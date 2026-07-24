@@ -921,6 +921,9 @@ export async function collectDoctorPreviewNotes(params: {
     }),
   );
 
+  const { collectCodeModeLocalWarnings } = await import("./code-mode-local-warnings.js");
+  warnings.push(...collectCodeModeLocalWarnings(params.cfg));
+
   return { infoNotes, warningNotes: warnings };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

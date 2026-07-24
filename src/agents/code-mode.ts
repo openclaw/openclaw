@@ -36,6 +36,10 @@ import {
   type CodeModeNamespaceRuntime,
   type SerializedCodeModeNamespaceValue,
 } from "./code-mode-namespaces.js";
+import {
+  CODE_MODE_SHELL_SOURCE_ERROR,
+  isShellLikeCodeModeSource,
+} from "./code-mode-shell-source.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import { optionalStringEnum } from "./schema/typebox.js";
 import type { ToolDefinition } from "./sessions/index.js";
@@ -485,6 +489,11 @@ function readCode(args: unknown): {
   const code = typeof commandParam === "string" ? commandParam : codeParam;
   if (typeof code !== "string" || !code.trim()) {
     throw new ToolInputError("code or command must be a non-empty string.");
+  }
+  // Reject shell-shaped source before QuickJS so local models get invalid_input
+  // instead of SyntaxError/ReferenceError retry storms.
+  if (isShellLikeCodeModeSource(code)) {
+    throw new ToolInputError(CODE_MODE_SHELL_SOURCE_ERROR);
   }
   const language = params.language;
   if (language !== undefined && language !== "javascript" && language !== "typescript") {
@@ -1734,6 +1743,8 @@ function createCodeModeExecDescription(
     swarmGuidance +
     namespaceGuidance +
     ' The `language` field accepts only "javascript" or "typescript"; do not pass "bash", "shell", or other values.' +
+    " `code` and the `command` alias are JavaScript/TypeScript source only — never pass shell strings such as `ls`, `pwd`, `echo`, `/bin/…`, or `sh -c …`; call catalog tools from guest JS instead." +
+    " Do not retry the same failed exec payload; fix the program or stop after a clear invalid_input." +
     (namespacePrompt ? `\n\n${namespacePrompt}` : "") +
     (catalogIndex ? `\n\n${catalogIndex}` : "")
   );
@@ -2211,7 +2222,8 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       ),
       command: Type.Optional(
         Type.String({
-          description: "Alias for code, provided for exec-compatible hook policies.",
+          description:
+            "Alias for code (JavaScript/TypeScript source), provided for exec-compatible hook policies. Not a shell command — do not pass bash/ls/pwd/echo strings.",
         }),
       ),
       language: optionalStringEnum(["javascript", "typescript"] as const, {

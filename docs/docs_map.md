@@ -9882,6 +9882,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: QuickJS-WASI runtime
   - H2: TypeScript
   - H2: Security boundary
+  - H2: Local models
   - H2: Error codes
   - H2: Telemetry
   - H2: Debugging
