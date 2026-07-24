@@ -16,7 +16,7 @@ import {
 /** Default Arcee model ref for direct API setup. */
 export const ARCEE_DEFAULT_MODEL_REF = "arcee/trinity-large-thinking";
 /** Default Arcee model ref for OpenRouter setup. */
-export const ARCEE_OPENROUTER_DEFAULT_MODEL_REF = "arcee/trinity-large-thinking";
+export const ARCEE_OPENROUTER_DEFAULT_MODEL_REF = "openrouter/arcee-ai/trinity-large-thinking";
 
 const arceePresetAppliers = createModelCatalogPresetAppliers({
   primaryModelRef: ARCEE_DEFAULT_MODEL_REF,
@@ -32,7 +32,7 @@ const arceePresetAppliers = createModelCatalogPresetAppliers({
 const arceeOpenRouterPresetAppliers = createModelCatalogPresetAppliers({
   primaryModelRef: ARCEE_OPENROUTER_DEFAULT_MODEL_REF,
   resolveParams: (_cfg: OpenClawConfig) => ({
-    providerId: "arcee",
+    providerId: "openrouter",
     api: "openai-completions",
     baseUrl: OPENROUTER_BASE_URL,
     catalogModels: buildArceeOpenRouterCatalogModels(),
