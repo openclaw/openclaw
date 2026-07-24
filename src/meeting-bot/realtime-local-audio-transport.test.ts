@@ -16,6 +16,20 @@ type TestBridgeProcess = EventEmitter & {
   kill: ReturnType<typeof vi.fn<(signal?: NodeJS.Signals) => boolean>>;
 };
 
+class StatefulRuntimeLogger {
+  readonly messages: string[] = [];
+
+  debug(message: string): void {
+    this.messages.push(message);
+  }
+
+  info(): void {}
+
+  warn(): void {}
+
+  error(): void {}
+}
+
 function createTestBridgeProcess(): TestBridgeProcess {
   const proc = new EventEmitter() as TestBridgeProcess;
   proc.exitCode = null;
@@ -79,7 +93,9 @@ describe("createLocalMeetingRealtimeAudioTransport", () => {
       expect(debug).toHaveBeenCalledTimes(callsBeforeLine + 1);
 
       proc.stderr.end();
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       expect(debug).toHaveBeenNthCalledWith(
         callsBeforeLine + 2,
         `[meeting] ${label}: ${unterminatedDiagnostic}`,
@@ -195,12 +211,43 @@ describe("createLocalMeetingRealtimeAudioTransport", () => {
 
     outputProcess.stderr.write("before exit ");
     outputProcess.emit("exit", 0, null);
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     outputProcess.stderr.write(Buffer.from([0xe4]));
     outputProcess.stderr.write(Buffer.from([0xbd, 0xa0]));
     outputProcess.stderr.end();
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(debug).toHaveBeenCalledWith("[meeting] audio output: before exit 你");
+  });
+
+  it("preserves the logger receiver while handling stderr", () => {
+    const processes = new Map<string, TestBridgeProcess>();
+    const logger = new StatefulRuntimeLogger();
+    createLocalMeetingRealtimeAudioTransport({
+      inputCommand: ["input"],
+      outputCommand: ["output"],
+      bargeInRmsThreshold: 10,
+      bargeInPeakThreshold: 10,
+      bargeInCooldownMs: 1,
+      logger,
+      logScope: "[meeting]",
+      spawn: (command) => {
+        const proc = createTestBridgeProcess();
+        processes.set(command, proc);
+        return proc;
+      },
+    });
+    const outputProcess = processes.get("output");
+    if (!outputProcess) {
+      throw new Error("Expected output process");
+    }
+
+    outputProcess.stderr.write("stateful logger\n");
+
+    expect(logger.messages).toContain("[meeting] audio output: stateful logger");
   });
 
   it("preserves exit-following diagnostics from a data-only stderr adapter", async () => {
@@ -229,7 +276,9 @@ describe("createLocalMeetingRealtimeAudioTransport", () => {
     outputProcess.stderr.emit("data", "before exit ");
     outputProcess.emit("exit", 0, null);
     outputProcess.stderr.emit("data", "after exit");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect(debug).toHaveBeenCalledWith("[meeting] audio output: before exit");
     expect(debug).toHaveBeenCalledWith("[meeting] audio output: after exit");

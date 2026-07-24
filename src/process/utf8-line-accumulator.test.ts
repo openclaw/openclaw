@@ -40,6 +40,14 @@ describe("UTF-8 line accumulator", () => {
     expect(
       appendUtf8Lines({
         accumulator,
+        chunk: Buffer.alloc(0),
+        maxPendingLineBytes: 8 * 1024,
+        splitOnCarriageReturn: true,
+      }),
+    ).toEqual([]);
+    expect(
+      appendUtf8Lines({
+        accumulator,
         chunk: "\nnext\r\n",
         maxPendingLineBytes: 8 * 1024,
         splitOnCarriageReturn: true,
@@ -76,7 +84,7 @@ describe("UTF-8 line accumulator", () => {
     expect(
       appendUtf8Lines({
         accumulator,
-        chunk: split.subarray(0, split.length - 1),
+        chunk: split.subarray(0, -1),
         maxPendingLineBytes: 8192,
         splitOnCarriageReturn: true,
         emitPending: true,
@@ -85,13 +93,27 @@ describe("UTF-8 line accumulator", () => {
     expect(
       appendUtf8Lines({
         accumulator,
-        chunk: split.subarray(split.length - 1),
+        chunk: split.subarray(-1),
         maxPendingLineBytes: 8192,
         splitOnCarriageReturn: true,
         emitPending: true,
       }),
     ).toEqual([{ line: "你", truncated: false }]);
     expect(flushUtf8Line(accumulator, 8192)).toBeUndefined();
+  });
+
+  it("applies completed-line bounds to emitted progress fragments", () => {
+    const accumulator = createUtf8LineAccumulator();
+
+    expect(
+      appendUtf8Lines({
+        accumulator,
+        chunk: "12345",
+        maxPendingLineBytes: 8192,
+        maxLineBytes: 4,
+        emitPending: true,
+      }),
+    ).toEqual([{ line: "2345", truncated: true }]);
   });
 
   it("bounds completed and trailing lines with UTF-8-safe truncation metadata", () => {

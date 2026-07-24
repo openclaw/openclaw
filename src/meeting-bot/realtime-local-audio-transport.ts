@@ -62,17 +62,17 @@ function splitCommand(argv: string[]): { command: string; args: string[] } {
 
 function attachStderrLineLogger(params: {
   stderr: BridgeProcess["stderr"];
-  debug: RuntimeLogger["debug"];
+  logger: RuntimeLogger;
   prefix: string;
 }): void {
   if (!params.stderr) {
     return;
   }
-  if (!params.debug) {
+  if (!params.logger.debug) {
     params.stderr.on("data", () => {});
     return;
   }
-  const debug = params.debug;
+  const debug = (message: string) => params.logger.debug?.(message);
   if (!(params.stderr instanceof Readable)) {
     // The public injected adapter contract does not require a completion event.
     // Keep its existing per-chunk behavior so stderr arriving after child exit
@@ -182,7 +182,7 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
     });
     attachStderrLineLogger({
       stderr: proc.stderr,
-      debug: params.logger.debug,
+      logger: params.logger,
       prefix: `${params.logScope} audio output`,
     });
     proc.stderr?.on("error", (error: Error) => {
@@ -203,7 +203,7 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
   });
   attachStderrLineLogger({
     stderr: inputProcess.stderr,
-    debug: params.logger.debug,
+    logger: params.logger,
     prefix: `${params.logScope} audio input`,
   });
   inputProcess.stdout?.on("error", fail("audio input command stdout"));
@@ -320,7 +320,7 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
       });
       attachStderrLineLogger({
         stderr: bargeInInputProcess.stderr,
-        debug: params.logger.debug,
+        logger: params.logger,
         prefix: `${params.logScope} barge-in input`,
       });
       bargeInInputProcess.stderr?.on("error", (error: Error) => {

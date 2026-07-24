@@ -43,6 +43,9 @@ export function appendUtf8Lines(params: {
   let text = params.accumulator.decoder.write(
     Buffer.isBuffer(params.chunk) ? params.chunk : Buffer.from(params.chunk, "utf8"),
   );
+  if (!text) {
+    return [];
+  }
   if (params.accumulator.skipLeadingLf && text.startsWith("\n")) {
     text = text.slice(1);
   }
@@ -72,9 +75,10 @@ export function appendUtf8Lines(params: {
   params.accumulator.pendingLine = pending.line;
   params.accumulator.pendingLineTruncated ||= pending.truncated;
   if (params.emitPending && params.accumulator.pendingLine) {
+    const emitted = boundLine(params.accumulator.pendingLine, params.maxLineBytes);
     completed.push({
-      line: params.accumulator.pendingLine,
-      truncated: params.accumulator.pendingLineTruncated,
+      line: emitted.line,
+      truncated: emitted.truncated || params.accumulator.pendingLineTruncated,
     });
     params.accumulator.pendingLine = "";
     params.accumulator.pendingLineTruncated = false;

@@ -192,11 +192,11 @@ describe("resolveMcpTransport", () => {
     }
 
     const progress = Buffer.from("loading 你\r", "utf8");
-    stderr.write(progress.subarray(0, progress.length - 2));
+    stderr.write(progress.subarray(0, -2));
     expect(logDebugMock).toHaveBeenCalledWith("bundle-mcp:progress: loading");
     expect(logDebugMock).not.toHaveBeenCalledWith("bundle-mcp:progress: �");
 
-    stderr.write(progress.subarray(progress.length - 2));
+    stderr.write(progress.subarray(-2));
     expect(logDebugMock).toHaveBeenLastCalledWith("bundle-mcp:progress: 你");
   });
 
