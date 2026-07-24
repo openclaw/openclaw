@@ -281,8 +281,8 @@ describe("iOS Fastlane release upload gates", () => {
     expect(navigationTest).toContain("self.launchApp(for: Self.agentScreenshotTarget)");
     expect(navigationTest).toContain('self.selectSidebarDestination("Settings")');
     expect(navigationTest).toContain('"settings-system-agent-row"');
-    expect(navigationTest).toContain("XCTExpectedFailure.Options()");
-    expect(navigationTest).toContain("options.isStrict = false");
+    expect(navigationTest).not.toContain("XCTExpectFailure");
+    expect(navigationTest).not.toContain("XCTExpectedFailure");
     expect(rootTabs).toContain("self.scenePhase == .active");
     expect(rootTabs).toContain("self.selectedSidebarDestination.rawValue");
   });
