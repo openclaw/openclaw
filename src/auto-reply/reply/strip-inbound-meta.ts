@@ -23,6 +23,14 @@ const CHAT_HISTORY_SENTINEL = "Chat history since last reply:";
 /**
  * Sentinel strings that identify the start of an injected metadata block.
  * Must stay in sync with `buildInboundUserContextPrefix` in `inbound-meta.ts`.
+ *
+ * Accepted tradeoff of the plain labels: a block is recognized by an EXACT label
+ * match plus the required ```json fence on the next line. A user who types one of
+ * these exact labels on its own line immediately before a ```json fence would have
+ * that span stripped from rendered/replayed history (never from the processed
+ * message). Realistically only `Sender:` collides with natural text; eliminating
+ * it entirely would require a forgeable-proof provenance marker on every emitted
+ * block, which the plain-label design deliberately avoids.
  */
 const INBOUND_META_SENTINELS = [
   "Conversation info:",

@@ -201,11 +201,19 @@ enum ChatMarkdownPreprocessor {
         guard lines[index].trimmingCharacters(in: .whitespacesAndNewlines) == self.contextHeader else {
             return false
         }
+        // Mirror core stripInboundMetadata: only the external-content envelope
+        // marker (unforgeable per-call id) qualifies a trailing Context: block.
+        // Its sole producer wraps every entry with that marker as the first line,
+        // so `Source:`/`Channel metadata (` only ever appear inside it. Match the
+        // marker as the first non-empty line, so a bare Context: the user typed —
+        // even one followed by `Source: <url>` prose — cannot truncate their message.
         let endIndex = min(lines.count, index + 8)
-        let probe = lines[(index + 1)..<endIndex].joined(separator: "\n")
-        return probe.range(
-            of: #"<<<EXTERNAL_UNTRUSTED_CONTENT|Channel metadata \(|Source:\s+"#,
-            options: .regularExpression) != nil
+        for probe in (index + 1)..<endIndex {
+            let trimmed = lines[probe].trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty { continue }
+            return trimmed.hasPrefix("<<<EXTERNAL_UNTRUSTED_CONTENT")
+        }
+        return false
     }
 
     private static func stripPrefixedTimestamps(_ raw: String) -> String {

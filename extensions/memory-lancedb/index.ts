@@ -700,41 +700,45 @@ function cleanMemorySearchResults(results: MemorySearchResult[]): Array<{
 // ============================================================================
 
 /**
- * Explicit sentinel strings used by `sanitizeForMemoryCapture` to locate and
- * surgically strip individual blocks. Canonical source:
- * src/auto-reply/reply/strip-inbound-meta.ts. Duplicated here because
- * extensions must not import core internals.
+ * Explicit sentinel strings used by `sanitizeForMemoryCapture` and
+ * `looksLikeEnvelopeSludge` to locate injected blocks. This is the full set of
+ * fenced/plain labels `buildInboundUserContextPrefix` emits (canonical source:
+ * src/auto-reply/reply/strip-inbound-meta.ts, extended here with the fenced
+ * labels core recognizes structurally). Duplicated because extensions must not
+ * import core internals.
  *
- * NOTE: `looksLikeEnvelopeSludge` deliberately uses the broader
- * `INBOUND_META_LABEL_RE` below instead of this list, because
- * `buildInboundUserContextPrefix` in core also injects label variants such as
- * `Location:`, `Structured object:`, and arbitrary `<custom-label>:` blocks
- * (from `ChannelStructuredContext`). Detection must stay forward-compatible
- * with those without bloating this explicit list every time core adds a new
- * label.
+ * We match ONLY these known labels, never an arbitrary `<heading>:` + fence.
+ * Matching any heading ate ordinary user content shaped like a heading plus
+ * JSON (e.g. `Preferences:` / `Config:`). The one label the producer does not
+ * fix — a plugin `ChannelStructuredContext` entry emits an arbitrary `${label}:`
+ * — is instead caught by its JSON payload via `ENVELOPE_JSON_LINE_RE`; that is
+ * the accepted tradeoff for never stripping user text.
  */
 const INBOUND_META_SENTINELS = [
   "Conversation info:",
   "Sender:",
   "Thread starter:",
+  "Reply chain of current user message (nearest first):",
   "Reply target of current user message:",
   "Replied message:",
   "Forwarded message context:",
+  "Location:",
+  "Structured object:",
   "Conversation context (chronological, selected for current message):",
   "Current local chat window (chronological, before current message):",
   "Nearby reply target window (chronological, around replied-to message):",
   "Chat history since last reply:",
 ] as const;
+// One escaped alternation, reused by every sentinel matcher below.
+const INBOUND_META_SENTINEL_ALTERNATION = INBOUND_META_SENTINELS.map((sentinel) =>
+  sentinel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+).join("|");
 const INBOUND_META_SENTINEL_LINE_RE = new RegExp(
-  `^(?:${INBOUND_META_SENTINELS.map((sentinel) =>
-    sentinel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
-  ).join("|")})[^\\n]*$`,
+  `^(?:${INBOUND_META_SENTINEL_ALTERNATION})[^\\n]*$`,
   "m",
 );
 const INBOUND_META_SENTINEL_EXACT_LINE_RE = new RegExp(
-  `^(?:${INBOUND_META_SENTINELS.map((sentinel) =>
-    sentinel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
-  ).join("|")})[ \\t]*$`,
+  `^(?:${INBOUND_META_SENTINEL_ALTERNATION})[ \\t]*$`,
   "m",
 );
 
@@ -760,21 +764,21 @@ const CURRENT_MESSAGE_MARKERS = [
 const ACTIVE_TURN_RECOVERY_RE = /active-turn-recovery/i;
 
 /**
- * Line-anchored pattern matching any inbound-meta block header injected by
- * `buildInboundUserContextPrefix`. Labels are now plain (`Conversation info:`,
- * `Location:`, plus any future `<label>:` produced from
- * `ChannelStructuredContext`), so real injections are distinguished from
- * user content by the required ```json fence on the following line. Anchoring
- * the label and fence to their own lines avoids flagging a user message that
- * quotes a label phrase mid-sentence.
- *
- * The producer does not truncate custom structured-context labels, so the
- * label segment is newline-bound rather than length-bound. The expression uses
- * only linear character classes; avoid nested wildcards here.
+ * Line-anchored patterns matching a KNOWN inbound-meta block header injected by
+ * `buildInboundUserContextPrefix`, distinguished from user text by both the
+ * known label (`INBOUND_META_SENTINELS`) and the required ```json fence on the
+ * following line. Anchoring label and fence to their own lines avoids flagging a
+ * user message that quotes a label phrase mid-sentence, and restricting to the
+ * known set avoids stripping a user's own `<heading>:` + JSON.
  */
-const INBOUND_META_LABEL_RE = /^[^\n]+:[ \t]*(?=\n[ \t]*```json[ \t]*$)/m;
-const INBOUND_META_LABEL_JSON_BLOCK_RE =
-  /^[^\n]+:[ \t]*\n[ \t]*```json[ \t]*\n[\s\S]*?\n[ \t]*```[ \t]*\n?/gm;
+const INBOUND_META_LABEL_RE = new RegExp(
+  `^(?:${INBOUND_META_SENTINEL_ALTERNATION})[ \\t]*(?=\\n[ \\t]*\`\`\`json[ \\t]*$)`,
+  "m",
+);
+const INBOUND_META_LABEL_JSON_BLOCK_RE = new RegExp(
+  `^(?:${INBOUND_META_SENTINEL_ALTERNATION})[ \\t]*\\n[ \\t]*\`\`\`json[ \\t]*\\n[\\s\\S]*?\\n[ \\t]*\`\`\`[ \\t]*\\n?`,
+  "gm",
+);
 const LEADING_CHRONOLOGICAL_CONTEXT_LABEL_RE =
   /^\s*[^\n]{1,100}\(chronological,[^\n)]{1,80}\):[ \t]*(?:\n|$)/;
 const BRACKETED_PREFIX_RE = /\[[^\]\n]{1,500}\]\s/g;

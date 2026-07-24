@@ -3475,23 +3475,33 @@ describe("memory plugin e2e", () => {
     expect(looksLikeEnvelopeSludge(indentedPretty)).toBe(true);
   });
 
-  test("looksLikeEnvelopeSludge detects additional inbound-meta label variants", () => {
-    // buildInboundUserContextPrefix in core injects more plain labels than the
-    // explicit sentinel list. The generic line-anchored matcher must catch
-    // fenced blocks so envelope leaks cannot bypass capture gating just by
-    // using a label our explicit list never enumerated.
+  test("looksLikeEnvelopeSludge detects known inbound-meta label variants", () => {
+    // buildInboundUserContextPrefix injects a fixed set of labels beyond the
+    // legacy sentinels; every one is enumerated in INBOUND_META_SENTINELS and
+    // recognized by known-label + fence.
     expect(looksLikeEnvelopeSludge("Location:\n```json\n{}\n```")).toBe(true);
     expect(looksLikeEnvelopeSludge("Structured object:\n```json\n{}\n```")).toBe(true);
-    expect(looksLikeEnvelopeSludge("Calendar event:\n```json\n{}\n```")).toBe(true);
-    expect(looksLikeEnvelopeSludge("Custom plugin label:\n```json\n{}\n```")).toBe(true);
-    expect(looksLikeEnvelopeSludge(`${"Custom ".repeat(30)}label:\n\`\`\`json\n{}\n\`\`\``)).toBe(
-      true,
-    );
     expect(
       looksLikeEnvelopeSludge(
         "Reply chain of current user message (nearest first):\n```json\n[]\n```",
       ),
     ).toBe(true);
+  });
+
+  test("looksLikeEnvelopeSludge leaves a user heading + JSON that is not a known label", () => {
+    // Regression: matching any `<heading>:` + fence ate ordinary user content.
+    // Unknown labels whose JSON carries no envelope key are preserved.
+    expect(looksLikeEnvelopeSludge('Preferences:\n```json\n{"theme":"dark"}\n```')).toBe(false);
+    expect(looksLikeEnvelopeSludge("Config:\n```json\n{}\n```")).toBe(false);
+    expect(looksLikeEnvelopeSludge("Calendar event:\n```json\n{}\n```")).toBe(false);
+    expect(looksLikeEnvelopeSludge(`${"Custom ".repeat(30)}label:\n\`\`\`json\n{}\n\`\`\``)).toBe(
+      false,
+    );
+    // A plugin structured block with an arbitrary label is still caught by its
+    // payload (envelope key), not its label.
+    expect(looksLikeEnvelopeSludge('Custom plugin label:\n```json\n{"chat_id":"c1"}\n```')).toBe(
+      true,
+    );
   });
 
   test("looksLikeEnvelopeSludge does not false-positive on mid-line quoted labels", () => {
@@ -3775,7 +3785,7 @@ describe("memory plugin e2e", () => {
     expect(sanitizeForMemoryCapture(input)).toBe("I prefer verbose output");
   });
 
-  test("sanitizeForMemoryCapture strips generic current inbound metadata blocks", () => {
+  test("sanitizeForMemoryCapture strips known current inbound metadata blocks", () => {
     const locationInput = [
       "Location:",
       "```json",
@@ -3795,16 +3805,6 @@ describe("memory plugin e2e", () => {
       "I always prefer concise replies",
     ].join("\n");
     expect(sanitizeForMemoryCapture(replyChainInput)).toBe("I always prefer concise replies");
-
-    const customInput = [
-      "Calendar event:",
-      "```json",
-      '{"title":"Focus"}',
-      "```",
-      "",
-      "I always prefer morning meetings",
-    ].join("\n");
-    expect(sanitizeForMemoryCapture(customInput)).toBe("I always prefer morning meetings");
   });
 
   test("sanitizeForMemoryCapture strips media annotations", () => {
@@ -4006,7 +4006,9 @@ describe("memory plugin e2e", () => {
     expect(sanitizeForMemoryCapture(input)).toBe("I prefer dark mode");
   });
 
-  test("sanitizeForMemoryCapture strips long structured-context labels", () => {
+  test("sanitizeForMemoryCapture preserves an unknown structured-context label as user content", () => {
+    // An arbitrary `<label>:` + fence whose JSON carries no envelope key is the
+    // user's own text, not an OpenClaw injection, so it survives capture intact.
     const input = [
       `${"Custom ".repeat(30)}label:`,
       "```json",
@@ -4015,7 +4017,9 @@ describe("memory plugin e2e", () => {
       "",
       "I prefer dark mode",
     ].join("\n");
-    expect(sanitizeForMemoryCapture(input)).toBe("I prefer dark mode");
+    const result = sanitizeForMemoryCapture(input);
+    expect(result).toContain("I prefer dark mode");
+    expect(result).toContain(`${"Custom ".repeat(30)}label:`);
   });
 
   test("sanitizeForMemoryCapture strips current message reply context before envelopes", () => {
