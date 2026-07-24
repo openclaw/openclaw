@@ -103,7 +103,9 @@ describe("msteams probe", () => {
     });
   });
 
-  it("reports delegated tokens expired when the process clock is invalid", async () => {
+  it("treats an expired delegated access token as healthy when a refresh token is present", async () => {
+    // NaN clock forces the expiry check to fail; a stored refresh token means
+    // the client auto-refreshes, so the probe must not report a health failure.
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
     hostMockState.delegatedTokens = {
       accessToken: "delegated-token",
@@ -126,10 +128,43 @@ describe("msteams probe", () => {
         appId: "app",
         graph: { ok: true, roles: undefined, scopes: undefined },
         delegatedAuth: {
+          ok: true,
+          scopes: ["ChatMessage.Send"],
+          userPrincipalName: "user@example.com",
+        },
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("reports delegated auth unhealthy when the token is expired and no refresh token is stored", async () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+    hostMockState.delegatedTokens = {
+      accessToken: "delegated-token",
+      refreshToken: "",
+      expiresAt: Date.parse("2030-01-01T00:00:00.000Z"),
+      scopes: ["ChatMessage.Send"],
+      userPrincipalName: "user@example.com",
+    };
+    const cfg = {
+      enabled: true,
+      appId: "app",
+      appPassword: "pw",
+      tenantId: "tenant",
+      delegatedAuth: { enabled: true },
+    } as unknown as MSTeamsConfig;
+
+    try {
+      await expect(probeMSTeams(cfg)).resolves.toEqual({
+        ok: true,
+        appId: "app",
+        graph: { ok: true, roles: undefined, scopes: undefined },
+        delegatedAuth: {
           ok: false,
           scopes: ["ChatMessage.Send"],
           userPrincipalName: "user@example.com",
-          error: "token expired (will auto-refresh on next use)",
+          error: "token expired and no refresh token available (re-run setup wizard)",
         },
       });
     } finally {
