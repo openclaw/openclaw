@@ -18,6 +18,7 @@ export async function postJson<T>(params: {
   body: unknown;
   errorPrefix: string;
   attachStatus?: boolean;
+  attachRetryAfter?: boolean;
   maxResponseBytes?: number;
   parse: (payload: unknown) => T | Promise<T>;
 }): Promise<T> {
@@ -36,9 +37,19 @@ export async function postJson<T>(params: {
         const text = await readMemoryHostResponseTextSnippet(res, { signal: params.signal });
         const err = new Error(`${params.errorPrefix}: ${res.status} ${text}`) as Error & {
           status?: number;
+          retryAfterMs?: number;
         };
         if (params.attachStatus) {
           err.status = res.status;
+        }
+        if (params.attachRetryAfter) {
+          const retryAfter = res.headers.get("Retry-After");
+          if (retryAfter) {
+            const parsed = parseInt(retryAfter, 10);
+            if (Number.isFinite(parsed) && parsed > 0) {
+              err.retryAfterMs = parsed * 1000;
+            }
+          }
         }
         throw err;
       }
