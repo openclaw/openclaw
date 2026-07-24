@@ -1,5 +1,5 @@
 import { clearBootstrapSnapshotOnSessionBoundary } from "../../agents/bootstrap-cache.js";
-import { clearAllCliSessions } from "../../agents/cli-session.js";
+import { clearAllCliSessions, clearCliSession } from "../../agents/cli-session.js";
 // Handles session reset requests produced during agent runner execution.
 import { transitionMainSessionRecovery } from "../../agents/main-session-recovery-state.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -22,6 +22,7 @@ type ResetSessionOptions = {
   failureLabel: string;
   buildLogMessage: (nextSessionId: string) => string;
   cleanupTranscripts?: boolean;
+  failedProvider?: string;
 };
 
 const deps = {
@@ -104,7 +105,11 @@ export async function resetReplyRunSession(params: {
     memoryFlushLastFailedAt: undefined,
     memoryFlushLastFailureError: undefined,
   };
-  clearAllCliSessions(nextEntry);
+  if (params.options.failedProvider) {
+    clearCliSession(nextEntry, params.options.failedProvider);
+  } else {
+    clearAllCliSessions(nextEntry);
+  }
   nextEntry.agentHarnessId = undefined;
   transitionMainSessionRecovery(nextEntry, { kind: "clear" });
   const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
