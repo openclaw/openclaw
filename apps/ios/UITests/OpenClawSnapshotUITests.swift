@@ -60,21 +60,10 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.launchApp(for: Self.agentScreenshotTarget)
 
         XCTAssertTrue(self.app?.buttons["agent-status-filter-menu"].waitForExistence(timeout: 8) == true)
-        let options = XCTExpectedFailure.Options()
-        options.isStrict = false
-        XCTExpectFailure(
-            "Agents-to-Settings navigation can wedge XCTest quiescence; keep it separate from release capture.",
-            options: options)
-        {
-            do {
-                try self.selectSidebarDestination("Settings")
-            } catch {
-                XCTFail("Agents-to-Settings navigation setup failed: \(error)")
-            }
-            XCTAssertTrue(
-                self.app?.descendants(matching: .any)["settings-system-agent-row"]
-                    .waitForExistence(timeout: 8) == true)
-        }
+        try self.selectSidebarDestination("Settings")
+        XCTAssertTrue(
+            self.app?.descendants(matching: .any)["settings-system-agent-row"]
+                .waitForExistence(timeout: 8) == true)
     }
 
     func testAutomationManagementScreenshot() {
