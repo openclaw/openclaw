@@ -14,9 +14,8 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPlainObject } from "../utils.js";
 import { isMessagingToolSendAction } from "./embedded-agent-messaging.js";
 import { stableStringify } from "./stable-stringify.js";
-
+import { hashStableExecFailure } from "./tool-loop-detection-exec-fingerprint.js";
 const log = createSubsystemLogger("agents/loop-detection");
-
 type LoopDetectorKind =
   | "generic_repeat"
   | "unknown_tool_repeat"
@@ -73,6 +72,9 @@ type ToolLoopDetectionScope = {
   runId?: string;
 };
 
+const positiveInteger = (value: unknown, fallback: number): number =>
+  typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
+
 function selectHistoryForScope(
   history: readonly ToolCallRecord[],
   scope?: ToolLoopDetectionScope,
@@ -82,14 +84,26 @@ function selectHistoryForScope(
 }
 
 function resolveLoopDetectionConfig(config?: ToolLoopDetectionConfig): ResolvedLoopDetectionConfig {
+  const defaults = DEFAULT_LOOP_DETECTION_CONFIG;
   return {
-    enabled: config?.enabled ?? DEFAULT_LOOP_DETECTION_CONFIG.enabled,
-    historySize: DEFAULT_LOOP_DETECTION_CONFIG.historySize,
-    warningThreshold: DEFAULT_LOOP_DETECTION_CONFIG.warningThreshold,
-    unknownToolThreshold: DEFAULT_LOOP_DETECTION_CONFIG.unknownToolThreshold,
-    criticalThreshold: DEFAULT_LOOP_DETECTION_CONFIG.criticalThreshold,
-    globalCircuitBreakerThreshold: DEFAULT_LOOP_DETECTION_CONFIG.globalCircuitBreakerThreshold,
-    detectors: DEFAULT_LOOP_DETECTION_CONFIG.detectors,
+    enabled: config?.enabled ?? defaults.enabled,
+    historySize: positiveInteger(config?.historySize, defaults.historySize),
+    warningThreshold: positiveInteger(config?.warningThreshold, defaults.warningThreshold),
+    unknownToolThreshold: positiveInteger(
+      config?.unknownToolThreshold,
+      defaults.unknownToolThreshold,
+    ),
+    criticalThreshold: positiveInteger(config?.criticalThreshold, defaults.criticalThreshold),
+    globalCircuitBreakerThreshold: positiveInteger(
+      config?.globalCircuitBreakerThreshold,
+      defaults.globalCircuitBreakerThreshold,
+    ),
+    detectors: {
+      genericRepeat: config?.detectors?.genericRepeat ?? defaults.detectors.genericRepeat,
+      knownPollNoProgress:
+        config?.detectors?.knownPollNoProgress ?? defaults.detectors.knownPollNoProgress,
+      pingPong: config?.detectors?.pingPong ?? defaults.detectors.pingPong,
+    },
   };
 }
 
@@ -165,23 +179,24 @@ function hashExecToolOutcome(details: Record<string, unknown>, text: string): st
   if (!status) {
     return undefined;
   }
-
   if (status === "running") {
     return digestStable({
       status,
       tail: stringField(details.tail) ?? "",
     });
   }
-
   if (status === "completed" || status === "failed") {
+    const exitCode = typeof details.exitCode === "number" ? details.exitCode : null;
+    if (status === "failed" || (exitCode !== null && exitCode !== 0)) {
+      return hashStableExecFailure(status, details);
+    }
     return digestStable({
       status,
-      exitCode: typeof details.exitCode === "number" ? details.exitCode : null,
+      exitCode,
       timedOut: details.timedOut === true,
       output: nonEmptyStringField(details.aggregated) ?? text,
     });
   }
-
   if (status === "approval-pending" || status === "approval-unavailable") {
     return digestStable({
       status,

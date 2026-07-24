@@ -70,9 +70,20 @@ The per-agent setting overrides the global setting.
 | --------- | ------- | ------------------------------------------------------------------------------------------------- |
 | `enabled` | `false` | Master switch for the rolling-history detectors. `false` also disables the post-compaction guard. |
 
-For `exec`, no-progress hashing compares stable command outcomes (status,
-exit code, timed-out flag, output) and ignores volatile runtime metadata such
-as duration, PID, session ID, and working directory. Outbound message-send
+For `exec`, no-progress hashing compares stable command outcomes and ignores
+volatile runtime metadata such as duration, PID, session ID, and working
+directory. Successful and failed results are compared differently. A completed
+result that exited zero keeps its output text in the hash, because changing
+output from a successful command is real progress. Any nonzero outcome is
+treated as a failure and ignores the output text (error output often carries
+volatile noise such as timestamps or connection-refused-at times): a completed
+nonzero exit (an ordinary `exit 1` from grep, SSH, Docker, and similar) and a
+hard `failed` result (timeout, signal, shell command-not-found) are both
+compared only by stable failure metadata (status, exit code, timed-out flag,
+exit signal, and failure kind). Repeated failures of the same command whose
+error text varies but whose failure mode is identical therefore still count as
+no progress, while genuinely different failure modes stay distinct. Outbound
+message-send
 results are hashed with volatile per-call ids (message id, file id, timestamp)
 stripped, so a "sent" result does not look identical to a different "sent"
 result. When a run id is available, history is evaluated only within that run,

@@ -160,6 +160,21 @@ export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
 export type ToolLoopDetectionConfig = {
   /** Enable tool-loop protection (default: false). */
   enabled?: boolean;
+  /** Number of identical calls before a warning is emitted. */
+  warningThreshold?: number;
+  /** Number of unavailable-tool repeats before the missing-tool breaker trips. */
+  unknownToolThreshold?: number;
+  /** Number of known no-progress poll repeats before a critical warning is emitted. */
+  criticalThreshold?: number;
+  /** Number of identical no-progress outcomes before the global breaker trips. */
+  globalCircuitBreakerThreshold?: number;
+  /** Maximum number of recent tool calls retained for loop detection. */
+  historySize?: number;
+  detectors?: {
+    genericRepeat?: boolean;
+    knownPollNoProgress?: boolean;
+    pingPong?: boolean;
+  };
 };
 
 export type ToolSearchConfig =

@@ -112,6 +112,19 @@ export type ExecApprovalFollowupFactory = (
   context: ExecApprovalFollowupContext,
 ) => string | undefined | Promise<string | undefined>;
 
+/** Stable failure categories emitted by foreground exec process outcomes. */
+export type ExecToolFailureKind =
+  | "shell-command-not-found"
+  | "shell-not-executable"
+  | "overall-timeout"
+  | "no-output-timeout"
+  | "signal"
+  | "aborted"
+  | "runtime-error"
+  | "approval_required"
+  | "approval-denied"
+  | "node-run-failed";
+
 /** Effective elevated-exec defaults derived from config/runtime policy. */
 export type ExecElevatedDefaults = {
   enabled: boolean;
@@ -132,10 +145,20 @@ export type ExecToolDetails =
       tail?: string;
     }
   | {
-      status: "completed" | "failed";
+      status: "completed";
       exitCode: number | null;
-      exitSignal?: NodeJS.Signals | number | null;
-      failureKind?: string;
+      durationMs: number;
+      aggregated: string;
+      timedOut?: boolean;
+      cwd?: string;
+    }
+  | {
+      status: "failed";
+      exitCode: number | null;
+      exitSignal: NodeJS.Signals | number | null;
+      failureKind: ExecToolFailureKind;
+      /** Stable failure reason/error text, hashed for no-progress detection instead of volatile stdout. */
+      failureReason?: string;
       exitReason?: TerminationReason;
       durationMs: number;
       aggregated: string;

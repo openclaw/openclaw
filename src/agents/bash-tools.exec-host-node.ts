@@ -231,6 +231,7 @@ export async function executeNodeHostCommand(
       details: {
         status: "failed",
         exitCode: null,
+        exitSignal: null,
         failureKind: "approval_required",
         durationMs: 0,
         aggregated: text,

@@ -590,7 +590,42 @@ describe("tool-loop-detection", () => {
       }
     });
 
-    it("keeps changing empty-output exec failures below the global no-progress breaker", () => {
+    // #93917: An ordinary nonzero exit (grep/SSH/Docker exit 1) is reported as
+    // status "completed", not "failed". Its output text still varies per call,
+    // so the completed hash must fingerprint nonzero exits by stable exit facts
+    // (like the failed branch) and escalate to the global circuit breaker.
+    it("escalates repeated nonzero completed exec calls with volatile output to the global breaker", () => {
+      const state = createState();
+      const params = { command: "grep needle haystack.log" };
+
+      for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+        recordSuccessfulCall(
+          state,
+          "exec",
+          params,
+          {
+            content: [{ type: "text", text: `no match at ${index} (attempt ${index})` }],
+            details: {
+              status: "completed",
+              exitCode: 1,
+              durationMs: 100 + index,
+              aggregated: `no match at ${index}\n\n(Command exited with code 1)`,
+            },
+          },
+          index,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+        expect(loopResult.detector).toBe("global_circuit_breaker");
+      }
+    });
+    // (status, exitCode, timedOut, failureKind, exitSignal) but varying
+    // output text now correctly escalate to the global circuit breaker.
+    it("escalates repeated failed exec calls to the global breaker when status and exitCode are stable", () => {
       const state = createState();
       const params = { command: "openclaw flaky-helper" };
 
@@ -604,6 +639,7 @@ describe("tool-loop-detection", () => {
             details: {
               status: "failed",
               exitCode: null,
+              failureKind: "runtime-error",
               durationMs: 100 + index,
               aggregated: "",
             },
@@ -615,8 +651,267 @@ describe("tool-loop-detection", () => {
       const loopResult = detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig);
       expect(loopResult.stuck).toBe(true);
       if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+        expect(loopResult.detector).toBe("global_circuit_breaker");
+      }
+    });
+
+    // #93917: Different failure kinds with the same exitCode should NOT
+    // merge into one no-progress streak — each failure mode is a distinct
+    // problem that may need a different fix.
+    it("keeps distinct exec failure kinds below the global no-progress breaker", () => {
+      const state = createState();
+      const params = { command: "flaky-command" };
+
+      const failureKinds = ["overall-timeout", "signal", "runtime-error"];
+      let callIndex = 0;
+
+      for (const failureKind of failureKinds) {
+        for (
+          let i = 0;
+          i < Math.floor(GLOBAL_CIRCUIT_BREAKER_THRESHOLD / failureKinds.length);
+          i++
+        ) {
+          recordSuccessfulCall(
+            state,
+            "exec",
+            params,
+            {
+              content: [{ type: "text", text: `${failureKind} error at attempt ${i}` }],
+              details: {
+                status: "failed",
+                exitCode: 1,
+                failureKind,
+                durationMs: 100 + i,
+                aggregated: "",
+              },
+            },
+            callIndex,
+          );
+          callIndex += 1;
+        }
+      }
+
+      const loopResult = detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig);
+      // Different failure kinds → distinct hashes → no single streak
+      // reaches the circuit breaker threshold.
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
         expect(loopResult.level).toBe("warning");
-        expect(loopResult.detector).toBe("generic_repeat");
+      }
+    });
+
+    // #93917: exitSignal can be a string ("SIGTERM") or a number (9 for
+    // SIGKILL). normalizeExitSignal preserves both forms so numeric
+    // signals don't collapse to null and falsely merge with exitSignal-less
+    // failures.
+    it("does not merge distinct exitSignal values into one failed no-progress streak", () => {
+      const state = createState();
+      const params = { command: "flaky-command" };
+
+      for (let i = 0; i < Math.floor(GLOBAL_CIRCUIT_BREAKER_THRESHOLD / 2); i++) {
+        recordSuccessfulCall(
+          state,
+          "exec",
+          params,
+          {
+            content: [{ type: "text", text: `killed by SIGTERM (attempt ${i})` }],
+            details: {
+              status: "failed",
+              exitCode: null,
+              failureKind: "signal",
+              exitSignal: "SIGTERM",
+            },
+          },
+          i,
+        );
+      }
+      for (
+        let i = Math.floor(GLOBAL_CIRCUIT_BREAKER_THRESHOLD / 2);
+        i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD;
+        i++
+      ) {
+        recordSuccessfulCall(
+          state,
+          "exec",
+          params,
+          {
+            content: [{ type: "text", text: `killed by signal 9 (attempt ${i})` }],
+            details: {
+              status: "failed",
+              exitCode: null,
+              failureKind: "signal",
+              exitSignal: 9,
+            },
+          },
+          i,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("warning");
+      }
+    });
+
+    // #93917 follow-up: broad catch-all failures (null exitCode + null
+    // exitSignal) with genuinely different reasons must not collapse into one
+    // no-progress streak just because they share a broad failureKind.
+    it("keeps distinct catch-all exec failure reasons below the global breaker", () => {
+      const state = createState();
+      const params = { command: "flaky-command" };
+      const reasons = ["connection refused", "permission denied", "host unreachable"];
+      let callIndex = 0;
+
+      for (const reason of reasons) {
+        for (let i = 0; i < Math.floor(GLOBAL_CIRCUIT_BREAKER_THRESHOLD / reasons.length); i += 1) {
+          recordSuccessfulCall(
+            state,
+            "exec",
+            params,
+            {
+              content: [{ type: "text", text: reason }],
+              details: {
+                status: "failed",
+                exitCode: null,
+                exitSignal: null,
+                failureKind: "node-run-failed",
+                durationMs: 100 + i,
+                aggregated: reason,
+              },
+            },
+            callIndex,
+          );
+          callIndex += 1;
+        }
+      }
+
+      const loopResult = detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig);
+      // Distinct normalized reasons → distinct hashes → no single streak reaches
+      // the critical/global threshold.
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("warning");
+      }
+    });
+
+    // #93917: repeats of the same catch-all failure whose reason only varies in
+    // a per-instance identifier (gateway approval id) must still collapse to one
+    // streak and trip the breaker — the unique id is masked before hashing.
+    it("trips the breaker on repeated catch-all failure with a volatile identifier", () => {
+      const state = createState();
+      const params = { command: "flaky-command" };
+
+      for (let i = 0; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
+        const reason = `Exec denied (gateway id=req-${1000 + i}, timeout): flaky-command`;
+        recordSuccessfulCall(
+          state,
+          "exec",
+          params,
+          {
+            content: [{ type: "text", text: reason }],
+            details: {
+              status: "failed",
+              exitCode: null,
+              exitSignal: null,
+              failureKind: "approval-denied",
+              durationMs: 100 + i,
+              aggregated: reason,
+            },
+          },
+          i,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+        expect(loopResult.detector).toBe("global_circuit_breaker");
+      }
+    });
+
+    // #93917 follow-up: numeric status/error codes are stable identity, not
+    // noise, so failures that differ only by a code (500 vs 503) must stay
+    // distinct and not collapse into one no-progress streak.
+    it("keeps distinct stable numeric failure codes apart below the breaker", () => {
+      const state = createState();
+      const params = { command: "flaky-command" };
+      const codes = [500, 503];
+      let callIndex = 0;
+
+      for (const code of codes) {
+        for (let i = 0; i < Math.floor(GLOBAL_CIRCUIT_BREAKER_THRESHOLD / codes.length); i += 1) {
+          const reason = `upstream request failed with status ${code}`;
+          recordSuccessfulCall(
+            state,
+            "exec",
+            params,
+            {
+              content: [{ type: "text", text: reason }],
+              details: {
+                status: "failed",
+                exitCode: null,
+                exitSignal: null,
+                failureKind: "node-run-failed",
+                durationMs: 100 + i,
+                aggregated: reason,
+              },
+            },
+            callIndex,
+          );
+          callIndex += 1;
+        }
+      }
+
+      const loopResult = detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig);
+      // Distinct numeric codes → distinct hashes → neither streak reaches the breaker.
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("warning");
+      }
+    });
+
+    // #93917 follow-up: two node failures with identical leading stdout but
+    // different actual errors must stay distinct — the hash uses the structured
+    // failureReason (the real error), not the first line of stdout.
+    it("keeps node failures with identical stdout but different errors apart", () => {
+      const state = createState();
+      const params = { command: "flaky-command" };
+      const errors = ["ENOENT missing dependency", "ECONNREFUSED upstream refused"];
+      let callIndex = 0;
+
+      for (const error of errors) {
+        for (let i = 0; i < Math.floor(GLOBAL_CIRCUIT_BREAKER_THRESHOLD / errors.length); i += 1) {
+          recordSuccessfulCall(
+            state,
+            "exec",
+            params,
+            {
+              content: [{ type: "text", text: "identical leading stdout" }],
+              details: {
+                status: "failed",
+                exitCode: null,
+                exitSignal: null,
+                failureKind: "node-run-failed",
+                // Identical leading stdout, distinct structured failure reason.
+                aggregated: `identical leading stdout\n${error}`,
+                failureReason: error,
+                durationMs: 100 + i,
+              },
+            },
+            callIndex,
+          );
+          callIndex += 1;
+        }
+      }
+
+      const loopResult = detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig);
+      // Distinct failureReason → distinct hashes → no single streak trips the breaker.
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("warning");
       }
     });
 

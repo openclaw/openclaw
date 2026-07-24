@@ -25,7 +25,7 @@ import { isSubagentSessionKey } from "../sessions/session-key-utils.js";
  */
 import { formatFencedCodeBlock } from "../shared/markdown-code.js";
 import type { ProcessSession } from "./bash-process-registry.js";
-import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import type { ExecToolDetails, ExecToolFailureKind } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import type { AgentToolResult } from "./runtime/index.js";
 export { applyPathPrepend, normalizePathPrepend } from "../infra/path-prepend.js";
@@ -112,14 +112,10 @@ const DEFAULT_APPROVAL_RUNNING_NOTICE_MS = 10_000;
 const APPROVAL_SLUG_LENGTH = 8;
 
 /** Failure categories used to explain exec process exits. */
-type ExecProcessFailureKind =
-  | "shell-command-not-found"
-  | "shell-not-executable"
-  | "overall-timeout"
-  | "no-output-timeout"
-  | "signal"
-  | "aborted"
-  | "runtime-error";
+type ExecProcessFailureKind = Exclude<
+  ExecToolFailureKind,
+  "approval_required" | "approval-denied" | "node-run-failed"
+>;
 
 type ExecExitFailureKind = Exclude<ExecProcessFailureKind, "runtime-error">;
 
@@ -146,6 +142,8 @@ export type ExecProcessOutcome =
       noOutputTimedOut?: boolean;
       failureKind: ExecProcessFailureKind;
       reason: string;
+      /** Stable failure reason/error text for no-progress hashing (excludes volatile output). */
+      failureReason?: string;
     };
 
 /** Live handle returned after an exec process has started. */
@@ -517,6 +515,7 @@ function buildExecExitOutcome(params: {
     timedOut: params.exit.timedOut,
     noOutputTimedOut: params.exit.noOutputTimedOut,
     failureKind,
+    failureReason: reason,
     reason: joinExecFailureOutput(params.aggregated, reason),
   };
 }
@@ -535,6 +534,7 @@ export function buildExecRuntimeErrorOutcome(params: {
     aggregated: params.aggregated,
     timedOut: false,
     failureKind: "runtime-error",
+    failureReason: String(params.error),
     reason: joinExecFailureOutput(params.aggregated, String(params.error)),
   };
 }
