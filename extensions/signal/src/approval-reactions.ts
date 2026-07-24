@@ -889,6 +889,35 @@ export async function resolveSignalApprovalReactionTargetWithPersistence(params:
   });
 }
 
+export type SignalApprovalLosingRaceParams = {
+  /** The resolved conversation key where the losing reaction occurred. */
+  conversationKey: string;
+  /** Canonical terminal approval status (allowed, denied, expired, cancelled). */
+  approvalStatus: string;
+  /** Canonical decision when the terminal status includes one (allow-once, allow-always, deny). */
+  approvalDecision?: string;
+};
+
+/** Returns a human-readable label for the canonical losing-race outcome. */
+export function formatSignalApprovalLosingFeedbackLabel(status: string, decision?: string): string {
+  if (decision === "allow-once") {
+    return "Allowed once";
+  }
+  if (decision === "allow-always") {
+    return "Allowed always";
+  }
+  if (decision === "deny") {
+    return "Denied";
+  }
+  if (status === "expired") {
+    return "Expired";
+  }
+  if (status === "cancelled") {
+    return "Cancelled";
+  }
+  return "Resolved";
+}
+
 export async function maybeResolveSignalApprovalReaction(params: {
   cfg: OpenClawConfig;
   accountId: string;
@@ -900,6 +929,12 @@ export async function maybeResolveSignalApprovalReaction(params: {
   targetAuthorUuid?: string | null;
   gatewayUrl?: string;
   logVerboseMessage?: (message: string) => void;
+  /**
+   * Called when the approval was already resolved by another operator.
+   * The plugin should deliver visible feedback so the losing operator knows
+   * the canonical outcome.
+   */
+  onLosingRace?: (params: SignalApprovalLosingRaceParams) => Promise<void>;
 }): Promise<boolean> {
   const target = await resolveSignalApprovalReactionTargetWithPersistence({
     accountId: params.accountId,
@@ -969,6 +1004,12 @@ export async function maybeResolveSignalApprovalReaction(params: {
       params.logVerboseMessage?.(
         `signal: approval reaction already resolved id=${target.approvalId} sender=${actorId} ${terminalTruth}`,
       );
+      const approvalDecision = "decision" in result.approval ? result.approval.decision : undefined;
+      await params.onLosingRace?.({
+        conversationKey: params.conversationKey,
+        approvalStatus: result.approval.status,
+        approvalDecision,
+      });
       return true;
     }
     params.logVerboseMessage?.(

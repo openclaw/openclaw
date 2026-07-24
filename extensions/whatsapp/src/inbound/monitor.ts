@@ -24,7 +24,10 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { maybeResolveWhatsAppApprovalReaction } from "../approval-reactions.js";
+import {
+  maybeResolveWhatsAppApprovalReaction,
+  formatWhatsAppApprovalLosingFeedbackLabel,
+} from "../approval-reactions.js";
 import { readWebSelfIdentityForDecision, WhatsAppAuthUnstableError } from "../auth-store.js";
 import { getWhatsAppConnectionController } from "../connection-controller-runtime-context.js";
 import { getPrimaryIdentityId, identitiesOverlap, resolveComparableIdentity } from "../identity.js";
@@ -1569,6 +1572,21 @@ export async function attachWebInboxToSocket(
     if (upsert.type !== "notify" && upsert.type !== "append") {
       return;
     }
+    const handleLosingRace = async (params: {
+      targetJid: string;
+      approvalStatus: string;
+      approvalDecision?: string;
+    }) => {
+      const text = `⚠️ Approval already resolved: ${formatWhatsAppApprovalLosingFeedbackLabel(params.approvalStatus, params.approvalDecision)}`;
+      try {
+        await sendTrackedMessage(params.targetJid, { text });
+      } catch (err) {
+        logWhatsAppVerbose(
+          options.verbose,
+          `whatsapp: failed to send losing-race feedback to ${params.targetJid}: ${String(err)}`,
+        );
+      }
+    };
     for (const msg of upsert.messages ?? []) {
       rememberBaileysMessage(msg.key?.remoteJid, msg.key?.id, msg.message);
 
@@ -1583,6 +1601,7 @@ export async function attachWebInboxToSocket(
           resolveInboundJid,
           resolveReactionTargetJids,
           logVerboseMessage: (message) => logWhatsAppVerbose(options.verbose, message),
+          onLosingRace: handleLosingRace,
         })
       ) {
         continue;

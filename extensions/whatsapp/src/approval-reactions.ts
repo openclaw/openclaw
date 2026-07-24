@@ -547,6 +547,38 @@ function readWhatsAppApprovalReactionEvent(params: {
   };
 }
 
+export type WhatsAppApprovalLosingRaceParams = {
+  /** The resolved conversation JID where the losing reaction occurred. */
+  targetJid: string;
+  /** Canonical terminal approval status (allowed, denied, expired, cancelled). */
+  approvalStatus: string;
+  /** Canonical decision when the terminal status includes one (allow-once, allow-always, deny). */
+  approvalDecision?: string;
+};
+
+/** Returns a human-readable label for the canonical losing-race outcome. */
+export function formatWhatsAppApprovalLosingFeedbackLabel(
+  status: string,
+  decision?: string,
+): string {
+  if (decision === "allow-once") {
+    return "Allowed once";
+  }
+  if (decision === "allow-always") {
+    return "Allowed always";
+  }
+  if (decision === "deny") {
+    return "Denied";
+  }
+  if (status === "expired") {
+    return "Expired";
+  }
+  if (status === "cancelled") {
+    return "Cancelled";
+  }
+  return "Resolved";
+}
+
 export async function maybeResolveWhatsAppApprovalReaction(params: {
   cfg: OpenClawConfig;
   accountId: string;
@@ -557,6 +589,12 @@ export async function maybeResolveWhatsAppApprovalReaction(params: {
   resolveInboundJid: (jid: string | null | undefined) => Promise<string | null>;
   resolveReactionTargetJids?: (jid: string) => Promise<readonly string[]>;
   logVerboseMessage?: (message: string) => void;
+  /**
+   * Called when the approval was already resolved by another operator.
+   * The plugin should deliver visible feedback so the losing operator knows
+   * the canonical outcome.
+   */
+  onLosingRace?: (params: WhatsAppApprovalLosingRaceParams) => Promise<void>;
 }): Promise<boolean> {
   const event = readWhatsAppApprovalReactionEvent({
     msg: params.msg,
@@ -629,6 +667,14 @@ export async function maybeResolveWhatsAppApprovalReaction(params: {
         ? `whatsapp: approval reaction applied id=${target.approvalId} sender=${actorId} status=${result.approval.status}${canonicalDecision}`
         : `whatsapp: approval reaction already resolved id=${target.approvalId} sender=${actorId} status=${result.approval.status}${canonicalDecision}`,
     );
+    if (!result.applied) {
+      const approvalDecision = "decision" in result.approval ? result.approval.decision : undefined;
+      await params.onLosingRace?.({
+        targetJid: target.remoteJid,
+        approvalStatus: result.approval.status,
+        approvalDecision,
+      });
+    }
     return true;
   } catch (error) {
     if (isApprovalNotFoundError(error)) {

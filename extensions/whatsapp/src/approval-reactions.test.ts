@@ -180,6 +180,21 @@ describe("WhatsApp approval reactions", () => {
     });
   });
 
+  it("does not invoke onLosingRace when the winning reaction is applied", async () => {
+    registerExecApprovalTarget({ remoteJid: "15551230000@s.whatsapp.net" });
+    const onLosingRace = vi.fn();
+
+    await maybeResolveWhatsAppApprovalReaction({
+      cfg: approvalConfig(["+15551230000"]),
+      accountId: "default",
+      msg: buildReactionMessage({ remoteJid: "15551230000@s.whatsapp.net" }),
+      resolveInboundJid: async () => "+15551230000",
+      onLosingRace,
+    });
+
+    expect(onLosingRace).not.toHaveBeenCalled();
+  });
+
   it("consumes a losing reaction binding and reports the canonical first answer", async () => {
     registerWhatsAppApprovalReactionTarget({
       accountId: "default",
@@ -194,6 +209,7 @@ describe("WhatsApp approval reactions", () => {
       approval: { status: "denied", decision: "deny" },
     });
     const logVerboseMessage = vi.fn();
+    const onLosingRace = vi.fn();
 
     await expect(
       maybeResolveWhatsAppApprovalReaction({
@@ -202,12 +218,19 @@ describe("WhatsApp approval reactions", () => {
         msg: buildReactionMessage({ remoteJid: "15551230000@s.whatsapp.net" }),
         resolveInboundJid: async () => "+15551230000",
         logVerboseMessage,
+        onLosingRace,
       }),
     ).resolves.toBe(true);
 
     expect(logVerboseMessage).toHaveBeenCalledWith(
       "whatsapp: approval reaction already resolved id=plugin:looks-plugin-but-is-exec sender=+15551230000 status=denied decision=deny",
     );
+    expect(onLosingRace).toHaveBeenCalledTimes(1);
+    expect(onLosingRace).toHaveBeenCalledWith({
+      targetJid: "15551230000@s.whatsapp.net",
+      approvalStatus: "denied",
+      approvalDecision: "deny",
+    });
     expect(
       logVerboseMessage.mock.calls.some(([message]) =>
         String(message).includes("decision=allow-once"),

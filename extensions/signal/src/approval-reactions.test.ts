@@ -840,6 +840,7 @@ describe("Signal approval reactions", () => {
       approval: { status: "denied", decision: "deny" },
     });
     const logVerboseMessage = vi.fn();
+    const onLosingRace = vi.fn();
 
     await expect(
       maybeResolveSignalApprovalReaction({
@@ -863,6 +864,7 @@ describe("Signal approval reactions", () => {
         actorId: "+15551230000",
         targetAuthor: "+15550009999",
         logVerboseMessage,
+        onLosingRace,
       }),
     ).resolves.toBe(true);
 
@@ -880,6 +882,12 @@ describe("Signal approval reactions", () => {
     expect(logVerboseMessage).not.toHaveBeenCalledWith(
       expect.stringContaining("decision=allow-once"),
     );
+    expect(onLosingRace).toHaveBeenCalledTimes(1);
+    expect(onLosingRace).toHaveBeenCalledWith({
+      conversationKey: "+15551230000",
+      approvalStatus: "denied",
+      approvalDecision: "deny",
+    });
     await expect(
       resolveSignalApprovalReactionTargetWithPersistence({
         accountId: "default",
@@ -889,6 +897,37 @@ describe("Signal approval reactions", () => {
         targetAuthor: "+15550009999",
       }),
     ).resolves.toBeNull();
+  });
+
+  it("does not invoke onLosingRace when the winning reaction is applied", async () => {
+    registerSignalApprovalReactionTarget({
+      accountId: "default",
+      conversationKey: "+15551230000",
+      messageId: "1700000000020",
+      approvalId: "exec-winning",
+      approvalKind: "exec",
+      allowedDecisions: ["allow-once"],
+      targetAuthorKeys: ["+15550009999"],
+      route: approvalRoute,
+      routeAllowed: true,
+    });
+    const onLosingRace = vi.fn();
+
+    await maybeResolveSignalApprovalReaction({
+      cfg: {
+        channels: { signal: { allowFrom: ["+15551230000"] } },
+        approvals: { exec: { enabled: true, mode: "session" } },
+      },
+      accountId: "default",
+      conversationKey: "+15551230000",
+      messageId: "1700000000020",
+      reactionKey: "👍",
+      actorId: "+15551230000",
+      targetAuthor: "+15550009999",
+      onLosingRace,
+    });
+
+    expect(onLosingRace).not.toHaveBeenCalled();
   });
 
   it("requires explicit approvers for approval reactions", async () => {
