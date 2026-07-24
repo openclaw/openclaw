@@ -182,6 +182,90 @@ describe("brave web search provider", () => {
     });
   });
 
+  it("resolves configured Brave env SecretRefs before BRAVE_API_KEY fallback", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "brave-fallback-key");
+    vi.stubEnv("BRAVE_SECRETREF_API_KEY", "brave-env-ref-key");
+    const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) => {
+      return emptyWebSearchResponse();
+    });
+    global.fetch = mockFetch as typeof global.fetch;
+
+    const provider = createBraveWebSearchProvider();
+    const tool = provider.createTool({
+      config: {
+        plugins: {
+          entries: {
+            brave: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: {
+                    source: "env",
+                    provider: "default",
+                    id: "BRAVE_SECRETREF_API_KEY",
+                  },
+                  mode: "web",
+                },
+              },
+            },
+          },
+        },
+      },
+      searchConfig: {},
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    await tool.execute({ query: "brave env SecretRef fallback" });
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(readHeader(fetchRequestInit(mockFetch), "X-Subscription-Token")).toBe(
+      "brave-env-ref-key",
+    );
+  });
+
+  it("does not use BRAVE_API_KEY when a configured env SecretRef is unavailable", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "brave-fallback-key");
+    vi.stubEnv("MISSING_BRAVE_SECRETREF_API_KEY", "");
+    const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) => {
+      return emptyWebSearchResponse();
+    });
+    global.fetch = mockFetch as typeof global.fetch;
+
+    const provider = createBraveWebSearchProvider();
+    const tool = provider.createTool({
+      config: {
+        plugins: {
+          entries: {
+            brave: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: {
+                    source: "env",
+                    provider: "default",
+                    id: "MISSING_BRAVE_SECRETREF_API_KEY",
+                  },
+                  mode: "web",
+                },
+              },
+            },
+          },
+        },
+      },
+      searchConfig: {},
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    const result = await tool.execute({ query: "brave unavailable SecretRef" });
+
+    expect(result).toMatchObject({ error: "missing_brave_api_key" });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
   it("normalizes brave language parameters and swaps reversed ui/search inputs", () => {
     expect(
       testing.normalizeBraveLanguageParams({
