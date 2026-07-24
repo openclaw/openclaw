@@ -230,6 +230,11 @@ export async function main(argv = process.argv.slice(2), runtimeEnv = process.en
     : applyLocalOxlintPolicy(oxlintArgs, localEnv);
   const sparseTargets = filterSparseMissingOxlintTargets(policyArgs);
   const finalArgs = sparseTargets.args;
+  const oxlintPath = resolveRepoToolBinPath("oxlint");
+  const needsArtifactPreparation =
+    !focusedConfig &&
+    env.OPENCLAW_OXLINT_SKIP_PREPARE !== "1" &&
+    shouldPrepareExtensionPackageBoundaryArtifacts(finalArgs);
   if (sparseTargets.skippedTargets.length > 0) {
     console.error(
       `[oxlint] sparse checkout is missing tracked target(s); skipping ${sparseTargets.skippedTargets.join(", ")}`,
@@ -261,15 +266,10 @@ export async function main(argv = process.argv.slice(2), runtimeEnv = process.en
         : () => {};
 
   try {
-    if (
-      !focusedConfig &&
-      env.OPENCLAW_OXLINT_SKIP_PREPARE !== "1" &&
-      shouldPrepareExtensionPackageBoundaryArtifacts(finalArgs)
-    ) {
+    if (needsArtifactPreparation) {
       await prepareExtensionPackageBoundaryArtifacts(env);
     }
 
-    const oxlintPath = resolveRepoToolBinPath("oxlint");
     const status = await runManagedCommand({
       bin: oxlintPath,
       args: finalArgs,
@@ -281,6 +281,24 @@ export async function main(argv = process.argv.slice(2), runtimeEnv = process.en
   }
 }
 
+/**
+ * CLI entry: converts wrapper crashes into a nonzero exit and ends every
+ * failing run with one stable final line. That line must survive output
+ * truncation (`… | tail -N`): without it, a crash or lint failure whose
+ * diagnostics scrolled away reads as success when only the tail is inspected.
+ */
+export async function runOxlintCliEntry(run = main, log = console.error) {
+  try {
+    await run();
+  } catch (error) {
+    log(error);
+    process.exitCode = 1;
+  }
+  if (typeof process.exitCode === "number" && process.exitCode !== 0) {
+    log(`[oxlint] FAILED (exit ${process.exitCode})`);
+  }
+}
+
 if (import.meta.main) {
-  await main();
+  await runOxlintCliEntry();
 }

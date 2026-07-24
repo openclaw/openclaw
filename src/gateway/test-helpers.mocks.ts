@@ -10,7 +10,6 @@ import {
   type GetReplyFromConfigFn,
   getGatewayTestHoistedState,
   agentDiscoveryMock,
-  sessionStoreSaveDelayMs,
   testTailnetIPv4,
   testTailscaleWhois,
   type RunBtwSideQuestionFn,
@@ -168,23 +167,6 @@ vi.mock("../infra/tailscale.js", async () => {
   return {
     ...actual,
     readTailscaleWhoisIdentity: async () => testTailscaleWhois.value,
-  };
-});
-
-vi.mock("../config/sessions.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../config/sessions.js")>("../config/sessions.js");
-  return {
-    ...actual,
-    saveSessionStore: vi.fn(async (storePath: string, store: unknown) => {
-      const delay = sessionStoreSaveDelayMs.value;
-      if (delay > 0) {
-        await new Promise((resolve) => {
-          setTimeout(resolve, delay);
-        });
-      }
-      return actual.saveSessionStore(storePath, store as never);
-    }),
   };
 });
 

@@ -122,6 +122,7 @@ export type {
 export {
   clearPluginOwnedSessionState,
   listSessionEntries,
+  listSessionEntriesReadOnly,
   loadExactSessionEntry,
   loadSessionEntry,
   loadSessionEntryReadOnly,
@@ -168,6 +169,7 @@ export {
 export {
   forkSessionAtMessage,
   listSessionBranches,
+  resolveSessionTranscriptActiveLeafEntryId,
   rewindSessionToMessage,
   switchSessionBranch,
 } from "./session-accessor.message-cut.js";
@@ -202,6 +204,7 @@ export { persistSessionTranscriptTurn } from "./session-accessor.transcript-turn
 export {
   isSessionTranscriptProjectionUnavailableError,
   readRecentSessionTranscriptMessageEvents,
+  readSessionTranscriptActiveLeafEvents,
   readSessionTranscriptMessageAnchorPage,
   readSessionTranscriptMessageEventById,
   readSessionTranscriptMessageEventCount,

@@ -3,7 +3,6 @@ import { EventEmitter } from "node:events";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { RateLimitError } from "../internal/discord.js";
 import {
@@ -17,8 +16,6 @@ import {
   formatDiscordDeployErrorDetails,
   formatDiscordDeployErrorMessage,
 } from "./provider.deploy-errors.js";
-
-vi.mock("openclaw/plugin-sdk/runtime-env", { spy: true });
 
 const {
   clientConstructorOptionsMock,
@@ -238,7 +235,6 @@ describe("monitorDiscordProvider", () => {
     vi.doMock("../token.js", () => ({
       normalizeDiscordToken: (value?: string) => value,
     }));
-    vi.mocked(logVerbose).mockImplementation(() => undefined);
     ({ monitorDiscordProvider } = await import("./provider.js"));
     ({ discordProviderTestSupport: providerTesting } = await import("./provider.test-support.js"));
   });
@@ -247,7 +243,6 @@ describe("monitorDiscordProvider", () => {
     providerTesting.reset();
     resetDiscordProviderMonitorMocks();
     voiceAutoJoinMock.mockClear();
-    vi.mocked(logVerbose).mockClear();
     providerTesting.setFetchDiscordApplicationId(async () => "app-1");
     providerTesting.setCreateDiscordNativeCommand(((
       ...args: Parameters<typeof providerTesting.setCreateDiscordNativeCommand>[0] extends
@@ -811,7 +806,7 @@ describe("monitorDiscordProvider", () => {
     });
   });
 
-  it("forwards custom eventQueue config from discord config to the Discord client", async () => {
+  it("ignores removed custom eventQueue config", async () => {
     resolveDiscordAccountMock.mockReturnValue({
       accountId: "default",
       token: "MTIz.abc.def",
@@ -830,7 +825,7 @@ describe("monitorDiscordProvider", () => {
     });
 
     const eventQueue = getConstructedEventQueue();
-    expect(eventQueue?.listenerTimeout).toBe(300_000);
+    expect(eventQueue?.listenerTimeout).toBe(120_000);
   });
 
   it("does not pass eventQueue.listenerTimeout into the message run queue", async () => {

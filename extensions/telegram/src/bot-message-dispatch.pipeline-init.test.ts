@@ -35,13 +35,14 @@ describeTelegramDispatch("dispatchTelegramMessage pipeline-init", () => {
         } as TelegramMessageContext["ctxPayload"],
         statusReactionController: statusReactionController as never,
         reactionApi,
-        removeAckAfterReply: true,
       }),
       runtime,
       suppressFailureFallback: true,
     });
 
-    await vi.waitFor(() => expect(statusReactionController.restoreInitial).toHaveBeenCalled());
+    await vi.waitFor(() => {
+      expect(statusReactionController.restoreInitial).toHaveBeenCalled();
+    });
     expect(reactionApi).not.toHaveBeenCalled();
   });
 });

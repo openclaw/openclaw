@@ -49,6 +49,9 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
     {
       sessionId?: string;
       updatedAt?: number;
+      createdVia?: SessionEntry["createdVia"];
+      createdActor?: SessionEntry["createdActor"];
+      createdAt?: number;
       archivedAt?: number;
       sessionFile?: string;
       spawnedBy?: string;
@@ -214,7 +217,7 @@ describe("realtime voice agent consult runtime", () => {
     const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime();
 
     const result = await consultRealtimeVoiceAgent({
-      cfg: {} as never,
+      cfg: { agents: { list: [{ id: "operator", default: true }] } } as never,
       agentRuntime: runtime as never,
       logger: { warn: vi.fn() },
       sessionKey: "voice:15550001234",
@@ -239,14 +242,21 @@ describe("realtime voice agent consult runtime", () => {
     if (!voiceSession) {
       throw new Error("Expected voice consult session entry");
     }
-    expect(Object.keys(voiceSession).toSorted()).toStrictEqual(["sessionId", "updatedAt"]);
+    expect(Object.keys(voiceSession).toSorted()).toStrictEqual([
+      "createdAt",
+      "createdVia",
+      "sessionId",
+      "updatedAt",
+    ]);
+    expect(voiceSession.createdVia).toBe("talk");
+    expectPositiveTimestamp(voiceSession.createdAt);
     expectNonEmptyString(voiceSession.sessionId);
     expectPositiveTimestamp(voiceSession.updatedAt);
     const call = requireEmbeddedAgentCall(runEmbeddedAgent);
     expect(call.sessionId).toBe(voiceSession.sessionId);
     expect(call.sessionKey).toBe("voice:15550001234");
-    expect(call.sandboxSessionKey).toBe("agent:main:voice:15550001234");
-    expect(call.agentId).toBe("main");
+    expect(call.sandboxSessionKey).toBe("agent:operator:voice:15550001234");
+    expect(call.agentId).toBe("operator");
     expect(call.messageProvider).toBe("voice");
     expect(call.lane).toBe("voice");
     expect(call.toolsAllow).toStrictEqual(["read"]);
@@ -416,7 +426,7 @@ describe("realtime voice agent consult runtime", () => {
     const { runtime, runEmbeddedAgent } = createAgentRuntime();
 
     await consultRealtimeVoiceAgent({
-      cfg: {} as never,
+      cfg: { agents: { list: [{ id: "operator", default: true }] } } as never,
       agentRuntime: runtime as never,
       logger: { warn: vi.fn() },
       agentId: "voice",
@@ -551,6 +561,9 @@ describe("realtime voice agent consult runtime", () => {
       sessionFile: testTempPath("forked.jsonl"),
       spawnedBy: "agent:main:main",
       forkedFromParent: true,
+      createdVia: "talk",
+      createdActor: { type: "agent", id: "agent:main:main" },
+      createdAt: forkedEntry.createdAt,
       updatedAt: forkedEntry.updatedAt,
     });
     expectPositiveTimestamp(forkedEntry.updatedAt);
@@ -668,6 +681,9 @@ describe("realtime voice agent consult runtime", () => {
     expect(voiceEntry).toStrictEqual({
       sessionId: voiceEntry.sessionId,
       spawnedBy: "agent:main:discord:channel:123",
+      createdVia: "talk",
+      createdActor: { type: "agent", id: "agent:main:discord:channel:123" },
+      createdAt: voiceEntry.createdAt,
       deliveryContext: {
         channel: "discord",
         to: "channel:123",

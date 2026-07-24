@@ -583,10 +583,10 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       );
       const shell = page.locator(".shell");
       const shellNav = page.locator(".shell-nav");
-      const collapseButton = sidebar
-        .locator(".sidebar-brand")
+      const collapseButton = page
+        .locator(".shell-chrome-controls")
         .getByRole("button", { name: "Collapse sidebar" });
-      const expandButton = page.locator(".shell-nav-expand");
+      const expandButton = page.locator(".shell-chrome-controls__nav-toggle");
       const drawerToggle = page
         .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
         .first();
@@ -839,7 +839,6 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       const initialListCount = (await gateway.getRequests("sessions.list")).length;
 
       await gateway.closeLatest(1006, "disconnect proof");
-      await page.locator(".connection-banner").waitFor({ state: "visible", timeout: 10_000 });
       await gateway.deferNext("sessions.list");
       await sidebarRow.waitFor({ state: "visible" });
       await captureUiProof(page, "sidebar-sessions-during-reconnect.png");
@@ -848,7 +847,6 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list")).length, { timeout: 15_000 })
         .toBeGreaterThan(initialListCount);
-      await page.locator(".connection-banner").waitFor({ state: "detached", timeout: 15_000 });
       await sidebarRow.waitFor({ state: "visible" });
       expect(await sidebarRows.count()).toBe(3);
       for (const otherKey of otherSessionKeys) {

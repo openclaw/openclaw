@@ -59,6 +59,7 @@ import {
 import type { RealtimeTalkLevelSignal } from "../realtime-talk-level.ts";
 import type { RealtimeTalkStatus } from "../realtime-talk.ts";
 import { CHAT_RUN_STATUS_TOAST_DURATION_MS, type ChatRunUiStatus } from "../run-lifecycle.ts";
+import { isInflightSteer, isSteeredQueueItem } from "../steered-chip.ts";
 import type { CompactionStatus, FallbackStatus, PlanStatus } from "../tool-stream.ts";
 import {
   handleChatAttachmentPaste,
@@ -99,13 +100,16 @@ type ChatComposerProps = {
   sessionKey: string;
   currentAgentId: string;
   connected: boolean;
+  offline?: boolean;
+  queuedOutboxCount?: number;
   canSend: boolean;
   disabledReason: string | null;
-  disabledActionLabel?: string | null;
-  onDisabledAction?: (() => void) | null;
+  disabledBanner?: { text: string; actionLabel: string; onAction: () => void };
+  runError?: { summary: string } | null;
   sending: boolean;
   canAbort?: boolean;
   runStatus?: ChatRunUiStatus | null;
+  waitingApproval?: boolean;
   compactionStatus?: CompactionStatus | null;
   fallbackStatus?: FallbackStatus | null;
   planStatus?: PlanStatus | null;
@@ -139,6 +143,9 @@ type ChatComposerProps = {
   realtimeTalkCameraError?: boolean;
   gatewayClient?: GatewayBrowserClient | null;
   composerHoldToRecord?: boolean;
+  suggestionComposer?: boolean;
+  typingLabel?: string | null;
+  onTypingChange?: (typing: boolean) => void;
   composerControls?: TemplateResult | typeof nothing;
   getDraft?: () => string;
   onDraftChange: (next: string) => void;
@@ -354,7 +361,15 @@ export function resetChatComposerState(paneId?: string) {
   goalElapsedTimers.clear();
 }
 
-const composerTextareaResizeObservers = new WeakMap<HTMLTextAreaElement, ResizeObserver>();
+type ComposerTextareaResizeObserverState = {
+  observer: ResizeObserver;
+  adjustmentFrame: number | null;
+};
+
+const composerTextareaResizeObservers = new WeakMap<
+  HTMLTextAreaElement,
+  ComposerTextareaResizeObserverState
+>();
 const questionDockResizeObservers = new WeakMap<HTMLElement, ResizeObserver>();
 
 function updateTextareaOverflow(el: HTMLTextAreaElement) {
@@ -374,14 +389,38 @@ function observeTextareaOverflow(el: HTMLTextAreaElement) {
   if (typeof ResizeObserver !== "function" || composerTextareaResizeObservers.has(el)) {
     return;
   }
-  const observer = new ResizeObserver(() => updateTextareaOverflow(el));
+  let width = el.getBoundingClientRect().width;
+  const observer = new ResizeObserver(() => {
+    const nextWidth = el.getBoundingClientRect().width;
+    if (nextWidth !== width) {
+      width = nextWidth;
+      const state = composerTextareaResizeObservers.get(el);
+      if (state && state.adjustmentFrame === null) {
+        state.adjustmentFrame = requestAnimationFrame(() => {
+          state.adjustmentFrame = null;
+          if (composerTextareaResizeObservers.get(el) === state) {
+            adjustTextareaHeight(el);
+          }
+        });
+      }
+      return;
+    }
+    updateTextareaOverflow(el);
+  });
   observer.observe(el);
-  composerTextareaResizeObservers.set(el, observer);
+  composerTextareaResizeObservers.set(el, { observer, adjustmentFrame: null });
 }
 
 function disconnectTextareaOverflowObserver(el: HTMLTextAreaElement) {
-  composerTextareaResizeObservers.get(el)?.disconnect();
+  const state = composerTextareaResizeObservers.get(el);
   composerTextareaResizeObservers.delete(el);
+  if (!state) {
+    return;
+  }
+  state.observer.disconnect();
+  if (state.adjustmentFrame !== null) {
+    cancelAnimationFrame(state.adjustmentFrame);
+  }
 }
 
 function syncQuestionDockHeight(el: HTMLElement): void {
@@ -1046,6 +1085,9 @@ type ChatQueueProps = {
 };
 
 function sendStateLabel(item: ChatQueueItem): string | null {
+  if (isInflightSteer(item)) {
+    return "Steering";
+  }
   switch (item.sendState) {
     case "waiting-model":
       // Persisted state name predates reasoning and speed picker gating.
@@ -1054,8 +1096,6 @@ function sendStateLabel(item: ChatQueueItem): string | null {
       return "Waiting for current run";
     case "executing-command":
       return "Running command";
-    case "steering":
-      return "Steering";
     case "waiting-reconnect":
       return "Waiting for reconnect";
     case "unconfirmed":
@@ -1081,9 +1121,10 @@ function renderChatQueue(props: ChatQueueProps) {
 
 function renderChatQueueItem(item: ChatQueueItem, props: ChatQueueProps) {
   const stateLabel = sendStateLabel(item);
-  const steered = item.kind === "steered";
+  const steered = isSteeredQueueItem(item);
   const failed = item.sendState === "failed" || item.sendState === "unconfirmed";
-  const busy = item.sendState === "executing-command" || item.sendState === "steering";
+  const reconnecting = item.sendState === "waiting-reconnect";
+  const busy = item.sendState === "executing-command" || isInflightSteer(item);
   const canSteer =
     Boolean(props.canAbort && props.onQueueSteer) &&
     !steered &&
@@ -1092,21 +1133,29 @@ function renderChatQueueItem(item: ChatQueueItem, props: ChatQueueProps) {
   const text = item.text || (item.attachments?.length ? `Image (${item.attachments.length})` : "");
   const itemClass = `chat-queue__item${steered ? " chat-queue__item--steered" : ""}${
     failed ? " chat-queue__item--failed" : ""
-  }`;
+  }${reconnecting ? " chat-queue__item--reconnect" : ""}`;
   // Row order keeps the actions on the first flex line; the error wraps below
   // them via flex-basis so failed rows grow by one line instead of a card.
   return html`
     <div class=${itemClass}>
-      <span class="chat-queue__icon" aria-hidden="true">
-        ${failed ? icons.alertTriangle : icons.clock}
-      </span>
+      ${reconnecting
+        ? html`<span class="chat-queue__dot" aria-hidden="true"></span>`
+        : html`<span class="chat-queue__icon" aria-hidden="true">
+            ${failed ? icons.alertTriangle : icons.clock}
+          </span>`}
       ${renderChatAuthorAvatar(item.sender)}
       ${steered
         ? html`<span class="chat-queue__badge chat-queue__badge--steered"
             >${t("chat.queue.steered")}</span
           >`
         : nothing}
-      ${stateLabel ? html`<span class="chat-queue__badge">${stateLabel}</span>` : nothing}
+      ${stateLabel
+        ? html`<span
+            class="chat-queue__badge"
+            title=${ifDefined(reconnecting ? item.sendError : undefined)}
+            >${stateLabel}</span
+          >`
+        : nothing}
       <span class="chat-queue__text" title=${text}>${text}</span>
       <span class="chat-queue__actions">
         ${failed && props.onQueueRetry
@@ -1150,7 +1199,14 @@ function renderChatQueueItem(item: ChatQueueItem, props: ChatQueueProps) {
               </openclaw-tooltip>
             `}
       </span>
-      ${item.sendError ? html`<span class="chat-queue__error">${item.sendError}</span>` : nothing}
+      ${
+        // Reconnect rows auto-retry, so the raw transport error is noise there;
+        // it stays inspectable via the badge tooltip. Failed/unconfirmed rows
+        // keep the visible error because the user must act on them.
+        item.sendError && !reconnecting
+          ? html`<span class="chat-queue__error">${item.sendError}</span>`
+          : nothing
+      }
     </div>
   `;
 }
@@ -1771,6 +1827,7 @@ type ChatRunControlsProps = {
   hasMessages: boolean;
   isBusy: boolean;
   followUpMode?: ControlUiFollowUpMode;
+  suggestionComposer?: boolean;
   sending: boolean;
   voiceActive?: boolean;
   voiceStatus?: RealtimeTalkStatus;
@@ -1922,16 +1979,18 @@ function renderChatPrimaryActions(props: ChatRunControlsProps) {
   const hasComposedContent = Boolean(props.draft.trim() || props.hasAttachments);
   const steersActiveRun = props.followUpMode === "steer";
   const interruptsActiveRun = props.followUpMode === "interrupt";
-  const activeRunActionLabel =
-    props.followUpMode === undefined
+  const activeRunActionLabel = props.suggestionComposer
+    ? t("chat.sessionSuggestions.suggest")
+    : props.followUpMode === undefined
       ? t("chat.runControls.send")
       : steersActiveRun
         ? t("chat.queue.steer")
         : interruptsActiveRun
           ? t("chat.runControls.send")
           : t("chat.runControls.queue");
-  const activeRunActionDescription =
-    props.followUpMode === undefined
+  const activeRunActionDescription = props.suggestionComposer
+    ? t("chat.sessionSuggestions.suggestMessage")
+    : props.followUpMode === undefined
       ? t("chat.runControls.sendMessage")
       : steersActiveRun
         ? t("chat.followUpModeSteer")
@@ -1967,19 +2026,29 @@ function renderChatPrimaryActions(props: ChatRunControlsProps) {
   const voiceButton = renderComposerVoiceButton(props);
   const sendAction = html`
     <openclaw-tooltip
-      .content=${props.isBusy ? t("chat.runControls.queue") : t("chat.runControls.send")}
+      .content=${props.suggestionComposer
+        ? t("chat.sessionSuggestions.suggestMessage")
+        : props.isBusy
+          ? t("chat.runControls.queue")
+          : t("chat.runControls.send")}
     >
       <button
         class="chat-send-btn"
         @click=${storeDraftAndSend}
         ?disabled=${!props.canSend || props.sending}
-        aria-label=${props.isBusy
-          ? t("chat.runControls.queueMessage")
-          : t("chat.runControls.sendMessage")}
+        aria-label=${props.suggestionComposer
+          ? t("chat.sessionSuggestions.suggestMessage")
+          : props.isBusy
+            ? t("chat.runControls.queueMessage")
+            : t("chat.runControls.sendMessage")}
       >
         ${icons.arrowUp}
         <span class="agent-chat__control-label"
-          >${props.isBusy ? t("chat.runControls.queue") : t("chat.runControls.send")}</span
+          >${props.suggestionComposer
+            ? t("chat.sessionSuggestions.suggest")
+            : props.isBusy
+              ? t("chat.runControls.queue")
+              : t("chat.runControls.send")}</span
         >
       </button>
     </openclaw-tooltip>
@@ -2154,8 +2223,9 @@ export function renderChatComposer(props: ChatComposerProps) {
   );
   const composerControls = props.composerControls ?? nothing;
   const assistantName = props.assistantName || "OpenClaw";
-  const inProgressLabel =
-    submittedProgress?.sendState === "waiting-model"
+  const inProgressLabel = props.waitingApproval
+    ? t("chat.waitingForApproval")
+    : submittedProgress?.sendState === "waiting-model"
       ? t("chat.composer.preparingModel")
       : props.stream !== null
         ? t("chat.composer.responding", { name: assistantName })
@@ -2448,6 +2518,7 @@ export function renderChatComposer(props: ChatComposerProps) {
       return;
     }
     syncComposerValue(target);
+    props.onTypingChange?.(Boolean(target.value.trim()));
   };
   const handleCompositionEnd = (event: CompositionEvent) => {
     state.composerComposing = false;
@@ -2455,6 +2526,7 @@ export function renderChatComposer(props: ChatComposerProps) {
       state.composingDraft = null;
     }
     syncComposerValue(event.target as HTMLTextAreaElement);
+    props.onTypingChange?.(Boolean((event.target as HTMLTextAreaElement).value.trim()));
   };
   const handleBlur = (event: FocusEvent) => {
     const target = event.target as HTMLTextAreaElement;
@@ -2462,6 +2534,7 @@ export function renderChatComposer(props: ChatComposerProps) {
       state.composingDraft = null;
     }
     commitComposerDraft(props, target.value);
+    props.onTypingChange?.(false);
   };
   const handleSend = () => {
     const draft = state.composerTextarea?.value ?? props.draft;
@@ -2469,6 +2542,7 @@ export function renderChatComposer(props: ChatComposerProps) {
       return;
     }
     commitComposerDraft(props, draft);
+    props.onTypingChange?.(false);
     props.onSend();
     syncComposerDraftAfterSend(state.composerTextarea);
   };
@@ -2609,10 +2683,11 @@ export function renderChatComposer(props: ChatComposerProps) {
     canSend: canSubmitDraft(actionDraft),
     connected: props.connected,
     draft: actionDraft,
-    hasAttachments: Boolean(props.attachments?.length),
+    hasAttachments: !props.suggestionComposer && Boolean(props.attachments?.length),
     hasMessages: props.messages.length > 0,
     isBusy,
     followUpMode: props.followUpMode,
+    suggestionComposer: props.suggestionComposer,
     sending: props.sending,
     voiceActive: props.realtimeTalkActive,
     voiceStatus: props.realtimeTalkStatus,
@@ -2650,6 +2725,14 @@ export function renderChatComposer(props: ChatComposerProps) {
       onQueueSteer: props.connected && canCompose ? props.onQueueSteer : undefined,
       onQueueRemove: props.onQueueRemove,
     })}
+    ${props.runError
+      ? html`
+          <div class="chat-run-error" role="alert">
+            <span class="chat-run-error__icon" aria-hidden="true">${icons.alertTriangle}</span>
+            <span class="chat-run-error__summary">${props.runError.summary}</span>
+          </div>
+        `
+      : nothing}
     <div class="agent-chat__composer-shell">
       ${questionPanelProps
         ? html`
@@ -2672,11 +2755,35 @@ export function renderChatComposer(props: ChatComposerProps) {
             </div>
           `
         : nothing}
+      ${props.disabledBanner
+        ? html`
+            <div class="agent-chat__disabled-banner callout info callout--action" role="status">
+              <span class="callout__content">${props.disabledBanner.text}</span>
+              <button type="button" class="btn btn--xs" @click=${props.disabledBanner.onAction}>
+                ${props.disabledBanner.actionLabel}
+              </button>
+            </div>
+          `
+        : nothing}
       ${showComposer
         ? html`<div
-            class="agent-chat__input"
+            class="agent-chat__input ${props.offline ? "agent-chat__input--offline" : ""}"
             @click=${(event: MouseEvent) => focusComposerFromChrome(event, canCompose)}
           >
+            ${props.offline
+              ? html`<div class="agent-chat__offline-hint" role="status" aria-live="polite">
+                  ${props.queuedOutboxCount
+                    ? t("chat.composer.offlineQueuedHint", {
+                        count: String(props.queuedOutboxCount),
+                      })
+                    : t("chat.composer.offlineHint")}
+                </div>`
+              : nothing}
+            ${props.typingLabel
+              ? html`<div class="agent-chat__typing-indicator" role="status">
+                  ${props.typingLabel}
+                </div>`
+              : nothing}
             ${slashMenuVisible ? renderSlashMenu(requestUpdate, props, visibleDraft) : nothing}
             ${renderAttachmentPreview(props)}
             ${props.replyTarget
@@ -2798,23 +2905,15 @@ export function renderChatComposer(props: ChatComposerProps) {
               ? html`
                   <div class="agent-chat__disabled-reason">
                     <span>${props.disabledReason}</span>
-                    ${props.disabledActionLabel && props.onDisabledAction
-                      ? html`
-                          <button
-                            type="button"
-                            class="btn btn--xs"
-                            @click=${props.onDisabledAction}
-                          >
-                            ${props.disabledActionLabel}
-                          </button>
-                        `
-                      : nothing}
                   </div>
                 `
               : nothing}
 
             <div class="agent-chat__composer-input-row">
-              ${renderChatAttachmentMenu({ ...props, disabled: !canCompose })}
+              ${renderChatAttachmentMenu({
+                ...props,
+                disabled: !canCompose || props.suggestionComposer === true,
+              })}
               <div class="agent-chat__composer-combobox">
                 <textarea
                   ${ref(state.textareaRef)}
@@ -2842,7 +2941,7 @@ export function renderChatComposer(props: ChatComposerProps) {
                   @compositionend=${handleCompositionEnd}
                   @blur=${handleBlur}
                   @paste=${(event: ClipboardEvent) => {
-                    if (canCompose) {
+                    if (canCompose && !props.suggestionComposer) {
                       handleChatAttachmentPaste(event, props);
                     }
                   }}

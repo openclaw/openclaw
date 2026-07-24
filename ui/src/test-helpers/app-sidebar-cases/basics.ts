@@ -2,6 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
 import {
+  clearSessionBoardAvailability,
+  recordSessionBoardAvailability,
+} from "../../lib/board/provider.ts";
+import {
   createGateway,
   createGatewayHarness,
   createSessions,
@@ -14,12 +18,11 @@ import "../../components/app-sidebar.ts";
 await import("../../components/viewer-facepile.ts");
 
 describe("AppSidebar update card wiring", () => {
-  it("shows OpenClaw in the default sidebar entries", async () => {
+  it("keeps OpenClaw out of the workspace sidebar", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
 
-    const link = sidebar.querySelector<HTMLAnchorElement>('.nav-item[href="/custodian"]');
-    expect(link?.textContent?.trim()).toBe("OpenClaw");
+    expect(sidebar.querySelector('.nav-item[href="/custodian"]')).toBeNull();
   });
 
   it("renders the update card in the footer after the attention slot and forwards its action", async () => {
@@ -45,7 +48,7 @@ describe("AppSidebar update card wiring", () => {
 });
 
 describe("AppSidebar viewer presence", () => {
-  it("renders the self user's Gravatar in the footer identity chip", async () => {
+  it("renders the self user's avatar route in the footer identity chip", async () => {
     const client = { instanceId: "self-instance" } as GatewayBrowserClient;
     const gatewayHarness = createGatewayHarness(client);
     const { sidebar } = await mountSidebar(
@@ -58,22 +61,29 @@ describe("AppSidebar viewer presence", () => {
       presence: [
         {
           instanceId: "self-instance",
-          user: { id: "00-self", email: "test@example.com", name: "Self User" },
+          // Presence publishes the canonical gateway avatar route; the gateway
+          // serves an uploaded avatar or its Gravatar fallback behind it, so the
+          // chip renders that same-origin route (CSP-safe) rather than a direct
+          // gravatar.com URL the Control UI CSP would block.
+          user: {
+            id: "00-self",
+            email: "test@example.com",
+            name: "Self User",
+            avatarUrl: "/api/users/00-self/avatar?v=7",
+          },
         },
       ],
     });
 
     await vi.waitFor(() => {
       const avatar = sidebar.querySelector<HTMLImageElement>(
-        ".sidebar-footer-bar__identity openclaw-viewer-avatar img",
+        ".sidebar-identity-card openclaw-viewer-avatar img",
       );
-      expect(avatar?.src).toBe(
-        "https://gravatar.com/avatar/973dfe463ec85785f5f95af5ba3906eedb2d931c24e69824a89ea65dba4e813b?d=404&s=128",
-      );
+      expect(avatar?.getAttribute("src")).toBe("/api/users/00-self/avatar?v=7");
     });
   });
 
-  it("groups identified viewers for session rows and the footer", async () => {
+  it("groups identified viewers for session rows and keeps the footer identity-only", async () => {
     const client = { instanceId: "self-instance" } as GatewayBrowserClient;
     const gatewayHarness = createGatewayHarness(client);
     const { sidebar } = await mountSidebar(
@@ -81,9 +91,6 @@ describe("AppSidebar viewer presence", () => {
       createSessions("main", ["agent:main:main", "agent:main:work"]),
     );
     sidebar.connected = true;
-    const onNavigate = vi.fn();
-    sidebar.onNavigate = onNavigate;
-
     gatewayHarness.publishEvent("presence", {
       presence: [
         {
@@ -97,7 +104,9 @@ describe("AppSidebar viewer presence", () => {
         },
         {
           instanceId: "alice-1",
-          user: { id: "alice", name: "Alice", avatarUrl: "https://example.test/alice.png" },
+          // Presence publishes avatars as the canonical gateway route; the
+          // resolver renders only that, falling back to initials otherwise.
+          user: { id: "alice", name: "Alice", avatarUrl: "/api/users/alice/avatar" },
           watchedSessions: ["agent:main:work"],
         },
         {
@@ -140,13 +149,7 @@ describe("AppSidebar viewer presence", () => {
     const sessionFacepile = sidebar.querySelector<HTMLElement>(
       '[data-session-key="agent:main:work"] openclaw-viewer-facepile',
     );
-    const footerFacepile = sidebar.querySelector<HTMLElement>(
-      ".sidebar-footer-bar openclaw-viewer-facepile",
-    );
-    await Promise.all([
-      (sessionFacepile as { updateComplete?: Promise<unknown> } | null)?.updateComplete,
-      (footerFacepile as { updateComplete?: Promise<unknown> } | null)?.updateComplete,
-    ]);
+    await (sessionFacepile as { updateComplete?: Promise<unknown> } | null)?.updateComplete;
     expect(
       sessionFacepile?.querySelector(".viewer-facepile")?.getAttribute("data-viewer-count"),
     ).toBe("6");
@@ -163,24 +166,22 @@ describe("AppSidebar viewer presence", () => {
       ),
     ).toEqual(["Alice", "bob@example.test", "Carol", "Dave\nErin\nFrank"]);
 
-    expect(
-      footerFacepile?.querySelector(".viewer-facepile")?.getAttribute("data-viewer-count"),
-    ).toBe("6");
-    expect(footerFacepile?.querySelector('[data-viewer-id="00-self"]')).toBeNull();
-    expect(footerFacepile?.querySelector(".viewer-avatar--overflow")?.textContent).toContain("+1");
-
-    const identityChip = sidebar.querySelector<HTMLButtonElement>(".sidebar-footer-bar__identity");
-    expect(identityChip?.querySelector(".sidebar-footer-bar__identity-name")?.textContent).toBe(
+    const identityCard = sidebar.querySelector<HTMLButtonElement>(".sidebar-identity-card");
+    expect(identityCard?.querySelector(".sidebar-identity-card__name")?.textContent).toBe(
       "Self User",
     );
-    expect(identityChip?.querySelector('[data-viewer-id="00-self"]')).not.toBeNull();
-    identityChip?.click();
-    expect(onNavigate).toHaveBeenCalledWith("profile", {
-      hash: "#settings-profile-identity",
-    });
+    expect(identityCard?.querySelector('[data-viewer-id="00-self"]')).not.toBeNull();
 
-    const avatar = identityChip?.querySelector<HTMLImageElement>("openclaw-viewer-avatar img");
+    const avatar = identityCard?.querySelector<HTMLImageElement>("openclaw-viewer-avatar img");
     expect(avatar?.getAttribute("src")).toBe("/api/users/00-self/avatar?v=1");
+    const footer = sidebar.querySelector(".sidebar-footer-bar");
+    expect(footer?.querySelector("openclaw-viewer-facepile")).toBeNull();
+    expect(footer?.querySelector("openclaw-sidebar-build-chip")).toBeNull();
+    expect(footer?.querySelector(".sidebar-brand__logo-slot")).toBeNull();
+    expect([...(footer?.children ?? [])].map((element) => element.localName)).toEqual([
+      "openclaw-tooltip",
+      "span",
+    ]);
     gatewayHarness.gateway.updateSelfUser?.({
       name: "Augusta Ada",
       avatarUrl: "/api/users/00-self/avatar?v=4",
@@ -188,17 +189,17 @@ describe("AppSidebar viewer presence", () => {
     await sidebar.updateComplete;
 
     // Profile mutations update gateway state directly; no presence event follows them.
-    expect(identityChip?.querySelector(".sidebar-footer-bar__identity-name")?.textContent).toBe(
+    expect(identityCard?.querySelector(".sidebar-identity-card__name")?.textContent).toBe(
       "Augusta Ada",
     );
     expect(avatar?.getAttribute("src")).toBe("/api/users/00-self/avatar?v=4");
 
     sidebar.connected = false;
     await sidebar.updateComplete;
-    expect(sidebar.querySelector(".sidebar-footer-bar__identity")).toBeNull();
+    expect(sidebar.querySelector(".sidebar-identity-card__name")?.textContent).toBe("Augusta Ada");
   });
 
-  it("leaves the footer identity chip absent for an unidentified connection", async () => {
+  it("renders an Account fallback for an unidentified connection", async () => {
     const client = { instanceId: "anonymous-self" } as GatewayBrowserClient;
     const gatewayHarness = createGatewayHarness(client);
     const { sidebar } = await mountSidebar(
@@ -214,8 +215,11 @@ describe("AppSidebar viewer presence", () => {
     });
     await sidebar.updateComplete;
 
-    expect(sidebar.querySelector(".sidebar-footer-bar__identity")).toBeNull();
-    expect(sidebar.querySelector(".sidebar-footer-bar")?.textContent).not.toContain("Sign in");
+    const identityCard = sidebar.querySelector(".sidebar-identity-card");
+    expect(identityCard?.querySelector(".sidebar-identity-card__name")?.textContent).toBe(
+      "Account",
+    );
+    expect(identityCard?.querySelector('[data-viewer-id="account"]')?.textContent).toContain("A");
   });
 });
 
@@ -246,6 +250,9 @@ describe("AppSidebar brand actions", () => {
     );
     expect(brandButton?.getAttribute("aria-label")).toBe("New thread");
     expect(brandButton?.disabled).toBe(true);
+    expect(actions?.querySelectorAll("button")).toHaveLength(1);
+    expect(sidebar.querySelector(".sidebar-search")).toBeNull();
+    expect(sidebar.querySelector(".sidebar-brand__collapse")).toBeNull();
 
     sidebar.connected = true;
     await sidebar.updateComplete;
@@ -257,21 +264,6 @@ describe("AppSidebar brand actions", () => {
       '[data-session-section="ungrouped"] .sidebar-new-session',
     );
     expect(headerButton?.getAttribute("aria-label")).toBe("New thread");
-  });
-
-  it("opens the archived Sessions view from the sessions-zone footer", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(
-      gateway,
-      createSessions("main", ["agent:main:main", "agent:main:work"]),
-    );
-    const onNavigate = vi.fn();
-    sidebar.onNavigate = onNavigate;
-    await sidebar.updateComplete;
-
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-view-archived")?.click();
-
-    expect(onNavigate).toHaveBeenCalledWith("sessions", { search: "?showArchived=1" });
   });
 });
 
@@ -345,52 +337,50 @@ describe("AppSidebar agent chip", () => {
     expect(onNavigate).not.toHaveBeenCalledWith("config");
   });
 
-  it("shows connection exceptions only after a sustained disconnect", async () => {
-    vi.useFakeTimers();
+  it("keeps the identity card available offline with reconnect and retry actions", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-    const presence = () => sidebar.querySelector(".sidebar-agent-card__presence");
-    const offlinePill = () => sidebar.querySelector(".sidebar-footer-bar__status");
-    const expectQuiet = () => {
-      expect(presence()).toBeNull();
-      expect(offlinePill()).toBeNull();
-    };
+    const onRetryConnect = vi.fn();
+    sidebar.onRetryConnect = onRetryConnect;
     sidebar.connected = true;
     await sidebar.updateComplete;
 
-    expectQuiet();
+    expect(sidebar.querySelector(".sidebar-identity-card__subtitle")).toBeNull();
     expect(
       sidebar.querySelector(".sidebar-agent-card__main")?.getAttribute("aria-label"),
-    ).toContain("Online");
+    ).not.toContain("Online");
 
     sidebar.connected = false;
+    sidebar.offline = true;
     await sidebar.updateComplete;
-    expect(sidebar.querySelector(".sidebar-agent-card__subtitle")?.textContent?.trim()).toBe(
+    const card = sidebar.querySelector<HTMLButtonElement>(".sidebar-identity-card");
+    expect(card?.querySelector(".sidebar-identity-card__name")?.textContent).toBe("Account");
+    expect(card?.querySelector(".sidebar-identity-card__subtitle")?.textContent).toBe(
+      "Reconnecting…",
+    );
+    expect(
+      card?.querySelector(".sidebar-identity-card__subtitle")?.getAttribute("aria-hidden"),
+    ).toBe("true");
+    const connectionStatus = sidebar.querySelector(".sidebar-identity-card__status");
+    expect(connectionStatus?.getAttribute("role")).toBe("status");
+    expect(connectionStatus?.getAttribute("aria-live")).toBe("polite");
+    expect(connectionStatus?.textContent).toBe("Reconnecting…");
+    expect(sidebar.querySelector(".sidebar-footer-bar__status")).toBeNull();
+    expect(sidebar.querySelector(".sidebar-agent-card__subtitle")?.textContent).not.toContain(
       "Offline",
     );
-    await vi.advanceTimersByTimeAsync(1_999);
-    expectQuiet();
 
-    await vi.advanceTimersByTimeAsync(1);
+    card?.click();
     await sidebar.updateComplete;
-    const pill = offlinePill();
-    expect(pill?.textContent?.trim()).toBe("Offline");
-    expect(pill?.getAttribute("aria-live")).toBe("polite");
-    expect(pill?.getAttribute("title")).toContain("Offline");
-    expect(pill?.querySelector(".sidebar-footer-bar__status-dot")).not.toBeNull();
-    expect(presence()).not.toBeNull();
+    const menu = sidebar.querySelector<HTMLElement>(".sidebar-identity-menu");
+    const retry = menu?.querySelector('wa-dropdown-item[value="command:retry-connect"]');
+    menu?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: retry }, bubbles: true }));
+    expect(onRetryConnect).toHaveBeenCalledOnce();
 
-    sidebar.connected = true;
+    sidebar.offline = false;
     await sidebar.updateComplete;
-    expectQuiet();
-
-    sidebar.connected = false;
-    await sidebar.updateComplete;
-    await vi.advanceTimersByTimeAsync(1_000);
-    sidebar.connected = true;
-    await sidebar.updateComplete;
-    await vi.advanceTimersByTimeAsync(2_000);
-    expectQuiet();
+    expect(sidebar.querySelector(".sidebar-identity-card__subtitle")).toBeNull();
+    expect(sidebar.querySelector(".sidebar-identity-card__status")?.textContent).toBe("");
   });
 
   it("shows a working subtitle while the agent has an active run", async () => {
@@ -413,6 +403,34 @@ describe("AppSidebar agent chip", () => {
     expect(sidebar.querySelector(".sidebar-agent-card__subtitle")?.textContent).toContain(
       "Working",
     );
+    const spinner = sidebar.querySelector(".nav-item--home .session-run-spinner");
+    expect(spinner?.hasAttribute("title")).toBe(false);
+    expect(
+      (spinner?.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)
+        ?.content,
+    ).toBe("Active run");
+  });
+
+  it("uses the shared tooltip for the Home dashboard glyph", async () => {
+    const mainKey = "agent:main:main";
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, createSessions("main", [mainKey]));
+
+    try {
+      recordSessionBoardAvailability(mainKey, true);
+      sidebar.requestUpdate();
+      await sidebar.updateComplete;
+
+      const glyph = sidebar.querySelector(".nav-item--home .sidebar-board-glyph");
+      expect(glyph?.getAttribute("aria-label")).toBe("Dashboard available");
+      expect(glyph?.hasAttribute("title")).toBe(false);
+      expect(
+        (glyph?.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)
+          ?.content,
+      ).toBe("Dashboard available");
+    } finally {
+      clearSessionBoardAvailability();
+    }
   });
 
   it("keeps the sessions list flat for the selected agent and flags other-agent unread", async () => {

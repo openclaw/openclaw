@@ -507,6 +507,11 @@ toward native `spawn_agent` for Codex-native subagent work, while
 Message-tool-only source replies also stay direct, since that is a
 turn-control contract.
 
+Codex Code Mode projects generic OpenClaw dynamic-tool results as text. Parse a
+JSON result before reading fields. Nested dynamic calls are serialized by the
+Codex runtime, so `Promise.all` does not submit them concurrently; use a
+bounded sequential launch loop when starting collector children.
+
 Tools marked `catalogMode: "direct-only"`, including the OpenClaw `computer`
 tool, are grouped under `openclaw_direct`. OpenClaw adds that namespace to
 Codex's `code_mode.direct_only_tool_namespaces` list without replacing
@@ -527,22 +532,23 @@ OpenClaw-owned dynamic tool calls are bounded independently from
 first available timeout in this order:
 
 - A positive per-call `timeoutMs` argument.
-- For `image_generate`, `agents.defaults.imageGenerationModel.timeoutMs`.
+- For `image_generate`, `agents.defaults.mediaModels.image.timeoutMs`.
 - For `image_generate` without a configured timeout, the 120 second
   image-generation default.
-- For the media-understanding `image` tool, `tools.media.image.timeoutSeconds`
+- For the media-understanding `image` tool, the selected image-capable `tools.media.models[]` entry's `timeoutSeconds`
   converted to milliseconds, or the 60 second media default. For image
   understanding, this applies to the request itself and is not reduced by
   earlier preparation work.
-- For the `message` tool, a fixed 120 second default.
+- For the `message` tool, a fixed 600 second outer budget that covers Gateway delivery and bounded same-key reconciliation.
 - The 90 second dynamic-tool default.
 
 This watchdog is the outer dynamic `item/tool/call` budget. Provider-specific
 request timeouts run inside that call and keep their own timeout semantics.
-Dynamic tool budgets are capped at 600000 ms. On timeout, OpenClaw aborts the
-tool signal where supported and returns a failed dynamic-tool response to
-Codex so the turn can continue instead of leaving the session in
-`processing`.
+Dynamic tool budgets are capped at 600000 ms. `agents_wait` adds 30000 ms of
+outer completion grace, and the app-server client allows 660000 ms so that
+structured wait result can reach Codex. On timeout, OpenClaw aborts the tool
+signal where supported and returns a failed dynamic-tool response to Codex so
+the turn can continue instead of leaving the session in `processing`.
 
 After Codex accepts a turn, and after OpenClaw responds to a turn-scoped
 app-server request, the harness expects Codex to make current-turn progress

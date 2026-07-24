@@ -1,126 +1,213 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { PresenceViewer } from "./viewer-facepile.ts";
-import "./viewer-facepile.ts";
+import { afterEach, expect, it, vi } from "vitest";
+import type { ControlUiBuildInfo } from "../build-info.ts";
+import { setAvatarGatewayOrigin } from "../lib/identity-avatar.ts";
+import {
+  hasMultiplePresenceIdentities,
+  hasSessionPresenceViewers,
+  type PresenceViewer,
+} from "./viewer-facepile.ts";
 
 type ViewerAvatarElement = HTMLElement & {
-  user: PresenceViewer;
+  user: PresenceViewer | null;
   updateComplete: Promise<boolean>;
 };
 
-function viewer(overrides: Partial<PresenceViewer> = {}): PresenceViewer {
-  return {
-    id: "profile-1",
-    name: "Test Person",
-    watchedSessions: [],
-    ...overrides,
-  };
-}
-
-async function mountViewer(user: PresenceViewer): Promise<ViewerAvatarElement> {
-  const avatar = document.createElement("openclaw-viewer-avatar") as ViewerAvatarElement;
-  avatar.user = user;
-  document.body.append(avatar);
-  await avatar.updateComplete;
-  return avatar;
-}
-
-async function waitForImage(avatar: ViewerAvatarElement): Promise<HTMLImageElement> {
-  await vi.waitFor(() => expect(avatar.querySelector("img")).not.toBeNull());
-  return avatar.querySelector<HTMLImageElement>("img")!;
-}
-
 afterEach(() => {
   document.body.replaceChildren();
+  setAvatarGatewayOrigin(null);
   vi.restoreAllMocks();
 });
 
-describe("viewer avatar resolution", () => {
-  it("keeps an uploaded avatar ahead of the email fallback", async () => {
-    const digest = vi.spyOn(globalThis.crypto.subtle, "digest");
-    const avatar = await mountViewer(
-      viewer({ email: "test@example.com", avatarUrl: "/api/users/profile-1/avatar?v=2" }),
-    );
-    const image = await waitForImage(avatar);
+it("uses the shared resolver and rejects cross-origin presence avatar metadata", async () => {
+  const avatar = document.createElement("openclaw-viewer-avatar") as ViewerAvatarElement;
+  avatar.user = {
+    id: "profile-mallory",
+    name: "Mallory",
+    avatarUrl: "https://evil.example/avatar.png",
+    watchedSessions: [],
+  };
+  document.body.append(avatar);
 
-    expect(image.getAttribute("src")).toBe("/api/users/profile-1/avatar?v=2");
-    expect(image.getAttribute("referrerpolicy")).toBe("no-referrer");
-    expect(image.getAttribute("loading")).toBe("lazy");
-    expect(digest).not.toHaveBeenCalled();
-  });
-
-  it("retries a failed uploaded avatar after the user snapshot updates", async () => {
-    const avatarUrl = "/api/users/profile-1/avatar?v=2";
-    const avatar = await mountViewer(viewer({ avatarUrl }));
-    const failedImage = await waitForImage(avatar);
-
-    failedImage.dispatchEvent(new Event("error"));
+  await vi.waitFor(async () => {
     await avatar.updateComplete;
     expect(avatar.querySelector("img")).toBeNull();
+    expect(avatar.textContent?.trim()).toBe("MA");
+  });
+});
 
-    avatar.user = viewer({ avatarUrl });
+it("renders trusted presence avatar routes directly", async () => {
+  const avatar = document.createElement("openclaw-viewer-avatar") as ViewerAvatarElement;
+  avatar.user = {
+    id: "profile-ada",
+    name: "Ada Lovelace",
+    avatarUrl: "/api/users/profile-ada/avatar",
+    watchedSessions: [],
+  };
+  document.body.append(avatar);
+
+  await vi.waitFor(async () => {
     await avatar.updateComplete;
-    expect(avatar.querySelector("img")?.getAttribute("src")).toBe(avatarUrl);
+    expect(avatar.querySelector("img")?.getAttribute("src")).toBe("/api/users/profile-ada/avatar");
+  });
+});
+
+type ViewerFacepileElement = HTMLElement & {
+  presencePayload: unknown;
+  selfInstanceId?: string;
+  variant: "session" | "footer";
+  buildInfo: ControlUiBuildInfo;
+  gatewayVersion: string | null;
+  updateComplete: Promise<boolean>;
+};
+
+const BUILD_INFO: ControlUiBuildInfo = {
+  version: "2026.7.2",
+  commit: "1234567890abcdef1234567890abcdef12345678",
+  commitAt: null,
+  builtAt: "2026-07-20T10:30:00.000Z",
+  branch: "main",
+  dirty: true,
+  buildId: "test",
+};
+
+function mountFooterFacepile() {
+  const facepile = document.createElement("openclaw-viewer-facepile") as ViewerFacepileElement;
+  facepile.variant = "footer";
+  facepile.selfInstanceId = "self-instance";
+  facepile.buildInfo = BUILD_INFO;
+  facepile.gatewayVersion = "2026.7.1";
+  facepile.presencePayload = {
+    presence: [
+      {
+        instanceId: "self-instance",
+        user: { id: "z-self", name: "Self User", email: "self@example.test" },
+        watchedSessions: [],
+      },
+      {
+        instanceId: "alice-1",
+        user: { id: "alice", name: "Alice", email: "alice@example.test" },
+        watchedSessions: [],
+      },
+      {
+        instanceId: "bob-1",
+        user: { id: "bob", email: "bob@example.test" },
+        watchedSessions: [],
+      },
+    ],
+  };
+  document.body.append(facepile);
+  return facepile;
+}
+
+it("shows one footer hover card with every online user and server details", async () => {
+  const facepile = mountFooterFacepile();
+
+  await vi.waitFor(async () => {
+    await facepile.updateComplete;
+    expect(facepile.querySelector(".viewer-facepile-trigger")).not.toBeNull();
   });
 
-  it("normalizes and hashes email with SHA-256 for the Gravatar URL", async () => {
-    const avatar = await mountViewer(viewer({ email: "  TEST@example.com " }));
+  const tooltip = facepile.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+    "openclaw-tooltip.sidebar-hover-tooltip",
+  );
+  await tooltip?.updateComplete;
+  const trigger = facepile.querySelector<HTMLElement>(".viewer-facepile-trigger");
+  trigger?.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true }));
 
-    expect(avatar.querySelector("img")).toBeNull();
-    expect(avatar.textContent?.trim()).toBe("TP");
-    const image = await waitForImage(avatar);
-    expect(image.getAttribute("src")).toBe(
-      "https://gravatar.com/avatar/973dfe463ec85785f5f95af5ba3906eedb2d931c24e69824a89ea65dba4e813b?d=404&s=128",
-    );
+  expect(
+    tooltip?.shadowRoot?.querySelector<HTMLElement & { open: boolean }>("wa-tooltip")?.open,
+  ).toBe(true);
+  const card = facepile.querySelector('.sidebar-presence-hover-card[slot="content"]');
+  expect(card?.querySelector(".sidebar-hover-card__heading")?.textContent).toContain("Online · 3");
+  const rows = [...(card?.querySelectorAll(".sidebar-hover-card__person") ?? [])];
+  expect(card?.querySelector(".sidebar-hover-card__people")?.getAttribute("tabindex")).toBe("0");
+  expect(rows.map((row) => row.getAttribute("data-viewer-id"))).toEqual(["z-self", "alice", "bob"]);
+  expect(rows[0]?.querySelector(".sidebar-hover-card__you")?.textContent).toContain("you");
+  // Named users show the email as a subtitle; email-only users don't repeat it.
+  expect(rows[1]?.querySelector(".sidebar-hover-card__person-email")?.textContent).toBe(
+    "alice@example.test",
+  );
+  expect(rows[2]?.querySelector(".sidebar-hover-card__person-name")?.textContent?.trim()).toBe(
+    "bob@example.test",
+  );
+  expect(rows[2]?.querySelector(".sidebar-hover-card__person-email")).toBeNull();
+  expect(rows[1]?.querySelector("openclaw-viewer-avatar")).not.toBeNull();
+  expect(card?.textContent).toContain("Server");
+  expect(card?.querySelector(".sidebar-hover-card__summary")?.textContent).toContain(
+    "v2026.7.2 · main · dirty",
+  );
+  expect(
+    card?.querySelector(".sidebar-hover-card__metadata-value--mono")?.textContent?.trim(),
+  ).toBe("1234567890ab");
+  expect(card?.textContent).toContain("2026-07-20T10:30:00.000Z");
+  expect(card?.textContent).toContain("2026.7.1");
+  expect(facepile.querySelector("wa-dropdown")).toBeNull();
+  expect(trigger?.hasAttribute("aria-haspopup")).toBe(false);
+  expect(trigger?.hasAttribute("aria-expanded")).toBe(false);
+});
+
+it("keeps session facepiles as plain non-interactive avatar clusters", async () => {
+  const facepile = document.createElement("openclaw-viewer-facepile") as ViewerFacepileElement;
+  facepile.variant = "session";
+  facepile.presencePayload = {
+    presence: [
+      {
+        instanceId: "alice-1",
+        user: { id: "alice", name: "Alice" },
+        watchedSessions: [],
+      },
+    ],
+  };
+  document.body.append(facepile);
+
+  await vi.waitFor(async () => {
+    await facepile.updateComplete;
+    expect(facepile.querySelector(".viewer-facepile")).not.toBeNull();
   });
+  expect(facepile.querySelector("button.viewer-facepile-trigger")).toBeNull();
+  expect(facepile.querySelectorAll("openclaw-tooltip")).toHaveLength(1);
+});
 
-  it("falls back to initials when the Gravatar image fails", async () => {
-    const avatar = await mountViewer(viewer({ email: "missing-one@example.test" }));
-    const image = await waitForImage(avatar);
+it("detects only other viewers watching the requested session", () => {
+  const payload = {
+    presence: [
+      {
+        instanceId: "self-instance",
+        user: { id: "self", name: "Self" },
+        watchedSessions: ["agent:main:active"],
+      },
+      {
+        instanceId: "alice-instance",
+        user: { id: "alice", name: "Alice" },
+        watchedSessions: ["agent:main:other"],
+      },
+    ],
+  };
+  expect(hasSessionPresenceViewers(payload, "self-instance", "agent:main:active")).toBe(false);
+  expect(hasSessionPresenceViewers(payload, "self-instance", "agent:main:other")).toBe(true);
+});
 
-    image.dispatchEvent(new Event("error"));
-    await avatar.updateComplete;
-
-    expect(avatar.querySelector("img")).toBeNull();
-    expect(avatar.textContent?.trim()).toBe("TP");
-  });
-
-  it("does not attribute a stale Gravatar error to the next user", async () => {
-    const avatar = await mountViewer(viewer({ email: "first-stale@example.test" }));
-    const staleImage = await waitForImage(avatar);
-
-    avatar.user = viewer({ id: "profile-2", email: "second-current@example.test" });
-    staleImage.dispatchEvent(new Event("error"));
-    await avatar.updateComplete;
-
-    const image = await waitForImage(avatar);
-    expect(image.getAttribute("src")).toMatch(
-      /^https:\/\/gravatar\.com\/avatar\/[a-f0-9]{64}\?d=404&s=128$/u,
-    );
-  });
-
-  it("renders initials without attempting a hash when email is absent", async () => {
-    const digest = vi.spyOn(globalThis.crypto.subtle, "digest");
-    const avatar = await mountViewer(viewer());
-
-    expect(avatar.querySelector("img")).toBeNull();
-    expect(avatar.textContent?.trim()).toBe("TP");
-    expect(digest).not.toHaveBeenCalled();
-  });
-
-  it("caches missing Gravatars by normalized email", async () => {
-    const digest = vi.spyOn(globalThis.crypto.subtle, "digest");
-    const first = await mountViewer(viewer({ email: " Missing-Two@Example.Test " }));
-    const image = await waitForImage(first);
-    image.dispatchEvent(new Event("error"));
-    await first.updateComplete;
-
-    const second = await mountViewer(
-      viewer({ id: "profile-2", email: "missing-two@example.test" }),
-    );
-
-    expect(second.querySelector("img")).toBeNull();
-    expect(digest).toHaveBeenCalledTimes(1);
-  });
+it("keeps collaboration UI dormant for a solo identity", () => {
+  const solo = {
+    presence: [
+      {
+        instanceId: "self-instance",
+        user: { id: "self", name: "Self" },
+        watchedSessions: ["agent:main:active"],
+      },
+      {
+        instanceId: "second-tab",
+        user: { id: "self", name: "Self" },
+        watchedSessions: ["agent:main:active"],
+      },
+    ],
+  };
+  expect(hasMultiplePresenceIdentities(solo)).toBe(false);
+  expect(
+    hasMultiplePresenceIdentities({
+      presence: [...solo.presence, { user: { id: "alice" }, watchedSessions: [] }],
+    }),
+  ).toBe(true);
 });

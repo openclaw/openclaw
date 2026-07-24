@@ -1,3 +1,4 @@
+import { normalizeCodexResponsesBaseUrlForOpenAISdk } from "@openclaw/ai/transports";
 import type { TSchema } from "typebox";
 import type {
   WorkerInferenceContext,
@@ -44,7 +45,6 @@ import {
   type PreparedSimpleCompletionModel,
 } from "../../agents/simple-completion-runtime.js";
 import { bindSimpleCompletionModelResolverWorkspace } from "../../agents/simple-completion-scope.js";
-import { normalizeCodexResponsesBaseUrlForOpenAISdk } from "../../agents/simple-completion-transport.js";
 import { normalizeUsage, hasNonzeroUsage } from "../../agents/usage.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -127,40 +127,6 @@ function resolveWorkerInferenceAuthProfileMode(params: {
     allowKeychainPrompt: false,
     config: params.config,
   }).profiles[params.profileId]?.type;
-}
-
-export function projectWorkerInferenceModelRouteConfig(params: {
-  config: OpenClawConfig;
-  provider: string;
-  modelId: string;
-  authMode?: string;
-}): OpenClawConfig {
-  const authRequirement = resolveProviderModelRouteAuthRequirement(params.authMode);
-  if (!authRequirement) {
-    return params.config;
-  }
-  const resolution = resolveProviderModelRoutes({
-    provider: params.provider,
-    modelId: params.modelId,
-    config: params.config,
-  });
-  if (resolution?.kind !== "routes") {
-    return params.config;
-  }
-  const route = resolution.routes.find(
-    (candidate) => candidate.authRequirement === authRequirement,
-  );
-  if (!route) {
-    return params.config;
-  }
-  // Worker placement owns the agent harness, while the gateway-owned profile
-  // owns the provider route. Keep those decisions separate or OAuth can be
-  // materialized as a public API-key endpoint and fail before the first token.
-  return projectProviderModelRouteConfig({
-    provider: params.provider,
-    config: params.config,
-    route,
-  });
 }
 
 const ERROR_MESSAGES = {
@@ -553,18 +519,36 @@ async function resolveApprovedModel(params: {
           : sessionProfileId
             ? { id: sessionProfileId, source: sessionProfileSource }
             : undefined;
-    const modelConfig = projectWorkerInferenceModelRouteConfig({
-      config: lifecycleConfig,
-      provider: resolved.ref.provider,
-      modelId: resolved.ref.model,
-      authMode: selectedProfile
-        ? dependencies.resolveAuthProfileMode({
-            config: lifecycleConfig,
-            agentDir,
-            profileId: selectedProfile.id,
-          })
-        : undefined,
-    });
+    let modelConfig = lifecycleConfig;
+    const authMode = selectedProfile
+      ? dependencies.resolveAuthProfileMode({
+          config: lifecycleConfig,
+          agentDir,
+          profileId: selectedProfile.id,
+        })
+      : undefined;
+    const authRequirement = resolveProviderModelRouteAuthRequirement(authMode);
+    const routeResolution = authRequirement
+      ? resolveProviderModelRoutes({
+          provider: resolved.ref.provider,
+          modelId: resolved.ref.model,
+          config: lifecycleConfig,
+        })
+      : undefined;
+    const route =
+      routeResolution?.kind === "routes"
+        ? routeResolution.routes.find((candidate) => candidate.authRequirement === authRequirement)
+        : undefined;
+    if (route) {
+      // Worker placement owns the agent harness, while the gateway-owned profile
+      // owns the provider route. Keep those decisions separate or OAuth can be
+      // materialized as a public API-key endpoint and fail before the first token.
+      modelConfig = projectProviderModelRouteConfig({
+        provider: resolved.ref.provider,
+        config: lifecycleConfig,
+        route,
+      });
+    }
     const modelResolver = bindSimpleCompletionModelResolverWorkspace(
       (provider, modelId, resolvedAgentDir, cfg, options) =>
         dependencies.resolveModel(provider, modelId, resolvedAgentDir, cfg, {

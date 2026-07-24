@@ -78,12 +78,6 @@ function createTaskFlowSessionMock() {
   };
 }
 
-function createDeprecatedRuntimeConfigError(name: "loadConfig" | "writeConfigFile"): Error {
-  return new Error(
-    `Plugin runtime config.${name}() is deprecated in tests; pass cfg/current() or use mutateConfigFile()/replaceConfigFile().`,
-  );
-}
-
 function normalizeUntrustedGroupPrompt(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -423,9 +417,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       MessageSidFull: params.messageIdFull,
       ReplyToId: params.reply.replyToId ?? params.supplemental?.quote?.id,
       ReplyToIdFull: params.reply.replyToIdFull ?? params.supplemental?.quote?.fullId,
-      MediaPath: params.media?.[0]?.path,
-      MediaUrl: params.media?.[0]?.url ?? params.media?.[0]?.path,
-      MediaType: params.media?.[0]?.contentType ?? params.media?.[0]?.kind,
+      media: params.media,
       ChatType: params.conversation.kind,
       ConversationLabel: params.conversation.label,
       SenderName: params.sender.name ?? params.sender.displayLabel,
@@ -484,12 +476,6 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         afterWrite: { mode: "auto" },
         followUp: { mode: "auto", requiresRestart: false },
       })) as unknown as PluginRuntime["config"]["replaceConfigFile"],
-      loadConfig: vi.fn(() => {
-        throw createDeprecatedRuntimeConfigError("loadConfig");
-      }) as unknown as PluginRuntime["config"]["loadConfig"],
-      writeConfigFile: vi.fn(async () => {
-        throw createDeprecatedRuntimeConfigError("writeConfigFile");
-      }) as unknown as PluginRuntime["config"]["writeConfigFile"],
     },
     agent: {
       defaults: {
@@ -663,9 +649,6 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       listProviders: vi.fn() as unknown as PluginRuntime["webSearch"]["listProviders"],
       search: vi.fn() as unknown as PluginRuntime["webSearch"]["search"],
     },
-    stt: {
-      transcribeAudioFile: vi.fn() as unknown as PluginRuntime["stt"]["transcribeAudioFile"],
-    },
     channel: {
       text: {
         chunkByNewline: vi.fn((text: string) => (text ? [text] : [])),
@@ -721,9 +704,6 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         formatAgentEnvelope: vi.fn(
           (opts: { body: string }) => opts.body,
         ) as unknown as PluginRuntime["channel"]["reply"]["formatAgentEnvelope"],
-        formatInboundEnvelope: vi.fn(
-          (opts: { body: string }) => opts.body,
-        ) as unknown as PluginRuntime["channel"]["reply"]["formatInboundEnvelope"],
         resolveEnvelopeFormatOptions: vi.fn(() => ({
           template: "channel+name+time",
         })) as unknown as PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"],
@@ -936,9 +916,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         fromToolContext: vi.fn(),
       } as PluginRuntime["tasks"]["flows"],
       managedFlows: taskFlow,
-      flow: taskFlow,
     },
-    taskFlow,
     modelAuth: {
       getApiKeyForModel: vi.fn() as unknown as PluginRuntime["modelAuth"]["getApiKeyForModel"],
       getRuntimeAuthForModel:
@@ -950,7 +928,6 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       run: vi.fn(),
       waitForRun: vi.fn(),
       getSessionMessages: vi.fn(),
-      getSession: vi.fn(),
       deleteSession: vi.fn(),
     },
     sandbox: {
