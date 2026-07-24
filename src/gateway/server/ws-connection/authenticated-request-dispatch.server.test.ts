@@ -1,0 +1,175 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { WebSocket } from "ws";
+import {
+  createDiagnosticTraceContext,
+  getActiveDiagnosticTraceContext,
+  runWithDiagnosticTraceContext,
+  type DiagnosticTraceContext,
+} from "../../../infra/diagnostic-trace-context.js";
+import type { GatewayWsClient } from "../ws-types.js";
+import { createGatewayAuthenticatedRequestDispatcher } from "./authenticated-request-dispatch.js";
+import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
+
+const TRACEPARENTS = {
+  first: "00-11111111111111111111111111111111-1111111111111111-01",
+  second: "00-22222222222222222222222222222222-2222222222222222-00",
+} as const;
+
+function createClient(): GatewayWsClient {
+  return {
+    socket: {} as WebSocket,
+    connect: {
+      minProtocol: 1,
+      maxProtocol: 1,
+      client: {
+        id: "gateway-client",
+        version: "dev",
+        platform: "test",
+        mode: "backend",
+      },
+      role: "operator",
+      scopes: ["operator.admin"],
+    },
+    connId: "conn-trace-test",
+    usesSharedGatewayAuth: false,
+  };
+}
+
+function createDispatcher(
+  handler: NonNullable<GatewayWsMessageHandlerParams["extraHandlers"][string]>,
+) {
+  const send = vi.fn();
+  const logGateway = {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  };
+  const dispatcher = createGatewayAuthenticatedRequestDispatcher({
+    handler: {
+      connId: "conn-trace-test",
+      extraHandlers: { "test.trace": handler },
+      buildRequestContext: () => ({}) as never,
+      send,
+      close: vi.fn(),
+      isClosed: () => false,
+      setCloseCause: vi.fn(),
+      logGateway,
+    } as unknown as GatewayWsMessageHandlerParams,
+    isWebchatConnect: () => false,
+  });
+  return { dispatcher, logGateway, send };
+}
+
+async function dispatchInFreshMessageScope(
+  dispatcher: ReturnType<typeof createDispatcher>["dispatcher"],
+  client: GatewayWsClient,
+  id: string,
+  traceparent?: string,
+): Promise<void> {
+  await runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () =>
+    dispatcher.dispatch(
+      {
+        type: "req",
+        id,
+        method: "test.trace",
+        params: {},
+        ...(traceparent ? { traceparent } : {}),
+      },
+      client,
+    ),
+  );
+}
+
+describe("authenticated WebSocket request trace dispatch", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("continues a valid upstream trace as a child context", async () => {
+    let observed: DiagnosticTraceContext | undefined;
+    const { dispatcher } = createDispatcher(() => {
+      observed = getActiveDiagnosticTraceContext();
+    });
+
+    await dispatchInFreshMessageScope(dispatcher, createClient(), "first", TRACEPARENTS.first);
+    await vi.waitFor(() => {
+      expect(observed).toBeDefined();
+    });
+
+    expect(observed).toMatchObject({
+      traceId: "11111111111111111111111111111111",
+      parentSpanId: "1111111111111111",
+      traceFlags: "01",
+    });
+    expect(observed?.spanId).not.toBe("1111111111111111");
+  });
+
+  it("retains fresh roots for missing and malformed traceparent values", async () => {
+    const observed = new Map<string, DiagnosticTraceContext | undefined>();
+    const { dispatcher } = createDispatcher(({ req }) => {
+      observed.set(req.id, getActiveDiagnosticTraceContext());
+    });
+    const client = createClient();
+
+    await dispatchInFreshMessageScope(dispatcher, client, "missing");
+    await vi.waitFor(() => {
+      expect(observed.has("missing")).toBe(true);
+    });
+    await dispatchInFreshMessageScope(
+      dispatcher,
+      client,
+      "malformed",
+      "00-11111111111111111111111111111111-1111111111111111-zz",
+    );
+    await vi.waitFor(() => {
+      expect(observed.has("malformed")).toBe(true);
+    });
+
+    const missing = observed.get("missing");
+    const malformed = observed.get("malformed");
+    expect(missing).toBeDefined();
+    expect(malformed).toBeDefined();
+    expect(missing?.traceId).not.toBe("11111111111111111111111111111111");
+    expect(malformed?.traceId).not.toBe("11111111111111111111111111111111");
+    expect(missing?.traceId).not.toBe(malformed?.traceId);
+  });
+
+  it("isolates concurrent request contexts on one connection", async () => {
+    let releaseRequests: (() => void) | undefined;
+    const requestBarrier = new Promise<void>((resolve) => {
+      releaseRequests = resolve;
+    });
+    const observed = new Map<
+      string,
+      { before: DiagnosticTraceContext | undefined; after?: DiagnosticTraceContext }
+    >();
+    const { dispatcher } = createDispatcher(async ({ req }) => {
+      const observation: {
+        before: DiagnosticTraceContext | undefined;
+        after?: DiagnosticTraceContext;
+      } = { before: getActiveDiagnosticTraceContext() };
+      observed.set(req.id, observation);
+      await requestBarrier;
+      observation.after = getActiveDiagnosticTraceContext();
+    });
+    const client = createClient();
+
+    await Promise.all([
+      dispatchInFreshMessageScope(dispatcher, client, "first", TRACEPARENTS.first),
+      dispatchInFreshMessageScope(dispatcher, client, "second", TRACEPARENTS.second),
+    ]);
+    await vi.waitFor(() => {
+      expect(observed.size).toBe(2);
+    });
+    releaseRequests?.();
+    await vi.waitFor(() => {
+      expect([...observed.values()].every((entry) => entry.after)).toBe(true);
+    });
+
+    expect(observed.get("first")?.before?.traceId).toBe("11111111111111111111111111111111");
+    expect(observed.get("second")?.before?.traceId).toBe("22222222222222222222222222222222");
+    expect(observed.get("first")?.after).toEqual(observed.get("first")?.before);
+    expect(observed.get("second")?.after).toEqual(observed.get("second")?.before);
+  });
+});

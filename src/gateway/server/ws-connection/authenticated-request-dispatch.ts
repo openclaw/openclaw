@@ -5,6 +5,11 @@ import {
   formatValidationErrors,
   validateRequestFrame,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import {
+  createChildDiagnosticTraceContext,
+  parseDiagnosticTraceparent,
+  runWithDiagnosticTraceContext,
+} from "../../../infra/diagnostic-trace-context.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
@@ -137,7 +142,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       });
     };
 
-    const requestDispatch = (async () => {
+    const executeRequest = async () => {
       const { handleGatewayRequest } = await import("../../server-methods.js");
       await handleGatewayRequest({
         req,
@@ -148,7 +153,16 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
         methodRegistry: getMethodRegistry?.(),
         context: buildRequestContext(),
       });
-    })().catch((err: unknown) => {
+    };
+    const upstreamTrace = parseDiagnosticTraceparent(req.traceparent);
+    const requestDispatch = (
+      upstreamTrace
+        ? runWithDiagnosticTraceContext(
+            createChildDiagnosticTraceContext(upstreamTrace),
+            executeRequest,
+          )
+        : executeRequest()
+    ).catch((err: unknown) => {
       logGateway.error(`request handler failed: ${formatForLog(err)}`);
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     });
