@@ -51,6 +51,8 @@ import {
   extractBindableShellWrapperInlineCommand,
   isShellWrapperExecutable,
   normalizeExecutableToken,
+  POSIX_PARSEABLE_SHELL_WRAPPERS,
+  POSIX_SHELL_WRAPPERS,
   POWERSHELL_WRAPPERS,
 } from "./exec-wrapper-resolution.js";
 import { resolveExecWrapperTrustPlan } from "./exec-wrapper-trust-plan.js";
@@ -60,6 +62,7 @@ import {
   resolveKnownPackageManagerExecInvocation,
 } from "./package-manager-exec-wrapper.js";
 import {
+  advancePosixInlineOptionScan,
   POSIX_INLINE_COMMAND_FLAGS,
   isDirectShellPositionalCarrierCommand,
   isPowerShellInlineFileCommandFlag,
@@ -521,6 +524,7 @@ function resolveSegmentAllowlistMatch(params: {
       : executableResolution;
   const matchExecutionResolution = resolveExecutionTargetResolution(matchResolution);
   const inlineCommand = extractBindableShellWrapperInlineCommand(allowlistSegment.argv);
+  const opaquePosixShellWrapper = isOpaquePosixShellWrapperSegment(allowlistSegment);
   const powerShellFileScriptArgv = resolvePowerShellFileScriptArgv({
     segment: allowlistSegment,
     cwd: params.context.cwd,
@@ -597,7 +601,7 @@ function resolveSegmentAllowlistMatch(params: {
       : null;
   return {
     effectiveArgv,
-    inlineCommand: powerShellFileScriptArgv ? null : inlineCommand,
+    inlineCommand: powerShellFileScriptArgv || opaquePosixShellWrapper ? null : inlineCommand,
     match: executableMatch ?? shellPositionalArgvMatch ?? shellScriptMatch,
   };
 }
@@ -991,7 +995,25 @@ function isShellWrapperSegment(segment: ExecCommandSegment): boolean {
   return hasSegmentExecutableMatch(segment, isShellWrapperExecutable);
 }
 
-const SHELL_WRAPPER_OPTIONS_WITH_VALUE = new Set(["-c", "--command", "-o", "-O", "+O"]);
+function isOpaquePosixShellWrapperSegment(segment: ExecCommandSegment): boolean {
+  return hasSegmentExecutableMatch(segment, (token) => {
+    const wrapper = normalizeExecutableToken(token);
+    return POSIX_SHELL_WRAPPERS.has(wrapper) && !POSIX_PARSEABLE_SHELL_WRAPPERS.has(wrapper);
+  });
+}
+
+const SHELL_WRAPPER_OPTIONS_WITH_VALUE = new Set(["-c", "--command", "-o", "-O", "+O", "+o"]);
+const POSIX_SHELLS_WITH_PLUS_OPTIONS = new Set([
+  "ash",
+  "bash",
+  "dash",
+  "ksh",
+  "mksh",
+  "osh",
+  "sh",
+  "yash",
+  "zsh",
+]);
 
 const SHELL_WRAPPER_DISQUALIFYING_SCRIPT_OPTIONS = [
   "--rcfile",
@@ -1015,6 +1037,9 @@ function resolveShellWrapperScriptCandidatePath(params: {
   if (!isShellWrapperSegment(params.segment)) {
     return undefined;
   }
+  if (isOpaquePosixShellWrapperSegment(params.segment)) {
+    return undefined;
+  }
 
   const argv = params.segment.argv;
   if (!Array.isArray(argv) || argv.length < 2) {
@@ -1023,6 +1048,7 @@ function resolveShellWrapperScriptCandidatePath(params: {
 
   const wrapperName = normalizeExecutableToken(argv[0] ?? "");
   const isPowerShell = POWERSHELL_WRAPPERS.has(wrapperName);
+  const supportsPosixPlusOptions = POSIX_SHELLS_WITH_PLUS_OPTIONS.has(wrapperName);
 
   let idx = 1;
   while (idx < argv.length) {
@@ -1035,7 +1061,7 @@ function resolveShellWrapperScriptCandidatePath(params: {
       idx += 1;
       break;
     }
-    if (token === "-c" || token === "--command") {
+    if (!isPowerShell && POSIX_INLINE_COMMAND_FLAGS.has(token)) {
       return undefined;
     }
     if (!isPowerShell && /^-[^-]*c[^-]*$/i.test(token)) {
@@ -1053,6 +1079,13 @@ function resolveShellWrapperScriptCandidatePath(params: {
     }
     if (isPowerShell && POWERSHELL_OPTIONS_WITH_VALUE_RE.test(token)) {
       idx += 2;
+      continue;
+    }
+    if (
+      !isPowerShell &&
+      (token.startsWith("-") || (supportsPosixPlusOptions && token.startsWith("+")))
+    ) {
+      idx += advancePosixInlineOptionScan(token);
       continue;
     }
     if (token.startsWith("-") || token.startsWith("+")) {
@@ -1317,6 +1350,9 @@ function collectAllowAlwaysPatterns(params: {
     cwd: params.cwd,
   });
   const inlineCommand = powerShellFileScriptArgv ? null : trustPlan.shellInlineCommand;
+  if (inlineCommand && isOpaquePosixShellWrapperSegment(segment)) {
+    return;
+  }
   const positionalArgvCandidate =
     inlineCommand !== null
       ? resolveShellWrapperPositionalArgvCandidate({

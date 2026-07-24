@@ -147,7 +147,6 @@ extensions/matrix/src/matrix/actions/verification.test.ts
 extensions/matrix/src/matrix/client/config.ts
 extensions/matrix/src/matrix/monitor/events.test.ts
 extensions/matrix/src/matrix/monitor/handler.test.ts
-extensions/matrix/src/matrix/monitor/handler.ts
 extensions/matrix/src/matrix/sdk.test.ts
 extensions/matrix/src/matrix/sdk.ts
 extensions/matrix/src/matrix/sdk/verification-manager.ts
@@ -179,7 +178,6 @@ extensions/memory-core/src/memory/search-manager.test.ts
 extensions/memory-core/src/memory/search-manager.ts
 extensions/memory-core/src/rem-evidence.ts
 extensions/memory-core/src/short-term-promotion.test.ts
-extensions/memory-core/src/short-term-promotion.ts
 extensions/memory-core/src/tools.test.ts
 extensions/memory-core/src/tools.ts
 extensions/memory-lancedb/index.test.ts
@@ -302,7 +300,6 @@ extensions/telegram/src/message-cache.ts
 extensions/telegram/src/polling-session.test.ts
 extensions/telegram/src/polling-session.ts
 extensions/telegram/src/send.test.ts
-extensions/telegram/src/send.ts
 extensions/telegram/src/thread-bindings.ts
 extensions/telegram/src/webhook.test.ts
 extensions/tlon/src/monitor/index.ts
@@ -355,7 +352,6 @@ packages/gateway-protocol/src/schema/agents-models-skills.ts
 packages/gateway-protocol/src/schema/protocol-schemas.ts
 packages/markdown-core/src/ir.ts
 packages/memory-host-sdk/src/host/session-files.ts
-packages/model-catalog-core/src/model-catalog-normalize.ts
 packages/sdk/src/client.ts
 packages/sdk/src/index.test.ts
 packages/speech-core/src/tts.test.ts
@@ -585,7 +581,6 @@ src/auto-reply/reply/dispatch-from-config.progress.test-utils.ts
 src/auto-reply/reply/dispatch-from-config.routing.test-utils.ts
 src/auto-reply/reply/dispatch-from-config.send-policy-routing.test-utils.ts
 src/auto-reply/reply/dispatch-from-config.shared.test-harness.ts
-src/auto-reply/reply/dispatch-from-config.ts
 src/auto-reply/reply/followup-runner.test.ts
 src/auto-reply/reply/followup-runner.ts
 src/auto-reply/reply/get-reply-inline-actions.skip-when-config-empty.test.ts
@@ -621,7 +616,6 @@ src/cli/command-secret-gateway.test.ts
 src/cli/command-secret-gateway.ts
 src/cli/command-secret-targets.ts
 src/cli/config-cli.test.ts
-src/cli/config-cli.ts
 src/cli/cron-cli.test.ts
 src/cli/daemon-cli/status.gather.test.ts
 src/cli/daemon-cli/status.gather.ts
@@ -741,7 +735,6 @@ src/cron/service/jobs.ts
 src/cron/service/ops.test.ts
 src/cron/service/ops.ts
 src/cron/service/timer.regression.test.ts
-src/cron/service/timer.ts
 src/cron/store.test.ts
 src/daemon/launchd.test.ts
 src/daemon/launchd.ts
@@ -855,7 +848,6 @@ src/gateway/session-utils.fs.test.ts
 src/gateway/session-utils.fs.ts
 src/gateway/session-utils.subagent.test.ts
 src/gateway/session-utils.test.ts
-src/gateway/session-utils.ts
 src/gateway/sessions-history-http.test.ts
 src/gateway/sessions-patch.test.ts
 src/gateway/talk-realtime-relay.test.ts
@@ -962,7 +954,6 @@ src/plugins/conversation-binding.test.ts
 src/plugins/conversation-binding.ts
 src/plugins/discovery.test.ts
 src/plugins/discovery.ts
-src/plugins/gateway-startup-plugin-ids.ts
 src/plugins/hook-types.ts
 src/plugins/hooks.ts
 src/plugins/install-security-scan.runtime.ts
@@ -1042,7 +1033,6 @@ src/tasks/task-flow-registry.ts
 src/tasks/task-registry.maintenance.ts
 src/tasks/task-registry.store.test.ts
 src/tasks/task-registry.test.ts
-src/tasks/task-registry.ts
 src/trajectory/export.test.ts
 src/trajectory/export.ts
 src/tui/embedded-backend.test.ts

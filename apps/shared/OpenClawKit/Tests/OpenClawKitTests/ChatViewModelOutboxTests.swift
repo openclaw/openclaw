@@ -1741,6 +1741,9 @@ struct ChatViewModelOutboxTests {
                 vm.messages.contains { vm.outboxState(for: $0.id)?.isFailed == true }
             }
         }
+        try await waitUntil("terminal failure flush settled") {
+            await MainActor.run { !vm.isFlushingOutbox }
+        }
 
         // Tap-to-retry resets attempts; with the gateway accepting again the
         // command now flushes and the row disappears.
