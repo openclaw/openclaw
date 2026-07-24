@@ -8,6 +8,7 @@ import {
   canUseCodexModelBackedApprovalsReviewerForModel,
   codexAppServerStartOptionsKey,
   readCodexPluginConfig,
+  resolveCodexAppServerNativeHookRelay,
   resolveCodexAppServerRuntimeOptions,
   resolveCodexAppServerStartOptionsForAgent,
   resolveCodexAppServerUserHomeDir,
@@ -384,6 +385,131 @@ describe("Codex app-server config", () => {
         },
       }),
     ).toStrictEqual({});
+  });
+
+  it("parses the native hook relay toggle and event scope", () => {
+    expect(
+      readCodexPluginConfig({ appServer: { nativeHookRelay: { enabled: false } } }).appServer
+        ?.nativeHookRelay,
+    ).toEqual({ enabled: false });
+    expect(
+      readCodexPluginConfig({ appServer: { nativeHookRelay: { events: ["post_tool_use"] } } })
+        .appServer?.nativeHookRelay,
+    ).toEqual({ events: ["post_tool_use"] });
+  });
+
+  it("rejects unknown native hook relay events and fields", () => {
+    expect(
+      readCodexPluginConfig({
+        appServer: { nativeHookRelay: { events: ["not_a_relay_event"] } },
+      }),
+    ).toStrictEqual({});
+    expect(
+      readCodexPluginConfig({
+        appServer: { nativeHookRelay: { enabled: true, unknownField: 1 } },
+      }),
+    ).toStrictEqual({});
+  });
+
+  it("resolves the native hook relay defaults, disablement, and event scope", () => {
+    expect(resolveCodexAppServerNativeHookRelay(undefined)).toStrictEqual({ enabled: true });
+    expect(
+      resolveCodexAppServerNativeHookRelay({
+        appServer: { nativeHookRelay: { enabled: false, events: ["post_tool_use"] } },
+      }),
+    ).toStrictEqual({ enabled: false });
+    expect(resolveCodexAppServerNativeHookRelay({ appServer: {} })).toStrictEqual({
+      enabled: true,
+    });
+    expect(
+      resolveCodexAppServerNativeHookRelay({
+        appServer: { nativeHookRelay: { enabled: false } },
+      }),
+    ).toStrictEqual({ enabled: false });
+    expect(
+      resolveCodexAppServerNativeHookRelay({
+        appServer: { nativeHookRelay: { events: ["post_tool_use", "permission_request"] } },
+      }),
+    ).toStrictEqual({ enabled: true, events: ["post_tool_use", "permission_request"] });
+    expect(
+      resolveCodexAppServerNativeHookRelay({
+        appServer: { nativeHookRelay: { events: [] } },
+      }),
+    ).toStrictEqual({ enabled: true });
+  });
+
+  it("retains permission_request in a scoped event list while an approval policy is active", () => {
+    // Default approval policy ("on-request") is active: scoping to post_tool_use
+    // must not silently drop approval enforcement.
+    expect(
+      resolveCodexAppServerNativeHookRelay({
+        appServer: { nativeHookRelay: { events: ["post_tool_use"] } },
+      }),
+    ).toStrictEqual({ enabled: true, events: ["post_tool_use", "permission_request"] });
+    // Explicit approval policy still active (untrusted): same guardrail.
+    expect(
+      resolveCodexAppServerNativeHookRelay({
+        appServer: {
+          approvalPolicy: "untrusted",
+          nativeHookRelay: { events: ["post_tool_use"] },
+        },
+      }),
+    ).toStrictEqual({ enabled: true, events: ["post_tool_use", "permission_request"] });
+    // Already present: not duplicated.
+    expect(
+      resolveCodexAppServerNativeHookRelay({
+        appServer: { nativeHookRelay: { events: ["permission_request", "post_tool_use"] } },
+      }),
+    ).toStrictEqual({ enabled: true, events: ["permission_request", "post_tool_use"] });
+  });
+
+  it("honors a scoped event list verbatim when the approval policy is 'never'", () => {
+    expect(
+      resolveCodexAppServerNativeHookRelay({
+        appServer: {
+          approvalPolicy: "never",
+          nativeHookRelay: { events: ["post_tool_use"] },
+        },
+      }),
+    ).toStrictEqual({ enabled: true, events: ["post_tool_use"] });
+    // Full opt-out wins regardless of approval policy.
+    expect(
+      resolveCodexAppServerNativeHookRelay({
+        appServer: {
+          approvalPolicy: "on-request",
+          nativeHookRelay: { enabled: false, events: ["post_tool_use"] },
+        },
+      }),
+    ).toStrictEqual({ enabled: false });
+  });
+
+  it("keeps the plugin manifest configSchema in sync for appServer.nativeHookRelay", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const manifest = JSON.parse(
+      await readFile(new URL("../../openclaw.plugin.json", import.meta.url), "utf8"),
+    ) as {
+      configSchema: {
+        properties: {
+          appServer: {
+            properties: Record<
+              string,
+              { properties?: Record<string, { items?: { enum?: string[] } }> }
+            >;
+          };
+        };
+      };
+    };
+    const relay = manifest.configSchema.properties.appServer.properties.nativeHookRelay;
+    if (!relay) {
+      throw new Error("nativeHookRelay missing from codex plugin manifest configSchema");
+    }
+    expect(Object.keys(relay.properties ?? {}).toSorted()).toStrictEqual(["enabled", "events"]);
+    expect(relay.properties?.events?.items?.enum).toStrictEqual([
+      "pre_tool_use",
+      "post_tool_use",
+      "permission_request",
+      "before_agent_finalize",
+    ]);
   });
 
   it("rejects removed app-server topology fields", () => {
