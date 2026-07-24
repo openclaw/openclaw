@@ -232,6 +232,7 @@ describe("getMessageFeishu", () => {
       data: {
         receive_id: "oc_send",
         msg_type: "post",
+        uuid: expect.any(String),
         content: JSON.stringify({
           zh_cn: {
             content: [

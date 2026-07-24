@@ -94,8 +94,58 @@ function createFeishuApiError(
   return new Error(formatFeishuApiFailure(error, errorPrefix, options), { cause: error });
 }
 
+const FEISHU_SEND_TRANSIENT_ERROR_CODES = new Set([
+  "EAI_AGAIN",
+  "ECONNABORTED",
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "EHOSTUNREACH",
+  "ENETDOWN",
+  "ENETUNREACH",
+  "ENOTFOUND",
+  "EPIPE",
+  "ERR_NETWORK",
+  "ETIMEDOUT",
+]);
+const FEISHU_MESSAGE_IN_PROGRESS_CODE = 230049;
 const FEISHU_SEND_MAX_RETRIES = 2;
 const FEISHU_SEND_RETRY_BASE_MS = 500;
+
+function isFeishuSendTransientError(error: unknown, seen = new Set<unknown>()): boolean {
+  if (!isRecord(error) || seen.has(error)) {
+    return false;
+  }
+  seen.add(error);
+
+  const response = isRecord(error.response) ? error.response : undefined;
+  const responseData = isRecord(response?.data) ? response.data : undefined;
+  if (responseData?.code === FEISHU_MESSAGE_IN_PROGRESS_CODE) {
+    return true;
+  }
+  const status = response?.status;
+  if (
+    typeof status === "number" &&
+    (status === 408 || status === 425 || (status >= 500 && status <= 599))
+  ) {
+    return true;
+  }
+
+  const code = readString(error.code)?.toUpperCase();
+  if (code && FEISHU_SEND_TRANSIENT_ERROR_CODES.has(code)) {
+    return true;
+  }
+
+  const message = typeof error.message === "string" ? error.message.toLowerCase() : "";
+  if (
+    message.includes("timeout") ||
+    message.includes("socket hang up") ||
+    message.includes("network error")
+  ) {
+    return true;
+  }
+
+  return isFeishuSendTransientError(error.cause, seen);
+}
 
 export async function requestFeishuApi<T>(
   request: () => Promise<T>,
@@ -103,6 +153,8 @@ export async function requestFeishuApi<T>(
   options: {
     includeConfigParams?: boolean;
     includeNestedErrorLogId?: boolean;
+    /** Retry transient network/server failures. Only enable for idempotent requests. */
+    retryTransient?: boolean;
     /** Base retry delay in ms; doubles on the second retry. @internal */
     retryDelayMs?: number;
   } = {},
@@ -130,7 +182,9 @@ export async function requestFeishuApi<T>(
         // matches the previous linear attempt*base backoff exactly; revisit
         // the delay curve if FEISHU_SEND_MAX_RETRIES grows.
         minDelayMs: options.retryDelayMs ?? FEISHU_SEND_RETRY_BASE_MS,
-        shouldRetry: (error) => getFeishuSendRateLimitCode(error) !== undefined,
+        shouldRetry: (error) =>
+          getFeishuSendRateLimitCode(error) !== undefined ||
+          (options.retryTransient === true && isFeishuSendTransientError(error)),
       },
     );
   } catch (error) {
