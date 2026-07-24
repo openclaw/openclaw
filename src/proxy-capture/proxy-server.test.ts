@@ -5,10 +5,10 @@ import {
   createServer as createHttpServer,
   type IncomingMessage,
 } from "node:http";
-import type { AddressInfo } from "node:net";
+import net, { Socket, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import type { DebugProxySettings } from "./env.js";
 import { startDebugProxyServer } from "./proxy-server.js";
@@ -228,7 +228,23 @@ async function postThroughProxy(params: {
   });
 }
 
+async function openConnectClient(proxyUrl: string, connectTarget: string): Promise<Socket> {
+  const proxy = new URL(proxyUrl);
+  const socket = new Socket();
+  socket.on("error", () => {});
+  await new Promise<void>((resolve, reject) => {
+    socket.once("error", reject);
+    socket.connect(Number(proxy.port), proxy.hostname, () => {
+      socket.off("error", reject);
+      resolve();
+    });
+  });
+  socket.write(`CONNECT ${connectTarget} HTTP/1.1\r\nHost: ${connectTarget}\r\n\r\n`);
+  return socket;
+}
+
 afterEach(async () => {
+  vi.restoreAllMocks();
   await cleanupTestRoot();
 });
 
@@ -315,6 +331,93 @@ describe("startDebugProxyServer", () => {
     } finally {
       await proxy.stop();
       await origin.stop();
+    }
+  });
+
+  it("returns 504 when a CONNECT upstream opening attempt times out", async () => {
+    const settings = await makeSettings();
+    const stalledUpstream = new Socket();
+    const setOpeningTimeout = vi.spyOn(stalledUpstream, "setTimeout");
+    let resolveConnectCalled!: (target: { hostname: string; port: number }) => void;
+    const connectCalled = new Promise<{ hostname: string; port: number }>((resolve) => {
+      resolveConnectCalled = resolve;
+    });
+    vi.spyOn(net, "connect").mockImplementation(((port: number, hostname: string) => {
+      resolveConnectCalled({ hostname, port });
+      return stalledUpstream;
+    }) as typeof net.connect);
+    const proxy = await startDebugProxyServer({ settings });
+    let client: Socket | undefined;
+
+    try {
+      const connectedClient = await openConnectClient(proxy.proxyUrl, "unreachable.example:443");
+      client = connectedClient;
+      let response = "";
+      connectedClient.setEncoding("utf8");
+      connectedClient.on("data", (chunk) => {
+        response += chunk.toString();
+      });
+      const clientClosed = new Promise<void>((resolve) => {
+        connectedClient.once("close", resolve);
+      });
+
+      await expect(connectCalled).resolves.toMatchObject({
+        hostname: "unreachable.example",
+        port: 443,
+      });
+      expect(setOpeningTimeout).toHaveBeenCalledWith(30_000, expect.any(Function));
+      stalledUpstream.emit("timeout");
+      await clientClosed;
+
+      expect(response).toContain("504 Gateway Timeout");
+      expect(response).toContain("Gateway Timeout\n");
+      expect(stalledUpstream.destroyed).toBe(true);
+      expect(getDebugProxyCaptureStore().getSessionEvents(settings.sessionId, 10)).toContainEqual(
+        expect.objectContaining({
+          direction: "local",
+          errorText: "CONNECT upstream timed out after 30000ms",
+          kind: "error",
+          protocol: "connect",
+        }),
+      );
+    } finally {
+      client?.destroy();
+      stalledUpstream.destroy();
+      await proxy.stop();
+    }
+  });
+
+  it("removes the CONNECT opening timeout after the upstream socket connects", async () => {
+    const settings = await makeSettings();
+    const upstream = new Socket();
+    const disableTimeout = vi.spyOn(upstream, "setTimeout");
+    let resolveConnectCalled!: () => void;
+    const connectCalled = new Promise<void>((resolve) => {
+      resolveConnectCalled = resolve;
+    });
+    vi.spyOn(net, "connect").mockImplementation(((
+      _port: number,
+      _hostname: string,
+      onConnect: () => void,
+    ) => {
+      resolveConnectCalled();
+      upstream.once("connect", onConnect);
+      return upstream;
+    }) as typeof net.connect);
+    const proxy = await startDebugProxyServer({ settings });
+    let client: Socket | undefined;
+
+    try {
+      client = await openConnectClient(proxy.proxyUrl, "example.com:443");
+      await connectCalled;
+      upstream.emit("connect");
+
+      expect(disableTimeout).toHaveBeenCalledWith(0);
+      expect(upstream.listenerCount("timeout")).toBe(0);
+    } finally {
+      client?.destroy();
+      upstream.destroy();
+      await proxy.stop();
     }
   });
 });
