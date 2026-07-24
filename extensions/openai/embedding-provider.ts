@@ -114,8 +114,11 @@ async function resolveOpenAiEmbeddingClient(
   });
   // Non-native OpenAI routers (e.g. Requesty) expect the provider-qualified
   // model name ("openai/text-embedding-3-small") in embedding requests.
+  // Proxy routers need the qualified name for ALL embedding models, not just
+  // those already configured with the openai/ prefix, because they use the
+  // prefix to determine which upstream provider to route through.
   // Strip the prefix only when talking to the native OpenAI API.
-  if (!isNativeOpenAiBaseUrl(client.baseUrl) && originalModel.startsWith("openai/")) {
+  if (!isNativeOpenAiBaseUrl(client.baseUrl)) {
     client.model = `openai/${normalizeOpenAiModel(originalModel)}`;
   }
   return {
