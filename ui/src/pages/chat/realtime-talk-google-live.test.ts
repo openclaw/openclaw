@@ -22,6 +22,7 @@ type MockWebSocketEventType = "close" | "error" | "message" | "open";
 
 const wsInstances: MockGoogleLiveWebSocket[] = [];
 const createdSources: MockAudioBufferSource[] = [];
+const audioContexts: MockAudioContext[] = [];
 const inputProcessors: Array<{
   connect: ReturnType<typeof vi.fn>;
   disconnect: ReturnType<typeof vi.fn>;
@@ -74,6 +75,19 @@ class MockGoogleLiveWebSocket {
     }
   }
 
+  emitClose() {
+    this.readyState = 3;
+    for (const handler of this.handlers.close) {
+      handler();
+    }
+  }
+
+  emitError() {
+    for (const handler of this.handlers.error) {
+      handler();
+    }
+  }
+
   emitMessage(data: unknown) {
     for (const handler of this.handlers.message) {
       handler({ data });
@@ -97,6 +111,7 @@ class MockAudioContext {
 
   constructor(options?: { sampleRate?: number }) {
     this.sampleRate = options?.sampleRate ?? 24000;
+    audioContexts.push(this);
   }
 
   createMediaStreamSource() {
@@ -231,6 +246,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
   beforeEach(() => {
     wsInstances.length = 0;
     createdSources.length = 0;
+    audioContexts.length = 0;
     inputProcessors.length = 0;
     inputSinks.length = 0;
     vi.stubGlobal("WebSocket", MockGoogleLiveWebSocket);
@@ -246,6 +262,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -334,6 +351,149 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     expect(inputProcessors).toHaveLength(0);
     expect(wsInstances).toHaveLength(0);
     expect(onInputLevel).not.toHaveBeenCalled();
+  });
+
+  it("times out a stalled WebSocket opening and releases browser resources", async () => {
+    vi.useFakeTimers();
+    const stopTrack = vi.fn();
+    getUserMedia.mockResolvedValue({
+      getTracks: () => [{ stop: stopTrack }],
+    });
+    const onStatus = vi.fn();
+    const onTalkEvent = vi.fn();
+    const transport = createTransport({ onStatus, onTalkEvent });
+
+    await transport.start();
+    const ws = latestWebSocket();
+    ws.readyState = 0;
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(onStatus).toHaveBeenCalledExactlyOnceWith(
+      "error",
+      "Realtime connection timed out after 30000ms",
+    );
+    expect(stopTrack).toHaveBeenCalledOnce();
+    expect(audioContexts).toHaveLength(2);
+    expect(audioContexts.every((context) => context.close.mock.calls.length === 1)).toBe(true);
+    expect(ws.readyState).toBe(3);
+    expect(onTalkEvent).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ type: "session.closed", final: true }),
+    );
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(onStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("times out when WebSocket opens but Google setup never completes", async () => {
+    vi.useFakeTimers();
+    const stopTrack = vi.fn();
+    getUserMedia.mockResolvedValue({
+      getTracks: () => [{ stop: stopTrack }],
+    });
+    const onStatus = vi.fn();
+    const onTalkEvent = vi.fn();
+    const transport = createTransport({ onStatus, onTalkEvent });
+
+    await transport.start();
+    latestWebSocket().emitOpen();
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(onStatus).toHaveBeenCalledExactlyOnceWith(
+      "error",
+      "Realtime connection timed out after 30000ms",
+    );
+    expect(stopTrack).toHaveBeenCalledOnce();
+    expect(audioContexts.every((context) => context.close.mock.calls.length === 1)).toBe(true);
+    expect(onTalkEvent).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ type: "session.closed", final: true }),
+    );
+  });
+
+  it("clears the startup timeout after Google setup completes", async () => {
+    vi.useFakeTimers();
+    const onStatus = vi.fn();
+    const transport = createTransport({ onStatus });
+
+    await transport.start();
+    const ws = latestWebSocket();
+    ws.emitOpen();
+    ws.emitMessage(encodeJsonFrame({ setupComplete: {} }));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(onStatus).toHaveBeenCalledExactlyOnceWith("listening");
+    transport.stop();
+  });
+
+  it("releases browser resources once when WebSocket error is followed by close", async () => {
+    vi.useFakeTimers();
+    const stopTrack = vi.fn();
+    getUserMedia.mockResolvedValue({
+      getTracks: () => [{ stop: stopTrack }],
+    });
+    const onInputLevel = vi.fn();
+    const onStatus = vi.fn();
+    const onTalkEvent = vi.fn();
+    const transport = createTransport({ onInputLevel, onStatus, onTalkEvent });
+
+    await transport.start();
+    const ws = latestWebSocket();
+    ws.readyState = 0;
+    ws.emitError();
+    ws.emitClose();
+
+    expect(onStatus).toHaveBeenCalledExactlyOnceWith("error", "Realtime connection failed");
+    expect(stopTrack).toHaveBeenCalledOnce();
+    expect(audioContexts).toHaveLength(2);
+    for (const context of audioContexts) {
+      expect(context.close).toHaveBeenCalledOnce();
+    }
+    expect(onInputLevel).toHaveBeenLastCalledWith(0);
+    expect(onTalkEvent).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ type: "session.closed", final: true }),
+    );
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("releases browser resources once when WebSocket closes before open", async () => {
+    vi.useFakeTimers();
+    const stopTrack = vi.fn();
+    getUserMedia.mockResolvedValue({
+      getTracks: () => [{ stop: stopTrack }],
+    });
+    const onInputLevel = vi.fn();
+    const onStatus = vi.fn();
+    const onTalkEvent = vi.fn();
+    const transport = createTransport({ onInputLevel, onStatus, onTalkEvent });
+
+    await transport.start();
+    const ws = latestWebSocket();
+    ws.readyState = 0;
+    ws.emitClose();
+
+    expect(onStatus).toHaveBeenCalledExactlyOnceWith("error", "Realtime connection closed");
+    expect(stopTrack).toHaveBeenCalledOnce();
+    expect(audioContexts).toHaveLength(2);
+    for (const context of audioContexts) {
+      expect(context.close).toHaveBeenCalledOnce();
+    }
+    expect(onInputLevel).toHaveBeenLastCalledWith(0);
+    expect(onTalkEvent).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ type: "session.closed", final: true }),
+    );
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("clears the WebSocket opening timeout when stopped", async () => {
+    vi.useFakeTimers();
+    const onStatus = vi.fn();
+    const transport = createTransport({ onStatus });
+
+    await transport.start();
+    transport.stop();
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(onStatus).not.toHaveBeenCalled();
   });
 
   it("requests ArrayBuffer frames and decodes binary setup messages", async () => {

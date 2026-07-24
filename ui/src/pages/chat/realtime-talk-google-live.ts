@@ -69,6 +69,8 @@ function googleLiveVideoMessage(frame: RealtimeTalkVideoFrame): unknown {
   };
 }
 
+const GOOGLE_LIVE_SETUP_TIMEOUT_MS = 30_000;
+
 // Browser sessions can still pin a 2.5 model, whose text and tool-response wire
 // contract differs from the 3.1 default carried in new session metadata.
 function isGemini31LiveModel(model: string | undefined): boolean {
@@ -105,6 +107,7 @@ function buildGoogleLiveUrl(session: RealtimeTalkJsonPcmWebSocketSessionResult):
 
 export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   private ws: WebSocket | null = null;
+  private setupTimeout: ReturnType<typeof globalThis.setTimeout> | null = null;
   private media: MediaStream | null = null;
   private cameraMedia: MediaStream | null = null;
   private captureVideo: HTMLVideoElement | null = null;
@@ -170,27 +173,35 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
       this.inputMeter = new RealtimeTalkMediaStreamMeter(this.ctx.callbacks.onInputLevel);
       this.inputMeter.start(this.media, this.inputContext);
     }
-    this.ws = new WebSocket(wsUrl);
-    this.ws.binaryType = "arraybuffer";
-    this.ws.addEventListener("open", () => {
-      if (this.closed) {
+    const ws = new WebSocket(wsUrl);
+    this.ws = ws;
+    ws.binaryType = "arraybuffer";
+    this.setupTimeout = globalThis.setTimeout(() => {
+      if (this.closed || this.ws !== ws) {
+        return;
+      }
+      this.setupTimeout = null;
+      this.ctx.callbacks.onStatus?.(
+        "error",
+        `Realtime connection timed out after ${GOOGLE_LIVE_SETUP_TIMEOUT_MS}ms`,
+      );
+      this.stop();
+    }, GOOGLE_LIVE_SETUP_TIMEOUT_MS);
+    ws.addEventListener("open", () => {
+      if (this.closed || this.ws !== ws) {
         return;
       }
       this.send(this.session.initialMessage ?? { setup: {} });
       this.startMicrophonePump();
     });
-    this.ws.addEventListener("message", (event) => {
-      void this.handleMessage(event.data);
+    ws.addEventListener("message", (event) => {
+      void this.handleMessage(ws, event.data);
     });
-    this.ws.addEventListener("close", () => {
-      if (!this.closed) {
-        this.ctx.callbacks.onStatus?.("error", "Realtime connection closed");
-      }
+    ws.addEventListener("close", () => {
+      this.failSocket(ws, "Realtime connection closed");
     });
-    this.ws.addEventListener("error", () => {
-      if (!this.closed) {
-        this.ctx.callbacks.onStatus?.("error", "Realtime connection failed");
-      }
+    ws.addEventListener("error", () => {
+      this.failSocket(ws, "Realtime connection failed");
     });
   }
 
@@ -284,6 +295,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     this.cameraSetupController?.abort();
     this.cameraSetupController = null;
     this.setupComplete = false;
+    this.clearSetupTimeout();
     for (const controller of this.consultAbortControllers) {
       controller.abort();
     }
@@ -302,6 +314,29 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     this.outputContext = null;
     this.ws?.close();
     this.ws = null;
+  }
+
+  private clearSetupTimeout(ws?: WebSocket): void {
+    // A stopped socket can emit after a replacement starts. Keep stale events
+    // from clearing the replacement attempt's startup deadline.
+    if (ws && this.ws !== ws) {
+      return;
+    }
+    if (this.setupTimeout !== null) {
+      globalThis.clearTimeout(this.setupTimeout);
+      this.setupTimeout = null;
+    }
+  }
+
+  private failSocket(ws: WebSocket, message: string): void {
+    // Error and close can arrive for the same socket, or after a replacement
+    // starts. Only the current lifecycle owner may report and release resources.
+    if (this.closed || this.ws !== ws) {
+      return;
+    }
+    this.clearSetupTimeout(ws);
+    this.ctx.callbacks.onStatus?.("error", message);
+    this.stop();
   }
 
   private startMicrophonePump(): void {
@@ -332,8 +367,8 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     return false;
   }
 
-  private async handleMessage(data: unknown): Promise<void> {
-    if (this.closed) {
+  private async handleMessage(ws: WebSocket, data: unknown): Promise<void> {
+    if (this.closed || this.ws !== ws) {
       return;
     }
     let message: GoogleLiveMessage;
@@ -342,11 +377,12 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     } catch {
       return;
     }
-    if (this.closed) {
+    if (this.closed || this.ws !== ws) {
       return;
     }
     if (message.setupComplete) {
       this.setupComplete = true;
+      this.clearSetupTimeout(ws);
       this.ctx.callbacks.onStatus?.("listening");
       this.emitTalkEvent({ type: "session.ready" });
       this.startVideoFrames();

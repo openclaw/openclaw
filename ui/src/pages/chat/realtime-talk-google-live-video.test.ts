@@ -370,4 +370,57 @@ describe("Google Live Video Talk", () => {
 
     transport.stop();
   });
+
+  it("releases camera media when Google setup times out", async () => {
+    const audioStop = vi.fn();
+    const videoStop = vi.fn();
+    const audioTrack = { stop: audioStop } as unknown as MediaStreamTrack;
+    const videoTrack = Object.assign(new EventTarget(), {
+      stop: videoStop,
+      readyState: "live",
+      enabled: true,
+      muted: false,
+    }) as unknown as MediaStreamTrack;
+    const audio = {
+      getAudioTracks: () => [audioTrack],
+      getTracks: () => [audioTrack],
+    } as unknown as MediaStream;
+    const camera = {
+      getVideoTracks: () => [videoTrack],
+      getTracks: () => [videoTrack],
+    } as unknown as MediaStream;
+    const getUserMedia = vi.fn().mockResolvedValueOnce(audio).mockResolvedValueOnce(camera);
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    const originalCreateElement = document.createElement.bind(document);
+    vi.spyOn(document, "createElement").mockImplementation((tagName: string) => {
+      const element = originalCreateElement(tagName);
+      if (element instanceof HTMLVideoElement) {
+        vi.spyOn(element, "play").mockResolvedValue(undefined);
+      }
+      return element;
+    });
+    const onStatus = vi.fn();
+    const onVideoStream = vi.fn();
+    const transport = createTransport({ onStatus, onVideoStream });
+
+    await transport.start();
+    await transport.setVideoEnabled(true);
+    const ws = FakeGoogleLiveWebSocket.instance;
+    if (!ws) {
+      throw new Error("missing Google Live WebSocket");
+    }
+    ws.emitOpen();
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(onStatus).toHaveBeenCalledExactlyOnceWith(
+      "error",
+      "Realtime connection timed out after 30000ms",
+    );
+    expect(audioStop).toHaveBeenCalledOnce();
+    expect(videoStop).toHaveBeenCalledOnce();
+    expect(getUserMedia).toHaveBeenNthCalledWith(2, { video: true });
+    expect(onVideoStream).toHaveBeenNthCalledWith(1, camera);
+    expect(onVideoStream).toHaveBeenLastCalledWith(null);
+    expect(ws.readyState).toBe(3);
+  });
 });
