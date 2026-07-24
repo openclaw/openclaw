@@ -533,6 +533,17 @@ describe("qa-channel plugin", () => {
       const cfg = createQaChannelConfig({ baseUrl: bus.baseUrl });
 
       const handleAction = requireQaActionHandler();
+      const discovery = qaChannelPlugin.actions?.describeMessageTool?.({
+        cfg,
+        accountId: "default",
+      });
+      const schema = discovery?.schema;
+      const contributions = Array.isArray(schema) ? schema : schema ? [schema] : [];
+      const titleSchema = contributions.find((entry) => "title" in entry.properties)?.properties
+        .title;
+      expect(titleSchema).toMatchObject({
+        description: "Deprecated alias for threadName.",
+      });
 
       const threadResult = await handleAction({
         channel: "qa-channel",
@@ -540,16 +551,37 @@ describe("qa-channel plugin", () => {
         cfg,
         accountId: "default",
         params: {
-          channelId: "qa-room",
-          title: "QA thread",
+          target: "channel:qa-room",
+          threadName: "QA thread",
+          title: "ignored legacy title",
         },
       });
       const threadPayload = extractToolPayload(threadResult) as {
-        thread: { id: string };
+        thread: { id: string; title: string };
         target: string;
       };
       expect(threadPayload.thread.id).toMatch(/^thread-/);
+      expect(threadPayload.thread.title).toBe("QA thread");
       expect(threadPayload.target).toContain(threadPayload.thread.id);
+
+      const replyResult = await handleAction({
+        channel: "qa-channel",
+        action: "thread-reply",
+        cfg,
+        accountId: "default",
+        params: {
+          target: threadPayload.target,
+          message: "thread reply",
+          text: "ignored legacy reply",
+        },
+      });
+      const replyPayload = extractToolPayload(replyResult) as {
+        message: { text: string; threadId: string };
+      };
+      expect(replyPayload.message).toMatchObject({
+        text: "thread reply",
+        threadId: threadPayload.thread.id,
+      });
 
       const outbound = state.addOutboundMessage({
         to: threadPayload.target,
@@ -575,9 +607,10 @@ describe("qa-channel plugin", () => {
         cfg,
         accountId: "default",
         params: {
-          to: threadPayload.target,
+          target: threadPayload.target,
           messageId: outbound.id,
-          text: "message (edited)",
+          message: "message (edited)",
+          text: "ignored legacy edit",
         },
       });
 
@@ -621,6 +654,73 @@ describe("qa-channel plugin", () => {
         },
       });
       expect(state.readMessage({ messageId: outbound.id }).deleted).toBe(true);
+    } finally {
+      await bus.stop();
+    }
+  });
+
+  it("keeps the shipped thread and edit aliases for direct API callers", async () => {
+    installQaChannelTestRegistry();
+    const state = createQaBusState();
+    const bus = await startQaBusServer({ state });
+
+    try {
+      const cfg = createQaChannelConfig({ baseUrl: bus.baseUrl });
+      const handleAction = requireQaActionHandler();
+      const threadResult = await handleAction({
+        channel: "qa-channel",
+        action: "thread-create",
+        cfg,
+        accountId: "default",
+        params: {
+          channelId: "qa-room",
+          title: "Legacy thread",
+        },
+      });
+      const threadPayload = extractToolPayload(threadResult) as {
+        thread: { id: string; title: string };
+        target: string;
+      };
+      expect(threadPayload.thread.title).toBe("Legacy thread");
+
+      const replyResult = await handleAction({
+        channel: "qa-channel",
+        action: "thread-reply",
+        cfg,
+        accountId: "default",
+        params: {
+          channelId: "qa-room",
+          threadId: threadPayload.thread.id,
+          text: "legacy reply",
+        },
+      });
+      expect(extractToolPayload(replyResult)).toMatchObject({
+        message: {
+          text: "legacy reply",
+          threadId: threadPayload.thread.id,
+        },
+      });
+
+      const outbound = state.addOutboundMessage({
+        to: threadPayload.target,
+        text: "before legacy edit",
+        threadId: threadPayload.thread.id,
+      });
+      const editResult = await handleAction({
+        channel: "qa-channel",
+        action: "edit",
+        cfg,
+        accountId: "default",
+        params: {
+          to: threadPayload.target,
+          messageId: outbound.id,
+          text: "legacy edit",
+        },
+      });
+      expect(extractToolPayload(editResult)).toMatchObject({
+        message: { text: "legacy edit" },
+      });
+      expect(state.readMessage({ messageId: outbound.id }).text).toBe("legacy edit");
     } finally {
       await bus.stop();
     }
@@ -672,7 +772,7 @@ describe("qa-channel plugin", () => {
         { action: "read", params: {} },
         { action: "reactions", params: {} },
         { action: "react", params: { emoji: "eyes" } },
-        { action: "edit", params: { text: "foreign edit" } },
+        { action: "edit", params: { message: "foreign edit" } },
         { action: "delete", params: {} },
       ];
       for (const testCase of crossedActions) {
