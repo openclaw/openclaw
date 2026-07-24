@@ -55,13 +55,16 @@ import { markBackgrounded } from "./bash-process-registry.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
-import { renderExecOutputText } from "./bash-tools.exec-output.js";
+import {
+  buildExecForegroundResult,
+  buildExecRunningResult,
+} from "./bash-tools.exec-result-format.js";
 import {
   DEFAULT_MAX_OUTPUT,
   DEFAULT_PATH,
   DEFAULT_PENDING_MAX_OUTPUT,
-  type ExecProcessHandle,
   type ExecProcessOutcome,
+  type ExecProcessHandle,
   applyPathPrepend,
   applyShellPath,
   normalizePathPrepend,
@@ -92,7 +95,7 @@ import {
 import { createModelExecAutoReviewer } from "./exec-auto-reviewer.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
-import { type AgentToolWithMeta, failedTextResult, textResult } from "./tools/common.js";
+import type { AgentToolWithMeta } from "./tools/common.js";
 
 export type { BashSandboxConfig } from "./bash-tools.shared.js";
 export type {
@@ -240,38 +243,6 @@ function getResolvedExecWorkdirPreparedState(
   params: ExecToolArgs,
 ): ResolvedExecWorkdirPreparedState | undefined {
   return resolvedExecWorkdirPreparedStates.get(params);
-}
-
-function buildExecForegroundResult(params: {
-  outcome: ExecProcessOutcome;
-  cwd?: string;
-  warningText?: string;
-}): AgentToolResult<ExecToolDetails> {
-  const warningText = params.warningText?.trim() ? `${params.warningText}\n\n` : "";
-  if (params.outcome.status === "failed") {
-    return failedTextResult(`${warningText}${params.outcome.reason}`, {
-      status: "failed",
-      exitCode: params.outcome.exitCode ?? null,
-      exitSignal: params.outcome.exitSignal,
-      failureKind: params.outcome.failureKind,
-      exitReason: params.outcome.exitReason,
-      durationMs: params.outcome.durationMs,
-      aggregated: params.outcome.aggregated,
-      timedOut: params.outcome.timedOut,
-      noOutputTimedOut: params.outcome.noOutputTimedOut,
-      cwd: params.cwd,
-    });
-  }
-  return textResult(`${warningText}${renderExecOutputText(params.outcome.aggregated)}`, {
-    status: "completed",
-    exitCode: params.outcome.exitCode,
-    exitSignal: params.outcome.exitSignal,
-    exitReason: params.outcome.exitReason,
-    durationMs: params.outcome.durationMs,
-    aggregated: params.outcome.aggregated,
-    noOutputTimedOut: params.outcome.noOutputTimedOut,
-    cwd: params.cwd,
-  });
 }
 
 const PREFLIGHT_ENV_OPTIONS_WITH_VALUES = new Set([
@@ -2043,7 +2014,7 @@ export function createExecTool(
       const onAbortSignal = () => {
         // Immediately suppress onUpdate calls so that any late stdout/stderr
         // from the still-running process cannot push a rejected Promise into
-        // agent runtime's updateEvents after the agent run has ended (#62520).
+        // pi-agent-core's updateEvents after the agent run has ended (#62520).
         // Intentionally placed *before* the yielded/backgrounded guard: the
         // agent run is ending regardless, so no consumer exists for further
         // tool_execution_update events even for backgrounded sessions (which
@@ -2076,24 +2047,16 @@ export function createExecTool(
       return new Promise<AgentToolResult<ExecToolDetails>>((resolve, reject) => {
         const resolveRunning = () => {
           cleanupToolRunListeners();
-          resolve({
-            content: [
-              {
-                type: "text",
-                text: `${getWarningText()}Command still running (session ${run.session.id}, pid ${
-                  run.session.pid ?? "n/a"
-                }). Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.`,
-              },
-            ],
-            details: {
-              status: "running",
+          resolve(
+            buildExecRunningResult({
+              warningText: getWarningText(),
               sessionId: run.session.id,
               pid: run.session.pid ?? undefined,
               startedAt: run.startedAt,
               cwd: run.session.cwd,
               tail: run.session.tail,
-            },
-          });
+            }),
+          );
         };
 
         const onYieldNow = () => {
