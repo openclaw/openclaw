@@ -244,7 +244,7 @@ export async function monitorWebChannel(
           ),
         });
       };
-      const resolveDebounceDecision = (msg: WebInboundMessageInput) =>
+      const resolveDebounceDecision = (msg: WebInboundMessageInput & { debounceKey?: string }) =>
         resolveWhatsAppInboundDebounceDecision({
           cfg,
           msg,

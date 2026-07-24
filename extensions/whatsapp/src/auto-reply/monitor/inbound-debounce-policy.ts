@@ -13,7 +13,7 @@ import { getRuntimeConfig } from "../config.runtime.js";
 
 export function resolveWhatsAppInboundDebounceDecision(params: {
   cfg: ReturnType<typeof getRuntimeConfig>;
-  msg: WebInboundMessageInput;
+  msg: WebInboundMessageInput & { debounceKey?: string };
   defaultDebounceMs: number;
   shouldDebounce: (msg: WebInboundMessageInput) => boolean;
 }): PluginHookInboundDebounceResult | Promise<PluginHookInboundDebounceResult> {
@@ -46,7 +46,9 @@ export function resolveWhatsAppInboundDebounceDecision(params: {
   return hookRunner
     .runInboundDebounce(
       {
-        debounceKey: `${admission.accountId}:${admission.conversation.id}:${senderKey}`,
+        debounceKey:
+          params.msg.debounceKey ??
+          `${admission.accountId}:${admission.conversation.id}:${senderKey}`,
         defaultAction,
         defaultDebounceMs: params.defaultDebounceMs,
         conversationKind: admission.conversation.kind,

@@ -1057,27 +1057,30 @@ describe("web auto-reply connection", () => {
     await monitorWebChannel(false, capture.listenerFactory as never, false, async () => ({
       text: "ok",
     }));
-    const msg = createTestWebInboundMessage({
-      admission: {
-        accountId: "default",
-        account: { accountId: "default" },
-        conversation: { id: "120363@g.us", kind: "group", groupSessionId: "120363@g.us" },
-        sender: { id: "15550001111@s.whatsapp.net" },
-        ingress: { admission: "dispatch", decision: "allow" },
-      },
-      event: { id: "rich-1" },
-      payload: {
-        body: "<media:image>",
-        mediaItems: [{ kind: "image" }],
-      },
-      platform: {
-        chatJid: "120363@g.us",
-        senderJid: "15550001111@s.whatsapp.net",
-        sendComposing,
-        reply,
-        sendMedia,
-      },
-    });
+    const msg = {
+      ...createTestWebInboundMessage({
+        admission: {
+          accountId: "default",
+          account: { accountId: "default" },
+          conversation: { id: "120363@g.us", kind: "group", groupSessionId: "120363@g.us" },
+          sender: { id: "15550001111@s.whatsapp.net" },
+          ingress: { admission: "dispatch", decision: "allow" },
+        },
+        event: { id: "rich-1" },
+        payload: {
+          body: "<media:image>",
+          mediaItems: [{ kind: "image" }],
+        },
+        platform: {
+          chatJid: "120363@g.us",
+          senderJid: "15550001111@s.whatsapp.net",
+          sendComposing,
+          reply,
+          sendMedia,
+        },
+      }),
+      debounceKey: "custom:rich-message",
+    };
 
     await expect(capture.getLastOptions()?.resolveDebounceDecision?.(msg)).resolves.toEqual({
       action: "debounce",

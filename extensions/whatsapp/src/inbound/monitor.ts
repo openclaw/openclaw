@@ -299,6 +299,10 @@ type AppendReplyWindow = {
   maxAgeMs: number;
 };
 
+type WhatsAppInboundDebounceMessage = AdmittedWebInboundCallbackMessage & {
+  debounceKey?: string;
+};
+
 type MonitorWebInboxOptions = {
   cfg: OpenClawConfig;
   loadConfig?: () => OpenClawConfig;
@@ -320,7 +324,7 @@ type MonitorWebInboxOptions = {
   shouldDebounce?: (msg: AdmittedWebInboundCallbackMessage) => boolean;
   /** Optional plugin policy decision. An explicit result overrides the channel default. */
   resolveDebounceDecision?: (
-    msg: AdmittedWebInboundCallbackMessage,
+    msg: WhatsAppInboundDebounceMessage,
   ) => InboundDebounceDecision | undefined | Promise<InboundDebounceDecision | undefined>;
   /** Optional shared socket reference so reply closures can follow reconnects. */
   socketRef?: { current: WASocket | null };
@@ -510,7 +514,7 @@ export async function attachWebInboxToSocket(
   };
   const shouldDebounceInboundMessage = (msg: AdmittedWebInboundCallbackMessage): boolean =>
     options.shouldDebounce?.(msg) ?? true;
-  const resolveInboundDebounceDecision = (msg: AdmittedWebInboundCallbackMessage) =>
+  const resolveInboundDebounceDecision = (msg: WhatsAppInboundDebounceMessage) =>
     options.resolveDebounceDecision?.(msg);
   const orderDebouncedInboundEntries = (entries: QueuedInboundMessage[]) =>
     entries.toSorted((a, b) => {
