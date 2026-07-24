@@ -25,6 +25,8 @@ describe("minimax web search provider", () => {
   const originalCodingApiKey = process.env.MINIMAX_CODING_API_KEY;
   const originalOauthToken = process.env.MINIMAX_OAUTH_TOKEN;
   const originalApiKey = process.env.MINIMAX_API_KEY;
+  const originalSecretRefApiKey = process.env.MINIMAX_SECRETREF_API_KEY;
+  const originalMissingSecretRefApiKey = process.env.MISSING_MINIMAX_SECRETREF_API_KEY;
 
   beforeEach(() => {
     delete process.env.MINIMAX_API_HOST;
@@ -32,6 +34,8 @@ describe("minimax web search provider", () => {
     delete process.env.MINIMAX_CODING_API_KEY;
     delete process.env.MINIMAX_OAUTH_TOKEN;
     delete process.env.MINIMAX_API_KEY;
+    delete process.env.MINIMAX_SECRETREF_API_KEY;
+    delete process.env.MISSING_MINIMAX_SECRETREF_API_KEY;
   });
 
   afterEach(() => {
@@ -40,6 +44,8 @@ describe("minimax web search provider", () => {
     restoreEnvValue("MINIMAX_CODING_API_KEY", originalCodingApiKey);
     restoreEnvValue("MINIMAX_OAUTH_TOKEN", originalOauthToken);
     restoreEnvValue("MINIMAX_API_KEY", originalApiKey);
+    restoreEnvValue("MINIMAX_SECRETREF_API_KEY", originalSecretRefApiKey);
+    restoreEnvValue("MISSING_MINIMAX_SECRETREF_API_KEY", originalMissingSecretRefApiKey);
   });
 
   describe("resolveMiniMaxRegion", () => {
@@ -141,6 +147,45 @@ describe("minimax web search provider", () => {
     it("prefers configured apiKey over env vars", () => {
       process.env.MINIMAX_CODE_PLAN_KEY = "env-key";
       expect(resolveMiniMaxApiKey({ apiKey: "configured-key" })).toBe("configured-key");
+    });
+
+    it("resolves configured env SecretRefs before MiniMax token-plan fallbacks", () => {
+      process.env.MINIMAX_CODE_PLAN_KEY = "token-plan-fallback";
+      process.env.MINIMAX_SECRETREF_API_KEY = "secretref-token-plan-key";
+      expect(
+        resolveMiniMaxApiKey({
+          apiKey: {
+            source: "env",
+            provider: "default",
+            id: "MINIMAX_SECRETREF_API_KEY",
+          },
+        }),
+      ).toBe("secretref-token-plan-key");
+    });
+
+    it("does not use MiniMax token-plan fallbacks when configured SecretRefs are unavailable", () => {
+      process.env.MINIMAX_CODE_PLAN_KEY = "token-plan-fallback";
+      process.env.MINIMAX_API_KEY = "legacy-fallback";
+      process.env.MISSING_MINIMAX_SECRETREF_API_KEY = "";
+
+      expect(
+        resolveMiniMaxApiKey({
+          apiKey: {
+            source: "env",
+            provider: "default",
+            id: "MISSING_MINIMAX_SECRETREF_API_KEY",
+          },
+        }),
+      ).toBeUndefined();
+      expect(
+        resolveMiniMaxApiKey({
+          apiKey: {
+            source: "file",
+            provider: "vault",
+            id: "/minimax/api-key",
+          },
+        }),
+      ).toBeUndefined();
     });
 
     it("accepts MINIMAX_CODING_API_KEY as a token-plan alias", () => {
