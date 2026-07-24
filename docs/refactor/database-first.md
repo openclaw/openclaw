@@ -1138,9 +1138,8 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   the imported sources. Plugin target writebacks update matching `cron_jobs`
   rows instead of loading and replacing the whole cron store.
 - Gateway startup ignores legacy `notify: true` markers in the runtime
-  projection. Doctor translates them into explicit SQLite delivery when
-  `cron.webhook` is valid, removes inert markers when it is unset, and preserves
-  them with a warning when the configured webhook is invalid.
+  projection. Doctor reads the retired raw `cron.webhook` only while translating
+  those markers into explicit SQLite delivery, then removes the config key.
 - Outbound and session delivery queues now store queue status, entry kind,
   session key, channel, target, account id, retry count, last attempt/error,
   recovery state, and platform-send markers as typed columns in the shared
@@ -1853,8 +1852,9 @@ runtime contract:
   `patchSessionEntry`, `deleteSessionEntry`, and `listSessionEntries`.
 - Whole-store rewrite helpers, file writers, queue tests, alias pruning, and
   legacy-key deletion parameters are gone from runtime.
-- Deprecated root-package compatibility exports still adapt canonical
-  `sessions.json` paths onto the SQLite row APIs.
+- Deprecated root-package compatibility exports delegate to the doctor-only
+  `sessions.json` importer through 2026-10-12; Plugin SDK compatibility reads
+  continue to project canonical SQLite rows.
 - `sessions.json` parsing remains only in doctor migration/import code and
   doctor tests.
 - Runtime lifecycle fallback reads SQLite transcript headers, not JSONL first
@@ -2035,8 +2035,6 @@ payload.
 6. Delete file-lock-shaped session mutation.
    - Done for runtime lock creation and runtime lock APIs.
    - The standalone legacy `.jsonl.lock` doctor cleanup lane is removed.
-   - `session.writeLock` is doctor-migrated legacy config, not a typed runtime
-     setting.
    - State integrity no longer has a separate orphan transcript-file pruning
      path; doctor migration imports/removes legacy JSONL sources in one place.
    - Gateway singleton coordination uses typed SQLite `state_leases` rows under
@@ -2241,7 +2239,7 @@ Add a repo check that fails new runtime writes to legacy state paths:
   gateway startup, transient pending/bootstrap rows are dropped)
 - `nodes/pending.json` / `nodes/paired.json` (retired 2026.7: folded into paired device records at gateway startup)
 - `identity/device.json`
-- `identity/device-auth.json`
+- `identity/device-auth.json` (retired; Doctor-only import into `device_auth_tokens`)
 - `push/web-push-subscriptions.json` (retired; Doctor-only import into `web_push_subscriptions`)
 - `push/vapid-keys.json` (retired; Doctor-only import into `web_push_vapid_keys`)
 - `push/apns-registrations.json` (retired; Doctor-only import into `apns_registrations`)

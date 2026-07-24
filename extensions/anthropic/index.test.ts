@@ -91,7 +91,7 @@ describe("anthropic provider replay hooks", () => {
     expectFields(backend.config, {
       command: "claude",
       modelArg: "--model",
-      sessionArg: "--session-id",
+      sessionArgs: ["--session-id", "{sessionId}"],
     });
   });
 
@@ -1270,6 +1270,78 @@ describe("anthropic provider replay hooks", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("preflights non-interactive setup-token input without writing credentials", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+    const setupTokenAuth = provider.auth.find((entry) => entry.id === "setup-token");
+    if (!setupTokenAuth?.validateNonInteractive) {
+      throw new Error("expected setup-token reset preflight");
+    }
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    const valid = await setupTokenAuth.validateNonInteractive({
+      authChoice: "setup-token",
+      config: {},
+      baseConfig: {},
+      opts: { token: ANTHROPIC_SETUP_TOKEN },
+      runtime,
+      resolveApiKey: vi.fn(async () => null),
+    });
+
+    expect(valid).toBe(true);
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("rejects setup-token ref storage during non-interactive preflight", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+    const setupTokenAuth = provider.auth.find((entry) => entry.id === "setup-token");
+    if (!setupTokenAuth?.validateNonInteractive) {
+      throw new Error("expected setup-token reset preflight");
+    }
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    const valid = await setupTokenAuth.validateNonInteractive({
+      authChoice: "setup-token",
+      config: {},
+      baseConfig: {},
+      opts: {
+        token: ANTHROPIC_SETUP_TOKEN,
+        secretInputMode: "ref", // pragma: allowlist secret
+      },
+      runtime,
+      resolveApiKey: vi.fn(async () => null),
+    });
+
+    expect(valid).toBe(false);
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Anthropic setup-token input cannot be stored with --secret-input-mode ref. Use --secret-input-mode plaintext.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("rejects invalid setup-token expiry during non-interactive preflight", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+    const setupTokenAuth = provider.auth.find((entry) => entry.id === "setup-token");
+    if (!setupTokenAuth?.validateNonInteractive) {
+      throw new Error("expected setup-token reset preflight");
+    }
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    const valid = await setupTokenAuth.validateNonInteractive({
+      authChoice: "setup-token",
+      config: {},
+      baseConfig: {},
+      opts: { token: ANTHROPIC_SETUP_TOKEN, tokenExpiresIn: "nope" },
+      runtime,
+      resolveApiKey: vi.fn(async () => null),
+    });
+
+    expect(valid).toBe(false);
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Invalid --token-expires-in"),
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
   it("omits setup-token expiry when duration overflows the Date range", async () => {

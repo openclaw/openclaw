@@ -50,6 +50,11 @@ const installPluginFromGitSpecMock = vi.fn();
 const resolveBundledPluginSourcesMock = vi.fn();
 const runCommandWithTimeoutMock = vi.fn();
 const validatePackageExtensionEntriesForInstallMock = vi.fn();
+const markClawPackageIndependentlyOwnedMock = vi.fn();
+const withClawPackageLifecycleLeaseMock = vi.fn(
+  async (_artifact: unknown, operation: () => Promise<unknown>, _options?: unknown) =>
+    await operation(),
+);
 const tempDirs: string[] = [];
 
 vi.mock("./install.js", () => ({
@@ -84,6 +89,19 @@ vi.mock("./clawhub.js", () => ({
     CLAWHUB_DOWNLOAD_BLOCKED: "clawhub_download_blocked",
   },
   installPluginFromClawHub: (...args: unknown[]) => installPluginFromClawHubMock(...args),
+}));
+
+vi.mock("../state/claw-package-adoption.js", () => ({
+  markClawPackageIndependentlyOwned: (...args: unknown[]) =>
+    markClawPackageIndependentlyOwnedMock(...args),
+}));
+
+vi.mock("../state/claw-package-lifecycle-lease.js", () => ({
+  withClawPackageLifecycleLease: (
+    artifact: unknown,
+    operation: () => Promise<unknown>,
+    options?: unknown,
+  ) => withClawPackageLifecycleLeaseMock(artifact, operation, options),
 }));
 
 vi.mock("./bundled-sources.js", () => ({
@@ -538,6 +556,12 @@ describe("updateNpmInstalledPlugins", () => {
     resolveBundledPluginSourcesMock.mockReturnValue(new Map());
     runCommandWithTimeoutMock.mockReset();
     validatePackageExtensionEntriesForInstallMock.mockReset();
+    markClawPackageIndependentlyOwnedMock.mockReset();
+    withClawPackageLifecycleLeaseMock
+      .mockReset()
+      .mockImplementation(
+        async (_artifact: unknown, operation: () => Promise<unknown>) => await operation(),
+      );
     const installPath = createInstalledPackageDir({
       name: "@martian-engineering/lossless-claw",
       version: "0.9.0",
@@ -1393,6 +1417,151 @@ describe("updateNpmInstalledPlugins", () => {
         currentVersion: "0.9.0",
         nextVersion: "0.9.0",
         message: "lossless-claw is up to date (0.9.0).",
+      },
+    ]);
+  });
+
+  it.each([
+    {
+      name: "latest",
+      updateChannel: undefined,
+      registrySpec: "@acme/demo",
+      registryVersion: "1.2.4",
+      overrideSpec: "@acme/demo@latest",
+    },
+    {
+      name: "beta",
+      updateChannel: "beta" as const,
+      registrySpec: "@acme/demo@beta",
+      registryVersion: "1.3.0-beta.1",
+      overrideSpec: "@acme/demo@beta",
+    },
+  ])(
+    "reports newer $name releases for exact-pinned installed records instead of claiming up to date",
+    async ({ updateChannel, registrySpec, registryVersion, overrideSpec }) => {
+      const installPath = createInstalledPackageDir({
+        name: "@acme/demo",
+        version: "1.2.3",
+      });
+      mockNpmViewMetadata({
+        name: "@acme/demo",
+        version: "1.2.3",
+        integrity: "sha512-same",
+        shasum: "same",
+      });
+      mockNpmViewMetadata({
+        name: "@acme/demo",
+        version: registryVersion,
+      });
+      installPluginFromNpmSpecMock.mockRejectedValue(new Error("installer should not run"));
+      const config = createNpmInstallConfig({
+        pluginId: "demo",
+        spec: "@acme/demo@1.2.3",
+        installPath,
+        resolvedName: "@acme/demo",
+        resolvedSpec: "@acme/demo@1.2.3",
+        resolvedVersion: "1.2.3",
+        integrity: "sha512-same",
+        shasum: "same",
+        installedAt: "2026-07-01T00:00:00.000Z",
+        resolvedAt: "2026-07-01T00:00:01.000Z",
+      });
+
+      const result = await updateNpmInstalledPlugins({
+        config,
+        pluginIds: ["demo"],
+        ...(updateChannel ? { updateChannel } : {}),
+      });
+
+      expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+      expect(runCommandWithTimeoutMock.mock.calls).toHaveLength(2);
+      expect(runCommandWithTimeoutMock.mock.calls[1]?.[0]).toEqual([
+        "npm",
+        "view",
+        registrySpec,
+        "name",
+        "version",
+        "dist.integrity",
+        "dist.shasum",
+        "openclaw",
+        "--json",
+      ]);
+      expect(result.changed).toBe(false);
+      expect(result.config).toBe(config);
+      expect(result.outcomes).toEqual([
+        {
+          pluginId: "demo",
+          status: "unchanged",
+          currentVersion: "1.2.3",
+          nextVersion: registryVersion,
+          message:
+            `demo is pinned to @acme/demo@1.2.3 (installed 1.2.3); ` +
+            `registry ${updateChannel === "beta" ? "beta" : "latest"} resolves to ${registryVersion}. ` +
+            `Pass \`openclaw plugins update ${overrideSpec}\` to follow that registry line.`,
+        },
+      ]);
+    },
+  );
+
+  it("reports a newer latest release when the beta line for an exact pin is unavailable", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@acme/demo",
+      version: "1.2.3",
+    });
+    mockNpmViewMetadata({
+      name: "@acme/demo",
+      version: "1.2.3",
+      integrity: "sha512-same",
+      shasum: "same",
+    });
+    runCommandWithTimeoutMock.mockResolvedValueOnce({
+      code: 1,
+      stdout: "",
+      stderr: "npm error code E404",
+    });
+    mockNpmViewMetadata({
+      name: "@acme/demo",
+      version: "1.2.4",
+    });
+    installPluginFromNpmSpecMock.mockRejectedValue(new Error("installer should not run"));
+
+    const result = await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "demo",
+        spec: "@acme/demo@1.2.3",
+        installPath,
+        resolvedName: "@acme/demo",
+        resolvedSpec: "@acme/demo@1.2.3",
+        resolvedVersion: "1.2.3",
+        integrity: "sha512-same",
+        shasum: "same",
+      }),
+      pluginIds: ["demo"],
+      updateChannel: "beta",
+    });
+
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(runCommandWithTimeoutMock.mock.calls).toHaveLength(3);
+    expect(runCommandWithTimeoutMock.mock.calls[2]?.[0]).toEqual([
+      "npm",
+      "view",
+      "@acme/demo",
+      "name",
+      "version",
+      "dist.integrity",
+      "dist.shasum",
+      "openclaw",
+      "--json",
+    ]);
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "demo",
+        status: "unchanged",
+        currentVersion: "1.2.3",
+        nextVersion: "1.2.4",
+        message:
+          "demo is pinned to @acme/demo@1.2.3 (installed 1.2.3); registry latest resolves to 1.2.4. " +
+          "Pass `openclaw plugins update @acme/demo@latest` to follow that registry line.",
       },
     ]);
   });
@@ -2760,8 +2929,8 @@ describe("updateNpmInstalledPlugins", () => {
         pluginId: "demo",
         status: "unchanged",
         currentVersion: "1.2.3",
-        nextVersion: "1.2.3",
-        message: `demo is pinned to ${spec} (installed 1.2.3); registry default resolves to 1.2.4. Pass \`openclaw plugins update @acme/demo@latest\` to follow the registry default line.`,
+        nextVersion: "1.2.4",
+        message: `demo is pinned to ${spec} (installed 1.2.3); registry latest resolves to 1.2.4. Pass \`openclaw plugins update @acme/demo@latest\` to follow that registry line.`,
       });
     },
   );
@@ -3906,27 +4075,41 @@ describe("updateNpmInstalledPlugins", () => {
       },
     });
 
+    const config = createClawHubInstallConfig({
+      pluginId: "demo",
+      installPath: "/tmp/demo",
+      clawhubUrl: "https://clawhub.ai",
+      clawhubPackage: "demo",
+      clawhubFamily: "code-plugin",
+      clawhubChannel: "official",
+    });
+    delete config.plugins?.installs?.demo?.clawhubPackage;
+    config.plugins!.installs!.demo!.resolvedSpec = "clawhub:demo@1.2.3";
+    delete config.plugins?.installs?.demo?.spec;
     const result = await updateNpmInstalledPlugins({
-      config: createClawHubInstallConfig({
-        pluginId: "demo",
-        installPath: "/tmp/demo",
-        clawhubUrl: "https://clawhub.ai",
-        clawhubPackage: "demo",
-        clawhubFamily: "code-plugin",
-        clawhubChannel: "official",
-      }),
+      config,
       pluginIds: ["demo"],
       timeoutMs: 1_800_000,
     });
 
-    expect(clawHubInstallCall()?.spec).toBe("clawhub:demo");
+    expect(clawHubInstallCall()?.spec).toBe("clawhub:demo@1.2.3");
     expect(clawHubInstallCall()?.baseUrl).toBe("https://clawhub.ai");
     expect(clawHubInstallCall()?.expectedPluginId).toBe("demo");
     expect(clawHubInstallCall()?.mode).toBe("update");
     expect(clawHubInstallCall()?.timeoutMs).toBe(1_800_000);
+    expect(withClawPackageLifecycleLeaseMock).toHaveBeenCalledWith(
+      { kind: "plugin", source: "clawhub", ref: "demo" },
+      expect.any(Function),
+      { required: true },
+    );
+    expect(markClawPackageIndependentlyOwnedMock).toHaveBeenCalledWith({
+      kind: "plugin",
+      source: "clawhub",
+      ref: "demo",
+    });
     expectRecordFields(result.config.plugins?.installs?.demo, {
       source: "clawhub",
-      spec: "clawhub:demo",
+      spec: "clawhub:demo@1.2.3",
       installPath: "/tmp/demo",
       version: "1.2.4",
       clawhubPackage: "demo",
@@ -3943,6 +4126,30 @@ describe("updateNpmInstalledPlugins", () => {
       clawpackManifestSha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       clawpackSize: 4096,
     });
+  });
+
+  it("records a busy ClawHub lifecycle lease as one plugin update failure", async () => {
+    withClawPackageLifecycleLeaseMock.mockRejectedValueOnce(new Error("package busy"));
+    const result = await updateNpmInstalledPlugins({
+      config: createClawHubInstallConfig({
+        pluginId: "demo",
+        installPath: "/tmp/demo",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: "demo",
+        clawhubFamily: "code-plugin",
+        clawhubChannel: "official",
+      }),
+      pluginIds: ["demo"],
+    });
+
+    expect(result.outcomes).toContainEqual(
+      expect.objectContaining({
+        pluginId: "demo",
+        status: "error",
+        message: expect.stringContaining("package busy"),
+      }),
+    );
+    expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
   });
 
   it("tries ClawHub beta for default ClawHub specs on beta channel without persisting the beta tag", async () => {

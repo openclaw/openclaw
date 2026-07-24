@@ -1,6 +1,6 @@
 // Discord plugin module implements message handler.process behavior.
 import type { APIAllowedMentions } from "discord-api-types/v10";
-import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAgentConfig, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   dispatchChannelInboundTurn,
   hasFinalInboundReplyDispatch,
@@ -41,6 +41,7 @@ import {
   formatDiscordReplySkip,
 } from "./reply-delivery.js";
 import { sanitizeDiscordFrontChannelReplyPayloads } from "./reply-safety.js";
+import { resolveDiscordWebhookId } from "./sender-identity.js";
 
 const TARGETED_ONLY_ALLOWED_MENTIONS = {
   parse: ["users", "roles"],
@@ -103,7 +104,7 @@ async function processDiscordMessageInner(
     return;
   }
   const text = messageText;
-  if (!text) {
+  if (!text && mediaList.length === 0) {
     logVerbose("discord: drop message " + message.id + " (empty content)");
     return;
   }
@@ -126,9 +127,9 @@ async function processDiscordMessageInner(
     },
   });
   const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
-  const configuredTypingMode = cfg.session?.typingMode ?? cfg.agents?.defaults?.typingMode;
-  const configuredTypingInterval =
-    cfg.agents?.defaults?.typingIntervalSeconds ?? cfg.session?.typingIntervalSeconds;
+  const routedAgentConfig = resolveAgentConfig(cfg, route.agentId);
+  const configuredTypingMode = routedAgentConfig?.typingMode ?? cfg.agents?.defaults?.typingMode;
+  const configuredTypingInterval = cfg.agents?.defaults?.typingIntervalSeconds;
   const shouldDisableCoreTypingKeepalive =
     sourceRepliesAreToolOnly &&
     configuredTypingMode === undefined &&
@@ -607,6 +608,7 @@ async function processDiscordMessageInner(
       cfg,
       channel: "discord",
       accountId: route.accountId,
+      outboundEchoSourceId: resolveDiscordWebhookId(message) ?? undefined,
       route: { agentId: route.agentId, sessionKey: persistedSessionKey },
       ctxPayload,
       afterRecord: reactions.queueInitialAckReactionAfterRecord,

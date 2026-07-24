@@ -12,7 +12,10 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
+import {
+  convertMarkdownTables,
+  type FormatCapabilityProfile,
+} from "openclaw/plugin-sdk/text-chunking";
 import { getMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
@@ -69,6 +72,40 @@ type MattermostSendResult = {
 
 const MATTERMOST_BOT_USER_CACHE_MAX_ENTRIES = 64;
 const MATTERMOST_TARGET_CACHE_MAX_ENTRIES = 1024;
+const MATTERMOST_FORMAT_PROFILE = {
+  mechanism: "markdown",
+  constructs: {
+    bold: "native",
+    italic: "native",
+    underline: "native",
+    strikethrough: "native",
+    spoiler: "native",
+    codeInline: "native",
+    codeBlock: "native",
+    codeLanguage: "native",
+    linkLabel: "native",
+    heading: "native",
+    bulletList: "native",
+    orderedList: "native",
+    taskList: "native",
+    table: "native",
+    blockquote: "native",
+    image: "native",
+    mention: "native",
+  },
+  chunk: { limit: 16_383, unit: "chars" },
+} satisfies FormatCapabilityProfile;
+
+function renderMattermostMarkdown(
+  markdown: string,
+  tableMode: Parameters<typeof convertMarkdownTables>[1],
+): string {
+  // Native tables stay byte-identical; only an explicit operator fallback uses conversion.
+  return tableMode === "off" && MATTERMOST_FORMAT_PROFILE.constructs.table === "native"
+    ? markdown
+    : convertMarkdownTables(markdown, tableMode);
+}
+
 const botUserCache = new Map<string, MattermostUser>();
 const userByNameCache = new Map<string, MattermostUser>();
 const channelByNameCache = new Map<string, string>();
@@ -456,7 +493,7 @@ export async function sendMessageMattermost(
       channel: "mattermost",
       accountId,
     });
-    message = convertMarkdownTables(message, tableMode);
+    message = renderMattermostMarkdown(message, tableMode);
   }
 
   if (!message && (!fileIds || fileIds.length === 0)) {

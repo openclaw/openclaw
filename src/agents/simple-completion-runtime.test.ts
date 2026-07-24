@@ -31,6 +31,20 @@ vi.mock("../llm/stream.js", () => ({
   completeSimple: hoisted.completeMock,
 }));
 
+vi.mock("./sessions/model-registry-runtime.js", () => ({
+  getModelRegistryRuntime: () => {
+    const apiRegistry = {};
+    return {
+      apiRegistry,
+      llmRuntime: {
+        registry: apiRegistry,
+        completeSimple: (...args: unknown[]) => hoisted.completeMock(...args),
+        streamSimple: vi.fn(),
+      },
+    };
+  },
+}));
+
 vi.mock("./embedded-agent-runner/model.js", () => ({
   resolveModel: hoisted.resolveModelMock,
   resolveModelAsync: hoisted.resolveModelAsyncMock,
@@ -45,7 +59,8 @@ vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal)
   getCurrentPluginMetadataSnapshot: hoisted.getCurrentPluginMetadataSnapshotMock,
 }));
 
-vi.mock("./simple-completion-transport.js", () => ({
+vi.mock("@openclaw/ai/transports", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/ai/transports")>()),
   prepareModelForSimpleCompletion: hoisted.prepareModelForSimpleCompletionMock,
 }));
 
@@ -880,7 +895,11 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
       },
     });
 
-    expect(hoisted.prepareModelForSimpleCompletionMock).toHaveBeenCalledWith({ model, cfg });
+    expect(hoisted.prepareModelForSimpleCompletionMock).toHaveBeenCalledWith({
+      apiRegistry: expect.anything(),
+      model,
+      cfg,
+    });
     expect(hoisted.completeMock).toHaveBeenCalledWith(
       preparedModel,
       {

@@ -1233,6 +1233,7 @@
                 "group": "Sessions and memory",
                 "pages": [
                   "concepts/main-session",
+                  "concepts/multi-user",
                   "concepts/session",
                   "concepts/session-search",
                   "concepts/channel-docking",
@@ -1427,6 +1428,7 @@
                   "tools/goal",
                   "tools/steer",
                   "tools/subagents",
+                  "tools/swarm",
                   "tools/acp-agents",
                   "tools/acp-agents-setup",
                   "tools/multi-agent-sandbox-tools"
@@ -1685,6 +1687,8 @@
                     "group": "Protocols and APIs",
                     "pages": [
                       "gateway/protocol",
+                      "gateway/clients",
+                      "gateway/embedding",
                       "gateway/bridge-protocol",
                       "gateway/openai-http-api",
                       "gateway/openresponses-http-api",
@@ -1755,6 +1759,7 @@
                   "web/index",
                   "web/control-ui",
                   "web/dashboard",
+                  "web/dashboards",
                   "web/dashboard-architecture",
                   "web/webchat",
                   "web/tui",
@@ -1797,6 +1802,7 @@
                     "pages": [
                       "cli/agent",
                       "cli/agents",
+                      "cli/claws",
                       "cli/audit",
                       "cli/hooks",
                       "cli/infer",

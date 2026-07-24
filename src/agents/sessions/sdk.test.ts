@@ -3,7 +3,10 @@ import { createAssistantMessageEventStream, type AssistantMessage } from "opencl
 // session write-lock behavior.
 import { Type } from "typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Model, SimpleStreamOptions } from "../../llm/types.js";
+import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
+import type { ImageContent, Model, SimpleStreamOptions } from "../../llm/types.js";
+import { readRuntimePromptImageOrder } from "../../media/media-facts.js";
+import { finalizeRuntimePromptImages } from "../../media/runtime-prompt-image-provenance.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 
@@ -24,6 +27,8 @@ import { takeRuntimeUserTurnTranscriptContext } from "../../sessions/user-turn-t
 import { AuthStorage } from "./auth-storage.js";
 import { createExtensionRuntime } from "./extensions/loader.js";
 import type { LoadExtensionsResult, ToolDefinition } from "./extensions/types.js";
+import * as publicSessionSdk from "./index.js";
+import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import { ModelRegistry } from "./model-registry.js";
 import type { ResourceLoader } from "./resource-loader.js";
 import { createAgentSession } from "./sdk.js";
@@ -43,6 +48,27 @@ const testModel: Model = {
   contextWindow: 1000,
   maxTokens: 1000,
 };
+
+describe("createAgentSession runtime ownership", () => {
+  it("keeps embedded recovery construction out of the public sessions barrel", () => {
+    expect(publicSessionSdk).not.toHaveProperty("createAgentSessionForEmbeddedRunner");
+  });
+
+  it("binds the installed stream wrapper to the model-registry lifecycle", async () => {
+    const modelRegistry = createTestModelRegistry();
+    const { session } = await createAgentSession({
+      model: testModel,
+      resourceLoader: createEmptyResourceLoader(),
+      sessionManager: SessionManager.inMemory(),
+      settingsManager: SettingsManager.inMemory(),
+      modelRegistry,
+    });
+
+    expect(getStreamLlmRuntime(session.agent.streamFn)).toBe(
+      getModelRegistryRuntime(modelRegistry).llmRuntime,
+    );
+  });
+});
 
 function createModelWithoutBaseUrl(overrides: Partial<Model>): Model {
   const { baseUrl: _baseUrl, ...model } = { ...testModel, ...overrides };
@@ -85,6 +111,17 @@ function createAssistantResultStream(message: AssistantMessage) {
 
 function createEmptyResourceLoader(): ResourceLoader {
   return createResourceLoaderWithHandlers(new Map());
+}
+
+function createTestModelRegistry(authStorage = AuthStorage.inMemory()): ModelRegistry {
+  const modelRegistry = ModelRegistry.inMemory(authStorage);
+  for (const api of ["openai-responses", "bedrock-converse-stream"] as const) {
+    modelRegistry.registerProvider(`test-${api}`, {
+      api,
+      streamSimple: streamMocks.streamSimple,
+    });
+  }
+  return modelRegistry;
 }
 
 function createResourceLoaderWithHandlers(
@@ -130,7 +167,7 @@ async function createSessionAndStreamModel(model: Model): Promise<SimpleStreamOp
     resourceLoader: createEmptyResourceLoader(),
     sessionManager: SessionManager.inMemory(),
     settingsManager: SettingsManager.inMemory(),
-    modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+    modelRegistry: createTestModelRegistry(),
   });
 
   await session.agent.streamFn?.(
@@ -254,6 +291,37 @@ describe("AgentSession queued user turns", () => {
       },
       recorder,
     });
+  });
+
+  it("carries prompt facts non-enumerably on the exact steered message", async () => {
+    const session = await createSessionFromManager(SessionManager.inMemory());
+    const steer = vi.spyOn(session.agent, "steer").mockImplementation(() => undefined);
+    const media = [{ path: "/tmp/a.png", contentType: "image/png" }];
+    const imageOrder = ["inline"] as const;
+    const image: ImageContent = { type: "image", data: "aW1hZ2U=", mimeType: "image/png" };
+    const { images } = finalizeRuntimePromptImages([{ image, factIndex: 0 }]);
+
+    await session.steer("[media attached: /tmp/a.png (image/png)]", images, undefined, media, [
+      ...imageOrder,
+    ]);
+
+    const runtimeMessage = steer.mock.calls[0]?.[0];
+    expect(runtimeMessage).toBeDefined();
+    const mediaSymbol = Object.getOwnPropertySymbols(runtimeMessage ?? {}).find(
+      (symbol) => Symbol.keyFor(symbol) === "openclaw.runtimePromptMediaFacts",
+    );
+    expect(mediaSymbol).toBeDefined();
+    if (!runtimeMessage || !mediaSymbol) {
+      throw new Error("expected runtime prompt media message and symbol");
+    }
+    expect((runtimeMessage as unknown as Record<PropertyKey, unknown>)[mediaSymbol]).toEqual([
+      expect.objectContaining({ path: "/tmp/a.png", contentType: "image/png", kind: "image" }),
+    ]);
+    expect(readRuntimePromptImageOrder(runtimeMessage)).toEqual(imageOrder);
+    expect((runtimeMessage as unknown as Record<string, unknown>)["__openclaw"]).toEqual({
+      mediaImageBlockFactIndexes: [0],
+    });
+    expect(JSON.stringify(runtimeMessage)).not.toContain("runtimePromptMediaFacts");
   });
 });
 
@@ -735,7 +803,7 @@ describe("AgentSession retry behavior", () => {
       settingsManager: SettingsManager.inMemory({
         retry: retry ?? { baseDelayMs: 0, maxRetries: 1 },
       }),
-      modelRegistry: ModelRegistry.inMemory(authStorage),
+      modelRegistry: createTestModelRegistry(authStorage),
     });
   }
 

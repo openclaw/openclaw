@@ -44,6 +44,11 @@ describe("method scope resolution", () => {
     ["tasks.list", ["operator.read"]],
     ["audit.activity.list", ["operator.read"]],
     ["audit.list", ["operator.read"]],
+    ["users.list", ["operator.read"]],
+    ["users.self", ["operator.write"]],
+    ["users.linkEmail", ["operator.admin"]],
+    ["users.setDisplayName", ["operator.write"]],
+    ["users.setAvatar", ["operator.write"]],
     ["tasks.get", ["operator.read"]],
     ["taskSuggestions.list", ["operator.read"]],
     ["taskSuggestions.create", ["operator.write"]],
@@ -73,6 +78,8 @@ describe("method scope resolution", () => {
     ["sessions.catalog.read", ["operator.read"]],
     ["sessions.catalog.continue", ["operator.write"]],
     ["sessions.catalog.archive", ["operator.write"]],
+    ["session.discussion.info", ["operator.read"]],
+    ["session.discussion.open", ["operator.write"]],
     ["environments.status", ["operator.read"]],
     ["diagnostics.stability", ["operator.read"]],
     ["skills.curator.status", ["operator.read"]],
@@ -82,6 +89,8 @@ describe("method scope resolution", () => {
     ["node.pair.approve", ["operator.pairing"]],
     ["poll", ["operator.write"]],
     ["talk.client.create", ["operator.write"]],
+    ["talk.client.transcript", ["operator.write"]],
+    ["talk.client.close", ["operator.write"]],
     ["talk.client.toolCall", ["operator.write"]],
     ["talk.client.steer", ["operator.write"]],
     ["talk.session.create", ["operator.write"]],
@@ -168,6 +177,29 @@ describe("method scope resolution", () => {
       authorizeOperatorScopesForMethod("talk.config", ["operator.read", "operator.talk.secrets"], {
         includeSecrets: true,
       }),
+    ).toEqual({ allowed: true });
+  });
+
+  it("requires admin only when DM pairing approval bootstraps a command owner", () => {
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("channels.pairing.approve", {})).toEqual([
+      "operator.pairing",
+    ]);
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("channels.pairing.approve", {
+        bootstrapCommandOwner: true,
+      }),
+    ).toEqual(["operator.pairing", "operator.admin"]);
+    expect(
+      authorizeOperatorScopesForMethod("channels.pairing.approve", ["operator.pairing"], {
+        bootstrapCommandOwner: true,
+      }),
+    ).toEqual({ allowed: false, missingScope: "operator.admin" });
+    expect(
+      authorizeOperatorScopesForMethod(
+        "channels.pairing.approve",
+        ["operator.pairing", "operator.admin"],
+        { bootstrapCommandOwner: true },
+      ),
     ).toEqual({ allowed: true });
   });
 
@@ -310,6 +342,81 @@ describe("method scope resolution", () => {
     ).toEqual({ allowed: false, missingScope: "operator.admin" });
   });
 
+  it("requires admin for incognito session creation and inheritance", () => {
+    const incognitoKey = "agent:main:dashboard:incognito-parent";
+    for (const params of [
+      { agentId: "main", incognito: true },
+      { key: incognitoKey },
+      { parentSessionKey: incognitoKey },
+      { parentSessionKey: incognitoKey, fork: true },
+      { parentSessionKey: incognitoKey, spawnDepth: 1 },
+      { parentSessionKey: incognitoKey, succeedsParent: false, emitCommandHooks: true },
+    ]) {
+      expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", params)).toEqual([
+        "operator.admin",
+      ]);
+      expect(
+        authorizeOperatorScopesForMethod("sessions.create", ["operator.write"], params),
+      ).toEqual({ allowed: false, missingScope: "operator.admin" });
+      expect(
+        authorizeOperatorScopesForMethod("sessions.create", ["operator.admin"], params),
+      ).toEqual({ allowed: true });
+    }
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", { incognito: false }),
+    ).toEqual(["operator.write"]);
+  });
+
+  it("keeps keyed sessions.create model selection at write scope for handler-state checks", () => {
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", {
+        agentId: "main",
+        label: "Dashboard",
+        model: "openai/gpt-5.5",
+      }),
+    ).toEqual(["operator.write"]);
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", {
+        key: "agent:main:dashboard:existing",
+        label: "Dashboard",
+      }),
+    ).toEqual(["operator.write"]);
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", {
+        key: "agent:main:dashboard:existing",
+        model: "openai/gpt-5.5",
+      }),
+    ).toEqual(["operator.write"]);
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", {
+        key: "agent:main:dashboard:existing",
+        thinkingLevel: "high",
+      }),
+    ).toEqual(["operator.write"]);
+
+    for (const params of [
+      { key: "agent:main:dashboard:existing", model: "openai/gpt-5.5" },
+      { key: "agent:main:dashboard:existing", thinkingLevel: "high" },
+      {
+        key: "agent:main:dashboard:existing",
+        label: "Dashboard",
+        model: "openai/gpt-5.5",
+        thinkingLevel: "high",
+      },
+    ]) {
+      expect(
+        authorizeOperatorScopesForMethod("sessions.create", ["operator.write"], params),
+      ).toEqual({
+        allowed: true,
+      });
+      expect(
+        authorizeOperatorScopesForMethod("sessions.create", ["operator.admin"], params),
+      ).toEqual({
+        allowed: true,
+      });
+    }
+  });
+
   it("keeps worktree target params at write scope but execNode at admin", () => {
     expect(
       resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", {
@@ -340,7 +447,11 @@ describe("method scope resolution", () => {
     ["model", { key: "agent:main:ios-1", model: "anthropic/claude-sonnet-5" }],
     ["sendPolicy", { key: "agent:main:ios-1", sendPolicy: "deny" }],
     ["inheritedToolAllow", { key: "agent:main:ios-1", inheritedToolAllow: ["exec"] }],
-    ["spawnedBy", { key: "agent:main:ios-1", spawnedBy: "agent:main:main" }],
+    ["inheritedToolPolicyVersion", { key: "agent:main:ios-1", inheritedToolPolicyVersion: 1 }],
+    [
+      "completionOwnerSessionKey",
+      { key: "agent:main:ios-1", completionOwnerSessionKey: "agent:main:main" },
+    ],
     ["mixed with safe fields", { key: "agent:main:ios-1", label: "x", execHost: "node-1" }],
     ["unknown fields", { key: "agent:main:ios-1", futureField: true }],
   ])("keeps sessions.patch admin-only when params include %s", (_name, params) => {
@@ -513,6 +624,8 @@ describe("operator scope authorization", () => {
   it("allows operator.write clients to use unified Talk sessions", () => {
     for (const method of [
       "talk.client.create",
+      "talk.client.transcript",
+      "talk.client.close",
       "talk.client.toolCall",
       "talk.client.steer",
       "talk.session.create",

@@ -19,9 +19,14 @@ export const ErrorCodes = {
 /** Closed set of canonical gateway error code strings. */
 export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];
 
-/** Stable discriminants for structured method-level authorization failures. */
+/** Stable discriminants for structured method-level failures. */
 export const GatewayErrorDetailCodes = {
   MISSING_SCOPE: "MISSING_SCOPE",
+  MCP_APP_VIEW_EXPIRED: "MCP_APP_VIEW_EXPIRED",
+  SESSION_OBSERVER_BUSY: "SESSION_OBSERVER_BUSY",
+  SESSION_OBSERVER_UNAVAILABLE: "SESSION_OBSERVER_UNAVAILABLE",
+  UNKNOWN_AGENT_ID: "UNKNOWN_AGENT_ID",
+  WIZARD_NOT_FOUND: "WIZARD_NOT_FOUND",
 } as const;
 
 /** Missing operator-scope details shared by WebSocket and HTTP responses. */
@@ -31,8 +36,27 @@ export type MissingScopeErrorDetails = {
   requiredScopes: string[];
 };
 
-/** Structured details emitted by method-level authorization failures. */
-export type GatewayErrorDetails = MissingScopeErrorDetails;
+export type McpAppViewExpiredErrorDetails = {
+  code: typeof GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED;
+};
+
+/** Unknown agent details carried by agent-scoped method validation failures. */
+export type UnknownAgentIdErrorDetails = {
+  code: typeof GatewayErrorDetailCodes.UNKNOWN_AGENT_ID;
+  agentId: string;
+};
+
+/** Missing or expired process-local setup wizard session. */
+export type WizardNotFoundErrorDetails = {
+  code: typeof GatewayErrorDetailCodes.WIZARD_NOT_FOUND;
+};
+
+/** Structured details emitted by method-level failures. */
+export type GatewayErrorDetails =
+  | MissingScopeErrorDetails
+  | McpAppViewExpiredErrorDetails
+  | UnknownAgentIdErrorDetails
+  | WizardNotFoundErrorDetails;
 
 type GatewayErrorLike = {
   code?: unknown;
@@ -67,6 +91,11 @@ export function readMissingScopeErrorDetails(details: unknown): MissingScopeErro
     missingScope,
     requiredScopes,
   };
+}
+
+export function isMcpAppViewExpiredError(error: unknown): boolean {
+  const record = asRecord(error);
+  return asRecord(record?.details)?.code === GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED;
 }
 
 /**

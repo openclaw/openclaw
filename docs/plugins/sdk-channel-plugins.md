@@ -116,8 +116,10 @@ dedupes `chat_id:message_id` because debounce merges can re-surface a message
 under a fresh `update_id`), or a longer window than the channel's tombstone
 retention. If your guard key would equal the drain `event_id`, delete the
 guard when adopting the drain and size `completedTtlMs`/`completedMaxEntries`
-to cover the old guard window instead. Non-dedupe protections (age fences,
-outbound echo caches) are unrelated to this rule and stay.
+to cover the old guard window instead. Non-dedupe protections such as age
+fences are unrelated to this rule. Stable outbound message IDs use the shared
+outbound-echo registry from `openclaw/plugin-sdk/channel-outbound` instead of a
+channel-local TTL cache.
 
 #### Transport classes and retention
 
@@ -478,10 +480,9 @@ adapter/wizard fail closed on config writes and finalization, and they reuse
 the same install-required message across validation, finalize, and docs-link
 copy.
 
-If your channel supports env-driven setup or auth and generic startup/config
-flows should know those env names before runtime loads, declare them in the
-plugin manifest with `channelEnvVars`. Keep channel runtime `envVars` or local
-constants for operator-facing copy only.
+If your channel supports env-driven setup or auth, expose it through the
+channel config schema and setup descriptors. Keep channel runtime `envVars` or
+local constants for operator-facing copy only.
 
 If your channel can appear in `status`, `channels list`, `channels status`, or
 SecretRef scans before the plugin runtime starts, add `openclaw.setupEntry` in
@@ -512,9 +513,8 @@ surfaces:
   `openclaw/plugin-sdk/channel-inbound` for inbound route/envelope and
   record-and-dispatch wiring
 - `openclaw/plugin-sdk/channel-targets` for target parsing helpers
-- `openclaw/plugin-sdk/outbound-media` for media loading and
-  `openclaw/plugin-sdk/channel-outbound` for outbound identity/send delegates
-  and payload planning
+- `openclaw/plugin-sdk/channel-outbound` for outbound identity/send delegates
+  and typed payload planning
 - `buildThreadAwareOutboundSessionRoute(...)` from
   `openclaw/plugin-sdk/channel-core` when an outbound route should preserve
   an explicit `replyToId`/`threadId` or recover the current `:thread:`
@@ -523,12 +523,6 @@ surfaces:
   their platform has native thread delivery semantics.
 - `openclaw/plugin-sdk/thread-bindings-runtime` for thread-binding lifecycle
   and adapter registration
-- `openclaw/plugin-sdk/agent-media-payload` only when a legacy agent/media
-  payload field layout is still required
-- `openclaw/plugin-sdk/telegram-command-config` (deprecated: no bundled
-  plugin uses it in production) for Telegram custom-command normalization,
-  duplicate/conflict validation, and a fallback-stable command config
-  contract; prefer plugin-local command config handling for new plugin code
 
 Auth-only channels can usually stop at the default path: core handles
 approvals and the plugin just exposes outbound/auth capabilities. Native
@@ -841,6 +835,21 @@ unrelated inbound runtime helpers.
       when a native reply target was resolved, so payload helpers can preserve
       explicit reply tags without consuming an implicit single-use reply slot.
     </Accordion>
+
+    ### Group tool-policy adapters
+
+    A channel that implements `group.resolveToolPolicy` and supports
+    `toolsBySender` must forward the complete `ChannelGroupContext` to its
+    shared policy resolver. In particular, honor `senderPolicyMode: "never"`
+    by skipping sender-specific overlays at both the matched-group and wildcard
+    scopes while still applying the base `tools` policy.
+
+    OpenClaw sets this mode only for trusted non-ingress execution whose sender
+    authority was already captured in a server-owned envelope, such as an
+    explicitly capped scheduled run. Plugins must not derive the mode from
+    inbound metadata, persist it as channel state, or expose it as config. Add
+    an adapter test that proves the mode skips a wildcard `toolsBySender` entry
+    without dropping the matching base `tools` restriction.
 
   </Step>
 

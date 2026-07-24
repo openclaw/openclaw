@@ -18,9 +18,12 @@ import {
   patchSessionEntryTarget,
   type SessionEntryPatchOptions,
 } from "../../config/sessions/session-accessor.js";
+import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeCronScheduledToolPolicy } from "../../cron/scheduled-tool-policy.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { recordSessionCreated } from "../../sessions/session-state-events.js";
 import { getGeneratedMediaTaskIdsForSessionKey } from "../../tasks/task-status-access.js";
 import { formatForLog } from "../ws-log.js";
 import {
@@ -35,6 +38,7 @@ import {
 } from "./agent-handler-helpers.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import type { AgentSessionPatchBuild } from "./agent-session-patch.js";
+import type { TrustedSessionCreation } from "./session-creation-provenance.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 export type CronContinuationClaim = {
@@ -75,6 +79,7 @@ export async function persistAgentSessionPhase(params: {
   canonicalSessionKey: string;
   sessionAgentId: string;
   mainSessionKey: string;
+  creation: TrustedSessionCreation;
   lifecycleGeneration: string;
   isRestartRecoveryResumeRun: boolean;
   runId: string;
@@ -117,6 +122,7 @@ export async function persistAgentSessionPhase(params: {
   let restoredCronContinuation: RestoredCronContinuation | undefined;
   let mainRestartRecoveryOwnerLease: MainSessionRecoveryOwnerLease | undefined;
   let skipAgentInitialSessionTouch = false;
+  let createdNewEntry = false;
   const recoveredSessionStartedAt =
     !patchBuild.isNewSession &&
     params.entry !== undefined &&
@@ -222,6 +228,13 @@ export async function persistAgentSessionPhase(params: {
                 ...(freshEntry.thinkingLevel ? { thinking: freshEntry.thinkingLevel } : {}),
                 ...(marker.toolsAllow !== undefined ? { toolsAllow: [...marker.toolsAllow] } : {}),
                 ...(marker.toolsAllowIsDefault === true ? { toolsAllowIsDefault: true } : {}),
+                ...(normalizeCronScheduledToolPolicy(marker.scheduledToolPolicy)
+                  ? {
+                      scheduledToolPolicy: normalizeCronScheduledToolPolicy(
+                        marker.scheduledToolPolicy,
+                      ),
+                    }
+                  : {}),
                 ...(marker.cliSessionBindingFacts
                   ? { cliSessionBindingFacts: { ...marker.cliSessionBindingFacts } }
                   : {}),
@@ -246,12 +259,25 @@ export async function persistAgentSessionPhase(params: {
               });
             }
             patchBuild = params.buildSessionPatch(entryForPatch);
-            const effectivePatch =
+            const lifecyclePatch =
               recoveredSessionStartedAt !== undefined &&
               entryForPatch?.sessionStartedAt === undefined &&
               entryForPatch?.sessionId === params.entry?.sessionId
                 ? { ...patchBuild.patch, sessionStartedAt: recoveredSessionStartedAt }
                 : patchBuild.patch;
+            const previousSessionId = normalizeOptionalString(freshEntry?.sessionId);
+            const nextSessionId = normalizeOptionalString(lifecyclePatch.sessionId);
+            const rotationLineage =
+              previousSessionId && nextSessionId && previousSessionId !== nextSessionId
+                ? { previousSessionId }
+                : {};
+            const effectivePatch = freshEntry
+              ? { ...lifecyclePatch, ...rotationLineage }
+              : {
+                  ...lifecyclePatch,
+                  ...buildSessionCreationStamp(params.creation),
+                };
+            createdNewEntry = freshEntry === undefined;
             const merged = withSqliteSessionFileMarker({
               agentId: params.sessionAgentId,
               entry: mergeSessionEntry(entryForPatch, effectivePatch),
@@ -416,6 +442,13 @@ export async function persistAgentSessionPhase(params: {
   const rotatedSessionId = patchBuild.rotatedSessionId;
   const usableRequestedSessionId = patchBuild.usableRequestedSessionId;
   const freshness = patchBuild.freshness;
+  if (createdNewEntry && sessionEntry) {
+    recordSessionCreated({
+      sessionKey: params.canonicalSessionKey,
+      agentId: params.sessionAgentId,
+      entry: sessionEntry,
+    });
+  }
   if (isNewSession && params.entry?.sessionId && resolvedSessionId !== params.entry.sessionId) {
     supersededSessionId = params.entry.sessionId;
   }

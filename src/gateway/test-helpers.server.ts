@@ -10,16 +10,13 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import { parseConfigJson5, resetConfigRuntimeState } from "../config/config.js";
-import {
-  clearSessionStoreCacheForTest,
-  resolveMainSessionKeyFromConfig,
-  type SessionEntry,
-} from "../config/sessions.js";
+import { resolveMainSessionKeyFromConfig, type SessionEntry } from "../config/sessions.js";
 import {
   applySessionEntryLifecycleMutation,
   listSessionEntries,
 } from "../config/sessions/session-accessor.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
+import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import {
   loadOrCreateDeviceIdentity,
@@ -59,6 +56,7 @@ import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import type { GatewayServerOptions } from "./server.js";
+import { invalidateSessionSharingSnapshot } from "./session-sharing.js";
 import { resetTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import {
   agentCommand,
@@ -67,7 +65,6 @@ import {
   getReplyFromConfig,
   agentDiscoveryMock,
   sendWhatsAppMock,
-  sessionStoreSaveDelayMs,
   setTestConfigRoot,
   testIsNixMode,
   testTailscaleWhois,
@@ -366,9 +363,9 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   );
   setTestConfigRoot(tempConfigRoot);
   resetConfigRuntimeState();
+  invalidateSessionSharingSnapshot();
   resetTestPluginRegistry();
   clearGatewaySubagentRuntime();
-  sessionStoreSaveDelayMs.value = 0;
   testTailnetIPv4.value = undefined;
   testTailscaleWhois.value = null;
   testState.gatewayBind = DEFAULT_GATEWAY_TEST_BIND;
@@ -425,7 +422,7 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   }
   resetAgentEventsForTest();
   const mod = await getServerModule();
-  await mod.resetModelCatalogCacheForTest();
+  await mod.resetPreparedModelCatalogForTest();
   agentDiscoveryMock.enabled = false;
   agentDiscoveryMock.discoverCalls = 0;
   agentDiscoveryMock.models = [];
@@ -465,9 +462,9 @@ async function resetGatewayTestRuntimeOnly() {
   applyGatewaySkipEnv();
   delete process.env.OPENCLAW_GATEWAY_TOKEN;
   resetConfigRuntimeState();
+  invalidateSessionSharingSnapshot();
   resetTestPluginRegistry();
   clearGatewaySubagentRuntime();
-  sessionStoreSaveDelayMs.value = 0;
   testTailnetIPv4.value = undefined;
   testTailscaleWhois.value = null;
   testState.gatewayBind = DEFAULT_GATEWAY_TEST_BIND;
@@ -1239,7 +1236,7 @@ export async function rpcReq<T extends Record<string, unknown>>(
     id: string;
     ok: boolean;
     payload?: T | null | undefined;
-    error?: { message?: string; code?: string };
+    error?: { message?: string; code?: string; details?: unknown };
   }>(
     ws,
     (o) => {

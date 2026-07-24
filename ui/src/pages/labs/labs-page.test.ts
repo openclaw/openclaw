@@ -59,12 +59,16 @@ async function mountPage(sourceConfig: Record<string, unknown>): Promise<{
   return { page, provider, runtimeConfig };
 }
 
-function codeModeToggle(page: LabsPageElement) {
-  const toggle = page.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+function labToggle(page: LabsPageElement, index: number, label: string) {
+  const toggle = page.querySelectorAll<HTMLElement & { checked: boolean }>("wa-switch").item(index);
   if (!toggle) {
-    throw new Error("Code Mode toggle not rendered");
+    throw new Error(`${label} toggle not rendered`);
   }
   return toggle;
+}
+
+function codeModeToggle(page: LabsPageElement) {
+  return labToggle(page, 0, "Code Mode");
 }
 
 describe("LabsPage", () => {
@@ -77,20 +81,29 @@ describe("LabsPage", () => {
     vi.restoreAllMocks();
   });
 
-  it("renders the experimental Code Mode entry without the schema-pending Swarm entry", async () => {
-    const { page } = await mountPage({ tools: { codeMode: { enabled: true } } });
+  it("renders the experimental Code Mode and Swarm entries", async () => {
+    const { page } = await mountPage({
+      tools: { codeMode: { enabled: true }, swarm: { enabled: true } },
+    });
 
     expect(page.querySelector(".settings-page__intro")?.textContent).toContain("experimental");
-    expect(page.querySelectorAll(".settings-row")).toHaveLength(1);
+    expect(page.querySelectorAll(".settings-row")).toHaveLength(2);
     expect(page.textContent).toContain("Code Mode");
-    expect(page.textContent).not.toContain("Swarm");
+    expect(page.textContent).toContain("Swarm");
     expect(page.textContent).not.toContain("restart required");
     expect(codeModeToggle(page).checked).toBe(true);
+    expect([...page.querySelectorAll<HTMLElement & { checked: boolean }>("wa-switch")]).toEqual([
+      expect.objectContaining({ checked: true }),
+      expect.objectContaining({ checked: true }),
+    ]);
 
-    const docs = page.querySelector<HTMLAnchorElement>(".settings-row__desc a");
-    expect(docs?.href).toBe("https://docs.openclaw.ai/tools/code-mode");
-    expect(docs?.target).toBe("_blank");
-    expect(docs?.rel).toContain("noopener");
+    const docs = [...page.querySelectorAll<HTMLAnchorElement>(".settings-row__desc a")];
+    expect(docs.map((link) => link.href)).toEqual([
+      "https://docs.openclaw.ai/tools/code-mode",
+      "https://docs.openclaw.ai/tools/swarm",
+    ]);
+    expect(docs.every((link) => link.target === "_blank")).toBe(true);
+    expect(docs.every((link) => link.rel.includes("noopener"))).toBe(true);
   });
 
   it("reflects the supported boolean Code Mode shorthand", async () => {
@@ -116,19 +129,32 @@ describe("LabsPage", () => {
     expect(runtimeConfig.refresh).toHaveBeenCalledOnce();
   });
 
-  it("writes true at the registered config path when enabling", async () => {
-    const { page, runtimeConfig } = await mountPage({
-      tools: { codeMode: { enabled: false } },
-    });
-    const toggle = codeModeToggle(page);
+  it.each([
+    {
+      label: "Code Mode",
+      index: 0,
+      sourceConfig: { tools: { codeMode: { enabled: false } } },
+      expectedPatch: { tools: { codeMode: { enabled: true } } },
+      note: "labs: update codeMode",
+    },
+    {
+      label: "Swarm",
+      index: 1,
+      sourceConfig: { tools: { swarm: { enabled: false } } },
+      expectedPatch: { tools: { swarm: { enabled: true } } },
+      note: "labs: update swarm",
+    },
+  ])("writes true at the registered config path when enabling $label", async (testCase) => {
+    const { page, runtimeConfig } = await mountPage(testCase.sourceConfig);
+    const toggle = labToggle(page, testCase.index, testCase.label);
 
     toggle.checked = true;
     toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
 
     await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
     expect(runtimeConfig.patch).toHaveBeenCalledWith({
-      raw: { tools: { codeMode: { enabled: true } } },
-      note: "labs: update codeMode",
+      raw: testCase.expectedPatch,
+      note: testCase.note,
     });
   });
 });

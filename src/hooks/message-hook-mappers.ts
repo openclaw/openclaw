@@ -9,6 +9,11 @@ import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
+import {
+  hasStagedMediaProjection,
+  resolveMediaFacts,
+  resolveStagedMediaFacts,
+} from "../media/media-facts.js";
 import type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
@@ -144,21 +149,17 @@ export function deriveInboundMessageHookContext(
     ctx.From ??
     internalSessionConversationId(channelId, ctx.SessionKey);
   const isGroup = Boolean(ctx.GroupSubject || ctx.GroupChannel);
-  const mediaPaths = Array.isArray(ctx.MediaPaths)
-    ? ctx.MediaPaths.filter(
-        (value): value is string => typeof value === "string" && value.length > 0,
-      )
-    : undefined;
-  const mediaTypes = Array.isArray(ctx.MediaTypes)
-    ? ctx.MediaTypes.filter(
-        (value): value is string => typeof value === "string" && value.length > 0,
-      )
-    : undefined;
-  const mediaUrls = Array.isArray(ctx.MediaUrls)
-    ? ctx.MediaUrls.filter(
-        (value): value is string => typeof value === "string" && value.length > 0,
-      )
-    : undefined;
+  const media = hasStagedMediaProjection(ctx)
+    ? resolveStagedMediaFacts(ctx)
+    : resolveMediaFacts(ctx);
+  const compact = (values: Array<string | undefined>) => {
+    const entries = values.filter((value): value is string => Boolean(value));
+    return entries.length > 0 ? entries : undefined;
+  };
+  const mediaPaths = compact(media.map((fact) => fact.path));
+  const mediaUrls = compact(media.map((fact) => fact.url ?? fact.path));
+  const mediaTypes = compact(media.map((fact) => fact.contentType ?? fact.kind));
+  const firstMedia = media[0];
   return {
     from: ctx.From ?? "",
     to: ctx.To,
@@ -194,9 +195,9 @@ export function deriveInboundMessageHookContext(
     surface: ctx.Surface,
     threadId: ctx.MessageThreadId,
     threadParentId: ctx.ThreadParentId,
-    mediaPath: ctx.MediaPath ?? mediaPaths?.[0],
-    mediaUrl: ctx.MediaUrl ?? mediaUrls?.[0],
-    mediaType: ctx.MediaType ?? mediaTypes?.[0],
+    mediaPath: firstMedia?.path ?? mediaPaths?.[0],
+    mediaUrl: firstMedia?.url ?? firstMedia?.path ?? mediaUrls?.[0],
+    mediaType: firstMedia?.contentType ?? firstMedia?.kind ?? mediaTypes?.[0],
     mediaPaths,
     mediaUrls,
     mediaTypes,
@@ -242,6 +243,20 @@ export function buildCanonicalSentMessageHookContext(params: {
     isGroup: params.isGroup,
     groupId: params.groupId,
   };
+}
+
+/** Resolves the outbound hook target for a reply produced by an inbound channel turn. */
+export function resolveInboundReplyHookTarget(
+  finalized: FinalizedMsgContext,
+  hookCtx: CanonicalInboundMessageHookContext,
+): string {
+  if (typeof finalized.OriginatingTo === "string" && finalized.OriginatingTo.trim()) {
+    return finalized.OriginatingTo;
+  }
+  if (hookCtx.isGroup) {
+    return hookCtx.conversationId ?? hookCtx.to ?? hookCtx.from;
+  }
+  return hookCtx.from || hookCtx.conversationId || hookCtx.to || "";
 }
 
 type DiagnosticTraceHookFields = Pick<

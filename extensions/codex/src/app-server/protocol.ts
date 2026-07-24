@@ -1,4 +1,3 @@
-// Codex plugin module implements protocol behavior.
 export type JsonValue = null | boolean | number | string | JsonValue[] | JsonObject;
 export type JsonObject = { [key: string]: JsonValue };
 export type CodexServiceTier = string;
@@ -95,8 +94,6 @@ export type CodexDynamicToolFunctionSpec = JsonObject & {
   deferLoading?: boolean;
 };
 
-type CodexDynamicToolNamespaceTool = CodexDynamicToolFunctionSpec;
-
 /** Namespace Codex keeps directly model-visible without exposing it to Code Mode guests. */
 export const CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE = "openclaw_direct";
 
@@ -104,7 +101,7 @@ type CodexDynamicToolNamespaceSpec = JsonObject & {
   type: "namespace";
   name: string;
   description: string;
-  tools: CodexDynamicToolNamespaceTool[];
+  tools: CodexDynamicToolFunctionSpec[];
 };
 
 export type CodexDynamicToolSpec = CodexDynamicToolFunctionSpec | CodexDynamicToolNamespaceSpec;
@@ -135,6 +132,7 @@ export type CodexThreadStartParams = JsonObject & {
   developerInstructions?: string;
   experimentalRawEvents?: boolean;
   environments?: CodexTurnEnvironmentParams[] | null;
+  ephemeral?: boolean;
 };
 
 export type CodexThreadResumeParams = JsonObject & {
@@ -165,6 +163,7 @@ export type CodexThreadStartResponse = {
 export type CodexThreadForkParams = JsonObject & {
   threadId: string;
   lastTurnId?: string | null;
+  beforeTurnId?: string | null;
   path?: string | null;
   model?: string | null;
   modelProvider?: string | null;

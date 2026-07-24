@@ -1,6 +1,7 @@
 // Stable SQLite accessor surface. Domain owners live in the focused modules below.
 export {
   listSqliteSessionEntries,
+  listSqliteSessionEntriesReadOnly,
   listSqliteSessionEntriesByStatus,
   listSqliteSessionTranscriptInstances,
   loadExactSqliteSessionEntry,
@@ -41,6 +42,7 @@ export {
 export {
   forkSqliteSessionAtMessage,
   listSqliteSessionBranches,
+  resolveSessionTranscriptActiveLeafEntryId,
   rewindSqliteSessionToMessage,
   switchSqliteSessionBranch,
 } from "./session-accessor.sqlite-message-cut.js";
@@ -53,12 +55,12 @@ export {
   importSqliteSessionRows,
   replaceSqliteTranscriptEvents,
   replaceSqliteTranscriptEventsSync,
+  trimSqliteTranscriptForManualCompact,
   withSqliteTranscriptWriteLock,
   withSqliteTranscriptWriteTransaction,
 } from "./session-accessor.sqlite-transcript-write.js";
 export { publishSqliteTranscriptUpdate } from "./session-accessor.sqlite-events.js";
 export { readSqliteTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
-export { previewSqliteSessionDiskBudget } from "./session-accessor.sqlite-maintenance.js";
 export {
   findSqliteTranscriptEvent,
   loadLatestSqliteAssistantText,

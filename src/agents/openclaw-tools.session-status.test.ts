@@ -198,7 +198,7 @@ function createConfigModuleMock() {
 
 function createModelCatalogModuleMock() {
   return {
-    loadModelCatalog: async () => [
+    loadPreparedModelCatalog: async () => [
       {
         provider: "anthropic",
         id: "claude-sonnet-4-6",
@@ -313,12 +313,17 @@ function createCommandsStatusRuntimeModuleMock() {
 vi.mock("../config/sessions.js", createSessionsModuleMock);
 vi.mock("../gateway/call.js", createGatewayCallModuleMock);
 vi.mock("../config/config.js", createConfigModuleMock);
-vi.mock("../agents/model-catalog.js", createModelCatalogModuleMock);
+vi.mock("../agents/prepared-model-catalog.js", createModelCatalogModuleMock);
 vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: () => undefined,
 }));
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
   getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
+}));
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
+  isPluginMetadataSnapshotCompatible: () => true,
+  resolvePluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
 }));
 vi.mock("../plugins/provider-thinking.js", () => ({
   resolveProviderBinaryThinking: () => undefined,

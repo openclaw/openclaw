@@ -1,6 +1,8 @@
 // OpenClaw state database manages shared persisted state and migrations.
 import { existsSync } from "node:fs";
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { pathToFileURL } from "node:url";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   executeSqliteQuerySync,
@@ -58,6 +60,7 @@ import {
   dropLegacyStateTables,
   markCurrentStateSchemaVersion,
   repairAgentDatabasesCompositePrimaryKey,
+  repairLegacyGatewayRestartHandoffsForStrictMigration,
 } from "./openclaw-state-db-schema-repair.js";
 import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migration.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
@@ -174,6 +177,9 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
         if (tableExists(db, "audit_events")) {
           ensureAdditiveStateColumns(db);
           db.exec(OPENCLAW_STATE_SCHEMA_SQL);
+          if (previousVersion < OPENCLAW_STATE_STRICT_SCHEMA_VERSION) {
+            repairLegacyGatewayRestartHandoffsForStrictMigration(db);
+          }
           const strictMigration = migrateSqliteSchemaToStrictInTransaction(
             db,
             OPENCLAW_STATE_SCHEMA_SQL,
@@ -242,6 +248,7 @@ function ensureSchema(db: DatabaseSync, pathname: string): void {
         db.exec(OPENCLAW_STATE_SCHEMA_SQL);
         migrateLegacyCronRunLogsToTaskRuns(db);
         if (previousVersion < OPENCLAW_STATE_STRICT_SCHEMA_VERSION) {
+          repairLegacyGatewayRestartHandoffsForStrictMigration(db);
           migrateSqliteSchemaToStrictInTransaction(db, OPENCLAW_STATE_SCHEMA_SQL, {
             databaseLabel: pathname,
           });
@@ -283,6 +290,39 @@ function ensureSchema(db: DatabaseSync, pathname: string): void {
   }
 }
 
+/** Open existing shared state without creating, migrating, chmodding, or configuring it. */
+export function openExistingOpenClawStateDatabaseReadOnly(
+  options: OpenClawStateDatabaseOptions = {},
+): OpenClawStateDatabase | undefined {
+  const pathname = resolveDatabasePath(options);
+  if (!existsSync(pathname)) {
+    return undefined;
+  }
+  const sqlite = requireNodeSqlite();
+  const hasWalSidecars = existsSync(`${pathname}-wal`) || existsSync(`${pathname}-shm`);
+  const uri = `${pathToFileURL(pathname).href}?mode=ro&immutable=1`;
+  const db = new sqlite.DatabaseSync(hasWalSidecars ? pathname : uri, { readOnly: true });
+  try {
+    assertSupportedSchemaVersion(db, pathname);
+  } catch (error) {
+    db.close();
+    throw error;
+  }
+  return {
+    db,
+    path: pathname,
+    walMaintenance: {
+      checkpoint: () => false,
+      close: () => {
+        if (!db.isOpen) {
+          return false;
+        }
+        db.close();
+        return true;
+      },
+    },
+  };
+}
 function assertStateDatabaseIntegrityBeforeMutation(
   database: DatabaseSync,
   pathname: string,
@@ -316,6 +356,9 @@ function assertStateDatabaseIntegrityBeforeMutation(
 export function openOpenClawStateDatabase(
   options: OpenClawStateDatabaseOptions = {},
 ): OpenClawStateDatabase {
+  if (options.database) {
+    return options.database;
+  }
   const env = options.env ?? process.env;
   const pathname = resolveDatabasePath(options);
   // Latched paths are quarantined: the recorder closed any live handle, and
@@ -414,6 +457,22 @@ export function runOpenClawStateWriteTransaction<T>(
     // callers never retry an operation that is durable in SQLite.
   }
   return result;
+}
+
+/** Close one cached shared state database handle by exact pathname. */
+export function closeOpenClawStateDatabaseByPath(pathname: string): boolean {
+  const resolvedPath = path.resolve(pathname);
+  const database = cachedDatabases.get(resolvedPath);
+  if (!database) {
+    return false;
+  }
+  database.walMaintenance.close();
+  clearNodeSqliteKyselyCacheForDatabase(database.db);
+  if (database.db.isOpen) {
+    database.db.close();
+  }
+  cachedDatabases.delete(resolvedPath);
+  return true;
 }
 
 /** Close all cached shared state database handles. */
