@@ -403,6 +403,14 @@ export type AgentCompactionConfig = {
   /** Maximum time in seconds for a single compaction operation (default: 180). */
   timeoutSeconds?: number;
   /**
+   * Opt-in per-task bound, disabled by default (no bound). Set a positive value
+   * (milliseconds) to bound a single deferred (background) context-engine
+   * turn-maintenance run before its lane is released and the run is abandoned,
+   * so a queued user message is not blocked behind a wedged run for the full
+   * session-level abort window. 0 also disables.
+   */
+  turnMaintenanceTaskTimeoutMs?: number;
+  /**
    * Id of a registered compaction provider plugin.
    * When set, the provider's summarize() is called instead of
    * the built-in summarizeInStages(). Falls back to built-in on failure.

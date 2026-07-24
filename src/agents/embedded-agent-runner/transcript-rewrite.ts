@@ -1,7 +1,4 @@
-import {
-  loadTranscriptEvents,
-  replaceTranscriptEvents,
-} from "../../config/sessions/session-accessor.js";
+import { withTranscriptWriteLock } from "../../config/sessions/session-accessor.js";
 import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 /**
  * Rewrites transcript entries in session managers, states, and files.
@@ -47,6 +44,7 @@ function isTranscriptEventRecord(event: unknown): event is {
 async function rewriteSqliteRuntimeTranscript(params: {
   target: Awaited<ReturnType<typeof resolveRuntimeTranscriptReadTarget>>;
   request: TranscriptRewriteRequest;
+  shouldAbort?: () => boolean;
 }): Promise<TranscriptRewriteResult> {
   const marker = parseSqliteSessionFileMarker(params.target.sessionFile);
   if (!marker) {
@@ -60,65 +58,79 @@ async function rewriteSqliteRuntimeTranscript(params: {
   const replacementsById = new Map(
     params.request.replacements.map((replacement) => [replacement.entryId, replacement.message]),
   );
-  let bytesFreed = 0;
-  let rewrittenEntries = 0;
-  const events = await loadTranscriptEvents({
-    agentId: marker.agentId,
-    sessionId: marker.sessionId,
-    sessionKey: params.target.sessionKey,
-    storePath: marker.storePath,
-  });
-  const nextEvents = events.map((event) => {
-    if (!isTranscriptEventRecord(event)) {
-      return event;
-    }
-    const eventId = typeof event.id === "string" ? event.id : undefined;
-    const replacement = eventId ? replacementsById.get(eventId) : undefined;
-    if (!replacement || event.type !== "message") {
-      return event;
-    }
-    bytesFreed += Math.max(
-      0,
-      Buffer.byteLength(JSON.stringify(event.message), "utf8") -
-        Buffer.byteLength(JSON.stringify(replacement), "utf8"),
-    );
-    rewrittenEntries += 1;
-    return Object.assign({}, event, {
-      message: replacement,
-    });
-  });
-  if (rewrittenEntries === 0) {
-    return {
-      changed: false,
-      bytesFreed: 0,
-      rewrittenEntries: 0,
-      reason: "no matching transcript entries",
-    };
-  }
-  await replaceTranscriptEvents(
+  // Mirror the file-backed path: hold the exclusive transcript write lock across
+  // the load and the replace so a late deferred run cannot read a snapshot
+  // outside the lock and then clobber a message the resumed foreground turn
+  // appended. replaceEvents revalidates that snapshot inside the write
+  // transaction, so a concurrent append surfaces as a conflict instead of a
+  // silent overwrite.
+  return await withTranscriptWriteLock(
     {
       agentId: marker.agentId,
       sessionId: marker.sessionId,
       sessionKey: params.target.sessionKey,
       storePath: marker.storePath,
     },
-    nextEvents,
-  );
-  emitSessionTranscriptUpdate({
-    sessionFile: params.target.sessionFile,
-    sessionKey: params.target.sessionKey,
-    agentId: params.target.agentId,
-    target: {
-      agentId: params.target.agentId,
-      sessionId: params.target.sessionId,
-      sessionKey: params.target.sessionKey,
+    async ({ readEvents, replaceEvents }) => {
+      // The deferred-maintenance timeout fence can trip while we are blocked
+      // acquiring the write lock; re-check before reading/persisting so a late
+      // run does not mutate the transcript the foreground turn now owns.
+      if (params.shouldAbort?.()) {
+        return fencedRuntimeTranscriptRewriteResult();
+      }
+      const events = await readEvents();
+      let bytesFreed = 0;
+      let rewrittenEntries = 0;
+      const nextEvents = events.map((event) => {
+        if (!isTranscriptEventRecord(event)) {
+          return event;
+        }
+        const eventId = typeof event.id === "string" ? event.id : undefined;
+        const replacement = eventId ? replacementsById.get(eventId) : undefined;
+        if (!replacement || event.type !== "message") {
+          return event;
+        }
+        bytesFreed += Math.max(
+          0,
+          Buffer.byteLength(JSON.stringify(event.message), "utf8") -
+            Buffer.byteLength(JSON.stringify(replacement), "utf8"),
+        );
+        rewrittenEntries += 1;
+        return Object.assign({}, event, {
+          message: replacement,
+        });
+      });
+      if (rewrittenEntries === 0) {
+        return {
+          changed: false,
+          bytesFreed: 0,
+          rewrittenEntries: 0,
+          reason: "no matching transcript entries",
+        };
+      }
+      // Fence can also trip between the read and persist; bail before writing
+      // or emitting the transcript update.
+      if (params.shouldAbort?.()) {
+        return fencedRuntimeTranscriptRewriteResult();
+      }
+      await replaceEvents(nextEvents);
+      emitSessionTranscriptUpdate({
+        sessionFile: params.target.sessionFile,
+        sessionKey: params.target.sessionKey,
+        agentId: params.target.agentId,
+        target: {
+          agentId: params.target.agentId,
+          sessionId: params.target.sessionId,
+          sessionKey: params.target.sessionKey,
+        },
+      });
+      return {
+        changed: true,
+        bytesFreed,
+        rewrittenEntries,
+      };
     },
-  });
-  return {
-    changed: true,
-    bytesFreed,
-    rewrittenEntries,
-  };
+  );
 }
 
 function estimateMessageBytes(message: AgentMessage): number {
@@ -533,6 +545,19 @@ export function rewriteTranscriptEntriesInState(params: {
 }
 
 /**
+ * No-op result returned when the maintenance fence trips mid-flight, after the
+ * write lock is held but before the rewrite is persisted.
+ */
+function fencedRuntimeTranscriptRewriteResult(): TranscriptRewriteResult {
+  return {
+    changed: false,
+    bytesFreed: 0,
+    rewrittenEntries: 0,
+    reason: "rewrite fenced before persist",
+  };
+}
+
+/**
  * Rewrites message entries for a runtime transcript without using the
  * file-backed path as caller identity.
  */
@@ -540,6 +565,7 @@ export async function rewriteTranscriptEntriesInRuntimeTranscript(params: {
   scope: RuntimeTranscriptScope;
   request: TranscriptRewriteRequest;
   config?: SessionWriteLockAcquireTimeoutConfig;
+  shouldAbort?: () => boolean;
 }): Promise<TranscriptRewriteResult> {
   let sessionLock: Awaited<ReturnType<typeof acquireSessionWriteLock>> | undefined;
   try {
@@ -548,12 +574,21 @@ export async function rewriteTranscriptEntriesInRuntimeTranscript(params: {
       return await rewriteSqliteRuntimeTranscript({
         target,
         request: params.request,
+        // Thread the same fence used on the file path so a timed-out deferred run
+        // re-checks after acquiring the SQLite write lock and before persisting.
+        ...(params.shouldAbort ? { shouldAbort: params.shouldAbort } : {}),
       });
     }
     sessionLock = await acquireSessionWriteLock({
       sessionFile: target.sessionFile,
       ...resolveSessionWriteLockOptions(params.config),
     });
+    // The deferred-maintenance timeout fence can trip while we are blocked
+    // acquiring the write lock; re-check before reading/persisting so a
+    // late run does not mutate the transcript the foreground turn now owns.
+    if (params.shouldAbort?.()) {
+      return fencedRuntimeTranscriptRewriteResult();
+    }
     const state = await readTranscriptFileState(target.sessionFile);
     const result = rewriteTranscriptEntriesInState({
       state,
@@ -562,6 +597,11 @@ export async function rewriteTranscriptEntriesInRuntimeTranscript(params: {
         ? { allowedRewriteSuffixEntryIds: params.request.allowedRewriteSuffixEntryIds }
         : {}),
     });
+    // Fence can also trip between the read and persist; bail before writing,
+    // emitting the transcript update, or logging the rewrite.
+    if (params.shouldAbort?.()) {
+      return fencedRuntimeTranscriptRewriteResult();
+    }
     if (result.changed) {
       await persistRuntimeTranscriptStateMutation({
         target,

@@ -672,6 +672,7 @@ export function logMessageQueued(params: {
   state.generation = (state.generation ?? 0) + 1;
   state.lastStuckWarnAgeMs = undefined;
   state.lastLongRunningWarnAgeMs = undefined;
+  state.lastStalledWarnAgeMs = undefined;
   if (diag.isEnabled("debug")) {
     diag.debug(
       `message queued: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
@@ -884,6 +885,7 @@ export function logSessionStateChange(
   state.generation = (state.generation ?? 0) + 1;
   state.lastStuckWarnAgeMs = undefined;
   state.lastLongRunningWarnAgeMs = undefined;
+  state.lastStalledWarnAgeMs = undefined;
   if (params.state === "processing" && prevState !== "processing") {
     state.activeQueuedTurn = state.queueDepth > 0;
   }
@@ -930,6 +932,7 @@ export function markDiagnosticSessionProgress(params: SessionRef) {
   state.generation = (state.generation ?? 0) + 1;
   state.lastStuckWarnAgeMs = undefined;
   state.lastLongRunningWarnAgeMs = undefined;
+  state.lastStalledWarnAgeMs = undefined;
   markActivity();
 }
 
@@ -1049,6 +1052,20 @@ export function logSessionAttention(
       suppressWarning = true;
     } else {
       state.lastLongRunningWarnAgeMs = params.ageMs;
+    }
+  }
+  if (classification.eventType === "session.stalled") {
+    const nextWarnAgeMs =
+      state.lastStalledWarnAgeMs === undefined
+        ? params.thresholdMs
+        : Math.max(state.lastStalledWarnAgeMs + params.thresholdMs, state.lastStalledWarnAgeMs * 2);
+    if (params.ageMs < nextWarnAgeMs) {
+      if (!recoveryEligible) {
+        return undefined;
+      }
+      suppressWarning = true;
+    } else {
+      state.lastStalledWarnAgeMs = params.ageMs;
     }
   }
   if (suppressWarning) {

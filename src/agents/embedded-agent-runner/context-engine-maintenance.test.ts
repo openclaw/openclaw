@@ -83,6 +83,16 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+// Asserts the array produced a first element so a regression that drops the
+// tracked task/promise fails loudly here instead of reading through undefined.
+function requireFirst<T>(items: readonly T[], label: string): T {
+  const [first] = items;
+  if (first === undefined) {
+    throw new Error(`expected ${label}`);
+  }
+  return first;
+}
+
 function firstMaintainParams(maintain: { mock: { calls: unknown[][] } }): Record<string, unknown> {
   return requireRecord(maintain.mock.calls[0]?.[0], "maintain params");
 }
@@ -95,6 +105,18 @@ function expectRecordFields(record: Record<string, unknown>, expected: Record<st
 
 function expectSystemEventContaining(sessionKey: string, text: string) {
   expect(peekSystemEvents(sessionKey).join("\n")).toContain(text);
+}
+
+function createBackgroundMaintenanceEngine(
+  maintain: (params?: unknown) => Promise<unknown>,
+): NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]> {
+  return {
+    info: { id: "test", name: "Test Engine", turnMaintenanceMode: "background" as const },
+    ingest: async () => ({ ingested: true }),
+    assemble: async ({ messages }: { messages: unknown[] }) => ({ messages, estimatedTokens: 0 }),
+    compact: async () => ({ ok: true, compacted: false }),
+    maintain,
+  } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
 }
 
 vi.mock("./context-engine-capabilities.js", () => ({
@@ -303,7 +325,8 @@ describe("runContextEngineMaintenance", () => {
           },
         ],
       },
-      config: {},
+      config: { session: { writeLock: { acquireTimeoutMs: 75_000 } } },
+      shouldAbort: expect.any(Function),
     });
   });
 
@@ -460,7 +483,8 @@ describe("runContextEngineMaintenance", () => {
                 },
               ],
             },
-            config: {},
+            config: { session: { writeLock: { acquireTimeoutMs: 91_000 } } },
+            shouldAbort: expect.any(Function),
           }),
         );
 
@@ -1078,6 +1102,587 @@ describe("runContextEngineMaintenance", () => {
         expect(maintain).not.toHaveBeenCalled();
       } finally {
         enqueueSpy.mockRestore();
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it("treats a foreign-lane timeout error as a schedule failure, not its own timeout", async () => {
+    await withStateDirEnv("openclaw-turn-maintenance-foreign-lane-", async () => {
+      vi.useFakeTimers();
+      // A timeout error carrying a DIFFERENT lane than this maintenance lane:
+      // the scoped classifier must not mistake it for this run's own timeout.
+      // CommandLaneTaskTimeoutError is private to command-queue; reproduce the
+      // name/message shape that isCommandLaneTaskTimeoutError() matches on.
+      const foreignLaneError = Object.assign(
+        new Error(`Command lane "some-other-lane:xyz" task timed out after 5000ms`),
+        { name: "CommandLaneTaskTimeoutError" },
+      );
+      const enqueueSpy = vi
+        .spyOn(commandQueueModule, "enqueueCommandInLane")
+        .mockRejectedValue(foreignLaneError);
+      try {
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+        resetCommandQueueStateForTest();
+
+        const sessionKey = "agent:main:session-foreign-lane-timeout";
+        const maintain = vi.fn(async () => ({
+          changed: false,
+          bytesFreed: 0,
+          rewrittenEntries: 0,
+        }));
+
+        await runContextEngineMaintenance({
+          contextEngine: createBackgroundMaintenanceEngine(maintain),
+          sessionId: "session-foreign-lane-timeout",
+          sessionKey,
+          sessionFile: "/tmp/session-foreign-lane-timeout.jsonl",
+          reason: "turn",
+          config: { agents: { defaults: { compaction: { turnMaintenanceTaskTimeoutMs: 5_000 } } } },
+        });
+        await flushAsyncWork();
+
+        const tasks = listTasksForOwnerKey(sessionKey).filter(
+          (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
+        );
+        expect(tasks).toHaveLength(1);
+        const task = requireRecord(tasks[0], "foreign-lane schedule-failure task");
+        expect(task.status).toBe("cancelled");
+        // Normal schedule-failure path: names the foreign lane, not this run's timeout.
+        const summary = String(task.terminalSummary);
+        expect(summary).toContain("could not be scheduled");
+        expect(summary).toContain("some-other-lane:xyz");
+        expect(summary).not.toContain("Deferred maintenance timed out after");
+      } finally {
+        enqueueSpy.mockRestore();
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it("disables the per-task timeout by default and passes the configured bound when set", async () => {
+    await withStateDirEnv("openclaw-turn-maintenance-timeout-opt-", async () => {
+      vi.useFakeTimers();
+      const enqueueSpy = vi
+        .spyOn(commandQueueModule, "enqueueCommandInLane")
+        .mockResolvedValue(undefined);
+      try {
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+        resetCommandQueueStateForTest();
+
+        const maintain = vi.fn(async () => ({
+          changed: false,
+          bytesFreed: 0,
+          rewrittenEntries: 0,
+        }));
+
+        await runContextEngineMaintenance({
+          contextEngine: createBackgroundMaintenanceEngine(maintain),
+          sessionId: "session-timeout-default",
+          sessionKey: "agent:main:session-timeout-default",
+          sessionFile: "/tmp/session-timeout-default.jsonl",
+          reason: "turn",
+        });
+        await flushAsyncWork();
+
+        await runContextEngineMaintenance({
+          contextEngine: createBackgroundMaintenanceEngine(maintain),
+          sessionId: "session-timeout-configured",
+          sessionKey: "agent:main:session-timeout-configured",
+          sessionFile: "/tmp/session-timeout-configured.jsonl",
+          reason: "turn",
+          config: {
+            agents: { defaults: { compaction: { turnMaintenanceTaskTimeoutMs: 45_000 } } },
+          },
+        });
+        await flushAsyncWork();
+
+        expect(enqueueSpy).toHaveBeenCalledTimes(2);
+        const defaultOpts = requireRecord(enqueueSpy.mock.calls[0]?.[2], "default enqueue options");
+        expect(defaultOpts.taskTimeoutMs).toBeUndefined();
+        expect(defaultOpts.onTaskTimeout).toBeUndefined();
+        const configuredOpts = requireRecord(
+          enqueueSpy.mock.calls[1]?.[2],
+          "configured enqueue options",
+        );
+        expect(configuredOpts.taskTimeoutMs).toBe(45_000);
+        expect(configuredOpts.onTaskTimeout).toBeTypeOf("function");
+      } finally {
+        enqueueSpy.mockRestore();
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it("treats turnMaintenanceTaskTimeoutMs=0 as disabled", async () => {
+    await withStateDirEnv("openclaw-turn-maintenance-timeout-zero-", async () => {
+      vi.useFakeTimers();
+      const enqueueSpy = vi
+        .spyOn(commandQueueModule, "enqueueCommandInLane")
+        .mockResolvedValue(undefined);
+      try {
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+        resetCommandQueueStateForTest();
+
+        const maintain = vi.fn(async () => ({
+          changed: false,
+          bytesFreed: 0,
+          rewrittenEntries: 0,
+        }));
+
+        await runContextEngineMaintenance({
+          contextEngine: createBackgroundMaintenanceEngine(maintain),
+          sessionId: "session-timeout-zero",
+          sessionKey: "agent:main:session-timeout-zero",
+          sessionFile: "/tmp/session-timeout-zero.jsonl",
+          reason: "turn",
+          config: {
+            agents: { defaults: { compaction: { turnMaintenanceTaskTimeoutMs: 0 } } },
+          },
+        });
+        await flushAsyncWork();
+
+        expect(enqueueSpy).toHaveBeenCalledTimes(1);
+        const opts = requireRecord(enqueueSpy.mock.calls[0]?.[2], "zero enqueue options");
+        expect(opts.taskTimeoutMs).toBeUndefined();
+        expect(opts.onTaskTimeout).toBeUndefined();
+      } finally {
+        enqueueSpy.mockRestore();
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it("bounds a wedged deferred maintenance run with the configured task timeout", async () => {
+    await withStateDirEnv("openclaw-turn-maintenance-timeout-", async () => {
+      vi.useFakeTimers();
+      try {
+        resetCommandQueueStateForTest();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+
+        const sessionKey = "agent:main:session-timeout-wedge";
+        // Never resolves: models a maintenance worker wedged on lock contention.
+        const maintain = vi.fn(() => new Promise<never>(() => {}));
+
+        const deferredPromises: Promise<void>[] = [];
+        await runContextEngineMaintenance({
+          contextEngine: createBackgroundMaintenanceEngine(maintain),
+          sessionId: "session-timeout-wedge",
+          sessionKey,
+          sessionFile: "/tmp/session-timeout-wedge.jsonl",
+          reason: "turn",
+          config: { agents: { defaults: { compaction: { turnMaintenanceTaskTimeoutMs: 5_000 } } } },
+          onDeferredMaintenance: (promise) => {
+            deferredPromises.push(promise);
+          },
+        });
+
+        await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(1));
+        expect(deferredPromises).toHaveLength(1);
+        let deferredSettled = false;
+        const tracked = requireFirst(deferredPromises, "deferred maintenance promise").then(() => {
+          deferredSettled = true;
+        });
+
+        // Before the timeout the wedged run is still active and blocking.
+        await vi.advanceTimersByTimeAsync(4_000);
+        expect(deferredSettled).toBe(false);
+
+        // Past the configured timeout the lane is released and the run abandoned.
+        await vi.advanceTimersByTimeAsync(2_000);
+        await tracked;
+        expect(deferredSettled).toBe(true);
+
+        // The session no longer treats maintenance as active, so a queued turn proceeds.
+        await waitForDeferredTurnMaintenanceForSession(sessionKey);
+
+        // The task descriptor is released rather than left running forever.
+        const tasks = listTasksForOwnerKey(sessionKey).filter(
+          (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
+        );
+        expect(tasks).toHaveLength(1);
+        const task = requireRecord(
+          getTaskById(requireFirst(tasks, "turn-maintenance task").taskId),
+          "timed-out task",
+        );
+        expect(task.status).toBe("cancelled");
+        expect(String(task.terminalSummary)).toContain("timed out after 5000ms");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it("ignores a transcript rewrite requested after the deferred run timed out", async () => {
+    await withStateDirEnv("openclaw-turn-maintenance-fence-rewrite-", async () => {
+      vi.useFakeTimers();
+      try {
+        resetCommandQueueStateForTest();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+
+        const sessionKey = "agent:main:session-fence-rewrite";
+        let releaseMaintain: (() => void) | undefined;
+        let rewriteResult: unknown;
+        const maintain = vi.fn(async (params?: unknown) => {
+          await new Promise<void>((resolve) => {
+            releaseMaintain = resolve;
+          });
+          // Requested only after the lane timeout has fired, modeling a worker
+          // still unwinding past its bound.
+          rewriteResult = await (
+            params as { runtimeContext?: ContextEngineRuntimeContext }
+          ).runtimeContext?.rewriteTranscriptEntries?.({
+            replacements: [
+              {
+                entryId: "entry-1",
+                message: castAgentMessage({
+                  role: "assistant",
+                  content: [{ type: "text", text: "done" }],
+                  timestamp: 2,
+                }),
+              },
+            ],
+          });
+          return { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
+        });
+
+        const deferredPromises: Promise<void>[] = [];
+        await runContextEngineMaintenance({
+          contextEngine: createBackgroundMaintenanceEngine(maintain),
+          sessionId: "session-fence-rewrite",
+          sessionKey,
+          sessionFile: "/tmp/session-fence-rewrite.jsonl",
+          reason: "turn",
+          config: { agents: { defaults: { compaction: { turnMaintenanceTaskTimeoutMs: 5_000 } } } },
+          onDeferredMaintenance: (promise) => {
+            deferredPromises.push(promise);
+          },
+        });
+
+        await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(1));
+        const tracked = deferredPromises[0];
+
+        // Drive past the timeout: the fence trips and the lane is released.
+        await vi.advanceTimersByTimeAsync(6_000);
+        await tracked;
+
+        // Let the still-parked worker resume and attempt the now-fenced rewrite.
+        expect(releaseMaintain).toBeTypeOf("function");
+        releaseMaintain?.();
+        await waitForAssertion(() => expect(rewriteResult).toBeDefined());
+
+        expect(rewriteResult).toEqual({
+          changed: false,
+          bytesFreed: 0,
+          rewrittenEntries: 0,
+          reason: "maintenance fenced after timeout",
+        });
+        expect(rewriteTranscriptEntriesInRuntimeTranscriptMock).not.toHaveBeenCalled();
+
+        const tasks = listTasksForOwnerKey(sessionKey).filter(
+          (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
+        );
+        expect(tasks).toHaveLength(1);
+        const task = requireRecord(
+          getTaskById(requireFirst(tasks, "turn-maintenance task").taskId),
+          "fenced task",
+        );
+        expect(task.status).toBe("cancelled");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it("keeps a timed-out descriptor cancelled when the worker completes late", async () => {
+    await withStateDirEnv("openclaw-turn-maintenance-fence-complete-", async () => {
+      vi.useFakeTimers();
+      try {
+        resetCommandQueueStateForTest();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+
+        const sessionKey = "agent:main:session-fence-complete";
+        let releaseMaintain: (() => void) | undefined;
+        const maintain = vi.fn(async () => {
+          await new Promise<void>((resolve) => {
+            releaseMaintain = resolve;
+          });
+          return { changed: true, bytesFreed: 10, rewrittenEntries: 1 };
+        });
+
+        const deferredPromises: Promise<void>[] = [];
+        await runContextEngineMaintenance({
+          contextEngine: createBackgroundMaintenanceEngine(maintain),
+          sessionId: "session-fence-complete",
+          sessionKey,
+          sessionFile: "/tmp/session-fence-complete.jsonl",
+          reason: "turn",
+          config: { agents: { defaults: { compaction: { turnMaintenanceTaskTimeoutMs: 5_000 } } } },
+          onDeferredMaintenance: (promise) => {
+            deferredPromises.push(promise);
+          },
+        });
+
+        await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(1));
+        const tracked = deferredPromises[0];
+
+        await vi.advanceTimersByTimeAsync(6_000);
+        await tracked;
+
+        // Worker succeeds after the timeout; the complete path must stay fenced.
+        releaseMaintain?.();
+        await vi.advanceTimersByTimeAsync(50);
+        await flushAsyncWork(8);
+
+        const tasks = listTasksForOwnerKey(sessionKey).filter(
+          (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
+        );
+        expect(tasks).toHaveLength(1);
+        const task = requireRecord(
+          getTaskById(requireFirst(tasks, "turn-maintenance task").taskId),
+          "fenced task",
+        );
+        expect(task.status).toBe("cancelled");
+        expect(String(task.terminalSummary)).toContain("timed out after 5000ms");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it("keeps a timed-out descriptor cancelled when the worker fails late", async () => {
+    await withStateDirEnv("openclaw-turn-maintenance-fence-fail-", async () => {
+      vi.useFakeTimers();
+      try {
+        resetCommandQueueStateForTest();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+
+        const sessionKey = "agent:main:session-fence-fail";
+        let rejectMaintain: ((reason: unknown) => void) | undefined;
+        const maintain = vi.fn(
+          () =>
+            new Promise<never>((_, reject) => {
+              rejectMaintain = reject;
+            }),
+        );
+
+        const deferredPromises: Promise<void>[] = [];
+        await runContextEngineMaintenance({
+          contextEngine: createBackgroundMaintenanceEngine(maintain),
+          sessionId: "session-fence-fail",
+          sessionKey,
+          sessionFile: "/tmp/session-fence-fail.jsonl",
+          reason: "turn",
+          config: { agents: { defaults: { compaction: { turnMaintenanceTaskTimeoutMs: 5_000 } } } },
+          onDeferredMaintenance: (promise) => {
+            deferredPromises.push(promise);
+          },
+        });
+
+        await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(1));
+        const tracked = deferredPromises[0];
+
+        await vi.advanceTimersByTimeAsync(6_000);
+        await tracked;
+
+        // Worker throws after the timeout; the fail path must stay fenced.
+        rejectMaintain?.(new Error("late maintenance failure"));
+        await vi.advanceTimersByTimeAsync(50);
+        await flushAsyncWork(8);
+
+        const tasks = listTasksForOwnerKey(sessionKey).filter(
+          (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
+        );
+        expect(tasks).toHaveLength(1);
+        const task = requireRecord(
+          getTaskById(requireFirst(tasks, "turn-maintenance task").taskId),
+          "fenced task",
+        );
+        expect(task.status).toBe("cancelled");
+        expect(String(task.terminalSummary)).toContain("timed out after 5000ms");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it("lets the foreground read proceed and fences the rewrite when maintenance times out", async () => {
+    await withStateDirEnv("openclaw-turn-maintenance-fence-checkpoint-", async () => {
+      vi.useFakeTimers();
+      try {
+        resetCommandQueueStateForTest();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+
+        const sessionKey = "agent:main:session-fence-checkpoint";
+        const sessionLane = resolveSessionLane(sessionKey);
+        const events: string[] = [];
+        let releaseMaintain: (() => void) | undefined;
+        const maintain = vi.fn(async (params?: unknown) => {
+          events.push("maintenance-start");
+          await new Promise<void>((resolve) => {
+            releaseMaintain = resolve;
+          });
+          events.push("maintenance-before-rewrite");
+          await (
+            params as { runtimeContext?: ContextEngineRuntimeContext }
+          ).runtimeContext?.rewriteTranscriptEntries?.({
+            replacements: [
+              {
+                entryId: "entry-1",
+                message: castAgentMessage({
+                  role: "assistant",
+                  content: [{ type: "text", text: "done" }],
+                  timestamp: 2,
+                }),
+              },
+            ],
+          });
+          events.push("maintenance-after-rewrite");
+          return { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
+        });
+
+        const deferredPromises: Promise<void>[] = [];
+        await runContextEngineMaintenance({
+          contextEngine: createBackgroundMaintenanceEngine(maintain),
+          sessionId: "session-fence-checkpoint",
+          sessionKey,
+          sessionFile: "/tmp/session-fence-checkpoint.jsonl",
+          reason: "turn",
+          config: { agents: { defaults: { compaction: { turnMaintenanceTaskTimeoutMs: 5_000 } } } },
+          onDeferredMaintenance: (promise) => {
+            deferredPromises.push(promise);
+          },
+        });
+
+        await waitForAssertion(() => expect(events).toContain("maintenance-start"));
+        const tracked = deferredPromises[0];
+
+        // Drive past the timeout: the lane is released and the fence trips while
+        // maintenance is still wedged.
+        await vi.advanceTimersByTimeAsync(6_000);
+        await tracked;
+
+        // The queued foreground turn proceeds instead of waiting for the wedged
+        // worker, because the session no longer treats maintenance as active.
+        const foregroundTurn = enqueueCommandInLane(sessionLane, async () => {
+          events.push("foreground-before-read-checkpoint");
+          await waitForDeferredTurnMaintenanceForSession(sessionKey);
+          events.push("foreground-read");
+        });
+        await waitForAssertion(() => expect(events).toContain("foreground-read"));
+
+        // Now let the worker resume; its rewrite must be a fenced no-op observed
+        // strictly after the foreground read already happened.
+        releaseMaintain?.();
+        await waitForAssertion(() => expect(events).toContain("maintenance-after-rewrite"));
+
+        // The fenced rewrite never reached the runtime transcript, and it was
+        // observed strictly after the foreground read already happened.
+        expect(rewriteTranscriptEntriesInRuntimeTranscriptMock).not.toHaveBeenCalled();
+        expect(events.indexOf("foreground-read")).toBeLessThan(
+          events.indexOf("maintenance-after-rewrite"),
+        );
+        await foregroundTurn;
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it("holds the same-session read barrier until an in-flight persist admitted before the timeout settles", async () => {
+    await withStateDirEnv("openclaw-turn-maintenance-persist-checkpoint-", async () => {
+      vi.useFakeTimers();
+      try {
+        resetCommandQueueStateForTest();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+
+        const sessionKey = "agent:main:session-persist-checkpoint";
+        const events: string[] = [];
+        let releasePersist: (() => void) | undefined;
+        // The persist is admitted before the timeout, then parked mid-write.
+        rewriteTranscriptEntriesInRuntimeTranscriptMock.mockImplementationOnce(async () => {
+          events.push("persist-start");
+          await new Promise<void>((resolve) => {
+            releasePersist = resolve;
+          });
+          events.push("persist-end");
+          return { changed: true, bytesFreed: 123, rewrittenEntries: 2 };
+        });
+        const maintain = vi.fn(async (params?: unknown) => {
+          await (
+            params as { runtimeContext?: ContextEngineRuntimeContext }
+          ).runtimeContext?.rewriteTranscriptEntries?.({
+            replacements: [
+              {
+                entryId: "entry-1",
+                message: castAgentMessage({
+                  role: "assistant",
+                  content: [{ type: "text", text: "done" }],
+                  timestamp: 2,
+                }),
+              },
+            ],
+          });
+          return { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
+        });
+
+        const deferredPromises: Promise<void>[] = [];
+        await runContextEngineMaintenance({
+          contextEngine: createBackgroundMaintenanceEngine(maintain),
+          sessionId: "session-persist-checkpoint",
+          sessionKey,
+          sessionFile: "/tmp/session-persist-checkpoint.jsonl",
+          reason: "turn",
+          config: { agents: { defaults: { compaction: { turnMaintenanceTaskTimeoutMs: 5_000 } } } },
+          onDeferredMaintenance: (promise) => {
+            deferredPromises.push(promise);
+          },
+        });
+
+        await waitForAssertion(() => expect(events).toContain("persist-start"));
+        expect(deferredPromises).toHaveLength(1);
+        let barrierSettled = false;
+        const tracked = requireFirst(deferredPromises, "deferred maintenance promise").then(() => {
+          barrierSettled = true;
+        });
+
+        // Drive past the timeout: the lane is released and the fence trips, but a
+        // persist admitted before the timeout is still awaiting I/O.
+        await vi.advanceTimersByTimeAsync(6_000);
+        await flushAsyncWork();
+        // The read barrier must NOT resolve while that persist is unsettled, or a
+        // same-session read could observe a half-applied rewrite.
+        expect(barrierSettled).toBe(false);
+
+        // Once the in-flight persist settles, the bounded checkpoint releases the
+        // read barrier and the next same-session read can proceed.
+        expect(releasePersist).toBeTypeOf("function");
+        releasePersist?.();
+        await tracked;
+        expect(barrierSettled).toBe(true);
+        expect(events).toContain("persist-end");
+        await waitForDeferredTurnMaintenanceForSession(sessionKey);
+
+        // The descriptor stays cancelled: the late worker is fenced past its bound.
+        const tasks = listTasksForOwnerKey(sessionKey).filter(
+          (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
+        );
+        expect(tasks).toHaveLength(1);
+        const task = requireRecord(
+          getTaskById(requireFirst(tasks, "turn-maintenance task").taskId),
+          "timed-out task",
+        );
+        expect(task.status).toBe("cancelled");
+      } finally {
         vi.useRealTimers();
       }
     });

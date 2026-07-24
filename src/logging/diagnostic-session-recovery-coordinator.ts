@@ -153,6 +153,7 @@ function applyRecoveryOutcomeToDiagnosticState(params: {
   state.generation = (state.generation ?? 0) + 1;
   state.lastStuckWarnAgeMs = undefined;
   state.lastLongRunningWarnAgeMs = undefined;
+  state.lastStalledWarnAgeMs = undefined;
   const preserveQueuedIdleWork =
     params.request.expectedState === "idle" && recoveryOutcomeHasQueuedLaneWork(params.outcome);
   state.queueDepth = recoveryOutcomeClearsQueuedSessionState(params.outcome)

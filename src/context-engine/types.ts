@@ -363,6 +363,21 @@ export interface ContextEngine {
    *
    * Engines can use runtimeContext.rewriteTranscriptEntries() to request safe
    * branch-and-reappend transcript rewrites without depending on runner internals.
+   *
+   * Concurrency: the host bounds deferred turn maintenance with a per-task
+   * timeout. When it fires the host fences its own side effects — late
+   * transcript rewrites and persistence become no-ops — and releases the
+   * maintenance lane while the prior maintain() call may still be running.
+   * The host may therefore start a new same-session maintain() before the
+   * earlier one has settled; it does not guarantee at-most-one in-flight
+   * maintain() per session after a timeout. Host state cannot be corrupted by
+   * the abandoned worker, but ENGINES MUST tolerate concurrent/re-entrant
+   * same-session maintain() invocations (e.g. by being idempotent or
+   * serializing internally).
+   *
+   * A future optional `abortSignal` (mirroring compact()'s abortSignal contract
+   * below) MAY be added so the host can request cancellation of an abandoned
+   * worker; that is an additive enhancement, not required today.
    */
   maintain?(params: {
     sessionId: string;
