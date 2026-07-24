@@ -1,6 +1,11 @@
 /** Combined session MCP runtime facade for static + requester partitions. */
+import {
+  type SessionMcpSharedTask,
+  waitForSessionMcpSharedTask,
+} from "./agent-bundle-mcp-runtime-shared.js";
 import type {
   McpCatalogTool,
+  McpRequestOptions,
   McpServerCatalog,
   McpToolCatalog,
   McpToolCatalogDiagnostic,
@@ -74,7 +79,7 @@ export function createCombinedSessionMcpRuntime(params: {
   let lastUsedAt = Math.max(...parts.map((part) => part.lastUsedAt));
   let cachedCatalog: McpToolCatalog | null = null;
   let mergedSourceCatalogs: ReadonlyArray<McpToolCatalog> | null = null;
-  let catalogInFlight: Promise<McpToolCatalog> | undefined;
+  let catalogInFlight: SessionMcpSharedTask<McpToolCatalog> | undefined;
   const serverOwner = new Map<string, SessionMcpRuntime>();
 
   const rememberServerOwners = (catalog: McpToolCatalog, owner: SessionMcpRuntime) => {
@@ -91,15 +96,15 @@ export function createCombinedSessionMcpRuntime(params: {
     mergedSourceCatalogs !== null &&
     parts.every((part, index) => part.peekCatalog() === mergedSourceCatalogs?.[index]);
 
-  const loadCatalog = async (): Promise<McpToolCatalog> => {
-    if (cachedCatalog && cachedCatalogIsCurrent()) {
-      return cachedCatalog;
-    }
-    if (catalogInFlight) {
-      return catalogInFlight;
-    }
-    const inFlight = (async () => {
-      const catalogs = await Promise.all(parts.map((part) => part.getCatalog()));
+  const startCatalogLoad = (): SessionMcpSharedTask<McpToolCatalog> => {
+    const controller = new AbortController();
+    const promise = (async () => {
+      // The combined generation is the real waiter on its parts. Propagating its
+      // lifetime lets each part retain work needed by other callers without
+      // keeping abandoned merged-catalog work alive.
+      const catalogs = await Promise.all(
+        parts.map((part) => part.getCatalog({ signal: controller.signal })),
+      );
       serverOwner.clear();
       for (let index = 0; index < parts.length; index += 1) {
         rememberServerOwners(catalogs[index]!, parts[index]!);
@@ -108,21 +113,52 @@ export function createCombinedSessionMcpRuntime(params: {
       cachedCatalog = mergeMcpToolCatalogs(catalogs);
       return cachedCatalog;
     })();
-    catalogInFlight = inFlight;
-    try {
-      return await inFlight;
-    } finally {
-      if (catalogInFlight === inFlight) {
-        catalogInFlight = undefined;
-      }
+    const refresh: SessionMcpSharedTask<McpToolCatalog> = {
+      controller,
+      promise,
+      activeWaiters: 0,
+    };
+    catalogInFlight = refresh;
+    void refresh.promise
+      .finally(() => {
+        if (catalogInFlight === refresh) {
+          catalogInFlight = undefined;
+        }
+      })
+      .catch(() => {});
+    return refresh;
+  };
+
+  const loadCatalog = async (
+    options?: Pick<McpRequestOptions, "signal">,
+  ): Promise<McpToolCatalog> => {
+    options?.signal?.throwIfAborted();
+    if (cachedCatalog && cachedCatalogIsCurrent()) {
+      return cachedCatalog;
     }
+    const refresh = catalogInFlight ?? startCatalogLoad();
+    return await waitForSessionMcpSharedTask({
+      task: refresh,
+      signal: options?.signal,
+      abandonIfCurrent: () => {
+        if (catalogInFlight !== refresh) {
+          return false;
+        }
+        catalogInFlight = undefined;
+        return true;
+      },
+      abandonedReason: new Error("combined MCP catalog load abandoned by all waiters"),
+    });
   };
 
   // Fresh combined facades have an empty owner map until the catalog is loaded.
   // Share one in-flight getCatalog so concurrent tool/resource calls do not fan out.
-  const ownerForServer = async (serverName: string): Promise<SessionMcpRuntime> => {
+  const ownerForServer = async (
+    serverName: string,
+    options?: Pick<McpRequestOptions, "signal">,
+  ): Promise<SessionMcpRuntime> => {
     if (serverOwner.size === 0) {
-      await loadCatalog();
+      await loadCatalog(options);
     }
     const owner = serverOwner.get(serverName);
     if (owner) {
@@ -175,42 +211,47 @@ export function createCombinedSessionMcpRuntime(params: {
       }
       return mergeMcpToolCatalogs(peeked as McpToolCatalog[]);
     },
+    getServerRequestTimeoutMs(serverName) {
+      return serverOwner.get(serverName)?.getServerRequestTimeoutMs(serverName);
+    },
     markUsed() {
       lastUsedAt = Date.now();
       for (const part of parts) {
         part.markUsed();
       }
     },
-    async callTool(serverName, toolName, input) {
-      return await (await ownerForServer(serverName)).callTool(serverName, toolName, input);
+    async callTool(serverName, toolName, input, options) {
+      return await (
+        await ownerForServer(serverName, options)
+      ).callTool(serverName, toolName, input, options);
     },
-    async listTools(serverName, requestParams) {
-      const owner = await ownerForServer(serverName);
+    async listTools(serverName, requestParams, options) {
+      const owner = await ownerForServer(serverName, options);
       if (!owner.listTools) {
         throw new Error(`bundle-mcp server "${serverName}" does not support listTools`);
       }
-      return await owner.listTools(serverName, requestParams);
+      return await owner.listTools(serverName, requestParams, options);
     },
     async listResources(serverName, options) {
-      const owner = await ownerForServer(serverName);
+      const owner = await ownerForServer(serverName, options);
       if (!owner.listResources) {
         throw new Error(`bundle-mcp server "${serverName}" does not support listResources`);
       }
       return await owner.listResources(serverName, options);
     },
     async readResource(serverName, uri, options) {
-      const owner = await ownerForServer(serverName);
+      const owner = await ownerForServer(serverName, options);
       if (!owner.readResource) {
         throw new Error(`bundle-mcp server "${serverName}" does not support readResource`);
       }
       return await owner.readResource(serverName, uri, options);
     },
-    async listResourceTemplates(serverName, requestParams) {
-      const owner = await ownerForServer(serverName);
+    async listResourceTemplates(serverName, requestParams, options) {
+      const owner = await ownerForServer(serverName, options);
       if (!owner.listResourceTemplates) {
         throw new Error(`bundle-mcp server "${serverName}" does not support listResourceTemplates`);
       }
-      return await owner.listResourceTemplates(serverName, requestParams);
+      return await owner.listResourceTemplates(serverName, requestParams, options);
     },
     async listPrompts(serverName) {
       const owner = await ownerForServer(serverName);
@@ -227,6 +268,8 @@ export function createCombinedSessionMcpRuntime(params: {
       return await owner.getPrompt(serverName, name, args);
     },
     async dispose() {
+      catalogInFlight?.controller.abort(new Error("combined MCP runtime disposed"));
+      catalogInFlight = undefined;
       await Promise.allSettled(parts.map((part) => part.dispose()));
     },
   };

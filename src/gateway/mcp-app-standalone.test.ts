@@ -1,6 +1,10 @@
-import type { IncomingMessage } from "node:http";
+import { EventEmitter } from "node:events";
+import { createServer, type IncomingMessage, request as requestHttp } from "node:http";
 import { Readable } from "node:stream";
+import { runInNewContext } from "node:vm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "../../packages/gateway-client/src/timeouts.js";
+import type { SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
 const mocks = vi.hoisted(() => ({
@@ -35,6 +39,8 @@ function issueTicket(params: Parameters<typeof createMcpAppStandaloneTicket>[0])
 
 const nowMs = 1_800_000_000_000;
 const secret = Buffer.alloc(32, 7);
+const mcpRequestTimeoutMs = DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS * 2;
+const viewOperationTimeoutMs = 10 * 60_000;
 const releaseRuntimeLease = vi.fn();
 const runtime = {
   sessionId: "runtime-session",
@@ -49,7 +55,20 @@ const runtime = {
       { serverName: "other", toolName: "cross-only", uiVisibility: ["app"] },
     ],
   })),
-  callTool: vi.fn(async (serverName: string, toolName: string) => ({
+  peekCatalog: vi.fn<SessionMcpRuntime["peekCatalog"]>(() => ({
+    version: 1,
+    generatedAt: nowMs,
+    servers: {
+      demo: {
+        serverName: "demo",
+        launchSummary: "demo",
+        toolCount: 0,
+        requestTimeoutMs: mcpRequestTimeoutMs,
+      },
+    },
+    tools: [],
+  })),
+  callTool: vi.fn<SessionMcpRuntime["callTool"]>(async (serverName, toolName) => ({
     content: [{ type: "text", text: `${serverName}:${toolName}` }],
   })),
   listTools: vi.fn(async () => ({
@@ -81,6 +100,7 @@ const view = {
   allowedAppToolNames: new Set(["shared", "app-only"]),
   toolInput: { city: "Paris" },
   toolResult: { content: [{ type: "text", text: "sunny" }] },
+  operationTimeoutMs: viewOperationTimeoutMs,
   expiresAtMs: nowMs + 10 * 60_000,
   requestWindowStartedAtMs: nowMs,
   requestCount: 0,
@@ -98,6 +118,8 @@ async function request(params: {
   body?: unknown;
 }) {
   const { res, end, setHeader } = makeMockHttpResponse();
+  const socket = new EventEmitter();
+  Object.assign(res, { socket });
   const serialized = params.body === undefined ? undefined : JSON.stringify(params.body);
   const req = Object.assign(Readable.from(serialized === undefined ? [] : [serialized]), {
     url: params.url,
@@ -106,7 +128,7 @@ async function request(params: {
       ...(params.authorization ? { authorization: params.authorization } : {}),
       ...(serialized ? { "content-type": "application/json" } : {}),
     },
-    socket: {},
+    socket,
   }) as IncomingMessage;
   const handled = await handleMcpAppStandaloneHttpRequest(req, res, {
     gatewayPort: 18_789,
@@ -116,6 +138,160 @@ async function request(params: {
     ticketSecret: secret,
   });
   return { handled, res, end, setHeader };
+}
+
+async function launchStandaloneHostWithStalledFetch(stallPhase: "fetch" | "body" = "fetch") {
+  const shell = await request({ url: "/__openclaw__/mcp-app" });
+  const body = String(shell.end.mock.calls[0]?.[0]);
+  const script = body.match(/<script>([\s\S]*)<\/script>/u)?.[1];
+  if (!script) {
+    throw new Error("standalone host script missing");
+  }
+  const listeners = new Map<string, Array<() => void>>();
+  const replaceChildren = vi.fn();
+  let requestSignal: AbortSignal | undefined;
+  const requestAbortError = () =>
+    requestSignal?.reason instanceof Error ? requestSignal.reason : new Error("request aborted");
+  const fetch = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+    requestSignal = init?.signal ?? undefined;
+    if (stallPhase === "body") {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () =>
+          new Promise<unknown>((_resolve, reject) => {
+            requestSignal?.addEventListener("abort", () => reject(requestAbortError()), {
+              once: true,
+            });
+          }),
+      } as Response);
+    }
+    return new Promise<Response>((_resolve, reject) => {
+      requestSignal?.addEventListener("abort", () => reject(requestAbortError()), { once: true });
+    });
+  });
+  runInNewContext(script, {
+    AbortController,
+    URL,
+    addEventListener: (type: string, listener: () => void) => {
+      listeners.set(type, [...(listeners.get(type) ?? []), listener]);
+    },
+    clearTimeout,
+    document: {
+      createElement: () => ({
+        className: "",
+        contentWindow: undefined,
+        referrerPolicy: "",
+        remove: vi.fn(),
+        setAttribute: vi.fn(),
+        src: "",
+        style: { height: "" },
+        textContent: "",
+        title: "",
+      }),
+      getElementById: () => ({ replaceChildren }),
+    },
+    fetch,
+    innerWidth: 1024,
+    location: { hash: "#ticket", origin: "http://127.0.0.1:18789" },
+    matchMedia: () => ({ matches: false }),
+    navigator: { language: "en-US" },
+    setTimeout,
+  });
+  return {
+    emit: (type: string) => {
+      for (const listener of listeners.get(type) ?? []) {
+        listener();
+      }
+    },
+    fetch,
+    getRequestSignal: () => requestSignal,
+    replaceChildren,
+  };
+}
+
+async function launchStandaloneHostWithStalledOperation(operationTimeoutMs: number) {
+  const shell = await request({ url: "/__openclaw__/mcp-app" });
+  const body = String(shell.end.mock.calls[0]?.[0]);
+  const script = body.match(/<script>([\s\S]*)<\/script>/u)?.[1];
+  if (!script) {
+    throw new Error("standalone host script missing");
+  }
+  const listeners = new Map<string, Array<(event?: unknown) => void>>();
+  const frameWindow = { postMessage: vi.fn() };
+  let requestSignal: AbortSignal | undefined;
+  const requestAbortError = () =>
+    requestSignal?.reason instanceof Error ? requestSignal.reason : new Error("request aborted");
+  const fetch = vi
+    .fn()
+    .mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        sandboxUrl: "/mcp-app-sandbox",
+        sandboxPort: 18_790,
+        html: "<!doctype html><p>private fixture</p>",
+        toolInput: {},
+        toolResult: {},
+        serverTools: true,
+        operationTimeoutMs,
+      }),
+    } as Response)
+    .mockImplementationOnce((_input: RequestInfo | URL, init?: RequestInit) => {
+      requestSignal = init?.signal ?? undefined;
+      return new Promise<Response>((_resolve, reject) => {
+        requestSignal?.addEventListener("abort", () => reject(requestAbortError()), { once: true });
+      });
+    });
+  runInNewContext(script, {
+    AbortController,
+    URL,
+    addEventListener: (type: string, listener: (event?: unknown) => void) => {
+      listeners.set(type, [...(listeners.get(type) ?? []), listener]);
+    },
+    clearTimeout,
+    document: {
+      createElement: () => ({
+        className: "",
+        contentWindow: frameWindow,
+        referrerPolicy: "",
+        remove: vi.fn(),
+        setAttribute: vi.fn(),
+        src: "",
+        style: { height: "" },
+        textContent: "",
+        title: "",
+      }),
+      getElementById: () => ({ replaceChildren: vi.fn() }),
+    },
+    fetch,
+    innerWidth: 1024,
+    location: { hash: "#ticket", origin: "http://127.0.0.1:18789" },
+    matchMedia: () => ({ matches: false }),
+    navigator: { language: "en-US" },
+    setTimeout,
+  });
+  for (let index = 0; index < 12; index += 1) {
+    await Promise.resolve();
+  }
+  const emitMessage = (data: unknown) => {
+    for (const listener of listeners.get("message") ?? []) {
+      listener({ data, origin: "http://127.0.0.1:18790", source: frameWindow });
+    }
+  };
+  emitMessage({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "ui/initialize",
+    params: {
+      protocolVersion: "2026-01-26",
+      appInfo: { name: "test", version: "1.0.0" },
+      appCapabilities: {},
+    },
+  });
+  emitMessage({ jsonrpc: "2.0", method: "ui/notifications/initialized" });
+  emitMessage({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "slow" } });
+  return { fetch, getRequestSignal: () => requestSignal };
 }
 
 describe("MCP App standalone host", () => {
@@ -213,6 +389,163 @@ describe("MCP App standalone host", () => {
     );
   });
 
+  it("bounds a stalled standalone view fetch", async () => {
+    vi.useFakeTimers();
+    try {
+      const host = await launchStandaloneHostWithStalledFetch();
+      expect(host.fetch).toHaveBeenCalledOnce();
+      expect(host.getRequestSignal()).toBeDefined();
+      await vi.advanceTimersByTimeAsync(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
+      expect(host.getRequestSignal()?.aborted).toBe(true);
+      expect(host.replaceChildren).toHaveBeenCalledWith(
+        expect.objectContaining({ textContent: "MCP App request timed out" }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("aborts a pending standalone view fetch when the page is hidden", async () => {
+    const host = await launchStandaloneHostWithStalledFetch();
+    expect(host.getRequestSignal()).toBeDefined();
+    host.emit("pagehide");
+    expect(host.getRequestSignal()?.aborted).toBe(true);
+  });
+
+  it("bounds a stalled standalone view response body", async () => {
+    vi.useFakeTimers();
+    try {
+      const host = await launchStandaloneHostWithStalledFetch("body");
+      expect(host.fetch).toHaveBeenCalledOnce();
+      expect(host.getRequestSignal()).toBeDefined();
+      await vi.advanceTimersByTimeAsync(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
+      expect(host.getRequestSignal()?.aborted).toBe(true);
+      expect(host.replaceChildren).toHaveBeenCalledWith(
+        expect.objectContaining({ textContent: "MCP App request timed out" }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("aborts a pending standalone view response body when the page is hidden", async () => {
+    const host = await launchStandaloneHostWithStalledFetch("body");
+    expect(host.getRequestSignal()).toBeDefined();
+    host.emit("pagehide");
+    expect(host.getRequestSignal()?.aborted).toBe(true);
+  });
+
+  it("cancels a running standalone operation when the HTTP client disconnects", async () => {
+    view.operationTimeoutMs = 300;
+    let operationSignal: AbortSignal | undefined;
+    let resolveOperationStarted: (() => void) | undefined;
+    const operationStarted = new Promise<void>((resolve) => {
+      resolveOperationStarted = resolve;
+    });
+    runtime.callTool.mockImplementationOnce(async (_serverName, _toolName, _args, options) => {
+      operationSignal = options?.signal;
+      resolveOperationStarted?.();
+      return await new Promise((resolve, reject) => {
+        operationSignal?.addEventListener(
+          "abort",
+          () => {
+            reject(
+              operationSignal?.reason instanceof Error
+                ? operationSignal.reason
+                : new Error("standalone MCP App operation aborted"),
+            );
+          },
+          { once: true },
+        );
+      });
+    });
+
+    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs, secret });
+    let resolveHandled: ((handled: boolean) => void) | undefined;
+    let rejectHandled: ((error: unknown) => void) | undefined;
+    const handled = new Promise<boolean>((resolve, reject) => {
+      resolveHandled = resolve;
+      rejectHandled = reject;
+    });
+    const server = createServer((req, res) => {
+      void handleMcpAppStandaloneHttpRequest(req, res, {
+        gatewayPort: 18_789,
+        sandboxPort: 18_790,
+        nowMs,
+        ticketSecret: secret,
+      }).then(resolveHandled, rejectHandled);
+    });
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("standalone disconnect test server did not bind a TCP port");
+      }
+      const client = requestHttp({
+        host: "127.0.0.1",
+        port: address.port,
+        path: "/__openclaw__/mcp-app/view",
+        method: "POST",
+        headers: {
+          Authorization: `MCP-App ${issued.ticket}`,
+          "Content-Type": "application/json",
+        },
+      });
+      client.on("error", () => {});
+      client.end(
+        JSON.stringify({
+          method: "tools/call",
+          params: { name: "shared", arguments: {} },
+        }),
+      );
+
+      await operationStarted;
+      expect(view.activeRequests).toBe(1);
+      client.destroy();
+
+      const abortedPromptly = await Promise.race([
+        new Promise<boolean>((resolve) => {
+          operationSignal?.addEventListener("abort", () => resolve(true), { once: true });
+        }),
+        new Promise<boolean>((resolve) => {
+          setTimeout(() => resolve(false), 100);
+        }),
+      ]);
+      expect(abortedPromptly).toBe(true);
+      await expect(handled).resolves.toBe(true);
+      expect(operationSignal?.aborted).toBe(true);
+      expect(view.activeRequests).toBe(0);
+      expect(releaseRuntimeLease).toHaveBeenCalledOnce();
+    } finally {
+      await handled.catch(() => {});
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+      view.operationTimeoutMs = viewOperationTimeoutMs;
+    }
+  });
+
+  it("keeps slow standalone operations within the MCP deadline alive past the gateway default", async () => {
+    vi.useFakeTimers();
+    try {
+      const operationTimeoutMs = DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS * 3;
+      const host = await launchStandaloneHostWithStalledOperation(operationTimeoutMs);
+      expect(host.fetch).toHaveBeenCalledTimes(2);
+      expect(host.getRequestSignal()).toBeDefined();
+      await vi.advanceTimersByTimeAsync(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
+      expect(host.getRequestSignal()?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(operationTimeoutMs - DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
+      expect(host.getRequestSignal()?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("returns capabilities only for handlers installed on the live view", async () => {
     const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs, secret });
     const route = "/__openclaw__/mcp-app/view";
@@ -225,6 +558,7 @@ describe("MCP App standalone host", () => {
       sandboxPort: 18_790,
       serverTools: true,
       serverResources: true,
+      operationTimeoutMs: viewOperationTimeoutMs + DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
     });
     expect(
       (await request({ url: route, authorization: `MCP-App ${issued.ticket}` })).res.statusCode,
@@ -233,6 +567,20 @@ describe("MCP App standalone host", () => {
     expect(
       (await request({ url: route, authorization: `MCP-App ${issued.ticket}` })).res.statusCode,
     ).toBe(401);
+  });
+
+  it("keeps the view-owned operation deadline after the runtime catalog is invalidated", async () => {
+    runtime.peekCatalog.mockReturnValueOnce(null);
+    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs, secret });
+    const accepted = await request({
+      url: "/__openclaw__/mcp-app/view",
+      authorization: `MCP-App ${issued.ticket}`,
+    });
+
+    expect(accepted.res.statusCode).toBe(200);
+    expect(JSON.parse(String(accepted.end.mock.calls[0]?.[0]))).toMatchObject({
+      operationTimeoutMs: viewOperationTimeoutMs + DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
+    });
   });
 
   it("executes only owning-server app-visible allowed tools and resources", async () => {
@@ -250,10 +598,21 @@ describe("MCP App standalone host", () => {
       params: { name: "app-only", arguments: {} },
     });
     expect(tool.res.statusCode).toBe(200);
-    expect(runtime.callTool).toHaveBeenCalledWith("demo", "app-only", {});
+    expect(runtime.callTool).toHaveBeenCalledWith(
+      "demo",
+      "app-only",
+      {},
+      {
+        signal: expect.any(AbortSignal),
+      },
+    );
+    const toolSignal = runtime.callTool.mock.calls[0]?.[3]?.signal;
+    expect(runtime.getCatalog).toHaveBeenCalledWith({ signal: toolSignal });
     const resource = await invoke({ method: "resources/read", params: { uri: "ui://demo/state" } });
     expect(resource.res.statusCode).toBe(200);
-    expect(runtime.readResource).toHaveBeenCalledWith("demo", "ui://demo/state");
+    expect(runtime.readResource).toHaveBeenCalledWith("demo", "ui://demo/state", {
+      signal: expect.any(AbortSignal),
+    });
 
     for (const name of ["model-only", "not-allowed", "cross-only"]) {
       expect(

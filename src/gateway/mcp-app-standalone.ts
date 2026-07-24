@@ -1,171 +1,37 @@
-import { createHash, createHmac, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import {
+  addSafeTimeoutDelayGraceMs,
+  DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
+} from "../../packages/gateway-client/src/timeouts.js";
 import { peekSessionMcpRuntime } from "../agents/agent-bundle-mcp-runtime.js";
 import { buildMcpAppSandboxPath, resolveMcpAppSandboxPort } from "../agents/mcp-app-sandbox.js";
 import { getMcpAppViewLease, type McpAppViewLease } from "../agents/mcp-ui-resource.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { safeEqualSecret } from "../security/secret-equal.js";
-import { readJsonBodyOrError, sendJson } from "./http-common.js";
+import { readJsonBodyOrError, sendJson, watchClientDisconnect } from "./http-common.js";
 import {
   executeMcpAppOperation,
   type McpAppActiveView,
   parseMcpAppOperation,
   withMcpAppActiveView,
 } from "./mcp-app-operations.js";
+import {
+  createMcpAppStandaloneTicket,
+  MCP_APP_STANDALONE_PATH,
+  mcpAppStandaloneTesting,
+  verifyMcpAppStandaloneTicket,
+} from "./mcp-app-standalone-ticket.js";
 
-const MCP_APP_STANDALONE_PATH = "/__openclaw__/mcp-app";
+export { createMcpAppStandaloneTicket, mcpAppStandaloneTesting, verifyMcpAppStandaloneTicket };
+
 const MCP_APP_STANDALONE_VIEW_PATH = `${MCP_APP_STANDALONE_PATH}/view`;
-const MCP_APP_STANDALONE_TICKET_SCOPE = "mcp-app-standalone-view";
-const MCP_APP_STANDALONE_TICKET_TTL_MS = 2 * 60_000;
-const MCP_APP_STANDALONE_TICKET_MIN_REMAINING_MS = 15_000;
-const MCP_APP_STANDALONE_TICKET_MAX_ENTRIES = 256;
 const MCP_APP_STABLE_PROTOCOL_VERSION = "2026-01-26";
 const MCP_APP_OPERATION_MAX_BODY_BYTES = 256 * 1024;
-const ticketSecret = randomBytes(32);
-
-type StandaloneTicketBinding = {
-  nonce: string;
-  sessionKey: string;
-  sessionId: string;
-  viewId: string;
-  expiresAtMs: number;
-};
-
-type StandaloneTicket = { ticket: string; url: string; expiresAtMs: number };
-
-const ticketBindings = new Map<string, StandaloneTicketBinding>();
-
-export const mcpAppStandaloneTesting = {
-  clearTickets: () => ticketBindings.clear(),
-};
-
-function pruneTicketBindings(nowMs: number): void {
-  for (const [nonce, binding] of ticketBindings) {
-    if (binding.expiresAtMs <= nowMs) {
-      ticketBindings.delete(nonce);
-    }
-  }
-}
-
-function signTicket(nonce: string, expiresAtMs: number, secret: Buffer): string {
-  return createHmac("sha256", secret)
-    .update(`${MCP_APP_STANDALONE_TICKET_SCOPE}\0${nonce}\0${expiresAtMs}`)
-    .digest("base64url");
-}
-
-function formatTicket(binding: StandaloneTicketBinding, secret: Buffer): string {
-  return `v1.${binding.nonce}.${binding.expiresAtMs}.${signTicket(binding.nonce, binding.expiresAtMs, secret)}`;
-}
-
-export function createMcpAppStandaloneTicket(params: {
-  sessionKey: string;
-  view: Pick<McpAppViewLease, "viewId" | "sessionId" | "expiresAtMs">;
-  nowMs?: number;
-  secret?: Buffer;
-}): StandaloneTicket | undefined {
-  const nowMs = params.nowMs ?? Date.now();
-  if (!Number.isSafeInteger(nowMs) || params.view.expiresAtMs <= nowMs) {
-    return undefined;
-  }
-  const expiresAtMs = Math.min(params.view.expiresAtMs, nowMs + MCP_APP_STANDALONE_TICKET_TTL_MS);
-  pruneTicketBindings(nowMs);
-  let reusable: StandaloneTicketBinding | undefined;
-  for (const binding of ticketBindings.values()) {
-    if (
-      binding.sessionKey === params.sessionKey &&
-      binding.sessionId === params.view.sessionId &&
-      binding.viewId === params.view.viewId
-    ) {
-      if (binding.expiresAtMs > params.view.expiresAtMs) {
-        ticketBindings.delete(binding.nonce);
-        continue;
-      }
-      if (!reusable || binding.expiresAtMs > reusable.expiresAtMs) {
-        reusable = binding;
-      }
-    }
-  }
-  if (
-    reusable &&
-    (reusable.expiresAtMs >= expiresAtMs ||
-      reusable.expiresAtMs - nowMs >= MCP_APP_STANDALONE_TICKET_MIN_REMAINING_MS)
-  ) {
-    const ticket = formatTicket(reusable, params.secret ?? ticketSecret);
-    return {
-      ticket,
-      url: `${MCP_APP_STANDALONE_PATH}#${ticket}`,
-      expiresAtMs: reusable.expiresAtMs,
-    };
-  }
-  // Standalone issuance is additive to the existing authenticated view API.
-  // At capacity, omit the link rather than failing that pre-existing path.
-  if (ticketBindings.size >= MCP_APP_STANDALONE_TICKET_MAX_ENTRIES) {
-    return undefined;
-  }
-  const nonce = randomBytes(24).toString("base64url");
-  const binding: StandaloneTicketBinding = {
-    nonce,
-    sessionKey: params.sessionKey,
-    sessionId: params.view.sessionId,
-    viewId: params.view.viewId,
-    expiresAtMs,
-  };
-  ticketBindings.set(nonce, binding);
-  const ticket = formatTicket(binding, params.secret ?? ticketSecret);
-  return {
-    ticket,
-    url: `${MCP_APP_STANDALONE_PATH}#${ticket}`,
-    expiresAtMs,
-  };
-}
-
-export function verifyMcpAppStandaloneTicket(
-  value: string,
-  expected: {
-    sessionKey?: string;
-    sessionId?: string;
-    viewId?: string;
-    nowMs?: number;
-    secret?: Buffer;
-  } = {},
-): StandaloneTicketBinding | undefined {
-  const nowMs = expected.nowMs ?? Date.now();
-  if (!Number.isSafeInteger(nowMs)) {
-    return undefined;
-  }
-  const parts = value.split(".");
-  if (parts.length !== 4 || parts[0] !== "v1") {
-    return undefined;
-  }
-  const [, nonce, rawExpiresAtMs, signature] = parts;
-  if (!nonce || nonce.length !== 32 || !rawExpiresAtMs || !signature) {
-    return undefined;
-  }
-  const expiresAtMs = Number(rawExpiresAtMs);
-  if (!Number.isSafeInteger(expiresAtMs) || expiresAtMs <= nowMs) {
-    return undefined;
-  }
-  const expectedSignature = signTicket(nonce, expiresAtMs, expected.secret ?? ticketSecret);
-  if (!safeEqualSecret(signature, expectedSignature)) {
-    return undefined;
-  }
-  const binding = ticketBindings.get(nonce);
-  if (
-    !binding ||
-    binding.expiresAtMs !== expiresAtMs ||
-    (expected.sessionKey !== undefined && binding.sessionKey !== expected.sessionKey) ||
-    (expected.sessionId !== undefined && binding.sessionId !== expected.sessionId) ||
-    (expected.viewId !== undefined && binding.viewId !== expected.viewId)
-  ) {
-    return undefined;
-  }
-  return binding;
-}
 
 function resolveTicketActiveView(
   value: string,
   nowMs: number,
-  secret: Buffer,
+  secret?: Buffer,
 ): McpAppActiveView | undefined {
   const binding = verifyMcpAppStandaloneTicket(value, { nowMs, secret });
   if (!binding) {
@@ -211,7 +77,11 @@ function sendText(res: ServerResponse, statusCode: number, body: string): void {
   res.end(body);
 }
 
-function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: string }): void {
+function runStandaloneMcpAppHost(config: {
+  protocolVersion: string;
+  requestTimeoutMs: number;
+  viewPath: string;
+}): void {
   type StandaloneElement = { className: string; textContent: string };
   type StandaloneFrame = StandaloneElement & {
     contentWindow?: { postMessage(message: unknown, targetOrigin: string): void };
@@ -254,6 +124,7 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
     toolResult: unknown;
     serverTools?: boolean;
     serverResources?: boolean;
+    operationTimeoutMs: number;
   };
 
   const host = browser.document.getElementById("host");
@@ -265,6 +136,8 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
   let requestId = 0;
   let sandboxOrigin: string | undefined;
   let teardownId: JsonRpcId | undefined;
+  let operationTimeoutMs = config.requestTimeoutMs;
+  const pendingRequests = new Set<AbortController>();
 
   const asRecord = (value: unknown): Record<string, unknown> | undefined =>
     value && typeof value === "object" && !Array.isArray(value)
@@ -317,20 +190,55 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
     }
     return resolved;
   };
+  const withViewResponse = async <T>(
+    init: RequestInit,
+    consume: (response: Response, signal: AbortSignal) => Promise<T>,
+    timeoutMs = config.requestTimeoutMs,
+  ): Promise<T> => {
+    // Standalone HTTP bypasses GatewayBrowserClient, so mirror its request
+    // watchdog through body consumption and retain page-lifecycle ownership.
+    const controller = new AbortController();
+    const timeout = setTimeout(
+      () => controller.abort(new Error("MCP App request timed out")),
+      timeoutMs,
+    );
+    pendingRequests.add(controller);
+    try {
+      const response = await fetch(config.viewPath, { ...init, signal: controller.signal });
+      return await consume(response, controller.signal);
+    } catch (error) {
+      if (controller.signal.aborted) {
+        throw controller.signal.reason;
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+      pendingRequests.delete(controller);
+    }
+  };
   const request = async (method: string, params: unknown): Promise<unknown> => {
-    const response = await fetch(config.viewPath, {
-      method: "POST",
-      headers: {
-        Authorization: `MCP-App ${ticket}`,
-        "Content-Type": "application/json",
+    const { response, body } = await withViewResponse(
+      {
+        method: "POST",
+        headers: {
+          Authorization: `MCP-App ${ticket}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ method, params }),
+        cache: "no-store",
+        credentials: "omit",
       },
-      body: JSON.stringify({ method, params }),
-      cache: "no-store",
-      credentials: "omit",
-    });
-    const body = (await response.json().catch(() => undefined)) as
-      | { ok?: boolean; result?: unknown; error?: string }
-      | undefined;
+      async (viewResponse, signal) => ({
+        response: viewResponse,
+        body: (await viewResponse.json().catch((error: unknown) => {
+          if (signal.aborted) {
+            throw error;
+          }
+          return undefined;
+        })) as { ok?: boolean; result?: unknown; error?: string } | undefined,
+      }),
+      operationTimeoutMs,
+    );
     if (response.status === 401) {
       fail("MCP App ticket was rejected");
       throw new Error("MCP App ticket was rejected");
@@ -480,23 +388,33 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
     if (frame?.contentWindow) {
       post({ jsonrpc: "2.0", id: ++requestId, method: "ui/resource-teardown", params: {} });
     }
+    for (const controller of pendingRequests) {
+      controller.abort(new Error("MCP App page closed"));
+    }
+    pendingRequests.clear();
   });
   if (!ticket) {
     fail("MCP App ticket is missing");
     return;
   }
-  void fetch(config.viewPath, {
-    headers: { Authorization: `MCP-App ${ticket}` },
-    cache: "no-store",
-    credentials: "omit",
-  })
-    .then(async (response) => {
+  void withViewResponse(
+    {
+      headers: { Authorization: `MCP-App ${ticket}` },
+      cache: "no-store",
+      credentials: "omit",
+    },
+    async (response) => {
       if (!response.ok) {
         throw new Error("MCP App ticket was rejected");
       }
-      payload = (await response.json()) as ViewPayload;
-      installOperationHandlers(payload);
-      const sandboxUrl = resolveSandboxUrl(payload);
+      return (await response.json()) as ViewPayload;
+    },
+  )
+    .then((view) => {
+      payload = view;
+      operationTimeoutMs = view.operationTimeoutMs;
+      installOperationHandlers(view);
+      const sandboxUrl = resolveSandboxUrl(view);
       sandboxOrigin = sandboxUrl.origin;
       frame = browser.document.createElement("iframe");
       frame.title = "MCP App";
@@ -511,6 +429,7 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
 function standaloneHostHtml(): { html: string; scriptHash: string } {
   const clientSource = `(${runStandaloneMcpAppHost.toString()})(${JSON.stringify({
     protocolVersion: MCP_APP_STABLE_PROTOCOL_VERSION,
+    requestTimeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
     viewPath: MCP_APP_STANDALONE_VIEW_PATH,
   })});`;
   const escapedSource = clientSource.replaceAll("</script", "<\\/script");
@@ -609,7 +528,7 @@ export async function handleMcpAppStandaloneHttpRequest(
   const ticket = ticketFromRequest(req);
   const now = options.now ?? (() => options.nowMs ?? Date.now());
   const nowMs = now();
-  const secret = options.ticketSecret ?? ticketSecret;
+  const secret = options.ticketSecret;
   const active = ticket ? resolveTicketActiveView(ticket, nowMs, secret) : undefined;
   if (!active) {
     res.setHeader("WWW-Authenticate", "MCP-App");
@@ -641,10 +560,21 @@ export async function handleMcpAppStandaloneHttpRequest(
       sendJson(res, 403, { ok: false, error: "MCP App tool bridge is unavailable" });
       return true;
     }
+    const disconnectController = new AbortController();
+    const stopWatchingDisconnect = watchClientDisconnect(req, res, disconnectController);
     try {
-      sendJson(res, 200, { ok: true, result: await executeMcpAppOperation(current, operation) });
+      const result = await executeMcpAppOperation(current, operation, {
+        signal: disconnectController.signal,
+      });
+      if (!disconnectController.signal.aborted) {
+        sendJson(res, 200, { ok: true, result });
+      }
     } catch (error) {
-      sendJson(res, 403, { ok: false, error: formatErrorMessage(error) });
+      if (!disconnectController.signal.aborted) {
+        sendJson(res, 403, { ok: false, error: formatErrorMessage(error) });
+      }
+    } finally {
+      stopWatchingDisconnect();
     }
     return true;
   }
@@ -652,6 +582,12 @@ export async function handleMcpAppStandaloneHttpRequest(
   try {
     return await withMcpAppActiveView(active, "read", () => {
       const { runtime, view } = active;
+      // The browser watchdog also covers HTTP and body parsing, so it must
+      // outlive the whole server-side operation rather than race it.
+      const operationTimeoutMs = addSafeTimeoutDelayGraceMs(
+        view.operationTimeoutMs,
+        DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
+      );
       res.statusCode = 200;
       res.setHeader("Content-Type", "application/json; charset=utf-8");
       res.end(
@@ -669,6 +605,7 @@ export async function handleMcpAppStandaloneHttpRequest(
               toolResult: view.toolResult,
               serverTools: supportsStandaloneToolOperations(view),
               serverResources: runtime.readResource !== undefined,
+              operationTimeoutMs,
             }),
       );
       return true;

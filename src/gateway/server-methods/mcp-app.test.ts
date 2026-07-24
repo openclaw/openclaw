@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayErrorDetailCodes } from "../../../packages/gateway-protocol/src/index.js";
 
 const mocks = vi.hoisted(() => ({
+  acquireMcpAppViewRequest: vi.fn(),
   completeDeferredSessionMcpRuntimeRetirement: vi.fn(),
   getMcpAppViewLease: vi.fn(),
   peekSessionMcpRuntime: vi.fn(),
@@ -12,7 +13,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../agents/mcp-ui-resource.js", () => ({
   getMcpAppViewLease: mocks.getMcpAppViewLease,
-  acquireMcpAppViewRequest: () => () => {},
+  acquireMcpAppViewRequest: mocks.acquireMcpAppViewRequest,
 }));
 vi.mock("../../agents/mcp-app-sandbox.js", () => ({
   buildMcpAppSandboxPath: () => "mcp-app-sandbox",
@@ -43,6 +44,7 @@ const view = {
   readOnly: undefined as boolean | undefined,
   toolInput: { city: "Paris" },
   toolResult: { content: [{ type: "text", text: "ok" }] },
+  operationTimeoutMs: 10 * 60_000,
   expiresAtMs: Date.now() + 60_000,
   requestWindowStartedAtMs: Date.now(),
   requestCount: 0,
@@ -115,6 +117,7 @@ describe("MCP App gateway bridge", () => {
     view.allowedAppToolNames = new Set(["shared", "app-only"]);
     view.authorizeAppInteraction = undefined;
     view.readOnly = undefined;
+    mocks.acquireMcpAppViewRequest.mockReset().mockImplementation(() => vi.fn());
     mocks.getMcpAppViewLease.mockReset().mockReturnValue(view);
     mocks.completeDeferredSessionMcpRuntimeRetirement.mockReset().mockResolvedValue(false);
     mocks.peekSessionMcpRuntime.mockReset().mockReturnValue(runtime());
@@ -355,16 +358,108 @@ describe("MCP App gateway bridge", () => {
     expect(mocks.peekSessionMcpRuntime.mock.results[0]?.value.callTool).not.toHaveBeenCalled();
   });
 
+  it("releases the view and runtime leases when tool authorization exceeds the operation deadline", async () => {
+    const controller = new AbortController();
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
+    view.authorizeAppInteraction = vi.fn(() => new Promise<boolean>(() => {}));
+
+    try {
+      const invocation = invoke("mcp.app.callTool", {
+        sessionKey: "agent:main:main",
+        viewId: "cv_app",
+        toolName: "shared",
+      });
+      await vi.waitFor(() => expect(view.authorizeAppInteraction).toHaveBeenCalledOnce());
+
+      controller.abort(new Error("MCP App operation timed out"));
+      await expect(
+        Promise.race([
+          invocation.then(() => "settled"),
+          new Promise<string>((resolve) => {
+            setTimeout(() => resolve("pending"), 50);
+          }),
+        ]),
+      ).resolves.toBe("settled");
+
+      const activeRuntime = mocks.peekSessionMcpRuntime.mock.results[0]?.value;
+      expect(activeRuntime.getCatalog).not.toHaveBeenCalled();
+      expect(activeRuntime.callTool).not.toHaveBeenCalled();
+      expect(mocks.acquireMcpAppViewRequest.mock.results[0]?.value).toHaveBeenCalledOnce();
+      expect(activeRuntime.acquireLease.mock.results[0]?.value).toHaveBeenCalledOnce();
+      expect(mocks.completeDeferredSessionMcpRuntimeRetirement).toHaveBeenCalledWith(activeRuntime);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    {
+      method: "mcp.app.view" as const,
+      params: { sessionKey: "agent:main:main", viewId: "cv_app" },
+    },
+    {
+      method: "mcp.app.updateModelContext" as const,
+      params: {
+        sessionKey: "agent:main:main",
+        viewId: "cv_app",
+        content: [{ type: "text", text: "blocked" }],
+      },
+    },
+  ])(
+    "releases direct $method leases when authorization exceeds the operation deadline",
+    async ({ method, params }) => {
+      const controller = new AbortController();
+      const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
+      view.authorizeAppInteraction = vi.fn(() => new Promise<boolean>(() => {}));
+
+      try {
+        const invocation = invoke(method, params);
+        await vi.waitFor(() => expect(view.authorizeAppInteraction).toHaveBeenCalledOnce());
+
+        controller.abort(new Error("MCP App operation timed out"));
+        await expect(
+          Promise.race([
+            invocation.then(() => "settled"),
+            new Promise<string>((resolve) => {
+              setTimeout(() => resolve("pending"), 50);
+            }),
+          ]),
+        ).resolves.toBe("settled");
+
+        const respond = await invocation;
+        const activeRuntime = mocks.peekSessionMcpRuntime.mock.results[0]?.value;
+        expect(respond.mock.calls[0]?.[0]).toBe(false);
+        expect(mocks.acquireMcpAppViewRequest.mock.results[0]?.value).toHaveBeenCalledOnce();
+        expect(activeRuntime.acquireLease.mock.results[0]?.value).toHaveBeenCalledOnce();
+        expect(mocks.completeDeferredSessionMcpRuntimeRetirement).toHaveBeenCalledWith(
+          activeRuntime,
+        );
+        if (method === "mcp.app.view") {
+          expect(mocks.createMcpAppStandaloneTicket).not.toHaveBeenCalled();
+        } else {
+          expect(activeRuntime.pendingMcpAppModelContext).toBeUndefined();
+        }
+      } finally {
+        timeoutSpy.mockRestore();
+      }
+    },
+  );
+
   it("captures only app-visible tools allowed by the originating view", async () => {
     const activeRuntime = runtime();
     const activeView = {
       ...view,
       allowedAppToolNames: new Set(["app-only", "model-only"]),
     };
+    const signal = new AbortController().signal;
 
     await expect(
-      resolveMcpAppAllowedToolNames({ runtime: activeRuntime as never, view: activeView as never }),
+      resolveMcpAppAllowedToolNames(
+        { runtime: activeRuntime as never, view: activeView as never },
+        signal,
+      ),
     ).resolves.toEqual(["app-only"]);
+    expect(activeRuntime.getCatalog).toHaveBeenCalledWith({ signal });
     await expect(
       resolveMcpAppAllowedToolNames({
         runtime: activeRuntime as never,

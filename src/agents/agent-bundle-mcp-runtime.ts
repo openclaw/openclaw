@@ -38,7 +38,11 @@ import {
   loadSessionMcpConfig,
   resolveSessionMcpConfigSummary,
 } from "./agent-bundle-mcp-runtime-config.js";
-import { resolveSessionMcpRuntimeIdleTtlMs } from "./agent-bundle-mcp-runtime-shared.js";
+import {
+  resolveSessionMcpRuntimeIdleTtlMs,
+  type SessionMcpSharedTask,
+  waitForSessionMcpSharedTask,
+} from "./agent-bundle-mcp-runtime-shared.js";
 import type {
   McpCatalogTool,
   McpRequestOptions,
@@ -71,7 +75,9 @@ type BundleMcpSession = {
   retiring: boolean;
   catalogUseCount: number;
   sharedAcrossCatalogGenerations: boolean;
-  connectPromise?: Promise<void>;
+  connectTask?: SessionMcpSharedTask<void>;
+  createdByCatalogRefresh: AbortController;
+  catalogRefreshOwner: AbortController;
   detachStderr?: () => void;
 };
 
@@ -108,6 +114,10 @@ type McpServerBackoffState = {
   retryAfterMs?: number;
 };
 
+type CatalogRefresh = SessionMcpSharedTask<McpToolCatalog> & {
+  generation: number;
+};
+
 export { createMcpJsonSchemaValidator as createBundleMcpJsonSchemaValidator };
 
 async function connectWithTimeout(
@@ -115,15 +125,35 @@ async function connectWithTimeout(
   client: Client,
   transport: Transport,
   timeoutMs: number,
+  ownerSignal?: AbortSignal,
 ): Promise<void> {
+  ownerSignal?.throwIfAborted();
   const abortController = new AbortController();
   let timeout: ReturnType<typeof setTimeout> | undefined;
   let deadlineExpired = false;
+  let onOwnerAbort: (() => void) | undefined;
+  const ownerAbortPromise = ownerSignal
+    ? new Promise<never>((_, reject) => {
+        onOwnerAbort = () => {
+          abortController.abort(ownerSignal.reason);
+          reject(
+            ownerSignal.reason instanceof Error
+              ? ownerSignal.reason
+              : new Error("MCP connection aborted", { cause: ownerSignal.reason }),
+          );
+        };
+        if (ownerSignal.aborted) {
+          onOwnerAbort();
+        } else {
+          ownerSignal.addEventListener("abort", onOwnerAbort, { once: true });
+        }
+      })
+    : undefined;
   try {
     // Client.connect() owns both transport startup and the initialize round trip.
     // Give the SDK the deadline so initialize is cancelled, while the outer race
     // also bounds transports whose start() has not reached initialize yet.
-    await Promise.race([
+    const connectRaces: Promise<unknown>[] = [
       client.connect(transport, {
         signal: abortController.signal,
         timeout: timeoutMs,
@@ -136,16 +166,37 @@ async function connectWithTimeout(
           reject(new Error("MCP connect deadline expired"));
         }, timeoutMs);
       }),
-    ]);
+    ];
+    if (ownerAbortPromise) {
+      connectRaces.push(ownerAbortPromise);
+    }
+    await Promise.race(connectRaces);
   } catch (error) {
+    if (ownerSignal?.aborted && !deadlineExpired) {
+      const transportClose =
+        transport instanceof OpenClawStdioClientTransport
+          ? transport.forceClose()
+          : transport.close();
+      await settleWithin(
+        Promise.allSettled([transportClose, client.close()]),
+        Math.min(timeoutMs, 1_000),
+      );
+      throw ownerSignal.reason instanceof Error
+        ? ownerSignal.reason
+        : new Error("MCP connection aborted", { cause: ownerSignal.reason });
+    }
     if (deadlineExpired || (isMcpConfigRecord(error) && error.code === ErrorCode.RequestTimeout)) {
-      if (transport instanceof OpenClawStdioClientTransport) {
-        await transport.forceClose();
-      }
+      const transportClose =
+        transport instanceof OpenClawStdioClientTransport
+          ? transport.forceClose()
+          : transport.close();
       // Closing the SDK client settles its pending initialize request. Without
       // this, later runtime disposal waits its full teardown timeout even though
       // the stdio child is already dead.
-      await settleWithin(client.close(), Math.min(timeoutMs, 1_000));
+      await settleWithin(
+        Promise.allSettled([transportClose, client.close()]),
+        Math.min(timeoutMs, 1_000),
+      );
       throw new Error(
         `MCP server "${serverName}" timed out: did not complete initialize within ${timeoutMs / 1_000}s`,
         { cause: error },
@@ -156,6 +207,9 @@ async function connectWithTimeout(
     if (timeout) {
       clearTimeout(timeout);
     }
+    if (ownerSignal && onOwnerAbort) {
+      ownerSignal.removeEventListener("abort", onOwnerAbort);
+    }
   }
 }
 
@@ -163,12 +217,14 @@ function redactMcpDiagnosticError(error: unknown): string {
   return redactToolPayloadText(redactSensitiveUrlLikeString(String(error)));
 }
 
-async function listAllTools(client: Client, timeoutMs: number) {
+async function listAllTools(client: Client, timeoutMs: number, signal?: AbortSignal) {
   const tools: ListedTool[] = [];
   let cursor: string | undefined;
   do {
     const params = cursor ? { cursor } : undefined;
-    const page = await client.listTools(params, { timeout: timeoutMs });
+    const page = await runWithMcpRequestSignal(signal, (requestSignal) =>
+      client.listTools(params, { timeout: timeoutMs, signal: requestSignal }),
+    );
     tools.push(...page.tools);
     cursor = page.nextCursor;
   } while (cursor);
@@ -187,9 +243,10 @@ async function listAllToolsBestEffort(params: {
   client: Client;
   timeoutMs: number;
   suppressUnsupported: boolean;
+  signal?: AbortSignal;
 }): Promise<ListedTool[]> {
   try {
-    return await listAllTools(params.client, params.timeoutMs);
+    return await listAllTools(params.client, params.timeoutMs, params.signal);
   } catch (error) {
     if (params.suppressUnsupported && isMcpMethodNotFoundError(error)) {
       return [];
@@ -251,16 +308,38 @@ function buildMcpClientOptions(mcpAppsEnabled: boolean): ClientOptions {
   return { capabilities: buildMcpClientCapabilities(mcpAppsEnabled) };
 }
 
-async function listAllResources(client: Client, timeoutMs: number) {
+async function listAllResources(client: Client, timeoutMs: number, signal?: AbortSignal) {
   const resources: unknown[] = [];
   let cursor: string | undefined;
   do {
     const params = cursor ? { cursor } : undefined;
-    const page = await client.listResources(params, { timeout: timeoutMs });
+    const page = await runWithMcpRequestSignal(signal, (requestSignal) =>
+      client.listResources(params, { timeout: timeoutMs, signal: requestSignal }),
+    );
     resources.push(...page.resources);
     cursor = page.nextCursor;
   } while (cursor);
   return resources;
+}
+
+async function runWithMcpRequestSignal<T>(
+  signal: AbortSignal | undefined,
+  request: (signal?: AbortSignal) => Promise<T>,
+): Promise<T> {
+  if (!signal) {
+    return await request();
+  }
+  signal.throwIfAborted();
+  const controller = new AbortController();
+  const onAbort = () => controller.abort(signal.reason);
+  // SDK 1.29 retains request abort listeners after success. Isolating each
+  // request prevents a later operation deadline from cancelling settled pages.
+  signal.addEventListener("abort", onAbort, { once: true });
+  try {
+    return await request(controller.signal);
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
 }
 
 async function listAllPrompts(client: Client, timeoutMs: number) {
@@ -416,7 +495,8 @@ export function createSessionMcpRuntime(params: {
   let activeLeases = 0;
   let disposed = false;
   let catalog: McpToolCatalog | null = null;
-  let catalogInFlight: Promise<McpToolCatalog> | undefined;
+  let catalogInFlight: CatalogRefresh | undefined;
+  const abandonedCatalogRefreshControllers = new WeakSet<AbortController>();
   let catalogInvalidationGeneration = 0;
   const sessions = new Map<string, BundleMcpSession>();
   const serverBackoff = new Map<string, McpServerBackoffState>();
@@ -449,7 +529,9 @@ export function createSessionMcpRuntime(params: {
       }
       return result;
     } catch (error) {
-      if (tracksFailureBackoff) {
+      // A caller-owned deadline cancels only this operation; it is not evidence that
+      // the shared MCP server is unhealthy.
+      if (tracksFailureBackoff && !options?.signal?.aborted) {
         recordServerToolFailure(serverName, nowMs);
       }
       throw error;
@@ -471,30 +553,6 @@ export function createSessionMcpRuntime(params: {
     }
     return session;
   };
-  const ensureSessionConnected = async (
-    session: BundleMcpSession,
-    connectionTimeoutMs: number,
-  ): Promise<void> => {
-    if (session.retiring) {
-      throw new Error(`bundle-mcp server "${session.serverName}" is retiring`);
-    }
-    if (session.connected) {
-      return;
-    }
-    session.connectPromise ??= connectWithTimeout(
-      session.serverName,
-      session.client,
-      session.transport,
-      connectionTimeoutMs,
-    )
-      .then(() => {
-        session.connected = true;
-      })
-      .finally(() => {
-        session.connectPromise = undefined;
-      });
-    await session.connectPromise;
-  };
   const retireSessionIfCurrent = async (
     serverName: string,
     session: BundleMcpSession,
@@ -507,16 +565,77 @@ export function createSessionMcpRuntime(params: {
     await disposeSession(session);
     return true;
   };
+  const ensureSessionConnected = async (
+    session: BundleMcpSession,
+    connectionTimeoutMs: number,
+    refreshController: AbortController,
+  ): Promise<void> => {
+    if (session.retiring) {
+      throw new Error(`bundle-mcp server "${session.serverName}" is retiring`);
+    }
+    if (session.connected) {
+      return;
+    }
+    let connectTask = session.connectTask;
+    if (!connectTask) {
+      const connectController = new AbortController();
+      const connectPromise = connectWithTimeout(
+        session.serverName,
+        session.client,
+        session.transport,
+        connectionTimeoutMs,
+        connectController.signal,
+      )
+        .then(() => {
+          session.connected = true;
+        })
+        .finally(() => {
+          if (session.connectTask?.promise === connectPromise) {
+            session.connectTask = undefined;
+          }
+        });
+      const createdTask: SessionMcpSharedTask<void> = {
+        controller: connectController,
+        promise: connectPromise,
+        activeWaiters: 0,
+      };
+      session.connectTask = createdTask;
+      connectTask = createdTask;
+    }
+    try {
+      await waitForSessionMcpSharedTask({
+        task: connectTask,
+        signal: refreshController.signal,
+        abandonIfCurrent: () =>
+          abandonedCatalogRefreshControllers.has(refreshController) &&
+          session.connectTask === connectTask,
+        abandonedReason: new Error("MCP session connection abandoned by all catalog refreshes"),
+      });
+    } finally {
+      if (connectTask.controller.signal.aborted) {
+        await connectTask.promise.catch(() => {});
+        if (!session.connected && (!session.connectTask || session.connectTask === connectTask)) {
+          await retireSessionIfCurrent(session.serverName, session);
+        }
+      }
+    }
+  };
+  const retireSessionsCreatedAndOwnedByCatalogRefresh = async (
+    refreshController: AbortController,
+  ): Promise<void> => {
+    const ownedSessions = Array.from(sessions.entries()).filter(
+      ([, session]) =>
+        session.createdByCatalogRefresh === refreshController &&
+        session.catalogRefreshOwner === refreshController,
+    );
+    await Promise.allSettled(
+      ownedSessions.map(([serverName, session]) => retireSessionIfCurrent(serverName, session)),
+    );
+  };
 
-  const getCatalog = async (): Promise<McpToolCatalog> => {
-    failIfDisposed();
-    if (catalog) {
-      return catalog;
-    }
-    if (catalogInFlight) {
-      return catalogInFlight;
-    }
+  const startCatalogRefresh = (): CatalogRefresh => {
     const catalogGeneration = catalogInvalidationGeneration;
+    const refreshController = new AbortController();
     const inFlight = (async () => {
       if (Object.keys(loaded.mcpServers).length === 0) {
         return {
@@ -594,16 +713,21 @@ export function createSessionMcpRuntime(params: {
           ({ serverName, rawServer, resolved, safeServerName, launchDescription }) =>
             async (): Promise<ServerResult> => {
               failIfDisposed();
+              refreshController.signal.throwIfAborted();
 
               let session = sessions.get(serverName);
               while (
                 session &&
                 !session.retiring &&
                 !session.connected &&
-                !session.connectPromise
+                (!session.connectTask || session.connectTask.controller.signal.aborted)
               ) {
-                // A closed SDK client cannot reconnect cleanly on the same transport.
+                refreshController.signal.throwIfAborted();
+                // A closed or abandoned SDK client cannot reconnect cleanly on
+                // the same transport. Retire it before a new generation can
+                // adopt an already-aborted shared connection task.
                 await retireSessionIfCurrent(serverName, session);
+                refreshController.signal.throwIfAborted();
                 // Retirement yields while closing. Preserve any replacement that a
                 // newer catalog generation installed during that await.
                 session = sessions.get(serverName);
@@ -613,6 +737,7 @@ export function createSessionMcpRuntime(params: {
               }
               const reusedSession = Boolean(session);
               if (!session) {
+                refreshController.signal.throwIfAborted();
                 const client = new Client(
                   {
                     name: "openclaw-bundle-mcp",
@@ -631,9 +756,20 @@ export function createSessionMcpRuntime(params: {
                               `bundle-mcp: failed to refresh changed tool list for server "${serverName}": ${redactMcpDiagnosticError(error)}`,
                             );
                           }
+                          const supersededRefresh = catalogInFlight;
                           catalogInvalidationGeneration += 1;
                           catalog = null;
                           catalogInFlight = undefined;
+                          // The runtime owns refresh generations. Cancel only work
+                          // whose result can no longer populate the current cache.
+                          // Let a protocol response delivered immediately before
+                          // this notification settle before cancelling remaining
+                          // in-flight and queued work from the old generation.
+                          queueMicrotask(() => {
+                            supersededRefresh?.controller.abort(
+                              new Error("MCP catalog refresh superseded by tools/list_changed"),
+                            );
+                          });
                         },
                       },
                     },
@@ -650,6 +786,8 @@ export function createSessionMcpRuntime(params: {
                   retiring: false,
                   catalogUseCount: 0,
                   sharedAcrossCatalogGenerations: false,
+                  createdByCatalogRefresh: refreshController,
+                  catalogRefreshOwner: refreshController,
                   detachStderr: resolved.detachStderr,
                 };
                 // The SDK exposes lifecycle hooks as callback properties. A close is
@@ -661,6 +799,8 @@ export function createSessionMcpRuntime(params: {
                 };
                 session = createdSession;
                 sessions.set(serverName, session);
+              } else {
+                session.catalogRefreshOwner = refreshController;
               }
 
               if (session.catalogUseCount === 0) {
@@ -672,8 +812,14 @@ export function createSessionMcpRuntime(params: {
               session.catalogUseCount += 1;
               try {
                 failIfDisposed();
-                await ensureSessionConnected(session, resolved.connectionTimeoutMs);
+                refreshController.signal.throwIfAborted();
+                await ensureSessionConnected(
+                  session,
+                  resolved.connectionTimeoutMs,
+                  refreshController,
+                );
                 failIfDisposed();
+                refreshController.signal.throwIfAborted();
                 const capabilities = summarizeServerCapabilities(
                   session.client.getServerCapabilities(),
                 );
@@ -683,6 +829,7 @@ export function createSessionMcpRuntime(params: {
                   suppressUnsupported: Boolean(
                     !capabilities.tools && (capabilities.resources || capabilities.prompts),
                   ),
+                  signal: refreshController.signal,
                 });
                 failIfDisposed();
                 const selection = getMcpToolSelection(rawServer);
@@ -753,8 +900,16 @@ export function createSessionMcpRuntime(params: {
                   diagnostics: [] as McpToolCatalogDiagnostic[],
                 };
               } catch (error) {
+                if (abandonedCatalogRefreshControllers.has(refreshController)) {
+                  throw error;
+                }
+                const generationSuperseded = catalogInvalidationGeneration !== catalogGeneration;
+                const sharedWithNewerGeneration =
+                  session.sharedAcrossCatalogGenerations || session.catalogUseCount > 1;
+                const ownedByCurrentCatalogRefresh =
+                  session.catalogRefreshOwner === refreshController;
                 const message = redactMcpDiagnosticError(error);
-                if (!disposed) {
+                if (!disposed && !generationSuperseded) {
                   const action = reusedSession ? "refresh" : "start";
                   logWarn(
                     `bundle-mcp: failed to ${action} server "${serverName}" (${launchDescription}): ${message}`,
@@ -768,13 +923,15 @@ export function createSessionMcpRuntime(params: {
                     message,
                   },
                 ];
-                const sharedWithNewerGeneration =
-                  session.sharedAcrossCatalogGenerations || session.catalogUseCount > 1;
-                if (!session.connected) {
+                if (
+                  !session.connected &&
+                  ownedByCurrentCatalogRefresh &&
+                  (!generationSuperseded || !session.connectTask)
+                ) {
                   // A close is terminal for every catalog generation sharing this
                   // session. The identity guard preserves any newer replacement.
                   await retireSessionIfCurrent(serverName, session);
-                } else if (!reusedSession && !sharedWithNewerGeneration) {
+                } else if (!generationSuperseded && !reusedSession && !sharedWithNewerGeneration) {
                   // Catalog invalidation can overlap generations; an older failed
                   // generation must not dispose a session a newer one already reused.
                   await retireSessionIfCurrent(serverName, session);
@@ -797,7 +954,7 @@ export function createSessionMcpRuntime(params: {
         const { results, firstError, hasError } = await runTasksWithConcurrency({
           tasks,
           limit: BUNDLE_MCP_CATALOG_CONNECT_CONCURRENCY,
-          errorMode: "continue",
+          errorMode: "stop",
         });
         if (hasError) {
           throw firstError;
@@ -824,6 +981,11 @@ export function createSessionMcpRuntime(params: {
           ...(diagnostics.length > 0 ? { diagnostics } : {}),
         };
       } catch (error) {
+        const generationSuperseded = catalogInvalidationGeneration !== catalogGeneration;
+        if (abandonedCatalogRefreshControllers.has(refreshController) || generationSuperseded) {
+          await retireSessionsCreatedAndOwnedByCatalogRefresh(refreshController);
+          throw error;
+        }
         await Promise.allSettled(
           Array.from(sessions.values(), (session) => disposeSession(session)),
         );
@@ -831,18 +993,66 @@ export function createSessionMcpRuntime(params: {
         throw error;
       }
     })();
-    catalogInFlight = inFlight;
-
-    try {
+    const trackedInFlight = (async () => {
       const nextCatalog = await inFlight;
       failIfDisposed();
       if (catalogInvalidationGeneration === catalogGeneration) {
         catalog = nextCatalog;
       }
       return nextCatalog;
-    } finally {
-      if (catalogInFlight === inFlight) {
-        catalogInFlight = undefined;
+    })();
+    const refresh: CatalogRefresh = {
+      generation: catalogGeneration,
+      controller: refreshController,
+      promise: trackedInFlight,
+      activeWaiters: 0,
+    };
+    catalogInFlight = refresh;
+    void trackedInFlight
+      .finally(() => {
+        if (catalogInFlight === refresh) {
+          catalogInFlight = undefined;
+        }
+      })
+      .catch(() => {});
+    return refresh;
+  };
+
+  const getCatalog = async (
+    options?: Pick<McpRequestOptions, "signal">,
+  ): Promise<McpToolCatalog> => {
+    while (true) {
+      failIfDisposed();
+      options?.signal?.throwIfAborted();
+      if (catalog) {
+        return catalog;
+      }
+
+      const refresh = catalogInFlight ?? startCatalogRefresh();
+      try {
+        return await waitForSessionMcpSharedTask({
+          task: refresh,
+          signal: options?.signal,
+          abandonIfCurrent: () => {
+            if (catalogInFlight !== refresh) {
+              return false;
+            }
+            abandonedCatalogRefreshControllers.add(refresh.controller);
+            catalogInFlight = undefined;
+            return true;
+          },
+          abandonedReason: new Error("MCP catalog refresh abandoned by all waiters"),
+        });
+      } catch (error) {
+        options?.signal?.throwIfAborted();
+        failIfDisposed();
+        if (refresh.generation !== catalogInvalidationGeneration) {
+          continue;
+        }
+        if (abandonedCatalogRefreshControllers.has(refresh.controller)) {
+          continue;
+        }
+        throw error;
       }
     }
   };
@@ -881,63 +1091,90 @@ export function createSessionMcpRuntime(params: {
     peekCatalog() {
       return catalog;
     },
+    getServerRequestTimeoutMs(serverName) {
+      return sessions.get(serverName)?.requestTimeoutMs;
+    },
     markUsed() {
       lastUsedAt = Date.now();
     },
-    async callTool(serverName, toolName, input) {
+    async callTool(serverName, toolName, input, options) {
       failIfDisposed();
-      await getCatalog();
+      await getCatalog(options);
       const session = requireConnectedSession(serverName);
       return await runGuardedServerRequest(
         serverName,
         async () =>
-          (await session.client.callTool(
-            {
-              name: toolName,
-              arguments: isMcpConfigRecord(input) ? input : {},
-            },
-            undefined,
-            { timeout: session.requestTimeoutMs },
-          )) as CallToolResult,
+          await runWithMcpRequestSignal(
+            options?.signal,
+            async (requestSignal) =>
+              (await session.client.callTool(
+                {
+                  name: toolName,
+                  arguments: isMcpConfigRecord(input) ? input : {},
+                },
+                undefined,
+                { timeout: session.requestTimeoutMs, signal: requestSignal },
+              )) as CallToolResult,
+          ),
+        options,
       );
     },
-    async listTools(serverName, requestParams) {
+    async listTools(serverName, requestParams, options) {
       failIfDisposed();
-      await getCatalog();
+      await getCatalog(options);
       const session = requireConnectedSession(serverName);
-      return await runGuardedServerRequest(serverName, async () =>
-        session.client.listTools(requestParams, { timeout: session.requestTimeoutMs }),
+      return await runGuardedServerRequest(
+        serverName,
+        async () =>
+          runWithMcpRequestSignal(options?.signal, (requestSignal) =>
+            session.client.listTools(requestParams, {
+              timeout: session.requestTimeoutMs,
+              signal: requestSignal,
+            }),
+          ),
+        options,
       );
     },
     async listResources(serverName, options) {
       failIfDisposed();
-      await getCatalog();
+      await getCatalog(options);
       const session = requireConnectedSession(serverName);
       return await runGuardedServerRequest(
         serverName,
-        async () => listAllResources(session.client, session.requestTimeoutMs),
+        async () => listAllResources(session.client, session.requestTimeoutMs, options?.signal),
         options,
       );
     },
     async readResource(serverName, uri, options) {
       failIfDisposed();
-      await getCatalog();
+      await getCatalog(options);
       const session = requireConnectedSession(serverName);
       return await runGuardedServerRequest(
         serverName,
         async () =>
-          await session.client.readResource({ uri }, { timeout: session.requestTimeoutMs }),
+          await runWithMcpRequestSignal(options?.signal, (requestSignal) =>
+            session.client.readResource(
+              { uri },
+              { timeout: session.requestTimeoutMs, signal: requestSignal },
+            ),
+          ),
         options,
       );
     },
-    async listResourceTemplates(serverName, requestParams) {
+    async listResourceTemplates(serverName, requestParams, options) {
       failIfDisposed();
-      await getCatalog();
+      await getCatalog(options);
       const session = requireConnectedSession(serverName);
-      return await runGuardedServerRequest(serverName, async () =>
-        session.client.listResourceTemplates(requestParams, {
-          timeout: session.requestTimeoutMs,
-        }),
+      return await runGuardedServerRequest(
+        serverName,
+        async () =>
+          runWithMcpRequestSignal(options?.signal, (requestSignal) =>
+            session.client.listResourceTemplates(requestParams, {
+              timeout: session.requestTimeoutMs,
+              signal: requestSignal,
+            }),
+          ),
+        options,
       );
     },
     async listPrompts(serverName) {
@@ -967,7 +1204,9 @@ export function createSessionMcpRuntime(params: {
       }
       disposed = true;
       catalog = null;
+      const refresh = catalogInFlight;
       catalogInFlight = undefined;
+      refresh?.controller.abort(createDisposedError(params.sessionId));
       const sessionsToClose = Array.from(sessions.values());
       sessions.clear();
       await Promise.allSettled(sessionsToClose.map((session) => disposeSession(session)));

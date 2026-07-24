@@ -24,6 +24,11 @@ function createUiE2eVitestConfig(
     test: {
       ...baseTest,
       environment: "node",
+      env: {
+        OPENCLAW_SKIP_CHANNELS: "1",
+        OPENCLAW_SKIP_CRON: "1",
+        OPENCLAW_SKIP_PROVIDERS: "1",
+      },
       exclude,
       fileParallelism: false,
       include,

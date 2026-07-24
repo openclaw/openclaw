@@ -67,20 +67,58 @@ function isAllowedByView(view: McpAppViewLease, toolName: string): boolean {
   return view.allowedAppToolNames === undefined || view.allowedAppToolNames.has(toolName);
 }
 
-export async function requireMcpAppInteraction(view: McpAppViewLease): Promise<void> {
+function toMcpAppOperationError(reason: unknown, fallbackMessage: string): Error {
+  return reason instanceof Error ? reason : new Error(fallbackMessage, { cause: reason });
+}
+
+async function waitForMcpAppOperation<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) {
+    return await promise;
+  }
+  signal.throwIfAborted();
+  return await new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      reject(toMcpAppOperationError(signal.reason, "MCP App operation aborted"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(toMcpAppOperationError(error, "MCP App operation failed"));
+      },
+    );
+  });
+}
+
+export async function requireMcpAppInteraction(
+  view: McpAppViewLease,
+  signal?: AbortSignal,
+): Promise<void> {
+  signal?.throwIfAborted();
   if (view.readOnly === true || view.allowedAppToolNames === undefined) {
     throw new Error("MCP App view is read-only");
   }
-  if (view.authorizeAppInteraction && !(await view.authorizeAppInteraction())) {
+  if (
+    view.authorizeAppInteraction &&
+    !(await waitForMcpAppOperation(Promise.resolve(view.authorizeAppInteraction()), signal))
+  ) {
     throw new Error("MCP App widget grant is no longer active");
   }
 }
 
-export async function resolveMcpAppAllowedToolNames(active: McpAppActiveView): Promise<string[]> {
+export async function resolveMcpAppAllowedToolNames(
+  active: McpAppActiveView,
+  signal?: AbortSignal,
+): Promise<string[]> {
+  signal?.throwIfAborted();
   if (active.view.readOnly === true || active.view.allowedAppToolNames === undefined) {
     return [];
   }
-  const catalog = await active.runtime.getCatalog();
+  const catalog = await active.runtime.getCatalog(signal ? { signal } : undefined);
   return catalog.tools
     .filter(
       (tool) =>
@@ -97,9 +135,10 @@ async function requireCallableTool(
   runtime: SessionMcpRuntime,
   view: McpAppViewLease,
   toolName: string,
+  signal: AbortSignal,
 ): Promise<void> {
-  await requireMcpAppInteraction(view);
-  const catalog = await runtime.getCatalog();
+  await requireMcpAppInteraction(view, signal);
+  const catalog = await runtime.getCatalog({ signal });
   const tool = catalog.tools.find(
     (entry) => entry.serverName === view.serverName && entry.toolName === toolName,
   );
@@ -142,13 +181,20 @@ export async function resolveMcpAppActiveView(params: {
 export async function withMcpAppActiveView<T>(
   active: McpAppActiveView,
   kind: "read" | "tool",
-  operation: () => Promise<T> | T,
+  operation: (signal: AbortSignal) => Promise<T> | T,
+  options?: { signal?: AbortSignal },
 ): Promise<T> {
+  const timeoutSignal = AbortSignal.timeout(active.view.operationTimeoutMs);
+  const signal = options?.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
+  signal.throwIfAborted();
   active.runtime.markUsed();
   const release = acquireMcpAppViewRequest(active.view, kind);
   const releaseRuntimeLease = active.runtime.acquireLease?.();
   try {
-    return await operation();
+    return await waitForMcpAppOperation(
+      Promise.resolve().then(() => operation(signal)),
+      signal,
+    );
   } finally {
     release();
     releaseRuntimeLease?.();
@@ -163,21 +209,27 @@ export async function withMcpAppActiveView<T>(
 export async function executeMcpAppOperation(
   active: McpAppActiveView,
   operation: McpAppOperation,
+  options?: { signal?: AbortSignal },
 ): Promise<unknown> {
   const { runtime, view } = active;
+  const runActiveViewOperation = <T>(
+    kind: "read" | "tool",
+    callback: (signal: AbortSignal) => Promise<T> | T,
+  ) => withMcpAppActiveView(active, kind, callback, options);
   switch (operation.method) {
     case "tools/call":
-      return await withMcpAppActiveView(active, "tool", async () => {
-        await requireCallableTool(runtime, view, operation.params.name);
+      return await runActiveViewOperation("tool", async (signal) => {
+        await requireCallableTool(runtime, view, operation.params.name, signal);
         return await runtime.callTool(
           view.serverName,
           operation.params.name,
           operation.params.arguments ?? {},
+          { signal },
         );
       });
     case "tools/list":
-      return await withMcpAppActiveView(active, "read", async () => {
-        await requireMcpAppInteraction(view);
+      return await runActiveViewOperation("read", async (signal) => {
+        await requireMcpAppInteraction(view, signal);
         if (!runtime.listTools) {
           throw new Error("MCP tools/list is unavailable");
         }
@@ -185,8 +237,9 @@ export async function executeMcpAppOperation(
           runtime.listTools(
             view.serverName,
             operation.params?.cursor ? { cursor: operation.params.cursor } : undefined,
+            { signal },
           ),
-          runtime.getCatalog(),
+          runtime.getCatalog({ signal }),
         ]);
         const allowed = new Set(
           catalog.tools
@@ -206,31 +259,32 @@ export async function executeMcpAppOperation(
         };
       });
     case "resources/list":
-      return await withMcpAppActiveView(active, "read", async () => {
+      return await runActiveViewOperation("read", async (signal) => {
         if (!runtime.listResources) {
           throw new Error("MCP resources/list is unavailable");
         }
         // SessionMcpRuntime aggregates every upstream resources/list page, so
         // callers receive the complete list and no nextCursor is exposed.
-        const resources = await runtime.listResources(view.serverName);
+        const resources = await runtime.listResources(view.serverName, { signal });
         return Array.isArray(resources) ? { resources } : resources;
       });
     case "resources/templates/list":
-      return await withMcpAppActiveView(active, "read", async () => {
+      return await runActiveViewOperation("read", async (signal) => {
         if (!runtime.listResourceTemplates) {
           throw new Error("MCP resources/templates/list is unavailable");
         }
         return await runtime.listResourceTemplates(
           view.serverName,
           operation.params?.cursor ? { cursor: operation.params.cursor } : undefined,
+          { signal },
         );
       });
     case "resources/read":
-      return await withMcpAppActiveView(active, "read", async () => {
+      return await runActiveViewOperation("read", async (signal) => {
         if (!runtime.readResource) {
           throw new Error("MCP resources/read is unavailable");
         }
-        return await runtime.readResource(view.serverName, operation.params.uri);
+        return await runtime.readResource(view.serverName, operation.params.uri, { signal });
       });
     default: {
       const unsupported: never = operation;
