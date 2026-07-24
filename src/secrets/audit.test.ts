@@ -9,7 +9,13 @@ import {
   writePersistedAuthProfileStoreRaw,
 } from "../agents/auth-profiles/sqlite.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { runSecretsAudit } from "./audit.js";
+import {
+  parseSecretsAuditSeverity,
+  resolveSecretsAuditExitCode,
+  runSecretsAudit,
+} from "./audit.js";
+
+type SecretsAuditReport = Awaited<ReturnType<typeof runSecretsAudit>>;
 
 type AuditFixture = {
   rootDir: string;
@@ -277,6 +283,86 @@ describe("secrets audit", () => {
     expect(report.summary.shadowedRefCount).toBeGreaterThan(0);
     expectFindingCode(report, "REF_SHADOWED");
     expectFindingCode(report, "PLAINTEXT_FOUND");
+  });
+
+  it("parses audit severity thresholds", () => {
+    expect(parseSecretsAuditSeverity("info")).toBe("info");
+    expect(parseSecretsAuditSeverity("warn")).toBe("warn");
+    expect(parseSecretsAuditSeverity("warning")).toBe("warn");
+    expect(parseSecretsAuditSeverity("error")).toBe("error");
+    expect(parseSecretsAuditSeverity("critical")).toBeNull();
+  });
+
+  it("maps check exit codes using the requested severity threshold", () => {
+    const infoOnlyReport: SecretsAuditReport = {
+      version: 1,
+      status: "findings",
+      resolution: {
+        refsChecked: 0,
+        skippedExecRefs: 0,
+        resolvabilityComplete: true,
+      },
+      filesScanned: [],
+      summary: {
+        plaintextCount: 0,
+        unresolvedRefCount: 0,
+        shadowedRefCount: 0,
+        legacyResidueCount: 1,
+      },
+      findings: [
+        {
+          code: "LEGACY_RESIDUE",
+          severity: "info",
+          file: "openclaw-agent.sqlite",
+          jsonPath: "profiles.openai:default",
+          message: "OAuth credentials are present.",
+        },
+      ],
+    };
+    const warnReport: SecretsAuditReport = {
+      ...infoOnlyReport,
+      summary: {
+        plaintextCount: 1,
+        unresolvedRefCount: 0,
+        shadowedRefCount: 0,
+        legacyResidueCount: 0,
+      },
+      findings: [
+        {
+          code: "PLAINTEXT_FOUND",
+          severity: "warn",
+          file: "openclaw.json",
+          jsonPath: "gateway.auth.token",
+          message: "Gateway token is stored as plaintext.",
+        },
+      ],
+    };
+    const unresolvedReport: SecretsAuditReport = {
+      ...infoOnlyReport,
+      status: "unresolved",
+      summary: {
+        plaintextCount: 0,
+        unresolvedRefCount: 1,
+        shadowedRefCount: 0,
+        legacyResidueCount: 0,
+      },
+      findings: [
+        {
+          code: "REF_UNRESOLVED",
+          severity: "error",
+          file: "openclaw.json",
+          jsonPath: "gateway.auth.token",
+          message: "SecretRef could not be resolved.",
+        },
+      ],
+    };
+
+    expect(resolveSecretsAuditExitCode(infoOnlyReport, false)).toBe(0);
+    expect(resolveSecretsAuditExitCode(infoOnlyReport, true)).toBe(1);
+    expect(resolveSecretsAuditExitCode(infoOnlyReport, true, "warn")).toBe(0);
+    expect(resolveSecretsAuditExitCode(warnReport, true, "warn")).toBe(1);
+    expect(resolveSecretsAuditExitCode(warnReport, true, "error")).toBe(0);
+    expect(resolveSecretsAuditExitCode(unresolvedReport, false, "error")).toBe(2);
   });
 
   it("does not mutate legacy auth.json during audit", async () => {
