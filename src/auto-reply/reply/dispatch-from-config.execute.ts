@@ -227,8 +227,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       isOperationalReplyPayload({
                         payload,
                         explicitCommandTurn: false,
-                      }) &&
-                      state.operationalReplyPolicy.policy !== "always";
+                      });
                     const progressCallbackForwarded = shouldForwardToolResultProgressCallback(
                       payload,
                       isFastModeAutoProgress,
@@ -533,12 +532,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       payload: visiblePayload,
                       explicitCommandTurn: false,
                     });
-                    if (
-                      suppressDelivery &&
-                      (sendPolicyDenied ||
-                        !isOperationalPayload ||
-                        state.operationalReplyPolicy.policy === "always")
-                    ) {
+                    if (suppressDelivery && (sendPolicyDenied || !isOperationalPayload)) {
                       return;
                     }
                     const policyResult = await applyDispatchOperationalReplyPolicy(visiblePayload);

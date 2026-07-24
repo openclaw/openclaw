@@ -444,7 +444,8 @@ export function createFollowupRunner(params: {
       (payload): payload is ReplyPayload =>
         hasOutboundReplyContent(payload) &&
         (!deliveryPlan.isSilentPayload(payload) ||
-          getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true),
+          getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true ||
+          isOperationalReplyPayload({ payload, explicitCommandTurn: false })),
     );
     const replyKind = options.kind ?? "final";
     const applyFollowupPayloadPolicy = async (
