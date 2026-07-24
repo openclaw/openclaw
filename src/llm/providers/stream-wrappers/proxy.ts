@@ -148,14 +148,10 @@ export function createOpenRouterSystemCacheWrapper(
       capability: "llm",
       transport: "stream",
     }).endpointClass;
-    if (
-      !modelId ||
-      !isAnthropicModelRef(modelId) ||
-      !(
-        endpointClass === "openrouter" ||
-        (endpointClass === "default" && normalizeOptionalLowercaseString(provider) === "openrouter")
-      )
-    ) {
+    const isVerifiedOpenRouterRoute =
+      endpointClass === "openrouter" ||
+      (endpointClass === "default" && normalizeOptionalLowercaseString(provider) === "openrouter");
+    if (!modelId || !isAnthropicModelRef(modelId) || !isVerifiedOpenRouterRoute) {
       return underlying(model, context, options);
     }
 
@@ -170,8 +166,15 @@ export function createOpenRouterSystemCacheWrapper(
       (payloadObj) => {
         applyAnthropicEphemeralCacheControlMarkers(
           payloadObj,
-          resolveAnthropicEphemeralCacheControl(readStringValue(model.baseUrl), cacheRetention) ??
-            null,
+          // This wrapper has already verified the route is OpenRouter (incl. the
+          // default route where model.baseUrl is undefined), so mark it long-TTL
+          // eligible — otherwise env-driven `OPENCLAW_CACHE_RETENTION=long` would
+          // still emit the 5-minute marker on the supported default route.
+          resolveAnthropicEphemeralCacheControl(
+            readStringValue(model.baseUrl),
+            cacheRetention,
+            true,
+          ) ?? null,
         );
       },
     );
