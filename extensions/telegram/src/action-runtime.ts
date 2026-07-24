@@ -872,7 +872,13 @@ export async function handleTelegramAction(
       throw new Error("Telegram createForumTopic is disabled.");
     }
     const chatId = readTelegramChatId(params);
-    const name = readStringParam(params, "name", { required: true });
+    // Accept threadName as an alias for name (MCP tool uses threadName, handler expects name)
+    const nameFromName = readStringParam(params, "name");
+    const nameFromThread = readStringParam(params, "threadName");
+    const name = nameFromName ?? nameFromThread;
+    if (!name) {
+      throw new Error("Telegram forum topic name is required (name or threadName).");
+    }
     const iconColor = readTelegramForumTopicIconColor(params);
     const iconCustomEmojiId = readStringParam(params, "iconCustomEmojiId");
     const token = resolveTelegramToken(cfg, { accountId }).token;
@@ -918,7 +924,10 @@ export async function handleTelegramAction(
     if (typeof messageThreadId !== "number") {
       throw new Error("messageThreadId or threadId is required.");
     }
-    const name = readStringParam(params, "name");
+    // Accept threadName as an alias for name (MCP tool uses threadName, handler expects name)
+    const nameFromName = readStringParam(params, "name");
+    const nameFromThread = readStringParam(params, "threadName");
+    const name = nameFromName ?? nameFromThread;
     const iconCustomEmojiId = readStringParam(params, "iconCustomEmojiId");
     const token = resolveTelegramToken(cfg, { accountId }).token;
     if (!token) {

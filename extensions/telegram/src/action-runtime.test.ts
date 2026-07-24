@@ -1553,6 +1553,136 @@ describe("handleTelegramAction", () => {
     await expect(getTopicName("-100123", 42, topicCacheScopeFor(cfg, "work"))).resolves.toBe("New");
   });
 
+  // Regression: threadName alias support (PR #99505)
+  // MCP message tool uses threadName but handler reads name.
+  // See: https://github.com/openclaw/openclaw/pull/99505
+  describe("threadName alias for forum topic name", () => {
+    const readMockCall = (
+      calls: ReadonlyArray<ReadonlyArray<unknown>>,
+      argIndex: number,
+    ): unknown => {
+      const args = calls[0];
+      if (!Array.isArray(args)) {
+        throw new Error("Expected mock call args to be an array");
+      }
+      return args[argIndex];
+    };
+
+    it("accepts threadName for createForumTopic", async () => {
+      createForumTopicTelegram.mockResolvedValueOnce({
+        topicId: 100,
+        name: "Topic",
+        chatId: "-100123",
+      });
+      const cfg = telegramConfig({ actions: { createForumTopic: true } });
+
+      await handleTelegramAction(
+        { action: "createForumTopic", chatId: "-100123", threadName: "Topic" },
+        cfg,
+      );
+
+      const name = readMockCall(createForumTopicTelegram.mock.calls, 1);
+      expect(name).toBe("Topic");
+    });
+
+    it("accepts threadName for editForumTopic", async () => {
+      editForumTopicTelegram.mockResolvedValueOnce({
+        ok: true,
+        chatId: "-100123",
+        messageThreadId: 42,
+        name: "New",
+      });
+      const cfg = telegramConfig({ actions: { editForumTopic: true } });
+
+      await handleTelegramAction(
+        { action: "editForumTopic", chatId: "-100123", messageThreadId: 42, threadName: "New" },
+        cfg,
+      );
+
+      const opts = readMockCall(editForumTopicTelegram.mock.calls, 2) as {
+        name?: string;
+      };
+      expect(opts.name).toBe("New");
+    });
+
+    it("prefers name over threadName when both are provided (createForumTopic)", async () => {
+      createForumTopicTelegram.mockResolvedValueOnce({
+        topicId: 101,
+        name: "Primary",
+        chatId: "-100123",
+      });
+      const cfg = telegramConfig({ actions: { createForumTopic: true } });
+
+      await handleTelegramAction(
+        { action: "createForumTopic", chatId: "-100123", name: "Primary", threadName: "Alias" },
+        cfg,
+      );
+
+      const name = readMockCall(createForumTopicTelegram.mock.calls, 1);
+      expect(name).toBe("Primary");
+    });
+
+    it("prefers name over threadName when both are provided (editForumTopic)", async () => {
+      editForumTopicTelegram.mockResolvedValueOnce({
+        ok: true,
+        chatId: "-100123",
+        messageThreadId: 42,
+        name: "Primary",
+      });
+      const cfg = telegramConfig({ actions: { editForumTopic: true } });
+
+      await handleTelegramAction(
+        {
+          action: "editForumTopic",
+          chatId: "-100123",
+          messageThreadId: 42,
+          name: "Primary",
+          threadName: "Alias",
+        },
+        cfg,
+      );
+
+      const opts = readMockCall(editForumTopicTelegram.mock.calls, 2) as {
+        name?: string;
+      };
+      expect(opts.name).toBe("Primary");
+    });
+
+    it("throws on createForumTopic with neither name nor threadName", async () => {
+      const cfg = telegramConfig({ actions: { createForumTopic: true } });
+
+      await expect(
+        handleTelegramAction(
+          { action: "createForumTopic", chatId: "-100123" },
+          cfg,
+        ),
+      ).rejects.toThrow(/name or threadName/);
+    });
+
+    it("editForumTopic silently skips when neither name nor threadName is provided", async () => {
+      // editForumTopic allows renaming OR just iconCustomEmojiId update,
+      // so absence of name is acceptable if iconCustomEmojiId is present.
+      // Here we have neither — should still call the Telegram API with name=undefined.
+      editForumTopicTelegram.mockResolvedValueOnce({
+        ok: true,
+        chatId: "-100123",
+        messageThreadId: 42,
+        name: "",
+      });
+      const cfg = telegramConfig({ actions: { editForumTopic: true } });
+
+      await handleTelegramAction(
+        { action: "editForumTopic", chatId: "-100123", messageThreadId: 42 },
+        cfg,
+      );
+
+      const opts = readMockCall(editForumTopicTelegram.mock.calls, 2) as {
+        name?: string;
+      };
+      expect(opts.name).toBeUndefined();
+    });
+  });
+
   it.each([
     {
       name: "media",
