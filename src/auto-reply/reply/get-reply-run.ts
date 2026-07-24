@@ -1107,9 +1107,17 @@ export async function runPreparedReply(
     });
   }
   if (!thinkingLevelSupported) {
+    // `adaptive` is the auto sentinel (normalizeThinkLevel maps "auto" ->
+    // "adaptive"): it means "pick an appropriate level", not "force this exact
+    // level". Some clients (e.g. the Apple Watch client) send it as a transport
+    // default while the iOS app sends none, so hard-erroring on an unsupported
+    // `adaptive` rejects otherwise-valid turns from those clients. Always fall
+    // back to a supported level for the auto sentinel; only genuine explicit
+    // concrete levels still hard-error. See #109351.
     const explicitThink =
-      (directives.hasThinkDirective && directives.thinkLevel !== undefined) ||
-      explicitThinkingLevelOverride !== undefined;
+      resolvedThinkLevel !== "adaptive" &&
+      ((directives.hasThinkDirective && directives.thinkLevel !== undefined) ||
+        explicitThinkingLevelOverride !== undefined);
     if (explicitThink) {
       typing.cleanup();
       return {

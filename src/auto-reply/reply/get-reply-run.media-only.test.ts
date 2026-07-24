@@ -470,6 +470,42 @@ describe("runPreparedReply media-only handling", () => {
     expect(runReplyAgent).not.toHaveBeenCalled();
   });
 
+  it("falls back instead of erroring for an unsupported adaptive override (#109351)", async () => {
+    // The Apple Watch client sends thinking="adaptive" as a transport default;
+    // when the model does not support it the turn must still run at a supported
+    // level (matching the iOS app, which sends no override) rather than being
+    // rejected with a hard error.
+    const result = await runPreparedReply(
+      baseParams({
+        provider: "openai",
+        model: "chat-latest",
+        resolvedThinkLevel: "adaptive",
+        opts: { thinkingLevelOverride: "adaptive" },
+        modelState: {
+          resolveDefaultThinkingLevel: async () => "medium",
+          resolveThinkingCatalog: async () => [
+            {
+              provider: "openai",
+              id: "chat-latest",
+              reasoning: false,
+            },
+          ],
+          allowedModelCatalog: [
+            {
+              provider: "openai",
+              id: "chat-latest",
+              name: "Chat Latest",
+            },
+          ],
+        } as never,
+      }),
+    );
+
+    expect(Array.isArray(result) ? "" : (result?.text ?? "")).not.toContain("is not supported");
+    expect(runReplyAgent).toHaveBeenCalledOnce();
+    expect(requireRunReplyAgentCall().followupRun.run.thinkLevel).not.toBe("adaptive");
+  });
+
   it("does not persist turn-local thinking fallback over a stored session override", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session-thinking",
