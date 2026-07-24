@@ -7,6 +7,13 @@
       "roots": ["src/wizard/i18n/catalogs"],
       "extensions": [".json"],
       "excludedRoots": ["src/wizard/i18n/catalogs/generated"]
+    },
+    {
+      "id": "updater-dry-run-catalogs",
+      "owner": "updater",
+      "roots": ["src/cli/i18n/locales"],
+      "extensions": [".ts"],
+      "excludedRoots": []
     }
   ],
   "surfaces": [
@@ -16,6 +23,20 @@
       "source": "src/wizard/i18n/catalogs/en.json",
       "disposition": "adopted",
       "catalogArea": "wizard-core"
+    },
+    {
+      "id": "updater-dry-run-en",
+      "owner": "updater",
+      "source": "src/cli/i18n/locales/en.ts",
+      "disposition": "deferred",
+      "rationale": "Reviewed English dry-run output is runtime-proven in this slice; generated-catalog adoption remains a later updater-owner slice."
+    },
+    {
+      "id": "updater-dry-run-zh-CN",
+      "owner": "updater",
+      "source": "src/cli/i18n/locales/zh-CN.ts",
+      "disposition": "deferred",
+      "rationale": "The hand-owned bootstrap target remains reviewable until a later updater-owner slice moves the family to generated output."
     }
   ]
 }
