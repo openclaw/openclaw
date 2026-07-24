@@ -1322,6 +1322,10 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Verify and restore
   - H2: What gets backed up
   - H2: Invalid config behavior
+  - H2: Restore from an archive
+  - H3: Inspect and stage the archive
+  - H3: Archive layout
+  - H3: Restore selected paths
   - H2: Size and performance
   - H2: Related
 
