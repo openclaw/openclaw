@@ -123,15 +123,29 @@ async function resolvePythonExecutablePath(): Promise<string | undefined> {
   const candidates = findExecutablesOnPath(["python3", "python"]);
   for (const candidate of candidates) {
     const res = await runCommandWithTimeout(
-      [candidate, "-c", "import os, sys; print(os.path.realpath(sys.executable))"],
+      [
+        candidate,
+        "-c",
+        "import os, sys; print(os.path.realpath(sys.executable)); print('.'.join(map(str, sys.version_info[:2])))",
+      ],
       { timeoutMs: 2_000 },
     );
     if (res.code !== 0) {
       continue;
     }
-    const resolved = res.stdout.trim().split(/\s+/)[0];
+    const lines = res.stdout.trim().split(/\s+/);
+    const resolved = lines[0];
+    const pyVersion = lines[1];
     if (!resolved) {
       continue;
+    }
+    if (pyVersion) {
+      const [major, minor] = pyVersion.split(".").map(Number);
+      if (major == null || minor == null) continue;
+      if (major !== 3 || minor < 10) {
+        // Skip incompatible Python versions (gcloud requires 3.10–3.14)
+        continue;
+      }
     }
     try {
       fs.accessSync(resolved, fs.constants.X_OK);
