@@ -12,7 +12,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildConversationRef } from "../../routing/conversation-ref.js";
 import { registerPendingConversationTurn } from "../../sessions/conversation-turns.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import type { FinalizedMsgContext } from "../templating.js";
+import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import { capturePendingConversationTurnReply } from "./conversation-turn-capture.js";
 
 afterEach(() => {
@@ -94,7 +94,10 @@ describe("conversation turn capture", () => {
           Provider: "reef",
           ReplyToIdFull: "outbound-untrusted",
           RawBody: "untrusted reply",
-        } as FinalizedMsgContext,
+          commandText: "untrusted reply",
+          agentText: "untrusted reply",
+          rawText: "untrusted reply",
+        } as FinalizedRuntimeMsgContext,
       }),
     ).resolves.toBe(false);
     pending.cancel();
@@ -134,8 +137,11 @@ describe("conversation turn capture", () => {
       ReplyToIdFull: "reef-outbound-full",
       RawBody: "peer acknowledged",
       BodyForAgent: "trusted provenance\n\n<reef-message>peer acknowledged</reef-message>",
+      commandText: "peer acknowledged",
+      agentText: "trusted provenance\n\n<reef-message>peer acknowledged</reef-message>",
+      rawText: "peer acknowledged",
       Timestamp: 1_710_000_000,
-    } as FinalizedMsgContext;
+    } as FinalizedRuntimeMsgContext;
     await expect(
       capturePendingConversationTurnReply({ cfg: setup.cfg, ctx: inboundContext }),
     ).resolves.toBe(true);
@@ -189,7 +195,10 @@ describe("conversation turn capture", () => {
           MessageSidFull: "reef-inbound-distinct",
           RawBody: "new ordinary message",
           BodyForAgent: "new ordinary message",
-        } as FinalizedMsgContext,
+          commandText: "new ordinary message",
+          agentText: "new ordinary message",
+          rawText: "new ordinary message",
+        } as FinalizedRuntimeMsgContext,
       }),
     ).resolves.toBe(false);
     expect(
@@ -244,7 +253,10 @@ describe("conversation turn capture", () => {
           ReplyToIdFull: outboundMessageId,
           RawBody: `secret ${redactedValue}`,
           BodyForAgent: replyText,
-        } as FinalizedMsgContext,
+          commandText: `secret ${redactedValue}`,
+          agentText: replyText,
+          rawText: `secret ${redactedValue}`,
+        } as FinalizedRuntimeMsgContext,
       }),
     ).resolves.toBe(true);
     await expect(pending.wait()).resolves.toMatchObject({ text: replyText });
@@ -299,7 +311,10 @@ describe("conversation turn capture", () => {
           ReplyToIdFull: outboundMessageId,
           RawBody: "reply survives audit failure",
           BodyForAgent: "reply survives audit failure",
-        } as FinalizedMsgContext,
+          commandText: "reply survives audit failure",
+          agentText: "reply survives audit failure",
+          rawText: "reply survives audit failure",
+        } as FinalizedRuntimeMsgContext,
       }),
     ).resolves.toBe(true);
     await expect(pending.wait()).resolves.toEqual(
@@ -339,7 +354,10 @@ describe("conversation turn capture", () => {
           ReplyToIdFull: "reef-outbound-restart",
           RawBody: "reply after restart",
           BodyForAgent: "reply after restart",
-        } as FinalizedMsgContext,
+          commandText: "reply after restart",
+          agentText: "reply after restart",
+          rawText: "reply after restart",
+        } as FinalizedRuntimeMsgContext,
       }),
     ).resolves.toBe(false);
 
@@ -385,7 +403,10 @@ describe("conversation turn capture", () => {
           ReplyToIdFull: "reef-outbound-send",
           RawBody: "ordinary reply",
           BodyForAgent: "ordinary reply",
-        } as FinalizedMsgContext,
+          commandText: "ordinary reply",
+          agentText: "ordinary reply",
+          rawText: "ordinary reply",
+        } as FinalizedRuntimeMsgContext,
       }),
     ).resolves.toBe(false);
     expect(getConversationDeliveryOperation(setup.scope, operationId)).toMatchObject({
@@ -427,7 +448,10 @@ describe("conversation turn capture", () => {
       ReplyToIdFull: outboundMessageId,
       RawBody: "thread-promoted reply",
       BodyForAgent: "thread-promoted reply",
-    } as FinalizedMsgContext;
+      commandText: "thread-promoted reply",
+      agentText: "thread-promoted reply",
+      rawText: "thread-promoted reply",
+    } as FinalizedRuntimeMsgContext;
 
     await expect(
       capturePendingConversationTurnReply({ cfg: setup.cfg, ctx: inboundContext }),
@@ -509,7 +533,10 @@ describe("conversation turn capture", () => {
           SenderId: "member-1",
           RawBody: "channel ack",
           BodyForAgent: "channel ack",
-        } as FinalizedMsgContext,
+          commandText: "channel ack",
+          agentText: "channel ack",
+          rawText: "channel ack",
+        } as FinalizedRuntimeMsgContext,
       }),
     ).resolves.toBe(true);
     await expect(pending.wait()).resolves.toMatchObject({
@@ -551,7 +578,10 @@ describe("conversation turn capture", () => {
           ReplyToIdFull: "outbound-missing",
           RawBody: "fall through",
           BodyForAgent: "fall through",
-        } as FinalizedMsgContext,
+          commandText: "fall through",
+          agentText: "fall through",
+          rawText: "fall through",
+        } as FinalizedRuntimeMsgContext,
       }),
     ).resolves.toBe(false);
     pending.cancel();

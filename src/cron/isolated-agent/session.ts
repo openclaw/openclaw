@@ -23,7 +23,6 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 const FRESH_CRON_CARRIED_PREFERENCE_FIELDS = [
-  "heartbeatTaskState",
   "chatType",
   "thinkingLevel",
   "fastMode",

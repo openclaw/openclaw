@@ -15,7 +15,6 @@ extensions/browser/src/browser-tool.test.ts
 extensions/browser/src/browser-tool.ts
 extensions/browser/src/browser/cdp.ts
 extensions/browser/src/browser/chrome-mcp.test.ts
-extensions/browser/src/browser/chrome-mcp.ts
 extensions/browser/src/browser/chrome.executables.ts
 extensions/browser/src/browser/chrome.internal.test.ts
 extensions/browser/src/browser/chrome.ts
@@ -567,7 +566,6 @@ src/auto-reply/reply/agent-runner-memory.ts
 src/auto-reply/reply/agent-runner-payloads.test.ts
 src/auto-reply/reply/agent-runner.misc.runreplyagent.test.ts
 src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts
-src/auto-reply/reply/agent-runner.ts
 src/auto-reply/reply/commands-acp.test.ts
 src/auto-reply/reply/commands-approve.test.ts
 src/auto-reply/reply/commands-models.ts
@@ -587,7 +585,6 @@ src/auto-reply/reply/dispatch-from-config.progress.test-utils.ts
 src/auto-reply/reply/dispatch-from-config.routing.test-utils.ts
 src/auto-reply/reply/dispatch-from-config.send-policy-routing.test-utils.ts
 src/auto-reply/reply/dispatch-from-config.shared.test-harness.ts
-src/auto-reply/reply/dispatch-from-config.ts
 src/auto-reply/reply/followup-runner.test.ts
 src/auto-reply/reply/followup-runner.ts
 src/auto-reply/reply/get-reply-inline-actions.skip-when-config-empty.test.ts
@@ -724,9 +721,6 @@ src/config/schema.ts
 src/config/sessions/disk-budget.ts
 src/config/sessions/session-accessor.conformance.test.ts
 src/config/sessions/session-accessor.test.ts
-src/config/sessions/sessions.test.ts
-src/config/sessions/store.pruning.integration.test.ts
-src/config/sessions/store.ts
 src/config/sessions/transcript.test.ts
 src/config/sessions/transcript.ts
 src/config/validation.ts
@@ -746,7 +740,6 @@ src/cron/service/jobs.ts
 src/cron/service/ops.test.ts
 src/cron/service/ops.ts
 src/cron/service/timer.regression.test.ts
-src/cron/service/timer.ts
 src/cron/store.test.ts
 src/daemon/launchd.test.ts
 src/daemon/launchd.ts
@@ -860,7 +853,6 @@ src/gateway/session-utils.fs.test.ts
 src/gateway/session-utils.fs.ts
 src/gateway/session-utils.subagent.test.ts
 src/gateway/session-utils.test.ts
-src/gateway/session-utils.ts
 src/gateway/sessions-history-http.test.ts
 src/gateway/sessions-patch.test.ts
 src/gateway/talk-realtime-relay.test.ts
@@ -889,7 +881,6 @@ src/infra/exec-approval-forwarder.ts
 src/infra/exec-approvals-allow-always.test.ts
 src/infra/exec-approvals-allowlist.ts
 src/infra/exec-approvals-store.test.ts
-src/infra/exec-approvals.ts
 src/infra/exec-authorization-plan.ts
 src/infra/heartbeat-runner.returns-default-unset.test.ts
 src/infra/heartbeat-runner.ts
@@ -899,7 +890,6 @@ src/infra/net/fetch-guard.ssrf.test.ts
 src/infra/npm-managed-root.test.ts
 src/infra/npm-managed-root.ts
 src/infra/outbound/deliver.test.ts
-src/infra/outbound/deliver.ts
 src/infra/outbound/delivery-queue-recovery.ts
 src/infra/outbound/delivery-queue.recovery.test.ts
 src/infra/outbound/message-action-runner.media.test.ts
@@ -961,7 +951,6 @@ src/plugins/channel-plugin-ids.test.ts
 src/plugins/clawhub.test.ts
 src/plugins/clawhub.ts
 src/plugins/commands.test.ts
-src/plugins/compat/registry.ts
 src/plugins/contracts/host-hooks.contract.test.ts
 src/plugins/contracts/plugin-sdk-subpaths.test.ts
 src/plugins/contracts/scheduled-turns.contract.test.ts
@@ -970,7 +959,6 @@ src/plugins/conversation-binding.test.ts
 src/plugins/conversation-binding.ts
 src/plugins/discovery.test.ts
 src/plugins/discovery.ts
-src/plugins/gateway-startup-plugin-ids.ts
 src/plugins/hook-types.ts
 src/plugins/hooks.ts
 src/plugins/install-security-scan.runtime.ts
@@ -1043,7 +1031,6 @@ src/status/status-message.ts
 src/system-agent/chat-engine.test.ts
 src/system-agent/chat-engine.ts
 src/system-agent/setup-inference.test.ts
-src/system-agent/setup-inference.ts
 src/system-agent/verified-inference.test.ts
 src/system-agent/verified-inference.ts
 src/tasks/task-executor.test.ts
@@ -1073,7 +1060,6 @@ src/worker/worker.runtime.test.ts
 ui/src/api/gateway.node.test.ts
 ui/src/api/types.ts
 ui/src/app/app-host.ts
-ui/src/components/terminal/terminal-panel.ts
 ui/src/e2e/chat-flow.e2e.test.ts
 ui/src/e2e/new-session-page.e2e.test.ts
 ui/src/e2e/session-management.e2e.test.ts
@@ -1097,7 +1083,6 @@ ui/src/pages/chat/chat-history.ts
 ui/src/pages/chat/chat-pane.ts
 ui/src/pages/chat/chat-responsive.browser.test.ts
 ui/src/pages/chat/chat-send.test.ts
-ui/src/pages/chat/chat-send.ts
 ui/src/pages/chat/chat-state.test.ts
 ui/src/pages/chat/chat-state.ts
 ui/src/pages/chat/chat-thread.test.ts

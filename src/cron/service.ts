@@ -156,6 +156,17 @@ export class CronService implements CronServiceContract {
     return await ops.readJob(this.state, id);
   }
 
+  async readScratch(id: string) {
+    return await ops.readScratch(this.state, id);
+  }
+
+  async writeScratch(
+    id: string,
+    params: { content: string | null; expectedRevision?: number; sourceSha256?: string },
+  ) {
+    return await ops.writeScratch(this.state, id, params);
+  }
+
   async recordExternalFailure(
     id: string,
     error: string,

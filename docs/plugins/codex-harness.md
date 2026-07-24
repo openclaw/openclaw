@@ -789,11 +789,18 @@ Persistent effective search-policy changes rotate the bound Codex thread
 before the next turn; transient per-turn restrictions use a temporary
 restricted thread and preserve the existing binding for later resume.
 
-`sessions_yield` and message-tool-only source replies stay direct because
-those are turn-control contracts. `sessions_spawn` stays searchable so
-Codex's native `spawn_agent` remains the primary Codex subagent surface,
-while explicit OpenClaw or ACP delegation is still available through the
-`openclaw` dynamic tool namespace. Heartbeat collaboration instructions
+`sessions_yield`, `sessions_spawn`, and message-tool-only source replies stay
+direct because they are turn-control or delegation contracts. Guidance still
+prefers Codex's native `spawn_agent` as the primary Codex subagent surface,
+while explicit OpenClaw or ACP delegation remains directly callable through
+`sessions_spawn`. In Codex Code Mode, generic OpenClaw
+dynamic-tool results are JSON text rather than JavaScript objects, so parse
+JSON-looking results before reading fields. Codex also serializes nested
+dynamic calls; submit several `sessions_spawn` calls in a bounded loop rather
+than expecting `Promise.all` to launch them concurrently. Already-accepted
+children can still overlap while later calls are submitted. See
+[Swarm](/tools/swarm#use-swarm-from-other-harnesses) for a complete pattern.
+Heartbeat collaboration instructions
 tell Codex to search for `heartbeat_respond` before ending a heartbeat turn
 when the tool is not already loaded.
 

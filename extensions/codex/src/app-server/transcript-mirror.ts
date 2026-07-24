@@ -339,6 +339,7 @@ async function mirrorBestEffort(params: {
   turnId: string;
 }): Promise<{
   assistantTranscriptOwned: boolean;
+  assistantTranscriptIdempotencyKey?: string;
   mirroredMessages: MirroredAgentMessage[];
 }> {
   try {
@@ -387,10 +388,18 @@ async function mirrorBestEffort(params: {
         readCodexMirrorSourceFingerprint(message) === expectedFingerprints.get(identity)
       );
     });
+    const assistantMirrorIdentity = `${params.turnId}:assistant`;
+    const assistantTranscriptOwned =
+      mirrorResult.assistantMirrorIdentitiesOwned.includes(assistantMirrorIdentity);
+    const assistantTranscriptMessage = assistantTranscriptOwned
+      ? mirroredMessages.find((message) => readMirrorIdentity(message) === assistantMirrorIdentity)
+      : undefined;
+    const assistantTranscriptIdempotencyKey = normalizeOptionalString(
+      (assistantTranscriptMessage as { idempotencyKey?: unknown } | undefined)?.idempotencyKey,
+    );
     return {
-      assistantTranscriptOwned: mirrorResult.assistantMirrorIdentitiesOwned.includes(
-        `${params.turnId}:assistant`,
-      ),
+      assistantTranscriptOwned,
+      ...(assistantTranscriptIdempotencyKey ? { assistantTranscriptIdempotencyKey } : {}),
       mirroredMessages,
     };
   } catch (error) {

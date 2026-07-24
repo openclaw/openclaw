@@ -364,6 +364,27 @@ export function replaceCronRows(db: DatabaseSync, storeKey: string, store: CronS
   }
 }
 
+/** Upserts one persisted cron row without rewriting unrelated jobs in its store partition. */
+export function upsertCronJobRow(
+  db: DatabaseSync,
+  storeKey: string,
+  job: CronJob,
+  sortOrder: number,
+): void {
+  const normalized = normalizeCronJobForSqlite(job);
+  if (!normalized) {
+    throw new Error(`Cannot persist invalid cron job ${job.id}`);
+  }
+  const values = bindCronJobRow(storeKey, normalized, sortOrder);
+  executeSqliteQuerySync(
+    db,
+    getCronStoreKysely(db)
+      .insertInto("cron_jobs")
+      .values(values)
+      .onConflict((conflict) => conflict.columns(["store_key", "job_id"]).doUpdateSet(values)),
+  );
+}
+
 /** Updates only mutable runtime columns without rewriting full job config JSON. */
 export function updateCronRuntimeRows(
   db: DatabaseSync,
