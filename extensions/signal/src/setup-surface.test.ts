@@ -103,7 +103,11 @@ vi.mock("./setup-transport.js", async () => {
   };
 });
 
-import { createSignalSetupWizardProxy, signalNumberTextInputs } from "./setup-core.js";
+import {
+  createSignalSetupWizardProxy,
+  signalCompletionNote,
+  signalNumberTextInputs,
+} from "./setup-core.js";
 import { signalSetupWizard } from "./setup-surface.js";
 
 function toCredentialValues(
@@ -324,9 +328,7 @@ describe("signalSetupWizard", () => {
     expect(queued.plain).toHaveBeenCalledWith(
       expect.stringContaining("Signal > Settings > Linked devices"),
     );
-    expect(queued.plain).toHaveBeenCalledWith(
-      expect.stringContaining("\x1b[48;2;0;0;0m\x1b[38;2;255;255;255m"),
-    );
+    expect(queued.plain).toHaveBeenCalledWith(expect.stringContaining("Scan this QR code:"));
     expect(queued.text).not.toHaveBeenCalled();
     expect(mocks.probeSignalTransport).toHaveBeenCalledWith(
       expect.objectContaining({ account: "+15555550123" }),
@@ -507,7 +509,6 @@ describe("signalSetupWizard", () => {
   });
 
   it("starts and stops a temporary signal-cli daemon around a managed probe", async () => {
-    const runtime = createRuntimeEnv({ throwOnExit: false });
     const queued = createQueuedWizardPrompter();
 
     await runSetupWizardFinalize({
@@ -526,7 +527,7 @@ describe("signalSetupWizard", () => {
         signalCliConfigPath: "/var/lib/signal-cli",
       },
       prompter: queued.prompter,
-      runtime,
+      runtime: createRuntimeEnv({ throwOnExit: false }),
     });
 
     expect(mocks.spawnSignalDaemon).toHaveBeenCalledWith({
@@ -535,10 +536,21 @@ describe("signalSetupWizard", () => {
       account: "+15555550123",
       httpHost: "127.0.0.1",
       httpPort: 8080,
-      runtime,
     });
+    expect(queued.progress).toHaveBeenCalledWith("Validating Signal setup...");
+    expect(queued.progress.mock.results[0]?.value.stop).toHaveBeenCalledWith(
+      "Signal setup validated.",
+    );
     expect(mocks.probeSignalTransport).toHaveBeenCalledOnce();
     expect(mocks.spawnSignalDaemon.mock.results[0]?.value.stop).toHaveBeenCalledOnce();
+  });
+
+  it("shows user-facing completion guidance instead of a raw gateway RPC", () => {
+    const lines = signalCompletionNote.lines.join("\n");
+
+    expect(lines).toContain("Signal setup is validated.");
+    expect(lines).toContain("openclaw channels status --probe");
+    expect(lines).not.toContain("gateway call");
   });
 
   it("stops a temporary daemon that exits before its managed probe", async () => {

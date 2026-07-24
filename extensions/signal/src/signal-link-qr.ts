@@ -3,7 +3,10 @@ import { renderQrTerminal } from "openclaw/plugin-sdk/media-runtime";
 const ANSI_SGR = new RegExp(`${String.fromCharCode(0x1b)}\\[[0-9;]*m`, "g");
 const SOURCE_QUIET_ZONE_MODULES = 1;
 const SIGNAL_LINK_QUIET_ZONE_MODULES = 4;
-const BLACK_BACKGROUND_WHITE_FOREGROUND = "\x1b[48;2;0;0;0m\x1b[38;2;255;255;255m";
+const BLACK_BACKGROUND = "\x1b[48;2;0;0;0m";
+const BLACK_FOREGROUND = "\x1b[38;2;0;0;0m";
+const WHITE_BACKGROUND = "\x1b[48;2;255;255;255m";
+const WHITE_FOREGROUND = "\x1b[38;2;255;255;255m";
 const TERMINAL_RESET = "\x1b[0m";
 
 function decodeCompactBlock(char: string): [boolean, boolean] {
@@ -24,15 +27,15 @@ function decodeCompactBlock(char: string): [boolean, boolean] {
 
 function renderHighContrastBlock(topDark: boolean, bottomDark: boolean): string {
   if (topDark && bottomDark) {
-    return " ";
+    return `${BLACK_BACKGROUND} `;
   }
   if (topDark) {
-    return "▄";
+    return `${WHITE_BACKGROUND}${BLACK_FOREGROUND}▀`;
   }
   if (bottomDark) {
-    return "▀";
+    return `${BLACK_BACKGROUND}${WHITE_FOREGROUND}▀`;
   }
-  return "█";
+  return `${WHITE_BACKGROUND} `;
 }
 
 export async function renderSignalLinkQr(uri: string): Promise<string> {
@@ -52,10 +55,10 @@ export async function renderSignalLinkQr(uri: string): Promise<string> {
   const symbolSize = qrSize + SIGNAL_LINK_QUIET_ZONE_MODULES * 2;
   const output: string[] = [];
 
-  // Truecolor escapes avoid terminal palette remapping. Repacking also restores the
-  // four-module quiet zone that scanners require without using oversized full mode.
+  // Truecolor escapes avoid terminal palette remapping, while background-painted solid
+  // cells avoid font-grid seams. Repacking also restores the four-module quiet zone.
   for (let y = 0; y < symbolSize; y += 2) {
-    let line = BLACK_BACKGROUND_WHITE_FOREGROUND;
+    let line = "";
     for (let x = 0; x < symbolSize; x += 1) {
       const moduleX = x - SIGNAL_LINK_QUIET_ZONE_MODULES;
       const topModuleY = y - SIGNAL_LINK_QUIET_ZONE_MODULES;

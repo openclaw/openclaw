@@ -159,6 +159,7 @@ export async function finalizeSignalInteractiveSetup(params: SignalFinalizeParam
             resolvedTransport: resolvedManagedTransport,
             account,
             runtime: params.runtime,
+            prompter: params.prompter,
           })
         : await probeSignalTransport({
             cfg,
@@ -234,7 +235,9 @@ async function probeManagedSignalSetup(params: {
   resolvedTransport: ResolvedManagedSignalTransport;
   account: string;
   runtime: SignalFinalizeParams["runtime"];
+  prompter: WizardPrompter;
 }): Promise<SignalTransportProbeResult> {
+  const progress = params.prompter.progress("Validating Signal setup...");
   const daemon = spawnSignalDaemon({
     cliPath: params.resolvedTransport.cliPath,
     ...(params.resolvedTransport.configPath
@@ -243,9 +246,9 @@ async function probeManagedSignalSetup(params: {
     account: params.account,
     httpHost: params.resolvedTransport.httpHost,
     httpPort: params.resolvedTransport.httpPort,
-    runtime: params.runtime,
   });
   let successfulProbe: SignalTransportProbeResult | undefined;
+  let result: SignalTransportProbeResult;
   try {
     const startupTimeoutMs = Math.min(
       120_000,
@@ -275,12 +278,14 @@ async function probeManagedSignalSetup(params: {
         return probe;
       },
     });
-    return successfulProbe ?? { ok: false, error: "Signal transport probe failed." };
+    result = successfulProbe ?? { ok: false, error: "Signal transport probe failed." };
   } catch (error) {
-    return { ok: false, error: String(error) };
+    result = { ok: false, error: String(error) };
   } finally {
     await daemon.stop();
   }
+  progress.stop(result.ok ? "Signal setup validated." : "Signal setup validation failed.");
+  return result;
 }
 
 async function promptSignalAccount(prompter: WizardPrompter) {
@@ -340,7 +345,7 @@ async function prepareManagedNativeSetup(
 
   if (params.options?.allowSignalInstall) {
     installRequested = await params.prompter.confirm({
-      message: cliDetected ? "Reinstall signal-cli?" : "Install signal-cli?",
+      message: cliDetected ? "Reinstall signal-cli? (not normally needed)" : "Install signal-cli?",
       initialValue: !cliDetected,
     });
   }
@@ -360,7 +365,7 @@ async function prepareManagedNativeSetup(
     resolvedTransport.kind === "managed-native" ? resolvedTransport.configPath : undefined;
   const configPath = normalizeOptionalString(
     await params.prompter.text({
-      message: "signal-cli config path (optional)",
+      message: "signal-cli config directory (leave blank for default)",
       initialValue: existingConfigPath,
       placeholder: "~/.local/share/signal-cli",
     }),

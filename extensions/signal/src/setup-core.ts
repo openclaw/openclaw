@@ -366,8 +366,9 @@ export const signalNumberTextInputs: ChannelSetupWizardTextInput[] = [
 export const signalCompletionNote = {
   title: t("wizard.signal.nextStepsTitle"),
   lines: [
-    "Signal setup is validated and ready for the gateway.",
-    `Then run: ${formatCliCommand("openclaw gateway call channels.status --params '{\"probe\":true}'")}`,
+    "Signal setup is validated.",
+    "OpenClaw will use this Signal connection when the gateway runs.",
+    `Check it later: ${formatCliCommand("openclaw channels status --probe")}`,
     `Docs: ${formatDocsLink("/signal", "signal")}`,
   ],
 };
