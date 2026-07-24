@@ -227,7 +227,9 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       isOperationalReplyPayload({
                         payload,
                         explicitCommandTurn: false,
-                      });
+                      }) &&
+                      (ctx.InboundEventKind !== "room_event" ||
+                        state.operationalReplyPolicy.policy !== "always");
                     const progressCallbackForwarded = shouldForwardToolResultProgressCallback(
                       payload,
                       isFastModeAutoProgress,
@@ -532,7 +534,11 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       payload: visiblePayload,
                       explicitCommandTurn: false,
                     });
-                    if (suppressDelivery && (sendPolicyDenied || !isOperationalPayload)) {
+                    const canBypassSourceSuppression =
+                      isOperationalPayload &&
+                      (ctx.InboundEventKind !== "room_event" ||
+                        state.operationalReplyPolicy.policy !== "always");
+                    if (suppressDelivery && (sendPolicyDenied || !canBypassSourceSuppression)) {
                       return;
                     }
                     const policyResult = await applyDispatchOperationalReplyPolicy(visiblePayload);
