@@ -100,6 +100,18 @@ import {
 const permissionErrorNotifiedAt = new Map<string, number>();
 const PERMISSION_ERROR_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
 
+// Reply-session init conflicts raise a load-bearing error message shared across
+// channels; parity with Slack/Signal/Discord means an exhausted conflict must
+// surface a visible user notice instead of dropping the inbound message. See #108320.
+const FEISHU_REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE =
+  /reply session initialization conflicted for \S+/u;
+
+function isFeishuReplySessionInitConflictError(error: unknown): boolean {
+  return FEISHU_REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(
+    error instanceof Error ? error.message : String(error),
+  );
+}
+
 function shouldSendNoVisibleReplyFallback(dispatchResult: {
   counts: { final?: number };
   failedCounts?: { final?: number };
@@ -682,6 +694,11 @@ export async function handleFeishuMessage(params: {
     }
   }
 
+  // Resolved dispatch delivery parameters, captured before the dispatch try so
+  // the reply-session conflict notice in the catch block can reuse them.
+  let conflictNoticeCfg = cfg;
+  let conflictNoticeReplyToMessageId: string | undefined = ctx.messageId;
+  let conflictNoticeReplyInThread = false;
   try {
     const core = {
       channel: channelRuntime?.inbound ? channelRuntime : getFeishuRuntime().channel,
@@ -1820,6 +1837,9 @@ export async function handleFeishuMessage(params: {
           sessionKey: route.sessionKey,
         });
 
+      conflictNoticeCfg = effectiveCfg;
+      conflictNoticeReplyToMessageId = replyTargetMessageId;
+      conflictNoticeReplyInThread = replyInThread;
       log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
       const turnResult = await core.channel.inbound.run({
         channel: "feishu",
@@ -1882,6 +1902,27 @@ export async function handleFeishuMessage(params: {
       );
     }
   } catch (err) {
+    if (!turnAdoptionLifecycle && isFeishuReplySessionInitConflictError(err)) {
+      // Parity with Slack/Signal/Discord: a reply-session init conflict that
+      // exhausted its bounded retry must reach the user as a visible notice
+      // instead of being silently dropped. See #108320.
+      error(`feishu[${account.accountId}]: failed to dispatch message: ${String(err)}`);
+      try {
+        await sendMessageFeishu({
+          cfg: conflictNoticeCfg,
+          to: directPreDispatchTarget ?? `chat:${ctx.chatId}`,
+          text: "⚠️ Couldn't process this message because the session stayed busy. Please try again in a moment.",
+          replyToMessageId: conflictNoticeReplyToMessageId,
+          replyInThread: conflictNoticeReplyInThread,
+          accountId: account.accountId,
+        });
+      } catch (noticeError) {
+        error(
+          `feishu[${account.accountId}]: reply-session conflict notice failed: ${String(noticeError)}`,
+        );
+      }
+      return;
+    }
     error(`feishu[${account.accountId}]: failed to dispatch message: ${String(err)}`);
     if (turnAdoptionLifecycle) {
       throw err;
