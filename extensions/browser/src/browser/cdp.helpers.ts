@@ -7,7 +7,7 @@
 import { createHash } from "node:crypto";
 import { parseBrowserHttpUrl, redactCdpUrl } from "openclaw/plugin-sdk/browser-config";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
-import { sleep } from "openclaw/plugin-sdk/runtime-env";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import WebSocket from "ws";
 import { isLoopbackHost } from "../gateway/net.js";
@@ -696,6 +696,7 @@ type CdpSocketOptions = {
   handshakeRetries?: number;
   handshakeRetryDelayMs?: number;
   handshakeMaxRetryDelayMs?: number;
+  signal?: AbortSignal;
 };
 
 function normalizeRetryCount(value: number | undefined, fallback: number): number {
@@ -783,7 +784,7 @@ export async function withCdpSocket<T>(
       }
       // Retry only handshake failures. Once CDP commands are flowing, callers
       // own retry semantics because commands may already have side effects.
-      await sleep(computeHandshakeRetryDelayMs(attempt + 1, opts));
+      await sleepWithAbort(computeHandshakeRetryDelayMs(attempt + 1, opts), opts?.signal);
       continue;
     }
 

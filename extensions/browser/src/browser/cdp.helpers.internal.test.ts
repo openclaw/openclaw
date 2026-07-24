@@ -339,6 +339,44 @@ describe("cdp.helpers internal", () => {
       expect(callbackCount).toBe(1);
     });
 
+    it("honors the caller abort signal during handshake retry backoff", async () => {
+      let rejectedHandshakes = 0;
+      wss = new WebSocketServer({
+        port: 0,
+        host: "127.0.0.1",
+        verifyClient: (_info, cb) => {
+          rejectedHandshakes += 1;
+          cb(false, 503, "try later");
+        },
+      });
+      await new Promise<void>((resolve) => {
+        wss?.once("listening", () => resolve());
+      });
+      const port = (wss.address() as { port: number }).port;
+
+      const controller = new AbortController();
+      const started = Date.now();
+      const socketPromise = withCdpSocket(
+        `ws://127.0.0.1:${port}/devtools/browser/TEST`,
+        async (send) => {
+          await send("Test.neverRuns");
+        },
+        {
+          handshakeRetries: 5,
+          handshakeRetryDelayMs: 30_000,
+          handshakeMaxRetryDelayMs: 30_000,
+          signal: controller.signal,
+        },
+      );
+      // Abort once the first rejected handshake has landed inside the 30s backoff.
+      await vi.waitFor(() => expect(rejectedHandshakes).toBe(1));
+      controller.abort();
+
+      await expect(socketPromise).rejects.toThrow(/aborted/);
+      expect(Date.now() - started).toBeLessThan(10_000);
+      expect(rejectedHandshakes).toBe(1);
+    });
+
     it("does not retry rate-limited websocket handshakes", async () => {
       let rejectedHandshakes = 0;
       wss = new WebSocketServer({
