@@ -11,6 +11,24 @@ describe("twitchPlugin pairing", () => {
 });
 
 describe("twitchPlugin outbound session routing", () => {
+  it("normalizes channel-prefixed Twitch targets for message sends", () => {
+    expect(twitchPlugin.messaging?.targetPrefixes).toEqual(["twitch", "twitch-chat"]);
+    expect(twitchPlugin.messaging?.normalizeTarget?.("  twitch:channel:OpenClaw  ")).toBe(
+      "openclaw",
+    );
+    expect(twitchPlugin.messaging?.normalizeTarget?.("twitch-chat:group:OpenClaw")).toBe(
+      "openclaw",
+    );
+    expect(twitchPlugin.messaging?.normalizeTarget?.("#OpenClaw")).toBe("openclaw");
+  });
+
+  it.each(["twitch:user:alice", "twitch:dm:alice"])(
+    "normalizes unsupported direct target %s to an empty target",
+    (target) => {
+      expect(twitchPlugin.messaging?.normalizeTarget?.(target)).toBe("");
+    },
+  );
+
   it("reproduces the canonical inbound channel session", async () => {
     const route = await twitchPlugin.messaging?.resolveOutboundSessionRoute?.({
       cfg: {},
