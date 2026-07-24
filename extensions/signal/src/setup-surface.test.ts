@@ -325,7 +325,7 @@ describe("signalSetupWizard", () => {
       expect.stringContaining("Signal > Settings > Linked devices"),
     );
     expect(queued.plain).toHaveBeenCalledWith(
-      expect.stringContaining("\x1b[40m\x1b[37m█ ▄▀█\x1b[0m"),
+      expect.stringContaining("\x1b[48;2;0;0;0m\x1b[38;2;255;255;255m"),
     );
     expect(queued.text).not.toHaveBeenCalled();
     expect(mocks.probeSignalTransport).toHaveBeenCalledWith(
