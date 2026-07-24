@@ -12,6 +12,7 @@ vi.mock("./attempt-stream-settle.js", () => ({
   settleEmbeddedAttemptStream: mocks.settleStream,
 }));
 
+import type { AgentMessage } from "../../runtime/index.js";
 import { finalizeEmbeddedAttemptStreamPhase } from "./attempt-stream-finalize.js";
 
 type FinalizeInput = Parameters<typeof finalizeEmbeddedAttemptStreamPhase>[0];
@@ -38,9 +39,11 @@ function createFixture(overrides?: Partial<FinalizeInput>) {
   const input = {
     attempt: { runId: "run-1" },
     activeSession,
+    isOpenAIResponsesApi: false,
     sessionManager: {
       buildSessionContext: () => ({ messages: repairedMessages }),
     },
+    transcriptPolicy: { repairToolUseResultPairing: false },
     sessionLockController: {
       waitForSessionEvents: vi.fn(async () => {
         order.push("session-events");
@@ -192,5 +195,63 @@ describe("finalizeEmbeddedAttemptStreamPhase", () => {
     );
     expect(fixture.input.onSettled).not.toHaveBeenCalled();
     expect(mocks.completeAfterTurn).not.toHaveBeenCalled();
+  });
+
+  it("applies repair to orphaned tool_use when policy is enabled", async () => {
+    const orphanedMessages = [
+      { role: "user", content: [{ type: "text", text: "List files" }], timestamp: 1 },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "I'll check." },
+          { type: "toolUse", id: "toolu_strm_test", name: "list_files", input: { path: "." } },
+        ],
+        provider: "anthropic",
+        model: "sonnet-4.6",
+        stopReason: "tool_use",
+        timestamp: 2,
+      },
+    ] as unknown as AgentMessage[];
+    const fixture = createFixture({
+      transcriptPolicy: { repairToolUseResultPairing: true },
+      repairedRejectedThinkingReplay: true,
+      sessionManager: {
+        buildSessionContext: () => ({
+          messages: orphanedMessages as AgentMessage[],
+          thinkingLevel: "medium",
+          model: null,
+        }),
+      },
+    } as unknown as Parameters<typeof createFixture>[0]);
+    const settledStream = {
+      promptError: null,
+      promptErrorSource: null,
+      timedOutDuringCompaction: false,
+      compactionOccurredThisAttempt: false,
+      messagesSnapshot: [],
+      sessionIdUsed: "settled-session",
+      lastAssistant: undefined,
+      currentAttemptAssistant: undefined,
+      attemptUsage: undefined,
+      cacheBreak: null,
+      lastCallUsage: undefined,
+      promptCache: undefined,
+    };
+    mocks.settleStream.mockResolvedValue(settledStream);
+    mocks.completeAfterTurn.mockResolvedValue({
+      sessionIdUsed: "after-session",
+      sessionFileUsed: "after.jsonl",
+    });
+
+    await finalizeEmbeddedAttemptStreamPhase(fixture.input);
+
+    // Repair should wrap the messages, adding a synthetic toolResult
+    const messages = fixture.activeSession.agent.state.messages as AgentMessage[];
+    const toolResults = messages.filter(
+      (m): m is typeof m & { role: "toolResult" } => m.role === "toolResult",
+    );
+    expect(toolResults).toHaveLength(1);
+    expect(toolResults[0]!.toolCallId).toBe("toolu_strm_test");
+    expect(toolResults[0]!.isError).toBe(true);
   });
 });

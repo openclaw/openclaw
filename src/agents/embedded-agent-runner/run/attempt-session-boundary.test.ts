@@ -36,10 +36,12 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
       activeSession,
       attempt: { prompt: "exact probe" },
       getUserTranscriptContexts: () => undefined,
+      isOpenAIResponsesApi: false,
       isRawModelRun: true,
       preparedUserTurnMessage: undefined,
       sessionManager: createSessionManager(),
       setActiveSessionSystemPrompt,
+      transcriptPolicy: { repairToolUseResultPairing: false },
     });
     const converted = await activeSession.agent.convertToLlm([
       {
@@ -114,10 +116,12 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
         trigger: "user",
       },
       getUserTranscriptContexts: () => undefined,
+      isOpenAIResponsesApi: false,
       isRawModelRun: false,
       preparedUserTurnMessage: undefined,
       sessionManager: createSessionManager(),
       setActiveSessionSystemPrompt: vi.fn(),
+      transcriptPolicy: { repairToolUseResultPairing: false },
     });
     boundary.setCurrentUserTimestampOverride({
       timestamp: preparedTimestamp,
@@ -158,6 +162,8 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
       preparedUserTurnMessage: undefined,
       sessionManager: createSessionManager(),
       setActiveSessionSystemPrompt: vi.fn(),
+      isOpenAIResponsesApi: false,
+      transcriptPolicy: { repairToolUseResultPairing: false },
     });
 
     const converted = await activeSession.agent.convertToLlm([runtimeMessage]);
@@ -204,6 +210,8 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
       preparedUserTurnMessage: undefined,
       sessionManager: createSessionManager(),
       setActiveSessionSystemPrompt: vi.fn(),
+      isOpenAIResponsesApi: false,
+      transcriptPolicy: { repairToolUseResultPairing: false },
     });
 
     const converted = await activeSession.agent.convertToLlm([initialRuntime, queuedRuntime]);
@@ -251,6 +259,8 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
       preparedUserTurnMessage: undefined,
       sessionManager: createSessionManager(),
       setActiveSessionSystemPrompt: vi.fn(),
+      isOpenAIResponsesApi: false,
+      transcriptPolicy: { repairToolUseResultPairing: false },
     });
 
     const converted = await activeSession.agent.convertToLlm([firstRuntime, secondRuntime]);
@@ -290,10 +300,12 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
         trigger: "user",
       },
       getUserTranscriptContexts: () => undefined,
+      isOpenAIResponsesApi: false,
       isRawModelRun: false,
       preparedUserTurnMessage: undefined,
       sessionManager,
       setActiveSessionSystemPrompt: vi.fn(),
+      transcriptPolicy: { repairToolUseResultPairing: false },
     });
 
     expect(boundary.orphanRepair?.removeLeaf).toBe(true);
@@ -301,5 +313,67 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
     expect(clearNextUserMessagePersistenceSuppression).toHaveBeenCalledOnce();
     expect(onUserMessagePersistenceInvalidated).toHaveBeenCalledOnce();
     expect(activeSession.agent.state.messages).toBe(repairedMessages);
+  });
+
+  it("applies repair to orphaned tool_use when policy is enabled", () => {
+    // Simulate original messages with an orphaned tool_use (no matching toolResult)
+    const rawMessages: AgentMessage[] = [
+      { role: "user", content: [{ type: "text", text: "List files" }], timestamp: 1 },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "I'll check the directory." },
+          {
+            type: "toolCall" as const,
+            id: "toolu_repair_test",
+            name: "list_files",
+            input: { path: "." },
+          },
+        ],
+        provider: "anthropic" as const,
+        model: "sonnet-4.6" as const,
+        stopReason: "toolUse" as const,
+        timestamp: 2,
+      },
+    ] as unknown as AgentMessage[];
+    const { activeSession } = createActiveSession([]);
+    const onUserMessagePersistenceInvalidated = vi.fn();
+    const sessionManager = createSessionManager({
+      getLeafEntry: () => ({
+        id: "user-leaf",
+        parentId: "parent-entry",
+        type: "message",
+        timestamp: "2026-07-13T00:00:00.000Z",
+        message: { role: "user", content: "old" },
+      }),
+      branch: vi.fn(),
+      clearNextUserMessagePersistenceSuppression: vi.fn(),
+      buildSessionContext: () => ({ messages: rawMessages }),
+    });
+
+    prepareEmbeddedAttemptSessionBoundary({
+      activeSession,
+      attempt: {
+        onUserMessagePersistenceInvalidated,
+        prompt: "new",
+        trigger: "user",
+      },
+      isOpenAIResponsesApi: false,
+      isRawModelRun: false,
+      preparedUserTurnMessage: undefined,
+      sessionManager,
+      setActiveSessionSystemPrompt: vi.fn(),
+      transcriptPolicy: { repairToolUseResultPairing: true },
+      getUserTranscriptContexts: () => undefined,
+    });
+
+    // With repair enabled, the orphaned tool_use should be paired with a synthetic toolResult
+    expect(activeSession.agent.state.messages).not.toBe(rawMessages);
+    const toolResults = (activeSession.agent.state.messages as AgentMessage[]).filter(
+      (m) => (m as { role?: string }).role === "toolResult",
+    );
+    expect(toolResults).toHaveLength(1);
+    expect((toolResults[0] as { toolCallId?: string }).toolCallId).toBe("toolu_repair_test");
+    expect((toolResults[0] as { isError?: boolean }).isError).toBe(true);
   });
 });
