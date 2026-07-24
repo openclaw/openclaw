@@ -7,12 +7,10 @@ import {
   resolveAgentIdFromSessionKey,
   resolveMainSessionKey,
 } from "../config/sessions/main-session.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { normalizeMainKey } from "../routing/session-key.js";
 
-type RequesterStoreKeyConfig = {
-  session?: { mainKey?: string };
-  agents?: { list?: Array<{ id?: string; default?: boolean }> };
-};
+type RequesterStoreKeyConfig = Pick<OpenClawConfig, "session" | "agents">;
 
 /** Resolve the canonical store key for a subagent requester session. */
 export function resolveRequesterStoreKey(

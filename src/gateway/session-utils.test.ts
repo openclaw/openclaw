@@ -2242,6 +2242,31 @@ describe("gateway session utils", () => {
     });
   });
 
+  test("listAgentsForGateway keeps keyed roster scope and identity metadata", async () => {
+    await withStateDirEnv("openclaw-agent-list-keyed-", async ({ stateDir }) => {
+      fs.mkdirSync(path.join(stateDir, "agents", "main"), { recursive: true });
+      const cfg = {
+        agents: {
+          entries: {
+            jarvis: {
+              default: true,
+              identity: { name: "Jarvis", emoji: "🫙" },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = listAgentsForGateway(cfg);
+
+      expect(result.defaultId).toBe("jarvis");
+      expect(result.agents).toHaveLength(1);
+      expect(result.agents[0]).toMatchObject({
+        id: "jarvis",
+        identity: { name: "Jarvis", emoji: "🫙" },
+      });
+    });
+  });
+
   test("listAgentsForGateway preserves canonical roster kinds", async () => {
     await withStateDirEnv("openclaw-agent-list-kinds-", async ({ stateDir }) => {
       fs.mkdirSync(path.join(stateDir, "agents", "openclaw"), { recursive: true });
