@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { escapeRegExp, formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { PluginHookInboundDebounceResult } from "openclaw/plugin-sdk/plugin-entry";
 import { setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { beforeAll, describe, expect, it, vi } from "vitest";
@@ -49,7 +50,9 @@ const deliveryQueueMocks = vi.hoisted(() => ({
 
 const inboundDebounceHookMocks = vi.hoisted(() => ({
   hasHooks: vi.fn(() => false),
-  runInboundDebounce: vi.fn(async () => undefined),
+  runInboundDebounce: vi.fn<() => Promise<PluginHookInboundDebounceResult | undefined>>(
+    async () => undefined,
+  ),
 }));
 
 vi.mock("openclaw/plugin-sdk/delivery-queue-runtime", () => ({
@@ -1063,7 +1066,6 @@ describe("web auto-reply connection", () => {
         ingress: { admission: "dispatch", decision: "allow" },
       },
       event: { id: "rich-1" },
-      debounceKey: "custom:rich-message",
       payload: {
         body: "<media:image>",
         mediaItems: [{ kind: "image" }],

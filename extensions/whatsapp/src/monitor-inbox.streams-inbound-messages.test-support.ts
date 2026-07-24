@@ -1078,7 +1078,7 @@ describe("web monitor inbox", () => {
   });
 
   it("keeps location context out of plugin-requested batches", async () => {
-    const onMessage = vi.fn(async () => undefined);
+    const onMessage = vi.fn(async (_msg: Parameters<InboxOnMessage>[0]) => undefined);
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
       debounceMs: 0,
       resolveDebounceDecision: async () => ({ action: "debounce", debounceMs: 50 }),
@@ -1129,7 +1129,7 @@ describe("web monitor inbox", () => {
   });
 
   it("keeps quote context out of plugin-requested batches", async () => {
-    const onMessage = vi.fn(async () => undefined);
+    const onMessage = vi.fn(async (_msg: Parameters<InboxOnMessage>[0]) => undefined);
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
       debounceMs: 0,
       resolveDebounceDecision: async () => ({ action: "debounce", debounceMs: 50 }),
@@ -1182,7 +1182,7 @@ describe("web monitor inbox", () => {
   });
 
   it("keeps contact context out of plugin-requested batches", async () => {
-    const onMessage = vi.fn(async () => undefined);
+    const onMessage = vi.fn(async (_msg: Parameters<InboxOnMessage>[0]) => undefined);
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
       debounceMs: 0,
       resolveDebounceDecision: async () => ({ action: "debounce", debounceMs: 50 }),

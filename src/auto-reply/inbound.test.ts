@@ -530,7 +530,9 @@ describe("createInboundDebouncer", () => {
         }
         return { action: "bypass" };
       },
-      onFlush: async (items) => calls.push(items.map((entry) => entry.id)),
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
     });
 
     const first = debouncer.enqueue({ key: "a", id: "1" });
@@ -578,7 +580,9 @@ describe("createInboundDebouncer", () => {
       debounceMs: 10,
       buildKey: (item) => item.key,
       resolveDecision: (item) => (item.id === "1" ? never : { action: "bypass" }),
-      onFlush: async (items) => calls.push(items.map((entry) => entry.id)),
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
     });
 
     const first = debouncer.enqueue({ key: "a", id: "1" });
@@ -605,7 +609,9 @@ describe("createInboundDebouncer", () => {
         await pendingDecision;
         return { action: "debounce" };
       },
-      onFlush: async (items) => calls.push(items.map((entry) => entry.id)),
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
       onCancel: (items) => canceled.push(items.map((entry) => entry.id)),
     });
 
@@ -634,7 +640,9 @@ describe("createInboundDebouncer", () => {
         }
         return { action: "debounce" };
       },
-      onFlush: async (items) => calls.push(items.map((entry) => entry.id)),
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
     });
 
     await debouncer.enqueue({ key: "a", id: "1" });
@@ -655,7 +663,9 @@ describe("createInboundDebouncer", () => {
       debounceMs: 10,
       buildKey: (item) => item.key,
       canCombine: (items, item) => !item.quoted || !items.some((entry) => entry.quoted),
-      onFlush: async (items) => calls.push(items.map((entry) => entry.id)),
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
     });
 
     await debouncer.enqueue({ key: "a", id: "1", quoted: true });
@@ -680,7 +690,9 @@ describe("createInboundDebouncer", () => {
       buildKey: (item) => item.key,
       resolveDebounceMs: (item) => item.windowMs,
       resolveMaxBufferAgeMs: (item) => (item.rich ? 100 : undefined),
-      onFlush: async (items) => calls.push(items.map((entry) => entry.id)),
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
     });
 
     await debouncer.enqueue({ key: "a", id: "1", rich: true, windowMs: 1_000 });
@@ -715,7 +727,9 @@ describe("createInboundDebouncer", () => {
         return { action: "debounce" };
       },
       resolveMaxBufferAgeMs: (item) => (item.rich ? 100 : undefined),
-      onFlush: async (items) => calls.push(items.map((entry) => entry.id)),
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
     });
 
     await debouncer.enqueue({ key: "a", id: "1", rich: true });
@@ -738,7 +752,9 @@ describe("createInboundDebouncer", () => {
       buildKey: (item) => item.key,
       resolveDecision: async () => ({ action: "debounce", debounceMs: 10 }),
       resolveMaxBufferAgeMs: () => 100,
-      onFlush: async (items) => calls.push(items.map((entry) => entry.id)),
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
     });
 
     await debouncer.enqueue({ key: "a", id: "1" });
@@ -869,7 +885,9 @@ describe("createInboundDebouncer", () => {
       buildKey: (item) => item.key,
       resolveDebounceMs: (item) => item.windowMs,
       resolveDecision: () => ({ action: "debounce" }),
-      onFlush: async (items) => calls.push(items.map((entry) => entry.id)),
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
     });
 
     await debouncer.enqueue({ key: "forward", id: "1", windowMs: 30 });
