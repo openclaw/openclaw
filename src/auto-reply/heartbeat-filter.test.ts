@@ -135,6 +135,36 @@ describe("isHeartbeatOkResponse", () => {
       ),
     ).toBe(false);
   });
+
+  it("matches HEARTBEAT_OK even when the message contains reasoning/thinking blocks", () => {
+    // This tests the fix for issue #95796 where messages with reasoning blocks
+    // were incorrectly rejected by isHeartbeatOkResponse due to hasNonTextContent check.
+    const messageWithReasoning = {
+      role: "assistant",
+      content: [
+        { type: "reasoning", text: "Let me check the heartbeat status..." },
+        { type: "text", text: "HEARTBEAT_OK" },
+      ],
+    };
+    expect(isHeartbeatOkResponse(messageWithReasoning)).toBe(true);
+
+    // Also test with thinking block (another common non-text block type)
+    const messageWithThinking = {
+      role: "assistant",
+      content: [
+        { type: "thinking", text: "Processing heartbeat request" },
+        { type: "text", text: "**HEARTBEAT_OK**" },
+      ],
+    };
+    expect(isHeartbeatOkResponse(messageWithThinking)).toBe(true);
+
+    // Test with output_text (should still work as before)
+    const messageWithOutputText = {
+      role: "assistant",
+      content: [{ type: "output_text", text: "HEARTBEAT_OK" }],
+    };
+    expect(isHeartbeatOkResponse(messageWithOutputText)).toBe(true);
+  });
 });
 
 describe("filterHeartbeatTranscriptArtifacts", () => {

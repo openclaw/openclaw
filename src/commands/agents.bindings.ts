@@ -289,14 +289,32 @@ export function buildChannelBindings(params: {
   const agentId = normalizeAgentId(params.agentId);
   for (const channel of params.selection) {
     const match: AgentRouteBinding["match"] = { channel };
-    const accountId = resolveBindingAccountId({
-      channel,
-      config: params.config,
-      agentId,
-      explicitAccountId: params.accountIds?.[channel],
-    });
-    if (accountId) {
-      match.accountId = accountId;
+    const explicitAccountId = params.accountIds?.[channel];
+
+    // For feishu channel, treat explicit account IDs as peer IDs (group chats)
+    // unless they are prefixed with "account:"
+    if (channel === "feishu" && explicitAccountId) {
+      if (explicitAccountId.startsWith("account:")) {
+        // Explicit accountId syntax: feishu:account:xxx
+        const accountId = explicitAccountId.slice("account:".length);
+        if (accountId.trim()) {
+          match.accountId = accountId.trim();
+        }
+      } else {
+        // Default: treat as peer ID for group chats
+        match.peer = { kind: "group" as const, id: explicitAccountId };
+      }
+    } else {
+      // For other channels, use the existing logic
+      const accountId = resolveBindingAccountId({
+        channel,
+        config: params.config,
+        agentId,
+        explicitAccountId,
+      });
+      if (accountId) {
+        match.accountId = accountId;
+      }
     }
     bindings.push({ type: "route", agentId, match });
   }
@@ -317,15 +335,23 @@ export function parseBindingSpecs(params: {
     if (!trimmed) {
       continue;
     }
-    // Bind specs are exactly <channel> or <channel>:<account>; extra colon
-    // segments would silently change the requested account if truncated.
-    const [channelRaw, accountRaw, ...extraSegments] = trimmed.split(":");
+    // Bind specs support two formats:
+    // - <channel>:<peerId> for peer-based routing (e.g., feishu:oc_test for group chats)
+    // - <channel>:account:<accountId> for explicit accountId routing (e.g., feishu:account:work)
+    // Extra colon segments beyond these patterns are rejected.
+    const parts = trimmed.split(":");
+    const channelRaw = parts[0];
+    const accountOrPeerRaw = parts[1];
+    const accountPrefixRaw = parts[2];
+    const extraSegments = parts.slice(3);
+
     if (extraSegments.length > 0) {
       errors.push(
-        `Invalid binding "${trimmed}". Account id cannot contain ":". Use <channel>:<account>, for example telegram:default.`,
+        `Invalid binding "${trimmed}". Too many colon-separated segments. Use <channel>:<id> or <channel>:account:<id>.`,
       );
       continue;
     }
+
     const channel = normalizeBindingChannelId(channelRaw, params.config);
     if (!channel) {
       errors.push(
@@ -335,23 +361,39 @@ export function parseBindingSpecs(params: {
       );
       continue;
     }
-    let accountId: string | undefined = accountRaw?.trim();
-    if (accountRaw !== undefined && !accountId) {
-      errors.push(
-        `Invalid binding "${trimmed}". Account id is empty. Use <channel>:<account>, for example telegram:default.`,
-      );
-      continue;
-    }
-    accountId = resolveBindingAccountId({
-      channel,
-      config: params.config,
-      agentId,
-      explicitAccountId: accountId,
-    });
+
     const match: AgentRouteBinding["match"] = { channel };
-    if (accountId) {
-      match.accountId = accountId;
+
+    if (accountOrPeerRaw !== undefined) {
+      // Check for explicit accountId syntax: <channel>:account:<id>
+      if (accountOrPeerRaw.toLowerCase() === "account" && accountPrefixRaw !== undefined) {
+        const accountId = accountPrefixRaw.trim();
+        if (!accountId) {
+          errors.push(
+            `Invalid binding "${trimmed}". Account id is empty. Use <channel>:account:<id>.`,
+          );
+          continue;
+        }
+        match.accountId = accountId;
+      } else if (accountOrPeerRaw.trim()) {
+        // For feishu channel, treat as peer ID (group chat) by default
+        if (channel === "feishu") {
+          match.peer = { kind: "group" as const, id: accountOrPeerRaw.trim() };
+        } else {
+          // For other channels, use the existing accountId logic
+          const accountId = resolveBindingAccountId({
+            channel,
+            config: params.config,
+            agentId,
+            explicitAccountId: accountOrPeerRaw.trim(),
+          });
+          if (accountId) {
+            match.accountId = accountId;
+          }
+        }
+      }
     }
+
     bindings.push({ type: "route", agentId, match });
   }
   return { bindings, errors };
