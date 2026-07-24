@@ -365,7 +365,7 @@ Load the file directly and restart the Gateway:
 ```json5
 {
   agents: {
-    list: [
+    entries: [
       {
         id: "maintenance-agent",
         workspace: "~/.openclaw/workspace-maintenance",

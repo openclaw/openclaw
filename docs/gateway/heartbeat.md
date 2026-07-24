@@ -137,7 +137,7 @@ Example: two agents, only the second agent runs heartbeats.
         target: "last", // explicit delivery to last contact (default is "none")
       },
     },
-    list: [
+    entries: [
       { id: "main", default: true },
       {
         id: "ops",
@@ -196,7 +196,7 @@ Use `accountId` to target a specific account on multi-account channels like Tele
 ```json5
 {
   agents: {
-    list: [
+    entries: [
       {
         id: "ops",
         heartbeat: {
