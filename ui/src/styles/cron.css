@@ -351,6 +351,17 @@
   font-size: var(--control-ui-text-xs);
 }
 
+.cron-table__running-note {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.cron-table__running-note--active {
+  color: var(--ok);
+  font-weight: 600;
+}
+
 .cron-table__cell {
   color: var(--text);
   font-size: 12.5px;

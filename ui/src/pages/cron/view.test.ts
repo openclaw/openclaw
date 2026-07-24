@@ -244,7 +244,9 @@ describe("cron view list pane", () => {
 
   it("renders table rows with schedule and status cells and selects on click", () => {
     const onSelectJob = vi.fn();
-    const job = createJob("job-1", { state: { nextRunAtMs: Date.now() + 60_000 } });
+    const job = createJob("job-1", {
+      state: { nextRunAtMs: Date.now() + 60_000, runningAtMs: 1_700_000_000_000 },
+    });
     const paused = createJob("job-2", { name: "Paused task", enabled: false });
     const failed = createJob("job-3", {
       name: "Failing task",
@@ -257,7 +259,11 @@ describe("cron view list pane", () => {
 
     const rows = Array.from(container.querySelectorAll(".cron-table__row"));
     expect(rows).toHaveLength(3);
+    expect(rows[0]?.textContent).toContain("ID: job-1");
+    expect(rows[0]?.textContent).toContain("Running");
     expect(rows[0]?.textContent).toContain("Cron 0 9 * * *");
+    expect(rows[1]?.textContent).toContain("ID: job-2");
+    expect(rows[1]?.textContent).toContain("Not running");
     expect(rows[1]?.classList.contains("cron-table__row--paused")).toBe(true);
     expect(rows[1]?.textContent).toContain("Paused");
     expect(rows[2]?.querySelector(".cron-table__dot--error")).not.toBeNull();

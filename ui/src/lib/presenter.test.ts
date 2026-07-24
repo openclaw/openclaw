@@ -1,7 +1,7 @@
 // Control UI tests cover cron schedule presentation.
 import { describe, expect, it } from "vitest";
 import type { CronJob } from "../api/types.ts";
-import { formatCronSchedule } from "./presenter.ts";
+import { formatCronRunningState, formatCronSchedule, isCronJobRunning } from "./presenter.ts";
 
 function job(schedule: CronJob["schedule"]): CronJob {
   return {
@@ -36,5 +36,22 @@ describe("formatCronSchedule", () => {
     expect(formatCronSchedule(job({ kind: "on-exit", command: "./watch.sh", cwd: "/repo" }))).toBe(
       "On exit: ./watch.sh (cwd: /repo)",
     );
+  });
+});
+
+describe("cron running state", () => {
+  it("detects and formats running jobs", () => {
+    const runningJob = job({ kind: "cron", expr: "0 * * * *" });
+    runningJob.state = { runningAtMs: 1_700_000_000_000 };
+
+    expect(isCronJobRunning(runningJob)).toBe(true);
+    expect(formatCronRunningState(runningJob)).toBe("Running");
+  });
+
+  it("detects and formats idle jobs", () => {
+    const idleJob = job({ kind: "cron", expr: "0 * * * *" });
+
+    expect(isCronJobRunning(idleJob)).toBe(false);
+    expect(formatCronRunningState(idleJob)).toBe("Not running");
   });
 });

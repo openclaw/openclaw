@@ -917,6 +917,7 @@ export const en: TranslationMap = {
       agentJobsSubtitle: "Scheduled jobs targeting this agent.",
       noJobs: "No jobs assigned.",
       runNow: "Run Now",
+      jobId: "ID",
     },
     files: {
       emptyDraft: "Empty draft",
@@ -4596,6 +4597,7 @@ export const en: TranslationMap = {
       unknown: "This automation could not be started.",
     },
     jobs: {
+      id: "ID",
       schedule: "Schedule",
       lastRun: "Last run",
       all: "All",
@@ -4766,6 +4768,8 @@ export const en: TranslationMap = {
     },
     jobState: {
       next: "Next",
+      running: "Running",
+      notRunning: "Not running",
     },
     runEntry: {
       noSummary: "No summary.",
