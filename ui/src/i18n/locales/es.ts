@@ -599,6 +599,9 @@ export const es: TranslationMap = {
     worktreeName: "Nombre del worktree",
     worktreeNamePlaceholder: "auto",
     worktreeNameInvalid: "Los nombres de worktree usan letras minúsculas, dígitos y guiones.",
+    incognito: "Incógnito",
+    incognitoDescription: "Mantén este hilo solo hasta que el Gateway se reinicie",
+    startAsDraft: "Iniciar como borrador",
     messagePlaceholder: "¿En qué debería trabajar esta sesión?",
     readingAttachment: "Leyendo archivo adjunto",
     start: "Iniciar sesión",
@@ -620,7 +623,8 @@ export const es: TranslationMap = {
     limit: "Límite",
     filters: "Filtros",
     createdBy: "Creado por {name}",
-    filterByCreator: "Filtrar por creador",
+    archivedBy: "Archivado por {name}",
+    people: "Personas",
     allCreators: "Todas las personas",
     filterControls: "Filtros de sesión",
     sourceFilters: "Filtros de origen de sesión",
@@ -680,6 +684,8 @@ export const es: TranslationMap = {
     openWorkboardCard: "Abrir tarjeta de Workboard",
     dashboardAvailable: "Panel disponible",
     approvalNeeded: "Se requiere aprobación",
+    queuedMessage: "{count} mensaje en cola para enviar",
+    queuedMessages: "{count} mensajes en cola para enviar",
     noSessions: "No se encontraron sesiones.",
     noActiveSessions: "No hay hilos activos.",
     noArchivedSessions: "No hay sesiones archivadas.",
@@ -747,6 +753,7 @@ export const es: TranslationMap = {
     unread: "Unread",
     worktreeSession: "Worktree session",
     automationAttached: "Automation attached",
+    incognito: "Hilo de incógnito",
     cloudWorkerPlacement: "Trabajador en la nube: {state}",
     cloudWorkerPlacementConflict: "Worker en la nube: {state} · 1 conflicto de espacio de trabajo",
     cloudWorkerPlacementConflicts:
@@ -1412,6 +1419,11 @@ export const es: TranslationMap = {
     chatPrefs: {
       title: "Chat",
       hint: "Preferencias de chat locales del navegador.",
+      messageWidth: "Ancho del mensaje",
+      messageWidthHint:
+        "Ancho CSS opcional para la transcripción centrada, como 960px, 82% o min(1280px, 82%).",
+      messageWidthInvalid:
+        "Introduce un ancho CSS como 960px, 82%, min(1280px, 82%) o calc(100% - 2rem).",
     },
     sidebarPrefs: {
       title: "Barra lateral",
@@ -1702,6 +1714,7 @@ export const es: TranslationMap = {
     blockedAgentFilter: "bloqueado por filtro de agente",
   },
   nav: {
+    account: "Cuenta",
     back: "Atrás",
     forward: "Adelante",
     chat: "Chat",
@@ -2441,6 +2454,8 @@ export const es: TranslationMap = {
     toolRuns: "{count} ejecuciones",
     identity: {
       title: "Identidad",
+      menuLabel: "Menú de identidad",
+      menuButtonLabel: "Menú de identidad y aplicación para {name}",
       description: "Tu perfil en este gateway.",
       loading: "Cargando tu identidad…",
       profileUnavailable: "No se pudo cargar tu perfil de identidad.",
@@ -3064,6 +3079,7 @@ export const es: TranslationMap = {
     eventStale: "Sesión obsoleta",
   },
   connection: {
+    queuedCount: "{count} en cola",
     reconnecting: "Reconectando…",
     retryNow: "Reintentar ahora",
     access: {
@@ -3740,6 +3756,17 @@ export const es: TranslationMap = {
   },
   login: {
     subtitle: "Panel de Gateway",
+    deviceAuthMigration: {
+      banner:
+        "Este navegador aún necesita aprobación de dispositivo única después de la actualización.",
+      action: "Proteger este navegador",
+      secureContextRequired:
+        "Este navegador heredado sigue disponible temporalmente. Vuelve a abrirlo por HTTPS o localhost para protegerlo con identidad de dispositivo.",
+      pendingUnavailable:
+        "La solicitud de emparejamiento del navegador aún no está disponible. Vuelve a intentarlo en un momento.",
+      loadFailed: "No se pudo cargar la solicitud de emparejamiento de este navegador: {error}",
+      approvalFailed: "No se pudo proteger este navegador: {error}",
+    },
     passwordPlaceholder: "opcional",
     showToken: "Mostrar token",
     hideToken: "Ocultar token",
@@ -3842,6 +3869,9 @@ export const es: TranslationMap = {
   },
   chat: {
     disconnected: "Desconectado de la puerta de enlace.",
+    sendErrors: {
+      activeLeafChanged: "El hilo cambió de rama — revisa y vuelve a enviar.",
+    },
     waitingForApproval: "Esperando aprobación…",
     startupStatus: {
       preparingWorkspace: "Preparando espacio de trabajo…",
@@ -3851,6 +3881,36 @@ export const es: TranslationMap = {
     },
     outputTokens: "{count} tokens de salida",
     archivedSessionDisabled: "Restaura esta sesión para enviar mensajes.",
+    sessionSharing: {
+      menu: "Compartir hilo",
+      current: "Visibilidad del hilo: {visibility}",
+      visibility: "Visibilidad",
+      shared: "Compartido",
+      readOnly: "Solo lectura",
+      suggest: "Sugerir",
+      draft: "Borrador",
+      publishDraft: "Publicar borrador",
+      members: "Miembros",
+      selected: "Miembro",
+      noPeople: "No se encontraron personas emparejadas.",
+      readOnlyNotice: "Solo el propietario del hilo y los miembros pueden actuar en este hilo.",
+    },
+    sessionSuggestions: {
+      suggest: "Sugerir",
+      suggestMessage: "Sugerir mensaje",
+      attachmentsUnsupported: "Elimina los adjuntos antes de enviar una sugerencia de texto.",
+      sendNow: "Enviar ahora la sugerencia de {author}",
+      queue: "Poner en cola la sugerencia de {author}",
+      edit: "Editar la sugerencia de {author}",
+      dismiss: "Descartar la sugerencia de {author}",
+      typing: "{name} está escribiendo…",
+      typingMany: "{names} están escribiendo…",
+      state: {
+        pending: "Pendiente",
+        accepted: "Aceptado",
+        dismissed: "Descartado",
+      },
+    },
     loadOlder: "Cargar anteriores",
     sessionHeader: {
       renameTooltip: "Cambiar nombre de la sesión",
@@ -3864,6 +3924,7 @@ export const es: TranslationMap = {
       copyPath: "Copiar ruta",
       copyBranch: "Copiar nombre de la rama",
       copied: "Copiado",
+      incognito: "Hilo de incógnito",
       branches: "Ramas del hilo",
       branchSwitchUnavailable:
         "El cambio de rama no está disponible mientras el agente está trabajando.",
@@ -4155,6 +4216,7 @@ export const es: TranslationMap = {
       openInCanvas: "Abrir en lienzo",
       reply: "Responder",
       replyToMessage: "Responder al mensaje",
+      replyingTo: "Respondiendo a {name}",
       rewind: "Rebobinar",
       rewindConfirm: "¿Rebobinar hasta antes de este mensaje?",
       rewindToHere: "Rebobinar hasta aquí",
@@ -4253,6 +4315,8 @@ export const es: TranslationMap = {
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       offlineHint:
         "Sin conexión: los mensajes se pondrán en cola y se enviarán cuando vuelva la conexión.",
+      offlineQueuedHint:
+        "Sin conexión — {count} en cola; los mensajes se enviarán cuando se restablezca la conexión.",
       preparingModel: "Preparando modelo...",
       responding: "{name} está respondiendo...",
       sendingMessage: "Enviando mensaje...",

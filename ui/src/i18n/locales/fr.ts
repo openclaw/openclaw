@@ -606,6 +606,9 @@ export const fr: TranslationMap = {
     worktreeNamePlaceholder: "auto",
     worktreeNameInvalid:
       "Les noms de worktree utilisent des lettres minuscules, des chiffres et des tirets.",
+    incognito: "Navigation privée",
+    incognitoDescription: "Conserver ce fil uniquement jusqu'au redémarrage du Gateway",
+    startAsDraft: "Démarrer comme brouillon",
     messagePlaceholder: "Sur quoi cette session doit-elle travailler ?",
     readingAttachment: "Lecture de la pièce jointe",
     start: "Démarrer la session",
@@ -627,7 +630,8 @@ export const fr: TranslationMap = {
     limit: "Limite",
     filters: "Filtres",
     createdBy: "Créé par {name}",
-    filterByCreator: "Filtrer par créateur",
+    archivedBy: "Archivé par {name}",
+    people: "Personnes",
     allCreators: "Toutes les personnes",
     filterControls: "Filtres de session",
     sourceFilters: "Filtres de source de session",
@@ -687,6 +691,8 @@ export const fr: TranslationMap = {
     openWorkboardCard: "Ouvrir la carte Workboard",
     dashboardAvailable: "Tableau de bord disponible",
     approvalNeeded: "Approbation requise",
+    queuedMessage: "{count} message en file d'attente",
+    queuedMessages: "{count} messages en file d'attente",
     noSessions: "Aucune session trouvée.",
     noActiveSessions: "Aucun fil actif.",
     noArchivedSessions: "Aucune session archivée.",
@@ -755,6 +761,7 @@ export const fr: TranslationMap = {
     unread: "Unread",
     worktreeSession: "Worktree session",
     automationAttached: "Automation attached",
+    incognito: "Fil privé",
     cloudWorkerPlacement: "Worker cloud : {state}",
     cloudWorkerPlacementConflict: "Cloud worker : {state} · 1 conflit d'espace de travail",
     cloudWorkerPlacementConflicts: "Cloud worker : {state} · {count} conflits d'espace de travail",
@@ -1418,6 +1425,11 @@ export const fr: TranslationMap = {
     chatPrefs: {
       title: "Chat",
       hint: "Préférences de chat locales au navigateur.",
+      messageWidth: "Largeur des messages",
+      messageWidthHint:
+        "Largeur CSS facultative pour la transcription centrée, comme 960px, 82% ou min(1280px, 82%).",
+      messageWidthInvalid:
+        "Saisissez une largeur CSS telle que 960px, 82%, min(1280px, 82%) ou calc(100% - 2rem).",
     },
     sidebarPrefs: {
       title: "Barre latérale",
@@ -1710,6 +1722,7 @@ export const fr: TranslationMap = {
     blockedAgentFilter: "bloqué par le filtre d'agent",
   },
   nav: {
+    account: "Compte",
     back: "Retour",
     forward: "Suivant",
     chat: "Chat",
@@ -2462,6 +2475,8 @@ export const fr: TranslationMap = {
     toolRuns: "{count} exécutions",
     identity: {
       title: "Identité",
+      menuLabel: "Menu d'identité",
+      menuButtonLabel: "Menu d'identité et d'application pour {name}",
       description: "Votre profil sur ce gateway.",
       loading: "Chargement de votre identité…",
       profileUnavailable: "Impossible de charger votre profil d'identité.",
@@ -3092,6 +3107,7 @@ export const fr: TranslationMap = {
     eventStale: "Session inactive",
   },
   connection: {
+    queuedCount: "{count} en file d'attente",
     reconnecting: "Reconnexion…",
     retryNow: "Réessayer maintenant",
     access: {
@@ -3771,6 +3787,17 @@ export const fr: TranslationMap = {
   },
   login: {
     subtitle: "Tableau de bord Gateway",
+    deviceAuthMigration: {
+      banner:
+        "Ce navigateur nécessite encore une approbation unique de l'appareil après la mise à jour.",
+      action: "Sécuriser ce navigateur",
+      secureContextRequired:
+        "Ce navigateur hérité reste disponible temporairement. Rouvrez-le via HTTPS ou localhost pour le sécuriser avec l'identité de l'appareil.",
+      pendingUnavailable:
+        "La demande d'appairage du navigateur n'est pas encore disponible. Réessayez dans un instant.",
+      loadFailed: "Impossible de charger la demande d'appairage de ce navigateur : {error}",
+      approvalFailed: "Impossible de sécuriser ce navigateur : {error}",
+    },
     passwordPlaceholder: "facultatif",
     showToken: "Afficher le jeton",
     hideToken: "Masquer le jeton",
@@ -3877,6 +3904,9 @@ export const fr: TranslationMap = {
   },
   chat: {
     disconnected: "Déconnecté du Gateway.",
+    sendErrors: {
+      activeLeafChanged: "Le fil a changé de branche — vérifiez et renvoyez.",
+    },
     waitingForApproval: "En attente d'approbation…",
     startupStatus: {
       preparingWorkspace: "Préparation de l'espace de travail…",
@@ -3886,6 +3916,37 @@ export const fr: TranslationMap = {
     },
     outputTokens: "{count} jetons de sortie",
     archivedSessionDisabled: "Restaurez cette session pour envoyer des messages.",
+    sessionSharing: {
+      menu: "Partage de fil",
+      current: "Visibilité du fil : {visibility}",
+      visibility: "Visibilité",
+      shared: "Partagé",
+      readOnly: "Lecture seule",
+      suggest: "Suggérer",
+      draft: "Brouillon",
+      publishDraft: "Publier le brouillon",
+      members: "Membres",
+      selected: "Membre",
+      noPeople: "Aucune personne associée trouvée.",
+      readOnlyNotice: "Seuls le propriétaire du fil et les membres peuvent agir dans ce fil.",
+    },
+    sessionSuggestions: {
+      suggest: "Suggérer",
+      suggestMessage: "Suggérer un message",
+      attachmentsUnsupported:
+        "Supprimez les pièces jointes avant de soumettre une suggestion de texte.",
+      sendNow: "Envoyer la suggestion de {author} maintenant",
+      queue: "Mettre en file la suggestion de {author}",
+      edit: "Modifier la suggestion de {author}",
+      dismiss: "Ignorer la suggestion de {author}",
+      typing: "{name} est en train d'écrire…",
+      typingMany: "{names} sont en train d'écrire…",
+      state: {
+        pending: "En attente",
+        accepted: "Accepté",
+        dismissed: "Ignoré",
+      },
+    },
     loadOlder: "Charger les plus anciens",
     sessionHeader: {
       renameTooltip: "Renommer la session",
@@ -3899,6 +3960,7 @@ export const fr: TranslationMap = {
       copyPath: "Copier le chemin",
       copyBranch: "Copier le nom de la branche",
       copied: "Copié",
+      incognito: "Fil de discussion incognito",
       branches: "Branches de fil",
       branchSwitchUnavailable:
         "Le changement de branche est indisponible pendant que l'agent travaille.",
@@ -4192,6 +4254,7 @@ export const fr: TranslationMap = {
       openInCanvas: "Ouvrir dans le canevas",
       reply: "Répondre",
       replyToMessage: "Répondre au message",
+      replyingTo: "Réponse à {name}",
       rewind: "Revenir en arrière",
       rewindConfirm: "Revenir avant ce message ?",
       rewindToHere: "Revenir ici",
@@ -4290,6 +4353,8 @@ export const fr: TranslationMap = {
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       offlineHint:
         "Hors ligne — les messages seront mis en file d'attente et envoyés au retour de la connexion.",
+      offlineQueuedHint:
+        "Hors ligne — {count} en attente ; les messages seront envoyés au retour de la connexion.",
       preparingModel: "Préparation du modèle...",
       responding: "{name} répond...",
       sendingMessage: "Envoi du message...",

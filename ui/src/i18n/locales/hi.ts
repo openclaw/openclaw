@@ -588,6 +588,9 @@ export const hi: TranslationMap = {
     worktreeName: "Worktree name",
     worktreeNamePlaceholder: "ऑटो",
     worktreeNameInvalid: "Worktree names में lowercase letters, digits, और dashes का उपयोग होता है।",
+    incognito: "गुप्त",
+    incognitoDescription: "इस थ्रेड को केवल तब तक रखें जब तक Gateway पुनः आरंभ न हो",
+    startAsDraft: "ड्राफ़्ट के रूप में शुरू करें",
     messagePlaceholder: "यह session किस पर काम करे?",
     readingAttachment: "अटैचमेंट पढ़ रहे हैं",
     start: "Session शुरू करें",
@@ -609,7 +612,8 @@ export const hi: TranslationMap = {
     limit: "सीमा",
     filters: "फ़िल्टर",
     createdBy: "{name} द्वारा बनाया गया",
-    filterByCreator: "निर्माता के अनुसार फ़िल्टर करें",
+    archivedBy: "{name} द्वारा संग्रहित",
+    people: "लोग",
     allCreators: "सभी लोग",
     filterControls: "सत्र फ़िल्टर",
     sourceFilters: "सेशन स्रोत फ़िल्टर",
@@ -668,6 +672,8 @@ export const hi: TranslationMap = {
     openWorkboardCard: "Workboard कार्ड खोलें",
     dashboardAvailable: "डैशबोर्ड उपलब्ध है",
     approvalNeeded: "अनुमोदन आवश्यक",
+    queuedMessage: "{count} संदेश भेजने के लिए कतारबद्ध",
+    queuedMessages: "{count} संदेश भेजने के लिए कतारबद्ध",
     noSessions: "कोई सत्र नहीं मिला।",
     noActiveSessions: "कोई सक्रिय थ्रेड नहीं।",
     noArchivedSessions: "कोई संग्रहित सत्र नहीं।",
@@ -735,6 +741,7 @@ export const hi: TranslationMap = {
     unread: "Unread",
     worktreeSession: "Worktree session",
     automationAttached: "Automation attached",
+    incognito: "गुप्त थ्रेड",
     cloudWorkerPlacement: "Cloud वर्कर: {state}",
     cloudWorkerPlacementConflict: "क्लाउड वर्कर: {state} · 1 वर्कस्पेस विरोध",
     cloudWorkerPlacementConflicts: "क्लाउड वर्कर: {state} · {count} वर्कस्पेस विरोध",
@@ -1388,6 +1395,11 @@ export const hi: TranslationMap = {
     chatPrefs: {
       title: "चैट",
       hint: "ब्राउज़र-स्थानीय चैट प्राथमिकताएँ।",
+      messageWidth: "संदेश की चौड़ाई",
+      messageWidthHint:
+        "केंद्रित ट्रांसक्रिप्ट के लिए वैकल्पिक CSS चौड़ाई, जैसे 960px, 82%, या min(1280px, 82%)।",
+      messageWidthInvalid:
+        "960px, 82%, min(1280px, 82%), या calc(100% - 2rem) जैसी CSS चौड़ाई दर्ज करें।",
     },
     sidebarPrefs: {
       title: "साइडबार",
@@ -1671,6 +1683,7 @@ export const hi: TranslationMap = {
     blockedAgentFilter: "agent फ़िल्टर द्वारा अवरुद्ध",
   },
   nav: {
+    account: "खाता",
     back: "वापस",
     forward: "आगे",
     chat: "चैट",
@@ -2377,6 +2390,8 @@ export const hi: TranslationMap = {
     toolRuns: "{count} रन",
     identity: {
       title: "पहचान",
+      menuLabel: "पहचान मेनू",
+      menuButtonLabel: "{name} के लिए पहचान और ऐप मेनू",
       description: "इस gateway पर आपकी प्रोफ़ाइल।",
       loading: "आपकी पहचान लोड हो रही है…",
       profileUnavailable: "आपकी पहचान प्रोफ़ाइल लोड नहीं की जा सकी।",
@@ -2994,6 +3009,7 @@ export const hi: TranslationMap = {
     eventStale: "पुराना सत्र",
   },
   connection: {
+    queuedCount: "{count} कतारबद्ध",
     reconnecting: "फिर से कनेक्ट हो रहा है…",
     retryNow: "अभी फिर से प्रयास करें",
     access: {
@@ -3658,6 +3674,15 @@ export const hi: TranslationMap = {
   },
   login: {
     subtitle: "Gateway Dashboard",
+    deviceAuthMigration: {
+      banner: "अपडेट के बाद इस ब्राउज़र को एक बार डिवाइस अनुमोदन की आवश्यकता है।",
+      action: "इस ब्राउज़र को सुरक्षित करें",
+      secureContextRequired:
+        "यह पुराना ब्राउज़र अस्थायी रूप से उपलब्ध है। इसे डिवाइस पहचान से सुरक्षित करने के लिए HTTPS या localhost पर पुनः खोलें।",
+      pendingUnavailable: "ब्राउज़र पेयरिंग अनुरोध अभी उपलब्ध नहीं है। एक क्षण में पुनः प्रयास करें।",
+      loadFailed: "इस ब्राउज़र का पेयरिंग अनुरोध लोड नहीं किया जा सका: {error}",
+      approvalFailed: "इस ब्राउज़र को सुरक्षित नहीं किया जा सका: {error}",
+    },
     passwordPlaceholder: "वैकल्पिक",
     showToken: "टोकन दिखाएँ",
     hideToken: "टोकन छिपाएँ",
@@ -3751,6 +3776,9 @@ export const hi: TranslationMap = {
   },
   chat: {
     disconnected: "Gateway से डिस्कनेक्ट हो गया।",
+    sendErrors: {
+      activeLeafChanged: "थ्रेड ने ब्रांच बदल दी — समीक्षा करें और फिर से भेजें।",
+    },
     waitingForApproval: "अनुमोदन की प्रतीक्षा हो रही है…",
     startupStatus: {
       preparingWorkspace: "कार्यक्षेत्र तैयार किया जा रहा है…",
@@ -3760,6 +3788,36 @@ export const hi: TranslationMap = {
     },
     outputTokens: "{count} आउटपुट टोकन",
     archivedSessionDisabled: "संदेश भेजने के लिए इस सत्र को बहाल करें।",
+    sessionSharing: {
+      menu: "थ्रेड साझाकरण",
+      current: "थ्रेड दृश्यता: {visibility}",
+      visibility: "दृश्यता",
+      shared: "साझा किया गया",
+      readOnly: "केवल-पढ़ने के लिए",
+      suggest: "सुझाव दें",
+      draft: "ड्राफ़्ट",
+      publishDraft: "ड्राफ़्ट प्रकाशित करें",
+      members: "सदस्य",
+      selected: "सदस्य",
+      noPeople: "कोई युग्मित व्यक्ति नहीं मिला।",
+      readOnlyNotice: "केवल थ्रेड स्वामी और सदस्य ही इस थ्रेड में कार्य कर सकते हैं।",
+    },
+    sessionSuggestions: {
+      suggest: "सुझाव दें",
+      suggestMessage: "संदेश सुझाएँ",
+      attachmentsUnsupported: "टेक्स्ट सुझाव सबमिट करने से पहले अटैचमेंट हटाएँ।",
+      sendNow: "{author} का सुझाव अभी भेजें",
+      queue: "{author} का सुझाव कतार में लगाएँ",
+      edit: "{author} का सुझाव संपादित करें",
+      dismiss: "{author} का सुझाव खारिज करें",
+      typing: "{name} टाइप कर रहा है…",
+      typingMany: "{names} टाइप कर रहे हैं…",
+      state: {
+        pending: "लंबित",
+        accepted: "स्वीकृत",
+        dismissed: "खारिज",
+      },
+    },
     loadOlder: "पुराने लोड करें",
     sessionHeader: {
       renameTooltip: "सत्र का नाम बदलें",
@@ -3773,6 +3831,7 @@ export const hi: TranslationMap = {
       copyPath: "पथ कॉपी करें",
       copyBranch: "ब्रांच नाम कॉपी करें",
       copied: "कॉपी किया गया",
+      incognito: "गुप्त थ्रेड",
       branches: "थ्रेड शाखाएँ",
       branchSwitchUnavailable: "एजेंट के काम करने के दौरान शाखा स्विच उपलब्ध नहीं है।",
       branchSwitchRequiresAdmin: "शाखा स्विच करने के लिए ऑपरेटर एडमिन एक्सेस आवश्यक है।",
@@ -4061,6 +4120,7 @@ export const hi: TranslationMap = {
       openInCanvas: "कैनवास में खोलें",
       reply: "उत्तर दें",
       replyToMessage: "संदेश का उत्तर दें",
+      replyingTo: "{name} को उत्तर दे रहे हैं",
       rewind: "रीवाइंड करें",
       rewindConfirm: "इस संदेश से पहले तक रीवाइंड करें?",
       rewindToHere: "यहाँ तक रीवाइंड करें",
@@ -4158,6 +4218,7 @@ export const hi: TranslationMap = {
       placeholderWithAttachments: "संदेश जोड़ें या और छवियाँ पेस्ट करें...",
       placeholderDisconnected: "चैट शुरू करने के लिए gateway से कनेक्ट करें...",
       offlineHint: "ऑफ़लाइन — कनेक्शन वापस आने पर संदेश कतार में रखे जाएँगे और भेजे जाएँगे।",
+      offlineQueuedHint: "ऑफ़लाइन — {count} कतार में; कनेक्शन वापस आने पर संदेश भेजे जाएंगे।",
       preparingModel: "मॉडल तैयार हो रहा है...",
       responding: "{name} जवाब दे रहा है...",
       sendingMessage: "संदेश भेजा जा रहा है...",

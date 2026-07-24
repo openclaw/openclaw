@@ -590,6 +590,9 @@ export const ko: TranslationMap = {
     worktreeName: "Worktree 이름",
     worktreeNamePlaceholder: "자동",
     worktreeNameInvalid: "Worktree 이름은 소문자, 숫자, 대시를 사용합니다.",
+    incognito: "시크릿",
+    incognitoDescription: "이 스레드를 Gateway가 재시작될 때까지만 유지합니다",
+    startAsDraft: "초안으로 시작",
     messagePlaceholder: "이 세션에서 어떤 작업을 해야 하나요?",
     readingAttachment: "첨부 파일 읽는 중",
     start: "세션 시작",
@@ -611,7 +614,8 @@ export const ko: TranslationMap = {
     limit: "제한",
     filters: "필터",
     createdBy: "{name} 생성",
-    filterByCreator: "생성자별 필터",
+    archivedBy: "{name}님이 보관함",
+    people: "사람",
     allCreators: "모든 사용자",
     filterControls: "세션 필터",
     sourceFilters: "세션 소스 필터",
@@ -670,6 +674,8 @@ export const ko: TranslationMap = {
     openWorkboardCard: "Workboard 카드 열기",
     dashboardAvailable: "대시보드 사용 가능",
     approvalNeeded: "승인 필요",
+    queuedMessage: "전송 대기 중인 메시지 {count}개",
+    queuedMessages: "전송 대기 중인 메시지 {count}개",
     noSessions: "세션을 찾을 수 없습니다.",
     noActiveSessions: "활성 스레드가 없습니다.",
     noArchivedSessions: "보관된 세션이 없습니다.",
@@ -737,6 +743,7 @@ export const ko: TranslationMap = {
     unread: "Unread",
     worktreeSession: "Worktree session",
     automationAttached: "Automation attached",
+    incognito: "시크릿 스레드",
     cloudWorkerPlacement: "Cloud 작업자: {state}",
     cloudWorkerPlacementConflict: "클라우드 워커: {state} · 작업 공간 충돌 1개",
     cloudWorkerPlacementConflicts: "클라우드 워커: {state} · 작업 공간 충돌 {count}개",
@@ -1392,6 +1399,11 @@ export const ko: TranslationMap = {
     chatPrefs: {
       title: "채팅",
       hint: "브라우저 로컬 채팅 환경설정입니다.",
+      messageWidth: "메시지 너비",
+      messageWidthHint:
+        "가운데 정렬된 대화 기록의 선택적 CSS 너비입니다. 예: 960px, 82%, min(1280px, 82%).",
+      messageWidthInvalid:
+        "960px, 82%, min(1280px, 82%) 또는 calc(100% - 2rem)와 같은 CSS 너비를 입력하세요.",
     },
     sidebarPrefs: {
       title: "사이드바",
@@ -1678,6 +1690,7 @@ export const ko: TranslationMap = {
     blockedAgentFilter: "에이전트 필터에 의해 차단됨",
   },
   nav: {
+    account: "계정",
     back: "뒤로",
     forward: "앞으로",
     chat: "채팅",
@@ -2394,6 +2407,8 @@ export const ko: TranslationMap = {
     toolRuns: "{count}회 실행",
     identity: {
       title: "ID",
+      menuLabel: "ID 메뉴",
+      menuButtonLabel: "{name}의 ID 및 앱 메뉴",
       description: "이 게이트웨이에서의 프로필입니다.",
       loading: "신원 정보를 불러오는 중…",
       profileUnavailable: "신원 프로필을 불러올 수 없습니다.",
@@ -3012,6 +3027,7 @@ export const ko: TranslationMap = {
     eventStale: "오래된 세션",
   },
   connection: {
+    queuedCount: "{count}개 대기 중",
     reconnecting: "다시 연결 중…",
     retryNow: "지금 다시 시도",
     access: {
@@ -3676,6 +3692,16 @@ export const ko: TranslationMap = {
   },
   login: {
     subtitle: "Gateway 대시보드",
+    deviceAuthMigration: {
+      banner: "이 브라우저는 업데이트 후 일회성 기기 승인이 필요합니다.",
+      action: "이 브라우저 보안 설정",
+      secureContextRequired:
+        "이 레거시 브라우저는 일시적으로 사용할 수 있습니다. 기기 ID로 보안을 설정하려면 HTTPS 또는 localhost로 다시 여세요.",
+      pendingUnavailable:
+        "브라우저 페어링 요청을 아직 사용할 수 없습니다. 잠시 후 다시 시도하세요.",
+      loadFailed: "이 브라우저의 페어링 요청을 불러올 수 없습니다: {error}",
+      approvalFailed: "이 브라우저의 보안을 설정할 수 없습니다: {error}",
+    },
     passwordPlaceholder: "선택 사항",
     showToken: "토큰 표시",
     hideToken: "토큰 숨기기",
@@ -3774,6 +3800,9 @@ export const ko: TranslationMap = {
   },
   chat: {
     disconnected: "Gateway와 연결이 끊어졌습니다.",
+    sendErrors: {
+      activeLeafChanged: "스레드가 브랜치를 전환했습니다 — 검토 후 다시 보내세요.",
+    },
     waitingForApproval: "승인 대기 중…",
     startupStatus: {
       preparingWorkspace: "작업 공간 준비 중…",
@@ -3783,6 +3812,36 @@ export const ko: TranslationMap = {
     },
     outputTokens: "출력 토큰 {count}개",
     archivedSessionDisabled: "메시지를 보내려면 이 세션을 복원하세요.",
+    sessionSharing: {
+      menu: "스레드 공유",
+      current: "스레드 표시 범위: {visibility}",
+      visibility: "표시 범위",
+      shared: "공유됨",
+      readOnly: "읽기 전용",
+      suggest: "제안",
+      draft: "초안",
+      publishDraft: "초안 게시",
+      members: "구성원",
+      selected: "구성원",
+      noPeople: "페어링된 사람이 없습니다.",
+      readOnlyNotice: "스레드 소유자와 구성원만 이 스레드에서 작업할 수 있습니다.",
+    },
+    sessionSuggestions: {
+      suggest: "제안",
+      suggestMessage: "메시지 제안",
+      attachmentsUnsupported: "텍스트 제안을 제출하기 전에 첨부 파일을 제거하세요.",
+      sendNow: "{author}님의 제안을 지금 보내기",
+      queue: "{author}님의 제안을 대기열에 추가",
+      edit: "{author}님의 제안 편집",
+      dismiss: "{author}님의 제안 무시",
+      typing: "{name}님이 입력 중…",
+      typingMany: "{names}이(가) 입력 중…",
+      state: {
+        pending: "대기 중",
+        accepted: "수락됨",
+        dismissed: "해제됨",
+      },
+    },
     loadOlder: "이전 항목 불러오기",
     sessionHeader: {
       renameTooltip: "세션 이름 변경",
@@ -3796,6 +3855,7 @@ export const ko: TranslationMap = {
       copyPath: "경로 복사",
       copyBranch: "브랜치 이름 복사",
       copied: "복사됨",
+      incognito: "시크릿 스레드",
       branches: "스레드 분기",
       branchSwitchUnavailable: "에이전트가 작업 중일 때는 분기를 전환할 수 없습니다.",
       branchSwitchRequiresAdmin: "분기 전환에는 운영자 관리자 권한이 필요합니다.",
@@ -4085,6 +4145,7 @@ export const ko: TranslationMap = {
       openInCanvas: "캔버스에서 열기",
       reply: "답장",
       replyToMessage: "메시지에 답장",
+      replyingTo: "{name}에게 답장",
       rewind: "되감기",
       rewindConfirm: "이 메시지 이전으로 되감을까요?",
       rewindToHere: "여기까지 되감기",
@@ -4182,6 +4243,7 @@ export const ko: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       offlineHint: "오프라인 — 메시지는 대기열에 저장되며 연결이 복구되면 전송됩니다.",
+      offlineQueuedHint: "오프라인 — {count}개 대기 중, 연결이 복구되면 메시지가 전송됩니다.",
       preparingModel: "모델 준비 중...",
       responding: "{name}이(가) 응답하는 중...",
       sendingMessage: "메시지 전송 중...",
