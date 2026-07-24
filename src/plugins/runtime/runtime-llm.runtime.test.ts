@@ -135,7 +135,7 @@ function primeCompletionMocks() {
       cacheRead: 5,
       cacheWrite: 2,
       total: 25,
-      cost: { total: 0.0042 },
+      cost: { total: 0.0042, totalOrigin: "provider-billed" },
     },
   });
 }
@@ -615,6 +615,55 @@ describe("runtime.llm.complete", () => {
       },
     );
     expectFields(requireRecord(logPayload.usage, "log usage"), { costUsd: 0.0042 });
+  });
+
+  it("omits costUsd when model pricing is all-zero (unknown)", async () => {
+    hoisted.prepareSimpleCompletionModelForAgent.mockResolvedValue({
+      ...createPreparedModel(),
+      model: {
+        ...createPreparedModel().model,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      },
+    });
+    hoisted.resolveSimpleCompletionSelectionForAgent.mockImplementation(
+      (params: { modelRef?: string; agentId: string }) => ({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        agentDir: `/tmp/${params.agentId}`,
+      }),
+    );
+    hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValue({
+      content: [{ type: "text", text: "done" }],
+      // Mirror the real adapter shape: usage always carries a cost object whose
+      // totals default to zero when the provider did not bill anything.
+      usage: {
+        input: 11,
+        output: 7,
+        cacheRead: 5,
+        cacheWrite: 2,
+        total: 25,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+    });
+
+    const llm = createRuntimeLlm({
+      getConfig: () => cfg,
+      authority: { allowComplete: true },
+    });
+    const result = await llm.complete({
+      messages: [{ role: "user", content: "Ping" }],
+      purpose: "test-purpose",
+    });
+
+    const usage = requireRecord(result.usage, "completion usage");
+    expect(usage.costUsd).toBeUndefined();
+    expectFields(usage, {
+      inputTokens: 11,
+      outputTokens: 7,
+      cacheReadTokens: 5,
+      cacheWriteTokens: 2,
+      totalTokens: 25,
+    });
   });
 
   it("preserves the completion options shape when reasoning is omitted", async () => {

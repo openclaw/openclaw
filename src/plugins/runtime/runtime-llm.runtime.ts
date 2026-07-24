@@ -183,10 +183,32 @@ function readExplicitCostUsd(raw: unknown): number | undefined {
   if (!cost || typeof cost !== "object" || Array.isArray(cost)) {
     return undefined;
   }
+  // AssistantMessage usage always carries a cost object whose totals default to
+  // zero, so a bare `total` cannot mark an explicit cost. Only a provider-billed
+  // total is authoritative (see applyProviderReportedUsageCost); adapter-default
+  // zeros fall through to the pricing-known estimate path.
+  if ((cost as { totalOrigin?: unknown }).totalOrigin !== "provider-billed") {
+    return undefined;
+  }
   return (
     readFiniteNonNegativeNumber((cost as { total?: unknown; totalUsd?: unknown }).totalUsd) ??
     readFiniteNonNegativeNumber((cost as { total?: unknown }).total)
   );
+}
+
+// An all-zero cost config is indistinguishable from "pricing unknown": some
+// providers (e.g. codex) ship cost {input:0,output:0,...} in the generated
+// models.json because the backend exposes no per-token price. Treating such a
+// config as a real $0 makes runtime usage report confident zero spend, silently
+// blinding budget/spike safeguards. Mirror session-cost-usage's isModelPricingKnown.
+function isModelPricingKnown(cost: ReturnType<typeof resolveModelCostConfig>): boolean {
+  if (!cost) {
+    return false;
+  }
+  if (cost.tieredPricing && cost.tieredPricing.length > 0) {
+    return true;
+  }
+  return cost.input > 0 || cost.output > 0 || cost.cacheRead > 0 || cost.cacheWrite > 0;
 }
 
 function buildUsage(params: {
@@ -201,9 +223,12 @@ function buildUsage(params: {
     model: params.model,
     config: params.cfg,
   });
+  const explicitCostUsd = readExplicitCostUsd(params.rawUsage);
   const costUsd =
-    readExplicitCostUsd(params.rawUsage) ??
-    estimateUsageCost({ usage: params.normalized, cost: costConfig });
+    explicitCostUsd ??
+    (isModelPricingKnown(costConfig)
+      ? estimateUsageCost({ usage: params.normalized, cost: costConfig })
+      : undefined);
   return {
     ...(params.normalized?.input !== undefined ? { inputTokens: params.normalized.input } : {}),
     ...(params.normalized?.output !== undefined ? { outputTokens: params.normalized.output } : {}),
