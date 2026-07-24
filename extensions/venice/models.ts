@@ -1,4 +1,5 @@
 // Venice plugin module implements models behavior.
+import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import {
   getCachedLiveProviderModelRows,
   LiveModelCatalogHttpError,
@@ -6,6 +7,7 @@ import {
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { createSubsystemLogger, retryAsync } from "openclaw/plugin-sdk/runtime-env";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
@@ -189,6 +191,7 @@ export async function discoverVeniceModels(
           ttlMs: VENICE_DISCOVERY_CACHE_TTL_MS,
           policy: { allowedHostnames: VENICE_ALLOWED_HOSTNAMES },
           auditContext: "venice-model-discovery",
+          fetchGuard: (params) => fetchWithSsrFGuard(withTrustedEnvProxyGuardedFetchMode(params)),
         }),
       {
         attempts: 3,
