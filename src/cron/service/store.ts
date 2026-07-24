@@ -167,7 +167,7 @@ export async function ensureLoaded(
   const loaded = await loadCronJobsStoreWithConfigJobs(state.deps.storePath);
   // Persisted cron rows are validated lazily, so treat them as raw records at the
   // store boundary and only trust the CronJob shape after validation below.
-  const loadedJobs = (loaded.store.jobs ?? []) as unknown as Record<string, unknown>[];
+  const loadedJobs: Record<string, unknown>[] = loaded.store.jobs ?? [];
   const jobs: CronJob[] = [];
   const durableNextRunAtMsByJobId = new Map<string, number | undefined>();
   const quarantinedConfigJobs: QuarantinedCronConfigJob[] = [...loaded.invalidConfigRows];
@@ -217,7 +217,7 @@ export async function ensureLoaded(
       continue;
     }
     // Validated above, so the raw record is now a trusted CronJob.
-    const hydrated = hydratedRaw as unknown as CronJob;
+    const hydrated = hydratedRaw as CronJob;
     jobs.push(hydrated);
     // Capture the value SQLite actually held before schedule-identity repair
     // mutates the runtime view. A later save can then publish that transition.
