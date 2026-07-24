@@ -20,6 +20,10 @@ import type { SessionEntry as SessionStoreEntry } from "../../config/sessions/ty
 import { onInternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { formatFullOutputFooter } from "../sessions/tools/tool-contracts.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
+import {
+  calculateMaxToolResultCharsWithCap,
+  resolveAutoLiveToolResultMaxChars,
+} from "../tool-result-limits.js";
 import { buildRuntimeContextCustomMessage } from "./run/runtime-context-prompt.js";
 import {
   clearEmbeddedSessionPromptStates,
@@ -28,8 +32,6 @@ import {
 } from "./session-prompt-state.js";
 
 let truncateToolResultMessage: typeof import("./tool-result-truncation.js").truncateToolResultMessage;
-let calculateMaxToolResultCharsWithCap: typeof import("./tool-result-truncation.js").calculateMaxToolResultCharsWithCap;
-let resolveAutoLiveToolResultMaxChars: typeof import("./tool-result-truncation.js").resolveAutoLiveToolResultMaxChars;
 let truncateOversizedToolResultsInMessages: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInMessages;
 let truncateOversizedToolResultsInActiveTarget: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInActiveTarget;
 let sessionLikelyHasOversizedToolResults: typeof import("./tool-result-truncation.js").sessionLikelyHasOversizedToolResults;
@@ -45,8 +47,6 @@ async function loadFreshToolResultTruncationModuleForTest() {
   // across persisted-session and live-truncation tests.
   ({
     truncateToolResultMessage,
-    calculateMaxToolResultCharsWithCap,
-    resolveAutoLiveToolResultMaxChars,
     truncateOversizedToolResultsInMessages,
     truncateOversizedToolResultsInActiveTarget,
     sessionLikelyHasOversizedToolResults,
