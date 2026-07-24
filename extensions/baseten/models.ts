@@ -1,6 +1,7 @@
 /**
  * Baseten model catalog, compat metadata, and authenticated live discovery.
  */
+import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import {
   getCachedLiveProviderModelRows,
   type LiveModelCatalogFetchGuard,
@@ -11,7 +12,10 @@ import type {
   ModelDefinitionConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const log = createSubsystemLogger("baseten-models");
@@ -280,7 +284,11 @@ export async function discoverBasetenModels(
       providerId: "baseten",
       endpoint: `${BASETEN_BASE_URL}/models`,
       discoveryApiKey: params.discoveryApiKey,
-      fetchGuard: params.fetchGuard,
+      // Default to the trusted-env-proxy preset so live discovery reaches the
+      // catalog behind an eligible HTTP(S) proxy; injected guards (tests) win.
+      fetchGuard:
+        params.fetchGuard ??
+        ((guardParams) => fetchWithSsrFGuard(withTrustedEnvProxyGuardedFetchMode(guardParams))),
       signal: params.signal,
       timeoutMs: 10_000,
       ttlMs: CACHE_TTL_MS,
