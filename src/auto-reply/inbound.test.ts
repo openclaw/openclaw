@@ -557,6 +557,19 @@ describe("createInboundDebouncer", () => {
     await expect(debouncer.enqueue({ key: "a" })).rejects.toBe(error);
   });
 
+  it("returns key-builder failures through the enqueue promise", async () => {
+    const error = new Error("key failed");
+    const debouncer = createInboundDebouncer<{ key: string }>({
+      debounceMs: 10,
+      buildKey: () => {
+        throw error;
+      },
+      onFlush: async () => undefined,
+    });
+
+    await expect(debouncer.enqueue({ key: "a" })).rejects.toBe(error);
+  });
+
   it("releases a pending decision before applying a later synchronous bypass", async () => {
     vi.useFakeTimers();
     const never = new Promise<InboundDebounceDecision>(() => {});

@@ -417,7 +417,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     await previousFlush?.catch(() => undefined);
   };
 
-  const enqueue = (item: T) => {
+  const enqueue = async (item: T) => {
     const key = params.buildKey(item);
     if (!params.resolveDecision || !key) {
       return enqueueResolved(item, key);
