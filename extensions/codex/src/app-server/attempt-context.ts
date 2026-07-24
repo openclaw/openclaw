@@ -44,7 +44,7 @@ const CODEX_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES = new Set([
   ...CODEX_TURN_SCOPED_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES,
 ]);
 const CODEX_MEMORY_CONTEXT_BASENAME = "memory.md";
-const CODEX_MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
+const CODEX_MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get", "memory_recall"]);
 const CODEX_BOOTSTRAP_CONTEXT_ORDER = new Map<string, number>([
   ["soul.md", 10],
   ["identity.md", 20],

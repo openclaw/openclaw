@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildCodexWorkspaceBootstrapContext,
   buildCodexSystemPromptReport,
+  getCodexWorkspaceMemoryToolNames,
   readContextEngineThreadBootstrapProjection,
   readMirroredSessionHistoryMessages,
   resolveContextEngineBootstrapProjectionDecision,
@@ -191,6 +192,68 @@ describe("Codex app-server attempt context", () => {
       expect(context.memoryCollaborationInstructions).toContain(
         "agent=marketing-agent session=agent:marketing-agent:session-1",
       );
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("treats memory_recall as a Codex workspace memory tool", () => {
+    const tools = [
+      {
+        type: "function",
+        name: "memory_recall",
+        description: "Search through long-term memories.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            query: { type: "string" },
+          },
+        },
+      },
+    ] as CodexDynamicToolSpec[];
+
+    expect(getCodexWorkspaceMemoryToolNames(tools)).toContain("memory_recall");
+  });
+
+  it("routes MEMORY.md through tools when only memory_recall is exposed", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-memory-recall-"));
+    const memorySummary = "Durable memory recalled through memory_recall.";
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), memorySummary);
+
+    const tools = [
+      {
+        type: "function",
+        name: "memory_recall",
+        description: "Search through long-term memories.",
+        inputSchema: { type: "object", properties: {} },
+      },
+    ] as CodexDynamicToolSpec[];
+
+    try {
+      const context = await buildCodexWorkspaceBootstrapContext({
+        params: {
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+          config: {
+            agents: {
+              defaults: {
+                workspace: workspaceDir,
+              },
+            },
+          },
+        } as EmbeddedRunAttemptParams,
+        resolvedWorkspace: workspaceDir,
+        effectiveWorkspace: workspaceDir,
+        sessionKey: "agent:main:session-1",
+        sessionAgentId: "main",
+        memoryToolNames: getCodexWorkspaceMemoryToolNames(tools),
+      });
+
+      expect(context.memoryToolRouted).toBe(true);
+      expect(context.memoryToolRoutedBootstrapFiles?.map((file) => file.path)).toContain(
+        path.join(workspaceDir, "MEMORY.md"),
+      );
+      expect(context.promptContext ?? "").not.toContain(memorySummary);
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
