@@ -389,6 +389,39 @@ describe("buildChildCompletionFindings", () => {
 });
 
 describe("applySubagentWaitOutcome", () => {
+  it("preserves sandbox provisioning failures for parent completion findings", () => {
+    const error =
+      'Sandbox backend "docker" failed to start: Sandbox image not found: openclaw-sandbox:analyst';
+    const applied = applySubagentWaitOutcome({
+      wait: {
+        status: "error",
+        startedAt: 100,
+        endedAt: 150,
+        error,
+      },
+      outcome: undefined,
+    });
+
+    expect(applied.outcome).toEqual({
+      status: "error",
+      error,
+      startedAt: 100,
+      endedAt: 150,
+      elapsedMs: 50,
+    });
+    expect(
+      buildChildCompletionFindings([
+        {
+          childSessionKey: "agent:main:subagent:sandbox-failure",
+          task: "sandboxed child",
+          createdAt: 100,
+          endedAt: 150,
+          outcome: applied.outcome,
+        },
+      ]),
+    ).toContain(`status: error: ${error}`);
+  });
+
   it("treats blocked ok wait snapshots as errors", () => {
     const applied = applySubagentWaitOutcome({
       wait: {

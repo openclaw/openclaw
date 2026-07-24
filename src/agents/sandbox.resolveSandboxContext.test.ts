@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { SkillUsagePath } from "../skills/types.js";
 import { registerSandboxBackend } from "./sandbox/backend.js";
 import { ensureSandboxWorkspaceForSession, resolveSandboxContext } from "./sandbox/context.js";
+import { SandboxProvisioningError } from "./sandbox/errors.js";
 
 const updateRegistryMock = vi.hoisted(() => vi.fn());
 const syncSkillsToWorkspaceMock = vi.hoisted(() =>
@@ -263,6 +264,43 @@ describe("resolveSandboxContext", () => {
         workspaceDir: "/tmp/openclaw-test",
       });
       expect(workspace?.containerWorkdir).toBe("/runtime/workspace");
+    } finally {
+      restore();
+    }
+  }, 15_000);
+
+  it("types backend startup failures as sandbox provisioning errors", async () => {
+    const startupError = new Error("runtime image is missing");
+    const restore = registerSandboxBackend("broken-backend", async () => {
+      throw startupError;
+    });
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              backend: "broken-backend",
+              scope: "session",
+              workspaceAccess: "rw",
+              prune: { idleHours: 0, maxAgeDays: 0 },
+            },
+          },
+        },
+      };
+
+      const promise = resolveSandboxContext({
+        config: cfg,
+        sessionKey: "agent:worker:broken",
+        workspaceDir: "/tmp/openclaw-test",
+      });
+
+      await expect(promise).rejects.toMatchObject({
+        name: "SandboxProvisioningError",
+        message: 'Sandbox backend "broken-backend" failed to start: runtime image is missing',
+        backendId: "broken-backend",
+        cause: startupError,
+      } satisfies Partial<SandboxProvisioningError>);
     } finally {
       restore();
     }

@@ -1838,11 +1838,10 @@ async function runWithModelFallbackInternal<T>(
       exhaustionResult = attemptRun.exhaustionResult;
     }
     {
-      // Local runtime coordination errors (session write-lock timeout, embedded
-      // attempt session takeover) are not provider/model failures. Aborting
-      // here prevents the fallback chain from consuming candidates retrying
-      // the same local condition and surfacing a misleading "All models
-      // failed" summary. See #83510.
+      // Local runtime failures (sandbox provisioning, session write-lock
+      // timeout, embedded attempt takeover) are not provider/model failures.
+      // Aborting prevents retries of the same condition and a misleading
+      // "All models failed" summary. See #83510 and #106516.
       if (isNonProviderRuntimeCoordinationError(err)) {
         throw err;
       }

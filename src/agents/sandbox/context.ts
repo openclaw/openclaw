@@ -16,10 +16,15 @@ import {
 import { defaultRuntime } from "../../runtime.js";
 import type { SkillEligibilityContext, SkillUsagePath } from "../../skills/types.js";
 import type { ExecPolicyOverrides } from "../exec-defaults.js";
-import { getSandboxBackendWorkdirResolver, requireSandboxBackendFactory } from "./backend.js";
+import {
+  getSandboxBackendWorkdirResolver,
+  requireSandboxBackendFactory,
+  type SandboxBackendHandle,
+} from "./backend.js";
 import { ensureSandboxBrowser } from "./browser.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { resolveSandboxDockerUser } from "./docker-user.js";
+import { isSandboxProvisioningError, SandboxProvisioningError } from "./errors.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
 import { updateRegistry } from "./registry.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
@@ -227,17 +232,27 @@ export async function resolveSandboxContext(params: {
   const resolvedCfg = docker === cfg.docker ? cfg : { ...cfg, docker };
 
   const backendFactory = requireSandboxBackendFactory(resolvedCfg.backend);
-  const backend = await backendFactory({
-    sessionKey: rawSessionKey,
-    scopeKey,
-    workspaceDir,
-    agentWorkspaceDir,
-    skillsWorkspaceDir,
-    cfg: resolvedCfg,
-    ...(params.requireCurrentConfig !== undefined
-      ? { requireCurrentConfig: params.requireCurrentConfig }
-      : {}),
-  });
+  let backend: SandboxBackendHandle;
+  try {
+    backend = await backendFactory({
+      sessionKey: rawSessionKey,
+      scopeKey,
+      workspaceDir,
+      agentWorkspaceDir,
+      skillsWorkspaceDir,
+      cfg: resolvedCfg,
+      ...(params.requireCurrentConfig !== undefined
+        ? { requireCurrentConfig: params.requireCurrentConfig }
+        : {}),
+    });
+  } catch (error) {
+    if (isSandboxProvisioningError(error)) {
+      throw error;
+    }
+    // Backend creation is local provisioning, not a model attempt. Preserve
+    // that distinction so model fallback cannot retry the same broken runtime.
+    throw new SandboxProvisioningError(resolvedCfg.backend, error);
+  }
   await updateRegistry({
     containerName: backend.runtimeId,
     backendId: backend.id,
