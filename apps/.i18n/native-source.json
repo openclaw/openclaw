@@ -15523,7 +15523,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 193,
+      "line": 197,
       "path": "apps/ios/Sources/Camera/CameraController.swift",
       "source": "Camera",
       "surface": "apple",
@@ -15531,7 +15531,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 193,
+      "line": 197,
       "path": "apps/ios/Sources/Camera/CameraController.swift",
       "source": "Microphone",
       "surface": "apple",
@@ -30147,7 +30147,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 169,
+      "line": 173,
       "path": "apps/macos/Sources/OpenClaw/CameraCaptureService.swift",
       "source": "Camera",
       "surface": "apple",
@@ -30155,7 +30155,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 169,
+      "line": 173,
       "path": "apps/macos/Sources/OpenClaw/CameraCaptureService.swift",
       "source": "Microphone",
       "surface": "apple",
