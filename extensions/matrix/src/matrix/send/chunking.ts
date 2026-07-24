@@ -22,7 +22,7 @@ import {
   renderMatrixMarkdownTables,
 } from "../format.js";
 
-export type MatrixPreparedSingleText = {
+type MatrixPreparedSingleText = {
   trimmedText: string;
   convertedText: string;
   singleEventLimit: number;
@@ -31,7 +31,7 @@ export type MatrixPreparedSingleText = {
   tableMode: MarkdownTableMode;
 };
 
-export type MatrixPreparedChunkedText = MatrixPreparedSingleText & {
+type MatrixPreparedChunkedText = MatrixPreparedSingleText & {
   chunks: string[];
 };
 

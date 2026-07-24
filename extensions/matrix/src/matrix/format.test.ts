@@ -1,7 +1,7 @@
 // Matrix tests cover format plugin behavior.
 import { describe, expect, it } from "vitest";
+import { findMatrixSpoilerDelimiterOffsets } from "./format-spoiler-ranges.js";
 import {
-  findMatrixSpoilerDelimiterOffsets,
   MATRIX_FORMAT_PROFILE,
   markdownToMatrixBody,
   markdownToMatrixHtml,

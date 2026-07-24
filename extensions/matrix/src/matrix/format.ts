@@ -23,8 +23,6 @@ import type { MatrixClient } from "./sdk.js";
 import { isMatrixQualifiedUserId } from "./target-ids.js";
 
 export { MATRIX_FORMAT_PROFILE, renderMatrixMarkdownTables } from "./format-profile.js";
-export { findMatrixSpoilerDelimiterOffsets } from "./format-spoiler-ranges.js";
-
 const MATRIX_STYLE_MARKERS = {
   underline: { open: "<u>", close: "</u>" },
   spoiler: { open: "<span data-mx-spoiler>", close: "</span>" },
