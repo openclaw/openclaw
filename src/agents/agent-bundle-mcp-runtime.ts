@@ -496,7 +496,6 @@ export function createSessionMcpRuntime(params: {
   let disposed = false;
   let catalog: McpToolCatalog | null = null;
   let catalogInFlight: CatalogRefresh | undefined;
-  const abandonedCatalogRefreshControllers = new WeakSet<AbortController>();
   let catalogInvalidationGeneration = 0;
   const sessions = new Map<string, BundleMcpSession>();
   const serverBackoff = new Map<string, McpServerBackoffState>();
@@ -597,28 +596,14 @@ export function createSessionMcpRuntime(params: {
       const createdTask: SessionMcpSharedTask<void> = {
         controller: connectController,
         promise: connectPromise,
-        activeWaiters: 0,
       };
       session.connectTask = createdTask;
       connectTask = createdTask;
     }
-    try {
-      await waitForSessionMcpSharedTask({
-        task: connectTask,
-        signal: refreshController.signal,
-        abandonIfCurrent: () =>
-          abandonedCatalogRefreshControllers.has(refreshController) &&
-          session.connectTask === connectTask,
-        abandonedReason: new Error("MCP session connection abandoned by all catalog refreshes"),
-      });
-    } finally {
-      if (connectTask.controller.signal.aborted) {
-        await connectTask.promise.catch(() => {});
-        if (!session.connected && (!session.connectTask || session.connectTask === connectTask)) {
-          await retireSessionIfCurrent(session.serverName, session);
-        }
-      }
-    }
+    await waitForSessionMcpSharedTask({
+      task: connectTask,
+      signal: refreshController.signal,
+    });
   };
   const retireSessionsCreatedAndOwnedByCatalogRefresh = async (
     refreshController: AbortController,
@@ -765,11 +750,11 @@ export function createSessionMcpRuntime(params: {
                           // Let a protocol response delivered immediately before
                           // this notification settle before cancelling remaining
                           // in-flight and queued work from the old generation.
-                          queueMicrotask(() => {
+                          setTimeout(() => {
                             supersededRefresh?.controller.abort(
                               new Error("MCP catalog refresh superseded by tools/list_changed"),
                             );
-                          });
+                          }, 0);
                         },
                       },
                     },
@@ -900,9 +885,6 @@ export function createSessionMcpRuntime(params: {
                   diagnostics: [] as McpToolCatalogDiagnostic[],
                 };
               } catch (error) {
-                if (abandonedCatalogRefreshControllers.has(refreshController)) {
-                  throw error;
-                }
                 const generationSuperseded = catalogInvalidationGeneration !== catalogGeneration;
                 const sharedWithNewerGeneration =
                   session.sharedAcrossCatalogGenerations || session.catalogUseCount > 1;
@@ -982,7 +964,7 @@ export function createSessionMcpRuntime(params: {
         };
       } catch (error) {
         const generationSuperseded = catalogInvalidationGeneration !== catalogGeneration;
-        if (abandonedCatalogRefreshControllers.has(refreshController) || generationSuperseded) {
+        if (generationSuperseded) {
           await retireSessionsCreatedAndOwnedByCatalogRefresh(refreshController);
           throw error;
         }
@@ -1005,7 +987,6 @@ export function createSessionMcpRuntime(params: {
       generation: catalogGeneration,
       controller: refreshController,
       promise: trackedInFlight,
-      activeWaiters: 0,
     };
     catalogInFlight = refresh;
     void trackedInFlight
@@ -1033,23 +1014,11 @@ export function createSessionMcpRuntime(params: {
         return await waitForSessionMcpSharedTask({
           task: refresh,
           signal: options?.signal,
-          abandonIfCurrent: () => {
-            if (catalogInFlight !== refresh) {
-              return false;
-            }
-            abandonedCatalogRefreshControllers.add(refresh.controller);
-            catalogInFlight = undefined;
-            return true;
-          },
-          abandonedReason: new Error("MCP catalog refresh abandoned by all waiters"),
         });
       } catch (error) {
         options?.signal?.throwIfAborted();
         failIfDisposed();
         if (refresh.generation !== catalogInvalidationGeneration) {
-          continue;
-        }
-        if (abandonedCatalogRefreshControllers.has(refresh.controller)) {
           continue;
         }
         throw error;
