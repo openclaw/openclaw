@@ -352,7 +352,6 @@ packages/gateway-protocol/src/schema/agents-models-skills.ts
 packages/gateway-protocol/src/schema/protocol-schemas.ts
 packages/markdown-core/src/ir.ts
 packages/memory-host-sdk/src/host/session-files.ts
-packages/model-catalog-core/src/model-catalog-normalize.ts
 packages/sdk/src/client.ts
 packages/sdk/src/index.test.ts
 packages/speech-core/src/tts.test.ts
@@ -531,7 +530,6 @@ src/agents/system-prompt.ts
 src/agents/tool-display-common.ts
 src/agents/tool-loop-detection.test.ts
 src/agents/tool-search.test.ts
-src/agents/tool-search.ts
 src/agents/tools/computer-tool.ts
 src/agents/tools/cron-tool.test.ts
 src/agents/tools/cron-tool.ts
