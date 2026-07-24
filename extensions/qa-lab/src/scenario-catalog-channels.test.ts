@@ -110,6 +110,33 @@ describe("qa scenario catalog channel contracts", () => {
     });
   });
 
+  it("assigns Slack and Discord channel scenarios to exact asserted coverage owners", () => {
+    expect(readQaScenarioById("slack-canary").coverage?.primary).toEqual(["slack.socket"]);
+    expect(readQaScenarioById("slack-allowlist-block").coverage?.primary).toEqual([
+      "slack.channel-allowlists",
+    ]);
+    expect(readQaScenarioById("slack-channel-disabled-warning").coverage?.primary).toEqual([
+      "slack.channel-allowlists",
+    ]);
+
+    for (const scenarioId of [
+      "slack-approval-exec-native",
+      "slack-approval-plugin-native",
+      "slack-codex-approval-exec-native",
+      "slack-codex-approval-plugin-native",
+    ]) {
+      const scenario = readQaScenarioById(scenarioId);
+      expect(scenario.coverage?.primary, scenarioId).toEqual(["slack.native-approvals"]);
+      expect(scenario.coverage?.secondary, scenarioId).toContain(
+        "channels.channel-native-approval-prompts",
+      );
+    }
+
+    const discordThreadReply = readQaScenarioById("discord-thread-reply-filepath-attachment");
+    expect(discordThreadReply.coverage?.primary).toEqual(["discord.thread-actions"]);
+    expect(discordThreadReply.coverage?.secondary).toContain("discord.media-and-rich-content");
+  });
+
   it("rejects malformed string matcher lists before running a flow", () => {
     expect(() =>
       validateQaScenarioExecutionConfig({
