@@ -65,6 +65,21 @@ function redirectResponse(location: string): Response {
   });
 }
 
+function streamingRedirectResponse(params: { location?: string; cancel: () => void }): Response {
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("redirecting"));
+      },
+      cancel: params.cancel,
+    }),
+    {
+      status: 302,
+      ...(params.location ? { headers: { location: params.location } } : {}),
+    },
+  );
+}
+
 function okResponse(body = "ok"): Response {
   return new Response(body, { status: 200 });
 }
@@ -949,6 +964,65 @@ describe("fetchWithSsrFGuard hardening", () => {
     await result.release();
   });
 
+  it("releases without waiting for a cloned unread response branch", async () => {
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("pending"));
+        },
+      }),
+      { status: 401 },
+    );
+    const captureBranch = response.clone();
+    const result = await fetchWithSsrFGuard({
+      url: "https://api.example.com/resource",
+      fetchImpl: vi.fn(async () => response),
+      lookupFn: createPublicLookup(),
+    });
+
+    let releaseState: "released" | "pending";
+    try {
+      releaseState = await Promise.race([
+        result.release().then(() => "released" as const),
+        new Promise<"pending">((resolve) => {
+          setImmediate(() => resolve("pending"));
+        }),
+      ]);
+    } finally {
+      await captureBranch.body?.cancel();
+    }
+
+    expect(releaseState).toBe("released");
+  });
+
+  it("cancels an unread successful response when released", async () => {
+    let resolveCancel: (() => void) | undefined;
+    const cancelObserved = new Promise<void>((resolve) => {
+      resolveCancel = resolve;
+    });
+    const cancel = vi.fn(() => {
+      resolveCancel?.();
+    });
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("pending"));
+        },
+        cancel,
+      }),
+      { status: 200 },
+    );
+    const result = await fetchWithSsrFGuard({
+      url: "https://api.example.com/resource",
+      fetchImpl: vi.fn(async () => response),
+      lookupFn: createPublicLookup(),
+    });
+
+    await result.release();
+    await cancelObserved;
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
   it("preserves redirects when response body cancellation rejects", async () => {
     const unhandledRejections: unknown[] = [];
     const onUnhandledRejection = (reason: unknown) => {
@@ -1410,36 +1484,42 @@ describe("fetchWithSsrFGuard hardening", () => {
   it.each([
     {
       name: "rejects redirects without a location header",
-      responses: [new Response(null, { status: 302 })],
+      locations: [undefined],
       expectedError: /missing location header/i,
       maxRedirects: undefined,
     },
     {
       name: "rejects redirect loops",
-      responses: [
-        redirectResponse("https://public.example/next"),
-        redirectResponse("https://public.example/next"),
-      ],
+      locations: ["https://public.example/next", "https://public.example/next"],
       expectedError: /redirect loop/i,
       maxRedirects: undefined,
     },
     {
       name: "rejects too many redirects",
-      responses: [
-        redirectResponse("https://public.example/one"),
-        redirectResponse("https://public.example/two"),
-      ],
+      locations: ["https://public.example/one", "https://public.example/two"],
       expectedError: /too many redirects/i,
       maxRedirects: 1,
     },
-  ])("$name", async ({ responses, expectedError, maxRedirects }) => {
+  ])("$name and cancels every discarded response body", async (params) => {
+    const cancels = params.locations.map(() => vi.fn());
+    const responses = params.locations.map((location, index) =>
+      streamingRedirectResponse({
+        ...(location ? { location } : {}),
+        cancel: cancels[index]!,
+      }),
+    );
+
     await expectRedirectFailure({
       url: "https://public.example/start",
       responses,
-      expectedError,
+      expectedError: params.expectedError,
       lookupFn: createPublicLookup(),
-      maxRedirects,
+      maxRedirects: params.maxRedirects,
     });
+
+    for (const cancel of cancels) {
+      expect(cancel).toHaveBeenCalledOnce();
+    }
   });
 
   it("rejects redirect loops that return to the original URL", async () => {
@@ -1964,6 +2044,45 @@ describe("fetchWithSsrFGuard hardening", () => {
     );
 
     expect(outcome).toBe("TimeoutError");
+  });
+
+  it("bounds release when an unread body and dispatcher close both stall", async () => {
+    const destroy = vi.fn();
+    agentCtor.mockImplementationOnce(
+      function MockAgent(this: { close: () => Promise<void>; destroy: () => void }) {
+        this.close = () => new Promise(() => {});
+        this.destroy = destroy;
+      },
+    );
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: agentCtor,
+      EnvHttpProxyAgent: envHttpProxyAgentCtor,
+      ProxyAgent: proxyAgentCtor,
+      fetch: vi.fn(async () => okResponse()),
+    };
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        cancel: () => new Promise<void>(() => {}),
+      }),
+      { status: 200 },
+    );
+    const result = await fetchWithSsrFGuard({
+      url: "https://public.example/resource",
+      fetchImpl: vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        expectDispatcherAttached((init as RequestInit & { dispatcher?: unknown }).dispatcher);
+        return response;
+      }),
+      lookupFn: createPublicLookup(),
+    });
+
+    const outcome = await raceWithTimeoutResult(
+      result.release().then(() => "released" as const),
+      250,
+      "hung" as const,
+    );
+
+    expect(outcome).toBe("released");
+    expect(destroy).toHaveBeenCalledOnce();
   });
 
   it("aborts a stalled DNS preflight from the caller signal without dispatching", async () => {

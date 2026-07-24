@@ -100,6 +100,10 @@ export type GuardedFetchOptions = {
 export type GuardedFetchResult = {
   response: Response;
   finalUrl: string;
+  /**
+   * Releases the guarded transport and cancels any unread response body.
+   * Callers must finish consuming, or intentionally discard, the body before releasing it.
+   */
   release: () => Promise<void>;
   refreshTimeout?: () => void;
 };
@@ -295,6 +299,12 @@ async function assertExplicitProxyAllowed(
 
 function isRedirectStatus(status: number): boolean {
   return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+}
+
+function cancelResponseBodyBestEffort(response: Response | undefined): void {
+  // Debug capture can tee the body, and cancelling one branch may not settle until
+  // its sibling finishes. Start cleanup without letting it delay release or errors.
+  void response?.body?.cancel().catch(() => undefined);
 }
 
 function isAmbientGlobalFetch(params: {
@@ -501,12 +511,17 @@ async function fetchWithSsrFGuardInternal(
   });
 
   let released = false;
+  let responseToRelease: Response | undefined;
   const release = async (dispatcher?: Dispatcher | null) => {
     if (released) {
       return;
     }
     released = true;
+    cancelResponseBodyBestEffort(responseToRelease);
+    responseToRelease = undefined;
     cleanup();
+    // closeDispatcher bounds graceful shutdown and falls back to destroy, so release
+    // remains coupled to transport cleanup without waiting on an unread body forever.
     await closeDispatcher(dispatcher ?? undefined);
   };
 
@@ -642,6 +657,7 @@ async function fetchWithSsrFGuardInternal(
       const response = shouldUseRuntimeFetch
         ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
         : await defaultFetch(parsedUrl.toString(), init);
+      responseToRelease = response;
       const capturedByGlobalFetchPatch =
         !shouldUseRuntimeFetch &&
         isAmbientGlobalFetch({
@@ -665,12 +681,10 @@ async function fetchWithSsrFGuardInternal(
       if (isRedirectStatus(response.status)) {
         const location = response.headers.get("location");
         if (!location) {
-          await release(dispatcher);
           throw new Error(`Redirect missing location header (${response.status})`);
         }
         redirectCount += 1;
         if (redirectCount > maxRedirects) {
-          await release(dispatcher);
           throw new Error(`Too many redirects (limit: ${maxRedirects})`);
         }
         const nextParsedUrl = new URL(location, parsedUrl);
@@ -694,11 +708,11 @@ async function fetchWithSsrFGuardInternal(
         }
         const nextVisitKey = getRedirectVisitKey(nextUrl, currentInit);
         if (visited.has(nextVisitKey)) {
-          await release(dispatcher);
           throw new Error("Redirect loop detected");
         }
         visited.add(nextVisitKey);
-        void response.body?.cancel().catch(() => undefined);
+        cancelResponseBodyBestEffort(response);
+        responseToRelease = undefined;
         await closeDispatcher(dispatcher);
         currentUrl = nextUrl;
         continue;
