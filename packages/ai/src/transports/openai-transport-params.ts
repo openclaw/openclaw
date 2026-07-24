@@ -234,19 +234,28 @@ export function buildOpenAISdkRequestOptions(
   model: Model,
   signal?: AbortSignal,
   options?: { stream?: boolean },
-): { signal?: AbortSignal; timeout?: number; headers?: Record<string, string> } | undefined {
+  maxRetries?: number,
+):
+  | {
+      signal?: AbortSignal;
+      timeout?: number;
+      headers?: Record<string, string>;
+      maxRetries?: number;
+    }
+  | undefined {
   const timeout = resolveOpenAISdkTimeoutMs(model);
   const headers =
     options?.stream === true && usesNativeOpenAICodexResponsesBackend(model)
       ? { Accept: "text/event-stream" }
       : undefined;
-  if (timeout === undefined && !signal && !headers) {
+  if (timeout === undefined && !signal && !headers && maxRetries === undefined) {
     return undefined;
   }
   return {
     ...(headers ? { headers } : {}),
     ...(signal ? { signal } : {}),
     ...(timeout !== undefined ? { timeout } : {}),
+    ...(maxRetries !== undefined ? { maxRetries } : {}),
   };
 }
 

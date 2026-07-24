@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { FailoverError } from "../../agents/failover-error.js";
 import { AgentHarnessSessionSupersededError } from "../../agents/harness/errors.js";
+import { SessionWriteLockTimeoutError } from "../../agents/session-write-lock-error.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
@@ -325,6 +326,243 @@ describe("runAgentTurnWithFallback: terminal failures", () => {
     const failCall = requireMockCall(failMock, 0, "reply operation fail");
     expect(failCall[0]).toBe("command_lane_cleared");
     expect(failCall[1]).toBeInstanceOf(CommandLaneClearedError);
+  });
+
+  // Guard for the abort-ownership fix below: a normal takeover (reply
+  // operation not aborted) must still surface resend guidance and fail with
+  // "run_failed". The guard must not over-suppress this baseline path.
+  it("surfaces embedded session takeover with specific resend guidance", async () => {
+    const { replyOperation, failMock } = createMockReplyOperation();
+    const takeoverError = Object.assign(
+      new Error(
+        "session file changed while embedded prompt lock was released: /tmp/session.jsonl (phase: prompt_reacquire)",
+      ),
+      {
+        name: "EmbeddedAttemptSessionTakeoverError",
+        sessionFile: "/tmp/session.jsonl",
+        phase: "prompt_reacquire",
+      },
+    );
+    state.runWithModelFallbackMock.mockRejectedValueOnce(takeoverError);
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams(),
+      replyOperation,
+    });
+
+    // result starts null in createMockReplyOperation: the guard must treat
+    // this as a normal takeover and emit the resend payload.
+    expect(replyOperation.result).toBeNull();
+    expect(result.kind).toBe("final");
+    if (result.kind !== "final") {
+      throw new Error("expected final reply");
+    }
+    expect(result.payload.text).toBe(
+      "⚠️ Your message was interrupted because new input arrived while the previous turn was still in progress. Please resend your message.",
+    );
+    const failCall = requireMockCall(failMock, 0, "reply operation fail");
+    expect(failCall[0]).toBe("run_failed");
+    expect(failCall[1]).toBe(takeoverError);
+  });
+
+  it("emits a lifecycle terminal error on the normal session takeover resend path", async () => {
+    const agentEvents = await import("../../infra/agent-events.js");
+    const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
+    const { replyOperation, failMock } = createMockReplyOperation();
+    const takeoverError = Object.assign(
+      new Error(
+        "session file changed while embedded prompt lock was released: /tmp/session.jsonl (phase: prompt_reacquire)",
+      ),
+      {
+        name: "EmbeddedAttemptSessionTakeoverError",
+        sessionFile: "/tmp/session.jsonl",
+        phase: "prompt_reacquire",
+      },
+    );
+    // Throw from the embedded runner (not the fallback orchestrator) so the
+    // pending lifecycle terminal is established before the takeover surfaces;
+    // a rejected fallback mock would skip terminal setup and mask the emit.
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(takeoverError);
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams(),
+      replyOperation,
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind !== "final") {
+      throw new Error("expected final reply");
+    }
+    expect(result.payload.text).toBe(
+      "⚠️ Your message was interrupted because new input arrived while the previous turn was still in progress. Please resend your message.",
+    );
+    const failCall = requireMockCall(failMock, 0, "reply operation fail");
+    expect(failCall[0]).toBe("run_failed");
+    expect(failCall[1]).toBe(takeoverError);
+    // Lifecycle/status consumers must still see the terminal failure even though
+    // the user only gets resend guidance. Regression guard: the resend branch
+    // previously skipped takePendingLifecycleTerminal()?.emit("error", err).
+    const lifecycleErrorEvent = emitAgentEvent.mock.calls
+      .map((call) => call[0])
+      .find(
+        (event) =>
+          event.stream === "lifecycle" &&
+          event.data.phase === "error" &&
+          typeof event.data.error === "string" &&
+          event.data.error.includes("session file changed while embedded prompt lock was released"),
+      );
+    expect(lifecycleErrorEvent).toBeDefined();
+  });
+
+  it("preserves restart lifecycle text when a takeover error is thrown after a restart abort", async () => {
+    const { replyOperation, failMock } = createMockReplyOperation();
+    // Gateway restart already aborted the operation before the takeover error
+    // surfaced during cleanup/reacquire; abort ownership must win.
+    Object.defineProperty(replyOperation, "result", {
+      value: { kind: "aborted", code: "aborted_for_restart" } as const,
+      configurable: true,
+    });
+    const takeoverError = Object.assign(
+      new Error(
+        "session file changed while embedded prompt lock was released: /tmp/session.jsonl (phase: prompt_reacquire)",
+      ),
+      {
+        name: "EmbeddedAttemptSessionTakeoverError",
+        sessionFile: "/tmp/session.jsonl",
+        phase: "prompt_reacquire",
+      },
+    );
+    state.runWithModelFallbackMock.mockRejectedValueOnce(takeoverError);
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams(),
+      replyOperation,
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind !== "final") {
+      throw new Error("expected final reply");
+    }
+    expect(result.payload.text).toBe(
+      "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+    );
+    expect(result.payload.text).not.toContain("Please resend your message");
+    // The takeover branch must not clobber the restart outcome with a
+    // run_failed failure.
+    expect(failMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves silent user-abort result when a takeover error is thrown after a user abort", async () => {
+    const { replyOperation, failMock } = createMockReplyOperation();
+    // User stop already aborted the operation; the takeover error must not turn
+    // the intended silent result into visible resend guidance.
+    Object.defineProperty(replyOperation, "result", {
+      value: { kind: "aborted", code: "aborted_by_user" } as const,
+      configurable: true,
+    });
+    const takeoverError = Object.assign(
+      new Error(
+        "session file changed while embedded prompt lock was released: /tmp/session.jsonl (phase: prompt_reacquire)",
+      ),
+      {
+        name: "EmbeddedAttemptSessionTakeoverError",
+        sessionFile: "/tmp/session.jsonl",
+        phase: "prompt_reacquire",
+      },
+    );
+    state.runWithModelFallbackMock.mockRejectedValueOnce(takeoverError);
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams(),
+      replyOperation,
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind !== "final") {
+      throw new Error("expected final reply");
+    }
+    expect(result.payload.text).toBe(SILENT_REPLY_TOKEN);
+    expect(result.payload.text).not.toContain("Please resend your message");
+    expect(failMock).not.toHaveBeenCalled();
+  });
+
+  it("unwraps preserved prompt error from cleanup takeover and classifies normally", async () => {
+    const { replyOperation, failMock } = createMockReplyOperation();
+    const promptError = new Error("429 Too Many Requests");
+    const wrappedError = Object.assign(new Error("429 Too Many Requests"), {
+      name: "EmbeddedAttemptSessionTakeoverError",
+      promptError,
+      cleanupError: Object.assign(
+        new Error(
+          "session file changed while embedded prompt lock was released: /tmp/session.jsonl",
+        ),
+        {
+          name: "EmbeddedAttemptSessionTakeoverError",
+          sessionFile: "/tmp/session.jsonl",
+          phase: "cleanup" as const,
+        },
+      ),
+    });
+    state.runWithModelFallbackMock.mockRejectedValueOnce(wrappedError);
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams(),
+      replyOperation,
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind !== "final") {
+      throw new Error("expected final reply");
+    }
+    expect(result.payload.text).not.toContain("Please resend your message");
+    const failCall = requireMockCall(failMock, 0, "reply operation fail");
+    expect(failCall[0]).toBe("run_failed");
+  });
+
+  it("does not retry a session write-lock timeout through the transient timeout gate (#87180)", async () => {
+    // A SessionWriteLockTimeoutError formats as "session file locked (timeout
+    // 5000ms): ..." so its message reads like a transport timeout. It is a
+    // local non-provider runtime coordination failure, though: re-running the
+    // model fallback chain would just hit the same lock. The transient gate
+    // must skip it (isNonProviderRuntimeCoordinationError) so it runs exactly
+    // once and surfaces a terminal run_failed instead of looping. Driven via
+    // the takeover preserved-prompt unwrap path that falls through to the gate.
+    const { replyOperation, failMock } = createMockReplyOperation();
+    const lockError = new SessionWriteLockTimeoutError({
+      timeoutMs: 5000,
+      owner: "other-run",
+      lockPath: "/tmp/session.jsonl.lock",
+    });
+    const takeoverError = Object.assign(
+      new Error(
+        "session file changed while embedded prompt lock was released: /tmp/session.jsonl (phase: prompt_reacquire)",
+      ),
+      {
+        name: "EmbeddedAttemptSessionTakeoverError",
+        sessionFile: "/tmp/session.jsonl",
+        phase: "prompt_reacquire",
+        promptError: lockError,
+      },
+    );
+    state.runWithModelFallbackMock.mockRejectedValueOnce(takeoverError);
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams(),
+      replyOperation,
+    });
+
+    expect(result.kind).toBe("final");
+    // The lock-timeout shape must not consume the transient retry budget: a
+    // single cycle, terminating as a terminal run_failed rather than re-running.
+    expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(1);
+    const failCall = requireMockCall(failMock, 0, "reply operation fail");
+    expect(failCall[0]).toBe("run_failed");
   });
 
   it("stays silent (NO_REPLY) when the reply operation was aborted for restart", async () => {

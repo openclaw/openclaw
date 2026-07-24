@@ -56,6 +56,7 @@ function prepareCatalogExecutor(projections: ToolSearchTargetTranscriptProjectio
     sandboxSessionKey: "agent:main:main",
     builtinToolNames: new Set(),
     replaySafeToolNames: new Set(),
+    withOwnedTranscriptWrites: async (run) => run(),
   });
 }
 
