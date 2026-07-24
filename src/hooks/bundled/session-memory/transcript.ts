@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { sanitizeModelSpecialTokens } from "../../../security/external-content.js";
 import { hasInterSessionUserProvenance } from "../../../sessions/input-provenance.js";
-import { isOpenClawDeliveryMirrorAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
+import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
 
 const SESSION_MEMORY_TOOL_DIRECTIVE_PREFIX = String.raw`(?:(?:\|DSML\|)|(?:\uFF5CDSML\uFF5C))?`;
 const SESSION_MEMORY_TOOL_DIRECTIVE_KIND = String.raw`(?:tool_calls?|function_calls?|tool_use_error)`;
@@ -55,7 +55,7 @@ function extractTextMessageContent(content: unknown): string | undefined {
 }
 
 type RenderedSessionMemoryMessage = {
-  isDeliveryMirror: boolean;
+  isTranscriptOnlyOpenClawAssistant: boolean;
   role: "assistant" | "user";
   text?: string;
 };
@@ -88,10 +88,11 @@ function renderSessionMemoryMessage(entry: unknown): RenderedSessionMemoryMessag
     return undefined;
   }
   if (sanitized.startsWith("/")) {
-    return role === "user" ? { isDeliveryMirror: false, role } : undefined;
+    return role === "user" ? { isTranscriptOnlyOpenClawAssistant: false, role } : undefined;
   }
   return {
-    isDeliveryMirror: isOpenClawDeliveryMirrorAssistantMessage(record.message),
+    isTranscriptOnlyOpenClawAssistant:
+      role === "assistant" && isTranscriptOnlyOpenClawAssistantMessage(record.message),
     role,
     text: sanitized,
   };
@@ -117,10 +118,9 @@ export function getRecentSessionContentFromEvents(
     if (!rendered.text) {
       continue;
     }
-    // Skip delivery-mirror rows only when they duplicate the preceding
-    // assistant text. Delivery-mirror rows with unique visible content
-    // (e.g., message-tool replies) are preserved.
-    if (rendered.isDeliveryMirror && rendered.text === lastAssistantText) {
+    // Skip OpenClaw-authored assistant bookkeeping only when it repeats the
+    // previous visible reply; unique mirror/injected rows can be the reply.
+    if (rendered.isTranscriptOnlyOpenClawAssistant && rendered.text === lastAssistantText) {
       continue;
     }
     allMessages.push(`${rendered.role}: ${rendered.text}`);
