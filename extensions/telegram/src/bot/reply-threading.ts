@@ -23,7 +23,7 @@ export function markReplyApplied(progress: DeliveryProgress, replyToId?: number)
   }
 }
 
-function markDelivered(progress: DeliveryProgress): void {
+function markDelivered(progress: DeliveryProgress, _messageId?: number): void {
   progress.hasDelivered = true;
 }
 
@@ -39,14 +39,14 @@ export async function sendChunkedTelegramReplyText<
   replyMarkup?: TReplyMarkup;
   replyQuoteText?: string;
   quoteOnlyOnFirstChunk?: boolean;
-  markDelivered?: (progress: TProgress) => void;
+  markDelivered?: (progress: TProgress, messageId?: number) => void;
   sendChunk: (opts: {
     chunk: TChunk;
     isFirstChunk: boolean;
     replyToMessageId?: number;
     replyMarkup?: TReplyMarkup;
     replyQuoteText?: string;
-  }) => Promise<void>;
+  }) => Promise<number | void>;
 }): Promise<void> {
   const applyDelivered = params.markDelivered ?? markDelivered;
   const suppressSingleUseReply =
@@ -71,7 +71,7 @@ export async function sendChunkedTelegramReplyText<
       Boolean(replyToMessageId) &&
       Boolean(params.replyQuoteText) &&
       (params.quoteOnlyOnFirstChunk !== true || isFirstChunk);
-    await params.sendChunk({
+    const messageId = await params.sendChunk({
       chunk,
       isFirstChunk,
       replyToMessageId,
@@ -82,6 +82,6 @@ export async function sendChunkedTelegramReplyText<
       params.progress,
       suppressSingleUseReply && isFirstChunk ? params.replyToId : replyToMessageId,
     );
-    applyDelivered(params.progress);
+    applyDelivered(params.progress, typeof messageId === "number" ? messageId : undefined);
   }
 }

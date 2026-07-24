@@ -8,6 +8,7 @@ import {
   deliverInboundReplyWithMessageSendContext,
   deliverReplies,
   dispatchReplyWithBufferedBlockDispatcher,
+  dispatchTelegramMessage,
   dispatchWithContext,
   expectDeliverRepliesParams,
   expectDraftStreamParams,
@@ -25,6 +26,29 @@ import type {
 } from "./bot-message-dispatch.test-harness.js";
 
 describeTelegramDispatch("dispatchTelegramMessage delivery-basics", () => {
+  it("forwards cfg to deliverReplies so the sent-message ledger is scoped correctly", async () => {
+    // recordSentMessage / wasSentByBot resolve their bucket from cfg; if automatic
+    // dispatch omits cfg, ledger writes land in the default scope and own-mode
+    // reaction filtering with a custom session store cannot see them. (#92242)
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    const cfg = {
+      session: { store: "/tmp/custom-store" },
+    } as unknown as Parameters<typeof dispatchTelegramMessage>[0]["cfg"];
+    await dispatchWithContext({
+      context: createContext({
+        route: { agentId: "work" } as unknown as TelegramMessageContext["route"],
+      }),
+      cfg,
+    });
+
+    expectDeliverRepliesParams({ cfg });
+  });
+
   it("queues final Telegram replies through outbound delivery when available", async () => {
     deliverInboundReplyWithMessageSendContext.mockResolvedValue({
       status: "handled_visible",
