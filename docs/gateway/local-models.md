@@ -19,6 +19,7 @@ Aim for **2+ maxed-out Mac Studios or an equivalent GPU rig (~$30k+)** for a com
 
 | Backend                                              | Use when                                                                    |
 | ---------------------------------------------------- | --------------------------------------------------------------------------- |
+| [Atomic Chat](#atomic-chat)                          | Desktop GUI loader, open-weight models, one OpenAI-compatible local server  |
 | [ds4](/providers/ds4)                                | Local DeepSeek V4 Flash on macOS Metal with OpenAI-compatible tool calls    |
 | [LM Studio](/providers/lmstudio)                     | First-time local setup, GUI loader, native Responses API                    |
 | LiteLLM / OAI-proxy / custom OpenAI-compatible proxy | You front another model API and need OpenClaw to treat it as OpenAI         |
@@ -126,6 +127,60 @@ For local-first with a hosted safety net, swap `primary`/`fallbacks` order and k
 ### Regional hosting / data routing
 
 Hosted MiniMax/Kimi/GLM variants also exist on OpenRouter with region-pinned endpoints (for example, US-hosted). Pick the regional variant to keep traffic in your chosen jurisdiction while keeping `models.mode: "merge"` for Anthropic/OpenAI fallbacks. Local-only is still the strongest privacy path; hosted regional routing is the middle ground when you need provider features but want control over data flow.
+
+## Atomic Chat
+
+Atomic Chat is a desktop app for running open-weight models on your own
+hardware. It runs llama.cpp and MLX (Apple Silicon) builds behind a single
+OpenAI-compatible server, so OpenClaw connects to one endpoint regardless of the
+backend. For product and setup docs, see [atomic.chat](https://atomic.chat/).
+
+Install Atomic Chat, download a model, and start the local server on
+`http://127.0.0.1:1337/v1`. Confirm it is up and note the model id it returns:
+
+```bash
+curl http://127.0.0.1:1337/v1/models
+```
+
+Point a custom provider at it with the Chat Completions adapter. The local
+server is unauthenticated by default, so any non-empty `apiKey` marker is
+accepted for the loopback URL:
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: { primary: "atomicchat/my-local-model" },
+    },
+  },
+  models: {
+    mode: "merge",
+    providers: {
+      atomicchat: {
+        baseUrl: "http://127.0.0.1:1337/v1",
+        apiKey: "atomicchat-local",
+        api: "openai-completions",
+        models: [
+          {
+            id: "my-local-model",
+            name: "Atomic Chat Model",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 128000,
+            maxTokens: 8192,
+          },
+        ],
+      },
+    },
+  },
+}
+```
+
+Replace `my-local-model` with the id from `/v1/models`. Set
+`input: ["text", "image"]` for vision models, and keep `models.mode: "merge"` so
+hosted models stay available as fallbacks.
+
 
 ## Other OpenAI-compatible local proxies
 
