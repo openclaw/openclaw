@@ -88,7 +88,7 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
     (delivery as { accountId?: unknown } | undefined)?.accountId,
   );
   if (hasDelivery) {
-    const resolvedMode = mode ?? "announce";
+    const resolvedMode = mode ?? "none";
     const channel =
       resolvedMode === "announce"
         ? resolveAnnounceChannel({ channel: deliveryChannel, to })
