@@ -620,7 +620,6 @@ src/cli/command-secret-gateway.test.ts
 src/cli/command-secret-gateway.ts
 src/cli/command-secret-targets.ts
 src/cli/config-cli.test.ts
-src/cli/config-cli.ts
 src/cli/cron-cli.test.ts
 src/cli/daemon-cli/status.gather.test.ts
 src/cli/daemon-cli/status.gather.ts
