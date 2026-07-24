@@ -62,10 +62,14 @@ describe("listGatewayMethods", () => {
   });
 
   it("appends new methods after model probing without shifting older method indices", () => {
-    expect(listGatewayMethods().slice(-20)).toEqual([
+    expect(listGatewayMethods().slice(-22)).toEqual([
+      "sessions.dispatch",
+      "sessions.reclaim",
       "models.probe",
       "migrations.memory.plan",
       "migrations.memory.apply",
+      "safety.events.list",
+      "safety.events.summary",
       "ui.command",
       "approval.history",
       "plugin.surface.refresh",
@@ -95,9 +99,9 @@ describe("listGatewayMethods", () => {
       methods.indexOf("node.pluginSurface.refresh") + 1,
     );
     expect(methods.slice(-3)).toEqual([
-      "board.prompt.authorize",
-      "board.data.read",
-      "board.action",
+      "session.members.list",
+      "session.members.add",
+      "session.members.remove",
     ]);
   });
 

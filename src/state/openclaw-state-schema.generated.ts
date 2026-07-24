@@ -2041,7 +2041,7 @@ CREATE INDEX IF NOT EXISTS idx_ai_safety_events_recorded
 
 CREATE INDEX IF NOT EXISTS idx_ai_safety_events_session
   ON ai_safety_events(session_id, sequence)
-  WHERE session_id IS NOT NULL;\n`;
+  WHERE session_id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS claw_installs (
   agent_id TEXT NOT NULL PRIMARY KEY,
   schema_version TEXT NOT NULL,
