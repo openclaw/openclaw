@@ -4,7 +4,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerBackupCommand } from "./register.backup.js";
 
 const mocks = vi.hoisted(() => ({
+  backupCaptureFinalCommand: vi.fn(),
   backupCreateCommand: vi.fn(),
+  backupRestoreAcceptedCommand: vi.fn(),
   backupSqliteCreateCommand: vi.fn(),
   backupSqliteListCommand: vi.fn(),
   backupSqliteRestoreCommand: vi.fn(),
@@ -18,6 +20,8 @@ const mocks = vi.hoisted(() => ({
 }));
 
 const backupCreateCommand = mocks.backupCreateCommand;
+const backupCaptureFinalCommand = mocks.backupCaptureFinalCommand;
+const backupRestoreAcceptedCommand = mocks.backupRestoreAcceptedCommand;
 const backupSqliteCreateCommand = mocks.backupSqliteCreateCommand;
 const backupSqliteListCommand = mocks.backupSqliteListCommand;
 const backupSqliteRestoreCommand = mocks.backupSqliteRestoreCommand;
@@ -27,6 +31,14 @@ const runtime = mocks.runtime;
 
 vi.mock("../../commands/backup.js", () => ({
   backupCreateCommand: mocks.backupCreateCommand,
+}));
+
+vi.mock("../../commands/backup-capture-final.js", () => ({
+  backupCaptureFinalCommand: mocks.backupCaptureFinalCommand,
+}));
+
+vi.mock("../../commands/backup-restore-accepted.js", () => ({
+  backupRestoreAcceptedCommand: mocks.backupRestoreAcceptedCommand,
 }));
 
 vi.mock("../../commands/backup-verify.js", () => ({
@@ -54,6 +66,8 @@ describe("registerBackupCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     backupCreateCommand.mockResolvedValue(undefined);
+    backupCaptureFinalCommand.mockResolvedValue(undefined);
+    backupRestoreAcceptedCommand.mockResolvedValue(undefined);
     backupSqliteCreateCommand.mockResolvedValue(undefined);
     backupSqliteListCommand.mockResolvedValue(undefined);
     backupSqliteRestoreCommand.mockResolvedValue(undefined);
@@ -126,6 +140,28 @@ describe("registerBackupCommand", () => {
       "restore",
       "verify",
     ]);
+  });
+
+  it("keeps final capture hidden and invokes its structured stdin command", async () => {
+    const program = new Command();
+    registerBackupCommand(program);
+    const backup = program.commands.find((command) => command.name() === "backup");
+    expect(backup?.helpInformation()).not.toContain("capture-final");
+
+    await program.parseAsync(["backup", "capture-final"], { from: "user" });
+
+    expect(backupCaptureFinalCommand).toHaveBeenCalledWith(runtime);
+  });
+
+  it("keeps accepted restore hidden and invokes its structured stdin command", async () => {
+    const program = new Command();
+    registerBackupCommand(program);
+    const backup = program.commands.find((command) => command.name() === "backup");
+    expect(backup?.helpInformation()).not.toContain("restore-accepted");
+
+    await program.parseAsync(["backup", "restore-accepted"], { from: "user" });
+
+    expect(backupRestoreAcceptedCommand).toHaveBeenCalledWith(runtime);
   });
 
   it("runs SQLite snapshot create for named OpenClaw databases", async () => {

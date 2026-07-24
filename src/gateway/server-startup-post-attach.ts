@@ -1040,6 +1040,7 @@ export async function startGatewayPostAttachRuntime(
     onPostReadySidecars?: (postReadySidecars: GatewayPostReadySidecarHandle[]) => void;
     onGatewayLifetimeSidecars?: (sidecars: GatewayPostReadySidecarHandle[]) => void;
     startWorkerEnvironmentRuntime?: () => Awaitable<GatewayPostReadySidecarHandle | null>;
+    beforeReady?: () => Awaitable<void>;
     onSidecarsReady?: () => void;
     isClosing?: () => boolean;
     startupTrace?: GatewayStartupTrace;
@@ -1283,6 +1284,7 @@ export async function startGatewayPostAttachRuntime(
         params.onPostReadySidecars?.(postReadySidecars);
         params.onGatewayLifetimeSidecars?.(gatewayLifetimeSidecars);
         params.log.info(formatGatewayStartupOutcomes(startupOutcomes.snapshot()));
+        await params.beforeReady?.();
         params.onSidecarsReady?.();
         params.startupTrace?.detail("sidecars.ready", [
           [
