@@ -19,8 +19,6 @@ import {
   isCronJobActive,
   markCronJobActive,
   type CronActiveJobMarker,
-  advanceCronActiveJobGeneration,
-  waitForActiveCronJobs,
 } from "../active-jobs.js";
 import { resolveCronListSnapshotRevision } from "../list-snapshot-revision.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
@@ -30,6 +28,10 @@ import {
   readCronJobScratchState,
   writeCronJobScratch,
 } from "../scratch-store.js";
+import {
+  cancelActiveCronTaskRun,
+  waitForActiveCronTaskRuns,
+} from "../service/active-run-cancellation.js";
 import { createCronStreamSourceIdentity, cronStreamScheduleKey } from "../stream-schedule.js";
 import { normalizeCronTaskRunJobId } from "../task-run-history.js";
 import type {
@@ -986,13 +988,14 @@ export async function remove(
       );
     }
 
-    // If the job is currently running, advance the generation to abort it
-    // and wait for it to finish before removing.
+    // If the job is currently running, cancel it by its runId
+    // and wait for it to finish draining before removing.
     if (removedJob && isCronJobActive(id)) {
       state.deps.log.info({ jobId: id }, "cron: aborting active job before removal");
-      advanceCronActiveJobGeneration();
-      // Wait for the job to finish/abort (bounded wait)
-      await waitForActiveCronJobs(30_000);
+      const runId = `cron-active:${id}`;
+      cancelActiveCronTaskRun({ runId, reason: "Job removed via cron remove" });
+      // Wait for the specific job run to finish draining (bounded wait)
+      await waitForActiveCronTaskRuns(30_000);
     }
 
     state.store.jobs = state.store.jobs.filter((j) => j.id !== id);
