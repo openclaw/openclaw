@@ -96,7 +96,9 @@ async function linkManagedSignalAccount(params: {
       cliPath: params.transport.cliPath,
       ...(params.transport.configPath ? { configPath: params.transport.configPath } : {}),
       onLinkUri: async (uri) => {
-        const qr = await renderQrTerminal(uri, { small: true });
+        // The compact renderer uses foreground black, which some embedded terminals remap.
+        // Full mode uses background colors only, keeping the Signal QR code scannable.
+        const qr = await renderQrTerminal(uri);
         await params.prompter.plain?.(
           [
             "On your phone, open Signal > Settings > Linked devices and add a device.",

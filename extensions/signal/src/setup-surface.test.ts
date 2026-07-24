@@ -317,10 +317,7 @@ describe("signalSetupWizard", () => {
       configPath: "/var/lib/signal-cli",
       onLinkUri: expect.any(Function),
     });
-    expect(mocks.renderQrTerminal).toHaveBeenCalledWith(
-      "sgnl://linkdevice?uuid=test&pub_key=test",
-      { small: true },
-    );
+    expect(mocks.renderQrTerminal).toHaveBeenCalledWith("sgnl://linkdevice?uuid=test&pub_key=test");
     expect(queued.plain).toHaveBeenCalledWith(
       expect.stringContaining("Signal > Settings > Linked devices"),
     );
