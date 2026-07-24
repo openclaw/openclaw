@@ -19,6 +19,8 @@ import {
   isCronJobActive,
   markCronJobActive,
   type CronActiveJobMarker,
+  advanceCronActiveJobGeneration,
+  waitForActiveCronJobs,
 } from "../active-jobs.js";
 import { resolveCronListSnapshotRevision } from "../list-snapshot-revision.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
@@ -967,6 +969,16 @@ export async function remove(
         "heartbeat monitor jobs are system-owned; edit agents.*.heartbeat config instead",
       );
     }
+
+    // If the job is currently running, advance the generation to abort it
+    // and wait for it to finish before removing.
+    if (removedJob && isCronJobActive(id)) {
+      state.deps.log.info({ jobId: id }, "cron: aborting active job before removal");
+      advanceCronActiveJobGeneration();
+      // Wait for the job to finish/abort (bounded wait)
+      await waitForActiveCronJobs(state, id, 30_000);
+    }
+
     state.store.jobs = state.store.jobs.filter((j) => j.id !== id);
     const removed = (state.store.jobs.length ?? 0) !== before;
 
