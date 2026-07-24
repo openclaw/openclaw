@@ -1,36 +1,6 @@
-import { resolveAccountEntry } from "openclaw/plugin-sdk/account-core";
 import { normalizeWebInboundMessage } from "../../inbound/message-aliases.js";
 import type { WebInboundMessageInput } from "../../inbound/types.js";
 import { getRuntimeConfig } from "../config.runtime.js";
-
-function normalizeReconnectAccountId(accountId?: string | null): string {
-  return (accountId ?? "").trim() || "default";
-}
-
-export function resolveExplicitWhatsAppDebounceOverride(params: {
-  cfg: ReturnType<typeof getRuntimeConfig>;
-  sourceCfg?: ReturnType<typeof getRuntimeConfig> | null;
-  accountId: string;
-}): number | undefined {
-  const channel = params.sourceCfg?.channels?.whatsapp;
-  if (!channel) {
-    return undefined;
-  }
-
-  const accountId = normalizeReconnectAccountId(params.accountId);
-  const accountDebounce = resolveAccountEntry(channel.accounts, accountId)?.debounceMs;
-  if (accountDebounce !== undefined) {
-    return accountDebounce;
-  }
-  if (accountId !== "default") {
-    const defaultAccountDebounce = resolveAccountEntry(channel.accounts, "default")?.debounceMs;
-    if (defaultAccountDebounce !== undefined) {
-      return defaultAccountDebounce;
-    }
-  }
-
-  return channel.debounceMs;
-}
 
 type WhatsAppConversationDebounceEntry = {
   debounceMs?: number;

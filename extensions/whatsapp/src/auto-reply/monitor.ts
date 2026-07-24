@@ -48,10 +48,7 @@ import { getRuntimeConfig } from "./config.runtime.js";
 import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
 import { buildMentionConfig } from "./mentions.js";
 import { createWebChannelStatusController } from "./monitor-state.js";
-import {
-  resolveExplicitWhatsAppDebounceOverride,
-  resolveWhatsAppConversationDebounceMs,
-} from "./monitor/debounce-policy.js";
+import { resolveWhatsAppConversationDebounceMs } from "./monitor/debounce-policy.js";
 import { createEchoTracker } from "./monitor/echo.js";
 import { formatWhatsAppInboundListeningLog } from "./monitor/listener-log.js";
 import { createWebOnMessageHandler } from "./monitor/on-message.js";
