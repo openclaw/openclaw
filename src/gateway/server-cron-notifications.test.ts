@@ -12,8 +12,15 @@ import {
 } from "../process/gateway-work-admission.js";
 import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
 
+function unusedWebhookResponse(): Response {
+  return new Response(null, { status: 204 });
+}
+
 const mocks = vi.hoisted(() => ({
-  fetchWithSsrFGuard: vi.fn(async (_request: unknown) => ({ release: vi.fn() })),
+  fetchWithSsrFGuard: vi.fn(async (_request: unknown) => ({
+    response: new Response(null, { status: 204 }),
+    release: vi.fn(),
+  })),
   sendFailureNotificationAnnounce: vi.fn(),
   sendCronAnnouncePayloadStrict: vi.fn(),
 }));
@@ -88,7 +95,10 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
   beforeEach(() => {
     resetGatewayWorkAdmission();
     vi.clearAllMocks();
-    mocks.fetchWithSsrFGuard.mockImplementation(async () => ({ release: vi.fn() }));
+    mocks.fetchWithSsrFGuard.mockImplementation(async () => ({
+      response: unusedWebhookResponse(),
+      release: vi.fn(),
+    }));
     mocks.sendFailureNotificationAnnounce.mockResolvedValue(undefined);
     mocks.sendCronAnnouncePayloadStrict.mockResolvedValue(undefined);
   });
@@ -102,7 +112,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     const deferred = createVoidDeferred();
     mocks.fetchWithSsrFGuard.mockImplementationOnce(async () => {
       await deferred.promise;
-      return { release: vi.fn() };
+      return { response: unusedWebhookResponse(), release: vi.fn() };
     });
     const job = createWebhookJob({
       mode: "webhook",
@@ -227,7 +237,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     const deferred = createVoidDeferred();
     mocks.fetchWithSsrFGuard.mockImplementationOnce(async () => {
       await deferred.promise;
-      return { release: vi.fn() };
+      return { response: unusedWebhookResponse(), release: vi.fn() };
     });
     const job = createWebhookJob({
       mode: "announce",

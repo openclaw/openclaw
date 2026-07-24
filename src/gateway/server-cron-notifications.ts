@@ -213,7 +213,7 @@ async function postCronWebhook(params: {
 
   try {
     assertSecretOwnerAvailable("capability", "cron-webhook");
-    const result = await fetchWithSsrFGuard({
+    const { response, release } = await fetchWithSsrFGuard({
       url: params.webhookUrl,
       init: {
         method: "POST",
@@ -222,7 +222,15 @@ async function postCronWebhook(params: {
         signal: abortController.signal,
       },
     });
-    await result.release();
+    try {
+      // release() only tears down the SSRF dispatcher; unread bodies keep the
+      // undici socket pinned. Webhooks are fire-and-forget (no status/body use).
+      if (!response.bodyUsed) {
+        await response.body?.cancel().catch(() => undefined);
+      }
+    } finally {
+      await release();
+    }
   } catch (err) {
     if (err instanceof SsrFBlockedError) {
       params.logger.warn(
