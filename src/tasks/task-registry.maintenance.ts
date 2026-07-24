@@ -41,6 +41,7 @@ import {
   shouldPruneTerminalTask,
 } from "./cron-history-retention.js";
 export { CRON_HISTORY_KEEP_PER_JOB } from "./cron-history-retention.js";
+export { CRON_HISTORY_RETENTION_MS } from "./cron-history-retention.js";
 import {
   getDetachedTaskLifecycleRuntime,
   tryRecoverTaskBeforeMarkLost,

@@ -213,7 +213,7 @@ Cron does not classify final-output prose or approval-looking refusal phrases as
 Retention behavior:
 
 - `cron.sessionRetention` (default `24h`, or `false` to disable) prunes completed isolated run sessions.
-- Run history keeps the newest 2000 terminal rows per cron job. Lost rows retain the standard 24-hour lost-task cleanup window.
+- Run history keeps terminal rows for 30 days and also caps each cron job to the newest 2000 terminal rows. Lost rows retain the standard 24-hour lost-task cleanup window.
 
 ## Migrating older jobs
 
