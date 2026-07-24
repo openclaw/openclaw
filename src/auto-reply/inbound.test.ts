@@ -754,6 +754,66 @@ describe("createInboundDebouncer", () => {
     await Promise.all([first, second]);
   });
 
+  it("allows a later debounced flush when onFlush returns before the turn settles", async () => {
+    // Callers that kick off delivery without awaiting the full agent turn can
+    // release the keyed chain so a follow-up flush can steer (#113180).
+    const started: string[] = [];
+    let releaseFirst: (() => void) | undefined;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 50,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        void (async () => {
+          const id = items[0]?.id ?? "";
+          started.push(id);
+          if (id === "1") {
+            await firstGate;
+          }
+        })();
+      },
+    });
+
+    try {
+      await debouncer.enqueue({ key: "a", id: "1" });
+      const firstTimerIndex = setTimeoutSpy.mock.calls.findLastIndex((call) => call[1] === 50);
+      expect(firstTimerIndex).toBeGreaterThanOrEqual(0);
+      clearTimeout(
+        setTimeoutSpy.mock.results[firstTimerIndex]?.value as ReturnType<typeof setTimeout>,
+      );
+      (setTimeoutSpy.mock.calls[firstTimerIndex]?.[0] as (() => void) | undefined)?.();
+
+      await vi.waitFor(() => {
+        expect(started).toEqual(["1"]);
+      });
+
+      await debouncer.enqueue({ key: "a", id: "2" });
+      const secondTimerIndex = setTimeoutSpy.mock.calls.findLastIndex(
+        (call, index) => index > firstTimerIndex && call[1] === 50,
+      );
+      expect(secondTimerIndex).toBeGreaterThan(firstTimerIndex);
+      clearTimeout(
+        setTimeoutSpy.mock.results[secondTimerIndex]?.value as ReturnType<typeof setTimeout>,
+      );
+      (setTimeoutSpy.mock.calls[secondTimerIndex]?.[0] as (() => void) | undefined)?.();
+
+      await vi.waitFor(() => {
+        expect(started).toEqual(["1", "2"]);
+      });
+
+      if (!releaseFirst) {
+        throw new Error("Expected first inbound debounce release callback to be initialized");
+      }
+      releaseFirst();
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
   it("serializes keyed turns when immediate serialization is enabled", async () => {
     const started: string[] = [];
     let releaseFirst: (() => void) | undefined;

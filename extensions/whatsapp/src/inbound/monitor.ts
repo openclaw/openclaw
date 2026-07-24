@@ -571,10 +571,17 @@ export async function attachWebInboxToSocket(
     };
   };
 
+  const reportInboundFlushError = (err: unknown) => {
+    inboundLogger.error({ error: String(err) }, "failed handling inbound web message");
+    inboundConsoleLog.error(`Failed handling inbound web message: ${String(err)}`);
+  };
   const debouncer = createInboundDebouncer<QueuedInboundMessage>({
     debounceMs: inboundDebounceMs,
     buildKey: (msg) => msg.debounceKey ?? buildInboundDebounceKey(msg),
     shouldDebounce: shouldDebounceInboundMessage,
+    // Return as soon as delivery into the session lane begins so a later same-key
+    // flush can steer the active run. Keep activeInboundFlushes until the turn
+    // settles so close() still drains in-flight work (#113180).
     onFlush: async (entries) => {
       let finishFlush!: () => void;
       const flushTask = new Promise<void>((resolve) => {
@@ -583,91 +590,91 @@ export async function attachWebInboxToSocket(
       activeInboundFlushes.add(flushTask);
       publishPendingWorkState();
       notifyDebounceWork();
-      try {
-        const orderedEntries = orderDebouncedInboundEntries(entries);
-        const last = orderedEntries.at(-1);
-        if (!last) {
-          return;
-        }
-        const { lifecycle, settle, abandon } = buildFlushIngressLifecycle(orderedEntries);
+      const runFlush = async () => {
         try {
-          if (orderedEntries.length === 1) {
-            await options.onMessage(attachWhatsAppIngressLifecycle(last, lifecycle));
+          const orderedEntries = orderDebouncedInboundEntries(entries);
+          const last = orderedEntries.at(-1);
+          if (!last) {
+            return;
+          }
+          const { lifecycle, settle, abandon } = buildFlushIngressLifecycle(orderedEntries);
+          try {
+            if (orderedEntries.length === 1) {
+              await options.onMessage(attachWhatsAppIngressLifecycle(last, lifecycle));
+              await settle();
+              await Promise.all(
+                orderedEntries.map((entry) => maybeMarkInboundAsRead(entry.readReceipt)),
+              );
+              return;
+            }
+            const mentioned = new Set<string>();
+            for (const entry of orderedEntries) {
+              for (const jid of entry.group?.mentions?.jids ?? []) {
+                mentioned.add(jid);
+              }
+            }
+            const combinedBody = orderedEntries
+              .map((entry) => entry.payload.body)
+              .filter(Boolean)
+              .join("\n");
+            const combinedCommandBody = orderedEntries
+              .map((entry) => entry.payload.commandBody ?? entry.payload.body)
+              .filter(Boolean)
+              .join("\n");
+            const combinedMentions =
+              mentioned.size > 0
+                ? {
+                    ...last.group?.mentions,
+                    jids: Array.from(mentioned),
+                  }
+                : last.group?.mentions;
+            const combinedGroup =
+              last.group || combinedMentions
+                ? {
+                    ...last.group,
+                    mentions: combinedMentions,
+                  }
+                : undefined;
+            const combinedMessage: QueuedInboundMessage = attachWhatsAppIngressLifecycle(
+              withDeprecatedWebInboundMessageFlatAliases({
+                ...last,
+                ...(lifecycle ? { turnAdoptionLifecycle: lifecycle } : {}),
+                payload: {
+                  ...last.payload,
+                  body: combinedBody,
+                  commandBody: combinedCommandBody,
+                },
+                group: combinedGroup,
+                event: {
+                  ...last.event,
+                  isBatched: true,
+                },
+              }),
+              lifecycle,
+            );
+            await options.onMessage(combinedMessage);
             await settle();
             await Promise.all(
               orderedEntries.map((entry) => maybeMarkInboundAsRead(entry.readReceipt)),
             );
-            return;
+          } catch (error) {
+            await abandon();
+            throw error;
           }
-          const mentioned = new Set<string>();
-          for (const entry of orderedEntries) {
-            for (const jid of entry.group?.mentions?.jids ?? []) {
-              mentioned.add(jid);
+        } finally {
+          for (const entry of entries) {
+            if (entry.debounceKey) {
+              pendingDebounceKeys.delete(entry.debounceKey);
             }
           }
-          const combinedBody = orderedEntries
-            .map((entry) => entry.payload.body)
-            .filter(Boolean)
-            .join("\n");
-          const combinedCommandBody = orderedEntries
-            .map((entry) => entry.payload.commandBody ?? entry.payload.body)
-            .filter(Boolean)
-            .join("\n");
-          const combinedMentions =
-            mentioned.size > 0
-              ? {
-                  ...last.group?.mentions,
-                  jids: Array.from(mentioned),
-                }
-              : last.group?.mentions;
-          const combinedGroup =
-            last.group || combinedMentions
-              ? {
-                  ...last.group,
-                  mentions: combinedMentions,
-                }
-              : undefined;
-          const combinedMessage: QueuedInboundMessage = attachWhatsAppIngressLifecycle(
-            withDeprecatedWebInboundMessageFlatAliases({
-              ...last,
-              ...(lifecycle ? { turnAdoptionLifecycle: lifecycle } : {}),
-              payload: {
-                ...last.payload,
-                body: combinedBody,
-                commandBody: combinedCommandBody,
-              },
-              group: combinedGroup,
-              event: {
-                ...last.event,
-                isBatched: true,
-              },
-            }),
-            lifecycle,
-          );
-          await options.onMessage(combinedMessage);
-          await settle();
-          await Promise.all(
-            orderedEntries.map((entry) => maybeMarkInboundAsRead(entry.readReceipt)),
-          );
-        } catch (error) {
-          await abandon();
-          throw error;
+          activeInboundFlushes.delete(flushTask);
+          finishFlush();
+          publishPendingWorkState();
         }
-      } finally {
-        for (const entry of entries) {
-          if (entry.debounceKey) {
-            pendingDebounceKeys.delete(entry.debounceKey);
-          }
-        }
-        activeInboundFlushes.delete(flushTask);
-        finishFlush();
-        publishPendingWorkState();
-      }
+      };
+      void runFlush().catch(reportInboundFlushError);
     },
-    onError: (err) => {
-      inboundLogger.error({ error: String(err) }, "failed handling inbound web message");
-      inboundConsoleLog.error(`Failed handling inbound web message: ${String(err)}`);
-    },
+    onError: reportInboundFlushError,
   });
   const groupMetadataCache = options.groupMetadataCache ?? new Map();
   const groupMetaCache = new Map<string, LocalGroupMetadataCacheEntry>();

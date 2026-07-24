@@ -980,68 +980,116 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("drains serialized same-lane messages after close", async () => {
-    vi.useFakeTimers();
-    try {
-      let releaseFirst: (() => void) | undefined;
-      const firstTurn = new Promise<void>((resolve) => {
-        releaseFirst = resolve;
-      });
-      const onMessage = vi.fn(async () => {
-        if (onMessage.mock.calls.length === 1) {
-          await firstTurn;
-        }
-      });
-      const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
-        debounceMs: 50,
-      });
-      sock.ev.emit(
-        "messages.upsert",
-        buildNotifyMessageUpsert({
-          id: nextMessageId("debounce-close-1"),
-          remoteJid: "999@s.whatsapp.net",
-          text: "first",
-          timestamp: 1_700_000_000,
-          pushName: "Tester",
-        }),
-      );
-      await vi.advanceTimersByTimeAsync(50);
-      await waitForMessageCalls(onMessage, 1);
-      expect(inboundMessage(onMessage).payload.body).toBe("first");
-
-      const second = buildNotifyMessageUpsert({
-        id: nextMessageId("debounce-close-2"),
+  it("lets a later same-key flush start while an earlier turn is still active", async () => {
+    // Debounce must release the conversation key once delivery begins so a
+    // follow-up can steer the active run (#113180). Adopt immediately to mirror
+    // session-lane acceptance while the turn itself remains in flight.
+    let releaseFirst: (() => void) | undefined;
+    const firstTurn = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const onMessage = vi.fn(async (message: WebInboundMessage) => {
+      const lifecycle = resolveWhatsAppIngressLifecycle(message);
+      if (!lifecycle) {
+        throw new Error("expected durable ingress lifecycle");
+      }
+      await lifecycle.onAdopted();
+      if (onMessage.mock.calls.length === 1) {
+        await firstTurn;
+      }
+    });
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      debounceMs: 20,
+    });
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("debounce-steer-1"),
         remoteJid: "999@s.whatsapp.net",
-        text: "second",
+        text: "first",
+        timestamp: 1_700_000_000,
+        pushName: "Tester",
+      }),
+    );
+    await waitForMessageCalls(onMessage, 1);
+    expect(inboundMessage(onMessage).payload.body).toBe("first");
+
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("debounce-steer-2"),
+        remoteJid: "999@s.whatsapp.net",
+        text: "steer",
         timestamp: 1_700_000_001,
         pushName: "Tester",
-      });
-      const third = buildNotifyMessageUpsert({
-        id: nextMessageId("debounce-close-3"),
+      }),
+    );
+    await waitForMessageCalls(onMessage, 2);
+    expect(inboundMessage(onMessage, 1).payload.body).toBe("steer");
+
+    releaseFirst?.();
+    await listener.close();
+  });
+
+  it("drains same-lane messages after close while an earlier turn is still active", async () => {
+    let releaseFirst: (() => void) | undefined;
+    const firstTurn = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const onMessage = vi.fn(async (message: WebInboundMessage) => {
+      const lifecycle = resolveWhatsAppIngressLifecycle(message);
+      if (!lifecycle) {
+        throw new Error("expected durable ingress lifecycle");
+      }
+      await lifecycle.onAdopted();
+      if (onMessage.mock.calls.length === 1) {
+        await firstTurn;
+      }
+    });
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      debounceMs: 20,
+    });
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("debounce-close-1"),
         remoteJid: "999@s.whatsapp.net",
-        text: "third",
-        timestamp: 1_700_000_002,
+        text: "first",
+        timestamp: 1_700_000_000,
         pushName: "Tester",
-      });
-      sock.ev.emit("messages.upsert", {
-        type: "notify",
-        messages: [...second.messages, ...third.messages],
-      });
+      }),
+    );
+    await waitForMessageCalls(onMessage, 1);
+    expect(inboundMessage(onMessage).payload.body).toBe("first");
 
-      const closePromise = listener.close();
-      expect(onMessage).toHaveBeenCalledTimes(1);
+    const second = buildNotifyMessageUpsert({
+      id: nextMessageId("debounce-close-2"),
+      remoteJid: "999@s.whatsapp.net",
+      text: "second",
+      timestamp: 1_700_000_001,
+      pushName: "Tester",
+    });
+    const third = buildNotifyMessageUpsert({
+      id: nextMessageId("debounce-close-3"),
+      remoteJid: "999@s.whatsapp.net",
+      text: "third",
+      timestamp: 1_700_000_002,
+      pushName: "Tester",
+    });
+    sock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [...second.messages, ...third.messages],
+    });
 
-      releaseFirst?.();
-      await closePromise;
+    const closePromise = listener.close();
+    await waitForMessageCalls(onMessage, 3);
+    expect(inboundMessage(onMessage, 1).payload.body).toBe("second");
+    expect(inboundMessage(onMessage, 1).admission?.conversation.kind).toBe("direct");
+    expect(inboundMessage(onMessage, 2).payload.body).toBe("third");
+    expect(inboundMessage(onMessage, 2).admission?.conversation.kind).toBe("direct");
 
-      expect(onMessage).toHaveBeenCalledTimes(3);
-      expect(inboundMessage(onMessage, 1).payload.body).toBe("second");
-      expect(inboundMessage(onMessage, 1).admission?.conversation.kind).toBe("direct");
-      expect(inboundMessage(onMessage, 2).payload.body).toBe("third");
-      expect(inboundMessage(onMessage, 2).admission?.conversation.kind).toBe("direct");
-    } finally {
-      vi.useRealTimers();
-    }
+    releaseFirst?.();
+    await closePromise;
   });
 
   it("completes shutdown under a long durable debounce without waiting for the window", async () => {
