@@ -211,6 +211,14 @@ describe("stripReasoningTagsFromText", () => {
         expected: "A visible answer B",
       },
       {
+        input: "Before<thinking/>After",
+        expected: "BeforeAfter",
+      },
+      {
+        input: "A <thinking id='x'/> B",
+        expected: "A  B",
+      },
+      {
         input: "A <final data-model=openrouter/google/gemini>answer</final> B",
         expected: "A answer B",
       },

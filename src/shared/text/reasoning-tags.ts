@@ -113,6 +113,13 @@ export function stripReasoningTagsFromText(
       continue;
     }
 
+    // Self-closing tag: strip the marker without changing reasoning depth.
+    if (/\/\s*>$/.test(match[0]) && !isClose) {
+      result += cleaned.slice(lastIndex, idx);
+      lastIndex = idx + match[0].length;
+      continue;
+    }
+
     if (thinkingDepth === 0) {
       if (
         scope === "leading" &&
