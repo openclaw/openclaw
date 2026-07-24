@@ -266,8 +266,8 @@ describe("extractDeliveryInfo", () => {
       channel: "telegram",
       to: "group:98765",
       accountId: "main",
+      threadId: "55",
     });
-    storeState.store[baseKey].lastThreadId = "55";
 
     const result = extractDeliveryInfo(topicKey);
 

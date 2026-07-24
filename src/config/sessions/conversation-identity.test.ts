@@ -15,6 +15,7 @@ type LegacyDeliveryFixture = SessionEntry & {
   origin?: SessionOrigin;
   channel?: string;
   lastAccountId?: string;
+  lastChannel?: string;
 };
 
 function conversationIdentityFromSessionEntry(entry: LegacyDeliveryFixture) {
@@ -226,7 +227,7 @@ describe("conversation identity", () => {
 
   it.each([
     { fallback: { origin: { provider: "reef", accountId: "work" } }, label: "origin" },
-    { fallback: { lastAccountId: "work" }, label: "last route" },
+    { fallback: { lastChannel: "reef", lastAccountId: "work" }, label: "last route" },
   ])("fills an omitted delivery account from the persisted $label", ({ fallback }) => {
     const identity = conversationIdentityFromSessionEntry({
       sessionId: "session-main",

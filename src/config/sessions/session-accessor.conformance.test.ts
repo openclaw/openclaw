@@ -1336,6 +1336,7 @@ describe("sqlite session normalization", () => {
     expect(loadSqliteSessionEntry(scope)).toEqual({
       sessionId: "restored-session",
       updatedAt: 20,
+      delivery: { kind: "none" },
     });
   });
 
@@ -1905,6 +1906,7 @@ describe("sqlite session normalization", () => {
       entry_json: JSON.stringify({
         sessionId: "minimal-session",
         sessionStartedAt: 123,
+        delivery: { kind: "none" },
         updatedAt: 123,
       }),
       node_updated_at: 123,

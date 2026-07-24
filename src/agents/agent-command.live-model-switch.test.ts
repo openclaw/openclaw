@@ -3,7 +3,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
-import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
+import {
+  deliveryContextFromSession,
+  normalizeSessionDeliveryState,
+} from "../utils/delivery-context.shared.js";
 import {
   buildTestAllowedModelSet,
   type CommandSessionEntryFixture,
@@ -2636,12 +2639,14 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     setupSingleAttemptFallback();
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
     setupBareStoredSession({
-      deliveryContext: {
-        channel: "discord",
-        to: "discord:channel:general",
-        accountId: "main",
-        threadId: "thread-1",
-      },
+      delivery: normalizeSessionDeliveryState({
+        context: {
+          channel: "discord",
+          to: "discord:channel:general",
+          accountId: "main",
+          threadId: "thread-1",
+        },
+      }),
     });
     state.deliverAgentCommandResultMock.mockResolvedValue({ deliverySucceeded: true });
 
@@ -2666,7 +2671,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         explicitTo: undefined,
         requestedChannel: undefined,
         sessionEntry: expect.objectContaining({
-          deliveryContext: expect.objectContaining({ to: "discord:channel:general" }),
+          delivery: expect.objectContaining({
+            context: expect.objectContaining({ to: "discord:channel:general" }),
+          }),
         }),
         wantsDelivery: true,
       }),

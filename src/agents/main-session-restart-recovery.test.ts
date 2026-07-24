@@ -34,6 +34,7 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
 import { createDeferred } from "../test-utils/deferred.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { setActiveEmbeddedRunLifecycleGeneration } from "./embedded-agent-runner/run-state.js";
 import {
   clearActiveEmbeddedRun,
@@ -4129,16 +4130,20 @@ describe("main-session-restart-recovery", () => {
     });
   });
 
-  it("sends a visible notice through the legacy route when no resumable transcript survives", async () => {
+  it("sends a visible notice through the canonical route when no resumable transcript survives", async () => {
     const sessionsDir = await makeSessionsDir();
     await writeStore(sessionsDir, {
       "agent:main:demo-channel:room-1": {
         ...runningSessionEntry("main-session"),
         abortedLastRun: true,
-        lastChannel: "discord",
-        lastTo: "discord:channel:room-1",
-        lastAccountId: "default",
-        lastThreadId: "thread-1",
+        delivery: normalizeSessionDeliveryState({
+          context: {
+            channel: "discord",
+            to: "discord:channel:room-1",
+            accountId: "default",
+            threadId: "thread-1",
+          },
+        }),
       },
     });
     await writeTranscript(sessionsDir, "main-session", [
