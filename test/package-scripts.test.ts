@@ -175,6 +175,12 @@ describe("package scripts", () => {
     );
   });
 
+  it("runs SQLite snapshot path coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/infra/sqlite-snapshot.test.ts",
+    );
+  });
+
   it("runs cross-OS installer behavior coverage in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
       "test/scripts/openclaw-cross-os-installer.windows.test.ts",

@@ -161,7 +161,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: shipped Slack and Discord setup compatibility helpers.
       // +3: typed channel partial-delivery error, creator, and structural guard.
       // +1: closed attempt-terminal merge, normalization, and projection helper.
-      4701,
+      // +1: canonical unknown-value to Error coercion.
+      4702,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -179,7 +180,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: canonical incognito session classifier for storage-safe plugin behavior.
       // +2: shipped Slack and Discord setup compatibility helpers.
       // +2: channel partial-delivery error creator and structural guard.
-      2847,
+      // +1: canonical unknown-value to Error coercion.
+      2848,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

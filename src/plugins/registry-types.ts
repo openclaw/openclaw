@@ -192,6 +192,7 @@ export type PluginDashboardActionVerbRegistration = PluginManifestDashboardActio
 type PluginCliBackendRegistration = {
   pluginId: string;
   pluginName?: string;
+  builtWithOpenClawVersion?: string;
   backend: CliBackendPlugin;
   source: string;
   rootDir?: string;
@@ -413,6 +414,7 @@ export type PluginRecord = {
   id: string;
   name: string;
   version?: string;
+  builtWithOpenClawVersion?: string;
   packageName?: string;
   description?: string;
   format?: PluginFormat;
