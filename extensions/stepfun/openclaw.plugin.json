@@ -5,17 +5,27 @@
     "onStartup": false
   },
   "enabledByDefault": true,
-  "providers": ["stepfun", "stepfun-plan"],
-  "autoEnableWhenConfiguredProviders": ["stepfun", "stepfun-plan"],
+  "providers": [
+    "stepfun",
+    "stepfun-plan"
+  ],
+  "autoEnableWhenConfiguredProviders": [
+    "stepfun",
+    "stepfun-plan"
+  ],
   "setup": {
     "providers": [
       {
         "id": "stepfun",
-        "envVars": ["STEPFUN_API_KEY"]
+        "envVars": [
+          "STEPFUN_API_KEY"
+        ]
       },
       {
         "id": "stepfun-plan",
-        "envVars": ["STEPFUN_API_KEY"]
+        "envVars": [
+          "STEPFUN_API_KEY"
+        ]
       }
     ]
   },
@@ -69,7 +79,9 @@
             "id": "step-3.5-flash",
             "name": "Step 3.5 Flash",
             "reasoning": true,
-            "input": ["text"],
+            "input": [
+              "text"
+            ],
             "contextWindow": 262144,
             "maxTokens": 65536,
             "cost": {
@@ -129,7 +141,9 @@
             "id": "step-3.5-flash",
             "name": "Step 3.5 Flash",
             "reasoning": true,
-            "input": ["text"],
+            "input": [
+              "text"
+            ],
             "contextWindow": 262144,
             "maxTokens": 65536,
             "cost": {
@@ -143,7 +157,9 @@
             "id": "step-3.5-flash-2603",
             "name": "Step 3.5 Flash 2603",
             "reasoning": true,
-            "input": ["text"],
+            "input": [
+              "text"
+            ],
             "contextWindow": 262144,
             "maxTokens": 65536,
             "cost": {
@@ -227,5 +243,38 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {}
+  },
+  "contracts": {
+    "mediaUnderstandingProviders": [
+      "stepfun"
+    ]
+  },
+  "mediaUnderstandingProviderMetadata": {
+    "stepfun": {
+      "capabilities": [
+        "image",
+        "video"
+      ],
+      "defaultModels": {
+        "image": "step-3.7-flash",
+        "video": "step-3.7-flash"
+      },
+      "autoPriority": {
+        "video": 20
+      }
+    },
+    "stepfun-plan": {
+      "capabilities": [
+        "image",
+        "video"
+      ],
+      "defaultModels": {
+        "image": "step-3.7-flash",
+        "video": "step-3.7-flash"
+      },
+      "autoPriority": {
+        "video": 20
+      }
+    }
   }
 }
