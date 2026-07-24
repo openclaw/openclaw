@@ -59,6 +59,7 @@ import {
   getReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
   markReplyPayloadForSourceSuppressionDelivery,
+  setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
@@ -98,6 +99,12 @@ import {
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery.js";
 import { type InternalGetReplyOptions, shouldBridgeCliPreambleEvents } from "./get-reply.types.js";
 import { refreshActiveGoalContext } from "./inbound-meta.js";
+import {
+  applyOperationalReplyPolicy,
+  isOperationalReplyPayload,
+  markOperationalReplyPolicyDelivered,
+  resolveOperationalReplyPolicy,
+} from "./operational-reply-policy.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
 import {
@@ -131,6 +138,21 @@ import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
 type EmbeddedAgentRunResult = Awaited<ReturnType<typeof runEmbeddedAgent>>;
+
+function resolveFollowupOperationalReplySourceEventKey(params: {
+  queued: FollowupRun;
+  kind: ReplyDispatchKind;
+  payloadIndex: number;
+  runId?: string;
+}): string {
+  const sourceMessageKey =
+    params.queued.messageId ??
+    params.queued.originatingReplyToId ??
+    params.runId ??
+    params.queued.run.sessionId ??
+    "queued-followup";
+  return `${sourceMessageKey}:${params.kind}:${params.payloadIndex}`;
+}
 
 type FollowupAgentEvent = { stream: string; data: Record<string, unknown> };
 
@@ -418,28 +440,47 @@ export function createFollowupRunner(params: {
       agentDir: queued.run.agentDir,
     });
 
-    const sendablePayloads = payloads.filter(
+    const policyCandidatePayloads = payloads.filter(
       (payload): payload is ReplyPayload =>
         hasOutboundReplyContent(payload) &&
         (!deliveryPlan.isSilentPayload(payload) ||
-          getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true),
+          getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true ||
+          isOperationalReplyPayload({ payload, explicitCommandTurn: false })),
     );
-
-    if (sendablePayloads.length === 0) {
-      return false;
-    }
-
-    if (!shouldRouteToOriginating && !opts?.onBlockReply) {
-      defaultRuntime.error?.(
-        "followup queue: completed with payloads but no origin route or visible dispatcher is available",
-      );
+    const replyKind = options.kind ?? "final";
+    const applyFollowupPayloadPolicy = async (
+      payload: ReplyPayload,
+      payloadIndex: number,
+      kind: ReplyDispatchKind,
+    ) =>
+      await applyOperationalReplyPolicy({
+        cfg: runtimeConfig,
+        payload,
+        explicitCommandTurn: false,
+        sendPolicyDenied: false,
+        sourceSessionKey: queued.run.runtimePolicySessionKey ?? queued.run.sessionKey,
+        sourceStorePath: storePath,
+        sourceEventKey: resolveFollowupOperationalReplySourceEventKey({
+          queued,
+          kind,
+          payloadIndex,
+          runId: options.runId,
+        }),
+        sourceChannel: queued.originatingChannel ?? queued.run.messageProvider,
+        provider: queued.run.messageProvider,
+        surface: queued.originatingChannel,
+        chatType: queued.originatingChatType ?? queued.run.chatType,
+        inboundEventKind: queued.currentInboundEventKind,
+        messageKey: queued.messageId,
+        logPrefix: "followup queue",
+      });
+    if (policyCandidatePayloads.length === 0) {
       return false;
     }
 
     let deliveredAnyPayload = false;
     let crossChannelRouteFailureNeedsNotice = false;
     let routedAnyCrossChannelPayloadToOrigin = false;
-    const replyKind = options.kind ?? "final";
     const sendDispatcherPayload = async (payload: ReplyPayload): Promise<boolean> => {
       if (!opts?.onBlockReply) {
         return false;
@@ -450,86 +491,126 @@ export function createFollowupRunner(params: {
       await opts.onBlockReply(payload);
       return true;
     };
-    for (const payload of sendablePayloads) {
-      const providerRoute = deliveryPlan.resolveFollowupRoute({
-        payload,
-        originatingChannel,
-        originatingTo,
-        originRoutable: Boolean(shouldRouteToOriginating),
-        dispatcherAvailable: Boolean(opts?.onBlockReply),
-      });
-      if (providerRoute?.route === "drop") {
-        logVerbose(
-          `followup queue: provider hook dropped payload route reason=${providerRoute.reason ?? "unspecified"}`,
-        );
+    for (const [payloadIndex, payload] of policyCandidatePayloads.entries()) {
+      const policyResult = await applyFollowupPayloadPolicy(payload, payloadIndex, replyKind);
+      if (!policyResult.shouldDeliver) {
         continue;
       }
-      const deliveryRoute =
-        providerRoute?.route === "origin" && shouldRouteToOriginating
-          ? "origin"
-          : providerRoute?.route === "dispatcher" && opts?.onBlockReply
-            ? "dispatcher"
-            : shouldRouteToOriginating
-              ? "origin"
-              : opts?.onBlockReply
-                ? "dispatcher"
-                : undefined;
-      await typingSignals.signalTextDelta(payload.text);
-
-      // Route to originating channel if set, otherwise fall back to dispatcher.
-      if (deliveryRoute === "origin" && isRoutableChannel(originatingChannel) && originatingTo) {
-        const payloadMetadata = getReplyPayloadMetadata(payload);
-        const hasTranscriptOwner =
-          payloadMetadata?.assistantMessageIndex !== undefined ||
-          payloadMetadata?.assistantTranscriptOwned === true;
-        const result = await routeReply({
+      let policySettled = false;
+      const settleOperationalPolicy = (delivered: boolean): Promise<void> | undefined => {
+        policySettled = true;
+        return policyResult.markDelivered
+          ? markOperationalReplyPolicyDelivered(policyResult, delivered)
+          : undefined;
+      };
+      try {
+        if (!shouldRouteToOriginating && !opts?.onBlockReply) {
+          defaultRuntime.error?.(
+            "followup queue: completed with payloads but no origin route or visible dispatcher is available",
+          );
+          return false;
+        }
+        const providerRoute = deliveryPlan.resolveFollowupRoute({
           payload,
-          channel: originatingChannel,
-          to: originatingTo,
-          sessionKey: queued.run.sessionKey,
-          accountId: queued.originatingAccountId,
-          requesterSenderId: queued.run.senderId,
-          requesterSenderName: queued.run.senderName,
-          requesterSenderUsername: queued.run.senderUsername,
-          requesterSenderE164: queued.run.senderE164,
-          threadId: queued.originatingThreadId,
-          cfg: runtimeConfig,
-          mirror: hasTranscriptOwner ? false : options.mirror,
-          replyKind,
-          runId: options.runId,
+          originatingChannel,
+          originatingTo,
+          originRoutable: Boolean(shouldRouteToOriginating),
+          dispatcherAvailable: Boolean(opts?.onBlockReply),
         });
-        if (!result.ok) {
-          const errorMsg = result.error ?? "unknown error";
-          logVerbose(`followup queue: route-reply failed: ${errorMsg}`);
-          const provider = resolveOriginMessageProvider({
-            provider: queued.run.messageProvider,
+        if (providerRoute?.route === "drop") {
+          logVerbose(
+            `followup queue: provider hook dropped payload route reason=${providerRoute.reason ?? "unspecified"}`,
+          );
+          continue;
+        }
+        const deliveryRoute =
+          providerRoute?.route === "origin" && shouldRouteToOriginating
+            ? "origin"
+            : providerRoute?.route === "dispatcher" && opts?.onBlockReply
+              ? "dispatcher"
+              : shouldRouteToOriginating
+                ? "origin"
+                : opts?.onBlockReply
+                  ? "dispatcher"
+                  : undefined;
+        await typingSignals.signalTextDelta(payload.text);
+
+        // Route to originating channel if set, otherwise fall back to dispatcher.
+        if (deliveryRoute === "origin" && isRoutableChannel(originatingChannel) && originatingTo) {
+          const payloadMetadata = getReplyPayloadMetadata(payload);
+          const hasTranscriptOwner =
+            payloadMetadata?.assistantMessageIndex !== undefined ||
+            payloadMetadata?.assistantTranscriptOwned === true;
+          const result = await routeReply({
+            payload,
+            channel: originatingChannel,
+            to: originatingTo,
+            sessionKey: queued.run.sessionKey,
+            accountId: queued.originatingAccountId,
+            requesterSenderId: queued.run.senderId,
+            requesterSenderName: queued.run.senderName,
+            requesterSenderUsername: queued.run.senderUsername,
+            requesterSenderE164: queued.run.senderE164,
+            threadId: queued.originatingThreadId,
+            cfg: runtimeConfig,
+            mirror: hasTranscriptOwner ? false : options.mirror,
+            replyKind,
+            runId: options.runId,
           });
-          const origin = resolveOriginMessageProvider({
-            originatingChannel,
-          });
-          if (opts?.onBlockReply) {
-            if (origin && origin === provider) {
-              deliveredAnyPayload = (await sendDispatcherPayload(payload)) || deliveredAnyPayload;
+          if (!result.ok) {
+            const errorMsg = result.error ?? "unknown error";
+            logVerbose(`followup queue: route-reply failed: ${errorMsg}`);
+            const provider = resolveOriginMessageProvider({
+              provider: queued.run.messageProvider,
+            });
+            const origin = resolveOriginMessageProvider({
+              originatingChannel,
+            });
+            if (opts?.onBlockReply) {
+              if (origin && origin === provider) {
+                const delivered = await sendDispatcherPayload(payload);
+                const policySettle = settleOperationalPolicy(delivered);
+                if (policySettle) {
+                  await policySettle;
+                }
+                deliveredAnyPayload = delivered || deliveredAnyPayload;
+              } else {
+                crossChannelRouteFailureNeedsNotice = true;
+              }
             } else {
-              crossChannelRouteFailureNeedsNotice = true;
+              defaultRuntime.error?.(`followup queue: route-reply failed: ${errorMsg}`);
             }
-          } else {
-            defaultRuntime.error?.(`followup queue: route-reply failed: ${errorMsg}`);
+          } else if (!result.suppressed) {
+            const policySettle = settleOperationalPolicy(true);
+            if (policySettle) {
+              await policySettle;
+            }
+            deliveredAnyPayload = true;
+            const provider = resolveOriginMessageProvider({
+              provider: queued.run.messageProvider,
+            });
+            const origin = resolveOriginMessageProvider({
+              originatingChannel,
+            });
+            if (origin && provider && origin !== provider) {
+              routedAnyCrossChannelPayloadToOrigin = true;
+            }
           }
-        } else if (!result.suppressed) {
-          deliveredAnyPayload = true;
-          const provider = resolveOriginMessageProvider({
-            provider: queued.run.messageProvider,
-          });
-          const origin = resolveOriginMessageProvider({
-            originatingChannel,
-          });
-          if (origin && provider && origin !== provider) {
-            routedAnyCrossChannelPayloadToOrigin = true;
+        } else if (deliveryRoute === "dispatcher") {
+          const delivered = await sendDispatcherPayload(payload);
+          const policySettle = settleOperationalPolicy(delivered);
+          if (policySettle) {
+            await policySettle;
+          }
+          deliveredAnyPayload = delivered || deliveredAnyPayload;
+        }
+      } finally {
+        if (!policySettled) {
+          const policySettle = settleOperationalPolicy(false);
+          if (policySettle) {
+            await policySettle;
           }
         }
-      } else if (deliveryRoute === "dispatcher") {
-        deliveredAnyPayload = (await sendDispatcherPayload(payload)) || deliveredAnyPayload;
       }
     }
     if (
@@ -537,18 +618,30 @@ export function createFollowupRunner(params: {
       !routedAnyCrossChannelPayloadToOrigin &&
       opts?.onBlockReply
     ) {
-      if (queued.currentInboundEventKind === "room_event") {
-        logVerbose("followup queue: cross-channel failure notice suppressed for room_event");
-        return deliveredAnyPayload;
+      const routeFailureNotice: ReplyPayload = markReplyPayloadForSourceSuppressionDelivery({
+        text:
+          "Follow-up completed, but OpenClaw could not deliver it to the originating " +
+          "channel. The reply content was not forwarded to this channel to avoid " +
+          "cross-channel misdelivery.",
+        isError: true,
+      });
+      const policyResult = await applyFollowupPayloadPolicy(
+        routeFailureNotice,
+        policyCandidatePayloads.length,
+        "block",
+      );
+      if (policyResult.shouldDeliver) {
+        if (
+          queued.currentInboundEventKind === "room_event" &&
+          resolveOperationalReplyPolicy(runtimeConfig).policy === "always"
+        ) {
+          logVerbose("followup queue: cross-channel failure notice suppressed for room_event");
+          return deliveredAnyPayload;
+        }
+        const delivered = await sendDispatcherPayload(routeFailureNotice);
+        await markOperationalReplyPolicyDelivered(policyResult, delivered);
+        deliveredAnyPayload = delivered || deliveredAnyPayload;
       }
-      deliveredAnyPayload =
-        (await sendDispatcherPayload({
-          text:
-            "Follow-up completed, but OpenClaw could not deliver it to the originating " +
-            "channel. The reply content was not forwarded to this channel to avoid " +
-            "cross-channel misdelivery.",
-          isError: true,
-        })) || deliveredAnyPayload;
     }
     return deliveredAnyPayload;
   };
@@ -624,6 +717,20 @@ export function createFollowupRunner(params: {
       const shouldEmitToolOutputProgress = () =>
         resolveCurrentVerboseLevel() === "full" && !shouldSuppressDefaultToolProgressMessages();
       const isRoomEventFollowup = () => queued.currentInboundEventKind === "room_event";
+      const shouldEvaluateRoomEventOperationalPayload = (payload: ReplyPayload) => {
+        if (!isRoomEventFollowup()) {
+          return true;
+        }
+        if (!isOperationalReplyPayload({ payload, explicitCommandTurn: false })) {
+          return false;
+        }
+        const operationalPolicy = resolveOperationalReplyPolicy(runtimeConfig).policy;
+        return (
+          operationalPolicy === "redirect" ||
+          operationalPolicy === "silent" ||
+          operationalPolicy === "once"
+        );
+      };
       let observedVisibleToolErrorProgress = false;
       const markVisibleToolErrorProgress = () => {
         if (resolveCurrentVerboseLevel() === "on" && shouldEmitToolResultProgress()) {
@@ -767,7 +874,7 @@ export function createFollowupRunner(params: {
           modelId: fallbackModel,
         },
       ) => {
-        if (isRoomEventFollowup()) {
+        if (!shouldEvaluateRoomEventOperationalPayload(payload)) {
           logVerbose("followup queue: compaction notice suppressed for room_event");
           return;
         }
@@ -840,21 +947,19 @@ export function createFollowupRunner(params: {
           includeDetails: run.verboseLevel === "on" || run.verboseLevel === "full",
         });
         if (preflightCompactionFailureText) {
-          if (isRoomEventFollowup()) {
+          const preflightCompactionFailurePayload = markReplyPayloadForSourceSuppressionDelivery({
+            text: preflightCompactionFailureText,
+          });
+          if (!shouldEvaluateRoomEventOperationalPayload(preflightCompactionFailurePayload)) {
             logVerbose(
               "followup queue: preflight compaction failure notice suppressed for room_event",
             );
             return;
           }
-          await sendRunPayloads(
-            [
-              markReplyPayloadForSourceSuppressionDelivery({
-                text: preflightCompactionFailureText,
-              }),
-            ],
-            effectiveQueued,
-            { provider: fallbackProvider, modelId: fallbackModel },
-          );
+          await sendRunPayloads([preflightCompactionFailurePayload], effectiveQueued, {
+            provider: fallbackProvider,
+            modelId: fallbackModel,
+          });
           return;
         }
         throw err;
@@ -1090,7 +1195,7 @@ export function createFollowupRunner(params: {
               enqueueProgressDelivery(async () => {
                 // room_event turns are ambient; only an explicit message tool call
                 // may post back into the source chat.
-                if (isRoomEventFollowup()) {
+                if (!shouldEvaluateRoomEventOperationalPayload(payload)) {
                   return;
                 }
                 if (
@@ -1219,7 +1324,7 @@ export function createFollowupRunner(params: {
                         await enqueueProgressDelivery(async () => {
                           // Mirrors direct dispatch progress suppression: ambient
                           // room events never get automatic fast-mode notices.
-                          if (isRoomEventFollowup()) {
+                          if (!shouldEvaluateRoomEventOperationalPayload(payload)) {
                             return;
                           }
                           await sendRunPayloads(
@@ -1941,6 +2046,11 @@ export function createFollowupRunner(params: {
       if (responseUsageLine) {
         deliveryPayloads = appendUsageLine(deliveryPayloads, responseUsageLine);
       }
+      if (runResult.meta?.error?.kind === "hook_block") {
+        deliveryPayloads = deliveryPayloads.map((payload) =>
+          setReplyPayloadMetadata(payload, { beforeAgentRunBlocked: true }),
+        );
+      }
       if (autoCompactionCount > 0) {
         const previousSessionId = run.sessionId;
         const count = await incrementRunCompactionCount({
@@ -1974,20 +2084,39 @@ export function createFollowupRunner(params: {
           deliveryPayloads = [
             {
               text: `🧹 Auto-compaction complete${suffix}.`,
+              isCompactionNotice: true,
             },
             ...deliveryPayloads,
           ];
         }
       }
       if (run.sourceReplyDeliveryMode === "message_tool_only") {
-        const suppressionDeliverablePayloads = deliveryPayloads.filter(
-          (payload) =>
-            getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true,
+        const operationalDeliveryPayloads = deliveryPayloads.filter((payload) =>
+          isOperationalReplyPayload({ payload, explicitCommandTurn: false }),
         );
+        const hasNonOperationalDeliveryPayloads = deliveryPayloads.some(
+          (payload) => !isOperationalReplyPayload({ payload, explicitCommandTurn: false }),
+        );
+        const operationalPolicy = resolveOperationalReplyPolicy(runtimeConfig).policy;
+        const shouldEvaluateOperationalPayloads =
+          operationalDeliveryPayloads.length > 0 &&
+          (!isRoomEventFollowup() ||
+            operationalPolicy === "redirect" ||
+            operationalPolicy === "silent" ||
+            operationalPolicy === "once");
+        const suppressionDeliverablePayloads = deliveryPayloads.filter((payload) => {
+          if (getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression !== true) {
+            return false;
+          }
+          return (
+            !isOperationalReplyPayload({ payload, explicitCommandTurn: false }) ||
+            shouldEvaluateOperationalPayloads
+          );
+        });
         if (suppressionDeliverablePayloads.length > 0) {
           // Marked runtime output bypasses source-reply suppression, not the
           // admission-time send policy or ambient room-event silence.
-          if (isRoomEventFollowup()) {
+          if (isRoomEventFollowup() && !shouldEvaluateOperationalPayloads) {
             return;
           }
           await sendRunPayloads(
@@ -2000,6 +2129,25 @@ export function createFollowupRunner(params: {
             { runId },
           );
           return;
+        }
+        if (shouldEvaluateOperationalPayloads) {
+          await sendRunPayloads(
+            operationalDeliveryPayloads,
+            effectiveQueued,
+            {
+              provider: providerUsed,
+              modelId: modelUsed,
+            },
+            { runId },
+          );
+          if (!hasNonOperationalDeliveryPayloads) {
+            return;
+          }
+        } else if (operationalDeliveryPayloads.length > 0) {
+          logVerbose("followup queue: operational notice suppressed for room_event");
+          if (!hasNonOperationalDeliveryPayloads) {
+            return;
+          }
         }
         if (await enqueueStrandedReplyRecoveryRetry()) {
           return;

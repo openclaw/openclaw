@@ -13,17 +13,23 @@ import { logVerbose } from "../../globals.js";
 import { createTtsDirectiveTextStreamCleaner } from "../../tts/directives.js";
 import { shouldCleanTtsDirectiveText } from "../../tts/tts-config.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
+import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import type { ChooseDispatchRouteReadyState } from "./dispatch-from-config.choose-route.js";
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import { loadGetReplyFromConfigRuntime } from "./dispatch-from-config.runtime-loaders.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
-import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
+import { markOperationalReplyPolicyDelivered } from "./operational-reply-policy.js";
+import {
+  captureReplyDispatchDeliveryOutcome,
+  waitForReplyDispatcherIdle,
+} from "./reply-dispatcher.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
 export async function prepareDispatchExecution(state: ChooseDispatchRouteReadyState) {
   const {
+    applyDispatchOperationalReplyPolicy,
     cfg,
     ctx,
     deliveryChannel,
@@ -58,6 +64,33 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     suppressDelivery,
     traceReplyPhase,
   } = state;
+  const settleDirectOperationalPolicyAfterDispatch = async (
+    payload: ReplyPayload,
+    policyResult: Awaited<ReturnType<typeof applyDispatchOperationalReplyPolicy>>,
+    dispatch: () => boolean,
+  ): Promise<boolean> => {
+    const deliveryOutcome = captureReplyDispatchDeliveryOutcome(payload);
+    let delivered: boolean;
+    try {
+      delivered = dispatch();
+    } catch (error) {
+      await markOperationalReplyPolicyDelivered(policyResult, false);
+      throw error;
+    }
+    if (!delivered) {
+      await markOperationalReplyPolicyDelivered(policyResult, false);
+      return false;
+    }
+    if (deliveryOutcome.isTracked()) {
+      const settlement = deliveryOutcome.promise.then(async (outcome) => {
+        await markOperationalReplyPolicyDelivered(policyResult, outcome === "delivered");
+      });
+      registerReplyDispatcherSettledTask(dispatcher, () => settlement);
+    } else {
+      await markOperationalReplyPolicyDelivered(policyResult, true);
+    }
+    return true;
+  };
   // When automatic source delivery is suppressed, still let the agent process
   // the inbound message (context, memory, tool calls) but suppress automatic
   // outbound source delivery.
@@ -108,13 +141,21 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     toolStartStatusCount += 1;
     const payload: ReplyPayload = {
       text: `Working: ${normalizedLabel}`,
+      isStatusNotice: true,
     };
+    const policyResult = await applyDispatchOperationalReplyPolicy(payload);
+    if (!policyResult.shouldDeliver) {
+      return;
+    }
     if (shouldRouteToOriginating) {
-      await sendPayloadAsync(payload, undefined, false);
+      const delivered = await sendPayloadAsync(payload, undefined, false);
+      await markOperationalReplyPolicyDelivered(policyResult, delivered);
       return;
     }
     markInboundDedupeReplayUnsafe();
-    dispatcher.sendToolResult(payload);
+    await settleDirectOperationalPolicyAfterDispatch(payload, policyResult, () =>
+      dispatcher.sendToolResult(payload),
+    );
   };
   const sendPlanUpdate = async (payload: {
     explanation?: string;
@@ -132,12 +173,19 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
       text: formatPlanUpdateText(payload),
       isStatusNotice: true,
     };
+    const policyResult = await applyDispatchOperationalReplyPolicy(replyPayload);
+    if (!policyResult.shouldDeliver) {
+      return;
+    }
     if (shouldRouteToOriginating) {
-      await sendPayloadAsync(replyPayload, undefined, false);
+      const delivered = await sendPayloadAsync(replyPayload, undefined, false);
+      await markOperationalReplyPolicyDelivered(policyResult, delivered);
       return;
     }
     markInboundDedupeReplayUnsafe();
-    dispatcher.sendToolResult(replyPayload);
+    await settleDirectOperationalPolicyAfterDispatch(replyPayload, policyResult, () =>
+      dispatcher.sendToolResult(replyPayload),
+    );
   };
   const summarizeApprovalLabel = (payload: {
     status?: string;
@@ -487,6 +535,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     {
       maybeSendWorkingStatus,
       sendPlanUpdate,
+      settleDirectOperationalPolicyAfterDispatch,
       summarizeApprovalLabel,
       summarizePatchLabel,
       cleanBlockTtsDirectiveText,

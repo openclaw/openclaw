@@ -263,6 +263,8 @@ export type ReplyPayloadMetadata = {
   beforeAgentRunBlocked?: boolean;
   /** Warning synthesized from an observed tool error after the run produced assistant output. */
   nonTerminalToolErrorWarning?: boolean;
+  /** Explicit command handler reply that must stay visible to the authorized caller. */
+  commandReply?: boolean;
   /** Unresolved mutating tool failure that makes a heartbeat run terminally failed. */
   heartbeatTerminalToolFailure?: {
     toolName: string;
@@ -291,6 +293,23 @@ export function isReplyPayloadNonTerminalToolErrorWarning(payload: object): bool
   return getReplyPayloadMetadata(payload)?.nonTerminalToolErrorWarning === true;
 }
 
+/** Returns true for automatic runtime notices, not normal assistant answer content. */
+export function isReplyPayloadOperationalNotice(
+  payload: Pick<
+    ReplyPayload,
+    "channelData" | "isCompactionNotice" | "isError" | "isFallbackNotice" | "isStatusNotice"
+  >,
+): boolean {
+  return (
+    payload.isError === true ||
+    payload.isCompactionNotice === true ||
+    payload.isFallbackNotice === true ||
+    payload.isStatusNotice === true ||
+    isFastModeAutoProgressPayload(payload) ||
+    isReplyPayloadNonTerminalToolErrorWarning(payload)
+  );
+}
+
 /** Copies internal payload metadata when cloning or transforming payload objects. */
 export function copyReplyPayloadMetadata<T extends object>(source: object, payload: T): T {
   const metadata = getReplyPayloadMetadata(source);
@@ -311,9 +330,17 @@ export function markCommandReplyForDelivery(
     return reply;
   }
   if (Array.isArray(reply)) {
-    return reply.map((payload) => markReplyPayloadForSourceSuppressionDelivery(payload));
+    return reply.map((payload) =>
+      setReplyPayloadMetadata(payload, {
+        deliverDespiteSourceReplySuppression: true,
+        commandReply: true,
+      }),
+    );
   }
-  return markReplyPayloadForSourceSuppressionDelivery(reply);
+  return setReplyPayloadMetadata(reply, {
+    deliverDespiteSourceReplySuppression: true,
+    commandReply: true,
+  });
 }
 
 /** Returns true for internal status/notice payloads, not assistant answer content. */

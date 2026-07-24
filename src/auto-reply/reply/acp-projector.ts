@@ -335,12 +335,12 @@ export function createAcpReplyProjector(params: {
     }
     if (settings.deliveryMode === "final_only") {
       pendingToolDeliveries.push({
-        payload: { text: formatted },
+        payload: { text: formatted, isStatusNotice: true },
         meta,
       });
     } else {
       await flush(true);
-      await params.deliver("tool", { text: formatted }, meta);
+      await params.deliver("tool", { text: formatted, isStatusNotice: true }, meta);
     }
     lastStatusHash = hash;
   };

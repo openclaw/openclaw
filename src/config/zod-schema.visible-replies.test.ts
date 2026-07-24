@@ -67,6 +67,56 @@ describe("visible reply config schema", () => {
     }
   });
 
+  it("accepts operational reply delivery policies", () => {
+    for (const policy of ["always", "once", "silent"] as const) {
+      const result = validateConfigObjectRaw({
+        messages: {
+          operationalReplies: { policy },
+        },
+      });
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.config.messages?.operationalReplies?.policy).toBe(policy);
+      }
+    }
+
+    const redirect = validateConfigObjectRaw({
+      messages: {
+        operationalReplies: {
+          policy: "redirect",
+          redirectSessionKey: "agent:main:ops",
+        },
+      },
+    });
+
+    expect(redirect.ok).toBe(true);
+    if (redirect.ok) {
+      expect(redirect.config.messages?.operationalReplies).toEqual({
+        policy: "redirect",
+        redirectSessionKey: "agent:main:ops",
+      });
+    }
+  });
+
+  it("rejects operational reply redirect without a target session", () => {
+    const result = validateConfigObjectRaw({
+      messages: {
+        operationalReplies: {
+          policy: "redirect",
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const issue = result.issues.find(
+        (candidate) => candidate.path === "messages.operationalReplies.redirectSessionKey",
+      );
+      expect(issue?.path).toBe("messages.operationalReplies.redirectSessionKey");
+    }
+  });
+
   it("accepts enum unmentioned group inbound values", () => {
     const legacy = validateConfigObjectRaw({
       messages: {

@@ -505,6 +505,16 @@ export type SessionEntry = SessionRestartRecoveryState &
     fallbackNoticeSelectedModel?: string;
     fallbackNoticeActiveModel?: string;
     fallbackNoticeReason?: string;
+    /**
+     * Operational reply fingerprints already delivered under
+     * messages.operationalReplies.policy="once".
+     */
+    operationalReplyOnceKeys?: string[];
+    /**
+     * In-flight operational reply fingerprints reserved before visible delivery.
+     * These are retried after restart and only move to operationalReplyOnceKeys on success.
+     */
+    operationalReplyPendingOnceKeys?: string[];
     contextTokens?: number;
     contextBudgetStatus?: SessionContextBudgetStatus;
     compactionCount?: number;

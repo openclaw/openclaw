@@ -19,11 +19,16 @@ import {
   capturePendingFinalDeliveryIdentity,
   reconcilePendingFinalDeliveryAfterSettlement,
 } from "./dispatch-from-config.pending-final.js";
+import {
+  isOperationalReplyPayload,
+  markOperationalReplyPolicyDelivered,
+} from "./operational-reply-policy.js";
 import type { ReplyDispatchDeliveryOutcome } from "./reply-dispatcher.js";
 
 export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState) {
   const {
     acpDispatchSessionKey,
+    applyDispatchOperationalReplyPolicy,
     attachSourceReplyDeliveryMode,
     cfg,
     chatType,
@@ -39,11 +44,13 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     flushPendingCommentaryProgress,
     getDispatchAbortSignal,
     getObservedReplyDelivery,
+    getOperationalReplyPolicyIntentionalSilence,
     isRoutedReplyDelivered,
     markIdle,
     markInboundDedupeReplayUnsafe,
     maybeApplyTtsWithFinalizationLease,
     normalizeReplyMediaPayload,
+    operationalReplyPolicy,
     preserveProgressCallbackStartOrder,
     reasoningPayloadsEnabled,
     recordAgentDispatchCompleted,
@@ -97,17 +104,29 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     payload: ReplyPayload;
   }> = [];
   let allQueuedFinalsObserved = true;
+  let suppressedFinalByOperationalPolicy = false;
+  const finalPolicySettlements: Promise<void>[] = [];
   // Explicit command turns (native or authorized text-slash like /compact) are
   // user-initiated, so a marked terminal reply for the command bypasses
   // room_event suppression. Ambient marked notices (no CommandTurn) stay
   // suppressed in room_event. sendPolicy: deny still suppresses everything.
   // Uses the same helper as the source-reply visibility policy so the bypass
   // and the policy stay aligned.
-  const shouldDeliverDespiteSourceReplySuppression = (reply: ReplyPayload) =>
-    suppressAutomaticSourceDelivery &&
-    !sendPolicyDenied &&
-    getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true &&
-    (ctx.InboundEventKind !== "room_event" || explicitCommandTurnCtx);
+  const shouldDeliverDespiteSourceReplySuppression = (reply: ReplyPayload) => {
+    const operationalReply = isOperationalReplyPayload({
+      payload: reply,
+      explicitCommandTurn: explicitCommandTurnCtx,
+    });
+    return (
+      suppressAutomaticSourceDelivery &&
+      !sendPolicyDenied &&
+      (getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true ||
+        operationalReply) &&
+      (ctx.InboundEventKind !== "room_event" ||
+        explicitCommandTurnCtx ||
+        (operationalReply && operationalReplyPolicy.policy !== "always"))
+    );
+  };
   const sentFinalPayloadDedupeKeys = new Set<string>();
   for (const [replyIndex, reply] of replies.entries()) {
     throwIfDispatchOperationAborted();
@@ -119,7 +138,13 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     if (reply.isCommentary === true && !commentaryPayloadsEnabled) {
       continue;
     }
+    const policyResult = await applyDispatchOperationalReplyPolicy(reply);
+    if (!policyResult.shouldDeliver) {
+      suppressedFinalByOperationalPolicy = true;
+      continue;
+    }
     if (suppressDelivery && !shouldDeliverDespiteSourceReplySuppression(reply)) {
+      await markOperationalReplyPolicyDelivered(policyResult, false);
       if (hasOutboundReplyContent(reply, { trimText: true })) {
         logVerbose(
           [
@@ -142,19 +167,44 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     }
     sentFinalPayloadDedupeKeys.add(finalPayloadDedupeKey);
     attemptedFinalDelivery = true;
-    const finalReply = await sendFinalPayload(reply, { deliveryId: String(replyIndex) });
+    let finalReply: Awaited<ReturnType<typeof sendFinalPayload>>;
+    try {
+      finalReply = await sendFinalPayload(reply, { deliveryId: String(replyIndex) });
+    } catch (error) {
+      await markOperationalReplyPolicyDelivered(policyResult, false);
+      throw error;
+    }
     queuedFinal = finalReply.queuedFinal || queuedFinal;
     routedFinalCount += finalReply.routedFinalCount;
     if (finalReply.queuedFinal) {
       if (finalReply.dispatcherOutcome) {
+        finalPolicySettlements.push(
+          finalReply.dispatcherOutcome.then(async (outcome) => {
+            await markOperationalReplyPolicyDelivered(policyResult, outcome === "delivered");
+          }),
+        );
         finalDeliveries.push({ outcome: finalReply.dispatcherOutcome, payload: reply });
       } else {
+        await markOperationalReplyPolicyDelivered(
+          policyResult,
+          finalReply.queuedFinal || finalReply.routedFinalCount > 0,
+        );
         allQueuedFinalsObserved = false;
       }
+    } else {
+      await markOperationalReplyPolicyDelivered(
+        policyResult,
+        finalReply.queuedFinal || finalReply.routedFinalCount > 0,
+      );
     }
     if (!finalReply.queuedFinal && finalReply.routedFinalCount === 0) {
       finalDeliveryFailed = true;
     }
+  }
+
+  if (finalPolicySettlements.length > 0) {
+    const settlement = Promise.all(finalPolicySettlements).then(() => undefined);
+    registerReplyDispatcherSettledTask(dispatcher, () => settlement);
   }
 
   if (attemptedFinalDelivery && !finalDeliveryFailed) {
@@ -192,6 +242,11 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     // Register successful queued cleanup before honoring a late abort. The
     // outer settle owner still runs it from finally (#89115).
     throwIfDispatchOperationAborted();
+  } else if (!attemptedFinalDelivery && suppressedFinalByOperationalPolicy) {
+    await clearPendingFinalDeliveryAfterSuccess({
+      ...pendingFinalDelivery,
+      identity: pendingFinalDeliveryIdentity,
+    });
   }
 
   if (!suppressDelivery) {
@@ -290,7 +345,10 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
         ? { sessionMetadataChanges: state.sessionMetadataChangesForResult }
         : {}),
       ...(getObservedReplyDelivery() ? { observedReplyDelivery: true } : {}),
-      ...(!queuedFinal && !getObservedReplyDelivery() && !emptyFinalAllowedAsSilent
+      ...(!queuedFinal &&
+      !getObservedReplyDelivery() &&
+      !emptyFinalAllowedAsSilent &&
+      !(getOperationalReplyPolicyIntentionalSilence() && !attemptedFinalDelivery)
         ? { noVisibleReplyFallbackEligible: true }
         : {}),
       ...(beforeAgentRunBlocked ? { beforeAgentRunBlocked } : {}),

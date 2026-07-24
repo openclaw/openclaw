@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -32,7 +33,7 @@ import {
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { resolveSilentReplyPolicyFromPolicies } from "../../shared/silent-reply-policy.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
-import type { ReplyPayload } from "../reply-payload.js";
+import { copyReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import { capturePendingConversationTurnReply } from "./conversation-turn-capture.js";
 import {
@@ -49,6 +50,11 @@ import type { PrepareDispatchDeliveryReadyState } from "./dispatch-from-config.p
 import { createInternalHookEvent, triggerInternalHook } from "./dispatch-from-config.runtime.js";
 import type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
 import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
+import {
+  applyOperationalReplyPolicy as applyOperationalReplyPolicyFromConfig,
+  markOperationalReplyPolicyDelivered,
+  resolveOperationalReplyPolicy,
+} from "./operational-reply-policy.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import { isDuplicateRestartRecoverySource } from "./restart-recovery-claim.js";
@@ -96,10 +102,24 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     mode: "additive" | "terminal",
     transcriptOwner?: PluginBindingTranscriptOwner,
   ): Promise<boolean> => {
-    if (suppressAutomaticSourceDelivery) {
+    const noticePayload =
+      payload.isError ||
+      payload.isFallbackNotice ||
+      payload.isCompactionNotice ||
+      payload.isStatusNotice
+        ? payload
+        : copyReplyPayloadMetadata(payload, { ...payload, isStatusNotice: true });
+    const policyResult = await applyDispatchOperationalReplyPolicy(noticePayload);
+    if (!policyResult.shouldDeliver) {
+      return policyResult.redirected === true;
+    }
+    if (suppressAutomaticSourceDelivery && operationalReplyPolicy.policy === "always") {
+      await markOperationalReplyPolicyDelivered(policyResult, false);
       return false;
     }
-    return await deliverBindingPayload(payload, mode, transcriptOwner);
+    const delivered = await deliverBindingPayload(noticePayload, mode, transcriptOwner);
+    await markOperationalReplyPolicyDelivered(policyResult, delivered);
+    return delivered;
   };
 
   // Hook contexts use transport-native ids (for example Slack `U123`), while
@@ -344,6 +364,40 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
         }
       : result;
   const explicitCommandTurnCtx = isExplicitSourceReplyCommand(ctx, cfg);
+  const operationalReplyPolicy = resolveOperationalReplyPolicy(cfg);
+  const operationalReplySourceSessionKey =
+    acpDispatchSessionKey ?? sessionStoreEntry.sessionKey ?? sessionKey;
+  const operationalReplySourceEventKey =
+    normalizeOptionalString(ctx.MessageSidFull) ??
+    normalizeOptionalString(ctx.MessageSid) ??
+    normalizeOptionalString(ctx.AmbientTranscriptMessageId) ??
+    normalizeOptionalString(ctx.MessageSidLast) ??
+    normalizeOptionalString(ctx.MessageSidFirst) ??
+    params.replyOptions?.runId ??
+    crypto.randomUUID();
+  let operationalReplyPolicyIntentionalSilence = false;
+  const applyDispatchOperationalReplyPolicy = async (payload: ReplyPayload) => {
+    const result = await applyOperationalReplyPolicyFromConfig({
+      cfg,
+      payload,
+      explicitCommandTurn: explicitCommandTurnCtx,
+      sendPolicyDenied,
+      sourceSessionKey: operationalReplySourceSessionKey,
+      sourceStorePath: sessionStoreEntry.storePath,
+      sourceEventKey: operationalReplySourceEventKey,
+      sourceChannel: routeReplyChannel,
+      provider: ctx.Provider,
+      surface: ctx.Surface,
+      chatType,
+      inboundEventKind: ctx.InboundEventKind,
+      messageKey: ctx.MessageSidFull ?? ctx.MessageSid,
+      logPrefix: "dispatch-from-config",
+    });
+    if (!result.shouldDeliver) {
+      operationalReplyPolicyIntentionalSilence = true;
+    }
+    return result;
+  };
   const unauthorizedTextSlashSourceReplyCtx =
     (chatType === "group" || chatType === "channel") && isUnauthorizedTextSlashCommand(ctx);
   const shouldDeliverPluginBindingReply =
@@ -497,6 +551,9 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
       suppressAutomaticSourceDelivery,
       suppressDelivery,
       sendPolicyDenied,
+      operationalReplyPolicy,
+      applyDispatchOperationalReplyPolicy,
+      getOperationalReplyPolicyIntentionalSilence: () => operationalReplyPolicyIntentionalSilence,
       deliverySuppressionReason,
       suppressHookUserDelivery,
       suppressHookReplyLifecycle,

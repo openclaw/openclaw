@@ -455,6 +455,8 @@ describe("runReplyAgent auto-compaction token update", () => {
     agentMeta: Record<string, unknown>;
     collectDiagnostics?: boolean;
     config?: OpenClawConfig;
+    isNewSession?: boolean;
+    resolvedVerboseLevel?: VerboseLevel;
     tmpPrefix: string;
     workspaceDir?: string;
   }) {
@@ -488,9 +490,10 @@ describe("runReplyAgent auto-compaction token update", () => {
       config: params.config,
       workspaceDir: params.workspaceDir,
     });
+    let result: unknown;
 
     try {
-      await runReplyAgent({
+      result = await runReplyAgent({
         commandBody: "hello",
         followupRun,
         queueKey: "main",
@@ -507,8 +510,8 @@ describe("runReplyAgent auto-compaction token update", () => {
         storePath,
         defaultModel: "anthropic/claude-opus-4-6",
         agentCfgContextTokens: 200_000,
-        resolvedVerboseLevel: "off",
-        isNewSession: false,
+        resolvedVerboseLevel: params.resolvedVerboseLevel ?? "off",
+        isNewSession: params.isNewSession ?? false,
         blockStreamingEnabled: false,
         resolvedBlockStreamingBreak: "message_end",
         shouldInjectGroupIntro: false,
@@ -521,7 +524,7 @@ describe("runReplyAgent auto-compaction token update", () => {
     const persisted = loadSessionEntry({ storePath, sessionKey });
     const stored = persisted ? { [sessionKey]: persisted } : {};
     const usageEvent = diagnostics.find((event) => event.type === "model.usage");
-    return { sessionKey, stored, usageEvent };
+    return { result, sessionKey, stored, usageEvent };
   }
 
   it("updates totalTokens from lastCallUsage even without compaction", async () => {
@@ -983,6 +986,40 @@ describe("runReplyAgent auto-compaction token update", () => {
     // agentMeta.compactionCount is diagnostic metadata from the harness result;
     // post-compaction context refresh belongs to runner-owned compaction paths.
     expect(peekSystemEvents(sessionKey)).toEqual([]);
+  });
+
+  it("marks direct auto-compaction prefix notices as compaction notices", async () => {
+    const { result } = await runBaseReplyWithAgentMeta({
+      tmpPrefix: "openclaw-direct-compaction-notice-",
+      resolvedVerboseLevel: "on",
+      agentMeta: {
+        compactionCount: 1,
+        lastCallUsage: { input: 10_000, output: 500, total: 10_500 },
+      },
+    });
+
+    const payloads = Array.isArray(result) ? result : [result];
+    expect(payloads[0]).toMatchObject({
+      text: expect.stringContaining("Auto-compaction complete"),
+      isCompactionNotice: true,
+    });
+  });
+
+  it("marks direct new-session prefix notices as status notices", async () => {
+    const { result } = await runBaseReplyWithAgentMeta({
+      tmpPrefix: "openclaw-direct-new-session-notice-",
+      resolvedVerboseLevel: "on",
+      isNewSession: true,
+      agentMeta: {
+        lastCallUsage: { input: 10_000, output: 500, total: 10_500 },
+      },
+    });
+
+    const payloads = Array.isArray(result) ? result : [result];
+    expect(payloads[0]).toMatchObject({
+      text: expect.stringContaining("New session"),
+      isStatusNotice: true,
+    });
   });
 });
 

@@ -495,6 +495,7 @@ export type PluginHookReplyDispatchEvent = {
   ttsChannel?: string;
   suppressUserDelivery?: boolean;
   suppressReplyLifecycle?: boolean;
+  suppressUserDeliveryBySourceReplyPolicy?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   shouldRouteToOriginating: boolean;
   originatingChannel?: string;

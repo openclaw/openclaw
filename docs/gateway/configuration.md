@@ -219,6 +219,7 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
     - **Metadata mentions**: native @-mentions (WhatsApp tap-to-mention, Telegram @bot, etc.)
     - **Text patterns**: safe regex patterns in `mentionPatterns`
     - **Visible replies**: `messages.visibleReplies` can require message-tool sends globally; `messages.groupChat.visibleReplies` overrides that for groups/channels.
+    - **Operational notices**: `messages.operationalReplies` controls automatic runtime notices separately from normal assistant replies. Use `silent` or `redirect` when provider errors, fallback notices, or usage-limit messages should not appear in the source chat.
     - See [full reference](/gateway/config-channels#group-chat-mention-gating) for visible reply modes, per-channel overrides, and self-chat mode.
 
   </Accordion>

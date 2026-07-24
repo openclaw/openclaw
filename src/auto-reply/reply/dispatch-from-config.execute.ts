@@ -20,11 +20,16 @@ import {
 } from "./dispatch-from-config.events.js";
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import type { PrepareDispatchExecutionReadyState } from "./dispatch-from-config.prepare-execution.js";
+import {
+  isOperationalReplyPayload,
+  markOperationalReplyPolicyDelivered,
+} from "./operational-reply-policy.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 
 export async function executeDispatch(state: PrepareDispatchExecutionReadyState) {
   const {
     acpDispatchSessionKey,
+    applyDispatchOperationalReplyPolicy,
     attachSourceReplyDeliveryMode,
     canForwardSuppressedSourceItemEvents,
     cfg,
@@ -84,6 +89,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     sendPlanUpdate,
     sendPolicy,
     sendPolicyDenied,
+    settleDirectOperationalPolicyAfterDispatch,
     sessionAgentId,
     sessionStableSourceReplyDeliveryMode,
     sessionTtsAuto,
@@ -216,6 +222,14 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       shouldDeliverFastModeAutoProgressDespiteSourceSuppression();
                     const isForcedToolProgress =
                       shouldDeliverForcedToolProgressDespiteSourceSuppression();
+                    const shouldEvaluateOperationalPayload =
+                      !sendPolicyDenied &&
+                      isOperationalReplyPayload({
+                        payload,
+                        explicitCommandTurn: false,
+                      }) &&
+                      (ctx.InboundEventKind !== "room_event" ||
+                        state.operationalReplyPolicy.policy !== "always");
                     const progressCallbackForwarded = shouldForwardToolResultProgressCallback(
                       payload,
                       isFastModeAutoProgress,
@@ -238,6 +252,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     }
                     if (
                       shouldSuppressProgressDelivery() &&
+                      !shouldEvaluateOperationalPayload &&
                       !isFastModeAutoProgressDelivery &&
                       !isForcedToolProgress &&
                       !hasAskUserPayload(payload)
@@ -271,16 +286,21 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     }
                     if (
                       shouldSuppressLateTextOnlyToolProgress(deliveryPayload) &&
+                      !shouldEvaluateOperationalPayload &&
                       !isFastModeAutoProgressPayload(deliveryPayload) &&
                       !isForcedToolProgress
                     ) {
                       return;
                     }
-                    if (shouldSuppressMessageToolOnlyTextErrorProgress(deliveryPayload)) {
+                    if (
+                      !shouldEvaluateOperationalPayload &&
+                      shouldSuppressMessageToolOnlyTextErrorProgress(deliveryPayload)
+                    ) {
                       return;
                     }
                     if (
                       shouldSuppressDefaultToolProgressMessages() &&
+                      !shouldEvaluateOperationalPayload &&
                       !isFastModeAutoProgressPayload(deliveryPayload) &&
                       !isForcedToolProgress
                     ) {
@@ -306,11 +326,20 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     if (isDispatchOperationAborted()) {
                       return;
                     }
+                    const policyResult = await applyDispatchOperationalReplyPolicy(deliveryPayload);
+                    if (!policyResult.shouldDeliver) {
+                      return;
+                    }
                     if (shouldRouteToOriginating) {
-                      await sendPayloadAsync(deliveryPayload, undefined, false);
+                      const delivered = await sendPayloadAsync(deliveryPayload, undefined, false);
+                      await markOperationalReplyPolicyDelivered(policyResult, delivered);
                     } else {
                       markInboundDedupeReplayUnsafe();
-                      const delivered = dispatcher.sendToolResult(deliveryPayload);
+                      const delivered = await settleDirectOperationalPolicyAfterDispatch(
+                        deliveryPayload,
+                        policyResult,
+                        () => dispatcher.sendToolResult(deliveryPayload),
+                      );
                       if (delivered && hasAskUserPayload(deliveryPayload)) {
                         // ask_user blocks until this callback resolves; drain its prompt now
                         // or the answerable UI can remain queued behind the blocked agent run.
@@ -451,9 +480,6 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     }
                     // Buffered commentary preceded this block; deliver it first.
                     await flushPendingCommentaryProgress();
-                    if (suppressDelivery) {
-                      return;
-                    }
                     // Durable reasoning is a channel-owned lane; generic channels
                     // keep the historical suppression unless they explicitly opt in.
                     if (payload.isReasoning === true && !reasoningPayloadsEnabled) {
@@ -504,6 +530,21 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     if (!hasOutboundReplyContent(visiblePayload, { trimText: true })) {
                       return;
                     }
+                    const isOperationalPayload = isOperationalReplyPayload({
+                      payload: visiblePayload,
+                      explicitCommandTurn: false,
+                    });
+                    const canBypassSourceSuppression =
+                      isOperationalPayload &&
+                      (ctx.InboundEventKind !== "room_event" ||
+                        state.operationalReplyPolicy.policy !== "always");
+                    if (suppressDelivery && (sendPolicyDenied || !canBypassSourceSuppression)) {
+                      return;
+                    }
+                    const policyResult = await applyDispatchOperationalReplyPolicy(visiblePayload);
+                    if (!policyResult.shouldDeliver) {
+                      return;
+                    }
                     // Channels that keep a live draft preview may need to rotate their
                     // preview state at the logical block boundary before queued block
                     // delivery drains asynchronously through the dispatcher.
@@ -541,15 +582,20 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       return;
                     }
                     if (shouldRouteToOriginating) {
-                      await sendPayloadAsync(
+                      const delivered = await sendPayloadAsync(
                         normalizedPayload,
                         context?.abortSignal,
                         false,
                         "block",
                       );
+                      await markOperationalReplyPolicyDelivered(policyResult, delivered);
                     } else {
                       markInboundDedupeReplayUnsafe();
-                      const delivered = dispatcher.sendBlockReply(normalizedPayload);
+                      const delivered = await settleDirectOperationalPolicyAfterDispatch(
+                        normalizedPayload,
+                        policyResult,
+                        () => dispatcher.sendBlockReply(normalizedPayload),
+                      );
                       if (delivered) {
                         state.hasPendingDirectBlockReplyDelivery = true;
                       }

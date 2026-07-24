@@ -861,6 +861,22 @@ Fix: either pick a stronger tool-calling model, remove the explicit `"message_to
 
 `messages.visibleReplies` is the global source-event default; `messages.groupChat.visibleReplies` overrides it for group/channel source events. When `messages.visibleReplies` is unset, direct/source chats use the selected runtime or harness default, but internal WebChat direct turns use automatic final delivery for Pi/Codex prompt parity. Set `messages.visibleReplies: "message_tool"` to intentionally require `message(action=send)` for visible output. Channel allowlists and mention gating still decide whether an event is processed.
 
+Operational notices are controlled separately. `messages.visibleReplies: "message_tool"` keeps normal final text private, but runtime-generated notices such as model fallback, compaction, usage-limit, backend error, and status messages use `messages.operationalReplies`:
+
+```json5
+{
+  messages: {
+    visibleReplies: "message_tool",
+    operationalReplies: {
+      policy: "silent", // always (default) | once | redirect | silent
+      // redirectSessionKey: "agent:main:ops", // required when policy is redirect
+    },
+  },
+}
+```
+
+Use `silent` to keep these notices in logs only, `once` to show one matching notice per source session, or `redirect` to write them to an operator-owned session instead of the source chat. This setting does not suppress normal message-tool replies or marked replies from authorized commands such as `/compact`.
+
 #### DM history limits
 
 ```json5

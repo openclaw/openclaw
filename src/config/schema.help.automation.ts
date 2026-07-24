@@ -235,6 +235,12 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Custom /usage full footer template, either an inline object or a JSON file path. Invalid or unavailable templates fall back to the built-in usage line.",
   "messages.responseUsage":
     'Default per-reply usage footer mode ("off"|"tokens"|"full") seeded into sessions that have not chosen one via /usage. Also accepts "on" as a legacy alias for "tokens". Accepts a bare mode or a per-channel map with a "default" fallback. Precedence: session value -> channel entry -> default -> off; an explicit /usage choice (including off) is persisted and overrides the default. Use /usage reset (aliases: inherit, clear, default) to clear a session override and re-inherit this configured default.',
+  "messages.operationalReplies":
+    'Controls automatic operational notices such as fallback, compaction, usage-limit, backend error, and status messages. Default "always" preserves existing delivery. Use "silent" to keep notices in logs only, "once" to show one matching notice per source session, or "redirect" with redirectSessionKey to write notices to an operator session instead of the source chat.',
+  "messages.operationalReplies.policy":
+    'Delivery policy for automatic operational notices. "always" preserves existing behavior, "silent" suppresses source-chat notices, "once" reduces repeats per source session, and "redirect" writes notices to redirectSessionKey.',
+  "messages.operationalReplies.redirectSessionKey":
+    'Session key that receives redirected operational notices when messages.operationalReplies.policy is "redirect". Keep this pointed at an operator-owned session; normal assistant replies are not redirected by this setting.',
   "messages.groupChat":
     "Group-message handling controls including mention triggers and history window sizing. Keep mention patterns narrow so group channels do not trigger on every message.",
   "messages.groupChat.mentionPatterns":

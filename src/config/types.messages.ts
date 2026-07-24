@@ -65,6 +65,20 @@ export type StatusReactionsConfig = {
   enabled?: boolean;
 };
 
+export type OperationalRepliesPolicy = "always" | "once" | "redirect" | "silent";
+
+export type OperationalRepliesConfig = {
+  /**
+   * Controls automatic runtime notices such as fallback, compaction, limit, and
+   * backend error messages. Normal assistant replies still use visibleReplies.
+   *
+   * Default: "always".
+   */
+  policy: OperationalRepliesPolicy;
+  /** Required when policy is "redirect"; names the session that receives notices. */
+  redirectSessionKey?: string;
+};
+
 export type MessagesConfig = {
   /** @deprecated Doctor-only legacy input. */
   removeAckAfterReply?: boolean;
@@ -127,6 +141,8 @@ export type MessagesConfig = {
   ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all" | "off" | "none";
   /** Lifecycle status reactions configuration. */
   statusReactions?: StatusReactionsConfig;
+  /** Automatic operational notice delivery policy. Default: "always". */
+  operationalReplies?: OperationalRepliesConfig;
   /** When true, suppress ⚠️ tool-error warnings from being shown to the user. Default: false. */
   suppressToolErrors?: boolean;
 };

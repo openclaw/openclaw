@@ -43,6 +43,10 @@ import {
 import { copyReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { replaceGenericExternalRunFailureText } from "../auto-reply/reply/agent-runner-failure-copy.js";
 import { resolveDefaultModel } from "../auto-reply/reply/directive-handling.defaults.js";
+import {
+  applyOperationalReplyPolicy,
+  markOperationalReplyPolicyDelivered,
+} from "../auto-reply/reply/operational-reply-policy.js";
 import { buildRecoverablePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import {
   REPLY_OPERATION_RUN_STATE,
@@ -1183,6 +1187,21 @@ function heartbeatRunOwnsPendingFinalDelivery(
   return typeof createdAt === "number" && createdAt >= runStartedAt;
 }
 
+async function clearHeartbeatPendingFinalDeliveryIfOwned(params: {
+  storePath: string;
+  sessionKey: string;
+  startedAt: number;
+}): Promise<void> {
+  await patchSessionEntry(
+    { storePath: params.storePath, sessionKey: params.sessionKey },
+    (current) =>
+      heartbeatRunOwnsPendingFinalDelivery(current, params.startedAt)
+        ? CLEARED_PENDING_FINAL_DELIVERY_FIELDS
+        : null,
+    { preserveActivity: true },
+  );
+}
+
 export async function runHeartbeatOnce(opts: {
   cfg?: OpenClawConfig;
   agentId?: string;
@@ -2137,7 +2156,107 @@ export async function runHeartbeatOnce(opts: {
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
+    const mainDeliveryPayload = shouldSkipMain
+      ? undefined
+      : replyPayload
+        ? copyReplyPayloadMetadata(replyPayload, {
+            ...replyPayload,
+            text: normalized.text,
+            mediaUrls,
+          })
+        : {
+            text: normalized.text,
+            mediaUrls,
+          };
+    const deliveryCandidates = [
+      ...reasoningPayloads,
+      ...(mainDeliveryPayload ? [mainDeliveryPayload] : []),
+    ];
+    const deliveryPayloads: ReplyPayload[] = [];
+    const operationalPolicyResults: Array<Awaited<ReturnType<typeof applyOperationalReplyPolicy>>> =
+      [];
+    let mainDeliveryAllowed = mainDeliveryPayload === undefined;
+    for (const [payloadIndex, payload] of deliveryCandidates.entries()) {
+      const policyResult = await applyOperationalReplyPolicy({
+        cfg,
+        payload,
+        explicitCommandTurn: false,
+        sendPolicyDenied: false,
+        sourceSessionKey: sessionKey,
+        sourceStorePath: storePath,
+        sourceEventKey: `heartbeat:${startedAt}:${payloadIndex}`,
+        sourceChannel: delivery.channel,
+        provider: ctx.Provider,
+        chatType: delivery.chatType,
+        inboundEventKind: "heartbeat",
+        messageKey: opts.reason,
+        logPrefix: "heartbeat",
+      });
+      if (policyResult.shouldDeliver) {
+        if (mainDeliveryPayload && payload === mainDeliveryPayload) {
+          mainDeliveryAllowed = true;
+        }
+        deliveryPayloads.push(payload);
+        operationalPolicyResults.push(policyResult);
+      }
+    }
+    const mainDeliverySuppressedByOperationalPolicy =
+      mainDeliveryPayload !== undefined && !mainDeliveryAllowed;
+    if (mainDeliverySuppressedByOperationalPolicy) {
+      await clearHeartbeatPendingFinalDeliveryIfOwned({
+        storePath,
+        sessionKey,
+        startedAt,
+      });
+    }
+    if (deliveryPayloads.length === 0) {
+      await restoreHeartbeatUpdatedAt({
+        storePath,
+        sessionKey,
+        updatedAt: previousUpdatedAt,
+      });
+      emitHeartbeatEvent({
+        status: "skipped",
+        reason: "operational-replies",
+        preview: truncateHeartbeatPreview(previewText),
+        durationMs: Date.now() - startedAt,
+        hasMedia: mediaUrls.length > 0,
+        channel: delivery.channel,
+        accountId: delivery.accountId,
+      });
+      consumeInspectedSystemEvents();
+      return { status: "ran", durationMs: Date.now() - startedAt };
+    }
+
     const deliveryAccountId = delivery.accountId;
+    let operationalPolicyResultsSettled = false;
+    const settleOperationalPolicyResults = async (delivered: boolean): Promise<void> => {
+      if (operationalPolicyResultsSettled) {
+        return;
+      }
+      operationalPolicyResultsSettled = true;
+      for (const policyResult of operationalPolicyResults) {
+        await markOperationalReplyPolicyDelivered(policyResult, delivered);
+      }
+    };
+    const settleOperationalPolicyResultsForSend = async (
+      send: Awaited<ReturnType<typeof sendDurableMessageBatch>>,
+    ): Promise<void> => {
+      if (operationalPolicyResultsSettled) {
+        return;
+      }
+      operationalPolicyResultsSettled = true;
+      const outcomeByPayloadIndex = new Map(
+        send.payloadOutcomes?.map((outcome) => [outcome.index, outcome.status === "sent"]) ?? [],
+      );
+      const defaultDelivered = send.status === "sent";
+      for (const [payloadIndex, policyResult] of operationalPolicyResults.entries()) {
+        await markOperationalReplyPolicyDelivered(
+          policyResult,
+          outcomeByPayloadIndex.get(payloadIndex) ?? defaultDelivered,
+        );
+      }
+    };
     const heartbeatPlugin = resolveHeartbeatChannelPlugin(delivery.channel);
     if (heartbeatPlugin?.heartbeat?.checkReady) {
       const readiness = await heartbeatPlugin.heartbeat.checkReady({
@@ -2155,6 +2274,7 @@ export async function runHeartbeatOnce(opts: {
           channel: delivery.channel,
           accountId: delivery.accountId,
         });
+        await settleOperationalPolicyResults(false);
         log.info("heartbeat: channel not ready", {
           channel: delivery.channel,
           reason: readiness.reason,
@@ -2163,35 +2283,35 @@ export async function runHeartbeatOnce(opts: {
       }
     }
 
-    const send = await sendDurableMessageBatch({
-      cfg,
-      channel: delivery.channel,
-      to: delivery.to,
-      accountId: deliveryAccountId,
-      session: outboundSession,
-      identity: outboundIdentity,
-      threadId: delivery.threadId,
-      payloads: [
-        ...reasoningPayloads,
-        ...(shouldSkipMain
-          ? []
-          : [
-              {
-                text: normalized.text,
-                mediaUrls,
-              },
-            ]),
-      ],
-      deps: opts.deps,
-      silent: normalized.silent,
-    });
+    let send: Awaited<ReturnType<typeof sendDurableMessageBatch>>;
+    try {
+      send = await sendDurableMessageBatch({
+        cfg,
+        channel: delivery.channel,
+        to: delivery.to,
+        accountId: deliveryAccountId,
+        session: outboundSession,
+        identity: outboundIdentity,
+        threadId: delivery.threadId,
+        payloads: deliveryPayloads,
+        deps: opts.deps,
+        silent: normalized.silent,
+      });
+    } catch (error) {
+      await settleOperationalPolicyResults(false);
+      throw error;
+    }
     if (send.status === "failed" || send.status === "partial_failed") {
+      await settleOperationalPolicyResultsForSend(send);
       throw send.error;
     }
     const visibleSendSucceeded = send.status === "sent";
+    await settleOperationalPolicyResultsForSend(send);
+    const visibleMainSendSucceeded =
+      visibleSendSucceeded && (shouldSkipMain || mainDeliveryAllowed);
     // Suppressed durable sends committed no visible channel message. Keep due
     // commitments and heartbeat dedupe state active so a later heartbeat can retry.
-    if (shouldSkipMain || visibleSendSucceeded) {
+    if (visibleMainSendSucceeded) {
       await markCommitmentsStatus({
         cfg,
         ids: dueCommitmentIds,
@@ -2201,7 +2321,7 @@ export async function runHeartbeatOnce(opts: {
     }
 
     // Record last delivered heartbeat payload for dedupe.
-    if (visibleSendSucceeded && !shouldSkipMain && normalized.text.trim()) {
+    if (visibleMainSendSucceeded && !shouldSkipMain && normalized.text.trim()) {
       await patchSessionEntry(
         { storePath, sessionKey },
         (current, context) => {
@@ -2234,7 +2354,6 @@ export async function runHeartbeatOnce(opts: {
       status: eventStatus,
       to: delivery.to,
       ...(deliveredAgentRunFailure ? { reason: "agent-runner-failure" } : {}),
-      ...(!deliveredAgentRunFailure && !visibleSendSucceeded ? { reason: send.reason } : {}),
       preview: truncateHeartbeatPreview(previewText),
       durationMs: Date.now() - startedAt,
       hasMedia: mediaUrls.length > 0,
