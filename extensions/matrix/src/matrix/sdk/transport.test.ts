@@ -467,6 +467,98 @@ describe("performMatrixRequest", () => {
   });
 });
 
+describe("normalizeEndpoint via performMatrixRequest", () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+    clearTestUndiciRuntimeDepsOverride();
+  });
+
+  afterEach(() => {
+    clearTestUndiciRuntimeDepsOverride();
+  });
+
+  async function captureRequestUrl(params: {
+    homeserver: string;
+    endpoint: string;
+  }): Promise<string> {
+    const runtimeFetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
+      const url =
+        typeof _input === "string" ? _input : _input instanceof URL ? _input.href : _input.url;
+      return new Response(JSON.stringify({ url }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    stubRuntimeFetch(runtimeFetch);
+
+    // Await the request to ensure runtimeFetch is called before we assert
+    await performMatrixRequest({
+      homeserver: params.homeserver,
+      accessToken: "token",
+      method: "GET",
+      endpoint: params.endpoint,
+      timeoutMs: 5000,
+      ssrfPolicy: { allowPrivateNetwork: true },
+    }).catch(() => {});
+
+    expect(runtimeFetch).toHaveBeenCalledTimes(1);
+    return runtimeFetch.mock.calls.at(0)?.[0] as string;
+  }
+
+  it("resolves path-prefixed homeserver endpoint correctly", async () => {
+    const requestUrl = await captureRequestUrl({
+      homeserver: "https://host/proxy/base/",
+      endpoint: "/_matrix/client/v3/account/whoami",
+    });
+    // The leading slash is stripped, so new URL("_matrix/...", "https://host/proxy/base/")
+    // resolves to https://host/proxy/base/_matrix/...
+    expect(requestUrl).toBe("https://host/proxy/base/_matrix/client/v3/account/whoami");
+  });
+
+  it("resolves standard homeserver endpoint correctly", async () => {
+    const requestUrl = await captureRequestUrl({
+      homeserver: "https://matrix.example.org/",
+      endpoint: "/_matrix/client/v3/account/whoami",
+    });
+    expect(requestUrl).toBe("https://matrix.example.org/_matrix/client/v3/account/whoami");
+  });
+
+  it("handles homeserver URL without trailing slash", async () => {
+    const requestUrl = await captureRequestUrl({
+      homeserver: "https://host/proxy/base",
+      endpoint: "/_matrix/client/v3/account/whoami",
+    });
+    // The trailing slash is added in performMatrixRequest, so the URL still resolves correctly
+    expect(requestUrl).toBe("https://host/proxy/base/_matrix/client/v3/account/whoami");
+  });
+
+  it("passes through absolute endpoint when allowed", async () => {
+    const runtimeFetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
+      const url =
+        typeof _input === "string" ? _input : _input instanceof URL ? _input.href : _input.url;
+      return new Response(JSON.stringify({ url }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    stubRuntimeFetch(runtimeFetch);
+
+    await performMatrixRequest({
+      homeserver: "https://host/proxy/base/",
+      accessToken: "token",
+      method: "GET",
+      endpoint: "https://other.example.com/_matrix/client/v3/account/whoami",
+      timeoutMs: 5000,
+      ssrfPolicy: { allowPrivateNetwork: true },
+      allowAbsoluteEndpoint: true,
+    }).catch(() => {});
+
+    expect(runtimeFetch).toHaveBeenCalledTimes(1);
+    const requestUrl = runtimeFetch.mock.calls.at(0)?.[0] as string;
+    expect(requestUrl).toBe("https://other.example.com/_matrix/client/v3/account/whoami");
+  });
+});
+
 describe("createMatrixGuardedFetch", () => {
   beforeEach(() => {
     vi.unstubAllGlobals();
