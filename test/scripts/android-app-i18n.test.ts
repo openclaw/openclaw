@@ -85,12 +85,17 @@ describe("Android app i18n resources", () => {
 
   it("builds complete third-party flavor resources for every native locale", async () => {
     const catalog = await buildAndroidAppI18nCatalog();
+    const base = await readFile(
+      "apps/android/app/src/thirdParty/res/values/accessibility_strings.xml",
+      "utf8",
+    );
     const resources = [...catalog.resources].filter(
       ([filePath]) =>
         filePath.includes("/apps/android/app/src/thirdParty/res/values-") &&
         filePath.endsWith("/accessibility_strings.xml"),
     );
 
+    expect(base).toContain('tools:ignore="MissingTranslation"');
     expect(resources).toHaveLength(NATIVE_I18N_LOCALES.length);
     for (const [, content] of resources) {
       expect(content).toContain('name="accessibility_service_label"');

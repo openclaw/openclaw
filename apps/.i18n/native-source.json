@@ -14691,7 +14691,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 3,
+      "line": 4,
       "path": "apps/android/app/src/thirdParty/res/values/accessibility_strings.xml",
       "source": "OpenClaw UI control",
       "surface": "android",
@@ -14699,7 +14699,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 4,
+      "line": 5,
       "path": "apps/android/app/src/thirdParty/res/values/accessibility_strings.xml",
       "source": "Developer UI observation and control",
       "surface": "android",
@@ -14707,7 +14707,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 5,
+      "line": 6,
       "path": "apps/android/app/src/thirdParty/res/values/accessibility_strings.xml",
       "source": "Allows the third-party OpenClaw build to inspect and control the active app during local development.",
       "surface": "android",
@@ -14715,7 +14715,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 6,
+      "line": 7,
       "path": "apps/android/app/src/thirdParty/res/values/accessibility_strings.xml",
       "source": "OpenClaw Accessibility Developer",
       "surface": "android",
