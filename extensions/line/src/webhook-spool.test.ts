@@ -19,11 +19,17 @@ import {
   type LineWebhookTurnAdoptionLifecycle,
 } from "./webhook-spool.js";
 
-type SpoolPayload = {
-  version: number;
-  rawEvent: string;
-  destination: string;
-};
+type SpoolPayload =
+  | {
+      version: number;
+      rawEvent: string;
+      destination: string;
+    }
+  | {
+      version: number;
+      destination: string;
+      event: webhook.Event;
+    };
 
 const runtime = (): RuntimeEnv => ({ error: vi.fn(), exit: vi.fn(), log: vi.fn() });
 
@@ -496,6 +502,63 @@ describe("LINE webhook spool", () => {
         expect(deliver).toHaveBeenCalledTimes(1);
       } finally {
         await restarted.stop();
+      }
+    });
+  });
+
+  it("delivers rows spooled by the pre-drain worker after an upgrade", async () => {
+    await withQueue(async (queue) => {
+      const event = createEvent({ webhookEventId: "legacy-upgrade-1" });
+      await queue.enqueue(
+        "legacy-upgrade-1",
+        { version: 1, destination: "destination-1", event },
+        { laneKey: "user:user-1" },
+      );
+      const deliver = vi.fn(async (_event, _destination, control) => {
+        await control.turnAdoptionLifecycle.onAdopted();
+      });
+      const spool = createLineWebhookSpool({
+        accountId: "default",
+        runtime: runtime(),
+        queue,
+        deliver,
+      });
+      spool.start();
+      try {
+        await waitForVerdict(queue, "legacy-upgrade-1", "completed");
+        expect(deliver).toHaveBeenCalledTimes(1);
+        expect(deliver).toHaveBeenCalledWith(
+          event,
+          "destination-1",
+          expect.objectContaining({ turnAdoptionLifecycle: expect.anything() }),
+        );
+      } finally {
+        await spool.stop();
+      }
+    });
+  });
+
+  it("dead-letters a pre-drain row whose event does not match its stored id", async () => {
+    await withQueue(async (queue) => {
+      const event = createEvent({ webhookEventId: "legacy-other-id" });
+      await queue.enqueue(
+        "legacy-mismatch",
+        { version: 1, destination: "destination-1", event },
+        { laneKey: "user:user-1" },
+      );
+      const deliver = vi.fn(async () => {});
+      const spool = createLineWebhookSpool({
+        accountId: "default",
+        runtime: runtime(),
+        queue,
+        deliver,
+      });
+      spool.start();
+      try {
+        await waitForVerdict(queue, "legacy-mismatch", "failed");
+        expect(deliver).not.toHaveBeenCalled();
+      } finally {
+        await spool.stop();
       }
     });
   });
