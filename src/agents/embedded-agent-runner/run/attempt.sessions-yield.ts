@@ -171,12 +171,17 @@ export async function persistSessionsYieldContextMessage(
 }
 
 // Remove the synthetic yield interrupt + aborted assistant entry from the live transcript.
+// After strip, the transcript must end with a non-assistant role so subagent
+// completion auto-announce can inject a continuation turn.
 export function stripSessionsYieldArtifacts(activeSession: {
   messages: AgentMessage[];
   agent: { state: { messages: AgentMessage[] } };
   sessionManager?: unknown;
 }) {
+  const originalLength = activeSession.messages.length;
   const strippedMessages = activeSession.messages.slice();
+
+  // Phase 1: remove yield-specific artifacts (aborted assistant + interrupt custom message).
   while (strippedMessages.length > 0) {
     const last = strippedMessages.at(-1) as
       | AgentMessage
@@ -195,57 +200,78 @@ export function stripSessionsYieldArtifacts(activeSession: {
     }
     break;
   }
-  if (strippedMessages.length !== activeSession.messages.length) {
-    activeSession.agent.state.messages = strippedMessages;
+
+  // Phase 2: remove trailing regular assistant messages (pre-yield tool work).
+  // After sessions_yield, the transcript must not end with an assistant role
+  // so that subagent completion auto-announce can inject a continuation turn.
+  while (strippedMessages.length > 0) {
+    const last = strippedMessages.at(-1) as AgentMessage | { role?: string; stopReason?: string };
+    if (last?.role === "assistant" && last.stopReason !== "aborted") {
+      strippedMessages.pop();
+      continue;
+    }
+    break;
   }
 
-  const sessionManager = activeSession.sessionManager as
-    | {
-        removeTrailingEntries?: (
-          predicate: (entry: {
-            type?: string;
-            message?: {
-              role?: string;
-              stopReason?: string;
-              provider?: string;
-              model?: string;
-            };
-            customType?: string;
-          }) => boolean,
-          options?: {
-            preserveTrailing?: (entry: {
+  const removedCount = originalLength - strippedMessages.length;
+  if (removedCount > 0) {
+    activeSession.agent.state.messages = strippedMessages;
+
+    const sessionManager = activeSession.sessionManager as
+      | {
+          removeTrailingEntries?: (
+            predicate: (entry: {
               type?: string;
               message?: {
                 role?: string;
+                stopReason?: string;
                 provider?: string;
                 model?: string;
               };
-            }) => boolean;
-          },
-        ) => number;
-      }
-    | undefined;
-  if (typeof sessionManager?.removeTrailingEntries !== "function") {
-    return;
+              customType?: string;
+            }) => boolean,
+            options?: {
+              preserveTrailing?: (entry: {
+                type?: string;
+                message?: {
+                  role?: string;
+                  provider?: string;
+                  model?: string;
+                };
+              }) => boolean;
+            },
+          ) => number;
+        }
+      | undefined;
+    if (typeof sessionManager?.removeTrailingEntries === "function") {
+      // Use a count-capped type-checking predicate: match at most
+      // `removedCount` entries of the removable types, so persisted
+      // cleanup never exceeds what was removed from the active suffix.
+      let matchCount = 0;
+      sessionManager.removeTrailingEntries(
+        (entry) => {
+          if (matchCount >= removedCount) {
+            return false;
+          }
+          const isAssistantMessage =
+            entry.type === "message" && entry.message?.role === "assistant";
+          const isYieldInterruptMessage =
+            entry.type === "custom_message" &&
+            entry.customType === SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE;
+          if (!isAssistantMessage && !isYieldInterruptMessage) {
+            return false;
+          }
+          matchCount += 1;
+          return true;
+        },
+        {
+          preserveTrailing: (entry) =>
+            entry.type === "custom" ||
+            entry.type === "label" ||
+            entry.type === "session_info" ||
+            (entry.type === "message" && isTranscriptOnlyOpenClawAssistantMessage(entry.message)),
+        },
+      );
+    }
   }
-
-  sessionManager.removeTrailingEntries(
-    (entry) => {
-      const isYieldAbortAssistant =
-        entry.type === "message" &&
-        entry.message?.role === "assistant" &&
-        entry.message?.stopReason === "aborted";
-      const isYieldInterruptMessage =
-        entry.type === "custom_message" &&
-        entry.customType === SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE;
-      return isYieldAbortAssistant || isYieldInterruptMessage;
-    },
-    {
-      preserveTrailing: (entry) =>
-        entry.type === "custom" ||
-        entry.type === "label" ||
-        entry.type === "session_info" ||
-        (entry.type === "message" && isTranscriptOnlyOpenClawAssistantMessage(entry.message)),
-    },
-  );
 }
