@@ -59,6 +59,98 @@ function readEntryJson(env: NodeJS.ProcessEnv, sessionKey: string): string {
 }
 
 describe("doctor canonical session delivery state", () => {
+  it("keeps bare channel and origin metadata below explicit delivery context", () => {
+    const stateDir = fs.realpathSync(tempDirs.make("openclaw-delivery-fallback-order-"));
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    insertSessionRow(env, "agent:main:explicit", {
+      sessionId: "explicit-session",
+      updatedAt: 10,
+      channel: "slack",
+      deliveryContext: { channel: "telegram", to: "current", accountId: "current-bot" },
+      origin: { provider: "discord", to: "stale", accountId: "stale-bot" },
+    });
+    insertSessionRow(env, "agent:main:origin-only", {
+      sessionId: "origin-session",
+      updatedAt: 20,
+      origin: { provider: "discord", to: "origin-recipient", accountId: "origin-bot" },
+    });
+    insertSessionRow(env, "agent:main:orphan-account", {
+      sessionId: "orphan-account-session",
+      updatedAt: 30,
+      channel: "slack",
+      deliveryContext: { channel: "telegram", to: "current", accountId: "current-bot" },
+      lastAccountId: "stale-slack-bot",
+    });
+    insertSessionRow(env, "agent:main:whitespace-last", {
+      sessionId: "whitespace-last-session",
+      updatedAt: 40,
+      channel: "slack",
+      deliveryContext: { channel: "telegram", to: "current", accountId: "current-bot" },
+      lastTo: "   ",
+    });
+
+    expect(repairCanonicalSessionDeliveryStates({ apply: true, cfg: {}, env })).toEqual({
+      found: 4,
+      repaired: 4,
+      scannedStores: 1,
+    });
+    expect(JSON.parse(readEntryJson(env, "agent:main:explicit")).delivery.context).toEqual({
+      channel: "telegram",
+      to: "current",
+      accountId: "current-bot",
+    });
+    expect(JSON.parse(readEntryJson(env, "agent:main:origin-only")).delivery.context).toEqual({
+      channel: "discord",
+      to: "origin-recipient",
+      accountId: "origin-bot",
+    });
+    for (const key of ["agent:main:orphan-account", "agent:main:whitespace-last"]) {
+      expect(JSON.parse(readEntryJson(env, key)).delivery.context).toEqual({
+        channel: "telegram",
+        to: "current",
+        accountId: "current-bot",
+      });
+    }
+  });
+
+  it("preserves shipped last-route precedence over stale explicit context", () => {
+    const stateDir = fs.realpathSync(tempDirs.make("openclaw-delivery-precedence-"));
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    insertSessionRow(env, "agent:main:precedence", {
+      sessionId: "precedence-session",
+      updatedAt: 10,
+      deliveryContext: { channel: "telegram", to: "old-recipient", accountId: "bot" },
+      lastChannel: "telegram",
+      lastTo: "new-recipient",
+      lastAccountId: "bot",
+    });
+    insertSessionRow(env, "agent:main:partial-precedence", {
+      sessionId: "partial-precedence-session",
+      updatedAt: 20,
+      channel: "slack",
+      lastChannel: "",
+      deliveryContext: { channel: "telegram", to: "old-recipient" },
+      lastTo: "C-new",
+    });
+
+    expect(repairCanonicalSessionDeliveryStates({ apply: true, cfg: {}, env })).toEqual({
+      found: 2,
+      repaired: 2,
+      scannedStores: 1,
+    });
+    expect(JSON.parse(readEntryJson(env, "agent:main:precedence")).delivery.context).toEqual({
+      channel: "telegram",
+      to: "new-recipient",
+      accountId: "bot",
+    });
+    expect(
+      JSON.parse(readEntryJson(env, "agent:main:partial-precedence")).delivery.context,
+    ).toEqual({
+      channel: "slack",
+      to: "C-new",
+    });
+  });
+
   it("skips structurally invalid row JSON while repairing valid sessions", () => {
     const stateDir = fs.realpathSync(tempDirs.make("openclaw-delivery-invalid-row-"));
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };

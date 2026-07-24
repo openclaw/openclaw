@@ -592,12 +592,32 @@ export function normalizeLegacySessionEntryDelivery(entry: SessionEntry): Sessio
   const route = normalizeDeliveryChannelRoute(legacy.route);
   const routeContext = deliveryContextFromChannelRoute(route);
   const explicitContext = normalizeDeliveryContext(legacy.deliveryContext);
-  const lastContext = normalizeDeliveryContext({
-    channel: legacy.lastChannel,
+  const lastChannel = normalizeDeliveryContext({ channel: legacy.lastChannel })?.channel;
+  const storedChannel = normalizeDeliveryContext({ channel: legacy.channel })?.channel;
+  const originChannel = normalizeDeliveryContext({ channel: legacy.origin?.provider })?.channel;
+  const normalizedLastFields = normalizeDeliveryContext({
     to: legacy.lastTo,
     accountId: legacy.lastAccountId,
     threadId: legacy.lastThreadId,
   });
+  const hasNormalizedLastFields = Boolean(
+    normalizedLastFields?.to ||
+    normalizedLastFields?.accountId ||
+    normalizedLastFields?.threadId != null,
+  );
+  const lastCandidate = normalizeDeliveryContext({
+    channel:
+      lastChannel ?? (hasNormalizedLastFields ? (storedChannel ?? originChannel) : undefined),
+    to: normalizedLastFields?.to,
+    accountId: normalizedLastFields?.accountId,
+    threadId: normalizedLastFields?.threadId,
+  });
+  const lastContext =
+    isInternalContext(lastCandidate) ||
+    hasExternalTarget(lastCandidate) ||
+    (lastCandidate?.channel && lastCandidate.channel === explicitContext?.channel)
+      ? lastCandidate
+      : undefined;
   const channelContext = normalizeDeliveryContext({ channel: legacy.channel });
   const originContext = normalizeDeliveryContext({
     channel: legacy.origin?.provider,
@@ -606,15 +626,15 @@ export function normalizeLegacySessionEntryDelivery(entry: SessionEntry): Sessio
     threadId: legacy.origin?.threadId,
   });
   const fallbackContext = mergeDeliveryContext(
-    explicitContext,
-    mergeDeliveryContext(lastContext, mergeDeliveryContext(channelContext, originContext)),
+    lastContext,
+    mergeDeliveryContext(explicitContext, mergeDeliveryContext(channelContext, originContext)),
   );
   const internalFallbackContext = isInternalContext(routeContext)
     ? mergeDeliveryContext(routeContext, lastContext)
     : isInternalContext(lastContext)
       ? lastContext
       : isInternalContext(channelContext)
-        ? channelContext
+        ? mergeDeliveryContext(channelContext, lastContext)
         : undefined;
   const hasInternalFallback =
     internalFallbackContext !== undefined && hasExternalTarget(explicitContext);
