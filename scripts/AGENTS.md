@@ -36,6 +36,8 @@ This directory owns local tooling, script wrappers, and generated-artifact helpe
 - Source PRs run credential-free detection: missing targets and source drift are reported, while malformed current output fails. Generated changes and manual/release runs use strict source/generated parity.
 - Keep auto-merge disabled. Generation provenance and structural validation do not count as linguistic, product, or safety approval.
 - A new area must include the owner runtime import and focused rendering tests in the same adoption slice. Do not register speculative or unconsumed catalogs.
+- Extend `localization/surfaces.json` progressively with owner-scoped adapters. Adapters enumerate product-facing source resources; they do not scan arbitrary literals or prove repository-wide coverage.
+- Every source discovered by an adapter needs the matching semantic owner and one explicit disposition: adopted catalog area, conforming owner pipeline, or a reviewed English-only, platform-constrained, or deferred rationale. Exclude generated roots, never the complete owner root.
 
 ## Scope
 

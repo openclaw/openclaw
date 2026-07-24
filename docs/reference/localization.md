@@ -72,13 +72,16 @@ the shared source-path convention supplies its trigger. A surface with
 safety-sensitive copy must add an enforceable approval or quarantine mechanism
 before adopting that message family.
 
+### Classify an owner surface
+
 Owner adapters in `localization/surfaces.json` enumerate product-facing source
 roots; they do not scan every string literal. When a new source appears under a
 declared root, add a disposition with its semantic owner: adopt it into
 `localization/catalogs.json`, identify the conforming owner pipeline, or record
-an English-only, platform-constrained, or deferred rationale. Existing debt is
-baselined explicitly. Run `pnpm localization:surfaces:check` before opening the
-pull request.
+an English-only, platform-constrained, or deferred rationale. Sources within
+each declared adapter are baselined explicitly; follow-up owner slices expand
+the adapter inventory progressively. Run `pnpm localization:surfaces:check`
+before opening the pull request.
 
 Other CLI commands, the TUI, Gateway errors, approvals, channels, plugins, and
 skill metadata do not gain localization merely because the shared runtime can
