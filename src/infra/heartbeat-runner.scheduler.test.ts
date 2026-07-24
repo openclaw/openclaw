@@ -745,6 +745,44 @@ describe("startHeartbeatRunner", () => {
 
     runner.stop();
   });
+  it("recomputes next due from current time after slow runOnce that crosses phase boundary (#104951)", async () => {
+    useFakeHeartbeatTime();
+
+    const intervalMs = 5 * 60_000; // 5 minutes
+    // runOnce takes 6 minutes — crosses the next 5-minute phase boundary.
+    // With the stale-now bug, computeNextHeartbeatPhaseDueMs uses the pre-run
+    // timestamp, producing a nextDueMs already in the past → delay = 0 → immediate re-arm.
+    const slowRunDurationMs = 6 * 60_000;
+    const runSpy = vi.fn().mockImplementation(async () => {
+      // Simulate wall-clock time passing during runOnce execution
+      vi.setSystemTime(Date.now() + slowRunDurationMs);
+      return { status: "ran", durationMs: slowRunDurationMs };
+    });
+
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig([{ id: "main", heartbeat: { every: "5m" } }]),
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+    const firstDueMs = resolveDueFromNow(0, intervalMs, "main");
+
+    // First heartbeat fires at the scheduled slot
+    await vi.advanceTimersByTimeAsync(firstDueMs + 1);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    // Advance by a small amount (< interval) — should NOT trigger a second run.
+    // Without the fix, the stale `now` produces a past nextDueMs → 0ms timer → immediate re-arm.
+    // With the fix (fresh Date.now()), next due is correctly in the future.
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    // Advance to the next full interval from current wall-clock — now it should fire again
+    await vi.advanceTimersByTimeAsync(intervalMs);
+    expect(runSpy).toHaveBeenCalledTimes(2);
+
+    runner.stop();
+  });
+
 
   it("does not fan out to unrelated agents for session-scoped exec wakes", async () => {
     useFakeHeartbeatTime();

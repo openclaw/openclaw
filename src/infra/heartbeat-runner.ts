@@ -2574,7 +2574,7 @@ export function startHeartbeatRunner(opts: {
         // purposes — record bookkeeping so the wake layer doesn't tight-loop
         // on the same reason.
         recordRunBookkeeping(agent, now);
-        advanceAgentSchedule(agent, now, reason);
+        advanceAgentSchedule(agent, Date.now(), reason);
         return { ran: false, result: { status: "failed", reason: formatErrorMessage(err) } };
       }
       if (res.status === "skipped" && isRetryableHeartbeatBusySkipReason(res.reason)) {
@@ -2584,7 +2584,7 @@ export function startHeartbeatRunner(opts: {
       }
       // Non-retryable outcome — record bookkeeping for cooldown gates.
       recordRunBookkeeping(agent, now);
-      advanceAgentSchedule(agent, now, reason);
+      advanceAgentSchedule(agent, Date.now(), reason);
       let agentRan = res.status === "ran";
 
       const defaultSessionKey = resolveHeartbeatSession(
@@ -2726,7 +2726,7 @@ export function startHeartbeatRunner(opts: {
         // on a stale past-due agent.
         if (targetAgent) {
           recordRunBookkeeping(targetAgent, now);
-          advanceAgentSchedule(targetAgent, now, reason);
+          advanceAgentSchedule(targetAgent, Date.now(), reason);
         }
         return res.status === "ran" ? { status: "ran", durationMs: Date.now() - startedAt } : res;
       } catch (err) {
@@ -2739,7 +2739,7 @@ export function startHeartbeatRunner(opts: {
         // on the same reason.
         if (targetAgent) {
           recordRunBookkeeping(targetAgent, now);
-          advanceAgentSchedule(targetAgent, now, reason);
+          advanceAgentSchedule(targetAgent, Date.now(), reason);
         }
         return { status: "failed", reason: errMsg };
       }
