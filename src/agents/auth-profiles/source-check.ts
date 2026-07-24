@@ -3,6 +3,7 @@
  * These checks intentionally avoid loading secret-bearing credential payloads.
  */
 import fs from "node:fs";
+import { readRegularFileSync } from "../../infra/regular-file.js";
 import { evaluateStoredCredentialEligibility } from "./credential-state.js";
 import {
   resolveAuthStatePath,
@@ -27,9 +28,20 @@ function hasStoredAuthProfileFiles(agentDir?: string): boolean {
   );
 }
 
+// Cap auth-profile JSON reads at 10 MiB — credential stores are compact config files.
+// Uses descriptor-level bounded reads to prevent OOM and TOCTOU races.
+const MAX_AUTH_PROFILE_JSON_BYTES = 10 * 1024 * 1024;
+
 function readJsonFile(pathname: string): unknown {
   try {
-    return JSON.parse(fs.readFileSync(pathname, "utf8")) as unknown;
+    // Auth stores may be symlinks to regular files (dotfile managers); the
+    // previous readFileSync followed them. Resolve first so the bounded read
+    // keeps that contract while still rejecting non-regular targets.
+    const { buffer } = readRegularFileSync({
+      filePath: fs.realpathSync(pathname),
+      maxBytes: MAX_AUTH_PROFILE_JSON_BYTES,
+    });
+    return JSON.parse(buffer.toString("utf8")) as unknown;
   } catch {
     return null;
   }
