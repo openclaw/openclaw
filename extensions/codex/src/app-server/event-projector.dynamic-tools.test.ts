@@ -97,6 +97,50 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
     expect(toolResultMessage.details).toEqual(details);
   });
 
+  it("awaits MCP App preview details for native MCP tool results", async () => {
+    const details = {
+      mcpAppPreview: {
+        kind: "canvas",
+        view: { id: "mcp-app-native-1" },
+        presentation: { target: "assistant_message", sandbox: "scripts" },
+        mcpApp: {
+          viewId: "mcp-app-native-1",
+          serverName: "doordash",
+          toolName: "show_options",
+          uiResourceUri: "ui://doordash/options.html",
+          toolCallId: "call-native-app-1",
+        },
+      },
+    };
+    const prepareNativeMcpAppResultDetails = vi.fn(async () => details);
+    const projector = await createProjector(undefined, { prepareNativeMcpAppResultDetails });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "mcpToolCall",
+          id: "call-native-app-1",
+          status: "completed",
+          server: "doordash",
+          tool: "show_options",
+          arguments: { limit: 4 },
+          appContext: { connectorId: "doordash", resourceUri: "ui://doordash/options.html" },
+          result: {
+            content: [{ type: "text", text: "Found four nearby restaurants." }],
+            structuredContent: { stores: [{ id: "store-1", name: "Nan's Noodle House" }] },
+          },
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const toolResultMessage = requireRecord(result.messagesSnapshot[2], "tool result message");
+    expect(prepareNativeMcpAppResultDetails).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "call-native-app-1", type: "mcpToolCall" }),
+    );
+    expect(toolResultMessage.details).toEqual(details);
+  });
+
   it("does not mirror Codex-native web searches into transcript snapshots", async () => {
     const projector = await createProjector();
 

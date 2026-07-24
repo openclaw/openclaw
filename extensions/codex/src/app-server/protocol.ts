@@ -694,6 +694,8 @@ type CodexHooksListResponse = {
 export type CodexMcpServerStatus = {
   name: string;
   tools: JsonObject;
+  resources?: JsonValue[];
+  resourceTemplates?: JsonValue[];
 };
 
 export type CodexListMcpServerStatusResponse = {
@@ -748,6 +750,18 @@ type CodexAppServerRequestParamsOverride = {
   "thread/goal/get": CodexThreadGoalGetParams;
   "thread/goal/clear": CodexThreadGoalClearParams;
   "turn/interrupt": CodexTurnInterruptParams;
+  "mcpServer/resource/read": {
+    threadId?: string | null;
+    server: string;
+    uri: string;
+  };
+  "mcpServer/tool/call": {
+    threadId: string;
+    server: string;
+    tool: string;
+    arguments?: JsonValue;
+    _meta?: JsonValue;
+  };
 };
 
 type CodexAppServerRequestResultMap = {
@@ -765,6 +779,13 @@ type CodexAppServerRequestResultMap = {
   "hooks/list": CodexHooksListResponse;
   "marketplace/add": JsonValue;
   "mcpServerStatus/list": CodexListMcpServerStatusResponse;
+  "mcpServer/resource/read": { contents: JsonValue[] };
+  "mcpServer/tool/call": {
+    content: JsonValue[];
+    structuredContent?: JsonValue;
+    isError?: boolean;
+    _meta?: JsonValue;
+  };
   "model/list": CodexModelListResponse;
   "modelProvider/capabilities/read": CodexModelProviderCapabilitiesReadResponse;
   "plugin/install": CodexPluginInstallResponse;

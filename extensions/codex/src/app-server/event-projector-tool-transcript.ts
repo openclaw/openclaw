@@ -117,7 +117,7 @@ export class CodexToolTranscriptProjection {
     }
   }
 
-  recordNativeToolResult(item: CodexThreadItem | undefined): void {
+  recordNativeToolResult(item: CodexThreadItem | undefined, details?: unknown): void {
     if (!item || !shouldRecordNativeToolTranscript(item)) {
       return;
     }
@@ -128,6 +128,7 @@ export class CodexToolTranscriptProjection {
         name,
         text: itemTranscriptResultText(item, this.progress.outputTextByItem),
         isError: isNonSuccessItemStatus(itemStatus(item)),
+        details,
       });
     }
   }
