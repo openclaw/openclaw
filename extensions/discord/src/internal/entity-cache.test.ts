@@ -1,4 +1,5 @@
 // Discord tests cover entity cache plugin behavior.
+import { GatewayDispatchEvents } from "discord-api-types/v10";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DiscordEntityCache } from "./entity-cache.js";
 import type { RequestClient } from "./rest.js";
@@ -74,5 +75,27 @@ describe("DiscordEntityCache eviction", () => {
     await cache.fetchUser("u2");
 
     expect(cache.size).toBe(0);
+  });
+});
+
+describe("DiscordEntityCache gateway invalidation", () => {
+  it.each([
+    GatewayDispatchEvents.GuildMemberAdd,
+    GatewayDispatchEvents.GuildMemberRemove,
+    GatewayDispatchEvents.GuildMemberUpdate,
+  ])("invalidates member and user entries for %s", async (event) => {
+    const { cache, getCalls } = makeCache({ ttlMs: 60_000 });
+
+    await cache.fetchMember("g1", "u1");
+    await cache.fetchUser("u1");
+    await cache.fetchMember("g1", "u1");
+    await cache.fetchUser("u1");
+    expect(getCalls()).toBe(2);
+
+    cache.invalidateForGatewayEvent(event, { guild_id: "g1", user: { id: "u1" } });
+
+    await cache.fetchMember("g1", "u1");
+    await cache.fetchUser("u1");
+    expect(getCalls()).toBe(4);
   });
 });
