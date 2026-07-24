@@ -32,6 +32,7 @@ const mockState = vi.hoisted(() => ({
   acpProtocolVersion: 1,
   acpInputMessages: [] as unknown[],
   rawInputChunks: [] as Uint8Array[],
+  acpOutputMessages: [] as unknown[],
   gateways: [] as MockGatewayClient[],
   gatewayAuth: [] as GatewayClientAuth[],
   gatewayOptions: [] as GatewayClientOptions[],
@@ -127,7 +128,11 @@ vi.mock("@agentclientprotocol/sdk", () => ({
   },
   PROTOCOL_VERSION: mockState.acpProtocolVersion,
   ndJsonStream: vi.fn(() => ({
-    writable: new WritableStream(),
+    writable: new WritableStream({
+      write(message) {
+        mockState.acpOutputMessages.push(message);
+      },
+    }),
     readable: new ReadableStream({
       start(controller) {
         for (const message of mockState.acpInputMessages) {
@@ -360,6 +365,7 @@ describe("serveAcpGateway startup", () => {
   beforeEach(async () => {
     mockState.acpInputMessages.length = 0;
     mockState.rawInputChunks.length = 0;
+    mockState.acpOutputMessages.length = 0;
     mockState.gateways.length = 0;
     mockState.gatewayAuth.length = 0;
     mockState.gatewayOptions.length = 0;
@@ -799,5 +805,52 @@ describe("serveAcpGateway startup", () => {
 
     const [message] = await captureAcpMessagesAfterStartup([sessionRequest]);
     expect(message).toBe(sessionRequest);
+  });
+
+  it("orders new-session updates at the ACP stdio boundary without delaying loaded sessions", async () => {
+    mockState.acpInputMessages.push({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "session/load",
+      params: { sessionId: "existing-session", cwd: "/tmp/openclaw" },
+    });
+    const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
+    const servePromise = serveAcpGateway({});
+
+    try {
+      await emitHelloAndWaitForAgentSideConnection();
+      mockState.closeAcpInput?.();
+      await readCapturedAcpMessages();
+      const writer = getCapturedAcpStream().writable.getWriter();
+      const update = (sessionId: string) => ({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId,
+          update: { sessionUpdate: "session_info_update", title: "Proof" },
+        },
+      });
+      const existingUpdate = update("existing-session");
+      const newUpdate = update("new-session");
+      const newResult = {
+        jsonrpc: "2.0",
+        id: 2,
+        result: { sessionId: "new-session" },
+      };
+
+      await writer.write(existingUpdate);
+      await vi.waitFor(() => expect(mockState.acpOutputMessages).toEqual([existingUpdate]));
+      await writer.write(newUpdate);
+      expect(mockState.acpOutputMessages).toEqual([existingUpdate]);
+      await writer.write(newResult);
+      await vi.waitFor(() =>
+        expect(mockState.acpOutputMessages).toEqual([existingUpdate, newResult, newUpdate]),
+      );
+      writer.releaseLock();
+    } finally {
+      signalHandlers.get("SIGINT")?.();
+      await servePromise;
+      onceSpy.mockRestore();
+    }
   });
 });
