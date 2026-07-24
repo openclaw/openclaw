@@ -401,6 +401,18 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(note).toHaveBeenCalledWith("- imported", "Doctor changes");
   });
 
+  it("passes the current-schema fast path only when the caller opts in", async () => {
+    await runDoctorConfigPreflight({
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+      allowCurrentStateSchemaFastPath: true,
+    });
+
+    expect(autoMigrateLegacyState).toHaveBeenCalledWith(
+      expect.objectContaining({ allowCurrentStateSchemaFastPath: true }),
+    );
+  });
+
   it("carries cron Codex runtime policy targets only during repair", async () => {
     collectCronCodexRuntimePolicyTargetsReadOnly.mockResolvedValueOnce({
       targets: [{ modelRef: "openai/gpt-5.6-sol" }],

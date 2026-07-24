@@ -27,6 +27,7 @@ import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   openOpenClawStateDatabase,
   OPENCLAW_STATE_SCHEMA_VERSION,
+  recordOpenClawStateDatabaseOpenFailure,
   repairOpenClawStateDatabaseSchema,
   runOpenClawStateWriteTransaction,
   withOpenClawStateStartupMigrationCheckpointDatabase,
@@ -2177,6 +2178,22 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     expect(() => openOpenClawStateDatabase(options)).toThrow(
       /integrity_check failed.*unsafe_schema_meta_role/iu,
     );
+    expect(
+      repairOpenClawStateDatabaseSchema({ ...options, allowCurrentSchemaFastPath: true }).warnings,
+    ).toEqual([expect.stringMatching(/integrity_check failed.*unsafe_schema_meta_role/iu)]);
+  });
+
+  it("does not bypass a process-local terminal failure latch", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = openOpenClawStateDatabase(options).path;
+    closeOpenClawStateDatabaseForTest();
+    recordOpenClawStateDatabaseOpenFailure(databasePath, new Error("process-local quarantine"));
+
+    expect(
+      repairOpenClawStateDatabaseSchema({ ...options, allowCurrentSchemaFastPath: true }),
+    ).toEqual({ changes: [], warnings: [] });
+    expect(openOpenClawStateDatabase(options).db.isOpen).toBe(true);
   });
 
   it("defers unrelated current-schema index corruption but keeps doctor scans full", () => {
@@ -2185,6 +2202,9 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
     createUnsafeIndexDrift(databasePath);
 
+    expect(
+      repairOpenClawStateDatabaseSchema({ ...options, allowCurrentSchemaFastPath: true }),
+    ).toEqual({ changes: [], warnings: [] });
     expect(openOpenClawStateDatabase(options).db.isOpen).toBe(true);
     closeOpenClawStateDatabaseForTest();
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
@@ -2216,6 +2236,13 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       before.close();
     }
 
+    expect(
+      repairOpenClawStateDatabaseSchema({ ...options, allowCurrentSchemaFastPath: true }).warnings,
+    ).toEqual([
+      expect.stringMatching(
+        /integrity_check failed.*missing from index unsafe_index_records_value/iu,
+      ),
+    ]);
     expect(() => openOpenClawStateDatabase(options)).toThrow(
       /integrity_check failed.*missing from index unsafe_index_records_value/iu,
     );
@@ -3475,6 +3502,28 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       schema_version: OPENCLAW_STATE_SCHEMA_VERSION,
       app_version: VERSION,
     });
+  });
+
+  it("does not rewrite schema metadata when reopening a current database", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = openOpenClawStateDatabase(options).path;
+    closeOpenClawStateDatabaseForTest();
+    const { DatabaseSync } = requireNodeSqlite();
+    const before = new DatabaseSync(databasePath);
+    try {
+      before
+        .prepare("UPDATE schema_meta SET updated_at = ? WHERE meta_key = 'primary'")
+        .run(123_456);
+    } finally {
+      before.close();
+    }
+
+    const reopened = openOpenClawStateDatabase(options);
+
+    expect(
+      reopened.db.prepare("SELECT updated_at FROM schema_meta WHERE meta_key = 'primary'").get(),
+    ).toEqual({ updated_at: 123_456 });
   });
 
   it("latches newer global schema failures before integrity scans", () => {

@@ -47,6 +47,7 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db-contract.js";
 import {
+  assertOpenClawStateDatabaseForMaintenance,
   assertSupportedSchemaVersion,
   createOpenClawDatabaseVerificationError,
   resolveDatabasePath,
@@ -57,6 +58,7 @@ import { ensureAdditiveStateColumns } from "./openclaw-state-db-schema-additive.
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import {
   assertCanonicalStateSchemaShape,
+  detectOpenClawStateDatabaseSchemaMigrations,
   dropLegacyStateTables,
   markCurrentStateSchemaVersion,
   repairAgentDatabasesCompositePrimaryKey,
@@ -134,7 +136,70 @@ export function clearOpenClawStateDatabaseOpenFailure(pathname: string): void {
 type OpenClawStateMetadataDatabase = Pick<OpenClawStateKyselyDatabase, "schema_meta">;
 const stateDbLog = createSubsystemLogger("state/db");
 
-export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabaseOptions = {}): {
+function isCurrentOpenClawStateDatabaseSchema(db: DatabaseSync, pathname: string): boolean {
+  try {
+    assertOpenClawStateDatabaseForMaintenance(db, { pathname });
+    if (detectOpenClawStateDatabaseSchemaMigrations({ path: pathname }).length > 0) {
+      return false;
+    }
+    for (const retiredTable of [
+      ["database", "verifications"].join("_"),
+      "node_pairing_pending",
+      "node_pairing_paired",
+      "cron_run_logs",
+    ]) {
+      if (tableExists(db, retiredTable)) {
+        return false;
+      }
+    }
+    if (
+      tableExists(db, "task_runs") &&
+      db.prepare("SELECT 1 FROM task_runs WHERE delivery_status = 'not-requested' LIMIT 1").get()
+    ) {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function canSkipCurrentStateDatabaseSchemaRepair(options: OpenClawStateDatabaseOptions): boolean {
+  const pathname = resolveDatabasePath(options);
+  if (terminalOpenLatch.get(pathname)) {
+    return false;
+  }
+  try {
+    if (readOpenClawDatabaseQuarantine(pathname, { env: options.env })) {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+  const sqlite = requireNodeSqlite();
+  let db: DatabaseSync | undefined;
+  try {
+    db = new sqlite.DatabaseSync(pathname, { readOnly: true });
+    db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+    assertSupportedSchemaVersion(db, pathname);
+    if (readSqliteUserVersion(db) !== OPENCLAW_STATE_SCHEMA_VERSION) {
+      return false;
+    }
+    if (!tableExists(db, "schema_meta")) {
+      return false;
+    }
+    assertSqliteTableIntegrity(db, pathname, "schema_meta");
+    return isCurrentOpenClawStateDatabaseSchema(db, pathname);
+  } catch {
+    return false;
+  } finally {
+    db?.close();
+  }
+}
+
+export function repairOpenClawStateDatabaseSchema(
+  options: OpenClawStateDatabaseOptions & { allowCurrentSchemaFastPath?: boolean } = {},
+): {
   changes: string[];
   warnings: string[];
 } {
@@ -144,6 +209,12 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
     return { changes: [], warnings: [] };
   }
   ensureOpenClawStatePermissions(pathname, env);
+  // Automatic CLI preflight may use the same current-schema gate as normal
+  // runtime opens. Explicit Doctor and pending schema migrations still take
+  // the default full-file integrity path below.
+  if (options.allowCurrentSchemaFastPath && canSkipCurrentStateDatabaseSchemaRepair(options)) {
+    return { changes: [], warnings: [] };
+  }
   const sqlite = requireNodeSqlite();
   const db = new sqlite.DatabaseSync(pathname);
   try {
@@ -413,7 +484,9 @@ export function openOpenClawStateDatabase(
         foreignKeys: true,
         synchronous: "NORMAL",
       });
-      ensureSchema(db, pathname);
+      if (!isCurrentOpenClawStateDatabaseSchema(db, pathname)) {
+        ensureSchema(db, pathname);
+      }
       return maintenance;
     } catch (err) {
       maintenance?.close();
