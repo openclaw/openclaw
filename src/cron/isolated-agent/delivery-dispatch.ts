@@ -52,6 +52,7 @@ import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
 import { createCronExecutionId } from "../run-id.js";
 import { hasScheduledNextRunAtMs } from "../service/jobs.js";
 import type { CronJob, CronRunTelemetry } from "../types.js";
+import { selectCronRouteCurrentSessionKey } from "./delivery-route-session-key.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
 import { pickLastNonEmptyTextFromPayloads, pickSummaryFromOutput } from "./helpers.js";
 import { resolveCronLifecycleRevisionIdentity } from "./run-session-state.js";
@@ -674,6 +675,7 @@ async function resolveCronDeliveryRouteSessionKey(params: {
   jobId: string;
   agentId: string;
   agentSessionKey: string;
+  routeCurrentSessionKey: string;
   delivery: SuccessfulDeliveryTarget;
   warningContext: string;
 }): Promise<string> {
@@ -686,7 +688,10 @@ async function resolveCronDeliveryRouteSessionKey(params: {
       agentId: params.agentId,
       accountId: params.delivery.accountId,
       target: params.delivery.to,
-      currentSessionKey: params.agentSessionKey,
+      // Use the job's bound conversation identity (not the isolated run key) so the
+      // outbound route keeps the source namespace — e.g. a Mattermost private channel
+      // stays `group:<id>` instead of forking a phantom `channel:<id>` session (#95646).
+      currentSessionKey: params.routeCurrentSessionKey,
       threadId: params.delivery.threadId,
     });
     const routeSessionKey = route?.sessionKey?.trim();
@@ -748,6 +753,7 @@ async function resolveDirectCronDeliverySessionKey(params: {
     jobId: params.job.id,
     agentId: params.agentId,
     agentSessionKey: params.agentSessionKey,
+    routeCurrentSessionKey: selectCronRouteCurrentSessionKey(params.job, params.agentSessionKey),
     delivery: params.delivery,
     warningContext: "direct delivery mirror",
   });
@@ -836,6 +842,7 @@ export async function queueCronMessageToolDeliveryAwareness(params: {
       jobId: params.job.id,
       agentId: params.agentId,
       agentSessionKey: params.agentSessionKey,
+      routeCurrentSessionKey: selectCronRouteCurrentSessionKey(params.job, params.agentSessionKey),
       delivery: target,
       warningContext: "message-tool delivery awareness",
     });
