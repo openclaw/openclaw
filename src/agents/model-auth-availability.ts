@@ -14,6 +14,7 @@ import type {
   ProviderModelRouteSource,
 } from "../plugin-sdk/provider-model-types.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { resolveRuntimeSyntheticAuthCandidateRefs } from "../plugins/synthetic-auth.runtime.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
 import {
   isConfiguredAwsSdkAuthProfileForProvider,
@@ -64,6 +65,7 @@ import {
 } from "./provider-model-route-auth.js";
 
 const OPENAI_PROVIDER_ID = "openai";
+const CODEX_RUNTIME_PROVIDER_ID = "codex";
 const OPENAI_CODEX_RESPONSES_API = "openai-chatgpt-responses";
 
 export type ModelAuthAvailability = boolean | undefined;
@@ -110,6 +112,8 @@ type CreateModelAuthAvailabilityResolverParams = {
   externalCliProviderIds?: readonly string[];
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
   allowPreparedRuntimeAuth?: boolean;
+  resolveRuntimeAuthAvailability?: typeof hasRuntimeAvailableProviderAuth;
+  runtimeSyntheticAuthCandidateRefs?: readonly string[];
 };
 
 type AuthTarget = ModelAuthAvailabilityRef & {
@@ -265,6 +269,22 @@ export function createModelAuthAvailabilityResolver(
     config: params.cfg,
     env,
   });
+  const resolveRuntimeAuthAvailability =
+    params.resolveRuntimeAuthAvailability ?? hasRuntimeAvailableProviderAuth;
+  const runtimeSyntheticAuthCandidates = new Set(
+    (
+      params.runtimeSyntheticAuthCandidateRefs ??
+      (params.syntheticAuthProviderRefs === undefined
+        ? resolveRuntimeSyntheticAuthCandidateRefs({
+            config: params.cfg,
+            workspaceDir: params.workspaceDir,
+            env,
+            index: params.metadataSnapshot?.index,
+            registryDiagnostics: params.metadataSnapshot?.registryDiagnostics,
+          })
+        : [])
+    ).map(normalizeProviderIdForAuth),
+  );
   const envCache = new Map<string, ReturnType<typeof resolveProviderEnvAuthEvidence>>();
   const orderCache = new Map<string, AuthProfileOrderResolution>();
   const normalizeProvider = (provider: string) => {
@@ -600,6 +620,27 @@ export function createModelAuthAvailabilityResolver(
         selectedAuthMode: mode,
         evidence: "environment",
       };
+    }
+    const modelId = target.modelId
+      ? normalizeModelIdForProvider(provider, target.modelId)
+      : undefined;
+    if (
+      provider !== OPENAI_PROVIDER_ID &&
+      provider !== CODEX_RUNTIME_PROVIDER_ID &&
+      modelId &&
+      (params.syntheticAuthProviderRefs === undefined
+        ? runtimeSyntheticAuthCandidates.has(normalizeProvider(provider))
+        : synthetic.has(normalizeProvider(provider))) &&
+      resolveRuntimeAuthAvailability({
+        provider,
+        modelId,
+        modelApi: target.api ?? undefined,
+        cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
+        env,
+      })
+    ) {
+      return { availability: true, evidence: "synthetic" };
     }
     const hasCompatibleCodexSyntheticAuth =
       provider === OPENAI_PROVIDER_ID &&

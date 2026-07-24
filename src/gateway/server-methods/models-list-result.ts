@@ -121,14 +121,14 @@ function resolveModelChoiceAgentRuntime(params: {
 function listEnabledSyntheticAuthProviderRefs(params: {
   cfg: OpenClawConfig;
   workspaceDir: string;
-}): readonly string[] {
+}): readonly string[] | undefined {
   const result = loadPluginRegistrySnapshotWithMetadata({
     config: params.cfg,
     workspaceDir: params.workspaceDir,
     env: process.env,
   });
   if (result.source !== "persisted" && result.source !== "provided") {
-    return [];
+    return undefined;
   }
   return result.snapshot.plugins
     .filter((plugin) => plugin.enabled)

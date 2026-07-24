@@ -27,7 +27,7 @@ vi.mock("../plugins/plugin-registry.js", () => ({
     plugins: [
       {
         origin: "bundled",
-        nonSecretAuthMarkers: ["gcp-vertex-credentials", "ollama-local"],
+        nonSecretAuthMarkers: ["gcp-vertex-credentials", "ollama-local", "public"],
         setup: {
           providers: [{ id: "ollama", envVars: ["OLLAMA_API_KEY"] }],
         },
@@ -35,6 +35,15 @@ vi.mock("../plugins/plugin-registry.js", () => ({
     ],
   }),
 }));
+
+vi.mock("../plugins/synthetic-auth.runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/synthetic-auth.runtime.js")>();
+  return {
+    ...actual,
+    hasRuntimeSyntheticAuthCandidateRef: (params: { providerRefs: readonly string[] }) =>
+      params.providerRefs.includes("opencode"),
+  };
+});
 
 vi.mock("../plugins/manifest-metadata-scan.js", () => ({
   listOpenClawPluginManifestMetadata: () => [
@@ -44,6 +53,14 @@ vi.mock("../plugins/manifest-metadata-scan.js", () => ({
       manifest: {
         id: "anthropic-vertex",
         nonSecretAuthMarkers: ["gcp-vertex-credentials"],
+      },
+    },
+    {
+      pluginDir: "/bundled/opencode",
+      origin: "bundled",
+      manifest: {
+        id: "opencode",
+        nonSecretAuthMarkers: ["public"],
       },
     },
   ],
@@ -99,7 +116,10 @@ vi.mock("../plugins/provider-runtime.js", async () => {
         };
       };
       modelApi?: string;
-      context: { providerConfig?: { api?: string; baseUrl?: string; models?: unknown[] } };
+      context: {
+        modelId?: string;
+        providerConfig?: { api?: string; baseUrl?: string; models?: unknown[] };
+      };
     }) => {
       if (params.provider === "plugin-web") {
         if (
@@ -131,6 +151,13 @@ vi.mock("../plugins/provider-runtime.js", async () => {
           apiKey: "native-cli-access-token",
           source: "Native CLI auth",
           mode: "oauth" as const,
+        };
+      }
+      if (params.provider === "opencode" && params.context.modelId === "deepseek-v4-flash-free") {
+        return {
+          apiKey: "public",
+          source: "OpenCode Zen public key",
+          mode: "api-key" as const,
         };
       }
       const effectiveApi = params.modelApi ?? params.context.providerConfig?.api;
@@ -1755,6 +1782,37 @@ describe("resolveApiKeyForProvider", () => {
 });
 
 describe("resolveApiKeyForProvider – synthetic local auth for custom providers", () => {
+  it("passes the selected model id to provider-owned synthetic auth", async () => {
+    const auth = await resolveApiKeyForProvider({
+      provider: "opencode",
+      modelId: "deepseek-v4-flash-free",
+      modelApi: "openai-completions",
+      store: { version: 1, profiles: {} },
+    });
+
+    expectAuthFields(auth, {
+      apiKey: "public",
+      source: "OpenCode Zen public key",
+      mode: "api-key",
+    });
+  });
+
+  it("keeps provider-owned non-secret auth markers in prepared direct attempts", async () => {
+    const auth = await resolveApiKeyForProvider({
+      provider: "opencode",
+      modelId: "deepseek-v4-flash-free",
+      modelApi: "openai-completions",
+      store: { version: 1, profiles: {} },
+      allowAuthProfileFallback: false,
+    });
+
+    expectAuthFields(auth, {
+      apiKey: "public",
+      source: "OpenCode Zen public key",
+      mode: "api-key",
+    });
+  });
+
   it("recognizes local baseUrl variants for synthetic auth config", () => {
     const localBaseUrls = [
       "http://127.0.0.1:8080/v1",

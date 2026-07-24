@@ -46,6 +46,8 @@ vi.mock("./manifest-registry-installed.js", () => ({
 }));
 
 import {
+  hasRuntimeSyntheticAuthCandidateRef,
+  resolveRuntimeSyntheticAuthCandidateRefs,
   resolveRuntimeSyntheticAuthProviderRefState,
   resolveRuntimeSyntheticAuthProviderRefs,
 } from "./synthetic-auth.runtime.js";
@@ -131,6 +133,13 @@ describe("synthetic auth runtime refs", () => {
       refs: [],
       complete: false,
     });
+    expect(resolveRuntimeSyntheticAuthCandidateRefs()).toStrictEqual([
+      "local-provider",
+      "local-cli",
+      "remote-provider",
+    ]);
+    expect(hasRuntimeSyntheticAuthCandidateRef({ providerRefs: ["remote-provider"] })).toBe(true);
+    expect(hasRuntimeSyntheticAuthCandidateRef({ providerRefs: ["unknown"] })).toBe(false);
   });
 
   it("does not treat a provided index with registry diagnostics as validated synthetic auth", () => {

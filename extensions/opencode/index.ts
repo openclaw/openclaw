@@ -13,6 +13,7 @@ import {
   buildStaticOpencodeZenProviderConfig,
   listOpencodeZenModelCatalogEntries,
   normalizeOpencodeZenBaseUrl,
+  resolveOpencodeZenSyntheticAuth,
   resolveOpencodeZenModel,
 } from "./provider-catalog.js";
 import { resolveThinkingProfile as resolveOpencodeThinkingProfile } from "./provider-policy-api.js";
@@ -149,6 +150,7 @@ export default definePluginEntry({
         },
       },
       augmentModelCatalog: () => listOpencodeZenModelCatalogEntries(),
+      resolveSyntheticAuth: (ctx) => resolveOpencodeZenSyntheticAuth(ctx),
       ...buildProviderReplayFamilyHooks({ family: "passthrough-gemini" }),
       isModernModelRef: ({ modelId }) => isModernOpencodeModel(modelId),
       resolveThinkingProfile: resolveOpencodeThinkingProfile,

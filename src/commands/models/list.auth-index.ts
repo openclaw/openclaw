@@ -34,14 +34,16 @@ function listValidatedSyntheticAuthProviderRefs(params: {
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
   metadataSnapshot?: PluginMetadataSnapshot;
-}): readonly string[] {
+}): readonly string[] | undefined {
   if (params.metadataSnapshot) {
-    if (
-      params.metadataSnapshot.registryDiagnostics.length > 0 ||
-      (params.metadataSnapshot.registrySource !== "persisted" &&
-        params.metadataSnapshot.registrySource !== "provided")
-    ) {
+    if ((params.metadataSnapshot.registryDiagnostics?.length ?? 0) > 0) {
       return [];
+    }
+    if (
+      params.metadataSnapshot.registrySource !== "persisted" &&
+      params.metadataSnapshot.registrySource !== "provided"
+    ) {
+      return undefined;
     }
     return params.metadataSnapshot.index.plugins
       .filter((plugin) => plugin.enabled)
@@ -52,11 +54,11 @@ function listValidatedSyntheticAuthProviderRefs(params: {
     workspaceDir: params.workspaceDir,
     env: params.env,
   });
-  if (
-    result.diagnostics.length > 0 ||
-    (result.source !== "persisted" && result.source !== "provided")
-  ) {
+  if (result.diagnostics.length > 0) {
     return [];
+  }
+  if (result.source !== "persisted" && result.source !== "provided") {
+    return undefined;
   }
   return result.snapshot.plugins
     .filter((plugin) => plugin.enabled)

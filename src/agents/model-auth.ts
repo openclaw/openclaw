@@ -30,7 +30,10 @@ import {
   shouldDeferProviderSyntheticProfileAuthWithPlugin,
 } from "../plugins/provider-runtime.js";
 import { resolveOwningPluginIdsForProviderRef } from "../plugins/providers.js";
-import { resolveRuntimeSyntheticAuthProviderRefState } from "../plugins/synthetic-auth.runtime.js";
+import {
+  hasRuntimeSyntheticAuthCandidateRef,
+  resolveRuntimeSyntheticAuthProviderRefState,
+} from "../plugins/synthetic-auth.runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
 import {
   findActiveDegradedSecretOwner,
@@ -952,6 +955,21 @@ function shouldResolvePluginSyntheticAuth(params: {
   return listProviderSyntheticAuthRefs(params).some((ref) => eligibleRefs.has(ref));
 }
 
+function shouldResolvePreparedPluginSyntheticAuth(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+  modelApi?: string;
+}): boolean {
+  const provider = normalizeProviderId(params.provider);
+  if (provider === OPENAI_PROVIDER_ID || provider === "codex") {
+    return false;
+  }
+  return hasRuntimeSyntheticAuthCandidateRef({
+    config: params.cfg,
+    providerRefs: listProviderSyntheticAuthRefs(params),
+  });
+}
+
 /** Fast auth-availability check for runtime provider/model selection. */
 export function hasRuntimeAvailableProviderAuth(params: {
   provider: string;
@@ -960,6 +978,7 @@ export function hasRuntimeAvailableProviderAuth(params: {
   env?: NodeJS.ProcessEnv;
   allowPluginSyntheticAuth?: boolean;
   runtimeLookup?: RuntimeProviderAuthLookup;
+  modelId?: string;
   modelApi?: string;
 }): boolean {
   const provider = normalizeProviderId(params.provider);
@@ -1001,7 +1020,11 @@ export function hasRuntimeAvailableProviderAuth(params: {
       provider,
       runtimeLookup: params.runtimeLookup,
     }) &&
-    resolveSyntheticLocalProviderAuth({ cfg: params.cfg, provider })
+    resolveSyntheticLocalProviderAuth({
+      cfg: params.cfg,
+      provider,
+      modelId: params.modelId,
+    })
   ) {
     return true;
   }
@@ -1016,6 +1039,7 @@ type SyntheticProviderAuthResolution = {
 function resolveProviderSyntheticRuntimeAuth(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
+  modelId?: string;
   modelApi?: string;
   secretSentinels?: boolean;
 }): SyntheticProviderAuthResolution {
@@ -1038,6 +1062,7 @@ function resolveProviderSyntheticRuntimeAuth(params: {
         context: {
           config,
           provider: params.provider,
+          modelId: params.modelId,
           providerConfig,
         },
         modelApi: params.modelApi,
@@ -1078,18 +1103,31 @@ function resolveProviderSyntheticRuntimeAuth(params: {
 function resolveSyntheticLocalProviderAuth(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
+  modelId?: string;
   modelApi?: string;
   secretSentinels?: boolean;
   allowPluginSyntheticAuth?: boolean;
 }): ResolvedProviderAuth | null {
-  // Prepared direct attempts may use local no-auth config, but must not widen
-  // back into an unprepared plugin-owned credential source.
-  const syntheticProviderAuth =
-    params.allowPluginSyntheticAuth === false ? {} : resolveProviderSyntheticRuntimeAuth(params);
-  if (syntheticProviderAuth.auth) {
-    return syntheticProviderAuth.auth;
+  // Prepared direct attempts may use provider-owned non-secret markers, but
+  // must not widen back into an unprepared plugin-owned credential source.
+  const mayResolvePluginSyntheticAuth =
+    params.allowPluginSyntheticAuth !== false || shouldResolvePreparedPluginSyntheticAuth(params);
+  const syntheticProviderAuth = mayResolvePluginSyntheticAuth
+    ? resolveProviderSyntheticRuntimeAuth(params)
+    : {};
+  const syntheticAuth = syntheticProviderAuth.auth;
+  const syntheticApiKey = syntheticAuth?.apiKey;
+  if (
+    syntheticAuth &&
+    syntheticApiKey &&
+    (params.allowPluginSyntheticAuth !== false || isNonSecretApiKeyMarker(syntheticApiKey))
+  ) {
+    return syntheticAuth;
   }
-  if (syntheticProviderAuth.blockedOnManagedSecretRef) {
+  if (
+    params.allowPluginSyntheticAuth !== false &&
+    syntheticProviderAuth.blockedOnManagedSecretRef
+  ) {
     return null;
   }
 
@@ -1647,6 +1685,7 @@ export async function resolveApiKeyForProvider(params: {
   const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({
     cfg,
     provider,
+    modelId: params.modelId,
     modelApi: params.modelApi,
     secretSentinels: params.secretSentinels,
     allowPluginSyntheticAuth: params.allowAuthProfileFallback !== false,
@@ -1800,7 +1839,7 @@ export async function hasAvailableAuthForProvider(params: {
   if (resolveUsableCustomProviderApiKey({ cfg, provider })) {
     return true;
   }
-  if (resolveSyntheticLocalProviderAuth({ cfg, provider })) {
+  if (resolveSyntheticLocalProviderAuth({ cfg, provider, modelId: params.modelId })) {
     return true;
   }
   const store =
