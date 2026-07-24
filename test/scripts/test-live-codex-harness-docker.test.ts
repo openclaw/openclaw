@@ -101,6 +101,12 @@ describe("scripts/test-live-codex-harness-docker.sh", () => {
     );
   });
 
+  it("enables private plugin SDK aliases for the source-staged harness", () => {
+    const script = fs.readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).toContain("-e OPENCLAW_ENABLE_PRIVATE_QA_CLI=1");
+  });
+
   it("forwards bounded resume stress controls into Docker", () => {
     const script = fs.readFileSync(SCRIPT_PATH, "utf8");
 
