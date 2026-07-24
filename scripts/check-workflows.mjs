@@ -3,7 +3,7 @@
 // Uses installed tools when present, otherwise falls back to pinned hooks where
 // possible, then runs repo-specific workflow guards.
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -93,6 +93,19 @@ function workflowFiles() {
     .map((file) => join(WORKFLOW_DIR, file));
 }
 
+function failOnWorkflowTabs(workflows) {
+  const bad = workflows.filter((file) => readFileSync(file).includes("\t"));
+  if (bad.length === 0) {
+    return;
+  }
+
+  console.error("Tabs found in workflow file(s):");
+  for (const file of bad) {
+    console.error(`- ${file}`);
+  }
+  process.exit(1);
+}
+
 function runPreCommitHook(hook, files) {
   const hookArgs = ["run", "--config", ".pre-commit-config.yaml", hook, "--files", ...files];
   if (commandExists("pre-commit")) {
@@ -114,6 +127,8 @@ function runPreCommitHook(hook, files) {
 }
 
 const workflows = workflowFiles();
+
+failOnWorkflowTabs(workflows);
 
 if (commandExists("actionlint")) {
   run("actionlint", workflows);
