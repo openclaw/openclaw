@@ -22,6 +22,7 @@ export type LogTailPayload = {
   lines: string[];
   truncated: boolean;
   reset: boolean;
+  skippedBytes?: number;
 };
 
 /** Resolves a rolling daily log path to the newest existing rolling log when needed. */
@@ -72,6 +73,7 @@ async function readLogSlice(params: {
       lines: [],
       truncated: false,
       reset: false,
+      skippedBytes: 0,
     };
   }
 
@@ -83,22 +85,32 @@ async function readLogSlice(params: {
       ? Math.max(0, Math.floor(params.cursor))
       : undefined;
   let reset = false;
+  let skippedBytes = 0;
   let truncated = false;
   let start;
 
   if (cursor != null) {
     if (cursor > size) {
-      // File rotated or shrank since the previous cursor; restart near the end.
+      // The file shrank below the previously-returned cursor, so the log was
+      // rotated or truncated and the cursor is no longer meaningful.
       reset = true;
       start = Math.max(0, size - maxBytes);
       truncated = start > 0;
     } else {
       start = cursor;
       if (size - start > maxBytes) {
-        // Cursor is valid but too stale; cap reads and tell the caller state was reset.
+        // The file grew faster than --max-bytes between polls. The cursor is
+        // still valid (we read forward from it), but we must skip bytes to fit
+        // the budget. `reset` stays the backward-compatible re-anchor signal so
+        // older `logs.tail` clients (which only understand `reset`) discard their
+        // retained buffer instead of appending a discontinuous suffix; the
+        // additive `skippedBytes` lets newer clients tell a budget skip apart
+        // from a true rotation (skippedBytes === 0).
         reset = true;
         truncated = true;
-        start = Math.max(0, size - maxBytes);
+        const boundedStart = Math.max(0, size - maxBytes);
+        skippedBytes = Math.max(0, boundedStart - start);
+        start = boundedStart;
       }
     }
   } else {
@@ -113,6 +125,7 @@ async function readLogSlice(params: {
       lines: [],
       truncated,
       reset,
+      skippedBytes,
     };
   }
 
@@ -149,6 +162,7 @@ async function readLogSlice(params: {
       lines,
       truncated,
       reset,
+      skippedBytes,
     };
   } finally {
     await handle.close();

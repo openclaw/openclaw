@@ -11,6 +11,8 @@ type TestLogsPage = HTMLElement & {
   logsAtBottom: boolean;
   logsAutoFollow: boolean;
   logsEntries: unknown[];
+  logsTruncated: boolean;
+  logsCursor: number | null;
   logsStatus: { error: string | null; hasLoaded: boolean; stale: boolean };
   scheduleScroll: (force?: boolean) => void;
   readonly updateComplete: Promise<boolean>;
@@ -201,6 +203,43 @@ describe("LogsPage lifecycle", () => {
     await page.loadLogs({ reset: true });
     expect(page.logsStatus).toEqual({ error: null, hasLoaded: true, stale: false });
     expect(page.logsEntries).toHaveLength(1);
+  });
+
+  it("re-anchors instead of appending when the tail payload skipped bytes", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        file: "/tmp/openclaw.log",
+        cursor: 10,
+        lines: ["older entry"],
+        truncated: false,
+        reset: true,
+      })
+      .mockResolvedValueOnce({
+        file: "/tmp/openclaw.log",
+        cursor: 100,
+        lines: ["fresh after skipped window"],
+        truncated: true,
+        reset: false,
+        skippedBytes: 42,
+      });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const page = document.createElement("openclaw-logs-page") as TestLogsPage;
+    page.context = contextWithClient(client);
+    document.body.append(page);
+    await page.updateComplete;
+    page.connected = true;
+
+    await page.loadLogs({ reset: true });
+    expect(page.logsEntries).toHaveLength(1);
+
+    await page.loadLogs({ quiet: true });
+
+    expect(page.logsEntries.map((entry) => (entry as { message?: string }).message)).toEqual([
+      "fresh after skipped window",
+    ]);
+    expect(page.logsTruncated).toBe(true);
+    expect(page.logsCursor).toBe(100);
   });
 
   it("drops deferred scroll work after a same-client reconnect", async () => {
