@@ -31,13 +31,11 @@ import {
   diagnosticLogger as diag,
   logMessageQueued,
   logSessionStateChange,
-  updateDiagnosticSessionFile,
 } from "../../logging/diagnostic.js";
 import { resolveTimerTimeoutMs } from "../../shared/number-coercion.js";
 import {
   ACTIVE_EMBEDDED_RUNS,
   ACTIVE_EMBEDDED_RUNS_BY_RUN_ID,
-  ACTIVE_EMBEDDED_RUN_LIFECYCLE_GENERATIONS,
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE,
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY,
   ACTIVE_EMBEDDED_RUN_SNAPSHOTS,
@@ -880,24 +878,6 @@ export function updateActiveEmbeddedRunSnapshot(
     return;
   }
   ACTIVE_EMBEDDED_RUN_SNAPSHOTS.set(sessionId, snapshot);
-}
-
-export function updateActiveEmbeddedRunSessionFile(
-  sessionId: string,
-  sessionFile: string | undefined,
-  lifecycleGeneration: string,
-): void {
-  const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
-  if (
-    handle === undefined ||
-    ACTIVE_EMBEDDED_RUN_LIFECYCLE_GENERATIONS.get(handle) !== lifecycleGeneration ||
-    !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)
-  ) {
-    return;
-  }
-  clearActiveRunSessionFiles(sessionId);
-  setActiveRunSessionFile(sessionFile, sessionId);
-  updateDiagnosticSessionFile({ sessionId, sessionFile });
 }
 
 export function clearActiveEmbeddedRun(
