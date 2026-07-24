@@ -14,6 +14,28 @@ import {
   type OllamaTagModel,
 } from "./provider-models.js";
 
+function cancelTrackedResponse(
+  text: string,
+  init: ResponseInit,
+): {
+  response: Response;
+  wasCanceled: () => boolean;
+} {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(stream, init),
+    wasCanceled: () => canceled,
+  };
+}
+
 describe("ollama provider models", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -427,6 +449,31 @@ describe("ollama provider models", () => {
     const info = await queryOllamaModelShowInfo("http://127.0.0.1:11434", "test-model");
 
     expect(info.contextWindow).toBe(expected);
+  });
+
+  it("cancels non-OK discovery response bodies before fallback results", async () => {
+    const tagsResponse = cancelTrackedResponse("ollama unavailable", { status: 503 });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => tagsResponse.response),
+    );
+
+    await expect(fetchOllamaModels("http://127.0.0.1:11434")).resolves.toEqual({
+      reachable: true,
+      models: [],
+    });
+    expect(tagsResponse.wasCanceled()).toBe(true);
+
+    const showResponse = cancelTrackedResponse("model unavailable", { status: 503 });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => showResponse.response),
+    );
+
+    await expect(queryOllamaModelShowInfo("http://127.0.0.1:11434", "llama3:8b")).resolves.toEqual(
+      {},
+    );
+    expect(showResponse.wasCanceled()).toBe(true);
   });
 
   it("fails soft and stops reading when discovery streams exceed the JSON byte cap", async () => {
