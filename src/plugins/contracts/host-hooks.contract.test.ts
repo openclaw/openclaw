@@ -44,7 +44,11 @@ import {
 import { buildPluginAgentTurnPrepareContext, isPluginJsonValue } from "../host-hooks.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { createPluginRegistry } from "../registry.js";
-import { setActivePluginRegistry } from "../runtime.js";
+import {
+  pinActivePluginSessionExtensionRegistry,
+  releasePinnedPluginSessionExtensionRegistry,
+  setActivePluginRegistry,
+} from "../runtime.js";
 import type { PluginRuntime } from "../runtime/types.js";
 import { createPluginRecord } from "../status.test-helpers.js";
 import { runTrustedToolPolicies } from "../trusted-tool-policy.js";
@@ -1991,6 +1995,60 @@ describe("host-hook fixture plugin contract", () => {
         },
       ],
     });
+  });
+
+  it("projects plugin UI descriptors from the pinned session-extension registry", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "host-hook-fixture",
+        name: "Host Hook Fixture",
+      }),
+      register(api) {
+        api.registerControlUiDescriptor({
+          id: "approval-panel",
+          surface: "session",
+          label: "Approval panel",
+        });
+      },
+    });
+
+    try {
+      pinActivePluginSessionExtensionRegistry(registry.registry);
+      setActivePluginRegistry(createEmptyPluginRegistry());
+
+      const calls: Array<[boolean, unknown, unknown]> = [];
+      void expectDefined(
+        pluginHostHookHandlers["plugins.uiDescriptors"],
+        'pluginHostHookHandlers["plugins.uiDescriptors"] test invariant',
+      )({
+        params: {},
+        respond: (ok: boolean, payload: unknown, error: unknown) => {
+          calls.push([ok, payload, error]);
+        },
+      } as never);
+
+      expect(calls).toHaveLength(1);
+      const [ok, payload, error] = calls[0] ?? [];
+      expect(ok).toBe(true);
+      expect(error).toBeUndefined();
+      expect(payload).toEqual({
+        ok: true,
+        descriptors: [
+          {
+            id: "approval-panel",
+            pluginId: "host-hook-fixture",
+            pluginName: "Host Hook Fixture",
+            surface: "session",
+            label: "Approval panel",
+          },
+        ],
+      });
+    } finally {
+      releasePinnedPluginSessionExtensionRegistry(registry.registry);
+    }
   });
 
   it("enforces command requiredScopes for gateway clients and command owners", async () => {
