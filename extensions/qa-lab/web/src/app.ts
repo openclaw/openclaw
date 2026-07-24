@@ -610,9 +610,11 @@ export async function createQaLabApp(root: HTMLDivElement) {
       const result = await postJson<{ runner: { selection: RunnerSelection } }>(
         "/api/scenario/suite",
         {
+          channelDriver: state.runnerDraft.channelDriver,
           providerMode: state.runnerDraft.providerMode,
           primaryModel: state.runnerDraft.primaryModel,
           alternateModel: state.runnerDraft.alternateModel,
+          fastMode: state.runnerDraft.fastMode,
           scenarioIds: state.runnerDraft.scenarioIds,
         },
       );
@@ -940,6 +942,11 @@ export async function createQaLabApp(root: HTMLDivElement) {
         providerMode: mode,
         ...defaultModelsForProviderMode(mode, state.bootstrap),
       }));
+    });
+    root.querySelector<HTMLSelectElement>("#channel-driver")?.addEventListener("change", (e) => {
+      const value = (e.currentTarget as HTMLSelectElement).value;
+      const channelDriver = value === "crabline" || value === "live" ? value : "qa-channel";
+      updateRunnerDraft((draft) => ({ ...draft, channelDriver }));
     });
     root.querySelector<HTMLSelectElement>("#primary-model")?.addEventListener("change", (e) => {
       const primaryModel = (e.currentTarget as HTMLSelectElement).value;

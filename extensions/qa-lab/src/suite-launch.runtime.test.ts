@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { QaLabServerHandle } from "./lab-server.types.js";
 
 const { crablineRuntimeLoads, runQaFlowSuite, runQaTestFileScenarios } = vi.hoisted(() => ({
   crablineRuntimeLoads: vi.fn(),
@@ -537,7 +538,19 @@ describe("qa suite runtime launcher", () => {
 
   it("routes selected Playwright scenarios to the Playwright scenario runner", async () => {
     const repoRoot = await makeTempRepo("qa-suite-launch-");
+    const setScenarioRun = vi.fn<QaLabServerHandle["setScenarioRun"]>();
+    const lab = {
+      baseUrl: "http://127.0.0.1:43124",
+      listenUrl: "http://127.0.0.1:43124",
+      runSelfCheck: vi.fn(),
+      setControlUi: vi.fn(),
+      setLatestReport: vi.fn(),
+      setScenarioRun,
+      state: {} as QaLabServerHandle["state"],
+      stop: vi.fn(),
+    } satisfies QaLabServerHandle;
     const result = await runQaSuite({
+      lab,
       repoRoot,
       outputDir: ".artifacts/qa-e2e/scenario-test",
       scenarioIds: ["control-ui-chat-flow-playwright"],
@@ -577,6 +590,14 @@ describe("qa suite runtime launcher", () => {
         kind: scenario.execution.kind,
       })),
     ).toEqual([{ id: "control-ui-chat-flow-playwright", kind: "playwright" }]);
+    expect(setScenarioRun).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        status: "completed",
+        scenarios: [
+          expect.objectContaining({ id: "control-ui-chat-flow-playwright", status: "pass" }),
+        ],
+      }),
+    );
   });
 
   it("serializes test-file runner partitions in one checkout", async () => {
@@ -691,6 +712,81 @@ describe("qa suite runtime launcher", () => {
     expect(JSON.stringify(summary)).not.toContain(repoRoot);
     expect(summary.scenarios?.[1]?.details).toContain(
       "log=.artifacts/qa-e2e/mixed/playwright/control-ui-chat-flow-playwright.log",
+    );
+  });
+
+  it("aggregates mixed-kind progress through the parent lab", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-mixed-progress-");
+    const scenarioRuns: Array<Parameters<QaLabServerHandle["setScenarioRun"]>[0]> = [];
+    const lab = {
+      baseUrl: "http://127.0.0.1:43124",
+      listenUrl: "http://127.0.0.1:43124",
+      runSelfCheck: vi.fn(),
+      setControlUi: vi.fn(),
+      setLatestReport: vi.fn(),
+      setScenarioRun: vi.fn((run) => scenarioRuns.push(run)),
+      state: {} as QaLabServerHandle["state"],
+      stop: vi.fn(),
+    } satisfies QaLabServerHandle;
+    const defaultFlowImplementation = runQaFlowSuite.getMockImplementation();
+    if (!defaultFlowImplementation) {
+      throw new Error("expected default QA flow suite mock implementation");
+    }
+    runQaFlowSuite.mockImplementationOnce(async (params) => {
+      params?.lab?.setScenarioRun({
+        kind: "suite",
+        status: "running",
+        startedAt: "2026-07-23T00:00:00.000Z",
+        scenarios: [
+          { id: "channel-chat-baseline", name: "channel-chat-baseline", status: "running" },
+        ],
+      });
+      const result = await defaultFlowImplementation(params);
+      params?.lab?.setScenarioRun({
+        kind: "suite",
+        status: "completed",
+        startedAt: "2026-07-23T00:00:00.000Z",
+        finishedAt: "2026-07-23T00:00:01.000Z",
+        scenarios: [{ id: "channel-chat-baseline", name: "channel-chat-baseline", status: "pass" }],
+      });
+      return result;
+    });
+
+    await runQaSuite({
+      lab,
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/mixed-progress",
+      scenarioIds: ["channel-chat-baseline", "control-ui-chat-flow-playwright"],
+    });
+
+    expect(
+      scenarioRuns.some(
+        (run) =>
+          run?.status === "running" &&
+          run.scenarios.some(
+            (scenario) => scenario.id === "channel-chat-baseline" && scenario.status === "running",
+          ),
+      ),
+    ).toBe(true);
+    expect(
+      scenarioRuns.some(
+        (run) =>
+          run?.status === "running" &&
+          run.scenarios.some(
+            (scenario) =>
+              scenario.id === "control-ui-chat-flow-playwright" && scenario.status === "running",
+          ),
+      ),
+    ).toBe(true);
+    expect(scenarioRuns.at(-1)).toMatchObject({
+      status: "completed",
+      scenarios: [
+        { id: "channel-chat-baseline", status: "pass" },
+        { id: "control-ui-chat-flow-playwright", status: "pass" },
+      ],
+    });
+    expect(lab.setLatestReport).toHaveBeenCalledWith(
+      expect.objectContaining({ outputPath: expect.stringMatching(/qa-suite-report\.md$/u) }),
     );
   });
 

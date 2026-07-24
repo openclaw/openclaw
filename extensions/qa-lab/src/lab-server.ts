@@ -681,14 +681,32 @@ export async function startQaLabServer(
             writeError(res, 409, "QA suite run already in progress");
             return;
           }
-          const selection = normalizeQaRunSelection(
-            await readQaJsonBody(req),
-            scenarioCatalog.scenarios,
-          );
+          let selection: ReturnType<typeof normalizeQaRunSelection>;
+          try {
+            selection = normalizeQaRunSelection(
+              await readQaJsonBody(req),
+              scenarioCatalog.scenarios,
+            );
+          } catch (error) {
+            writeError(res, 400, error);
+            return;
+          }
           state.reset();
           latestReport = null;
-          latestScenarioRun = null;
           const startedAt = new Date().toISOString();
+          const scenarioById = new Map(
+            scenarioCatalog.scenarios.map((scenario) => [scenario.id, scenario]),
+          );
+          latestScenarioRun = withQaLabRunCounts({
+            kind: "suite",
+            status: "running",
+            startedAt,
+            scenarios: selection.scenarioIds.map((scenarioId) => ({
+              id: scenarioId,
+              name: scenarioById.get(scenarioId)?.title ?? scenarioId,
+              status: "pending",
+            })),
+          });
           runnerSnapshot = {
             status: "running",
             selection,
@@ -699,38 +717,73 @@ export async function startQaLabServer(
           };
           activeSuiteRun = (async () => {
             try {
-              const { runQaFlowSuite } = await import("./suite.js");
-              const result = await runQaFlowSuite({
+              const [{ runQaSuite }, adapterFactories] = await Promise.all([
+                import("./suite-launch.runtime.js"),
+                selection.channelDriver === "live"
+                  ? import("./live-transports/cli.js").then((module) =>
+                      module.listLiveTransportQaAdapterFactories(),
+                    )
+                  : Promise.resolve(undefined),
+              ]);
+              const runtimeResult = await runQaSuite({
                 lab: labHandle ?? undefined,
                 startLab: startQaLabServer,
+                repoRoot,
                 outputDir: createQaRunOutputDir(repoRoot),
+                channelDriver: selection.channelDriver,
+                ...(adapterFactories ? { adapterFactories } : {}),
                 providerMode: selection.providerMode,
                 primaryModel: selection.primaryModel,
                 alternateModel: selection.alternateModel,
+                fastMode: selection.fastMode,
                 scenarioIds: selection.scenarioIds,
               });
+              const result = runtimeResult.result;
+              const finishedAt = new Date().toISOString();
+              latestReport = {
+                outputPath: result.reportPath,
+                markdown: result.report,
+                generatedAt: finishedAt,
+              };
               runnerSnapshot = {
                 status: "completed",
                 selection,
                 startedAt,
-                finishedAt: new Date().toISOString(),
+                finishedAt,
                 artifacts: {
                   outputDir: result.outputDir,
                   evidencePath: result.evidencePath,
                   reportPath: result.reportPath,
                   summaryPath: result.summaryPath,
-                  watchUrl: result.watchUrl,
+                  watchUrl: labHandle?.baseUrl ?? publicBaseUrl,
                 },
                 error: null,
               };
             } catch (error) {
+              const finishedAt = new Date().toISOString();
+              const message = formatErrorMessage(error);
+              latestScenarioRun = withQaLabRunCounts({
+                kind: "suite",
+                status: "completed",
+                startedAt,
+                finishedAt,
+                scenarios: (latestScenarioRun?.scenarios ?? []).map((scenario) =>
+                  scenario.status === "pending" || scenario.status === "running"
+                    ? Object.assign({}, scenario, {
+                        status: "fail" as const,
+                        details: message,
+                        finishedAt,
+                      })
+                    : scenario,
+                ),
+              });
               runnerSnapshot = {
                 status: "failed",
                 selection,
                 startedAt,
-                finishedAt: new Date().toISOString(),
+                finishedAt,
                 artifacts: null,
-                error: formatErrorMessage(error),
+                error: message,
               };
             } finally {
               activeSuiteRun = null;

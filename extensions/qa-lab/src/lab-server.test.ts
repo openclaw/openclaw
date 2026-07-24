@@ -14,6 +14,22 @@ const qaChannelMock = vi.hoisted(() => ({
   startAccount: vi.fn(),
 }));
 
+const suiteLaunchMock = vi.hoisted(() => ({
+  runQaSuite: vi.fn(),
+}));
+const liveTransportMock = vi.hoisted(() => ({
+  adapterFactories: [{ id: "live-test-factory", matches: vi.fn(), create: vi.fn() }],
+  listAdapterFactories: vi.fn(),
+}));
+
+vi.mock("./suite-launch.runtime.js", () => ({
+  runQaSuite: suiteLaunchMock.runQaSuite,
+}));
+
+vi.mock("./live-transports/cli.js", () => ({
+  listLiveTransportQaAdapterFactories: liveTransportMock.listAdapterFactories,
+}));
+
 vi.mock("openclaw/plugin-sdk/qa-channel", () => ({
   qaChannelPlugin: {
     config: {
@@ -161,6 +177,9 @@ async function startQaLabServerForTest(params?: QaLabServerStartParams) {
 }
 
 beforeEach(() => {
+  suiteLaunchMock.runQaSuite.mockReset();
+  liveTransportMock.listAdapterFactories.mockReset();
+  liveTransportMock.listAdapterFactories.mockReturnValue(liveTransportMock.adapterFactories);
   qaChannelMock.resolveAccount.mockReset();
   qaChannelMock.resolveAccount.mockImplementation((_cfg: unknown, accountId: string) => ({
     accountId,
@@ -186,10 +205,10 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  captureMock.reset();
   while (cleanups.length > 0) {
     await cleanups.pop()?.();
   }
+  captureMock.reset();
 });
 
 function isRetryableLocalFetchError(error: unknown) {
@@ -324,6 +343,113 @@ async function createQaLabRepoRootFixture(params?: {
 }
 
 describe("qa-lab server", () => {
+  it("dispatches explicit mixed-kind selections through the suite planner", async () => {
+    const lab = await startQaLabServerForTest();
+    cleanups.push(async () => {
+      await lab.stop();
+    });
+    suiteLaunchMock.runQaSuite.mockResolvedValue({
+      executionKind: "suite",
+      result: {
+        evidencePath: "/tmp/qa-evidence.json",
+        outputDir: "/tmp/qa-output",
+        report: "# QA report\n",
+        reportPath: "/tmp/qa-report.md",
+        scenarios: [],
+        summaryPath: "/tmp/qa-summary.json",
+      },
+    });
+
+    const response = await fetch(`${lab.baseUrl}/api/scenario/suite`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        channelDriver: "crabline",
+        providerMode: "live-frontier",
+        primaryModel: "openai/gpt-5.6-luna",
+        alternateModel: "openai/gpt-5.6-luna",
+        scenarioIds: ["dm-chat-baseline", "browser-talk-start-stop"],
+      }),
+    });
+
+    expect(response.status).toBe(202);
+    await vi.waitFor(() => expect(suiteLaunchMock.runQaSuite).toHaveBeenCalledTimes(1));
+    expect(suiteLaunchMock.runQaSuite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelDriver: "crabline",
+        providerMode: "live-frontier",
+        scenarioIds: ["dm-chat-baseline", "browser-talk-start-stop"],
+      }),
+    );
+    expect(liveTransportMock.listAdapterFactories).not.toHaveBeenCalled();
+    await vi.waitFor(async () => {
+      const bootstrap = (await (await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`)).json()) as {
+        runner: { status: string; selection: { scenarioIds: string[] } };
+      };
+      expect(bootstrap.runner.status).toBe("completed");
+      expect(bootstrap.runner.selection.scenarioIds).toEqual([
+        "dm-chat-baseline",
+        "browser-talk-start-stop",
+      ]);
+    });
+  });
+
+  it("keeps mock providers independent from real channel adapters", async () => {
+    const lab = await startQaLabServerForTest();
+    cleanups.push(async () => {
+      await lab.stop();
+    });
+    suiteLaunchMock.runQaSuite.mockResolvedValue({
+      executionKind: "flow",
+      result: {
+        evidencePath: "/tmp/qa-evidence.json",
+        outputDir: "/tmp/qa-output",
+        report: "# QA report\n",
+        reportPath: "/tmp/qa-report.md",
+        scenarios: [],
+        summaryPath: "/tmp/qa-summary.json",
+        watchUrl: lab.baseUrl,
+      },
+    });
+
+    const response = await fetch(`${lab.baseUrl}/api/scenario/suite`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        channelDriver: "live",
+        providerMode: "mock-openai",
+        scenarioIds: ["dm-chat-baseline"],
+      }),
+    });
+
+    expect(response.status).toBe(202);
+    await vi.waitFor(() => expect(suiteLaunchMock.runQaSuite).toHaveBeenCalledTimes(1));
+    expect(liveTransportMock.listAdapterFactories).toHaveBeenCalledTimes(1);
+    expect(suiteLaunchMock.runQaSuite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        adapterFactories: liveTransportMock.adapterFactories,
+        channelDriver: "live",
+        providerMode: "mock-openai",
+      }),
+    );
+  });
+
+  it("rejects empty and unknown explicit selections before dispatch", async () => {
+    const lab = await startQaLabServerForTest();
+    cleanups.push(async () => {
+      await lab.stop();
+    });
+    for (const scenarioIds of [[], ["missing-scenario"]]) {
+      const response = await fetch(`${lab.baseUrl}/api/scenario/suite`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ scenarioIds }),
+      });
+      expect(response.status).toBe(400);
+    }
+    expect(suiteLaunchMock.runQaSuite).not.toHaveBeenCalled();
+  });
+
   it("cleans up capture state when embedded gateway setup fails", async () => {
     qaChannelMock.resolveAccount.mockImplementationOnce(() => {
       throw new Error("embedded setup failed");

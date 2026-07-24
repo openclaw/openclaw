@@ -60,6 +60,7 @@ describe("qa run config", () => {
 
   it("creates a live-by-default selection that arms flow scenarios", () => {
     expect(normalizeQaRunSelection({}, scenarios)).toEqual({
+      channelDriver: "qa-channel",
       providerMode: "live-frontier",
       primaryModel: DEFAULT_LIVE_FRONTIER_MODEL,
       alternateModel: DEFAULT_LIVE_FRONTIER_MODEL,
@@ -68,7 +69,7 @@ describe("qa run config", () => {
     });
   });
 
-  it("normalizes live selections and filters unknown scenario ids", () => {
+  it("normalizes live selections and deduplicates scenario ids", () => {
     expect(
       normalizeQaRunSelection(
         {
@@ -76,11 +77,12 @@ describe("qa run config", () => {
           primaryModel: "openai/gpt-5.6-luna",
           alternateModel: "",
           fastMode: false,
-          scenarioIds: ["thread-lifecycle", "missing", "thread-lifecycle"],
+          scenarioIds: ["thread-lifecycle", "thread-lifecycle"],
         },
         scenarios,
       ),
     ).toEqual({
+      channelDriver: "qa-channel",
       providerMode: "live-frontier",
       primaryModel: "openai/gpt-5.6-luna",
       alternateModel: DEFAULT_LIVE_FRONTIER_MODEL,
@@ -100,21 +102,16 @@ describe("qa run config", () => {
     ).toThrow("unknown QA provider mode: live-openai");
   });
 
-  it("falls back to all scenarios when selection would otherwise be empty", () => {
+  it("keeps the implicit default flow-only and rejects an explicit empty selection", () => {
     const snapshot = createIdleQaRunnerSnapshot(scenarios);
     expect(snapshot.status).toBe("idle");
     expect(snapshot.selection.scenarioIds).toEqual(["dm-chat-baseline", "thread-lifecycle"]);
-    expect(
-      normalizeQaRunSelection(
-        {
-          scenarioIds: [],
-        },
-        scenarios,
-      ).scenarioIds,
-    ).toEqual(["dm-chat-baseline", "thread-lifecycle"]);
+    expect(() => normalizeQaRunSelection({ scenarioIds: [] }, scenarios)).toThrow(
+      "scenarioIds must be a non-empty array",
+    );
   });
 
-  it("filters non-flow scenarios from lab runner selections", () => {
+  it("preserves explicit non-flow scenarios for the mixed-kind suite planner", () => {
     expect(
       normalizeQaRunSelection(
         {
@@ -122,7 +119,48 @@ describe("qa run config", () => {
         },
         scenarios,
       ).scenarioIds,
-    ).toEqual(["thread-lifecycle"]);
+    ).toEqual(["control-ui-chat-flow-playwright", "thread-lifecycle"]);
+  });
+
+  it("fails closed on unknown explicit scenario ids", () => {
+    expect(() =>
+      normalizeQaRunSelection(
+        {
+          scenarioIds: ["thread-lifecycle", "missing"],
+        },
+        scenarios,
+      ),
+    ).toThrow("unknown QA scenario id(s): missing");
+  });
+
+  it("normalizes the channel driver independently from the provider lane", () => {
+    expect(
+      normalizeQaRunSelection(
+        {
+          channelDriver: "crabline",
+          providerMode: "live-frontier",
+          scenarioIds: ["dm-chat-baseline"],
+        },
+        scenarios,
+      ),
+    ).toMatchObject({ channelDriver: "crabline", providerMode: "live-frontier" });
+    expect(
+      normalizeQaRunSelection(
+        {
+          channelDriver: "live",
+          providerMode: "mock-openai",
+          scenarioIds: ["dm-chat-baseline"],
+        },
+        scenarios,
+      ),
+    ).toMatchObject({ channelDriver: "live", providerMode: "mock-openai" });
+  });
+
+  it("rejects malformed requests and unknown channel drivers", () => {
+    expect(() => normalizeQaRunSelection(null, scenarios)).toThrow("request must be a JSON object");
+    expect(() =>
+      normalizeQaRunSelection({ channelDriver: "renamed-cli-policy" }, scenarios),
+    ).toThrow("unknown QA channel driver: renamed-cli-policy");
   });
 
   it("keeps idle snapshots on static defaults so startup does not inspect auth profiles", () => {
@@ -148,6 +186,7 @@ describe("qa run config", () => {
         scenarios,
       ),
     ).toEqual({
+      channelDriver: "qa-channel",
       providerMode: "aimock",
       primaryModel: "aimock/gpt-5.6-luna",
       alternateModel: "aimock/gpt-5.6-luna-alt",
@@ -186,6 +225,7 @@ describe("qa run config", () => {
     );
 
     expect(normalizeQaRunSelection({}, scenarios)).toEqual({
+      channelDriver: "qa-channel",
       providerMode: "live-frontier",
       primaryModel: "openai/gpt-5.6-luna",
       alternateModel: "openai/gpt-5.6-luna",

@@ -82,6 +82,9 @@ export type SeedScenario = {
   successCriteria: string[];
   docsRefs?: string[];
   codeRefs?: string[];
+  execution?: {
+    kind?: "flow" | "playwright" | "script" | "vitest";
+  };
 };
 
 export type Bootstrap = {
@@ -137,6 +140,7 @@ type ScenarioRun = {
 };
 
 export type RunnerSelection = {
+  channelDriver: "qa-channel" | "crabline" | "live";
   providerMode: "mock-openai" | "live-frontier";
   primaryModel: string;
   alternateModel: string;
