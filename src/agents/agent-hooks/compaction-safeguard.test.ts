@@ -1558,18 +1558,18 @@ describe("compaction-safeguard recent-turn preservation", () => {
     // should reach summarizeInStages — no orphaned toolCall, no synthetic toolResult.
     expect(summaryMessages.map((m) => (m as { role?: unknown }).role)).toEqual(["user"]);
     // Verify no unpaired toolCall reaches the summarizer.
-    const toolCallIds = summaryMessages
-      .flatMap((m) => {
-        const content = (m as { content?: unknown }).content;
-        if (!Array.isArray(content)) { return []; }
-        return content
-          .filter((b) => (b as { type?: string }).type === "toolCall")
-          .map((b) => (b as { id?: string }).id)
-          .filter(Boolean);
-      });
+    const toolCallIds = summaryMessages.flatMap((m) => {
+      const content = (m as { content?: unknown }).content;
+      if (!Array.isArray(content)) {
+        return [];
+      }
+      return content
+        .filter((b) => (b as { type?: string }).type === "toolCall")
+        .map((b) => (b as { id?: string }).id)
+        .filter(Boolean);
+    });
     expect(toolCallIds).toHaveLength(0);
   });
-
 
   it("repairs orphaned tool_use in no-prune compaction path when recentTurnsPreserve is 0", async () => {
     // Regression for clawsweeper P1: when recentTurnsPreserve=0 and history fits
@@ -1627,7 +1627,9 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(summaryMessages.map((m) => (m as { role?: unknown }).role)).toEqual(["user"]);
     const toolCallIds = summaryMessages.flatMap((m) => {
       const content = (m as { content?: unknown }).content;
-      if (!Array.isArray(content)) { return []; }
+      if (!Array.isArray(content)) {
+        return [];
+      }
       return content
         .filter((b) => (b as { type?: string }).type === "toolCall")
         .map((b) => (b as { id?: string }).id)
@@ -1696,20 +1698,19 @@ describe("compaction-safeguard recent-turn preservation", () => {
       const callArg = call[0] as { messages?: unknown[] };
       const msgs = callArg?.messages ?? [];
       const toolCallIds = new Set(
-        msgs
-          .flatMap((m) => {
-            const content = (m as { content?: unknown }).content;
-            if (!Array.isArray(content)) { return []; }
-            return content
-              .filter((b) => (b as { type?: string }).type === "toolCall")
-              .map((b) => (b as { id?: string }).id)
-              .filter(Boolean);
-          }),
+        msgs.flatMap((m) => {
+          const content = (m as { content?: unknown }).content;
+          if (!Array.isArray(content)) {
+            return [];
+          }
+          return content
+            .filter((b) => (b as { type?: string }).type === "toolCall")
+            .map((b) => (b as { id?: string }).id)
+            .filter(Boolean);
+        }),
       );
       const toolResultIds = new Set(
-        msgs
-          .map((m) => (m as { toolCallId?: string }).toolCallId)
-          .filter(Boolean),
+        msgs.map((m) => (m as { toolCallId?: string }).toolCallId).filter(Boolean),
       );
       for (const id of toolCallIds) {
         expect(toolResultIds.has(id)).toBe(true);
