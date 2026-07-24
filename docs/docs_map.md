@@ -8847,6 +8847,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H1: Localize product-owned text
   - H2: Before you begin
   - H2: Choose the owning workflow
+  - H3: Adopt another catalog family
   - H2: Add a message
   - H3: Use the bounded ICU profile
   - H3: Resolve process locales once

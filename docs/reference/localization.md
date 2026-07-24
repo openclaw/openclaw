@@ -48,6 +48,30 @@ and opens a generated pull request with auto-merge disabled. Generated changes
 and manual/release validation run the strict
 `pnpm localization:catalogs:check` path.
 
+### Adopt another catalog family
+
+Adoption extends the repository-level registry, gate, and refresh workflow; do
+not create a per-surface copy of them.
+
+1. Put reviewed English in the owning surface at
+   `<owner>/i18n/catalogs/en.json` and generated targets at
+   `<owner>/i18n/catalogs/generated/<locale>.json`.
+2. Add one area to `localization/catalogs.json` with its semantic namespace,
+   source, target locales, target paths, and protected literals.
+3. Import the declared source and generated targets only at the surface's
+   rendering boundary. Keep structured output and operational values outside
+   the catalog.
+4. Add focused renderer and registry tests, then run
+   `pnpm localization:catalogs:detect`. Missing targets and English drift are
+   reported without credentials; malformed current output fails.
+5. After the English source lands, confirm that Localization Catalog Refresh
+   opens or updates the generated PR and that its strict catalog check passes.
+
+The registry supplies the workflow's owned source and publication paths, while
+the shared source-path convention supplies its trigger. A surface with
+safety-sensitive copy must add an enforceable approval or quarantine mechanism
+before adopting that message family.
+
 Other CLI commands, the TUI, Gateway errors, approvals, channels, plugins, and
 skill metadata do not gain localization merely because the shared runtime can
 render a catalog. Add each message family through its existing owner and review
