@@ -74,7 +74,7 @@ function parseListenerAddress(address: string): { host: string; port: number } |
 // Dual-stack listener output can include IPv4-mapped IPv6 addresses; keep them
 // in the IPv6 family so the benign loopback-pair detection stays conservative.
 function classifyLoopbackAddressFamily(host: string): "ipv4" | "ipv6" | null {
-  if (host === "127.0.0.1" || host === "localhost") {
+  if (host.startsWith("127.") || host === "localhost") {
     return "ipv4";
   }
   if (host === "::1") {
@@ -82,7 +82,7 @@ function classifyLoopbackAddressFamily(host: string): "ipv4" | "ipv6" | null {
   }
   if (host.startsWith("::ffff:")) {
     const mapped = host.slice("::ffff:".length);
-    return mapped === "127.0.0.1" ? "ipv6" : null;
+    return mapped.startsWith("127.") ? "ipv6" : null;
   }
   return null;
 }
