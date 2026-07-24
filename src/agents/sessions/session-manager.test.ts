@@ -527,7 +527,7 @@ describe("SessionManager.open", () => {
     expect(branchedMarker).toContain(`sqlite:main:${branchedSessionId}:`);
     expect(branchedSessionId).not.toBe(sessionId);
     expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toMatchObject({
-      channel: "dashboard",
+      delivery: { kind: "internal" },
       sessionFile: branchedMarker,
       sessionId: branchedSessionId,
     });
