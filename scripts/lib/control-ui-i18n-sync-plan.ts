@@ -9,6 +9,11 @@ export type LocaleEntry = {
   fileName: string;
   languageKey: string;
   locale: string;
+  /**
+   * Locale artifacts may be generated before the Control UI starts loading them.
+   * This keeps the source and generated PRs independently mergeable.
+   */
+  runtime?: boolean;
 };
 
 export type GlossaryEntry = {
