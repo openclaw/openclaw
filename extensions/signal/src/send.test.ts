@@ -80,7 +80,10 @@ describe("sendMessageSignal receipts", () => {
   });
 
   it("attaches a text receipt for timestamp results", async () => {
-    signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567890 });
+    signalRpcRequestMock.mockResolvedValueOnce({
+      timestamp: 1234567890,
+      results: [{ type: "SUCCESS" }],
+    });
 
     const result = await sendMessageSignal("+15551234567", "hello", {
       cfg: SIGNAL_TEST_CFG,
@@ -114,6 +117,32 @@ describe("sendMessageSignal receipts", () => {
       },
     ]);
     expect(result.receipt.sentAt).toBeGreaterThan(0);
+  });
+
+  it("rejects per-recipient failures even when signal-cli returns a timestamp", async () => {
+    signalRpcRequestMock.mockResolvedValueOnce({
+      timestamp: 1234567890,
+      results: [{ type: "UNREGISTERED_FAILURE" }],
+    });
+
+    await expect(
+      sendMessageSignal("+15551234567", "hello", {
+        cfg: SIGNAL_TEST_CFG,
+      }),
+    ).rejects.toThrow("Signal send failed for 1 recipient: UNREGISTERED_FAILURE");
+  });
+
+  it("rejects legacy per-recipient success false results", async () => {
+    signalRpcRequestMock.mockResolvedValueOnce({
+      timestamp: 1234567890,
+      results: [{ success: false, message: "recipient is not registered" }],
+    });
+
+    await expect(
+      sendMessageSignal("+15551234567", "hello", {
+        cfg: SIGNAL_TEST_CFG,
+      }),
+    ).rejects.toThrow("Signal send failed for 1 recipient: recipient is not registered");
   });
 
   it.each(["username:alice.42", "u:alice.42", "signal:u:ALICE.42"])(
