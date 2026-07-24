@@ -94,7 +94,8 @@ export function transformMessages<TApi extends Api>(
 
     // Handle toolResult messages - normalize toolCallId if we have a mapping
     if (msg.role === "toolResult") {
-      const normalizedId = toolCallIdMap.get(msg.toolCallId);
+      const trimmedId = msg.toolCallId.trim();
+      const normalizedId = toolCallIdMap.get(trimmedId) ?? trimmedId;
       if (normalizedId && normalizedId !== msg.toolCallId) {
         return Object.assign({}, msg, { toolCallId: normalizedId });
       }
@@ -172,17 +173,19 @@ export function transformMessages<TApi extends Api>(
 
         if (block.type === "toolCall") {
           const toolCall = block;
-          let normalizedToolCall: ToolCall = toolCall;
+          const trimmedId = toolCall.id.trim();
+          let normalizedToolCall: ToolCall =
+            trimmedId !== toolCall.id ? Object.assign({}, toolCall, { id: trimmedId }) : toolCall;
 
           if (!isSameModel && toolCall.thoughtSignature) {
-            normalizedToolCall = Object.assign({}, toolCall);
+            normalizedToolCall = Object.assign({}, normalizedToolCall);
             delete (normalizedToolCall as { thoughtSignature?: string }).thoughtSignature;
           }
 
           if (!isSameModel && normalizeToolCallId) {
-            const normalizedId = normalizeToolCallId(toolCall.id, model, assistantMsg);
-            if (normalizedId !== toolCall.id) {
-              toolCallIdMap.set(toolCall.id, normalizedId);
+            const normalizedId = normalizeToolCallId(trimmedId, model, assistantMsg);
+            if (normalizedId !== trimmedId) {
+              toolCallIdMap.set(trimmedId, normalizedId);
               normalizedToolCall = Object.assign({}, normalizedToolCall, { id: normalizedId });
             }
           }
