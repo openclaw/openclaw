@@ -84,6 +84,13 @@ const WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE = "websocket_connection_limit_reac
 const OPENAI_CHATGPT_RESPONSES_ERROR_BODY_MAX_BYTES = 16 * 1024;
 const OPENAI_CHATGPT_RESPONSES_SUCCESS_BODY_MAX_BYTES = 16 * 1024 * 1024;
 
+// `globalThis.WebSocket` (standard WebSocket API) does not support the
+// `ws`-library `handshakeTimeout` option.  Use setTimeout to enforce a
+// connection-phase deadline so a TCP socket that accepts but never completes
+// the HTTP upgrade does not leave the connect promise pending indefinitely.
+// Matches the 30s handshakeTimeout used by Discord, Signal, QQBot, etc.
+const WEBSOCKET_CONNECT_HANDSHAKE_MS = 30_000;
+
 const CODEX_RESPONSE_STATUSES = new Set<CodexResponseStatus>([
   "completed",
   "incomplete",
@@ -1032,6 +1039,7 @@ async function connectWebSocket(
   url: string,
   headers: Headers,
   signal?: AbortSignal,
+  handshakeTimeoutMs?: number,
 ): Promise<WebSocketLike> {
   const WebSocketCtor = await getWebSocketConstructor();
   if (!WebSocketCtor) {
@@ -1044,6 +1052,7 @@ async function connectWebSocket(
   return new Promise<WebSocketLike>((resolve, reject) => {
     let settled = false;
     let socket: WebSocketLike;
+    let connectTimer: ReturnType<typeof setTimeout> | undefined;
 
     try {
       socket = new WebSocketCtor(url, { headers: wsHeaders });
@@ -1051,6 +1060,27 @@ async function connectWebSocket(
       reject(error instanceof Error ? error : new Error(String(error)));
       return;
     }
+
+    // Handshake deadline applies unconditionally.  When the caller
+    // specifies an explicit timeoutMs it is forwarded as handshakeTimeoutMs
+    // and governs the connection phase; otherwise the 30s default applies.
+    // The timer and the onAbort handler below race cleanly: whichever fires
+    // first settles the promise via the settled flag, and cleanup() prevents
+    // the other from leaking or double-rejecting.
+    const effectiveTimeout = handshakeTimeoutMs ?? WEBSOCKET_CONNECT_HANDSHAKE_MS;
+    connectTimer = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      socket.close(1000, "handshake_timeout");
+      reject(
+        new Error(
+          `WebSocket connection to OpenAI Responses API timed out after ${effectiveTimeout}ms`,
+        ),
+      );
+    }, effectiveTimeout);
 
     const onOpen: WebSocketListener = () => {
       if (settled) {
@@ -1089,6 +1119,10 @@ async function connectWebSocket(
     };
 
     const cleanup = () => {
+      if (connectTimer !== undefined) {
+        clearTimeout(connectTimer);
+        connectTimer = undefined;
+      }
       socket.removeEventListener("open", onOpen);
       socket.removeEventListener("error", onError);
       socket.removeEventListener("close", onClose);
@@ -1107,18 +1141,23 @@ async function connectWebSocket(
   });
 }
 
+// Test-only export — allows handshake-timeout tests without exposing the full
+// internal connect path to the public API surface.
+export const connectWebSocketForTest = connectWebSocket;
+
 async function acquireWebSocket(
   url: string,
   headers: Headers,
   sessionId: string | undefined,
   signal?: AbortSignal,
+  handshakeTimeoutMs?: number,
 ): Promise<{
   socket: WebSocketLike;
   entry?: CachedWebSocketConnection;
   release: (options?: { keep?: boolean }) => void;
 }> {
   if (!sessionId) {
-    const socket = await connectWebSocket(url, headers, signal);
+    const socket = await connectWebSocket(url, headers, signal, handshakeTimeoutMs);
     return {
       socket,
       release: ({ keep } = {}) => {
@@ -1157,7 +1196,7 @@ async function acquireWebSocket(
       };
     }
     if (cached.busy) {
-      const socket = await connectWebSocket(url, headers, signal);
+      const socket = await connectWebSocket(url, headers, signal, handshakeTimeoutMs);
       return {
         socket,
         release: () => {
@@ -1171,7 +1210,7 @@ async function acquireWebSocket(
     }
   }
 
-  const socket = await connectWebSocket(url, headers, signal);
+  const socket = await connectWebSocket(url, headers, signal, handshakeTimeoutMs);
   const entry: CachedWebSocketConnection = { socket, busy: true, createdAt: Date.now() };
   websocketSessionCache.set(sessionId, entry);
   return {
@@ -1464,6 +1503,7 @@ async function processWebSocketStream(
     headers,
     options?.sessionId,
     options?.signal,
+    resolveRequestTimeoutMs(options),
   );
   let keepConnection = true;
   const useCachedContext =
