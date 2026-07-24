@@ -1366,6 +1366,45 @@ export async function runHeartbeatOnce(opts: {
 
   const previousUpdatedAt = entry?.updatedAt;
 
+  // Phase 2.5: Skip scheduled heartbeats when the resolved session has been
+  // idle longer than the configured threshold without pending work.
+  // Only ordinary scheduled interval heartbeats (intent === "scheduled")
+  // are gated; event/manual/immediate wakes always proceed.  Hearts that
+  // have due commitments, queued system/cron events, or due heartbeat
+  // tasks are preserved — the idle skip only fires when there is no
+  // pending work on the session.
+  // The threshold defaults to 48 hours (2880 minutes). Set maxIdleMinutes to
+  // 0 to disable the idle gate entirely.
+  const HEARTBEAT_IDLE_THRESHOLD_MS =
+    heartbeat?.maxIdleMinutes != null && heartbeat.maxIdleMinutes > 0
+      ? heartbeat.maxIdleMinutes * 60 * 1000
+      : heartbeat?.maxIdleMinutes === 0
+        ? Infinity // disabled
+        : 48 * 60 * 60 * 1000; // default: 48 hours
+  if (
+    HEARTBEAT_IDLE_THRESHOLD_MS < Infinity &&
+    opts.intent === "scheduled" &&
+    preflight.dueCommitments.length === 0 &&
+    preflight.pendingEventEntries.length === 0 &&
+    !preflight.hasTaggedCronEvents &&
+    recentSessionEntry
+  ) {
+    const lastInteractionAt =
+      recentSessionEntry.lastInteractionAt ?? recentSessionEntry.sessionStartedAt;
+    if (lastInteractionAt != null && startedAt - lastInteractionAt > HEARTBEAT_IDLE_THRESHOLD_MS) {
+      log.debug(
+        `heartbeat: skip scheduled — session idle > ${HEARTBEAT_IDLE_THRESHOLD_MS / 60_000} min ` +
+          `(agent="${agentId}", lastInteractionAt=${new Date(lastInteractionAt).toISOString()})`,
+      );
+      emitHeartbeatEvent({
+        status: "skipped",
+        reason: "session-idle",
+        durationMs: Date.now() - startedAt,
+      });
+      return { status: "skipped", reason: "session-idle" };
+    }
+  }
+
   // When isolatedSession is enabled, create a fresh session via the same
   // pattern as cron sessionTarget: "isolated". This gives the heartbeat
   // a new session ID (empty transcript) each run, avoiding the cost of
