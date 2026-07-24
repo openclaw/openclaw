@@ -539,6 +539,14 @@ final class NodeAppModel {
     private var talkPermissionUpgradeReconnectGeneration: UInt64 = 0
     private var lastTalkPermissionReconnectAttemptAt: Date?
     private var voiceWakeSyncTask: Task<Void, Never>?
+    private struct PendingGlobalWakeWordsSync {
+        let words: [String]
+        let stableID: String
+    }
+
+    @ObservationIgnored private let globalWakeWordsDelayGate = DelayedActionGate()
+    @ObservationIgnored private var globalWakeWordsUpdateGeneration: UInt64 = 0
+    @ObservationIgnored private var pendingGlobalWakeWordsSync: PendingGlobalWakeWordsSync?
     @ObservationIgnored private var cameraHUDDismissTask: Task<Void, Never>?
     @ObservationIgnored private var cameraHUDOwnerID: String?
     @ObservationIgnored private lazy var capabilityRouter: NodeCapabilityRouter = self.buildCapabilityRouter()
@@ -563,6 +571,7 @@ final class NodeAppModel {
     @ObservationIgnored private var testTalkCapturePreparationHandler: (() async -> Void)?
     @ObservationIgnored private var testTalkCaptureStartedHandler: (() async -> Void)?
     @ObservationIgnored private var testChatSessionRoutingRestoreHandler: (() async -> Void)?
+    @ObservationIgnored private var testGlobalWakeWordsApplyHandler: (([String], String) async -> Void)?
     @ObservationIgnored private var testExecApprovalPromptFetchHandler:
         ((String, String) async -> ExecApprovalPromptFetchOutcome)?
     @ObservationIgnored private var testExecApprovalResolutionHandler:
@@ -1802,22 +1811,137 @@ final class NodeAppModel {
         }
     }
 
-    func setGlobalWakeWords(_ words: [String]) async {
+    @discardableResult
+    func scheduleGlobalWakeWordsSync(
+        _ words: [String],
+        after delay: Duration = .milliseconds(650)) -> Task<Void, Never>?
+    {
         let sanitized = VoiceWakePreferences.sanitizeTriggerWords(words)
+        guard let stableID = GatewayStableIdentifier.exact(
+            self.activeGatewayConnectConfig?.effectiveStableID ?? self.connectedGatewayID)
+        else {
+            self.cancelScheduledGlobalWakeWordsSync()
+            return nil
+        }
+        self.pendingGlobalWakeWordsSync = PendingGlobalWakeWordsSync(
+            words: sanitized,
+            stableID: stableID)
+        return self.schedulePendingGlobalWakeWordsSync(after: delay)
+    }
+
+    @discardableResult
+    private func schedulePendingGlobalWakeWordsSync(after delay: Duration) -> Task<Void, Never>? {
+        guard let pendingGlobalWakeWordsSync else { return nil }
+        self.globalWakeWordsUpdateGeneration &+= 1
+        let updateGeneration = self.globalWakeWordsUpdateGeneration
+        let routeGeneration = self.gatewayRouteGeneration
+        return self.globalWakeWordsDelayGate.schedule(after: delay) { [weak self] in
+            guard let self,
+                  self.isCurrentGlobalWakeWordsUpdate(
+                      updateGeneration: updateGeneration,
+                      routeGeneration: routeGeneration,
+                      stableID: pendingGlobalWakeWordsSync.stableID)
+            else { return }
+            await self.applyGlobalWakeWords(
+                pendingGlobalWakeWordsSync.words,
+                updateGeneration: updateGeneration,
+                routeGeneration: routeGeneration,
+                stableID: pendingGlobalWakeWordsSync.stableID)
+        }
+    }
+
+    func cancelScheduledGlobalWakeWordsSync() {
+        self.pendingGlobalWakeWordsSync = nil
+        self.globalWakeWordsUpdateGeneration &+= 1
+        self.globalWakeWordsDelayGate.cancel()
+    }
+
+    private func applyGlobalWakeWords(
+        _ words: [String],
+        updateGeneration: UInt64,
+        routeGeneration: UInt64,
+        stableID: String) async
+    {
+        guard self.isCurrentGlobalWakeWordsUpdate(
+            updateGeneration: updateGeneration,
+            routeGeneration: routeGeneration,
+            stableID: stableID)
+        else { return }
+
+        #if DEBUG
+        if let testGlobalWakeWordsApplyHandler {
+            await testGlobalWakeWordsApplyHandler(words, stableID)
+            self.completeGlobalWakeWordsUpdate(
+                words,
+                updateGeneration: updateGeneration,
+                routeGeneration: routeGeneration,
+                stableID: stableID)
+            return
+        }
+        #endif
+
+        guard let operatorRoute = await self.operatorGateway.currentRoute(ifGatewayID: stableID),
+              self.isCurrentGlobalWakeWordsUpdate(
+                  updateGeneration: updateGeneration,
+                  routeGeneration: routeGeneration,
+                  stableID: stableID)
+        else { return }
 
         struct Payload: Codable {
             var triggers: [String]
         }
-        let payload = Payload(triggers: sanitized)
+        let payload = Payload(triggers: words)
         guard let data = try? JSONEncoder().encode(payload),
               let json = String(data: data, encoding: .utf8)
         else { return }
 
         do {
-            _ = try await self.operatorGateway.request(method: "voicewake.set", paramsJSON: json, timeoutSeconds: 12)
+            guard self.isCurrentGlobalWakeWordsUpdate(
+                updateGeneration: updateGeneration,
+                routeGeneration: routeGeneration,
+                stableID: stableID)
+            else { return }
+            _ = try await self.operatorGateway.request(
+                method: "voicewake.set",
+                paramsJSON: json,
+                timeoutSeconds: 12,
+                ifCurrentRoute: operatorRoute,
+                distinguishPreDispatchRouteChange: true)
+            self.completeGlobalWakeWordsUpdate(
+                words,
+                updateGeneration: updateGeneration,
+                routeGeneration: routeGeneration,
+                stableID: stableID)
         } catch {
             // Best-effort only.
         }
+    }
+
+    private func completeGlobalWakeWordsUpdate(
+        _ words: [String],
+        updateGeneration: UInt64,
+        routeGeneration: UInt64,
+        stableID: String)
+    {
+        guard self.isCurrentGlobalWakeWordsUpdate(
+            updateGeneration: updateGeneration,
+            routeGeneration: routeGeneration,
+            stableID: stableID),
+            let pendingGlobalWakeWordsSync,
+            pendingGlobalWakeWordsSync.words == words,
+            GatewayStableIdentifier.matches(pendingGlobalWakeWordsSync.stableID, stableID)
+        else { return }
+        self.pendingGlobalWakeWordsSync = nil
+    }
+
+    private func isCurrentGlobalWakeWordsUpdate(
+        updateGeneration: UInt64,
+        routeGeneration: UInt64,
+        stableID: String) -> Bool
+    {
+        !Task.isCancelled &&
+            updateGeneration == self.globalWakeWordsUpdateGeneration &&
+            self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID)
     }
 
     private func startVoiceWakeSync(shouldContinue: @escaping @MainActor @Sendable () -> Bool = { true }) async {
@@ -3929,7 +4053,7 @@ extension NodeAppModel {
             return
         }
 
-        self.gatewayRouteGeneration &+= 1
+        self.advanceGatewayRouteGeneration(preservingGlobalWakeWordsFor: effectiveStableID)
         self.activeGatewayConnectConfig = nextConfig
         prepareForGatewayConnect(
             stableID: effectiveStableID,
@@ -4012,7 +4136,10 @@ extension NodeAppModel {
     }
 
     @discardableResult
-    private func beginGatewaySessionReset(chainingAfterExisting: Bool = false) -> Task<Void, Never> {
+    private func beginGatewaySessionReset(
+        chainingAfterExisting: Bool = false,
+        preservingGlobalWakeWordsFor stableID: String?) -> Task<Void, Never>
+    {
         let previousResetTask = self.gatewaySessionResetTask
         if let previousResetTask, !chainingAfterExisting {
             return previousResetTask
@@ -4021,7 +4148,7 @@ extension NodeAppModel {
         let operatorGatewayTask = self.operatorGatewayTask
         self.talkMode.updateGatewayConnected(false)
         self.voiceWake.invalidatePendingCommand()
-        self.gatewayRouteGeneration &+= 1
+        self.advanceGatewayRouteGeneration(preservingGlobalWakeWordsFor: stableID)
         nodeGatewayTask?.cancel()
         self.nodeGatewayTask = nil
         operatorGatewayTask?.cancel()
@@ -4047,7 +4174,9 @@ extension NodeAppModel {
     }
 
     func resetGatewaySessionsForForcedReconnect() async {
-        await self.beginGatewaySessionReset().value
+        let stableID = GatewayStableIdentifier.exact(
+            self.activeGatewayConnectConfig?.effectiveStableID ?? self.connectedGatewayID)
+        await self.beginGatewaySessionReset(preservingGlobalWakeWordsFor: stableID).value
     }
 
     func resetGatewaySessionsForTargetSwitch() async {
@@ -4057,9 +4186,10 @@ extension NodeAppModel {
         self.chatSessionRoutingRestoreTask?.cancel()
         self.chatSessionRoutingRestoreTask = nil
         self.disableGatewayAutoReconnect()
+        self.cancelScheduledGlobalWakeWordsSync()
         self.activeGatewayConnectConfig = nil
         ShareGatewayRelaySettings.clearConfig()
-        await self.resetGatewaySessionsForForcedReconnect()
+        await self.beginGatewaySessionReset(preservingGlobalWakeWordsFor: nil).value
         guard !self.gatewayAutoReconnectEnabled, self.activeGatewayConnectConfig == nil else { return }
         // A canceled loop may have persisted its reconnect flag and relay config while teardown was in flight.
         self.disableGatewayAutoReconnect()
@@ -4135,7 +4265,9 @@ extension NodeAppModel {
         self.cancelTalkPermissionUpgrade()
         // Publish teardown through the shared barrier before returning. A replacement connect
         // must await old loop cleanup instead of racing this synchronous UI action.
-        _ = self.beginGatewaySessionReset(chainingAfterExisting: true)
+        _ = self.beginGatewaySessionReset(
+            chainingAfterExisting: true,
+            preservingGlobalWakeWordsFor: nil)
         self.voiceWakeSyncTask?.cancel()
         self.voiceWakeSyncTask = nil
         LiveActivityManager.shared.endActivity(reason: "manual_disconnect")
@@ -4584,6 +4716,23 @@ extension NodeAppModel {
                 stableID)
     }
 
+    @discardableResult
+    private func advanceGatewayRouteGeneration(
+        preservingGlobalWakeWordsFor stableID: String?) -> Task<Void, Never>?
+    {
+        self.gatewayRouteGeneration &+= 1
+        self.globalWakeWordsUpdateGeneration &+= 1
+        self.globalWakeWordsDelayGate.cancel()
+        guard let stableID,
+              let pendingGlobalWakeWordsSync,
+              GatewayStableIdentifier.matches(pendingGlobalWakeWordsSync.stableID, stableID)
+        else {
+            self.pendingGlobalWakeWordsSync = nil
+            return nil
+        }
+        return self.schedulePendingGlobalWakeWordsSync(after: .zero)
+    }
+
     private func isCurrentExecApprovalReadbackRoute(generation: UInt64, stableID: String) -> Bool {
         #if DEBUG
         if self.testExecApprovalPromptFetchHandler != nil {
@@ -4622,6 +4771,9 @@ extension NodeAppModel {
             }
         }
         self.setOperatorConnected(true)
+        self.retryPendingGlobalWakeWordsSyncIfNeeded(
+            stableID: stableID,
+            routeGeneration: routeGeneration)
         self.clearOperatorGatewayConnectionProblemIfCurrent()
         GatewayDiagnostics.log(
             "operator gateway connected host=\(url.host ?? "?") scheme=\(url.scheme ?? "?")")
@@ -4671,6 +4823,18 @@ extension NodeAppModel {
     private func admitTalkAfterSessionHydration() {
         self.synchronizeTalkSessionKey()
         self.talkMode.updateGatewayConnected(true)
+    }
+
+    @discardableResult
+    private func retryPendingGlobalWakeWordsSyncIfNeeded(
+        stableID: String,
+        routeGeneration: UInt64) -> Task<Void, Never>?
+    {
+        guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID),
+              let pendingGlobalWakeWordsSync,
+              GatewayStableIdentifier.matches(pendingGlobalWakeWordsSync.stableID, stableID)
+        else { return nil }
+        return self.schedulePendingGlobalWakeWordsSync(after: .zero)
     }
 
     private func handleNodeGatewayConnected(
@@ -10746,6 +10910,24 @@ extension NodeAppModel {
 
     func _test_setChatSessionRoutingRestoreHandler(_ handler: (() async -> Void)?) {
         self.testChatSessionRoutingRestoreHandler = handler
+    }
+
+    func _test_setGlobalWakeWordsApplyHandler(_ handler: (([String], String) async -> Void)?) {
+        self.testGlobalWakeWordsApplyHandler = handler
+    }
+
+    @discardableResult
+    func _test_advanceGatewayRouteGeneration(
+        preservingGlobalWakeWordsFor stableID: String? = nil) -> Task<Void, Never>?
+    {
+        self.advanceGatewayRouteGeneration(preservingGlobalWakeWordsFor: stableID)
+    }
+
+    @discardableResult
+    func _test_retryPendingGlobalWakeWordsSync(stableID: String) -> Task<Void, Never>? {
+        self.retryPendingGlobalWakeWordsSyncIfNeeded(
+            stableID: stableID,
+            routeGeneration: self.gatewayRouteGeneration)
     }
 
     func _test_setRemoveAllChatDatabaseFilesHandler(_ handler: (() throws -> Void)?) {

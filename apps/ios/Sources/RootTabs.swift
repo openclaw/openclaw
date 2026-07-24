@@ -35,7 +35,7 @@ struct RootTabs: View {
     @State private var isSidebarDrawerLayout: Bool = false
     @State private var didResolveSidebarLayout: Bool = false
     @State private var voiceWakeToastText: String?
-    @State private var toastDismissTask: Task<Void, Never>?
+    @State private var toastDismissGate = DelayedActionGate()
     @State private var presentedSheet: PresentedSheet?
     @State private var showGatewayProblemDetails: Bool = false
     @State private var gatewayToastDragOffset: CGFloat = 0
@@ -498,9 +498,9 @@ struct RootTabs: View {
             }
 
             .overlay {
-                if self.appModel.cameraFlashNonce != 0 {
-                    RootCameraFlashOverlay(nonce: self.appModel.cameraFlashNonce)
-                }
+                // Keep the observer mounted so the first 0 -> 1 capture transition
+                // flashes without treating a later remount as a new capture.
+                RootCameraFlashOverlay(nonce: self.appModel.cameraFlashNonce)
             }
             .overlay {
                 if self.appModel.screen.isCanvasPresented {
@@ -602,17 +602,13 @@ struct RootTabs: View {
                 let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty else { return }
 
-                self.toastDismissTask?.cancel()
                 withAnimation(self.reduceMotion ? .none : .spring(response: 0.25, dampingFraction: 0.85)) {
                     self.voiceWakeToastText = trimmed
                 }
 
-                self.toastDismissTask = Task {
-                    try? await Task.sleep(nanoseconds: 2_300_000_000)
-                    await MainActor.run {
-                        withAnimation(self.reduceMotion ? .none : .easeOut(duration: 0.25)) {
-                            self.voiceWakeToastText = nil
-                        }
+                self.toastDismissGate.schedule(after: .milliseconds(2300)) {
+                    withAnimation(self.reduceMotion ? .none : .easeOut(duration: 0.25)) {
+                        self.voiceWakeToastText = nil
                     }
                 }
             }
@@ -643,8 +639,8 @@ struct RootTabs: View {
             }
             .onDisappear {
                 UIApplication.shared.isIdleTimerDisabled = false
-                self.toastDismissTask?.cancel()
-                self.toastDismissTask = nil
+                self.voiceWakeToastText = nil
+                self.toastDismissGate.cancel()
             }
     }
 
@@ -1163,29 +1159,29 @@ private struct RootCameraFlashOverlay: View {
     var nonce: Int
 
     @State private var opacity: CGFloat = 0
-    @State private var task: Task<Void, Never>?
+    @State private var dismissGate = DelayedActionGate()
 
     var body: some View {
         Color.white
             .opacity(self.opacity)
             .ignoresSafeArea()
             .allowsHitTesting(false)
-            .onChange(of: self.nonce) { _, _ in
-                self.task?.cancel()
-                self.task = Task { @MainActor in
-                    withAnimation(.easeOut(duration: 0.08)) {
-                        self.opacity = 0.85
-                    }
-                    try? await Task.sleep(nanoseconds: 110_000_000)
-                    withAnimation(.easeOut(duration: 0.32)) {
-                        self.opacity = 0
-                    }
-                }
-            }
+            .onChange(of: self.nonce) { _, _ in self.showFlash() }
             .onDisappear {
-                self.task?.cancel()
-                self.task = nil
+                self.opacity = 0
+                self.dismissGate.cancel()
             }
+    }
+
+    private func showFlash() {
+        withAnimation(.easeOut(duration: 0.08)) {
+            self.opacity = 0.85
+        }
+        self.dismissGate.schedule(after: .milliseconds(110)) {
+            withAnimation(.easeOut(duration: 0.32)) {
+                self.opacity = 0
+            }
+        }
     }
 }
 
