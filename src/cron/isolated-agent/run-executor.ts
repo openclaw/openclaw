@@ -8,7 +8,6 @@ import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { wrapUntrustedPromptDataBlock } from "../../agents/sanitize-for-prompt.js";
-import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import { withLocalSessionPlacementTurnAdmission } from "../../agents/session-placement-admission.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
@@ -27,6 +26,7 @@ import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../../tasks/task-status-access.js";
+import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import type { CronAgentExecutionPhaseUpdate, CronJob } from "../types.js";
 import {
   resolveCronChannelOutputPolicy,
@@ -274,10 +274,10 @@ function createCronPromptExecutor(params: {
     params.cronSession.sessionEntry.systemPromptReport,
   );
   const bootstrapContextMode = resolveCronBootstrapContextMode(params.agentPayload);
-  const scheduledToolPolicy = resolveScheduledToolPolicyContext({
+  const scheduledToolPolicy = resolveCronScheduledToolPolicy({
     toolsAllow: params.agentPayload?.toolsAllow,
-    ownerSessionKey: params.job.owner?.sessionKey,
-    ownerAccountId: params.job.owner?.accountId,
+    scheduledToolPolicy: params.job.scheduledToolPolicy,
+    owner: params.job.owner,
   });
   if (!params.sourceDelivery) {
     logWarn(

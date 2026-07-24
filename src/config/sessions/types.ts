@@ -10,6 +10,7 @@ import type { SessionObserverDigest } from "../../../packages/gateway-protocol/s
 import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-icon.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
+import type { CronScheduledToolPolicy } from "../../cron/scheduled-tool-policy.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import type { Skill } from "../../skills/loading/skill-contract.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
@@ -386,10 +387,8 @@ export type SessionEntry = SessionRestartRecoveryState &
       cliExecutionProvider?: string;
       toolsAllow?: string[];
       toolsAllowIsDefault?: boolean;
-      /** Server-stamped creator session used to resolve sender-independent group policy. */
-      ownerSessionKey?: string;
-      /** Server-stamped creator account paired with ownerSessionKey. */
-      ownerAccountId?: string;
+      /** Exact server-stamped authority provenance copied from the owning cron job. */
+      scheduledToolPolicy?: CronScheduledToolPolicy;
       cliSessionBindingFacts?: {
         extraSystemPromptStatic?: string;
         sourceReplyDeliveryMode?: "automatic" | "message_tool_only";

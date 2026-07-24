@@ -26,7 +26,12 @@ type CreateOpenClawCodingToolsArg = {
   workspaceDir?: string;
   cwd?: string;
   wrapBeforeToolCallHook?: boolean;
-  scheduledToolPolicy?: { ownerSessionKey: string; ownerAccountId: string };
+  scheduledToolPolicy?: {
+    version: 1;
+    mode: "account";
+    ownerSessionKey: string;
+    ownerAccountId: string;
+  };
 };
 
 type LazyExecToolDefaults = {
@@ -162,6 +167,8 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       excludeToolNames: ["read", "edit", "apply_patch", "exec", "process"],
       mediatedToolNames: ["write"],
       scheduledToolPolicy: {
+        version: 1,
+        mode: "account",
         ownerSessionKey: "agent:main:qa-channel:group:ops",
         ownerAccountId: "default",
       },
@@ -177,6 +184,8 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
         cwd: "/workspace/task",
         wrapBeforeToolCallHook: false,
         scheduledToolPolicy: {
+          version: 1,
+          mode: "account",
           ownerSessionKey: "agent:main:qa-channel:group:ops",
           ownerAccountId: "default",
         },

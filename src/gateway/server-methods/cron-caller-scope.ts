@@ -1,3 +1,8 @@
+import {
+  createAccountCronScheduledToolPolicy,
+  createTrustedCronScheduledToolPolicy,
+  type CronScheduledToolPolicy,
+} from "../../cron/scheduled-tool-policy.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../../cron/types.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
@@ -24,6 +29,27 @@ export function readCronCallerScope(
     sessionKey: identity.sessionKey?.trim() || undefined,
     accountId: normalizeAccountId(identity.turnSourceAccountId),
   };
+}
+
+/** Converts the authenticated gateway caller into server-only scheduled authority provenance. */
+export function resolveCronScheduledToolPolicyForCaller(
+  callerScope: CronCallerScope | undefined,
+): CronScheduledToolPolicy {
+  if (!callerScope) {
+    return createTrustedCronScheduledToolPolicy();
+  }
+  const policy = callerScope.sessionKey
+    ? createAccountCronScheduledToolPolicy({
+        ownerSessionKey: callerScope.sessionKey,
+        ownerAccountId: callerScope.accountId,
+      })
+    : undefined;
+  if (!policy) {
+    // An agent-runtime caller cannot be promoted to operator authority merely
+    // because its signed runtime envelope omitted a session identity.
+    throw new TypeError("agent-runtime cron mutations require an authenticated session identity");
+  }
+  return policy;
 }
 
 function resolveCronJobEffectiveAgentId(job: CronJob, defaultAgentId?: string): string {

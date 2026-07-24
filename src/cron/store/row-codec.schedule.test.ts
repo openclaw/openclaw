@@ -29,6 +29,32 @@ describe("schedule column codec round-trip", () => {
     });
   });
 
+  it("round-trips scheduled authority through the additive job_json envelope", () => {
+    const job = projectCronJobThroughStorageCodec(
+      makeCronJob({
+        owner: {
+          agentId: "main",
+          sessionKey: "agent:main:discord:group:ops",
+          accountId: "work",
+        },
+        payload: { kind: "agentTurn", message: "run", toolsAllow: ["write"] },
+        scheduledToolPolicy: {
+          version: 1,
+          mode: "account",
+          ownerSessionKey: "agent:main:discord:group:ops",
+          ownerAccountId: "work",
+        },
+      }),
+    );
+
+    expect(job.scheduledToolPolicy).toEqual({
+      version: 1,
+      mode: "account",
+      ownerSessionKey: "agent:main:discord:group:ops",
+      ownerAccountId: "work",
+    });
+  });
+
   it("round-trips pacing through the additive job_json envelope", () => {
     const job = projectCronJobThroughStorageCodec(
       makeCronJob({ pacing: { min: "15m", max: "4h" } }),

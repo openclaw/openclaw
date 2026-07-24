@@ -461,6 +461,8 @@ describe("Codex app-server dynamic tool build", () => {
     };
     params.trustedInternalHandoff = true;
     params.scheduledToolPolicy = {
+      version: 1,
+      mode: "account",
       ownerSessionKey: "agent:main:discord:group:ops",
       ownerAccountId: "default",
     };

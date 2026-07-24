@@ -728,6 +728,8 @@ describe("createCopilotToolBridge", () => {
           memoryFlushWritePath: ".memory/append.md",
           toolsAllow: ["read", "edit"],
           scheduledToolPolicy: {
+            version: 1,
+            mode: "account",
             ownerSessionKey: "agent:main:discord:group:ops",
             ownerAccountId: "default",
           },
@@ -747,6 +749,8 @@ describe("createCopilotToolBridge", () => {
       // renamed key, so the bridge must surface the renamed shape too.
       expect(opts.runtimeToolAllowlist).toEqual(["read", "edit"]);
       expect(opts.scheduledToolPolicy).toEqual({
+        version: 1,
+        mode: "account",
         ownerSessionKey: "agent:main:discord:group:ops",
         ownerAccountId: "default",
       });

@@ -132,6 +132,15 @@ const CronOwnerSchema = closedObject({
   sessionKey: Type.Optional(NonEmptyString),
   accountId: Type.Optional(NonEmptyString),
 });
+const CronScheduledToolPolicySchema = Type.Union([
+  closedObject({ version: Type.Literal(1), mode: Type.Literal("trusted") }),
+  closedObject({
+    version: Type.Literal(1),
+    mode: Type.Literal("account"),
+    ownerSessionKey: NonEmptyString,
+    ownerAccountId: NonEmptyString,
+  }),
+]);
 const CronAnnounceChannelSchema = Type.Union([Type.Literal("last"), NonBlankString]);
 const CronFailoverReasonSchema = Type.Union([
   Type.Literal("auth"),
@@ -515,6 +524,7 @@ export const CronJobSchema = closedObject({
   declarationKey: Type.Optional(CronDeclarationKeySchema),
   displayName: Type.Optional(CronDisplayNameSchema),
   owner: Type.Optional(CronOwnerSchema),
+  scheduledToolPolicy: Type.Optional(CronScheduledToolPolicySchema),
   agentId: Type.Optional(NonEmptyString),
   sessionKey: Type.Optional(NonEmptyString),
   name: NonEmptyString,

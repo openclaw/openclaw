@@ -61,6 +61,8 @@ describe("resolveWorkerToolAuthority", () => {
         senderId: "guest",
         toolsAllow: ["read", "write", "exec"],
         scheduledToolPolicy: {
+          version: 1,
+          mode: "account",
           ownerSessionKey: "agent:main:whatsapp:group:team",
           ownerAccountId: "default",
         },
@@ -89,6 +91,8 @@ describe("resolveWorkerToolAuthority", () => {
         messageProvider: "whatsapp",
         toolsAllow: ["write"],
         scheduledToolPolicy: {
+          version: 1,
+          mode: "account",
           ownerSessionKey: "agent:main:whatsapp:group:team",
           ownerAccountId: "default",
         },

@@ -935,6 +935,8 @@ describe("createOpenClawCodingTools", () => {
         messageTo: "channel:123",
         agentAccountId: "work",
         scheduledToolPolicy: {
+          version: 1,
+          mode: "account",
           ownerSessionKey: "agent:main:discord:group:ops",
           ownerAccountId: "creator",
         },
@@ -1017,6 +1019,8 @@ describe("createOpenClawCodingTools", () => {
       config: testConfig,
       agentAccountId: "delivery",
       scheduledToolPolicy: {
+        version: 1,
+        mode: "account",
         ownerSessionKey: "agent:main:discord:group:ops",
         ownerAccountId: "creator",
       },

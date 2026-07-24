@@ -23,6 +23,8 @@ describe("assertSupportedTurn", () => {
         },
         toolsAllow: ["write"],
         scheduledToolPolicy: {
+          version: 1,
+          mode: "account",
           ownerSessionKey: "agent:main:discord:group:ops",
           ownerAccountId: "default",
         },

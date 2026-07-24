@@ -694,7 +694,7 @@ function resolvePluginHarnessToolPolicies(
     groupChannel: params.groupChannel,
     groupSpace: params.groupSpace,
     accountId: params.scheduledToolPolicy?.ownerAccountId ?? params.agentAccountId,
-    requireConfiguredAccount: Boolean(params.scheduledToolPolicy),
+    requireConfiguredAccount: params.scheduledToolPolicy?.mode === "account",
     senderId: params.senderId,
     senderName: params.senderName,
     senderUsername: params.senderUsername,

@@ -52,6 +52,12 @@ function makeParamsWithToolsAllow(toolsAllow: string[]) {
     ...params,
     job: {
       ...job,
+      scheduledToolPolicy: {
+        version: 1,
+        mode: "account",
+        ownerSessionKey: "agent:main:whatsapp:group:team",
+        ownerAccountId: "default",
+      },
       payload: {
         kind: "agentTurn",
         message: "check allowed tools",
@@ -68,6 +74,12 @@ function makeParamsWithDefaultToolsAllow(toolsAllow: string[]) {
     ...params,
     job: {
       ...job,
+      scheduledToolPolicy: {
+        version: 1,
+        mode: "account",
+        ownerSessionKey: "agent:main:whatsapp:group:team",
+        ownerAccountId: "default",
+      },
       payload: {
         kind: "agentTurn",
         message: "check allowed tools",
@@ -81,13 +93,23 @@ function makeParamsWithDefaultToolsAllow(toolsAllow: string[]) {
 function requireEmbeddedAgentCall(): {
   jobId?: string;
   toolsAllow?: string[];
-  scheduledToolPolicy?: { ownerSessionKey: string; ownerAccountId: string };
+  scheduledToolPolicy?: {
+    version: 1;
+    mode: "account";
+    ownerSessionKey: string;
+    ownerAccountId: string;
+  };
 } {
   const call = runEmbeddedAgentMock.mock.calls[0]?.[0] as
     | {
         jobId?: string;
         toolsAllow?: string[];
-        scheduledToolPolicy?: { ownerSessionKey: string; ownerAccountId: string };
+        scheduledToolPolicy?: {
+          version: 1;
+          mode: "account";
+          ownerSessionKey: string;
+          ownerAccountId: string;
+        };
       }
     | undefined;
   if (!call) {
@@ -164,6 +186,8 @@ describe("runCronIsolatedAgentTurn toolsAllow passthrough", () => {
       expect(call.jobId).toBe("tools-allow");
       expect(call.toolsAllow).toEqual(["cron"]);
       expect(call.scheduledToolPolicy).toEqual({
+        version: 1,
+        mode: "account",
         ownerSessionKey: "agent:main:whatsapp:group:team",
         ownerAccountId: "default",
       });

@@ -197,6 +197,8 @@ describe("resolveConversationCapabilityProfile", () => {
     const scheduled = resolveConversationCapabilityProfile({
       ...baseParams,
       scheduledToolPolicy: {
+        version: 1,
+        mode: "account",
         ownerSessionKey: "agent:main:whatsapp:group:team",
         ownerAccountId: "default",
       },

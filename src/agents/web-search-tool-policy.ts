@@ -70,7 +70,7 @@ export function resolveWebSearchToolPolicy(
     groupChannel: params.groupChannel,
     groupSpace: params.groupSpace,
     accountId: params.scheduledToolPolicy?.ownerAccountId ?? params.agentAccountId,
-    requireConfiguredAccount: Boolean(params.scheduledToolPolicy),
+    requireConfiguredAccount: params.scheduledToolPolicy?.mode === "account",
     senderPolicyMode: params.scheduledToolPolicy ? ("never" as const) : ("always" as const),
   };
   const senderPolicyParams = {
@@ -89,7 +89,7 @@ export function resolveWebSearchToolPolicy(
     trustedInternalHandoff: params.trustedInternalHandoff,
     senderPolicyMode: params.scheduledToolPolicy ? "never" : "always",
     groupPolicySessionKey: params.scheduledToolPolicy?.ownerSessionKey,
-    requireConfiguredGroupAccount: Boolean(params.scheduledToolPolicy),
+    requireConfiguredGroupAccount: params.scheduledToolPolicy?.mode === "account",
   });
   const persistentGroupPolicy = requesterPolicies.delegated
     ? undefined

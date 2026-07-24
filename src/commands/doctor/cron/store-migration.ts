@@ -25,6 +25,7 @@ import {
   migrateLegacyAgentTurnCommandPayload,
   migrateLegacyCronPayload,
 } from "./payload-migration.js";
+import { migrateScheduledToolPolicy } from "./scheduled-tool-policy-migration.js";
 
 type CronStoreIssueKey =
   | "jobId"
@@ -40,6 +41,7 @@ type CronStoreIssueKey =
   | "legacyTopLevelPayloadFields"
   | "legacyTopLevelDeliveryFields"
   | "legacyDeliveryMode"
+  | "migratedScheduledToolPolicy"
   | "invalidSchedule"
   | "invalidPayload";
 
@@ -95,6 +97,8 @@ type NormalizeCronStoreJobsResult = {
   issues: CronStoreIssues;
   unresolvedAgentTurnCommandPromptJobs: string[];
   unresolvedAgentTurnShellToolPromptJobs: string[];
+  legacyScheduledToolPolicyJobs: string[];
+  invalidScheduledToolPolicyJobs: string[];
   jobs: Array<Record<string, unknown>>;
   mutated: boolean;
   removedJobs: Array<{ job: Record<string, unknown>; reason: string; sourceIndex: number }>;
@@ -306,6 +310,8 @@ export function normalizeStoredCronJobs(
   const issues: CronStoreIssues = {};
   const unresolvedAgentTurnCommandPromptJobs: string[] = [];
   const unresolvedAgentTurnShellToolPromptJobs: string[] = [];
+  const legacyScheduledToolPolicyJobs: string[] = [];
+  const invalidScheduledToolPolicyJobs: string[] = [];
   const unresolvedAgentTurnPromptJobsByKind = {
     commandPromptWithoutShellAccess: unresolvedAgentTurnCommandPromptJobs,
     shellToolPrompt: unresolvedAgentTurnShellToolPromptJobs,
@@ -698,6 +704,20 @@ export function normalizeStoredCronJobs(
       mutated = true;
     }
 
+    const scheduledPolicyMigration = migrateScheduledToolPolicy(raw);
+    if (scheduledPolicyMigration.mutated) {
+      mutated = true;
+    }
+    const scheduledPolicyJobName =
+      normalizeOptionalString(raw.name) ?? normalizeOptionalString(raw.id);
+    if (scheduledPolicyMigration.status === "migrated") {
+      trackIssue("migratedScheduledToolPolicy");
+    } else if (scheduledPolicyMigration.status === "legacy" && scheduledPolicyJobName) {
+      legacyScheduledToolPolicyJobs.push(scheduledPolicyJobName);
+    } else if (scheduledPolicyMigration.status === "invalid" && scheduledPolicyJobName) {
+      invalidScheduledToolPolicyJobs.push(scheduledPolicyJobName);
+    }
+
     const invalidPersistedReason = getInvalidPersistedCronJobReason(raw);
     if (
       invalidPersistedReason === "missing-schedule" ||
@@ -729,6 +749,8 @@ export function normalizeStoredCronJobs(
     issues,
     unresolvedAgentTurnCommandPromptJobs,
     unresolvedAgentTurnShellToolPromptJobs,
+    legacyScheduledToolPolicyJobs,
+    invalidScheduledToolPolicyJobs,
     jobs,
     mutated,
     removedJobs,

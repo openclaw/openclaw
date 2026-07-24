@@ -1,25 +1,18 @@
-/**
- * Trusted runtime context for a scheduled run with a server-stamped tool cap.
- * The owner session selects group policy; sender-specific policy was already
- * projected into the immutable cap when the job was created.
- */
-export type ScheduledToolPolicyContext = {
-  ownerSessionKey: string;
-  ownerAccountId: string;
-};
+import {
+  normalizeCronScheduledToolPolicy,
+  type CronScheduledToolPolicy,
+} from "../cron/scheduled-tool-policy.js";
+
+/** Trusted runtime context for a scheduled run with a server-stamped tool cap. */
+export type ScheduledToolPolicyContext = CronScheduledToolPolicy;
 
 /** Builds scheduled policy context only when both the cap and trusted owner exist. */
 export function resolveScheduledToolPolicyContext(params: {
   toolsAllow?: readonly string[];
-  ownerSessionKey?: string | null;
-  ownerAccountId?: string | null;
+  scheduledToolPolicy?: unknown;
 }): ScheduledToolPolicyContext | undefined {
   if (params.toolsAllow === undefined) {
     return undefined;
   }
-  const ownerSessionKey = params.ownerSessionKey?.trim();
-  const ownerAccountId = params.ownerAccountId?.trim();
-  // Accountless jobs predate creator-account authority. Keep their shipped sender-policy path;
-  // inferring authority from a later delivery account would cross the account boundary.
-  return ownerSessionKey && ownerAccountId ? { ownerSessionKey, ownerAccountId } : undefined;
+  return normalizeCronScheduledToolPolicy(params.scheduledToolPolicy);
 }

@@ -60,6 +60,7 @@ import {
   cronJobMatchesCallerScope,
   cronPatchSessionRefsMatchCaller,
   readCronCallerScope,
+  resolveCronScheduledToolPolicyForCaller,
   type CronCallerScope,
 } from "./cron-caller-scope.js";
 import { isCronInvalidRequestError } from "./cron-error-classification.js";
@@ -746,6 +747,9 @@ export const cronHandlers: GatewayRequestHandlers = {
             callerScope,
             defaultAgentId: context.cron.getDefaultAgentId(),
           }),
+        ...(cronJobUsesToolRuntime(jobCreate)
+          ? { scheduledToolPolicy: resolveCronScheduledToolPolicyForCaller(callerScope) }
+          : {}),
       });
     } catch (err) {
       if (
@@ -901,38 +905,47 @@ export const cronHandlers: GatewayRequestHandlers = {
     }
     let job: Awaited<ReturnType<typeof context.cron.update>>;
     try {
-      job = await context.cron.updateWithPrecondition(jobId, patch, async (lockedJob) => {
-        if (
-          !cronJobMatchesCallerScope({
-            job: lockedJob,
-            callerScope,
+      job = await context.cron.updateWithPrecondition(
+        jobId,
+        patch,
+        async (lockedJob) => {
+          if (
+            !cronJobMatchesCallerScope({
+              job: lockedJob,
+              callerScope,
+              defaultAgentId: context.cron.getDefaultAgentId(),
+            })
+          ) {
+            throw new Error(`unknown cron job id: ${jobId}`);
+          }
+          if (p.expectedConfigRevision !== undefined) {
+            const actualConfigRevision = resolveCronJobConfigRevision(lockedJob);
+            if (actualConfigRevision !== p.expectedConfigRevision) {
+              throw new CronJobConfigRevisionConflictError(
+                p.expectedConfigRevision,
+                actualConfigRevision,
+              );
+            }
+          }
+          const nextJob = await assertValidCronUpdatePatch({
+            cfg,
             defaultAgentId: context.cron.getDefaultAgentId(),
-          })
-        ) {
-          throw new Error(`unknown cron job id: ${jobId}`);
-        }
-        if (p.expectedConfigRevision !== undefined) {
-          const actualConfigRevision = resolveCronJobConfigRevision(lockedJob);
-          if (actualConfigRevision !== p.expectedConfigRevision) {
-            throw new CronJobConfigRevisionConflictError(
-              p.expectedConfigRevision,
-              actualConfigRevision,
+            currentJob: lockedJob,
+            patch,
+          });
+          if (
+            cronPatchTouchesToolRuntime(patch) &&
+            requiresExplicitAgentRuntimeToolsAllow({ job: nextJob, callerScope })
+          ) {
+            throw new TypeError(
+              "agent-runtime tool jobs require an explicit payload.toolsAllow cap",
             );
           }
-        }
-        const nextJob = await assertValidCronUpdatePatch({
-          cfg,
-          defaultAgentId: context.cron.getDefaultAgentId(),
-          currentJob: lockedJob,
-          patch,
-        });
-        if (
-          cronPatchTouchesToolRuntime(patch) &&
-          requiresExplicitAgentRuntimeToolsAllow({ job: nextJob, callerScope })
-        ) {
-          throw new TypeError("agent-runtime tool jobs require an explicit payload.toolsAllow cap");
-        }
-      });
+        },
+        cronPatchTouchesToolRuntime(patch)
+          ? { scheduledToolPolicy: resolveCronScheduledToolPolicyForCaller(callerScope) }
+          : undefined,
+      );
     } catch (err) {
       if (err instanceof CronJobConfigRevisionConflictError) {
         respond(

@@ -2435,6 +2435,8 @@ describe("prepareCliRunContext", () => {
       runId: "run-test-loopback-prompt-tools",
       config: createCliBackendConfig({ bundleMcp: true }),
       scheduledToolPolicy: {
+        version: 1,
+        mode: "account",
         ownerSessionKey: "agent:worker:discord:group:ops",
         ownerAccountId: "default",
       },
@@ -2465,6 +2467,8 @@ describe("prepareCliRunContext", () => {
       modelProvider: "native-cli",
       modelId: "test-model",
       scheduledToolPolicy: {
+        version: 1,
+        mode: "account",
         ownerSessionKey: "agent:worker:discord:group:ops",
         ownerAccountId: "default",
       },
@@ -2989,6 +2993,8 @@ describe("prepareCliRunContext", () => {
         provider: "claude-cli",
         toolsAllow: ["write"],
         scheduledToolPolicy: {
+          version: 1,
+          mode: "account",
           ownerSessionKey: "agent:main:discord:group:ops",
           ownerAccountId: "default",
         },
@@ -3005,6 +3011,8 @@ describe("prepareCliRunContext", () => {
         "apply_patch",
       ]);
       expect(mintMcpLoopbackClientGrant.mock.calls[0]?.[0]?.context.scheduledToolPolicy).toEqual({
+        version: 1,
+        mode: "account",
         ownerSessionKey: "agent:main:discord:group:ops",
         ownerAccountId: "default",
       });
@@ -3012,6 +3020,8 @@ describe("prepareCliRunContext", () => {
         expect.objectContaining({
           toolsAllow: ["write"],
           scheduledToolPolicy: {
+            version: 1,
+            mode: "account",
             ownerSessionKey: "agent:main:discord:group:ops",
             ownerAccountId: "default",
           },

@@ -20,6 +20,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeCronScheduledToolPolicy } from "../../cron/scheduled-tool-policy.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { recordSessionCreated } from "../../sessions/session-state-events.js";
@@ -227,11 +228,12 @@ export async function persistAgentSessionPhase(params: {
                 ...(freshEntry.thinkingLevel ? { thinking: freshEntry.thinkingLevel } : {}),
                 ...(marker.toolsAllow !== undefined ? { toolsAllow: [...marker.toolsAllow] } : {}),
                 ...(marker.toolsAllowIsDefault === true ? { toolsAllowIsDefault: true } : {}),
-                ...(marker.ownerSessionKey?.trim()
-                  ? { ownerSessionKey: marker.ownerSessionKey.trim() }
-                  : {}),
-                ...(marker.ownerAccountId?.trim()
-                  ? { ownerAccountId: marker.ownerAccountId.trim() }
+                ...(normalizeCronScheduledToolPolicy(marker.scheduledToolPolicy)
+                  ? {
+                      scheduledToolPolicy: normalizeCronScheduledToolPolicy(
+                        marker.scheduledToolPolicy,
+                      ),
+                    }
                   : {}),
                 ...(marker.cliSessionBindingFacts
                   ? { cliSessionBindingFacts: { ...marker.cliSessionBindingFacts } }

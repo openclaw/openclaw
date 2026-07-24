@@ -231,7 +231,7 @@ export function resolveConversationCapabilityProfile(
     trustedInternalHandoff: params.trustedInternalHandoff,
     senderPolicyMode: params.scheduledToolPolicy || isOwnerInternalSession ? "never" : "always",
     groupPolicySessionKey: params.scheduledToolPolicy?.ownerSessionKey,
-    requireConfiguredGroupAccount: Boolean(params.scheduledToolPolicy),
+    requireConfiguredGroupAccount: params.scheduledToolPolicy?.mode === "account",
   });
   const { groupPolicy, senderPolicy, subagentPolicy, inheritedToolPolicy } = requesterPolicies;
   const profilePolicy = resolveToolProfilePolicy(effective.profile);
