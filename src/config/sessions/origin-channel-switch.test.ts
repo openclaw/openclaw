@@ -7,7 +7,7 @@ import {
   normalizeSessionDeliveryState,
   sessionDeliveryOrigin,
 } from "../../utils/delivery-context.shared.js";
-import { deriveSessionMetaPatch } from "./metadata.js";
+import { deriveLastRoutePatch, deriveSessionMetaPatch } from "./metadata.js";
 import type { SessionEntry, SessionOrigin } from "./types.js";
 
 const sessionKey = "agent:user";
@@ -141,6 +141,18 @@ describe("session origin across a channel switch", () => {
     expect(afterAccountSwitch.origin?.threadId).toBeUndefined();
   });
 
+  it("clears a stored route when only the same-account surface identity changes", () => {
+    const existing = applyOrigin(undefined, slackTurn);
+    const afterSurfaceSwitch = applyOrigin(existing, {
+      ...slackTurn,
+      Surface: "slack-canvas",
+      To: "slack:D222SLACK",
+    });
+
+    expect(afterSurfaceSwitch.origin?.surface).toBe("slack-canvas");
+    expect(afterSurfaceSwitch.deliveryContext).toBeUndefined();
+  });
+
   it("preserves sparse existing channel metadata when optional identity fields are first populated", () => {
     const existing = {
       sessionId: "session-1",
@@ -169,6 +181,29 @@ describe("session origin across a channel switch", () => {
     expect(afterFollowUp.origin?.accountId).toBe("slack-team-1");
     expect(afterFollowUp.origin?.nativeChannelId).toBe("D111SLACK");
     expect(afterFollowUp.origin?.threadId).toBe("1700000000.000100");
+  });
+
+  it("preserves a fresh rich route when the inbound identity switches providers", () => {
+    const patch = deriveLastRoutePatch({
+      sessionKey,
+      existing: applyOrigin(undefined, slackTurn),
+      route: {
+        channel: "telegram",
+        accountId: "telegram-bot-1",
+        target: { to: "chat:42", rawTo: "@forty-two", chatType: "group" },
+        thread: { id: 456, kind: "topic", source: "turn" },
+      },
+      ctx: telegramTurn as MsgContext,
+    });
+
+    expect(patch.delivery).toMatchObject({
+      kind: "external",
+      route: {
+        channel: "telegram",
+        target: { to: "chat:42", rawTo: "@forty-two", chatType: "group" },
+        thread: { id: 456, kind: "topic", source: "turn" },
+      },
+    });
   });
 });
 

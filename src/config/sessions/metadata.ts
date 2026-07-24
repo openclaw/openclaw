@@ -221,6 +221,7 @@ export function deriveSessionMetaPatch(params: {
   sessionKey: string;
   existing?: SessionEntry;
   groupResolution?: GroupKeyResolution | null;
+  preserveExistingDeliveryRoute?: boolean;
   skipSystemEventOrigin?: boolean;
 }): Partial<SessionEntry> | null {
   const groupPatch = deriveGroupSessionPatch(params);
@@ -245,8 +246,17 @@ export function deriveSessionMetaPatch(params: {
       !isInternalNonDeliveryChannel(nextProvider) &&
       !isSystemEventProvider(nextProvider),
     );
+    const existingRoute = sessionDeliveryRoute(params.existing);
+    const existingRouteAccountId =
+      existingRoute?.accountId ?? deliveryContextFromSession(params.existing)?.accountId;
+    const freshRouteOwnsNextProvider =
+      params.preserveExistingDeliveryRoute === true &&
+      nextProvider != null &&
+      existingRoute?.channel === nextProvider &&
+      (origin?.accountId == null || existingRouteAccountId === origin.accountId);
     const deliveryIdentityChanged =
       nextOwnsExternalRoute &&
+      !freshRouteOwnsNextProvider &&
       (!existingOrigin ||
         (existingOrigin.provider != null && nextProvider !== existingOrigin.provider) ||
         (existingOrigin.surface != null &&
@@ -350,6 +360,7 @@ export function deriveLastRoutePatch(params: {
         sessionKey: params.sessionKey,
         existing: nextEntry,
         groupResolution: params.groupResolution,
+        preserveExistingDeliveryRoute: routeContext != null,
       })
     : null;
   const basePatch: Partial<SessionEntry> = { delivery };
