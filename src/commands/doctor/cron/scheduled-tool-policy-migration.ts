@@ -13,6 +13,29 @@ export type ScheduledToolPolicyMigrationResult = {
   status: "current" | "migrated" | "legacy" | "invalid" | "not-applicable";
 };
 
+/** Collects operator-visible recovery outcomes while normalizing a cron store. */
+export function createScheduledToolPolicyMigrationCollector() {
+  const legacyJobs: string[] = [];
+  const invalidJobs: string[] = [];
+  return {
+    legacyJobs,
+    invalidJobs,
+    migrate(raw: Record<string, unknown>, onMigrated: () => void) {
+      const result = migrateScheduledToolPolicy(raw);
+      const jobName = normalizeOptionalString(raw.name) ?? normalizeOptionalString(raw.id);
+      if (result.status === "migrated") {
+        onMigrated();
+      }
+      if (result.status === "legacy" && jobName) {
+        legacyJobs.push(jobName);
+      } else if (result.status === "invalid" && jobName) {
+        invalidJobs.push(jobName);
+      }
+      return result.mutated;
+    },
+  };
+}
+
 function readRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)

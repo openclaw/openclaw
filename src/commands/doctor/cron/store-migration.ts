@@ -25,7 +25,7 @@ import {
   migrateLegacyAgentTurnCommandPayload,
   migrateLegacyCronPayload,
 } from "./payload-migration.js";
-import { migrateScheduledToolPolicy } from "./scheduled-tool-policy-migration.js";
+import { createScheduledToolPolicyMigrationCollector } from "./scheduled-tool-policy-migration.js";
 
 type CronStoreIssueKey =
   | "jobId"
@@ -310,8 +310,7 @@ export function normalizeStoredCronJobs(
   const issues: CronStoreIssues = {};
   const unresolvedAgentTurnCommandPromptJobs: string[] = [];
   const unresolvedAgentTurnShellToolPromptJobs: string[] = [];
-  const legacyScheduledToolPolicyJobs: string[] = [];
-  const invalidScheduledToolPolicyJobs: string[] = [];
+  const scheduledToolPolicyMigrations = createScheduledToolPolicyMigrationCollector();
   const unresolvedAgentTurnPromptJobsByKind = {
     commandPromptWithoutShellAccess: unresolvedAgentTurnCommandPromptJobs,
     shellToolPrompt: unresolvedAgentTurnShellToolPromptJobs,
@@ -704,19 +703,10 @@ export function normalizeStoredCronJobs(
       mutated = true;
     }
 
-    const scheduledPolicyMigration = migrateScheduledToolPolicy(raw);
-    if (scheduledPolicyMigration.mutated) {
-      mutated = true;
-    }
-    const scheduledPolicyJobName =
-      normalizeOptionalString(raw.name) ?? normalizeOptionalString(raw.id);
-    if (scheduledPolicyMigration.status === "migrated") {
-      trackIssue("migratedScheduledToolPolicy");
-    } else if (scheduledPolicyMigration.status === "legacy" && scheduledPolicyJobName) {
-      legacyScheduledToolPolicyJobs.push(scheduledPolicyJobName);
-    } else if (scheduledPolicyMigration.status === "invalid" && scheduledPolicyJobName) {
-      invalidScheduledToolPolicyJobs.push(scheduledPolicyJobName);
-    }
+    const scheduledPolicyMutated = scheduledToolPolicyMigrations.migrate(raw, () =>
+      trackIssue("migratedScheduledToolPolicy"),
+    );
+    mutated ||= scheduledPolicyMutated;
 
     const invalidPersistedReason = getInvalidPersistedCronJobReason(raw);
     if (
@@ -749,8 +739,8 @@ export function normalizeStoredCronJobs(
     issues,
     unresolvedAgentTurnCommandPromptJobs,
     unresolvedAgentTurnShellToolPromptJobs,
-    legacyScheduledToolPolicyJobs,
-    invalidScheduledToolPolicyJobs,
+    legacyScheduledToolPolicyJobs: scheduledToolPolicyMigrations.legacyJobs,
+    invalidScheduledToolPolicyJobs: scheduledToolPolicyMigrations.invalidJobs,
     jobs,
     mutated,
     removedJobs,
