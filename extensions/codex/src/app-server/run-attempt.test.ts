@@ -3388,11 +3388,14 @@ describe("runCodexAppServerAttempt", () => {
       }),
     ]);
   });
-  it("points heartbeat Codex turns at HEARTBEAT.md without injecting its contents", async () => {
+  it.each([
+    { name: "non-empty legacy HEARTBEAT.md", contents: "Heartbeat checklist goes here." },
+    { name: "empty legacy HEARTBEAT.md", contents: "\n\n" },
+  ])("keeps $name out of Codex heartbeat context", async ({ contents }) => {
     const { sessionFile, workspaceDir } = createRunPaths();
     const heartbeatPath = path.join(workspaceDir, "HEARTBEAT.md");
     await fs.mkdir(workspaceDir, { recursive: true });
-    await fs.writeFile(heartbeatPath, "Heartbeat checklist goes here.");
+    await fs.writeFile(heartbeatPath, contents);
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
     params.trigger = "heartbeat";
@@ -3406,47 +3409,10 @@ describe("runCodexAppServerAttempt", () => {
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
     const threadStart = harness.requests.find((request) => request.method === "thread/start");
-    const threadStartParams = threadStart?.params as {
-      developerInstructions?: string;
-    };
-    expect(threadStartParams.developerInstructions).not.toContain("Heartbeat checklist goes here.");
+    const threadStartParams = threadStart?.params as { developerInstructions?: string };
     const turnStart = harness.requests.find((request) => request.method === "turn/start");
     const turnStartParams = turnStart?.params as {
       input?: Array<{ text?: string }>;
-      collaborationMode?: {
-        settings?: {
-          developer_instructions?: string | null;
-        };
-      };
-    };
-    const inputText = turnStartParams.input?.[0]?.text ?? "";
-    const collaborationInstructions =
-      turnStartParams.collaborationMode?.settings?.developer_instructions ?? "";
-    expect(inputText).not.toContain("Heartbeat checklist goes here.");
-    expect(collaborationInstructions).toContain("HEARTBEAT.md exists");
-    expect(collaborationInstructions).toContain("Read it before proceeding with this heartbeat");
-    expect(collaborationInstructions).toContain(heartbeatPath);
-    expect(collaborationInstructions).not.toContain("Heartbeat checklist goes here.");
-  });
-
-  it("omits heartbeat Codex workspace pointers for empty HEARTBEAT.md files", async () => {
-    const { sessionFile, workspaceDir } = createRunPaths();
-    await fs.mkdir(workspaceDir, { recursive: true });
-    await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "\n\n");
-    const harness = createStartedThreadHarness();
-    const params = createParams(sessionFile, workspaceDir);
-    params.trigger = "heartbeat";
-    params.bootstrapContextMode = "lightweight";
-    params.bootstrapContextRunKind = "heartbeat";
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
-    const turnStart = harness.requests.find((request) => request.method === "turn/start");
-    const turnStartParams = turnStart?.params as {
       collaborationMode?: {
         settings?: {
           developer_instructions?: string | null;
@@ -3457,6 +3423,13 @@ describe("runCodexAppServerAttempt", () => {
       turnStartParams.collaborationMode?.settings?.developer_instructions ?? "";
     expect(collaborationInstructions).toContain("This is an OpenClaw heartbeat turn");
     expect(collaborationInstructions).not.toContain("HEARTBEAT.md exists");
+    expect(collaborationInstructions).not.toContain(heartbeatPath);
+    const legacyContent = contents.trim();
+    if (legacyContent) {
+      expect(threadStartParams.developerInstructions ?? "").not.toContain(legacyContent);
+      expect(turnStartParams.input?.[0]?.text ?? "").not.toContain(legacyContent);
+      expect(collaborationInstructions).not.toContain(legacyContent);
+    }
   });
   it("keeps lightweight cron Codex turns out of OpenClaw bootstrap context", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
