@@ -119,7 +119,7 @@ describe("model recovery gateway methods", () => {
     );
 
     vi.mocked(store.status).mockImplementation(() => {
-      throw new Error("model target fence schema unavailable");
+      throw new Error("database /sensitive/path/model-recovery.sqlite failed");
     });
     const unavailable = invoke(createModelRecoveryHandlers(store), "modelRecovery.status", {});
     await unavailable.result;
@@ -128,8 +128,9 @@ describe("model recovery gateway methods", () => {
       undefined,
       expect.objectContaining({
         code: "UNAVAILABLE",
-        message: expect.stringContaining("schema unavailable"),
+        message: "Model recovery capability is unavailable",
       }),
     );
+    expect(JSON.stringify(unavailable.respond.mock.calls)).not.toContain("/sensitive/path");
   });
 });

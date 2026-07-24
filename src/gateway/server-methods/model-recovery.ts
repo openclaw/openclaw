@@ -29,7 +29,13 @@ function respondStoreError(
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
     return;
   }
-  respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error), { retryable: true }));
+  respond(
+    false,
+    undefined,
+    errorShape(ErrorCodes.UNAVAILABLE, "Model recovery capability is unavailable", {
+      retryable: true,
+    }),
+  );
 }
 
 export function createModelRecoveryHandlers(store: ModelTargetFenceStore): GatewayRequestHandlers {
