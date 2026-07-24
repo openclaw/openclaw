@@ -73,10 +73,52 @@ export type MemorySearchRuntimeQmdCollectionValidationDebug = {
   sources?: MemorySource[];
 };
 
+/**
+ * How a multi-collection mcporter search actually reached the QMD server.
+ * "unified" is the v2 happy path (one `mcporter call` process for every
+ * collection via its `collections` array). "per-collection" is the v1
+ * fallback or an explicit tool override (one process per collection,
+ * unchanged from pre-unification behavior). "degraded" means the unified
+ * attempt failed for a non-tool-version reason and results were salvaged by
+ * retrying collections in isolation; `failedCollections`/`succeededCollections`
+ * name which ones.
+ */
+/** @public */ export type MemorySearchRuntimeQmdMcporterCallPlanDebug = {
+  mode: "unified" | "per-collection" | "degraded";
+  collectionCount: number;
+  processCount: number;
+  failedCollections?: string[];
+  succeededCollections?: string[];
+};
+
+/**
+ * Per-phase wall-clock timings inside a single QMD manager search() call.
+ * managerAcquisitionMs is reported separately (MemorySearchRuntimeDebug's
+ * sibling `managerMs`, computed at manager-context-resolution time, before a
+ * manager instance exists to attach this object to).
+ */
+/** @public */ export type MemorySearchRuntimeQmdPhaseTimingsDebug = {
+  dirtySyncWaitMs?: number;
+  pendingUpdateWaitMs?: number;
+  collectionQueryMs?: number;
+  resultResolutionMs?: number;
+};
+
 /** @public */ export type MemorySearchRuntimeQmdDebug = {
   collectionValidation?: MemorySearchRuntimeQmdCollectionValidationDebug;
   multiCollectionProbe?: MemorySearchRuntimeQmdMultiCollectionProbeDebug;
   searchPlan?: MemorySearchRuntimeQmdSearchPlanDebug;
+  mcporterCallPlan?: MemorySearchRuntimeQmdMcporterCallPlanDebug;
+  phaseTimings?: MemorySearchRuntimeQmdPhaseTimingsDebug;
+  /**
+   * Hits returned by QMD whose docid could not be resolved back to a document
+   * on disk (resolveDocLocation returned null) and were silently dropped
+   * before session-visibility filtering or source attribution. One of the two
+   * candidate loss points for the "direct QMD returns session hits that
+   * corpus=sessions doesn't" diagnosis in the recall-latency scope; the other
+   * is downstream in filterMemorySearchHitsBySessionVisibility.
+   */
+  hitsDroppedAtDocResolution?: number;
 };
 
 export type MemorySearchRuntimeDebug = {

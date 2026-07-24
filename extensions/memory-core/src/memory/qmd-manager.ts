@@ -64,7 +64,11 @@ import {
   type ManagedQmdCollection as ManagedCollection,
   type QmdSearchRuntimeDebugContext,
 } from "./qmd-collection-controller.js";
-import { QmdCommandClient, type QmdCommandPhaseReporter } from "./qmd-command-client.js";
+import {
+  QmdCommandClient,
+  type QmdCommandPhaseReporter,
+  type QmdMcporterCallPlanDebug,
+} from "./qmd-command-client.js";
 import {
   asQmdAbortError,
   isMissingCollectionSearchError,
@@ -651,6 +655,25 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (debugContext.searchPlan) {
       debug.searchPlan = debugContext.searchPlan;
     }
+    if (debugContext.mcporterCallPlan) {
+      debug.mcporterCallPlan = debugContext.mcporterCallPlan;
+    }
+    if (
+      debugContext.dirtySyncWaitMs !== undefined ||
+      debugContext.pendingUpdateWaitMs !== undefined ||
+      debugContext.collectionQueryMs !== undefined ||
+      debugContext.resultResolutionMs !== undefined
+    ) {
+      debug.phaseTimings = {
+        dirtySyncWaitMs: debugContext.dirtySyncWaitMs,
+        pendingUpdateWaitMs: debugContext.pendingUpdateWaitMs,
+        collectionQueryMs: debugContext.collectionQueryMs,
+        resultResolutionMs: debugContext.resultResolutionMs,
+      };
+    }
+    if (debugContext.hitsDroppedAtDocResolution !== undefined) {
+      debug.hitsDroppedAtDocResolution = debugContext.hitsDroppedAtDocResolution;
+    }
     return Object.keys(debug).length > 0 ? debug : undefined;
   }
 
@@ -727,9 +750,13 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (!trimmed) {
       return [];
     }
+    const dirtySyncWaitStartedAt = Date.now();
     await this.maybeWarmSession(opts?.sessionKey);
     await this.maybeSyncDirtySearchState();
+    debugContext.dirtySyncWaitMs = Math.max(0, Date.now() - dirtySyncWaitStartedAt);
+    const pendingUpdateWaitStartedAt = Date.now();
     await this.waitForPendingUpdateBeforeSearch();
+    debugContext.pendingUpdateWaitMs = Math.max(0, Date.now() - pendingUpdateWaitStartedAt);
     const resultLimit = Math.min(
       this.qmd.limits.maxResults,
       opts?.maxResults ?? this.qmd.limits.maxResults,
@@ -753,6 +780,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     let searchFallbackReason: string | undefined;
     const explicitSearchTool = this.qmd.searchTool;
     const mcporterEnabled = this.qmd.mcporter.enabled;
+    let mcporterCallPlan: QmdMcporterCallPlanDebug | undefined;
     const runSearchAttempt = async (
       allowMissingCollectionRepair: boolean,
     ): Promise<QmdQueryResult[]> => {
@@ -762,7 +790,7 @@ export class QmdMemoryManager implements MemorySearchManager {
           const minScore = opts?.minScore ?? 0;
           if (explicitSearchTool) {
             if (collectionNames.length > 1) {
-              return await this.commands.searchAcrossCollections({
+              const across = await this.commands.searchAcrossCollections({
                 tool: explicitSearchTool,
                 searchCommand: qmdSearchCommand,
                 explicitToolOverride: true,
@@ -773,6 +801,8 @@ export class QmdMemoryManager implements MemorySearchManager {
                 signal: searchSignal,
                 reportCommandPhase,
               });
+              mcporterCallPlan = across.callPlan;
+              return across.results;
             }
             return await this.commands.searchViaMcporter({
               mcporter: this.qmd.mcporter,
@@ -790,7 +820,7 @@ export class QmdMemoryManager implements MemorySearchManager {
           }
           const tool = this.commands.resolveMcpTool(qmdSearchCommand);
           if (collectionNames.length > 1) {
-            return await this.commands.searchAcrossCollections({
+            const across = await this.commands.searchAcrossCollections({
               tool,
               searchCommand: qmdSearchCommand,
               explicitToolOverride: false,
@@ -801,6 +831,8 @@ export class QmdMemoryManager implements MemorySearchManager {
               signal: searchSignal,
               reportCommandPhase,
             });
+            mcporterCallPlan = across.callPlan;
+            return across.results;
           }
           return await this.commands.searchViaMcporter({
             mcporter: this.qmd.mcporter,
@@ -896,15 +928,25 @@ export class QmdMemoryManager implements MemorySearchManager {
       }
     };
 
+    const collectionQueryStartedAt = Date.now();
     let parsed: QmdQueryResult[];
     try {
       parsed = await runSearchAttempt(true);
+      if (mcporterCallPlan) {
+        debugContext.mcporterCallPlan = mcporterCallPlan;
+      }
     } catch (err) {
       if (!(await this.tryRepairMissingCollectionSearch(err, debugContext, searchSignal))) {
         throw err instanceof Error ? err : new Error(String(err));
       }
       parsed = await runSearchAttempt(false);
+      if (mcporterCallPlan) {
+        debugContext.mcporterCallPlan = mcporterCallPlan;
+      }
     }
+    debugContext.collectionQueryMs = Math.max(0, Date.now() - collectionQueryStartedAt);
+    const resultResolutionStartedAt = Date.now();
+    let droppedAtDocResolution = 0;
     const results: MemorySearchResult[] = [];
     for (const entry of parsed) {
       const docHints = this.normalizeDocHints({
@@ -913,6 +955,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       });
       const doc = await this.resolveDocLocation(entry.docid, docHints);
       if (!doc) {
+        droppedAtDocResolution += 1;
         continue;
       }
       const snippet = truncateUtf16Safe(entry.snippet ?? "", this.qmd.limits.maxSnippetChars);
@@ -943,6 +986,16 @@ export class QmdMemoryManager implements MemorySearchManager {
       results.push(
         artifactIdentity ? attachQmdSessionArtifactHit(result, artifactIdentity) : result,
       );
+    }
+    debugContext.resultResolutionMs = Math.max(0, Date.now() - resultResolutionStartedAt);
+    if (droppedAtDocResolution > 0) {
+      // Source is unknown for these — resolveDocLocation failed before a
+      // MemorySource could be attached. This is one of the two silent
+      // hit-loss points the recall-latency scope's diagnosis targets (the
+      // other is filterMemorySearchHitsBySessionVisibility, instrumented
+      // separately); a nonzero count here on a corpus=sessions query that
+      // returns zero results is the first thing to check.
+      debugContext.hitsDroppedAtDocResolution = droppedAtDocResolution;
     }
     opts?.onDebug?.({
       backend: "qmd",
