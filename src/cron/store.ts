@@ -6,7 +6,26 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { readRegularFile } from "../infra/regular-file.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
+
+// Cron quarantine sidecars are small JSON files; cap reads so a corrupted or
+// hostile file cannot OOM the cron load path.
+export const CRON_QUARANTINE_MAX_BYTES = 8 * 1024 * 1024;
+
+/** Thrown when a persisted cron quarantine sidecar exceeds the bounded read cap. */
+export class CronQuarantineOversizedError extends Error {
+  override readonly name = "CronQuarantineOversizedError";
+  readonly code = "CRON_QUARANTINE_OVERSIZED";
+  constructor(
+    readonly filePath: string,
+    readonly maxBytes: number,
+  ) {
+    super(
+      `Cron quarantine file at ${filePath} exceeds ${maxBytes} bytes; run openclaw doctor --fix to archive it.`,
+    );
+  }
+}
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -232,8 +251,11 @@ export async function saveCronStore(
 /** Loads the cron quarantine sidecar, validating its persisted v1 shape. */
 export async function loadCronQuarantineFile(pathLocal: string): Promise<CronQuarantineFile> {
   try {
-    const raw = await fs.promises.readFile(pathLocal, "utf-8");
-    const parsed = parseJsonWithJson5Fallback(raw);
+    const { buffer } = await readRegularFile({
+      filePath: pathLocal,
+      maxBytes: CRON_QUARANTINE_MAX_BYTES,
+    });
+    const parsed = parseJsonWithJson5Fallback(buffer.toString("utf-8"));
     if (!isRecord(parsed) || parsed.version !== 1 || !Array.isArray(parsed.jobs)) {
       throw new Error(`Unsupported cron quarantine file shape at ${pathLocal}`);
     }
@@ -277,8 +299,38 @@ export async function loadCronQuarantineFile(pathLocal: string): Promise<CronQua
     if ((err as { code?: unknown })?.code === "ENOENT") {
       return { version: 1, jobs: [] };
     }
+    if (err instanceof Error && err.message.includes("exceeds")) {
+      throw new CronQuarantineOversizedError(pathLocal, CRON_QUARANTINE_MAX_BYTES);
+    }
     throw err;
   }
+}
+
+function buildQuarantineJobEntry(
+  entry: QuarantinedCronConfigJob,
+  nowMs: number,
+): CronQuarantineFile["jobs"][number] {
+  const result: CronQuarantineFile["jobs"][number] = {
+    quarantinedAtMs: nowMs,
+    sourceIndex: entry.sourceIndex,
+    reason: entry.reason,
+  };
+  if (entry.job) {
+    result.job = structuredClone(entry.job);
+  }
+  if ("raw" in entry) {
+    result.raw = structuredClone(entry.raw);
+  }
+  if (entry.state) {
+    result.state = structuredClone(entry.state);
+  }
+  if (entry.updatedAtMs !== undefined) {
+    result.updatedAtMs = entry.updatedAtMs;
+  }
+  if (entry.scheduleIdentity !== undefined) {
+    result.scheduleIdentity = entry.scheduleIdentity;
+  }
+  return result;
 }
 
 function quarantineEntryKey(entry: QuarantinedCronConfigJob): string {
@@ -307,8 +359,15 @@ export async function saveCronQuarantineFile(params: {
     return null;
   }
   const quarantinePath = resolveCronQuarantinePath(params.storePath);
+
+  // Load existing quarantine entries for deduplication. A missing file starts
+  // with empty state; an oversized sidecar is a legacy-data migration issue
+  // that must be resolved with `openclaw doctor --fix` rather than silently
+  // discarded here.
   const existing = await loadCronQuarantineFile(quarantinePath);
-  const seen = new Set(existing.jobs.map(quarantineEntryKey));
+  const existingKeys = new Set(existing.jobs.map(quarantineEntryKey));
+
+  const seen = new Set(existingKeys);
   const nextJobs = existing.jobs.slice();
   let appended = false;
   for (const entry of params.entries.toSorted((a, b) => a.sourceIndex - b.sourceIndex)) {
@@ -320,21 +379,15 @@ export async function saveCronQuarantineFile(params: {
     // keep appending the same quarantined config job.
     seen.add(key);
     appended = true;
-    nextJobs.push({
-      quarantinedAtMs: params.nowMs,
-      sourceIndex: entry.sourceIndex,
-      reason: entry.reason,
-      ...(entry.job ? { job: structuredClone(entry.job) } : {}),
-      ...("raw" in entry ? { raw: structuredClone(entry.raw) } : {}),
-      ...(entry.state ? { state: structuredClone(entry.state) } : {}),
-      ...(entry.updatedAtMs !== undefined ? { updatedAtMs: entry.updatedAtMs } : {}),
-      ...(entry.scheduleIdentity !== undefined ? { scheduleIdentity: entry.scheduleIdentity } : {}),
-    });
+    nextJobs.push(buildQuarantineJobEntry(entry, params.nowMs));
   }
   if (!appended) {
     return quarantinePath;
   }
   const payload = JSON.stringify({ version: 1, jobs: nextJobs }, null, 2);
+  if (Buffer.byteLength(payload, "utf-8") > CRON_QUARANTINE_MAX_BYTES) {
+    throw new Error(`Cron quarantine file exceeds ${CRON_QUARANTINE_MAX_BYTES} bytes`);
+  }
   await atomicWrite(quarantinePath, payload);
   return quarantinePath;
 }

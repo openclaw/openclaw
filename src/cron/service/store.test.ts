@@ -1,9 +1,15 @@
 // Cron service store tests cover persisted service state loading and writes.
 import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setupCronServiceSuite } from "../service.test-harness.js";
 import * as cronStoreModule from "../store.js";
-import { loadCronStore, saveCronStore } from "../store.js";
+import {
+  loadCronQuarantineFile,
+  loadCronStore,
+  resolveCronQuarantinePath,
+  saveCronStore,
+} from "../store.js";
 import type { CronJob } from "../types.js";
 import { findJobOrThrow } from "./jobs.js";
 import { createCronServiceState } from "./state.js";
@@ -348,6 +354,51 @@ describe("cron service store seam coverage", () => {
       }),
     );
     expect((await loadCronStore(storePath)).jobs[0]?.state.nextRunAtMs).toBe(changedNextRunAtMs);
+  });
+
+  it("rejects persist when the quarantine sidecar write would exceed the byte cap", async () => {
+    const { storePath } = await makeStorePath();
+    const quarantinePath = resolveCronQuarantinePath(storePath);
+    const initialNextRunAtMs = STORE_TEST_NOW + 60_000;
+    const changedNextRunAtMs = STORE_TEST_NOW + 120_000;
+    await writeSingleJobStore(
+      storePath,
+      createReloadCronJob({
+        id: "quarantine-archive-job",
+        state: { nextRunAtMs: initialNextRunAtMs },
+      }),
+    );
+
+    // Pre-fill the sidecar with a few entries, then append a huge entry so
+    // the merged payload exceeds the cap — persist returns false fail-closed.
+    const existingJobs = Array.from({ length: 3 }, (_, i) => ({
+      sourceIndex: i,
+      reason: "old-entry",
+      job: { id: `old-job-${i}`, data: "small" },
+    }));
+    await fs.mkdir(path.dirname(quarantinePath), { recursive: true });
+    await fs.writeFile(
+      quarantinePath,
+      JSON.stringify({ version: 1, jobs: existingJobs }, null, 2),
+      "utf-8",
+    );
+
+    const onEvent = vi.fn();
+    const state = createStoreTestState(storePath, onEvent);
+    await ensureLoaded(state, { skipRecompute: true });
+    const job = findJobOrThrow(state, "quarantine-archive-job");
+    job.state.nextRunAtMs = changedNextRunAtMs;
+    state.pendingQuarantineConfigJobs = [
+      {
+        sourceIndex: 99,
+        reason: "oversized-quarantine",
+        raw: "x".repeat(9 * 1024 * 1024),
+      },
+    ];
+
+    // The quarantine write fails closed, so persist returns false.
+    const persisted = await persist(state, { stateOnly: true });
+    expect(persisted).toBe(false);
   });
 
   it("loads normalized jobId-only jobs from SQLite so scheduler lookups resolve by stable id", async () => {

@@ -294,6 +294,43 @@ describe("collectLegacyCronStoreHealthFindings", () => {
     await expect(readPersistedJobs(storePath)).resolves.toEqual([]);
   });
 
+  it("reports an oversized cron quarantine sidecar as a legacy repair finding", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCurrentCronStore(storePath, []);
+    const quarantinePath = resolveCronQuarantinePath(storePath);
+    await fs.mkdir(path.dirname(quarantinePath), { recursive: true });
+    await fs.writeFile(quarantinePath, "x".repeat(8 * 1024 * 1024 + 1), "utf-8");
+
+    const findings = await collectLegacyCronStoreHealthFindings({
+      cfg: createCronConfig(storePath),
+    });
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/legacy-cron-store",
+        path: quarantinePath,
+        requirement: "cron-quarantine-oversized",
+      }),
+    ]);
+  });
+
+  it("archives an oversized cron quarantine sidecar when repairing", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCurrentCronStore(storePath, []);
+    const quarantinePath = resolveCronQuarantinePath(storePath);
+    await fs.mkdir(path.dirname(quarantinePath), { recursive: true });
+    await fs.writeFile(quarantinePath, "x".repeat(8 * 1024 * 1024 + 1), "utf-8");
+
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    await expect(fs.access(quarantinePath)).rejects.toThrow(/ENOENT/);
+    const archives = await fs.readdir(path.dirname(quarantinePath));
+    expect(archives.some((name) => name.endsWith(".archive.json"))).toBe(true);
+  });
+
   it("returns no findings for an already-normalized empty cron store", async () => {
     const storePath = await makeTempStorePath();
     await writeCurrentCronStore(storePath, []);

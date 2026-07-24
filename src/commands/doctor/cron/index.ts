@@ -2,7 +2,11 @@
 import { note } from "../../../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { loadCronQuarantineFile, resolveCronJobsStorePath } from "../../../cron/store.js";
+import {
+  CRON_QUARANTINE_MAX_BYTES,
+  loadCronQuarantineFile,
+  resolveCronJobsStorePath,
+} from "../../../cron/store.js";
 import type { HealthFinding } from "../../../flows/health-checks.js";
 import { shortenHomePath } from "../../../utils.js";
 import type { DoctorPrompter, DoctorOptions } from "../../doctor-prompter.js";
@@ -13,6 +17,11 @@ import {
   type LegacyCronRepairResult,
   type LegacyCronRepairState,
 } from "./legacy-repair.js";
+import {
+  archiveOversizedCronQuarantineSidecar,
+  formatArchivedQuarantineNote,
+  isOversizedCronQuarantineSidecar,
+} from "./oversized-quarantine.js";
 import {
   formatLegacyIssuePreview,
   formatScheduledToolPolicyAdvisory,
@@ -142,6 +151,18 @@ export async function collectLegacyCronStoreHealthFindings(params: {
     sqliteProjectionBackfillCount,
     rawJobs,
   } = state;
+
+  if (isOversizedCronQuarantineSidecar(quarantinePath)) {
+    findings.push(
+      legacyCronStoreFinding({
+        message: `Cron quarantine sidecar at ${shortenHomePath(quarantinePath)} exceeds the ${CRON_QUARANTINE_MAX_BYTES} byte safety cap.`,
+        path: quarantinePath,
+        requirement: "cron-quarantine-oversized",
+        fixHint: `Run ${formatCliCommand("openclaw doctor --fix")} to archive the oversized sidecar and start fresh.`,
+      }),
+    );
+    return findings;
+  }
 
   try {
     const quarantine = await loadCronQuarantineFile(quarantinePath);
@@ -304,6 +325,26 @@ export async function maybeRepairLegacyCronStore(params: {
     sqliteProjectionBackfillCount,
     rawJobs,
   } = state;
+  if (isOversizedCronQuarantineSidecar(quarantinePath)) {
+    note(
+      [
+        `Cron quarantine sidecar at ${shortenHomePath(quarantinePath)} exceeds the ${CRON_QUARANTINE_MAX_BYTES} byte safety cap.`,
+        `- The runtime cannot safely load the existing sidecar; it must be archived before new quarantine writes can proceed.`,
+      ].join("\n"),
+      "Cron",
+    );
+    const shouldArchive = await params.prompter.confirm({
+      message: "Archive the oversized quarantine sidecar now?",
+      initialValue: true,
+    });
+    if (shouldArchive) {
+      const archivePath = archiveOversizedCronQuarantineSidecar(quarantinePath);
+      note(
+        formatArchivedQuarantineNote({ archivePath, originalPath: quarantinePath }),
+        "Doctor changes",
+      );
+    }
+  }
   try {
     const quarantine = await loadCronQuarantineFile(quarantinePath);
     if (quarantine.jobs.length > 0) {
