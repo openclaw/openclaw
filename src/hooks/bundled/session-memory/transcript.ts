@@ -131,12 +131,55 @@ export function getRecentSessionContentFromEvents(
   return allMessages.slice(-messageCount).join("\n");
 }
 
+// Session transcript files contain agent-user conversation content.
+// Most transcripts are under 1 MiB; cap reads at 50 MiB to prevent OOM on
+// extremely long sessions or corrupted files.
+const MAX_SESSION_TRANSCRIPT_BYTES = 50 * 1024 * 1024;
+
+/**
+ * Read a session transcript through one file descriptor, bounding the read to
+ * the trailing MAX_SESSION_TRANSCRIPT_BYTES. Only recent events are consumed,
+ * so an oversized transcript still yields its latest messages instead of
+ * failing, and concurrent growth or replacement after open cannot bypass the
+ * bound.
+ */
+async function readSessionTranscriptSafely(filePath: string): Promise<string> {
+  const handle = await fs.open(filePath, "r");
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) {
+      throw new Error(`not a regular file: ${filePath}`);
+    }
+    const start = Math.max(0, stat.size - MAX_SESSION_TRANSCRIPT_BYTES);
+    const length = Math.min(stat.size, MAX_SESSION_TRANSCRIPT_BYTES);
+    const buffer = Buffer.alloc(length);
+    let offset = 0;
+    while (offset < length) {
+      const { bytesRead } = await handle.read(buffer, offset, length - offset, start + offset);
+      if (bytesRead === 0) {
+        break;
+      }
+      offset += bytesRead;
+    }
+    const tail = buffer.subarray(0, offset).toString("utf-8");
+    if (start === 0) {
+      return tail;
+    }
+    // A truncated tail can start mid-line; drop the partial first line so
+    // JSONL parsing resumes at an event boundary.
+    const firstNewline = tail.indexOf("\n");
+    return firstNewline === -1 ? "" : tail.slice(firstNewline + 1);
+  } finally {
+    await handle.close();
+  }
+}
+
 async function getRecentSessionContent(
   sessionFilePath: string,
   messageCount = 15,
 ): Promise<string | null> {
   try {
-    const content = await fs.readFile(sessionFilePath, "utf-8");
+    const content = await readSessionTranscriptSafely(sessionFilePath);
     const lines = content.trim().split("\n");
 
     return getRecentSessionContentFromEvents(
