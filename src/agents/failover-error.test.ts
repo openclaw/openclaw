@@ -1404,9 +1404,9 @@ describe("failover-error", () => {
         new Error("Sandbox image not found"),
       );
       expect(isNonProviderRuntimeCoordinationError(provisioningError)).toBe(true);
-      expect(isNonProviderRuntimeCoordinationError(new Error("wrapper", { cause: provisioningError }))).toBe(
-        true,
-      );
+      expect(
+        isNonProviderRuntimeCoordinationError(new Error("wrapper", { cause: provisioningError })),
+      ).toBe(true);
       expect(resolveFailoverReasonFromError(provisioningError)).toBeNull();
     });
 
@@ -1442,7 +1442,9 @@ describe("failover-error", () => {
     it("returns false for plain timeouts and provider errors", () => {
       const timeoutErr = Object.assign(new Error("operation timed out"), { name: "TimeoutError" });
       expect(isNonProviderRuntimeCoordinationError(timeoutErr)).toBe(false);
-      expect(isNonProviderRuntimeCoordinationError({ status: 429, message: "rate limit" })).toBe(false);
+      expect(isNonProviderRuntimeCoordinationError({ status: 429, message: "rate limit" })).toBe(
+        false,
+      );
       expect(
         isNonProviderRuntimeCoordinationError({
           status: 429,
