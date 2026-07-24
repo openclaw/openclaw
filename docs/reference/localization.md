@@ -69,6 +69,42 @@ revisions remain reproducible.
 8. **Delete the superseded authority.** Remove the duplicated hardcoded or
    parsed-prose path after the catalog-backed renderer is proven.
 
+### Use the bounded ICU profile
+
+JavaScript and TypeScript catalog messages use ICU MessageFormat through
+`intl-messageformat`. OpenClaw's initial profile intentionally accepts only:
+
+- plain text and named arguments such as `{path}`;
+- one top-level cardinal `plural` or `select` expression;
+- CLDR plural categories (`zero`, `one`, `two`, `few`, `many`, and `other`);
+  and
+- an `other` branch for every selector.
+
+Do not use ordinal or exact-number selectors, nested selectors, `#`, rich-text
+tags, or ICU number, date, and time formatting in this profile. Every selector
+branch must preserve the source placeholder set. Translated `select` messages
+must preserve the source case names; translated plurals may add or remove CLDR
+categories for the target language. Source and translated catalogs must not
+contain bidirectional control characters.
+
+Catalog validation rejects messages outside this profile. Runtime formatting
+still fails safely to the reviewed whole-message English fallback, but that
+fallback is emergency behavior, not a substitute for passing validation.
+
+### Resolve process locales once
+
+Resolve locale at the owning presentation edge and pass one immutable context
+through the render operation. Do not read environment variables separately in
+each message helper.
+
+For process-owned CLI and TUI prose, `OPENCLAW_LOCALE` is a strict explicit
+override. Without it, use the first nonblank POSIX variable in this order:
+`LC_ALL`, `LC_MESSAGES`, then `LANG`. `C` and `POSIX` select English. An invalid
+or surface-unsupported higher-priority value falls back to English instead of
+silently selecting a lower-priority variable. Browser and operating-system
+locale inference belongs only to platform fallback paths; it must not override
+an explicit or selected process value.
+
 ## Change an existing message
 
 Treat an English source edit as a new translation revision:
