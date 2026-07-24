@@ -1,5 +1,6 @@
 // Memory Host SDK module implements embeddings worker behavior.
 import { fork, type ChildProcess } from "node:child_process";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -175,6 +176,69 @@ function resolveWorkerExecArgv(): string[] {
   return args;
 }
 
+/** Lazy cache for the stable Node executable path, resolved once per process lifetime. */
+let stableWorkerExecPathPromise: Promise<string> | null = null;
+
+/** @internal reset for testing only — clears the module-scoped path cache. */
+export function __resetStableWorkerExecPathCache(): void {
+  stableWorkerExecPathPromise = null;
+}
+
+/**
+ * Resolve a stable Node executable path for worker fork() that survives
+ * Homebrew upgrades.  Homebrew removes old Cellar versions on upgrade, but
+ * process.execPath points at the real Cellar path — so after brew upgrade the
+ * recorded binary is deleted and fork() fails with ENOENT.
+ *
+ * On Homebrew: resolve {@code <prefix>/Cellar/<formula>/<version>/bin/node}
+ * to {@code <prefix>/opt/<formula>/bin/node} (stable opt symlink).
+ * On all other platforms: returns process.execPath unchanged.
+ *
+ * The resolved path is cached in module scope so fs.access is called at most
+ * once per process lifetime (process.execPath does not change while running).
+ */
+/** @internal exported for testing only */
+export async function resolveStableWorkerExecPath(): Promise<string> {
+  if (stableWorkerExecPathPromise) return stableWorkerExecPathPromise;
+
+  stableWorkerExecPathPromise = (async (): Promise<string> => {
+    const execPath = process.execPath;
+    const cellarMatch = execPath.match(
+      /^(.+?)[/\\]Cellar[/\\]([^/\\]+)[/\\][^/\\]+[/\\]bin[/\\]node$/,
+    );
+    if (!cellarMatch) return execPath;
+
+    const prefix = cellarMatch[1];
+    const formula = cellarMatch[2];
+
+    // Try the Homebrew opt symlink — works for both "node" and "node@22"
+    const optPath = path.join(prefix, "opt", formula, "bin", "node");
+    try {
+      await fs.access(optPath);
+      stableWorkerExecPathPromise = Promise.resolve(optPath);
+      return optPath;
+    } catch {
+      // opt path absent — fall through
+    }
+
+    // For default "node" formula, also try the direct bin symlink
+    if (formula === "node") {
+      const binPath = path.join(prefix, "bin", "node");
+      try {
+        await fs.access(binPath);
+        stableWorkerExecPathPromise = Promise.resolve(binPath);
+        return binPath;
+      } catch {
+        // bin path absent — fall through
+      }
+    }
+
+    return execPath;
+  })();
+
+  return stableWorkerExecPathPromise;
+}
+
 /** IPC client that serializes local embedding calls through one child process. */
 class LocalEmbeddingWorkerClient {
   private child: ChildProcess | null = null;
@@ -239,12 +303,23 @@ class LocalEmbeddingWorkerClient {
   }
 
   /** Ensure the child process exists and has lifecycle failure handlers installed. */
-  private ensureChild(): ChildProcess {
+  private async ensureChild(): Promise<ChildProcess> {
+    if (this.child?.connected) {
+      return this.child;
+    }
+
+    // Resolve a stable Node executable path so the worker fork survives
+    // Homebrew upgrades that delete old Cellar binaries from under the process.
+    const execPath = await resolveStableWorkerExecPath();
+
+    // Re-check after the async yield — a concurrent restart request may
+    // have already forked a new child while we resolved the executable path.
     if (this.child?.connected) {
       return this.child;
     }
 
     const child = fork(this.scriptPath, [], {
+      execPath,
       execArgv: resolveWorkerExecArgv(),
       serialization: "json",
       stdio: ["ignore", "ignore", "ignore", "ipc"],
@@ -279,7 +354,11 @@ class LocalEmbeddingWorkerClient {
     options?: EmbeddingProviderCallOptions,
   ): Promise<number[] | number[][] | undefined> {
     options?.signal?.throwIfAborted();
-    const child = this.ensureChild();
+    const child = await this.ensureChild();
+    // Recheck after the async yield — the caller's signal may have aborted
+    // while resolveStableWorkerExecPath was awaiting fs.access. Without this
+    // recheck, the request would be sent and never rejected on abort.
+    options?.signal?.throwIfAborted();
     const id = this.nextRequestId++;
     const payload = { ...request, id } as LocalEmbeddingWorkerRequest;
     return await new Promise((resolve, reject) => {

@@ -841,6 +841,36 @@ process.on("message", (message) => {
     }
   });
 
+  it("rejects embed query when AbortSignal fires before worker responds", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-embedding-worker-"));
+    const workerScript = path.join(tempDir, "worker.cjs");
+    await fs.writeFile(
+      workerScript,
+      `
+process.on("message", (message) => {
+  if (message.type === "initialize") {
+    process.send({ id: message.id, ok: true });
+    return;
+  }
+  // Never respond to embedQuery — the abort handler should cancel it.
+});
+`,
+      "utf8",
+    );
+
+    const provider = await createLocalEmbeddingWorkerProvider(
+      { config: {} as never, provider: "local", model: "", fallback: "none" },
+      { workerScriptPath: workerScript },
+    );
+
+    const ac = new AbortController();
+    const embedPromise = provider.embedQuery("never-respond", { signal: ac.signal });
+    ac.abort();
+
+    await expect(embedPromise).rejects.toThrow(/aborted|Local embedding request aborted/);
+    await provider.close?.();
+  });
+
   it("reports worker exits with structured failure codes", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-embedding-worker-"));
     const workerScript = path.join(tempDir, "worker.cjs");
