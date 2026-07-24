@@ -3037,19 +3037,20 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     });
     mockedResolveAuthProfileOrder.mockReturnValue(["openai:sub"]);
     mockedResolveProviderEntryApiKeyProfileReference.mockReturnValue({ kind: "literal" });
-    mockedGetApiKeyForModel.mockImplementation(async ({ profileId }: { profileId?: string } = {}) =>
-      profileId
-        ? {
-            apiKey: "profile-subscription-token",
-            profileId,
-            source: `profile:${profileId}`,
-            mode: "oauth" as const,
-          }
-        : {
-            apiKey: "direct-subscription-token",
-            source: "models.providers.openai",
-            mode: "oauth" as const,
-          },
+    mockedGetApiKeyForModel.mockImplementation(
+      async ({ profileId }: { profileId?: string } = {}) =>
+        profileId
+          ? {
+              apiKey: "profile-subscription-token",
+              profileId,
+              source: `profile:${profileId}`,
+              mode: "oauth" as const,
+            }
+          : {
+              apiKey: "direct-subscription-token",
+              source: "models.providers.openai",
+              mode: "oauth" as const,
+            },
     );
     const route = {
       provider: "openai",
