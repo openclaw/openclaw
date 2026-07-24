@@ -2,7 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { collectDependencyPinViolations } from "../../scripts/check-dependency-pins.mjs";
 import { cleanupTempDirs, makeTempRepoRoot } from "../helpers/temp-repo.js";
 
@@ -41,6 +41,19 @@ function writeJson(filePath: string, value: unknown) {
   writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+function writeGitFixture(binDir: string, body: string): void {
+  if (process.platform === "win32") {
+    const fixturePath = path.join(binDir, "git-fixture.mjs");
+    writeFileSync(fixturePath, body);
+    writeFileSync(
+      path.join(binDir, "git.cmd"),
+      `@echo off\r\n"${process.execPath}" "${fixturePath}" %*\r\n`,
+    );
+    return;
+  }
+  writeFileSync(path.join(binDir, "git"), `#!${process.execPath}\n${body}`, { mode: 0o755 });
+}
+
 function makeRepo() {
   const dir = makeTempRepoRoot(tempDirs, "openclaw-dependency-pins-");
   git(dir, ["init", "-q", "--initial-branch=main"]);
@@ -48,6 +61,7 @@ function makeRepo() {
 }
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   cleanupTempDirs(tempDirs);
 });
 
@@ -159,6 +173,21 @@ packageExtensions:
     rmSync(path.join(dir, "qa"), { recursive: true, force: true });
 
     expect(collectDependencyPinViolations(dir)).toEqual([]);
+  });
+
+  it("fails with an actionable timeout when git ls-files hangs", () => {
+    const tempDir = makeTempRepoRoot(tempDirs, "openclaw-dependency-pins-timeout-");
+    const binDir = path.join(tempDir, "bin");
+    mkdirSync(binDir);
+    writeGitFixture(
+      binDir,
+      'if (process.argv[2] === "ls-files") { setTimeout(() => {}, 10_000); }\nelse { process.exit(0); }\n',
+    );
+    vi.stubEnv("PATH", binDir);
+
+    expect(() => collectDependencyPinViolations(tempDir, { gitTimeoutMs: 500 })).toThrow(
+      "dependency pin guard: git ls-files -z -- *package.json timed out after 500ms.",
+    );
   });
 
   it("rejects floating workspace overrides and package extension dependencies", () => {
