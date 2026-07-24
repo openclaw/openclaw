@@ -141,6 +141,12 @@ export function createReplyRestartRecoveryClaimController(params: {
   beforeAgentReplyState?: "admitted" | "pending" | "continue";
   isRestartAbort: () => boolean;
   resolveDeliveryContext: (entry: SessionEntry | undefined) => DeliveryContext | undefined;
+  resolveLogicalTurnSettlement?: () =>
+    | {
+        outcome: "succeeded" | "failed" | "abandoned";
+        terminal: boolean;
+      }
+    | undefined;
   requesterAccountId?: unknown;
   requesterSenderId?: unknown;
   resolveUserTurnTarget?: (params: {
@@ -159,6 +165,21 @@ export function createReplyRestartRecoveryClaimController(params: {
   let recoveryRunId: string = randomUUID();
   let recoverySourceRunId: string | undefined;
   let tracked = false;
+  let logicalTurnRecorder: UserTurnTranscriptRecorder | undefined;
+
+  const claimLogicalTurn = (
+    recorder: UserTurnTranscriptRecorder | undefined,
+  ): "admitted" | "duplicate-source" => {
+    if (!recorder?.claimLogicalTurnAttempt) {
+      return "admitted";
+    }
+    const claim = recorder.claimLogicalTurnAttempt(recoveryRunId);
+    if (!claim.claimed) {
+      return "duplicate-source";
+    }
+    logicalTurnRecorder = recorder;
+    return "admitted";
+  };
 
   const persistAdmissionPatch = async (options: {
     entry: SessionEntry;
@@ -228,7 +249,7 @@ export function createReplyRestartRecoveryClaimController(params: {
   const admitUserTurn: ReplyRestartRecoveryClaimController["admitUserTurn"] = async (recorder) => {
     if (!params.sessionKey || !params.storePath) {
       await recorder?.persistApproved();
-      return "admitted";
+      return claimLogicalTurn(recorder);
     }
     const sessionId = params.getSessionId();
     const entry =
@@ -299,7 +320,7 @@ export function createReplyRestartRecoveryClaimController(params: {
       recoveryRunId = admissionRunId;
       recoverySourceRunId = normalizeOptionalString(adopted.restartRecoveryDeliverySourceRunId);
       tracked = true;
-      return "admitted";
+      return claimLogicalTurn(recorder);
     }
 
     const deliveryContext = params.resolveDeliveryContext(entry);
@@ -318,7 +339,7 @@ export function createReplyRestartRecoveryClaimController(params: {
       // Source-less scheduled/ambient runs may execute, but cannot own a
       // channel recovery claim that would be impossible to correlate after restart.
       await persistUserTurnOnly(recorder, sessionId);
-      return "admitted";
+      return claimLogicalTurn(recorder);
     }
     const updatedAt = Date.now();
     if (
@@ -375,7 +396,7 @@ export function createReplyRestartRecoveryClaimController(params: {
     params.setEntry(persisted);
     recoverySourceRunId = normalizeOptionalString(persisted.restartRecoveryDeliverySourceRunId);
     tracked = persisted.restartRecoveryDeliveryRunId === recoveryRunId;
-    return "admitted";
+    return claimLogicalTurn(recorder);
   };
 
   const checkpointBeforeAgentReply: ReplyRestartRecoveryClaimController["checkpointBeforeAgentReply"] =
@@ -457,86 +478,99 @@ export function createReplyRestartRecoveryClaimController(params: {
     };
 
   const clear = async (): Promise<void> => {
-    if (!tracked || !params.sessionKey || !params.storePath || params.isRestartAbort()) {
+    if (params.isRestartAbort()) {
+      logicalTurnRecorder?.finishLogicalTurnAttempt?.({
+        outcome: "abandoned",
+        terminal: false,
+      });
+      logicalTurnRecorder = undefined;
       return;
     }
-    const persisted = await updateSessionEntry(
-      { storePath: params.storePath, sessionKey: params.sessionKey },
-      (current) => {
-        if (
-          current.sessionId !== params.getSessionId() ||
-          current.restartRecoveryDeliveryRunId !== recoveryRunId
-        ) {
-          return null;
-        }
-        // Unknown provider outcome is terminal for this live run. Retire its source without
-        // replay so later distinct turns can proceed; a crash before this point still leaves
-        // the active receipt for startup recovery's user-facing fail-closed notice.
-        if (current.restartRecoveryDeliveryReceiptState === "terminal-pending") {
-          const endedAt = Date.now();
+    if (tracked && params.sessionKey && params.storePath) {
+      const persisted = await updateSessionEntry(
+        { storePath: params.storePath, sessionKey: params.sessionKey },
+        (current) => {
+          if (
+            current.sessionId !== params.getSessionId() ||
+            current.restartRecoveryDeliveryRunId !== recoveryRunId
+          ) {
+            return null;
+          }
+          // Unknown provider outcome is terminal for this live run. Retire its source without
+          // replay so later distinct turns can proceed; a crash before this point still leaves
+          // the active receipt for startup recovery's user-facing fail-closed notice.
+          if (current.restartRecoveryDeliveryReceiptState === "terminal-pending") {
+            const endedAt = Date.now();
+            return {
+              ...buildRestartRecoveryClaimCleanupPatch({
+                entry: current,
+                recordTerminalSource: true,
+                terminalSourceRunId: recoverySourceRunId,
+              }),
+              abortedLastRun: true,
+              endedAt,
+              pendingFinalDelivery: undefined,
+              pendingFinalDeliveryText: undefined,
+              pendingFinalDeliveryCreatedAt: undefined,
+              pendingFinalDeliveryLastAttemptAt: undefined,
+              pendingFinalDeliveryAttemptCount: undefined,
+              pendingFinalDeliveryLastError: undefined,
+              pendingFinalDeliveryContext: undefined,
+              pendingFinalDeliveryIntentId: undefined,
+              runtimeMs:
+                typeof current.startedAt === "number"
+                  ? Math.max(0, endedAt - current.startedAt)
+                  : undefined,
+              status: "failed" as const,
+              updatedAt: endedAt,
+            };
+          }
+          const preservesPendingFinal =
+            current.pendingFinalDelivery === true ||
+            normalizeOptionalString(current.pendingFinalDeliveryText) !== undefined;
+          const completesHandledSilent =
+            current.restartRecoveryBeforeAgentReplyState === "handled-silent" &&
+            !preservesPendingFinal;
+          const endedAt = completesHandledSilent ? Date.now() : undefined;
           return {
             ...buildRestartRecoveryClaimCleanupPatch({
               entry: current,
               recordTerminalSource: true,
               terminalSourceRunId: recoverySourceRunId,
             }),
-            abortedLastRun: true,
-            endedAt,
-            pendingFinalDelivery: undefined,
-            pendingFinalDeliveryText: undefined,
-            pendingFinalDeliveryCreatedAt: undefined,
-            pendingFinalDeliveryLastAttemptAt: undefined,
-            pendingFinalDeliveryAttemptCount: undefined,
-            pendingFinalDeliveryLastError: undefined,
-            pendingFinalDeliveryContext: undefined,
-            pendingFinalDeliveryIntentId: undefined,
-            runtimeMs:
-              typeof current.startedAt === "number"
-                ? Math.max(0, endedAt - current.startedAt)
-                : undefined,
-            status: "failed" as const,
-            updatedAt: endedAt,
+            // Transport settlement owns this final checkpoint. Keep enough provenance for a
+            // restart to enforce hook safety until that exact pending intent is resolved.
+            ...(preservesPendingFinal
+              ? {
+                  restartRecoveryBeforeAgentReplyState:
+                    current.restartRecoveryBeforeAgentReplyState,
+                  restartRecoverySourceIngress: current.restartRecoverySourceIngress,
+                  restartRecoveryForceSafeTools: current.restartRecoveryForceSafeTools,
+                }
+              : {}),
+            ...(endedAt !== undefined
+              ? {
+                  abortedLastRun: false,
+                  endedAt,
+                  runtimeMs:
+                    typeof current.startedAt === "number"
+                      ? Math.max(0, endedAt - current.startedAt)
+                      : undefined,
+                  status: "done" as const,
+                }
+              : {}),
+            updatedAt: endedAt ?? Date.now(),
           };
-        }
-        const preservesPendingFinal =
-          current.pendingFinalDelivery === true ||
-          normalizeOptionalString(current.pendingFinalDeliveryText) !== undefined;
-        const completesHandledSilent =
-          current.restartRecoveryBeforeAgentReplyState === "handled-silent" &&
-          !preservesPendingFinal;
-        const endedAt = completesHandledSilent ? Date.now() : undefined;
-        return {
-          ...buildRestartRecoveryClaimCleanupPatch({
-            entry: current,
-            recordTerminalSource: true,
-            terminalSourceRunId: recoverySourceRunId,
-          }),
-          // Transport settlement owns this final checkpoint. Keep enough provenance for a
-          // restart to enforce hook safety until that exact pending intent is resolved.
-          ...(preservesPendingFinal
-            ? {
-                restartRecoveryBeforeAgentReplyState: current.restartRecoveryBeforeAgentReplyState,
-                restartRecoverySourceIngress: current.restartRecoverySourceIngress,
-                restartRecoveryForceSafeTools: current.restartRecoveryForceSafeTools,
-              }
-            : {}),
-          ...(endedAt !== undefined
-            ? {
-                abortedLastRun: false,
-                endedAt,
-                runtimeMs:
-                  typeof current.startedAt === "number"
-                    ? Math.max(0, endedAt - current.startedAt)
-                    : undefined,
-                status: "done" as const,
-              }
-            : {}),
-          updatedAt: endedAt ?? Date.now(),
-        };
-      },
-    );
-    if (persisted) {
-      params.setEntry(persisted);
+        },
+      );
+      if (persisted) {
+        params.setEntry(persisted);
+      }
+    }
+    const logicalTurnSettlement = params.resolveLogicalTurnSettlement?.();
+    if (logicalTurnSettlement) {
+      logicalTurnRecorder?.finishLogicalTurnAttempt?.(logicalTurnSettlement);
+      logicalTurnRecorder = undefined;
     }
   };
 

@@ -1,4 +1,5 @@
 import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type {
   DeletedAgentSessionEntryPurgeParams,
@@ -102,7 +103,19 @@ export type TranscriptMessageAppendOptions<TMessage> = {
   eventId?: string;
   parentId?: string | null;
   prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
+  afterPersistInTransaction?: (
+    context: TranscriptMessagePersistTransactionContext<TMessage>,
+  ) => void;
   useRawWhenLinear?: boolean;
+};
+
+export type TranscriptMessagePersistTransactionContext<TMessage> = {
+  database: OpenClawAgentDatabase;
+  appended: boolean;
+  message: TMessage;
+  messageId: string;
+  sessionId: string;
+  sessionKey: string;
 };
 
 export type TranscriptMessageAppendResult<TMessage> = {

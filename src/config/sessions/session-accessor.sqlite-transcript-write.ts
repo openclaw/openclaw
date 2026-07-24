@@ -547,6 +547,17 @@ function appendSqliteTranscriptMessageInTransaction<TMessage>(
   resolved: ResolvedTranscriptScope,
   options: TranscriptMessageAppendOptions<TMessage>,
 ): TranscriptMessageAppendResult<TMessage> | undefined {
+  const acceptPersisted = (
+    result: TranscriptMessageAppendResult<TMessage>,
+  ): TranscriptMessageAppendResult<TMessage> => {
+    options.afterPersistInTransaction?.({
+      database,
+      ...result,
+      sessionId: resolved.sessionId,
+      sessionKey: resolved.sessionKey,
+    });
+    return result;
+  };
   const idempotencyKey = readMessageIdempotencyKey(options.message);
   if (idempotencyKey && options.idempotencyLookup !== "caller-checked") {
     const existing = readTranscriptMessageByScopedIdempotencyKey(
@@ -556,11 +567,11 @@ function appendSqliteTranscriptMessageInTransaction<TMessage>(
       options.idempotencyLookup,
     );
     if (existing) {
-      return {
+      return acceptPersisted({
         appended: false,
         message: existing.message as TMessage,
         messageId: existing.messageId,
-      };
+      });
     }
   }
 
@@ -599,31 +610,31 @@ function appendSqliteTranscriptMessageInTransaction<TMessage>(
       options.idempotencyLookup,
     );
     if (existing) {
-      return {
+      return acceptPersisted({
         appended: false,
         message: existing.message as TMessage,
         messageId: existing.messageId,
-      };
+      });
     }
   }
   if (!appended) {
     const existing = readTranscriptMessageByEventId(database, resolved, messageId);
     if (existing) {
-      return {
+      return acceptPersisted({
         appended: false,
         message: existing.message as TMessage,
         messageId: existing.messageId,
-      };
+      });
     }
   }
   if (!appended) {
     throw new Error(`SQLite transcript append did not insert message ${messageId}.`);
   }
-  return {
+  return acceptPersisted({
     appended: true,
     message: finalMessage,
     messageId,
-  };
+  });
 }
 
 function assertNonMessageTranscriptEvent(event: TranscriptEvent): void {

@@ -503,6 +503,19 @@ export function createReplyAgentRestartRecoveryController(
             opts,
           })
         : undefined,
+    resolveLogicalTurnSettlement: () => {
+      const result = replyOperation.result;
+      if (result?.kind === "aborted" && result.code === "aborted_for_restart") {
+        return undefined;
+      }
+      if (result?.kind === "failed") {
+        return { outcome: "failed", terminal: false };
+      }
+      if (result?.kind === "aborted") {
+        return { outcome: "abandoned", terminal: true };
+      }
+      return { outcome: "succeeded", terminal: true };
+    },
     requesterAccountId:
       followupRun.originatingAccountId ?? sessionCtx.AccountId ?? followupRun.run.agentAccountId,
     requesterSenderId: sessionCtx.SenderId,

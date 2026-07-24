@@ -38,8 +38,8 @@ import {
 } from "./openclaw-agent-db-session-provenance.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "./openclaw-agent-db.generated.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
+import { AGENT_SCHEMA_WITHOUT_LAZY_SURFACES_SQL } from "./openclaw-agent-logical-turn-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.generated.js";
-import { AGENT_SCHEMA_WITHOUT_LAZY_SURFACES_SQL } from "./openclaw-agent-session-sharing-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db.js";
 
 const OPENCLAW_AGENT_CANONICAL_UNIQUE_INDEXES = [

@@ -125,6 +125,40 @@ export interface HeartbeatOutcomes {
   wake_source: string | null;
 }
 
+export interface LogicalTurnAttempts {
+  acquired_at: number;
+  attempt_epoch: number;
+  finished_at: number | null;
+  lease_expires_at: number;
+  logical_turn_id: string;
+  owner_id: string;
+  state: string;
+}
+
+export interface LogicalTurnEffects {
+  attempt_epoch: number;
+  committed_at: number | null;
+  created_at: number;
+  effect_id: string;
+  effect_kind: string;
+  idempotency_key: string;
+  logical_turn_id: string;
+  state: string;
+}
+
+export interface LogicalTurns {
+  created_at: number;
+  current_attempt_epoch: Generated<number>;
+  ingress_key: string;
+  ingress_kind: string;
+  logical_turn_id: string;
+  session_id: string;
+  session_key: string;
+  state: string;
+  updated_at: number;
+  user_event_id: string;
+}
+
 export interface MemoryEmbeddingCache {
   dims: number | null;
   embedding: string;
@@ -354,6 +388,9 @@ export interface DB {
   conversation_deliveries: ConversationDeliveries;
   conversations: Conversations;
   heartbeat_outcomes: HeartbeatOutcomes;
+  logical_turn_attempts: LogicalTurnAttempts;
+  logical_turn_effects: LogicalTurnEffects;
+  logical_turns: LogicalTurns;
   memory_embedding_cache: MemoryEmbeddingCache;
   memory_index_chunks: MemoryIndexChunks;
   memory_index_meta: MemoryIndexMeta;

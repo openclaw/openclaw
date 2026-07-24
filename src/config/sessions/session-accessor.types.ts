@@ -1,4 +1,5 @@
 import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type {
   DeleteSessionEntryLifecycleResult,
@@ -298,8 +299,21 @@ export type TranscriptMessageAppendOptions<TMessage> = {
   parentId?: string | null;
   /** Optional finalizer that runs after duplicate detection but before persistence. */
   prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
+  /** Synchronous acceptance work committed atomically with this transcript message. */
+  afterPersistInTransaction?: (
+    context: TranscriptMessagePersistTransactionContext<TMessage>,
+  ) => void;
   /** Allow append without parent-link migration for large legacy linear transcripts. */
   useRawWhenLinear?: boolean;
+};
+
+export type TranscriptMessagePersistTransactionContext<TMessage> = {
+  database: OpenClawAgentDatabase;
+  appended: boolean;
+  message: TMessage;
+  messageId: string;
+  sessionId: string;
+  sessionKey: string;
 };
 
 export type TranscriptMessageAppendResult<TMessage> = {

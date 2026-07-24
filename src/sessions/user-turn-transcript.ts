@@ -421,6 +421,12 @@ async function persistUserTurnTranscript(
         {
           message,
           idempotencyLookup: "scan",
+          ...(params.logicalTurnAdmission
+            ? {
+                afterPersistInTransaction:
+                  params.logicalTurnAdmission.acceptInTranscriptTransaction,
+              }
+            : {}),
           prepareMessageAfterIdempotencyCheck: (candidate) =>
             preparePersistedUserTurnMessageForTranscriptWrite(
               candidate as PersistedUserTurnMessage,
@@ -548,6 +554,7 @@ export function createUserTurnTranscriptRecorder(
     expectedSessionState?: SessionTranscriptTurnPersistOptions["expectedSessionState"];
     sessionLifecyclePatch?: SessionTranscriptTurnPersistOptions["sessionLifecyclePatch"];
     retryIfUnpersisted?: boolean;
+    includeLogicalTurnAdmission: boolean;
   }): Promise<UserTurnTranscriptPersistResult | undefined> => {
     if (options.skipWhenBlocked && blocked) {
       return undefined;
@@ -585,6 +592,7 @@ export function createUserTurnTranscriptRecorder(
       const persistMessage = async (
         candidate: PersistedUserTurnMessage,
         candidateUpdateMode: UserTurnTranscriptUpdateMode,
+        includeLogicalTurnAdmission = true,
       ) =>
         await persistUserTurnTranscript({
           ...resolvedTarget,
@@ -602,6 +610,11 @@ export function createUserTurnTranscriptRecorder(
               }
             : {}),
           updateMode: candidateUpdateMode,
+          ...(params.logicalTurnAdmission &&
+          options.includeLogicalTurnAdmission &&
+          includeLogicalTurnAdmission
+            ? { logicalTurnAdmission: params.logicalTurnAdmission }
+            : {}),
           ...(params.beforeMessageWrite ? { beforeMessageWrite: params.beforeMessageWrite } : {}),
         });
       const lateMediaMessage =
@@ -622,7 +635,7 @@ export function createUserTurnTranscriptRecorder(
             notifyMessagePersisted(admittedResult.message);
           }
         }
-        const appendedMedia = await persistMessage(lateMediaMessage, "none");
+        const appendedMedia = await persistMessage(lateMediaMessage, "none", false);
         if (appendedMedia) {
           persisted = true;
           persistedResult = appendedMedia;
@@ -683,6 +696,12 @@ export function createUserTurnTranscriptRecorder(
     isBlocked: () => blocked,
     hasRuntimePersistencePending: () => runtimePersistencePromise !== undefined,
     waitForRuntimePersistence,
+    ...(params.logicalTurnAdmission
+      ? {
+          claimLogicalTurnAttempt: params.logicalTurnAdmission.claimAttempt,
+          finishLogicalTurnAttempt: params.logicalTurnAdmission.finishAttempt,
+        }
+      : {}),
     persistApproved: async (options) =>
       await persistPrepared({
         waitForRuntime: false,
@@ -694,6 +713,7 @@ export function createUserTurnTranscriptRecorder(
         expectedSessionState: options?.expectedSessionState,
         sessionLifecyclePatch: options?.sessionLifecyclePatch,
         retryIfUnpersisted: options?.retryIfUnpersisted,
+        includeLogicalTurnAdmission: true,
       }),
     persistBlocked: async (blockedMessage, options) => {
       blocked = true;
@@ -704,6 +724,7 @@ export function createUserTurnTranscriptRecorder(
         target: options?.target,
         updateMode: options?.updateMode,
         cwd: options?.cwd,
+        includeLogicalTurnAdmission: false,
       });
     },
     persistFallback: async (options) =>
@@ -713,6 +734,7 @@ export function createUserTurnTranscriptRecorder(
         target: options?.target,
         updateMode: options?.updateMode,
         cwd: options?.cwd,
+        includeLogicalTurnAdmission: true,
       }),
   };
 }

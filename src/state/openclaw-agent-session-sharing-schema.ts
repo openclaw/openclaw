@@ -18,7 +18,8 @@ function splitSessionSharingSchema(sql: string): { sharing: string; withoutShari
 
 const sessionSharingSchema = splitSessionSharingSchema(OPENCLAW_AGENT_SCHEMA_WITHOUT_BOARD_SQL);
 
-export const AGENT_SCHEMA_WITHOUT_LAZY_SURFACES_SQL = sessionSharingSchema.withoutSharing;
+export const OPENCLAW_AGENT_SCHEMA_WITHOUT_SESSION_SHARING_SQL =
+  sessionSharingSchema.withoutSharing;
 
 /** Adds the phase-2 collaboration table on first use without a schema-version bump. */
 export function ensureOpenClawAgentSessionSharingSchemaInTransaction(db: DatabaseSync): void {

@@ -1,4 +1,5 @@
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
+import { createLogicalTurnAdmission } from "../../channels/turn/logical-turn-admission.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
@@ -84,6 +85,11 @@ export function createGatewayChatUserTurnController(params: {
       : {}),
     errorContext: "gateway chat user turn transcript",
     beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+    logicalTurnAdmission: createLogicalTurnAdmission({
+      agentId: params.agentId,
+      ingressKind: "chat",
+      ingressKey: baseInput.idempotencyKey,
+    }),
     onPersistenceError: (error) =>
       params.warn(`gateway user transcript persistence failed: ${formatForLog(error)}`),
   });

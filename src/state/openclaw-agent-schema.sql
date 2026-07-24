@@ -343,6 +343,57 @@ CREATE INDEX IF NOT EXISTS idx_agent_transcript_event_parent
 CREATE INDEX IF NOT EXISTS idx_agent_transcript_event_sequence
   ON transcript_event_identities(session_id, event_type, seq DESC);
 
+CREATE TABLE IF NOT EXISTS logical_turns (
+  logical_turn_id TEXT NOT NULL PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  session_key TEXT NOT NULL,
+  ingress_kind TEXT NOT NULL CHECK (ingress_kind IN ('chat', 'telegram')),
+  ingress_key TEXT NOT NULL,
+  user_event_id TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('accepted', 'running', 'terminal')),
+  current_attempt_epoch INTEGER NOT NULL DEFAULT 0 CHECK (current_attempt_epoch >= 0),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE (ingress_kind, ingress_key),
+  FOREIGN KEY (session_id, user_event_id)
+    REFERENCES transcript_event_identities(session_id, event_id) ON DELETE RESTRICT
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_agent_logical_turn_state
+  ON logical_turns(state, updated_at, logical_turn_id);
+
+CREATE TABLE IF NOT EXISTS logical_turn_attempts (
+  logical_turn_id TEXT NOT NULL,
+  attempt_epoch INTEGER NOT NULL CHECK (attempt_epoch > 0),
+  owner_id TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('active', 'succeeded', 'failed', 'abandoned')),
+  lease_expires_at INTEGER NOT NULL,
+  acquired_at INTEGER NOT NULL,
+  finished_at INTEGER,
+  PRIMARY KEY (logical_turn_id, attempt_epoch),
+  FOREIGN KEY (logical_turn_id) REFERENCES logical_turns(logical_turn_id) ON DELETE CASCADE
+) STRICT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_logical_turn_active_attempt
+  ON logical_turn_attempts(logical_turn_id)
+  WHERE state = 'active';
+
+CREATE INDEX IF NOT EXISTS idx_agent_logical_turn_attempt_lease
+  ON logical_turn_attempts(state, lease_expires_at, logical_turn_id);
+
+CREATE TABLE IF NOT EXISTS logical_turn_effects (
+  effect_id TEXT NOT NULL PRIMARY KEY,
+  logical_turn_id TEXT NOT NULL,
+  attempt_epoch INTEGER NOT NULL,
+  effect_kind TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL UNIQUE,
+  state TEXT NOT NULL CHECK (state IN ('planned', 'committed')),
+  created_at INTEGER NOT NULL,
+  committed_at INTEGER,
+  FOREIGN KEY (logical_turn_id, attempt_epoch)
+    REFERENCES logical_turn_attempts(logical_turn_id, attempt_epoch) ON DELETE CASCADE
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS cache_entries (
   scope TEXT NOT NULL,
   key TEXT NOT NULL,

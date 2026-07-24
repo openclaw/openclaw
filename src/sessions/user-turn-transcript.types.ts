@@ -5,6 +5,7 @@ import type {
   SessionTranscriptTurnLifecyclePatch,
 } from "../config/sessions/session-transcript-turn-lifecycle.types.js";
 import type { MediaFactInput } from "../media/media-facts.js";
+import type { OpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import type { InputProvenance } from "./input-provenance.js";
 
 type UserTurnSessionEntry = {
@@ -23,6 +24,26 @@ export type PersistedUserTurnMediaInput = Pick<
 };
 
 export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }>;
+
+export type UserTurnLogicalAdmission = {
+  acceptInTranscriptTransaction: (context: {
+    database: OpenClawAgentDatabase;
+    appended: boolean;
+    message: PersistedUserTurnMessage;
+    messageId: string;
+    sessionId: string;
+    sessionKey: string;
+  }) => void;
+  claimAttempt: (
+    ownerId: string,
+  ) =>
+    | { claimed: true; attemptEpoch: number; leaseExpiresAt: number }
+    | { claimed: false; reason: "active-attempt" | "missing-turn" | "terminal-turn" };
+  finishAttempt: (params: {
+    outcome: "succeeded" | "failed" | "abandoned";
+    terminal: boolean;
+  }) => boolean;
+};
 
 export type UserTurnInput = {
   text?: string | null;
@@ -117,6 +138,7 @@ export type PersistUserTurnTranscriptParams = {
   beforeMessageWrite?: UserTurnBeforeMessageWrite;
   expectedSessionState?: SessionTranscriptTurnExpectedState;
   sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
+  logicalTurnAdmission?: UserTurnLogicalAdmission;
 };
 
 type UserTurnInputResolver = () => UserTurnInput | undefined | Promise<UserTurnInput | undefined>;
@@ -133,6 +155,7 @@ export type CreateUserTurnTranscriptRecorderParams = {
   onMessagePersisted?: (message: PersistedUserTurnMessage) => void | Promise<void>;
   expectedSessionState?: SessionTranscriptTurnExpectedState;
   sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
+  logicalTurnAdmission?: UserTurnLogicalAdmission;
 };
 
 export type UserTurnTranscriptRecorder = {
@@ -147,6 +170,12 @@ export type UserTurnTranscriptRecorder = {
   isBlocked: () => boolean;
   hasRuntimePersistencePending: () => boolean;
   waitForRuntimePersistence: () => Promise<void>;
+  claimLogicalTurnAttempt?: (
+    ownerId: string,
+  ) => ReturnType<UserTurnLogicalAdmission["claimAttempt"]>;
+  finishLogicalTurnAttempt?: (
+    params: Parameters<UserTurnLogicalAdmission["finishAttempt"]>[0],
+  ) => boolean;
   persistApproved: (params?: {
     target?: UserTurnTranscriptTargetResolver;
     updateMode?: UserTurnTranscriptUpdateMode;

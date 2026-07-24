@@ -103,6 +103,7 @@ export type {
   TranscriptEvent,
   TranscriptMessageAppendOptions,
   TranscriptMessageAppendResult,
+  TranscriptMessagePersistTransactionContext,
   TranscriptUpdatePayload,
 } from "./session-accessor.types.js";
 export { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";

@@ -22,6 +22,7 @@ import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawn
 import type { SilentReplyPromptMode } from "../../agents/system-prompt.types.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { createLogicalTurnAdmission } from "../../channels/turn/logical-turn-admission.js";
 import { updateAmbientTranscriptWatermark } from "../../config/sessions/ambient-transcript-watermark.js";
 import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
@@ -1627,6 +1628,15 @@ export async function runPreparedReply(
           }),
           errorContext: "reply user turn transcript",
           beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+          ...(messageProvider === "telegram" && inboundEventKind === "user_request" && sourceTurnId
+            ? {
+                logicalTurnAdmission: createLogicalTurnAdmission({
+                  agentId,
+                  ingressKind: "telegram",
+                  ingressKey: sourceTurnId,
+                }),
+              }
+            : {}),
           onMessagePersisted: isRoomEvent
             ? async () =>
                 await updateRoomEventAmbientTranscriptWatermark({
