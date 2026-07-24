@@ -160,6 +160,18 @@ type SourceRule = {
   requiresContext?: RegExp;
   /** If set, secondary context must be within this many lines of the primary match. */
   requiresContextWindowLines?: number;
+  /**
+   * When set, evaluate this rule against a source with string-literal *contents*
+   * blanked out (see `maskStringLiteralContents`), so it stops matching tokens that
+   * only appear inside string data — e.g. `fetch(` in an `it()` description tripping
+   * `env-harvesting`. Only safe for rules whose primary and context tokens never
+   * legitimately live inside a string: `env-harvesting` matches `process.env` (dotted)
+   * and `fetch(`/`.post(` calls, which are always code. Do NOT set it for a rule whose
+   * token can be a bracket-property string (`potential-exfiltration`'s bare `readFile`
+   * in `fs["readFile"]`) or a string payload (`obfuscated-code` hex/base64,
+   * `crypto-mining` URLs) — masking would hide real matches. See #82469.
+   */
+  ignoreStringLiterals?: boolean;
 };
 
 const LINE_RULES: LineRule[] = [
@@ -200,6 +212,9 @@ const SOURCE_RULES: SourceRule[] = [
     message: "File read combined with network send — possible data exfiltration",
     pattern: /readFileSync|readFile/,
     requiresContext: NETWORK_SEND_CONTEXT_PATTERN,
+    // Intentionally NOT ignoreStringLiterals: its primary token is a bare identifier
+    // that legitimately appears as a bracket-property string in real reads such as
+    // `fs["readFile"]`, so masking string contents would hide genuine exfiltration.
   },
   {
     ruleId: "obfuscated-code",
@@ -221,6 +236,7 @@ const SOURCE_RULES: SourceRule[] = [
     pattern: /process\.env/,
     requiresContext: NETWORK_SEND_CONTEXT_PATTERN,
     requiresContextWindowLines: 8,
+    ignoreStringLiterals: true,
   },
 ];
 
@@ -351,6 +367,214 @@ function stripCommentsForHeuristics(source: string): string {
   return stripped;
 }
 
+// Keywords after which a `/` begins a regex literal rather than a division, so the
+// masker recognizes e.g. `return /["']/` as a regex and does not treat its quotes as
+// a string start.
+const REGEX_PRECEDING_KEYWORDS = new Set([
+  "return",
+  "typeof",
+  "instanceof",
+  "in",
+  "of",
+  "new",
+  "delete",
+  "void",
+  "case",
+  "do",
+  "else",
+  "yield",
+  "await",
+  "throw",
+]);
+
+// True when a `/` in code position starts a regex literal (expression position)
+// rather than a division. Decided from the last meaningful char already emitted:
+// operators/open-brackets/start-of-input allow a regex; a value end (identifier,
+// `)`, `]`, `.`, a closed string) means division, unless the trailing word is a
+// regex-preceding keyword. A heuristic, but enough to keep quotes inside regex
+// literals from being mistaken for string starts (which would blank real code).
+function regexLiteralAllowedAfter(code: string): boolean {
+  let j = code.length - 1;
+  while (j >= 0 && /\s/.test(code[j] ?? "")) {
+    j--;
+  }
+  if (j < 0) {
+    return true;
+  }
+  const c = code[j] ?? "";
+  if ("([{,;:=!&|?+-*/%^~<>".includes(c)) {
+    return true;
+  }
+  if (/[A-Za-z0-9_$]/.test(c)) {
+    let k = j;
+    while (k >= 0 && /[A-Za-z0-9_$]/.test(code[k] ?? "")) {
+      k--;
+    }
+    return REGEX_PRECEDING_KEYWORDS.has(code.slice(k + 1, j + 1));
+  }
+  return false;
+}
+
+// Scans a regex literal starting at `startIndex` (the opening `/`), returning its full
+// text and the index of its last char, so callers can emit it verbatim as code.
+// Handles `\` escapes and `[...]` classes (where `/` does not close); a newline ends an
+// unterminated literal defensively.
+function scanRegexLiteral(source: string, startIndex: number): { text: string; endIndex: number } {
+  let text = source[startIndex] ?? "/";
+  let inClass = false;
+  let escaped = false;
+  let i = startIndex + 1;
+  for (; i < source.length; i++) {
+    const ch = source[i] ?? "";
+    text += ch;
+    if (escaped) {
+      escaped = false;
+    } else if (ch === "\\") {
+      escaped = true;
+    } else if (ch === "[") {
+      inClass = true;
+    } else if (ch === "]") {
+      inClass = false;
+    } else if (ch === "\n" || (ch === "/" && !inClass)) {
+      break;
+    }
+  }
+  return { text, endIndex: Math.min(i, source.length - 1) };
+}
+
+/**
+ * Blanks the *contents* of string literals in already comment-free source, so
+ * rules that hunt for code constructs (a real `fetch(` call, `process.env` access)
+ * stop matching those same tokens when they only appear inside string data — e.g.
+ * `fetch(` in an `it()` description. Quote delimiters, newlines, and length are
+ * preserved so reported line/offset stay aligned with the raw source.
+ *
+ * Backtick templates keep their `${...}` interpolation bodies (they hold real code
+ * that must still be scanned); only the static template text is blanked. Nested
+ * strings inside an interpolation are tracked so a brace inside `obj["}"]` cannot
+ * miscount the interpolation boundary. Regex literals in code position are consumed
+ * as code so quote chars inside them (e.g. `/["']/`) are not mistaken for a string
+ * start. Input must already be comment-free (run `stripCommentsForHeuristics` first)
+ * so `/` is always a division or regex literal, never a comment. See #82469.
+ */
+function maskStringLiteralContents(source: string): string {
+  let out = "";
+  let quote: "'" | '"' | "`" | null = null;
+  let escaped = false;
+  // >0 while inside a `${...}` interpolation; counts brace nesting to find its close.
+  let exprDepth = 0;
+  // A string opened *inside* an interpolation, so its braces do not move exprDepth.
+  let exprQuote: "'" | '"' | "`" | null = null;
+  let exprEscaped = false;
+
+  for (let i = 0; i < source.length; i++) {
+    const ch = source[i] ?? "";
+    const next = source[i + 1] ?? "";
+
+    if (quote === null) {
+      // A regex literal in code position: consume it as code so quote chars inside
+      // it (e.g. `/["']/`) are not mistaken for a string start, which would blank
+      // real code that follows and weaken env/exfil detection.
+      if (ch === "/" && regexLiteralAllowedAfter(out)) {
+        const regexLiteral = scanRegexLiteral(source, i);
+        out += regexLiteral.text;
+        i = regexLiteral.endIndex;
+        continue;
+      }
+      if (ch === "'" || ch === '"' || ch === "`") {
+        quote = ch;
+      }
+      out += ch;
+      continue;
+    }
+
+    // Single/double-quoted string: blank every content char, keep the closing delimiter.
+    if (quote !== "`") {
+      if (escaped) {
+        out += ch === "\n" ? "\n" : " ";
+        escaped = false;
+      } else if (ch === "\\") {
+        out += " ";
+        escaped = true;
+      } else if (ch === quote) {
+        out += ch;
+        quote = null;
+      } else {
+        out += ch === "\n" ? "\n" : " ";
+      }
+      continue;
+    }
+
+    // Inside a `${...}` interpolation of a backtick template: preserve as code.
+    if (exprDepth > 0) {
+      // Consume regex literals here too, so a `}` inside `/}/ ` does not prematurely
+      // end the preserved interpolation and blank real code that follows.
+      if (exprQuote === null && ch === "/" && regexLiteralAllowedAfter(out)) {
+        const regexLiteral = scanRegexLiteral(source, i);
+        out += regexLiteral.text;
+        i = regexLiteral.endIndex;
+        continue;
+      }
+      // A single/double-quoted string inside the interpolation: blank its contents
+      // like a top-level string, so a `fetch(` buried in it is not scanned as context.
+      // (A nested backtick template is preserved as code; fully masking its own nested
+      // `${...}` would require a recursive lexer — left as documented scope.)
+      if (exprQuote === "'" || exprQuote === '"') {
+        if (exprEscaped) {
+          out += ch === "\n" ? "\n" : " ";
+          exprEscaped = false;
+        } else if (ch === "\\") {
+          out += " ";
+          exprEscaped = true;
+        } else if (ch === exprQuote) {
+          out += ch;
+          exprQuote = null;
+        } else {
+          out += ch === "\n" ? "\n" : " ";
+        }
+        continue;
+      }
+      out += ch;
+      if (exprQuote === "`") {
+        if (exprEscaped) {
+          exprEscaped = false;
+        } else if (ch === "\\") {
+          exprEscaped = true;
+        } else if (ch === exprQuote) {
+          exprQuote = null;
+        }
+      } else if (ch === "'" || ch === '"' || ch === "`") {
+        exprQuote = ch;
+      } else if (ch === "{") {
+        exprDepth++;
+      } else if (ch === "}") {
+        exprDepth--;
+      }
+      continue;
+    }
+
+    // Static backtick text: blank it, but enter interpolations and honor the close.
+    if (escaped) {
+      out += ch === "\n" ? "\n" : " ";
+      escaped = false;
+    } else if (ch === "\\") {
+      out += " ";
+      escaped = true;
+    } else if (ch === "$" && next === "{") {
+      out += "${";
+      i++;
+      exprDepth = 1;
+    } else if (ch === "`") {
+      out += ch;
+      quote = null;
+    } else {
+      out += ch === "\n" ? "\n" : " ";
+    }
+  }
+
+  return out;
+}
+
 function findSourceRuleMatch(params: {
   rule: SourceRule;
   source: string;
@@ -392,6 +616,10 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
   const lines = source.split("\n");
   const heuristicSource = stripCommentsForHeuristics(source);
   const heuristicLines = heuristicSource.split("\n");
+  // Same source with string-literal contents blanked, for rules that hunt for code
+  // constructs and should ignore tokens that only appear inside string data (#82469).
+  const stringMaskedSource = maskStringLiteralContents(heuristicSource);
+  const stringMaskedLines = stringMaskedSource.split("\n");
   const matchedLineRules = new Set<string>();
 
   // --- Line rules ---
@@ -448,8 +676,8 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
 
     const match = findSourceRuleMatch({
       rule,
-      source: heuristicSource,
-      lines: heuristicLines,
+      source: rule.ignoreStringLiterals ? stringMaskedSource : heuristicSource,
+      lines: rule.ignoreStringLiterals ? stringMaskedLines : heuristicLines,
     });
     if (!match) {
       continue;
