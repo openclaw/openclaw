@@ -303,6 +303,7 @@ export function mockClientRuntimeMethods() {
     getInstanceId: () => "test-client-1",
     getRuntimeIdentity: getMockRuntimeIdentity,
     getServerVersion: getMockServerVersion,
+    getInstanceId: () => "codex-test-client-instance",
   };
 }
 

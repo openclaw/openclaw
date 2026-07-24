@@ -41,6 +41,7 @@ import { normalizeCodexTrajectoryError, recordCodexTrajectoryCompletion } from "
 import { codexTranscriptMirrorRuntime } from "./transcript-mirror.js";
 import {
   createCodexUsageLimitPromptError,
+  formatCodexTurnStartUsageLimitError,
   isCodexUsageLimitPromptError,
   markCodexAuthProfileBlockedFromRateLimits,
   refreshCodexUsageLimitPromptError,
@@ -202,12 +203,29 @@ export async function finalizeCodexAttempt(
       threadId: resourceState.thread.threadId,
     });
   }
-  const refreshedUsageLimitPromptError = await refreshCodexUsageLimitPromptError({
-    client: resourceState.client,
-    message: finalPromptErrorMessage,
-    timeoutMs: appServer.requestTimeoutMs,
-    signal: runAbortController.signal,
-  });
+  // A mid-turn usage-limit error followed only by silence means the app-server
+  // stalled waiting for the limit to reset; surface the structured usage-limit
+  // failure instead of the generic idle-timeout message so blocking and
+  // failover classification engage.
+  const midTurnUsageLimitErrorNotification =
+    effectiveTurnCompletionIdleTimedOut && !clientClosedPromptErrorForFinal
+      ? state.latestUsageLimitErrorNotification
+      : undefined;
+  const refreshedUsageLimitPromptError = midTurnUsageLimitErrorNotification
+    ? await formatCodexTurnStartUsageLimitError({
+        client: resourceState.client,
+        error: undefined,
+        errorNotification: midTurnUsageLimitErrorNotification,
+        rateLimitsRevisionBeforeTurnStart: state.rateLimitsRevisionBeforeLastTurnStart,
+        timeoutMs: appServer.requestTimeoutMs,
+        signal: runAbortController.signal,
+      })
+    : await refreshCodexUsageLimitPromptError({
+        client: resourceState.client,
+        message: finalPromptErrorMessage,
+        timeoutMs: appServer.requestTimeoutMs,
+        signal: runAbortController.signal,
+      });
   if (refreshedUsageLimitPromptError) {
     await markCodexAuthProfileBlockedFromRateLimits({
       params,
@@ -238,9 +256,15 @@ export async function finalizeCodexAttempt(
   const replayBlockedReason = codexAppServerFailureKind
     ? resolveCodexAppServerReplayBlockedReason(result)
     : undefined;
+  const midTurnUsageLimitPromptErrorProduced = Boolean(
+    midTurnUsageLimitErrorNotification && refreshedUsageLimitPromptError,
+  );
   const promptTimeoutOutcome = buildCodexAppServerPromptTimeoutOutcome({
     result,
-    turnCompletionIdleTimedOut: effectiveTurnCompletionIdleTimedOut,
+    // The usage-limit prompt error is the user-facing explanation; the generic
+    // "stopped before confirming the turn" notice would be misleading here.
+    turnCompletionIdleTimedOut:
+      effectiveTurnCompletionIdleTimedOut && !midTurnUsageLimitPromptErrorProduced,
     turnWatchTimeoutKind: state.turnWatchTimeoutKind,
   });
   const failureDiagnostics =

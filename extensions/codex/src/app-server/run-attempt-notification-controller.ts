@@ -7,6 +7,7 @@ import {
   describeNotificationActivity,
   isAssistantCompletionReleaseNotification,
   isRawFunctionToolOutputCompletionNotification,
+  isUsageLimitErrorNotification,
   readCodexNotificationItem,
   readRawResponseToolCallId,
 } from "./attempt-notifications.js";
@@ -87,6 +88,25 @@ export function createCodexAttemptNotificationController(
       onReportExecutionNotification: reportExecutionNotification,
     });
     state.turnCrossedToolHandoff = notificationState.turnCrossedToolHandoff;
+    if (notificationState.isCurrentTurnNotification) {
+      if (notification.method === "error") {
+        // A later non-usage-limit error makes the stall cause ambiguous, so
+        // fall back to the generic timeout attribution.
+        state.latestUsageLimitErrorNotification = isUsageLimitErrorNotification(notification.params)
+          ? notification
+          : undefined;
+      } else if (state.latestUsageLimitErrorNotification !== undefined) {
+        // Any later current-turn activity means the retry recovered; a
+        // subsequent stall is no longer attributable to the usage limit, and
+        // the usage-limit pin should not keep a completion bound on the
+        // recovered turn. Terminal-error pins never reach here: their capture
+        // field is unset, so this only unwinds the usage-limit pin.
+        state.latestUsageLimitErrorNotification = undefined;
+        if (turnWatches.isCompletionIdleWatchPinnedByTerminalError()) {
+          turnWatches.armCompletionIdleWatch();
+        }
+      }
+    }
     if (notificationState.isCurrentTurnNotification && notification.method === "item/completed") {
       const item = readCodexNotificationItem(notification.params);
       if (item?.type === "userMessage" && typeof item.clientId === "string") {

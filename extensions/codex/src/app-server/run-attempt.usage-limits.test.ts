@@ -404,4 +404,254 @@ describe("runCodexAppServerAttempt usage limits", () => {
       false,
     );
   });
+
+  it("fails fast with a usage-limit error when a mid-turn retryable usage-limit error stalls the turn", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: { appServer: { turnCompletionIdleTimeoutMs: 40 } },
+      turnAssistantCompletionIdleTimeoutMs: 5_000,
+      turnTerminalIdleTimeoutMs: 60_000,
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "error",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        willRetry: true,
+        error: {
+          message: "You've reached your usage limit.",
+          codexErrorInfo: "usageLimitExceeded",
+        },
+      },
+    });
+
+    const result = await run;
+
+    expect(result.timedOut).toBe(true);
+    const promptError = expectUsageLimitPromptError(result.promptError);
+    expect(promptError.message).toContain("You've reached your Codex subscription usage limit.");
+    expect(result.promptTimeoutOutcome).toBeUndefined();
+  });
+
+  it("blocks the auth profile when a mid-turn usage-limit stall has trusted in-turn limits", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const resetsAt = Math.ceil(Date.now() / 1000) + 120;
+    const authProfileId = "openai:work";
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.agentDir = path.join(tempDir, "mid-turn-usage-limit-agent");
+    params.authProfileId = authProfileId;
+    params.authProfileStore = {
+      version: 1,
+      profiles: {
+        [authProfileId]: {
+          type: "oauth",
+          provider: "openai",
+          access: "placeholder",
+          refresh: "placeholder",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+    saveAuthProfileStore(params.authProfileStore, params.agentDir);
+
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: { appServer: { turnCompletionIdleTimeoutMs: 40 } },
+      turnAssistantCompletionIdleTimeoutMs: 5_000,
+      turnTerminalIdleTimeoutMs: 60_000,
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.notify(rateLimitsUpdated(resetsAt));
+    await harness.notify({
+      method: "error",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        willRetry: true,
+        error: {
+          message: "You've reached your usage limit.",
+          codexErrorInfo: "usageLimitExceeded",
+        },
+      },
+    });
+
+    const result = await run;
+
+    const promptError = expectUsageLimitPromptError(result.promptError);
+    expect(promptError.message).toContain("Next reset in");
+    expect(params.authProfileStore.usageStats?.[authProfileId]?.blockedUntil).toBe(resetsAt * 1000);
+  });
+
+  it("keeps waiting through mid-turn retryable errors that are not usage limits", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.timeoutMs = 250;
+
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: { appServer: { turnCompletionIdleTimeoutMs: 150 } },
+      turnAssistantCompletionIdleTimeoutMs: 5_000,
+      turnTerminalIdleTimeoutMs: 60_000,
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "error",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        willRetry: true,
+        error: { message: "stream disconnected; retrying" },
+      },
+    });
+
+    const result = await run;
+
+    // The completion idle watch stays disarmed for plain retryable errors, so
+    // the attempt runs to its overall progress cap instead of failing at the
+    // smaller completion-idle window a pinned watch would enforce.
+    expect(result.timedOut).toBe(true);
+    expect(result.codexAppServerFailure?.turnWatchTimeoutKind).toBe("progress");
+    expect((result.promptError as Error & { status?: number })?.status).toBeUndefined();
+  });
+
+  it("completes normally when the app-server retry recovers after a usage-limit error", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: { appServer: { turnCompletionIdleTimeoutMs: 1_000 } },
+      turnAssistantCompletionIdleTimeoutMs: 5_000,
+      turnTerminalIdleTimeoutMs: 60_000,
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "error",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        willRetry: true,
+        error: {
+          message: "You've reached your usage limit.",
+          codexErrorInfo: "usageLimitExceeded",
+        },
+      },
+    });
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "completed" },
+      },
+    });
+
+    const result = await run;
+
+    expect(result.timedOut).toBe(false);
+    expect(result.promptError ?? undefined).toBeUndefined();
+  });
+
+  it("does not blame the usage limit for a stall after the retry recovered", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.timeoutMs = 500;
+
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: { appServer: { turnCompletionIdleTimeoutMs: 40 } },
+      postToolRawAssistantCompletionIdleTimeoutMs: 50,
+      turnAssistantCompletionIdleTimeoutMs: 5_000,
+      turnTerminalIdleTimeoutMs: 60_000,
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "error",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        willRetry: true,
+        error: {
+          message: "You've reached your usage limit.",
+          codexErrorInfo: "usageLimitExceeded",
+        },
+      },
+    });
+    await harness.notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "cmd-1",
+          type: "commandExecution",
+          command: "touch done.txt",
+          status: "completed",
+        },
+      },
+    });
+
+    const result = await run;
+
+    expect(result.timedOut).toBe(true);
+    expect(result.promptError).toBe(
+      "codex app-server turn idle timed out waiting for turn/completed",
+    );
+  });
+
+  it("releases the usage-limit pin once retry activity resumes", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.timeoutMs = 400;
+
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: { appServer: { turnCompletionIdleTimeoutMs: 40 } },
+      turnAssistantCompletionIdleTimeoutMs: 5_000,
+      turnTerminalIdleTimeoutMs: 60_000,
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "error",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        willRetry: true,
+        error: {
+          message: "You've reached your usage limit.",
+          codexErrorInfo: "usageLimitExceeded",
+        },
+      },
+    });
+    for (const delta of ["Recovered", " and writing"]) {
+      await harness.notify({
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "msg-recovered-1",
+          delta,
+        },
+      });
+    }
+
+    const result = await run;
+
+    // The first recovery notification releases the usage-limit pin, so the
+    // next delta disarms the completion watch as on a normal streaming turn
+    // and the stall falls to the overall progress cap, not the pinned window.
+    expect(result.timedOut).toBe(true);
+    expect(result.codexAppServerFailure?.turnWatchTimeoutKind).toBe("progress");
+    expect((result.promptError as Error & { status?: number })?.status).toBeUndefined();
+  });
 });
