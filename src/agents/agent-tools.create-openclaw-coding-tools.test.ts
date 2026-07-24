@@ -35,7 +35,11 @@ import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandb
 import { stubTool } from "./test-helpers/fast-tool-stubs.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { buildEmptyExplicitToolAllowlistError } from "./tool-allowlist-guard.js";
-import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolName } from "./tool-policy.js";
+import {
+  DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
+  normalizeToolName,
+  replaceWithEffectiveToolAllowlist,
+} from "./tool-policy.js";
 import { replaceWithEffectiveCronCreatorToolAllowlist } from "./tools/cron-tool.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
@@ -1166,6 +1170,30 @@ describe("createOpenClawCodingTools", () => {
     expectListIncludes(inheritedAllow, ["read", "sessions_spawn"]);
     expect(inheritedAllow?.includes("exec")).toBe(false);
     expect(inheritedAllow?.includes("process")).toBe(false);
+  });
+
+  it("lets embedded attempts refresh a caller-owned spawned-session tool surface", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+    const inheritedToolAllowlistRef: string[] = [];
+
+    createOpenClawCodingTools({
+      config: { tools: { allow: ["read", "sessions_spawn"] } },
+      inheritedToolAllowlistRef,
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    const inheritedAllow = latestCreateOpenClawToolsOptions().inheritedToolAllowlist;
+    expect(inheritedAllow).toBe(inheritedToolAllowlistRef);
+    expect(inheritedAllow).toEqual(["read", "sessions_spawn"]);
+
+    replaceWithEffectiveToolAllowlist(inheritedToolAllowlistRef, [
+      stubTool("read"),
+      stubTool("sessions_spawn"),
+      stubTool("probe__search"),
+    ]);
+
+    expect(inheritedAllow).toEqual(["read", "sessions_spawn", "probe__search"]);
   });
 
   it("passes group-restricted tool surface to cron-created agent turns", () => {

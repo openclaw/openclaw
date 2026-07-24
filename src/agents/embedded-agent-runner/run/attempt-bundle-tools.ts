@@ -6,6 +6,7 @@ import {
 } from "../../agent-bundle-mcp-tools.js";
 import { filterLocalModelLeanTools } from "../../local-model-lean.js";
 import { normalizeAgentRuntimeTools } from "../../runtime-plan/tools.js";
+import { replaceWithEffectiveToolAllowlist } from "../../tool-policy.js";
 import { filterRuntimeCompatibleTools } from "../../tool-schema-projection.js";
 import { logRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
 import { replaceWithEffectiveCronCreatorToolAllowlist } from "../../tools/cron-tool.js";
@@ -36,12 +37,13 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
   const {
     cronCreatorToolAllowlist,
     effectiveToolsAllow,
+    inheritedToolAllowlist,
     localModelLeanPreserveToolNames,
     runtimeCapabilityProfile,
     toolsEnabled,
     toolsRaw,
   } = params.preparedToolBase;
-  const tools = normalizeAgentRuntimeTools({
+  const normalizedCoreTools = normalizeAgentRuntimeTools({
     runtimePlan: params.attempt.runtimePlan,
     tools: toolsEnabled ? toolsRaw : [],
     provider: params.attempt.provider,
@@ -99,7 +101,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     ? await materializeBundleMcpToolsForRun({
         runtime: bundleMcpSessionRuntime,
         reservedToolNames: [
-          ...tools.map((tool) => tool.name),
+          ...normalizedCoreTools.map((tool) => tool.name),
           ...(clientTools?.map((tool) => tool.function.name) ?? []),
         ],
       })
@@ -119,7 +121,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
           cfg: params.attempt.config,
           manifestRegistry: bundleManifestRegistry,
           reservedToolNames: [
-            ...tools.map((tool) => tool.name),
+            ...normalizedCoreTools.map((tool) => tool.name),
             ...(clientTools?.map((tool) => tool.function.name) ?? []),
             ...(bundleMcpRuntime?.tools.map((tool) => tool.name) ?? []),
           ],
@@ -184,8 +186,9 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
               }),
           })
         : filteredBundledTools;
-    const projectedTools = filterLocalModelLeanTools({
-      tools: [...tools, ...normalizedBundledTools],
+    const combinedModelVisibleTools = [...normalizedCoreTools, ...normalizedBundledTools];
+    const projectedModelVisibleTools = filterLocalModelLeanTools({
+      tools: combinedModelVisibleTools,
       config: params.attempt.config,
       agentId: params.sessionAgentId,
       preserveToolNames: localModelLeanPreserveToolNames,
@@ -194,14 +197,19 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       // Cron is built before bundled tools; refresh its cap against the complete surface.
       replaceWithEffectiveCronCreatorToolAllowlist(
         cronCreatorToolAllowlist,
-        projectedTools,
+        projectedModelVisibleTools,
         (tool) => getPluginToolMeta(tool),
       );
     }
-    const schemaProjection = filterRuntimeCompatibleTools(projectedTools);
+    const schemaProjection = filterRuntimeCompatibleTools(projectedModelVisibleTools);
+    if (inheritedToolAllowlist) {
+      // This projection contains both normalized core tools and late MCP/LSP tools.
+      // Refreshing from it also drops anything removed by lean or schema filtering.
+      replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, schemaProjection.tools);
+    }
     logRuntimeToolSchemaQuarantine({
       diagnostics: schemaProjection.diagnostics,
-      tools: projectedTools,
+      tools: projectedModelVisibleTools,
       runId: params.attempt.runId,
       agentId: params.sessionAgentId,
       sessionKey: params.attempt.sessionKey,
@@ -211,7 +219,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       bundleLspRuntime,
       bundleMcpRuntime,
       clientTools,
-      tools,
+      tools: normalizedCoreTools,
       uncompactedEffectiveTools: [...schemaProjection.tools],
     };
   } catch (error) {
