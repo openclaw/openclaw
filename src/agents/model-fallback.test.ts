@@ -200,7 +200,7 @@ const authRuntimeMock = vi.hoisted(() => {
   };
 });
 
-vi.mock("./model-fallback-auth.runtime.js", () => authRuntimeMock.runtime);
+vi.mock("./auth-profiles.runtime.js", () => authRuntimeMock.runtime);
 
 const makeCfg = makeModelFallbackCfg;
 let authTempRoot = "";
@@ -662,6 +662,90 @@ describe("runWithModelFallback", () => {
         error: failure,
       }),
     );
+  });
+
+  it("skips same-provider candidates after a TLS certificate failure", async () => {
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new FailoverError("Hostname/IP does not match certificate's altnames", {
+          provider: "openai",
+          model: "gpt-5.5",
+          reason: "tls_certificate",
+          code: "ERR_TLS_CERT_ALTNAME_INVALID",
+        }),
+      )
+      .mockResolvedValueOnce("anthropic success");
+
+    const result = await runWithModelFallback({
+      cfg: makeDiagnosticFallbackConfig(["openai/gpt-5.5-mini", "anthropic/claude-opus-4-6"]),
+      provider: "openai",
+      model: "gpt-5.5",
+      run,
+    });
+
+    expect(result.result).toBe("anthropic success");
+    expect(run.mock.calls).toEqual([
+      ["openai", "gpt-5.5", { isFinalFallbackAttempt: false }],
+      ["anthropic", "claude-opus-4-6", { isFinalFallbackAttempt: true }],
+    ]);
+    expect(result.attempts).toHaveLength(1);
+    expect(result.attempts[0]?.reason).toBe("tls_certificate");
+  });
+
+  it("keeps TLS-failed providers excluded across interleaved fallbacks", async () => {
+    const diagnostics = captureModelFailoverDiagnostics();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new FailoverError("Hostname/IP does not match certificate's altnames", {
+          provider: "openai",
+          model: "gpt-5.5",
+          reason: "tls_certificate",
+          code: "ERR_TLS_CERT_ALTNAME_INVALID",
+        }),
+      )
+      .mockRejectedValueOnce(
+        new FailoverError("overloaded", {
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+          reason: "overloaded",
+        }),
+      )
+      .mockResolvedValueOnce("must not run");
+    let thrown: unknown;
+
+    try {
+      await runWithModelFallback({
+        cfg: makeDiagnosticFallbackConfig(["anthropic/claude-opus-4-6", "openai/gpt-5.5-mini"]),
+        provider: "openai",
+        model: "gpt-5.5",
+        sessionId: "session:tls-provider-exclusion",
+        sessionKey: "agent:test:tls-provider-exclusion",
+        lane: "main",
+        run,
+      });
+    } catch (error) {
+      thrown = error;
+    } finally {
+      diagnostics.stop();
+    }
+
+    expect(isFallbackSummaryError(thrown)).toBe(true);
+    expect(run.mock.calls).toEqual([
+      ["openai", "gpt-5.5", { isFinalFallbackAttempt: false }],
+      ["anthropic", "claude-opus-4-6", { isFinalFallbackAttempt: true }],
+    ]);
+    expect(diagnostics.events).toHaveLength(1);
+    expect(diagnostics.events).toMatchObject([
+      {
+        fromProvider: "openai",
+        fromModel: "gpt-5.5",
+        toProvider: "anthropic",
+        toModel: "claude-opus-4-6",
+        reason: "tls_certificate",
+      },
+    ]);
   });
 
   it("does not replay CLI max-turn failures on configured fallback models", async () => {

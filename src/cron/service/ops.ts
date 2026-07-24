@@ -23,6 +23,11 @@ import {
 import { resolveCronListSnapshotRevision } from "../list-snapshot-revision.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
+import {
+  deleteCronJobScratch,
+  readCronJobScratchState,
+  writeCronJobScratch,
+} from "../scratch-store.js";
 import { createCronStreamSourceIdentity, cronStreamScheduleKey } from "../stream-schedule.js";
 import { normalizeCronTaskRunJobId } from "../task-run-history.js";
 import type {
@@ -79,6 +84,7 @@ import type {
   CronAddOptions,
   CronEvent,
   CronServiceState,
+  CronUpdateOptions,
   CronUpdatePrecondition,
   CronWakeMode,
 } from "./state.js";
@@ -358,6 +364,39 @@ export async function readJob(state: CronServiceState, id: string) {
   return await locked(state, async () => {
     await ensureLoadedForRead(state);
     return state.store?.jobs.find((job) => job.id === id);
+  });
+}
+
+/** Reads one job's private scratch state after proving the job exists in this store. */
+export async function readScratch(state: CronServiceState, id: string) {
+  return await locked(state, async () => {
+    await ensureLoaded(state, { skipRecompute: true });
+    findJobOrThrow(state, id);
+    // Scratch intentionally opens the process-global state DB, matching every
+    // other cron store write in this service (see saveCronJobsStore); threading
+    // injected state-db options through CronServiceState is a service-wide
+    // refactor that must move jobs and scratch together, not scratch alone.
+    return readCronJobScratchState(state.deps.storePath, id);
+  });
+}
+
+/** Writes or clears one job's private scratch under the cron mutation lock. */
+export async function writeScratch(
+  state: CronServiceState,
+  id: string,
+  params: { content: string | null; expectedRevision?: number; sourceSha256?: string },
+) {
+  return await locked(state, async () => {
+    await ensureLoaded(state, { skipRecompute: true });
+    findJobOrThrow(state, id);
+    return writeCronJobScratch({
+      storePath: state.deps.storePath,
+      jobId: id,
+      content: params.content,
+      expectedRevision: params.expectedRevision,
+      sourceSha256: params.sourceSha256,
+      nowMs: state.deps.nowMs(),
+    });
   });
 }
 
@@ -718,6 +757,7 @@ function declarativeFields(job: CronJob, includeEnabled: boolean) {
     pacing: job.pacing,
     trigger: job.trigger,
     payload: job.payload,
+    scheduledToolPolicy: job.scheduledToolPolicy,
     delivery: job.delivery,
     displayName: job.displayName,
     ...(includeEnabled ? { enabled: job.enabled } : {}),
@@ -728,6 +768,12 @@ function declarativeFields(job: CronJob, includeEnabled: boolean) {
 export async function add(state: CronServiceState, input: CronJobCreate, opts?: CronAddOptions) {
   return await locked(state, async () => {
     warnIfDisabled(state, "add");
+    // Heartbeat monitors are gateway-converged system jobs; without this
+    // boundary any internal caller could upsert the declaration key and
+    // hijack the monitor despite the transport schemas excluding the kind.
+    if (input.payload?.kind === "heartbeat" && opts?.systemOwned !== true) {
+      throw new Error("heartbeat payloads are system-owned; jobs cannot be created with them");
+    }
     await ensureLoaded(state, { skipRecompute: true });
     const agentId = resolveEffectiveJobAgentId(input, resolveCurrentDefaultAgentId(state));
     if (state.deps.isAgentAvailable?.(agentId) === false) {
@@ -753,6 +799,13 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
     const existing = matches[0];
 
     if (existing) {
+      // A declarative upsert may not repurpose an existing heartbeat monitor
+      // with a different payload; only the gateway's own convergence touches it.
+      if (existing.payload.kind === "heartbeat" && opts?.systemOwned !== true) {
+        throw new Error(
+          "heartbeat monitor jobs are system-owned; edit agents.*.heartbeat config instead",
+        );
+      }
       const now = state.deps.nowMs();
       const nextJob = structuredClone(existing);
       applyDeclarativeJobSpec(nextJob, normalizedInput, {
@@ -760,6 +813,7 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
         enabledExplicit: opts?.enabledExplicit === true,
         nowMs: now,
         cronConfig: state.deps.cronConfig,
+        scheduledToolPolicy: opts?.scheduledToolPolicy,
       });
       const includeEnabled = opts?.enabledExplicit === true;
       if (
@@ -786,7 +840,9 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
       throw new Error(`cron job already exists: ${normalizedId}`);
     }
     const snapshot = snapshotStoreForRollback(state);
-    const job = createJob(state, normalizedInput);
+    const job = createJob(state, normalizedInput, {
+      scheduledToolPolicy: opts?.scheduledToolPolicy,
+    });
     state.store?.jobs.push(job);
 
     // Auto-disable notifications describe durable state, so publish them only
@@ -829,12 +885,27 @@ async function updateLoadedJob(params: {
   id: string;
   patch: CronJobPatch;
   precondition?: CronUpdatePrecondition;
+  opts?: CronUpdateOptions;
 }) {
-  const { state, id, patch, precondition } = params;
+  const { state, id, patch, precondition, opts } = params;
   warnIfDisabled(state, "update");
+  // Mirrors the add-time boundary: no caller may patch a job into (or edit)
+  // the system-owned heartbeat payload; the gateway converges via add only.
+  if (patch.payload?.kind === "heartbeat") {
+    throw new Error("heartbeat payloads are system-owned; jobs cannot be patched to them");
+  }
   await ensureLoaded(state, { skipRecompute: true });
   const snapshot = snapshotStoreForRollback(state);
   const job = findJobOrThrow(state, id);
+  // Existing monitors are config-driven: any patch (disable, reschedule,
+  // repurpose) would silently diverge from agents.*.heartbeat until the next
+  // reconcile, so updates are rejected outright. Removal stays allowed — a
+  // removed monitor self-heals at the next convergence.
+  if (job.payload.kind === "heartbeat") {
+    throw new Error(
+      "heartbeat monitor jobs are system-owned; edit agents.*.heartbeat config instead",
+    );
+  }
   const now = state.deps.nowMs();
   await precondition?.(structuredClone(job), now);
   const nextJob = structuredClone(job);
@@ -842,6 +913,7 @@ async function updateLoadedJob(params: {
     defaultAgentId: state.deps.defaultAgentId,
     scheduleValidationNowMs: now,
     cronConfig: state.deps.cronConfig,
+    scheduledToolPolicy: opts?.scheduledToolPolicy,
   });
   if (patch.agentId !== undefined) {
     const agentId = resolveEffectiveJobAgentId(nextJob, resolveCurrentDefaultAgentId(state));
@@ -865,8 +937,13 @@ async function updateLoadedJob(params: {
 }
 
 /** Updates a cron job patch in-place, recomputes affected schedule state, and persists it. */
-export async function update(state: CronServiceState, id: string, patch: CronJobPatch) {
-  return await locked(state, async () => await updateLoadedJob({ state, id, patch }));
+export async function update(
+  state: CronServiceState,
+  id: string,
+  patch: CronJobPatch,
+  opts?: CronUpdateOptions,
+) {
+  return await locked(state, async () => await updateLoadedJob({ state, id, patch, opts }));
 }
 
 /** Updates a cron job only after a store-locked caller precondition passes. */
@@ -875,12 +952,20 @@ export async function updateWithPrecondition(
   id: string,
   patch: CronJobPatch,
   precondition: CronUpdatePrecondition,
+  opts?: CronUpdateOptions,
 ) {
-  return await locked(state, async () => await updateLoadedJob({ state, id, patch, precondition }));
+  return await locked(
+    state,
+    async () => await updateLoadedJob({ state, id, patch, precondition, opts }),
+  );
 }
 
 /** Removes a cron job by id and re-arms the timer when the in-memory store changes. */
-export async function remove(state: CronServiceState, id: string) {
+export async function remove(
+  state: CronServiceState,
+  id: string,
+  opts?: { systemOwned?: boolean },
+) {
   return await locked(state, async () => {
     warnIfDisabled(state, "remove");
     await ensureLoaded(state, { skipRecompute: true });
@@ -890,6 +975,14 @@ export async function remove(state: CronServiceState, id: string) {
     }
     const snapshot = snapshotStoreForRollback(state);
     const removedJob = state.store.jobs.find((j) => j.id === id);
+    // Config is the monitor's source of truth: ad-hoc deletion would disable
+    // heartbeats until an unrelated reload, so only gateway reconciliation
+    // (stale-monitor cleanup) may remove one.
+    if (removedJob?.payload.kind === "heartbeat" && opts?.systemOwned !== true) {
+      throw new Error(
+        "heartbeat monitor jobs are system-owned; edit agents.*.heartbeat config instead",
+      );
+    }
     state.store.jobs = state.store.jobs.filter((j) => j.id !== id);
     const removed = (state.store.jobs.length ?? 0) !== before;
 
@@ -902,6 +995,15 @@ export async function remove(state: CronServiceState, id: string) {
       postPersistAutoDisableNotifications,
       suppressScheduledJobId: id,
     });
+    if (removed) {
+      try {
+        deleteCronJobScratch(state.deps.storePath, id);
+      } catch (error) {
+        // The job deletion is already durable. Scratch cleanup is idempotent and
+        // must not turn a committed removal into a retryable API failure.
+        state.deps.log.warn({ jobId: id, err: String(error) }, "cron: scratch cleanup failed");
+      }
+    }
     armTimer(state);
     if (removed) {
       emit(state, { jobId: id, action: "removed", job: removedJob });
@@ -962,6 +1064,16 @@ export async function removeAgentJobsTransactional<T>(
         );
       }
       throw error;
+    }
+    for (const job of removedJobs) {
+      try {
+        deleteCronJobScratch(state.deps.storePath, job.id);
+      } catch (error) {
+        state.deps.log.warn(
+          { jobId: job.id, err: String(error) },
+          "cron: agent scratch cleanup failed",
+        );
+      }
     }
     armTimer(state);
     for (const job of removedJobs) {

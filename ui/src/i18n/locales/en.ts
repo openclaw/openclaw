@@ -566,6 +566,9 @@ export const en: TranslationMap = {
     worktreeName: "Worktree name",
     worktreeNamePlaceholder: "auto",
     worktreeNameInvalid: "Worktree names use lowercase letters, digits, and dashes.",
+    incognito: "Incognito",
+    incognitoDescription: "Keep this thread only until the Gateway restarts",
+    startAsDraft: "Start as draft",
     messagePlaceholder: "What should this thread work on?",
     readingAttachment: "Reading attachment",
     start: "Start thread",
@@ -587,7 +590,8 @@ export const en: TranslationMap = {
     limit: "Limit",
     filters: "Filters",
     createdBy: "Created by {name}",
-    filterByCreator: "Filter by creator",
+    archivedBy: "Archived by {name}",
+    people: "People",
     allCreators: "All people",
     filterControls: "Thread filters",
     sourceFilters: "Thread source filters",
@@ -646,6 +650,8 @@ export const en: TranslationMap = {
     openWorkboardCard: "Open Workboard card",
     dashboardAvailable: "Dashboard available",
     approvalNeeded: "Approval needed",
+    queuedMessage: "{count} message queued to send",
+    queuedMessages: "{count} messages queued to send",
     noSessions: "No threads found.",
     noActiveSessions: "No active threads.",
     noArchivedSessions: "No archived sessions.",
@@ -713,6 +719,7 @@ export const en: TranslationMap = {
     unread: "Unread",
     worktreeSession: "Worktree thread",
     automationAttached: "Automation attached",
+    incognito: "Incognito thread",
     cloudWorkerPlacement: "Cloud worker: {state}",
     cloudWorkerPlacementConflict: "Cloud worker: {state} · 1 workspace conflict",
     cloudWorkerPlacementConflicts: "Cloud worker: {state} · {count} workspace conflicts",
@@ -1359,6 +1366,11 @@ export const en: TranslationMap = {
     chatPrefs: {
       title: "Chat",
       hint: "Browser-local chat preferences.",
+      messageWidth: "Message width",
+      messageWidthHint:
+        "Optional CSS width for the centered transcript, such as 960px, 82%, or min(1280px, 82%).",
+      messageWidthInvalid:
+        "Enter a CSS width such as 960px, 82%, min(1280px, 82%), or calc(100% - 2rem).",
     },
     sidebarPrefs: {
       title: "Sidebar",
@@ -1644,6 +1656,7 @@ export const en: TranslationMap = {
     blockedAgentFilter: "blocked by agent filter",
   },
   nav: {
+    account: "Account",
     back: "Back",
     forward: "Forward",
     chat: "Chat",
@@ -2356,6 +2369,8 @@ export const en: TranslationMap = {
     toolRuns: "{count} runs",
     identity: {
       title: "Identity",
+      menuLabel: "Identity menu",
+      menuButtonLabel: "Identity and app menu for {name}",
       description: "Your profile on this gateway.",
       loading: "Loading your identity…",
       profileUnavailable: "Your identity profile could not be loaded.",
@@ -2974,6 +2989,7 @@ export const en: TranslationMap = {
     eventStale: "Stale thread",
   },
   connection: {
+    queuedCount: "{count} queued",
     reconnecting: "Reconnecting…",
     retryNow: "Retry now",
     access: {
@@ -3638,6 +3654,15 @@ export const en: TranslationMap = {
   },
   login: {
     subtitle: "Gateway Dashboard",
+    deviceAuthMigration: {
+      banner: "This browser still needs one-time device approval after the update.",
+      action: "Secure this browser",
+      secureContextRequired:
+        "This legacy browser remains available temporarily. Reopen it over HTTPS or localhost to secure it with device identity.",
+      pendingUnavailable: "The browser pairing request is not available yet. Retry in a moment.",
+      loadFailed: "Could not load this browser's pairing request: {error}",
+      approvalFailed: "Could not secure this browser: {error}",
+    },
     passwordPlaceholder: "optional",
     showToken: "Show token",
     hideToken: "Hide token",
@@ -3736,6 +3761,9 @@ export const en: TranslationMap = {
   },
   chat: {
     disconnected: "Disconnected from gateway.",
+    sendErrors: {
+      activeLeafChanged: "The thread switched branches — review and resend.",
+    },
     waitingForApproval: "Waiting for approval…",
     startupStatus: {
       preparingWorkspace: "Preparing workspace…",
@@ -3745,6 +3773,36 @@ export const en: TranslationMap = {
     },
     outputTokens: "{count} output tokens",
     archivedSessionDisabled: "This session is archived. Unarchive it to continue the conversation.",
+    sessionSharing: {
+      menu: "Thread sharing",
+      current: "Thread visibility: {visibility}",
+      visibility: "Visibility",
+      shared: "Shared",
+      readOnly: "Read-only",
+      suggest: "Suggest",
+      draft: "Draft",
+      publishDraft: "Publish draft",
+      members: "Members",
+      selected: "Member",
+      noPeople: "No paired people found.",
+      readOnlyNotice: "Only the thread owner and members can act in this thread.",
+    },
+    sessionSuggestions: {
+      suggest: "Suggest",
+      suggestMessage: "Suggest message",
+      attachmentsUnsupported: "Remove attachments before submitting a text suggestion.",
+      sendNow: "Send {author}'s suggestion now",
+      queue: "Queue {author}'s suggestion",
+      edit: "Edit {author}'s suggestion",
+      dismiss: "Dismiss {author}'s suggestion",
+      typing: "{name} is typing…",
+      typingMany: "{names} are typing…",
+      state: {
+        pending: "Pending",
+        accepted: "Accepted",
+        dismissed: "Dismissed",
+      },
+    },
     loadOlder: "Load older",
     sessionHeader: {
       renameTooltip: "Rename thread",
@@ -3758,6 +3816,7 @@ export const en: TranslationMap = {
       copyPath: "Copy path",
       copyBranch: "Copy branch name",
       copied: "Copied",
+      incognito: "Incognito thread",
       branches: "Thread branches",
       branchSwitchUnavailable: "Branch switch is unavailable while the agent is working.",
       branchSwitchRequiresAdmin: "Branch switching requires operator admin access.",
@@ -4047,6 +4106,7 @@ export const en: TranslationMap = {
       openInCanvas: "Open in canvas",
       reply: "Reply",
       replyToMessage: "Reply to message",
+      replyingTo: "Replying to {name}",
       rewind: "Rewind",
       rewindConfirm: "Rewind to before this message?",
       rewindToHere: "Rewind to here",
@@ -4144,6 +4204,7 @@ export const en: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       offlineHint: "Offline — messages will be queued and sent when the connection returns.",
+      offlineQueuedHint: "Offline — {count} queued; messages send when the connection returns.",
       preparingModel: "Preparing model...",
       responding: "{name} is responding...",
       sendingMessage: "Sending message...",

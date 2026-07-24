@@ -58,7 +58,7 @@ describe("Web Awesome control ownership", () => {
     expect(await matchingFiles(/<resizable-divider\b/u)).toEqual([
       "app/app-host.ts",
       "pages/chat/chat-page.ts",
-      "pages/chat/chat-view.ts",
+      "pages/chat/components/chat-resizable-divider.ts",
     ]);
   });
 });

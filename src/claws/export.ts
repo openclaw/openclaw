@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { closeSync } from "node:fs";
 import { mkdir, realpath, rm } from "node:fs/promises";
 import { dirname, relative, resolve, sep } from "node:path";
+import { stringify as stringifyYaml } from "yaml";
 import { listAgentEntries, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { openLocalAgentAvatarFile } from "../agents/identity-avatar-file.js";
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
@@ -28,8 +29,7 @@ export const CLAW_EXPORT_RESULT_SCHEMA_VERSION = "openclaw.clawExportResult.v1" 
 const MAX_EXPORT_FILE_BYTES = 1024 * 1024;
 
 type AgentConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
-type ClawAgent = ClawManifest["agent"];
-type ClawBootstrapFileName = keyof ClawManifest["workspace"]["bootstrapFiles"];
+type ClawBootstrapFileName = (typeof CLAW_BOOTSTRAP_FILE_NAMES)[number];
 
 type ClawExportResult = {
   schemaVersion: typeof CLAW_EXPORT_RESULT_SCHEMA_VERSION;
@@ -50,7 +50,7 @@ export class ClawExportError extends Error {
   }
 }
 
-function portableAgent(agent: AgentConfig, avatar: string | undefined): ClawAgent {
+function portableAgent(agent: AgentConfig, avatar: string | undefined): ClawManifest["agent"] {
   const identity = {
     ...(agent.identity?.name ? { name: agent.identity.name } : {}),
     ...(agent.identity?.theme ? { theme: agent.identity.theme } : {}),
@@ -135,7 +135,6 @@ function comparePortableText(left: string, right: string): number {
 function isClawBootstrapFileName(value: string): value is ClawBootstrapFileName {
   return (CLAW_BOOTSTRAP_FILE_NAMES as readonly string[]).includes(value);
 }
-
 function readPortableAvatar(params: {
   config: OpenClawConfig;
   agent: AgentConfig;
@@ -395,18 +394,21 @@ export async function exportClawAgent(
       name: `openclaw-claw-${record.install.agentId}`,
       version: derivativePackageVersion(manifest, contents),
       type: "module",
-      openclaw: { claw: "openclaw.claw.json" },
+      openclaw: { claw: "CLAW.md" },
     };
     await output.write("package.json", Buffer.from(`${JSON.stringify(packageJson, null, 2)}\n`), {
       overwrite: false,
     });
     filesWritten.push("package.json");
     await output.write(
-      "openclaw.claw.json",
-      Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`),
+      "CLAW.md",
+      Buffer.from(
+        `---\n${stringifyYaml(manifest)}---\n\n# ${manifest.agent.name ?? manifest.agent.id}\n\n` +
+          "This Claw creates one configured OpenClaw agent and workspace.\n",
+      ),
       { overwrite: false },
     );
-    filesWritten.push("openclaw.claw.json");
+    filesWritten.push("CLAW.md");
   } catch (error) {
     await rm(target, { recursive: true, force: true }).catch(() => undefined);
     throw new ClawExportError(
