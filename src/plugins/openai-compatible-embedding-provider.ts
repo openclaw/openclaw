@@ -143,6 +143,47 @@ function normalizeHeaderName(name: string): string {
   return name.trim().toLowerCase();
 }
 
+function isAzureOpenAICompatibleHost(hostname: string): boolean {
+  return (
+    hostname.endsWith(".openai.azure.com") ||
+    hostname.endsWith(".services.ai.azure.com") ||
+    hostname.endsWith(".cognitiveservices.azure.com")
+  );
+}
+
+function buildEmbeddingRequestTarget(client: OpenAICompatibleEmbeddingClient): {
+  url: string;
+  headers: Record<string, string>;
+} {
+  const fallback = {
+    url: `${client.baseUrl}/embeddings`,
+    headers: client.headers,
+  };
+  let url: URL;
+  try {
+    url = new URL(client.baseUrl);
+  } catch {
+    return fallback;
+  }
+  if (!isAzureOpenAICompatibleHost(url.hostname.toLowerCase())) {
+    return fallback;
+  }
+
+  url.pathname = `${url.pathname.replace(/\/+$/u, "")}/embeddings`;
+  const headers = { ...client.headers };
+  const apiVersionHeader = Object.keys(headers).find(
+    (name) => normalizeHeaderName(name) === "api-version",
+  );
+  if (apiVersionHeader) {
+    const apiVersion = headers[apiVersionHeader]?.trim();
+    delete headers[apiVersionHeader];
+    if (apiVersion && !url.searchParams.has("api-version")) {
+      url.searchParams.set("api-version", apiVersion);
+    }
+  }
+  return { url: url.toString(), headers };
+}
+
 function buildHeaders(params: {
   apiKey: string | undefined;
   extra: Record<string, unknown> | undefined;
@@ -330,6 +371,7 @@ async function postEmbeddingRequest(params: {
   inputType?: EmbeddingProviderCallOptions["inputType"];
 }): Promise<number[][]> {
   const { client, input } = params;
+  const requestTarget = buildEmbeddingRequestTarget(client);
   const inputType = resolveRequestInputType(client, params.inputType);
   const body = {
     model: client.model,
@@ -343,10 +385,10 @@ async function postEmbeddingRequest(params: {
       : undefined;
   try {
     const { response, release } = await fetchWithSsrFGuard({
-      url: `${client.baseUrl}/embeddings`,
+      url: requestTarget.url,
       init: {
         method: "POST",
-        headers: client.headers,
+        headers: requestTarget.headers,
         body: JSON.stringify(body),
       },
       signal: params.signal,
