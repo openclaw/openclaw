@@ -24,16 +24,19 @@ const {
   assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
   resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => {
     const headers = new Headers(params.defaultHeaders as HeadersInit | undefined);
-    // Stub mirroring the xAI attribution policy headers (real wire is locked in provider-attribution.test.ts).
     if (params.provider === "xai") {
       const version = process.env.OPENCLAW_VERSION?.trim() || "unknown";
       headers.set("User-Agent", `openclaw/${version}`);
       headers.set("originator", "openclaw");
       headers.set("version", version);
     }
+    const request = params.request as { allowPrivateNetwork?: boolean } | undefined;
     return {
       baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://api.x.ai/v1",
-      allowPrivateNetwork: false,
+      allowPrivateNetwork:
+        (params.allowPrivateNetwork as boolean | undefined) ??
+        request?.allowPrivateNetwork ??
+        false,
       headers,
       dispatcherPolicy: undefined,
     };
@@ -79,13 +82,6 @@ vi.mock("openclaw/plugin-sdk/string-coerce-runtime", () => ({
   readStringValue: (v: unknown) => (typeof v === "string" ? v.trim() : undefined),
 }));
 
-function jsonResponse(payload: unknown): Response {
-  return new Response(JSON.stringify(payload), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-  });
-}
-
 function requirePostJsonCall(index = 0): {
   url?: string;
   timeoutMs?: number;
@@ -104,6 +100,14 @@ function requirePostJsonCall(index = 0): {
     throw new Error(`Expected postJsonRequest call ${index}`);
   }
   return params;
+}
+
+function mockResponse(data: Record<string, unknown>) {
+  const body = JSON.stringify(data);
+  return {
+    json: async () => data,
+    arrayBuffer: async () => Buffer.from(body),
+  };
 }
 
 describe("xai image generation provider", () => {
@@ -156,7 +160,7 @@ describe("xai image generation provider", () => {
 
   it("uses main provider URL and resolves auth for generation", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: jsonResponse({
+      response: mockResponse({
         data: [{ b64_json: Buffer.from("testpng").toString("base64") }],
       }),
       release: vi.fn(async () => {}),
@@ -212,7 +216,7 @@ describe("xai image generation provider", () => {
 
   it("supports edit with exact user-provided payload format including image object with type image_url", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: jsonResponse({
+      response: mockResponse({
         data: [
           {
             b64_json:
@@ -252,7 +256,7 @@ describe("xai image generation provider", () => {
   it("forwards xAI attribution User-Agent through the SDK image request", async () => {
     vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
     postJsonRequestMock.mockResolvedValue({
-      response: jsonResponse({
+      response: mockResponse({
         data: [{ b64_json: Buffer.from("ua-png").toString("base64") }],
       }),
       release: vi.fn(async () => {}),
@@ -275,7 +279,7 @@ describe("xai image generation provider", () => {
 
   it("uses the plural xAI images payload for multiple edit inputs", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: jsonResponse({
+      response: mockResponse({
         data: [
           {
             b64_json: Buffer.from("edited").toString("base64"),
@@ -327,5 +331,87 @@ describe("xai image generation provider", () => {
       } as GenerateImageParams),
     ).rejects.toThrow("xAI image editing supports up to 3 reference images");
     expect(postJsonRequestMock).not.toHaveBeenCalled();
+  });
+
+  it("defaults allowPrivateNetwork to false when no SSRF opt-in is configured", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: mockResponse({
+        data: [{ b64_json: Buffer.from("deny").toString("base64") }],
+      }),
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildXaiImageGenerationProvider();
+    await provider.generateImage({
+      provider: "xai",
+      model: "grok-imagine-image",
+      prompt: "deny test",
+      cfg: {},
+    } as any);
+
+    expect(sanitizeConfiguredModelProviderRequestMock).toHaveBeenCalledWith(undefined);
+    expect(resolveProviderHttpRequestConfigMock).toHaveReturnedWith(
+      expect.objectContaining({ allowPrivateNetwork: false }),
+    );
+  });
+
+  it("does not allow private network from browser.ssrfPolicy alone (useConfiguredRequest only)", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: mockResponse({
+        data: [{ b64_json: Buffer.from("ssrf-ok").toString("base64") }],
+      }),
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildXaiImageGenerationProvider();
+    await provider.generateImage({
+      provider: "xai",
+      model: "grok-imagine-image",
+      prompt: "ssrf opt-in test",
+      cfg: {
+        browser: {
+          ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
+        },
+      },
+    } as any);
+
+    expect(sanitizeConfiguredModelProviderRequestMock).toHaveBeenCalledWith(undefined);
+    // browser.ssrfPolicy alone does not authorize; only provider request.allowPrivateNetwork does
+    expect(resolveProviderHttpRequestConfigMock).toHaveReturnedWith(
+      expect.objectContaining({ allowPrivateNetwork: false }),
+    );
+  });
+
+  it("allows private network when xai provider request.allowPrivateNetwork is set", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: mockResponse({
+        data: [{ b64_json: Buffer.from("provider-opt-in").toString("base64") }],
+      }),
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildXaiImageGenerationProvider();
+    await provider.generateImage({
+      provider: "xai",
+      model: "grok-imagine-image",
+      prompt: "provider opt-in test",
+      cfg: {
+        models: {
+          providers: {
+            xai: {
+              baseUrl: "http://10.0.0.10:8090/xai/v1",
+              request: { allowPrivateNetwork: true },
+            },
+          },
+        },
+      },
+    } as any);
+
+    expect(sanitizeConfiguredModelProviderRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({ allowPrivateNetwork: true }),
+    );
+    expect(resolveProviderHttpRequestConfigMock).toHaveReturnedWith(
+      expect.objectContaining({ allowPrivateNetwork: true }),
+    );
   });
 });
