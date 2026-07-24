@@ -37,6 +37,11 @@ describe("shared/text/code-regions", () => {
       text: ["```ts", "const a = 1;", "```", "after `inline` tail"].join("\n"),
       expectedSlices: ["```ts\nconst a = 1;\n```", "`inline`"],
     },
+    {
+      name: "does not treat unequal backtick runs as an inline-code region",
+      text: "before ```<think>private</think>`` after",
+      expectedSlices: [],
+    },
   ] as const)("$name", ({ text, expectedSlices }) => {
     expectCodeRegionSlices(text, expectedSlices);
   });

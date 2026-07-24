@@ -970,6 +970,12 @@ describe("sanitizeAssistantVisibleText", () => {
       "Before <think>literal tag text after",
     );
   });
+
+  it("does not preserve reasoning tags inside unequal backtick runs", () => {
+    expect(sanitizeAssistantVisibleText("before ```<think>private</think>`` after")).not.toContain(
+      "<think>",
+    );
+  });
 });
 
 describe("sanitizeAssistantVisibleTextWithProfile", () => {
