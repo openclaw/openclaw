@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { escapeRegExp, formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { PluginHookInboundDebounceResult } from "openclaw/plugin-sdk/plugin-entry";
 import { setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { beforeAll, describe, expect, it, vi } from "vitest";
@@ -47,9 +48,26 @@ const deliveryQueueMocks = vi.hoisted(() => ({
   drainPendingDeliveries: vi.fn(async (_opts: unknown) => undefined),
 }));
 
+const inboundDebounceHookMocks = vi.hoisted(() => ({
+  hasHooks: vi.fn(() => false),
+  runInboundDebounce: vi.fn<() => Promise<PluginHookInboundDebounceResult | undefined>>(
+    async () => undefined,
+  ),
+}));
+
 vi.mock("openclaw/plugin-sdk/delivery-queue-runtime", () => ({
   drainPendingDeliveries: deliveryQueueMocks.drainPendingDeliveries,
 }));
+
+vi.mock("openclaw/plugin-sdk/plugin-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/plugin-runtime")>(
+    "openclaw/plugin-sdk/plugin-runtime",
+  );
+  return {
+    ...actual,
+    getGlobalHookRunner: () => inboundDebounceHookMocks,
+  };
+});
 
 installWebAutoReplyTestHomeHooks();
 
@@ -1022,6 +1040,99 @@ describe("web auto-reply connection", () => {
         payload: { body: "partial nested" },
       } as unknown as WebInboundMessageInput),
     ).rejects.toThrow(/legacy flat or canonical nested/);
+  });
+
+  it("caps plugin debounce windows that may join rich batches", async () => {
+    const capture = createWebListenerFactoryCapture();
+    const { sendMedia, sendComposing, reply } = createWebInboundDeliverySpies();
+    setLoadConfigMock({
+      messages: { inbound: { debounceMs: 600_000 } },
+    } as OpenClawConfig);
+    inboundDebounceHookMocks.hasHooks.mockReturnValue(true);
+    inboundDebounceHookMocks.runInboundDebounce.mockResolvedValue({
+      action: "debounce",
+      debounceMs: 600_000,
+    });
+
+    await monitorWebChannel(false, capture.listenerFactory as never, false, async () => ({
+      text: "ok",
+    }));
+    const msg = {
+      ...createTestWebInboundMessage({
+        admission: {
+          accountId: "default",
+          account: { accountId: "default" },
+          conversation: { id: "120363@g.us", kind: "group", groupSessionId: "120363@g.us" },
+          sender: { id: "15550001111@s.whatsapp.net" },
+          ingress: { admission: "dispatch", decision: "allow" },
+        },
+        event: { id: "rich-1" },
+        payload: {
+          body: "<media:image>",
+          mediaItems: [{ kind: "image" }],
+        },
+        platform: {
+          chatJid: "120363@g.us",
+          senderJid: "15550001111@s.whatsapp.net",
+          sendComposing,
+          reply,
+          sendMedia,
+        },
+      }),
+      debounceKey: "custom:rich-message",
+    };
+
+    await expect(capture.getLastOptions()?.resolveDebounceDecision?.(msg)).resolves.toEqual({
+      action: "debounce",
+      debounceMs: 300_000,
+    });
+    expect(inboundDebounceHookMocks.runInboundDebounce).toHaveBeenCalledWith(
+      expect.objectContaining({
+        debounceKey: "custom:rich-message",
+        defaultAction: "debounce",
+        conversationKind: "group",
+        message: { hasMedia: true, hasLocation: false, hasQuote: false },
+      }),
+      expect.objectContaining({
+        channelId: "whatsapp",
+        accountId: "default",
+        conversationId: "120363@g.us",
+        senderId: "15550001111@s.whatsapp.net",
+      }),
+    );
+
+    await expect(
+      capture.getLastOptions()?.resolveDebounceDecision?.({
+        ...msg,
+        event: { id: "text-1" },
+        debounceKey: "custom:text-message",
+        payload: { body: "follow-up" },
+      }),
+    ).resolves.toEqual({
+      action: "debounce",
+      debounceMs: 300_000,
+    });
+    expect(inboundDebounceHookMocks.runInboundDebounce).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        debounceKey: "custom:text-message",
+        message: { hasMedia: false, hasLocation: false, hasQuote: false },
+      }),
+      expect.any(Object),
+    );
+
+    inboundDebounceHookMocks.runInboundDebounce.mockResolvedValueOnce(undefined);
+    await expect(
+      capture.getLastOptions()?.resolveDebounceDecision?.({
+        ...msg,
+        event: { id: "text-default-1" },
+        debounceKey: "custom:text-default",
+        payload: { body: "keep channel default" },
+      }),
+    ).resolves.toEqual({
+      action: "debounce",
+      debounceMs: 600_000,
+    });
+    resetLoadConfigMock();
   });
 
   it("processes inbound messages without batching and preserves timestamps", async () => {

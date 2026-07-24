@@ -478,6 +478,65 @@ describe("whatsapp inbound dispatch", () => {
     });
   });
 
+  it("preserves type-only inbound media facts", async () => {
+    const ctx = await buildWhatsAppInboundContext({
+      combinedBody: "<audio>",
+      msg: makeMsg({
+        payload: {
+          body: "<audio>",
+          media: {
+            type: "audio/ogg",
+            kind: "audio",
+          },
+        },
+      }),
+      route: makeRoute(),
+      sender: {
+        e164: "+1000",
+      },
+    });
+
+    expect(requireRecord(ctx, "type-only media inbound context")).toMatchObject({
+      media: [
+        expect.objectContaining({
+          contentType: "audio/ogg",
+          kind: "audio",
+        }),
+      ],
+    });
+  });
+
+  it("projects every media item preserved by an inbound debounce batch", async () => {
+    const ctx = await buildWhatsAppInboundContext({
+      combinedBody: "<media:image>\n<media:image>",
+      msg: makeMsg({
+        payload: {
+          body: "<media:image>\n<media:image>",
+          media: { path: "/tmp/first.jpg", type: "image/jpeg" },
+          mediaItems: [
+            { path: "/tmp/first.jpg", type: "image/jpeg" },
+            { path: "/tmp/second.png", type: "image/png" },
+          ],
+        },
+      }),
+      route: makeRoute(),
+      sender: { e164: "+1000" },
+    });
+
+    expect(requireRecord(ctx, "multi media inbound context")).toMatchObject({
+      media: [
+        expect.objectContaining({
+          path: "/tmp/first.jpg",
+          contentType: "image/jpeg",
+        }),
+        expect.objectContaining({
+          path: "/tmp/second.png",
+          contentType: "image/png",
+        }),
+      ],
+    });
+  });
+
   it("marks authorized text slash commands as text command turns", async () => {
     const ctx = await buildWhatsAppInboundContext({
       combinedBody: "/status",

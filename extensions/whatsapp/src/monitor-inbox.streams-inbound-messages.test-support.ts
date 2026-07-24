@@ -1044,6 +1044,208 @@ describe("web monitor inbox", () => {
     }
   });
 
+  it("waits for a plugin debounce decision before draining on close", async () => {
+    let releaseDecision!: () => void;
+    const decisionPending = new Promise<void>((resolve) => {
+      releaseDecision = resolve;
+    });
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      debounceMs: 0,
+      resolveDebounceDecision: async () => {
+        await decisionPending;
+        return { action: "debounce", debounceMs: 50 };
+      },
+    });
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("plugin-debounce-close"),
+        remoteJid: "999@s.whatsapp.net",
+        text: "held",
+        timestamp: 1_700_000_000,
+        pushName: "Tester",
+      }),
+    );
+
+    const closePromise = listener.close();
+    await Promise.resolve();
+    expect(onMessage).not.toHaveBeenCalled();
+    releaseDecision();
+    await closePromise;
+    await waitForMessageCalls(onMessage, 1);
+    expect(inboundMessage(onMessage).payload.body).toBe("held");
+  });
+
+  it("keeps location context out of plugin-requested batches", async () => {
+    const onMessage = vi.fn(async (_msg: Parameters<InboxOnMessage>[0]) => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      debounceMs: 0,
+      resolveDebounceDecision: async () => ({ action: "debounce", debounceMs: 50 }),
+    });
+    sock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: {
+            id: nextMessageId("plugin-debounce-location"),
+            fromMe: false,
+            remoteJid: "999@s.whatsapp.net",
+          },
+          message: {
+            locationMessage: {
+              degreesLatitude: 48.858844,
+              degreesLongitude: 2.294351,
+              name: "Eiffel Tower",
+            },
+          },
+          messageTimestamp: 1_700_000_000,
+          pushName: "Tester",
+        },
+      ],
+    });
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("plugin-debounce-after-location"),
+        remoteJid: "999@s.whatsapp.net",
+        text: "after location",
+        timestamp: 1_700_000_001,
+        pushName: "Tester",
+      }),
+    );
+    await settleInboundWork();
+    await waitForMessageCalls(onMessage, 2);
+
+    await listener.close();
+
+    expect(onMessage).toHaveBeenCalledTimes(2);
+    const messages = onMessage.mock.calls.map((call) => call[0] as WebInboundMessage);
+    expect(messages.find((message) => message.payload.location)?.payload.location).toMatchObject({
+      latitude: 48.858844,
+      longitude: 2.294351,
+    });
+    expect(messages.some((message) => message.payload.body === "after location")).toBe(true);
+  });
+
+  it("keeps quote context out of plugin-requested batches", async () => {
+    const onMessage = vi.fn(async (_msg: Parameters<InboxOnMessage>[0]) => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      debounceMs: 0,
+      resolveDebounceDecision: async () => ({ action: "debounce", debounceMs: 50 }),
+    });
+    sock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: {
+            id: nextMessageId("plugin-debounce-quote"),
+            fromMe: false,
+            remoteJid: "999@s.whatsapp.net",
+          },
+          message: {
+            extendedTextMessage: {
+              text: "reply",
+              contextInfo: {
+                stanzaId: "quoted-message",
+                participant: "111@s.whatsapp.net",
+                quotedMessage: { conversation: "original" },
+              },
+            },
+          },
+          messageTimestamp: 1_700_000_000,
+          pushName: "Tester",
+        },
+      ],
+    });
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("plugin-debounce-after-quote"),
+        remoteJid: "999@s.whatsapp.net",
+        text: "after quote",
+        timestamp: 1_700_000_001,
+        pushName: "Tester",
+      }),
+    );
+    await settleInboundWork();
+    await waitForMessageCalls(onMessage, 2);
+
+    await listener.close();
+
+    const messages = onMessage.mock.calls.map((call) => call[0] as WebInboundMessage);
+    expect(messages.find((message) => message.quote)?.quote).toMatchObject({
+      id: "quoted-message",
+      body: "original",
+    });
+    expect(messages.some((message) => message.payload.body === "after quote")).toBe(true);
+  });
+
+  it("keeps contact context out of plugin-requested batches", async () => {
+    const onMessage = vi.fn(async (_msg: Parameters<InboxOnMessage>[0]) => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      debounceMs: 0,
+      resolveDebounceDecision: async () => ({ action: "debounce", debounceMs: 50 }),
+    });
+    sock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: {
+            id: nextMessageId("plugin-debounce-contact"),
+            fromMe: false,
+            remoteJid: "999@s.whatsapp.net",
+          },
+          message: {
+            contactMessage: {
+              displayName: "Ada Lovelace",
+              vcard: [
+                "BEGIN:VCARD",
+                "VERSION:3.0",
+                "FN:Ada Lovelace",
+                "TEL;TYPE=CELL:+15555550123",
+                "END:VCARD",
+              ].join("\n"),
+            },
+          },
+          messageTimestamp: 1_700_000_000,
+          pushName: "Tester",
+        },
+      ],
+    });
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("plugin-debounce-after-contact"),
+        remoteJid: "999@s.whatsapp.net",
+        text: "after contact",
+        timestamp: 1_700_000_001,
+        pushName: "Tester",
+      }),
+    );
+    await settleInboundWork();
+    await waitForMessageCalls(onMessage, 2);
+
+    await listener.close();
+
+    const messages = onMessage.mock.calls.map((call) => call[0] as WebInboundMessage);
+    expect(
+      messages.find((message) => message.payload.untrustedStructuredContext)?.payload
+        .untrustedStructuredContext,
+    ).toEqual([
+      expect.objectContaining({
+        type: "contact",
+        source: "whatsapp",
+        payload: {
+          kind: "contact",
+          total: 1,
+          contacts: [{ name: "Ada Lovelace", phones: ["+15555550123"] }],
+        },
+      }),
+    ]);
+    expect(messages.some((message) => message.payload.body === "after contact")).toBe(true);
+  });
+
   it("completes shutdown under a long durable debounce without waiting for the window", async () => {
     // Durable pump tasks await claim flush waiters; close must force-flush
     // debounced batches before waiting on those pumps (socket-close timeout).

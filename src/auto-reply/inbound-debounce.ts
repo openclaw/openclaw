@@ -39,12 +39,17 @@ type DebounceBuffer<T> = {
   items: T[];
   timeout: ReturnType<typeof setTimeout> | null;
   debounceMs: number;
+  deadlineAt?: number;
   releaseReady: () => void;
   readyReleased: boolean;
   task: Promise<void>;
 };
 
 const DEFAULT_MAX_TRACKED_KEYS = 2048;
+
+export type InboundDebounceDecision =
+  | { action: "debounce"; debounceMs?: number }
+  | { action: "bypass" };
 
 /** Options for creating a keyed inbound debouncer. */
 export type InboundDebounceCreateParams<T> = {
@@ -53,6 +58,14 @@ export type InboundDebounceCreateParams<T> = {
   buildKey: (item: T) => string | null | undefined;
   shouldDebounce?: (item: T) => boolean;
   resolveDebounceMs?: (item: T) => number | undefined;
+  /** Optional async policy decision. An explicit result overrides the legacy callbacks. */
+  resolveDecision?: (
+    item: T,
+  ) => InboundDebounceDecision | undefined | Promise<InboundDebounceDecision | undefined>;
+  /** Return false to flush the current buffer before adding this item. */
+  canCombine?: (bufferedItems: readonly T[], item: T) => boolean;
+  /** Optional absolute batch lifetime introduced by this item. */
+  resolveMaxBufferAgeMs?: (item: T) => number | undefined;
   serializeImmediate?: boolean;
   onFlush: (items: T[]) => Promise<void>;
   onError?: (err: unknown, items: T[]) => void;
@@ -64,12 +77,23 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
   const buffers = new Map<string, DebounceBuffer<T>>();
   const keyChains = new Map<string, Promise<void>>();
   const keyGenerations = new Map<string, number>();
+  const decisionChains = new Map<string, Promise<void>>();
+  const pendingDecisionReleases = new Map<string, Set<() => void>>();
+  const pendingDecisionCounts = new Map<string, number>();
   const defaultDebounceMs = resolveNonNegativeIntegerOption(params.debounceMs, 0);
   const maxTrackedKeys = Math.max(1, Math.trunc(params.maxTrackedKeys ?? DEFAULT_MAX_TRACKED_KEYS));
 
   const resolveDebounceMs = (item: T) => {
     const resolved = params.resolveDebounceMs?.(item);
     return resolveNonNegativeIntegerOption(resolved, defaultDebounceMs);
+  };
+
+  const resolveItemDeadline = (item: T): number | undefined => {
+    const maxAgeMs = params.resolveMaxBufferAgeMs?.(item);
+    if (maxAgeMs === undefined) {
+      return undefined;
+    }
+    return Date.now() + resolveNonNegativeIntegerOption(maxAgeMs, 0);
   };
 
   const runFlush = async (items: T[]) => {
@@ -112,7 +136,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     const cleanup = () => {
       if (keyChains.get(key) === settled) {
         keyChains.delete(key);
-        if (!buffers.has(key)) {
+        if (!buffers.has(key) && !decisionChains.has(key)) {
           keyGenerations.delete(key);
         }
       }
@@ -131,7 +155,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       resolveSettled();
       if (keyChains.get(key) === settled) {
         keyChains.delete(key);
-        if (!buffers.has(key)) {
+        if (!buffers.has(key) && !decisionChains.has(key)) {
           keyGenerations.delete(key);
         }
       }
@@ -200,12 +224,15 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
 
   const cancelKey = (key: string): boolean => {
     const buffer = buffers.get(key);
-    if (!buffer && !keyChains.has(key)) {
+    if (!buffer && !keyChains.has(key) && !decisionChains.has(key)) {
       return false;
     }
     // Invalidate released tasks still waiting behind an active same-key flush.
     // The active task has already crossed this check and remains caller-owned.
     keyGenerations.set(key, resolveKeyGeneration(key) + 1);
+    for (const release of pendingDecisionReleases.get(key) ?? []) {
+      release();
+    }
     if (!buffer) {
       return true;
     }
@@ -226,24 +253,63 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
   const scheduleFlush = (key: string, buffer: DebounceBuffer<T>) => {
     if (buffer.timeout) {
       clearTimeout(buffer.timeout);
+      buffer.timeout = null;
     }
-    buffer.timeout = setTimeout(() => {
-      void flushBuffer(key, buffer);
-    }, buffer.debounceMs);
+    const hasPendingDecision = (pendingDecisionCounts.get(key) ?? 0) > 0;
+    if (hasPendingDecision && buffer.deadlineAt === undefined) {
+      return;
+    }
+    const remainingLifetime =
+      buffer.deadlineAt === undefined
+        ? buffer.debounceMs
+        : Math.max(0, buffer.deadlineAt - Date.now());
+    buffer.timeout = setTimeout(
+      () => {
+        void flushBuffer(key, buffer);
+      },
+      hasPendingDecision ? remainingLifetime : Math.min(buffer.debounceMs, remainingLifetime),
+    );
     buffer.timeout.unref?.();
   };
 
   const canTrackKey = (key: string) => {
-    if (buffers.has(key) || keyChains.has(key)) {
+    if (buffers.has(key) || keyChains.has(key) || decisionChains.has(key)) {
       return true;
     }
-    return new Set([...buffers.keys(), ...keyChains.keys()]).size < maxTrackedKeys;
+    return (
+      new Set([...buffers.keys(), ...keyChains.keys(), ...decisionChains.keys()]).size <
+      maxTrackedKeys
+    );
   };
 
-  const enqueue = async (item: T) => {
-    const key = params.buildKey(item);
-    const debounceMs = resolveDebounceMs(item);
-    const canDebounce = debounceMs > 0 && (params.shouldDebounce?.(item) ?? true);
+  const enqueueResolved = async (
+    item: T,
+    key: string | null | undefined,
+    resolvedDecision?: InboundDebounceDecision,
+    markApplied: () => void = () => undefined,
+    expectedGeneration?: number,
+  ) => {
+    if (
+      key &&
+      expectedGeneration !== undefined &&
+      resolveKeyGeneration(key) !== expectedGeneration
+    ) {
+      cancelItems([item]);
+      markApplied();
+      return;
+    }
+    const decision =
+      resolvedDecision?.action === "debounce" || resolvedDecision?.action === "bypass"
+        ? resolvedDecision
+        : undefined;
+    const debounceMs =
+      decision?.action === "debounce"
+        ? resolveNonNegativeIntegerOption(decision.debounceMs, resolveDebounceMs(item))
+        : resolveDebounceMs(item);
+    const canDebounce =
+      debounceMs > 0 &&
+      (decision?.action === "debounce" ||
+        (decision?.action !== "bypass" && (params.shouldDebounce?.(item) ?? true)));
 
     if (!canDebounce || !key) {
       if (key) {
@@ -254,48 +320,73 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
           const reservedTask = enqueueReservedKeyTask(key, async () => {
             await runQueuedFlush(key, generation, [item]);
           });
+          const flushTask = flushKey(key);
           try {
-            await flushKey(key);
+            await flushTask;
           } finally {
             reservedTask.release();
           }
           await reservedTask.task;
+          markApplied();
           return;
         }
         if (keyChains.has(key)) {
           const generation = resolveKeyGeneration(key);
-          await enqueueKeyTask(key, async () => {
+          const task = enqueueKeyTask(key, async () => {
             await runQueuedFlush(key, generation, [item]);
           });
+          await task;
+          markApplied();
           return;
         }
         if (params.serializeImmediate) {
-          await runKeyTaskNow(key, async () => {
+          const task = runKeyTaskNow(key, async () => {
             await runFlush([item]);
           });
+          await task;
+          markApplied();
           return;
         }
-        await runFlush([item]);
+        const task = runFlush([item]);
+        await task;
+        markApplied();
       } else {
-        await runFlush([item]);
+        const task = runFlush([item]);
+        await task;
+        markApplied();
       }
       return;
     }
 
     const existing = buffers.get(key);
+    let previousFlush: Promise<void> | undefined;
     if (existing) {
-      existing.items.push(item);
-      existing.debounceMs = debounceMs;
-      scheduleFlush(key, existing);
-      return;
+      if (params.canCombine && !params.canCombine(existing.items, item)) {
+        previousFlush = flushKey(key);
+      } else {
+        existing.items.push(item);
+        existing.debounceMs = debounceMs;
+        const itemDeadline = resolveItemDeadline(item);
+        if (itemDeadline !== undefined) {
+          existing.deadlineAt =
+            existing.deadlineAt === undefined
+              ? itemDeadline
+              : Math.min(existing.deadlineAt, itemDeadline);
+        }
+        scheduleFlush(key, existing);
+        markApplied();
+        return;
+      }
     }
     if (!canTrackKey(key)) {
       // When the debounce map is saturated, fall back to immediate keyed work
       // instead of buffering, but still preserve same-key ordering.
       const generation = resolveKeyGeneration(key);
-      await enqueueKeyTask(key, async () => {
+      const task = enqueueKeyTask(key, async () => {
         await runQueuedFlush(key, generation, [item]);
       });
+      markApplied();
+      await task;
       return;
     }
     const generation = resolveKeyGeneration(key);
@@ -313,12 +404,129 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       items: [item],
       timeout: null,
       debounceMs,
+      deadlineAt: resolveItemDeadline(item),
       releaseReady: reservedTask.release,
       readyReleased: false,
       task: reservedTask.task,
     };
     buffers.set(key, buffer);
     scheduleFlush(key, buffer);
+    markApplied();
+    // The new item is already retained in its own buffer. A preceding flush
+    // failure must not reject this enqueue and invite a duplicate retry.
+    await previousFlush?.catch(() => undefined);
+  };
+
+  const enqueue = async (item: T) => {
+    const key = params.buildKey(item);
+    if (!params.resolveDecision || !key) {
+      return enqueueResolved(item, key);
+    }
+    if (!canTrackKey(key)) {
+      // Saturated keys bypass policy evaluation but still need a short-lived
+      // key chain so same-conversation work cannot run concurrently.
+      const generation = resolveKeyGeneration(key);
+      return enqueueKeyTask(key, async () => {
+        await runQueuedFlush(key, generation, [item]);
+      });
+    }
+    const generation = resolveKeyGeneration(key);
+    const previous = decisionChains.get(key) ?? Promise.resolve();
+    let rawDecision:
+      | InboundDebounceDecision
+      | undefined
+      | Promise<InboundDebounceDecision | undefined>;
+    try {
+      rawDecision = params.resolveDecision(item);
+    } catch (error) {
+      rawDecision = Promise.reject(error instanceof Error ? error : new Error(String(error)));
+    }
+    const synchronousBypass =
+      rawDecision !== undefined && "action" in rawDecision && rawDecision.action === "bypass"
+        ? rawDecision
+        : undefined;
+    if (synchronousBypass) {
+      for (const release of pendingDecisionReleases.get(key) ?? []) {
+        release();
+      }
+      return enqueueResolved(item, key, synchronousBypass, undefined, generation);
+    }
+    const rawDecisionPromise = Promise.resolve(rawDecision);
+    // Decisions start eagerly, so observe rejection before an earlier same-key
+    // item finishes applying. The returned enqueue task still carries the error.
+    void rawDecisionPromise.catch(() => undefined);
+    let decision = rawDecisionPromise;
+    pendingDecisionCounts.set(key, (pendingDecisionCounts.get(key) ?? 0) + 1);
+    const heldBuffer = buffers.get(key);
+    if (heldBuffer?.timeout) {
+      clearTimeout(heldBuffer.timeout);
+      heldBuffer.timeout = null;
+    }
+    if (heldBuffer) {
+      // Pending policy work pauses trailing debounce, but never the absolute
+      // lifetime of an existing batch (for example one retaining media).
+      scheduleFlush(key, heldBuffer);
+    }
+    let releasePending!: () => void;
+    const released = new Promise<undefined>((resolve) => {
+      releasePending = () => resolve(undefined);
+    });
+    const releases = pendingDecisionReleases.get(key) ?? new Set<() => void>();
+    releases.add(releasePending);
+    pendingDecisionReleases.set(key, releases);
+    decision = Promise.race([rawDecisionPromise, released]);
+    void decision.then(
+      () => {
+        releases.delete(releasePending);
+        if (releases.size === 0) {
+          pendingDecisionReleases.delete(key);
+        }
+      },
+      () => {
+        releases.delete(releasePending);
+        if (releases.size === 0) {
+          pendingDecisionReleases.delete(key);
+        }
+      },
+    );
+    let releaseApplied!: () => void;
+    const applied = new Promise<void>((resolve) => {
+      releaseApplied = resolve;
+    });
+    let appliedReleased = false;
+    const markApplied = () => {
+      if (appliedReleased) {
+        return;
+      }
+      appliedReleased = true;
+      releaseApplied();
+      const remaining = (pendingDecisionCounts.get(key) ?? 1) - 1;
+      if (remaining > 0) {
+        pendingDecisionCounts.set(key, remaining);
+      } else {
+        pendingDecisionCounts.delete(key);
+        const buffer = buffers.get(key);
+        if (buffer) {
+          scheduleFlush(key, buffer);
+        }
+      }
+    };
+    const task = previous
+      .catch(() => undefined)
+      .then(async () => enqueueResolved(item, key, await decision, markApplied, generation))
+      .finally(() => {
+        markApplied();
+      });
+    decisionChains.set(key, applied);
+    void applied.then(() => {
+      if (decisionChains.get(key) === applied) {
+        decisionChains.delete(key);
+        if (!buffers.has(key) && !keyChains.has(key)) {
+          keyGenerations.delete(key);
+        }
+      }
+    });
+    return task;
   };
 
   return { enqueue, flushKey, cancelKey };

@@ -156,6 +156,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: attributed-range renderer and its options contract.
       // +1: agent-harness transcript visibility projector.
       // +1: outbound formatting capability profile.
+      // +3: inbound debounce event/result and decision exports.
       // +3: plugin approval reviewer-detail cap/truncator and sanitize-with-status variant.
       // +1: canonical incognito session classifier for storage-safe plugin behavior.
       // +2: shipped Slack and Discord setup compatibility helpers.
@@ -164,7 +165,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +3: harness-native MCP App preview helper and its runtime/catalog contracts.
       // +1: canonical unknown-value to Error coercion.
       // +6: canonical session delivery normalization, access, and projection helpers.
-      4711,
+      4714,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

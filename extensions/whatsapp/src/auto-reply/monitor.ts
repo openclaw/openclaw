@@ -49,6 +49,7 @@ import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
 import { buildMentionConfig } from "./mentions.js";
 import { createWebChannelStatusController } from "./monitor-state.js";
 import { createEchoTracker } from "./monitor/echo.js";
+import { resolveWhatsAppInboundDebounceDecision } from "./monitor/inbound-debounce-policy.js";
 import { formatWhatsAppInboundListeningLog } from "./monitor/listener-log.js";
 import { createWebOnMessageHandler } from "./monitor/on-message.js";
 import type { WebMonitorTuning } from "./types.js";
@@ -243,6 +244,13 @@ export async function monitorWebChannel(
           ),
         });
       };
+      const resolveDebounceDecision = (msg: WebInboundMessageInput & { debounceKey?: string }) =>
+        resolveWhatsAppInboundDebounceDecision({
+          cfg,
+          msg,
+          defaultDebounceMs: inboundDebounceMs,
+          shouldDebounce,
+        });
 
       let connection;
       try {
@@ -291,6 +299,7 @@ export async function monitorWebChannel(
                     maxAgeMs: reconnectCatchUpWindowMs,
                   }
                 : undefined,
+              resolveDebounceDecision,
               shouldDebounce,
               socketRef: controller.socketRef,
               shouldRetryDisconnect: () => !sigintStop && controller.shouldRetryDisconnect(),

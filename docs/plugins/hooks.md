@@ -147,16 +147,70 @@ observation-only.
 
 **Messages and delivery**
 
-| Hook                            | Purpose                                                           |
-| ------------------------------- | ----------------------------------------------------------------- |
-| **`inbound_claim`**             | Claim an inbound message before agent routing (synthetic replies) |
-| **`channel_pairing_requested`** | Observe newly created DM pairing requests                         |
-| `message_received`              | Observe inbound content, sender, thread, and metadata             |
-| **`message_sending`**           | Rewrite outbound content or cancel delivery                       |
-| **`reply_payload_sending`**     | Mutate or cancel normalized reply payloads before delivery        |
-| `message_sent`                  | Observe outbound delivery success or failure                      |
-| **`before_dispatch`**           | Inspect or rewrite an outbound dispatch before channel handoff    |
-| **`reply_dispatch`**            | Participate in the final reply-dispatch pipeline                  |
+| Hook                            | Purpose                                                            |
+| ------------------------------- | ------------------------------------------------------------------ |
+| **`inbound_debounce`**          | Choose whether and how long an admitted inbound message is batched |
+| **`inbound_claim`**             | Claim an inbound message before agent routing (synthetic replies)  |
+| **`channel_pairing_requested`** | Observe newly created DM pairing requests                          |
+| `message_received`              | Observe inbound content, sender, thread, and metadata              |
+| **`message_sending`**           | Rewrite outbound content or cancel delivery                        |
+| **`reply_payload_sending`**     | Mutate or cancel normalized reply payloads before delivery         |
+| `message_sent`                  | Observe outbound delivery success or failure                       |
+| **`before_dispatch`**           | Inspect or rewrite an outbound dispatch before channel handoff     |
+| **`reply_dispatch`**            | Participate in the final reply-dispatch pipeline                   |
+
+### Inbound debounce policy
+
+`inbound_debounce` lets a plugin override the channel's debounce decision for
+one admitted message. The first explicit result in priority order wins. Return
+`{ action: "bypass" }` for immediate delivery, or return
+`{ action: "debounce", debounceMs }` to batch the message with later messages
+that have the same channel-owned `event.debounceKey`. Returning nothing keeps
+the channel default.
+
+WhatsApp caps every plugin-selected window at five minutes because a text
+message may join a batch that already owns a persisted attachment file. A batch
+that contains media also has an absolute five-minute lifetime that later
+messages cannot extend.
+
+The hook receives `ctx.channelId`, `ctx.accountId`, `ctx.conversationId`, and
+`ctx.senderId`, plus the conversation kind and message facts for media,
+location, and quoted replies. This lets plugin-owned config define different
+windows for accounts, DMs, groups, senders, or individual conversations without
+adding those settings to core config.
+
+External plugins must opt into conversation data with
+`plugins.entries.<id>.hooks.allowConversationAccess: true`. Read the policy from
+`api.pluginConfig` during registration; each handler keeps that plugin-local
+config in its closure.
+
+```typescript
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+
+export default definePluginEntry({
+  id: "conversation-debounce",
+  name: "Conversation Debounce",
+  register(api) {
+    const policy = parseConversationDebounceConfig(api.pluginConfig);
+    api.on("inbound_debounce", (event, ctx) => {
+      const configuredMs = policy.resolve({
+        accountId: ctx.accountId,
+        conversationId: ctx.conversationId,
+        conversationKind: event.conversationKind,
+      });
+      if (configuredMs === undefined) {
+        return;
+      }
+      return { action: "debounce", debounceMs: configuredMs };
+    });
+  },
+});
+```
+
+Plugins cannot replace `event.debounceKey`, so they cannot merge unrelated
+conversations or senders. Channel integrations must keep control commands
+outside this hook; WhatsApp dispatches them immediately. The hook has a
+two-second default timeout and fails open to the channel's existing policy.
 
 **Sessions and compaction**
 

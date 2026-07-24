@@ -7,7 +7,7 @@ import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { createInboundDebouncer } from "./inbound-debounce.js";
+import { createInboundDebouncer, type InboundDebounceDecision } from "./inbound-debounce.js";
 import { resolveGroupRequireMention } from "./reply/groups.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
 import {
@@ -485,6 +485,287 @@ describe("createInboundDebouncer", () => {
     vi.useRealTimers();
   });
 
+  it("uses an async per-item decision for action and duration", async () => {
+    vi.useFakeTimers();
+    const calls: Array<string[]> = [];
+
+    const debouncer = createInboundDebouncer<{ key: string; id: string; mode: string }>({
+      debounceMs: 10,
+      buildKey: (item) => item.key,
+      shouldDebounce: () => false,
+      resolveDecision: async (item) =>
+        item.mode === "batch" ? { action: "debounce", debounceMs: 25 } : { action: "bypass" },
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
+    });
+
+    await debouncer.enqueue({ key: "a", id: "1", mode: "batch" });
+    await debouncer.enqueue({ key: "a", id: "2", mode: "batch" });
+    await vi.advanceTimersByTimeAsync(24);
+    expect(calls).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls).toEqual([["1", "2"]]);
+
+    await debouncer.enqueue({ key: "b", id: "3", mode: "immediate" });
+    expect(calls).toEqual([["1", "2"], ["3"]]);
+    vi.useRealTimers();
+  });
+
+  it("preserves same-key arrival order while async decisions are pending", async () => {
+    let releaseFirst!: () => void;
+    let secondDecisionStarted = false;
+    const firstDecision = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const calls: Array<string[]> = [];
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 10,
+      buildKey: (item) => item.key,
+      resolveDecision: async (item) => {
+        if (item.id === "1") {
+          await firstDecision;
+        } else {
+          secondDecisionStarted = true;
+        }
+        return { action: "bypass" };
+      },
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
+    });
+
+    const first = debouncer.enqueue({ key: "a", id: "1" });
+    const second = debouncer.enqueue({ key: "a", id: "2" });
+    await Promise.resolve();
+    expect(secondDecisionStarted).toBe(true);
+    expect(calls).toEqual([]);
+    releaseFirst();
+    await Promise.all([first, second]);
+    expect(calls).toEqual([["1"], ["2"]]);
+  });
+
+  it("returns synchronous decision failures through the enqueue promise", async () => {
+    const error = new Error("policy failed");
+    const debouncer = createInboundDebouncer<{ key: string }>({
+      debounceMs: 10,
+      buildKey: (item) => item.key,
+      resolveDecision: () => {
+        throw error;
+      },
+      onFlush: async () => undefined,
+    });
+
+    await expect(debouncer.enqueue({ key: "a" })).rejects.toBe(error);
+  });
+
+  it("returns key-builder failures through the enqueue promise", async () => {
+    const error = new Error("key failed");
+    const debouncer = createInboundDebouncer<{ key: string }>({
+      debounceMs: 10,
+      buildKey: () => {
+        throw error;
+      },
+      onFlush: async () => undefined,
+    });
+
+    await expect(debouncer.enqueue({ key: "a" })).rejects.toBe(error);
+  });
+
+  it("releases a pending decision before applying a later synchronous bypass", async () => {
+    vi.useFakeTimers();
+    const never = new Promise<InboundDebounceDecision>(() => {});
+    const calls: Array<string[]> = [];
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 10,
+      buildKey: (item) => item.key,
+      resolveDecision: (item) => (item.id === "1" ? never : { action: "bypass" }),
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
+    });
+
+    const first = debouncer.enqueue({ key: "a", id: "1" });
+    const bypass = debouncer.enqueue({ key: "a", id: "2" });
+    await bypass;
+    expect(calls).toEqual([["2"]]);
+    await first;
+    await vi.advanceTimersByTimeAsync(10);
+    expect(calls).toEqual([["2"], ["1"]]);
+    vi.useRealTimers();
+  });
+
+  it("cancels an item whose async decision is still pending", async () => {
+    let releaseDecision!: () => void;
+    const pendingDecision = new Promise<void>((resolve) => {
+      releaseDecision = resolve;
+    });
+    const calls: Array<string[]> = [];
+    const canceled: Array<string[]> = [];
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 10,
+      buildKey: (item) => item.key,
+      resolveDecision: async () => {
+        await pendingDecision;
+        return { action: "debounce" };
+      },
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
+      onCancel: (items) => canceled.push(items.map((entry) => entry.id)),
+    });
+
+    const enqueue = debouncer.enqueue({ key: "a", id: "1" });
+    expect(debouncer.cancelKey("a")).toBe(true);
+    releaseDecision();
+    await enqueue;
+
+    expect(canceled).toEqual([["1"]]);
+    expect(calls).toEqual([]);
+  });
+
+  it("holds an existing buffer while a later async decision is pending", async () => {
+    vi.useFakeTimers();
+    let releaseSecond!: () => void;
+    const secondPending = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
+    const calls: Array<string[]> = [];
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 10,
+      buildKey: (item) => item.key,
+      resolveDecision: async (item) => {
+        if (item.id === "2") {
+          await secondPending;
+        }
+        return { action: "debounce" };
+      },
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
+    });
+
+    await debouncer.enqueue({ key: "a", id: "1" });
+    const second = debouncer.enqueue({ key: "a", id: "2" });
+    await vi.advanceTimersByTimeAsync(20);
+    expect(calls).toEqual([]);
+    releaseSecond();
+    await second;
+    await vi.advanceTimersByTimeAsync(10);
+    expect(calls).toEqual([["1", "2"]]);
+    vi.useRealTimers();
+  });
+
+  it("flushes before combining items rejected by the combine policy", async () => {
+    vi.useFakeTimers();
+    const calls: Array<string[]> = [];
+    const debouncer = createInboundDebouncer<{ key: string; id: string; quoted: boolean }>({
+      debounceMs: 10,
+      buildKey: (item) => item.key,
+      canCombine: (items, item) => !item.quoted || !items.some((entry) => entry.quoted),
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
+    });
+
+    await debouncer.enqueue({ key: "a", id: "1", quoted: true });
+    await debouncer.enqueue({ key: "a", id: "2", quoted: true });
+    await debouncer.enqueue({ key: "a", id: "3", quoted: true });
+    expect(calls).toEqual([["1"], ["2"]]);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(calls).toEqual([["1"], ["2"], ["3"]]);
+    vi.useRealTimers();
+  });
+
+  it("does not let later items extend an absolute buffer lifetime", async () => {
+    vi.useFakeTimers();
+    const calls: Array<string[]> = [];
+    const debouncer = createInboundDebouncer<{
+      key: string;
+      id: string;
+      rich: boolean;
+      windowMs: number;
+    }>({
+      debounceMs: 0,
+      buildKey: (item) => item.key,
+      resolveDebounceMs: (item) => item.windowMs,
+      resolveMaxBufferAgeMs: (item) => (item.rich ? 100 : undefined),
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
+    });
+
+    await debouncer.enqueue({ key: "a", id: "1", rich: true, windowMs: 1_000 });
+    await vi.advanceTimersByTimeAsync(90);
+    await debouncer.enqueue({ key: "a", id: "2", rich: false, windowMs: 1_000 });
+    await vi.advanceTimersByTimeAsync(9);
+    expect(calls).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls).toEqual([["1", "2"]]);
+
+    vi.useRealTimers();
+  });
+
+  it("keeps an absolute buffer deadline while a later decision is pending", async () => {
+    vi.useFakeTimers();
+    let releaseSecond!: () => void;
+    const secondPending = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
+    const calls: Array<string[]> = [];
+    const debouncer = createInboundDebouncer<{
+      key: string;
+      id: string;
+      rich: boolean;
+    }>({
+      debounceMs: 1_000,
+      buildKey: (item) => item.key,
+      resolveDecision: async (item) => {
+        if (item.id === "2") {
+          await secondPending;
+        }
+        return { action: "debounce" };
+      },
+      resolveMaxBufferAgeMs: (item) => (item.rich ? 100 : undefined),
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
+    });
+
+    await debouncer.enqueue({ key: "a", id: "1", rich: true });
+    const second = debouncer.enqueue({ key: "a", id: "2", rich: false });
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(calls).toEqual([["1"]]);
+
+    releaseSecond();
+    await second;
+    expect(debouncer.cancelKey("a")).toBe(true);
+    vi.useRealTimers();
+  });
+
+  it("uses a short async decision window before the absolute deadline", async () => {
+    vi.useFakeTimers();
+    const calls: Array<string[]> = [];
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 1_000,
+      buildKey: (item) => item.key,
+      resolveDecision: async () => ({ action: "debounce", debounceMs: 10 }),
+      resolveMaxBufferAgeMs: () => 100,
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
+    });
+
+    await debouncer.enqueue({ key: "a", id: "1" });
+    await vi.advanceTimersByTimeAsync(9);
+    expect(calls).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls).toEqual([["1"]]);
+
+    vi.useRealTimers();
+  });
+
   it("reports buffered items when cancelling a key", async () => {
     vi.useFakeTimers();
     const calls: Array<string[]> = [];
@@ -591,6 +872,28 @@ describe("createInboundDebouncer", () => {
     expect(calls).toStrictEqual([]);
     await vi.advanceTimersByTimeAsync(30);
     expect(calls).toEqual([["1", "2"]]);
+
+    vi.useRealTimers();
+  });
+
+  it("uses the per-item window when a debounce decision omits its duration", async () => {
+    vi.useFakeTimers();
+    const calls: Array<string[]> = [];
+
+    const debouncer = createInboundDebouncer<{ key: string; id: string; windowMs: number }>({
+      debounceMs: 0,
+      buildKey: (item) => item.key,
+      resolveDebounceMs: (item) => item.windowMs,
+      resolveDecision: () => ({ action: "debounce" }),
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
+    });
+
+    await debouncer.enqueue({ key: "forward", id: "1", windowMs: 30 });
+    expect(calls).toStrictEqual([]);
+    await vi.advanceTimersByTimeAsync(30);
+    expect(calls).toEqual([["1"]]);
 
     vi.useRealTimers();
   });
@@ -754,6 +1057,77 @@ describe("createInboundDebouncer", () => {
     await Promise.all([first, second]);
   });
 
+  it("keeps async immediate decisions ordered until delivery finishes", async () => {
+    const started: string[] = [];
+    let releaseFirst: (() => void) | undefined;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 0,
+      buildKey: (item) => item.key,
+      resolveDecision: async () => ({ action: "bypass" }),
+      onFlush: async (items) => {
+        const id = items[0]?.id ?? "";
+        started.push(id);
+        if (id === "1") {
+          await firstGate;
+        }
+      },
+    });
+
+    const first = debouncer.enqueue({ key: "a", id: "1" });
+    await vi.waitFor(() => {
+      expect(started).toEqual(["1"]);
+    });
+    const second = debouncer.enqueue({ key: "a", id: "2" });
+    await Promise.resolve();
+    expect(started).toEqual(["1"]);
+
+    if (!releaseFirst) {
+      throw new Error("Expected first inbound debounce release callback to be initialized");
+    }
+    releaseFirst();
+    await Promise.all([first, second]);
+    expect(started).toEqual(["1", "2"]);
+  });
+
+  it("lets a synchronous bypass preempt active async immediate delivery", async () => {
+    const started: string[] = [];
+    let releaseFirst: (() => void) | undefined;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 0,
+      buildKey: (item) => item.key,
+      resolveDecision: (item) =>
+        item.id === "2" ? { action: "bypass" } : Promise.resolve({ action: "bypass" }),
+      onFlush: async (items) => {
+        const id = items[0]?.id ?? "";
+        started.push(id);
+        if (id === "1") {
+          await firstGate;
+        }
+      },
+    });
+
+    const first = debouncer.enqueue({ key: "a", id: "1" });
+    await vi.waitFor(() => {
+      expect(started).toEqual(["1"]);
+    });
+    await debouncer.enqueue({ key: "a", id: "2" });
+    expect(started).toEqual(["1", "2"]);
+
+    if (!releaseFirst) {
+      throw new Error("Expected first inbound debounce release callback to be initialized");
+    }
+    releaseFirst();
+    await first;
+  });
+
   it("serializes keyed turns when immediate serialization is enabled", async () => {
     const started: string[] = [];
     let releaseFirst: (() => void) | undefined;
@@ -842,6 +1216,7 @@ describe("createInboundDebouncer", () => {
       debounceMs: 50,
       maxTrackedKeys: 1,
       buildKey: (item) => item.key,
+      resolveDecision: async () => ({ action: "debounce" }),
       onFlush: async (items) => {
         calls.push(items.map((entry) => entry.id));
       },
@@ -871,6 +1246,7 @@ describe("createInboundDebouncer", () => {
       debounceMs: 50,
       maxTrackedKeys: 1,
       buildKey: (item) => item.key,
+      resolveDecision: () => ({ action: "debounce" }),
       onFlush: async (items) => {
         const ids = items.map((entry) => entry.id).join(",");
         started.push(ids);
@@ -896,6 +1272,9 @@ describe("createInboundDebouncer", () => {
       });
 
       const bufferedEnqueue = debouncer.enqueue({ key: "b", id: "3" });
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
       const bufferedTimerIndex = setTimeoutSpy.mock.calls.findLastIndex(
         (call, index) => index >= callCountBeforeOverflow && call[1] === 50,
       );

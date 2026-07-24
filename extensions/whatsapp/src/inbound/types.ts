@@ -91,16 +91,20 @@ export type WhatsAppInboundGroupContext = {
   };
 };
 
+type WhatsAppInboundMedia = {
+  path?: string;
+  type?: string;
+  fileName?: string;
+  url?: string;
+  kind?: ChannelInboundMediaInput["kind"];
+};
+
 type WhatsAppInboundPayload = {
   body: string;
   commandBody?: string;
-  media?: {
-    path?: string;
-    type?: string;
-    fileName?: string;
-    url?: string;
-    kind?: ChannelInboundMediaInput["kind"];
-  };
+  media?: WhatsAppInboundMedia;
+  /** Ordered media preserved when multiple inbound messages are debounced together. */
+  mediaItems?: WhatsAppInboundMedia[];
   location?: NormalizedLocation;
   untrustedStructuredContext?: Array<{
     label: string;

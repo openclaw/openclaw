@@ -98,6 +98,25 @@ export type PluginHookInboundClaimEvent = {
   metadata?: Record<string, unknown>;
 };
 
+export type PluginHookInboundDebounceEvent = {
+  /** Channel-owned key that will isolate this debounce buffer. Plugins cannot replace it. */
+  debounceKey: string;
+  /** The channel's decision when no plugin handles this event. */
+  defaultAction: "debounce" | "bypass";
+  /** Effective channel/config debounce window before plugin overrides. */
+  defaultDebounceMs: number;
+  conversationKind: "direct" | "group" | "channel" | "thread";
+  message: {
+    hasMedia: boolean;
+    hasLocation: boolean;
+    hasQuote: boolean;
+  };
+};
+
+export type PluginHookInboundDebounceResult =
+  | { action: "debounce"; debounceMs?: number }
+  | { action: "bypass" };
+
 export type PluginHookMessageReceivedEvent = {
   from: string;
   content: string;

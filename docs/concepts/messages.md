@@ -49,7 +49,7 @@ Rapid consecutive text messages from the same sender can be batched into one age
 }
 ```
 
-- Debounce applies to text-only messages; media/attachments flush immediately.
+- Debounce applies to text-only messages; media/attachments flush immediately unless an installed plugin explicitly opts them into the channel's `inbound_debounce` policy.
 - Control commands (stop/abort/status, etc.) bypass debouncing so they dispatch immediately.
 - Disabled by default: `messages.inbound.debounceMs` has no built-in default, so debouncing only activates once you set it (globally or per channel).
 - iMessage follows the same generic debounce policy. `imsg` 0.13.1 and newer coalesces Apple URL-preview split-sends before OpenClaw receives them, so no iMessage-specific debounce setting is needed.

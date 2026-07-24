@@ -46,6 +46,8 @@ import type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
   PluginHookInboundClaimResult,
+  PluginHookInboundDebounceEvent,
+  PluginHookInboundDebounceResult,
   PluginHookLlmInputEvent,
   PluginHookLlmOutputEvent,
   PluginHookBeforeResetEvent,
@@ -149,6 +151,9 @@ const DEFAULT_VOID_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, numbe
   after_compaction: 30_000,
 };
 const DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, number>> = {
+  // Inbound debounce sits on the message admission path. Slow policies fail open quickly so
+  // transport delivery is not retained behind plugin work.
+  inbound_debounce: 2_000,
   before_agent_run: 15_000,
   // Terminal finalization hooks sit on the runner's completion path. A hung
   // handler must not freeze final delivery or keep compaction retry recovery
@@ -934,6 +939,25 @@ export function createHookRunner(
     );
   }
 
+  /**
+   * Run inbound_debounce hook.
+   * The first explicit result wins, so the highest-priority policy owns the decision.
+   */
+  async function runInboundDebounce(
+    event: PluginHookInboundDebounceEvent,
+    ctx: PluginHookMessageContext,
+  ): Promise<PluginHookInboundDebounceResult | undefined> {
+    return runModifyingHook<"inbound_debounce", PluginHookInboundDebounceResult>(
+      "inbound_debounce",
+      event,
+      ctx,
+      {
+        shouldStop: () => true,
+        terminalLabel: "decision",
+      },
+    );
+  }
+
   async function runInboundClaimForPlugin(
     pluginId: string,
     event: PluginHookInboundClaimEvent,
@@ -1576,6 +1600,7 @@ export function createHookRunner(
     runBeforeAgentRun,
     // Message hooks
     runInboundClaim,
+    runInboundDebounce,
     runInboundClaimForPlugin,
     runInboundClaimForPluginOutcome,
     runChannelPairingRequested,

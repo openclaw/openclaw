@@ -15,7 +15,10 @@ import {
   formatLocationText,
   type MediaPlaceholderTextFact,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
+import {
+  createInboundDebouncer,
+  type InboundDebounceDecision,
+} from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
 import {
   asDateTimestampMs,
@@ -57,6 +60,7 @@ import {
   requireAdmittedWhatsAppInboundMessage,
   requireWhatsAppInboundAdmission,
 } from "./admission.js";
+import { resolveWhatsAppInboundMaxBufferAgeMs } from "./debounce.js";
 import { isRecentOutboundMessage, rememberRecentOutboundMessage } from "./dedupe.js";
 import {
   createWhatsAppDurableInboundMessageId,
@@ -295,6 +299,10 @@ type AppendReplyWindow = {
   maxAgeMs: number;
 };
 
+type WhatsAppInboundDebounceMessage = AdmittedWebInboundCallbackMessage & {
+  debounceKey?: string;
+};
+
 type MonitorWebInboxOptions = {
   cfg: OpenClawConfig;
   loadConfig?: () => OpenClawConfig;
@@ -314,6 +322,10 @@ type MonitorWebInboxOptions = {
   appendReplyWindow?: AppendReplyWindow;
   /** Optional debounce gating predicate. */
   shouldDebounce?: (msg: AdmittedWebInboundCallbackMessage) => boolean;
+  /** Optional plugin policy decision. An explicit result overrides the channel default. */
+  resolveDebounceDecision?: (
+    msg: WhatsAppInboundDebounceMessage,
+  ) => InboundDebounceDecision | undefined | Promise<InboundDebounceDecision | undefined>;
   /** Optional shared socket reference so reply closures can follow reconnects. */
   socketRef?: { current: WASocket | null };
   /** Whether send retries should wait for a reconnect. */
@@ -338,11 +350,14 @@ type MonitorWebInboxOptions = {
 
 type AttachWebInboxToSocketOptions = Omit<
   MonitorWebInboxOptions,
-  "onMessage" | "shouldDebounce" | "socketTiming"
+  "onMessage" | "resolveDebounceDecision" | "shouldDebounce" | "socketTiming"
 > & {
   socketTiming: Required<WhatsAppSocketTimingOptions>;
   onMessage: (msg: WebInboundMessageInput) => Promise<void>;
   shouldDebounce?: (msg: WebInboundMessageInput) => boolean;
+  resolveDebounceDecision?: (
+    msg: WebInboundMessageInput,
+  ) => InboundDebounceDecision | undefined | Promise<InboundDebounceDecision | undefined>;
 };
 
 export async function attachWebInboxToSocket(
@@ -499,6 +514,8 @@ export async function attachWebInboxToSocket(
   };
   const shouldDebounceInboundMessage = (msg: AdmittedWebInboundCallbackMessage): boolean =>
     options.shouldDebounce?.(msg) ?? true;
+  const resolveInboundDebounceDecision = (msg: WhatsAppInboundDebounceMessage) =>
+    options.resolveDebounceDecision?.(msg);
   const orderDebouncedInboundEntries = (entries: QueuedInboundMessage[]) =>
     entries.toSorted((a, b) => {
       const timestampDiff = (a.event.timestamp ?? 0) - (b.event.timestamp ?? 0);
@@ -575,6 +592,19 @@ export async function attachWebInboxToSocket(
     debounceMs: inboundDebounceMs,
     buildKey: (msg) => msg.debounceKey ?? buildInboundDebounceKey(msg),
     shouldDebounce: shouldDebounceInboundMessage,
+    resolveDecision: resolveInboundDebounceDecision,
+    resolveMaxBufferAgeMs: resolveWhatsAppInboundMaxBufferAgeMs,
+    // Singular structured contexts cannot be represented safely in a batch.
+    canCombine: (bufferedItems, item) =>
+      !item.payload.location &&
+      !item.quote &&
+      !item.payload.untrustedStructuredContext?.length &&
+      bufferedItems.every(
+        (entry) =>
+          !entry.payload.location &&
+          !entry.quote &&
+          !entry.payload.untrustedStructuredContext?.length,
+      ),
     onFlush: async (entries) => {
       let finishFlush!: () => void;
       const flushTask = new Promise<void>((resolve) => {
@@ -620,6 +650,10 @@ export async function attachWebInboxToSocket(
                   jids: Array.from(mentioned),
                 }
               : last.group?.mentions;
+          const combinedMediaItems = orderedEntries.flatMap(
+            (entry) =>
+              entry.payload.mediaItems ?? (entry.payload.media ? [entry.payload.media] : []),
+          );
           const combinedGroup =
             last.group || combinedMentions
               ? {
@@ -635,6 +669,8 @@ export async function attachWebInboxToSocket(
                 ...last.payload,
                 body: combinedBody,
                 commandBody: combinedCommandBody,
+                media: combinedMediaItems[0],
+                mediaItems: combinedMediaItems.length > 0 ? combinedMediaItems : undefined,
               },
               group: combinedGroup,
               event: {
@@ -1978,6 +2014,7 @@ export async function monitorWebInbox(options: MonitorWebInboxOptions) {
     throw err;
   }
   const shouldDebounce = options.shouldDebounce;
+  const resolveDebounceDecision = options.resolveDebounceDecision;
   const normalizeAdmittedWebInboundMessage = (
     msg: WebInboundMessageInput,
   ): AdmittedWebInboundCallbackMessage =>
@@ -1991,6 +2028,9 @@ export async function monitorWebInbox(options: MonitorWebInboxOptions) {
     },
     shouldDebounce: shouldDebounce
       ? (msg) => shouldDebounce(normalizeAdmittedWebInboundMessage(msg))
+      : undefined,
+    resolveDebounceDecision: resolveDebounceDecision
+      ? (msg) => resolveDebounceDecision(normalizeAdmittedWebInboundMessage(msg))
       : undefined,
     socketTiming,
     sock,
