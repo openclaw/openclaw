@@ -1011,10 +1011,14 @@ export function createSessionMcpRuntime(params: {
 
       const refresh = catalogInFlight ?? startCatalogRefresh();
       try {
-        return await waitForSessionMcpSharedTask({
+        const nextCatalog = await waitForSessionMcpSharedTask({
           task: refresh,
           signal: options?.signal,
         });
+        if (refresh.generation !== catalogInvalidationGeneration) {
+          continue;
+        }
+        return nextCatalog;
       } catch (error) {
         options?.signal?.throwIfAborted();
         failIfDisposed();
