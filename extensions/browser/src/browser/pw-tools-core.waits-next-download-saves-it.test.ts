@@ -205,6 +205,76 @@ describe("pw-tools-core", () => {
     });
   });
 
+  it("keeps the download timeout active while saving the file", async () => {
+    await withTempDir(async (tempDir) => {
+      const harness = createDownloadEventHarness();
+      const saveAs = vi.fn(() => new Promise<void>(() => {}));
+
+      const p = mod.waitForDownloadViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        path: path.join(tempDir, "file.bin"),
+        timeoutMs: 500,
+      });
+
+      await Promise.resolve();
+      harness.expectArmed();
+      harness.trigger({
+        url: () => "https://example.com/file.bin",
+        suggestedFilename: () => "file.bin",
+        saveAs,
+      });
+
+      await vi.waitFor(() => expect(saveAs).toHaveBeenCalledOnce());
+      await expect(p).rejects.toThrow("Timeout waiting for download");
+      expect(harness.activeHandlerCount()).toBe(0);
+    });
+  });
+
+  it("does not publish a download save that completes after the timeout", async () => {
+    await withTempDir(async (tempDir) => {
+      const harness = createDownloadEventHarness();
+      const targetPath = path.join(tempDir, "file.bin");
+      let releaseSave!: () => void;
+      const releaseSavePromise = new Promise<void>((resolve) => {
+        releaseSave = resolve;
+      });
+      let tempWriteFinished!: () => void;
+      const tempWriteFinishedPromise = new Promise<void>((resolve) => {
+        tempWriteFinished = resolve;
+      });
+      const saveAs = vi.fn(async (outPath: string) => {
+        await releaseSavePromise;
+        await fs.writeFile(outPath, "late-content", "utf8");
+        tempWriteFinished();
+      });
+
+      const p = mod.waitForDownloadViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        path: targetPath,
+        timeoutMs: 100,
+      });
+
+      await Promise.resolve();
+      harness.expectArmed();
+      harness.trigger({
+        url: () => "https://example.com/file.bin",
+        suggestedFilename: () => "file.bin",
+        saveAs,
+      });
+
+      await vi.waitFor(() => expect(saveAs).toHaveBeenCalledOnce());
+      await expect(p).rejects.toThrow("Timeout waiting for download");
+      releaseSave();
+      await tempWriteFinishedPromise;
+      const tempPath = requireSaveAsPath(saveAs);
+      await vi.waitFor(async () => await expectPathMissing(tempPath));
+      await expectPathMissing(targetPath);
+      expect(harness.activeHandlerCount()).toBe(0);
+    });
+  });
+
   it("creates missing explicit download output parents through the safe output directory path", async () => {
     await withTempDir(async (tempDir) => {
       const harness = createDownloadEventHarness();
