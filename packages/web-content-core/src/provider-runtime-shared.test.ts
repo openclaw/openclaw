@@ -161,4 +161,144 @@ describe("resolveWebProviderDefinition", () => {
       },
     });
   });
+
+  it("falls back to auto-detect when runtime metadata names an unavailable provider", () => {
+    const resolved = resolveWebProviderDefinition({
+      config: {},
+      toolConfig: { enabled: true },
+      runtimeMetadata: { selectedProvider: "removed-provider" },
+      providers: [
+        {
+          id: "custom",
+        },
+      ],
+      resolveEnabled: () => true,
+      resolveAutoProviderId: () => "custom",
+      createTool: ({ provider, runtimeMetadata }) => ({
+        name: provider.id,
+        runtimeSelectedProvider: runtimeMetadata?.selectedProvider,
+      }),
+    });
+
+    expect(resolved).toEqual({
+      provider: {
+        id: "custom",
+      },
+      definition: {
+        name: "custom",
+        runtimeSelectedProvider: "custom",
+      },
+    });
+  });
+
+  it("clears stale provider credential metadata after runtime metadata fallback", () => {
+    const staleRuntimeMetadata = {
+      selectedProvider: "removed-provider",
+      selectedProviderKeySource: "missing",
+    };
+    const resolved = resolveWebProviderDefinition({
+      config: {},
+      toolConfig: { enabled: true },
+      runtimeMetadata: staleRuntimeMetadata,
+      providers: [
+        {
+          id: "custom",
+        },
+      ],
+      resolveEnabled: () => true,
+      resolveAutoProviderId: () => "custom",
+      createTool: ({ provider, runtimeMetadata }) => ({
+        name: provider.id,
+        runtimeSelectedProvider: runtimeMetadata?.selectedProvider,
+        runtimeSelectedProviderKeySource: runtimeMetadata?.selectedProviderKeySource,
+      }),
+    });
+
+    expect(resolved).toEqual({
+      provider: {
+        id: "custom",
+      },
+      definition: {
+        name: "custom",
+        runtimeSelectedProvider: "custom",
+        runtimeSelectedProviderKeySource: undefined,
+      },
+    });
+    expect(staleRuntimeMetadata).toEqual({
+      selectedProvider: "removed-provider",
+      selectedProviderKeySource: "missing",
+    });
+  });
+
+  it.each([
+    {
+      scenario: "a provider alias resolves successfully",
+      providerId: undefined,
+      runtimeProviderId: "custom-alias",
+      keySource: "env",
+      expectedProviderId: "custom",
+    },
+    {
+      scenario: "an explicit provider overrides it",
+      providerId: "explicit-provider",
+      runtimeProviderId: "runtime-provider",
+      keySource: "config",
+      expectedProviderId: "explicit-provider",
+    },
+  ] as const)(
+    "preserves runtime metadata when $scenario",
+    ({ providerId, runtimeProviderId, keySource, expectedProviderId }) => {
+      const resolved = resolveWebProviderDefinition({
+        config: {},
+        toolConfig: { enabled: true },
+        runtimeMetadata: {
+          selectedProvider: runtimeProviderId,
+          selectedProviderKeySource: keySource,
+        },
+        providerId,
+        providers: [{ id: "custom" }, { id: "explicit-provider" }, { id: "runtime-provider" }],
+        resolveEnabled: () => true,
+        resolveAutoProviderId: () => "custom",
+        resolveFallbackProviderId: ({ providerId: candidateProviderId }) =>
+          candidateProviderId === "custom-alias" ? "custom" : undefined,
+        createTool: ({ provider, runtimeMetadata }) => ({
+          name: provider.id,
+          runtimeSelectedProvider: runtimeMetadata?.selectedProvider,
+          runtimeSelectedProviderKeySource: runtimeMetadata?.selectedProviderKeySource,
+        }),
+      });
+
+      expect(resolved).toEqual({
+        provider: {
+          id: expectedProviderId,
+        },
+        definition: {
+          name: expectedProviderId,
+          runtimeSelectedProvider: runtimeProviderId,
+          runtimeSelectedProviderKeySource: keySource,
+        },
+      });
+    },
+  );
+
+  it("does not replace an unavailable explicit provider id with auto-detect", () => {
+    const resolved = resolveWebProviderDefinition({
+      config: {},
+      toolConfig: { enabled: true },
+      runtimeMetadata: undefined,
+      providerId: "missing-provider",
+      providers: [
+        {
+          id: "custom",
+        },
+      ],
+      resolveEnabled: () => true,
+      resolveAutoProviderId: () => "custom",
+      createTool: ({ provider }) => ({
+        name: provider.id,
+      }),
+    });
+
+    expect(resolved).toBeNull();
+  });
 });

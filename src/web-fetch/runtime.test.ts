@@ -183,6 +183,56 @@ describe("web fetch runtime", () => {
     });
   });
 
+  it("passes normalized runtime metadata to the provider after stale metadata recovery", async () => {
+    const provider = createFirecrawlProvider({
+      getConfiguredCredentialValue: () => "firecrawl-key",
+      createTool: ({ runtimeMetadata }) => ({
+        description: "firecrawl",
+        parameters: {},
+        execute: async (args) => ({
+          ...args,
+          runtimeProviderConfigured: runtimeMetadata?.providerConfigured,
+          runtimeSelectedProvider: runtimeMetadata?.selectedProvider,
+          runtimeSelectedProviderKeySource: runtimeMetadata?.selectedProviderKeySource,
+        }),
+      }),
+    });
+    resolveRuntimeWebFetchProvidersMock.mockReturnValue([provider]);
+    const runtimeWebFetch: RuntimeWebFetchMetadata = {
+      providerConfigured: "removed-provider",
+      providerSource: "configured",
+      selectedProvider: "removed-provider",
+      selectedProviderKeySource: "missing",
+      diagnostics: [],
+    };
+
+    const webFetch = requireResolvedWebFetch(
+      resolveWebFetchDefinition({
+        config: {},
+        runtimeWebFetch,
+        preferRuntimeProviders: true,
+      }),
+    );
+
+    expect(webFetch.provider.id).toBe("firecrawl");
+    await expect(
+      webFetch.definition.execute({
+        url: "https://example.com",
+        extractMode: "markdown",
+        maxChars: 1000,
+      }),
+    ).resolves.toEqual({
+      url: "https://example.com",
+      extractMode: "markdown",
+      maxChars: 1000,
+      runtimeProviderConfigured: "removed-provider",
+      runtimeSelectedProvider: "firecrawl",
+      runtimeSelectedProviderKeySource: undefined,
+    });
+    expect(runtimeWebFetch.selectedProvider).toBe("removed-provider");
+    expect(runtimeWebFetch.selectedProviderKeySource).toBe("missing");
+  });
+
   it("auto-detects providers from provider-declared env vars", () => {
     const provider = createFirecrawlProvider();
     resolvePluginWebFetchProvidersMock.mockReturnValue([provider]);
