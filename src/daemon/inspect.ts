@@ -9,6 +9,7 @@ import {
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "./constants.js";
+import { parseLaunchdPlistLabel } from "./launchd-plist.js";
 import { resolveHomeDir } from "./paths.js";
 import { execSchtasks } from "./schtasks-exec.js";
 import { parseSystemdExecStart } from "./systemd-unit.js";
@@ -212,14 +213,6 @@ function isOpenClawGatewayTaskName(name: string): boolean {
   return stripped === defaultName || /^openclaw gateway \(.+\)$/.test(stripped);
 }
 
-function tryExtractPlistLabel(contents: string): string | null {
-  const match = contents.match(/<key>Label<\/key>\s*<string>([\s\S]*?)<\/string>/i);
-  if (!match) {
-    return null;
-  }
-  return match[1]?.trim() || null;
-}
-
 function isIgnoredLaunchdLabel(label: string): boolean {
   return label === resolveGatewayLaunchAgentLabel();
 }
@@ -293,7 +286,7 @@ async function scanLaunchdDir(params: {
   });
 
   for (const { name: labelFromName, fullPath, contents } of candidates) {
-    const label = tryExtractPlistLabel(contents) ?? labelFromName;
+    const label = parseLaunchdPlistLabel(contents) ?? labelFromName;
     const legacyLabel = isLegacyLabel(labelFromName) || isLegacyLabel(label);
     const executionMarker = detectLaunchdGatewayExecutionMarker(contents);
     const marker =

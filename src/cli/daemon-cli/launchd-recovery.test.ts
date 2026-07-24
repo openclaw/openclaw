@@ -87,4 +87,33 @@ describe("recoverInstalledLaunchAgent", () => {
       "requires a logged-in macOS GUI session",
     );
   });
+
+  it("surfaces system LaunchDaemon conflicts instead of falling back to unmanaged restart", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    launchAgentPlistExists.mockResolvedValue(true);
+    repairLaunchAgentBootstrap.mockResolvedValue({
+      ok: false,
+      status: "system-launchdaemon-conflict",
+      detail: "Existing system LaunchDaemon system/ai.openclaw.gateway detected by launchctl.",
+    });
+
+    await expect(recoverInstalledLaunchAgent({ result: "restarted" })).rejects.toThrow(
+      "Existing system LaunchDaemon system/ai.openclaw.gateway detected by launchctl",
+    );
+  });
+
+  it("surfaces unverifiable system LaunchDaemon state instead of falling back", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    launchAgentPlistExists.mockResolvedValue(true);
+    repairLaunchAgentBootstrap.mockResolvedValue({
+      ok: false,
+      status: "system-launchdaemon-unverifiable",
+      detail:
+        "Could not verify whether system LaunchDaemon system/ai.openclaw.gateway is loaded: permission denied",
+    });
+
+    await expect(recoverInstalledLaunchAgent({ result: "restarted" })).rejects.toThrow(
+      "Could not verify whether system LaunchDaemon system/ai.openclaw.gateway is loaded",
+    );
+  });
 });
