@@ -276,6 +276,48 @@ describe("volcengineTTS", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects malformed base64 in streamed Seed Speech frames", async () => {
+    const release = vi.fn();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        [
+          JSON.stringify({ code: 0, data: Buffer.from("audio-1").toString("base64") }),
+          JSON.stringify({ code: 0, data: "%%%not-base64!!" }),
+        ].join("\n"),
+      ),
+      release,
+    });
+
+    await expect(
+      volcengineTTS({
+        text: "hello",
+        apiKey: "secret-api-key",
+        timeoutMs: 1000,
+      }),
+    ).rejects.toThrow("BytePlus Seed Speech TTS returned malformed base64 audio data");
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects malformed base64 in legacy TTS responses", async () => {
+    const release = vi.fn();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(JSON.stringify({ code: 3000, data: "%%%not-base64!!" }), {
+        status: 200,
+      }),
+      release,
+    });
+
+    await expect(
+      volcengineTTS({
+        text: "hello",
+        appId: "app-id",
+        token: "legacy-token",
+        timeoutMs: 1000,
+      }),
+    ).rejects.toThrow("Volcengine TTS returned malformed base64 audio data");
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("reports Seed Speech provider errors without exposing credentials", async () => {
     const release = vi.fn();
     fetchWithSsrFGuardMock.mockResolvedValue({
