@@ -6,8 +6,30 @@ const sendMock = vi.hoisted(() => ({
   sendMessageIMessage: vi.fn(),
 }));
 
+const probeMock = vi.hoisted(() => ({
+  getCachedIMessagePrivateApiStatus: vi.fn(),
+  probeIMessagePrivateApi: vi.fn(),
+}));
+
+const actionsMock = vi.hoisted(() => ({
+  sendPoll: vi.fn(),
+  resolveChatGuidForTarget: vi.fn(),
+}));
+
 vi.mock("./send.js", () => ({
   sendMessageIMessage: sendMock.sendMessageIMessage,
+}));
+
+vi.mock("./probe.js", () => ({
+  getCachedIMessagePrivateApiStatus: probeMock.getCachedIMessagePrivateApiStatus,
+  probeIMessagePrivateApi: probeMock.probeIMessagePrivateApi,
+}));
+
+vi.mock("./actions.runtime.js", () => ({
+  imessageActionsRuntime: {
+    sendPoll: actionsMock.sendPoll,
+    resolveChatGuidForTarget: actionsMock.resolveChatGuidForTarget,
+  },
 }));
 
 describe("imessageApprovalNativeRuntime", () => {
@@ -140,6 +162,7 @@ describe("imessageApprovalNativeRuntime", () => {
         } as never,
         pendingPayload: {
           text: "pending",
+          hintlessText: "pending",
           allowedDecisions: ["allow-once"],
         },
       }),
@@ -155,6 +178,9 @@ describe("imessageApprovalNativeRuntime", () => {
   describe("deliverPending GUID-only binding", () => {
     beforeEach(() => {
       sendMock.sendMessageIMessage.mockReset();
+      // No cached bridge status: these cases exercise the text+tapback path.
+      probeMock.getCachedIMessagePrivateApiStatus.mockReset();
+      actionsMock.sendPoll.mockReset();
     });
 
     const baseDeliverArgs = {
@@ -182,6 +208,7 @@ describe("imessageApprovalNativeRuntime", () => {
       } as never,
       pendingPayload: {
         text: "Reply with: /approve exec-1 allow-once",
+        hintlessText: "Reply with: /approve exec-1 allow-once",
         allowedDecisions: ["allow-once" as const],
       },
     };
@@ -261,6 +288,7 @@ describe("imessageApprovalNativeRuntime", () => {
         } as never,
         pendingPayload: {
           text: "pending",
+          hintlessText: "pending",
           allowedDecisions: ["allow-once"],
         },
       }),
@@ -270,6 +298,267 @@ describe("imessageApprovalNativeRuntime", () => {
         to: "chat_guid:iMessage;+;chat42",
         accountId: "default",
       },
+    });
+  });
+
+  it("omits the /approve fences from the poll-mode prompt", async () => {
+    // The poll balloon renders every decision, so repeating them as
+    // `/approve <id> ...` fences is noise. Full id stays for reconstruction.
+    const payload = await imessageApprovalNativeRuntime.presentation.buildPendingPayload({
+      cfg: {} as never,
+      accountId: "default",
+      context: { accountId: "default" },
+      request: {
+        id: "exec-omit",
+        request: { command: "echo hi" },
+        createdAtMs: 0,
+        expiresAtMs: 60_000,
+      },
+      approvalKind: "exec",
+      nowMs: 0,
+      view: {
+        approvalKind: "exec",
+        approvalId: "exec-omit",
+        commandText: "echo hi",
+        actions: [
+          { decision: "allow-once", label: "Allow Once", command: "/approve exec-omit allow-once" },
+          { decision: "deny", label: "Deny", command: "/approve exec-omit deny" },
+        ],
+      } as never,
+    });
+
+    expect(payload.hintlessText).not.toContain("Other options:");
+    expect(payload.hintlessText).not.toContain("/approve exec-omit deny");
+    expect(payload.hintlessText).toContain("Pending command:");
+    expect(payload.hintlessText).toContain("Full id:");
+    // The tapback-mode text is unchanged for hosts without poll support.
+    expect(payload.text).toContain("👍 Allow Once");
+  });
+
+  describe("native poll controls", () => {
+    const pollDeliverArgs = {
+      cfg: { channels: { imessage: { allowFrom: ["+15551230000"] } } } as never,
+      accountId: "default",
+      context: { accountId: "default" },
+      preparedTarget: { to: "+15551230000", accountId: "default" },
+      plannedTarget: {
+        surface: "origin" as const,
+        reason: "preferred" as const,
+        target: { to: "+15551230000" },
+      },
+      request: {
+        id: "exec-poll",
+        request: { command: "echo hi" },
+        createdAtMs: 0,
+        expiresAtMs: 60_000,
+      },
+      approvalKind: "exec" as const,
+      view: {
+        approvalKind: "exec",
+        approvalId: "exec-poll",
+        commandText: "echo hi",
+        actions: [],
+        expiresAtMs: Date.now() + 60_000,
+      } as never,
+      pendingPayload: {
+        text: "PROMPT WITH HINT\n\nReact with:\n\n👍 Allow Once",
+        hintlessText: "PROMPT WITHOUT HINT",
+        allowedDecisions: ["allow-once" as const, "deny" as const],
+      },
+    };
+
+    beforeEach(() => {
+      sendMock.sendMessageIMessage.mockReset();
+      sendMock.sendMessageIMessage.mockResolvedValue({
+        messageId: "prompt-guid",
+        guid: "prompt-guid",
+        sentText: "PROMPT WITHOUT HINT",
+        receipt: { kind: "text" } as never,
+      });
+      probeMock.getCachedIMessagePrivateApiStatus.mockReset();
+      probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+        available: true,
+        selectors: { pollPayloadMessage: true },
+        rpcMethods: ["poll.send"],
+      });
+      probeMock.probeIMessagePrivateApi.mockReset();
+      actionsMock.sendPoll.mockReset();
+      actionsMock.sendPoll.mockResolvedValue({
+        messageId: "poll-guid",
+        pollOptions: [
+          { id: "id-allow", text: "👍 Allow Once" },
+          { id: "id-deny", text: "👎 Deny" },
+        ],
+      });
+      actionsMock.resolveChatGuidForTarget.mockReset();
+      actionsMock.resolveChatGuidForTarget.mockResolvedValue("iMessage;-;+15551230000");
+    });
+
+    it("attests approval sends as host-originated, not delegated", async () => {
+      // #99905: unstamped operations fail closed to "delegated". Approval
+      // delivery targets come from approval routing/config, never model input,
+      // so the send must carry its real authority.
+      await imessageApprovalNativeRuntime.transport.deliverPending(pollDeliverArgs);
+
+      expect(sendMock.sendMessageIMessage).toHaveBeenCalledWith(
+        "+15551230000",
+        expect.any(String),
+        expect.objectContaining({ conversationReadOrigin: "direct-operator" }),
+      );
+    });
+
+    it("sends the hintless prompt and threads a poll under it", async () => {
+      const entry = await imessageApprovalNativeRuntime.transport.deliverPending(pollDeliverArgs);
+
+      expect(sendMock.sendMessageIMessage).toHaveBeenCalledWith(
+        "+15551230000",
+        "PROMPT WITHOUT HINT",
+        expect.anything(),
+      );
+      expect(actionsMock.sendPoll).toHaveBeenCalledWith(
+        expect.objectContaining({
+          chatGuid: "iMessage;-;+15551230000",
+          question: "Approve exec-pol?",
+          choices: ["👍 Allow Once", "👎 Deny"],
+          replyToMessageId: "prompt-guid",
+        }),
+      );
+      expect(entry).toMatchObject({
+        messageId: "prompt-guid",
+        poll: { pollGuid: "poll-guid" },
+      });
+      expect(entry?.poll?.optionDecisions).toEqual([
+        ["id-allow", "allow-once"],
+        ["id-deny", "deny"],
+      ]);
+    });
+
+    it("keeps the tapback hint when the bridge has no poll selector", async () => {
+      probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+        available: true,
+        selectors: {},
+        rpcMethods: [],
+      });
+
+      const entry = await imessageApprovalNativeRuntime.transport.deliverPending(pollDeliverArgs);
+
+      expect(sendMock.sendMessageIMessage).toHaveBeenCalledWith(
+        "+15551230000",
+        pollDeliverArgs.pendingPayload.text,
+        expect.anything(),
+      );
+      expect(actionsMock.sendPoll).not.toHaveBeenCalled();
+      expect(entry?.poll).toBeUndefined();
+    });
+
+    it("never probes the bridge on the approval path", async () => {
+      // A probe spawns imsg; putting it in front of an approval prompt would
+      // add seconds of latency. Cold cache degrades to tapbacks instead.
+      probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue(undefined);
+
+      await imessageApprovalNativeRuntime.transport.deliverPending(pollDeliverArgs);
+
+      expect(probeMock.probeIMessagePrivateApi).not.toHaveBeenCalled();
+      expect(actionsMock.sendPoll).not.toHaveBeenCalled();
+    });
+
+    it("recovers the hint when the chat turns out not to be registered with Messages", async () => {
+      // Chat resolution happens after the prompt (it is an RPC and must not
+      // delay approval delivery), so this degrades via the recovery path.
+      actionsMock.resolveChatGuidForTarget.mockResolvedValue(null);
+
+      const entry = await imessageApprovalNativeRuntime.transport.deliverPending(pollDeliverArgs);
+
+      expect(actionsMock.sendPoll).not.toHaveBeenCalled();
+      expect(entry?.poll).toBeUndefined();
+      expect(sendMock.sendMessageIMessage).toHaveBeenLastCalledWith(
+        "+15551230000",
+        expect.stringContaining("👍 Allow Once"),
+        expect.objectContaining({
+          conversationReadOrigin: "direct-operator",
+          replyToId: "prompt-guid",
+        }),
+      );
+    });
+
+    it("keeps the tapback hint when fewer than two decisions are allowed", async () => {
+      const entry = await imessageApprovalNativeRuntime.transport.deliverPending({
+        ...pollDeliverArgs,
+        pendingPayload: { ...pollDeliverArgs.pendingPayload, allowedDecisions: ["allow-once"] },
+      });
+
+      expect(actionsMock.sendPoll).not.toHaveBeenCalled();
+      expect(entry?.poll).toBeUndefined();
+    });
+
+    it("recovers the hint when the poll send fails after the prompt went out", async () => {
+      actionsMock.sendPoll.mockRejectedValue(new Error("bridge gone"));
+
+      const entry = await imessageApprovalNativeRuntime.transport.deliverPending(pollDeliverArgs);
+
+      expect(entry?.poll).toBeUndefined();
+      // The prompt is already delivered without its hint, so the approver would
+      // otherwise be left with no visible way to act.
+      expect(sendMock.sendMessageIMessage).toHaveBeenLastCalledWith(
+        "+15551230000",
+        expect.stringContaining("👍 Allow Once"),
+        expect.objectContaining({ replyToId: "prompt-guid" }),
+      );
+    });
+
+    it("binds a reaction target to the recovery hint so tapping it resolves", async () => {
+      // An unbound hint would tell the approver to react to a message no
+      // tapback is bound to, which silently resolves nothing.
+      actionsMock.sendPoll.mockRejectedValue(new Error("bridge gone"));
+      sendMock.sendMessageIMessage
+        .mockResolvedValueOnce({
+          messageId: "prompt-guid",
+          guid: "prompt-guid",
+          receipt: { kind: "text" } as never,
+        })
+        .mockResolvedValueOnce({
+          messageId: "hint-guid",
+          guid: "hint-guid",
+          receipt: { kind: "text" } as never,
+        });
+
+      const entry = await imessageApprovalNativeRuntime.transport.deliverPending(pollDeliverArgs);
+
+      expect(entry).toMatchObject({ messageId: "prompt-guid", hintMessageId: "hint-guid" });
+    });
+
+    it("does not bind a poll the bridge returned no GUID for", async () => {
+      actionsMock.sendPoll.mockResolvedValue({ messageId: "ok", pollOptions: [] });
+
+      const entry = await imessageApprovalNativeRuntime.transport.deliverPending(pollDeliverArgs);
+
+      expect(entry).toMatchObject({ messageId: "prompt-guid" });
+      expect(entry?.poll).toBeUndefined();
+    });
+
+    it("attests resolved and expired threaded replies as host-originated", async () => {
+      await imessageApprovalNativeRuntime.transport.updateEntry?.({
+        cfg: {} as never,
+        accountId: "default",
+        context: { accountId: "default" },
+        entry: {
+          accountId: "default",
+          to: "+15551230000",
+          conversation: { chatIdentifier: "iMessage;-;+15551230000" },
+          messageId: "prompt-guid",
+        },
+        payload: { text: "Canonical result: Denied" },
+        phase: "resolved",
+      });
+
+      expect(sendMock.sendMessageIMessage).toHaveBeenCalledWith(
+        "+15551230000",
+        "Canonical result: Denied",
+        expect.objectContaining({
+          conversationReadOrigin: "direct-operator",
+          replyToId: "prompt-guid",
+        }),
+      );
     });
   });
 });

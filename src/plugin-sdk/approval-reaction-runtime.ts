@@ -451,6 +451,8 @@ export function buildApprovalReactionPendingContent(params: {
   request: ApprovalRequest;
   view: PendingApprovalView;
   nowMs: number;
+  /** Drop `/approve` fences from the fallback text when a channel renders native controls. */
+  omitDecisionCommands?: boolean;
 }): ApprovalReactionPendingContent {
   const reactionPayload = buildApprovalPendingPromptPayload(params);
   const manualFallbackPayload =
@@ -482,6 +484,7 @@ export function buildApprovalReactionPendingContent(params: {
             sessionKey: params.view.sessionKey ?? null,
             expiresAtMs: params.request.expiresAtMs,
             nowMs: params.nowMs,
+            omitDecisionCommands: params.omitDecisionCommands,
           } satisfies ExecApprovalPendingReplyParams),
         );
   return { reactionPayload, manualFallbackPayload };
