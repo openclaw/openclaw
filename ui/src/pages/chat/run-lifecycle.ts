@@ -181,7 +181,7 @@ async function requestChatAbort(
   intent: ChatAbortIntent,
 ): Promise<{ ok: true } | { ok: false; error: unknown }> {
   try {
-    if (intent.runId) {
+    if (intent.runId !== null) {
       await client.request("chat.abort", {
         sessionKey: intent.sessionKey,
         ...(intent.agentId ? { agentId: intent.agentId } : {}),
