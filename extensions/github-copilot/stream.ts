@@ -59,14 +59,14 @@ function buildCopilotDynamicHeaders(params: {
   };
 }
 
-function patchOnPayloadResult(result: unknown): unknown {
-  if (result && typeof result === "object" && "then" in result) {
+function patchOnPayloadResult(result: unknown, originalPayload: unknown): unknown {
+  if (typeof (result as { then?: unknown } | null)?.then === "function") {
     return Promise.resolve(result).then((next) => {
-      sanitizeCopilotReplayResponsePayload(next);
+      sanitizeCopilotReplayResponsePayload(next === undefined ? originalPayload : next);
       return next;
     });
   }
-  sanitizeCopilotReplayResponsePayload(result);
+  sanitizeCopilotReplayResponsePayload(result === undefined ? originalPayload : result);
   return result;
 }
 
@@ -133,7 +133,7 @@ function wrapCopilotOpenAIResponsesStream(
       headers: buildCopilotRequestHeaders(context, options?.headers),
       onPayload: (payload, payloadModel) => {
         sanitizeCopilotReplayResponsePayload(payload);
-        return patchOnPayloadResult(originalOnPayload?.(payload, payloadModel));
+        return patchOnPayloadResult(originalOnPayload?.(payload, payloadModel), payload);
       },
     };
     return underlying(model, context, wrappedOptions);
