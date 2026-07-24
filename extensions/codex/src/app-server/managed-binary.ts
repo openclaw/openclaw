@@ -26,6 +26,7 @@ type ManagedCodexAppServerPaths = {
 
 type ResolveManagedCodexAppServerOptions = {
   platform?: NodeJS.Platform;
+  arch?: NodeJS.Architecture;
   pluginRoot?: string;
   pathExists?: (filePath: string, platform: NodeJS.Platform) => Promise<boolean>;
 };
@@ -49,6 +50,7 @@ export async function resolveManagedCodexAppServerStartOptions(
   const platform = options.platform ?? process.platform;
   const paths = resolveManagedCodexAppServerPaths({
     platform,
+    arch: options.arch,
     pluginRoot: options.pluginRoot,
     managedCommandOrder: startOptions.managedCommandOrder,
   });
@@ -81,9 +83,20 @@ export function resolveManagedCodexNativeCommand(
   ) {
     return command;
   }
-  const target = resolveCodexNativeTarget(platform, options.arch ?? process.arch);
+  const arch = options.arch ?? process.arch;
+  const target = resolveCodexNativeTarget(platform, arch);
   if (!target) {
     return undefined;
+  }
+  const expectedPlatformPackageVersion = resolveCodexPlatformPackageVersion(platform, arch);
+  const directNativeCommand = resolveDirectCodexNativeCommand(
+    command,
+    target,
+    expectedPlatformPackageVersion,
+    platform,
+  );
+  if (directNativeCommand) {
+    return directNativeCommand;
   }
   const packageRoot = resolveManagedCodexPackageRootForCommand(command, platform);
   if (!packageRoot) {
@@ -93,7 +106,10 @@ export function resolveManagedCodexNativeCommand(
   const pathExists = options.pathExists ?? existsSync;
   for (const packageName of [target.packageName, MANAGED_CODEX_APP_SERVER_PACKAGE]) {
     const packageJsonPath = resolvePackageJson(packageName, packageRoot);
-    if (!packageJsonPath) {
+    if (
+      !packageJsonPath ||
+      !isExpectedManagedCodexPackage(packageJsonPath, expectedPlatformPackageVersion)
+    ) {
       continue;
     }
     const candidate = path.join(
@@ -105,6 +121,55 @@ export function resolveManagedCodexNativeCommand(
     );
     if (pathExists(candidate)) {
       return candidate;
+    }
+  }
+  return undefined;
+}
+
+function resolveDirectCodexNativeCommand(
+  command: string,
+  target: { triple: string },
+  expectedPackageVersion: string,
+  platform: NodeJS.Platform,
+): string | undefined {
+  const pathApi = pathForPlatform(platform);
+  const expectedRelativePath = pathApi.join(
+    "vendor",
+    target.triple,
+    "bin",
+    platform === "win32" ? "codex.exe" : "codex",
+  );
+  let commandPaths: string[];
+  try {
+    commandPaths = [realpathSync(command)];
+  } catch {
+    commandPaths = [command];
+  }
+  for (const candidate of commandPaths) {
+    const packageRoot = resolveManagedCodexPackageRootForCommand(candidate, platform);
+    if (!packageRoot) {
+      continue;
+    }
+    const relativePath = pathApi.relative(packageRoot, candidate);
+    const matchesNativePath =
+      platform === "win32"
+        ? relativePath.toLowerCase() === expectedRelativePath.toLowerCase()
+        : relativePath === expectedRelativePath;
+    if (!matchesNativePath) {
+      continue;
+    }
+    try {
+      const packageJson = JSON.parse(
+        readFileSync(pathApi.join(packageRoot, "package.json"), "utf8"),
+      ) as { name?: unknown; version?: unknown };
+      if (
+        packageJson.name === MANAGED_CODEX_APP_SERVER_PACKAGE &&
+        packageJson.version === expectedPackageVersion
+      ) {
+        return candidate;
+      }
+    } catch {
+      // Native identity requires readable exact-version package metadata.
     }
   }
   return undefined;
@@ -143,6 +208,14 @@ function resolveManagedCodexPackageRootForCommand(
   return undefined;
 }
 
+function resolveCodexPlatformPackageVersion(
+  platform: NodeJS.Platform,
+  arch: NodeJS.Architecture,
+): string {
+  const packagePlatform = platform === "android" ? "linux" : platform;
+  return `${MAX_CODEX_APP_SERVER_VERSION}-${packagePlatform}-${arch}`;
+}
+
 function resolveCodexNativeTarget(
   platform: NodeJS.Platform,
   arch: NodeJS.Architecture,
@@ -178,9 +251,28 @@ function resolvePackageJsonFromRoot(packageName: string, root: string): string |
   }
 }
 
+function isExpectedManagedCodexPackage(
+  packageJsonPath: string,
+  expectedPlatformPackageVersion: string,
+): boolean {
+  try {
+    const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as {
+      name?: unknown;
+      version?: unknown;
+    };
+    return (
+      packageJson.name === MANAGED_CODEX_APP_SERVER_PACKAGE &&
+      packageJson.version === expectedPlatformPackageVersion
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** Returns the preferred and fallback managed Codex binary paths for a plugin root. */
 function resolveManagedCodexAppServerPaths(params: {
   platform?: NodeJS.Platform;
+  arch?: NodeJS.Architecture;
   pluginRoot?: string;
   managedCommandOrder?: CodexManagedCommandOrder;
 }): ManagedCodexAppServerPaths {
@@ -188,6 +280,7 @@ function resolveManagedCodexAppServerPaths(params: {
   const candidateCommandPaths = resolveManagedCodexAppServerCommandCandidates(
     params.pluginRoot ?? CODEX_PLUGIN_ROOT,
     platform,
+    params.arch ?? process.arch,
     params.managedCommandOrder ?? "package-first",
   );
   return {
@@ -199,12 +292,14 @@ function resolveManagedCodexAppServerPaths(params: {
 function resolveManagedCodexAppServerCommandCandidates(
   pluginRoot: string,
   platform: NodeJS.Platform,
+  arch: NodeJS.Architecture,
   managedCommandOrder: CodexManagedCommandOrder,
 ): string[] {
   const pathApi = pathForPlatform(platform);
   const commandName = platform === "win32" ? "codex.cmd" : "codex";
   const roots = resolveManagedCodexAppServerCandidateRoots(pluginRoot, platform);
   const packageCommandPaths = [
+    ...resolveManagedCodexPnpmStoreNativeCandidates(roots, platform, arch),
     ...resolveManagedCodexPackageBinCandidates(roots, platform),
     ...roots.map((root) => pathApi.join(root, "node_modules", ".bin", commandName)),
   ];
@@ -244,8 +339,31 @@ function resolveManagedCodexAppServerCandidateRoots(
       : null,
   ].filter((root): root is string => Boolean(root));
   return [
-    ...new Set([...directRoots, ...resolveNearestNodeModulesProjectRoots(directRoots, platform)]),
+    ...new Set([
+      ...directRoots,
+      ...resolveNearestNodeModulesProjectRoots(directRoots, platform),
+      ...resolvePnpmVirtualStoreProjectRoots(directRoots, platform),
+    ]),
   ];
+}
+
+function resolvePnpmVirtualStoreProjectRoots(
+  roots: readonly string[],
+  platform: NodeJS.Platform,
+): string[] {
+  const pathApi = pathForPlatform(platform);
+  const marker = `${pathApi.sep}node_modules${pathApi.sep}.pnpm${pathApi.sep}`;
+  const projectRoots: string[] = [];
+  for (const root of roots) {
+    const resolved = pathApi.resolve(root);
+    const haystack = platform === "win32" ? resolved.toLowerCase() : resolved;
+    const needle = platform === "win32" ? marker.toLowerCase() : marker;
+    const markerIndex = haystack.indexOf(needle);
+    if (markerIndex > 0) {
+      projectRoots.push(resolved.slice(0, markerIndex));
+    }
+  }
+  return projectRoots;
 }
 
 function resolveNearestNodeModulesProjectRoots(
@@ -269,6 +387,34 @@ function resolveNearestNodeModulesProjectRoots(
     }
   }
   return projectRoots;
+}
+
+function resolveManagedCodexPnpmStoreNativeCandidates(
+  roots: readonly string[],
+  platform: NodeJS.Platform,
+  arch: NodeJS.Architecture,
+): string[] {
+  const target = resolveCodexNativeTarget(platform, arch);
+  if (!target) {
+    return [];
+  }
+  const pathApi = pathForPlatform(platform);
+  const platformPackageVersion = resolveCodexPlatformPackageVersion(platform, arch);
+  const packageStoreName = `${MANAGED_CODEX_APP_SERVER_PACKAGE.replace("/", "+")}@${platformPackageVersion}`;
+  return roots.map((root) =>
+    pathApi.join(
+      root,
+      "node_modules",
+      ".pnpm",
+      packageStoreName,
+      "node_modules",
+      ...MANAGED_CODEX_APP_SERVER_PACKAGE.split("/"),
+      "vendor",
+      target.triple,
+      "bin",
+      platform === "win32" ? "codex.exe" : "codex",
+    ),
+  );
 }
 
 function resolveManagedCodexPackageBinCandidates(
