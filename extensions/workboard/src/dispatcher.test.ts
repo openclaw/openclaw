@@ -942,6 +942,69 @@ describe("dispatchAndStartWorkboardCards", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
+  it("does not let stale claims on done cards consume an owner running slot", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const done = await store.create({
+      title: "Completed without releasing claim",
+      status: "ready",
+      agentId: "codex-main",
+    });
+    await store.claim(done.id, { ownerId: "codex-main", token: "stale-token" });
+    await store.update(done.id, { status: "done" });
+    const ready = await store.create({
+      title: "Next ready card",
+      status: "ready",
+      priority: "high",
+      agentId: "codex-main",
+      workspaceAccess: { unrestricted: true },
+    });
+    const run = vi.fn().mockResolvedValue({ runId: "run-next" });
+
+    const result = await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      options: { now: 10, maxStarts: 3 },
+    });
+
+    expect((await store.get(done.id))?.metadata?.claim).toMatchObject({
+      ownerId: "codex-main",
+    });
+    expect(result.started).toEqual([
+      expect.objectContaining({ cardId: ready.id, runId: "run-next" }),
+    ]);
+    expect(run).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a done card with a running execution in the owner running slot", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const running = await store.create({
+      title: "Completed card with active execution",
+      status: "ready",
+      agentId: "codex-main",
+    });
+    await store.update(running.id, {
+      status: "done",
+      execution: { runId: "run-active", status: "running" },
+    });
+    await store.create({
+      title: "Next ready card",
+      status: "ready",
+      priority: "high",
+      agentId: "codex-main",
+      workspaceAccess: { unrestricted: true },
+    });
+    const run = vi.fn().mockResolvedValue({ runId: "run-next" });
+
+    const result = await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      options: { now: 10, maxStarts: 3 },
+    });
+
+    expect(result.started).toEqual([]);
+    expect(run).not.toHaveBeenCalled();
+  });
+
   it("blocks a card when worker start fails after claim", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const card = await store.create({

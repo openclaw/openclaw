@@ -236,7 +236,7 @@ function selectStartableCards(
   for (const card of cards) {
     const consumesOwnerSlot =
       card.status === "running" ||
-      Boolean(card.metadata?.claim) ||
+      (card.status !== "done" && Boolean(card.metadata?.claim)) ||
       card.execution?.status === "running";
     if (!consumesOwnerSlot || cardIsArchived(card)) {
       continue;
