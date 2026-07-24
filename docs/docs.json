@@ -1960,6 +1960,7 @@
                   "reference/memory-config",
                   "reference/rich-output-protocol",
                   "reference/session-management-compaction",
+                  "reference/localization",
                   "date-time"
                 ]
               },
