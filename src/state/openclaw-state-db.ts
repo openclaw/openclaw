@@ -1,5 +1,5 @@
 // OpenClaw state database manages shared persisted state and migrations.
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
@@ -295,14 +295,32 @@ export function openExistingOpenClawStateDatabaseReadOnly(
   options: OpenClawStateDatabaseOptions = {},
 ): OpenClawStateDatabase | undefined {
   const pathname = resolveDatabasePath(options);
-  if (!existsSync(pathname)) {
+  return readOnlyDatabaseForPath(pathname);
+}
+
+function pathExistsOrThrow(pathname: string): boolean {
+  try {
+    statSync(pathname);
+    return true;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}
+
+function readOnlyDatabaseForPath(pathname: string): OpenClawStateDatabase | undefined {
+  if (!pathExistsOrThrow(pathname)) {
     return undefined;
   }
   const sqlite = requireNodeSqlite();
-  const hasWalSidecars = existsSync(`${pathname}-wal`) || existsSync(`${pathname}-shm`);
+  const hasWalSidecars =
+    pathExistsOrThrow(`${pathname}-wal`) || pathExistsOrThrow(`${pathname}-shm`);
   const uri = `${pathToFileURL(pathname).href}?mode=ro&immutable=1`;
   const db = new sqlite.DatabaseSync(hasWalSidecars ? pathname : uri, { readOnly: true });
   try {
+    db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     assertSupportedSchemaVersion(db, pathname);
   } catch (error) {
     db.close();
@@ -314,6 +332,7 @@ export function openExistingOpenClawStateDatabaseReadOnly(
     walMaintenance: {
       checkpoint: () => false,
       close: () => {
+        clearNodeSqliteKyselyCacheForDatabase(db);
         if (!db.isOpen) {
           return false;
         }
@@ -322,6 +341,51 @@ export function openExistingOpenClawStateDatabaseReadOnly(
       },
     },
   };
+}
+
+/** Read existing shared state through the state owner without mutating its file. */
+export function withOpenClawStateDatabaseReadOnly<T>(
+  operation: (database: OpenClawStateDatabase) => T,
+  options: OpenClawStateDatabaseOptions = {},
+): T | undefined {
+  if (options.database) {
+    return operation(options.database);
+  }
+  const env = options.env ?? process.env;
+  const pathname = resolveDatabasePath(options);
+  const terminalFailure = terminalOpenLatch.get(pathname);
+  if (terminalFailure) {
+    throw terminalFailure;
+  }
+  const cached = cachedDatabases.get(pathname);
+  if (cached?.db.isOpen) {
+    return operation(cached);
+  }
+  if (cached) {
+    cached.walMaintenance.close();
+    clearNodeSqliteKyselyCacheForDatabase(cached.db);
+    cachedDatabases.delete(pathname);
+  }
+  try {
+    const quarantine = readOpenClawDatabaseQuarantine(pathname, { env });
+    if (quarantine) {
+      throw createOpenClawDatabaseVerificationError("state", pathname, quarantine.reason);
+    }
+  } catch (error) {
+    if (error instanceof Error && error.name === "SqliteIntegrityError") {
+      throw error;
+    }
+    // Match the writable opener: a broken quarantine store must not brick all reads.
+  }
+  const database = readOnlyDatabaseForPath(pathname);
+  if (!database) {
+    return undefined;
+  }
+  try {
+    return operation(database);
+  } finally {
+    database.walMaintenance.close();
+  }
 }
 function assertStateDatabaseIntegrityBeforeMutation(
   database: DatabaseSync,
