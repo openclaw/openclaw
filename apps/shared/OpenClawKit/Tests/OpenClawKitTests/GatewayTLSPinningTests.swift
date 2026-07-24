@@ -139,12 +139,23 @@ struct GatewayTLSPinningTests {
     }
 
     @Test func `TLS authority includes normalized host and effective port`() throws {
-        let url = try #require(URL(string: "wss://Gateway.Example.com/path"))
-        let route = try #require(GatewayTLSAuthority(url: url))
+        let wssURL = try #require(URL(string: "wss://Gateway.Example.com/path"))
+        let httpsURL = try #require(URL(string: "https://Gateway.Example.com/path"))
+        let wsURL = try #require(URL(string: "ws://Gateway.Example.com/path"))
+        let httpURL = try #require(URL(string: "http://Gateway.Example.com/path"))
+        let customURL = try #require(URL(string: "https://Gateway.Example.com:8443/path"))
+        let wssRoute = try #require(GatewayTLSAuthority(url: wssURL))
+        let httpsRoute = try #require(GatewayTLSAuthority(url: httpsURL))
+        let wsRoute = try #require(GatewayTLSAuthority(url: wsURL))
+        let httpRoute = try #require(GatewayTLSAuthority(url: httpURL))
+        let customRoute = try #require(GatewayTLSAuthority(url: customURL))
 
-        #expect(route == GatewayTLSAuthority(host: "gateway.example.com", port: 443))
-        #expect(route != GatewayTLSAuthority(host: "redirect.example.com", port: 443))
-        #expect(route != GatewayTLSAuthority(host: "gateway.example.com", port: 8443))
+        #expect(wssRoute == GatewayTLSAuthority(host: "gateway.example.com", port: 443))
+        #expect(httpsRoute == GatewayTLSAuthority(host: "gateway.example.com", port: 443))
+        #expect(wsRoute == GatewayTLSAuthority(host: "gateway.example.com", port: 80))
+        #expect(httpRoute == GatewayTLSAuthority(host: "gateway.example.com", port: 80))
+        #expect(customRoute == GatewayTLSAuthority(host: "gateway.example.com", port: 8443))
+        #expect(wssRoute != GatewayTLSAuthority(host: "redirect.example.com", port: 443))
     }
 
     @Test func `bounded data request accepts exact limit and rejects next byte`() async throws {

@@ -364,11 +364,13 @@ struct SwiftUIRenderSmokeTests {
                     fileName: nil,
                     content: nil),
                 OpenClawChatMessageContent(
-                    type: "file",
+                    type: "image",
                     text: nil,
                     mimeType: "image/png",
-                    fileName: "result.png",
-                    mediaPath: "media/outbound/result.png",
+                    fileName: nil,
+                    url: "/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000001/full",
+                    openUrl: "/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000001/full",
+                    alt: "Generated image 1",
                     content: nil),
             ],
             timestamp: nil)

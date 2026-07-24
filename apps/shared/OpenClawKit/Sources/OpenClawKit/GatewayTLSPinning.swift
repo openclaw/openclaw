@@ -552,7 +552,7 @@ struct GatewayTLSAuthority: Equatable, Sendable {
     init?(url: URL) {
         guard let host = Self.normalizedHost(url.host) else { return nil }
         self.host = host
-        self.port = url.port ?? (url.scheme?.lowercased() == "wss" ? 443 : 80)
+        self.port = url.port ?? Self.defaultPort(scheme: url.scheme)
     }
 
     init?(host: String, port: Int) {
@@ -564,6 +564,13 @@ struct GatewayTLSAuthority: Equatable, Sendable {
     private static func normalizedHost(_ host: String?) -> String? {
         let value = host?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
         return value.isEmpty ? nil : value
+    }
+
+    private static func defaultPort(scheme: String?) -> Int {
+        switch scheme?.lowercased() {
+        case "https", "wss": 443
+        default: 80
+        }
     }
 }
 

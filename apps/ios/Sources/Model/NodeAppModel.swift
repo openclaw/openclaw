@@ -669,7 +669,14 @@ final class NodeAppModel {
         if self.isAppleReviewDemoModeEnabled {
             return AppleReviewDemoChatTransport()
         }
-        let mediaLoader = self.activeGatewayConnectConfig.map { IOSAssistantMediaLoader(config: $0) }
+        let mediaLoader = IOSAssistantMediaLoader { [weak self] in
+            guard let config = self?.activeGatewayConnectConfig else { return nil }
+            return IOSAssistantMediaLoader.Connection(
+                config: config,
+                storedOperatorToken: AuthenticatedControlUI.storedOperatorToken(config: config),
+                customHeaders: GatewaySettingsStore.loadGatewayCustomHeaders(
+                    gatewayStableID: config.effectiveStableID))
+        }
         return IOSGatewayChatTransport(
             gateway: self.operatorSession,
             widgetGateway: self.nodeGateway,

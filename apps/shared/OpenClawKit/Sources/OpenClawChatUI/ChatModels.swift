@@ -117,6 +117,9 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
     public let mimeType: String?
     public let fileName: String?
     public let mediaPath: String?
+    public let url: String?
+    public let openUrl: String?
+    public let alt: String?
     public let durationSeconds: Double?
     public let content: AnyCodable?
     public let preview: OpenClawChatCanvasPreview?
@@ -136,6 +139,9 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         mimeType: String?,
         fileName: String?,
         mediaPath: String? = nil,
+        url: String? = nil,
+        openUrl: String? = nil,
+        alt: String? = nil,
         durationSeconds: Double? = nil,
         content: AnyCodable?,
         preview: OpenClawChatCanvasPreview? = nil,
@@ -152,6 +158,9 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         self.mimeType = mimeType
         self.fileName = fileName
         self.mediaPath = mediaPath
+        self.url = url
+        self.openUrl = openUrl
+        self.alt = alt
         self.durationSeconds = durationSeconds
         self.content = content
         self.preview = preview
@@ -170,6 +179,9 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         case mimeType
         case fileName
         case mediaPath
+        case url
+        case openUrl
+        case alt
         case durationSeconds
         case content
         case preview
@@ -190,6 +202,9 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         self.mimeType = try container.decodeIfPresent(String.self, forKey: .mimeType)
         self.fileName = try container.decodeIfPresent(String.self, forKey: .fileName)
         self.mediaPath = try container.decodeIfPresent(String.self, forKey: .mediaPath)
+        self.url = try container.decodeIfPresent(String.self, forKey: .url)
+        self.openUrl = try container.decodeIfPresent(String.self, forKey: .openUrl)
+        self.alt = try container.decodeIfPresent(String.self, forKey: .alt)
         self.durationSeconds = try container.decodeIfPresent(Double.self, forKey: .durationSeconds)
         self.id = try container.decodeIfPresent(String.self, forKey: .id)
         self.name = try container.decodeIfPresent(String.self, forKey: .name)
@@ -217,6 +232,9 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         try container.encodeIfPresent(self.mimeType, forKey: .mimeType)
         try container.encodeIfPresent(self.fileName, forKey: .fileName)
         try container.encodeIfPresent(self.mediaPath, forKey: .mediaPath)
+        try container.encodeIfPresent(self.url, forKey: .url)
+        try container.encodeIfPresent(self.openUrl, forKey: .openUrl)
+        try container.encodeIfPresent(self.alt, forKey: .alt)
         try container.encodeIfPresent(self.durationSeconds, forKey: .durationSeconds)
         try container.encodeIfPresent(self.content, forKey: .content)
         try container.encodeIfPresent(self.preview, forKey: .preview)
@@ -403,15 +421,18 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         let containsDecodedAudio = decodedContent.contains { content in
             content.mimeType?.lowercased().hasPrefix("audio/") == true
         }
-        let mediaAttachments: [OpenClawChatMessageContent] = mediaPaths
+        let allowsUserAttachments = decodedRole.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "user"
+        let legacyAttachments: [OpenClawChatMessageContent] = mediaPaths
             .enumerated()
             .compactMap { index, mediaPath in
                 guard mediaTypes.indices.contains(index) else { return nil }
                 let mediaPath = mediaPath.trimmingCharacters(in: .whitespacesAndNewlines)
                 let mimeType = mediaTypes[index].trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !mediaPath.isEmpty, !mimeType.isEmpty else { return nil }
+                let isAudio = mimeType.lowercased().hasPrefix("audio/")
+                guard allowsUserAttachments || isAudio else { return nil }
                 guard seenMediaPaths.insert(mediaPath).inserted else { return nil }
-                if mimeType.lowercased().hasPrefix("audio/"), containsDecodedAudio {
+                if isAudio, containsDecodedAudio {
                     return nil
                 }
                 return OpenClawChatMessageContent(
@@ -422,7 +443,7 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
                     mediaPath: mediaPath,
                     content: nil)
             }
-        self.content = decodedContent + mediaAttachments
+        self.content = decodedContent + legacyAttachments
         self.isTruncated = decodedOpenClaw?.truncated == true || decodedContent.contains { content in
             content.text?.contains(Self.transcriptTruncationMarker) == true
         }

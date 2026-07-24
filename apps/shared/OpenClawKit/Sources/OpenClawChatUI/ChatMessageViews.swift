@@ -523,7 +523,7 @@ private struct ChatMessageBody: View {
     private var inlineAttachments: [OpenClawChatMessageContent] {
         self.message.content.filter { content in
             switch content.type ?? "text" {
-            case "file", "attachment":
+            case "file", "attachment", "image":
                 true
             default:
                 false
@@ -656,7 +656,7 @@ enum ChatMessageAttachmentDisplayPolicy {
         var omittedImageCount = 0
 
         for attachment in attachments {
-            let isImage = attachment.mimeType?
+            let isImage = attachment.type?.lowercased() == "image" || attachment.mimeType?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .lowercased()
                 .hasPrefix("image/") == true
@@ -682,10 +682,10 @@ private struct AttachmentRow: View {
     let loadMedia: @MainActor @Sendable (String) async throws -> Data?
 
     var body: some View {
-        if self.isImage, let mediaPath = self.normalizedMediaPath {
+        if self.isImage, let imagePath = self.imagePath {
             ChatMediaImageAttachment(
-                fileName: self.att.fileName,
-                mediaPath: mediaPath,
+                label: self.attachmentLabel,
+                imagePath: imagePath,
                 isUser: self.isUser,
                 resolverReady: self.resolverReady,
                 loadMedia: self.loadMedia)
@@ -697,7 +697,7 @@ private struct AttachmentRow: View {
     private var fallbackRow: some View {
         HStack(spacing: 8) {
             Image(systemName: self.isAudio ? "waveform" : "paperclip")
-            Text(self.isAudio ? "Voice note" : (self.att.fileName ?? "Attachment"))
+            Text(self.isAudio ? "Voice note" : self.attachmentLabel)
                 .font(OpenClawChatTypography.footnote)
                 .lineLimit(1)
                 .foregroundStyle(self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText)
@@ -721,17 +721,28 @@ private struct AttachmentRow: View {
     }
 
     private var isImage: Bool {
-        self.att.mimeType?
+        self.att.type?.lowercased() == "image" || self.att.mimeType?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
             .hasPrefix("image/") == true
     }
 
-    private var normalizedMediaPath: String? {
-        guard let path = self.att.mediaPath?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !path.isEmpty
-        else { return nil }
-        return path
+    private var attachmentLabel: String {
+        for candidate in [self.att.fileName, self.att.alt] {
+            if let value = candidate?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty {
+                return value
+            }
+        }
+        return self.isImage ? "Image attachment" : "Attachment"
+    }
+
+    private var imagePath: String? {
+        for candidate in [self.att.url, self.att.openUrl, self.att.mediaPath] {
+            if let value = candidate?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty {
+                return value
+            }
+        }
+        return nil
     }
 }
 
@@ -743,8 +754,8 @@ private struct ChatMediaImageAttachment: View {
         case unavailable
     }
 
-    let fileName: String?
-    let mediaPath: String
+    let label: String
+    let imagePath: String
     let isUser: Bool
     let resolverReady: Bool
     let loadMedia: @MainActor @Sendable (String) async throws -> Data?
@@ -761,10 +772,10 @@ private struct ChatMediaImageAttachment: View {
                         .scaledToFit()
                         .frame(maxWidth: 420, maxHeight: 320)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .accessibilityLabel(self.fileName ?? "Image attachment")
+                        .accessibilityLabel(self.label)
 
-                    if let fileName, !fileName.isEmpty {
-                        Text(fileName)
+                    if !self.label.isEmpty {
+                        Text(self.label)
                             .font(OpenClawChatTypography.footnote)
                             .foregroundStyle(self.textColor.opacity(0.72))
                             .lineLimit(1)
@@ -774,7 +785,7 @@ private struct ChatMediaImageAttachment: View {
                 HStack(spacing: 8) {
                     ProgressView()
                         .controlSize(.small)
-                    Text(self.fileName ?? "Loading image")
+                    Text(self.label)
                         .font(OpenClawChatTypography.footnote)
                         .lineLimit(1)
                     Spacer()
@@ -786,7 +797,7 @@ private struct ChatMediaImageAttachment: View {
             case .unavailable:
                 HStack(spacing: 8) {
                     Image(systemName: "photo")
-                    Text(self.fileName ?? "Image attachment")
+                    Text(self.label)
                         .font(OpenClawChatTypography.footnote)
                         .lineLimit(1)
                     Spacer()
@@ -797,7 +808,7 @@ private struct ChatMediaImageAttachment: View {
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
         }
-        .task(id: "\(self.mediaPath)#\(self.resolverReady)") {
+        .task(id: "\(self.imagePath)#\(self.resolverReady)") {
             await self.load()
         }
     }
@@ -817,7 +828,7 @@ private struct ChatMediaImageAttachment: View {
         }
         self.state = .loading
         do {
-            guard let data = try await self.loadMedia(self.mediaPath),
+            guard let data = try await self.loadMedia(self.imagePath),
                   !Task.isCancelled,
                   let image = await Task.detached(priority: .userInitiated, operation: {
                       ChatMediaImageDecoder.decode(data)

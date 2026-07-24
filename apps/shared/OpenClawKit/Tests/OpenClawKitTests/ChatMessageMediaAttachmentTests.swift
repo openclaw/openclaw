@@ -3,57 +3,116 @@ import XCTest
 @testable import OpenClawChatUI
 
 final class ChatMessageMediaAttachmentTests: XCTestCase {
-    func testDecodesAssistantImageMediaPathAsRenderableAttachment() throws {
-        let message = try decode(
-            #"{"role":"assistant","content":"Scan this code.","MediaPath":"media/inbound/code.png","MediaType":"image/png"}"#)
+    private static let managedImagePath =
+        "/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000001/full"
 
-        XCTAssertEqual(message.content.count, 2)
-        XCTAssertEqual(message.content[1].type, "file")
-        XCTAssertEqual(message.content[1].mimeType, "image/png")
-        XCTAssertEqual(message.content[1].fileName, "code.png")
-        XCTAssertEqual(message.content[1].mediaPath, "media/inbound/code.png")
+    @MainActor func testDecodesManagedAssistantImageFromChatHistory() throws {
+        let payload = try JSONDecoder().decode(OpenClawChatHistoryPayload.self, from: Data(
+            """
+            {
+              "sessionKey": "agent:main:main",
+              "sessionId": "session-1",
+              "messages": [{
+                "role": "assistant",
+                "content": [
+                  {"type": "text", "text": "Generated image"},
+                  {
+                    "type": "image",
+                    "url": "\(Self.managedImagePath)",
+                    "openUrl": "\(Self.managedImagePath)",
+                    "alt": "Generated image 1",
+                    "mimeType": "image/png",
+                    "width": 1,
+                    "height": 1
+                  }
+                ]
+              }],
+              "thinkingLevel": "off"
+            }
+            """.utf8))
+
+        let message = try XCTUnwrap(try OpenClawChatViewModel.decodeMessages(XCTUnwrap(payload.messages)).first)
+        let image = try XCTUnwrap(message.content.last)
+
+        XCTAssertEqual(message.role, "assistant")
+        XCTAssertEqual(image.type, "image")
+        XCTAssertEqual(image.url, Self.managedImagePath)
+        XCTAssertEqual(image.openUrl, Self.managedImagePath)
+        XCTAssertEqual(image.alt, "Generated image 1")
+        XCTAssertEqual(image.mimeType, "image/png")
     }
 
-    func testDecodesMultipleMediaKindsInOriginalOrder() throws {
+    func testTopLevelImageMediaPathIsNotSynthesizedAsAssistantImage() throws {
         let message = try decode(
-            #"{"role":"assistant","content":[],"MediaPaths":["/tmp/one.jpg","/tmp/two.pdf","/tmp/three.m4a"],"MediaTypes":["image/jpeg","application/pdf","audio/mp4"]}"#)
-
-        XCTAssertEqual(message.content.map(\.mimeType), ["image/jpeg", "application/pdf", "audio/mp4"])
-        XCTAssertEqual(message.content.map(\.mediaPath), ["/tmp/one.jpg", "/tmp/two.pdf", "/tmp/three.m4a"])
-    }
-
-    func testSkipsMediaWithoutMatchingTypeMetadata() throws {
-        let message = try decode(
-            #"{"role":"assistant","content":[],"MediaPaths":["/tmp/one.png","/tmp/two.png"],"MediaTypes":["image/png"]}"#)
+            """
+            {"role":"assistant","content":"Scan this code.",
+             "MediaPath":"media/inbound/code.png","MediaType":"image/png"}
+            """)
 
         XCTAssertEqual(message.content.count, 1)
-        XCTAssertEqual(message.content[0].mediaPath, "/tmp/one.png")
+        XCTAssertEqual(message.content.first?.type, "text")
     }
 
-    func testSkipsBlankMediaMetadata() throws {
+    func testTopLevelUserMediaPathsRemainRenderableAttachments() throws {
         let message = try decode(
-            #"{"role":"assistant","content":[],"MediaPaths":["   ","/tmp/two.png"],"MediaTypes":["image/png","   "]}"#)
+            """
+            {"role":"user","content":"Review these files.",
+             "MediaPaths":[" media/inbound/code.png ","media/inbound/report.pdf"],
+             "MediaTypes":[" image/png ","application/pdf"]}
+            """)
 
-        XCTAssertTrue(message.content.isEmpty)
+        XCTAssertEqual(message.content.count, 3)
+        XCTAssertEqual(message.content.dropFirst().map(\.type), ["file", "file"])
+        XCTAssertEqual(message.content.dropFirst().map(\.mediaPath), [
+            "media/inbound/code.png",
+            "media/inbound/report.pdf",
+        ])
+        XCTAssertEqual(message.content.dropFirst().map(\.mimeType), ["image/png", "application/pdf"])
     }
 
-    func testDeduplicatesNormalizedMediaPathsAndAudioKinds() throws {
+    func testTopLevelAudioMediaPathRemainsSupported() throws {
         let message = try decode(
-            #"{"role":"assistant","content":[],"MediaPaths":[" /tmp/one.png ","/tmp/one.png","/tmp/voice-1.m4a","/tmp/voice-2.m4a"],"MediaTypes":["image/png","image/png","audio/mp4","audio/mp4"]}"#)
+            #"{"role":"assistant","content":[],"MediaPath":"/tmp/voice.m4a","MediaType":"audio/mp4"}"#)
 
-        XCTAssertEqual(
-            message.content.map(\.mediaPath),
-            ["/tmp/one.png", "/tmp/voice-1.m4a", "/tmp/voice-2.m4a"])
+        XCTAssertEqual(message.content.count, 1)
+        XCTAssertEqual(message.content.first?.type, "file")
+        XCTAssertEqual(message.content.first?.mimeType, "audio/mp4")
+        XCTAssertEqual(message.content.first?.fileName, "voice.m4a")
+    }
+
+    func testExistingAudioBlockPreventsTranscriptAudioDuplicate() throws {
+        let message = try decode(
+            """
+            {"role":"assistant","content":[{"type":"file","mimeType":"audio/mp4","fileName":"voice.m4a"}],
+             "MediaPath":"/tmp/voice.m4a","MediaType":"audio/mp4"}
+            """)
+
+        XCTAssertEqual(message.content.count, 1)
+        XCTAssertEqual(message.content.filter { $0.mimeType == "audio/mp4" }.count, 1)
+    }
+
+    func testTopLevelAudioMediaPathsRejectBlanksAndDuplicates() throws {
+        let message = try decode(
+            """
+            {"role":"assistant","content":[],
+             "MediaPaths":["   "," /tmp/voice.m4a ","/tmp/voice.m4a","/tmp/missing-type.m4a"],
+             "MediaTypes":["audio/mp4"," audio/mp4 ","audio/mp4"]}
+            """)
+
+        XCTAssertEqual(message.content.count, 1)
+        XCTAssertEqual(message.content.first?.mediaPath, "/tmp/voice.m4a")
+        XCTAssertEqual(message.content.first?.mimeType, "audio/mp4")
     }
 
     func testAttachmentDisplayCapsImagesButPreservesOtherFiles() {
         let images = (0..<6).map { index in
             OpenClawChatMessageContent(
-                type: "file",
+                type: "image",
                 text: nil,
                 mimeType: "image/png",
-                fileName: "\(index).png",
-                mediaPath: "/tmp/\(index).png",
+                fileName: nil,
+                url: "/api/chat/media/outgoing/session/\(index)/full",
+                alt: "Generated image \(index + 1)",
                 content: nil)
         }
         let document = OpenClawChatMessageContent(
@@ -61,7 +120,6 @@ final class ChatMessageMediaAttachmentTests: XCTestCase {
             text: nil,
             mimeType: "application/pdf",
             fileName: "report.pdf",
-            mediaPath: "/tmp/report.pdf",
             content: nil)
 
         let presentation = ChatMessageAttachmentDisplayPolicy.partition(images + [document])
@@ -71,22 +129,15 @@ final class ChatMessageMediaAttachmentTests: XCTestCase {
         XCTAssertEqual(presentation.omittedImageCount, 2)
     }
 
-    func testExistingAudioBlockStillPreventsTranscriptAudioDuplicate() throws {
-        let message = try decode(
-            #"{"role":"assistant","content":[{"type":"file","mimeType":"audio/mp4","fileName":"voice.m4a"}],"MediaPaths":["/tmp/voice.m4a","/tmp/image.png"],"MediaTypes":["audio/mp4","image/png"]}"#)
-
-        XCTAssertEqual(message.content.count, 2)
-        XCTAssertEqual(message.content.filter { $0.mimeType == "audio/mp4" }.count, 1)
-        XCTAssertEqual(message.content.last?.mediaPath, "/tmp/image.png")
-    }
-
-    func testMediaPathSurvivesContentRoundTrip() throws {
+    func testManagedImageFieldsSurviveContentRoundTrip() throws {
         let original = OpenClawChatMessageContent(
-            type: "file",
+            type: "image",
             text: nil,
             mimeType: "image/png",
-            fileName: "code.png",
-            mediaPath: "media/inbound/code.png",
+            fileName: nil,
+            url: Self.managedImagePath,
+            openUrl: Self.managedImagePath,
+            alt: "Generated image 1",
             content: nil)
 
         let encoded = try JSONEncoder().encode(original)
