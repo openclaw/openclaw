@@ -43,7 +43,6 @@ import {
   resolveMarketplaceInstallShortcut,
 } from "../plugins/marketplace.js";
 import { resolveCatalogOfficialExternalInstallPlan } from "../plugins/official-external-install-trust.js";
-import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { markClawPackageIndependentlyOwned } from "../state/claw-package-adoption.js";
@@ -68,6 +67,7 @@ import {
   resolveBundledInstallPlanBeforeNpm,
   resolveBundledInstallPlanForNpmFailure,
 } from "./plugin-install-plan.js";
+import { withPluginLifecycleCommandLease } from "./plugin-lifecycle-command.js";
 import {
   createHookPackInstallLogger,
   createPluginInstallLogger,
@@ -776,10 +776,10 @@ type RunPluginInstallCommandParams = {
 
 export async function runPluginInstallCommand(params: RunPluginInstallCommandParams) {
   assertConfigWriteAllowedInCurrentMode();
-  return await withPluginLifecycleLease(
-    {},
-    async () => await runPluginInstallCommandUnlocked(params),
-  );
+  const runtime = params.runtime ?? defaultRuntime;
+  return await withPluginLifecycleCommandLease(runtime, async (deferredExitRuntime) => {
+    return await runPluginInstallCommandUnlocked({ ...params, runtime: deferredExitRuntime });
+  });
 }
 
 async function runPluginInstallCommandUnlocked(params: RunPluginInstallCommandParams) {

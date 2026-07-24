@@ -189,11 +189,15 @@ function restoreRuntimeCaptureMocks() {
   });
 }
 
-vi.mock("../runtime.js", () => ({
-  defaultRuntime,
-  writeRuntimeJson: (runtime: CliMockOutputRuntime, value: unknown, space = 2) =>
-    runtime.writeJson(value, space),
-}));
+vi.mock("../runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../runtime.js")>();
+  return {
+    ...actual,
+    defaultRuntime,
+    writeRuntimeJson: (runtime: CliMockOutputRuntime, value: unknown, space = 2) =>
+      runtime.writeJson(value, space),
+  };
+});
 
 vi.mock("./plugins-update-gateway-signal.js", () => ({
   notifyGatewayPluginMetadataChanged: (...args: unknown[]) =>
