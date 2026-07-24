@@ -16,6 +16,16 @@ import { readSqliteUserVersion } from "./sqlite-user-version.js";
 
 const SQLITE_DIRECTORY_MODE = 0o700;
 const WINDOWS_DIRECTORY_EXISTS_MARKER = "OPENCLAW_SQLITE_DIRECTORY_EXISTS";
+
+function resolveSqliteFilesystemPath(pathname: string): string {
+  if (process.platform !== "win32") {
+    return pathname;
+  }
+  // Node normalizes long paths for fs, but DatabaseSync and VACUUM INTO pass
+  // filesystem names directly to SQLite's Windows VFS.
+  return path.toNamespacedPath(path.resolve(pathname));
+}
+
 // Managed directory creation accepts existing paths. CreateDirectoryW applies the
 // protected DACL atomically while preserving fail-if-exists semantics.
 const WINDOWS_PRIVATE_DIRECTORY_NATIVE_SOURCE = `
@@ -789,7 +799,7 @@ export async function createVerifiedSqliteSnapshot(
   const sqlite = requireNodeSqlite();
   let stagedIdentity: Stats | undefined;
   try {
-    const source = new sqlite.DatabaseSync(options.sourcePath, {
+    const source = new sqlite.DatabaseSync(resolveSqliteFilesystemPath(options.sourcePath), {
       allowExtension: true,
       readOnly: true,
     });
@@ -798,13 +808,15 @@ export async function createVerifiedSqliteSnapshot(
       await loadSqliteVecExtension({ db: source });
       assertSqliteIntegrity(source, options.sourcePath);
       options.validate?.(source, options.sourcePath);
-      source.prepare("VACUUM INTO ?").run(stagedPath);
+      source.prepare("VACUUM INTO ?").run(resolveSqliteFilesystemPath(stagedPath));
     } finally {
       source.close();
     }
 
     await fs.chmod(stagedPath, 0o600);
-    const snapshot = new sqlite.DatabaseSync(stagedPath, { allowExtension: true });
+    const snapshot = new sqlite.DatabaseSync(resolveSqliteFilesystemPath(stagedPath), {
+      allowExtension: true,
+    });
     try {
       snapshot.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF;");
       await loadSqliteVecExtension({ db: snapshot });
@@ -829,7 +841,7 @@ export async function createVerifiedSqliteSnapshot(
         beforePublish: options.beforePublish,
         afterPublish: options.afterPublish,
         validatePublished: async (publishedPath) => {
-          const published = new sqlite.DatabaseSync(publishedPath, {
+          const published = new sqlite.DatabaseSync(resolveSqliteFilesystemPath(publishedPath), {
             allowExtension: true,
             readOnly: true,
           });
