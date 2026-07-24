@@ -187,6 +187,7 @@ describe("chat.abort authorization", () => {
   });
 
   it("does not abort hidden internal runs by visible session key", async () => {
+    const onAuthorizedAfterQueuedAbort = vi.fn(() => true);
     const context = createChatAbortContext({
       chatAbortControllers: new Map([
         ["run-hidden", createActiveRun("main", { controlUiVisible: false })],
@@ -197,15 +198,40 @@ describe("chat.abort authorization", () => {
       context,
       connId: "conn-owner",
       deviceId: "dev-owner",
+      onAuthorizedAfterQueuedAbort,
     });
 
     const [ok, payload] = requireLastRespondCall(respond);
     expect(ok).toBe(true);
     expectAbortPayload(payload, { aborted: false, runIds: [] });
+    expect(onAuthorizedAfterQueuedAbort).not.toHaveBeenCalled();
+    expect(context.chatAbortControllers.has("run-hidden")).toBe(true);
+  });
+
+  it("does not reveal a foreign hidden run to ordinary session aborts", async () => {
+    const hidden = createActiveRun("main", {
+      controlUiVisible: false,
+      owner: { connId: "conn-hidden", deviceId: "dev-hidden" },
+    });
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([["run-hidden", hidden]]),
+    });
+
+    const respond = await invokeAbort({
+      context,
+      connId: "conn-other",
+      deviceId: "dev-other",
+    });
+
+    const [ok, payload] = requireLastRespondCall(respond);
+    expect(ok).toBe(true);
+    expectAbortPayload(payload, { aborted: false, runIds: [] });
+    expect(hidden.controller.signal.aborted).toBe(false);
     expect(context.chatAbortControllers.has("run-hidden")).toBe(true);
   });
 
   it("preserves BTW runs for TUI session stops", async () => {
+    const onAuthorizedAfterQueuedAbort = vi.fn(() => true);
     const main = createActiveRun("main", {
       owner: { connId: "conn-owner", deviceId: "dev-owner" },
     });
@@ -225,6 +251,7 @@ describe("chat.abort authorization", () => {
       connId: "conn-owner",
       deviceId: "dev-owner",
       preserveSideRuns: true,
+      onAuthorizedAfterQueuedAbort,
     });
 
     const [ok, payload] = requireLastRespondCall(respond);
@@ -232,10 +259,12 @@ describe("chat.abort authorization", () => {
     expectAbortPayload(payload, { aborted: true, runIds: ["run-main"] });
     expect(main.controller.signal.aborted).toBe(true);
     expect(btw.controller.signal.aborted).toBe(false);
+    expect(onAuthorizedAfterQueuedAbort).not.toHaveBeenCalled();
     expect(context.chatAbortControllers.has("run-btw")).toBe(true);
   });
 
   it("preserves BTW runs waiting for chat admission", async () => {
+    const onAuthorizedAfterQueuedAbort = vi.fn(() => true);
     const context = createChatAbortContext();
     context.dedupe.set("pending-chat:run-btw", {
       ts: Date.now(),
@@ -255,11 +284,13 @@ describe("chat.abort authorization", () => {
       connId: "conn-owner",
       deviceId: "dev-owner",
       preserveSideRuns: true,
+      onAuthorizedAfterQueuedAbort,
     });
 
     const [ok, payload] = requireLastRespondCall(respond);
     expect(ok).toBe(true);
     expectAbortPayload(payload, { aborted: false, runIds: [] });
+    expect(onAuthorizedAfterQueuedAbort).not.toHaveBeenCalled();
     expect(context.dedupe.get("pending-chat:run-btw")).toEqual(
       expect.objectContaining({
         payload: expect.objectContaining({ status: "accepted", turnKind: "btw" }),
@@ -444,6 +475,31 @@ describe("chat.abort queued-turn contract", () => {
     expectAbortPayload(requireLastRespondCall(respond)[1], { aborted: true, runIds: [] });
   });
 
+  it("does not count a controller-represented worker run as a second owner", async () => {
+    const onAuthorizedAfterQueuedAbort = vi.fn(() => true);
+    const cancelInferenceForSession = vi.fn(() => ["run-1"]);
+    const context = createSingleAbortContext();
+    context.workerEnvironmentService = {
+      cancelInferenceForSession,
+      hasInferenceForSession: (sessionId: string, runId?: string) =>
+        sessionId === "main-session" && (!runId || runId === "run-1"),
+    } as never;
+
+    const respond = await invokeAbort({
+      context,
+      connId: "conn-owner",
+      deviceId: "dev-owner",
+      onAuthorizedAfterQueuedAbort,
+    });
+
+    expectAbortPayload(requireLastRespondCall(respond)[1], {
+      aborted: true,
+      runIds: ["run-1"],
+    });
+    expect(onAuthorizedAfterQueuedAbort).toHaveBeenCalledTimes(1);
+    expect(cancelInferenceForSession).not.toHaveBeenCalled();
+  });
+
   it("does not let session cleanup bypass a worker run", async () => {
     const onAuthorizedAfterQueuedAbort = vi.fn(() => false);
     const cancelInferenceForSession = vi.fn(() => ["worker-run"]);
@@ -466,6 +522,50 @@ describe("chat.abort queued-turn contract", () => {
     expect(call[2]?.message).toBe("unauthorized");
     expect(onAuthorizedAfterQueuedAbort).not.toHaveBeenCalled();
     expect(cancelInferenceForSession).not.toHaveBeenCalled();
+  });
+
+  it("protects hidden worker runs only from injected lifecycle cleanup", async () => {
+    const onAuthorizedAfterQueuedAbort = vi.fn(() => true);
+    const cancelInferenceForSession = vi.fn(() => ["run-hidden"]);
+    const hidden = createActiveRun("main", {
+      controlUiVisible: false,
+      owner: { connId: "conn-owner", deviceId: "dev-owner" },
+    });
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([["run-hidden", hidden]]),
+      workerEnvironmentService: {
+        cancelInferenceForSession,
+        hasInferenceForSession: (sessionId: string, runId?: string) =>
+          sessionId === "main-session" && (!runId || runId === "run-hidden"),
+      },
+    });
+
+    const lifecycleRespond = await invokeAbort({
+      context,
+      connId: "conn-owner",
+      deviceId: "dev-owner",
+      onAuthorizedAfterQueuedAbort,
+    });
+
+    expectAbortPayload(requireLastRespondCall(lifecycleRespond)[1], {
+      aborted: false,
+      runIds: [],
+    });
+    expect(onAuthorizedAfterQueuedAbort).not.toHaveBeenCalled();
+    expect(cancelInferenceForSession).not.toHaveBeenCalled();
+    expect(hidden.controller.signal.aborted).toBe(false);
+
+    const ordinaryRespond = await invokeAbort({
+      context,
+      connId: "conn-admin",
+      deviceId: "dev-admin",
+      scopes: ["operator.admin"],
+    });
+    expectAbortPayload(requireLastRespondCall(ordinaryRespond)[1], {
+      aborted: true,
+      runIds: ["run-hidden"],
+    });
+    expect(cancelInferenceForSession).toHaveBeenCalledWith({ sessionId: "main-session" });
   });
 
   it("aborts only the requester runs without session cleanup in a mixed-owner session", async () => {
@@ -498,6 +598,64 @@ describe("chat.abort queued-turn contract", () => {
     expect(mine.controller.signal.aborted).toBe(true);
     expect(foreign.controller.signal.aborted).toBe(false);
     expect(context.chatAbortControllers.has("run-foreign")).toBe(true);
+  });
+
+  it("does not let session cleanup bypass a foreign hidden owner", async () => {
+    const onAuthorizedAfterQueuedAbort = vi.fn(() => true);
+    const hidden = createActiveRun("main", {
+      controlUiVisible: false,
+      owner: { connId: "conn-hidden", deviceId: "dev-hidden" },
+    });
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([["run-hidden", hidden]]),
+    });
+
+    const respond = await invokeAbort({
+      context,
+      connId: "conn-other",
+      deviceId: "dev-other",
+      onAuthorizedAfterQueuedAbort,
+    });
+
+    const call = requireLastRespondCall(respond);
+    expect(call[0]).toBe(false);
+    expect(call[2]?.message).toBe("unauthorized");
+    expect(onAuthorizedAfterQueuedAbort).not.toHaveBeenCalled();
+    expect(hidden.controller.signal.aborted).toBe(false);
+    expect(context.chatAbortControllers.has("run-hidden")).toBe(true);
+  });
+
+  it("aborts an owned run without cleanup when a foreign hidden run shares the session", async () => {
+    const onAuthorizedAfterQueuedAbort = vi.fn(() => true);
+    const mine = createActiveRun("main", {
+      owner: { connId: "conn-owner", deviceId: "dev-owner" },
+    });
+    const hidden = createActiveRun("main", {
+      controlUiVisible: false,
+      owner: { connId: "conn-hidden", deviceId: "dev-hidden" },
+    });
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([
+        ["run-mine", mine],
+        ["run-hidden", hidden],
+      ]),
+    });
+
+    const respond = await invokeAbort({
+      context,
+      connId: "conn-owner",
+      deviceId: "dev-owner",
+      onAuthorizedAfterQueuedAbort,
+    });
+
+    expectAbortPayload(requireLastRespondCall(respond)[1], {
+      aborted: true,
+      runIds: ["run-mine"],
+    });
+    expect(onAuthorizedAfterQueuedAbort).not.toHaveBeenCalled();
+    expect(mine.controller.signal.aborted).toBe(true);
+    expect(hidden.controller.signal.aborted).toBe(false);
+    expect(context.chatAbortControllers.has("run-hidden")).toBe(true);
   });
 
   it("allows cleanup for duplicate pending identities owned by the requester", async () => {
@@ -533,6 +691,84 @@ describe("chat.abort queued-turn contract", () => {
       runIds: ["run-pending"],
     });
     expect(onAuthorizedAfterQueuedAbort).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not run session cleanup around hidden pending work", async () => {
+    const onAuthorizedAfterQueuedAbort = vi.fn(() => true);
+    const context = createChatAbortContext();
+    context.dedupe.set("agent:run-hidden", {
+      ts: Date.now(),
+      ok: true,
+      payload: {
+        runId: "run-hidden",
+        sessionKey: "main",
+        status: "accepted",
+        controlUiVisible: false,
+        ownerConnId: "conn-owner",
+        ownerDeviceId: "dev-owner",
+      },
+    });
+
+    const respond = await invokeAbort({
+      context,
+      connId: "conn-owner",
+      deviceId: "dev-owner",
+      onAuthorizedAfterQueuedAbort,
+    });
+
+    expectAbortPayload(requireLastRespondCall(respond)[1], {
+      aborted: false,
+      runIds: [],
+    });
+    expect(onAuthorizedAfterQueuedAbort).not.toHaveBeenCalled();
+    expect(context.dedupe.get("agent:run-hidden")).toEqual(
+      expect.objectContaining({
+        payload: expect.objectContaining({ status: "accepted", controlUiVisible: false }),
+      }),
+    );
+  });
+
+  it("protects foreign hidden pending work across ordinary and lifecycle aborts", async () => {
+    const context = createChatAbortContext();
+    context.dedupe.set("agent:run-hidden", {
+      ts: Date.now(),
+      ok: true,
+      payload: {
+        runId: "run-hidden",
+        sessionKey: "main",
+        status: "accepted",
+        controlUiVisible: false,
+        ownerConnId: "conn-hidden",
+        ownerDeviceId: "dev-hidden",
+      },
+    });
+
+    const respond = await invokeAbort({
+      context,
+      connId: "conn-other",
+      deviceId: "dev-other",
+    });
+
+    const [ok, payload] = requireLastRespondCall(respond);
+    expect(ok).toBe(true);
+    expectAbortPayload(payload, { aborted: false, runIds: [] });
+
+    const onAuthorizedAfterQueuedAbort = vi.fn(() => true);
+    const lifecycleRespond = await invokeAbort({
+      context,
+      connId: "conn-other",
+      deviceId: "dev-other",
+      onAuthorizedAfterQueuedAbort,
+    });
+    const lifecycleCall = requireLastRespondCall(lifecycleRespond);
+    expect(lifecycleCall[0]).toBe(false);
+    expect(lifecycleCall[2]?.message).toBe("unauthorized");
+    expect(onAuthorizedAfterQueuedAbort).not.toHaveBeenCalled();
+    expect(context.dedupe.get("agent:run-hidden")).toEqual(
+      expect.objectContaining({
+        payload: expect.objectContaining({ status: "accepted", controlUiVisible: false }),
+      }),
+    );
   });
 
   it("skips session cleanup when a pending run has a foreign owner", async () => {

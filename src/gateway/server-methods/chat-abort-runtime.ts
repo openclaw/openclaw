@@ -189,19 +189,26 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
     defaultAgentId: params.defaultAgentId,
     requester: params.requester,
   });
-  const { authorizedRuns, hasUnauthorizedRuns: hasUnauthorizedActiveRuns } =
-    resolveAuthorizedRunsForSessionKeys({
-      chatAbortControllers: params.context.chatAbortControllers,
-      sessionKeys,
-      sessionIds: [params.sessionId],
-      agentId: params.agentId,
-      defaultAgentId: params.defaultAgentId,
-      requester: params.requester,
-      preserveSideRuns: params.preserveSideRuns,
-    });
+  const {
+    authorizedRuns,
+    matchedRunIds: matchedActiveRunIds,
+    hasUnauthorizedRuns: hasUnauthorizedActiveRuns,
+    hasUnauthorizedProtectedRuns: hasUnauthorizedProtectedActiveRuns,
+    hasProtectedRuns: hasProtectedActiveRuns,
+  } = resolveAuthorizedRunsForSessionKeys({
+    chatAbortControllers: params.context.chatAbortControllers,
+    sessionKeys,
+    sessionIds: [params.sessionId],
+    agentId: params.agentId,
+    defaultAgentId: params.defaultAgentId,
+    requester: params.requester,
+    preserveSideRuns: params.preserveSideRuns,
+  });
   const {
     authorizedRuns: authorizedPendingAgentRuns,
     hasUnauthorizedRuns: hasUnauthorizedPendingAgentRuns,
+    hasUnauthorizedProtectedRuns: hasUnauthorizedProtectedPendingAgentRuns,
+    hasProtectedRuns: hasProtectedPendingAgentRuns,
   } = resolveAuthorizedPreRegisteredRunsForSessionKeys({
     context: params.context,
     sessionKeys,
@@ -214,6 +221,8 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
   const {
     authorizedRuns: authorizedPendingChatRuns,
     hasUnauthorizedRuns: hasUnauthorizedPendingChatRuns,
+    hasUnauthorizedProtectedRuns: hasUnauthorizedProtectedPendingChatRuns,
+    hasProtectedRuns: hasProtectedPendingChatRuns,
   } = resolveAuthorizedPreRegisteredRunsForSessionKeys({
     context: params.context,
     sessionKeys,
@@ -229,32 +238,58 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
     authorizedPendingChatRuns.length > 0 ||
     queuedPlan.authorized.length > 0;
   const workerService = asWorkerInferenceControl(params.context.workerEnvironmentService);
+  const workerSessionId = params.sessionId;
   const hasWorkerRun = Boolean(
-    params.sessionId &&
+    workerSessionId &&
     (!hasAuthorizedGatewayRuns || params.onAuthorizedAfterQueuedAbort) &&
-    workerService?.hasInferenceForSession(params.sessionId),
+    workerService?.hasInferenceForSession(workerSessionId),
+  );
+  // The worker manager admits at most one active inference per session, and a
+  // worker-backed turn shares its controller's runId. One exact match therefore
+  // represents the only worker owner instead of inventing a second owner.
+  const hasControllerRepresentedWorkerRun = Boolean(
+    hasWorkerRun &&
+    workerSessionId &&
+    workerService &&
+    matchedActiveRunIds.some((runId) =>
+      workerService.hasInferenceForSession(workerSessionId, runId),
+    ),
   );
   const hasUnauthorizedOwner =
     hasUnauthorizedActiveRuns ||
     hasUnauthorizedPendingAgentRuns ||
     hasUnauthorizedPendingChatRuns ||
     queuedPlan.hasUnauthorizedRuns ||
-    (hasWorkerRun && !params.requester.isAdmin);
+    (hasWorkerRun && !hasControllerRepresentedWorkerRun && !params.requester.isAdmin);
+  const hasProtectedLifecycleRuns =
+    hasProtectedActiveRuns || hasProtectedPendingAgentRuns || hasProtectedPendingChatRuns;
+  const hasUnauthorizedProtectedOwner =
+    hasUnauthorizedProtectedActiveRuns ||
+    hasUnauthorizedProtectedPendingAgentRuns ||
+    hasUnauthorizedProtectedPendingChatRuns;
+  const hasUnauthorizedLifecycleOwner =
+    Boolean(params.onAuthorizedAfterQueuedAbort) && hasUnauthorizedProtectedOwner;
+  const canRunLifecycleCleanup = !hasUnauthorizedOwner && !hasProtectedLifecycleRuns;
+  // Keep ordinary chat.abort's admin worker behavior; only the injected broad
+  // lifecycle path must preserve hidden or explicitly preserved Gateway runs.
+  const canCancelWorkerSession = !params.onAuthorizedAfterQueuedAbort || !hasProtectedLifecycleRuns;
   if (!hasAuthorizedGatewayRuns) {
-    // Session-wide cleanup must not turn a persisted session id into a bypass
-    // around a matching connection or worker owner.
-    if (hasUnauthorizedOwner) {
+    // The injected lifecycle callback must not turn a persisted session id into
+    // a bypass around a matching connection or protected run owner.
+    if (hasUnauthorizedOwner || hasUnauthorizedLifecycleOwner) {
       return { aborted: false, runIds: [], unauthorized: true };
     }
     // With no owned Gateway run, the exact persisted session is the boundary,
     // matching sessions.steer's operator.write behavior for ownerless work.
-    const additionalAborted = params.onAuthorizedAfterQueuedAbort?.() ?? false;
-    if (!hasWorkerRun || !params.sessionId || !params.requester.isAdmin) {
+    const additionalAborted = canRunLifecycleCleanup
+      ? (params.onAuthorizedAfterQueuedAbort?.() ?? false)
+      : false;
+    if (!hasWorkerRun || !workerSessionId || !params.requester.isAdmin || !canCancelWorkerSession) {
       return { aborted: additionalAborted, runIds: [], unauthorized: false };
     }
     const workerRunIds = cancelWorkerInferenceForSession({
       context: params.context,
-      sessionId: params.sessionId,
+      sessionId: workerSessionId,
     });
     return {
       aborted: additionalAborted || workerRunIds.length > 0,
@@ -276,11 +311,11 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
     queuedPlan.authorized,
     params.stopReason,
   );
-  // Session-wide cleanup is safe only when every matching owner authorized it.
-  // Mixed-owner sessions still abort the requester's individual runs below.
-  const additionalAborted = hasUnauthorizedOwner
-    ? false
-    : (params.onAuthorizedAfterQueuedAbort?.() ?? false);
+  // Hidden and preserved side runs must also block broad cleanup: authorization
+  // alone must not let the callback abort work intentionally excluded above.
+  const additionalAborted = canRunLifecycleCleanup
+    ? (params.onAuthorizedAfterQueuedAbort?.() ?? false)
+    : false;
   for (const { runId, sessionKey } of authorizedRuns) {
     const res = abortChatRunById(params.ops, {
       runId,
@@ -314,7 +349,7 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
     });
     runIds.push(runId);
   }
-  if (params.requester.isAdmin) {
+  if (params.requester.isAdmin && canCancelWorkerSession) {
     for (const runId of cancelWorkerInferenceForSession({
       context: params.context,
       sessionId: params.sessionId,
