@@ -476,6 +476,9 @@ function resolveCoverageBatchKey(entry: SecretRegistryEntry): string {
     const scope = segments[2] === "accounts" ? "accounts" : "root";
     return `channels.${channelId}.${scope}`;
   }
+  if (entry.id.startsWith("tts.personas.")) {
+    return "tts.personas";
+  }
   if (entry.id.startsWith("tts.providers.")) {
     return "tts.providers";
   }

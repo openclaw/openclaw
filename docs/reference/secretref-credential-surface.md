@@ -38,10 +38,12 @@ The lists below are generated from the source target registry and checked agains
 - `skills.entries.*.apiKey`
 - `memory.search.remote.apiKey`
 - `agents.entries.*.tts.providers.*.apiKey`
+- `agents.entries.*.tts.personas.*.providers.*.apiKey`
 - `agents.entries.*.memory.search.remote.apiKey`
 - `talk.providers.*.apiKey`
 - `talk.realtime.providers.*.apiKey`
 - `tts.providers.*.apiKey`
+- `tts.personas.*.providers.*.apiKey`
 - `plugins.entries.acpx.config.mcpServers.*.env.*`
 - `plugins.entries.brave.config.webSearch.apiKey`
 - `plugins.entries.codex.config.appServer.authToken`
