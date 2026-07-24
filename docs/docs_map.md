@@ -3658,6 +3658,24 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Troubleshooting
   - H2: Related
 
+## gateway/local-text-workers.md
+
+- Route: /gateway/local-text-workers
+- Headings:
+  - H2: Use this pattern when
+  - H2: Recommended shape
+  - H2: Configure the local model
+  - H2: Choose a worker path
+  - H3: JSON-only tasks with llm-task
+  - H3: Native sub-agents with a local model
+  - H3: CLI backends as text fallback
+  - H2: Keep tools with the orchestrator
+  - H2: Timeouts and local servers
+  - H2: Sandbox and side effects
+  - H2: Test the setup
+  - H2: Troubleshooting
+  - H2: Related
+
 ## gateway/logging.md
 
 - Route: /gateway/logging
