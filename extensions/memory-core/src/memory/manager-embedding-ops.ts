@@ -63,6 +63,33 @@ const EMBEDDING_INDEX_CONCURRENCY = 4;
 const EMBEDDING_RETRY_MAX_ATTEMPTS = 3;
 const EMBEDDING_RETRY_BASE_DELAY_MS = 500;
 const EMBEDDING_RETRY_MAX_DELAY_MS = 8000;
+// Rate-limit (429 / quota-exhausted) errors need longer backoff so retries
+// clear the provider's rate-limit window (typically 60s) instead of landing
+// inside it and wasting every attempt. Start at 10s, double each retry, cap
+// at 60s. With rateLimitBaseDelayMs=10s and 5 attempts the retry budget
+// spans ~10s / ~20s / ~40s / ~60s / ~60s (~190s, ~3 min).
+const EMBEDDING_RATE_LIMIT_BASE_DELAY_MS = 10_000;
+const EMBEDDING_RATE_LIMIT_MAX_DELAY_MS = 60_000;
+const EMBEDDING_RATE_LIMIT_MAX_ATTEMPTS = 5;
+
+/** Extracts a server-specified retry-after duration (in ms) from an embedding
+ *  error. Checks the structured `retryAfterSeconds` property attached by
+ *  `postJson` when the HTTP response included a `Retry-After` header, then
+ *  falls back to parsing the error message for retry-after hints. */
+function extractEmbeddingRetryAfterMs(err: unknown): number | undefined {
+  const structured = (err as { retryAfterSeconds?: number } | null | undefined)?.retryAfterSeconds;
+  if (typeof structured === "number" && structured > 0) {
+    return structured * 1000;
+  }
+  // Fallback: parse provider error bodies that embed "retry after Ns".
+  const message = (err as { message?: string } | null | undefined)?.message ?? "";
+  const match = message.match(/retry[_ ]after[:\s]+(\d+)\s*s/i);
+  const retryAfterSecs = match?.[1];
+  if (retryAfterSecs !== undefined) {
+    return Number.parseInt(retryAfterSecs, 10) * 1000;
+  }
+  return undefined;
+}
 const EMBEDDING_QUERY_TIMEOUT_REMOTE_MS = 60_000;
 const EMBEDDING_QUERY_TIMEOUT_LOCAL_MS = 5 * 60_000;
 const EMBEDDING_BATCH_TIMEOUT_REMOTE_MS = 2 * 60_000;
@@ -437,6 +464,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         },
         maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
         baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
+        rateLimitBaseDelayMs: EMBEDDING_RATE_LIMIT_BASE_DELAY_MS,
+        rateLimitMaxDelayMs: EMBEDDING_RATE_LIMIT_MAX_DELAY_MS,
+        rateLimitMaxAttempts: EMBEDDING_RATE_LIMIT_MAX_ATTEMPTS,
+        extractRetryAfterMs: extractEmbeddingRetryAfterMs,
         onSplit: ({ itemCount, splitAt }) => {
           log.warn(
             `memory embeddings transport failed after retries; splitting batch of ${itemCount} into ${splitAt} + ${itemCount - splitAt}`,
@@ -489,6 +520,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         },
         maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
         baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
+        rateLimitBaseDelayMs: EMBEDDING_RATE_LIMIT_BASE_DELAY_MS,
+        rateLimitMaxDelayMs: EMBEDDING_RATE_LIMIT_MAX_DELAY_MS,
+        rateLimitMaxAttempts: EMBEDDING_RATE_LIMIT_MAX_ATTEMPTS,
+        extractRetryAfterMs: extractEmbeddingRetryAfterMs,
         onSplit: ({ itemCount, splitAt }) => {
           log.warn(
             `memory embeddings transport failed after retries; splitting structured batch of ${itemCount} into ${splitAt} + ${itemCount - splitAt}`,
@@ -506,11 +541,14 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   }
 
   private async waitForEmbeddingRetry(delayMs: number, action: string): Promise<void> {
-    const waitMs = resolveMemoryEmbeddingRetryDelay(
-      delayMs,
-      Math.random(),
-      EMBEDDING_RETRY_MAX_DELAY_MS,
-    );
+    // Rate-limit backoff delays can exceed the standard transport ceiling
+    // (8s); use the rate-limit cap (60s) for those so the longer schedule
+    // isn't truncated by resolveMemoryEmbeddingRetryDelay.
+    const maxDelay =
+      delayMs > EMBEDDING_RETRY_MAX_DELAY_MS
+        ? EMBEDDING_RATE_LIMIT_MAX_DELAY_MS
+        : EMBEDDING_RETRY_MAX_DELAY_MS;
+    const waitMs = resolveMemoryEmbeddingRetryDelay(delayMs, Math.random(), maxDelay);
     log.warn(`memory embeddings retryable error; ${action} in ${waitMs}ms`);
     await new Promise((resolve) => {
       setTimeout(resolve, waitMs);
@@ -551,6 +589,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         },
         maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
         baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
+        rateLimitBaseDelayMs: EMBEDDING_RATE_LIMIT_BASE_DELAY_MS,
+        rateLimitMaxDelayMs: EMBEDDING_RATE_LIMIT_MAX_DELAY_MS,
+        rateLimitMaxAttempts: EMBEDDING_RATE_LIMIT_MAX_ATTEMPTS,
+        extractRetryAfterMs: extractEmbeddingRetryAfterMs,
       });
     } catch (err) {
       this.markLocalEmbeddingProviderDegraded(err);
