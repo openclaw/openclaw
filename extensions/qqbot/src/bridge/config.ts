@@ -21,6 +21,17 @@ interface QQBotChannelConfig extends QQBotAccountConfig {
   defaultAccount?: string;
 }
 
+function readOwnAccountConfig(
+  qqbot: QQBotChannelConfig | undefined,
+  accountId: string,
+): QQBotAccountConfig | undefined {
+  if (!qqbot?.accounts || !Object.hasOwn(qqbot.accounts, accountId)) {
+    return undefined;
+  }
+  const account = qqbot.accounts[accountId];
+  return account && typeof account === "object" ? { ...account } : {};
+}
+
 function assertNotLegacySecretRefMarker(value: unknown, path: string): void {
   const normalized = normalizeSecretInputString(value);
   if (!normalized || !/^secretref(?:-env)?:/i.test(normalized)) {
@@ -112,9 +123,9 @@ export function resolveQQBotAccount(
     base.accountId === DEFAULT_ACCOUNT_ID
       ? {
           ...qqbot,
-          ...qqbot?.accounts?.[DEFAULT_ACCOUNT_ID],
+          ...readOwnAccountConfig(qqbot, DEFAULT_ACCOUNT_ID),
         }
-      : (qqbot?.accounts?.[base.accountId] ?? {});
+      : (readOwnAccountConfig(qqbot, base.accountId) ?? {});
 
   let clientSecret = "";
   let secretSource: "config" | "file" | "env" | "none" = "none";
