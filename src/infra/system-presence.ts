@@ -238,7 +238,7 @@ export function updateSystemPresence(payload: SystemPresencePayload): SystemPres
     roles: mergeStringList(existing.roles, payload.roles),
     scopes: mergeStringList(existing.scopes, payload.scopes),
     instanceId: payload.instanceId ?? parsed.instanceId ?? existing.instanceId,
-    text: payload.text || parsed.text || existing.text,
+    text: payload.text ?? parsed.text ?? existing.text,
     ts: Date.now(),
   };
   entries.set(key, merged);
