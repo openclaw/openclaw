@@ -245,6 +245,25 @@ describe("bash process registry", () => {
     expect(createSessionSlug()).toBe("amber-atlas");
   });
 
+  it("drops an inactive background id when deleting a removed session", () => {
+    const session = createRegistrySession({
+      id: "inactive-background",
+      maxOutputChars: 100,
+      pendingMaxOutputChars: 30_000,
+      backgrounded: false,
+    });
+
+    addSession(session);
+    markBackgrounded(session);
+    expect(getActiveBackgroundExecSessionCount()).toBe(1);
+
+    session.backgrounded = false;
+    deleteSession(session.id);
+
+    expect(listRunningSessions()).toHaveLength(0);
+    expect(getActiveBackgroundExecSessionCount()).toBe(0);
+  });
+
   it("clears background activity in the test reset", () => {
     const session = createRegistrySession({
       maxOutputChars: 100,
