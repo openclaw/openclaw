@@ -1972,6 +1972,7 @@ describe("ci workflow guards", () => {
       "checks-node-core-test-nondist-shard",
       "checks-ui",
       "control-ui-i18n",
+      "localization-catalogs",
       "native-i18n",
       "qa-smoke-ci-profile",
     ]);
@@ -4497,6 +4498,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "pnpm-store-warmup",
       "build-artifacts",
       "native-i18n",
+      "localization-catalogs",
       "checks-ui",
       "control-ui-i18n",
       "checks-fast-core",
