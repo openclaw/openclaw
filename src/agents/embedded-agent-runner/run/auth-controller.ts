@@ -22,9 +22,11 @@ import {
 import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
 import { shouldUseTransientCooldownProbeSlot } from "../../failover-policy.js";
 import {
+  createRuntimeProviderAuthLookup,
   getApiKeyForModel,
   MissingProviderAuthError,
   type ResolvedProviderAuth,
+  type RuntimeProviderAuthLookup,
 } from "../../model-auth.js";
 import { providerModelRouteAcceptsAuthMode } from "../../provider-model-route-auth.js";
 import {
@@ -438,6 +440,13 @@ export function createEmbeddedRunAuthController(params: {
     throw new Error(message);
   };
 
+  let runtimeAuthLookup: RuntimeProviderAuthLookup | undefined;
+  const resolveRuntimeAuthLookup = () =>
+    (runtimeAuthLookup ??= createRuntimeProviderAuthLookup({
+      cfg: params.config,
+      workspaceDir: params.workspaceDir,
+    }));
+
   const resolveApiKeyForCandidate = async (
     candidate?: string,
     model = params.getRuntimeModel(),
@@ -452,6 +461,13 @@ export function createEmbeddedRunAuthController(params: {
       workspaceDir: params.workspaceDir,
       lockedProfile: candidate != null && candidate === params.lockedProfileId,
       allowAuthProfileFallback,
+      // Provider plugin synthetic-auth (e.g. GCP-ADC) is a provider-owned hook,
+      // not stored-profile discovery. Keep the path reachable so a direct/gateway
+      // attempt (allowAuthProfileFallback: false) still resolves it. Prepared
+      // runtimeLookup scopes eligibility via core shouldResolvePluginSyntheticAuth
+      // so stored-key providers do not pay for plugin discovery.
+      allowPluginSyntheticAuth: true,
+      runtimeLookup: resolveRuntimeAuthLookup(),
       secretSentinels: true,
     });
   };

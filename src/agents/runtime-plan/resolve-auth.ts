@@ -3,7 +3,7 @@ import { toErrorObject } from "../../infra/errors.js";
 import { SecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { isProfileInCooldown } from "../auth-profiles/usage-state.js";
-import { getApiKeyForModel } from "../model-auth.js";
+import { createRuntimeProviderAuthLookup, getApiKeyForModel } from "../model-auth.js";
 import { providerModelRouteAcceptsAuthMode } from "../provider-model-route-auth.js";
 import { shouldForceDirectAuthFallbackModelResolve } from "./credential-scoped-model.js";
 import { sameAgentRuntimeAuthModelRoute } from "./model-route.js";
@@ -271,11 +271,21 @@ export async function resolvePreparedRuntimeModelAuth(
   if (candidates.length === 0) {
     // The planner selected direct auth. Resolve only env/config material so an
     // unrelated full store cannot replace or pre-reject that immutable source.
+    // Stored-profile discovery stays off (empty store + fallback disabled), but
+    // provider plugin synthetic-auth (e.g. GCP-ADC) is a provider-owned hook the
+    // gateway route still depends on, so keep it reachable on its own flag.
+    // Prepared runtimeLookup scopes eligibility in core so a stored-key provider
+    // (e.g. openai) does not pay for plugin discovery just to fail closed.
     const auth = await getApiKeyForModel({
       ...authParams,
       store: { version: 1, profiles: {} },
       lockedProfile: false,
       allowAuthProfileFallback: false,
+      allowPluginSyntheticAuth: true,
+      runtimeLookup: createRuntimeProviderAuthLookup({
+        cfg: authParams.cfg,
+        workspaceDir: authParams.workspaceDir,
+      }),
       skipSetupProviderFallback: plan.modelRoute?.provider === "openai",
     });
     assertResolvedAuthMatchesPreparedRoute({ plan, auth });

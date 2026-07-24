@@ -939,6 +939,11 @@ function shouldResolvePluginSyntheticAuth(params: {
   modelApi?: string;
   runtimeLookup?: RuntimeProviderAuthLookup;
 }): boolean {
+  // Prepared lookups that failed to finish discovery must fail closed so gateway
+  // paths stay on env/config auth instead of paying for another plugin resolve.
+  if (params.runtimeLookup?.syntheticAuthProviderRefsComplete === false) {
+    return false;
+  }
   const syntheticAuthProviderRefs = params.runtimeLookup?.syntheticAuthProviderRefs;
   if (!syntheticAuthProviderRefs) {
     return true;
@@ -999,9 +1004,16 @@ export function hasRuntimeAvailableProviderAuth(params: {
     shouldResolvePluginSyntheticAuth({
       cfg: params.cfg,
       provider,
+      modelApi: params.modelApi,
       runtimeLookup: params.runtimeLookup,
     }) &&
-    resolveSyntheticLocalProviderAuth({ cfg: params.cfg, provider })
+    resolveSyntheticLocalProviderAuth({
+      cfg: params.cfg,
+      provider,
+      modelApi: params.modelApi,
+      allowPluginSyntheticAuth: params.allowPluginSyntheticAuth,
+      runtimeLookup: params.runtimeLookup,
+    })
   ) {
     return true;
   }
@@ -1081,11 +1093,22 @@ function resolveSyntheticLocalProviderAuth(params: {
   modelApi?: string;
   secretSentinels?: boolean;
   allowPluginSyntheticAuth?: boolean;
+  runtimeLookup?: RuntimeProviderAuthLookup;
 }): ResolvedProviderAuth | null {
   // Prepared direct attempts may use local no-auth config, but must not widen
-  // back into an unprepared plugin-owned credential source.
-  const syntheticProviderAuth =
-    params.allowPluginSyntheticAuth === false ? {} : resolveProviderSyntheticRuntimeAuth(params);
+  // back into an unprepared plugin-owned credential source. When a prepared
+  // runtime lookup is present, scope plugin synthetic-auth to eligible refs.
+  const allowPluginSyntheticAuth =
+    params.allowPluginSyntheticAuth !== false &&
+    shouldResolvePluginSyntheticAuth({
+      cfg: params.cfg,
+      provider: params.provider,
+      modelApi: params.modelApi,
+      runtimeLookup: params.runtimeLookup,
+    });
+  const syntheticProviderAuth = allowPluginSyntheticAuth
+    ? resolveProviderSyntheticRuntimeAuth(params)
+    : {};
   if (syntheticProviderAuth.auth) {
     return syntheticProviderAuth.auth;
   }
@@ -1207,6 +1230,13 @@ export async function resolveApiKeyForProvider(params: {
   credentialPrecedence?: ProviderCredentialPrecedence;
   /** Skip implicit profile discovery for a prepared env/config fallback attempt. */
   allowAuthProfileFallback?: boolean;
+  /** Keep provider plugin synthetic-auth (e.g. GCP-ADC) reachable even when
+   *  auth-profile fallback is off. Defaults to tracking allowAuthProfileFallback
+   *  so existing callers are unchanged; gateway-isolated direct attempts pass
+   *  true to preserve plugin synthetic auth without re-opening stored profiles. */
+  allowPluginSyntheticAuth?: boolean;
+  /** Prepared env/synthetic-auth lookup reused for eligibility without a parallel API. */
+  runtimeLookup?: RuntimeProviderAuthLookup;
   /** Skip plugin setup fallback when the prepared route already excludes it. */
   skipSetupProviderFallback?: boolean;
   modelId?: string;
@@ -1649,7 +1679,14 @@ export async function resolveApiKeyForProvider(params: {
     provider,
     modelApi: params.modelApi,
     secretSentinels: params.secretSentinels,
-    allowPluginSyntheticAuth: params.allowAuthProfileFallback !== false,
+    // Plugin synthetic-auth is a provider-owned credential hook, distinct from
+    // stored-profile discovery. Keep it available on its own flag so a gateway
+    // attempt can disable profile fallback yet still resolve GCP-ADC-style auth.
+    // When callers also pass a prepared runtimeLookup, eligibility is scoped by
+    // shouldResolvePluginSyntheticAuth instead of a separate exported predicate.
+    allowPluginSyntheticAuth:
+      params.allowPluginSyntheticAuth ?? params.allowAuthProfileFallback !== false,
+    runtimeLookup: params.runtimeLookup,
   });
   if (syntheticLocalAuth) {
     return syntheticLocalAuth;
@@ -1870,6 +1907,8 @@ export async function getApiKeyForModel(params: {
   lockedProfile?: boolean;
   credentialPrecedence?: ProviderCredentialPrecedence;
   allowAuthProfileFallback?: boolean;
+  allowPluginSyntheticAuth?: boolean;
+  runtimeLookup?: RuntimeProviderAuthLookup;
   skipSetupProviderFallback?: boolean;
   secretSentinels?: boolean;
 }): Promise<ResolvedProviderAuth> {
@@ -1884,6 +1923,8 @@ export async function getApiKeyForModel(params: {
     lockedProfile: params.lockedProfile,
     credentialPrecedence: params.credentialPrecedence,
     allowAuthProfileFallback: params.allowAuthProfileFallback,
+    allowPluginSyntheticAuth: params.allowPluginSyntheticAuth,
+    runtimeLookup: params.runtimeLookup,
     skipSetupProviderFallback: params.skipSetupProviderFallback,
     modelId: params.model.id,
     modelApi: params.model.api,
