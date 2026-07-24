@@ -5,9 +5,9 @@
     "onStartup": false
   },
   "enabledByDefault": true,
-  "providers": ["google", "google-gemini-cli", "google-vertex"],
+  "providers": ["google", "google-antigravity-cli", "google-gemini-cli", "google-vertex"],
   "providerCatalogEntry": "./provider-discovery.ts",
-  "autoEnableWhenConfiguredProviders": ["google-gemini-cli"],
+  "autoEnableWhenConfiguredProviders": ["google-antigravity-cli", "google-gemini-cli"],
   "modelIdNormalization": {
     "providers": {
       "google": {
@@ -30,6 +30,16 @@
           "gemini-3.1-flash-lite-preview": "gemini-3.1-flash-lite",
           "gemini-3.1-flash": "gemini-3-flash-preview",
           "gemini-3.1-flash-preview": "gemini-3-flash-preview"
+        }
+      },
+      "google-antigravity-cli": {
+        "aliases": {
+          "gemini-3-pro": "gemini-3.1-pro-preview",
+          "gemini-3-pro-preview": "gemini-3.1-pro-preview",
+          "gemini-3.1-pro": "gemini-3.1-pro-preview",
+          "gemini-3.5-Flash": "gemini-3.5-flash",
+          "gemini-3.5-flash-preview": "gemini-3.5-flash",
+          "gemini-3-5-flash": "gemini-3.5-flash"
         }
       },
       "google-vertex": {
@@ -609,6 +619,14 @@
   },
   "modelPricing": {
     "providers": {
+      "google-antigravity-cli": {
+        "openRouter": {
+          "provider": "google"
+        },
+        "liteLLM": {
+          "provider": "google"
+        }
+      },
       "google-gemini-cli": {
         "openRouter": {
           "provider": "google"
@@ -650,6 +668,9 @@
       "google": {
         "family": "google"
       },
+      "google-antigravity-cli": {
+        "family": "google"
+      },
       "google-gemini-cli": {
         "family": "google"
       },
@@ -685,7 +706,7 @@
       }
     ]
   },
-  "cliBackends": ["google-gemini-cli"],
+  "cliBackends": ["google-antigravity-cli", "google-gemini-cli"],
   "providerAuthChoices": [
     {
       "provider": "google",
