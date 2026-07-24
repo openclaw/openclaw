@@ -13,7 +13,6 @@ import { configureSqlitePreSchemaPragmas } from "../infra/sqlite-wal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { VERSION } from "../version.js";
-import { OPENCLAW_AGENT_SCHEMA_WITHOUT_BOARD_SQL } from "./openclaw-agent-board-schema.js";
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   type OpenClawAgentDatabaseOptions,
@@ -31,6 +30,7 @@ import {
   migrateSessionEntryStatusProjection,
   readSqliteTableColumns,
 } from "./openclaw-agent-db-session-migrations.js";
+import { migrateSessionNodesAndWindows } from "./openclaw-agent-db-session-nodes-migration.js";
 import {
   addSessionProvenanceColumns,
   backfillSessionEntryProvenance,
@@ -39,6 +39,7 @@ import {
 import type { DB as OpenClawAgentKyselyDatabase } from "./openclaw-agent-db.generated.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.generated.js";
+import { AGENT_SCHEMA_WITHOUT_LAZY_SURFACES_SQL } from "./openclaw-agent-session-sharing-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db.js";
 
 const OPENCLAW_AGENT_CANONICAL_UNIQUE_INDEXES = [
@@ -67,6 +68,17 @@ const OPENCLAW_AGENT_CANONICAL_UNIQUE_INDEXES = [
     definition: `
       ON transcript_event_identities(session_id, message_idempotency_key)
       WHERE message_idempotency_key IS NOT NULL
+    `,
+  },
+  {
+    name: "idx_agent_transcript_active_event_seq",
+    definition: "ON session_transcript_active_events(session_id, event_seq)",
+  },
+  {
+    name: "idx_agent_transcript_active_messages",
+    definition: `
+      ON session_transcript_active_events(session_id, message_position)
+      WHERE message_position IS NOT NULL
     `,
   },
 ] as const satisfies readonly CanonicalSqliteUniqueIndex[];
@@ -258,7 +270,7 @@ function migrateSessionTranscriptGenerations(db: DatabaseSync, previousVersion: 
     return;
   }
   db.prepare(
-    `INSERT OR IGNORE INTO session_transcript_generations (session_id, generation, updated_at)
+    `INSERT OR IGNORE INTO transcript_rewrite_watermarks (session_id, generation, updated_at)
      SELECT session_id, lower(hex(randomblob(16))), ?
      FROM transcript_events
      GROUP BY session_id`,
@@ -362,8 +374,11 @@ function migratedSessionScope(
 }
 
 function migratedEntryChannel(entry: MigratedSessionEntry): string | null {
-  const deliveryContext = migratedObjectField(entry, "deliveryContext");
-  const origin = migratedObjectField(entry, "origin");
+  const delivery = migratedObjectField(entry, "delivery");
+  const deliveryContext =
+    migratedObjectField(delivery ?? {}, "context") ?? migratedObjectField(entry, "deliveryContext");
+  const origin =
+    migratedObjectField(delivery ?? {}, "origin") ?? migratedObjectField(entry, "origin");
   return (
     migratedText(entry.channel) ??
     migratedText(deliveryContext?.channel) ??
@@ -373,8 +388,11 @@ function migratedEntryChannel(entry: MigratedSessionEntry): string | null {
 }
 
 function migratedEntryAccountId(entry: MigratedSessionEntry): string | null {
-  const deliveryContext = migratedObjectField(entry, "deliveryContext");
-  const origin = migratedObjectField(entry, "origin");
+  const delivery = migratedObjectField(entry, "delivery");
+  const deliveryContext =
+    migratedObjectField(delivery ?? {}, "context") ?? migratedObjectField(entry, "deliveryContext");
+  const origin =
+    migratedObjectField(delivery ?? {}, "origin") ?? migratedObjectField(entry, "origin");
   return (
     migratedText(deliveryContext?.accountId) ??
     migratedText(entry.lastAccountId) ??
@@ -394,6 +412,19 @@ function migratedEntryDisplayName(entry: MigratedSessionEntry): string | null {
 function backfillOpenClawAgentSchema(db: DatabaseSync, previousVersion: number): void {
   if (previousVersion >= 2) {
     return;
+  }
+  if (!readSqliteTableColumns(db, "session_entries") || !readSqliteTableColumns(db, "sessions")) {
+    return;
+  }
+  if (!readSqliteTableColumns(db, "session_routes")) {
+    db.exec(`
+      CREATE TABLE session_routes (
+        session_key TEXT NOT NULL PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+      );
+    `);
   }
   db.exec(`
     INSERT OR REPLACE INTO session_routes (session_key, session_id, updated_at)
@@ -491,10 +522,9 @@ export function assertAgentDatabaseIntegrityBeforeMutation(
 
 function ensureAgentSchema(db: DatabaseSync, agentId: string, pathname: string): void {
   // FK enforcement must be off before BEGIN: PRAGMA foreign_keys is a silent
-  // no-op inside a transaction, and the v1 sessions rebuild would otherwise
-  // cascade-delete session_entries when the old parent table drops. The
-  // connection pragmas restore enforcement for steady-state work below.
-  db.exec("PRAGMA foreign_keys = OFF;");
+  // no-op inside a transaction, and legacy owner-table rebuilds would otherwise
+  // cascade-delete their children. Steady-state enforcement is restored below.
+  db.exec("PRAGMA foreign_keys = OFF; PRAGMA legacy_alter_table = OFF;");
   try {
     runSqliteImmediateTransactionSync(db, () => {
       // Repeat preflight ownership/version gates inside the write transaction;
@@ -513,13 +543,19 @@ function ensureAgentSchema(db: DatabaseSync, agentId: string, pathname: string):
       dropLegacySessionTranscriptSearchSchema(db);
       migrateMemoryIndexSourcesIdentity(db);
       migrateOpenClawAgentSchema(db);
+      migrateConversationDeliveryTargetColumn(db);
+      backfillOpenClawAgentSchema(db, previousVersion);
+      if (previousVersion < 11) {
+        backfillSessionConversations(db);
+      }
+      backfillSessionEntryProvenance(db, previousVersion);
+      migrateSessionNodesAndWindows(db, previousVersion);
       db.exec(
         previousVersion === OPENCLAW_AGENT_SCHEMA_VERSION
-          ? OPENCLAW_AGENT_SCHEMA_WITHOUT_BOARD_SQL
+          ? AGENT_SCHEMA_WITHOUT_LAZY_SURFACES_SQL
           : OPENCLAW_AGENT_SCHEMA_SQL,
       );
       migrateSessionTranscriptGenerations(db, previousVersion);
-      migrateConversationDeliveryTargetColumn(db);
       migrateSessionTranscriptActiveProjection(db, previousVersion);
       if (previousVersion < 11) {
         migrateSqliteSchemaToStrictInTransaction(db, OPENCLAW_AGENT_SCHEMA_SQL, {
@@ -527,11 +563,6 @@ function ensureAgentSchema(db: DatabaseSync, agentId: string, pathname: string):
         });
       }
       repairCanonicalSqliteUniqueIndexes(db, pathname, OPENCLAW_AGENT_CANONICAL_UNIQUE_INDEXES);
-      backfillOpenClawAgentSchema(db, previousVersion);
-      if (previousVersion < 11) {
-        backfillSessionConversations(db);
-      }
-      backfillSessionEntryProvenance(db, previousVersion);
       const kysely = getNodeSqliteKysely<OpenClawAgentMetadataDatabase>(db);
       db.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`);
       const now = Date.now();
