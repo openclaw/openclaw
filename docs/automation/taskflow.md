@@ -26,7 +26,7 @@ A managed flow has a controller: plugin code that creates the flow through the p
 
 - Each step runs as a background task created under the flow; the flow's owner key and requester origin carry over to child tasks.
 - The controller advances the flow between `running`, `waiting`, and terminal states, and stores arbitrary JSON step state on the flow record.
-- Every mutation passes the flow's expected revision. A stale write is rejected as a revision conflict instead of clobbering newer state.
+- Every controller state mutation passes the flow's expected revision. A stale write is rejected as a revision conflict instead of clobbering newer state. Cancellation mutations can persist controller `stateJson` together with the native cancel intent or terminal `cancelled` projection.
 - Once cancellation is requested, new child tasks are refused, and the flow finalizes as `cancelled` when no child task remains active.
 
 Example: a weekly report flow that (1) gathers data, (2) generates the report, and (3) delivers it, one background task per step:
@@ -62,6 +62,8 @@ Flow records persist in the shared SQLite state database (`~/.openclaw/state/ope
 ## Cancel behavior
 
 `openclaw tasks flow cancel` sets a sticky cancel intent on the flow, cancels its active child tasks, and refuses new managed child tasks. Once no child task remains active, the flow finalizes as `cancelled` - immediately, or via the maintenance sweep if children take longer to settle. The intent is persisted, so a cancelled flow stays cancelled even if the gateway restarts before all child tasks have terminated.
+
+Plugin controllers can use `requestCancel(...)` to atomically persist the cancel intent and their latest `stateJson` under an expected revision. Once controller-owned child cleanup is complete, `finalizeCancel(...)` atomically persists the terminal `cancelled` projection, final state, and timestamps. Finalization is rejected until the cancel intent is durable and while any linked child still participates in cancellation. The async `cancel(...)` helper remains the higher-level operation for requesting cancellation and dispatching it to active linked tasks.
 
 ## CLI commands
 

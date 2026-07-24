@@ -8,6 +8,7 @@ import {
 } from "./task-flow-registry.audit.js";
 import {
   deleteTaskFlowRecordById,
+  finalizeFlowCancel,
   getTaskFlowById,
   getTaskFlowRegistryRestoreFailure,
   listTaskFlowRecords,
@@ -74,17 +75,12 @@ function finalizeCancelledFlow(flow: TaskFlowRecord, now: number): boolean {
   let current = flow;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const endedAt = Math.max(now, current.updatedAt, current.cancelRequestedAt ?? now);
-    const result = updateFlowRecordByIdExpectedRevision({
+    const result = finalizeFlowCancel({
       flowId: current.flowId,
       expectedRevision: current.revision,
-      patch: {
-        status: "cancelled",
-        blockedTaskId: null,
-        blockedSummary: null,
-        waitJson: null,
-        endedAt,
-        updatedAt: endedAt,
-      },
+      endedAt,
+      updatedAt: endedAt,
+      hasPendingTasks: hasActiveLinkedTasks,
     });
     if (result.applied) {
       return true;

@@ -46,14 +46,14 @@ Managed-flow lifecycle:
 3. `setWaiting(...)` when waiting on a person or an external system
 4. `resume(...)` when work can continue
 5. `finish(...)` or `fail(...)`
-6. `requestCancel(...)` or `cancel(...)` when the whole job should stop
+6. `requestCancel(...)`, `finalizeCancel(...)`, or `cancel(...)` when the whole job should stop
 
 ## Design constraints
 
 - Use **managed** TaskFlows when your code owns the orchestration.
 - One-task **mirrored** flows are created by core runtime for detached ACP/subagent work; this skill is mainly about managed flows.
 - Treat `stateJson` as the persisted state bag. There is no separate `setFlowOutput` or `appendFlowOutput` API.
-- Every mutating method after creation is revision-checked. Carry forward the latest `flow.revision` after each successful mutation.
+- Every direct state mutation after creation is revision-checked. Carry forward the latest `flow.revision` after each successful mutation. The async `cancel(...)` orchestration helper is the exception because it may dispatch cancellation across multiple active child tasks.
 - `runTask(...)` links the child task to the flow. Use it instead of manually creating detached tasks when you want parent orchestration.
 
 ## Example shape
@@ -140,6 +140,8 @@ Use the flow runtime for state and task linkage. Keep decisions in the authoring
 - Put human-readable wait reasons in `blockedSummary` or structured wait metadata in `waitJson`.
 - Use `getTaskSummary(flowId)` when the orchestrator needs a compact health view of child work.
 - Use `requestCancel(...)` when a caller wants the flow to stop scheduling immediately.
+- Pass `stateJson` to `requestCancel(...)` when the controller checkpoint must be persisted with the cancel intent in the same revision-checked write.
+- Use `finalizeCancel(...)` only after `requestCancel(...)` has persisted cancel intent and controller-owned child cleanup has settled. It rejects while linked child work still participates in cancellation, then persists terminal `cancelled`, final `stateJson`, and timestamps in one revision-checked write.
 - Use `cancel(...)` when you also want active linked child tasks cancelled.
 
 ## Examples

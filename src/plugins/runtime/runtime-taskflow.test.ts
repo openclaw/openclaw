@@ -9,7 +9,13 @@ import {
 import { createRuntimeTaskFlow } from "./runtime-taskflow.js";
 
 type BoundTaskFlow = ReturnType<ReturnType<typeof createRuntimeTaskFlow>["bindSession"]>;
-type MutationName = "setWaiting" | "resume" | "finish" | "fail" | "requestCancel";
+type MutationName =
+  | "setWaiting"
+  | "resume"
+  | "finish"
+  | "fail"
+  | "requestCancel"
+  | "finalizeCancel";
 
 function requireCreatedFlow<T>(flow: T | null): T {
   if (!flow) {
@@ -185,7 +191,24 @@ describe("runtime TaskFlow", () => {
           },
           "failed",
         ],
-        ["requestCancel", { cancelRequestedAt: 60 }, "failed"],
+        [
+          "requestCancel",
+          {
+            stateJson: { phase: "cancelling" },
+            cancelRequestedAt: 60,
+            updatedAt: 61,
+          },
+          "failed",
+        ],
+        [
+          "finalizeCancel",
+          {
+            stateJson: { phase: "cancelled" },
+            updatedAt: 70,
+            endedAt: 71,
+          },
+          "cancelled",
+        ],
       ];
 
     for (const [index, [name, input, status]] of transitions.entries()) {
@@ -205,8 +228,12 @@ describe("runtime TaskFlow", () => {
         flowId: created.flowId,
         revision: index + 1,
       });
+      if (name === "requestCancel" || name === "finalizeCancel") {
+        expect(result.flow.currentStep, name).toBe("continue_work");
+      }
       expect(getTaskFlowById(created.flowId)?.revision, name).toBe(index + 1);
     }
+    expect(getTaskFlowById(created.flowId)?.cancelRequestedAt).toBe(60);
   });
 
   it("rejects invalid mutation targets before writing and preserves conflict mapping", () => {
@@ -220,9 +247,11 @@ describe("runtime TaskFlow", () => {
       }),
     );
 
-    const denied = otherTaskFlow.setWaiting({
+    const denied = otherTaskFlow.finalizeCancel({
       flowId: managed.flowId,
       expectedRevision: managed.revision,
+      stateJson: { phase: "must-not-write" },
+      endedAt: 21,
     });
     expect(denied).toEqual({ applied: false, code: "not_found" });
     expect(getTaskFlowById(managed.flowId)?.revision).toBe(0);
@@ -246,13 +275,112 @@ describe("runtime TaskFlow", () => {
     });
     expect(wrongMode).toMatchObject({ applied: false, code: "not_managed" });
 
-    const conflict = ownerTaskFlow.finish({ flowId: managed.flowId, expectedRevision: 1 });
+    const conflict = ownerTaskFlow.finalizeCancel({
+      flowId: managed.flowId,
+      expectedRevision: 1,
+      stateJson: { phase: "stale" },
+      endedAt: 31,
+    });
     expect(conflict).toMatchObject({ applied: false, code: "revision_conflict" });
     expect(getTaskFlowById(managed.flowId)).toMatchObject({
       revision: 0,
       status: "queued",
     });
     expect(getTaskFlowById(managed.flowId)?.endedAt).toBeUndefined();
+    expect(getTaskFlowById(managed.flowId)?.cancelRequestedAt).toBeUndefined();
+    expect(getTaskFlowById(managed.flowId)?.stateJson).toBeUndefined();
     expect(getTaskFlowById(mirrored.flowId)?.revision).toBe(0);
+  });
+
+  it("rejects terminal cancellation until intent is persisted and child work is settled", () => {
+    const taskFlow = createRuntimeTaskFlow().bindSession({ sessionKey: "agent:main:main" });
+    const managed = taskFlow.createManaged({
+      controllerId: "tests/runtime-taskflow/cancel-preconditions",
+      goal: "Settle child before terminal cancellation",
+    });
+
+    const withoutIntent = taskFlow.finalizeCancel({
+      flowId: managed.flowId,
+      expectedRevision: managed.revision,
+      stateJson: { phase: "must-not-finalize" },
+      endedAt: 20,
+    });
+    expect(withoutIntent).toMatchObject({
+      applied: false,
+      code: "cancel_not_requested",
+      current: { revision: 0, status: "queued" },
+    });
+
+    const child = taskFlow.runTask({
+      flowId: managed.flowId,
+      runtime: "acp",
+      childSessionKey: "agent:main:subagent:cancel-preconditions",
+      runId: "runtime-taskflow-cancel-preconditions",
+      task: "Finish cleanup first",
+      status: "running",
+      startedAt: 21,
+      lastEventAt: 21,
+    });
+    expect(child.created).toBe(true);
+    if (!child.created) {
+      throw new Error("expected child task creation to succeed");
+    }
+
+    const requested = taskFlow.requestCancel({
+      flowId: managed.flowId,
+      expectedRevision: child.flow.revision,
+      stateJson: { phase: "cancelling" },
+      cancelRequestedAt: 22,
+      updatedAt: 22,
+    });
+    expect(requested.applied).toBe(true);
+    if (!requested.applied) {
+      throw new Error("expected cancellation request to apply");
+    }
+
+    const childrenActive = taskFlow.finalizeCancel({
+      flowId: managed.flowId,
+      expectedRevision: requested.flow.revision,
+      stateJson: { phase: "must-not-finalize" },
+      endedAt: 23,
+    });
+    expect(childrenActive).toMatchObject({
+      applied: false,
+      code: "children_active",
+      current: {
+        revision: requested.flow.revision,
+        status: "queued",
+        stateJson: { phase: "cancelling" },
+        cancelRequestedAt: 22,
+      },
+    });
+    expect(getTaskFlowById(managed.flowId)).toMatchObject({
+      revision: requested.flow.revision,
+      status: "queued",
+      stateJson: { phase: "cancelling" },
+      cancelRequestedAt: 22,
+    });
+  });
+
+  it("keeps the existing active-child cancellation helper compatible", async () => {
+    const taskFlow = createRuntimeTaskFlow().bindSession({ sessionKey: "agent:main:main" });
+    const managed = taskFlow.createManaged({
+      controllerId: "tests/runtime-taskflow/legacy-cancel",
+      goal: "Cancel through the operator helper",
+    });
+
+    const result = await taskFlow.cancel({
+      flowId: managed.flowId,
+      cfg: {} as never,
+    });
+
+    expect(result).toMatchObject({
+      found: true,
+      cancelled: true,
+      flow: {
+        flowId: managed.flowId,
+        status: "cancelled",
+      },
+    });
   });
 });

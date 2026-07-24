@@ -7,6 +7,7 @@ import {
   deleteTaskFlowRecordById,
   getTaskFlowRegistryRestoreFailure,
   failFlow,
+  finalizeFlowCancel,
   getTaskFlowById,
   listTaskFlowRecords,
   requestFlowCancel,
@@ -390,6 +391,181 @@ describe("task-flow-registry", () => {
       revision: 0,
       status: "queued",
     });
+  });
+
+  it("persists cancel intent and controller state in one revision-checked write", () => {
+    const upsertFlow = vi.fn();
+    configureTaskFlowRegistryRuntime({
+      store: {
+        loadSnapshot: () => ({ flows: new Map() }),
+        saveSnapshot: () => {},
+        upsertFlow,
+      },
+    });
+    const created = createManagedTaskFlow({
+      ownerKey: "agent:main:main",
+      controllerId: "tests/atomic-cancel-request",
+      goal: "Persist cancellation state",
+      stateJson: { phase: "running" },
+    });
+    upsertFlow.mockClear();
+
+    const requested = requestFlowCancel({
+      flowId: created.flowId,
+      expectedRevision: created.revision,
+      stateJson: { phase: "cancelling", checkpoint: 4 },
+      cancelRequestedAt: 40,
+      updatedAt: 41,
+    });
+
+    expect(requested.applied).toBe(true);
+    expect(upsertFlow).toHaveBeenCalledTimes(1);
+    expect(upsertFlow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        flowId: created.flowId,
+        revision: 1,
+        stateJson: { phase: "cancelling", checkpoint: 4 },
+        cancelRequestedAt: 40,
+        updatedAt: 41,
+      }),
+    );
+
+    const conflict = requestFlowCancel({
+      flowId: created.flowId,
+      expectedRevision: created.revision,
+      stateJson: { phase: "stale" },
+      cancelRequestedAt: 50,
+    });
+
+    expect(conflict).toMatchObject({ applied: false, reason: "revision_conflict" });
+    expect(upsertFlow).toHaveBeenCalledTimes(1);
+    expect(getTaskFlowById(created.flowId)).toMatchObject({
+      revision: 1,
+      stateJson: { phase: "cancelling", checkpoint: 4 },
+      cancelRequestedAt: 40,
+      updatedAt: 41,
+    });
+  });
+
+  it("requires persisted cancel intent and settled children before terminal cancellation", () => {
+    const upsertFlow = vi.fn();
+    configureTaskFlowRegistryRuntime({
+      store: {
+        loadSnapshot: () => ({ flows: new Map() }),
+        saveSnapshot: () => {},
+        upsertFlow,
+      },
+    });
+    const created = createManagedTaskFlow({
+      ownerKey: "agent:main:main",
+      controllerId: "tests/atomic-cancel-preconditions",
+      goal: "Enforce cancellation preconditions",
+      stateJson: { phase: "running" },
+    });
+    upsertFlow.mockClear();
+
+    const withoutIntent = finalizeFlowCancel({
+      flowId: created.flowId,
+      expectedRevision: created.revision,
+      stateJson: { phase: "must-not-finalize" },
+      endedAt: 40,
+      hasPendingTasks: () => false,
+    });
+
+    expect(withoutIntent).toMatchObject({
+      applied: false,
+      reason: "cancel_not_requested",
+      current: { revision: 0, status: "queued", stateJson: { phase: "running" } },
+    });
+    expect(upsertFlow).not.toHaveBeenCalled();
+
+    const requested = requestFlowCancel({
+      flowId: created.flowId,
+      expectedRevision: created.revision,
+      stateJson: { phase: "cancelling" },
+      cancelRequestedAt: 50,
+      updatedAt: 51,
+    });
+    expect(requested.applied).toBe(true);
+    if (!requested.applied) {
+      throw new Error("expected cancellation request to apply");
+    }
+    upsertFlow.mockClear();
+
+    const childrenActive = finalizeFlowCancel({
+      flowId: created.flowId,
+      expectedRevision: requested.flow.revision,
+      stateJson: { phase: "must-not-finalize" },
+      endedAt: 60,
+      hasPendingTasks: () => true,
+    });
+
+    expect(childrenActive).toMatchObject({
+      applied: false,
+      reason: "children_active",
+      current: {
+        revision: requested.flow.revision,
+        status: "queued",
+        stateJson: { phase: "cancelling" },
+        cancelRequestedAt: 50,
+      },
+    });
+    expect(upsertFlow).not.toHaveBeenCalled();
+    expect(getTaskFlowById(created.flowId)).toMatchObject({
+      revision: requested.flow.revision,
+      status: "queued",
+      stateJson: { phase: "cancelling" },
+      cancelRequestedAt: 50,
+    });
+  });
+
+  it("persists the complete terminal cancellation projection in one write", () => {
+    const upsertFlow = vi.fn();
+    configureTaskFlowRegistryRuntime({
+      store: {
+        loadSnapshot: () => ({ flows: new Map() }),
+        saveSnapshot: () => {},
+        upsertFlow,
+      },
+    });
+    const created = createManagedTaskFlow({
+      ownerKey: "agent:main:main",
+      controllerId: "tests/atomic-cancel-finalize",
+      goal: "Finalize cancellation state",
+      status: "blocked",
+      stateJson: { phase: "cancelling" },
+      waitJson: { kind: "task", taskId: "task-1" },
+      blockedTaskId: "task-1",
+      blockedSummary: "Stopping child task",
+      cancelRequestedAt: 50,
+    });
+    upsertFlow.mockClear();
+
+    const finalized = finalizeFlowCancel({
+      flowId: created.flowId,
+      expectedRevision: created.revision,
+      stateJson: { phase: "cancelled", checkpoint: 5 },
+      updatedAt: 60,
+      endedAt: 61,
+      hasPendingTasks: () => false,
+    });
+
+    expect(finalized.applied).toBe(true);
+    expect(upsertFlow).toHaveBeenCalledTimes(1);
+    expect(upsertFlow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        flowId: created.flowId,
+        revision: 1,
+        status: "cancelled",
+        stateJson: { phase: "cancelled", checkpoint: 5 },
+        waitJson: null,
+        blockedTaskId: undefined,
+        blockedSummary: undefined,
+        cancelRequestedAt: 50,
+        updatedAt: 60,
+        endedAt: 61,
+      }),
+    );
   });
 
   it("does not throw or delete memory when flow delete persistence fails", () => {

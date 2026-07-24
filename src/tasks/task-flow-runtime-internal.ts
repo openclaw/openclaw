@@ -5,6 +5,7 @@ export {
   deleteTaskFlowRecordById,
   ensureTaskFlowRegistryReady,
   failFlow,
+  finalizeFlowCancel,
   finishFlow,
   getTaskFlowById,
   listTaskFlowRecords,
@@ -14,7 +15,6 @@ export {
   resumeFlow,
   setFlowWaiting,
   syncFlowFromTaskResult,
-  updateFlowRecordByIdExpectedRevision,
 } from "./task-flow-registry.js";
 
 export type { TaskFlowUpdateResult } from "./task-flow-registry.js";

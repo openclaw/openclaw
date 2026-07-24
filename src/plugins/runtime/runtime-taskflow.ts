@@ -2,6 +2,7 @@
 import {
   cancelFlowByIdForOwner,
   getFlowTaskSummary,
+  hasPendingFlowCancellationTasks,
   runTaskInFlowForOwner,
 } from "../../tasks/task-executor.js";
 import {
@@ -14,6 +15,7 @@ import type { TaskFlowRecord } from "../../tasks/task-flow-registry.types.js";
 import {
   createManagedTaskFlow,
   failFlow,
+  finalizeFlowCancel,
   finishFlow,
   type TaskFlowUpdateResult,
   requestFlowCancel,
@@ -220,7 +222,23 @@ function createBoundTaskFlowRuntime(params: {
           requestFlowCancel({
             flowId,
             expectedRevision: input.expectedRevision,
+            stateJson: input.stateJson,
             cancelRequestedAt: input.cancelRequestedAt,
+            updatedAt: input.updatedAt,
+          }),
+      }),
+    finalizeCancel: (input) =>
+      applyManagedFlowMutationForOwner({
+        flowId: input.flowId,
+        ownerKey,
+        mutate: (flowId) =>
+          finalizeFlowCancel({
+            flowId,
+            expectedRevision: input.expectedRevision,
+            stateJson: input.stateJson,
+            updatedAt: input.updatedAt,
+            endedAt: input.endedAt,
+            hasPendingTasks: hasPendingFlowCancellationTasks,
           }),
       }),
     cancel: ({ flowId, cfg }) =>

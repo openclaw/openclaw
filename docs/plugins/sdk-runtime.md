@@ -437,7 +437,31 @@ two-party event loops that do not go through the shared inbound reply runner.
       currentStep: "await-human-reply",
       waitJson: { kind: "reply", channel: "telegram" },
     });
+
+    if (!waiting.applied) {
+      throw new Error(`TaskFlow update failed: ${waiting.code}`);
+    }
+
+    const cancelRequested = taskFlow.requestCancel({
+      flowId: waiting.flow.flowId,
+      expectedRevision: waiting.flow.revision,
+      stateJson: { phase: "cancelling" },
+      cancelRequestedAt: Date.now(),
+    });
+
+    if (!cancelRequested.applied) {
+      throw new Error(`TaskFlow cancellation request failed: ${cancelRequested.code}`);
+    }
     ```
+
+    `requestCancel(...)` writes the native cancel intent and optional
+    `stateJson` in the same revision-checked mutation. After the controller has
+    settled its child work, `finalizeCancel(...)` writes `status: "cancelled"`,
+    the final `stateJson`, and cancellation timestamps in one mutation. It
+    rejects with `cancel_not_requested` until the intent is durable and with
+    `children_active` while any linked child still participates in cancellation.
+    Use the existing async `cancel({ flowId, cfg })` helper when OpenClaw should
+    request cancellation and dispatch cancellation to active linked tasks for you.
 
     Use `bindSession({ sessionKey, requesterOrigin })` when you already have a trusted OpenClaw session key from your own binding layer. Do not bind from raw user input.
 

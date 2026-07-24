@@ -35,9 +35,9 @@ import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
   createTaskFlowForTask,
   deleteTaskFlowRecordById,
+  finalizeFlowCancel,
   getTaskFlowById,
   requestFlowCancel,
-  updateFlowRecordByIdExpectedRevision,
 } from "./task-flow-runtime-internal.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type {
@@ -116,6 +116,10 @@ export function createQueuedTaskRun(params: DetachedTaskCreateParams): TaskRecor
 
 export function getFlowTaskSummary(flowId: string): TaskRegistrySummary {
   return summarizeTaskRecords(listTasksForFlowId(flowId));
+}
+
+export function hasPendingFlowCancellationTasks(flowId: string): boolean {
+  return listTasksForFlowId(flowId).some(isTaskFlowCancellationPending);
 }
 
 export function createRunningTaskRun(params: DetachedRunningTaskCreateParams): TaskRecord | null {
@@ -268,6 +272,10 @@ function describeFlowUpdateFailure(
       return "Flow changed while cancellation was in progress.";
     case "persist_failed":
       return "Flow persistence failed.";
+    case "cancel_not_requested":
+      return "Flow cancellation has not been requested.";
+    case "children_active":
+      return "One or more child tasks are still active.";
     case "not_found":
       return "Flow not found.";
     default:
@@ -279,17 +287,12 @@ function cancelManagedFlowAfterChildrenSettle(
   flow: TaskFlowRecord,
   endedAt: number,
 ): TaskFlowRecord | FlowUpdateFailure {
-  const result = updateFlowRecordByIdExpectedRevision({
+  const result = finalizeFlowCancel({
     flowId: flow.flowId,
     expectedRevision: flow.revision,
-    patch: {
-      status: "cancelled",
-      blockedTaskId: null,
-      blockedSummary: null,
-      waitJson: null,
-      endedAt,
-      updatedAt: endedAt,
-    },
+    endedAt,
+    updatedAt: endedAt,
+    hasPendingTasks: hasPendingFlowCancellationTasks,
   });
   if (result.applied) {
     return result.flow;
