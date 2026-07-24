@@ -19,8 +19,8 @@ import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite
 
 type SuggestionDatabase = Pick<OpenClawAgentKyselyDatabase, "session_suggestions">;
 
-export type StoredSessionSuggestionState = "pending" | "accepted" | "dismissed";
-export type StoredSessionSuggestionResolution = "send" | "queue" | "edit" | "dismiss";
+type StoredSessionSuggestionState = "pending" | "accepted" | "dismissed";
+type StoredSessionSuggestionResolution = "send" | "queue" | "edit" | "dismiss";
 
 export type StoredSessionSuggestion = {
   id: string;
@@ -32,9 +32,9 @@ export type StoredSessionSuggestion = {
 };
 
 const ensuredDatabases = new WeakSet<DatabaseSync>();
-export const MAX_PENDING_SESSION_SUGGESTIONS_PER_AUTHOR = 20;
-export const MAX_PENDING_SESSION_SUGGESTIONS_PER_SESSION = 100;
-export const MAX_RETAINED_RESOLVED_SESSION_SUGGESTIONS = 200;
+const MAX_PENDING_SESSION_SUGGESTIONS_PER_AUTHOR = 20;
+const MAX_PENDING_SESSION_SUGGESTIONS_PER_SESSION = 100;
+const MAX_RETAINED_RESOLVED_SESSION_SUGGESTIONS = 200;
 export const SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS = 30_000;
 
 function resolveDatabaseOptions(scope: SessionAccessScope): OpenClawAgentDatabaseOptions {
@@ -227,7 +227,7 @@ export function listSessionSuggestions(
   ).rows.map(toSuggestion);
 }
 
-export type SessionSuggestionDispatchClaim =
+type SessionSuggestionDispatchClaim =
   | { kind: "busy" }
   | { kind: "mismatch"; resolution: StoredSessionSuggestionResolution }
   | { kind: "claimed"; suggestion: StoredSessionSuggestion; token: string };
@@ -368,51 +368,6 @@ export function finalizeSessionSuggestionClaim(
         .where("id", "=", params.id)
         .where("state", "=", "pending")
         .where("dispatch_token", "=", params.token),
-    );
-    if ((updated.numAffectedRows ?? 0n) === 0n) {
-      return null;
-    }
-    pruneResolvedSessionSuggestions(database, sessionKey);
-    return { ...toSuggestion(row), state: params.state };
-  }, options);
-}
-
-export function resolveSessionSuggestion(
-  scope: SessionAccessScope,
-  params: {
-    id: string;
-    state: Exclude<StoredSessionSuggestionState, "pending">;
-    expectedSessionId?: string;
-  },
-): StoredSessionSuggestion | null {
-  const options = resolveDatabaseOptions(scope);
-  ensureSuggestionSchema(options);
-  const sessionKey = resolveSqliteScope(scope).sessionKey;
-  return runOpenClawAgentWriteTransaction((database) => {
-    assertSessionInstance(database, sessionKey, params.expectedSessionId);
-    const db = suggestionDb(database);
-    const row = executeSqliteQueryTakeFirstSync(
-      database.db,
-      db
-        .selectFrom("session_suggestions")
-        .select(["id", "author_id", "author_label", "text", "created_at", "state"])
-        .where("session_key", "=", sessionKey)
-        .where("id", "=", params.id)
-        .where("state", "=", "pending")
-        .where("dispatch_token", "is", null),
-    );
-    if (!row) {
-      return null;
-    }
-    const updated = executeSqliteQuerySync(
-      database.db,
-      db
-        .updateTable("session_suggestions")
-        .set({ state: params.state })
-        .where("session_key", "=", sessionKey)
-        .where("id", "=", params.id)
-        .where("state", "=", "pending")
-        .where("dispatch_token", "is", null),
     );
     if ((updated.numAffectedRows ?? 0n) === 0n) {
       return null;

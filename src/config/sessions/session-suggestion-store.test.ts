@@ -10,11 +10,32 @@ import {
   claimSessionSuggestionDispatch,
   finalizeSessionSuggestionClaim,
   listSessionSuggestions,
-  MAX_PENDING_SESSION_SUGGESTIONS_PER_AUTHOR,
-  MAX_RETAINED_RESOLVED_SESSION_SUGGESTIONS,
-  resolveSessionSuggestion,
   SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
 } from "./session-suggestion-store.js";
+
+const MAX_PENDING_SESSION_SUGGESTIONS_PER_AUTHOR = 20;
+const MAX_RETAINED_RESOLVED_SESSION_SUGGESTIONS = 200;
+
+function resolvePendingSuggestion(params: {
+  scope: { agentId: string; env: NodeJS.ProcessEnv; sessionKey: string };
+  id: string;
+  state: "accepted" | "dismissed";
+  expectedSessionId: string;
+}) {
+  const claim = claimSessionSuggestionDispatch(params.scope, {
+    id: params.id,
+    resolution: params.state === "accepted" ? "edit" : "dismiss",
+    expectedSessionId: params.expectedSessionId,
+  });
+  return claim?.kind === "claimed"
+    ? finalizeSessionSuggestionClaim(params.scope, {
+        id: params.id,
+        token: claim.token,
+        state: params.state,
+        expectedSessionId: params.expectedSessionId,
+      })
+    : null;
+}
 
 afterEach(() => closeOpenClawAgentDatabasesForTest());
 
@@ -49,14 +70,16 @@ describe("session suggestion store", () => {
         expect.objectContaining({ text: "  first\n" }),
       ]);
       expect(
-        resolveSessionSuggestion(scope, {
+        resolvePendingSuggestion({
+          scope,
           id: "a",
           state: "accepted",
           expectedSessionId: "session-a",
         })?.state,
       ).toBe("accepted");
       expect(
-        resolveSessionSuggestion(scope, {
+        resolvePendingSuggestion({
+          scope,
           id: "a",
           state: "dismissed",
           expectedSessionId: "session-a",
@@ -113,7 +136,8 @@ describe("session suggestion store", () => {
         }),
       ).toThrow(/author pending suggestion limit/);
 
-      resolveSessionSuggestion(scope, {
+      resolvePendingSuggestion({
+        scope,
         id: "suggestion-0",
         state: "dismissed",
         expectedSessionId: "session-a",
@@ -142,7 +166,8 @@ describe("session suggestion store", () => {
           createdAt: index + 1,
           expectedSessionId: "session-a",
         });
-        resolveSessionSuggestion(scope, {
+        resolvePendingSuggestion({
+          scope,
           id,
           state: "dismissed",
           expectedSessionId: "session-a",
@@ -184,7 +209,8 @@ describe("session suggestion store", () => {
         }),
       ).toEqual({ kind: "busy" });
       expect(
-        resolveSessionSuggestion(scope, {
+        resolvePendingSuggestion({
+          scope,
           id: "claimed",
           state: "dismissed",
           expectedSessionId: "session-a",
