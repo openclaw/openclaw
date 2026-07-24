@@ -906,6 +906,7 @@ How it maps:
 
 - `browser snapshot` returns a stable UI tree (AI or ARIA).
 - `browser act` uses the snapshot `ref` IDs to click/type/drag/select.
+- `browser act` also supports `kind="batch"` (run nested `actions[]` in one call; `stopOnError` defaults to stop), `doubleClick: true` on `act:click` for double clicks, and `kind="scrollIntoView"` to scroll a ref into view before acting. See [Browser control API](/tools/browser-control) for the full act kind reference.
 - `browser screenshot` captures pixels (full page, element, or labeled refs).
 - `browser doctor` checks Gateway, plugin, profile, browser, and tab readiness.
 - `browser` accepts:

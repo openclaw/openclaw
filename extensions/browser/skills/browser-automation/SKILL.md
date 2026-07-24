@@ -34,6 +34,12 @@ Use this skill when you need the `browser` tool for anything beyond a single pag
    - If the page needs login, permission, captcha, 2FA, camera/microphone approval, or another manual step, stop and tell the user exactly what is needed.
    - Do not claim the browser is not logged in just because the current page shows a permission or onboarding dialog. Inspect the visible UI first.
 
+## Batch and Compound Actions
+
+- `act` with `kind="batch"` runs an array of nested actions in one call. Each entry in `actions[]` is an act request with its own `kind` and fields. `stopOnError` defaults to `true` (stop on first error); set `stopOnError=false` to continue through all actions. Use batch to combine open/wait/snapshot/act/screenshot into a single replayable plan and reduce round trips. `batch` is not supported on `profile="user"` and other existing-session (chrome-mcp) profiles; send actions individually there.
+- For double clicks, pass `doubleClick: true` on `act:click` (CLI: `openclaw browser click <ref> --double`). `doubleClick` is also accepted on `act:clickCoords`.
+- Use `act:scrollIntoView` (CLI: `openclaw browser scrollintoview <ref>`) to scroll a snapshot ref into view before clicking or reading it; re-snapshot if the layout shifts after scrolling. On existing-session profiles, omit `timeoutMs` on `act:scrollIntoView`.
+
 ## Tab Hygiene
 
 Before creating a tab for a named task, list tabs and reuse an existing matching label or URL when it is still usable.
