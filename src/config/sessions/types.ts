@@ -241,6 +241,7 @@ export type RestartRecoveryRun = {
 };
 
 /** Empty in production; test-only declarations model retired fixture metadata. */
+// oxlint-disable-next-line typescript/no-empty-object-type -- declaration merging hook
 export interface SessionEntryTestExtensions {}
 
 export type SessionEntryCore = SessionRestartRecoveryState &
