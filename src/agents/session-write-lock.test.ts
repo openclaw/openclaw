@@ -681,6 +681,59 @@ describe("acquireSessionWriteLock", () => {
     }
   });
 
+  it("releases the second stale lock when the first force-release throws", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const sessionFileA = path.join(root, "session-a.jsonl");
+      const sessionFileB = path.join(root, "session-b.jsonl");
+      const lockPathA = `${sessionFileA}.lock`;
+      const lockPathB = `${sessionFileB}.lock`;
+
+      await acquireSessionWriteLock({
+        sessionFile: sessionFileA,
+        timeoutMs: 500,
+        maxHoldMs: 1,
+      });
+      await acquireSessionWriteLock({
+        sessionFile: sessionFileB,
+        timeoutMs: 500,
+        maxHoldMs: 1,
+      });
+
+      // Replace the first lock file with a directory so
+      // readSidecarLockSnapshot fails with EISDIR (not ENOENT),
+      // causing forceRelease to throw. This is the only reliable
+      // way to trigger a non-ENOENT filesystem error — JSON parse
+      // failures are caught and ENOENT returns null.
+      await fs.rm(lockPathA, { force: true });
+      await fs.mkdir(lockPathA);
+
+      const released = await testing.runLockWatchdogCheck(Date.now() + 1000);
+      // The first lock's forceRelease threw (EISDIR), the loop
+      // continued, and the second lock was successfully released.
+      // On unfixed main this test fails: the loop aborts and
+      // released is 0 (the error propagates, skipping lock B).
+      expect(released).toBe(1);
+      await expectPathMissing(lockPathB);
+
+      const errorLine = stderrSpy.mock.calls
+        .map((call) => String(call[0]))
+        .find((line) => line.includes("[session-write-lock] failed to release lock"));
+      expect(errorLine).toBeDefined();
+      expect(errorLine).toContain("EISDIR");
+    } finally {
+      stderrSpy.mockRestore();
+      // The directory at lockPathA must be cleaned up before rm(root).
+      try {
+        await fs.rm(lockPathA, { recursive: true, force: true });
+      } catch {
+        /* best effort */
+      }
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("removes lock files during process-exit cleanup", async () => {
     await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
       const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
