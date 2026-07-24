@@ -62,15 +62,11 @@ function resolveArg(arg: string, pluginRoot: string): string | undefined {
   return resolvePluginRelativePath(arg, pluginRoot);
 }
 
-function withNodeCommandTrustedDir(
-  command: string,
-  pluginRoot: string,
-  nodeCommand: string,
-): string[] {
+function withNodeCommandTrustedDir(command: string, pluginRoot: string): string[] {
   // The ${node} placeholder executes the current Node binary with a plugin-owned entrypoint.
   // Trust both the Node binary dir and plugin root so resolver path checks accept that shape.
   return command === NODE_COMMAND_PLACEHOLDER
-    ? [...new Set([path.dirname(nodeCommand), pluginRoot])]
+    ? [...new Set([path.dirname(process.execPath), pluginRoot])]
     : [pluginRoot];
 }
 
@@ -235,11 +231,10 @@ function materializeExecProviderConfig(
   if (integration.args && args?.length !== integration.args.length) {
     return undefined;
   }
-  const nodeCommand = fs.realpathSync(process.execPath);
-  const trustedDirs = withNodeCommandTrustedDir(integration.command, pluginRoot, nodeCommand);
+  const trustedDirs = withNodeCommandTrustedDir(integration.command, pluginRoot);
   return {
     source: "exec",
-    command: nodeCommand,
+    command: process.execPath,
     ...(args ? { args } : {}),
     ...(integration.timeoutMs !== undefined ? { timeoutMs: integration.timeoutMs } : {}),
     ...(integration.noOutputTimeoutMs !== undefined
@@ -251,10 +246,6 @@ function materializeExecProviderConfig(
     ...(integration.jsonOnly === false ? { jsonOnly: false } : {}),
     ...(integration.env ? { env: integration.env } : {}),
     ...(integration.passEnv ? { passEnv: integration.passEnv } : {}),
-    // `${node}` is the current trusted runtime plus a separately validated plugin entrypoint.
-    // Hosted toolchains can have group-writable Node installs, so the command path itself
-    // cannot satisfy the generic user-owned executable policy.
-    allowInsecurePath: true,
     trustedDirs,
   };
 }

@@ -67,7 +67,6 @@ afterEach(() => {
 describe("secret provider integration presets", () => {
   it("materializes plugin manifest exec providers without provider-specific core code", () => {
     const rootDir = makeTempDir();
-    const nodePath = fs.realpathSync(process.execPath);
     fs.writeFileSync(path.join(rootDir, "index.ts"), "export default {};\n", "utf8");
     makeSecureDir(path.join(rootDir, "bin"));
     writeSecureFile(path.join(rootDir, "bin", "resolve.mjs"), "process.stdin.resume();\n");
@@ -128,7 +127,7 @@ describe("secret provider integration presets", () => {
       ok: true,
       providerConfig: {
         source: "exec",
-        command: nodePath,
+        command: process.execPath,
         args: [fs.realpathSync(path.join(rootDir, "bin", "resolve.mjs")), "--profile", "work"],
         timeoutMs: 3000,
         noOutputTimeoutMs: 3000,
@@ -137,8 +136,7 @@ describe("secret provider integration presets", () => {
         env: {
           ACME_PROFILE: "work",
         },
-        trustedDirs: [path.dirname(nodePath), rootDir],
-        allowInsecurePath: true,
+        trustedDirs: [path.dirname(process.execPath), rootDir],
         jsonOnly: false,
       },
     });
@@ -146,7 +144,6 @@ describe("secret provider integration presets", () => {
 
   it("normalizes manifest exec provider options to SecretRef provider schema limits", () => {
     const rootDir = makeTempDir();
-    const nodePath = fs.realpathSync(process.execPath);
     fs.writeFileSync(path.join(rootDir, "index.ts"), "export default {};\n", "utf8");
     writeSecureFile(path.join(rootDir, "resolve.mjs"), "process.stdin.resume();\n");
     fs.writeFileSync(
@@ -196,11 +193,10 @@ describe("secret provider integration presets", () => {
       ok: true,
       providerConfig: {
         source: "exec",
-        command: nodePath,
+        command: process.execPath,
         args: [fs.realpathSync(path.join(rootDir, "resolve.mjs")), "ok"],
-        trustedDirs: [path.dirname(nodePath), rootDir],
+        trustedDirs: [path.dirname(process.execPath), rootDir],
         passEnv: ["GOOD_ENV"],
-        allowInsecurePath: true,
       },
     });
   });
@@ -569,7 +565,6 @@ describe("secret provider integration presets", () => {
         "});",
       ].join("\n"),
     );
-    fs.chmodSync(resolverPath, 0o600);
     fs.writeFileSync(
       path.join(rootDir, "openclaw.plugin.json"),
       JSON.stringify({
