@@ -33,7 +33,7 @@ provider names, or user-authored data.
 
 | Surface                          | Reviewed English source                                             | Translation workflow                                                                             | Focused validation                                                |
 | -------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------- |
-| Control UI                       | `ui/src/i18n/locales/en.ts`                                         | Land reviewed English; the Control UI locale refresh workflow updates generated locale artifacts | `pnpm ui:i18n:verify`                                             |
+| Control UI                       | `ui/src/i18n/locales/en.ts`                                         | Land reviewed English; the Control UI locale refresh workflow updates generated locale artifacts | `pnpm ui:i18n:baseline` followed by `pnpm ui:i18n:verify`         |
 | CLI onboarding and channel setup | `src/wizard/i18n/locales/en.ts`                                     | Update the wizard-owned catalogs                                                                 | `node scripts/run-vitest.mjs src/wizard/i18n/index.test.ts`       |
 | Android and Apple apps           | Native source projected through `apps/.i18n/native-source.json`     | Update native source, then use the native locale refresh workflow for generated artifacts        | `pnpm native:i18n:baseline` followed by `pnpm native:i18n:verify` |
 | Documentation                    | English pages under `docs/` and `docs/.i18n/glossary.<locale>.json` | Land English docs; the publish repository owns translated docs and translation memory            | `pnpm docs:check-i18n-glossary`                                   |
@@ -132,9 +132,11 @@ When a surface has human and structured output:
   reviewed protocol explicitly owns those fields.
 
 Approval, authentication, authorization, destructive-action, privacy, and
-recovery copy require the named product or security reviewer. Until that review
-is recorded, use the reviewed English fallback instead of shipping an
-unattested production translation.
+recovery copy require the named product or security reviewer before a
+translation is treated as approved. Current refresh workflows do not enforce
+that approval or withhold generated translations. Do not claim an English-only
+fallback guarantee for a surface unless its owner has added an enforceable
+quarantine or fallback mechanism.
 
 ## Add a locale
 
