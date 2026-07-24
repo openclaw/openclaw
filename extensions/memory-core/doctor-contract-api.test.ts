@@ -1108,7 +1108,7 @@ describe("memory-core doctor dreaming migration", () => {
     await expect(fs.access(`${eventPath}.migrated`)).resolves.toBeUndefined();
   });
 
-  it("imports persistent legacy dreaming state and ignores transient locks", async () => {
+  it("archives divergent derived dreaming journals while keeping SQLite state authoritative", async () => {
     const dreamsDir = path.join(workspaceDir, "memory", ".dreams");
     const dailyPath = path.join(dreamsDir, "daily-ingestion.json");
     const sessionPath = path.join(dreamsDir, "session-ingestion.json");
@@ -1256,18 +1256,69 @@ describe("memory-core doctor dreaming migration", () => {
       expect.stringContaining("Retained acknowledged Memory Core phase signals"),
     ]);
 
-    const changedDaily = JSON.parse(await fs.readFile(dailyPath, "utf8")) as {
-      files: Record<string, { mtimeMs: number }>;
+    const changedSession = JSON.parse(await fs.readFile(sessionPath, "utf8")) as {
+      seenMessages: Record<string, string[]>;
     };
-    changedDaily.files["memory/2026-04-05.md"]!.mtimeMs = 999;
-    await fs.writeFile(dailyPath, JSON.stringify(changedDaily), "utf8");
+    changedSession.seenMessages["main/session.jsonl"]!.push("seen-c");
+    const changedSessionContents = JSON.stringify(changedSession);
+    await fs.writeFile(sessionPath, changedSessionContents, "utf8");
+
+    const changedRecall = JSON.parse(await fs.readFile(recallPath, "utf8")) as {
+      entries: Record<string, { recallCount: number }>;
+    };
+    changedRecall.entries["memory:memory/2026-04-05.md:1:1"]!.recallCount = 99;
+    const changedRecallContents = JSON.stringify(changedRecall);
+    await fs.writeFile(recallPath, changedRecallContents, "utf8");
+
+    const changedPhase = JSON.parse(await fs.readFile(phasePath, "utf8")) as {
+      entries: Record<string, { lightHits: number }>;
+    };
+    changedPhase.entries["memory:memory/2026-04-05.md:1:1"]!.lightHits = 99;
+    const changedPhaseContents = JSON.stringify(changedPhase);
+    await fs.writeFile(phasePath, changedPhaseContents, "utf8");
+
     const conflictResult = await migration.migrateLegacyState(migrationParams());
-    expect(conflictResult.changes).toEqual([]);
-    expect(conflictResult.warnings).toEqual([
-      expect.stringContaining("SQLite rows conflict with the legacy source"),
+    expect(conflictResult.changes).toEqual([
+      "Resolved Memory Core session ingestion legacy conflict by keeping canonical SQLite plugin state",
+      expect.stringContaining("Archived Memory Core session ingestion conflicting legacy source"),
+      "Resolved Memory Core short-term recall legacy conflict by keeping canonical SQLite plugin state",
+      expect.stringContaining("Archived Memory Core short-term recall conflicting legacy source"),
+      "Resolved Memory Core phase signals legacy conflict by keeping canonical SQLite plugin state",
+      expect.stringContaining("Archived Memory Core phase signals conflicting legacy source"),
     ]);
-    expect(conflictResult.notices).toHaveLength(3);
+    expect(conflictResult.warnings).toEqual([]);
+    expect(conflictResult.notices).toEqual([
+      expect.stringContaining("Retained acknowledged Memory Core daily ingestion"),
+    ]);
     await expect(fs.access(dailyPath)).resolves.toBeUndefined();
+    for (const [sourcePath, contents] of [
+      [sessionPath, changedSessionContents],
+      [recallPath, changedRecallContents],
+      [phasePath, changedPhaseContents],
+    ] as const) {
+      await expect(fs.access(sourcePath)).rejects.toThrow();
+      await expect(fs.readFile(`${sourcePath}.migrated.2`, "utf8")).resolves.toBe(contents);
+    }
+
+    const settledResult = await migration.migrateLegacyState(migrationParams());
+    expect(settledResult.changes).toEqual([]);
+    expect(settledResult.warnings).toEqual([]);
+    expect(settledResult.notices).toEqual([
+      expect.stringContaining("Retained acknowledged Memory Core daily ingestion"),
+    ]);
+
+    const settledSession = await dreamingTesting.readSessionIngestionState(workspaceDir);
+    expect(settledSession.seenMessages["main/session.jsonl"]).toEqual(["seen-a", "seen-b"]);
+    const settledRecall = await shortTermTesting.readRecallStore(
+      workspaceDir,
+      "2026-04-05T12:00:00.000Z",
+    );
+    expect(settledRecall.entries["memory:memory/2026-04-05.md:1:1"]?.recallCount).toBe(1);
+    const settledPhase = await shortTermTesting.readPhaseSignalStore(
+      workspaceDir,
+      "2026-04-05T13:00:00.000Z",
+    );
+    expect(settledPhase.entries["memory:memory/2026-04-05.md:1:1"]?.lightHits).toBe(1);
   });
 
   it("leaves invalid legacy JSON in place", async () => {
