@@ -5401,6 +5401,51 @@ describe("createTelegramBot", () => {
     expect(payload.Body).not.toContain("[Forwarded from Bob Smith (@bobsmith)");
   });
 
+  it("preserves bot-self reply target context under allowlist visibility", async () => {
+    onSpy.mockReset();
+    sendMessageSpy.mockReset();
+    replySpy.mockReset();
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "allowlist",
+          contextVisibility: "allowlist",
+          groups: {
+            "-1008": {
+              requireMention: false,
+              allowFrom: ["1"],
+            },
+          },
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        message_id: 9100,
+        chat: { id: -1008, type: "group", title: "Ops" },
+        text: "what happened?",
+        date: 1736380800,
+        from: { id: 1, first_name: "Ada", username: "ada", is_bot: false },
+        reply_to_message: {
+          message_id: 9099,
+          text: "cron notification body",
+          from: { id: 999, first_name: "OpenClaw", is_bot: true },
+        },
+      },
+      me: { id: 999, username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    expect(payload.ReplyToId).toBe("9099");
+    expect(payload.ReplyToBody).toBe("cron notification body");
+  });
+
   it("accepts group replies to the bot without explicit mention when requireMention is enabled", async () => {
     onSpy.mockClear();
     replySpy.mockClear();
