@@ -30,6 +30,11 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: true,
   },
   {
+    name: "auth",
+    description: "Model auth profile shortcuts",
+    hasSubcommands: true,
+  },
+  {
     name: "promos",
     description: "Discover and claim promotional model offers from ClawHub",
     hasSubcommands: true,
