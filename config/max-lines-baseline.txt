@@ -352,7 +352,6 @@ packages/gateway-protocol/src/schema/agents-models-skills.ts
 packages/gateway-protocol/src/schema/protocol-schemas.ts
 packages/markdown-core/src/ir.ts
 packages/memory-host-sdk/src/host/session-files.ts
-packages/model-catalog-core/src/model-catalog-normalize.ts
 packages/sdk/src/client.ts
 packages/sdk/src/index.test.ts
 packages/speech-core/src/tts.test.ts
@@ -1034,7 +1033,6 @@ src/tasks/task-flow-registry.ts
 src/tasks/task-registry.maintenance.ts
 src/tasks/task-registry.store.test.ts
 src/tasks/task-registry.test.ts
-src/tasks/task-registry.ts
 src/trajectory/export.test.ts
 src/trajectory/export.ts
 src/tui/embedded-backend.test.ts

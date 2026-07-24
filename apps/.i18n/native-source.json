@@ -14405,9 +14405,9 @@
       "kind": "ui-call",
       "line": 154,
       "path": "apps/android/app/src/thirdParty/java/ai/openclaw/app/accessibility/AccessibilityDevActivity.kt",
-      "source": "Observed $count nodes",
+      "source": "Observed nodes: $count",
       "surface": "android",
-      "id": "native.android.5f3b2d7b6372291a"
+      "id": "native.android.522a27f673db3ea7"
     },
     {
       "kind": "ui-call",
@@ -14538,7 +14538,7 @@
       "id": "native.android.7cef45c1a4398242"
     },
     {
-      "kind": "ui-call-concatenated",
+      "kind": "ui-call",
       "line": 379,
       "path": "apps/android/app/src/thirdParty/java/ai/openclaw/app/accessibility/AccessibilityDevActivity.kt",
       "source": "Node actions run only when the target app is foreground (validated via the remote path). Global actions and same-app actions work here.",
@@ -14547,7 +14547,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 393,
+      "line": 392,
       "path": "apps/android/app/src/thirdParty/java/ai/openclaw/app/accessibility/AccessibilityDevActivity.kt",
       "source": "Activate",
       "surface": "android",
@@ -14555,7 +14555,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 401,
+      "line": 400,
       "path": "apps/android/app/src/thirdParty/java/ai/openclaw/app/accessibility/AccessibilityDevActivity.kt",
       "source": "Scroll forward",
       "surface": "android",
@@ -14563,7 +14563,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 409,
+      "line": 408,
       "path": "apps/android/app/src/thirdParty/java/ai/openclaw/app/accessibility/AccessibilityDevActivity.kt",
       "source": "Scroll back",
       "surface": "android",
@@ -14571,7 +14571,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 421,
+      "line": 420,
       "path": "apps/android/app/src/thirdParty/java/ai/openclaw/app/accessibility/AccessibilityDevActivity.kt",
       "source": "Text",
       "surface": "android",
@@ -14579,7 +14579,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 430,
+      "line": 429,
       "path": "apps/android/app/src/thirdParty/java/ai/openclaw/app/accessibility/AccessibilityDevActivity.kt",
       "source": "Set text",
       "surface": "android",
@@ -14587,7 +14587,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 461,
+      "line": 460,
       "path": "apps/android/app/src/thirdParty/java/ai/openclaw/app/accessibility/AccessibilityDevActivity.kt",
       "source": "$reference  $role",
       "surface": "android",
@@ -14595,7 +14595,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 471,
+      "line": 470,
       "path": "apps/android/app/src/thirdParty/java/ai/openclaw/app/accessibility/AccessibilityDevActivity.kt",
       "source": "text: $value",
       "surface": "android",
@@ -14603,7 +14603,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 477,
+      "line": 476,
       "path": "apps/android/app/src/thirdParty/java/ai/openclaw/app/accessibility/AccessibilityDevActivity.kt",
       "source": "description: $value",
       "surface": "android",
@@ -14611,7 +14611,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 483,
+      "line": 482,
       "path": "apps/android/app/src/thirdParty/java/ai/openclaw/app/accessibility/AccessibilityDevActivity.kt",
       "source": "bounds: $value",
       "surface": "android",
@@ -14619,7 +14619,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 492,
+      "line": 491,
       "path": "apps/android/app/src/thirdParty/java/ai/openclaw/app/accessibility/AccessibilityDevActivity.kt",
       "source": "actions: $value",
       "surface": "android",
@@ -14627,7 +14627,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 494,
+      "line": 493,
       "path": "apps/android/app/src/thirdParty/java/ai/openclaw/app/accessibility/AccessibilityDevActivity.kt",
       "source": "none",
       "surface": "android",

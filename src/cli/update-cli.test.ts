@@ -1984,6 +1984,14 @@ describe("update-cli", () => {
         ),
     ).toBe(true);
     expect(defaultRuntime.exit).toHaveBeenCalledWith(0);
+    expect(doctorCommand).toHaveBeenCalledWith(defaultRuntime, {
+      nonInteractive: true,
+      repair: true,
+      yes: false,
+    });
+    expect(vi.mocked(doctorCommand).mock.invocationCallOrder[0] ?? 0).toBeLessThan(
+      syncPluginsForUpdateChannel.mock.invocationCallOrder[0] ?? 0,
+    );
     expect(syncPluginsForUpdateChannel).toHaveBeenCalledTimes(1);
     expect(updateNpmInstalledPlugins).toHaveBeenCalledTimes(1);
     expect(spawn).not.toHaveBeenCalled();

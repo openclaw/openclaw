@@ -1360,6 +1360,8 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ],
   ],
   ["scripts/lib/npm-verify-exec.ts", ["test/scripts/npm-verify-exec.test.ts"]],
+  ["scripts/lib/numeric-options.mjs", ["test/scripts/numeric-options.test.ts"]],
+  ["scripts/lib/numeric-options.d.mts", ["test/scripts/numeric-options.test.ts"]],
   ["scripts/lib/openclaw-test-state.mjs", ["test/scripts/openclaw-test-state.test.ts"]],
   [
     "scripts/lib/workspace-bootstrap-smoke.mjs",
