@@ -136,7 +136,7 @@ function shouldProbeWhamForFailure(
     // Expired access tokens are routine and refreshable; probing with one
     // guarantees a 401 that looks like a 12h token-family outage.
     isFutureDateTimestampMs(profile.expires) &&
-    normalizedProvider === "openai" &&
+    (normalizedProvider === "openai" || normalizedProvider === "anthropic") &&
     (reason === "rate_limit" ||
       reason === "empty_response" ||
       reason === "no_error_details" ||
@@ -360,6 +360,57 @@ async function probeWhamForCooldown(
     return { cooldownMs: WHAM_PROBE_FAILURE_COOLDOWN_MS, reason: "wham_probe_failed" };
   } finally {
     clearTimeout(timeout);
+  }
+}
+
+const CLAUDE_USAGE_PROBE_TIMEOUT_MS = 3_000;
+
+// Anthropic counterpart of the WHAM probe: the OAuth usage endpoint already
+// reports exact window reset times (the /usage display reads it), so a
+// rate-limited Anthropic OAuth profile can be cooled down until the real
+// reset instead of the generic 30s to 5min backoff ladder. The display fetch
+// is reused as-is; a missing snapshot or missing reset time falls back to a
+// short probe-failure cooldown so behavior never gets worse than before.
+async function probeAnthropicUsageForCooldown(
+  store: AuthProfileStore,
+  profileId: string,
+): Promise<WhamCooldownProbeResult | null> {
+  const profile = store.profiles[profileId];
+  if (profile?.type !== "oauth" || !profile.access) {
+    return null;
+  }
+  try {
+    const { fetchClaudeUsage } = await import("../../infra/provider-usage.fetch.claude.js");
+    const snapshot = await fetchClaudeUsage(profile.access, CLAUDE_USAGE_PROBE_TIMEOUT_MS, fetch);
+    if (!snapshot || snapshot.windows.length === 0) {
+      return { cooldownMs: WHAM_PROBE_FAILURE_COOLDOWN_MS, reason: "claude_probe_failed" };
+    }
+    const exhausted = snapshot.windows.filter(
+      (window) => typeof window.usedPercent === "number" && window.usedPercent >= 100,
+    );
+    if (exhausted.length === 0) {
+      return {
+        available: true,
+        cooldownMs: WHAM_BURST_COOLDOWN_MS,
+        reason: "claude_burst_contention",
+      };
+    }
+    const now = Date.now();
+    const resets = exhausted
+      .map((window) => window.resetAt)
+      .filter((resetAt): resetAt is number => typeof resetAt === "number" && Number.isFinite(resetAt) && resetAt > now)
+      .toSorted((a, b) => a - b);
+    if (resets.length === 0) {
+      return { cooldownMs: WHAM_PROBE_FAILURE_COOLDOWN_MS, reason: "claude_probe_failed" };
+    }
+    return {
+      cooldownMs: WHAM_BURST_COOLDOWN_MS,
+      blockedUntil: resets[0],
+      blockedSource: "claude_usage",
+      reason: "claude_personal_limit",
+    };
+  } catch {
+    return { cooldownMs: WHAM_PROBE_FAILURE_COOLDOWN_MS, reason: "claude_probe_failed" };
   }
 }
 
@@ -932,12 +983,16 @@ export async function markAuthProfileFailure(params: {
 
   const shouldProbeWham = shouldProbeWhamForFailure(profile, reason);
   // A detail-less provider failure carries no credential-health evidence.
-  // Only OpenAI OAuth can disambiguate it with the canonical WHAM probe.
+  // OAuth providers with a canonical usage endpoint can disambiguate it.
   if (reason === "no_error_details" && !shouldProbeWham) {
     return;
   }
 
-  const whamResult = shouldProbeWham ? await probeWhamForCooldown(store, profileId) : null;
+  const whamResult = shouldProbeWham
+    ? normalizeProviderId(profile.provider ?? "") === "anthropic"
+      ? await probeAnthropicUsageForCooldown(store, profileId)
+      : await probeWhamForCooldown(store, profileId)
+    : null;
 
   let nextStats: ProfileUsageStats | undefined;
   let previousStats: ProfileUsageStats | undefined;

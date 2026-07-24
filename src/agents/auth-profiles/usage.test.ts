@@ -1733,3 +1733,105 @@ describe("markAuthProfileFailure — per-model cooldown metadata", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+
+describe("markAuthProfileFailure — Anthropic OAuth usage-based cooldowns", () => {
+  function makeAnthropicOAuthStore(): AuthProfileStore {
+    return {
+      version: 1,
+      profiles: {
+        "anthropic:default": {
+          type: "oauth",
+          provider: "anthropic",
+          access: "claude-access-token",
+          refresh: "claude-refresh-token",
+          expires: 4_102_444_800_000,
+        },
+      },
+      usageStats: {},
+    };
+  }
+
+  function mockClaudeUsageResponse(status: number, body?: unknown): void {
+    fetchMock.mockResolvedValueOnce(
+      new Response(body === undefined ? "{}" : JSON.stringify(body), {
+        status,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+  }
+
+  async function markAnthropicFailureAt(now: number, store: AuthProfileStore): Promise<void> {
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    mockLockedUpdateForStore(store);
+    try {
+      await markAuthProfileFailure({
+        store,
+        profileId: "anthropic:default",
+        reason: "rate_limit",
+      });
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+  }
+
+  it("cools an exhausted Anthropic OAuth profile down until the real window reset", async () => {
+    const now = 1_700_000_000_000;
+    const resetAtIso = "2023-11-15T04:00:00.000Z";
+    const store = makeAnthropicOAuthStore();
+    mockClaudeUsageResponse(200, {
+      five_hour: { utilization: 100, resets_at: resetAtIso },
+      seven_day: { utilization: 42, resets_at: "2023-11-21T00:00:00.000Z" },
+    });
+
+    await markAnthropicFailureAt(now, store);
+
+    expect(store.usageStats?.["anthropic:default"]?.blockedUntil).toBe(Date.parse(resetAtIso));
+    expect(store.usageStats?.["anthropic:default"]?.blockedSource).toBe("claude_usage");
+    expect(store.usageStats?.["anthropic:default"]?.blockedReason).toBe("subscription_limit");
+  });
+
+  it("keeps the profile usable when no Anthropic window is exhausted", async () => {
+    const now = 1_700_000_000_000;
+    const store = makeAnthropicOAuthStore();
+    mockClaudeUsageResponse(200, {
+      five_hour: { utilization: 42, resets_at: "2023-11-15T04:00:00.000Z" },
+    });
+
+    await markAnthropicFailureAt(now, store);
+
+    expect(store.usageStats?.["anthropic:default"]?.blockedUntil).toBeUndefined();
+    expect(store.usageStats?.["anthropic:default"]?.blockedSource).toBeUndefined();
+  });
+
+  it("falls back to a short probe-failure cooldown when the usage endpoint errors", async () => {
+    const now = 1_700_000_000_000;
+    const store = makeAnthropicOAuthStore();
+    mockClaudeUsageResponse(500);
+
+    await markAnthropicFailureAt(now, store);
+
+    const stats = store.usageStats?.["anthropic:default"];
+    expect(stats?.blockedUntil).toBeUndefined();
+    expect(stats?.cooldownUntil).toBe(now + 30_000);
+  });
+
+  it("does not probe the usage endpoint for api-key Anthropic profiles", async () => {
+    const now = 1_700_000_000_000;
+    const store = makeStore({});
+    mockLockedUpdateForStore(store);
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      await markAuthProfileFailure({
+        store,
+        profileId: "anthropic:default",
+        reason: "rate_limit",
+      });
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(store.usageStats?.["anthropic:default"]?.cooldownUntil).toBe(now + 30_000);
+  });
+});
