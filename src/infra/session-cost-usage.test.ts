@@ -31,7 +31,6 @@ import {
   loadSessionCostSummariesFromCache,
   loadSessionLogs,
   loadSessionUsageTimeSeries,
-  resolveExistingUsageSessionFile,
 } from "./session-cost-usage.js";
 
 function waitForFast<T>(
