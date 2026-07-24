@@ -1,6 +1,7 @@
 /** Mutates and persists isolated cron session state around one run. */
 import fs from "node:fs";
 import { isDeepStrictEqual } from "node:util";
+import { clearBootstrapSnapshotOnSessionBoundary } from "../../agents/bootstrap-cache.js";
 import type { LiveSessionModelSelection } from "../../agents/live-model-switch.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
@@ -31,6 +32,7 @@ export type CronLiveSelection = LiveSessionModelSelection;
  */
 type PersistSessionEntry = (params: {
   fallbackEntry: SessionEntry;
+  resetBoundaryReason?: "cron-stale";
   sessionKey: string;
   storePath: string;
   update: (currentEntry: SessionEntry | undefined) => SessionEntry;
@@ -99,6 +101,7 @@ export function createPersistCronSessionEntry(params: {
   persistSessionEntry: PersistSessionEntry;
 }): PersistCronSessionEntry {
   return async () => {
+    const resetBoundaryPending = params.cronSession.resetBoundaryPending !== undefined;
     const liveEntry = params.cronSession.sessionEntry;
     const persistedEntry =
       isCronSessionKey(params.agentSessionKey) &&
@@ -108,10 +111,11 @@ export function createPersistCronSessionEntry(params: {
         : liveEntry;
     let committedEntry = persistedEntry;
     let mergedLiveEntry = liveEntry;
-    await params.persistSessionEntry({
+    const persistPromise = params.persistSessionEntry({
       storePath: params.cronSession.storePath,
       sessionKey: params.agentSessionKey,
       fallbackEntry: persistedEntry,
+      ...(resetBoundaryPending ? { resetBoundaryReason: "cron-stale" as const } : {}),
       update: (currentEntry) => {
         if (!currentEntry) {
           const creationStamp = buildSessionCreationStamp({
@@ -136,8 +140,23 @@ export function createPersistCronSessionEntry(params: {
             projectCronOwnershipFields(currentEntry),
             projectCronOwnershipFields(params.cronSession.initialSessionEntry),
           );
+        // Same-generation continuation: the row still carries the lifecycle
+        // revision this run resolved from, so no competing run has claimed it
+        // since. Benign concurrent field writes (delivery, token, status) then
+        // merge into the claim instead of aborting it. Exact ownership-field
+        // equality alone spuriously rejected these on large, busy stores where
+        // such an update lands between resolve and this first persist.
+        const initialEntry = params.cronSession.initialSessionEntry;
+        const initialLifecycleRevision = initialEntry?.lifecycleRevision;
+        const currentContinuesInitialGeneration =
+          currentEntry !== undefined &&
+          initialEntry !== undefined &&
+          initialLifecycleRevision !== undefined &&
+          currentEntry.lifecycleRevision === initialLifecycleRevision &&
+          currentEntry.sessionId === initialEntry.sessionId;
         const canClaimInitialRevision = params.cronSession.initialSessionEntry
-          ? !currentRevisionActive && initialEntryMatchesOwnershipFields
+          ? !currentRevisionActive &&
+            (initialEntryMatchesOwnershipFields || currentContinuesInitialGeneration)
           : currentEntry === undefined;
         // Concurrent persistent runs can resolve the same initial row. Once one
         // revision claims it, older owners must not reclaim it and delete newer state.
@@ -163,6 +182,12 @@ export function createPersistCronSessionEntry(params: {
         return committedEntry;
       },
     });
+    await persistPromise;
+    clearBootstrapSnapshotOnSessionBoundary({
+      boundaryAppended: resetBoundaryPending,
+      sessionKey: params.agentSessionKey,
+    });
+    params.cronSession.resetBoundaryPending = undefined;
     // The storage projection may intentionally omit resume identity until its
     // transcript exists. Keep that projection out of the active run object.
     params.cronSession.sessionEntry = mergedLiveEntry;

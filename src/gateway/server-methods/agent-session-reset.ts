@@ -36,6 +36,9 @@ export async function runSessionResetFromAgent(params: {
   if (!result.ok) {
     return result;
   }
+  if ("incognitoDeleted" in result) {
+    return { ok: true as const, key: result.key };
+  }
   return {
     ok: true as const,
     key: result.key,

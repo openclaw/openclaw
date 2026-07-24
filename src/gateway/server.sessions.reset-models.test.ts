@@ -4,7 +4,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test } from "vitest";
-import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { MODEL_SELECTION_LOCKED_RESET_MESSAGE } from "../sessions/model-overrides.js";
 import { listSessionStateEventsSince } from "../sessions/session-state-events.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
@@ -291,7 +292,7 @@ test("sessions.reset recomputes model from defaults instead of stale runtime mod
 
   expect(reset.ok).toBe(true);
   expect(reset.payload?.key).toBe("agent:main:main");
-  expect(reset.payload?.entry.sessionId).not.toBe("sess-stale-model");
+  expect(reset.payload?.entry.sessionId).toBe("sess-stale-model");
   const sessionFile = reset.payload?.entry.sessionFile;
   if (!sessionFile) {
     throw new Error("expected reset session file");
@@ -354,7 +355,7 @@ test("sessions.reset clears stale estimated context budget status", async () => 
   }>("sessions.reset", { key: "main" });
 
   expect(reset.ok).toBe(true);
-  expect(reset.payload?.entry.sessionId).not.toBe("sess-stale-budget");
+  expect(reset.payload?.entry.sessionId).toBe("sess-stale-budget");
   expect(reset.payload?.entry.contextBudgetStatus).toBeUndefined();
   expect(reset.payload?.entry.contextTokens).toBeUndefined();
 
@@ -395,7 +396,7 @@ test("sessions.reset drops cached skills snapshot so /new rebuilds visible skill
   }>("sessions.reset", { key: "main" });
 
   expect(reset.ok).toBe(true);
-  expect(reset.payload?.entry.sessionId).not.toBe("sess-stale-skills");
+  expect(reset.payload?.entry.sessionId).toBe("sess-stale-skills");
   expect(reset.payload?.entry.skillsSnapshot).toBeUndefined();
 
   const stored = loadSessionEntry({ sessionKey: "agent:main:main", storePath }) as
@@ -435,7 +436,7 @@ test("sessions.reset rotates generated topic transcript files with the new sessi
   if (!nextSessionId || !nextSessionFile) {
     throw new Error("expected reset session id and file");
   }
-  expect(nextSessionId).not.toBe(previousSessionId);
+  expect(nextSessionId).toBe(previousSessionId);
   expect(nextSessionFile).toContain(`sqlite:main:${nextSessionId}:`);
 
   const persistedEntry = loadSessionEntry({
@@ -479,13 +480,53 @@ test("sessions.reset rotates an already-stale generated transcript file to the n
   if (!nextSessionId || !nextSessionFile) {
     throw new Error("expected reset session id and file");
   }
-  expect(nextSessionId).not.toBe(currentSessionId);
+  expect(nextSessionId).toBe(currentSessionId);
   expect(nextSessionFile).toContain(`sqlite:main:${nextSessionId}:`);
   expect(nextSessionFile).not.toContain(staleFileSessionId);
 
   const persistedEntry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
   expect(persistedEntry?.sessionId).toBe(nextSessionId);
   expect(persistedEntry?.sessionFile).toBe(nextSessionFile);
+});
+
+test("sessions.reset replaces a SQLite marker for a different transcript target", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionId = "current-session";
+  const sessionKey = "agent:main:main";
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry(sessionId),
+    },
+  });
+  const current = loadSessionEntry({ sessionKey, storePath });
+  if (!current) {
+    throw new Error("expected current session entry");
+  }
+  const staleMarker = formatSqliteSessionFileMarker({
+    agentId: "main",
+    sessionId: "stale-session",
+    storePath,
+  });
+  await replaceSessionEntry(
+    { sessionKey, storePath },
+    {
+      ...current,
+      sessionFile: staleMarker,
+    },
+  );
+
+  const reset = await directSessionReq<{
+    ok: true;
+    key: string;
+    entry: { sessionId: string; sessionFile?: string };
+  }>("sessions.reset", { key: "main" });
+
+  expect(reset.ok).toBe(true);
+  expect(reset.payload?.entry.sessionId).toBe(sessionId);
+  expect(reset.payload?.entry.sessionFile).toBe(
+    formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath }),
+  );
+  expect(reset.payload?.entry.sessionFile).not.toBe(staleMarker);
 });
 
 test("sessions.reset preserves legacy explicit model overrides without modelOverrideSource", async () => {
@@ -588,7 +629,6 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
       sessionId: "root-session",
       entryId: "root-entry",
     },
-    previousSessionId: "sess-owned-child",
   });
 
   const stored = loadSessionEntry({ sessionKey: "agent:main:subagent:child", storePath }) as
@@ -604,6 +644,5 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
       sessionId: "root-session",
       entryId: "root-entry",
     },
-    previousSessionId: "sess-owned-child",
   });
 });

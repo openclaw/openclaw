@@ -105,7 +105,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "inbound-reply-dispatch": 24,
   "channel-reply-pipeline": 12,
   "interactive-runtime": 11,
-  "infra-runtime": 593,
+  // +3: canonical incognito classifier projected through deprecated compatibility barrels.
+  "infra-runtime": 596,
   "ssrf-policy": 1,
   "ssrf-runtime": 1,
   "media-runtime": 2,
@@ -125,6 +126,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "channel-policy": 7,
   "channel-send-result": 1,
   "session-store-runtime": 4,
+  // +2: shipped Slack and Discord setup helpers retained through their package migration window.
+  "setup-runtime": 2,
   "group-access": 13,
   "reply-history": 6,
   "messaging-targets": 12,
@@ -151,7 +154,15 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: shared Teams reply-style and TTS schema leaves.
       // +2: generic inbound-root and SCP-host schema validators.
       // +2: attributed-range renderer and its options contract.
-      4689,
+      // +1: agent-harness transcript visibility projector.
+      // +1: outbound formatting capability profile.
+      // +3: plugin approval reviewer-detail cap/truncator and sanitize-with-status variant.
+      // +1: canonical incognito session classifier for storage-safe plugin behavior.
+      // +2: shipped Slack and Discord setup compatibility helpers.
+      // +3: typed channel partial-delivery error, creator, and structural guard.
+      // +1: closed attempt-terminal merge, normalization, and projection helper.
+      // +1: canonical unknown-value to Error coercion.
+      4702,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -164,12 +175,20 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: plugin-owned sensitive-schema registration.
       // +2: generic inbound-root and SCP-host schema validators.
       // +1: attributed-range renderer.
-      2839,
+      // +1: agent-harness transcript visibility projector.
+      // +2: plugin approval detail truncator and sanitize-with-status variant.
+      // +1: canonical incognito session classifier for storage-safe plugin behavior.
+      // +2: shipped Slack and Discord setup compatibility helpers.
+      // +2: channel partial-delivery error creator and structural guard.
+      // +1: canonical unknown-value to Error coercion.
+      2848,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
-      1683,
+      // +3: canonical incognito classifier projected through deprecated compatibility barrels.
+      // +2: shipped Slack and Discord setup compatibility helpers.
+      1688,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

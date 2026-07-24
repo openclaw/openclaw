@@ -129,41 +129,51 @@ describe("media-understanding CLI audio entry", () => {
   it("applies per-request prompt and language overrides to CLI transcription templating", async () => {
     let mediaPath = "";
 
-    await withAudioFixture("openclaw-cli-audio", async ({ ctx, media, cache }) => {
-      mediaPath = await fs.realpath(ctx.MediaPath);
+    await withAudioFixture(
+      "openclaw-cli-audio",
+      async ({ ctx, mediaPath: fixturePath, media, cache }) => {
+        mediaPath = await fs.realpath(fixturePath);
 
-      await runCliEntry({
-        capability: "audio",
-        entry: {
-          type: "cli",
-          command: "mock-transcriber",
-          args: ["--prompt", "{{Prompt}}", "--language", "{{Language}}", "--file", "{{MediaPath}}"],
-          prompt: "entry prompt",
-          language: "de",
-        },
-        cfg: {
-          tools: {
-            media: {
-              audio: {
-                prompt: "configured prompt",
-                language: "fr",
-                _requestPromptOverride: "Focus on names",
-                _requestLanguageOverride: "en",
+        await runCliEntry({
+          capability: "audio",
+          entry: {
+            type: "cli",
+            command: "mock-transcriber",
+            args: [
+              "--prompt",
+              "{{Prompt}}",
+              "--language",
+              "{{Language}}",
+              "--file",
+              "{{MediaPath}}",
+            ],
+            prompt: "entry prompt",
+            language: "de",
+          },
+          cfg: {
+            tools: {
+              media: {
+                audio: {
+                  prompt: "configured prompt",
+                  language: "fr",
+                  _requestPromptOverride: "Focus on names",
+                  _requestLanguageOverride: "en",
+                },
               },
             },
-          },
-        } as OpenClawConfig,
-        ctx,
-        attachment: requireFirstAttachment(media),
-        cache,
-        config: {
-          prompt: "configured prompt",
-          language: "fr",
-          _requestPromptOverride: "Focus on names",
-          _requestLanguageOverride: "en",
-        } as never,
-      });
-    });
+          } as OpenClawConfig,
+          ctx,
+          attachment: requireFirstAttachment(media),
+          cache,
+          config: {
+            prompt: "configured prompt",
+            language: "fr",
+            _requestPromptOverride: "Focus on names",
+            _requestLanguageOverride: "en",
+          } as never,
+        });
+      },
+    );
 
     expect(runExecMock).toHaveBeenCalledTimes(1);
     const [command, args, options] = requireFirstRunExecCall();
@@ -196,12 +206,6 @@ describe("media-understanding CLI audio entry", () => {
         : media;
       const ctx = {
         media: alignedMedia,
-        MediaPath: "/tmp/stale-first.wav",
-        MediaUrl: "media://inbound/stale-first.wav",
-        MediaType: "application/octet-stream",
-        MediaPaths: alignedMedia.map((entry) => entry.path ?? ""),
-        MediaUrls: alignedMedia.map((entry) => entry.url ?? ""),
-        MediaTypes: alignedMedia.map((entry) => entry.contentType ?? ""),
       };
       const attachments = normalizeMediaAttachments(ctx);
       expect(attachments.map((attachment) => attachment.index)).toEqual(

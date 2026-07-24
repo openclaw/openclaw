@@ -1130,6 +1130,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   ["apps/android/fastlane/Fastfile", ["test/scripts/android-release-fastlane-gates.test.ts"]],
   ["scripts/ios-release-archive.sh", ["test/scripts/ios-release-wrapper-args.test.ts"]],
+  ["scripts/ios-release-cut.sh", ["test/scripts/ios-release-plan.test.ts"]],
+  ["scripts/ios-release-cut.ts", ["test/scripts/ios-release-plan.test.ts"]],
+  ["scripts/ios-release-plan.sh", ["test/scripts/ios-release-plan.test.ts"]],
+  ["scripts/ios-release-plan.ts", ["test/scripts/ios-release-plan.test.ts"]],
   [
     "scripts/ios-release-prepare.sh",
     ["test/scripts/ios-release-prepare.test.ts", "test/scripts/ios-release-wrapper-args.test.ts"],
@@ -1305,6 +1309,8 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   ["scripts/lib/format-generated-module.mjs", ["test/scripts/format-generated-module.test.ts"]],
   ["scripts/lib/ios-version.ts", ["test/scripts/ios-version.test.ts"]],
+  ["scripts/lib/ios-release-plan.ts", ["test/scripts/ios-release-plan.test.ts"]],
+  ["scripts/lib/ios-fastlane.sh", ["test/scripts/ios-release-wrapper-args.test.ts"]],
   ["scripts/lib/live-docker-stage.sh", ["test/scripts/live-docker-stage.test.ts"]],
   ["scripts/live-docker-stage-private-sdk-exports.mjs", ["test/scripts/live-docker-stage.test.ts"]],
   [
@@ -2400,7 +2406,47 @@ const SOURCE_TEST_TARGETS = new Map([
   ],
   ["src/plugin-sdk/reply-runtime.ts", ["src/plugins/contracts/plugin-sdk-subpaths.test.ts"]],
   ["extensions/google-meet/index.ts", ["extensions/google-meet/index.test.ts"]],
-  ["extensions/google-meet/src/cli.ts", ["extensions/google-meet/src/cli.test.ts"]],
+  [
+    "extensions/google-meet/src/cli.ts",
+    [
+      "extensions/google-meet/src/cli-artifacts.test.ts",
+      "extensions/google-meet/src/cli-runtime.test.ts",
+      "extensions/google-meet/src/cli.test.ts",
+    ],
+  ],
+  [
+    "extensions/google-meet/src/cli-artifact-commands.ts",
+    ["extensions/google-meet/src/cli-artifacts.test.ts"],
+  ],
+  [
+    "extensions/google-meet/src/cli-export.ts",
+    ["extensions/google-meet/src/cli-artifacts.test.ts"],
+  ],
+  [
+    "extensions/google-meet/src/cli-space-commands.ts",
+    ["extensions/google-meet/src/cli-artifacts.test.ts"],
+  ],
+  [
+    "extensions/google-meet/src/cli-runtime-commands.ts",
+    ["extensions/google-meet/src/cli-runtime.test.ts"],
+  ],
+  ["extensions/google-meet/src/cli-doctor.ts", ["extensions/google-meet/src/cli.test.ts"]],
+  [
+    "extensions/google-meet/src/cli-command-context.ts",
+    [
+      "extensions/google-meet/src/cli-artifacts.test.ts",
+      "extensions/google-meet/src/cli-runtime.test.ts",
+      "extensions/google-meet/src/cli.test.ts",
+    ],
+  ],
+  [
+    "extensions/google-meet/src/cli-shared.ts",
+    [
+      "extensions/google-meet/src/cli-artifacts.test.ts",
+      "extensions/google-meet/src/cli-runtime.test.ts",
+      "extensions/google-meet/src/cli.test.ts",
+    ],
+  ],
   ["extensions/google-meet/src/create.ts", ["extensions/google-meet/index.test.ts"]],
   ["extensions/google-meet/src/oauth.ts", ["extensions/google-meet/src/oauth.test.ts"]],
   [

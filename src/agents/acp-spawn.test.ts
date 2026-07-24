@@ -198,10 +198,6 @@ vi.mock("../config/sessions/paths.js", () => ({
   resolveStorePath: hoisted.resolveStorePathMock,
 }));
 
-vi.mock("../config/sessions/store.js", () => ({
-  loadSessionStore: hoisted.loadSessionStoreMock,
-}));
-
 vi.mock("../config/sessions/session-accessor.js", () => hoisted.createSessionAccessorMock());
 
 vi.mock("../config/sessions.js", () => ({
