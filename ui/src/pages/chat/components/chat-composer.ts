@@ -48,6 +48,7 @@ import {
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { ComposerDictationController, insertComposerDictation } from "../composer-dictation.ts";
+import { applyComposerTextareaHeight } from "../composer-height.ts";
 import { exportChatMarkdown } from "../export.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
@@ -76,6 +77,7 @@ import {
   renderMicrophoneActivity,
   voiceStatusLabel,
 } from "./chat-voice-activity.ts";
+import "./composer-resize-handle.ts";
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
 const FALLBACK_TOAST_DURATION_MS = 8000;
@@ -377,12 +379,13 @@ function updateTextareaOverflow(el: HTMLTextAreaElement) {
 }
 
 function adjustTextareaHeight(el: HTMLTextAreaElement) {
-  // Hide the browser's scrollbar while measuring; restore it only when the
-  // final CSS-constrained height actually clips the draft.
-  el.style.overflowY = "hidden";
-  el.style.height = "auto";
-  el.style.height = `${Math.min(el.scrollHeight, 150)}px`;
-  updateTextareaOverflow(el);
+  // Honor the global drag-to-resize floor only for the primary composer (the one
+  // that renders the resize handle). Suggestion/secondary composers omit the
+  // handle, so they autosize normally and a manual height never leaks into them.
+  const hasHandle = Boolean(
+    el.closest(".agent-chat__input")?.querySelector("composer-resize-handle"),
+  );
+  applyComposerTextareaHeight(el, hasHandle ? undefined : null);
 }
 
 function observeTextareaOverflow(el: HTMLTextAreaElement) {
@@ -2770,6 +2773,9 @@ export function renderChatComposer(props: ChatComposerProps) {
             class="agent-chat__input ${props.offline ? "agent-chat__input--offline" : ""}"
             @click=${(event: MouseEvent) => focusComposerFromChrome(event, canCompose)}
           >
+            ${props.suggestionComposer
+              ? nothing
+              : html`<composer-resize-handle></composer-resize-handle>`}
             ${props.offline
               ? html`<div class="agent-chat__offline-hint" role="status" aria-live="polite">
                   ${props.queuedOutboxCount
