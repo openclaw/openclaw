@@ -5,7 +5,11 @@ import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public
 import { buildRuntimeReadiness, type ReadinessCondition } from "../../readiness/conditions.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import type { ChannelManager } from "../server-channels.js";
-import { createReadinessChecker, evaluateCanonicalGatewayReadiness } from "./readiness.js";
+import {
+  createReadinessChecker,
+  evaluateCanonicalGatewayReadiness,
+  evaluateConfiguredGatewayReadiness,
+} from "./readiness.js";
 
 type ReadinessResult = Awaited<ReturnType<ReturnType<typeof createReadinessChecker>>>;
 
@@ -593,5 +597,56 @@ describe("evaluateCanonicalGatewayReadiness", () => {
     });
     expect(result.conditions?.[0]?.type).toBe("ReadinessEvaluationComplete");
     expect(JSON.stringify(result)).not.toContain("unexpected core failure");
+  });
+});
+
+describe("evaluateConfiguredGatewayReadiness", () => {
+  it("uses only the legacy Gateway checker when readiness is not configured", async () => {
+    const gateway = readySnapshot() as ReadinessResult;
+    const evaluateGateway = vi.fn(() => gateway);
+    const evaluateRuntime = vi.fn(async () => {
+      throw new Error("extended evaluator should not run");
+    });
+
+    const result = await evaluateConfiguredGatewayReadiness({
+      config: {},
+      evaluateGateway,
+      evaluateRuntime,
+    });
+
+    expect(result.ready).toBe(gateway.ready);
+    expect(result.failing).toEqual(gateway.failing);
+    expect(evaluateGateway).toHaveBeenCalledTimes(1);
+    expect(evaluateRuntime).not.toHaveBeenCalled();
+  });
+
+  it("preserves legacy checker failures without canonicalizing them", async () => {
+    const evaluateRuntime = vi.fn(async () =>
+      buildRuntimeReadiness({ configLoaded: true, gateway: "responding" }),
+    );
+
+    await expect(
+      evaluateConfiguredGatewayReadiness({
+        config: {},
+        evaluateGateway: () => {
+          throw new Error("legacy checker failed");
+        },
+        evaluateRuntime,
+      }),
+    ).rejects.toThrow("legacy checker failed");
+    expect(evaluateRuntime).not.toHaveBeenCalled();
+  });
+
+  it("opts into fail-closed canonical evaluation when the section is present", async () => {
+    const result = await evaluateConfiguredGatewayReadiness({
+      config: { gateway: { readiness: {} } },
+      evaluateGateway: () => readySnapshot() as ReadinessResult,
+      evaluateRuntime: async () => {
+        throw new Error("runtime evaluation failed");
+      },
+    });
+
+    expect(result.ready).toBe(false);
+    expect(result.failures).toEqual(["ReadinessEvaluationFailed"]);
   });
 });

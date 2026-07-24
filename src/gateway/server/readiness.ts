@@ -1,5 +1,6 @@
 // Gateway readiness checker for channel health and startup sidecar state.
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ReadinessCondition, CanonicalReadinessResult } from "../../readiness/conditions.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
@@ -373,6 +374,44 @@ function mergeReadinessResults(
     failures,
     advisories,
   };
+}
+
+function projectLegacyGatewayReadiness(gateway: ReadinessResult): CanonicalGatewayReadinessResult {
+  const conditions = gateway.conditions ?? [];
+  return {
+    ...gateway,
+    conditions,
+    failures: Array.from(
+      new Set(
+        conditions
+          .filter(
+            (condition) => condition.requirement === "required" && condition.status !== "True",
+          )
+          .map((condition) => condition.reason),
+      ),
+    ),
+    advisories: Array.from(
+      new Set(
+        conditions
+          .filter(
+            (condition) => condition.requirement === "advisory" && condition.status !== "True",
+          )
+          .map((condition) => condition.reason),
+      ),
+    ),
+  };
+}
+
+export async function evaluateConfiguredGatewayReadiness(params: {
+  config: OpenClawConfig;
+  evaluateGateway: ReadinessChecker;
+  evaluateRuntime: () => Promise<CanonicalReadinessResult>;
+  timeoutMs?: number;
+}): Promise<CanonicalGatewayReadinessResult> {
+  if (params.config.gateway?.readiness === undefined) {
+    return projectLegacyGatewayReadiness(await params.evaluateGateway());
+  }
+  return evaluateCanonicalGatewayReadiness(params);
 }
 
 export async function evaluateCanonicalGatewayReadiness(params: {
