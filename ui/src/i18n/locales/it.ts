@@ -601,6 +601,9 @@ export const it: TranslationMap = {
     worktreeName: "Nome del worktree",
     worktreeNamePlaceholder: "auto",
     worktreeNameInvalid: "I nomi dei worktree usano lettere minuscole, cifre e trattini.",
+    incognito: "Incognito",
+    incognitoDescription: "Mantieni questo thread solo fino al riavvio del Gateway",
+    startAsDraft: "Inizia come bozza",
     messagePlaceholder: "Su cosa dovrebbe lavorare questa sessione?",
     readingAttachment: "Lettura allegato",
     start: "Avvia sessione",
@@ -622,7 +625,8 @@ export const it: TranslationMap = {
     limit: "Limite",
     filters: "Filtri",
     createdBy: "Creato da {name}",
-    filterByCreator: "Filtra per creatore",
+    archivedBy: "Archiviato da {name}",
+    people: "Persone",
     allCreators: "Tutte le persone",
     filterControls: "Filtri sessione",
     sourceFilters: "Filtri origine sessione",
@@ -682,6 +686,8 @@ export const it: TranslationMap = {
     openWorkboardCard: "Apri scheda Workboard",
     dashboardAvailable: "Dashboard disponibile",
     approvalNeeded: "Approvazione necessaria",
+    queuedMessage: "{count} messaggio in coda per l'invio",
+    queuedMessages: "{count} messaggi in coda per l'invio",
     noSessions: "Nessuna sessione trovata.",
     noActiveSessions: "Nessun thread attivo.",
     noArchivedSessions: "Nessuna sessione archiviata.",
@@ -750,6 +756,7 @@ export const it: TranslationMap = {
     unread: "Unread",
     worktreeSession: "Worktree session",
     automationAttached: "Automation attached",
+    incognito: "Thread in incognito",
     cloudWorkerPlacement: "Worker cloud: {state}",
     cloudWorkerPlacementConflict: "Cloud worker: {state} · 1 conflitto di workspace",
     cloudWorkerPlacementConflicts: "Cloud worker: {state} · {count} conflitti di workspace",
@@ -1414,6 +1421,11 @@ export const it: TranslationMap = {
     chatPrefs: {
       title: "Chat",
       hint: "Preferenze della chat locali del browser.",
+      messageWidth: "Larghezza del messaggio",
+      messageWidthHint:
+        "Larghezza CSS opzionale per la trascrizione centrata, come 960px, 82% o min(1280px, 82%).",
+      messageWidthInvalid:
+        "Inserisci una larghezza CSS come 960px, 82%, min(1280px, 82%) o calc(100% - 2rem).",
     },
     sidebarPrefs: {
       title: "Barra laterale",
@@ -1702,6 +1714,7 @@ export const it: TranslationMap = {
     blockedAgentFilter: "bloccato dal filtro dell'agente",
   },
   nav: {
+    account: "Account",
     back: "Indietro",
     forward: "Avanti",
     chat: "Chat",
@@ -2439,6 +2452,8 @@ export const it: TranslationMap = {
     toolRuns: "{count} esecuzioni",
     identity: {
       title: "Identità",
+      menuLabel: "Menu identità",
+      menuButtonLabel: "Menu identità e app per {name}",
       description: "Il tuo profilo su questo gateway.",
       loading: "Caricamento della tua identità…",
       profileUnavailable: "Impossibile caricare il profilo della tua identità.",
@@ -3062,6 +3077,7 @@ export const it: TranslationMap = {
     eventStale: "Sessione obsoleta",
   },
   connection: {
+    queuedCount: "{count} in coda",
     reconnecting: "Riconnessione…",
     retryNow: "Riprova ora",
     access: {
@@ -3737,6 +3753,17 @@ export const it: TranslationMap = {
   },
   login: {
     subtitle: "Dashboard Gateway",
+    deviceAuthMigration: {
+      banner:
+        "Questo browser necessita ancora dell'approvazione una tantum del dispositivo dopo l'aggiornamento.",
+      action: "Proteggi questo browser",
+      secureContextRequired:
+        "Questo browser legacy resta disponibile temporaneamente. Riaprilo tramite HTTPS o localhost per proteggerlo con l'identità del dispositivo.",
+      pendingUnavailable:
+        "La richiesta di associazione del browser non è ancora disponibile. Riprova tra poco.",
+      loadFailed: "Impossibile caricare la richiesta di associazione di questo browser: {error}",
+      approvalFailed: "Impossibile proteggere questo browser: {error}",
+    },
     passwordPlaceholder: "facoltativa",
     showToken: "Mostra token",
     hideToken: "Nascondi token",
@@ -3840,6 +3867,9 @@ export const it: TranslationMap = {
   },
   chat: {
     disconnected: "Disconnesso dal gateway.",
+    sendErrors: {
+      activeLeafChanged: "Il thread ha cambiato ramo — controlla e invia di nuovo.",
+    },
     waitingForApproval: "In attesa di approvazione…",
     startupStatus: {
       preparingWorkspace: "Preparazione area di lavoro…",
@@ -3849,6 +3879,36 @@ export const it: TranslationMap = {
     },
     outputTokens: "{count} token di output",
     archivedSessionDisabled: "Ripristina questa sessione per inviare messaggi.",
+    sessionSharing: {
+      menu: "Condivisione thread",
+      current: "Visibilità del thread: {visibility}",
+      visibility: "Visibilità",
+      shared: "Condiviso",
+      readOnly: "Sola lettura",
+      suggest: "Suggerisci",
+      draft: "Bozza",
+      publishDraft: "Pubblica bozza",
+      members: "Membri",
+      selected: "Membro",
+      noPeople: "Nessuna persona associata trovata.",
+      readOnlyNotice: "Solo il proprietario del thread e i membri possono agire in questo thread.",
+    },
+    sessionSuggestions: {
+      suggest: "Suggerisci",
+      suggestMessage: "Suggerisci messaggio",
+      attachmentsUnsupported: "Rimuovi gli allegati prima di inviare un suggerimento di testo.",
+      sendNow: "Invia ora il suggerimento di {author}",
+      queue: "Metti in coda il suggerimento di {author}",
+      edit: "Modifica il suggerimento di {author}",
+      dismiss: "Ignora il suggerimento di {author}",
+      typing: "{name} sta scrivendo…",
+      typingMany: "{names} stanno scrivendo…",
+      state: {
+        pending: "In sospeso",
+        accepted: "Accettato",
+        dismissed: "Ignorato",
+      },
+    },
     loadOlder: "Carica precedenti",
     sessionHeader: {
       renameTooltip: "Rinomina sessione",
@@ -3862,6 +3922,7 @@ export const it: TranslationMap = {
       copyPath: "Copia percorso",
       copyBranch: "Copia nome del branch",
       copied: "Copiato",
+      incognito: "Conversazione in incognito",
       branches: "Ramificazioni del thread",
       branchSwitchUnavailable: "Il cambio ramo non è disponibile mentre l'agente è al lavoro.",
       branchSwitchRequiresAdmin: "Il cambio ramo richiede l'accesso amministratore dell'operatore.",
@@ -4152,6 +4213,7 @@ export const it: TranslationMap = {
       openInCanvas: "Apri nel canvas",
       reply: "Rispondi",
       replyToMessage: "Rispondi al messaggio",
+      replyingTo: "Risposta a {name}",
       rewind: "Riavvolgi",
       rewindConfirm: "Riavvolgere fino a prima di questo messaggio?",
       rewindToHere: "Riavvolgi fino a qui",
@@ -4250,6 +4312,8 @@ export const it: TranslationMap = {
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       offlineHint:
         "Offline — i messaggi verranno messi in coda e inviati al ritorno della connessione.",
+      offlineQueuedHint:
+        "Offline — {count} in coda; i messaggi vengono inviati al ritorno della connessione.",
       preparingModel: "Preparazione del modello...",
       responding: "{name} sta rispondendo...",
       sendingMessage: "Invio messaggio...",

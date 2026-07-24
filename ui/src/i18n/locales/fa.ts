@@ -592,6 +592,9 @@ export const fa: TranslationMap = {
     worktreeName: "نام Worktree",
     worktreeNamePlaceholder: "auto",
     worktreeNameInvalid: "نام‌های Worktree از حروف کوچک، رقم‌ها و خط تیره استفاده می‌کنند.",
+    incognito: "ناشناس",
+    incognitoDescription: "این رشته را فقط تا زمانی که Gateway دوباره راه‌اندازی شود نگه دارید",
+    startAsDraft: "شروع به‌عنوان پیش‌نویس",
     messagePlaceholder: "این جلسه باید روی چه چیزی کار کند؟",
     readingAttachment: "در حال خواندن پیوست",
     start: "شروع جلسه",
@@ -613,7 +616,8 @@ export const fa: TranslationMap = {
     limit: "حد",
     filters: "فیلترها",
     createdBy: "ایجاد شده توسط {name}",
-    filterByCreator: "فیلتر بر اساس سازنده",
+    archivedBy: "بایگانی‌شده توسط {name}",
+    people: "افراد",
     allCreators: "همه افراد",
     filterControls: "فیلترهای نشست",
     sourceFilters: "فیلترهای منبع جلسه",
@@ -672,6 +676,8 @@ export const fa: TranslationMap = {
     openWorkboardCard: "باز کردن کارت Workboard",
     dashboardAvailable: "داشبورد در دسترس است",
     approvalNeeded: "نیازمند تأیید",
+    queuedMessage: "{count} پیام در صف ارسال",
+    queuedMessages: "{count} پیام در صف ارسال",
     noSessions: "هیچ نشستی پیدا نشد.",
     noActiveSessions: "هیچ رشته فعالی نیست.",
     noArchivedSessions: "هیچ نشست بایگانی‌شده‌ای نیست.",
@@ -739,6 +745,7 @@ export const fa: TranslationMap = {
     unread: "Unread",
     worktreeSession: "Worktree session",
     automationAttached: "Automation attached",
+    incognito: "رشته ناشناس",
     cloudWorkerPlacement: "عامل ابری: {state}",
     cloudWorkerPlacementConflict: "کارگر ابری: {state} · ۱ تداخل فضای کاری",
     cloudWorkerPlacementConflicts: "کارگر ابری: {state} · {count} تداخل فضای کاری",
@@ -1396,6 +1403,11 @@ export const fa: TranslationMap = {
     chatPrefs: {
       title: "گفت‌وگو",
       hint: "تنظیمات برگزیدهٔ گفت‌وگوی محلی مرورگر.",
+      messageWidth: "عرض پیام",
+      messageWidthHint:
+        "عرض اختیاری CSS برای رونوشتِ وسط‌چین، مانند 960px، 82%، یا min(1280px, 82%).",
+      messageWidthInvalid:
+        "یک عرض CSS وارد کنید، مانند 960px، 82%، min(1280px, 82%)، یا calc(100% - 2rem).",
     },
     sidebarPrefs: {
       title: "نوار کناری",
@@ -1683,6 +1695,7 @@ export const fa: TranslationMap = {
     blockedAgentFilter: "مسدودشده توسط فیلتر عامل",
   },
   nav: {
+    account: "حساب",
     back: "بازگشت",
     forward: "جلو",
     chat: "چت",
@@ -2400,6 +2413,8 @@ export const fa: TranslationMap = {
     toolRuns: "{count} اجرا",
     identity: {
       title: "هویت",
+      menuLabel: "منوی هویت",
+      menuButtonLabel: "منوی هویت و برنامه برای {name}",
       description: "نمایه شما در این Gateway.",
       loading: "در حال بارگذاری هویت شما…",
       profileUnavailable: "نمایه هویت شما بارگذاری نشد.",
@@ -3023,6 +3038,7 @@ export const fa: TranslationMap = {
     eventStale: "نشست منقضی‌شده",
   },
   connection: {
+    queuedCount: "{count} در صف",
     reconnecting: "در حال اتصال مجدد…",
     retryNow: "اکنون دوباره تلاش کنید",
     access: {
@@ -3691,6 +3707,15 @@ export const fa: TranslationMap = {
   },
   login: {
     subtitle: "داشبورد Gateway",
+    deviceAuthMigration: {
+      banner: "این مرورگر پس از به‌روزرسانی هنوز به تأیید یک‌باره دستگاه نیاز دارد.",
+      action: "ایمن‌سازی این مرورگر",
+      secureContextRequired:
+        "این مرورگر قدیمی موقتاً همچنان در دسترس است. برای ایمن‌سازی آن با هویت دستگاه، آن را از طریق HTTPS یا localhost دوباره باز کنید.",
+      pendingUnavailable: "درخواست جفت‌سازی مرورگر هنوز در دسترس نیست. لحظه‌ای دیگر دوباره تلاش کنید.",
+      loadFailed: "درخواست جفت‌سازی این مرورگر بارگیری نشد: {error}",
+      approvalFailed: "ایمن‌سازی این مرورگر انجام نشد: {error}",
+    },
     passwordPlaceholder: "اختیاری",
     showToken: "نمایش توکن",
     hideToken: "پنهان کردن توکن",
@@ -3793,6 +3818,9 @@ export const fa: TranslationMap = {
   },
   chat: {
     disconnected: "اتصال از Gateway قطع شد.",
+    sendErrors: {
+      activeLeafChanged: "رشته به شاخهٔ دیگری تغییر کرد — بررسی کنید و دوباره ارسال کنید.",
+    },
     waitingForApproval: "در انتظار تأیید…",
     startupStatus: {
       preparingWorkspace: "در حال آماده‌سازی فضای کاری…",
@@ -3802,6 +3830,36 @@ export const fa: TranslationMap = {
     },
     outputTokens: "{count} توکن خروجی",
     archivedSessionDisabled: "برای ارسال پیام، این نشست را بازیابی کنید.",
+    sessionSharing: {
+      menu: "اشتراک‌گذاری رشته",
+      current: "نمایانی رشته: {visibility}",
+      visibility: "نمایانی",
+      shared: "اشتراک‌گذاری‌شده",
+      readOnly: "فقط خواندنی",
+      suggest: "پیشنهاد",
+      draft: "پیش‌نویس",
+      publishDraft: "انتشار پیش‌نویس",
+      members: "اعضا",
+      selected: "عضو",
+      noPeople: "هیچ فرد جفت‌شده‌ای پیدا نشد.",
+      readOnlyNotice: "فقط مالک رشته و اعضا می‌توانند در این رشته اقدام کنند.",
+    },
+    sessionSuggestions: {
+      suggest: "پیشنهاد",
+      suggestMessage: "پیشنهاد پیام",
+      attachmentsUnsupported: "پیش از ارسال پیشنهاد متنی، پیوست‌ها را حذف کنید.",
+      sendNow: "پیشنهاد {author} را اکنون ارسال کنید",
+      queue: "پیشنهاد {author} را در صف قرار دهید",
+      edit: "پیشنهاد {author} را ویرایش کنید",
+      dismiss: "پیشنهاد {author} را رد کنید",
+      typing: "{name} در حال تایپ است…",
+      typingMany: "{names} در حال تایپ هستند…",
+      state: {
+        pending: "در انتظار",
+        accepted: "پذیرفته شد",
+        dismissed: "رد شد",
+      },
+    },
     loadOlder: "بارگیری قدیمی‌ترها",
     sessionHeader: {
       renameTooltip: "تغییر نام نشست",
@@ -3815,6 +3873,7 @@ export const fa: TranslationMap = {
       copyPath: "کپی مسیر",
       copyBranch: "کپی نام شاخه",
       copied: "کپی شد",
+      incognito: "رشتهٔ ناشناس",
       branches: "شاخه‌های رشته",
       branchSwitchUnavailable: "تعویض شاخه در حالی که عامل در حال کار است در دسترس نیست.",
       branchSwitchRequiresAdmin: "تعویض شاخه به دسترسی ادمین اپراتور نیاز دارد.",
@@ -4103,6 +4162,7 @@ export const fa: TranslationMap = {
       openInCanvas: "باز کردن در بوم",
       reply: "پاسخ",
       replyToMessage: "پاسخ به پیام",
+      replyingTo: "در حال پاسخ به {name}",
       rewind: "بازگشت",
       rewindConfirm: "بازگشت به قبل از این پیام؟",
       rewindToHere: "بازگشت به اینجا",
@@ -4200,6 +4260,7 @@ export const fa: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       offlineHint: "آفلاین — پیام‌ها در صف قرار می‌گیرند و هنگام بازگشت اتصال ارسال می‌شوند.",
+      offlineQueuedHint: "آفلاین — {count} در صف است؛ پیام‌ها وقتی اتصال برقرار شود ارسال می‌شوند.",
       preparingModel: "در حال آماده‌سازی مدل...",
       responding: "{name} در حال پاسخ‌دهی است...",
       sendingMessage: "در حال ارسال پیام...",

@@ -602,6 +602,9 @@ export const ja_JP: TranslationMap = {
     worktreeName: "ワークツリー名",
     worktreeNamePlaceholder: "auto",
     worktreeNameInvalid: "ワークツリー名には小文字、数字、ハイフンを使用できます。",
+    incognito: "シークレット",
+    incognitoDescription: "Gatewayが再起動するまでのみこのスレッドを保持します",
+    startAsDraft: "下書きとして開始",
     messagePlaceholder: "このセッションで何に取り組みますか？",
     readingAttachment: "添付ファイルを読み込み中",
     start: "セッションを開始",
@@ -623,7 +626,8 @@ export const ja_JP: TranslationMap = {
     limit: "制限",
     filters: "フィルター",
     createdBy: "{name}が作成",
-    filterByCreator: "作成者で絞り込み",
+    archivedBy: "{name}によりアーカイブ済み",
+    people: "ユーザー",
     allCreators: "すべての人",
     filterControls: "セッションフィルター",
     sourceFilters: "セッションソースのフィルター",
@@ -683,6 +687,8 @@ export const ja_JP: TranslationMap = {
     openWorkboardCard: "Workboardカードを開く",
     dashboardAvailable: "ダッシュボードが利用可能",
     approvalNeeded: "承認が必要",
+    queuedMessage: "{count}件のメッセージが送信待ちです",
+    queuedMessages: "{count}件のメッセージが送信待ちです",
     noSessions: "セッションが見つかりません。",
     noActiveSessions: "アクティブなスレッドはありません。",
     noArchivedSessions: "アーカイブされたセッションはありません。",
@@ -750,6 +756,7 @@ export const ja_JP: TranslationMap = {
     unread: "Unread",
     worktreeSession: "Worktree session",
     automationAttached: "Automation attached",
+    incognito: "シークレットスレッド",
     cloudWorkerPlacement: "クラウドワーカー: {state}",
     cloudWorkerPlacementConflict: "クラウドワーカー: {state} · ワークスペースの競合1件",
     cloudWorkerPlacementConflicts: "クラウドワーカー: {state} · ワークスペースの競合{count}件",
@@ -1407,6 +1414,11 @@ export const ja_JP: TranslationMap = {
     chatPrefs: {
       title: "チャット",
       hint: "ブラウザ内に保存されるチャット設定。",
+      messageWidth: "メッセージ幅",
+      messageWidthHint:
+        "中央揃えのトランスクリプトの任意のCSS幅（960px、82%、min(1280px, 82%) など）。",
+      messageWidthInvalid:
+        "960px、82%、min(1280px, 82%)、calc(100% - 2rem) などのCSS幅を入力してください。",
     },
     sidebarPrefs: {
       title: "サイドバー",
@@ -1695,6 +1707,7 @@ export const ja_JP: TranslationMap = {
     blockedAgentFilter: "エージェントフィルターによりブロック",
   },
   nav: {
+    account: "アカウント",
     back: "戻る",
     forward: "進む",
     chat: "チャット",
@@ -2421,6 +2434,8 @@ export const ja_JP: TranslationMap = {
     toolRuns: "{count} 回の実行",
     identity: {
       title: "アイデンティティ",
+      menuLabel: "アイデンティティメニュー",
+      menuButtonLabel: "{name}のアイデンティティおよびアプリメニュー",
       description: "この Gateway でのあなたのプロフィール。",
       loading: "あなたの ID を読み込んでいます…",
       profileUnavailable: "あなたの ID プロフィールを読み込めませんでした。",
@@ -3046,6 +3061,7 @@ export const ja_JP: TranslationMap = {
     eventStale: "古いセッション",
   },
   connection: {
+    queuedCount: "{count}件待機中",
     reconnecting: "再接続中…",
     retryNow: "今すぐ再試行",
     access: {
@@ -3716,6 +3732,16 @@ export const ja_JP: TranslationMap = {
   },
   login: {
     subtitle: "Gateway ダッシュボード",
+    deviceAuthMigration: {
+      banner: "このブラウザはアップデート後に一度だけデバイスの承認が必要です。",
+      action: "このブラウザを保護",
+      secureContextRequired:
+        "このレガシーブラウザは一時的に利用可能です。デバイスアイデンティティで保護するには、HTTPSまたはlocalhostで再度開いてください。",
+      pendingUnavailable:
+        "ブラウザのペアリング要求はまだ利用できません。しばらくしてから再試行してください。",
+      loadFailed: "このブラウザのペアリング要求を読み込めませんでした: {error}",
+      approvalFailed: "このブラウザを保護できませんでした: {error}",
+    },
     passwordPlaceholder: "任意",
     showToken: "トークンを表示",
     hideToken: "トークンを非表示",
@@ -3817,6 +3843,9 @@ export const ja_JP: TranslationMap = {
   },
   chat: {
     disconnected: "Gateway から切断されました。",
+    sendErrors: {
+      activeLeafChanged: "スレッドがブランチを切り替えました — 確認して再送信してください。",
+    },
     waitingForApproval: "承認を待機中…",
     startupStatus: {
       preparingWorkspace: "ワークスペースを準備中…",
@@ -3826,6 +3855,36 @@ export const ja_JP: TranslationMap = {
     },
     outputTokens: "{count} 出力トークン",
     archivedSessionDisabled: "メッセージを送信するには、このセッションを復元してください。",
+    sessionSharing: {
+      menu: "スレッドの共有",
+      current: "スレッドの表示範囲: {visibility}",
+      visibility: "表示範囲",
+      shared: "共有中",
+      readOnly: "読み取り専用",
+      suggest: "提案",
+      draft: "下書き",
+      publishDraft: "下書きを公開",
+      members: "メンバー",
+      selected: "メンバー",
+      noPeople: "ペアリング済みの相手が見つかりません。",
+      readOnlyNotice: "このスレッドではスレッドのオーナーとメンバーのみが操作できます。",
+    },
+    sessionSuggestions: {
+      suggest: "提案",
+      suggestMessage: "メッセージを提案",
+      attachmentsUnsupported: "テキストの提案を送信する前に添付ファイルを削除してください。",
+      sendNow: "{author} の提案を今すぐ送信",
+      queue: "{author} の提案をキューに追加",
+      edit: "{author} の提案を編集",
+      dismiss: "{author} の提案を却下",
+      typing: "{name} が入力中…",
+      typingMany: "{names} が入力中…",
+      state: {
+        pending: "保留中",
+        accepted: "承認済み",
+        dismissed: "却下済み",
+      },
+    },
     loadOlder: "以前の項目を読み込む",
     sessionHeader: {
       renameTooltip: "セッション名を変更",
@@ -3839,6 +3898,7 @@ export const ja_JP: TranslationMap = {
       copyPath: "パスをコピー",
       copyBranch: "ブランチ名をコピー",
       copied: "コピーしました",
+      incognito: "シークレットスレッド",
       branches: "スレッドの分岐",
       branchSwitchUnavailable: "エージェントが作業中は分岐の切り替えを利用できません。",
       branchSwitchRequiresAdmin: "ブランチの切り替えにはオペレーター管理者アクセスが必要です。",
@@ -4129,6 +4189,7 @@ export const ja_JP: TranslationMap = {
       openInCanvas: "キャンバスで開く",
       reply: "返信",
       replyToMessage: "メッセージに返信",
+      replyingTo: "{name} に返信",
       rewind: "巻き戻し",
       rewindConfirm: "このメッセージの前まで巻き戻しますか？",
       rewindToHere: "ここまで巻き戻し",
@@ -4226,6 +4287,8 @@ export const ja_JP: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       offlineHint: "オフライン — メッセージはキューに入り、接続が回復したときに送信されます。",
+      offlineQueuedHint:
+        "オフライン — {count} 件が待機中。接続が回復するとメッセージが送信されます。",
       preparingModel: "モデルを準備中...",
       responding: "{name}が応答中...",
       sendingMessage: "メッセージを送信中...",
