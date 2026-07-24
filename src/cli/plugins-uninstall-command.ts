@@ -218,11 +218,14 @@ async function runPluginUninstallCommandUnlocked(
       runtime.log("Cancelled.");
       return;
     }
-    return await withPluginLifecycleLease(
-      {},
-      async () =>
-        await runPluginUninstallCommandUnlocked(id, { ...opts, force: true }, runtime, true),
-    );
+    return await withPluginLifecycleCommandLease(runtime, async (deferredExitRuntime) => {
+      return await runPluginUninstallCommandUnlocked(
+        id,
+        { ...opts, force: true },
+        deferredExitRuntime,
+        true,
+      );
+    });
   }
 
   const uninstall = async () => {
