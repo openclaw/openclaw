@@ -11,6 +11,7 @@ import { hasConfiguredSecretInput, resolveSecretInputRef } from "../config/types
 import { resolveGatewayAuthTokenSourceConflict } from "../gateway/auth-token-source-conflict.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { isLoopbackHost, resolveGatewayBindHost } from "../gateway/net.js";
+import { resolveWebFetchProxySourceConflict } from "../gateway/web-fetch-proxy-source-conflict.js";
 import { resolveExecPolicyScopeSnapshot } from "../infra/exec-approvals-effective.js";
 import {
   loadExecApprovals,
@@ -340,6 +341,11 @@ export async function collectSecurityWarnings(
   const tokenConflict = resolveGatewayAuthTokenSourceConflict({ cfg, env });
   if (tokenConflict) {
     warnings.push(...tokenConflict.warningLines);
+  }
+
+  const proxyConflict = resolveWebFetchProxySourceConflict({ cfg, env });
+  if (proxyConflict) {
+    warnings.push(...proxyConflict.warningLines);
   }
 
   const warnDmPolicy = async (params: {

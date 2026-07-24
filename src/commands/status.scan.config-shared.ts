@@ -5,6 +5,7 @@ import { existsSync } from "node:fs";
 import { resolveConfigPath } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveGatewayAuthTokenSourceConflict } from "../gateway/auth-token-source-conflict.js";
+import { resolveWebFetchProxySourceConflict } from "../gateway/web-fetch-proxy-source-conflict.js";
 
 /** Returns true when tests should avoid the missing-config cold-start fast path. */
 function shouldSkipStatusScanMissingConfigFastPath(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -56,11 +57,20 @@ export async function loadStatusScanCommandConfig(params: {
       ? { resolvedConfig: loadedConfig, diagnostics: [] }
       : await params.resolveConfig(loadedConfig);
   const tokenConflict = resolveGatewayAuthTokenSourceConflict({ cfg: sourceConfig, env });
-  // Token source conflicts are config-level diagnostics, even when secret resolution itself succeeded.
+  const proxyConflict = resolveWebFetchProxySourceConflict({ cfg: sourceConfig, env });
+  // Token / web_fetch proxy source conflicts are config-level diagnostics, even when secret resolution itself succeeded.
+  const conflictDiagnostics: string[] = [];
+  if (tokenConflict) {
+    conflictDiagnostics.push(tokenConflict.diagnostic);
+  }
+  if (proxyConflict) {
+    conflictDiagnostics.push(proxyConflict.diagnostic);
+  }
   return {
     coldStart,
     sourceConfig,
     resolvedConfig,
-    secretDiagnostics: tokenConflict ? [...diagnostics, tokenConflict.diagnostic] : diagnostics,
+    secretDiagnostics:
+      conflictDiagnostics.length > 0 ? [...diagnostics, ...conflictDiagnostics] : diagnostics,
   };
 }
