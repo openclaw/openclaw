@@ -611,6 +611,8 @@ function buildActivityHandler(): MSTeamsActivityHandler {
   type MessageHandler = Parameters<MSTeamsActivityHandler["onMessage"]>[0];
   const messageHandlers: MessageHandler[] = [];
   const membersAddedHandlers: Handler[] = [];
+  const membersRemovedHandlers: Handler[] = [];
+  const installationUpdateHandlers: Handler[] = [];
   const reactionsAddedHandlers: Handler[] = [];
   const reactionsRemovedHandlers: Handler[] = [];
 
@@ -621,6 +623,14 @@ function buildActivityHandler(): MSTeamsActivityHandler {
     },
     onMembersAdded(cb) {
       membersAddedHandlers.push(cb);
+      return handler;
+    },
+    onMembersRemoved(cb) {
+      membersRemovedHandlers.push(cb);
+      return handler;
+    },
+    onInstallationUpdate(cb) {
+      installationUpdateHandlers.push(cb);
       return handler;
     },
     onReactionsAdded(cb) {
@@ -644,7 +654,30 @@ function buildActivityHandler(): MSTeamsActivityHandler {
           }
         }
       } else if (activityType === "conversationUpdate") {
-        for (const h of membersAddedHandlers) {
+        // Check which members array is populated to determine the event type
+        const activity = ctx as {
+          activity?: { membersAdded?: unknown[]; membersRemoved?: unknown[] };
+        };
+        const hasMembersAdded =
+          Array.isArray(activity.activity?.membersAdded) &&
+          activity.activity.membersAdded.length > 0;
+        const hasMembersRemoved =
+          Array.isArray(activity.activity?.membersRemoved) &&
+          activity.activity.membersRemoved.length > 0;
+
+        // Only call the appropriate handlers based on which members array is populated
+        if (hasMembersAdded) {
+          for (const h of membersAddedHandlers) {
+            await h(context, noop);
+          }
+        }
+        if (hasMembersRemoved) {
+          for (const h of membersRemovedHandlers) {
+            await h(context, noop);
+          }
+        }
+      } else if (activityType === "installationUpdate") {
+        for (const h of installationUpdateHandlers) {
           await h(context, noop);
         }
       } else if (activityType === "messageReaction") {

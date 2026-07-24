@@ -1,4 +1,6 @@
 // Msteams plugin module implements monitor handler behavior.
+import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { patchSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { serializeMSTeamsAdaptiveCardActionValue } from "./adaptive-card-submit.js";
 import { formatUnknownError } from "./errors.js";
@@ -19,6 +21,12 @@ export type MSTeamsActivityHandler = {
     ) => Promise<MSTeamsIngressDispatchResult | void>,
   ) => MSTeamsActivityHandler;
   onMembersAdded: (
+    handler: (context: unknown, next: () => Promise<void>) => Promise<void>,
+  ) => MSTeamsActivityHandler;
+  onMembersRemoved: (
+    handler: (context: unknown, next: () => Promise<void>) => Promise<void>,
+  ) => MSTeamsActivityHandler;
+  onInstallationUpdate: (
     handler: (context: unknown, next: () => Promise<void>) => Promise<void>,
   ) => MSTeamsActivityHandler;
   onReactionsAdded: (
@@ -263,6 +271,205 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
     } catch (err) {
       deps.runtime.error(`msteams reaction handler failed: ${String(err)}`);
     }
+    await next();
+  });
+
+  handler.onMembersRemoved(async (context, next) => {
+    const ctx = context as MSTeamsTurnContext;
+    const membersRemoved = ctx.activity?.membersRemoved ?? [];
+    const botId = ctx.activity?.recipient?.id;
+    const conversationId = ctx.activity?.conversation?.id;
+    const conversationType = normalizeOptionalLowercaseString(
+      ctx.activity?.conversation?.conversationType,
+    );
+    const activityFrom = ctx.activity?.from;
+
+    // Check if the bot itself was removed from a personal DM conversation.
+    for (const member of membersRemoved) {
+      if (member.id === botId && conversationType === "personal") {
+        // When bot is removed from a personal DM, we need to mark the user's session as stale.
+        // The user who triggered the removal is in activity.from.
+        const userId = activityFrom?.aadObjectId ?? activityFrom?.id;
+        if (!userId) {
+          deps.log.debug?.("cannot mark session stale: missing user id");
+          continue;
+        }
+
+        deps.log.info("bot removed from personal DM, marking session as stale", {
+          conversationId,
+          userId,
+          memberId: member.id,
+        });
+
+        // Build the session key for this user's DM conversations.
+        // Session key shape follows the routing pattern used by inbound messages:
+        // agent:<agentId>:msteams:direct:<userId> where agentId defaults to "main"
+        const agentId = "main"; // Match DEFAULT_AGENT_ID used by routing
+        const baseSessionKey = `agent:${agentId}:msteams:direct:${userId}`;
+
+        // Mark all sessions for this user as stale by setting updatedAt to 0.
+        // This preserves the transcript records but signals that new sessions
+        // should be created on the next message.
+        try {
+          const storePath = resolveStorePath(deps.cfg.session?.store, { agentId });
+          let resetCount = 0;
+
+          // Iterate through all session entries and mark those matching this user as stale.
+          // We need to check both the base key and any thread-qualified variants.
+          const sessionKeyPrefix = `${baseSessionKey}:`;
+          const exactSessionKey = baseSessionKey;
+
+          // Import listSessionEntries dynamically to avoid circular dependencies
+          const { listSessionEntries } = await import("openclaw/plugin-sdk/session-store-runtime");
+
+          for (const { sessionKey, entry } of listSessionEntries({ storePath })) {
+            // Match either exact key or keys with additional qualifiers (like thread IDs)
+            if (sessionKey === exactSessionKey || sessionKey.startsWith(sessionKeyPrefix)) {
+              if (entry.updatedAt === 0) {
+                // Already marked as stale
+                continue;
+              }
+
+              // Set updatedAt to 0 to mark as stale (following Discord's pattern)
+              let resetEntry = false;
+              const capturedEntry = entry; // Capture for use in closure
+              await patchSessionEntry({
+                storePath,
+                sessionKey,
+                replaceEntry: true,
+                update: (current: SessionEntry) => {
+                  if (current.updatedAt === 0) {
+                    return null;
+                  }
+                  // Verify the entry hasn't changed since we read it
+                  if (
+                    current.updatedAt !== capturedEntry.updatedAt ||
+                    current.sessionId !== capturedEntry.sessionId
+                  ) {
+                    return null;
+                  }
+                  resetEntry = true;
+                  return { ...current, updatedAt: 0 };
+                },
+              });
+
+              if (resetEntry) {
+                resetCount += 1;
+              }
+            }
+          }
+
+          if (resetCount > 0) {
+            deps.log.info(`marked ${resetCount} session(s) as stale for user ${userId}`);
+          }
+        } catch (err) {
+          deps.log.debug?.("failed to mark sessions stale on removal", {
+            error: formatUnknownError(err),
+          });
+        }
+      } else {
+        deps.log.debug?.("member removed", { member: member.id, conversationType });
+      }
+    }
+    await next();
+  });
+
+  handler.onInstallationUpdate(async (context, next) => {
+    const ctx = context as MSTeamsTurnContext;
+    const activity = ctx.activity;
+    const conversationId = activity?.conversation?.id;
+    const conversationType = normalizeOptionalLowercaseString(
+      activity?.conversation?.conversationType,
+    );
+    const activityFrom = activity?.from;
+
+    // installationUpdate activities carry an action field indicating install/uninstall.
+    // The eventType may also appear in channelData depending on SDK version.
+    const action =
+      (activity?.channelData as Record<string, unknown>)?.eventType ??
+      (activity as Record<string, unknown>)?.action;
+
+    deps.log.debug?.("installation update received", {
+      action,
+      conversationId,
+      conversationType,
+    });
+
+    // Handle app removal/uninstallation in personal DM conversations.
+    // Teams installationUpdate uses action values: remove, remove-upgrade
+    const isRemovalAction = action === "remove" || action === "remove-upgrade";
+    if (isRemovalAction && conversationType === "personal") {
+      // When app is removed/uninstalled, mark the user's sessions as stale.
+      const userId = activityFrom?.aadObjectId ?? activityFrom?.id;
+      if (!userId) {
+        deps.log.debug?.("cannot mark session stale on removal: missing user id");
+        await next();
+        return;
+      }
+
+      deps.log.info("app removed from personal DM, marking session as stale", {
+        conversationId,
+        userId,
+      });
+
+      // Build the session key for this user's DM conversations.
+      // Session key shape follows the routing pattern used by inbound messages:
+      // agent:<agentId>:msteams:direct:<userId> where agentId defaults to "main"
+      const agentId = "main"; // Match DEFAULT_AGENT_ID used by routing
+      const baseSessionKey = `agent:${agentId}:msteams:direct:${userId}`;
+
+      try {
+        const storePath = resolveStorePath(deps.cfg.session?.store, { agentId });
+        let resetCount = 0;
+
+        const sessionKeyPrefix = `${baseSessionKey}:`;
+        const exactSessionKey = baseSessionKey;
+
+        const { listSessionEntries } = await import("openclaw/plugin-sdk/session-store-runtime");
+
+        for (const { sessionKey, entry } of listSessionEntries({ storePath })) {
+          if (sessionKey === exactSessionKey || sessionKey.startsWith(sessionKeyPrefix)) {
+            if (entry.updatedAt === 0) {
+              continue;
+            }
+
+            let resetEntry = false;
+            const capturedEntry = entry;
+            await patchSessionEntry({
+              storePath,
+              sessionKey,
+              replaceEntry: true,
+              update: (current: SessionEntry) => {
+                if (current.updatedAt === 0) {
+                  return null;
+                }
+                if (
+                  current.updatedAt !== capturedEntry.updatedAt ||
+                  current.sessionId !== capturedEntry.sessionId
+                ) {
+                  return null;
+                }
+                resetEntry = true;
+                return { ...current, updatedAt: 0 };
+              },
+            });
+
+            if (resetEntry) {
+              resetCount += 1;
+            }
+          }
+        }
+
+        if (resetCount > 0) {
+          deps.log.info(`marked ${resetCount} session(s) as stale on uninstall for user ${userId}`);
+        }
+      } catch (err) {
+        deps.log.debug?.("failed to mark sessions stale on uninstall", {
+          error: formatUnknownError(err),
+        });
+      }
+    }
+
     await next();
   });
 
