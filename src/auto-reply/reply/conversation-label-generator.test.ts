@@ -296,6 +296,95 @@ describe("generateConversationLabel", () => {
     ).resolves.toBe("A very long ");
   });
 
+  it("strips reasoning blocks from generated labels", async () => {
+    completeWithPreparedSimpleCompletionModel.mockResolvedValue({
+      content: [{ type: "text", text: "<think>internal notes</think>\nInvoice follow-up" }],
+    });
+
+    await expect(
+      generateConversationLabel({
+        userMessage: "Need help with invoices",
+        prompt: "Generate a label",
+        cfg: {},
+      }),
+    ).resolves.toBe("Invoice follow-up");
+  });
+
+  it("drops generated labels that contain only unclosed reasoning", async () => {
+    completeWithPreparedSimpleCompletionModel.mockResolvedValue({
+      content: [{ type: "text", text: "<think>internal notes" }],
+    });
+
+    await expect(
+      generateConversationLabel({
+        userMessage: "Need help with invoices",
+        prompt: "Generate a label",
+        cfg: {},
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it("drops generated labels with unclosed prefixed reasoning", async () => {
+    completeWithPreparedSimpleCompletionModel.mockResolvedValue({
+      content: [{ type: "text", text: "<mm:think>internal notes" }],
+    });
+
+    await expect(
+      generateConversationLabel({
+        userMessage: "Need help with invoices",
+        prompt: "Generate a label",
+        cfg: {},
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it("strips closed prefixed reasoning from generated labels", async () => {
+    completeWithPreparedSimpleCompletionModel.mockResolvedValue({
+      content: [
+        {
+          type: "text",
+          text: "<antml:thinking>internal notes</antml:thinking>Invoice follow-up",
+        },
+      ],
+    });
+
+    await expect(
+      generateConversationLabel({
+        userMessage: "Need help with invoices",
+        prompt: "Generate a label",
+        cfg: {},
+      }),
+    ).resolves.toBe("Invoice follow-up");
+  });
+
+  it("keeps visible label text before unclosed reasoning", async () => {
+    completeWithPreparedSimpleCompletionModel.mockResolvedValue({
+      content: [{ type: "text", text: "Invoice follow-up<think>internal notes" }],
+    });
+
+    await expect(
+      generateConversationLabel({
+        userMessage: "Need help with invoices",
+        prompt: "Generate a label",
+        cfg: {},
+      }),
+    ).resolves.toBe("Invoice follow-up");
+  });
+
+  it("preserves literal reasoning tags in generated code labels", async () => {
+    completeWithPreparedSimpleCompletionModel.mockResolvedValue({
+      content: [{ type: "text", text: "Debug `<think>` parsing" }],
+    });
+
+    await expect(
+      generateConversationLabel({
+        userMessage: "Need help with parsing",
+        prompt: "Generate a label",
+        cfg: {},
+      }),
+    ).resolves.toBe("Debug `<think>` parsing");
+  });
+
   it("drops a split emoji instead of returning a lone surrogate", async () => {
     completeWithPreparedSimpleCompletionModel.mockResolvedValue({
       content: [{ type: "text", text: `${"a".repeat(11)}😀tail` }],
