@@ -4,7 +4,7 @@ import type {
   ProviderThinkingProfile,
 } from "openclaw/plugin-sdk/plugin-entry";
 
-export const KIMI_K3_MODEL_IDS = ["k3", "k3[1m]"] as const;
+export const KIMI_K3_MODEL_IDS = ["k3"] as const;
 
 export function isKimiK3ModelId(modelId: string): boolean {
   return KIMI_K3_MODEL_IDS.includes(
