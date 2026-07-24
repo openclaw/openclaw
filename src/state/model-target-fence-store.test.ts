@@ -105,6 +105,16 @@ describe("model target fence store", () => {
     });
 
     expect(released.state).toBe("released");
+    expect(
+      store.release({
+        provider: qwen35Fence.provider,
+        model: qwen35Fence.model,
+        topologyGeneration: qwen35Fence.topologyGeneration,
+        fenceEpoch: qwen35Fence.fenceEpoch,
+        fenceToken: qwen35Fence.fenceToken,
+        nowMs: 2_250,
+      }),
+    ).toEqual(released);
     expect(store.status()).toEqual({ activeFences: [] });
     expect(() =>
       store.divertNew({

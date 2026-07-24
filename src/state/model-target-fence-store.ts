@@ -248,7 +248,17 @@ export function createModelTargetFenceStore(
       runOpenClawStateWriteTransaction(
         (database) => {
           const target = normalizeTarget(params);
+          const topologyGeneration = params.topologyGeneration.trim();
+          const fenceToken = params.fenceToken.trim();
           const db = getNodeSqliteKysely<FenceDatabase>(database.db);
+          const existing = readFence(database.db, {
+            ...target,
+            topologyGeneration,
+            fenceEpoch: params.fenceEpoch,
+          });
+          if (existing?.fenceToken === fenceToken && existing.state === "released") {
+            return existing;
+          }
           const result = executeSqliteQuerySync(
             database.db,
             db
@@ -256,9 +266,9 @@ export function createModelTargetFenceStore(
               .set({ state: "released", released_at_ms: params.nowMs ?? Date.now() })
               .where("provider", "=", target.provider)
               .where("model", "=", target.model)
-              .where("topology_generation", "=", params.topologyGeneration.trim())
+              .where("topology_generation", "=", topologyGeneration)
               .where("fence_epoch", "=", params.fenceEpoch)
-              .where("fence_token", "=", params.fenceToken.trim())
+              .where("fence_token", "=", fenceToken)
               .where("state", "=", "active"),
           );
           if ((result.numAffectedRows ?? 0n) !== 1n) {
@@ -266,7 +276,7 @@ export function createModelTargetFenceStore(
           }
           const released = readFence(database.db, {
             ...target,
-            topologyGeneration: params.topologyGeneration.trim(),
+            topologyGeneration,
             fenceEpoch: params.fenceEpoch,
           });
           if (!released) {
