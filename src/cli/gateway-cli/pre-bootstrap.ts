@@ -1,4 +1,11 @@
-import { resetPublishedConfigRuntimeEnv } from "../../config/config-env-vars.js";
+import {
+  applyConfigEnvVars,
+  collectConfigRuntimeEnvOwnership,
+  collectConfigRuntimeEnvVars,
+  initializePublishedConfigRuntimeEnv,
+  isConfigRuntimeEnvVarAllowed,
+  resetPublishedConfigRuntimeEnv,
+} from "../../config/config-env-vars.js";
 // Gateway startup checks that must run before shared CLI bootstrap can migrate state.
 import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "../../config/future-version-guard.js";
 import { GATEWAY_CONFIG_SELECTION_ENV_KEYS } from "../../config/gateway-env-selection.js";
@@ -243,14 +250,12 @@ async function guardGatewayRunSelectedConfig(
   lastGuardedGatewayRunSnapshot = undefined;
   const [
     path,
-    { applyConfigEnvVars, isConfigRuntimeEnvVarAllowed },
     { loadGlobalRuntimeDotEnvFiles },
     { normalizeEnv },
     { normalizeStateDirEnv, resolveStateDir },
     { resolveConfigDir },
   ] = await Promise.all([
     import("node:path"),
-    import("../../config/config-env-vars.js"),
     import("../../infra/dotenv-global.js"),
     import("../../infra/env.js"),
     import("../../config/paths.js"),
@@ -466,22 +471,12 @@ export async function applyFinalGatewayRunConfigEnv(params: {
   const invocationDestructiveOverride = resolveInvocationDestructiveOverride();
   const envBeforeApply = { ...process.env };
   const selectionSignature = resolveGatewayConfigSelectionSignature(process.env);
-  const [
-    {
-      applyConfigEnvVars,
-      collectConfigRuntimeEnvOwnership,
-      collectConfigRuntimeEnvVars,
-      initializePublishedConfigRuntimeEnv,
-    },
-    { normalizeEnv },
-    { normalizeStateDirEnv },
-    { clearShellEnvAppliedKeys },
-  ] = await Promise.all([
-    import("../../config/config-env-vars.js"),
-    import("../../infra/env.js"),
-    import("../../config/paths.js"),
-    import("../../infra/shell-env.js"),
-  ]);
+  const [{ normalizeEnv }, { normalizeStateDirEnv }, { clearShellEnvAppliedKeys }] =
+    await Promise.all([
+      import("../../infra/env.js"),
+      import("../../config/paths.js"),
+      import("../../infra/shell-env.js"),
+    ]);
   const finalConfigEnv = collectConfigRuntimeEnvVars(params.snapshot.sourceConfig);
   if (
     preparedSnapshot &&
