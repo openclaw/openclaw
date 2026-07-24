@@ -576,6 +576,36 @@ describe("ModelRegistry models.json auth", () => {
     });
   });
 
+  it("loads generated Bedrock plugin catalog shards without a metadata snapshot", () => {
+    const modelsPath = writeModelsJsonWithPluginCatalog({
+      root: { providers: {} },
+      pluginRelativePath: join("plugins", "amazon-bedrock", PLUGIN_MODEL_CATALOG_FILE),
+      pluginCatalog: {
+        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+        providers: {
+          "amazon-bedrock": {
+            baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+            api: "bedrock-converse-stream",
+            auth: "aws-sdk",
+            models: [
+              {
+                id: "anthropic.claude-sonnet-4-6",
+                name: "Claude Sonnet 4.6",
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    const registry = ModelRegistry.create(AuthStorage.inMemory(), modelsPath);
+
+    expect(registry.getError()).toBeUndefined();
+    expect(registry.find("amazon-bedrock", "anthropic.claude-sonnet-4-6")?.name).toBe(
+      "Claude Sonnet 4.6",
+    );
+  });
+
   it("ignores non-generated plugin catalog files", () => {
     // Plugin catalog shards are codegen artifacts; hand-written lookalikes must
     // not extend the provider registry.
