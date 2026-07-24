@@ -1,5 +1,5 @@
 // Media parse tests cover media reference parsing from text and payloads.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { splitMediaFromOutput } from "./parse.js";
 
 type SplitMediaFromOutputOptions = NonNullable<Parameters<typeof splitMediaFromOutput>[1]>;
@@ -141,6 +141,46 @@ describe("splitMediaFromOutput", () => {
       { type: "media", url: "https://example.com/a.png" },
       { type: "text", text: "```text\nMEDIA:https://example.com/ignored.png\n```\nAfter" },
     ]);
+  });
+
+  describe("MEDIA token inside fenced code block notifies via callback (#41966)", () => {
+    it("invokes onFencedMediaTokenSkipped when a MEDIA: token appears inside a triple-backtick fence", () => {
+      const onFencedMediaTokenSkipped = vi.fn();
+      splitMediaFromOutput(
+        "Here's how to send media:\n```\nMEDIA:/home/user/screenshot.png\n```\nEnd of example.",
+        { onFencedMediaTokenSkipped },
+      );
+      expect(onFencedMediaTokenSkipped).toHaveBeenCalledOnce();
+      expect(onFencedMediaTokenSkipped.mock.calls[0]?.[0]).toMatch(
+        /MEDIA:\/home\/user\/screenshot\.png/,
+      );
+    });
+
+    it("does not notify when a MEDIA: token appears outside a fence", () => {
+      const onFencedMediaTokenSkipped = vi.fn();
+      splitMediaFromOutput("MEDIA:https://example.com/image.png", { onFencedMediaTokenSkipped });
+      expect(onFencedMediaTokenSkipped).not.toHaveBeenCalled();
+    });
+
+    it("notifies once per fenced MEDIA line and still keeps the line as visible text", () => {
+      const onFencedMediaTokenSkipped = vi.fn();
+      const result = splitMediaFromOutput(
+        "Caption\n```\nMEDIA:https://example.com/a.png\nMEDIA:https://example.com/b.png\n```\nEnd",
+        { onFencedMediaTokenSkipped },
+      );
+      // Both fenced MEDIA lines notify
+      expect(onFencedMediaTokenSkipped).toHaveBeenCalledTimes(2);
+      // Neither is extracted as media — kept as visible text (contract unchanged)
+      expect(result.mediaUrls).toBeUndefined();
+      expect(result.text).toContain("MEDIA:https://example.com/a.png");
+    });
+
+    it("stays silent (no callback) when none is provided — keeps parse.ts browser-safe", () => {
+      const result = splitMediaFromOutput("```\nMEDIA:/home/user/x.png\n```");
+      // No throw, contract unchanged: fenced token kept as text, not extracted.
+      expect(result.mediaUrls).toBeUndefined();
+      expect(result.text).toContain("MEDIA:/home/user/x.png");
+    });
   });
 
   const extractMarkdownImages = { extractMarkdownImages: true } as const;
