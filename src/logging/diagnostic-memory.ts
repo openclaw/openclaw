@@ -1,4 +1,5 @@
 // Diagnostic memory helpers capture process memory facts for support diagnostics.
+import v8 from "node:v8";
 import {
   emitInternalDiagnosticEvent as emitDiagnosticEvent,
   type DiagnosticMemoryPressureEvent,
@@ -58,14 +59,36 @@ function normalizeMemoryUsage(memory: NodeJS.MemoryUsage): DiagnosticMemoryUsage
   };
 }
 
+function getDefaultHeapWarningBytes(): number {
+  try {
+    return Math.max(
+      Math.floor(v8.getHeapStatistics().heap_size_limit * 0.6),
+      DEFAULT_HEAP_WARNING_BYTES,
+    );
+  } catch {
+    return DEFAULT_HEAP_WARNING_BYTES;
+  }
+}
+
+function getDefaultHeapCriticalBytes(): number {
+  try {
+    return Math.max(
+      Math.floor(v8.getHeapStatistics().heap_size_limit * 0.75),
+      DEFAULT_HEAP_CRITICAL_BYTES,
+    );
+  } catch {
+    return DEFAULT_HEAP_CRITICAL_BYTES;
+  }
+}
+
 function resolveThresholds(
   thresholds?: DiagnosticMemoryThresholds,
 ): Required<DiagnosticMemoryThresholds> {
   return {
     rssWarningBytes: thresholds?.rssWarningBytes ?? DEFAULT_RSS_WARNING_BYTES,
     rssCriticalBytes: thresholds?.rssCriticalBytes ?? DEFAULT_RSS_CRITICAL_BYTES,
-    heapUsedWarningBytes: thresholds?.heapUsedWarningBytes ?? DEFAULT_HEAP_WARNING_BYTES,
-    heapUsedCriticalBytes: thresholds?.heapUsedCriticalBytes ?? DEFAULT_HEAP_CRITICAL_BYTES,
+    heapUsedWarningBytes: thresholds?.heapUsedWarningBytes ?? getDefaultHeapWarningBytes(),
+    heapUsedCriticalBytes: thresholds?.heapUsedCriticalBytes ?? getDefaultHeapCriticalBytes(),
     rssGrowthWarningBytes: thresholds?.rssGrowthWarningBytes ?? DEFAULT_RSS_GROWTH_WARNING_BYTES,
     rssGrowthCriticalBytes: thresholds?.rssGrowthCriticalBytes ?? DEFAULT_RSS_GROWTH_CRITICAL_BYTES,
     growthWindowMs: thresholds?.growthWindowMs ?? DEFAULT_GROWTH_WINDOW_MS,

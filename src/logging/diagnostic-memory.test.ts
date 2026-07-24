@@ -2,12 +2,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import v8 from "node:v8";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
+  type DiagnosticMemoryPressureEvent,
 } from "../infra/diagnostic-events.js";
 import { emitDiagnosticMemorySample, resetDiagnosticMemoryForTest } from "./diagnostic-memory.js";
 import {
@@ -225,6 +227,69 @@ describe("diagnostic memory", () => {
         0,
       ),
     ).toBe(1);
+  });
+
+  it("default heap thresholds never go below the original constants as a conservative lower bound (#104631)", () => {
+    const events: DiagnosticEventPayload[] = [];
+    const stop = onDiagnosticEvent((event) => events.push(event));
+    const expectedWarning = Math.max(
+      Math.floor(v8.getHeapStatistics().heap_size_limit * 0.6),
+      1024 * 1024 * 1024,
+    );
+
+    // Below the adaptive warning threshold — no heap_threshold
+    emitDiagnosticMemorySample({
+      now: 1000,
+      memoryUsage: memoryUsage({ rss: 500, heapUsed: expectedWarning - 1 }),
+    });
+    stop();
+
+    const pressureEvents = events.filter(
+      (e): e is DiagnosticMemoryPressureEvent => e.type === "diagnostic.memory.pressure",
+    );
+    expect(pressureEvents).toHaveLength(0);
+  });
+
+  it("emits heap_threshold at the adaptive default warning threshold (#104631)", () => {
+    const events: DiagnosticEventPayload[] = [];
+    const stop = onDiagnosticEvent((event) => events.push(event));
+    const heapLimit = v8.getHeapStatistics().heap_size_limit;
+    const expectedWarning = Math.max(Math.floor(heapLimit * 0.6), 1024 * 1024 * 1024);
+
+    // Just above the adaptive warning threshold
+    emitDiagnosticMemorySample({
+      now: 1000,
+      memoryUsage: memoryUsage({ rss: 500, heapUsed: expectedWarning + 1 }),
+    });
+    stop();
+
+    const pressureEvents = events.filter(
+      (e): e is DiagnosticMemoryPressureEvent => e.type === "diagnostic.memory.pressure",
+    );
+    expect(pressureEvents).toHaveLength(1);
+    expect(pressureEvents[0].level).toBe("warning");
+    expect(pressureEvents[0].reason).toBe("heap_threshold");
+  });
+
+  it("emits heap_threshold critical at the adaptive default critical threshold (#104631)", () => {
+    const events: DiagnosticEventPayload[] = [];
+    const stop = onDiagnosticEvent((event) => events.push(event));
+    const heapLimit = v8.getHeapStatistics().heap_size_limit;
+    const expectedCritical = Math.max(Math.floor(heapLimit * 0.75), 2048 * 1024 * 1024);
+
+    // Just above the adaptive critical threshold
+    emitDiagnosticMemorySample({
+      now: 1000,
+      memoryUsage: memoryUsage({ rss: 500, heapUsed: expectedCritical + 1 }),
+    });
+    stop();
+
+    const pressureEvents = events.filter(
+      (e): e is DiagnosticMemoryPressureEvent => e.type === "diagnostic.memory.pressure",
+    );
+    expect(pressureEvents).toHaveLength(1);
+    expect(pressureEvents[0].level).toBe("critical");
+    expect(pressureEvents[0].reason).toBe("heap_threshold");
   });
 
   it("resolves session store paths only for enabled critical bundle writes", () => {
