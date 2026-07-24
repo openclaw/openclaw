@@ -560,6 +560,12 @@ export function reconcileLogicalTurnToolEffect(
       "occurred effect reconciliation requires the normalized result and fingerprint",
     );
   }
+  if (
+    params.outcome === "occurred" &&
+    createHash("sha256").update(params.resultJson!).digest("hex") !== params.resultHash
+  ) {
+    throw new Error("occurred effect reconciliation result fingerprint does not match");
+  }
   return runOpenClawAgentWriteTransaction(
     (database) => {
       ensureLogicalTurnSchema(database);

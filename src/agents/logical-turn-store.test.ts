@@ -283,6 +283,19 @@ describe("logical turn store", () => {
         now: 413,
       }),
     ).toThrow("authenticated operator");
+    expect(() =>
+      reconcileLogicalTurnToolEffect(options, {
+        effectId: planned.effectId,
+        expectedGeneration: 0,
+        outcome: "occurred",
+        operatorAuthorized: true,
+        auditIdentity: "operator-1",
+        coordinatorId: "coordinator-1",
+        resultJson: '{"status":"ok"}',
+        resultHash: "0".repeat(64),
+        now: 413,
+      }),
+    ).toThrow("fingerprint does not match");
     expect(
       reconcileLogicalTurnToolEffect(options, {
         effectId: planned.effectId,
