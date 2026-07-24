@@ -37,9 +37,13 @@ describe("skill_workshop tool", () => {
     expect(schema).toContain("create = new skill");
     expect(schema).toContain("update = existing live skill");
     expect(schema).toContain("revise = existing pending proposal");
+    expect(schema).toContain("review = exact applied content");
     expect(schema).toContain("not filesystem search");
     expect(schema).toContain("when proposal_id is unknown");
     expect(schema).toContain("returns candidates");
+    expect(schema).toContain("One-based output page");
+    expect(schema).toContain("later review pages");
+    expect(schema).toContain("bind the decision to the reviewed proposal");
     expect(schema).toContain("max 160 bytes");
     expect(schema).toContain("shortens the proposal listing entry");
   });
@@ -142,7 +146,7 @@ describe("skill_workshop tool", () => {
 
     expect(
       (tool.parameters as { properties: { action: { enum: string[] } } }).properties.action.enum,
-    ).toEqual(["create", "revise", "list", "inspect"]);
+    ).toEqual(["create", "revise", "list", "inspect", "review"]);
     await expect(
       tool.execute("call-apply", { action: "apply", proposal_id: "proposal-1" }),
     ).rejects.toThrow("only inspect or draft proposals");
@@ -237,7 +241,7 @@ describe("skill_workshop tool", () => {
 
     expect(
       (tool.parameters as { properties: { action: { enum: string[] } } }).properties.action.enum,
-    ).toEqual(["create", "revise", "list", "inspect", "complete"]);
+    ).toEqual(["create", "revise", "list", "inspect", "review", "complete"]);
     const create = tool.execute("call-create-before-complete", {
       action: "create",
       name: "Checkpointed Learning",
@@ -587,6 +591,29 @@ describe("skill_workshop tool", () => {
       },
     ]);
 
+    const reviewed = await tool.execute("call-4b", {
+      action: "review",
+      name: "weather-planner",
+    });
+
+    expect((reviewed.content[0] as { text: string }).text).toContain("Review: full");
+    expect((reviewed.content[0] as { text: string }).text).toContain("Version: v2");
+    expect((reviewed.content[0] as { text: string }).text).toContain("Scan: clean");
+    expect((reviewed.content[0] as { text: string }).text).toContain("Page: 1/1");
+    expect((reviewed.content[0] as { text: string }).text).toContain("--- SKILL.md ---");
+    expect((reviewed.content[0] as { text: string }).text).toContain(
+      "--- references/weather.md ---",
+    );
+    expect(reviewed.details).toMatchObject({
+      id: (result.details as { id: string }).id,
+      reviewMode: "full",
+      proposedVersion: "v2",
+      page: 1,
+      pageCount: 1,
+    });
+    expect(reviewed.details).not.toHaveProperty("skillContent");
+    expect((reviewed.content[0] as { text: string }).text).not.toContain("status: proposal");
+
     const revisedByName = await reviewerTool.execute("call-5", {
       action: "revise",
       name: "weather-planner",
@@ -601,6 +628,162 @@ describe("skill_workshop tool", () => {
     expect((revisedByName.content[0] as { text: string }).text).toBe(
       `Revised skill proposal ${(result.details as { id: string }).id} (pending) for weather-planner.`,
     );
+  });
+
+  it("paginates long reviews without placing the full content in details", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-");
+    const tool = createSkillWorkshopTool({ workspaceDir, config: {}, agentId: "main" });
+    const created = await tool.execute("call-create-long", {
+      action: "create",
+      name: "Long Review",
+      description: "Paginate a long exact review",
+      proposal_content: `# Long Review\n\n${"Review line.\n".repeat(700)}END_OF_REVIEW\n`,
+    });
+    const proposalId = (created.details as { id: string }).id;
+
+    const first = await tool.execute("call-review-first", {
+      action: "review",
+      proposal_id: proposalId,
+    });
+    expect(first.details).toMatchObject({ reviewMode: "full", page: 1, pageCount: 2 });
+    expect(first.details).not.toHaveProperty("skillContent");
+    expect((first.content[0] as { text: string }).text).toContain("Page: 1/2");
+    expect((first.content[0] as { text: string }).text).not.toContain("END_OF_REVIEW");
+
+    const second = await tool.execute("call-review-second", {
+      action: "review",
+      proposal_id: proposalId,
+      page: 2,
+      proposal_version: "v1",
+    });
+    expect(second.details).toMatchObject({ reviewMode: "full", page: 2, pageCount: 2 });
+    expect((second.content[0] as { text: string }).text).toContain("Page: 2/2");
+    expect((second.content[0] as { text: string }).text).toContain("END_OF_REVIEW");
+    await expect(
+      tool.execute("call-review-name-only-second", {
+        action: "review",
+        name: "Long Review",
+        page: 2,
+        proposal_version: "v1",
+      }),
+    ).rejects.toThrow("proposal_id required for review pages after page 1");
+    await expect(
+      tool.execute("call-review-invalid", {
+        action: "review",
+        proposal_id: proposalId,
+        page: 3,
+        proposal_version: "v1",
+      }),
+    ).rejects.toThrow("review page must be between 1 and 2");
+
+    await tool.execute("call-revise-long", {
+      action: "revise",
+      proposal_id: proposalId,
+      proposal_content: "# Long Review\n\nA revised proposal.\n",
+    });
+    await expect(
+      tool.execute("call-review-stale-page", {
+        action: "review",
+        proposal_id: proposalId,
+        page: 2,
+        proposal_version: "v1",
+      }),
+    ).rejects.toThrow("changed after review");
+    await expect(
+      tool.execute("call-review-unbound-page", {
+        action: "review",
+        proposal_id: proposalId,
+        page: 2,
+      }),
+    ).rejects.toThrow("proposal_version required");
+  });
+
+  it("surfaces target drift instead of a stale review page error", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-");
+    const tool = createSkillWorkshopTool({ workspaceDir, config: {}, agentId: "main" });
+    const created = await tool.execute("call-create-drift", {
+      action: "create",
+      name: "Review Page Drift",
+      description: "Detect drift between review pages",
+      proposal_content: `# Review Page Drift\n\n${"Review line.\n".repeat(700)}`,
+    });
+    const proposalId = (created.details as { id: string }).id;
+    const first = await tool.execute("call-review-before-drift", {
+      action: "review",
+      proposal_id: proposalId,
+    });
+    expect(first.details).toMatchObject({ page: 1, pageCount: 2 });
+
+    const skillDir = path.join(workspaceDir, "skills", "review-page-drift");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(path.join(skillDir, "SKILL.md"), "# Created elsewhere\n", "utf8");
+    const drifted = await tool.execute("call-review-after-drift", {
+      action: "review",
+      proposal_id: proposalId,
+      page: 2,
+      proposal_version: "v1",
+    });
+
+    expect(drifted.details).toMatchObject({
+      reviewMode: "unavailable",
+      unavailableReason: "target-changed",
+      page: 1,
+      pageCount: 1,
+    });
+    expect((drifted.content[0] as { text: string }).text).toContain(
+      "Review unavailable: The live target changed",
+    );
+  });
+
+  it("bounds the complete review workflow", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-");
+    const tool = createSkillWorkshopTool({ workspaceDir, config: {}, agentId: "main" });
+    const created = await tool.execute("call-create-output-limit", {
+      action: "create",
+      name: "Review Output Limit",
+      description: "Bound the complete review workflow",
+      proposal_content: "# Review Output Limit\n",
+      support_files: [{ path: "references/large.md", content: "support\n".repeat(15_000) }],
+    });
+    const reviewed = await tool.execute("call-review-output-limit", {
+      action: "review",
+      proposal_id: (created.details as { id: string }).id,
+    });
+
+    expect(reviewed.details).toMatchObject({
+      reviewMode: "unavailable",
+      unavailableReason: "output-limit",
+      page: 1,
+      pageCount: 1,
+    });
+  });
+
+  it("returns diff-limit when one diff line cannot fit a tool page", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-");
+    const skillDir = path.join(workspaceDir, "skills", "long-diff-line");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      '---\nname: "long-diff-line"\ndescription: "Bound tool diff lines"\n---\n\n# Long Diff Line\n',
+      "utf8",
+    );
+    const tool = createSkillWorkshopTool({ workspaceDir, config: {}, agentId: "main" });
+    const proposal = await tool.execute("call-long-line-update", {
+      action: "update",
+      skill_name: "long-diff-line",
+      proposal_content: "# Long Diff Line\n",
+      support_files: [{ path: "references/line.md", content: `${"x".repeat(7001)}\n` }],
+    });
+
+    const review = await tool.execute("call-long-line-review", {
+      action: "review",
+      proposal_id: (proposal.details as { id: string }).id,
+    });
+    expect(review.details).toMatchObject({
+      reviewMode: "unavailable",
+      unavailableReason: "diff-limit",
+    });
+    expect((review.content[0] as { text: string }).text).toContain("Review: unavailable");
   });
 
   it("rejects whitespace-only proposal content while preserving raw valid markdown", async () => {
@@ -706,23 +889,45 @@ describe("skill_workshop tool", () => {
       skillKey: "weather-planner",
     });
 
-    const revisedUpdate = await tool.execute("call-revise-update", {
+    const updateReview = await tool.execute("call-update-review", {
+      action: "review",
+      proposal_id: (update.details as { id: string }).id,
+    });
+    expect((updateReview.content[0] as { text: string }).text).toContain("Review: diff");
+    expect(updateReview.details).toMatchObject({
+      reviewMode: "diff",
+      proposedVersion: "v1",
+    });
+    expect((updateReview.content[0] as { text: string }).text).toContain(
+      "+Check alerts and timing.",
+    );
+
+    await tool.execute("call-update-revise", {
       action: "revise",
       proposal_id: (update.details as { id: string }).id,
       proposal_content:
-        "# Weather Planner\n\n## Steps\n\nCheck weather before outdoor recommendations.\nCheck alerts, timing, and location.\n\n## Tips\n\nPack layers.\n",
+        "# Weather Planner\n\n## Steps\n\nCheck weather before outdoor recommendations.\nCheck alerts, timing, location, and radar.\n\n## Tips\n\nPack layers.\n",
     });
-    expect(revisedUpdate.details).toMatchObject({ kind: "update", proposedVersion: "v2" });
-    await tool.execute("call-apply-update", {
+    await expect(
+      tool.execute("call-update-stale-apply", {
+        action: "apply",
+        proposal_id: (update.details as { id: string }).id,
+        proposal_version: "v1",
+      }),
+    ).rejects.toThrow("changed after review");
+    await tool.execute("call-update-apply", {
       action: "apply",
-      proposal_id: (revisedUpdate.details as { id: string }).id,
+      proposal_id: (update.details as { id: string }).id,
+      proposal_version: "v2",
     });
+    await expect(
+      fs.readFile(path.join(workspaceDir, "skills", "weather-planner", "SKILL.md"), "utf8"),
+    ).resolves.toContain("timing, location, and radar");
     const revisedSkill = await fs.readFile(
       path.join(workspaceDir, "skills", "weather-planner", "SKILL.md"),
       "utf8",
     );
     expect(revisedSkill).toContain("Check weather before outdoor recommendations.");
-    expect(revisedSkill).toContain("Check alerts, timing, and location.");
     expect(revisedSkill).toContain("## Tips\n\nPack layers.");
 
     const rejected = await tool.execute("call-3", {
@@ -732,9 +937,22 @@ describe("skill_workshop tool", () => {
       proposal_content: "# Rejected Skill\n\nDo not apply this.\n",
     });
     const rejectedId = (rejected.details as { id: string }).id;
+    await tool.execute("call-revise-rejected", {
+      action: "revise",
+      proposal_id: rejectedId,
+      proposal_content: "# Rejected Skill\n\nStill do not apply this.\n",
+    });
+    await expect(
+      tool.execute("call-reject-stale-version", {
+        action: "reject",
+        proposal_id: rejectedId,
+        proposal_version: "v1",
+      }),
+    ).rejects.toThrow("changed after review");
     const rejectResult = await tool.execute("call-4", {
       action: "reject",
       proposal_id: rejectedId,
+      proposal_version: "v2",
       reason: "not needed",
     });
 
@@ -758,9 +976,22 @@ describe("skill_workshop tool", () => {
       proposal_content: "# Quarantined Skill\n\nDo not apply this.\n",
     });
     const quarantinedId = (quarantined.details as { id: string }).id;
+    await tool.execute("call-revise-quarantined", {
+      action: "revise",
+      proposal_id: quarantinedId,
+      proposal_content: "# Quarantined Skill\n\nStill do not apply this.\n",
+    });
+    await expect(
+      tool.execute("call-quarantine-stale-version", {
+        action: "quarantine",
+        proposal_id: quarantinedId,
+        proposal_version: "v1",
+      }),
+    ).rejects.toThrow("changed after review");
     const quarantineResult = await tool.execute("call-6", {
       action: "quarantine",
       proposal_id: quarantinedId,
+      proposal_version: "v2",
       reason: "unsafe for now",
     });
 
@@ -818,6 +1049,12 @@ describe("skill_workshop tool", () => {
     await expect(
       firstTool.execute("call-4", {
         action: "inspect",
+        proposal_id: (second.details as { id: string }).id,
+      }),
+    ).rejects.toThrow(`Skill proposal not found: ${(second.details as { id: string }).id}`);
+    await expect(
+      firstTool.execute("call-5", {
+        action: "review",
         proposal_id: (second.details as { id: string }).id,
       }),
     ).rejects.toThrow(`Skill proposal not found: ${(second.details as { id: string }).id}`);

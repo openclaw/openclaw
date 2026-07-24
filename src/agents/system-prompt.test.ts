@@ -819,10 +819,16 @@ describe("buildAgentSystemPrompt", () => {
     expect(section).toEqual([
       "## Skill Workshop",
       "Durable reusable skill/playbook/workflow work: `skill_workshop`; never write proposal/skill files directly.",
-      "Generated = pending proposal. Apply/reject/quarantine only explicit user ask.",
+      "Generated = pending proposal. Review: show current page; reuse proposal_version for later pages/lifecycle. Apply/reject/quarantine only explicit user ask.",
       "proposal_content = complete final skill body, never plan/diff; update/revise preserves unchanged content.",
       "",
     ]);
+    const sectionText = section.join("\n");
+    expect(sectionText).toContain("Durable reusable skill/playbook/workflow work");
+    expect(sectionText).toContain("`skill_workshop`");
+    expect(sectionText).toContain("Generated = pending proposal");
+    expect(sectionText).toContain("reuse proposal_version for later pages/lifecycle");
+    expect(sectionText).toContain("only explicit user ask");
 
     const withoutTool = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -835,7 +841,7 @@ describe("buildAgentSystemPrompt", () => {
       workspaceDir: "/tmp/openclaw",
       toolNames: ["read", "skill_workshop"],
     });
-    expect(withTool).toContain("- skill_workshop: Manage reusable-skill proposals");
+    expect(withTool).toContain("- skill_workshop: Manage/review reusable-skill proposals");
     expect(withTool).toContain("## Skill Workshop");
     expect(withTool).toContain("Durable reusable skill/playbook/workflow work");
     expect(withTool).toContain("Generated = pending proposal");

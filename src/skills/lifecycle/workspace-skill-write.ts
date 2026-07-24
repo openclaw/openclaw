@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { pathExists, root } from "../../infra/fs-safe.js";
+import { FsSafeError, pathExists, root } from "../../infra/fs-safe.js";
+import { isSymlinkOpenError } from "../../infra/path-guards.js";
 import { isPathInside } from "../../infra/path-safety.js";
 import { findContainingAllowedSkillSymlinkTarget } from "../loading/symlink-targets.js";
 
@@ -27,6 +28,9 @@ export function normalizeWorkspaceSkillSupportPath(input: string): string {
   const trimmed = input.trim();
   if (!trimmed) {
     throw new Error("Support file path is required.");
+  }
+  if (/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(trimmed)) {
+    throw new Error("Support file paths cannot contain control or formatting characters.");
   }
   if (trimmed.includes("\\")) {
     throw new Error("Support file paths must use forward slashes.");
@@ -76,6 +80,7 @@ export async function readWorkspaceSkillFile(filePath: string): Promise<string |
   const read = await skillRoot.read(path.basename(filePath), {
     hardlinks: "reject",
     maxBytes: 1024 * 1024,
+    nonBlockingRead: true,
     symlinks: "reject",
   });
   return read.buffer.toString("utf8");
@@ -93,6 +98,7 @@ export async function readWorkspaceSupportFile(params: {
   const read = await skillRoot.read(relativePath, {
     hardlinks: "reject",
     maxBytes: MAX_WORKSPACE_SKILL_SUPPORT_FILE_BYTES,
+    nonBlockingRead: true,
     symlinks: "reject",
   });
   return read.buffer.toString("utf8");
@@ -289,7 +295,8 @@ async function resolveWorkspaceSkillWriteTarget(
       )
     : null;
   if (!allowedRoot) {
-    throw new Error(
+    throw new FsSafeError(
+      "symlink",
       `Skill file resolves through an untrusted symlink target: ${params.filePath}. Configure skills.load.allowSymlinkTargets and enable skills.workshop.allowSymlinkTargetWrites for intentional Skill Workshop symlink writes.`,
     );
   }
@@ -318,11 +325,84 @@ async function resolveRealPathThroughExistingAncestors(
   const segments = path.relative(workspaceDir, filePath).split(path.sep).filter(Boolean);
   let lexicalCursor = workspaceDir;
   let realCursor = (await tryRealpath(workspaceDir)) ?? workspaceDir;
-  for (const segment of segments) {
+  for (const [index, segment] of segments.entries()) {
     lexicalCursor = path.join(lexicalCursor, segment);
-    realCursor = (await tryRealpath(lexicalCursor)) ?? path.join(realCursor, segment);
+    let stats: Awaited<ReturnType<typeof fs.stat>>;
+    try {
+      stats = await fs.stat(lexicalCursor);
+    } catch (error) {
+      if (isSymlinkOpenError(error)) {
+        throw invalidSkillWriteTargetSymlink(lexicalCursor, error);
+      }
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOTDIR") {
+        throw invalidSkillWriteTargetAncestor(lexicalCursor, error);
+      }
+      if (code !== "ENOENT") {
+        throw error;
+      }
+      let unresolvedStats: Awaited<ReturnType<typeof fs.lstat>>;
+      try {
+        unresolvedStats = await fs.lstat(lexicalCursor);
+      } catch (lstatError) {
+        const lstatCode = (lstatError as NodeJS.ErrnoException).code;
+        if (lstatCode === "ENOTDIR") {
+          throw invalidSkillWriteTargetAncestor(lexicalCursor, lstatError);
+        }
+        if (lstatCode !== "ENOENT") {
+          throw lstatError;
+        }
+        return path.resolve(realCursor, ...segments.slice(index));
+      }
+      const unresolvedSymlink = unresolvedStats.isSymbolicLink();
+      throw new FsSafeError(
+        unresolvedSymlink ? "symlink" : "path-mismatch",
+        unresolvedSymlink
+          ? `Skill file path contains an unresolved symlink: ${lexicalCursor}.`
+          : `Skill file path changed during validation: ${lexicalCursor}.`,
+        { cause: error },
+      );
+    }
+    const isTarget = index === segments.length - 1;
+    if (!isTarget && !stats.isDirectory()) {
+      throw invalidSkillWriteTargetAncestor(lexicalCursor);
+    }
+    if (isTarget && !stats.isFile()) {
+      throw new FsSafeError(
+        "not-file",
+        `Skill file path is not writable as a regular file: ${lexicalCursor}.`,
+      );
+    }
+    try {
+      realCursor = await fs.realpath(lexicalCursor);
+    } catch (error) {
+      if (isSymlinkOpenError(error)) {
+        throw invalidSkillWriteTargetSymlink(lexicalCursor, error);
+      }
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "ENOTDIR") {
+        throw new FsSafeError(
+          "path-mismatch",
+          `Skill file path changed during validation: ${lexicalCursor}.`,
+          { cause: error },
+        );
+      }
+      throw error;
+    }
   }
   return path.resolve(realCursor);
+}
+
+function invalidSkillWriteTargetAncestor(filePath: string, cause?: unknown): FsSafeError {
+  return new FsSafeError("not-file", `Skill file path has a non-directory ancestor: ${filePath}.`, {
+    cause,
+  });
+}
+
+function invalidSkillWriteTargetSymlink(filePath: string, cause: unknown): FsSafeError {
+  return new FsSafeError("symlink", `Skill file path contains an invalid symlink: ${filePath}.`, {
+    cause,
+  });
 }
 
 async function tryRealpath(filePath: string): Promise<string | null> {

@@ -127,24 +127,37 @@ export async function readProposalForInspect(
   workspaceDir: string,
   env?: NodeJS.ProcessEnv,
 ): Promise<SkillProposalReadResult> {
+  const proposalId = await resolveProposalIdForRead(params, workspaceDir, env);
+  const proposal = await inspectSkillProposal(proposalId, { workspaceDir, env });
+  if (!proposal) {
+    throw new ToolInputError(`Skill proposal not found: ${proposalId}`);
+  }
+  return proposal;
+}
+
+export async function resolveProposalIdForRead(
+  params: Record<string, unknown>,
+  workspaceDir: string,
+  env?: NodeJS.ProcessEnv,
+): Promise<string> {
   const proposalId = readStringParam(params, "proposal_id", { label: "proposal_id" });
   if (proposalId) {
-    const proposal = await inspectSkillProposal(proposalId, { workspaceDir, env });
-    if (!proposal) {
-      throw new ToolInputError(`Skill proposal not found: ${proposalId}`);
-    }
-    return proposal;
+    return proposalId;
   }
   const resolved = await resolvePendingSkillProposal({
     name: readStringParam(params, "name", { required: true }),
     workspaceDir,
     env,
   });
-  const proposal = await inspectSkillProposal(resolved.record.id, { workspaceDir, env });
-  if (!proposal) {
-    throw new ToolInputError(`Skill proposal not found: ${resolved.record.id}`);
-  }
-  return proposal;
+  return resolved.record.id;
+}
+
+export function readProposalVersionParam(params: Record<string, unknown>): string | undefined {
+  return readStringParam(params, "proposal_version");
+}
+
+export function readReviewPageParam(params: Record<string, unknown>): number {
+  return readPositiveIntegerParam(params, "page") ?? 1;
 }
 
 export function readProposalStatusParam(

@@ -11,7 +11,7 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { resolveSkillWorkshopToolApproval } from "./policy.js";
-import { proposeCreateSkill } from "./service.js";
+import { proposeCreateSkill, reviseSkillProposal } from "./service.js";
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
@@ -64,7 +64,13 @@ describe("resolveSkillWorkshopToolApproval", () => {
       timeoutMs: 70_000,
       allowedDecisions: ["allow-once", "deny"],
     });
+    expect(result?.params).toEqual({
+      action: "apply",
+      proposal_id: proposal.record.id,
+      proposal_version: proposal.record.proposedVersion,
+    });
     expect(result?.requireApproval?.description).toContain(`Proposal ID: ${proposal.record.id}`);
+    expect(result?.requireApproval?.description).toContain("Proposal version: v1");
     expect(result?.requireApproval?.description).toContain("Target skill: Weather Helper");
     expect(result?.requireApproval?.description).toContain(`Description: ${description}`);
     expect(result?.requireApproval?.description).toContain("Support files: 2");
@@ -74,6 +80,19 @@ describe("resolveSkillWorkshopToolApproval", () => {
     expect(result?.requireApproval?.timeoutReason).toContain(
       `left Proposal ${proposal.record.id} unchanged and pending`,
     );
+    for (const action of ["reject", "quarantine"] as const) {
+      const lifecycleResult = await resolveSkillWorkshopToolApproval({
+        toolName: "skill_workshop",
+        toolParams: { action, proposal_id: proposal.record.id },
+        workspaceDir,
+        config: pendingApprovalConfig,
+      });
+      expect(lifecycleResult?.params).toEqual({
+        action,
+        proposal_id: proposal.record.id,
+        proposal_version: proposal.record.proposedVersion,
+      });
+    }
     const resolvedByName = await resolveSkillWorkshopToolApproval({
       toolName: "skill_workshop",
       toolParams: { action: "reject", name: "weather-helper" },
@@ -83,6 +102,12 @@ describe("resolveSkillWorkshopToolApproval", () => {
     expect(resolvedByName?.requireApproval?.description).toContain(
       `Proposal ID: ${proposal.record.id}`,
     );
+    expect(resolvedByName?.params).toEqual({
+      action: "reject",
+      name: "weather-helper",
+      proposal_id: proposal.record.id,
+      proposal_version: proposal.record.proposedVersion,
+    });
   });
 
   it("bounds approval metadata without splitting UTF-16 surrogates", async () => {
@@ -92,6 +117,7 @@ describe("resolveSkillWorkshopToolApproval", () => {
     const proposalIdLength = 60 + 1 + 8 + 1 + 10;
     const fixedLines = [
       `Proposal ID: ${"p".repeat(proposalIdLength)}`,
+      "Proposal version: v1",
       `Description: ${description}`,
       "Support files: 0",
       `Body size: ${(Buffer.byteLength(content, "utf8") / 1024).toFixed(1)} KB`,
@@ -120,6 +146,7 @@ describe("resolveSkillWorkshopToolApproval", () => {
 
     expect(approvalDescription.length).toBeLessThanOrEqual(PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH);
     expect(approvalDescription).toContain(`Proposal ID: ${proposal.record.id}`);
+    expect(approvalDescription).toContain("Proposal version: v1");
     expect(approvalDescription).toContain(`Description: ${description}`);
     expect(approvalDescription).toContain("Support files: 0");
     expect(approvalDescription).toContain(
@@ -131,6 +158,40 @@ describe("resolveSkillWorkshopToolApproval", () => {
     expect(approvalDescription).not.toMatch(
       /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
     );
+  });
+
+  it("blocks a future version before approval can outlive a concurrent revision", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-policy-version-race-");
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Version Race",
+      description: "Bind approval to the proposal snapshot",
+      content: "# Version Race\n\nVersion one.\n",
+    });
+
+    const result = await resolveSkillWorkshopToolApproval({
+      toolName: "skill_workshop",
+      toolParams: {
+        action: "apply",
+        proposal_id: proposal.record.id,
+        proposal_version: "v2",
+      },
+      workspaceDir,
+      config: pendingApprovalConfig,
+    });
+
+    expect(result).toEqual({
+      block: true,
+      blockReason:
+        "Skill proposal version v2 does not match the current approval snapshot v1. Review it again before continuing.",
+    });
+    const revised = await reviseSkillProposal({
+      workspaceDir,
+      proposalId: proposal.record.id,
+      content: "# Version Race\n\nVersion two.\n",
+    });
+    expect(revised.record.proposedVersion).toBe("v2");
+    expect(result?.requireApproval).toBeUndefined();
   });
 
   it("renders proposal-controlled fields without approval-line injection", async () => {
@@ -151,15 +212,16 @@ describe("resolveSkillWorkshopToolApproval", () => {
     });
     const lines = result?.requireApproval?.description.split("\n") ?? [];
 
-    expect(lines).toHaveLength(5);
+    expect(lines).toHaveLength(6);
     expect(lines[1]).toContain("Target skill: Line↵Break�Spoof");
-    expect(lines[2]).toBe(
+    expect(lines[2]).toBe("Proposal version: v1");
+    expect(lines[3]).toBe(
       "Description: Real description↵Support files: 999�Body size: 999 KB↵Target skill: fake�",
     );
     for (const line of lines) {
       expect(line).not.toMatch(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u);
     }
-    expect(lines[3]).toBe("Support files: 0");
+    expect(lines[4]).toBe("Support files: 0");
   });
 
   it("falls back to the action description when the proposal cannot be resolved", async () => {

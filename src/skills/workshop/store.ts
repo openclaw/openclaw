@@ -5,7 +5,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveStateDir } from "../../config/paths.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { type FileLockOptions, withFileLock } from "../../infra/file-lock.js";
-import { root } from "../../infra/fs-safe.js";
+import { FsSafeError, root } from "../../infra/fs-safe.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { normalizeSkillIndexName } from "../discovery/skill-index.js";
@@ -61,6 +61,16 @@ type SkillWorkshopStoreOptions = {
 export type PreparedSkillProposalSupportFile = SkillProposalSupportFile & {
   content: string;
 };
+export class SkillProposalIntegrityError extends Error {
+  override name = "SkillProposalIntegrityError";
+
+  constructor(
+    message: string,
+    readonly record?: SkillProposalRecord,
+  ) {
+    super(message);
+  }
+}
 type SkillProposalWriteGuard = (manifest: SkillProposalManifest) => Promise<void> | void;
 
 /** Creates a stable proposal id from skill name, date, and random suffix. */
@@ -166,14 +176,22 @@ export async function readSkillProposal(
     return null;
   }
   const stateRoot = await root(resolveSkillWorkshopStateDir(options));
-  const draft = await stateRoot.read(
-    path.join(proposalRelativeDir(proposalId), PROPOSAL_DRAFT_FILE),
-    {
+  const draft = await stateRoot
+    .read(path.join(proposalRelativeDir(proposalId), PROPOSAL_DRAFT_FILE), {
       hardlinks: "reject",
       maxBytes: MAX_PROPOSAL_BYTES,
+      nonBlockingRead: true,
       symlinks: "reject",
-    },
-  );
+    })
+    .catch((error: unknown) => {
+      if (error instanceof FsSafeError && error.category === "policy") {
+        throw new SkillProposalIntegrityError(
+          "Proposal draft no longer matches its stored record.",
+          record,
+        );
+      }
+      throw error;
+    });
   return { record, content: draft.buffer.toString("utf8") };
 }
 
@@ -379,16 +397,28 @@ export async function readProposalSupportFiles(
   const out: PreparedSkillProposalSupportFile[] = [];
   for (const file of record.supportFiles ?? []) {
     const filePath = normalizeWorkspaceSkillSupportPath(file.path);
-    const read = await stateRoot.read(path.join(proposalRelativeDir(record.id), filePath), {
-      hardlinks: "reject",
-      maxBytes: MAX_WORKSPACE_SKILL_SUPPORT_FILE_BYTES,
-      symlinks: "reject",
-    });
+    const read = await stateRoot
+      .read(path.join(proposalRelativeDir(record.id), filePath), {
+        hardlinks: "reject",
+        maxBytes: MAX_WORKSPACE_SKILL_SUPPORT_FILE_BYTES,
+        nonBlockingRead: true,
+        symlinks: "reject",
+      })
+      .catch((error: unknown) => {
+        if (error instanceof FsSafeError && error.category === "policy") {
+          throw new SkillProposalIntegrityError(
+            `Proposal support file no longer matches metadata: ${filePath}`,
+          );
+        }
+        throw error;
+      });
     const content = read.buffer.toString("utf8");
     const sizeBytes = contentSizeBytes(content);
     const hash = hashSkillProposalContent(content);
     if (file.sizeBytes !== sizeBytes || file.hash !== hash) {
-      throw new Error(`Proposal support file changed without updating metadata: ${filePath}`);
+      throw new SkillProposalIntegrityError(
+        `Proposal support file changed without updating metadata: ${filePath}`,
+      );
     }
     out.push({ path: filePath, sizeBytes, hash, content });
   }

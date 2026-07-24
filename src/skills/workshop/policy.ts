@@ -72,6 +72,7 @@ function formatApprovalField(value: string): string {
 
 function buildLifecycleApprovalDescription(params: {
   proposalId: string;
+  proposalVersion: string;
   skillName: string;
   description: string;
   supportFileCount: number;
@@ -81,6 +82,7 @@ function buildLifecycleApprovalDescription(params: {
   const requestedSkillName = formatApprovalField(params.skillName);
   const fixedLines = [
     `Proposal ID: ${params.proposalId}`,
+    `Proposal version: ${formatApprovalField(params.proposalVersion)}`,
     `Description: ${description}`,
     `Support files: ${params.supportFileCount}`,
     `Body size: ${params.bodySizeKb} KB`,
@@ -105,6 +107,7 @@ async function resolveLifecycleApprovalDescription(params: {
 }): Promise<{
   description: string;
   proposalId?: string;
+  proposalVersion?: string;
 }> {
   if (!params.workspaceDir) {
     return { description: params.fallback };
@@ -120,12 +123,14 @@ async function resolveLifecycleApprovalDescription(params: {
     return {
       description: buildLifecycleApprovalDescription({
         proposalId: record.id,
+        proposalVersion: record.proposedVersion,
         skillName: record.target.skillName,
         description: record.description,
         supportFileCount: record.supportFiles?.length ?? 0,
         bodySizeKb: formatBodySizeKb(proposal.content),
       }),
       proposalId: record.id,
+      proposalVersion: record.proposedVersion,
     };
   } catch {
     return { description: params.fallback };
@@ -140,6 +145,10 @@ function lifecycleApprovalTimeoutReason(proposalId?: string): string {
     "Decide in the Skill Workshop UI or run `openclaw skills workshop apply|reject|quarantine <id>`.",
     "Do not retry this tool call in a loop.",
   ].join(" ");
+}
+
+function lifecycleVersionMismatchReason(expected: string, current: string): string {
+  return `Skill proposal version ${formatApprovalField(expected)} does not match the current approval snapshot ${formatApprovalField(current)}. Review it again before continuing.`;
 }
 
 function resolveApprovalConfig(config?: OpenClawConfig): OpenClawConfig | undefined {
@@ -179,7 +188,35 @@ export async function resolveSkillWorkshopToolApproval(params: {
     workspaceDir: params.workspaceDir,
     fallback: text.description,
   });
+  const toolParams = asNullableRecord(params.toolParams);
+  const requestedVersion = readOptionalString(toolParams, "proposal_version");
+  if (
+    approvalDescription.proposalVersion &&
+    requestedVersion &&
+    requestedVersion !== approvalDescription.proposalVersion
+  ) {
+    return {
+      block: true,
+      blockReason: lifecycleVersionMismatchReason(
+        requestedVersion,
+        approvalDescription.proposalVersion,
+      ),
+    };
+  }
+  // The prompt describes this proposal snapshot, so execution must stay on the
+  // same version or a revision during the approval wait could change the action.
+  const bindProposalSnapshot =
+    approvalDescription.proposalId && approvalDescription.proposalVersion;
   return {
+    ...(bindProposalSnapshot
+      ? {
+          params: {
+            ...toolParams,
+            proposal_id: approvalDescription.proposalId,
+            proposal_version: approvalDescription.proposalVersion,
+          },
+        }
+      : {}),
     requireApproval: {
       ...text,
       description: approvalDescription.description,
