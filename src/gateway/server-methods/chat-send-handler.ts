@@ -345,6 +345,7 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
     const dispatchErrorLifecycle = createChatSendDispatchErrorLifecycle({
       admission: admitted.value,
       context,
+      isActiveRunTurnAdopted: activeRunOwnership.isActiveRunTurnAdopted,
       isQueuedFollowupEnqueued: activeRunOwnership.isQueuedFollowupEnqueued,
       persistUserTurnTranscript: persistGatewayUserTurnTranscript,
       session: preparedSession.value,
