@@ -116,7 +116,6 @@ export function createCombinedSessionMcpRuntime(params: {
     const refresh: SessionMcpSharedTask<McpToolCatalog> = {
       controller,
       promise,
-      activeWaiters: 0,
     };
     catalogInFlight = refresh;
     void refresh.promise
@@ -140,14 +139,6 @@ export function createCombinedSessionMcpRuntime(params: {
     return await waitForSessionMcpSharedTask({
       task: refresh,
       signal: options?.signal,
-      abandonIfCurrent: () => {
-        if (catalogInFlight !== refresh) {
-          return false;
-        }
-        catalogInFlight = undefined;
-        return true;
-      },
-      abandonedReason: new Error("combined MCP catalog load abandoned by all waiters"),
     });
   };
 

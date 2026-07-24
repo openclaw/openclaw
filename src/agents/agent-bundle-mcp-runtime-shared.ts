@@ -30,7 +30,6 @@ export type CreateSessionMcpRuntime = (params: {
 export type SessionMcpSharedTask<T> = {
   controller: AbortController;
   promise: Promise<T>;
-  activeWaiters: number;
 };
 
 function toMcpRequestError(reason: unknown, fallbackMessage: string): Error {
@@ -63,26 +62,12 @@ async function waitForSessionMcpRequest<T>(promise: Promise<T>, signal?: AbortSi
 export async function waitForSessionMcpSharedTask<T>(params: {
   task: SessionMcpSharedTask<T>;
   signal?: AbortSignal;
-  abandonIfCurrent: () => boolean;
-  abandonedReason: Error;
 }): Promise<T> {
   params.signal?.throwIfAborted();
-  params.task.activeWaiters += 1;
   const waitSignal = params.signal
     ? AbortSignal.any([params.signal, params.task.controller.signal])
     : params.task.controller.signal;
-  try {
-    return await waitForSessionMcpRequest(params.task.promise, waitSignal);
-  } finally {
-    params.task.activeWaiters -= 1;
-    if (
-      params.task.activeWaiters === 0 &&
-      !params.task.controller.signal.aborted &&
-      params.abandonIfCurrent()
-    ) {
-      params.task.controller.abort(params.abandonedReason);
-    }
-  }
+  return await waitForSessionMcpRequest(params.task.promise, waitSignal);
 }
 
 export function resolveSessionMcpRuntimeIdleTtlMs(): number {

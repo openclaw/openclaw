@@ -1603,7 +1603,7 @@ process.on("SIGINT", shutdown);`,
     }
   });
 
-  it("cancels a paginated catalog refresh when its last operation waiter aborts", async () => {
+  it("lets a paginated catalog refresh warm the cache after its operation waiter aborts", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-catalog-deadline-"));
     const serverPath = path.join(tempDir, "catalog-deadline.mjs");
     const logPath = path.join(tempDir, "server.log");
@@ -1649,19 +1649,18 @@ process.on("SIGINT", shutdown);`,
       await expect(runtime.getCatalog({ signal: AbortSignal.timeout(120) })).rejects.toThrow(
         /abort/i,
       );
-      await waitForFileText(
-        logPath,
-        "recv notifications/cancelled",
+      await waitForPredicate(
+        () => runtime.peekCatalog() !== null,
+        "runtime-owned catalog refresh to populate the cache",
         LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
       );
-      expect(runtime.peekCatalog()).toBeNull();
       expect((await runtime.getCatalog()).tools.map((tool) => tool.toolName)).toEqual([
         "initial_tool",
       ]);
-      const cancelledPageCount = (await fs.readFile(logPath, "utf8")).match(
-        /tools\/list generation 2 page/g,
-      )?.length;
-      expect(cancelledPageCount).toBeLessThan(CATALOG_REFRESH_TEST_PAGE_COUNT);
+      const logText = await fs.readFile(logPath, "utf8");
+      const completedPageCount = logText.match(/tools\/list generation 2 page/g)?.length;
+      expect(completedPageCount).toBe(CATALOG_REFRESH_TEST_PAGE_COUNT);
+      expect(logText).not.toContain("recv notifications/cancelled");
       expect(runtime.peekCatalog()?.tools.map((tool) => tool.toolName)).toEqual(["initial_tool"]);
     } finally {
       await runtime.dispose();
@@ -1670,7 +1669,7 @@ process.on("SIGINT", shutdown);`,
   });
 
   it(
-    "starts a fresh initialize when retrying immediately after the last waiter aborts",
+    "reuses runtime-owned initialize work after its operation waiter aborts",
     { timeout: LIST_TOOLS_TEST_DEADLINE_MS },
     async () => {
       const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-connect-deadline-"));
@@ -1712,26 +1711,16 @@ process.on("SIGINT", shutdown);`,
         await expect(catalogPromise).rejects.toThrow("catalog waiter aborted during initialize");
         expect(runtime.peekCatalog()).toBeNull();
 
-        // Retry before the abandoned connection has finished tearing down. The
-        // new generation must not adopt the already-aborted shared connect task.
-        const restartedCatalogPromise = runtime.getCatalog();
         await waitForPredicate(
-          () => {
-            try {
-              process.kill(firstPid, 0);
-              return false;
-            } catch {
-              return true;
-            }
-          },
-          "abandoned initialize process exit",
+          () => runtime.peekCatalog() !== null,
+          "runtime-owned initialize to populate the catalog",
           LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
         );
-
-        const restartedCatalog = await restartedCatalogPromise;
-        const secondPid = Number.parseInt((await fs.readFile(pidPath, "utf8")).trim(), 10);
-        expect(secondPid).not.toBe(firstPid);
-        expect(restartedCatalog.tools.map((tool) => tool.toolName)).toEqual(["slow_tool"]);
+        expect(process.kill(firstPid, 0)).toBe(true);
+        expect(Number.parseInt((await fs.readFile(pidPath, "utf8")).trim(), 10)).toBe(firstPid);
+        expect((await runtime.getCatalog()).tools.map((tool) => tool.toolName)).toEqual([
+          "slow_tool",
+        ]);
       } finally {
         await runtime.dispose();
         await fs.rm(tempDir, { recursive: true, force: true });
@@ -1740,7 +1729,7 @@ process.on("SIGINT", shutdown);`,
   );
 
   it(
-    "does not start queued server connections after the last catalog waiter aborts",
+    "finishes queued runtime-owned connections after the operation waiter aborts",
     { timeout: LIST_TOOLS_TEST_DEADLINE_MS },
     async () => {
       const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-queued-deadline-"));
@@ -1803,27 +1792,19 @@ process.on("SIGINT", shutdown);`,
         await expect(catalogPromise).rejects.toThrow(
           "catalog waiter aborted before queued connections",
         );
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 500);
-        });
-        for (const server of servers.slice(activeConnectionCount)) {
-          await expect(fs.access(server.pidPath)).rejects.toThrow();
-        }
-        for (const pid of activePids) {
-          await waitForPredicate(
-            () => {
-              try {
-                process.kill(pid, 0);
-                return false;
-              } catch {
-                return true;
-              }
-            },
-            `abandoned queued-generation process ${pid} exit`,
-            LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
-          );
-        }
-        expect(runtime.peekCatalog()).toBeNull();
+        await waitForPredicate(
+          () => runtime.peekCatalog()?.tools.length === servers.length,
+          "runtime-owned queued catalog work to populate the cache",
+          LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+        );
+        const finalPids = await Promise.all(
+          servers.map(async (server) => {
+            await waitForFileText(server.pidPath, "", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+            return Number.parseInt((await fs.readFile(server.pidPath, "utf8")).trim(), 10);
+          }),
+        );
+        expect(finalPids.slice(0, activeConnectionCount)).toEqual(activePids);
+        expect((await runtime.getCatalog()).tools).toHaveLength(servers.length);
       } finally {
         await runtime.dispose();
         await fs.rm(tempDir, { recursive: true, force: true });
@@ -3459,7 +3440,7 @@ describe("requester-scoped MCP connection resolution", () => {
     await manager.disposeAll();
   });
 
-  it("cancels a combined catalog load only after its last operation waiter aborts", async () => {
+  it("keeps a combined catalog load alive after all operation waiters abort", async () => {
     const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
     resolverTesting.setMcpServerConnectionResolversForTest([
       {
@@ -3497,14 +3478,11 @@ describe("requester-scoped MCP connection resolution", () => {
           const task: SessionMcpSharedTask<void> = {
             controller: new AbortController(),
             promise: catalogGate,
-            activeWaiters: 0,
           };
           try {
             await waitForSessionMcpSharedTask({
               task,
               signal: options?.signal,
-              abandonIfCurrent: () => false,
-              abandonedReason: new Error("combined MCP test catalog wait abandoned"),
             });
           } catch (error) {
             if (options?.signal?.aborted) {
@@ -3543,22 +3521,21 @@ describe("requester-scoped MCP connection resolution", () => {
 
     lastWaiter.abort(new Error("last combined catalog waiter aborted"));
     await expect(lastCatalog).rejects.toThrow("last combined catalog waiter aborted");
-    await waitForPredicate(
-      () => catalogAbortCount === 2,
-      "both combined catalog parts to observe cancellation",
-      LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
-    );
+    expect(catalogAbortCount).toBe(0);
     expect(catalogLoadCount).toBe(2);
     expect(runtime.peekCatalog()).toBeNull();
 
-    const restartedCatalog = runtime.getCatalog();
     releaseCatalog?.();
-
-    await expect(restartedCatalog).resolves.toMatchObject({
+    await waitForPredicate(
+      () => runtime.peekCatalog() !== null,
+      "runtime-owned combined catalog load to populate the cache",
+      LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+    );
+    await expect(runtime.getCatalog()).resolves.toMatchObject({
       servers: { shared: {}, "user-mail": {} },
     });
-    expect(catalogLoadCount).toBe(4);
-    expect(catalogAbortCount).toBe(2);
+    expect(catalogLoadCount).toBe(2);
+    expect(catalogAbortCount).toBe(0);
 
     await manager.disposeAll();
   });
@@ -5174,7 +5151,7 @@ process.on("SIGINT", shutdown);`,
               slow: {
                 command: process.execPath,
                 args: [slowServerPath],
-                connectionTimeoutMs: 150,
+                connectionTimeoutMs: 750,
               },
             },
           },
