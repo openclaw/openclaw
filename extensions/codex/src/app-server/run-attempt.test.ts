@@ -910,8 +910,9 @@ async function completeStartedRun(
   waitForMethod: ReturnType<typeof createStartedThreadHarness>["waitForMethod"],
   completeTurn: ReturnType<typeof createStartedThreadHarness>["completeTurn"],
   threadId = "thread-1",
+  waitTimeoutMs?: number,
 ): Promise<void> {
-  await waitForMethod("turn/start");
+  await waitForMethod("turn/start", waitTimeoutMs);
   await completeTurn({ threadId, turnId: "turn-1" });
   await run;
 }
@@ -3406,7 +3407,7 @@ describe("runCodexAppServerAttempt", () => {
       }),
     ]);
   });
-  it("points heartbeat Codex turns at HEARTBEAT.md without injecting its contents", async () => {
+  it("uses heartbeat instructions without injecting HEARTBEAT.md contents", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     const heartbeatPath = path.join(workspaceDir, "HEARTBEAT.md");
     await fs.mkdir(workspaceDir, { recursive: true });
@@ -3441,9 +3442,9 @@ describe("runCodexAppServerAttempt", () => {
     const collaborationInstructions =
       turnStartParams.collaborationMode?.settings?.developer_instructions ?? "";
     expect(inputText).not.toContain("Heartbeat checklist goes here.");
-    expect(collaborationInstructions).toContain("HEARTBEAT.md exists");
-    expect(collaborationInstructions).toContain("Read it before proceeding with this heartbeat");
-    expect(collaborationInstructions).toContain(heartbeatPath);
+    expect(collaborationInstructions).toContain("This is an OpenClaw heartbeat turn");
+    expect(collaborationInstructions).toContain("heartbeat_respond");
+    expect(collaborationInstructions).not.toContain(heartbeatPath);
     expect(collaborationInstructions).not.toContain("Heartbeat checklist goes here.");
   });
 
@@ -5029,7 +5030,21 @@ describe("runCodexAppServerAttempt", () => {
   });
   it("uses human approval instead of Guardian for auto exec on custom model providers", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
-    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
+    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness(async (method) => {
+      if (method === "thread/start") {
+        const response = threadStartResult();
+        return {
+          ...response,
+          thread: {
+            ...response.thread,
+            modelProvider: "lmstudio",
+          },
+          model: "local-model",
+          modelProvider: "lmstudio",
+        };
+      }
+      return undefined;
+    });
     const params = {
       ...createParams(sessionFile, workspaceDir),
       provider: "lmstudio",
@@ -5041,10 +5056,18 @@ describe("runCodexAppServerAttempt", () => {
             mode: "auto",
           },
         },
+        models: {
+          providers: {
+            lmstudio: {
+              baseUrl: "http://localhost:1234/v1",
+              models: [],
+            },
+          },
+        },
       },
     } as EmbeddedRunAttemptParams;
     const run = runCodexAppServerAttempt(params, { pluginConfig: {} });
-    await completeStartedRun(run, waitForMethod, completeTurn);
+    await completeStartedRun(run, waitForMethod, completeTurn, "thread-1", 240_000);
     const startRequest = requests.find((request) => request.method === "thread/start");
     const startRequestParams = startRequest?.params as Record<string, unknown> | undefined;
     expect(startRequestParams?.modelProvider).toBe("lmstudio");
@@ -5055,7 +5078,7 @@ describe("runCodexAppServerAttempt", () => {
     const turnRequestParams = turnRequest?.params as Record<string, unknown> | undefined;
     expect(turnRequestParams?.approvalPolicy).toBe("on-request");
     expect(turnRequestParams?.approvalsReviewer).toBe("user");
-  });
+  }, 240_000);
 
   it("enables Guardian on the first turn after a fresh thread confirms the OpenAI provider", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();

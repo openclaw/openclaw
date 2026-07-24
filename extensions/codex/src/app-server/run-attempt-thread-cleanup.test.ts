@@ -275,7 +275,10 @@ describe("Codex app-server main thread cleanup", () => {
       },
     });
 
-    await expect(run).resolves.toMatchObject({ aborted: false, timedOut: false });
+    await expect(run).resolves.toMatchObject({
+      replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+      terminal: { kind: "ok" },
+    });
     expect(requests.map((entry) => entry.method)).toEqual(["thread/start", "turn/start"]);
     expect(requests[0]?.params).toEqual(expect.objectContaining({ ephemeral: true }));
   });
