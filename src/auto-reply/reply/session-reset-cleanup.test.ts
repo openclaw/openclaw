@@ -1,5 +1,13 @@
 // Tests session reset cleanup for stale files and persisted state.
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  addSession,
+  listFinishedSessions,
+  markExited,
+} from "../../agents/bash-process-registry.js";
+import { createProcessSessionFixture } from "../../agents/bash-process-registry.test-helpers.js";
+import { resetProcessRegistryForTests } from "../../agents/bash-process-registry.test-support.js";
 import {
   clearEmbeddedSessionPromptStates,
   getEmbeddedSessionPromptState,
@@ -19,6 +27,7 @@ afterEach(() => {
   replyRunTesting.resetReplyRunRegistry();
   resetDiagnosticRunActivityForTest();
   resetSystemEventsForTest();
+  resetProcessRegistryForTests();
 });
 
 describe("clearSessionResetRuntimeState", () => {
@@ -40,9 +49,34 @@ describe("clearSessionResetRuntimeState", () => {
 
     expect(result.keys).toEqual(["alpha", "beta"]);
     expect(result.systemEventsCleared).toBe(2);
+    expect(result.finishedProcessSessionsCleared).toBe(0);
     expect(peekSystemEvents("alpha")).toStrictEqual([]);
     expect(peekSystemEvents("beta")).toStrictEqual([]);
     expect(peekSystemEvents("gamma")).toEqual(["fresh gamma"]);
+  });
+
+  it("purges finished bash process records scoped to the reset session keys", () => {
+    const scoped = createProcessSessionFixture({
+      id: "scoped-finished",
+      scopeKey: "agent:main:main",
+      backgrounded: true,
+      child: { pid: 1, removeAllListeners: vi.fn() } as unknown as ChildProcessWithoutNullStreams,
+    });
+    const shared = createProcessSessionFixture({
+      id: "shared-finished",
+      scopeKey: "chat:bash",
+      backgrounded: true,
+      child: { pid: 2, removeAllListeners: vi.fn() } as unknown as ChildProcessWithoutNullStreams,
+    });
+    addSession(scoped);
+    markExited(scoped, 0, null, "completed");
+    addSession(shared);
+    markExited(shared, 0, null, "completed");
+
+    const result = clearSessionResetRuntimeState(["agent:main:main"]);
+
+    expect(result.finishedProcessSessionsCleared).toBe(1);
+    expect(listFinishedSessions().map((session) => session.id)).toEqual(["shared-finished"]);
   });
 
   it("releases active reply work owned by the archived reset session id", () => {

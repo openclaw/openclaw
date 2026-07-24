@@ -9,6 +9,7 @@ import type { ProcessSession } from "./bash-process-registry.js";
 import {
   addSession,
   appendOutput,
+  cleanupFinishedSessionsForScopes,
   createSessionSlug,
   deleteSession,
   drainSession,
@@ -17,6 +18,7 @@ import {
   listRunningSessions,
   markBackgrounded,
   markExited,
+  setFinishedSessionRetentionForTests,
   setJobTtlMs,
   tail,
 } from "./bash-process-registry.js";
@@ -34,6 +36,7 @@ vi.mock("../infra/secure-random.js", () => ({
 describe("bash process registry", () => {
   function createRegistrySession(params: {
     id?: string;
+    scopeKey?: string;
     maxOutputChars: number;
     pendingMaxOutputChars: number;
     backgrounded: boolean;
@@ -41,6 +44,7 @@ describe("bash process registry", () => {
     return createProcessSessionFixture({
       id: params.id ?? "sess",
       command: "echo test",
+      scopeKey: params.scopeKey,
       child: { pid: 123, removeAllListeners: vi.fn() } as unknown as ChildProcessWithoutNullStreams,
       maxOutputChars: params.maxOutputChars,
       pendingMaxOutputChars: params.pendingMaxOutputChars,
@@ -286,6 +290,105 @@ describe("bash process registry", () => {
       resetProcessRegistryForTests();
       vi.useRealTimers();
     }
+  });
+
+  it("evicts the oldest finished session when the count cap is exceeded", () => {
+    setFinishedSessionRetentionForTests({ maxSessions: 2, maxTotalChars: 1_000_000 });
+
+    const first = createRegistrySession({
+      id: "old",
+      maxOutputChars: 100,
+      pendingMaxOutputChars: 30_000,
+      backgrounded: true,
+    });
+    const second = createRegistrySession({
+      id: "mid",
+      maxOutputChars: 100,
+      pendingMaxOutputChars: 30_000,
+      backgrounded: true,
+    });
+    const third = createRegistrySession({
+      id: "new",
+      maxOutputChars: 100,
+      pendingMaxOutputChars: 30_000,
+      backgrounded: true,
+    });
+
+    addSession(first);
+    markExited(first, 0, null, "completed");
+    addSession(second);
+    markExited(second, 0, null, "completed");
+    addSession(third);
+    markExited(third, 0, null, "completed");
+
+    const finished = listFinishedSessions()
+      .map((session) => session.id)
+      .toSorted();
+    expect(finished).toEqual(["mid", "new"]);
+  });
+
+  it("evicts oldest finished sessions when retained aggregate bytes exceed the cap", () => {
+    setFinishedSessionRetentionForTests({ maxSessions: 50, maxTotalChars: 30 });
+
+    const first = createRegistrySession({
+      id: "bytes-old",
+      maxOutputChars: 100,
+      pendingMaxOutputChars: 30_000,
+      backgrounded: true,
+    });
+    const second = createRegistrySession({
+      id: "bytes-new",
+      maxOutputChars: 100,
+      pendingMaxOutputChars: 30_000,
+      backgrounded: true,
+    });
+
+    addSession(first);
+    appendOutput(first, "stdout", "a".repeat(20));
+    markExited(first, 0, null, "completed");
+
+    addSession(second);
+    appendOutput(second, "stdout", "b".repeat(20));
+    markExited(second, 0, null, "completed");
+
+    const finished = listFinishedSessions();
+    expect(finished).toHaveLength(1);
+    expect(finished[0]?.id).toBe("bytes-new");
+    expect(finished[0]?.aggregated).toBe("b".repeat(20));
+  });
+
+  it("purges finished sessions for matching lifecycle scopes only", () => {
+    const matching = createRegistrySession({
+      id: "match",
+      scopeKey: "agent:main:main",
+      maxOutputChars: 100,
+      pendingMaxOutputChars: 30_000,
+      backgrounded: true,
+    });
+    const shared = createRegistrySession({
+      id: "shared",
+      scopeKey: "chat:bash",
+      maxOutputChars: 100,
+      pendingMaxOutputChars: 30_000,
+      backgrounded: true,
+    });
+    const unscoped = createRegistrySession({
+      id: "unscoped",
+      maxOutputChars: 100,
+      pendingMaxOutputChars: 30_000,
+      backgrounded: true,
+    });
+
+    for (const session of [matching, shared, unscoped]) {
+      addSession(session);
+      markExited(session, 0, null, "completed");
+    }
+
+    expect(cleanupFinishedSessionsForScopes([" agent:main:main ", "other"])).toBe(1);
+    const remaining = listFinishedSessions()
+      .map((session) => session.id)
+      .toSorted();
+    expect(remaining).toEqual(["shared", "unscoped"]);
   });
 });
 

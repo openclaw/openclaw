@@ -15,6 +15,13 @@ const DEFAULT_JOB_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const MIN_JOB_TTL_MS = 60 * 1000; // 1 minute
 const MAX_JOB_TTL_MS = 3 * 60 * 60 * 1000; // 3 hours
 const DEFAULT_PENDING_OUTPUT_CHARS = 30_000;
+/** Hard cap on retained finished sessions so TTL-only retention cannot grow without bound. */
+const DEFAULT_MAX_FINISHED_SESSIONS = 50;
+/**
+ * Hard cap on total retained finished aggregate text. Per-session output is already
+ * capped; this multi-session bound prevents multiplicative heap growth under bursts.
+ */
+const DEFAULT_MAX_FINISHED_TOTAL_CHARS = 2_000_000;
 
 function clampTtl(value: number | undefined) {
   if (value === undefined || Number.isNaN(value)) {
@@ -23,7 +30,16 @@ function clampTtl(value: number | undefined) {
   return Math.min(Math.max(value, MIN_JOB_TTL_MS), MAX_JOB_TTL_MS);
 }
 
+function clampPositiveInt(value: number | undefined, fallback: number) {
+  if (value === undefined || Number.isNaN(value) || value < 1) {
+    return fallback;
+  }
+  return Math.floor(value);
+}
+
 let jobTtlMs = clampTtl(readEnvInt("OPENCLAW_BASH_JOB_TTL_MS", "PI_BASH_JOB_TTL_MS"));
+let maxFinishedSessions = DEFAULT_MAX_FINISHED_SESSIONS;
+let maxFinishedTotalChars = DEFAULT_MAX_FINISHED_TOTAL_CHARS;
 
 /** Lifecycle status recorded for background process sessions. */
 type ProcessStatus = "running" | "completed" | "failed" | "killed";
@@ -275,11 +291,14 @@ function moveToFinished(session: ProcessSession, status: ProcessStatus) {
     ...(session.noOutputTimedOut !== undefined
       ? { noOutputTimedOut: session.noOutputTimedOut }
       : {}),
+    // Keep the full bounded aggregate: completed process poll/log contract
+    // reads this field; tail-only retention would regress documented behavior.
     aggregated: session.aggregated,
     tail: session.tail,
     truncated: session.truncated,
     totalOutputChars: session.totalOutputChars,
   });
+  enforceFinishedSessionRetention();
 }
 
 /** Returns the last `max` characters of text without adding ellipses. */
@@ -349,11 +368,40 @@ export function listFinishedSessions() {
   return Array.from(finishedSessions.values());
 }
 
+/**
+ * Drops finished background sessions whose scope matches gateway lifecycle keys.
+ * Only exact scopeKey matches are removed so intentional shared scopes (for
+ * example chat bash) are not purged when an unrelated agent session resets.
+ */
+export function cleanupFinishedSessionsForScopes(scopeKeys: Iterable<string | undefined>): number {
+  const keys = new Set<string>();
+  for (const key of scopeKeys) {
+    const normalized = typeof key === "string" ? key.trim() : "";
+    if (normalized) {
+      keys.add(normalized);
+    }
+  }
+  if (keys.size === 0) {
+    return 0;
+  }
+  let removed = 0;
+  for (const [id, session] of finishedSessions.entries()) {
+    const scopeKey = session.scopeKey?.trim();
+    if (scopeKey && keys.has(scopeKey)) {
+      finishedSessions.delete(id);
+      removed += 1;
+    }
+  }
+  return removed;
+}
+
 /** Test-only reset for in-memory registry state and retention timers. */
 function resetProcessRegistryForTests() {
   runningSessions.clear();
   finishedSessions.clear();
   activeBackgroundExecSessionIds.clear();
+  maxFinishedSessions = DEFAULT_MAX_FINISHED_SESSIONS;
+  maxFinishedTotalChars = DEFAULT_MAX_FINISHED_TOTAL_CHARS;
   stopSweeper();
 }
 
@@ -372,6 +420,47 @@ export function setJobTtlMs(value?: number) {
   startSweeper();
 }
 
+/** Test-only finished-session count/byte retention overrides. */
+export function setFinishedSessionRetentionForTests(params?: {
+  maxSessions?: number;
+  maxTotalChars?: number;
+}) {
+  maxFinishedSessions = clampPositiveInt(params?.maxSessions, DEFAULT_MAX_FINISHED_SESSIONS);
+  maxFinishedTotalChars = clampPositiveInt(params?.maxTotalChars, DEFAULT_MAX_FINISHED_TOTAL_CHARS);
+  enforceFinishedSessionRetention();
+}
+
+function totalFinishedAggregateChars() {
+  let total = 0;
+  for (const session of finishedSessions.values()) {
+    total += session.aggregated.length;
+  }
+  return total;
+}
+
+/** Evicts oldest finished sessions until count and retained aggregate bytes fit. */
+function enforceFinishedSessionRetention() {
+  while (finishedSessions.size > 0) {
+    const overCount = finishedSessions.size > maxFinishedSessions;
+    const overBytes = totalFinishedAggregateChars() > maxFinishedTotalChars;
+    if (!overCount && !overBytes) {
+      return;
+    }
+    let oldestId: string | undefined;
+    let oldestEndedAt = Number.POSITIVE_INFINITY;
+    for (const [id, session] of finishedSessions.entries()) {
+      if (session.endedAt < oldestEndedAt) {
+        oldestEndedAt = session.endedAt;
+        oldestId = id;
+      }
+    }
+    if (!oldestId) {
+      return;
+    }
+    finishedSessions.delete(oldestId);
+  }
+}
+
 function pruneFinishedSessions() {
   const cutoff = Date.now() - jobTtlMs;
   for (const [id, session] of finishedSessions.entries()) {
@@ -379,6 +468,7 @@ function pruneFinishedSessions() {
       finishedSessions.delete(id);
     }
   }
+  enforceFinishedSessionRetention();
 }
 
 function startSweeper() {
