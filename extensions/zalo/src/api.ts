@@ -11,6 +11,7 @@ import { ZALO_DEFAULT_REQUEST_TIMEOUT_MS, ZALO_SEND_PHOTO_REQUEST_TIMEOUT_MS } f
 const ZALO_API_BASE = "https://bot-api.zaloplatforms.com";
 const ZALO_API_URL_ENV = "ZALO_API_URL";
 const ZALO_MEDIA_SSRF_POLICY: SsrFPolicy = {};
+const ZALO_DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
 export type ZaloFetch = (input: string, init?: RequestInit) => Promise<Response>;
 

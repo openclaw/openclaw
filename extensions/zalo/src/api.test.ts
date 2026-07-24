@@ -25,6 +25,7 @@ import {
 import { ZALO_DEFAULT_REQUEST_TIMEOUT_MS, ZALO_SEND_PHOTO_REQUEST_TIMEOUT_MS } from "./timeouts.js";
 
 const ZALO_JSON_CAP_BYTES = 16 * 1024 * 1024;
+const ZALO_DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
 function oversizedZaloJsonResponse(onCancel: () => void): Response {
   const response = new Response(
