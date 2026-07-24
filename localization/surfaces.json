@@ -7,6 +7,13 @@
       "roots": ["src/wizard/i18n/catalogs"],
       "extensions": [".json"],
       "excludedRoots": ["src/wizard/i18n/catalogs/generated"]
+    },
+    {
+      "id": "tui-status-catalogs",
+      "owner": "tui",
+      "roots": ["src/tui/i18n/locales"],
+      "extensions": [".ts"],
+      "excludedRoots": []
     }
   ],
   "surfaces": [
@@ -16,6 +23,20 @@
       "source": "src/wizard/i18n/catalogs/en.json",
       "disposition": "adopted",
       "catalogArea": "wizard-core"
+    },
+    {
+      "id": "tui-status-en",
+      "owner": "tui",
+      "source": "src/tui/i18n/locales/en.ts",
+      "disposition": "deferred",
+      "rationale": "Reviewed English source is runtime-proven in F04; generated-catalog adoption remains a projected TUI owner slice."
+    },
+    {
+      "id": "tui-status-zh-CN",
+      "owner": "tui",
+      "source": "src/tui/i18n/locales/zh-CN.ts",
+      "disposition": "deferred",
+      "rationale": "The hand-owned bootstrap target remains reviewable until the projected TUI owner slice moves it to generated output."
     }
   ]
 }
