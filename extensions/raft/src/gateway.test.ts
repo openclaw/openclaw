@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
+import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
@@ -138,6 +139,54 @@ async function waitFor<T>(getValue: () => T | undefined): Promise<T> {
     });
   }
   throw new Error("Timed out waiting for value.");
+}
+
+async function sendPartialWakeRequest(params: {
+  endpoint: URL;
+  token: string;
+  contentLength: number;
+  bodyPrefix: string;
+}): Promise<string> {
+  const socket = connect(Number(params.endpoint.port), params.endpoint.hostname);
+  let response = "";
+  try {
+    await new Promise<void>((resolve, reject) => {
+      socket.once("connect", resolve);
+      socket.once("error", reject);
+    });
+    socket.setEncoding("utf8");
+    const closed = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error("Timed out waiting for the Raft wake socket to close."));
+      }, 500);
+      socket.on("data", (chunk: string) => {
+        response += chunk;
+      });
+      socket.once("error", (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+      socket.once("close", () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+    socket.write(
+      [
+        `POST ${params.endpoint.pathname} HTTP/1.1`,
+        `Host: ${params.endpoint.host}`,
+        `x-raft-bridge-token: ${params.token}`,
+        "Content-Type: application/json",
+        `Content-Length: ${params.contentLength}`,
+        "",
+        params.bodyPrefix,
+      ].join("\r\n"),
+    );
+    await closed;
+    return response;
+  } finally {
+    socket.destroy();
+  }
 }
 
 afterEach(() => {
@@ -372,6 +421,71 @@ describe("Raft wake gateway", () => {
 
     controller.abort();
     await start;
+  });
+
+  it("returns 413 and closes declared-oversized incomplete wake requests", async () => {
+    const { ctx, controller, run, wakeDedupe } = createContext();
+    Object.defineProperty(ctx, "abortSignal", { value: controller.signal });
+    const bridge = new FakeBridge();
+    let endpoint: string | undefined;
+    let token: string | undefined;
+    const start = startRaftGatewayAccount(ctx, {
+      spawnBridge: (params) => {
+        endpoint = params.endpoint;
+        token = params.token;
+        return bridge;
+      },
+      wakeDedupe,
+    });
+
+    try {
+      const response = await sendPartialWakeRequest({
+        endpoint: new URL(await waitFor(() => endpoint)),
+        token: await waitFor(() => token),
+        contentLength: 17 * 1024,
+        bodyPrefix: '{"eventId":"unfinished',
+      });
+      expect(response).toContain("HTTP/1.1 413 Payload Too Large");
+      expect(response.toLowerCase()).toContain("connection: close");
+      expect(response).toContain('"error":"Wake payload exceeds the 16 KiB limit."');
+      expect(run).not.toHaveBeenCalled();
+    } finally {
+      controller.abort();
+      await start;
+    }
+  });
+
+  it("closes authenticated wake requests whose bodies never finish", async () => {
+    const { ctx, controller, run, wakeDedupe } = createContext();
+    Object.defineProperty(ctx, "abortSignal", { value: controller.signal });
+    const bridge = new FakeBridge();
+    let endpoint: string | undefined;
+    let token: string | undefined;
+    const start = startRaftGatewayAccount(ctx, {
+      spawnBridge: (params) => {
+        endpoint = params.endpoint;
+        token = params.token;
+        return bridge;
+      },
+      wakeBodyTimeoutMs: 50,
+      wakeDedupe,
+    });
+
+    const wakeEndpoint = new URL(await waitFor(() => endpoint));
+    const bridgeToken = await waitFor(() => token);
+    try {
+      await sendPartialWakeRequest({
+        endpoint: wakeEndpoint,
+        token: bridgeToken,
+        contentLength: 128,
+        bodyPrefix: '{"eventId":"unfinished',
+      });
+      expect(run).not.toHaveBeenCalled();
+      expect(ctx.log?.warn).toHaveBeenCalledWith(expect.stringContaining("Request body timeout"));
+    } finally {
+      controller.abort();
+      await start;
+    }
   });
 
   it("keeps a failed delivery eligible for a bridge retry", async () => {
