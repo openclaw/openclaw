@@ -5,9 +5,9 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
-import { saveSessionStore } from "../../config/sessions/store.js";
 import * as jsonFiles from "../../infra/json-files.js";
 import * as replaceFileModule from "../../infra/replace-file.js";
+import { saveLegacySessionStore as saveSessionStore } from "../../infra/state-migrations.legacy-session-store.js";
 
 describe("pendingFinalDelivery requireWriteSuccess", () => {
   const tempDirTracker = useAutoCleanupTempDirTracker(afterEach);
@@ -76,7 +76,9 @@ describe("pendingFinalDelivery requireWriteSuccess", () => {
 
     // Mock replaceFileAtomic (one level below writeTextAtomic, at the
     // @openclaw/fs-safe boundary) to throw ENOENT.
-    const writeError = Object.assign(new Error("ENOENT from replaceFileAtomic"), { code: "ENOENT" });
+    const writeError = Object.assign(new Error("ENOENT from replaceFileAtomic"), {
+      code: "ENOENT",
+    });
     const spy = vi.spyOn(replaceFileModule, "replaceFileAtomic").mockRejectedValue(writeError);
 
     // Act + Assert: requireWriteSuccess:true → the store's ENOENT handler
@@ -101,7 +103,9 @@ describe("pendingFinalDelivery requireWriteSuccess", () => {
     );
 
     // Same ENOENT mock at the replaceFileAtomic level
-    const writeError = Object.assign(new Error("ENOENT from replaceFileAtomic"), { code: "ENOENT" });
+    const writeError = Object.assign(new Error("ENOENT from replaceFileAtomic"), {
+      code: "ENOENT",
+    });
     const spy = vi.spyOn(replaceFileModule, "replaceFileAtomic").mockRejectedValue(writeError);
 
     // Act + Assert: WITHOUT requireWriteSuccess (matches current main), the
