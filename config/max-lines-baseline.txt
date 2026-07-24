@@ -1034,7 +1034,6 @@ src/tasks/task-flow-registry.ts
 src/tasks/task-registry.maintenance.ts
 src/tasks/task-registry.store.test.ts
 src/tasks/task-registry.test.ts
-src/tasks/task-registry.ts
 src/trajectory/export.test.ts
 src/trajectory/export.ts
 src/tui/embedded-backend.test.ts
