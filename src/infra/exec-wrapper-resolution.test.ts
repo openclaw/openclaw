@@ -375,6 +375,18 @@ describe("resolveDispatchWrapperTrustPlan", () => {
       effectiveArgv: ["bash", "-lc", "echo hi"],
     },
     {
+      argv: ["flock", "/tmp/openclaw.lock", "--", "bash", "-lc", "echo hi"],
+      wrapper: "flock",
+      effectiveArgv: ["bash", "-lc", "echo hi"],
+    },
+    {
+      argv: ["flock", "-n", "/tmp/openclaw.lock", "--", "bash", "-lc", "echo hi"],
+      wrapper: "flock",
+      effectiveArgv: ["bash", "-lc", "echo hi"],
+    },
+    // script -- echo hello is tested in unwrapKnownDispatchWrapperInvocation
+    // (not here — script.transparentUsage is always false).,
+    {
       argv: ["timeout", "--signal=TERM", "5s", "bash", "-lc", "echo hi"],
       wrapper: "timeout",
       effectiveArgv: ["bash", "-lc", "echo hi"],
