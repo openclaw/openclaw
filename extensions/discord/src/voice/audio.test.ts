@@ -10,6 +10,7 @@ vi.mock("node:child_process", async (importOriginal) => ({
 }));
 vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
+  MAX_AUDIO_BYTES: 4096,
   resolveFfmpegBin: () => "ffmpeg",
 }));
 
@@ -87,6 +88,28 @@ describe("discord voice opus codec", () => {
     const packets = await packetsPromise;
 
     expect(packets).toHaveLength(1);
+  });
+
+  it("stops decoding when buffered PCM exceeds the shared audio limit", async () => {
+    const encoder = createDiscordOpusEncodeStream();
+    const packetsPromise = collectBuffers(encoder);
+    encoder.end(Buffer.alloc(960 * 2 * 2 * 2));
+    const packets = await packetsPromise;
+    const onError = vi.fn();
+
+    const decoded = await decodeOpusStream(Readable.from(packets), {
+      onError,
+      onVerbose: vi.fn(),
+      onWarn: vi.fn(),
+    });
+
+    expect(decoded).toHaveLength(960 * 2 * 2);
+    expect(decoded.length).toBeLessThanOrEqual(4096);
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("decoded audio exceeds 4096 bytes"),
+      }),
+    );
   });
 
   it("surfaces chunk decode stream failures to callers", async () => {

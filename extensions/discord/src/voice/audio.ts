@@ -10,7 +10,7 @@ import {
   type OpusDecoderHandle as LibopusDecoder,
   type OpusEncoderHandle as LibopusEncoder,
 } from "libopus-wasm";
-import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-runtime";
+import { MAX_AUDIO_BYTES, resolveFfmpegBin } from "openclaw/plugin-sdk/media-runtime";
 import { resamplePcm } from "openclaw/plugin-sdk/realtime-voice";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -273,6 +273,7 @@ export async function decodeOpusStream(
   }
   params.onVerbose(`opus decoder: ${selected.name}`);
   const chunks: Buffer[] = [];
+  let decodedBytes = 0;
   try {
     for await (const chunk of stream) {
       if (!chunk || !(chunk instanceof Buffer) || chunk.length === 0) {
@@ -280,6 +281,13 @@ export async function decodeOpusStream(
       }
       const decoded = await selected.decoder.decode(chunk);
       if (decoded && decoded.length > 0) {
+        // Speaking-end is transport-driven; cap decoded media so a missing end event
+        // cannot grow a voice capture without bound.
+        const nextDecodedBytes = decodedBytes + decoded.length;
+        if (nextDecodedBytes > MAX_AUDIO_BYTES) {
+          throw new Error("Discord voice decoded audio exceeds " + MAX_AUDIO_BYTES + " bytes");
+        }
+        decodedBytes = nextDecodedBytes;
         chunks.push(Buffer.from(decoded));
       }
     }

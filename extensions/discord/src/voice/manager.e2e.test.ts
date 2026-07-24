@@ -4627,6 +4627,76 @@ describe("DiscordVoiceManager", () => {
     expect(stream.destroy).toHaveBeenCalledTimes(1);
   });
 
+  it("cleans up capped captures and accepts the same speaker's next capture", async () => {
+    const connection = createConnectionMock();
+    joinVoiceChannelMock.mockReturnValueOnce(connection);
+    decodeOpusStreamMock
+      .mockImplementationOnce(
+        async (
+          _stream: Readable,
+          params: {
+            onError: (err: unknown) => void;
+          },
+        ) => {
+          params.onError(new Error("Discord voice decoded audio exceeds 16777216 bytes"));
+          return Buffer.alloc(0);
+        },
+      )
+      .mockResolvedValueOnce(Buffer.alloc(192_000));
+    const manager = createManager({
+      groupPolicy: "open",
+      allowFrom: ["discord:u-speaker"],
+      voice: { enabled: true, mode: "stt-tts" },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = getSessionEntry(manager) as {
+      capture: {
+        activeSpeakers: Set<string>;
+        activeCaptureStreams: Map<string, unknown>;
+      };
+      processingQueue: Promise<void>;
+    };
+    const cappedStream = {
+      on: vi.fn(),
+      off: vi.fn(),
+      destroy: vi.fn(),
+      destroyed: false,
+      async *[Symbol.asyncIterator]() {},
+    };
+    const recoveryStream = {
+      on: vi.fn(),
+      off: vi.fn(),
+      destroy: vi.fn(),
+      destroyed: false,
+      async *[Symbol.asyncIterator]() {},
+    };
+    connection.receiver.subscribe
+      .mockReturnValueOnce(cappedStream)
+      .mockReturnValueOnce(recoveryStream);
+    const handleSpeakingStart = (
+      manager as unknown as {
+        handleSpeakingStart: (entry: unknown, userId: string) => Promise<void>;
+      }
+    ).handleSpeakingStart.bind(manager);
+
+    await handleSpeakingStart(entry, "u-speaker");
+
+    expect(cappedStream.destroy).toHaveBeenCalledTimes(1);
+    expect(entry.capture.activeSpeakers.has("u-speaker")).toBe(false);
+    expect(entry.capture.activeCaptureStreams.has("u-speaker")).toBe(false);
+    expect(transcribeAudioFileMock).not.toHaveBeenCalled();
+
+    await handleSpeakingStart(entry, "u-speaker");
+    await entry.processingQueue;
+
+    expect(connection.receiver.subscribe).toHaveBeenCalledTimes(2);
+    expect(recoveryStream.destroy).toHaveBeenCalledTimes(1);
+    expect(entry.capture.activeSpeakers.has("u-speaker")).toBe(false);
+    expect(entry.capture.activeCaptureStreams.has("u-speaker")).toBe(false);
+    expect(transcribeAudioFileMock).toHaveBeenCalledTimes(1);
+  });
+
   it("processes partial non-realtime audio after abort-like stream endings", async () => {
     const connection = createConnectionMock();
     joinVoiceChannelMock.mockReturnValueOnce(connection);
