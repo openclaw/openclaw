@@ -124,11 +124,43 @@ download_file() {
     wget -q --https-only --secure-protocol=TLSv1_2 --tries=3 --timeout=20 -O "$output" "$url"
 }
 
+# Validate a downloaded file is a non-empty shell script before execution.
+# Used by run_remote_bash and the NodeSource setup-script paths.
+# A full checksum pin is impractical for third-party scripts that update
+# frequently (e.g., Homebrew installer), but structural validation catches
+# truncated downloads, HTML error pages, and empty responses.
+validate_downloaded_script() {
+    local file="$1" url="$2"
+    if [[ ! -s "$file" ]]; then
+        ui_error "Downloaded script is empty: ${url}"
+        return 1
+    fi
+    # Check the first two raw bytes are '#!' (0x23 0x21) BEFORE command
+    # substitution, which strips NUL/control bytes and could false-accept
+    # a file whose raw content does not actually start with a shebang.
+    local raw_magic
+    raw_magic="$(od -An -tx1 -N2 "$file" | tr -d ' ')"
+    if [[ "$raw_magic" != "2321" ]]; then
+        local first_line
+        first_line="$(head -c 256 "$file" | head -1)"
+        # Sanitize before logging: strip C0 controls (\000-\037), DEL (\177),
+        # and C1 controls (\200-\237) so untrusted content cannot inject
+        # terminal escapes through ui_error's echo -e path.
+        local safe_line
+        safe_line="$(printf '%s' "${first_line:0:80}" | LC_ALL=C tr -d '\000-\037\177\200-\237')"
+        safe_line="${safe_line//\\/\\\\}"
+        ui_error "Downloaded file does not look like a shell script (no shebang): ${url}"
+        ui_error "First line: ${safe_line}"
+        return 1
+    fi
+}
+
 run_remote_bash() {
     local url="$1"
     local tmp
     mktempfile tmp
-    download_file "$url" "$tmp"
+    download_file "$url" "$tmp" || return 1
+    validate_downloaded_script "$tmp" "$url" || return 1
     /bin/bash "$tmp"
 }
 
@@ -1993,6 +2025,7 @@ install_node() {
             local tmp
             mktempfile tmp
             run_required_step "Downloading NodeSource setup script" download_file "https://deb.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
+            validate_downloaded_script "$tmp" "https://deb.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" || return 1
             if is_root; then
                 run_required_step "Configuring NodeSource repository" bash "$tmp"
                 run_required_step "Installing Node.js" apt_get_install nodejs
@@ -2004,6 +2037,7 @@ install_node() {
             local tmp
             mktempfile tmp
             run_required_step "Downloading NodeSource setup script" download_file "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
+            validate_downloaded_script "$tmp" "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" || return 1
             if is_root; then
                 run_required_step "Configuring NodeSource repository" bash "$tmp"
                 run_required_step "Installing Node.js" dnf install -y -q nodejs
@@ -2015,6 +2049,7 @@ install_node() {
             local tmp
             mktempfile tmp
             run_required_step "Downloading NodeSource setup script" download_file "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
+            validate_downloaded_script "$tmp" "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" || return 1
             if is_root; then
                 run_required_step "Configuring NodeSource repository" bash "$tmp"
                 run_required_step "Installing Node.js" yum install -y -q nodejs
