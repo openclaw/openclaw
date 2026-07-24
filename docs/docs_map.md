@@ -2226,6 +2226,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /cli/workboard
 - Headings:
   - H2: Usage
+  - H2: JSON card shapes
   - H2: list
   - H2: create
   - H2: show
@@ -7791,6 +7792,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Enable it
   - H2: Configuration
   - H2: Card fields
+  - H3: Proof history and card views
   - H2: Starting work from a card
   - H2: Agent tools
   - H2: Dispatch
