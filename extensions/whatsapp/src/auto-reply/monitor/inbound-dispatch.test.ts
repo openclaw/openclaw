@@ -496,9 +496,13 @@ describe("whatsapp inbound dispatch", () => {
       },
     });
 
-    expectRecordFields(requireRecord(ctx, "type-only media inbound context"), {
-      MediaType: "audio/ogg",
-      MediaTypes: ["audio/ogg"],
+    expect(requireRecord(ctx, "type-only media inbound context")).toMatchObject({
+      media: [
+        expect.objectContaining({
+          contentType: "audio/ogg",
+          kind: "audio",
+        }),
+      ],
     });
   });
 
@@ -519,11 +523,17 @@ describe("whatsapp inbound dispatch", () => {
       sender: { e164: "+1000" },
     });
 
-    expectRecordFields(requireRecord(ctx, "multi media inbound context"), {
-      MediaPath: "/tmp/first.jpg",
-      MediaPaths: ["/tmp/first.jpg", "/tmp/second.png"],
-      MediaType: "image/jpeg",
-      MediaTypes: ["image/jpeg", "image/png"],
+    expect(requireRecord(ctx, "multi media inbound context")).toMatchObject({
+      media: [
+        expect.objectContaining({
+          path: "/tmp/first.jpg",
+          contentType: "image/jpeg",
+        }),
+        expect.objectContaining({
+          path: "/tmp/second.png",
+          contentType: "image/png",
+        }),
+      ],
     });
   });
 
