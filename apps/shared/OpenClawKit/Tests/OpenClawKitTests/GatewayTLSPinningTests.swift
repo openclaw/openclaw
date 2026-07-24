@@ -285,4 +285,39 @@ struct GatewayTLSPinningTests {
             required: true,
             systemTrustOk: false) == .reject(.untrustedCertificate))
     }
+
+    @Test func `clear all fingerprints removes every canonical pin without live Keychain access`() {
+        self.withFakeKeychain { _ in
+            GatewayTLSStore.saveFingerprint("11", stableID: "gateway-1")
+            GatewayTLSStore.saveFingerprint("22", stableID: "gateway-2")
+            var clearedLegacy = false
+
+            #expect(GatewayTLSStore.clearAllFingerprints(clearLegacy: { clearedLegacy = true }))
+            #expect(clearedLegacy)
+            #expect(GatewayTLSStore.loadFingerprint(stableID: "gateway-1") == nil)
+            #expect(GatewayTLSStore.loadFingerprint(stableID: "gateway-2") == nil)
+        }
+    }
+
+    @Test func `clear all fingerprints reports deletion failure and still clears legacy state`() {
+        var capturedQuery: [String: Any] = [:]
+        var clearedLegacy = false
+        let operations = GatewayTLSKeychainOperations(
+            copyMatching: { _, _ in errSecItemNotFound },
+            add: { _ in errSecSuccess },
+            update: { _, _ in errSecSuccess },
+            delete: { query in
+                capturedQuery = query as NSDictionary as? [String: Any] ?? [:]
+                return errSecAuthFailed
+            })
+
+        let result = GatewayTLSStore.$keychainOperations.withValue(operations) {
+            GatewayTLSStore.clearAllFingerprints(clearLegacy: { clearedLegacy = true })
+        }
+
+        #expect(!result)
+        #expect(clearedLegacy)
+        #expect(capturedQuery[kSecClass as String] as? String == kSecClassGenericPassword as String)
+        #expect(capturedQuery[kSecAttrService as String] as? String == "ai.openclaw.tls-pinning")
+    }
 }
