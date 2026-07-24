@@ -973,7 +973,7 @@ describe("gateway agent handler", () => {
     }
   });
 
-  it("keeps a provider-owned CLI session across the daily default boundary on the gateway path", async () => {
+  it("keeps a provider-owned CLI session with a catalog override across the daily boundary", async () => {
     const now = Date.parse("2026-04-25T12:00:00.000Z");
     vi.useFakeTimers();
     vi.setSystemTime(now);
@@ -985,6 +985,7 @@ describe("gateway agent handler", () => {
         sessionStartedAt: now - 25 * 60 * 60_000,
         lastInteractionAt: now - 25 * 60 * 60_000,
         modelProvider: "claude-cli",
+        providerOverride: "anthropic",
         cliSessionBindings: { "claude-cli": { sessionId: "claude-cli-conversation-123" } },
       });
       const loaded = mocks.loadSessionEntry();
