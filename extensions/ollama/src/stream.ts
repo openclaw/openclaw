@@ -1178,7 +1178,7 @@ function createRawOllamaStreamFn(
           headers.Authorization = `Bearer ${options.apiKey}`;
         }
 
-        const { response, release } = await fetchWithSsrFGuard({
+        const { response, release, refreshTimeout } = await fetchWithSsrFGuard({
           url: chatUrl,
           init: {
             method: "POST",
@@ -1336,6 +1336,12 @@ function createRawOllamaStreamFn(
           };
 
           for await (const chunk of parseNdjsonStream(reader)) {
+            // Reset the guarded-fetch idle timeout on each chunk so the request
+            // deadline behaves as a no-progress timeout, not a wall-clock cap.
+            // Without this, a slow remote Ollama host (CPU-only inference) is
+            // aborted mid-stream once timeoutMs elapses, which the server sees as
+            // a client disconnect and the session stalls at model_call:started.
+            refreshTimeout?.();
             throwIfOllamaStreamAborted(options?.signal);
             const thinkingDelta = chunk.message?.thinking ?? chunk.message?.reasoning;
             if (thinkingDelta && shouldEmitThinking) {

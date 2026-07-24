@@ -482,6 +482,47 @@ describe("createOllamaStreamFn thinking events", () => {
     expect(yieldedBeforeDone).toBe(true);
   });
 
+  it("refreshes the guarded-fetch idle timeout for each streamed chunk", async () => {
+    const chunks = [
+      {
+        model: "qwen3.5",
+        created_at: "2026-01-01T00:00:00Z",
+        message: { role: "assistant" as const, content: "Hello" },
+        done: false,
+      },
+      {
+        model: "qwen3.5",
+        created_at: "2026-01-01T00:00:01Z",
+        message: { role: "assistant" as const, content: " world" },
+        done: false,
+      },
+      makeOllamaResponse({ content: "" }),
+    ];
+    const body = makeNdjsonBody(chunks);
+    const refreshTimeout = vi.fn();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(body, { status: 200 }),
+      release: vi.fn(async () => undefined),
+      refreshTimeout,
+    });
+
+    const streamFn = createOllamaStreamFn("http://localhost:11434");
+    const stream = streamFn(
+      { api: "ollama", provider: "ollama", id: "qwen3.5", contextWindow: 65536 } as never,
+      { messages: [{ role: "user", content: "test" }] } as never,
+      {},
+    );
+
+    const events: Array<{ type: string }> = [];
+    for await (const event of stream as AsyncIterable<{ type: string }>) {
+      events.push(event);
+    }
+
+    // One refresh per consumed NDJSON chunk keeps the deadline a no-progress
+    // timeout instead of a wall-clock cap on slow remote Ollama hosts.
+    expect(refreshTimeout).toHaveBeenCalledTimes(chunks.length);
+  });
+
   it("reports caller aborts during dense native stream processing as aborted", async () => {
     const chunks = [
       ...Array.from({ length: 65 }, (_value, index) => ({
