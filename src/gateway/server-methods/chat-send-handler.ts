@@ -32,10 +32,7 @@ import { ensureChatQueuedTurns } from "./chat-abort-runtime.js";
 import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
 import { hasGatewayAdminScope } from "./chat-origin-routing.js";
 import { terminalizeRestartSafeChatAdmission } from "./chat-restart-recovery.js";
-import {
-  shouldFinalizeChatSendAsNonAgent,
-  shouldTerminalizeDeferredChatSend,
-} from "./chat-send-active-run-ownership.js";
+import { createChatSendActiveRunOwnership } from "./chat-send-active-run-ownership.js";
 import { admitChatSend } from "./chat-send-admission.js";
 import { prepareChatSendAttachments } from "./chat-send-attachments.js";
 import {
@@ -43,7 +40,7 @@ import {
   scheduleChatDashboardSessionTitle,
 } from "./chat-send-background.js";
 import { createChatSendDispatchErrorLifecycle } from "./chat-send-dispatch-errors.js";
-import { finalizeChatSendNonAgentReplies } from "./chat-send-nonagent-finalization.js";
+import { finalizeChatSendPostDispatch } from "./chat-send-post-dispatch.js";
 import {
   respondChatSessionRoutingChanged,
   runChatSendPreAdmission,
@@ -55,7 +52,6 @@ import {
 import { createChatSendReplyDispatch } from "./chat-send-reply-dispatch.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
 import { prepareChatSendSession } from "./chat-send-session.js";
-import { finalizeChatSendSourceReplies } from "./chat-send-source-finalization.js";
 import { applyChatSendManagedMedia, prepareChatSendUserTurn } from "./chat-send-user-turn.js";
 import {
   chatSendAckServerTimingAttributes,
@@ -345,14 +341,11 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
         session: preparedSession.value,
         userTurnRecorder,
       });
-    let queuedFollowupEnqueued = false;
-    // Steer adoption owns transcript writes through the active embedded run.
-    // Gateway fallback must not append again while that run's prompt lock is released.
-    let activeRunTurnAdopted = false;
+    const activeRunOwnership = createChatSendActiveRunOwnership();
     const dispatchErrorLifecycle = createChatSendDispatchErrorLifecycle({
       admission: admitted.value,
       context,
-      isQueuedFollowupEnqueued: () => queuedFollowupEnqueued,
+      isQueuedFollowupEnqueued: activeRunOwnership.isQueuedFollowupEnqueued,
       persistUserTurnTranscript: persistGatewayUserTurnTranscript,
       session: preparedSession.value,
       terminalizeRestartSafeAdmission,
@@ -451,20 +444,25 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
                   admission: "cancel-only",
                   ownerKey: queuedFollowupOwnerKey,
                   onAdopted: async () => {
-                    activeRunTurnAdopted = true;
+                    activeRunOwnership.markActiveRunTurnAdopted();
                   },
                   onDeferred: () => {
-                    queuedFollowupEnqueued = registerQueuedChatTurn({
-                      chatQueuedTurns: ensureChatQueuedTurns(context),
-                      runId: clientRunId,
-                      controller: activeRunAbort.controller,
-                      sessionId: backingSessionId ?? clientRunId,
-                      sessionKey,
-                      agentId: selectedAgent.agentId,
-                      ownerConnId: normalizeOptionalText(client?.connId),
-                      ownerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
-                    });
-                    return queuedFollowupEnqueued;
+                    if (
+                      !registerQueuedChatTurn({
+                        chatQueuedTurns: ensureChatQueuedTurns(context),
+                        runId: clientRunId,
+                        controller: activeRunAbort.controller,
+                        sessionId: backingSessionId ?? clientRunId,
+                        sessionKey,
+                        agentId: selectedAgent.agentId,
+                        ownerConnId: normalizeOptionalText(client?.connId),
+                        ownerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
+                      })
+                    ) {
+                      return false;
+                    }
+                    activeRunOwnership.markQueuedFollowupEnqueued();
+                    return true;
                   },
                   onCancellationRetired: () => {
                     retireQueuedChatTurnCancellation(
@@ -568,102 +566,22 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
         await measureDiagnosticsTimelineSpan(
           "gateway.chat_send.post_dispatch",
           async () => {
-            const returnedAgentErrorPayloads = agentRunStarted
-              ? deliveredReplies
-                  .map((entryInner) => entryInner.payload)
-                  .filter((payload) => payload.isError)
-              : [];
-            const returnedAgentErrorMessage =
-              returnedAgentErrorPayloads
-                .map((payload) => payload.text?.trim())
-                .filter((text): text is string => Boolean(text))
-                .join(" | ") || undefined;
-            if (
-              agentRunStarted &&
-              returnedAgentErrorPayloads.length > 0 &&
-              !userTurnRecorder.hasPersisted() &&
-              !userTurnRecorder.isBlocked()
-            ) {
-              await persistGatewayUserTurnTranscriptBestEffort();
-            }
-            if (
-              agentRunStarted &&
-              returnedAgentErrorPayloads.length === 0 &&
-              !userTurnRecorder.hasPersisted() &&
-              !userTurnRecorder.isBlocked() &&
-              userTurnRecorder.hasRuntimePersistencePending()
-            ) {
-              await persistGatewayUserTurnTranscriptBestEffort();
-            }
-            let broadcastedSourceReplyFinal = false;
-            // WebChat persistence has two owners. Agent runs persist model-visible turns
-            // through OpenClaw runtime's SessionManager; this dispatcher only owns live delivery payloads.
-            // Do not blindly mirror agent-run final payloads into JSONL or chat.history can
-            // duplicate normal embedded-agent assistant turns. The non-agent branch below has no
-            // runtime-owned assistant turn, so it appends a gateway-injected assistant entry before
-            // broadcasting the final UI event. Steered/queued turns already have a runtime owner.
-            if (
-              shouldFinalizeChatSendAsNonAgent({
-                agentRunStarted,
-                queuedFollowupEnqueued,
-                activeRunTurnAdopted,
-              })
-            ) {
-              await finalizeChatSendNonAgentReplies({
-                accountId,
-                context,
-                deliveredReplies,
-                emitFirstAssistantServerTiming,
-                foldCommandBlocks: isInternalTextSlashCommandTurn,
-                persistUserTurnTranscript: persistGatewayUserTurnTranscriptBestEffort,
-                session: preparedSession.value,
-                suppressReplies: hasAppendedWebchatAgentMedia(),
-              });
-            } else {
-              broadcastedSourceReplyFinal = await finalizeChatSendSourceReplies({
-                accountId,
-                context,
-                deliveredReplies,
-                emitFirstAssistantServerTiming,
-                hasReturnedAgentErrorPayloads: returnedAgentErrorPayloads.length > 0,
-                session: preparedSession.value,
-              });
-            }
-            const shouldBroadcastAgentError =
-              returnedAgentErrorPayloads.length > 0 && !broadcastedSourceReplyFinal;
-            if (shouldBroadcastAgentError) {
-              broadcastChatError({
-                context,
-                runId: clientRunId,
-                sessionKey,
-                agentId,
-                errorMessage: returnedAgentErrorMessage,
-              });
-            }
-            if (!context.chatRunState.hasAbortMarker(clientRunId)) {
-              const returnedAgentError = shouldBroadcastAgentError
-                ? errorShape(
-                    ErrorCodes.UNAVAILABLE,
-                    returnedAgentErrorMessage ?? "agent returned an error payload",
-                  )
-                : undefined;
-              setGatewayDedupeEntry({
-                dedupe: context.dedupe,
-                key: `chat:${clientRunId}`,
-                entry: {
-                  ts: Date.now(),
-                  ok: !shouldBroadcastAgentError,
-                  payload: shouldBroadcastAgentError
-                    ? {
-                        runId: clientRunId,
-                        status: "error" as const,
-                        summary: returnedAgentErrorMessage ?? "agent returned an error payload",
-                      }
-                    : { runId: clientRunId, status: "ok" as const },
-                  ...(returnedAgentError ? { error: returnedAgentError } : {}),
-                },
-              });
-            }
+            await finalizeChatSendPostDispatch({
+              accountId,
+              activeRunOwnership,
+              agentId,
+              agentRunStarted,
+              clientRunId,
+              context,
+              deliveredReplies,
+              emitFirstAssistantServerTiming,
+              foldCommandBlocks: isInternalTextSlashCommandTurn,
+              hasAppendedWebchatAgentMedia,
+              persistUserTurnTranscriptBestEffort: persistGatewayUserTurnTranscriptBestEffort,
+              session: preparedSession.value,
+              sessionKey,
+              userTurnRecorder,
+            });
           },
           {
             phase: "agent-turn",
@@ -679,14 +597,10 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
           dispatchStartedAtMs,
         );
         if (
-          shouldTerminalizeDeferredChatSend({
-            queuedFollowupEnqueued,
-            activeRunTurnAdopted,
-          }) &&
+          activeRunOwnership.shouldTerminalize() &&
           !context.chatRunState.hasAbortMarker(clientRunId)
         ) {
-          // Successful steer/queue admission ends this client run. The active
-          // runtime or a later aggregate/followup owns the remaining work.
+          // Successful steer/queue admission ends this client run.
           broadcastChatFinal({
             context,
             runId: clientRunId,

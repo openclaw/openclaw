@@ -21,3 +21,30 @@ export function shouldTerminalizeDeferredChatSend(params: {
 }): boolean {
   return params.queuedFollowupEnqueued || params.activeRunTurnAdopted;
 }
+
+/** Track steer vs followup ownership for chat.send post-dispatch. */
+export function createChatSendActiveRunOwnership() {
+  let queuedFollowupEnqueued = false;
+  let activeRunTurnAdopted = false;
+  return {
+    markQueuedFollowupEnqueued: () => {
+      queuedFollowupEnqueued = true;
+    },
+    markActiveRunTurnAdopted: () => {
+      activeRunTurnAdopted = true;
+    },
+    isQueuedFollowupEnqueued: () => queuedFollowupEnqueued,
+    isActiveRunTurnAdopted: () => activeRunTurnAdopted,
+    shouldFinalizeAsNonAgent: (agentRunStarted: boolean) =>
+      shouldFinalizeChatSendAsNonAgent({
+        agentRunStarted,
+        queuedFollowupEnqueued,
+        activeRunTurnAdopted,
+      }),
+    shouldTerminalize: () =>
+      shouldTerminalizeDeferredChatSend({
+        queuedFollowupEnqueued,
+        activeRunTurnAdopted,
+      }),
+  };
+}

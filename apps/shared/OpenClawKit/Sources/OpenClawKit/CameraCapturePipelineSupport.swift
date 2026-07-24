@@ -190,9 +190,11 @@ public enum CameraCapturePipelineSupport {
 
     /// Prefer landscape formats after `.photo` / `.high` renegotiation so external
     /// cameras (for example AnkerWork C310) do not stay locked to a portrait mode.
+    /// Best-effort: if the device cannot be reconfigured, keep capturing with the
+    /// active format instead of failing the whole snap.
     public static func applyPreferredCaptureFormat(
         device: AVCaptureDevice,
-        preferredMaxWidth: Int?) throws
+        preferredMaxWidth: Int?)
     {
         let sizes = device.formats.map { format in
             let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
@@ -208,9 +210,13 @@ public enum CameraCapturePipelineSupport {
         if device.activeFormat === preferred {
             return
         }
-        try device.lockForConfiguration()
-        defer { device.unlockForConfiguration() }
-        device.activeFormat = preferred
+        do {
+            try device.lockForConfiguration()
+            defer { device.unlockForConfiguration() }
+            device.activeFormat = preferred
+        } catch {
+            // Keep the session's current format when reconfiguration is unavailable.
+        }
     }
 
     /// Choose the best capture size for gateway snaps: landscape first, then closest

@@ -79,7 +79,7 @@ actor CameraController {
             session.startRunning()
             defer { sessionStopper.stop() }
             // `.photo` can renegotiate external cameras into portrait; reselect landscape after start.
-            try CameraCapturePipelineSupport.applyPreferredCaptureFormat(
+            CameraCapturePipelineSupport.applyPreferredCaptureFormat(
                 device: prepared.device,
                 preferredMaxWidth: maxWidth)
             try Task.checkCancellation()

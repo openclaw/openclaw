@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  createChatSendActiveRunOwnership,
   shouldFinalizeChatSendAsNonAgent,
   shouldTerminalizeDeferredChatSend,
 } from "./chat-send-active-run-ownership.js";
@@ -69,5 +70,14 @@ describe("shouldTerminalizeDeferredChatSend", () => {
         activeRunTurnAdopted: false,
       }),
     ).toBe(false);
+  });
+});
+
+describe("createChatSendActiveRunOwnership", () => {
+  it("tracks steered adoption for post-dispatch decisions", () => {
+    const ownership = createChatSendActiveRunOwnership();
+    ownership.markActiveRunTurnAdopted();
+    expect(ownership.shouldFinalizeAsNonAgent(false)).toBe(false);
+    expect(ownership.shouldTerminalize()).toBe(true);
   });
 });
