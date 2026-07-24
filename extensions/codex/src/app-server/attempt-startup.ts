@@ -226,6 +226,7 @@ export async function startCodexAttemptThread(params: {
             const attemptParams = params.buildAttemptParams();
             startupClient = await params.attemptClientFactory({
               startOptions: params.appServer.start,
+              pluginConfig: params.pluginConfig,
               ...(params.startupPreparedAuth
                 ? { preparedAuth: params.startupPreparedAuth }
                 : { authProfileId: params.startupAuthProfileId }),

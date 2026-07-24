@@ -12,6 +12,10 @@ import {
   type CodexAppServerClient,
 } from "./client.js";
 import {
+  ensureCodexComputerUseServiceApp,
+  resolveCodexComputerUseServiceHome,
+} from "./computer-use-service.js";
+import {
   resolveCodexAppServerRuntimeOptions,
   resolveCodexComputerUseConfig,
   type CodexComputerUseConfig,
@@ -292,6 +296,19 @@ async function inspectCodexComputerUse(
         pluginConfig: params.pluginConfig,
         managedCommandOrder: "desktop-first",
       });
+  if (params.installPlugin && !params.client && !params.request && runtime) {
+    const codexHome = resolveCodexComputerUseServiceHome({
+      startOptions: runtime.start,
+      agentDir: params.agentDir,
+      config: params.config,
+    });
+    if (codexHome) {
+      await ensureCodexComputerUseServiceApp({
+        codexHome,
+        appServerCommand: runtime.start.command,
+      });
+    }
+  }
   const fenceKey = resolveCodexNativeConfigFenceKey({
     client: params.client,
     startOptions: runtime?.start,
@@ -317,6 +334,7 @@ async function inspectCodexComputerUse(
       }
       client = await getLeasedSharedCodexAppServerClient({
         startOptions: runtime.start,
+        pluginConfig: params.pluginConfig,
         timeoutMs: params.timeoutMs ?? runtime.requestTimeoutMs,
         config: params.config,
         agentDir: params.agentDir,
@@ -480,9 +498,11 @@ async function readComputerUseTools(params: {
   repairComputerUseMcpChildren?: () => Promise<CodexComputerUseRepairStatus>;
 }): Promise<CodexComputerUseStatus> {
   let server = await readMcpServerStatus(params.request, params.config.mcpServerName);
-  if (!server && params.installPlugin) {
+  let tools = Object.keys(server?.tools ?? {}).toSorted();
+  if ((!server || tools.length === 0) && params.installPlugin) {
     await reloadMcpServers(params.request);
     server = await readMcpServerStatus(params.request, params.config.mcpServerName);
+    tools = Object.keys(server?.tools ?? {}).toSorted();
   }
   if (!server) {
     return statusFromPlugin({
@@ -493,11 +513,20 @@ async function readComputerUseTools(params: {
       message: `Computer Use is installed, but the ${params.config.mcpServerName} MCP server is not available.`,
     });
   }
+  if (tools.length === 0) {
+    return statusFromPlugin({
+      config: params.config,
+      plugin: params.plugin,
+      tools,
+      reason: "mcp_missing",
+      message: `Computer Use is installed, but the ${params.config.mcpServerName} MCP server exposes no tools.`,
+    });
+  }
 
   const status = statusFromPlugin({
     config: params.config,
     plugin: params.plugin,
-    tools: Object.keys(server.tools).toSorted(),
+    tools,
     reason: "ready",
     message: "Computer Use is ready.",
   });
@@ -506,13 +535,19 @@ async function readComputerUseTools(params: {
     config: params.config,
     repairComputerUseMcpChildren: params.repairComputerUseMcpChildren,
   });
-  const compatibilityStartupAllowed = !liveTest.ok && !params.config.strictReadiness;
-  return {
+  const probedStatus: CodexComputerUseStatus = {
     ...status,
     ready: liveTest.ok,
     reason: liveTest.ok ? "ready" : "live_test_failed",
     liveTest,
     ...(repair ? { repair } : {}),
+  };
+  const compatibilityStartupAllowed = isNonStrictLiveTestStartupAllowed(
+    probedStatus,
+    params.config,
+  );
+  return {
+    ...probedStatus,
     warnings: [
       ...status.warnings,
       ...(repair?.warnings ?? []),

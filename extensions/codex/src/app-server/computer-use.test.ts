@@ -12,6 +12,13 @@ const sharedClientMocks = vi.hoisted(() => ({
   getLeasedSharedCodexAppServerClient: vi.fn(),
   releaseLeasedSharedCodexAppServerClient: vi.fn(),
 }));
+const computerUseServiceMocks = vi.hoisted(() => ({
+  ensureCodexComputerUseServiceApp: vi.fn(async () => ({
+    status: "already_installed" as const,
+    changed: false,
+    message: "Computer Use service app is installed.",
+  })),
+}));
 
 vi.mock("./request.js", () => ({
   requestCodexAppServerJson: requestCodexAppServerJsonMock,
@@ -20,6 +27,11 @@ vi.mock("./request.js", () => ({
 vi.mock("./shared-client.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./shared-client.js")>()),
   ...sharedClientMocks,
+}));
+
+vi.mock("./computer-use-service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./computer-use-service.js")>()),
+  ensureCodexComputerUseServiceApp: computerUseServiceMocks.ensureCodexComputerUseServiceApp,
 }));
 
 import {
@@ -83,6 +95,7 @@ describe("Codex Computer Use setup", () => {
     requestCodexAppServerJsonMock.mockReset();
     sharedClientMocks.getLeasedSharedCodexAppServerClient.mockReset();
     sharedClientMocks.releaseLeasedSharedCodexAppServerClient.mockReset();
+    computerUseServiceMocks.ensureCodexComputerUseServiceApp.mockClear();
   });
 
   it("stays disabled until configured", async () => {
@@ -111,10 +124,15 @@ describe("Codex Computer Use setup", () => {
           commandSource: "managed",
           managedCommandOrder: "desktop-first",
         }),
+        pluginConfig: {},
         config,
         agentDir,
       }),
     );
+    expect(computerUseServiceMocks.ensureCodexComputerUseServiceApp).toHaveBeenCalledWith({
+      codexHome: path.join(agentDir, "codex-home"),
+      appServerCommand: "codex",
+    });
   });
 
   it("holds the Codex-home fence until an install request settles", async () => {
@@ -332,6 +350,55 @@ describe("Codex Computer Use setup", () => {
     expectRequestMethodNotCalled(request, "plugin/install");
   });
 
+  it("reports empty MCP tool exposure without running the live probe", async () => {
+    const request = createComputerUseRequest({ installed: true, mcpToolsAvailable: false });
+
+    const status = await readCodexComputerUseStatus({
+      pluginConfig: { computerUse: { enabled: true, marketplaceName: "desktop-tools" } },
+      request,
+    });
+
+    expectStatusFields(status, {
+      ready: false,
+      reason: "mcp_missing",
+      installed: true,
+      pluginEnabled: true,
+      mcpServerAvailable: false,
+      tools: [],
+      message: "Computer Use is installed, but the computer-use MCP server exposes no tools.",
+    });
+    expect(status.installation).toMatchObject({ status: "installed", ok: true });
+    expect(status.exposure).toMatchObject({ status: "missing", ok: false });
+    expect(status.liveTest).toMatchObject({ status: "skipped", attempted: false, attempts: 0 });
+    expect(status.warnings).not.toContain(
+      "Computer Use live test failed, but compatibility startup remains enabled; set computerUse.strictReadiness to true to fail closed.",
+    );
+    expect(status.message).not.toContain("Startup is allowed");
+    expectRequestMethodNotCalled(request, "thread/start");
+    expectRequestMethodNotCalled(request, "mcpServer/tool/call");
+  });
+
+  it("blocks non-strict startup when the named MCP server exposes no tools", async () => {
+    const request = createComputerUseRequest({ installed: true, mcpToolsAvailable: false });
+
+    await expectSetupErrorStatus(
+      ensureCodexComputerUse({
+        pluginConfig: { computerUse: { enabled: true, marketplaceName: "desktop-tools" } },
+        request,
+      }),
+      {
+        ready: false,
+        reason: "mcp_missing",
+        installed: true,
+        pluginEnabled: true,
+        mcpServerAvailable: false,
+        message: "Computer Use is installed, but the computer-use MCP server exposes no tools.",
+      },
+    );
+    expectRequestMethodNotCalled(request, "thread/start");
+    expectRequestMethodNotCalled(request, "mcpServer/tool/call");
+  });
+
   it("repairs stale Computer Use MCP children and retries the live test once", async () => {
     const request = createComputerUseRequest({ installed: true, liveTestFailures: 1 });
     const repairComputerUseMcpChildren = vi.fn(async () => ({
@@ -487,6 +554,34 @@ describe("Codex Computer Use setup", () => {
     expect(status.message).toContain(
       "Startup is allowed because computerUse.strictReadiness is false.",
     );
+  });
+
+  it("keeps startup compatible when thread creation fails after healthy exposure", async () => {
+    const request = createComputerUseRequest({ installed: true, threadStartFailures: 2 });
+
+    const status = await ensureCodexComputerUse({
+      pluginConfig: { computerUse: { enabled: true, marketplaceName: "desktop-tools" } },
+      request,
+    });
+
+    expectStatusFields(status, {
+      ready: false,
+      reason: "live_test_failed",
+      installed: true,
+      pluginEnabled: true,
+      mcpServerAvailable: true,
+    });
+    expect(status.liveTest).toMatchObject({
+      status: "failed",
+      attempted: true,
+      attempts: 2,
+      error: "thread/start timed out",
+    });
+    expect(status.message).toContain(
+      "Startup is allowed because computerUse.strictReadiness is false.",
+    );
+    expect(requestCalls(request).filter(([method]) => method === "thread/start")).toHaveLength(2);
+    expectRequestMethodNotCalled(request, "mcpServer/tool/call");
   });
 
   it("keeps auto-install startup compatible when installation succeeds but the live test fails", async () => {
@@ -653,6 +748,52 @@ describe("Codex Computer Use setup", () => {
         mcpServerAvailable: true,
       },
     );
+  });
+
+  it("reloads empty MCP exposure once during install before failing fast", async () => {
+    const request = createComputerUseRequest({ installed: true, mcpToolsAvailable: false });
+
+    await expectSetupErrorStatus(
+      installCodexComputerUse({
+        pluginConfig: { computerUse: { marketplaceName: "desktop-tools" } },
+        request,
+      }),
+      {
+        ready: false,
+        reason: "mcp_missing",
+        mcpServerAvailable: false,
+        message: "Computer Use is installed, but the computer-use MCP server exposes no tools.",
+      },
+    );
+    expect(
+      requestCalls(request).filter(([method]) => method === "config/mcpServer/reload"),
+    ).toHaveLength(1);
+    expectRequestMethodNotCalled(request, "thread/start");
+    expectRequestMethodNotCalled(request, "mcpServer/tool/call");
+  });
+
+  it("accepts MCP exposure that appears after the install reload", async () => {
+    const request = createComputerUseRequest({
+      installed: true,
+      mcpToolsAvailable: false,
+      mcpToolsAvailableAfterReload: true,
+    });
+
+    const status = await installCodexComputerUse({
+      pluginConfig: { computerUse: { marketplaceName: "desktop-tools" } },
+      request,
+    });
+
+    expectStatusFields(status, {
+      ready: true,
+      reason: "ready",
+      mcpServerAvailable: true,
+      tools: ["list_apps"],
+    });
+    expect(
+      requestCalls(request).filter(([method]) => method === "config/mcpServer/reload"),
+    ).toHaveLength(1);
+    expect(requestCalls(request).filter(([method]) => method === "thread/start")).toHaveLength(1);
   });
 
   it("re-enables an installed but disabled Computer Use plugin during install", async () => {
@@ -1008,12 +1149,17 @@ function createComputerUseRequest(params: {
   enabled?: boolean;
   marketplaceAvailableAfterListCalls?: number;
   liveTestFailures?: number;
+  threadStartFailures?: number;
+  mcpToolsAvailable?: boolean;
+  mcpToolsAvailableAfterReload?: boolean;
 }): CodexComputerUseRequest {
   let installed = params.installed;
   let enabled = params.enabled ?? installed;
   let pluginListCalls = 0;
   let liveTestFailures = params.liveTestFailures ?? 0;
+  let threadStartFailures = params.threadStartFailures ?? 0;
   let threadStartCalls = 0;
+  let mcpReloaded = false;
   return vi.fn(async (method: string, requestParams?: unknown) => {
     if (method === "experimentalFeature/enablement/set") {
       return { enablement: { plugins: true } };
@@ -1064,21 +1210,28 @@ function createComputerUseRequest(params: {
       return { authPolicy: "ON_INSTALL", appsNeedingAuth: [] };
     }
     if (method === "config/mcpServer/reload") {
+      mcpReloaded = true;
       return undefined;
     }
     if (method === "mcpServerStatus/list") {
+      const mcpToolsAvailable =
+        mcpReloaded && params.mcpToolsAvailableAfterReload !== undefined
+          ? params.mcpToolsAvailableAfterReload
+          : (params.mcpToolsAvailable ?? true);
       return {
         data:
           installed && enabled
             ? [
                 {
                   name: "computer-use",
-                  tools: {
-                    list_apps: {
-                      name: "list_apps",
-                      inputSchema: { type: "object" },
-                    },
-                  },
+                  tools: mcpToolsAvailable
+                    ? {
+                        list_apps: {
+                          name: "list_apps",
+                          inputSchema: { type: "object" },
+                        },
+                      }
+                    : {},
                   resources: [],
                   resourceTemplates: [],
                   authStatus: "unsupported",
@@ -1090,6 +1243,10 @@ function createComputerUseRequest(params: {
     }
     if (method === "thread/start") {
       threadStartCalls += 1;
+      if (threadStartFailures > 0) {
+        threadStartFailures -= 1;
+        throw new Error("thread/start timed out");
+      }
       return {
         thread: {
           id: `computer-use-probe-thread-${threadStartCalls}`,
