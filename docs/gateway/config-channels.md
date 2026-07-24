@@ -268,9 +268,9 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
           reactionNotifications: "own",
           users: ["987654321098765432"],
           channels: {
-            general: { allow: true },
+            general: { enabled: true },
             help: {
-              allow: true,
+              enabled: true,
               requireMention: true,
               users: ["987654321098765432"],
               skills: ["docs"],
@@ -398,7 +398,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       allowFrom: ["users/1234567890"],
       groupPolicy: "allowlist",
       groups: {
-        "spaces/AAAA": { allow: true, requireMention: true },
+        "spaces/AAAA": { enabled: true, requireMention: true },
       },
       actions: { reactions: true },
       typingIndicator: "message",
