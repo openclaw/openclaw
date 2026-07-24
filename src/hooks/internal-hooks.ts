@@ -10,9 +10,11 @@ import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import type { CliDeps } from "../cli/outbound-send-deps.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { formatErrorMessage } from "../infra/errors.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import {
+  internalHookHandlers as handlers,
+  internalHooksEnabledState,
+  triggerInternalHookWithScheduling,
+} from "./internal-hook-dispatch.js";
 import type {
   InternalHookEvent,
   InternalHookEventType,
@@ -177,28 +179,6 @@ export type SessionPatchHookEvent = InternalHookEvent & {
 };
 
 /**
- * Registry of hook handlers by event key.
- *
- * Uses a globalThis singleton so that registerInternalHook and
- * triggerInternalHook always share the same Map even when the bundler
- * emits multiple copies of this module into separate chunks (bundle
- * splitting). Without the singleton, handlers registered in one chunk
- * are invisible to triggerInternalHook in another chunk, causing hooks
- * to silently fire with zero handlers.
- */
-const INTERNAL_HOOK_HANDLERS_KEY = Symbol.for("openclaw.internalHookHandlers");
-const handlers = resolveGlobalSingleton<Map<string, InternalHookHandler[]>>(
-  INTERNAL_HOOK_HANDLERS_KEY,
-  () => new Map<string, InternalHookHandler[]>(),
-);
-const INTERNAL_HOOKS_ENABLED_KEY = Symbol.for("openclaw.internalHooksEnabled");
-const internalHooksEnabledState = resolveGlobalSingleton<{ enabled: boolean }>(
-  INTERNAL_HOOKS_ENABLED_KEY,
-  () => ({ enabled: true }),
-);
-const log = createSubsystemLogger("internal-hooks");
-
-/**
  * Register a hook handler for a specific event type or event:action combination
  *
  * @param eventKey - Event type (e.g., 'command') or specific action (e.g., 'command:new')
@@ -284,25 +264,7 @@ export function hasInternalHookListeners(type: InternalHookEventType, action: st
  * @param event - The event to trigger
  */
 export async function triggerInternalHook(event: InternalHookEvent): Promise<void> {
-  if (!internalHooksEnabledState.enabled) {
-    return;
-  }
-  if (!hasInternalHookListeners(event.type, event.action)) {
-    return;
-  }
-
-  const typeHandlers = handlers.get(event.type) ?? [];
-  const specificHandlers = handlers.get(`${event.type}:${event.action}`) ?? [];
-  const allHandlers = [...typeHandlers, ...specificHandlers];
-
-  for (const handler of allHandlers) {
-    try {
-      await handler(event);
-    } catch (err) {
-      const message = formatErrorMessage(err);
-      log.error(`Hook error [${event.type}:${event.action}]: ${message}`);
-    }
-  }
+  await triggerInternalHookWithScheduling(event);
 }
 
 /**

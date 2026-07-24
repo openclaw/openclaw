@@ -1,7 +1,7 @@
 // Bootstrap extra files hook tests cover extra file context injection.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { makeTempWorkspace, writeWorkspaceFile } from "../../../test-helpers/workspace.js";
 import {
@@ -9,6 +9,26 @@ import {
   createInternalHookEvent as createHookEvent,
 } from "../../internal-hooks.js";
 import handler from "./handler.js";
+
+const loggerMocks = vi.hoisted(() => ({
+  warn: vi.fn(),
+  debug: vi.fn(),
+}));
+
+vi.mock("../../../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => ({
+    subsystem: "bootstrap-extra-files",
+    isEnabled: () => false,
+    trace: vi.fn(),
+    debug: loggerMocks.debug,
+    info: vi.fn(),
+    warn: loggerMocks.warn,
+    error: vi.fn(),
+    fatal: vi.fn(),
+    raw: vi.fn(),
+    child: vi.fn(),
+  }),
+}));
 
 function createBootstrapExtraConfig(paths: string[]): OpenClawConfig {
   return {
@@ -96,5 +116,26 @@ describe("bootstrap-extra-files hook", () => {
     const event = createHookEvent("agent", "bootstrap", "agent:main:subagent:abc", context);
     await handler(event);
     expect(context.bootstrapFiles.map((f) => f.name).toSorted()).toEqual(["AGENTS.md", "TOOLS.md"]);
+  });
+
+  it("does not warn when resolving a configured glob", async () => {
+    loggerMocks.warn.mockClear();
+    const tempDir = await makeTempWorkspace("openclaw-bootstrap-extra-under-limit-");
+    const extraDir = path.join(tempDir, "packages", "core");
+    await fs.mkdir(extraDir, { recursive: true });
+    await fs.writeFile(path.join(extraDir, "AGENTS.md"), "extra agents", "utf-8");
+
+    const cfg = createBootstrapExtraConfig(["packages/*/AGENTS.md"]);
+    const context = await createBootstrapContext({
+      workspaceDir: tempDir,
+      cfg,
+      sessionKey: "agent:main:main",
+      rootFiles: [{ name: "AGENTS.md", content: "root agents" }],
+    });
+
+    const event = createHookEvent("agent", "bootstrap", "agent:main:main", context);
+    await handler(event);
+
+    expect(loggerMocks.warn).not.toHaveBeenCalled();
   });
 });

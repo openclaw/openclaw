@@ -24,6 +24,10 @@ import {
 } from "./workspace-bootstrap-read.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "./workspace-default.js";
 import {
+  hasGlobPattern,
+  resolveExtraBootstrapPatternPaths,
+} from "./workspace-extra-bootstrap-walker.js";
+import {
   assertNoUnmigratedWorkspaceState,
   LEGACY_WORKSPACE_STATE_CURRENT_FILENAME,
   LEGACY_WORKSPACE_STATE_DIRNAME,
@@ -77,7 +81,19 @@ function workspaceFileIdentity(stat: syncFs.Stats, canonicalPath: string): strin
   return `${canonicalPath}|${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
 }
 
-async function readWorkspaceFileWithGuards(params: {
+async function closeFdAsync(fd: number): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    syncFs.close(fd, (error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+export async function readWorkspaceFileWithGuards(params: {
   filePath: string;
   workspaceDir: string;
 }): Promise<WorkspaceGuardedReadResult> {
@@ -85,9 +101,11 @@ async function readWorkspaceFileWithGuards(params: {
     // A transient FS race (EAGAIN/EWOULDBLOCK/EINTR under load) on the open or
     // read must not drop the agent's bootstrap file for the turn — this reader
     // runs every turn for AGENTS/SOUL/HEARTBEAT/etc. Retry the whole open+read so
-    // each attempt uses a fresh fd (retrying readFileSync on the same fd could
+    // each attempt uses a fresh fd (retrying the read on the same fd could
     // return truncated content after a partial read); the inode-identity guard
     // in openRootFile still protects against a swapped file between attempts.
+    // Use the async fd read/close helpers so the bootstrap reader never blocks
+    // the event loop during embedded_run bootstrap-context.
     return await retryAsync(
       async () => {
         const opened = await openRootFile({
@@ -110,7 +128,7 @@ async function readWorkspaceFileWithGuards(params: {
         const identity = workspaceFileIdentity(opened.stat, opened.path);
         const cached = workspaceFileCache.get(params.filePath);
         if (cached && cached.identity === identity) {
-          syncFs.closeSync(opened.fd);
+          await closeFdAsync(opened.fd).catch(() => {});
           return { ok: true, content: cached.content };
         }
 
@@ -119,7 +137,9 @@ async function readWorkspaceFileWithGuards(params: {
           workspaceFileCache.set(params.filePath, { content, identity });
           return { ok: true, content };
         } finally {
-          syncFs.closeSync(opened.fd);
+          // Suppress close errors to avoid masking the original read error
+          // or causing unhandled rejections on NFS/FUSE filesystems.
+          await closeFdAsync(opened.fd).catch(() => {});
         }
       },
       {
@@ -965,30 +985,30 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
     },
   ];
 
-  const result: WorkspaceBootstrapFile[] = [];
-  for (const entry of entries) {
-    if (
-      entry.name === DEFAULT_MEMORY_FILENAME &&
-      !(await exactWorkspaceEntryExists(resolvedDir, DEFAULT_MEMORY_FILENAME))
-    ) {
-      continue;
-    }
-    const loaded = await readWorkspaceFileWithGuards({
-      filePath: entry.filePath,
-      workspaceDir: resolvedDir,
-    });
-    if (loaded.ok) {
-      result.push({
-        name: entry.name,
-        path: entry.filePath,
-        content: loaded.content,
-        missing: false,
+  const results = await Promise.all(
+    entries.map(async (entry): Promise<WorkspaceBootstrapFile | null> => {
+      if (
+        entry.name === DEFAULT_MEMORY_FILENAME &&
+        !(await exactWorkspaceEntryExists(resolvedDir, DEFAULT_MEMORY_FILENAME))
+      ) {
+        return null;
+      }
+      const loaded = await readWorkspaceFileWithGuards({
+        filePath: entry.filePath,
+        workspaceDir: resolvedDir,
       });
-    } else {
-      result.push({ name: entry.name, path: entry.filePath, missing: true });
-    }
-  }
-  return result;
+      if (loaded.ok) {
+        return {
+          name: entry.name,
+          path: entry.filePath,
+          content: loaded.content,
+          missing: false,
+        };
+      }
+      return { name: entry.name, path: entry.filePath, missing: true };
+    }),
+  );
+  return results.filter((file): file is WorkspaceBootstrapFile => file !== null);
 }
 
 const SUBAGENT_BOOTSTRAP_ALLOWLIST = new Set([DEFAULT_AGENTS_FILENAME, DEFAULT_TOOLS_FILENAME]);
@@ -1017,96 +1037,6 @@ export function filterBootstrapFilesForSession(
   return files;
 }
 
-function hasGlobPattern(pattern: string): boolean {
-  // Keep square brackets literal here; workspace paths commonly contain them.
-  return /[?*{}]/u.test(pattern);
-}
-
-function normalizeWorkspacePatternPath(value: string): string {
-  return value
-    .replaceAll(path.sep, "/")
-    .replaceAll("\\", "/")
-    .replace(/^\.\/+/u, "");
-}
-
-function resolveGlobWalkRoot(pattern: string): string {
-  const normalized = normalizeWorkspacePatternPath(pattern);
-  const globIndex = normalized.search(/[?*{}]/u);
-  if (globIndex === -1) {
-    return normalized;
-  }
-  const slashIndex = normalized.lastIndexOf("/", globIndex);
-  return slashIndex === -1 ? "." : normalized.slice(0, slashIndex) || ".";
-}
-
-async function* walkWorkspaceFiles(
-  workspaceDir: string,
-  initialRelativeDir: string,
-): AsyncGenerator<string> {
-  const stack = [initialRelativeDir === "." ? "" : initialRelativeDir];
-  while (stack.length > 0) {
-    const currentRelativeDir = stack.pop() ?? "";
-    const currentDir = path.resolve(workspaceDir, currentRelativeDir);
-    const relativeToWorkspace = path.relative(workspaceDir, currentDir);
-    if (relativeToWorkspace.startsWith("..") || path.isAbsolute(relativeToWorkspace)) {
-      continue;
-    }
-
-    let entries: syncFs.Dirent[];
-    try {
-      entries = await fs.readdir(currentDir, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-
-    for (const entry of entries) {
-      const childRelativePath = currentRelativeDir
-        ? path.join(currentRelativeDir, entry.name)
-        : entry.name;
-      if (entry.isDirectory()) {
-        stack.push(childRelativePath);
-        continue;
-      }
-      if (entry.isFile() || entry.isSymbolicLink()) {
-        yield normalizeWorkspacePatternPath(childRelativePath);
-      }
-    }
-  }
-}
-
-async function resolveExtraBootstrapPatternPaths(
-  workspaceDir: string,
-  pattern: string,
-): Promise<string[]> {
-  if (typeof fs.glob === "function") {
-    try {
-      const matches: string[] = [];
-      for await (const match of fs.glob(pattern, { cwd: workspaceDir })) {
-        matches.push(match);
-      }
-      return matches;
-    } catch {
-      // Fall through to the local matcher before treating the pattern as literal.
-    }
-  }
-
-  if (typeof path.matchesGlob !== "function") {
-    return [pattern];
-  }
-
-  const normalizedPattern = normalizeWorkspacePatternPath(pattern);
-  const matches: string[] = [];
-  for await (const candidate of walkWorkspaceFiles(
-    workspaceDir,
-    resolveGlobWalkRoot(normalizedPattern),
-  )) {
-    if (path.matchesGlob(candidate, normalizedPattern)) {
-      matches.push(candidate);
-    }
-  }
-  return matches.length > 0 ? matches : [pattern];
-}
-
 export async function loadExtraBootstrapFilesWithDiagnostics(
   dir: string,
   extraPatterns: string[],
@@ -1121,6 +1051,7 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
 
   // Resolve glob patterns into concrete file paths
   const resolvedPaths = new Set<string>();
+  const diagnostics: ExtraBootstrapLoadDiagnostic[] = [];
   for (const pattern of extraPatterns) {
     if (hasGlobPattern(pattern)) {
       const matches = await resolveExtraBootstrapPatternPaths(resolvedDir, pattern);
@@ -1133,7 +1064,6 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
   }
 
   const files: WorkspaceBootstrapFile[] = [];
-  const diagnostics: ExtraBootstrapLoadDiagnostic[] = [];
   for (const relPath of resolvedPaths) {
     const filePath = path.resolve(resolvedDir, relPath);
     // Only load files whose basename is a recognized bootstrap filename
