@@ -1089,8 +1089,14 @@ describe("config io write", () => {
       expect(snapshot.valid).toBe(false);
       expect(snapshot.raw).toBe(originalRaw);
       expect(snapshot.parsed).toEqual(original);
-      expect(snapshot.sourceConfig).toEqual(original);
-      expect(snapshot.config).toEqual(original);
+      expect(snapshot.sourceConfig).toEqual({
+        ...original,
+        agents: { entries: { main: { default: true } } },
+      });
+      expect(snapshot.config).toEqual({
+        ...original,
+        agents: { entries: { main: { default: true } } },
+      });
       expect(snapshot.issues[0]?.message).toContain("unknown channel id: test-plugin-channel");
     });
   });
@@ -1542,6 +1548,66 @@ describe("config io write", () => {
     });
   });
 
+  it("does not persist the injected roster for a non-roster first write", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const io = createConfigIO({
+        configPath,
+        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+      const snapshot = await io.readConfigFileSnapshot();
+      expect(snapshot.exists).toBe(false);
+      expect(snapshot.config.agents?.entries).toEqual({ main: { default: true } });
+      let preflightConfig: OpenClawConfig | undefined;
+
+      await io.writeConfigFile(
+        {
+          ...snapshot.config,
+          agents: {
+            ...snapshot.config.agents,
+            defaults: { model: "claude-cli/claude-opus-4-8" },
+          },
+        },
+        {
+          baseSnapshot: snapshot,
+          preCommitRuntimePreflight: async (config) => {
+            preflightConfig = config;
+          },
+        },
+      );
+
+      expect(preflightConfig?.agents?.entries).toEqual({ main: { default: true } });
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as OpenClawConfig;
+      expect(persisted.agents?.defaults?.model).toBe("claude-cli/claude-opus-4-8");
+      expect(persisted.agents?.entries).toBeUndefined();
+      expect(persisted.agents?.list).toBeUndefined();
+    });
+  });
+
+  it("persists an explicitly authored bootstrap roster on first write", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const io = createConfigIO({
+        configPath,
+        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+      const snapshot = await io.readConfigFileSnapshot();
+
+      await io.writeConfigFile(snapshot.config, {
+        baseSnapshot: snapshot,
+        explicitSetPaths: [["agents", "entries"]],
+      });
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as OpenClawConfig;
+      expect(persisted.agents?.entries).toEqual({ main: { default: true } });
+      expect(persisted.agents?.list).toBeUndefined();
+    });
+  });
+
   it("assigns distinct snapshot hashes to missing and empty root config", async () => {
     await withSuiteHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
@@ -1860,7 +1926,11 @@ describe("config io write", () => {
       expect(snapshot.valid).toBe(false);
 
       await io.writeConfigFile({
-        agents: { entries: { main: { workspace: "/resolved/agent-workspace" } } },
+        agents: {
+          entries: {
+            main: { default: true, workspace: "/resolved/agent-workspace" },
+          },
+        },
       });
 
       await expect(fs.readFile(configPath, "utf-8")).resolves.not.toBe(originalRootRaw);
@@ -2094,6 +2164,7 @@ describe("config io write", () => {
               defaults: {
                 model: { primary: "openrouter/anthropic/claude-sonnet-4.6" },
               },
+              entries: { main: { default: true } },
             });
           },
         );

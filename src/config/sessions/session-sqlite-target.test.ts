@@ -25,6 +25,39 @@ describe("resolveSqliteTargetFromSessionStorePath", () => {
     });
   });
 
+  it("keeps basename-matching non-owners on a distinct suffixed target", () => {
+    const storePath = path.join("tmp", "stores", "ops.json");
+
+    expect(resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path).toBe(
+      path.resolve("tmp", "stores", "ops.sqlite"),
+    );
+    expect(
+      resolveSqliteTargetFromSessionStorePath(storePath, {
+        agentId: "ops",
+        defaultAgentId: "main",
+      }).path,
+    ).toBe(path.resolve("tmp", "stores", "ops.ops.sqlite"));
+  });
+
+  it("lets the registered owner retain the unsuffixed target", () => {
+    const storePath = path.join("tmp", "stores", "ops.json");
+
+    expect(
+      resolveSqliteTargetFromSessionStorePath(storePath, {
+        agentId: "ops",
+        defaultAgentId: "main",
+        registeredOwnerAgentIds: ["ops"],
+      }).path,
+    ).toBe(path.resolve("tmp", "stores", "ops.sqlite"));
+    expect(
+      resolveSqliteTargetFromSessionStorePath(storePath, {
+        agentId: "main",
+        defaultAgentId: "main",
+        registeredOwnerAgentIds: ["ops"],
+      }).path,
+    ).toBe(path.resolve("tmp", "stores", "ops.main.sqlite"));
+  });
+
   it("keeps shared custom sessions.json targets distinct by agent", () => {
     const storePath = path.join("tmp", "stores", "sessions.json");
 

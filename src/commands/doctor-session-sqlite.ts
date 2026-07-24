@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { tryResolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveSessionFilePath } from "../config/sessions/paths.js";
@@ -25,7 +25,7 @@ import { resolveStoredSessionOwnerAgentId } from "../gateway/session-store-key.j
 import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { normalizeLegacySessionEntryDelivery as normalizeSessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { closeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
 import { compactDoctorSessionSqliteTarget } from "./doctor-session-sqlite-compact.js";
 import {
@@ -218,7 +218,9 @@ function resolveDoctorSessionSqliteConfig(options: DoctorSessionSqliteOptions): 
   if (options.cfg) {
     return options.cfg;
   }
-  return options.store ? {} : getRuntimeConfig();
+  return options.store
+    ? { agents: { entries: { [LEGACY_IMPLICIT_AGENT_ID]: { default: true } } } }
+    : getRuntimeConfig();
 }
 
 function resolveDoctorSessionSqliteTargets(params: {
@@ -513,7 +515,7 @@ function isLegacySessionRecordOwnedByTarget(
   });
   return ownerAgentId
     ? ownerAgentId === target.agentId
-    : target.agentId === resolveDefaultAgentId(cfg);
+    : target.agentId === tryResolveDefaultAgentId(cfg);
 }
 
 function shouldFilterLegacySessionRecordsByTarget(target: SessionStoreTarget): boolean {

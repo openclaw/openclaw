@@ -164,7 +164,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +3: harness-native MCP App preview helper and its runtime/catalog contracts.
       // +1: canonical unknown-value to Error coercion.
       // +6: canonical session delivery normalization, access, and projection helpers.
-      4711,
+      // +1: typed owner-required error for session store path resolution.
+      4712,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
