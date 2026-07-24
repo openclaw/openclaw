@@ -539,6 +539,7 @@ describe("resolveAllowAlwaysPatterns", () => {
     }
     const dir = makeTempDir();
     const tool = makeExecutable(dir, "openclaw-ok");
+    makeExecutable(dir, "yash");
     const env = { PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}` };
     const safeBins = resolveSafeBins(undefined);
 
@@ -549,6 +550,7 @@ describe("resolveAllowAlwaysPatterns", () => {
       `bash --login -c '$0 "$1"' ${tool} marker`,
       `bash -i -c '$0 "$1"' ${tool} marker`,
       `bash -lc '$0 "$1"' ${tool} marker`,
+      `yash -i --cmdline ${tool}`,
     ]) {
       const { persisted } = await resolvePersistedPatterns({
         command,
@@ -833,6 +835,263 @@ $0 \\"$1\\"" touch {marker}`,
       persistedPattern: null,
       allowlistPattern: echo,
     });
+  });
+
+  it.each(["csh", "tcsh", "mksh", "yash", "nu", "nu.exe", "xonsh", "elvish", "osh"])(
+    "prevents allowlist bypass for %s inline shell payloads",
+    async (shellName) => {
+      if (process.platform === "win32") {
+        return;
+      }
+      const dir = makeTempDir();
+      const shell = makeExecutable(dir, shellName);
+      makeExecutable(dir, "id");
+      const env = makePathEnv(dir);
+      const commandFlag =
+        shellName === "nu" || shellName === "nu.exe"
+          ? "--commands"
+          : shellName === "yash"
+            ? "--cmdline"
+            : "-c";
+      const result = await evaluateShellAllowlistWithAuthorization({
+        command: `${shell} ${commandFlag} 'id > marker'`,
+        allowlist: [{ pattern: shell, source: "allow-always" }],
+        safeBins: resolveSafeBins(undefined),
+        cwd: dir,
+        env,
+        platform: process.platform,
+      });
+
+      expect(result.allowlistSatisfied).toBe(false);
+      expect(
+        requiresExecApproval({
+          ask: "on-miss",
+          security: "allowlist",
+          analysisOk: result.analysisOk,
+          allowlistSatisfied: result.allowlistSatisfied,
+        }),
+      ).toBe(true);
+    },
+  );
+
+  it("prevents Windows fallback from allowlisting opaque shell inline payloads", () => {
+    const dir = makeTempDir();
+    const shell = makeExecutable(dir, "nu.exe");
+    const safeTool = makeExecutable(dir, "safe-tool.exe");
+    const env = makePathEnv(dir);
+    const platform = "win32";
+    const analysis = analyzeArgvCommand({
+      argv: [shell, "--commands", "safe-tool arg"],
+      cwd: dir,
+      env,
+      platform,
+    });
+    expect(analysis.ok).toBe(true);
+
+    const entries = resolveAllowAlwaysPatternEntries({
+      segments: analysis.segments,
+      cwd: dir,
+      env,
+      platform,
+    });
+    expect(entries).toStrictEqual([]);
+
+    const result = evaluateExecAllowlist({
+      analysis,
+      allowlist: [{ pattern: safeTool, source: "allow-always" }],
+      safeBins: resolveSafeBins(undefined),
+      cwd: dir,
+      env,
+      platform,
+    });
+
+    expect(result.allowlistSatisfied).toBe(false);
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: analysis.ok,
+        allowlistSatisfied: result.allowlistSatisfied,
+      }),
+    ).toBe(true);
+  });
+
+  it.each(["--commands", "--commands=", "--execute", "--execute=", "-e"])(
+    "prevents allowlist bypass for nu %s inline shell payloads",
+    async (commandFlag) => {
+      if (process.platform === "win32") {
+        return;
+      }
+      const dir = makeTempDir();
+      const shell = makeExecutable(dir, "nu");
+      makeExecutable(dir, "id");
+      const env = makePathEnv(dir);
+      const attachedValue = commandFlag.endsWith("=");
+      const result = await evaluateShellAllowlistWithAuthorization({
+        command: attachedValue
+          ? `${shell} ${commandFlag}'id > marker'`
+          : `${shell} ${commandFlag} 'id > marker'`,
+        allowlist: [{ pattern: shell, source: "allow-always" }],
+        safeBins: resolveSafeBins(undefined),
+        cwd: dir,
+        env,
+        platform: process.platform,
+      });
+
+      expect(result.allowlistSatisfied).toBe(false);
+      expect(
+        requiresExecApproval({
+          ask: "on-miss",
+          security: "allowlist",
+          analysisOk: result.analysisOk,
+          allowlistSatisfied: result.allowlistSatisfied,
+        }),
+      ).toBe(true);
+    },
+  );
+
+  it("prevents allowlist bypass for nu command payloads after value options", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const shell = makeExecutable(dir, "nu");
+    const config = path.join(dir, "allowed.nu");
+    fs.writeFileSync(config, "");
+    makeExecutable(dir, "id");
+    const env = makePathEnv(dir);
+    const result = await evaluateShellAllowlistWithAuthorization({
+      command: `${shell} --config ${config} --commands 'id > marker'`,
+      allowlist: [{ pattern: config, source: "allow-always" }],
+      safeBins: resolveSafeBins(undefined),
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+
+    expect(result.allowlistSatisfied).toBe(false);
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: result.analysisOk,
+        allowlistSatisfied: result.allowlistSatisfied,
+      }),
+    ).toBe(true);
+  });
+
+  it("prevents opaque shell option values from becoming script allowlist targets", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const shell = makeExecutable(dir, "xonsh");
+    const rcFile = path.join(dir, "allowed.xsh");
+    fs.writeFileSync(rcFile, "");
+    makeExecutable(dir, "id");
+    const env = makePathEnv(dir);
+    const result = await evaluateShellAllowlistWithAuthorization({
+      command: `${shell} --rc ${rcFile} -c 'id > marker'`,
+      allowlist: [{ pattern: rcFile, source: "allow-always" }],
+      safeBins: resolveSafeBins(undefined),
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+
+    expect(result.allowlistSatisfied).toBe(false);
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: result.analysisOk,
+        allowlistSatisfied: result.allowlistSatisfied,
+      }),
+    ).toBe(true);
+  });
+
+  it("fails closed for unmodeled opaque shell value options before inline payloads", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const shell = makeExecutable(dir, "nu");
+    const pluginList = path.join(dir, "allowed-plugins.nuon");
+    fs.writeFileSync(pluginList, "");
+    makeExecutable(dir, "id");
+    const env = makePathEnv(dir);
+    const result = await evaluateShellAllowlistWithAuthorization({
+      command: `${shell} --plugins ${pluginList} --commands 'id > marker'`,
+      allowlist: [{ pattern: pluginList, source: "allow-always" }],
+      safeBins: resolveSafeBins(undefined),
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+
+    expect(result.allowlistSatisfied).toBe(false);
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: result.analysisOk,
+        allowlistSatisfied: result.allowlistSatisfied,
+      }),
+    ).toBe(true);
+  });
+
+  it.each([
+    {
+      name: "mksh separate plus set option",
+      argv: ["mksh", "+o", "errexit", "./run.sh"],
+      decoyName: "errexit",
+    },
+    {
+      name: "yash separate plus set option",
+      argv: ["yash", "+o", "errexit", "./run.sh"],
+      decoyName: "errexit",
+    },
+    {
+      name: "bash combined minus set option",
+      argv: ["bash", "-eo", "pipefail", "./run.sh"],
+      decoyName: "pipefail",
+    },
+  ])("does not bind option values as shell script allowlist targets for $name", (testCase) => {
+    const dir = makeTempDir();
+    makeExecutable(dir, testCase.argv[0] ?? "sh");
+    const script = path.join(dir, "run.sh");
+    fs.writeFileSync(script, "#!/bin/sh\necho ok\n");
+    fs.chmodSync(script, 0o755);
+    const decoy = path.join(dir, testCase.decoyName);
+    fs.writeFileSync(decoy, "decoy\n");
+    const env = makePathEnv(dir);
+    const analysis = analyzeArgvCommand({
+      argv: testCase.argv,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(analysis.ok).toBe(true);
+
+    const decoyResult = evaluateExecAllowlist({
+      analysis,
+      allowlist: [{ pattern: decoy, source: "allow-always" }],
+      safeBins: resolveSafeBins(undefined),
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(decoyResult.allowlistSatisfied).toBe(false);
+
+    const scriptResult = evaluateExecAllowlist({
+      analysis,
+      allowlist: [{ pattern: script, source: "allow-always" }],
+      safeBins: resolveSafeBins(undefined),
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(scriptResult.allowlistSatisfied).toBe(true);
   });
 
   it("prevents allow-always bypass for caffeinate wrapper chains", async () => {

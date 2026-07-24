@@ -143,6 +143,9 @@ type ChatComposerProps = {
   realtimeTalkCameraError?: boolean;
   gatewayClient?: GatewayBrowserClient | null;
   composerHoldToRecord?: boolean;
+  suggestionComposer?: boolean;
+  typingLabel?: string | null;
+  onTypingChange?: (typing: boolean) => void;
   composerControls?: TemplateResult | typeof nothing;
   getDraft?: () => string;
   onDraftChange: (next: string) => void;
@@ -1824,6 +1827,7 @@ type ChatRunControlsProps = {
   hasMessages: boolean;
   isBusy: boolean;
   followUpMode?: ControlUiFollowUpMode;
+  suggestionComposer?: boolean;
   sending: boolean;
   voiceActive?: boolean;
   voiceStatus?: RealtimeTalkStatus;
@@ -1975,16 +1979,18 @@ function renderChatPrimaryActions(props: ChatRunControlsProps) {
   const hasComposedContent = Boolean(props.draft.trim() || props.hasAttachments);
   const steersActiveRun = props.followUpMode === "steer";
   const interruptsActiveRun = props.followUpMode === "interrupt";
-  const activeRunActionLabel =
-    props.followUpMode === undefined
+  const activeRunActionLabel = props.suggestionComposer
+    ? t("chat.sessionSuggestions.suggest")
+    : props.followUpMode === undefined
       ? t("chat.runControls.send")
       : steersActiveRun
         ? t("chat.queue.steer")
         : interruptsActiveRun
           ? t("chat.runControls.send")
           : t("chat.runControls.queue");
-  const activeRunActionDescription =
-    props.followUpMode === undefined
+  const activeRunActionDescription = props.suggestionComposer
+    ? t("chat.sessionSuggestions.suggestMessage")
+    : props.followUpMode === undefined
       ? t("chat.runControls.sendMessage")
       : steersActiveRun
         ? t("chat.followUpModeSteer")
@@ -2020,19 +2026,29 @@ function renderChatPrimaryActions(props: ChatRunControlsProps) {
   const voiceButton = renderComposerVoiceButton(props);
   const sendAction = html`
     <openclaw-tooltip
-      .content=${props.isBusy ? t("chat.runControls.queue") : t("chat.runControls.send")}
+      .content=${props.suggestionComposer
+        ? t("chat.sessionSuggestions.suggestMessage")
+        : props.isBusy
+          ? t("chat.runControls.queue")
+          : t("chat.runControls.send")}
     >
       <button
         class="chat-send-btn"
         @click=${storeDraftAndSend}
         ?disabled=${!props.canSend || props.sending}
-        aria-label=${props.isBusy
-          ? t("chat.runControls.queueMessage")
-          : t("chat.runControls.sendMessage")}
+        aria-label=${props.suggestionComposer
+          ? t("chat.sessionSuggestions.suggestMessage")
+          : props.isBusy
+            ? t("chat.runControls.queueMessage")
+            : t("chat.runControls.sendMessage")}
       >
         ${icons.arrowUp}
         <span class="agent-chat__control-label"
-          >${props.isBusy ? t("chat.runControls.queue") : t("chat.runControls.send")}</span
+          >${props.suggestionComposer
+            ? t("chat.sessionSuggestions.suggest")
+            : props.isBusy
+              ? t("chat.runControls.queue")
+              : t("chat.runControls.send")}</span
         >
       </button>
     </openclaw-tooltip>
@@ -2502,6 +2518,7 @@ export function renderChatComposer(props: ChatComposerProps) {
       return;
     }
     syncComposerValue(target);
+    props.onTypingChange?.(Boolean(target.value.trim()));
   };
   const handleCompositionEnd = (event: CompositionEvent) => {
     state.composerComposing = false;
@@ -2509,6 +2526,7 @@ export function renderChatComposer(props: ChatComposerProps) {
       state.composingDraft = null;
     }
     syncComposerValue(event.target as HTMLTextAreaElement);
+    props.onTypingChange?.(Boolean((event.target as HTMLTextAreaElement).value.trim()));
   };
   const handleBlur = (event: FocusEvent) => {
     const target = event.target as HTMLTextAreaElement;
@@ -2516,6 +2534,7 @@ export function renderChatComposer(props: ChatComposerProps) {
       state.composingDraft = null;
     }
     commitComposerDraft(props, target.value);
+    props.onTypingChange?.(false);
   };
   const handleSend = () => {
     const draft = state.composerTextarea?.value ?? props.draft;
@@ -2523,6 +2542,7 @@ export function renderChatComposer(props: ChatComposerProps) {
       return;
     }
     commitComposerDraft(props, draft);
+    props.onTypingChange?.(false);
     props.onSend();
     syncComposerDraftAfterSend(state.composerTextarea);
   };
@@ -2663,10 +2683,11 @@ export function renderChatComposer(props: ChatComposerProps) {
     canSend: canSubmitDraft(actionDraft),
     connected: props.connected,
     draft: actionDraft,
-    hasAttachments: Boolean(props.attachments?.length),
+    hasAttachments: !props.suggestionComposer && Boolean(props.attachments?.length),
     hasMessages: props.messages.length > 0,
     isBusy,
     followUpMode: props.followUpMode,
+    suggestionComposer: props.suggestionComposer,
     sending: props.sending,
     voiceActive: props.realtimeTalkActive,
     voiceStatus: props.realtimeTalkStatus,
@@ -2756,6 +2777,11 @@ export function renderChatComposer(props: ChatComposerProps) {
                         count: String(props.queuedOutboxCount),
                       })
                     : t("chat.composer.offlineHint")}
+                </div>`
+              : nothing}
+            ${props.typingLabel
+              ? html`<div class="agent-chat__typing-indicator" role="status">
+                  ${props.typingLabel}
                 </div>`
               : nothing}
             ${slashMenuVisible ? renderSlashMenu(requestUpdate, props, visibleDraft) : nothing}
@@ -2884,7 +2910,10 @@ export function renderChatComposer(props: ChatComposerProps) {
               : nothing}
 
             <div class="agent-chat__composer-input-row">
-              ${renderChatAttachmentMenu({ ...props, disabled: !canCompose })}
+              ${renderChatAttachmentMenu({
+                ...props,
+                disabled: !canCompose || props.suggestionComposer === true,
+              })}
               <div class="agent-chat__composer-combobox">
                 <textarea
                   ${ref(state.textareaRef)}
@@ -2912,7 +2941,7 @@ export function renderChatComposer(props: ChatComposerProps) {
                   @compositionend=${handleCompositionEnd}
                   @blur=${handleBlur}
                   @paste=${(event: ClipboardEvent) => {
-                    if (canCompose) {
+                    if (canCompose && !props.suggestionComposer) {
                       handleChatAttachmentPaste(event, props);
                     }
                   }}

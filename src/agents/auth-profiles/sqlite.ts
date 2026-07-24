@@ -335,6 +335,11 @@ export function writePersistedAuthProfileStateRaw(
 export function runAuthProfileWriteTransaction<T>(
   agentDir: string | undefined,
   operation: (database: OpenClawAgentDatabase) => T,
+  options: { stateDir?: string } = {},
 ): T {
-  return runOpenClawAgentWriteTransaction(operation, resolveAuthProfileDatabaseOptions(agentDir));
+  const databaseOptions = resolveAuthProfileDatabaseOptions(agentDir);
+  return runOpenClawAgentWriteTransaction(operation, {
+    ...databaseOptions,
+    ...(options.stateDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: options.stateDir } } : {}),
+  });
 }
