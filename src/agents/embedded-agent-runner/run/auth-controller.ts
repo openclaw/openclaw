@@ -174,7 +174,7 @@ export function createEmbeddedRunAuthController(params: {
   };
 
   const hasRefreshableRuntimeAuth = () =>
-    Boolean(params.getRuntimeAuthState()?.sourceApiKey.trim());
+    Boolean(params.getRuntimeAuthState()?.sourceApiKey?.trim());
 
   const nextRuntimeAuthGeneration = () => (params.getRuntimeAuthState()?.generation ?? 0) + 1;
 

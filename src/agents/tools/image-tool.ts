@@ -1002,7 +1002,7 @@ export function createImageTool(options?: {
       const imageCompression =
         imageRoute.kind === "fallback" ? imageRoute.imageCompression : undefined;
       const sandboxConfig: SandboxedBridgeMediaPathConfig | null =
-        options?.sandbox && options?.sandbox.root.trim()
+        options?.sandbox?.root?.trim()
           ? {
               root: options.sandbox.root.trim(),
               bridge: options.sandbox.bridge,
