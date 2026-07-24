@@ -3,16 +3,17 @@ import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { KIMI_K3_MODEL_IDS } from "./provider-policy-api.js";
 
 const KIMI_BASE_URL = "https://api.kimi.com/coding/";
 const KIMI_CODING_USER_AGENT = "claude-code/0.1.0";
 const KIMI_DEFAULT_MODEL_ID = "kimi-for-coding";
 const KIMI_HIGHSPEED_MODEL_ID = "kimi-for-coding-highspeed";
-// Kimi's Claude Code endpoint uses k3[1m] as the wire id for the 1M plan;
-// normalizing it to k3 would lose the server-side context entitlement signal.
+// Kimi API accepts only "k3" as the wire id regardless of membership tier.
+// The [1m] suffix is a Claude-Code-only env convention, not a wire id.
+// Server enforces per-account context limit; catalog advertises the max (1,048,576).
 const KIMI_LEGACY_MODEL_IDS = ["kimi-code", "k2p5"] as const;
 const KIMI_CODING_DEFAULT_CONTEXT_WINDOW = 262144;
+const KIMI_K3_CONTEXT_WINDOW = 1_048_576;
 const KIMI_CODING_DEFAULT_MAX_TOKENS = 32768;
 const KIMI_CODING_DEFAULT_COST = {
   input: 0,
@@ -21,6 +22,15 @@ const KIMI_CODING_DEFAULT_COST = {
   cacheWrite: 0,
 };
 const KIMI_CODING_INPUT = ["text", "image"] satisfies NonNullable<ModelDefinitionConfig["input"]>;
+const KIMI_K3_THINKING_LEVEL_MAP = {
+  off: null,
+  minimal: null,
+  low: null,
+  medium: null,
+  high: null,
+  xhigh: "max" as const,
+  max: "max" as const,
+};
 
 export function buildKimiCodingProvider(): ModelProviderConfig {
   return {
@@ -48,30 +58,27 @@ export function buildKimiCodingProvider(): ModelProviderConfig {
         contextWindow: KIMI_CODING_DEFAULT_CONTEXT_WINDOW,
         maxTokens: KIMI_CODING_DEFAULT_MAX_TOKENS,
       },
-      ...KIMI_K3_MODEL_IDS.map((id) => ({
-        id,
-        name: id === "k3" ? "Kimi K3" : "Kimi K3 (1M)",
+      {
+        id: "k3",
+        name: "Kimi K3",
         reasoning: true,
-        thinkingLevelMap: {
-          off: null,
-          minimal: null,
-          low: null,
-          medium: null,
-          high: null,
-          xhigh: "max" as const,
-          max: "max" as const,
-        },
+        thinkingLevelMap: { ...KIMI_K3_THINKING_LEVEL_MAP },
         input: [...KIMI_CODING_INPUT],
         cost: KIMI_CODING_DEFAULT_COST,
-        contextWindow: id === "k3" ? KIMI_CODING_DEFAULT_CONTEXT_WINDOW : 1_048_576,
+        contextWindow: KIMI_K3_CONTEXT_WINDOW,
         maxTokens: KIMI_CODING_DEFAULT_MAX_TOKENS,
-      })),
+      },
     ],
   };
 }
 
 export function normalizeKimiCodingModelId(modelId: string): string {
-  return KIMI_LEGACY_MODEL_IDS.includes(modelId as (typeof KIMI_LEGACY_MODEL_IDS)[number])
+  const trimmed = modelId.trim();
+  // Retire Claude-Code-only k3[1m] to the API wire id so stored configs still resolve.
+  if (trimmed.toLowerCase() === "k3[1m]") {
+    return "k3";
+  }
+  return KIMI_LEGACY_MODEL_IDS.includes(trimmed as (typeof KIMI_LEGACY_MODEL_IDS)[number])
     ? KIMI_DEFAULT_MODEL_ID
     : modelId;
 }

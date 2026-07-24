@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { isKimiK3ModelId, resolveThinkingProfile } from "./provider-policy-api.js";
 
 describe("Kimi Code provider policy", () => {
-  it.each(["k3", "k3[1m]"])("exposes off and max for %s", (modelId) => {
-    expect(resolveThinkingProfile({ provider: "kimi", modelId })).toEqual({
+  it("exposes off and max for k3", () => {
+    expect(resolveThinkingProfile({ provider: "kimi", modelId: "k3" })).toEqual({
       levels: [
         { id: "off", label: "off" },
         { id: "max", label: "max" },
@@ -23,9 +23,9 @@ describe("Kimi Code provider policy", () => {
     });
   });
 
-  it("recognizes K3 wire ids case-insensitively", () => {
+  it("recognizes the K3 wire id case-insensitively and rejects Claude-Code-only k3[1m]", () => {
     expect(isKimiK3ModelId("K3")).toBe(true);
-    expect(isKimiK3ModelId("k3[1M]")).toBe(true);
+    expect(isKimiK3ModelId("k3[1M]")).toBe(false);
     expect(isKimiK3ModelId("kimi-for-coding")).toBe(false);
   });
 });

@@ -1,5 +1,19 @@
 {
   "id": "kimi",
+  "modelIdNormalization": {
+    "providers": {
+      "kimi": {
+        "aliases": {
+          "k3[1m]": "k3"
+        }
+      },
+      "kimi-coding": {
+        "aliases": {
+          "k3[1m]": "k3"
+        }
+      }
+    }
+  },
   "activation": {
     "onStartup": false
   },
