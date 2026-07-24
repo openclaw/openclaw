@@ -284,6 +284,75 @@ describe("session suggestion handlers", () => {
     });
   });
 
+  it("keeps incognito suggestion and typing surfaces admin-only", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const incognitoKey = "agent:main:dashboard:incognito-suggestions";
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey: incognitoKey },
+        {
+          sessionId: "session-incognito",
+          updatedAt: 1,
+          incognito: true,
+          createdActor: { type: "human", id: "owner" },
+          visibility: "suggest",
+        },
+      );
+      addSessionSuggestion(
+        { agentId: "main", sessionKey: incognitoKey },
+        {
+          id: "incognito-suggestion",
+          authorId: "owner",
+          text: "private suggestion",
+          expectedSessionId: "session-incognito",
+        },
+      );
+      const owner = client("owner", "Owner");
+      const expectHidden = (result: Awaited<ReturnType<typeof call>>) => {
+        expect(result.responses[0]?.[0]).toBe(false);
+        expect(result.responses[0]?.[1]).toBeUndefined();
+        expect(result.responses[0]?.[2]?.message).toBe(
+          `Incognito session "${incognitoKey}" was not found.`,
+        );
+      };
+
+      expectHidden(await call("session.suggestions.list", { sessionKey: incognitoKey }, owner));
+      expectHidden(
+        await call("session.suggestions.add", { sessionKey: incognitoKey, text: "probe" }, owner),
+      );
+      expectHidden(
+        await call(
+          "session.suggestions.resolve",
+          { sessionKey: incognitoKey, id: "incognito-suggestion", resolution: "dismiss" },
+          owner,
+        ),
+      );
+      expectHidden(
+        await call(
+          "session.typing",
+          { sessionKey: incognitoKey, sessionId: "wrong-session", typing: true },
+          owner,
+        ),
+      );
+      expectHidden(
+        await call(
+          "session.typing",
+          { sessionKey: incognitoKey, sessionId: "session-incognito", typing: true },
+          owner,
+        ),
+      );
+
+      const adminList = await call(
+        "session.suggestions.list",
+        { sessionKey: incognitoKey },
+        client("admin", "Admin", true),
+      );
+      expect(adminList.responses[0]?.[1]).toMatchObject({
+        role: "admin",
+        suggestions: [{ id: "incognito-suggestion", text: "private suggestion" }],
+      });
+    });
+  });
+
   it("rejects archived suggestion creation and non-dismiss resolutions", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const archivedKey = "agent:main:archived-suggestions";

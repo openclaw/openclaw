@@ -175,7 +175,7 @@ function incognitoSessionNotFound(sessionKey: string): ErrorShape {
   return errorShape(ErrorCodes.INVALID_REQUEST, `Incognito session "${sessionKey}" was not found.`);
 }
 
-function authorizeIncognitoSessionTarget(params: {
+export function authorizeIncognitoSessionTarget(params: {
   client: GatewayClient | null;
   sessionKey: string;
   target: SessionSharingTarget | null;

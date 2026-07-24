@@ -23,6 +23,7 @@ import {
   type StoredSessionSuggestion,
 } from "../../config/sessions.js";
 import {
+  authorizeIncognitoSessionTarget,
   authorizeSessionSharingTarget,
   canManageSessionSharing,
   resolveSessionSharingRole,
@@ -96,10 +97,20 @@ function requireSuggestionTarget(params: {
 
 function requireVisibleSuggestionRole(params: {
   client: GatewayClient | null;
+  sessionKey: string;
   target: NonNullable<ReturnType<typeof resolveSessionSharingTarget>>;
   respond: RespondFn;
 }) {
   const role = resolveSessionSharingRole({ client: params.client, target: params.target });
+  const incognitoError = authorizeIncognitoSessionTarget({
+    client: params.client,
+    sessionKey: params.sessionKey,
+    target: params.target,
+  });
+  if (incognitoError) {
+    params.respond(false, undefined, incognitoError);
+    return null;
+  }
   if (resolveSessionVisibility(params.target.entry) !== "draft") {
     return role;
   }
@@ -253,7 +264,10 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     if (!target) {
       return;
     }
-    if (requireVisibleSuggestionRole({ client, target, respond }) === null) {
+    if (
+      requireVisibleSuggestionRole({ client, sessionKey: params.sessionKey, target, respond }) ===
+      null
+    ) {
       return;
     }
     const lifecycleError = resolveSessionWorkStartError(target.canonicalKey, target.entry);
@@ -328,7 +342,12 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     if (!target) {
       return;
     }
-    const role = requireVisibleSuggestionRole({ client, target, respond });
+    const role = requireVisibleSuggestionRole({
+      client,
+      sessionKey: params.sessionKey,
+      target,
+      respond,
+    });
     if (role === null) {
       return;
     }
@@ -369,7 +388,12 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     if (!target) {
       return;
     }
-    const role = requireVisibleSuggestionRole({ client, target, respond });
+    const role = requireVisibleSuggestionRole({
+      client,
+      sessionKey: params.sessionKey,
+      target,
+      respond,
+    });
     if (role === null) {
       return;
     }
@@ -572,6 +596,15 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     const target = requireSuggestionTarget({ context, ...params, respond });
     const actor = gatewayClientSessionCreator(client);
     if (!target) {
+      return;
+    }
+    const incognitoError = authorizeIncognitoSessionTarget({
+      client,
+      sessionKey: params.sessionKey,
+      target,
+    });
+    if (incognitoError) {
+      respond(false, undefined, incognitoError);
       return;
     }
     if (params.sessionId !== target.entry.sessionId) {

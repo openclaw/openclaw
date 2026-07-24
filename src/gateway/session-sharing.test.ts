@@ -6,6 +6,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import {
   allowedSessionVisibilities,
+  authorizeIncognitoSessionTarget,
   resolveSessionMutationAuthorization,
   canReceiveSessionEvent,
   filterDraftSessionsForClient,
@@ -78,6 +79,26 @@ function target(createdActor?: { type: "human"; id: string; label?: string }): S
 }
 
 describe("session sharing policy", () => {
+  it("reports an incognito denial against the caller's requested key", () => {
+    const hiddenTarget = {
+      ...target({ type: "human", id: "owner@example.com" }),
+      canonicalKey: "agent:main:dashboard:incognito-private",
+      entry: {
+        sessionId: "session-incognito",
+        updatedAt: 1,
+        visibility: "suggest" as const,
+        incognito: true,
+      },
+    };
+    expect(
+      authorizeIncognitoSessionTarget({
+        client: client({ user: "viewer@example.com" }),
+        sessionKey: "requested-incognito-alias",
+        target: hiddenTarget,
+      })?.message,
+    ).toBe('Incognito session "requested-incognito-alias" was not found.');
+  });
+
   it("keeps identity-less solo mode owner-equivalent for restricted sessions", () => {
     const role = resolveSessionSharingRole({ client: client({}), target: target() });
     expect(role).toBe("owner");
