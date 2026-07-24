@@ -15,6 +15,7 @@ import {
 } from "../../config/sessions.js";
 import { rollbackPluginOwnedSessionEntryLifecycle } from "../../config/sessions/session-accessor.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { isAgentHarnessSessionKey } from "../../sessions/agent-harness-session-key.js";
 import { isModelSelectionLocked } from "../../sessions/model-overrides.js";
 import {
@@ -340,9 +341,12 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
           return undefined;
         }
         const pluginOwnerId = normalizeOptionalString(postCleanupEntry?.pluginOwnerId);
+        const incognito =
+          postCleanupEntry?.incognito === true || isIncognitoSessionKey(target.canonicalKey);
         const deletionParams = {
           agentId: target.agentId,
-          archiveTranscript: deleteTranscript,
+          archiveTranscript: incognito ? false : deleteTranscript,
+          deleteTranscriptWithoutArchive: incognito,
           expectedEntry: postCleanupEntry,
           expectedLifecycleRevision,
           expectedSessionId,

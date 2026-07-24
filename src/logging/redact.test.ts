@@ -162,6 +162,36 @@ describe("redactSensitiveText", () => {
     expect(output).toContain("issue8…7890");
   });
 
+  it("masks AWS secret access keys in labeled and bare credential text", () => {
+    const secret = Array.from(
+      { length: 40 },
+      (_entry, index) => (["W", "j", "7", "/"] as const)[index % 4] ?? "W",
+    ).join("");
+    const input = [
+      `aws_secret_access_key = ${secret}`,
+      JSON.stringify({ SecretAccessKey: secret }),
+      `bare ${secret}`,
+    ].join("\n");
+    const output = redactSensitiveText(input, { mode: "tools" });
+    const masked = `${secret.slice(0, 6)}…${secret.slice(-4)}`;
+
+    expect(output).toContain(`aws_secret_access_key = ${masked}`);
+    expect(output).toContain(`"SecretAccessKey":"${masked}"`);
+    expect(output).toContain(`bare ${masked}`);
+    expect(output).not.toContain(secret);
+  });
+
+  it("masks structured AWS secret access key fields", () => {
+    const secret = Array.from(
+      { length: 40 },
+      (_entry, index) => (["A", "b", "C", "d", "0", "/", "+"] as const)[index % 7] ?? "A",
+    ).join("");
+
+    expect(redactSecrets({ awsSecretAccessKey: secret })).toEqual({
+      awsSecretAccessKey: `${secret.slice(0, 6)}…${secret.slice(-4)}`,
+    });
+  });
+
   it("masks CLI flags", () => {
     const input = "curl --token abcdef1234567890ghij https://api.test";
     const output = redactSensitiveText(input, { mode: "tools" });
@@ -172,6 +202,22 @@ describe("redactSensitiveText", () => {
     const input = "gog gmail watch serve --hook-token abcdef1234567890ghij";
     const output = redactSensitiveText(input, { mode: "tools" });
     expect(output).toBe("gog gmail watch serve --hook-token abcdef…ghij");
+  });
+
+  it("masks AWS secret access key CLI flags by key", () => {
+    const secretWithoutBareHeuristic = Array.from(
+      { length: 40 },
+      (_entry, index) => (["A", "b", "C", "d"] as const)[index % 4] ?? "A",
+    ).join("");
+    const input = [
+      `cmd --aws-secret-access-key=${secretWithoutBareHeuristic}`,
+      `cmd --awsSecretAccessKey ${secretWithoutBareHeuristic}`,
+    ].join("\n");
+    const output = redactSensitiveText(input, { mode: "tools" });
+
+    expect(output).not.toContain(secretWithoutBareHeuristic);
+    expect(output).toContain("--aws-secret-access-key=AbCdAb…AbCd");
+    expect(output).toContain("--awsSecretAccessKey AbCdAb…AbCd");
   });
 
   it("does not treat option-alternative prose as a CLI flag secret", () => {

@@ -4,7 +4,11 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
-import { loadSessionEntry, upsertSessionEntry } from "./session-accessor.js";
+import {
+  deleteSessionEntryLifecycle,
+  loadSessionEntry,
+  upsertSessionEntry,
+} from "./session-accessor.js";
 import {
   addSessionMember,
   isSessionMember,
@@ -129,6 +133,43 @@ describe("session sharing store", () => {
       ).toBe(true);
       await upsertSessionEntry(scope, { sessionId: "session-b", updatedAt: 5 });
       expect(isSessionMember(scope, "guest")).toBe(true);
+    });
+  });
+
+  it("rejects stale member writes after entry-only deletion leaves a placeholder", async () => {
+    await withTempDir({ prefix: "openclaw-session-sharing-placeholder-" }, async (dir) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+      const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
+      await upsertSessionEntry(scope, { sessionId: "session-a", updatedAt: 1 });
+      expect(
+        addSessionMember(scope, { identityId: "guest", addedBy: "owner", addedAt: 2 }).inserted,
+      ).toBe(true);
+
+      await deleteSessionEntryLifecycle({
+        agentId: "main",
+        archiveTranscript: false,
+        storePath: openOpenClawAgentDatabase({ agentId: "main", env }).path,
+        target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
+      });
+
+      expect(loadSessionEntry(scope)).toBeUndefined();
+      expect(listSessionMembers(scope)).toEqual([]);
+      expect(() =>
+        addSessionMember(scope, {
+          identityId: "stale",
+          addedBy: "owner",
+          expectedSessionId: "session-a",
+        }),
+      ).toThrow(/session changed/);
+      expect(() =>
+        addSessionMember(scope, {
+          identityId: "planted",
+          addedBy: "owner",
+        }),
+      ).toThrow(/session changed/);
+
+      await upsertSessionEntry(scope, { sessionId: "session-b", updatedAt: 3 });
+      expect(listSessionMembers(scope)).toEqual([]);
     });
   });
 });

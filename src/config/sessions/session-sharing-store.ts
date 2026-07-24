@@ -116,23 +116,36 @@ export function isSessionMember(scope: SessionAccessScope, identityId: string): 
   );
 }
 
-// Membership is bound to the session instance. Authorization is rechecked
-// before these transactions, but a reset/recreate can replace the row under the
-// same key in between; verifying the expected sessionId inside the write
-// transaction stops a stale owner from mutating the replacement's members.
+// Membership is bound to a live session entry, never a transcript placeholder.
+// Authorization is rechecked before these transactions, but a reset/recreate
+// can replace the row under the same key in between; the optional expected id
+// adds a caller snapshot check after the canonical node/entry check.
 function assertAuthorizedSessionInstance(
   database: OpenClawAgentDatabase,
   sessionKey: string,
   expectedSessionId: string | undefined,
 ): void {
-  if (expectedSessionId === undefined) {
-    return;
-  }
   const row =
-    database.db /* sqlite-allow-raw: sync TOCTOU re-read of session_id inside a write transaction; Kysely async execution is forbidden in synchronous commit sections */
-      .prepare("SELECT session_id FROM session_entries WHERE session_key = ?")
-      .get(sessionKey) as { session_id?: string } | undefined;
-  if (row?.session_id !== expectedSessionId) {
+    database.db /* sqlite-allow-raw: sync TOCTOU re-read of canonical entry identity inside a write transaction; Kysely async execution is forbidden in synchronous commit sections */
+      .prepare("SELECT current_session_id, entry_json FROM session_nodes WHERE session_key = ?")
+      .get(sessionKey) as { current_session_id?: string; entry_json?: string } | undefined;
+  let entrySessionId: string | undefined;
+  try {
+    const entry = row?.entry_json ? (JSON.parse(row.entry_json) as unknown) : undefined;
+    const candidate =
+      entry && typeof entry === "object" && !Array.isArray(entry)
+        ? (entry as { sessionId?: unknown }).sessionId
+        : undefined;
+    entrySessionId = typeof candidate === "string" ? candidate : undefined;
+  } catch {
+    entrySessionId = undefined;
+  }
+  if (
+    !row ||
+    entrySessionId === undefined ||
+    row.current_session_id !== entrySessionId ||
+    (expectedSessionId !== undefined && entrySessionId !== expectedSessionId)
+  ) {
     throw new Error("session changed before sharing mutation");
   }
 }

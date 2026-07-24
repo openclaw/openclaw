@@ -34,6 +34,7 @@ import {
   resolveSessionWorkStartError,
   snapshotSessionOrigin,
   type SessionEntry,
+  deleteSessionEntryLifecycle,
   resetSessionEntryLifecycle,
 } from "../config/sessions.js";
 import { rebindCliSessionReseedReceiptsForReset } from "../config/sessions/cli-session-binding.js";
@@ -58,6 +59,7 @@ import { runPluginHostCleanup } from "../plugins/host-hook-cleanup.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
 import {
+  isIncognitoSessionKey,
   isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
@@ -75,6 +77,7 @@ import {
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
 } from "../sessions/session-lifecycle-admission.js";
 import {
+  handleSessionStateSessionDeleted,
   handleSessionStateSessionReset,
   recordSessionCreated,
 } from "../sessions/session-state-events.js";
@@ -106,9 +109,10 @@ export function archiveSessionTranscriptsForSessionDetailed(params: {
   sessionFile?: string;
   agentId?: string;
   reason: "reset" | "deleted";
+  incognito?: boolean;
   onArchiveError?: (err: unknown, sourcePath: string) => void;
 }): ArchivedSessionTranscript[] {
-  if (!params.sessionId) {
+  if (!params.sessionId || params.incognito === true) {
     return [];
   }
   return archiveSessionTranscriptsDetailed({
@@ -937,6 +941,13 @@ export async function performGatewaySessionReset(params: {
       agentId: string;
       storePath: string;
     }
+  | {
+      ok: true;
+      key: string;
+      agentId: string;
+      storePath: string;
+      incognitoDeleted: true;
+    }
   | { ok: false; error: ReturnType<typeof errorShape> }
 > {
   const resetTarget = (() => {
@@ -1182,6 +1193,69 @@ export async function performGatewaySessionReset(params: {
             storePath,
           })
         : undefined;
+
+      const incognito = entry?.incognito === true || isIncognitoSessionKey(target.canonicalKey);
+      if (incognito) {
+        if (!entry) {
+          return {
+            ok: false,
+            error: errorShape(ErrorCodes.INVALID_REQUEST, `unknown session: ${params.key}`),
+          };
+        }
+        await emitGatewayBeforeResetPluginHook({
+          cfg,
+          key: params.key,
+          messages: beforeResetMessages,
+          target,
+          storePath,
+          entry,
+          reason: params.reason,
+        });
+        const deleted = await deleteSessionEntryLifecycle({
+          agentId: target.agentId,
+          archiveTranscript: false,
+          deleteTranscriptWithoutArchive: true,
+          expectedEntry: entry,
+          expectedSessionId: entry.sessionId,
+          expectedUpdatedAt: entry.updatedAt,
+          storePath,
+          target: {
+            canonicalKey: target.canonicalKey,
+            storeKeys: target.storeKeys,
+          },
+        });
+        if (!deleted.deleted) {
+          return {
+            ok: false,
+            error: errorShape(
+              ErrorCodes.UNAVAILABLE,
+              `Session ${params.key} changed before reset. Retry.`,
+            ),
+          };
+        }
+        handleSessionStateSessionDeleted(target.canonicalKey, agentId);
+        emitGatewaySessionEndPluginHook({
+          cfg,
+          sessionKey: target.canonicalKey,
+          sessionId: entry.sessionId,
+          storePath,
+          sessionFile: entry.sessionFile,
+          agentId: target.agentId,
+          reason: params.reason,
+          archivedTranscripts: [],
+        });
+        await emitSessionUnboundLifecycleEvent({
+          targetSessionKey: target.canonicalKey,
+          reason: "session-reset",
+        });
+        return {
+          ok: true,
+          key: target.canonicalKey,
+          agentId: target.agentId,
+          storePath,
+          incognitoDeleted: true,
+        };
+      }
 
       let createdNewEntry = false;
       params.assertAuthorizedInstance?.();

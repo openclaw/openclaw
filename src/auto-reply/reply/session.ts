@@ -37,6 +37,7 @@ import {
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
+import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
 import {
@@ -87,7 +88,11 @@ import {
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import { normalizeCommandBody } from "../commands-registry.js";
-import type { MsgContext, TemplateContext } from "../templating.js";
+import type {
+  FinalizedRuntimeMsgContext,
+  FinalizedTemplateContext as TemplateContext,
+  MsgContext,
+} from "../templating.js";
 import { resolveEffectiveResetTargetSessionKey } from "./acp-reset-target.js";
 import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
@@ -188,7 +193,7 @@ export type SessionInitResult = {
 type InitSessionStateParams = {
   cfg: OpenClawConfig;
   commandAuthorized: boolean;
-  ctx: MsgContext;
+  ctx: FinalizedRuntimeMsgContext;
   expectedExistingSessionId?: string;
   pinExpectedExistingSession?: boolean;
   requestedSessionId?: string;
@@ -201,7 +206,7 @@ type InitSessionStateAttemptContext = {
   conversationBindingContext: ReturnType<typeof resolveSessionConversationBindingContext>;
   isSystemEvent: boolean;
   retargetedSession: boolean;
-  sessionCtxForState: MsgContext;
+  sessionCtxForState: FinalizedRuntimeMsgContext;
   storePath: string;
 };
 
@@ -307,7 +312,11 @@ function resolveInitSessionStateAttemptContext(
     isSystemEvent,
     retargetedSession: sessionCtxForState !== ctx,
     sessionCtxForState,
-    storePath: resolveStorePath(cfg.session?.store, { agentId }),
+    storePath: resolveSessionStorePathForScope({
+      agentId,
+      sessionKey: sessionCtxForState.SessionKey,
+      storePath: resolveStorePath(cfg.session?.store, { agentId }),
+    }),
   };
 }
 
@@ -492,9 +501,7 @@ async function initSessionStateAttemptLocked(
   const normalizedChatType = normalizeChatType(ctx.ChatType);
   const isGroup =
     normalizedChatType != null && normalizedChatType !== "direct" ? true : Boolean(groupResolution);
-  // Prefer CommandBody/RawBody (clean message) for command detection; fall back
-  // to Body which may contain structural context (history, sender labels).
-  const commandSource = ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "";
+  const commandSource = ctx.commandText ?? "";
   // IMPORTANT: do NOT lowercase the entire command body.
   // Users often pass case-sensitive arguments (e.g. filesystem paths on Linux).
   // Command parsing downstream lowercases only the command token for matching.
@@ -772,7 +779,11 @@ async function initSessionStateAttemptLocked(
     persistedAuthProfileOverrideCompactionCount = reusableEntry.authProfileOverrideCompactionCount;
     persistedLabel = reusableEntry.label;
   } else {
-    sessionId = entry?.sessionId ?? crypto.randomUUID();
+    // Durable resets retain their transcript identity for cursor continuity; ACP
+    // resets still rotate the local session id that owns provider conversation state.
+    sessionId = isAcpSessionKey(sessionKey)
+      ? crypto.randomUUID()
+      : (entry?.sessionId ?? crypto.randomUUID());
     isNewSession = true;
     systemSent = false;
     abortedLastRun = false;
@@ -1178,17 +1189,8 @@ async function initSessionStateAttemptLocked(
 
   const sessionCtx: TemplateContext = {
     ...sessionCtxForState,
-    // Keep BodyStripped aligned with Body (best default for agent prompts).
-    // RawBody is reserved for command/directive parsing and may omit context.
-    BodyStripped: normalizeInboundTextNewlines(
-      bodyStripped ??
-        sessionCtxForState.BodyForAgent ??
-        sessionCtxForState.Body ??
-        sessionCtxForState.CommandBody ??
-        sessionCtxForState.RawBody ??
-        sessionCtxForState.BodyForCommands ??
-        "",
-    ),
+    agentText: normalizeInboundTextNewlines(bodyStripped ?? sessionCtxForState.agentText),
+    BodyStripped: normalizeInboundTextNewlines(bodyStripped ?? sessionCtxForState.agentText),
     SessionId: sessionId,
     IsNewSession: isNewSession ? "true" : "false",
   };

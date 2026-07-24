@@ -10,13 +10,13 @@
       "dependencies": {
         "@discord/embedded-app-sdk": "2.5.0",
         "@discordjs/voice": "0.19.2",
-        "discord-api-types": "0.38.49",
+        "discord-api-types": "0.38.50",
         "libopus-wasm": "0.2.0",
         "mdast-util-from-markdown": "2.0.3",
         "p-map": "7.0.5",
-        "typebox": "1.3.3",
-        "undici": "8.5.0",
-        "ws": "8.21.0",
+        "typebox": "1.3.6",
+        "undici": "8.6.0",
+        "ws": "8.21.1",
         "zod": "4.4.3"
       },
       "peerDependencies": {
@@ -393,9 +393,9 @@
       "license": "MIT"
     },
     "node_modules/@types/node": {
-      "version": "26.1.0",
-      "resolved": "https://registry.npmjs.org/@types/node/-/node-26.1.0.tgz",
-      "integrity": "sha512-O0A1G3xPGy4w7AgQdAQYUlQ+BKk2Oovw8eRpofyp5KdBZULnbe+WqaOVNrm705SHphCiG4XHsACrSmPu1f+Kgw==",
+      "version": "26.1.1",
+      "resolved": "https://registry.npmjs.org/@types/node/-/node-26.1.1.tgz",
+      "integrity": "sha512-nxAkRSVkN1Y0JC1W8ky/fTfkGsMmcrRsbx+3XoZE+rMOX71kLYTV7fLXpqud1GpbpP5TuffXFqfX7fH2GgZREw==",
       "license": "MIT",
       "dependencies": {
         "undici-types": "~8.3.0"
@@ -500,9 +500,9 @@
       }
     },
     "node_modules/discord-api-types": {
-      "version": "0.38.49",
-      "resolved": "https://registry.npmjs.org/discord-api-types/-/discord-api-types-0.38.49.tgz",
-      "integrity": "sha512-XnqcWmnFZFAE8ZM8SHAw9DIV8D3Or00rMQ8iQLotrEA2PmXhl+ykaf6L6q4l474hrSUH1JaYcv+iOMRWp2p6Tg==",
+      "version": "0.38.50",
+      "resolved": "https://registry.npmjs.org/discord-api-types/-/discord-api-types-0.38.50.tgz",
+      "integrity": "sha512-J2n/bpIETX3DQ6AJ7/0xbsTLmYiJQtO/LKcXKC1YDbB56OUwtDbdXOFE8Q4g8jVGHBR2VAy1+D4ngaIgkMNV9w==",
       "license": "MIT",
       "workspaces": [
         "scripts/actions/documentation"
@@ -1059,15 +1059,15 @@
       "license": "0BSD"
     },
     "node_modules/typebox": {
-      "version": "1.3.3",
-      "resolved": "https://registry.npmjs.org/typebox/-/typebox-1.3.3.tgz",
-      "integrity": "sha512-URXGUE31PJDQC+PtRMJeLdF4kmmOdFoVPikPCtV2oOIhUpNpppEdIz7W8bH8cFYPYHdDpaRvqwdegMTmHliudg==",
+      "version": "1.3.6",
+      "resolved": "https://registry.npmjs.org/typebox/-/typebox-1.3.6.tgz",
+      "integrity": "sha512-Sc8RA0NCMEFmApHNU9ZMzqcpQj46She44J8ffpLM/bdhLNUZKq7DJumcLcsFx1gRmDfQPgCgOmFFJ7rcnfWNyA==",
       "license": "MIT"
     },
     "node_modules/undici": {
-      "version": "8.5.0",
-      "resolved": "https://registry.npmjs.org/undici/-/undici-8.5.0.tgz",
-      "integrity": "sha512-xamtWoB1EshgjpmlXd7GGm2VfdDtw1+rD8uhry8pSNW3If6S8E0m2T2+orSKeZXEn/aPJMviCpDBA65WJt8zhg==",
+      "version": "8.6.0",
+      "resolved": "https://registry.npmjs.org/undici/-/undici-8.6.0.tgz",
+      "integrity": "sha512-l2FlC6I510GawyEd1qgcE/okihKrzy+BRTEBlu6T0fdbM9m5yxtIH5Oa3ysRsH0zC4EhmWUEaSDsy2QngBeRlw==",
       "license": "MIT",
       "engines": {
         "node": ">=22.19.0"
@@ -1093,9 +1093,9 @@
       }
     },
     "node_modules/uuid": {
-      "version": "14.0.0",
-      "resolved": "https://registry.npmjs.org/uuid/-/uuid-14.0.0.tgz",
-      "integrity": "sha512-Qo+uWgilfSmAhXCMav1uYFynlQO7fMFiMVZsQqZRMIXp0O7rR7qjkj+cPvBHLgBqi960QCoo/PH2/6ZtVqKvrg==",
+      "version": "14.0.1",
+      "resolved": "https://registry.npmjs.org/uuid/-/uuid-14.0.1.tgz",
+      "integrity": "sha512-6ZxzVpzDXDa3bJWaHilVayA+BH/1zmxCJoVgvmqJnid/gPoKHxUrS/aC/T6LGQtNHT+XHG9fXPJB4d+IrU30Ew==",
       "funding": [
         "https://github.com/sponsors/broofa",
         "https://github.com/sponsors/ctavan"
@@ -1106,9 +1106,9 @@
       }
     },
     "node_modules/ws": {
-      "version": "8.21.0",
-      "resolved": "https://registry.npmjs.org/ws/-/ws-8.21.0.tgz",
-      "integrity": "sha512-Vsp28b7DRcimFQvrqu2Wek3z1iYxDCWqHYB8Qsnk/S4RfaCQzPGPyBNuVjJV3cd6UiKtUtp6sNM77gWvzcCH+g==",
+      "version": "8.21.1",
+      "resolved": "https://registry.npmjs.org/ws/-/ws-8.21.1.tgz",
+      "integrity": "sha512-+0NTnW77fFN/DjQi6k/Sq/Yvk4Sgajw7urW8V+asjXnRgDs9gyGkdb7EzgfhA4goXsRIZKE28fzIXBHEzhuiWw==",
       "license": "MIT",
       "engines": {
         "node": ">=10.0.0"

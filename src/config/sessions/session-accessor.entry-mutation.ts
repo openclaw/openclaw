@@ -10,6 +10,7 @@ import {
   patchSessionEntry,
   resolveSessionEntryFromStore,
 } from "./session-accessor.entry.js";
+import type { SessionLifecycleStoreTarget } from "./session-accessor.lifecycle-types.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.lifecycle.js";
 import {
   appendSqliteTranscriptEvent,
@@ -43,14 +44,30 @@ import {
   normalizeTargetStoreKeys,
   resolveFreshestTargetEntry,
 } from "./session-entry-selection.js";
+import { projectSessionStoreForPersistence } from "./skill-prompt-blobs.js";
 import { formatSqliteSessionFileMarker } from "./sqlite-marker.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
-import {
-  projectSessionEntryForPersistenceRevision,
-  type SessionLifecycleStoreTarget,
-} from "./store.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import type { GroupKeyResolution, SessionEntry } from "./types.js";
+
+function projectSessionEntryForPersistenceRevision(params: {
+  storePath: string;
+  entry: SessionEntry;
+}): SessionEntry {
+  const snapshot = params.entry.skillsSnapshot;
+  const stripped =
+    snapshot?.resolvedSkills === undefined
+      ? params.entry
+      : {
+          ...params.entry,
+          skillsSnapshot: (({ resolvedSkills: _drop, ...rest }) => rest)(snapshot),
+        };
+  const projected = projectSessionStoreForPersistence({
+    storePath: params.storePath,
+    store: { entry: stripped },
+  });
+  return projected.store.entry ?? stripped;
+}
 
 export async function forkSessionFromParentTranscript(
   params: ForkSessionFromParentTranscriptParams,

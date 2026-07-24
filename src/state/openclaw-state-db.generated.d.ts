@@ -408,6 +408,15 @@ export interface ConfigMachineState {
   value_json: string;
 }
 
+export interface CronJobScratch {
+  content: string | null;
+  job_id: string;
+  revision: number;
+  source_sha256: string | null;
+  store_key: string;
+  updated_at_ms: number;
+}
+
 export interface CronJobs {
   agent_id: string | null;
   anchor_ms: number | null;
@@ -1500,6 +1509,7 @@ export interface DB {
   commitments: Commitments;
   config_health_entries: ConfigHealthEntries;
   config_machine_state: ConfigMachineState;
+  cron_job_scratch: CronJobScratch;
   cron_jobs: CronJobs;
   current_conversation_bindings: CurrentConversationBindings;
   delivery_queue_entries: DeliveryQueueEntries;
