@@ -86,6 +86,7 @@ let resolveProviderUsageAuthWithPlugin: typeof import("./provider-runtime.js").r
 let normalizeProviderToolSchemasWithPlugin: typeof import("./provider-runtime.js").normalizeProviderToolSchemasWithPlugin;
 let inspectProviderToolSchemasWithPlugin: typeof import("./provider-runtime.js").inspectProviderToolSchemasWithPlugin;
 let listProviderUsagePluginDescriptors: typeof import("./provider-runtime.js").listProviderUsagePluginDescriptors;
+let resolveProviderToolSchemaNormalizeCacheKey: typeof import("./provider-runtime.js").resolveProviderToolSchemaNormalizeCacheKey;
 let normalizeProviderResolvedModelWithPlugin: typeof import("./provider-runtime.js").normalizeProviderResolvedModelWithPlugin;
 let prepareProviderDynamicModel: typeof import("./provider-runtime.js").prepareProviderDynamicModel;
 let prepareProviderRuntimeAuth: typeof import("./provider-runtime.js").prepareProviderRuntimeAuth;
@@ -341,6 +342,7 @@ describe("provider-runtime", () => {
       normalizeProviderToolSchemasWithPlugin,
       inspectProviderToolSchemasWithPlugin,
       listProviderUsagePluginDescriptors,
+      resolveProviderToolSchemaNormalizeCacheKey,
       normalizeProviderResolvedModelWithPlugin,
       prepareProviderDynamicModel,
       prepareProviderRuntimeAuth,
@@ -2319,6 +2321,18 @@ describe("provider-runtime", () => {
         }),
       }),
     ).toEqual([DEMO_TOOL]);
+
+    expect(
+      resolveProviderToolSchemaNormalizeCacheKey({
+        provider: DEMO_PROVIDER_ID,
+        workspaceDir: "/tmp/demo-workspace",
+        context: createDemoResolvedModelContext({
+          workspaceDir: "/tmp/demo-workspace",
+          modelApi: MODEL.api,
+          tools: [DEMO_TOOL],
+        }),
+      }),
+    ).toBeNull();
 
     expect(
       inspectProviderToolSchemasWithPlugin({
