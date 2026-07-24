@@ -195,8 +195,8 @@ describe("openclaw test state", () => {
       expect(rmSpy).toHaveBeenCalledWith(state.root, {
         recursive: true,
         force: true,
-        maxRetries: 5,
-        retryDelay: 20,
+        maxRetries: 20,
+        retryDelay: 25,
       });
       await expectPathMissing(state.root);
       expect(unrelatedShared.db.isOpen).toBe(true);
@@ -212,14 +212,14 @@ describe("openclaw test state", () => {
       await fs.rm(state.root, {
         recursive: true,
         force: true,
-        maxRetries: 5,
-        retryDelay: 20,
+        maxRetries: 20,
+        retryDelay: 25,
       });
       await fs.rm(unrelatedRoot, {
         recursive: true,
         force: true,
-        maxRetries: 5,
-        retryDelay: 20,
+        maxRetries: 20,
+        retryDelay: 25,
       });
     }
   });

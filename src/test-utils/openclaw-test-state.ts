@@ -377,8 +377,8 @@ export async function createOpenClawTestState(
       await fs.rm(root, {
         recursive: true,
         force: true,
-        maxRetries: 5,
-        retryDelay: 20,
+        maxRetries: 20,
+        retryDelay: 25,
       });
     },
   };
