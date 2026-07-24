@@ -75,6 +75,7 @@ type ChatHistoryMethod = "chat.history" | "chat.startup";
 type ChatMetadataResult = {
   commands?: unknown[];
   models?: unknown[];
+  catalogMode?: "replace";
 };
 
 function runtimeConfigsMatch(left: OpenClawConfig, right: OpenClawConfig): boolean {

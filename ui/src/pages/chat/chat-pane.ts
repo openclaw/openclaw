@@ -159,6 +159,7 @@ import {
   switchChatHistoryBranch,
   syncSelectedSessionMessageSubscription,
 } from "./chat-history.ts";
+import { replaceModeModelSettingsHref as modelHref } from "./chat-model-catalog.ts";
 import { requestSessionObserverAnswer, sendSessionObserverVisibility } from "./chat-observer.ts";
 import {
   applySelectedSessionProjection,
@@ -3735,6 +3736,7 @@ class ChatPane extends OpenClawLightDomElement {
               gatewayAvailable: Boolean(state.client),
               loading: state.chatLoading,
               modelCatalog: state.chatModelCatalog,
+              modelSettingsHref: modelHref(state.chatModelCatalogMode, state.basePath),
               modelOverrides: state.sessions.state.modelOverrides,
               modelSelectionLocked: selectedSession?.modelSelectionLocked === true,
               modelSelectionRuntimeId: selectedSession?.agentRuntime?.id,

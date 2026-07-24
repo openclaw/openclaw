@@ -356,6 +356,75 @@ describe("models.list", () => {
     }
   });
 
+  it("reports replace mode while retaining discovered models", async () => {
+    const runtimeConfig = {
+      agents: {
+        defaults: {
+          models: {
+            "vllm/*": {},
+          },
+        },
+      },
+      models: {
+        mode: "replace",
+        providers: {
+          vllm: {
+            api: "openai-completions",
+            baseUrl: "http://127.0.0.1:8000/v1",
+            models: [{ id: "llama-configured", name: "Llama Configured" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const { request, respond } = requestModelsList({
+      view: "configured",
+      runtimeConfig,
+      loadGatewayModelCatalog: vi.fn(() =>
+        Promise.resolve([
+          {
+            id: "llama-configured",
+            name: "Llama Configured",
+            provider: "vllm",
+            api: "openai-completions",
+            baseUrl: "http://127.0.0.1:8000/v1",
+          },
+          {
+            id: "llama-discovered",
+            name: "Llama Discovered",
+            provider: "vllm",
+            api: "openai-completions",
+            baseUrl: "http://127.0.0.1:8000/v1",
+          },
+        ]),
+      ),
+      reqId: "req-models-list-replace-mode",
+    });
+
+    await request;
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        catalogMode: "replace",
+        models: [
+          {
+            id: "llama-configured",
+            name: "Llama Configured",
+            provider: "vllm",
+            available: true,
+          },
+          {
+            id: "llama-discovered",
+            name: "Llama Discovered",
+            provider: "vllm",
+            available: true,
+          },
+        ],
+      },
+      undefined,
+    );
+  });
+
   it("does not block the configured view on slow model catalog discovery", async () => {
     await withoutOpenAIEnvAuth(async () => {
       const catalog = createDeferred<never>();

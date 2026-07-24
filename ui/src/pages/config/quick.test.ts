@@ -2,6 +2,7 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import { t } from "../../i18n/index.ts";
 import { renderQuickSettings } from "./quick.ts";
 
 type QuickSettingsProps = Parameters<typeof renderQuickSettings>[0];
@@ -117,6 +118,28 @@ describe("renderQuickSettings", () => {
     expect(row.querySelector(".settings-row__value")?.textContent?.trim()).toBe("gpt-5.5");
     row.click();
     expect(onModelChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("explains replace-mode filtering and opens model settings", () => {
+    const container = document.createElement("div");
+    const onModelChange = vi.fn();
+
+    render(
+      renderQuickSettings(createProps({ modelCatalogMode: "replace", onModelChange })),
+      container,
+    );
+
+    const row = expectRowByTitle(container, t("chat.selectors.replaceModeHint"));
+    expectButtonByText(row, t("chat.selectors.manageModels")).click();
+    expect(onModelChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits the replace-mode explanation for merge mode", () => {
+    const container = document.createElement("div");
+
+    render(renderQuickSettings(createProps()), container);
+
+    expect(container.textContent).not.toContain(t("chat.selectors.replaceModeHint"));
   });
 
   it("renders Gateway host identity and resources", () => {

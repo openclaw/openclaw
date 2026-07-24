@@ -203,6 +203,7 @@ type ChatHeaderTestState = {
   chatMessage: string;
   chatMessages: unknown[];
   chatModelCatalog: ModelCatalogEntry[];
+  chatModelCatalogMode?: "replace";
   chatModelsLoading?: boolean;
   chatQueue: ChatQueueItem[];
   chatRunId: string | null;
@@ -495,6 +496,10 @@ function createChatModelControlsProps(state: ChatHeaderTestState): ChatModelCont
     gatewayAvailable: Boolean(state.client),
     loading: state.chatLoading,
     modelCatalog: state.chatModelCatalog,
+    modelSettingsHref:
+      state.chatModelCatalogMode === "replace"
+        ? "/settings/ai-agents?section=models#config-section-models"
+        : undefined,
     modelOverrides: state.sessions.state.modelOverrides,
     modelSwitching: false,
     modelsLoading: state.chatModelsLoading,
@@ -4421,6 +4426,29 @@ describe("chat model controls", () => {
 
     const modelSelect = getChatModelSelect(container);
     expect(modelSelect.getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("explains replace-mode filtering beside the model choices", () => {
+    const { state } = createChatHeaderState();
+    state.chatModelCatalogMode = "replace";
+    const container = document.createElement("div");
+
+    render(renderChatModelControls(createChatModelControlsProps(state)), container);
+
+    const hint = container.querySelector(".chat-controls__catalog-hint");
+    expect(hint?.textContent).toContain(t("chat.selectors.replaceModeHint"));
+    expect(hint?.querySelector("a")?.getAttribute("href")).toBe(
+      "/settings/ai-agents?section=models#config-section-models",
+    );
+  });
+
+  it("omits the replace-mode hint for the default catalog mode", () => {
+    const { state } = createChatHeaderState();
+    const container = document.createElement("div");
+
+    render(renderChatModelControls(createChatModelControlsProps(state)), container);
+
+    expect(container.querySelector(".chat-controls__catalog-hint")).toBeNull();
   });
 
   it("applies a model selection immediately", () => {

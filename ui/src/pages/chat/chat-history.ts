@@ -540,8 +540,8 @@ function reconcileLoadedHistoryTail(options: {
 
 export type ChatMetadataResult = CommandsListResult & {
   models?: ModelCatalogEntry[];
+  catalogMode?: "replace";
 };
-
 export type ChatEventPayload = {
   runId?: string;
   sessionKey: string;

@@ -3744,6 +3744,30 @@ openclaw-chat-page {
   overflow: hidden;
 }
 
+.chat-controls__catalog-hint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.chat-controls__catalog-hint a {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.chat-controls__catalog-hint a:hover,
+.chat-controls__catalog-hint a:focus-visible {
+  text-decoration: underline;
+}
+
 .chat-controls__locked-model {
   display: flex;
   align-items: center;

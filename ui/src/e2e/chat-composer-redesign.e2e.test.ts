@@ -541,6 +541,39 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
     }
   });
 
+  it("explains model filtering in replace mode", async () => {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const page = await context.newPage();
+    const models = [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true }];
+    const gateway = await installMockGateway(page, {
+      models,
+      methodResponses: {
+        "chat.metadata": {
+          catalogMode: "replace",
+          commands: [],
+          models,
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.metadata");
+
+      const composer = page.locator(".agent-chat__input");
+      await composer.locator('[data-chat-model-select="true"]').click();
+      const hint = composer.locator(".chat-controls__catalog-hint");
+      await expect
+        .poll(async () => (await hint.textContent())?.replace(/\s+/g, " ").trim())
+        .toBe("Replace mode filters models according to your model settings. Manage models");
+      await expect
+        .poll(() => hint.getByRole("link", { name: "Manage models" }).getAttribute("href"))
+        .toBe("/settings/ai-agents?section=models#config-section-models");
+    } finally {
+      await context.close();
+    }
+  });
+
   it("refreshes the configured usable catalog after advertised chat metadata", async () => {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();
