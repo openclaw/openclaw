@@ -88,6 +88,22 @@ skill metadata do not gain localization merely because the shared runtime can
 render a catalog. Add each message family through its existing owner and review
 boundary.
 
+### Localize a bounded Gateway error
+
+Keep the canonical English message, stable error code, and stable reason in the
+Gateway payload. Add localization metadata only through an owner-reviewed
+descriptor in `@openclaw/gateway-protocol`; never forward an arbitrary server
+message as a catalog key. The client must require the exact descriptor key,
+code, and reason tuple before rendering reviewed product copy, and must return
+the canonical server English when the key is absent from its active catalog.
+
+Add the reviewed English key to the rendering client's source catalog and use
+that client's existing refresh pipeline. For Control UI consumers, run the
+keyless baseline and verification commands in the workflow table; the
+post-merge `control-ui-locale-refresh` workflow owns generated translations.
+Approval and other safety-sensitive descriptors still require their named
+product or security reviewer before the translated message is accepted.
+
 Do not hand-edit generated native catalogs, translated documentation trees, or
 translation-memory files. Use the owning generator so source and artifact
 revisions remain reproducible.
