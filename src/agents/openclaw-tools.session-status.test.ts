@@ -395,9 +395,12 @@ beforeAll(async () => {
   await getSessionStatusTool("agent:main:spawned").execute("warm-spawned-workspace-status", {});
 });
 
-function resetSessionStore(store: Record<string, SessionEntry>) {
-  store = Object.fromEntries(
-    Object.entries(store).map(([key, entry]) => [key, normalizeLegacySessionEntryDelivery(entry)]),
+function resetSessionStore(inputStore: Record<string, SessionEntry>) {
+  const store = Object.fromEntries(
+    Object.entries(inputStore).map(([key, entry]) => [
+      key,
+      normalizeLegacySessionEntryDelivery(entry),
+    ]),
   ) as Record<string, SessionEntry>;
   buildStatusMessageMock.mockClear();
   resolveQueueSettingsMock.mockClear();
