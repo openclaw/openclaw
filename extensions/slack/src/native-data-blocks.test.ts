@@ -1,3 +1,4 @@
+import { Response as UndiciResponse } from "undici";
 import { describe, expect, it } from "vitest";
 import {
   appendSlackNativeDataFallbackText,
@@ -57,6 +58,11 @@ describe("Slack native data blocks", () => {
   it("matches Bolt 5 response_url responses and contextual RespondError failures", async () => {
     const response = new Response(JSON.stringify({ error: "invalid_blocks" }), { status: 200 });
     await expect(isSlackInvalidBlocksResponse(response)).resolves.toBe(true);
+    await expect(
+      isSlackInvalidBlocksResponse(
+        new UndiciResponse(JSON.stringify({ error: "invalid_blocks" }), { status: 200 }),
+      ),
+    ).resolves.toBe(true);
     await expect(isSlackInvalidBlocksResponse(new Response("ok"))).resolves.toBe(false);
     expect(
       isSlackNativeResponseUrlRejection({

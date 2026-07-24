@@ -49,9 +49,19 @@ export function isSlackInvalidBlocksError(error: unknown): boolean {
   return typeof code === "string" && code.trim().toLowerCase() === "invalid_blocks";
 }
 
+type SlackResponseLike = {
+  status: number;
+  clone: () => { text: () => Promise<string> };
+};
+
+function isSlackResponseLike(value: unknown): value is SlackResponseLike {
+  const record = asRecord(value);
+  return typeof record?.status === "number" && typeof record.clone === "function";
+}
+
 /** Inspect Bolt 5's native response_url Response without consuming the caller's body. */
 export async function isSlackInvalidBlocksResponse(response: unknown): Promise<boolean> {
-  if (!(response instanceof Response)) {
+  if (!isSlackResponseLike(response)) {
     return isSlackInvalidBlocksError(response);
   }
   try {
