@@ -7,6 +7,7 @@
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { matchesHostnameAllowlist, normalizeHostname } from "../sdk-security-runtime.js";
 import type { ResolvedBrowserProfile } from "./config.js";
+import { BrowserProfileUnavailableError } from "./errors.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import { withExactHostnamePolicy } from "./ssrf-policy-helpers.js";
 
@@ -51,3 +52,18 @@ export function resolveCdpReachabilityPolicy(
 
 /** Alias used by callers that treat reachability and control as one CDP policy. */
 export const resolveCdpControlPolicy = resolveCdpReachabilityPolicy;
+
+export function assertChromeMcpExplicitCdpUrlAllowed(
+  profile: ResolvedBrowserProfile,
+  cdpPolicy?: SsrFPolicy,
+): void {
+  if (profile.driver !== "existing-session" || !profile.cdpUrl) {
+    return;
+  }
+  if (!cdpPolicy) {
+    return;
+  }
+  throw new BrowserProfileUnavailableError(
+    `Browser profile "${profile.name}" uses Chrome MCP with an explicit cdpUrl, but the active Browser CDP policy requires OpenClaw to pin the approved endpoint. Chrome MCP cannot carry that pinned transport across its subprocess boundary. Use driver "openclaw" for guarded CDP endpoints, or remove cdpUrl from this existing-session profile and attach Chrome MCP to a host-local Chrome profile.`,
+  );
+}

@@ -25,6 +25,8 @@ import {
 import { normalizeCdpWsUrl } from "./cdp.js";
 import { BrowserCdpEndpointBlockedError } from "./errors.js";
 
+type ChromeCdpEndpointPin = NonNullable<Awaited<ReturnType<typeof assertCdpEndpointAllowed>>>;
+
 /** Machine-readable failure codes for Chrome CDP diagnostics. */
 type ChromeCdpDiagnosticCode =
   | "ssrf_blocked"
@@ -191,10 +193,12 @@ function chromeVersionFromCdpResult(result: unknown): ChromeVersion | undefined 
 async function diagnoseCdpHealthCommand(
   wsUrl: string,
   timeoutMs = CHROME_WS_READY_TIMEOUT_MS,
+  lookup?: ChromeCdpEndpointPin["lookup"],
 ): Promise<CdpHealthDiagnostic> {
   return await new Promise<CdpHealthDiagnostic>((resolve) => {
     const ws = openCdpWebSocket(wsUrl, {
       handshakeTimeoutMs: timeoutMs,
+      lookup,
     });
     let settled = false;
     let opened = false;
@@ -343,9 +347,14 @@ async function diagnoseCdpWebSocketEndpoint(params: {
   wsUrl: string;
   startedAt: number;
   handshakeTimeoutMs: number;
+  lookup?: ChromeCdpEndpointPin["lookup"];
   version?: ChromeVersion;
 }): Promise<ChromeCdpDiagnostic> {
-  const health = await diagnoseCdpHealthCommand(params.wsUrl, params.handshakeTimeoutMs);
+  const health = await diagnoseCdpHealthCommand(
+    params.wsUrl,
+    params.handshakeTimeoutMs,
+    params.lookup,
+  );
   if (!health.ok) {
     return failureDiagnostic({
       cdpUrl: params.cdpUrl,
@@ -373,8 +382,9 @@ export async function diagnoseChromeCdp(
   ssrfPolicy?: SsrFPolicy,
 ): Promise<ChromeCdpDiagnostic> {
   const startedAt = Date.now();
+  let configuredPin: ChromeCdpEndpointPin | undefined;
   try {
-    await assertCdpEndpointAllowed(cdpUrl, ssrfPolicy);
+    configuredPin = await assertCdpEndpointAllowed(cdpUrl, ssrfPolicy);
   } catch (err) {
     return failureDiagnostic({
       cdpUrl,
@@ -391,6 +401,7 @@ export async function diagnoseChromeCdp(
       wsUrl: cdpUrl,
       startedAt,
       handshakeTimeoutMs,
+      lookup: configuredPin?.lookup,
     });
   }
 
@@ -411,6 +422,7 @@ export async function diagnoseChromeCdp(
         wsUrl: cdpUrl,
         startedAt,
         handshakeTimeoutMs,
+        lookup: configuredPin?.lookup,
       });
     }
     const classified = classifyChromeVersionError(err);
@@ -430,6 +442,7 @@ export async function diagnoseChromeCdp(
         wsUrl: cdpUrl,
         startedAt,
         handshakeTimeoutMs,
+        lookup: configuredPin?.lookup,
         version,
       });
     }
@@ -441,8 +454,9 @@ export async function diagnoseChromeCdp(
     });
   }
   const wsUrl = normalizeCdpWsUrl(wsUrlRaw, discoveryUrl);
+  let discoveredPin: ChromeCdpEndpointPin | undefined;
   try {
-    await assertCdpEndpointAllowed(wsUrl, cdpControlPolicy, {
+    discoveredPin = await assertCdpEndpointAllowed(wsUrl, cdpControlPolicy, {
       source: "discovered",
       configuredUrl: cdpUrl,
     });
@@ -456,10 +470,14 @@ export async function diagnoseChromeCdp(
     });
   }
 
-  const health = await diagnoseCdpHealthCommand(wsUrl, handshakeTimeoutMs);
+  const health = await diagnoseCdpHealthCommand(wsUrl, handshakeTimeoutMs, discoveredPin?.lookup);
   if (!health.ok) {
     if (isWebSocketUrl(cdpUrl) && wsUrl !== cdpUrl) {
-      const directHealth = await diagnoseCdpHealthCommand(cdpUrl, handshakeTimeoutMs);
+      const directHealth = await diagnoseCdpHealthCommand(
+        cdpUrl,
+        handshakeTimeoutMs,
+        configuredPin?.lookup,
+      );
       if (directHealth.ok) {
         return {
           ok: true,

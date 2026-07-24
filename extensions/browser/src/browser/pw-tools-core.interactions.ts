@@ -2,6 +2,9 @@
  * Playwright-backed browser interaction tools, including clicks, form input,
  * screenshots, batch actions, and SSRF-aware post-interaction navigation checks.
  */
+import fs from "node:fs/promises";
+import path from "node:path";
+import { detectMime } from "openclaw/plugin-sdk/media-mime";
 import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -16,6 +19,7 @@ import {
   resolveActInteractionTimeoutMs,
   resolveActWaitTimeoutMs,
 } from "./act-policy.js";
+import { isLoopbackHost } from "./cdp.helpers.js";
 import type { BrowserActRequest, BrowserFormField } from "./client-actions.types.js";
 import type { BrowserDownloadResult } from "./download-types.js";
 import { normalizeBrowserEvaluateFunctionSource } from "./evaluate-source.js";
@@ -65,6 +69,14 @@ type TargetOpts = {
 };
 
 const ACT_DOWNLOAD_MAX_DRAIN_MS = 1_000;
+const DEFAULT_UPLOAD_MIME_TYPE = "application/octet-stream";
+const PLAYWRIGHT_FILE_PAYLOAD_SIZE_LIMIT_BYTES = 50 * 1024 * 1024;
+
+type PlaywrightFilePayload = {
+  name: string;
+  mimeType: string;
+  buffer: Buffer;
+};
 
 function interactionNavigationPolicy(
   opts: BrowserNavigationPolicyOptions,
@@ -76,6 +88,40 @@ function interactionNavigationPolicy(
 
 function hasInteractionNavigationPolicy(policy: BrowserNavigationPolicyOptions): boolean {
   return Boolean(policy.ssrfPolicy || policy.browserProxyMode);
+}
+
+async function toPlaywrightFilePayloads(paths: string[]): Promise<PlaywrightFilePayload[]> {
+  const stats = await Promise.all(paths.map(async (filePath) => await fs.stat(filePath)));
+  const totalSize = stats.reduce((size, stat) => size + stat.size, 0);
+  if (totalSize >= PLAYWRIGHT_FILE_PAYLOAD_SIZE_LIMIT_BYTES) {
+    throw new Error(
+      "Cannot set buffer larger than 50Mb, please write it to a file and pass its path instead.",
+    );
+  }
+  return await Promise.all(
+    paths.map(async (filePath) => {
+      const buffer = await fs.readFile(filePath);
+      return {
+        name: path.basename(filePath),
+        mimeType: (await detectMime({ buffer, filePath })) ?? DEFAULT_UPLOAD_MIME_TYPE,
+        buffer,
+      };
+    }),
+  );
+}
+
+function shouldUsePlaywrightFilePayloads(opts: {
+  cdpUrl: string;
+  ssrfPolicy?: BrowserNavigationPolicyOptions["ssrfPolicy"];
+}): boolean {
+  if (!opts.ssrfPolicy) {
+    return false;
+  }
+  try {
+    return !isLoopbackHost(new URL(opts.cdpUrl).hostname);
+  } catch {
+    return false;
+  }
 }
 
 type NavigationObservablePage = Pick<Page, "url"> & {
@@ -1711,11 +1757,14 @@ export async function setInputFilesViaPlaywright(
     throw new Error(resolvedResult.error);
   }
   const resolvedPaths = resolvedResult.paths;
+  const resolvedFiles = shouldUsePlaywrightFilePayloads(opts)
+    ? await toPlaywrightFilePayloads(resolvedPaths)
+    : resolvedPaths;
 
   try {
     await awaitNavigationGuardedInteraction({
       action: async () => {
-        await locator.setInputFiles(resolvedPaths);
+        await locator.setInputFiles(resolvedFiles);
       },
       cdpUrl: opts.cdpUrl,
       page,

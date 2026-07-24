@@ -34,6 +34,14 @@ import {
 import { normalizeBrowserTimerDelayMs } from "./timer-delay.js";
 
 const CDP_URL_IN_TEXT_RE = /\b(?:https?|wss?):\/\/[^\s"'<>`]+/gi;
+const CDP_WS_MAX_PAYLOAD_BYTES = 256 * 1024 * 1024;
+const PLAYWRIGHT_CDP_USER_AGENT = "Playwright/unknown";
+const PLAYWRIGHT_CDP_PER_MESSAGE_DEFLATE = {
+  clientNoContextTakeover: true,
+  zlibDeflateOptions: { level: 3 },
+  zlibInflateOptions: { chunkSize: 10 * 1024 },
+  threshold: 10 * 1024,
+} as const;
 
 export { isLoopbackHost };
 export { parseBrowserHttpUrl, redactCdpUrl };
@@ -97,6 +105,7 @@ export function scopeCdpPolicyToConfiguredEndpoint(
 type CdpEndpointSource =
   | { source?: "configured" }
   | { source: "discovered"; configuredUrl: string };
+type CdpEndpointPin = Awaited<ReturnType<typeof resolvePinnedHostnameWithPolicy>>;
 
 function cdpEndpointAuthority(url: string): string {
   const parsed = new URL(url);
@@ -125,12 +134,12 @@ export async function assertCdpEndpointAllowed(
   cdpUrl: string,
   ssrfPolicy?: SsrFPolicy,
   options?: CdpEndpointSource,
-): Promise<void> {
+): Promise<CdpEndpointPin | undefined> {
   if (options?.source === "discovered") {
     assertDiscoveredCdpEndpointMatchesConfigured(cdpUrl, options.configuredUrl, ssrfPolicy);
   }
   if (!ssrfPolicy) {
-    return;
+    return undefined;
   }
   const parsed = new URL(cdpUrl);
   if (!["http:", "https:", "ws:", "wss:"].includes(parsed.protocol)) {
@@ -144,7 +153,7 @@ export async function assertCdpEndpointAllowed(
       isLoopbackHost(parsed.hostname) && options?.source !== "discovered"
         ? withExactHostnamePolicy(ssrfPolicy, parsed.hostname)
         : ssrfPolicy;
-    await resolvePinnedHostnameWithPolicy(parsed.hostname, {
+    return await resolvePinnedHostnameWithPolicy(parsed.hostname, {
       policy,
     });
   } catch (error) {
@@ -199,6 +208,13 @@ export function getHeadersWithAuth(url: string, headers: Record<string, string> 
     // ignore
   }
   return mergedHeaders;
+}
+
+function withDefaultPlaywrightUserAgent(headers: Record<string, string>): Record<string, string> {
+  if (Object.keys(headers).some((key) => key.trim().toLowerCase() === "user-agent")) {
+    return headers;
+  }
+  return { ...headers, "User-Agent": PLAYWRIGHT_CDP_USER_AGENT };
 }
 
 /** Remove URL userinfo after callers have converted it to an Authorization header. */
@@ -322,9 +338,11 @@ type CdpTabOwnershipParams = {
   ssrfPolicy?: SsrFPolicy;
 };
 
-async function resolveCdpTabOwnershipContext(
-  params: CdpTabOwnershipParams,
-): Promise<{ ownership: BrowserTabOwnership; browserWebSocketUrl?: string }> {
+async function resolveCdpTabOwnershipContext(params: CdpTabOwnershipParams): Promise<{
+  ownership: BrowserTabOwnership;
+  browserWebSocketUrl?: string;
+  browserWebSocketLookup?: CdpEndpointPin["lookup"];
+}> {
   params.signal?.throwIfAborted();
   const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(params.cdpUrl);
   let version: { webSocketDebuggerUrl?: unknown };
@@ -353,7 +371,7 @@ async function resolveCdpTabOwnershipContext(
     return { ownership: { status: "non-durable", reason: "browser-identity-unavailable" } };
   }
   try {
-    await assertCdpEndpointAllowed(browserWebSocketUrl, params.ssrfPolicy, {
+    const pinned = await assertCdpEndpointAllowed(browserWebSocketUrl, params.ssrfPolicy, {
       source: "discovered",
       configuredUrl: params.cdpUrl,
     });
@@ -368,6 +386,7 @@ async function resolveCdpTabOwnershipContext(
         }),
       },
       browserWebSocketUrl,
+      browserWebSocketLookup: pinned?.lookup,
     };
   } catch (error) {
     if (error instanceof BrowserCdpEndpointBlockedError) {
@@ -471,6 +490,7 @@ export async function closeTrackedCdpTarget(
         commandTimeoutMs: params.timeoutMs,
         handshakeTimeoutMs: params.timeoutMs,
         handshakeRetries: 0,
+        lookup: resolved.browserWebSocketLookup,
       },
     );
   } catch (error) {
@@ -669,9 +689,17 @@ export async function fetchOk(
 /** Open a CDP WebSocket with URL basic-auth and proxy bypass handling. */
 export function openCdpWebSocket(
   wsUrl: string,
-  opts?: { headers?: Record<string, string>; handshakeTimeoutMs?: number },
+  opts?: {
+    headers?: Record<string, string>;
+    handshakeTimeoutMs?: number;
+    lookup?: CdpEndpointPin["lookup"];
+    playwrightTransportDefaults?: boolean;
+  },
 ): WebSocket {
-  const headers = getHeadersWithAuth(wsUrl, opts?.headers ?? {});
+  const headersWithAuth = getHeadersWithAuth(wsUrl, opts?.headers ?? {});
+  const headers = opts?.playwrightTransportDefaults
+    ? withDefaultPlaywrightUserAgent(headersWithAuth)
+    : headersWithAuth;
   const handshakeTimeoutMs =
     typeof opts?.handshakeTimeoutMs === "number" && Number.isFinite(opts.handshakeTimeoutMs)
       ? Math.max(1, Math.floor(opts.handshakeTimeoutMs))
@@ -683,8 +711,15 @@ export function openCdpWebSocket(
     () =>
       new WebSocket(connectionUrl, {
         handshakeTimeout: handshakeTimeoutMs,
+        maxPayload: CDP_WS_MAX_PAYLOAD_BYTES,
+        ...(opts?.playwrightTransportDefaults
+          ? { perMessageDeflate: PLAYWRIGHT_CDP_PER_MESSAGE_DEFLATE }
+          : {}),
         ...(Object.keys(headers).length ? { headers } : {}),
+        // getDirectAgentForCdp only returns a plain direct loopback agent, not
+        // a proxy agent. Non-loopback pins must reach Node's lookup option.
         ...(agent ? { agent } : {}),
+        ...(opts?.lookup ? { lookup: opts.lookup } : {}),
       }),
   );
 }
@@ -696,6 +731,7 @@ type CdpSocketOptions = {
   handshakeRetries?: number;
   handshakeRetryDelayMs?: number;
   handshakeMaxRetryDelayMs?: number;
+  lookup?: CdpEndpointPin["lookup"];
 };
 
 function normalizeRetryCount(value: number | undefined, fallback: number): number {

@@ -45,7 +45,7 @@ vi.mock("ws", () => {
 });
 
 const connectOverCdpSpy = vi.spyOn(chromium, "connectOverCDP");
-const getChromeWebSocketUrlSpy = vi.spyOn(chromeModule, "getChromeWebSocketUrl");
+const getChromeWebSocketEndpointSpy = vi.spyOn(chromeModule, "getChromeWebSocketEndpoint");
 
 function installBrowserMock() {
   const sessionSend = vi.fn(async (method: string) => {
@@ -78,13 +78,13 @@ function installBrowserMock() {
   } as unknown as import("playwright-core").Browser;
 
   connectOverCdpSpy.mockResolvedValue(browser);
-  getChromeWebSocketUrlSpy.mockResolvedValue(null);
+  getChromeWebSocketEndpointSpy.mockResolvedValue(null);
   return { browserClose };
 }
 
 afterEach(async () => {
   connectOverCdpSpy.mockReset();
-  getChromeWebSocketUrlSpy.mockReset();
+  getChromeWebSocketEndpointSpy.mockReset();
   wsMockState.constructorUrls = [];
   await closePlaywrightBrowserConnection().catch(() => {});
 });
@@ -116,8 +116,9 @@ describe("pw-session termination CDP SSRF guard", () => {
         ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
       });
 
-      expect(fetchSpy).toHaveBeenCalledTimes(1);
-      expect(fetchSpy.mock.calls[0]?.[0]).toBe("http://127.0.0.1:18792/json/list");
+      const fetchUrls = fetchSpy.mock.calls.map((call) => call[0]);
+      expect(fetchUrls).toContain("http://127.0.0.1:18792/json/list");
+      expect(fetchUrls).not.toContain("http://169.254.169.254/json/list");
       expect(wsMockState.constructorUrls).toEqual([]);
       expect(browserClose).toHaveBeenCalledTimes(1);
     } finally {
