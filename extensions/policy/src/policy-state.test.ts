@@ -55,6 +55,24 @@ describe("scanPolicyRouting", () => {
   });
 });
 
+describe("scanPolicyToolPosture", () => {
+  it("reports sandbox-default exec security for needed mode", () => {
+    const evidence = collectPolicyEvidence({
+      agents: { defaults: { sandbox: { mode: "needed" } } },
+      tools: { exec: { host: "auto" } },
+    }).toolPosture;
+
+    expect(evidence).toContainEqual(
+      expect.objectContaining({
+        kind: "execSecurity",
+        scope: "global",
+        value: "deny",
+        explicit: false,
+      }),
+    );
+  });
+});
+
 describe("scanPolicyTools", () => {
   it("scans documented bullet tool declarations", async () => {
     await expect(

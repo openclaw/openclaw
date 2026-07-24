@@ -839,7 +839,7 @@ export function collectSandboxDockerNoopFindings(cfg: OpenClawConfig): SecurityA
       "These docker settings will not take effect until sandbox mode is enabled:\n" +
       configuredPaths.map((entry) => `- ${entry}`).join("\n"),
     remediation:
-      'Enable sandbox mode (`agents.defaults.sandbox.mode="non-main"` or `"all"`) where needed, or remove unused docker settings.',
+      'Enable sandbox mode (`agents.defaults.sandbox.mode="needed"`, `"non-main"`, or `"all"`) where needed, or remove unused docker settings.',
   });
 
   return findings;

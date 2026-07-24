@@ -103,6 +103,15 @@ describe("parseClawManifest", () => {
     expect(manifest.cronJobs[0]?.id).toBe("weekday-triage");
   });
 
+  it("accepts needed sandbox mode", () => {
+    const manifest = requireManifest({
+      schemaVersion: 1,
+      agent: { id: "chat-first", sandbox: { mode: "needed" } },
+    });
+
+    expect(manifest.agent.sandbox?.mode).toBe("needed");
+  });
+
   it("defaults optional ownership groups without inventing agent settings", () => {
     const manifest = requireManifest({ schemaVersion: 1, agent: { id: "minimal-agent" } });
 

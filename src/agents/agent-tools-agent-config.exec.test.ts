@@ -4,7 +4,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
+import { registerSandboxBackend } from "./sandbox/backend.js";
 
 function createExecHostDefaultsConfig(
   agents: Array<{ id: string; execHost?: "auto" | "gateway" | "sandbox" }>,
@@ -114,6 +115,60 @@ describe("Agent-specific exec tool defaults", () => {
     });
     const resultDetails = result?.details as { status?: string } | undefined;
     expect(resultDetails?.status).toBe("completed");
+  });
+
+  it("creates a needed sandbox only when exec is called", async () => {
+    const backendFactory = vi.fn(async () => ({
+      id: "test-needed-exec",
+      runtimeId: "needed-exec-runtime",
+      runtimeLabel: "Needed Exec Runtime",
+      workdir: "/runtime/workspace",
+      buildExecSpec: async () => ({
+        argv: [process.execPath, "-e", 'process.stdout.write("needed sandbox")'],
+        env: process.env,
+        stdinMode: "pipe-closed" as const,
+      }),
+      runShellCommand: async () => ({
+        stdout: Buffer.alloc(0),
+        stderr: Buffer.alloc(0),
+        code: 0,
+      }),
+    }));
+    const restore = registerSandboxBackend("test-needed-exec", {
+      factory: backendFactory,
+      resolveWorkdir: () => "/runtime/workspace",
+    });
+    try {
+      const tools = createOpenClawCodingTools({
+        config: {
+          agents: {
+            defaults: {
+              sandbox: {
+                mode: "needed",
+                backend: "test-needed-exec",
+                scope: "session",
+                workspaceAccess: "rw",
+                prune: { idleHours: 0, maxAgeDays: 0 },
+              },
+            },
+          },
+          tools: { exec: { host: "auto", mode: "full" } },
+        },
+        sessionKey: "agent:main:main",
+        ...createTempAgentDirs("test-main-needed-sandbox"),
+      });
+      const execTool = requireExecTool(tools);
+
+      expect(backendFactory).not.toHaveBeenCalled();
+      const result = await execTool.execute("call-needed-sandbox", { command: "ignored" });
+
+      expect(backendFactory).toHaveBeenCalledTimes(1);
+      expect((result.content[0] as { text?: string } | undefined)?.text).toContain(
+        "needed sandbox",
+      );
+    } finally {
+      restore();
+    }
   });
 
   it("passes normalized exec mode defaults into the exec tool", async () => {
@@ -230,7 +285,7 @@ describe("Agent-specific exec tool defaults", () => {
         command: "echo done",
         host: "sandbox",
       }),
-    ).rejects.toThrow(/requires a sandbox runtime/);
+    ).rejects.toThrow(/no sandbox runtime is available/);
   });
 
   it("should apply agent-specific exec host defaults over global defaults", async () => {
@@ -276,7 +331,7 @@ describe("Agent-specific exec tool defaults", () => {
         host: "sandbox",
         yieldMs: 1000,
       }),
-    ).rejects.toThrow(/requires a sandbox runtime/);
+    ).rejects.toThrow(/no sandbox runtime is available/);
   });
 
   it("applies explicit agentId exec defaults when sessionKey is opaque", async () => {

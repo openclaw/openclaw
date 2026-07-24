@@ -160,6 +160,65 @@ describe("resolveSandboxContext", () => {
     }
   }, 15_000);
 
+  it("defers needed mode backend creation until tool activation", async () => {
+    const backendFactory = vi.fn(async () => ({
+      id: "test-needed-backend",
+      runtimeId: "needed-runtime",
+      runtimeLabel: "Needed Runtime",
+      workdir: "/runtime/workspace",
+      buildExecSpec: async () => ({
+        argv: ["needed-backend", "exec"],
+        env: process.env,
+        stdinMode: "pipe-closed" as const,
+      }),
+      runShellCommand: async () => ({
+        stdout: Buffer.alloc(0),
+        stderr: Buffer.alloc(0),
+        code: 0,
+      }),
+    }));
+    const restore = registerSandboxBackend("test-needed-backend", {
+      factory: backendFactory,
+      resolveWorkdir: () => "/runtime/workspace",
+    });
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "needed",
+              backend: "test-needed-backend",
+              scope: "session",
+              workspaceAccess: "rw",
+              prune: { idleHours: 0, maxAgeDays: 0 },
+            },
+          },
+        },
+      };
+
+      await expect(
+        resolveSandboxContext({
+          config: cfg,
+          sessionKey: "agent:main:main",
+          workspaceDir: "/tmp/openclaw-test",
+        }),
+      ).resolves.toBeNull();
+      expect(backendFactory).not.toHaveBeenCalled();
+
+      const result = await resolveSandboxContext({
+        config: cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir: "/tmp/openclaw-test",
+        activation: "tool",
+      });
+      expect(result?.backendId).toBe("test-needed-backend");
+      expect(result?.runtimeId).toBe("needed-runtime");
+      expect(backendFactory).toHaveBeenCalledTimes(1);
+    } finally {
+      restore();
+    }
+  }, 15_000);
+
   it("treats main session aliases as main in non-main mode", async () => {
     const cfg: OpenClawConfig = {
       session: { mainKey: "work" },

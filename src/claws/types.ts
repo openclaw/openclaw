@@ -29,7 +29,7 @@ type ClawAgent = {
     mentionPatterns?: string[];
   };
   sandbox?: {
-    mode?: "off" | "non-main" | "all";
+    mode?: "off" | "non-main" | "needed" | "all";
     scope?: "session" | "agent" | "shared";
     workspaceAccess?: "none" | "ro" | "rw";
   };

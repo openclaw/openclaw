@@ -26,16 +26,17 @@ Not sandboxed:
 
 Three independent settings control sandbox behavior:
 
-| Setting | Key                               | Values                       | Default  |
-| ------- | --------------------------------- | ---------------------------- | -------- |
-| Mode    | `agents.defaults.sandbox.mode`    | `off`, `non-main`, `all`     | `off`    |
-| Scope   | `agents.defaults.sandbox.scope`   | `agent`, `session`, `shared` | `agent`  |
-| Backend | `agents.defaults.sandbox.backend` | `docker`, `ssh`, `openshell` | `docker` |
+| Setting | Key                               | Values                             | Default  |
+| ------- | --------------------------------- | ---------------------------------- | -------- |
+| Mode    | `agents.defaults.sandbox.mode`    | `off`, `non-main`, `needed`, `all` | `off`    |
+| Scope   | `agents.defaults.sandbox.scope`   | `agent`, `session`, `shared`       | `agent`  |
+| Backend | `agents.defaults.sandbox.backend` | `docker`, `ssh`, `openshell`       | `docker` |
 
 **Mode** controls when sandboxing applies:
 
 - `off`: no sandboxing.
 - `non-main`: sandbox every session except the agent's main session. The main session key is always `agent:<agentId>:main` (or `global` when `session.scope` is `"global"`); it is not configurable. Group/channel sessions use their own keys, so they always count as non-main and get sandboxed.
+- `needed`: chat-only turns run direct. Sandbox-bound OpenClaw tools such as `exec` start the configured backend when called and fail closed if it is unavailable. Codex native execution stays disabled until an OpenClaw sandbox environment exists, so it cannot fall back to host execution.
 - `all`: every session runs in a sandbox.
 
 **Scope** controls how many containers/environments are created:

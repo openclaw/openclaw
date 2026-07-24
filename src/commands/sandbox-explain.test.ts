@@ -390,6 +390,36 @@ describe("sandbox explain command", () => {
     expect(parsed.sandbox.workspaceMounts).toEqual([]);
   });
 
+  it("reports needed mode as direct until sandbox-bound tool activation", async () => {
+    mockCfg = {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "needed",
+            scope: "agent",
+            workspaceAccess: "none",
+          },
+        },
+      },
+      session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
+    };
+
+    const logs: string[] = [];
+    await sandboxExplainCommand({ json: true, agent: "main" }, {
+      log: (msg: string) => logs.push(msg),
+      error: (msg: string) => logs.push(msg),
+      exit: (_code: number) => {},
+    } as unknown as Parameters<typeof sandboxExplainCommand>[1]);
+
+    const parsed = JSON.parse(logs.join(""));
+    expect(parsed.sandbox).toMatchObject({
+      mode: "needed",
+      sessionIsSandboxed: false,
+      toolActivationIsSandboxed: true,
+      workspaceSource: "direct",
+    });
+  });
+
   it("uses the configured default agent for global sessions", async () => {
     mockCfg = {
       agents: {

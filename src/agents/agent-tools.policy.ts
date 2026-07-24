@@ -24,7 +24,7 @@ import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig, resolveAgentIdFromSessionKey } from "./agent-scope.js";
 import { resolveProviderToolPolicy } from "./provider-tool-policy.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
-import type { SandboxToolPolicy } from "./sandbox.js";
+import type { SandboxMode, SandboxToolPolicy } from "./sandbox.js";
 import { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
 import {
   resolveSubagentCapabilityStore,
@@ -156,7 +156,7 @@ export function filterToolsByPolicy<TTool extends { name: string }>(
 export function resolveConfiguredToolPolicies(params: {
   cfg: OpenClawConfig;
   agentTools?: AgentToolsConfig;
-  sandboxMode?: "off" | "non-main" | "all";
+  sandboxMode?: SandboxMode;
   agentId?: string | null;
   extraPolicies?: readonly (SandboxToolPolicy | undefined)[];
 }): SandboxToolPolicy[] {

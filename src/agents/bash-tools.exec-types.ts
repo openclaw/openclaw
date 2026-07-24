@@ -50,6 +50,7 @@ export type ExecToolDefaults = {
   approvalFollowupMode?: "agent" | "direct";
   approvalRunningNoticeMs?: number;
   sandbox?: BashSandboxConfig;
+  resolveSandbox?: () => BashSandboxConfig | undefined | Promise<BashSandboxConfig | undefined>;
   elevated?: ExecElevatedDefaults;
   allowBackground?: boolean;
   scopeKey?: string;

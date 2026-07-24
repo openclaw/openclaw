@@ -208,6 +208,44 @@ describe("sandbox/tool-policy", () => {
     ).toBe(true);
   });
 
+  it("defers needed mode sandboxing until tool activation", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: { mode: "needed", scope: "agent" },
+        },
+        list: [{ id: "main" }],
+      },
+    };
+
+    expect(
+      resolveSandboxRuntimeStatus({
+        cfg,
+        sessionKey: "agent:main:main",
+      }).sandboxed,
+    ).toBe(false);
+    expect(
+      resolveSandboxRuntimeStatus({
+        cfg,
+        sessionKey: "agent:main:telegram:default:direct:42",
+      }).sandboxed,
+    ).toBe(false);
+    expect(
+      resolveSandboxRuntimeStatus({
+        cfg,
+        sessionKey: "agent:main:main",
+        activation: "tool",
+      }).sandboxed,
+    ).toBe(true);
+    expect(
+      resolveSandboxRuntimeStatus({
+        cfg,
+        sessionKey: "agent:main:telegram:default:direct:42",
+        activation: "tool",
+      }).sandboxed,
+    ).toBe(true);
+  });
+
   it("keeps explicit sandbox deny precedence over allow and alsoAllow", () => {
     const cfg: OpenClawConfig = {
       agents: {

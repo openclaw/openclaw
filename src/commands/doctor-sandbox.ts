@@ -310,8 +310,8 @@ export async function maybeRepairSandboxImages(
   if (!dockerAvailable) {
     const lines = [
       `Sandbox mode is enabled (mode: "${mode}") but Docker is not available.`,
-      "Docker is required for sandbox mode to function.",
-      "Isolated sessions (cron jobs, sub-agents) will fail without Docker.",
+      "Docker is required for Docker-backed sandbox execution.",
+      "Sandbox-bound sessions or tools will fail without Docker.",
       "",
       "Options:",
       "- Install Docker and restart the gateway",

@@ -445,6 +445,28 @@ describe("registerPolicyDoctorChecks", () => {
     expect(result.findings).toEqual([]);
   });
 
+  it("accepts needed as a reviewed sandbox mode", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      agents: {
+        defaults: {
+          sandbox: { mode: "needed" },
+        },
+      },
+    } as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ sandbox: { requireMode: ["needed"] } }),
+      "utf-8",
+    );
+
+    const result = await runPolicyChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual([]);
+  });
+
   it("applies agent-scoped sandbox claims only to matching agents", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {

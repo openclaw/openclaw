@@ -115,7 +115,7 @@ function pushToolExecPosture(
   const inheritedSecurity = readString(inheritedExec.security);
   // Config conformance intentionally ignores exec-approvals.json runtime/operator state.
   const sandboxMode = readString(params.sandbox.mode) ?? readString(params.inheritedSandbox.mode);
-  const sandboxCanApply = sandboxMode === "all";
+  const sandboxCanApply = sandboxMode === "all" || sandboxMode === "needed";
   pushToolPostureValue(entries, params, {
     suffix: "exec/security",
     kind: "execSecurity",

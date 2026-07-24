@@ -25,7 +25,7 @@ import { updateRegistry } from "./registry.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
 import { assertSshSandboxSecretOwnerAvailable } from "./secret-owner.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "./shared.js";
-import type { SandboxContext, SandboxWorkspaceInfo } from "./types.js";
+import type { SandboxActivation, SandboxContext, SandboxWorkspaceInfo } from "./types.js";
 import { ensureSandboxWorkspace } from "./workspace.js";
 
 async function syncSandboxSkillsToWorkspace(params: {
@@ -140,6 +140,7 @@ function resolveSandboxSession(params: {
   config?: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
+  activation?: SandboxActivation;
 }) {
   const rawSessionKey = params.sessionKey?.trim();
   if (!rawSessionKey) {
@@ -150,6 +151,7 @@ function resolveSandboxSession(params: {
     cfg: params.config,
     agentId: params.agentId,
     sessionKey: rawSessionKey,
+    activation: params.activation,
   });
   if (!runtime.sandboxed) {
     return null;
@@ -193,6 +195,7 @@ export async function resolveSandboxContext(params: {
   requireCurrentConfig?: boolean;
   sessionKey?: string;
   workspaceDir?: string;
+  activation?: SandboxActivation;
 }): Promise<SandboxContext | null> {
   const resolved = resolveSandboxSession(params);
   if (!resolved) {
@@ -323,6 +326,7 @@ export async function ensureSandboxWorkspaceForSession(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
   workspaceDir?: string;
+  activation?: SandboxActivation;
 }): Promise<SandboxWorkspaceInfo | null> {
   const resolved = resolveSandboxSession(params);
   if (!resolved) {

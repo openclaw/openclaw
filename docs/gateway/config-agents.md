@@ -720,7 +720,7 @@ Optional sandboxing for the embedded agent. See [Sandboxing](/gateway/sandboxing
   agents: {
     defaults: {
       sandbox: {
-        mode: "non-main", // off (default) | non-main | all
+        mode: "non-main", // off (default) | non-main | needed | all
         backend: "docker", // docker (default) | ssh | openshell
         scope: "agent", // session | agent (default) | shared
         workspaceAccess: "none", // none (default) | ro | rw

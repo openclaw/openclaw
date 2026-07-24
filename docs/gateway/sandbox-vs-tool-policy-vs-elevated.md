@@ -25,7 +25,7 @@ openclaw sandbox explain --json
 It prints:
 
 - effective sandbox mode/scope/workspace access
-- whether the session is currently sandboxed (main vs non-main)
+- whether the session is currently sandboxed, or will sandbox only when sandbox-bound tools run
 - effective sandbox tool allow/deny (and whether it came from agent/global/default)
 - elevated gates and fix-it key paths
 
@@ -35,6 +35,7 @@ Sandboxing is controlled by `agents.defaults.sandbox.mode`:
 
 - `"off"`: everything runs on the host.
 - `"non-main"`: only non-main sessions are sandboxed (common "surprise" for groups/channels).
+- `"needed"`: chat-only turns run direct; sandbox-bound tools such as `exec` start the sandbox when called and fail closed if the backend is unavailable.
 - `"all"`: everything is sandboxed.
 
 `agents.defaults.sandbox.workspaceAccess` controls what the sandbox can see: `"none"`, `"ro"`, or `"rw"`.

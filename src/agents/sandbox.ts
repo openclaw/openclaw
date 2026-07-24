@@ -74,7 +74,9 @@ export type {
 } from "./sandbox/ssh.js";
 
 export type {
+  SandboxActivation,
   SandboxContext,
+  SandboxMode,
   SandboxSshConfig,
   SandboxToolPolicy,
   SandboxWorkspaceAccess,

@@ -1377,6 +1377,7 @@ export function createExecTool(
   const agentId =
     defaults?.agentId ??
     (parsedAgentSession ? resolveAgentIdFromSessionKey(defaults?.sessionKey) : undefined);
+  const hasSandboxRuntime = () => Boolean(defaults?.sandbox || defaults?.resolveSandbox);
   const resolveHostForParams = (params: ExecToolArgs): ExecHost => {
     const elevatedDefaults = defaults?.elevated;
     const elevatedAllowed = Boolean(elevatedDefaults?.enabled && elevatedDefaults.allowed);
@@ -1402,7 +1403,7 @@ export function createExecTool(
       configuredTarget: defaults?.host,
       requestedTarget,
       elevatedRequested: elevatedMode !== "off",
-      sandboxAvailable: Boolean(defaults?.sandbox),
+      sandboxAvailable: hasSandboxRuntime(),
     }).effectiveHost;
   };
   const buildUnavailableWorkdirResult = (params: {
@@ -1641,7 +1642,7 @@ export function createExecTool(
       const elevatedRequested = elevatedMode !== "off";
       if (elevatedRequested) {
         if (!elevatedDefaults?.enabled || !elevatedDefaults.allowed) {
-          const runtime = defaults?.sandbox ? "sandboxed" : "direct";
+          const runtime = hasSandboxRuntime() ? "sandboxed" : "direct";
           const gates: string[] = [];
           const contextParts: string[] = [];
           const provider = normalizeOptionalString(defaults?.messageProvider);
@@ -1680,7 +1681,7 @@ export function createExecTool(
         configuredTarget: defaults?.host,
         requestedTarget,
         elevatedRequested,
-        sandboxAvailable: Boolean(defaults?.sandbox),
+        sandboxAvailable: hasSandboxRuntime(),
       });
       const host: ExecHost = target.effectiveHost;
 
@@ -1738,12 +1739,15 @@ export function createExecTool(
       }
       const autoReview = modePolicy.autoReview && ask === modePolicy.ask && !bypassApprovals;
 
-      const sandbox = host === "sandbox" ? defaults?.sandbox : undefined;
-      if (target.selectedTarget === "sandbox" && !sandbox) {
+      let sandbox = host === "sandbox" ? defaults?.sandbox : undefined;
+      if (host === "sandbox" && !sandbox && defaults?.resolveSandbox) {
+        sandbox = await defaults.resolveSandbox();
+      }
+      if (host === "sandbox" && !sandbox) {
         throw new Error(
           [
-            "exec host=sandbox requires a sandbox runtime for this session.",
-            'Enable sandbox mode (`agents.defaults.sandbox.mode="non-main"` or `"all"`) or use host=auto/gateway/node.',
+            "exec resolved to sandbox, but no sandbox runtime is available for this session.",
+            'Enable sandbox mode (`agents.defaults.sandbox.mode="needed"`, `"non-main"`, or `"all"`) or configure tools.exec.host=gateway/node.',
           ].join("\n"),
         );
       }

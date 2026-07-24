@@ -1543,6 +1543,40 @@ describe("Codex app-server dynamic tool build", () => {
     expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
   });
 
+  it("disables Codex native tools while needed mode waits for sandbox-bound tools", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "needed-session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.sessionKey = "agent:main:main";
+    params.config = {
+      agents: { defaults: { sandbox: { mode: "needed" } } },
+      tools: { exec: { host: "auto" } },
+    } as never;
+
+    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+    expect(
+      shouldEnableCodexAppServerNativeToolSurface(params, {
+        enabled: true,
+        backendId: "docker",
+      } as never),
+    ).toBe(false);
+    expect(
+      shouldEnableCodexAppServerNativeToolSurface(
+        params,
+        {
+          enabled: true,
+          backendId: "docker",
+          backend: {},
+          tools: {
+            allow: ["exec", "process", "read", "write", "edit", "apply_patch"],
+            deny: [],
+          },
+        } as never,
+        { sandboxExecServerEnabled: true },
+      ),
+    ).toBe(true);
+  });
+
   it("keeps Codex native tool surfaces when the effective exec target is node", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const sessionParams = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);

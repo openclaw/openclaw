@@ -119,6 +119,29 @@ describe("resolveExecDefaults", () => {
     expect(defaults.ask).toBe("off");
   });
 
+  it("treats needed sandbox mode as available for exec tool activation", () => {
+    const defaults = resolveExecDefaults({
+      cfg: {
+        agents: {
+          defaults: {
+            sandbox: { mode: "needed", scope: "agent" },
+          },
+        },
+        tools: {
+          exec: {
+            host: "auto",
+          },
+        },
+      },
+      sessionKey: "agent:main:main",
+    });
+
+    expect(defaults.host).toBe("auto");
+    expect(defaults.effectiveHost).toBe("sandbox");
+    expect(defaults.mode).toBe("deny");
+    expect(defaults.canRequestNode).toBe(false);
+  });
+
   it("ignores host approval defaults when auto resolves to sandbox", () => {
     vi.mocked(execApprovals.loadExecApprovals).mockReturnValue({
       version: 1,

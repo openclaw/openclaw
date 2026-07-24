@@ -513,6 +513,18 @@ export function shouldEnableCodexAppServerNativeToolSurface(
   if (params.disableTools) {
     return false;
   }
+  const nativeExecutionPolicy = resolveCodexNativeExecutionPolicy({
+    config: params.config,
+    sessionKey: resolveCodexRuntimePolicySessionKey(params, options.runtimeSessionKey),
+    sessionId: params.sessionId,
+    agentId: options.agentId,
+    execOverrides: params.execOverrides,
+    sandboxAvailable: sandbox?.enabled,
+    readRuntimeSessionEntry: true,
+  });
+  if (nativeExecutionPolicy.blockKind === "sandbox-activation-required") {
+    return false;
+  }
   const toolsAllow = includeForcedCodexDynamicToolAllow(params.toolsAllow, params);
   if (toolsAllow === undefined) {
     return canCodexAppServerNativeToolSurfaceHonorSandbox(sandbox, options);

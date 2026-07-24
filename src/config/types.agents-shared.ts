@@ -37,7 +37,7 @@ export type AgentRuntimePolicyConfig = {
 /** Per-agent sandbox policy shared by embedded agents and sandbox backends. */
 export type AgentSandboxConfig = {
   /** Sandbox activation mode for this agent. */
-  mode?: "off" | "non-main" | "all";
+  mode?: "off" | "non-main" | "all" | "needed";
   /** Sandbox runtime backend id. Default: "docker". */
   backend?: string;
   /** Agent workspace access inside the sandbox. */

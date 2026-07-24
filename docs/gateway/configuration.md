@@ -309,7 +309,7 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
       agents: {
         defaults: {
           sandbox: {
-            mode: "non-main",  // off | non-main | all
+            mode: "non-main",  // off | non-main | needed | all
             scope: "agent",    // session | agent | shared
           },
         },

@@ -1,6 +1,7 @@
 // Resolves filesystem policy for exec and sandbox tool use.
 import { resolveConfiguredToolPolicies } from "../agents/agent-tools.policy.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
+import type { SandboxMode } from "../agents/sandbox/types.js";
 import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AgentToolsConfig, ExecToolConfig } from "../config/types.tools.js";
@@ -13,7 +14,7 @@ type ExecFilesystemPolicyDriftHit = {
   scopeLabel: string;
   runtimeTools: string[];
   disabledFilesystemTools: string[];
-  sandboxMode: "off" | "non-main" | "all";
+  sandboxMode: SandboxMode;
   sandboxWorkspaceAccess: "none" | "ro" | "rw";
   execHost: NonNullable<ExecToolConfig["host"]>;
 };
@@ -26,7 +27,7 @@ function resolveExecHost(params: {
 }
 
 function isExecFilesystemConstrained(params: {
-  sandboxMode: "off" | "non-main" | "all";
+  sandboxMode: SandboxMode;
   sandboxWorkspaceAccess: "none" | "ro" | "rw";
   execHost: NonNullable<ExecToolConfig["host"]>;
 }): boolean {

@@ -73,6 +73,7 @@ function pushAgentWorkspaceEvidence(
   const explicitSandboxMode = readString(params.sandbox.mode);
   const inheritedSandboxMode = readString(params.inheritedSandbox.mode);
   const sandboxMode = explicitSandboxMode ?? inheritedSandboxMode ?? "off";
+  // `needed` activates execution isolation without sandboxing the chat turn's workspace.
   const sandboxModeCoversAgentMain = sandboxMode === "all";
   const sandboxModeSource =
     explicitSandboxMode !== undefined

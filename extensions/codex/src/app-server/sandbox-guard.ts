@@ -5,7 +5,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveSandboxRuntimeStatus } from "openclaw/plugin-sdk/sandbox";
 import {
-  formatCodexNativeNodeExecBlock,
+  formatCodexNativeExecutionBlock,
   resolveCodexNativeExecutionPolicy,
 } from "./native-execution-policy.js";
 
@@ -215,8 +215,8 @@ function resolveCodexNativeNodeExecBlock(params: {
   if (policy.nativeToolSurfaceAllowed) {
     return undefined;
   }
-  return formatCodexNativeNodeExecBlock({
+  return formatCodexNativeExecutionBlock({
     surface: params.surface,
-    reason: policy.blockReason,
+    policy,
   });
 }
