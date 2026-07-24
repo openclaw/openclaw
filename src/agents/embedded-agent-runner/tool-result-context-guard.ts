@@ -14,6 +14,10 @@ import { log } from "./logger.js";
 import { MidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./run/midturn-precheck.js";
 import { shouldPreemptivelyCompactBeforePrompt } from "./run/preemptive-compaction.js";
 import {
+  cloneToolResultPromptProjectionState,
+  type ToolResultPromptProjectionState,
+} from "./session-prompt-state.js";
+import {
   TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
   type MessageCharEstimateCache,
   createMessageCharEstimateCache,
@@ -22,6 +26,10 @@ import {
   invalidateMessageCharsCacheEntry,
   isToolResultMessage,
 } from "./tool-result-char-estimator.js";
+import {
+  resolveLiveToolResultAggregateMaxChars,
+  truncateOversizedToolResultsInMessages,
+} from "./tool-result-truncation.js";
 
 const SINGLE_TOOL_RESULT_CONTEXT_SHARE = 0.5;
 const TOOL_RESULT_ESTIMATE_TO_TEXT_RATIO = 4 / TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE;
@@ -43,6 +51,7 @@ type MidTurnPrecheckOptions = {
   contextTokenBudget: number;
   reserveTokens: () => number;
   toolResultMaxChars?: number;
+  toolResultPromptProjectionState: ToolResultPromptProjectionState;
   getSystemPrompt?: () => string | undefined;
   getPrePromptMessageCount?: () => number;
   onMidTurnPrecheck?: (request: MidTurnPrecheckRequest) => void;
@@ -301,6 +310,27 @@ function toMidTurnPrecheckRequest(
   };
 }
 
+function projectMessagesForMidTurnPrecheck(params: {
+  messages: AgentMessage[];
+  contextWindowTokens: number;
+  toolResultMaxChars?: number;
+  toolResultPromptProjectionState: ToolResultPromptProjectionState;
+}): AgentMessage[] {
+  const toolResultAggregateMaxChars = resolveLiveToolResultAggregateMaxChars({
+    contextWindowTokens: params.contextWindowTokens,
+    perResultMaxChars: params.toolResultMaxChars,
+  });
+  // Provider dispatch owns the session's frozen prompt projection. Precheck must
+  // inspect the same view without advancing that state before anything is sent.
+  return truncateOversizedToolResultsInMessages(
+    params.messages,
+    params.contextWindowTokens,
+    params.toolResultMaxChars,
+    toolResultAggregateMaxChars,
+    cloneToolResultPromptProjectionState(params.toolResultPromptProjectionState),
+  ).messages;
+}
+
 /**
  * Per-iteration `afterTurn` + `assemble` wrapper for sessions where
  * the context engine owns compaction. Lets the engine compact inside
@@ -508,8 +538,14 @@ export function installToolResultContextGuard(params: {
         // Use the same post-truncation view the runtime will send to the next model call.
         // Recovery re-applies truncation to the persisted session manager, so
         // this precheck is only a routing signal, not the source of truth.
-        const precheck = shouldPreemptivelyCompactBeforePrompt({
+        const precheckMessages = projectMessagesForMidTurnPrecheck({
           messages: contextMessages,
+          contextWindowTokens,
+          toolResultMaxChars: params.midTurnPrecheck.toolResultMaxChars,
+          toolResultPromptProjectionState: params.midTurnPrecheck.toolResultPromptProjectionState,
+        });
+        const precheck = shouldPreemptivelyCompactBeforePrompt({
+          messages: precheckMessages,
           systemPrompt: params.midTurnPrecheck.getSystemPrompt?.(),
           // During a tool loop, the active user prompt is already part of messages.
           prompt: "",

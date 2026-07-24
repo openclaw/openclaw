@@ -11,6 +11,7 @@ import type { guardSessionManager } from "../../session-tool-result-guard-wrappe
 import type { AgentSession } from "../../sessions/index.js";
 import { invalidateComputerFrameIfMissing } from "../../tools/computer-tool.js";
 import { readLastCacheTtlTimestamp } from "../cache-ttl.js";
+import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   installContextEngineLoopHook,
   installToolResultContextGuard,
@@ -44,6 +45,7 @@ export function installEmbeddedAttemptContextGuards(input: {
   sessionManager: ReturnType<typeof guardSessionManager>;
   settingsManager: AgentSession["settingsManager"];
   sandbox?: SandboxContext | null;
+  toolResultPromptProjectionState: ToolResultPromptProjectionState;
 }): {
   getAfterTurnCheckpoint: () => number | null;
   remove: () => void;
@@ -72,6 +74,7 @@ export function installEmbeddedAttemptContextGuards(input: {
             contextTokenBudget,
             reserveTokens: () => settingsManager.getCompactionReserveTokens(),
             toolResultMaxChars,
+            toolResultPromptProjectionState: input.toolResultPromptProjectionState,
             getSystemPrompt: input.getSystemPrompt,
             getPrePromptMessageCount: input.getPrePromptMessageCount,
             onMidTurnPrecheck: (request: MidTurnPrecheckRequest) => {

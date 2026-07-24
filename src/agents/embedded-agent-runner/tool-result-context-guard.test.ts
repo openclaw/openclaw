@@ -9,6 +9,7 @@ import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
 import { MidTurnPrecheckSignal } from "./run/midturn-precheck.js";
+import type { ToolResultPromptProjectionState } from "./session-prompt-state.js";
 import {
   installContextEngineLoopHook,
   installToolResultContextGuard,
@@ -16,6 +17,15 @@ import {
 } from "./tool-result-context-guard.js";
 
 const CONTEXT_LIMIT_TRUNCATION_NOTICE = "more characters truncated";
+
+function createToolResultPromptProjectionState(): ToolResultPromptProjectionState {
+  return {
+    replacements: new Map(),
+    frozen: new Set(),
+    ambiguousBaseKeys: new Set(),
+    sourceTextByKey: new Map(),
+  };
+}
 
 function makeUser(text: string): AgentMessage {
   return castAgentMessage({
@@ -123,6 +133,7 @@ async function applyMidTurnPrecheckGuardToContext(
     toolResultMaxChars?: number;
     prePromptMessageCount?: number;
     systemPrompt?: string;
+    toolResultPromptProjectionState?: ToolResultPromptProjectionState;
   } = {},
 ) {
   // Mid-turn precheck simulates a new tool result being appended after the
@@ -136,6 +147,8 @@ async function applyMidTurnPrecheckGuardToContext(
       contextTokenBudget: options.contextTokenBudget ?? contextWindowTokens,
       reserveTokens: () => options.reserveTokens ?? 10_000,
       toolResultMaxChars: options.toolResultMaxChars,
+      toolResultPromptProjectionState:
+        options.toolResultPromptProjectionState ?? createToolResultPromptProjectionState(),
       getSystemPrompt: () => options.systemPrompt,
       ...(options.prePromptMessageCount !== undefined
         ? { getPrePromptMessageCount: () => options.prePromptMessageCount as number }
@@ -393,13 +406,14 @@ describe("installToolResultContextGuard", () => {
     ).toBe(text);
   });
 
-  it("raises a structured mid-turn precheck signal after a new tool result overflows", async () => {
+  it("raises a structured mid-turn precheck signal after projected tool results overflow", async () => {
     // The signal carries route metadata so the run loop can compact/truncate
     // without guessing from a generic overflow error.
     const agent = makeGuardableAgent();
     const contextForNextCall = [
       makeUser("prompt already in history"),
       makeToolResult("call_big", "x".repeat(80_000)),
+      makeToolResult("call_big_2", "y".repeat(80_000)),
     ];
 
     try {
@@ -415,10 +429,45 @@ describe("installToolResultContextGuard", () => {
       expect(err).toBeInstanceOf(MidTurnPrecheckSignal);
       const signal = err as MidTurnPrecheckSignal;
       expect(signal.name).toBe("MidTurnPrecheckSignal");
-      expect(signal.request.route).toBe("compact_then_truncate");
+      expect(signal.request.route).toBe("compact_only");
       expect(typeof signal.request.overflowTokens).toBe("number");
-      expect(typeof signal.request.toolResultReducibleChars).toBe("number");
+      expect(signal.request.toolResultReducibleChars).toBe(0);
     }
+  });
+
+  it("projects aggregate-over-cap tool history before mid-turn route selection", async () => {
+    const agent = makeGuardableAgent();
+    const projectionState = createToolResultPromptProjectionState();
+    const contextForNextCall = [makeUser("prompt already in history")];
+    for (let index = 0; index < 40; index += 1) {
+      contextForNextCall.push(makeAssistant(`calling tool ${index}`));
+      contextForNextCall.push(makeToolResult(`call_${index}`, "x".repeat(12_500)));
+    }
+    const rawToolResultChars = contextForNextCall.reduce(
+      (sum, message) => sum + getToolResultText(message).length,
+      0,
+    );
+    expect(rawToolResultChars).toBeGreaterThan(400_000);
+
+    try {
+      await applyMidTurnPrecheckGuardToContext(agent, contextForNextCall, {
+        contextWindowTokens: 200_000,
+        contextTokenBudget: 200_000,
+        reserveTokens: 50_000,
+        toolResultMaxChars: 16_000,
+        prePromptMessageCount: 1,
+        toolResultPromptProjectionState: projectionState,
+      });
+      throw new Error("expected mid-turn precheck signal");
+    } catch (err) {
+      expect(err).toBeInstanceOf(MidTurnPrecheckSignal);
+      const signal = err as MidTurnPrecheckSignal;
+      expect(signal.request.route).toBe("compact_only");
+      expect(signal.request.toolResultReducibleChars).toBe(0);
+      expect(signal.request.estimatedPromptTokens).toBeLessThan(250_000);
+    }
+    expect(projectionState.frozen.size).toBe(0);
+    expect(projectionState.replacements.size).toBe(0);
   });
 
   it("does not run mid-turn precheck when no new tool result was appended", async () => {
@@ -620,6 +669,7 @@ describe("installContextEngineLoopHook", () => {
         contextTokenBudget: options.contextTokenBudget ?? 20_000,
         reserveTokens: () => options.reserveTokens ?? 12_000,
         toolResultMaxChars: options.toolResultMaxChars,
+        toolResultPromptProjectionState: createToolResultPromptProjectionState(),
         getSystemPrompt: () => "sys",
         ...(options.prePromptCount !== undefined
           ? { getPrePromptMessageCount: () => options.prePromptCount as number }

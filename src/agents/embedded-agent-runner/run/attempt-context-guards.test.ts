@@ -56,6 +56,12 @@ function createInput(overrides: Record<string, unknown> = {}) {
     sessionAgentId: "main",
     sessionManager: {},
     settingsManager,
+    toolResultPromptProjectionState: {
+      replacements: new Map(),
+      frozen: new Set(),
+      ambiguousBaseKeys: new Set(),
+      sourceTextByKey: new Map(),
+    },
     ...overrides,
   };
 }
@@ -91,6 +97,7 @@ describe("installEmbeddedAttemptContextGuards", () => {
         enabled: true,
         contextTokenBudget: 1_024,
         toolResultMaxChars: expect.any(Number),
+        toolResultPromptProjectionState: input.toolResultPromptProjectionState,
       },
     });
 
