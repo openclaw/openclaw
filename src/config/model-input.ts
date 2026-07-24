@@ -56,7 +56,12 @@ export function toAgentModelListLike(model?: AgentModelConfig): AgentModelListLi
   return model;
 }
 
-const GOOGLE_PROVIDER_IDS = new Set(["google", "google-gemini-cli", "google-vertex"]);
+const GOOGLE_PROVIDER_IDS = new Set([
+  "google",
+  "google-antigravity-cli",
+  "google-gemini-cli",
+  "google-vertex",
+]);
 
 /** Canonicalizes provider/model refs before they are persisted to config. */
 export function normalizeAgentModelRefForConfig(model: string): string {

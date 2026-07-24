@@ -10,6 +10,11 @@ const GEMINI_MODEL_ALIASES: Record<string, string> = {
   "flash-lite": "gemini-3.1-flash-lite",
 };
 const GEMINI_CLI_DEFAULT_MODEL_REF = "google-gemini-cli/gemini-3-flash-preview";
+const ANTIGRAVITY_MODEL_ALIASES: Record<string, string> = {
+  pro: "gemini-3.1-pro-preview",
+  flash: "gemini-3.5-flash",
+};
+const ANTIGRAVITY_CLI_DEFAULT_MODEL_REF = "google-antigravity-cli/gemini-3.5-flash";
 
 type GeminiCliBackendConfig = CliBackendPlugin["config"];
 type GeminiCliOutputMode = NonNullable<GeminiCliBackendConfig["output"]>;
@@ -131,6 +136,39 @@ export function buildGoogleGeminiCliBackend(): CliBackendPlugin {
           resume: { ...CLI_RESUME_WATCHDOG_DEFAULTS },
         },
       },
+      serialize: true,
+    },
+  };
+}
+
+export function buildGoogleAntigravityCliBackend(): CliBackendPlugin {
+  return {
+    id: "google-antigravity-cli",
+    modelProvider: "google",
+    liveTest: {
+      defaultModelRef: ANTIGRAVITY_CLI_DEFAULT_MODEL_REF,
+      defaultImageProbe: false,
+      defaultMcpProbe: false,
+      docker: {
+        binaryName: "agy",
+      },
+    },
+    nativeToolMode: "always-on",
+    config: {
+      command: "agy",
+      args: ["--print", "{prompt}"],
+      output: "text",
+      input: "arg",
+      modelArg: "--model",
+      modelAliases: ANTIGRAVITY_MODEL_ALIASES,
+      sessionMode: "none",
+      reliability: {
+        watchdog: {
+          fresh: { ...CLI_FRESH_WATCHDOG_DEFAULTS },
+          resume: { ...CLI_RESUME_WATCHDOG_DEFAULTS },
+        },
+      },
+      reseedFromRawTranscriptWhenUncompacted: true,
       serialize: true,
     },
   };
