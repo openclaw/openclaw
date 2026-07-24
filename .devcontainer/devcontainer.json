@@ -1,0 +1,28 @@
+{
+  "name": "OpenClaw",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+
+  // No host secrets are forwarded via containerEnv. Authenticate
+  // interactively after creation (VS Code forwards GitHub auth
+  // automatically for Copilot; run `gh auth login` or `claude login`
+  // for CLI usage).
+  "postCreateCommand": "bash .devcontainer/on-create.sh",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "github.copilot",
+        "github.copilot-chat",
+        "github.vscode-pull-request-github",
+        "oxc.oxc-vscode"
+      ],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash"
+      }
+    }
+  },
+
+  "remoteUser": "node"
+}

@@ -315,6 +315,11 @@
           - "docs/install/docker.md"
           - "docs/tools/multi-agent-sandbox-tools.md"
 
+"devcontainer":
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".devcontainer/**"
+
 "agents":
   - changed-files:
       - any-glob-to-any-file:
