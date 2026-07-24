@@ -81,12 +81,12 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
 
     projector.recordDynamicToolCall({
       callId: "call-app-1",
-      tool: "doordash__show_options",
+      tool: "sample__show_options",
       arguments: { limit: 4 },
     });
     projector.recordDynamicToolResult({
       callId: "call-app-1",
-      tool: "doordash__show_options",
+      tool: "sample__show_options",
       success: true,
       contentItems: [{ type: "inputText", text: "Found four nearby restaurants." }],
       details,
@@ -105,9 +105,9 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
         presentation: { target: "assistant_message", sandbox: "scripts" },
         mcpApp: {
           viewId: "mcp-app-native-1",
-          serverName: "doordash",
+          serverName: "sample",
           toolName: "show_options",
-          uiResourceUri: "ui://doordash/options.html",
+          uiResourceUri: "ui://sample/options.html",
           toolCallId: "call-native-app-1",
         },
       },
@@ -121,10 +121,10 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
           type: "mcpToolCall",
           id: "call-native-app-1",
           status: "completed",
-          server: "doordash",
+          server: "sample",
           tool: "show_options",
           arguments: { limit: 4 },
-          appContext: { connectorId: "doordash", resourceUri: "ui://doordash/options.html" },
+          appContext: { connectorId: "sample", resourceUri: "ui://sample/options.html" },
           result: {
             content: [{ type: "text", text: "Found four nearby restaurants." }],
             structuredContent: { stores: [{ id: "store-1", name: "Nan's Noodle House" }] },

@@ -22,7 +22,7 @@ describe("Codex native MCP Apps", () => {
         return {
           data: [
             {
-              name: "doordash",
+              name: "sample",
               tools: {
                 show_options: { description: "Show nearby options", inputSchema: {} },
                 show_menu: { description: "Show a restaurant menu", inputSchema: {} },
@@ -37,7 +37,7 @@ describe("Codex native MCP Apps", () => {
             {
               uri: params.uri,
               mimeType: "text/html;profile=mcp-app",
-              text: "<html><body>DoorDash</body></html>",
+              text: "<html><body>Sample</body></html>",
             },
           ],
         };
@@ -53,10 +53,10 @@ describe("Codex native MCP Apps", () => {
     const details = await prepare?.({
       id: "call-options",
       type: "mcpToolCall",
-      server: "doordash",
+      server: "sample",
       tool: "show_options",
       status: "completed",
-      appContext: { connectorId: "doordash", resourceUri: "ui://doordash/options.html" },
+      appContext: { connectorId: "sample", resourceUri: "ui://sample/options.html" },
       arguments: { limit: 4 },
       result: {
         content: [{ type: "text", text: "Found four restaurants." }],
@@ -69,9 +69,9 @@ describe("Codex native MCP Apps", () => {
         kind: "canvas",
         view: { id: expect.stringMatching(/^mcp-app-/u), title: "show_options UI" },
         mcpApp: {
-          serverName: "doordash",
+          serverName: "sample",
           toolName: "show_options",
-          uiResourceUri: "ui://doordash/options.html",
+          uiResourceUri: "ui://sample/options.html",
           toolCallId: "call-options",
           originSessionKey: "agent:main:dashboard:thread-1",
         },
@@ -83,8 +83,8 @@ describe("Codex native MCP Apps", () => {
     });
     expect(request).toHaveBeenCalledWith("mcpServer/resource/read", {
       threadId: "thread-1",
-      server: "doordash",
-      uri: "ui://doordash/options.html",
+      server: "sample",
+      uri: "ui://sample/options.html",
     });
   });
 

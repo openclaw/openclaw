@@ -396,14 +396,14 @@ describe("createCodexDynamicToolBridge", () => {
       presentation: { target: "assistant_message", sandbox: "scripts" },
       mcpApp: {
         viewId: "mcp-app-view-1",
-        serverName: "doordash",
+        serverName: "sample",
         toolName: "show_options",
-        uiResourceUri: "ui://doordash/options.html",
+        uiResourceUri: "ui://sample/options.html",
         toolCallId: "call-options",
       },
     };
     const bridge = createBridgeWithToolResult(
-      "doordash__show_options",
+      "sample__show_options",
       textToolResult("Found four nearby restaurants.", {
         mcpAppPreview,
         structuredContent: { privateModelPayload: true },
@@ -415,7 +415,7 @@ describe("createCodexDynamicToolBridge", () => {
       turnId: "turn-1",
       callId: "call-options",
       namespace: null,
-      tool: "doordash__show_options",
+      tool: "sample__show_options",
       arguments: { limit: 4 },
     });
 
