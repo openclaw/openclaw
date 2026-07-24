@@ -220,10 +220,15 @@ export abstract class XaiRealtimeVoiceProtocol {
     }
     this.deliveredToolCallKeys.add(dedupeKey);
     this.pendingToolCallIds.add(callId);
-    let args: unknown = {};
+    let args: unknown;
     try {
       args = JSON.parse(fields.rawArgs || "{}");
-    } catch {}
+    } catch {
+      return;
+    }
+    if (typeof args !== "object" || args === null || Array.isArray(args)) {
+      args = {};
+    }
     this.config.onToolCall({ itemId, callId, name, args });
   }
 
