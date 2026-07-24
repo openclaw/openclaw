@@ -39,7 +39,7 @@ const mocks = vi.hoisted(() => ({
       return { ok: true as const, associatedAccount: "+15555550123" };
     },
   ),
-  renderQrTerminal: vi.fn(async () => "TERMINAL-QR"),
+  renderQrTerminal: vi.fn(async () => "\x1b[47m\x1b[30m █▀▄ \x1b[0m"),
   runPluginCommandWithTimeout: vi.fn(async () => ({
     code: 0,
     stdout: '[{"number":"+15555550123"}]',
@@ -317,11 +317,16 @@ describe("signalSetupWizard", () => {
       configPath: "/var/lib/signal-cli",
       onLinkUri: expect.any(Function),
     });
-    expect(mocks.renderQrTerminal).toHaveBeenCalledWith("sgnl://linkdevice?uuid=test&pub_key=test");
+    expect(mocks.renderQrTerminal).toHaveBeenCalledWith(
+      "sgnl://linkdevice?uuid=test&pub_key=test",
+      { small: true },
+    );
     expect(queued.plain).toHaveBeenCalledWith(
       expect.stringContaining("Signal > Settings > Linked devices"),
     );
-    expect(queued.plain).toHaveBeenCalledWith(expect.stringContaining("TERMINAL-QR"));
+    expect(queued.plain).toHaveBeenCalledWith(
+      expect.stringContaining("\x1b[40m\x1b[37m█ ▄▀█\x1b[0m"),
+    );
     expect(queued.text).not.toHaveBeenCalled();
     expect(mocks.probeSignalTransport).toHaveBeenCalledWith(
       expect.objectContaining({ account: "+15555550123" }),

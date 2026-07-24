@@ -1,10 +1,10 @@
-import { renderQrTerminal } from "openclaw/plugin-sdk/media-runtime";
 import { runPluginCommandWithTimeout } from "openclaw/plugin-sdk/run-command";
 import { WizardCancelledError, type WizardPrompter } from "openclaw/plugin-sdk/setup";
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ResolvedSignalTransport } from "./accounts.js";
 import { normalizeSignalAccountInput } from "./setup-core.js";
 import { linkSignalCliAccount } from "./signal-cli-link.js";
+import { renderSignalLinkQr } from "./signal-link-qr.js";
 
 type ResolvedManagedSignalTransport = Extract<ResolvedSignalTransport, { kind: "managed-native" }>;
 type ManagedSignalAccountChoice = "link" | "stop" | `account:${string}`;
@@ -96,9 +96,7 @@ async function linkManagedSignalAccount(params: {
       cliPath: params.transport.cliPath,
       ...(params.transport.configPath ? { configPath: params.transport.configPath } : {}),
       onLinkUri: async (uri) => {
-        // The compact renderer uses foreground black, which some embedded terminals remap.
-        // Full mode uses background colors only, keeping the Signal QR code scannable.
-        const qr = await renderQrTerminal(uri);
+        const qr = await renderSignalLinkQr(uri);
         await params.prompter.plain?.(
           [
             "On your phone, open Signal > Settings > Linked devices and add a device.",
