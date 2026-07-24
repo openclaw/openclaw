@@ -1278,8 +1278,13 @@ async function* parseWebSocket(
     resolve();
   };
 
+  // Decode/parse must stay in arrival order. Blob-like frames await arrayBuffer()
+  // while strings resolve immediately; independent async handlers can reorder the
+  // queue and corrupt the Responses stream.
+  let messageChain: Promise<void> = Promise.resolve();
+
   const onMessage: WebSocketListener = (event) => {
-    void (async () => {
+    messageChain = messageChain.then(async () => {
       let text: string | null = null;
       try {
         if (!event || typeof event !== "object" || !("data" in event)) {
@@ -1312,26 +1317,32 @@ async function* parseWebSocket(
         done = true;
         wake();
       }
-    })();
+    });
   };
 
+  // Terminal callbacks must wait behind any decode still in flight on messageChain;
+  // an eager close/error otherwise overtakes a delayed Blob carrying response.completed.
   const onError: WebSocketListener = (event) => {
-    failed = extractWebSocketError(event);
-    done = true;
-    wake();
+    messageChain = messageChain.then(() => {
+      failed = extractWebSocketError(event);
+      done = true;
+      wake();
+    });
   };
 
   const onClose: WebSocketListener = (event) => {
-    if (sawCompletion) {
+    messageChain = messageChain.then(() => {
+      if (sawCompletion) {
+        done = true;
+        wake();
+        return;
+      }
+      if (!failed) {
+        failed = extractWebSocketCloseError(event);
+      }
       done = true;
       wake();
-      return;
-    }
-    if (!failed) {
-      failed = extractWebSocketCloseError(event);
-    }
-    done = true;
-    wake();
+    });
   };
 
   const onAbort = () => {

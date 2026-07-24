@@ -311,6 +311,170 @@ describe("streamOpenAICodexResponses transport", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("preserves websocket message order when blob decoding is delayed", async () => {
+    class DelayedBlobWebSocket extends EventTarget {
+      constructor() {
+        super();
+        queueMicrotask(() => this.dispatchEvent(new Event("open")));
+      }
+
+      send(): void {
+        const first = JSON.stringify({
+          type: "response.output_item.added",
+          item: { type: "message", id: "msg_order", phase: "final_answer" },
+        });
+        const contentPart = JSON.stringify({
+          type: "response.content_part.added",
+          part: { type: "output_text", text: "" },
+        });
+        const delta = JSON.stringify({
+          type: "response.output_text.delta",
+          delta: "ordered-first",
+        });
+        const itemDone = JSON.stringify({
+          type: "response.output_item.done",
+          item: {
+            type: "message",
+            id: "msg_order",
+            phase: "final_answer",
+            content: [{ type: "output_text", text: "ordered-first" }],
+          },
+        });
+        const completed = JSON.stringify({
+          type: "response.completed",
+          response: {
+            id: "resp_ws_order",
+            status: "completed",
+            output: [],
+            usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+          },
+        });
+
+        queueMicrotask(() => {
+          this.dispatchEvent(
+            Object.assign(new Event("message"), {
+              data: {
+                arrayBuffer: () =>
+                  new Promise<ArrayBuffer>((resolve) => {
+                    setTimeout(() => {
+                      const bytes = new TextEncoder().encode(first);
+                      resolve(
+                        bytes.buffer.slice(
+                          bytes.byteOffset,
+                          bytes.byteOffset + bytes.byteLength,
+                        ) as ArrayBuffer,
+                      );
+                    }, 30);
+                  }),
+              },
+            }),
+          );
+        });
+        queueMicrotask(() => {
+          for (const payload of [contentPart, delta, itemDone, completed]) {
+            this.dispatchEvent(Object.assign(new Event("message"), { data: payload }));
+          }
+        });
+      }
+
+      close(): void {}
+    }
+
+    vi.stubGlobal("WebSocket", DelayedBlobWebSocket);
+    vi.stubGlobal("fetch", vi.fn());
+
+    const mockJwt = createJwt({
+      "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
+    });
+    const stream = streamOpenAICodexResponses(model, context, {
+      apiKey: mockJwt,
+      transport: "websocket",
+    });
+    const textDeltas: string[] = [];
+    for await (const event of stream as AsyncIterable<{ type: string; delta?: string }>) {
+      if (event.type === "text_delta" && typeof event.delta === "string") {
+        textDeltas.push(event.delta);
+      }
+    }
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("stop");
+    expect(textDeltas).toEqual(["ordered-first"]);
+    expect(result.content).toContainEqual({
+      type: "text",
+      text: "ordered-first",
+      textSignature: JSON.stringify({ v: 1, id: "msg_order", phase: "final_answer" }),
+    });
+  });
+
+  it("does not let an eager close overtake a completion queued behind a delayed blob", async () => {
+    class EagerCloseWebSocket extends EventTarget {
+      constructor() {
+        super();
+        queueMicrotask(() => this.dispatchEvent(new Event("open")));
+      }
+
+      send(): void {
+        const added = JSON.stringify({
+          type: "response.output_item.added",
+          item: { type: "message", id: "msg_eager_close", phase: "final_answer" },
+        });
+        const completed = JSON.stringify({
+          type: "response.completed",
+          response: {
+            id: "resp_eager_close",
+            status: "completed",
+            output: [],
+            usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+          },
+        });
+
+        queueMicrotask(() => {
+          this.dispatchEvent(
+            Object.assign(new Event("message"), {
+              data: {
+                arrayBuffer: () =>
+                  new Promise<ArrayBuffer>((resolve) => {
+                    setTimeout(() => {
+                      const bytes = new TextEncoder().encode(added);
+                      resolve(
+                        bytes.buffer.slice(
+                          bytes.byteOffset,
+                          bytes.byteOffset + bytes.byteLength,
+                        ) as ArrayBuffer,
+                      );
+                    }, 30);
+                  }),
+              },
+            }),
+          );
+        });
+        queueMicrotask(() => {
+          this.dispatchEvent(Object.assign(new Event("message"), { data: completed }));
+        });
+        // Fires while the blob above is still decoding, before its 30ms timer resolves.
+        queueMicrotask(() => {
+          this.dispatchEvent(new Event("close"));
+        });
+      }
+
+      close(): void {}
+    }
+
+    vi.stubGlobal("WebSocket", EagerCloseWebSocket);
+    vi.stubGlobal("fetch", vi.fn());
+
+    const mockJwt = createJwt({
+      "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
+    });
+    const result = await streamOpenAICodexResponses(model, context, {
+      apiKey: mockJwt,
+      transport: "websocket",
+    }).result();
+
+    expect(result.stopReason).toBe("stop");
+  });
+
   it("rotates cached websockets before the backend connection age limit", async () => {
     vi.useFakeTimers();
     const startedAt = new Date("2026-07-03T00:00:00Z");
