@@ -1876,14 +1876,14 @@ export async function rankShortTermPromotionCandidates(
     if (!includePromoted && entry.promotedAt) {
       continue;
     }
-    const recallCount = Math.max(0, Math.floor(entry.recallCount ?? 0));
     const dailyCount = Math.max(0, Math.floor(entry.dailyCount ?? 0));
     const groundedCount = Math.max(0, Math.floor(entry.groundedCount ?? 0));
     const signalCount = totalSignalCountForEntry(entry);
+    const recallCount = Math.max(0, Math.floor(entry.recallCount ?? 0));
     if (signalCount <= 0) {
       continue;
     }
-    if (signalCount < minRecallCount) {
+    if (recallCount < minRecallCount) {
       continue;
     }
 
@@ -1891,7 +1891,7 @@ export async function rankShortTermPromotionCandidates(
     const frequency = clampScore(Math.log1p(signalCount) / Math.log1p(10));
     const uniqueQueries = entry.queryHashes?.length ?? 0;
     const contextDiversity = Math.max(uniqueQueries, entry.recallDays?.length ?? 0);
-    if (contextDiversity < minUniqueQueries) {
+    if (uniqueQueries < minUniqueQueries) {
       continue;
     }
     const diversity = clampScore(contextDiversity / 5);
@@ -2518,10 +2518,10 @@ export async function applyShortTermPromotions(
         if (candidate.score < minScore) {
           return false;
         }
-        if (candidate.signalCount < minRecallCount) {
+        if (candidate.recallCount < minRecallCount) {
           return false;
         }
-        if (Math.max(candidate.uniqueQueries, candidate.recallDays.length) < minUniqueQueries) {
+        if (candidate.uniqueQueries < minUniqueQueries) {
           return false;
         }
         if (maxAgeDays >= 0 && candidate.ageDays > maxAgeDays) {
