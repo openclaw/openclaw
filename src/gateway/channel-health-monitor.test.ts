@@ -76,8 +76,7 @@ async function startAndRunCheck(
 ) {
   const monitor = startDefaultMonitor(manager, overrides);
   const startupGraceMs = overrides.timing?.monitorStartupGraceMs ?? 0;
-  const checkIntervalMs = overrides.checkIntervalMs ?? DEFAULT_CHECK_INTERVAL_MS;
-  await vi.advanceTimersByTimeAsync(startupGraceMs + checkIntervalMs + 1);
+  await vi.advanceTimersByTimeAsync(startupGraceMs);
   return monitor;
 }
 
@@ -192,13 +191,24 @@ describe("channel-health-monitor", () => {
     expect(removeEventListener).toHaveBeenCalledWith("abort", addEventListener.mock.calls[0]?.[1]);
   });
 
-  it("normalizes oversized check intervals before arming timers", () => {
+  it("normalizes oversized check intervals before arming timers", async () => {
     const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
     const monitor = startDefaultMonitor(createMockChannelManager(), {
       checkIntervalMs: Number.MAX_SAFE_INTEGER,
     });
 
+    await vi.advanceTimersByTimeAsync(0);
     expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    monitor.stop();
+  });
+
+  it("normalizes oversized startup grace periods before arming timers", () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const monitor = startDefaultMonitor(createMockChannelManager(), {
+      timing: { monitorStartupGraceMs: Number.MAX_SAFE_INTEGER },
+    });
+
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
     monitor.stop();
   });
 
@@ -212,10 +222,14 @@ describe("channel-health-monitor", () => {
 
   it("runs health check after grace period", async () => {
     const manager = createMockChannelManager();
-    const monitor = await startAndRunCheck(manager, {
+    const monitor = startDefaultMonitor(manager, {
       timing: { monitorStartupGraceMs: 1_000 },
     });
-    expect(manager.getRuntimeSnapshot).toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(1);
     monitor.stop();
   });
 
@@ -231,18 +245,9 @@ describe("channel-health-monitor", () => {
     const monitor = startDefaultMonitor(manager);
 
     await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS + 1);
-    await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS + 1);
 
     expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(2);
     expect(manager.startChannel).not.toHaveBeenCalled();
-    monitor.stop();
-  });
-
-  it("accepts timing.monitorStartupGraceMs", async () => {
-    const manager = createMockChannelManager();
-    const monitor = startDefaultMonitor(manager, { timing: { monitorStartupGraceMs: 60_000 } });
-    await vi.advanceTimersByTimeAsync(5_001);
-    expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
     monitor.stop();
   });
 
@@ -618,6 +623,45 @@ describe("channel-health-monitor", () => {
     const startGate = new Promise<void>((resolve) => {
       releaseStart = () => resolve();
     });
+    const account: Partial<ChannelAccountSnapshot> = {
+      running: true,
+      connected: true,
+      enabled: true,
+      configured: true,
+    };
+    const manager = createSnapshotManager(
+      {
+        telegram: {
+          default: account,
+        },
+      },
+      {
+        startChannel: vi.fn(async () => {
+          await startGate;
+        }),
+      },
+    );
+    const monitor = startDefaultMonitor(manager, { checkIntervalMs: 100, cooldownCycles: 0 });
+
+    await vi.advanceTimersByTimeAsync(0);
+    account.running = false;
+    account.connected = false;
+    account.lastError = "stopped";
+    await vi.advanceTimersByTimeAsync(100);
+    expect(manager.startChannel).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(manager.startChannel).toHaveBeenCalledTimes(1);
+    releaseStart?.();
+    await monitor.waitForIdle();
+    monitor.stop();
+  });
+
+  it("waits for the initial check before starting recurring checks", async () => {
+    let releaseStart: (() => void) | undefined;
+    const startGate = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
     const manager = createSnapshotManager(
       {
         telegram: {
@@ -631,12 +675,17 @@ describe("channel-health-monitor", () => {
       },
     );
     const monitor = startDefaultMonitor(manager, { checkIntervalMs: 100, cooldownCycles: 0 });
-    await vi.advanceTimersByTimeAsync(120);
+
+    await vi.advanceTimersByTimeAsync(0);
     expect(manager.startChannel).toHaveBeenCalledTimes(1);
+    expect(setIntervalSpy).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(500);
     expect(manager.startChannel).toHaveBeenCalledTimes(1);
+    expect(setIntervalSpy).not.toHaveBeenCalled();
+
     releaseStart?.();
-    await Promise.resolve();
+    await monitor.waitForIdle();
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 100);
     monitor.stop();
   });
 

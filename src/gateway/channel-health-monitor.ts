@@ -57,7 +57,11 @@ function resolveTimingPolicy(
   deps: Pick<ChannelHealthMonitorDeps, "timing">,
 ): ChannelHealthTimingPolicy {
   return {
-    monitorStartupGraceMs: deps.timing?.monitorStartupGraceMs ?? DEFAULT_MONITOR_STARTUP_GRACE_MS,
+    monitorStartupGraceMs: resolveTimerTimeoutMs(
+      deps.timing?.monitorStartupGraceMs,
+      DEFAULT_MONITOR_STARTUP_GRACE_MS,
+      0,
+    ),
     channelConnectGraceMs: deps.timing?.channelConnectGraceMs ?? DEFAULT_CHANNEL_CONNECT_GRACE_MS,
     staleEventThresholdMs:
       deps.timing?.staleEventThresholdMs ?? DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
@@ -81,7 +85,8 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
   let stopped = false;
   let abandonInFlightRestart = false;
   let activeCheck: Promise<void> | null = null;
-  let timer: ReturnType<typeof setInterval> | null = null;
+  let startupTimer: ReturnType<typeof setTimeout> | null = null;
+  let intervalTimer: ReturnType<typeof setInterval> | null = null;
   const suppressedAccounts = new Set<string>();
 
   const rKey = (channelId: string, accountId: string) => `${channelId}:${accountId}`;
@@ -229,12 +234,24 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
     return check;
   }
 
+  function startRecurringChecks() {
+    if (stopped) {
+      return;
+    }
+    intervalTimer = setInterval(() => void runCheck(), checkIntervalMs);
+    intervalTimer.unref?.();
+  }
+
   function retire(abandonRestart: boolean) {
     stopped = true;
     abandonInFlightRestart ||= abandonRestart;
-    if (timer) {
-      clearInterval(timer);
-      timer = null;
+    if (startupTimer) {
+      clearTimeout(startupTimer);
+      startupTimer = null;
+    }
+    if (intervalTimer) {
+      clearInterval(intervalTimer);
+      intervalTimer = null;
     }
     if (!activeCheck) {
       abortSignal?.removeEventListener("abort", shutdown);
@@ -276,10 +293,13 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
     abandonInFlightRestart = true;
   } else {
     abortSignal?.addEventListener("abort", shutdown, { once: true });
-    timer = setInterval(() => void runCheck(), checkIntervalMs);
-    if (typeof timer === "object" && "unref" in timer) {
-      timer.unref();
-    }
+    startupTimer = setTimeout(() => {
+      startupTimer = null;
+      // Arm recurring checks only after the grace-period check settles so the
+      // initial recovery cannot overlap the first periodic pass.
+      void runCheck().finally(startRecurringChecks);
+    }, timing.monitorStartupGraceMs);
+    startupTimer.unref?.();
     log.info?.(
       `started (interval: ${Math.round(checkIntervalMs / 1000)}s, startup-grace: ${Math.round(timing.monitorStartupGraceMs / 1000)}s, channel-connect-grace: ${Math.round(timing.channelConnectGraceMs / 1000)}s)`,
     );
