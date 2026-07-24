@@ -72,6 +72,9 @@ type ToolLoopDetectionScope = {
   runId?: string;
 };
 
+const positiveInteger = (value: unknown, fallback: number): number =>
+  typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
+
 function selectHistoryForScope(
   history: readonly ToolCallRecord[],
   scope?: ToolLoopDetectionScope,
@@ -81,14 +84,26 @@ function selectHistoryForScope(
 }
 
 function resolveLoopDetectionConfig(config?: ToolLoopDetectionConfig): ResolvedLoopDetectionConfig {
+  const defaults = DEFAULT_LOOP_DETECTION_CONFIG;
   return {
-    enabled: config?.enabled ?? DEFAULT_LOOP_DETECTION_CONFIG.enabled,
-    historySize: DEFAULT_LOOP_DETECTION_CONFIG.historySize,
-    warningThreshold: DEFAULT_LOOP_DETECTION_CONFIG.warningThreshold,
-    unknownToolThreshold: DEFAULT_LOOP_DETECTION_CONFIG.unknownToolThreshold,
-    criticalThreshold: DEFAULT_LOOP_DETECTION_CONFIG.criticalThreshold,
-    globalCircuitBreakerThreshold: DEFAULT_LOOP_DETECTION_CONFIG.globalCircuitBreakerThreshold,
-    detectors: DEFAULT_LOOP_DETECTION_CONFIG.detectors,
+    enabled: config?.enabled ?? defaults.enabled,
+    historySize: positiveInteger(config?.historySize, defaults.historySize),
+    warningThreshold: positiveInteger(config?.warningThreshold, defaults.warningThreshold),
+    unknownToolThreshold: positiveInteger(
+      config?.unknownToolThreshold,
+      defaults.unknownToolThreshold,
+    ),
+    criticalThreshold: positiveInteger(config?.criticalThreshold, defaults.criticalThreshold),
+    globalCircuitBreakerThreshold: positiveInteger(
+      config?.globalCircuitBreakerThreshold,
+      defaults.globalCircuitBreakerThreshold,
+    ),
+    detectors: {
+      genericRepeat: config?.detectors?.genericRepeat ?? defaults.detectors.genericRepeat,
+      knownPollNoProgress:
+        config?.detectors?.knownPollNoProgress ?? defaults.detectors.knownPollNoProgress,
+      pingPong: config?.detectors?.pingPong ?? defaults.detectors.pingPong,
+    },
   };
 }
 
