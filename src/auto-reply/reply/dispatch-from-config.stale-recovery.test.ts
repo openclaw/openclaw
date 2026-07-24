@@ -9,6 +9,7 @@ import {
   noAbortResult,
   resetPluginTtsAndThreadMocks,
   runtimePluginMocks,
+  sessionStoreMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -59,6 +60,8 @@ describe("dispatchReplyFromConfig stale visible admission recovery", () => {
     mocks.tryFastAbortFromMessage.mockReset();
     setNoAbort();
     diagnosticMocks.requestStuckDiagnosticSessionRecovery.mockReset();
+    sessionStoreMocks.currentEntry = undefined;
+    sessionStoreMocks.entriesBySessionKey.clear();
   });
 
   afterEach(() => {
@@ -126,6 +129,38 @@ describe("dispatchReplyFromConfig stale visible admission recovery", () => {
 
     expect(diagnosticMocks.requestStuckDiagnosticSessionRecovery).not.toHaveBeenCalled();
     expect(activeOperation.result).toEqual({ kind: "failed", code: "run_stalled" });
+    expect(result).toMatchObject({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("reclaims a leftover active reply operation when the session entry is terminal/killed", async () => {
+    const activeOperation = createReplyOperation({
+      sessionKey,
+      sessionId: "active-session",
+      resetTriggered: false,
+    });
+    activeOperation.setPhase("running");
+    sessionStoreMocks.currentEntry = {
+      sessionId: "active-session",
+      status: "killed",
+      updatedAt: Date.now(),
+    };
+
+    const replyResolver = vi.fn(async () => ({ text: "telegram reply" }) satisfies ReplyPayload);
+    const dispatchParams = createVisibleDispatchParams(replyResolver);
+
+    const result = await dispatchReplyFromConfig(dispatchParams);
+
+    expect(diagnosticMocks.requestStuckDiagnosticSessionRecovery).not.toHaveBeenCalled();
+    expect(activeOperation.result).toMatchObject({
+      kind: "failed",
+      code: "run_failed",
+      cause: { message: "clearing stale terminal reply operation" },
+    });
     expect(result).toMatchObject({
       queuedFinal: true,
       counts: { tool: 0, block: 0, final: 0 },

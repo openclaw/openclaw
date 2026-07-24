@@ -17,6 +17,9 @@ import {
   type ReplyOperationPhase,
   waitForReplyRunEndBySessionId,
 } from "../../auto-reply/reply/reply-run-registry.js";
+import { getRuntimeConfig } from "../../config/io.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
+import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
@@ -33,6 +36,7 @@ import {
   logSessionStateChange,
   updateDiagnosticSessionFile,
 } from "../../logging/diagnostic.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { resolveTimerTimeoutMs } from "../../shared/number-coercion.js";
 import {
   ACTIVE_EMBEDDED_RUNS,
@@ -817,7 +821,53 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
     params.forceClear === true && (!aborted || !drained)
       ? forceClearEmbeddedAgentRun(params.sessionId, params.sessionKey, params.reason)
       : false;
+  if (forceCleared && params.sessionKey) {
+    await persistForceClearedEmbeddedRunTerminalState({ sessionKey: params.sessionKey });
+  }
   return { aborted, drained, forceCleared };
+}
+
+/**
+ * Patches the session entry with terminal state after a force-clear.
+ * This keeps the in-memory registry and the persisted SQLite row consistent,
+ * so upstream recovery paths (e.g. isRecoverableTerminalSessionStatus) can
+ * recognize the session as recoverable without waiting for the next heartbeat.
+ */
+async function persistForceClearedEmbeddedRunTerminalState(params: {
+  sessionKey: string;
+}): Promise<void> {
+  try {
+    const cfg = getRuntimeConfig();
+    const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+    const storePath = resolveStorePath(cfg.session?.store, { agentId });
+    await updateSessionEntry(
+      { sessionKey: params.sessionKey, storePath },
+      (entry) => {
+        const endedAt = Date.now();
+        const startedAt = entry.startedAt;
+        const runtimeMs =
+          typeof startedAt === "number" && startedAt > 0 && startedAt <= endedAt
+            ? endedAt - startedAt
+            : undefined;
+        return {
+          status: "killed",
+          abortedLastRun: true,
+          endedAt,
+          runtimeMs,
+          updatedAt: endedAt,
+        };
+      },
+      {
+        skipMaintenance: true,
+        takeCacheOwnership: true,
+        requireWriteSuccess: false,
+      },
+    );
+  } catch (err) {
+    diag.warn(
+      `persist force-cleared terminal state failed: sessionKey=${params.sessionKey} error=${String(err)}`,
+    );
+  }
 }
 
 function notifyEmbeddedRunEnded(sessionId: string) {
