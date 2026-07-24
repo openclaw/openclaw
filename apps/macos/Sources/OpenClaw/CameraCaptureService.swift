@@ -80,6 +80,10 @@ actor CameraCaptureService {
 
         session.startRunning()
         defer { session.stopRunning() }
+        // `.photo` can renegotiate external cameras into portrait; reselect landscape after start.
+        try CameraCapturePipelineSupport.applyPreferredCaptureFormat(
+            device: device,
+            preferredMaxWidth: maxWidth)
         try await CameraCapturePipelineSupport.warmUpCaptureSession()
         await self.waitForExposureAndWhiteBalance(device: device)
         await self.sleepDelayMs(delayMs)

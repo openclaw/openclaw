@@ -94,4 +94,28 @@ struct CameraCapturePipelineSupportTests {
         #expect(counts.stops == 1)
         #expect(counts.operations == 1)
     }
+
+    @Test func `format selection prefers landscape over portrait after photo renegotiation`() {
+        let candidates = [
+            CameraCaptureFormatSize(width: 1080, height: 1920),
+            CameraCaptureFormatSize(width: 1920, height: 1080),
+            CameraCaptureFormatSize(width: 1280, height: 720),
+        ]
+        let index = CameraCapturePipelineSupport.selectPreferredCaptureFormatIndex(
+            candidates: candidates,
+            preferredMaxWidth: 1920)
+        #expect(index == 1)
+    }
+
+    @Test func `format selection prefers the landscape size closest to max width`() {
+        let candidates = [
+            CameraCaptureFormatSize(width: 3840, height: 2160),
+            CameraCaptureFormatSize(width: 1920, height: 1080),
+            CameraCaptureFormatSize(width: 1280, height: 720),
+        ]
+        let index = CameraCapturePipelineSupport.selectPreferredCaptureFormatIndex(
+            candidates: candidates,
+            preferredMaxWidth: 1920)
+        #expect(index == 1)
+    }
 }
