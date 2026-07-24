@@ -4,6 +4,7 @@ import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import {
   shouldRepairMalformedToolCallArguments,
   wrapStreamFnRepairMalformedToolCallArguments,
+  wrapStreamResultRepairDoubleEscapedCodeStrings,
 } from "./attempt.tool-call-argument-repair.js";
 
 type FakeWrappedStream = {
@@ -520,5 +521,356 @@ const re = /\d+/;
       content: "Use ”, “foo”: “bar” in prose",
     });
     expect(result.finalArgs).not.toHaveProperty("foo");
+  });
+});
+
+describe("wrapStreamResultRepairDoubleEscapedCodeStrings", () => {
+  it("repairs double-escaped \\n at colon-then-indent Python block boundaries", async () => {
+    const baseFn: FakeStreamFn = () =>
+      createFakeStream({
+        events: [],
+        resultMessage: {
+          content: [
+            {
+              type: "toolCall",
+              id: "tc-1",
+              name: "write",
+              arguments: {
+                path: "test.py",
+                content: "class Foo:\\n    def bar():\\n        pass",
+              },
+            },
+          ],
+        },
+      });
+
+    const wrapped = wrapStreamResultRepairDoubleEscapedCodeStrings(baseFn as never);
+    const stream = await Promise.resolve(wrapped({} as never, {} as never, {} as never));
+    const message = (await stream.result()) as {
+      content: Array<{ arguments?: { content?: string } }>;
+    };
+
+    const args = message.content[0]?.arguments;
+    expect(args?.content).toContain("\n");
+    expect(args?.content).not.toContain("\\n");
+    expect(args?.content).toBe("class Foo:\n    def bar():\n        pass");
+  });
+
+  it("repairs double-escaped \\n in exec command arguments", async () => {
+    const baseFn: FakeStreamFn = () =>
+      createFakeStream({
+        events: [],
+        resultMessage: {
+          content: [
+            {
+              type: "toolCall",
+              id: "tc-1",
+              name: "exec",
+              arguments: {
+                command: 'python -c "for i in range(3):\\n    print(i)"',
+              },
+            },
+          ],
+        },
+      });
+
+    const wrapped = wrapStreamResultRepairDoubleEscapedCodeStrings(baseFn as never);
+    const stream = await Promise.resolve(wrapped({} as never, {} as never, {} as never));
+    const message = (await stream.result()) as {
+      content: Array<{ arguments?: { command?: string } }>;
+    };
+
+    const args = message.content[0]?.arguments;
+    expect(args?.command).toContain("\n");
+    expect(args?.command).not.toContain("\\n");
+  });
+
+  it("preserves intentional literal \\n escapes in string literals", async () => {
+    // Mixed: corrupted \n at code boundaries + intentional \n in a regex string
+    const baseFn: FakeStreamFn = () =>
+      createFakeStream({
+        events: [],
+        resultMessage: {
+          content: [
+            {
+              type: "toolCall",
+              id: "tc-1",
+              name: "write",
+              arguments: {
+                path: "test.py",
+                content:
+                  'import re\n\nclass Parser:\n    def tokenize(self, text):\n        return re.split(r"\\n", text)',
+              },
+            },
+          ],
+        },
+      });
+
+    const wrapped = wrapStreamResultRepairDoubleEscapedCodeStrings(baseFn as never);
+    const stream = await Promise.resolve(wrapped({} as never, {} as never, {} as never));
+    const message = (await stream.result()) as {
+      content: Array<{ arguments?: { content?: string } }>;
+    };
+
+    const args = message.content[0]?.arguments;
+    // Code-structure \n at block boundaries were repaired to real newlines
+    expect(args?.content).toContain("class Parser:\n    def tokenize");
+    // Intentional \n in the regex string literal is preserved byte-for-byte
+    expect(args?.content).toContain('r"\\n"');
+  });
+
+  it("does not modify non-code keys like path or pattern", async () => {
+    const baseFn: FakeStreamFn = () =>
+      createFakeStream({
+        events: [],
+        resultMessage: {
+          content: [
+            {
+              type: "toolCall",
+              id: "tc-1",
+              name: "write",
+              arguments: {
+                path: "test\\nfile.py",
+                content: "class Foo:\\n    pass",
+              },
+            },
+          ],
+        },
+      });
+
+    const wrapped = wrapStreamResultRepairDoubleEscapedCodeStrings(baseFn as never);
+    const stream = await Promise.resolve(wrapped({} as never, {} as never, {} as never));
+    const message = (await stream.result()) as {
+      content: Array<{ arguments?: { path?: string; content?: string } }>;
+    };
+
+    const args = message.content[0]?.arguments;
+    // path is not a code-like key — literal \n preserved
+    expect(args?.path).toBe("test\\nfile.py");
+    // content is a code-like key — \n repaired
+    expect(args?.content).toBe("class Foo:\n    pass");
+  });
+
+  it("repairs consecutive \\n\\t structural indentation in code blocks", async () => {
+    // Models may output \n\t (literal newline + literal tab) for indented
+    // Python blocks. Both escapes must be repaired.
+    const baseFn: FakeStreamFn = () =>
+      createFakeStream({
+        events: [],
+        resultMessage: {
+          content: [
+            {
+              type: "toolCall",
+              id: "tc-1",
+              name: "write",
+              arguments: {
+                path: "test.py",
+                content: "class Foo:\\n\\tdef bar():\\n\\t\\tpass\\n\\ndef baz():\\n\\treturn 42",
+              },
+            },
+          ],
+        },
+      });
+
+    const wrapped = wrapStreamResultRepairDoubleEscapedCodeStrings(baseFn as never);
+    const stream = await Promise.resolve(wrapped({} as never, {} as never, {} as never));
+    const message = (await stream.result()) as {
+      content: Array<{ arguments?: { content?: string } }>;
+    };
+
+    const content = message.content[0]?.arguments?.content;
+    // \n\t should become real newline + real tab
+    expect(content).toContain("\n\tdef bar()");
+    expect(content).toContain("\n\t\tpass");
+    // \n\t and \n\t\t at block boundaries repaired to real newline+tab
+    expect(content).toContain("\n\tdef bar()");
+    expect(content).toContain("\n\t\tpass");
+    // No literal \t remaining (tabs were inside block indentation)
+    expect(content).not.toContain("\\t");
+  });
+
+  it("exposes repaired arguments on the final tool call result", async () => {
+    // The stream result must carry the repaired arguments so tool
+    // execution sees corrected values. Uses the result() path directly
+    // (the same path the production wrapper uses for all providers).
+    const baseFn: FakeStreamFn = () =>
+      createFakeStream({
+        events: [],
+        resultMessage: {
+          content: [
+            {
+              type: "toolCall",
+              id: "tc-1",
+              name: "write",
+              arguments: {
+                path: "test.py",
+                content: "class Foo:\\n    def bar():\\n        pass",
+              },
+            },
+          ],
+        },
+      });
+
+    const wrapped = wrapStreamResultRepairDoubleEscapedCodeStrings(baseFn as never);
+    const stream = await Promise.resolve(wrapped({} as never, {} as never, {} as never));
+    const message = (await stream.result()) as {
+      content: Array<{ arguments?: { content?: string } }>;
+    };
+
+    const args = message.content[0]?.arguments;
+    expect(args?.content).toContain("\n");
+    expect(args?.content).not.toContain("\\n");
+    expect(args?.content).toBe("class Foo:\n    def bar():\n        pass");
+  });
+
+  it("preserves intentional colon-followed literal \\n in exec.command byte-for-byte", async () => {
+    // An exec command that contains a colon followed by a real newline
+    // (correctly escaped in JSON as \n) must not be modified. The colon
+    // here is inside a string literal, not Python block syntax.
+    const baseFn: FakeStreamFn = () =>
+      createFakeStream({
+        events: [],
+        resultMessage: {
+          content: [
+            {
+              type: "toolCall",
+              id: "tc-1",
+              name: "exec",
+              arguments: {
+                command: 'python -c "for i in range(3):\n    print(i)"',
+              },
+            },
+          ],
+        },
+      });
+
+    const wrapped = wrapStreamResultRepairDoubleEscapedCodeStrings(baseFn as never);
+    const stream = await Promise.resolve(wrapped({} as never, {} as never, {} as never));
+    const message = (await stream.result()) as {
+      content: Array<{ arguments?: { command?: string } }>;
+    };
+
+    const args = message.content[0]?.arguments;
+    // The command has a real newline (from JSON \n), NOT literal \n.
+    // It must pass through unchanged — the colon is inside a string
+    // literal, not at a Python block boundary.
+    expect(args?.command).toContain("\n");
+    expect(args?.command).not.toContain("\\n");
+    expect(args?.command).toContain('python -c "for i in range(3):');
+  });
+
+  it("preserves intentional literal \\n in exec.command when not an indented code block", async () => {
+    // A shell command with an intentional literal \n (correctly
+    // JSON-encoded as \\n, producing two chars backslash+n after
+    // parse). The colon precedes the \n but the \n is not followed
+    // by indentation — this is NOT a Python code block. The
+    // constrained fingerprint must not trigger, leaving the value
+    // byte-for-byte unchanged.
+    const baseFn: FakeStreamFn = () =>
+      createFakeStream({
+        events: [],
+        resultMessage: {
+          content: [
+            {
+              type: "toolCall",
+              id: "tc-1",
+              name: "exec",
+              arguments: {
+                command: "echo 'end:\\n' > /dev/null",
+              },
+            },
+          ],
+        },
+      });
+
+    const wrapped = wrapStreamResultRepairDoubleEscapedCodeStrings(baseFn as never);
+    const stream = await Promise.resolve(wrapped({} as never, {} as never, {} as never));
+    const message = (await stream.result()) as {
+      content: Array<{ arguments?: { command?: string } }>;
+    };
+
+    const args = message.content[0]?.arguments;
+    // The literal \n after the colon is followed by a closing quote,
+    // not by whitespace indentation. It must remain as literal \n.
+    expect(args?.command).toContain("\\n");
+    expect(args?.command).not.toContain("\n");
+    expect(args?.command).toBe("echo 'end:\\n' > /dev/null");
+  });
+
+  it("preserves intentional literal \\n inside a Python string literal in content", async () => {
+    // A Python source file containing a string literal with an
+    // intentional \n (two literal chars backslash+n) at a colon
+    // position WITH indentation. This is NOT a double-escaped code
+    // block — the \n is inside matching quotes (a Python string).
+    // The repair must leave it byte-for-byte unchanged.
+    const baseFn: FakeStreamFn = () =>
+      createFakeStream({
+        events: [],
+        resultMessage: {
+          content: [
+            {
+              type: "toolCall",
+              id: "tc-1",
+              name: "write",
+              arguments: {
+                path: "demo.py",
+                content:
+                  'import sys\n\nclass Demo:\n    def run(self):\n        msg = "Usage:\\n    python demo.py --help"\n        print(msg)',
+              },
+            },
+          ],
+        },
+      });
+
+    const wrapped = wrapStreamResultRepairDoubleEscapedCodeStrings(baseFn as never);
+    const stream = await Promise.resolve(wrapped({} as never, {} as never, {} as never));
+    const message = (await stream.result()) as {
+      content: Array<{ arguments?: { content?: string } }>;
+    };
+
+    const args = message.content[0]?.arguments;
+    // Structural \n at class:def boundary is repaired
+    expect(args?.content).toContain("class Demo:\n    def run");
+    // Intentional \n inside the string literal is preserved
+    expect(args?.content).toContain('"Usage:\\n    python demo.py --help"');
+    // No real newline inside the string literal
+    expect(args?.content).not.toContain('"Usage:\n    python demo.py --help"');
+  });
+
+  it("preserves intentional literal \\n inside a string in exec.command", async () => {
+    // An exec command with an intentional literal \n inside shell
+    // quotes — correctly JSON-encoded as \\n, producing literal
+    // backslash+n after parse. The \n is after a colon and has
+    // indentation, but it's inside matching double quotes. The
+    // repair must leave it byte-for-byte unchanged.
+    const baseFn: FakeStreamFn = () =>
+      createFakeStream({
+        events: [],
+        resultMessage: {
+          content: [
+            {
+              type: "toolCall",
+              id: "tc-1",
+              name: "exec",
+              arguments: {
+                command: 'printf "Usage:\\n    %s [opts]\\n" "$0" > /tmp/help.txt',
+              },
+            },
+          ],
+        },
+      });
+
+    const wrapped = wrapStreamResultRepairDoubleEscapedCodeStrings(baseFn as never);
+    const stream = await Promise.resolve(wrapped({} as never, {} as never, {} as never));
+    const message = (await stream.result()) as {
+      content: Array<{ arguments?: { command?: string } }>;
+    };
+
+    const args = message.content[0]?.arguments;
+    // The literal \n inside the printf format string is intentional
+    // and must be preserved byte-for-byte.
+    expect(args?.command).toContain("\\n");
+    // No real newline introduced into the format string
+    expect(args?.command).toBe('printf "Usage:\\n    %s [opts]\\n" "$0" > /tmp/help.txt');
   });
 });

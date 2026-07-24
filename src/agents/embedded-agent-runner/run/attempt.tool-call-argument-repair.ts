@@ -73,6 +73,148 @@ const TOOLCALL_REPAIR_FREEFORM_SUCCESSOR_KEYS: Record<string, string> = {
   old_string: "new_string",
   oldText: "newText",
 };
+
+// Pattern: colon followed by literal \n then indent or consecutive
+// escapes (\n\t) — fingerprint of double-escaped JSON in code blocks
+// (issue #109478). Requires at least one whitespace or escape char
+// between \n and the next code character so the fingerprint only
+// triggers on actual indented code-block structure, not on shell
+// commands or string literals that happen to contain colon-then-\n
+// without indentation.
+const TOOLCALL_REPAIR_DOUBLE_ESCAPED_CODE_RE = /:\s*\\n(?:\s|\\[nrt])+\S/s;
+
+// Maps JSON escape chars to their real equivalents. Only applied at
+// fingerprint positions, preserving intentional escapes elsewhere.
+const TOOLCALL_REPAIR_DOUBLE_ESCAPE_MAP: Record<string, string> = {
+  n: "\n",
+  r: "\r",
+  t: "\t",
+};
+
+// Matches corrupted \n, \t, \r at structural code positions: after a
+// colon, semicolon, closing brace, another literal escape, or a real
+// newline (result of a previous repair). Applied only after the
+// fingerprint confirms this is an indented code block, so the
+// lookahead intentionally uses * (not +) to also repair structural \n
+// at non-indented positions (e.g. top-level def after a class body).
+const TOOLCALL_REPAIR_DOUBLE_ESCAPED_REPLACE_RE =
+  /((?::|;|\}|\\[nrt]|\n)\s*)\\([nrt])(?=(?:\s|\\[nrt])*\S)/gs;
+
+// Code-like tool argument keys eligible for double-escape repair (#109478).
+// Includes exec's "command" which is not in the smart-quote freeform set.
+const TOOLCALL_REPAIR_DOUBLE_ESCAPED_CODE_KEYS = new Set([
+  "command",
+  ...TOOLCALL_REPAIR_FREEFORM_VALUE_KEYS,
+]);
+
+/**
+ * Returns true when the position in `str` is inside matching Python-style
+ * quotes (single or double), indicating a string literal rather than
+ * code structure.  Real newlines reset quote state because Python string
+ * literals cannot span lines without explicit continuation.
+ */
+function isInsideStringLiteral(str: string, pos: number): boolean {
+  let inDouble = false;
+  let inSingle = false;
+  for (let i = 0; i < pos; i++) {
+    const c = str[i];
+    if (c === "\n") {
+      inDouble = false;
+      inSingle = false;
+    } else if (c === '"' && !inSingle) {
+      inDouble = !inDouble;
+    } else if (c === "'" && !inDouble) {
+      inSingle = !inSingle;
+    }
+  }
+  return inDouble || inSingle;
+}
+
+/**
+ * Returns true when every double-quoted span in `str` that contains a
+ * Python keyword (def, class, if, for, while, with, try, except, import,
+ * from, return, yield, pass, break, continue, raise, assert, del, global,
+ * nonlocal) is treated as a code container rather than a string literal.
+ * This prevents the quote check from skipping repairs inside `python -c`
+ * and similar inline-code wrappers.
+ */
+function isInsideCodeContainer(str: string, pos: number): boolean {
+  // Walk backward from pos to find the opening double-quote and then
+  // check whether the text preceding it looks like a code launcher.
+  let i = pos;
+  while (i >= 0) {
+    if (str[i] === '"') {
+      // Check what comes before the opening quote.
+      const before = str.slice(Math.max(0, i - 16), i);
+      if (/(?:-\s*[ce]|python|node(?:\.exe)?)\s*$/i.test(before)) {
+        return true;
+      }
+      // Check the quoted content for Python keywords (sampled — the
+      // first 256 chars of the quoted region).
+      const start = i + 1;
+      const sample = str.slice(start, start + 256);
+      if (/\b(?:def|class)\s+\w/.test(sample)) {
+        return true;
+      }
+      break;
+    }
+    i--;
+  }
+  return false;
+}
+
+/** Fix double-escaped JSON strings in code-like tool call argument values. */
+function repairDoubleEscapedCodeStrings(args: Record<string, unknown>): void {
+  for (const [key, value] of Object.entries(args)) {
+    if (typeof value === "string") {
+      if (
+        TOOLCALL_REPAIR_DOUBLE_ESCAPED_CODE_KEYS.has(key) &&
+        TOOLCALL_REPAIR_DOUBLE_ESCAPED_CODE_RE.test(value)
+      ) {
+        // Loop so consecutive escapes (\n\t, \n\n) are all replaced.
+        let repaired = value;
+        for (let i = 0; i < 8; i++) {
+          const prev = repaired;
+          repaired = repaired.replace(
+            TOOLCALL_REPAIR_DOUBLE_ESCAPED_REPLACE_RE,
+            (_match, prefix, char, offset) => {
+              // Skip replacements inside Python string literals
+              // unless the quoted region is a code container
+              // (e.g. python -c "...").  Position of the escape
+              // char itself is offset + prefix.length.
+              const escapePos = offset + prefix.length;
+              if (
+                isInsideStringLiteral(repaired, escapePos) &&
+                !isInsideCodeContainer(repaired, escapePos)
+              ) {
+                return _match;
+              }
+              return `${prefix}${TOOLCALL_REPAIR_DOUBLE_ESCAPE_MAP[char] ?? char}`;
+            },
+          );
+          repaired = repaired.replace(
+            /\\([nrt])(?=\s*\\([nrt]))/gs,
+            (_match, char) => TOOLCALL_REPAIR_DOUBLE_ESCAPE_MAP[char] ?? _match,
+          );
+          if (repaired === prev) {
+            break;
+          }
+        }
+        // Final cleanup: remaining escapes preceded by a real newline
+        // (result of a prior repair) that were not matched because their
+        // prefix character was not a structural token.
+        repaired = repaired.replace(
+          /(\n)\\([nrt])/g,
+          (_match, nl) =>
+            nl + (TOOLCALL_REPAIR_DOUBLE_ESCAPE_MAP[_match.slice(-1)] ?? _match.slice(-1)),
+        );
+        args[key] = repaired;
+      }
+    } else if (value && typeof value === "object" && !Array.isArray(value)) {
+      repairDoubleEscapedCodeStrings(value as Record<string, unknown>);
+    }
+  }
+}
 const TOOLCALL_REPAIR_TOOL_VALUE_SUCCESSOR_KEYS = new Map<
   string,
   ReadonlyMap<string, readonly string[]>
@@ -666,6 +808,34 @@ function repairMalformedToolCallArgumentsInMessage(
   }
 }
 
+/** Walk message content blocks and repair double-escaped code strings in
+ *  tool call arguments that were already valid JSON (unrepaired path). */
+function repairDoubleEscapedCodeStringsInMessage(message: unknown): void {
+  if (!message || typeof message !== "object") {
+    return;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return;
+  }
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const typedBlock = block as { type?: unknown; arguments?: unknown };
+    if (!isRunnerToolCallBlockType(typedBlock.type)) {
+      continue;
+    }
+    if (
+      typedBlock.arguments !== null &&
+      typeof typedBlock.arguments === "object" &&
+      !Array.isArray(typedBlock.arguments)
+    ) {
+      repairDoubleEscapedCodeStrings(typedBlock.arguments as Record<string, unknown>);
+    }
+  }
+}
+
 function wrapStreamRepairMalformedToolCallArguments(
   stream: MutableAssistantMessageEventStream,
 ): MutableAssistantMessageEventStream {
@@ -678,6 +848,7 @@ function wrapStreamRepairMalformedToolCallArguments(
   stream.result = async () => {
     const message = await originalResult();
     repairMalformedToolCallArgumentsInMessage(message, repairedArgsByIndex);
+    repairDoubleEscapedCodeStringsInMessage(message);
     partialJsonByIndex.clear();
     repairedArgsByIndex.clear();
     hadPreexistingArgsByIndex.clear();
@@ -721,6 +892,7 @@ function wrapStreamRepairMalformedToolCallArguments(
           ) {
             hadPreexistingArgsByIndex.add(event.contentIndex);
           }
+          repairDoubleEscapedCodeStrings(repair.args);
           repairedArgsByIndex.set(event.contentIndex, repair.args);
           repairToolCallArgumentsInMessage(event.partial, event.contentIndex, repair.args);
           repairToolCallArgumentsInMessage(event.message, event.contentIndex, repair.args);
@@ -753,6 +925,7 @@ function wrapStreamRepairMalformedToolCallArguments(
     ) {
       const repairedArgs = repairedArgsByIndex.get(event.contentIndex);
       if (repairedArgs) {
+        repairDoubleEscapedCodeStrings(repairedArgs);
         if (event.toolCall && typeof event.toolCall === "object") {
           (event.toolCall as { arguments?: unknown }).arguments = repairedArgs;
         }
@@ -795,5 +968,36 @@ export function shouldRepairMalformedToolCallArguments(params: {
 
 export function wrapStreamFnDecodeXaiToolCallArguments(baseFn: StreamFn): StreamFn {
   return createHtmlEntityToolCallArgumentDecodingWrapper(baseFn);
+}
+
+/**
+ * Wraps a stream function so double-escaped JSON strings in tool call
+ * arguments are repaired before tool execution (#109478). Some models
+ * output \\\\n (JSON literal backslash-n) instead of \\n (JSON-escaped
+ * newline) in code-like argument values. This wrapper applies the repair
+ * unconditionally for all providers.
+ */
+export function wrapStreamResultRepairDoubleEscapedCodeStrings(baseFn: StreamFn): StreamFn {
+  return (model, context, options) => {
+    const maybeStream = baseFn(model, context, options);
+    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
+      return Promise.resolve(maybeStream).then((stream) => {
+        const originalResult = stream.result.bind(stream);
+        stream.result = async () => {
+          const message = await originalResult();
+          repairDoubleEscapedCodeStringsInMessage(message);
+          return message;
+        };
+        return stream;
+      });
+    }
+    const originalResult = maybeStream.result.bind(maybeStream);
+    maybeStream.result = async () => {
+      const message = await originalResult();
+      repairDoubleEscapedCodeStringsInMessage(message);
+      return message;
+    };
+    return maybeStream;
+  };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
