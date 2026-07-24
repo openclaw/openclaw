@@ -1,6 +1,7 @@
 // Tool media handler tests cover media extraction from tool results, trusted
 // local media flags, and quiet/verbose tool-output emission paths.
 import { describe, expect, it, vi } from "vitest";
+import { readPendingToolMediaReply } from "./embedded-agent-subscribe.handlers.messages.js";
 import {
   handleToolExecutionEnd,
   handleToolExecutionStart,
@@ -707,6 +708,167 @@ describe("handleToolExecutionEnd media emission", () => {
     });
 
     expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/reply.opus"]);
+    expect(ctx.state.pendingToolAudioAsVoice).toBe(true);
+    expect(ctx.state.pendingToolTrustedLocalMedia).toBe(true);
+  });
+});
+
+describe("handleToolExecutionEnd messaging-tool media dedup", () => {
+  // Regression: in automatic visible-reply mode the model may both queue
+  // generated media for automatic delivery AND deliver it via the message
+  // tool, which sent the image twice. The message tool sees the sandbox
+  // container path while the queued copy is a host path, so dedup is by basename.
+  it("drops queued tool media already delivered via the message tool across host/container paths", async () => {
+    const ctx = createMockContext();
+    ctx.state.pendingToolMediaUrls = [
+      "/data/media/tool-image-generation/gen-019eacf1---0e9fdb2e.jpg",
+    ];
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "msg-1",
+      args: {
+        action: "send",
+        to: "135170423",
+        text: "Готово",
+        media: "/workspace/media/tool-image-generation/gen-019eacf1---0e9fdb2e.jpg",
+      },
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "msg-1",
+      isError: false,
+      result: { content: [{ type: "text", text: "sent" }] },
+    });
+
+    expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
+    expect(ctx.state.messagingToolSentMediaUrls).toContain(
+      "/workspace/media/tool-image-generation/gen-019eacf1---0e9fdb2e.jpg",
+    );
+  });
+
+  it("keeps queued tool media the message tool did not deliver", async () => {
+    const ctx = createMockContext();
+    ctx.state.pendingToolMediaUrls = ["/data/media/tool-image-generation/gen-other.jpg"];
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "msg-1",
+      args: {
+        action: "send",
+        to: "135170423",
+        media: "/workspace/media/tool-image-generation/gen-sent.jpg",
+      },
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "msg-1",
+      isError: false,
+      result: { content: [{ type: "text", text: "sent" }] },
+    });
+
+    expect(ctx.state.pendingToolMediaUrls).toStrictEqual([
+      "/data/media/tool-image-generation/gen-other.jpg",
+    ]);
+  });
+
+  it("does not drop queued media on a failed message tool send", async () => {
+    const ctx = createMockContext();
+    ctx.state.pendingToolMediaUrls = [
+      "/data/media/tool-image-generation/gen-019eacf1---0e9fdb2e.jpg",
+    ];
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "msg-1",
+      args: {
+        action: "send",
+        to: "135170423",
+        media: "/workspace/media/tool-image-generation/gen-019eacf1---0e9fdb2e.jpg",
+      },
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "msg-1",
+      isError: true,
+      result: { content: [{ type: "text", text: "failed" }] },
+    });
+
+    expect(ctx.state.pendingToolMediaUrls).toStrictEqual([
+      "/data/media/tool-image-generation/gen-019eacf1---0e9fdb2e.jpg",
+    ]);
+  });
+
+  // Audio/trusted flags are global, not per-URL. If the basename filter empties
+  // the queue but leaves a flag set, readPendingToolMediaReply still returns a
+  // metadata-only payload — a phantom fallback delivery after the message tool
+  // already sent the file. Clearing the queue must clear the flags too.
+  it("clears audio/trusted flags when the message tool drained the queued media", async () => {
+    const ctx = createMockContext();
+    ctx.state.pendingToolMediaUrls = ["/data/media/tool-tts/gen-019eacf1---0e9fdb2e.opus"];
+    ctx.state.pendingToolAudioAsVoice = true;
+    ctx.state.pendingToolTrustedLocalMedia = true;
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "msg-1",
+      args: {
+        action: "send",
+        to: "135170423",
+        media: "/workspace/media/tool-tts/gen-019eacf1---0e9fdb2e.opus",
+      },
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "msg-1",
+      isError: false,
+      result: { content: [{ type: "text", text: "sent" }] },
+    });
+
+    expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
+    expect(ctx.state.pendingToolAudioAsVoice).toBe(false);
+    expect(ctx.state.pendingToolTrustedLocalMedia).toBe(false);
+    // No phantom metadata-only fallback reply remains.
+    expect(readPendingToolMediaReply(ctx.state)).toBeNull();
+  });
+
+  // Partial drain: flags must survive while any queued media still needs them.
+  it("keeps audio/trusted flags when some queued media remains undelivered", async () => {
+    const ctx = createMockContext();
+    ctx.state.pendingToolMediaUrls = [
+      "/data/media/tool-tts/gen-sent.opus",
+      "/data/media/tool-tts/gen-kept.opus",
+    ];
+    ctx.state.pendingToolAudioAsVoice = true;
+    ctx.state.pendingToolTrustedLocalMedia = true;
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "msg-1",
+      args: {
+        action: "send",
+        to: "135170423",
+        media: "/workspace/media/tool-tts/gen-sent.opus",
+      },
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "msg-1",
+      isError: false,
+      result: { content: [{ type: "text", text: "sent" }] },
+    });
+
+    expect(ctx.state.pendingToolMediaUrls).toStrictEqual(["/data/media/tool-tts/gen-kept.opus"]);
     expect(ctx.state.pendingToolAudioAsVoice).toBe(true);
     expect(ctx.state.pendingToolTrustedLocalMedia).toBe(true);
   });
