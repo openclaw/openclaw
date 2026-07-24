@@ -159,6 +159,10 @@ provider/auth configuration, switch to a reachable provider, or set
 }
 ```
 
+<Note>
+When `memorySearch.provider` points at a configured `models.providers.<id>` entry, memory embeddings use that provider's `request.allowPrivateNetwork` policy for private endpoint trust. Omit the flag to trust only the exact configured `baseUrl` origin (`scheme://host:port`) for that provider, set it to `true` to allow broader private-network embedding requests, or set it to `false` to opt out of exact-origin private-network trust. A `memorySearch.remote.baseUrl` override on a different origin requires explicit `true`; it does not inherit the configured provider origin's trust.
+</Note>
+
 ### API key resolution
 
 Remote embeddings require an API key. Bedrock uses the AWS SDK default credential chain instead (instance roles, SSO, access keys, or a Bedrock API key).
