@@ -36,7 +36,7 @@ export function readMcpToolResult(item: CodexThreadItem): NativeMcpCallToolResul
   if (!result || !Array.isArray(result.content)) {
     return undefined;
   }
-  const resultMeta = asRecord(result._meta);
+  const resultMeta = asRecord(result["_meta"]);
   return {
     content: result.content as JsonValue[],
     ...(result.structuredContent !== undefined
@@ -51,10 +51,9 @@ export function readMcpToolResult(item: CodexThreadItem): NativeMcpCallToolResul
 }
 
 function statusTools(status: CodexMcpServerStatus): Array<Record<string, unknown>> {
-  return Object.entries(status.tools).map(([name, value]) => ({
-    ...asRecord(value),
-    name,
-  }));
+  return Object.entries(status.tools).map(([name, value]) =>
+    Object.assign({}, asRecord(value), { name }),
+  );
 }
 
 function createNativeMcpRuntime(params: {
@@ -188,7 +187,7 @@ export function createCodexNativeMcpAppResultDetailsPreparer(params: {
       toolInput: item.arguments ?? {},
       toolResult: toolResult as never,
       allowedAppToolNames,
-      ...(toolResult._meta !== undefined ? { resultMetaState: "unavailable" as const } : {}),
+      ...(toolResult["_meta"] !== undefined ? { resultMetaState: "unavailable" as const } : {}),
     });
   };
 }

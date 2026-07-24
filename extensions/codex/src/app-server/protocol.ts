@@ -1,3 +1,7 @@
+import type * as CodexMcpProtocol from "./protocol-mcp.js";
+
+export type { CodexListMcpServerStatusResponse, CodexMcpServerStatus } from "./protocol-mcp.js";
+
 export type JsonValue = null | boolean | number | string | JsonValue[] | JsonObject;
 export type JsonObject = { [key: string]: JsonValue };
 export type CodexServiceTier = string;
@@ -691,18 +695,6 @@ type CodexHooksListResponse = {
   nextCursor?: string | null;
 };
 
-export type CodexMcpServerStatus = {
-  name: string;
-  tools: JsonObject;
-  resources?: JsonValue[];
-  resourceTemplates?: JsonValue[];
-};
-
-export type CodexListMcpServerStatusResponse = {
-  data: CodexMcpServerStatus[];
-  nextCursor?: string | null;
-};
-
 export type CodexConfigReadResponse = {
   config: JsonObject;
   layers?: JsonValue[] | null;
@@ -750,18 +742,8 @@ type CodexAppServerRequestParamsOverride = {
   "thread/goal/get": CodexThreadGoalGetParams;
   "thread/goal/clear": CodexThreadGoalClearParams;
   "turn/interrupt": CodexTurnInterruptParams;
-  "mcpServer/resource/read": {
-    threadId?: string | null;
-    server: string;
-    uri: string;
-  };
-  "mcpServer/tool/call": {
-    threadId: string;
-    server: string;
-    tool: string;
-    arguments?: JsonValue;
-    _meta?: JsonValue;
-  };
+  "mcpServer/resource/read": CodexMcpProtocol.ResourceReadParams;
+  "mcpServer/tool/call": CodexMcpProtocol.ToolCallParams;
 };
 
 type CodexAppServerRequestResultMap = {
@@ -778,14 +760,9 @@ type CodexAppServerRequestResultMap = {
   "feedback/upload": JsonValue;
   "hooks/list": CodexHooksListResponse;
   "marketplace/add": JsonValue;
-  "mcpServerStatus/list": CodexListMcpServerStatusResponse;
-  "mcpServer/resource/read": { contents: JsonValue[] };
-  "mcpServer/tool/call": {
-    content: JsonValue[];
-    structuredContent?: JsonValue;
-    isError?: boolean;
-    _meta?: JsonValue;
-  };
+  "mcpServerStatus/list": CodexMcpProtocol.CodexListMcpServerStatusResponse;
+  "mcpServer/resource/read": CodexMcpProtocol.ResourceReadResult;
+  "mcpServer/tool/call": CodexMcpProtocol.ToolCallResult;
   "model/list": CodexModelListResponse;
   "modelProvider/capabilities/read": CodexModelProviderCapabilitiesReadResponse;
   "plugin/install": CodexPluginInstallResponse;

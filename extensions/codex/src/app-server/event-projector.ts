@@ -93,8 +93,6 @@ export class CodexAppServerEventProjector {
   private readonly completedItemIds = new Set<string>();
   private readonly activeCompactionItemIds = new Set<string>();
   private readonly terminalPresentationClearedItemIds = new Set<string>();
-  private readonly nativeMcpAppResultDetails = new Map<string, unknown>();
-  private readonly nativeMcpAppResultDetailsAttempted = new Set<string>();
   private readonly nativeToolOutcomeOrdinals = new Map<string, number>();
   private readonly diagnostics: CodexProjectionDiagnostics;
   private readonly generatedMediaProjection: CodexGeneratedMediaProjection;
@@ -137,6 +135,7 @@ export class CodexAppServerEventProjector {
       () => this.nextTranscriptTimestamp(),
       {
         nativePostToolUseRelayEnabled: options.nativePostToolUseRelayEnabled,
+        prepareNativeMcpAppResultDetails: options.prepareNativeMcpAppResultDetails,
         trajectoryRecorder: options.trajectoryRecorder,
       },
     );
@@ -539,7 +538,6 @@ export class CodexAppServerEventProjector {
 
   private async handleItemCompleted(params: JsonObject): Promise<void> {
     const item = readItem(params.item);
-    const nativeMcpAppResultDetails = await this.prepareNativeMcpAppResultDetails(item);
     this.diagnostics.warnUnknownItemStatus(item);
     this.recordNativeToolOutcome(item);
     this.clearTerminalPresentationForNativeItem(item);
@@ -587,7 +585,7 @@ export class CodexAppServerEventProjector {
     this.eventProjection.emitStandardItemEvent({ phase: "end", item });
     await this.eventProjection.emitNormalizedToolItemEvent({ phase: "result", item });
     this.toolTranscriptProjection.recordNativeToolCall(item);
-    this.toolTranscriptProjection.recordNativeToolResult(item, nativeMcpAppResultDetails);
+    await this.toolTranscriptProjection.recordNativeToolResultWithDetails(item);
     this.toolProgressProjection.emitToolResultSummary(item);
     this.toolProgressProjection.emitToolResultOutput(item);
     this.emitAgentEvent({
@@ -647,9 +645,8 @@ export class CodexAppServerEventProjector {
       this.toolProgressProjection.recordToolMeta(item);
       this.toolProgressProjection.rememberCommandAggregateOutputEcho(item);
       await this.emitSnapshotOnlyNativeToolProgress(item);
-      const nativeMcpAppResultDetails = await this.prepareNativeMcpAppResultDetails(item);
       this.toolTranscriptProjection.recordNativeToolCall(item);
-      this.toolTranscriptProjection.recordNativeToolResult(item, nativeMcpAppResultDetails);
+      await this.toolTranscriptProjection.recordNativeToolResultWithDetails(item);
       this.toolTranscriptProjection.emitAfterToolCallObservation(item);
       this.toolProgressProjection.emitToolResultSummary(item);
       this.toolProgressProjection.emitToolResultOutput(item);
@@ -677,37 +674,6 @@ export class CodexAppServerEventProjector {
     this.eventProjection.emitStandardItemEvent({ phase: "end", item });
     await this.eventProjection.emitNormalizedToolItemEvent({ phase: "result", item });
     this.completedItemIds.add(item.id);
-  }
-
-  private async prepareNativeMcpAppResultDetails(
-    item: CodexThreadItem | undefined,
-  ): Promise<unknown> {
-    if (!item || item.type !== "mcpToolCall" || itemStatus(item) === "running") {
-      return undefined;
-    }
-    if (this.nativeMcpAppResultDetails.has(item.id)) {
-      return this.nativeMcpAppResultDetails.get(item.id);
-    }
-    if (
-      this.nativeMcpAppResultDetailsAttempted.has(item.id) ||
-      !this.options.prepareNativeMcpAppResultDetails
-    ) {
-      return undefined;
-    }
-    this.nativeMcpAppResultDetailsAttempted.add(item.id);
-    try {
-      const details = await this.options.prepareNativeMcpAppResultDetails(item);
-      if (details !== undefined) {
-        this.nativeMcpAppResultDetails.set(item.id, details);
-      }
-      return details;
-    } catch (error) {
-      embeddedAgentLog.debug("codex native MCP App preview preparation failed", {
-        itemId: item.id,
-        error,
-      });
-      return undefined;
-    }
   }
 
   private isCurrentTurnSnapshotItem(item: CodexThreadItem): boolean {
