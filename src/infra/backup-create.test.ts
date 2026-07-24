@@ -20,7 +20,10 @@ import {
   sanitizeOpenClawGlobalStateSnapshot,
   sanitizeOpenClawStateLeaseRows,
 } from "../state/openclaw-state-snapshot-sanitizer.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  type OpenClawTestState,
+  withOpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import {
   createBackupArchive,
   formatBackupCreateSummary,
@@ -109,6 +112,59 @@ function createUnsafeIndexDrift(sqlitePath: string): void {
   } finally {
     database.close();
   }
+}
+
+function createEmptySqliteDatabase(sqlitePath: string): void {
+  const sqlite = requireNodeSqlite();
+  const database = new sqlite.DatabaseSync(sqlitePath);
+  try {
+    database.exec("VACUUM;");
+  } finally {
+    database.close();
+  }
+}
+
+function createOwnedSqliteDatabase(params: {
+  sqlitePath: string;
+  role: "agent" | "global";
+  agentId?: string;
+  schemaVersion?: number;
+}): void {
+  const sqlite = requireNodeSqlite();
+  const database = new sqlite.DatabaseSync(params.sqlitePath);
+  const schemaVersion = params.schemaVersion ?? 1;
+  try {
+    database.exec(`
+      CREATE TABLE schema_meta (
+        meta_key TEXT NOT NULL PRIMARY KEY,
+        role TEXT NOT NULL,
+        schema_version INTEGER NOT NULL,
+        agent_id TEXT,
+        app_version TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      PRAGMA user_version = ${schemaVersion};
+    `);
+    database
+      .prepare(
+        `INSERT INTO schema_meta
+          (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
+         VALUES ('primary', ?, ?, ?, NULL, 1, 1)`,
+      )
+      .run(params.role, schemaVersion, params.agentId ?? null);
+  } finally {
+    database.close();
+  }
+}
+
+function resolveCanonicalTestSqlitePath(
+  state: OpenClawTestState,
+  kind: "agent" | "global",
+): string {
+  return kind === "global"
+    ? resolveOpenClawStateSqlitePath(state.env)
+    : state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
 }
 
 describe("formatBackupCreateSummary", () => {
@@ -1195,9 +1251,13 @@ describe("createBackupArchive", () => {
             PRAGMA wal_autocheckpoint = 0;
             CREATE TABLE schema_meta (
               meta_key TEXT NOT NULL PRIMARY KEY,
-              role TEXT NOT NULL
+              role TEXT NOT NULL,
+              schema_version INTEGER NOT NULL,
+              agent_id TEXT
             );
-            INSERT INTO schema_meta (meta_key, role) VALUES ('primary', 'agent');
+            INSERT INTO schema_meta (meta_key, role, schema_version, agent_id)
+            VALUES ('primary', 'agent', 1, 'node_modules');
+            PRAGMA user_version = 1;
             CREATE TABLE markers (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
             PRAGMA wal_checkpoint(TRUNCATE);
             INSERT INTO markers (value) VALUES ('committed-in-wal');
@@ -1238,6 +1298,362 @@ describe("createBackupArchive", () => {
           }
         } finally {
           db.close();
+        }
+      },
+    );
+  });
+
+  it.each([
+    {
+      name: "global",
+      kind: "global" as const,
+    },
+    {
+      name: "agent",
+      kind: "agent" as const,
+    },
+  ])("rejects a zero-byte canonical $name database", async ({ kind }) => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-zero-byte-canonical-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        const dbPath = resolveCanonicalTestSqlitePath(state, kind);
+        await fs.mkdir(path.dirname(dbPath), { recursive: true });
+        await fs.mkdir(outputDir, { recursive: true });
+        await fs.writeFile(dbPath, "");
+
+        await expect(
+          createBackupArchive({
+            output: outputDir,
+            includeWorkspace: false,
+            nowMs: Date.UTC(2026, 6, 24, 9, 0, 0),
+          }),
+        ).rejects.toThrow(/snapshot source must not be empty/iu);
+        expect((await fs.stat(dbPath)).size).toBe(0);
+        expect(await fs.readdir(outputDir)).toEqual([]);
+      },
+    );
+  });
+
+  it.each([
+    {
+      name: "global",
+      kind: "global" as const,
+    },
+    {
+      name: "agent",
+      kind: "agent" as const,
+    },
+  ])("rejects a schema-empty canonical $name database", async ({ kind }) => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-schema-empty-canonical-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        const dbPath = resolveCanonicalTestSqlitePath(state, kind);
+        await fs.mkdir(path.dirname(dbPath), { recursive: true });
+        await fs.mkdir(outputDir, { recursive: true });
+        createEmptySqliteDatabase(dbPath);
+
+        await expect(
+          createBackupArchive({
+            output: outputDir,
+            includeWorkspace: false,
+            nowMs: Date.UTC(2026, 6, 24, 9, 1, 0),
+          }),
+        ).rejects.toThrow(/schema role missing|no schema ownership metadata/iu);
+        const sqlite = requireNodeSqlite();
+        const database = new sqlite.DatabaseSync(dbPath, { readOnly: true });
+        try {
+          expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 0 });
+          expect(
+            database
+              .prepare(
+                "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'schema_meta'",
+              )
+              .get(),
+          ).toEqual({ count: 0 });
+        } finally {
+          database.close();
+        }
+        expect(await fs.readdir(outputDir)).toEqual([]);
+      },
+    );
+  });
+
+  it.each([
+    {
+      name: "global database with agent role",
+      kind: "global" as const,
+      role: "agent" as const,
+      agentId: "main",
+      expected: /schema role agent; expected global/iu,
+    },
+    {
+      name: "agent database with global role",
+      kind: "agent" as const,
+      role: "global" as const,
+      expected: /schema role global; expected agent/iu,
+    },
+    {
+      name: "agent database with a different owner",
+      kind: "agent" as const,
+      role: "agent" as const,
+      agentId: "worker",
+      expected: /belongs to agent worker; requested agent main/iu,
+    },
+    {
+      name: "agent database with a noncanonical owner spelling",
+      kind: "agent" as const,
+      role: "agent" as const,
+      agentId: "Main",
+      expected: /belongs to agent Main; requested agent main/iu,
+    },
+  ])("rejects a canonical $name", async ({ kind, role, agentId, expected }) => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-wrong-owner-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        const dbPath = resolveCanonicalTestSqlitePath(state, kind);
+        await fs.mkdir(path.dirname(dbPath), { recursive: true });
+        await fs.mkdir(outputDir, { recursive: true });
+        createOwnedSqliteDatabase({ sqlitePath: dbPath, role, agentId });
+
+        await expect(
+          createBackupArchive({
+            output: outputDir,
+            includeWorkspace: false,
+            nowMs: Date.UTC(2026, 6, 24, 9, 2, 0),
+          }),
+        ).rejects.toThrow(expected);
+        expect(await fs.readdir(outputDir)).toEqual([]);
+      },
+    );
+  });
+
+  it("rejects a canonical agent database under a noncanonical agent path", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-noncanonical-agent-path-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        const dbPath = state.statePath("agents", "Main", "agent", "openclaw-agent.sqlite");
+        await fs.mkdir(path.dirname(dbPath), { recursive: true });
+        await fs.mkdir(outputDir, { recursive: true });
+        createOwnedSqliteDatabase({
+          sqlitePath: dbPath,
+          role: "agent",
+          agentId: "main",
+        });
+
+        await expect(
+          createBackupArchive({
+            output: outputDir,
+            includeWorkspace: false,
+            nowMs: Date.UTC(2026, 6, 24, 9, 2, 30),
+          }),
+        ).rejects.toThrow(/noncanonical agent owner Main/iu);
+        expect(await fs.readdir(outputDir)).toEqual([]);
+      },
+    );
+  });
+
+  it("validates hard-linked canonical agent paths against each path owner", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-hardlinked-agent-owners-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        const mainDbPath = state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
+        const workerDbPath = state.statePath("agents", "worker", "agent", "openclaw-agent.sqlite");
+        await fs.mkdir(path.dirname(mainDbPath), { recursive: true });
+        await fs.mkdir(path.dirname(workerDbPath), { recursive: true });
+        await fs.mkdir(outputDir, { recursive: true });
+        createOwnedSqliteDatabase({
+          sqlitePath: mainDbPath,
+          role: "agent",
+          agentId: "main",
+        });
+        await fs.link(mainDbPath, workerDbPath);
+
+        await expect(
+          createBackupArchive({
+            output: outputDir,
+            includeWorkspace: false,
+            nowMs: Date.UTC(2026, 6, 24, 9, 2, 45),
+          }),
+        ).rejects.toThrow(/belongs to agent main; requested agent worker/iu);
+        expect(await fs.readdir(outputDir)).toEqual([]);
+      },
+    );
+  });
+
+  it("does not treat a canonical agent path as an alias of the global database", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-hardlinked-global-agent-owners-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        const globalDbPath = resolveCanonicalTestSqlitePath(state, "global");
+        const agentDbPath = resolveCanonicalTestSqlitePath(state, "agent");
+        await fs.mkdir(path.dirname(globalDbPath), { recursive: true });
+        await fs.mkdir(path.dirname(agentDbPath), { recursive: true });
+        await fs.mkdir(outputDir, { recursive: true });
+        createOwnedSqliteDatabase({
+          sqlitePath: globalDbPath,
+          role: "global",
+        });
+        await fs.link(globalDbPath, agentDbPath);
+
+        await expect(
+          createBackupArchive({
+            output: outputDir,
+            includeWorkspace: false,
+            nowMs: Date.UTC(2026, 6, 24, 9, 2, 50),
+          }),
+        ).rejects.toThrow(/schema role global; expected agent/iu);
+        expect(await fs.readdir(outputDir)).toEqual([]);
+      },
+    );
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "fails closed when a canonical SQLite symlink retargets after discovery",
+    async () => {
+      await withOpenClawTestState(
+        {
+          layout: "state-only",
+          prefix: "openclaw-backup-canonical-symlink-retarget-",
+          scenario: "minimal",
+        },
+        async (state) => {
+          const outputDir = state.path("backups");
+          const canonicalDbPath = resolveCanonicalTestSqlitePath(state, "global");
+          const firstDbPath = state.statePath("state", "first-global.sqlite");
+          const secondDbPath = state.statePath("state", "second-global.sqlite");
+          await fs.mkdir(path.dirname(canonicalDbPath), { recursive: true });
+          await fs.mkdir(outputDir, { recursive: true });
+          createOwnedSqliteDatabase({
+            sqlitePath: firstDbPath,
+            role: "global",
+          });
+          createOwnedSqliteDatabase({
+            sqlitePath: secondDbPath,
+            role: "global",
+          });
+          await fs.symlink(firstDbPath, canonicalDbPath);
+
+          const originalRealpath = fs.realpath.bind(fs);
+          let retargeted = false;
+          const realpathSpy = vi.spyOn(fs, "realpath").mockImplementation(async (target) => {
+            const resolved = await originalRealpath(target);
+            if (!retargeted && path.resolve(String(target)) === path.resolve(canonicalDbPath)) {
+              retargeted = true;
+              await fs.unlink(canonicalDbPath);
+              await fs.symlink(secondDbPath, canonicalDbPath);
+            }
+            return resolved;
+          });
+
+          try {
+            await expect(
+              createBackupArchive({
+                output: outputDir,
+                includeWorkspace: false,
+                nowMs: Date.UTC(2026, 6, 24, 9, 2, 55),
+              }),
+            ).rejects.toThrow(/Canonical SQLite path changed after discovery/iu);
+            expect(retargeted).toBe(true);
+            expect(await fs.readdir(outputDir)).toEqual([]);
+          } finally {
+            realpathSpy.mockRestore();
+          }
+        },
+      );
+    },
+  );
+
+  it("backs up older owned canonical databases and a generic schema-empty plugin database", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-owned-older-schema-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        const globalDbPath = resolveCanonicalTestSqlitePath(state, "global");
+        const agentDbPath = resolveCanonicalTestSqlitePath(state, "agent");
+        const pluginDbPath = state.statePath("plugins", "dedicated", "empty.sqlite");
+        for (const dbPath of [globalDbPath, agentDbPath, pluginDbPath]) {
+          await fs.mkdir(path.dirname(dbPath), { recursive: true });
+        }
+        await fs.mkdir(outputDir, { recursive: true });
+        createOwnedSqliteDatabase({
+          sqlitePath: globalDbPath,
+          role: "global",
+          schemaVersion: 1,
+        });
+        createOwnedSqliteDatabase({
+          sqlitePath: agentDbPath,
+          role: "agent",
+          agentId: "main",
+          schemaVersion: 1,
+        });
+        createEmptySqliteDatabase(pluginDbPath);
+
+        const result = await createBackupArchive({
+          output: outputDir,
+          includeWorkspace: false,
+          nowMs: Date.UTC(2026, 6, 24, 9, 3, 0),
+        });
+        const entries = await listArchiveEntries(result.archivePath);
+        expect(entries.some((entry) => entry.endsWith("/state/state/openclaw.sqlite"))).toBe(true);
+        expect(
+          entries.some((entry) => entry.endsWith("/state/agents/main/agent/openclaw-agent.sqlite")),
+        ).toBe(true);
+        expect(
+          entries.some((entry) => entry.endsWith("/state/plugins/dedicated/empty.sqlite")),
+        ).toBe(true);
+
+        const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        await expect(
+          backupVerifyCommand(runtime, { archive: result.archivePath }),
+        ).resolves.toMatchObject({ ok: true });
+
+        const sqlite = requireNodeSqlite();
+        for (const dbPath of [globalDbPath, agentDbPath]) {
+          const database = new sqlite.DatabaseSync(dbPath, { readOnly: true });
+          try {
+            expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
+            expect(
+              database
+                .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+                .get(),
+            ).toEqual({ schema_version: 1 });
+          } finally {
+            database.close();
+          }
         }
       },
     );
@@ -1679,9 +2095,13 @@ describe("createBackupArchive", () => {
           );
           CREATE TABLE schema_meta (
             meta_key TEXT NOT NULL PRIMARY KEY,
-            role TEXT NOT NULL
+            role TEXT NOT NULL,
+            schema_version INTEGER NOT NULL,
+            agent_id TEXT
           );
-          INSERT INTO schema_meta (meta_key, role) VALUES ('primary', 'global');
+          INSERT INTO schema_meta (meta_key, role, schema_version, agent_id)
+          VALUES ('primary', 'global', 1, NULL);
+          PRAGMA user_version = 1;
           PRAGMA wal_checkpoint(TRUNCATE);
           INSERT INTO durable_state (id, value) VALUES (1, 'must-stay');
           INSERT INTO delivery_queue_entries (id) VALUES ('must-drop');
@@ -1791,7 +2211,9 @@ describe("createBackupArchive", () => {
           PRAGMA wal_autocheckpoint = 0;
           CREATE TABLE schema_meta (
             meta_key TEXT NOT NULL PRIMARY KEY,
-            role TEXT NOT NULL
+            role TEXT NOT NULL,
+            schema_version INTEGER NOT NULL,
+            agent_id TEXT
           );
           CREATE TABLE durable_state (
             id INTEGER PRIMARY KEY,
@@ -1801,7 +2223,9 @@ describe("createBackupArchive", () => {
             scope TEXT NOT NULL,
             lease_key TEXT NOT NULL
           );
-          INSERT INTO schema_meta (meta_key, role) VALUES ('primary', 'agent');
+          INSERT INTO schema_meta (meta_key, role, schema_version, agent_id)
+          VALUES ('primary', 'agent', 1, 'main');
+          PRAGMA user_version = 1;
           PRAGMA wal_checkpoint(TRUNCATE);
           INSERT INTO durable_state (id, value) VALUES (1, 'committed-in-wal');
           INSERT INTO state_leases (scope, lease_key) VALUES ('plugin:memory-core:qmd', 'write');

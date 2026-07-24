@@ -44,7 +44,7 @@ import {
 } from "../reconnect.js";
 import { formatError, getWebAuthAgeMs, readWebSelfId } from "../session.js";
 import { resolveWhatsAppSocketTiming } from "../socket-timing.js";
-import { getRuntimeConfig, getRuntimeConfigSourceSnapshot } from "./config.runtime.js";
+import { getRuntimeConfig } from "./config.runtime.js";
 import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
 import { buildMentionConfig } from "./mentions.js";
 import { createWebChannelStatusController } from "./monitor-state.js";
@@ -108,12 +108,12 @@ function resolveWebMonitorConfigSnapshot(params: {
   return { cfg, account };
 }
 
-function normalizeReconnectAccountId(accountId?: string | null): string {
-  return (accountId ?? "").trim() || "default";
-}
-
 function isNoListenerReconnectError(lastError?: string): boolean {
   return typeof lastError === "string" && /No active WhatsApp Web listener/i.test(lastError);
+}
+
+function normalizeReconnectAccountId(accountId?: string | null): string {
+  return (accountId ?? "").trim() || "default";
 }
 
 function isRetryableAuthUnstableError(error: unknown): error is WhatsAppAuthUnstableError {
@@ -145,7 +145,6 @@ export async function monitorWebChannel(
   const heartbeatLogger = getChildLogger({ module: "web-heartbeat", runId });
   const reconnectLogger = getChildLogger({ module: "web-reconnect", runId });
   const baseCfg = getRuntimeConfig();
-  const sourceCfg = getRuntimeConfigSourceSnapshot();
   const { cfg, account } = resolveWebMonitorConfigSnapshot({
     cfg: baseCfg,
     accountId: tuning.accountId,
@@ -235,11 +234,6 @@ export async function monitorWebChannel(
       const inboundDebounceMs = resolveInboundDebounceMs({
         cfg,
         channel: "whatsapp",
-        overrideMs: resolveExplicitWhatsAppDebounceOverride({
-          cfg,
-          sourceCfg,
-          accountId: account.accountId,
-        }),
       });
       const shouldDebounce = (msg: WebInboundMessageInput) => {
         const normalized = normalizeWebInboundMessage(msg);

@@ -271,7 +271,7 @@ describe("AppSidebar session source lifecycle", () => {
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
     const cachedResult = sidebar.sessionData.sessionsResult;
 
-    gateway.publish({ connected: false, reconnecting: true });
+    gateway.publish({ phase: "reconnecting" });
     sessions.publish({ result: null, agentId: null, loading: false });
     await sidebar.updateComplete;
 
@@ -280,7 +280,7 @@ describe("AppSidebar session source lifecycle", () => {
     expect(Object.keys(sidebar.sessionData.sessionRowsByAgent)).toEqual(["main"]);
     expect([...sidebar.sessionData.sessionCreatedOrder.keys()]).toEqual(["main-a", "main-b"]);
 
-    gateway.publish({ connected: true, reconnecting: false });
+    gateway.publish({ phase: "connected" });
     const partial = createSessionState("main", ["main-a"]);
     sessions.publish({ result: partial.result, agentId: partial.agentId });
     await sidebar.updateComplete;
@@ -311,8 +311,7 @@ describe("AppSidebar session source lifecycle", () => {
 
     gateway.publish({
       client: {} as GatewayBrowserClient,
-      connected: false,
-      reconnecting: true,
+      phase: "reconnecting",
     });
     await sidebar.updateComplete;
 
@@ -614,8 +613,8 @@ describe("AppSidebar session mutation feedback", () => {
     menu.querySelector<HTMLButtonElement>('[data-shortcut="p"]')?.click();
     await waitForFast(() => expect(harness.patch).toHaveBeenCalledOnce());
 
-    gateway.publish({ connected: false, reconnecting: true });
-    gateway.publish({ connected: true, reconnecting: false });
+    gateway.publish({ phase: "reconnecting" });
+    gateway.publish({ phase: "connected" });
     pending.reject(new Error("late old-connection rejection"));
     await pending.promise.catch(() => undefined);
     await Promise.resolve();
@@ -639,8 +638,8 @@ describe("AppSidebar session mutation feedback", () => {
     menu?.querySelector<HTMLButtonElement>('[data-shortcut="a"]')?.click();
     await waitForFast(() => expect(harness.patch).toHaveBeenCalledOnce());
 
-    gateway.publish({ connected: false, reconnecting: true });
-    gateway.publish({ connected: true, reconnecting: false });
+    gateway.publish({ phase: "reconnecting" });
+    gateway.publish({ phase: "connected" });
     pending.resolve(successfulSessionPatch("agent:main:a"));
     await pending.promise;
     await new Promise<void>((resolve) => {
@@ -698,8 +697,8 @@ describe("AppSidebar session mutation feedback", () => {
     const confirmSpy = vi.spyOn(window, "confirm").mockImplementation(() => {
       confirmations += 1;
       if (confirmations === 2) {
-        gateway.publish({ connected: false, reconnecting: true });
-        gateway.publish({ connected: true, reconnecting: false });
+        gateway.publish({ phase: "reconnecting" });
+        gateway.publish({ phase: "connected" });
       }
       return true;
     });
