@@ -577,13 +577,6 @@ const publicApi = createSubagentRegistryPublicApi({
   startAnnounceCleanup: startSubagentAnnounceCleanupFlow,
   settleRequesterTurn: settleRequesterTurnAfterSessionSpawns,
 });
-const bootstrapState = getSubagentRegistryBootstrapState();
-bootstrapState.restorer = subagentRestorer;
-bootstrapState.ready = true;
-if (bootstrapState.pending) {
-  bootstrapState.pending = false;
-  subagentRestorer.restoreOnce();
-}
 
 export const leasePendingAgentSteeringItems = publicApi.leasePendingAgentSteeringItems;
 export const ackPendingAgentSteeringItems = publicApi.ackPendingAgentSteeringItems;
@@ -612,6 +605,14 @@ export function initSubagentRegistry() {
 }
 export const settleRequesterAfterSessionSpawns = publicApi.settleRequesterAfterSessionSpawns;
 export const markRequesterTurnYielded = publicApi.markRequesterTurnYielded;
+
+const bootstrapState = getSubagentRegistryBootstrapState();
+bootstrapState.restorer = subagentRestorer;
+bootstrapState.ready = true;
+if (bootstrapState.pending) {
+  bootstrapState.pending = false;
+  subagentRestorer.restoreOnce();
+}
 
 const SUBAGENT_REGISTRY_TEST_HANDLE = Symbol.for("openclaw.subagentRegistryTestApi");
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
