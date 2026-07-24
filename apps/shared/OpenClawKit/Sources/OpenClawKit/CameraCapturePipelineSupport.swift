@@ -32,8 +32,13 @@ public struct CameraCaptureFormatSize: Equatable, Sendable {
         self.height = height
     }
 
-    public var isLandscape: Bool { self.width >= self.height }
-    public var pixelCount: Int { max(0, self.width) * max(0, self.height) }
+    public var isLandscape: Bool {
+        self.width >= self.height
+    }
+
+    public var pixelCount: Int {
+        max(0, self.width) * max(0, self.height)
+    }
 }
 
 public enum CameraCapturePipelineSupport {
