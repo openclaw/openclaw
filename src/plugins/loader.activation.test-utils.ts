@@ -321,6 +321,124 @@ describe("loadOpenClawPlugins", () => {
     });
   });
 
+  it("reports missing config instead of required-property errors for plugins with required config fields", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "required-config",
+      filename: "required-config.cjs",
+      body: `module.exports = { id: "required-config", register() {} };`,
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          serverUrl: { type: "string" },
+          apiKey: { type: "string" },
+        },
+        required: ["serverUrl", "apiKey"],
+      },
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        entries: {
+          "required-config": { enabled: true },
+        },
+      },
+    });
+
+    const requiredConfig = registry.plugins.find((entry) => entry.id === "required-config");
+    expect(requiredConfig?.status).toBe("error");
+    expectDiagnosticContaining({
+      registry,
+      level: "error",
+      pluginId: "required-config",
+      message: "missing required config",
+    });
+  });
+
+  it("accepts valid config for plugins with required config fields", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "required-config-valid",
+      filename: "required-config-valid.cjs",
+      body: `module.exports = { id: "required-config-valid", register() {} };`,
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          serverUrl: { type: "string" },
+          apiKey: { type: "string" },
+        },
+        required: ["serverUrl", "apiKey"],
+      },
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        entries: {
+          "required-config-valid": {
+            enabled: true,
+            config: { serverUrl: "https://example.com", apiKey: "secret" },
+          },
+        },
+      },
+    });
+
+    const requiredConfigValid = registry.plugins.find(
+      (entry) => entry.id === "required-config-valid",
+    );
+    expect(requiredConfigValid?.status).toBe("loaded");
+    expect(registry.diagnostics.filter((d) => d.pluginId === "required-config-valid")).toHaveLength(
+      0,
+    );
+  });
+
+  it("hydrates defaults for plugins with dependency schemas when config is omitted", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "dep-defaults-plugin",
+      filename: "dep-defaults-plugin.cjs",
+      body: `module.exports = { id: "dep-defaults-plugin", register() {} };`,
+      configSchema: {
+        type: "object",
+        properties: {
+          flag: {
+            type: "boolean",
+            default: true,
+          },
+        },
+        dependencies: {
+          flag: {
+            properties: {
+              mode: {
+                type: "string",
+                default: "auto",
+              },
+            },
+            required: ["mode"],
+          },
+        },
+      },
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        entries: {
+          "dep-defaults-plugin": { enabled: true },
+        },
+      },
+    });
+
+    const depPlugin = registry.plugins.find((entry) => entry.id === "dep-defaults-plugin");
+    expect(depPlugin?.status).toBe("loaded");
+    expect(registry.diagnostics.filter((d) => d.pluginId === "dep-defaults-plugin")).toHaveLength(
+      0,
+    );
+  });
+
   it("repairs incomplete registered channel metadata before storing registry entries", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({

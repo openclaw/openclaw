@@ -29,7 +29,10 @@ import {
   resolvePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
-import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
+import {
+  validateJsonSchemaValue,
+  rewriteMissingConfigDiagnostics,
+} from "../plugins/schema-validator.js";
 import { hasKind } from "../plugins/slots.js";
 import { resolveWebSearchInstallCatalogEntries } from "../plugins/web-search-install-catalog.js";
 import { unsupportedSecretRefSurfacePolicy } from "../secrets/unsupported-surface-policy.js";
@@ -2183,7 +2186,15 @@ function validateConfigObjectWithPluginsBase(
           // writeConfigFile persists persistCandidate, not validated.config (#61841)
         });
         if (!res.ok) {
-          for (const error of res.errors) {
+          const errors =
+            entry?.config === undefined
+              ? rewriteMissingConfigDiagnostics({
+                  originalValue: undefined,
+                  errors: res.errors,
+                  schema: record.configSchema,
+                })
+              : res.errors;
+          for (const error of errors) {
             issues.push({
               path: resolvePluginConfigIssuePath(pluginId, error.path),
               message: `invalid config: ${error.message}`,

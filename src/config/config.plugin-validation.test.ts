@@ -1893,6 +1893,75 @@ describe("config plugin validation", () => {
     }
   });
 
+  it("reports missing config for enabled plugins with required schema properties instead of required-property errors", () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "openclaw" }] },
+      plugins: {
+        enabled: true,
+        load: { paths: [badPluginDir] },
+        entries: { "bad-plugin": { enabled: true } },
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      const hasMissingConfig = res.issues.some(
+        (issue) =>
+          issue.path.startsWith("plugins.entries.bad-plugin.config") &&
+          issue.message.includes("missing required config"),
+      );
+      expect(hasMissingConfig).toBe(true);
+      const hasMisleadingError = res.issues.some(
+        (issue) =>
+          issue.path.startsWith("plugins.entries.bad-plugin.config") &&
+          issue.message.includes("must have required property"),
+      );
+      expect(hasMisleadingError).toBe(false);
+    }
+  });
+
+  it("accepts plugins with dependency schemas that hydrate from defaults when config is omitted", async () => {
+    const depDefaultsDir = path.join(suiteHome, "dep-defaults-plugin");
+    await writePluginFixture({
+      dir: depDefaultsDir,
+      id: "dep-defaults-plugin",
+      schema: {
+        type: "object",
+        properties: {
+          flag: {
+            type: "boolean",
+            default: true,
+          },
+        },
+        dependencies: {
+          flag: {
+            properties: {
+              mode: {
+                type: "string",
+                default: "auto",
+              },
+            },
+            required: ["mode"],
+          },
+        },
+      },
+    });
+    const res = validateInSuite({
+      agents: { list: [{ id: "openclaw" }] },
+      plugins: {
+        enabled: true,
+        load: { paths: [depDefaultsDir] },
+        entries: { "dep-defaults-plugin": { enabled: true } },
+      },
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      const hasMissingConfig = res.issues.some(
+        (issue) => issue.path.includes("dep-defaults-plugin") && issue.message.includes("missing"),
+      );
+      expect(hasMissingConfig).toBe(false);
+    }
+  });
+
   it("surfaces invalid Codex native plugin marketplaces as config diagnostics", () => {
     const res = validateConfigObjectWithPlugins(
       {
