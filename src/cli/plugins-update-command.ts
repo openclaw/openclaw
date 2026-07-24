@@ -35,16 +35,16 @@ import {
   withoutPluginInstallRecords,
   withPluginInstallRecords,
 } from "../plugins/installed-plugin-index-records.js";
-import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../plugins/registry-refresh.js";
 import {
   isPluginInstallRecordUpdateSource,
   pluginInstallRecordMayMigrateConfigId,
   updateNpmInstalledPlugins,
 } from "../plugins/update.js";
-import { defaultRuntime } from "../runtime.js";
+import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { VERSION } from "../version.js";
 import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-acknowledgement.js";
+import { withPluginLifecycleCommandLease } from "./plugin-lifecycle-command.js";
 import { notifyGatewayPluginMetadataChanged } from "./plugins-update-gateway-signal.js";
 import { logPluginUpdateOutcomes } from "./plugins-update-outcomes.js";
 import {
@@ -185,15 +185,17 @@ type RunPluginUpdateCommandParams = {
 export async function runPluginUpdateCommand(params: RunPluginUpdateCommandParams) {
   assertConfigWriteAllowedInCurrentMode();
   if (params.opts.dryRun) {
-    return await runPluginUpdateCommandUnlocked(params);
+    return await runPluginUpdateCommandUnlocked(params, defaultRuntime);
   }
-  return await withPluginLifecycleLease(
-    {},
-    async () => await runPluginUpdateCommandUnlocked(params),
-  );
+  return await withPluginLifecycleCommandLease(defaultRuntime, async (deferredExitRuntime) => {
+    return await runPluginUpdateCommandUnlocked(params, deferredExitRuntime);
+  });
 }
 
-async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandParams) {
+async function runPluginUpdateCommandUnlocked(
+  params: RunPluginUpdateCommandParams,
+  runtime: RuntimeEnv,
+) {
   assertConfigWriteAllowedInCurrentMode();
 
   const sourceSnapshotPromise = readConfigFileSnapshotForWrite()
@@ -204,12 +206,12 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
     .catch(() => null);
   const mutationSnapshot = params.opts.dryRun ? null : await sourceSnapshotPromise;
   if (!params.opts.dryRun && !mutationSnapshot) {
-    defaultRuntime.error("Could not inspect config ownership before updating plugins or hooks.");
-    return defaultRuntime.exit(1);
+    runtime.error("Could not inspect config ownership before updating plugins or hooks.");
+    return runtime.exit(1);
   }
   if (mutationSnapshot && !mutationSnapshot.snapshot.valid) {
-    defaultRuntime.error("Cannot update plugins or hooks while the config is invalid.");
-    return defaultRuntime.exit(1);
+    runtime.error("Cannot update plugins or hooks while the config is invalid.");
+    return runtime.exit(1);
   }
   // Bind selection, updater input, ownership checks, and persistence to one
   // mutation-start snapshot so concurrent config changes cannot be resurrected.
@@ -223,11 +225,11 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
     pluginInstallRecords,
   );
   const logger = {
-    info: (msg: string) => defaultRuntime.log(msg),
-    warn: (msg: string) => defaultRuntime.log(msg.includes("╭─") ? msg : theme.warn(msg)),
+    info: (msg: string) => runtime.log(msg),
+    warn: (msg: string) => runtime.log(msg.includes("╭─") ? msg : theme.warn(msg)),
   };
   if (params.opts.dangerouslyForceUnsafeInstall) {
-    defaultRuntime.log(theme.warn(DEPRECATED_DANGEROUS_FORCE_UNSAFE_UPDATE_WARNING));
+    runtime.log(theme.warn(DEPRECATED_DANGEROUS_FORCE_UNSAFE_UPDATE_WARNING));
   }
   const pluginSelection = resolvePluginUpdateSelection({
     installs: pluginInstallRecords,
@@ -243,11 +245,11 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
 
   if (pluginSelection.pluginIds.length === 0 && hookSelection.hookIds.length === 0) {
     if (params.opts.all) {
-      defaultRuntime.log("No tracked plugins or hook packs to update.");
+      runtime.log("No tracked plugins or hook packs to update.");
       return;
     }
-    defaultRuntime.error("Provide a plugin or hook-pack id, or use --all.");
-    return defaultRuntime.exit(1);
+    runtime.error("Provide a plugin or hook-pack id, or use --all.");
+    return runtime.exit(1);
   }
 
   const pluginUpdateMayMutate =
@@ -268,8 +270,8 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
     });
   if (pluginUpdateMayMutate || hookUpdateMayMutate) {
     if (!mutationSnapshot) {
-      defaultRuntime.error("Could not inspect config ownership before updating plugins or hooks.");
-      return defaultRuntime.exit(1);
+      runtime.error("Could not inspect config ownership before updating plugins or hooks.");
+      return runtime.exit(1);
     }
     const { hookMutation, pluginMutation } = resolveInstallConfigMutationPreflights({
       parsed: (mutationSnapshot.snapshot.parsed ?? {}) as Record<string, unknown>,
@@ -323,8 +325,8 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
       }
     }
     if (blockedReasons.size > 0) {
-      defaultRuntime.error(Array.from(blockedReasons).join(" "));
-      return defaultRuntime.exit(1);
+      runtime.error(Array.from(blockedReasons).join(" "));
+      return runtime.exit(1);
     }
   }
 
@@ -349,7 +351,7 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
           logger,
           onIntegrityDrift: async (drift) => {
             const specLabel = drift.resolvedSpec ?? drift.spec;
-            defaultRuntime.log(
+            runtime.log(
               theme.warn(
                 `Integrity drift detected for "${drift.pluginId}" (${specLabel})` +
                   `\nExpected: ${drift.expectedIntegrity}` +
@@ -373,7 +375,7 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
           logger,
           onIntegrityDrift: async (drift) => {
             const specLabel = drift.resolvedSpec ?? drift.spec;
-            defaultRuntime.log(
+            runtime.log(
               theme.warn(
                 `Integrity drift detected for hook pack "${drift.hookId}" (${specLabel})` +
                   `\nExpected: ${drift.expectedIntegrity}` +
@@ -392,7 +394,7 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
 
   const outcomeSummary = logPluginUpdateOutcomes({
     outcomes: [...pluginResult.outcomes, ...hookResult.outcomes],
-    log: (message) => defaultRuntime.log(message),
+    log: (message) => runtime.log(message),
   });
 
   if (!params.opts.dryRun && (pluginResult.changed || hookResult.changed)) {
@@ -458,10 +460,10 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
         await notifyGatewayPluginMetadataChanged(cfg);
       }
     }
-    defaultRuntime.log("Restart the gateway to load plugins and hooks.");
+    runtime.log("Restart the gateway to load plugins and hooks.");
   }
 
   if (outcomeSummary.hasErrors) {
-    defaultRuntime.exit(1);
+    runtime.exit(1);
   }
 }

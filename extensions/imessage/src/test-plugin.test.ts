@@ -17,7 +17,7 @@ import {
 } from "./approval-reactions.js";
 import { imessagePlugin } from "./channel.js";
 import { createIMessageTestPlugin } from "./imessage.test-plugin.js";
-import { extractMarkdownFormatRuns } from "./markdown-format.js";
+import { extractMarkdownFormatRuns } from "./markdown-format.runtime.js";
 
 beforeEach(() => {
   resetFacadeRuntimeStateForTest();

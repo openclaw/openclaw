@@ -22,16 +22,15 @@ import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed
 import { resolveManifestCommandAliasOwnerInRegistry } from "../plugins/manifest-command-aliases.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
-  getOfficialExternalPluginCatalogEntry,
-  resolveOfficialExternalPluginInstall,
-} from "../plugins/official-external-plugin-catalog.js";
+  listOfficialExternalWebSearchProviderOwners,
+  resolveOfficialExternalPluginInstallHint,
+} from "../plugins/official-external-plugin-startup-metadata.js";
 import {
   resolvePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { hasKind } from "../plugins/slots.js";
-import { resolveWebSearchInstallCatalogEntries } from "../plugins/web-search-install-catalog.js";
 import { unsupportedSecretRefSurfacePolicy } from "../secrets/unsupported-surface-policy.js";
 import {
   hasAvatarUriScheme,
@@ -215,15 +214,7 @@ function formatMissingOfficialExternalPluginWarning(
   pluginId: string,
   opts?: { selectedMissingMemorySlot?: boolean },
 ): string | null {
-  const catalogEntry = getOfficialExternalPluginCatalogEntry(pluginId);
-  if (!catalogEntry) {
-    return null;
-  }
-  const install = resolveOfficialExternalPluginInstall(catalogEntry);
-  const npmSpec = install?.npmSpec?.trim();
-  const clawhubSpec = install?.clawhubSpec?.trim();
-  const installSpec =
-    install?.defaultChoice === "clawhub" ? (clawhubSpec ?? npmSpec) : (npmSpec ?? clawhubSpec);
+  const installSpec = resolveOfficialExternalPluginInstallHint(pluginId);
   if (!installSpec) {
     return null;
   }
@@ -1588,9 +1579,7 @@ function validateConfigObjectWithPluginsBase(
     return [
       ...new Set([
         ...collectActiveWebSearchProviderIds(),
-        ...resolveWebSearchInstallCatalogEntries()
-          .map((entry) => entry.provider.id.trim())
-          .filter((providerId) => providerId.length > 0),
+        ...listOfficialExternalWebSearchProviderOwners().map((entry) => entry.providerId),
       ]),
     ].toSorted((left, right) => left.localeCompare(right));
   };
@@ -1646,8 +1635,8 @@ function validateConfigObjectWithPluginsBase(
     if (activeProviderIds.includes(trimmed)) {
       return;
     }
-    const installCatalogEntry = resolveWebSearchInstallCatalogEntries().find(
-      (entry) => entry.provider.id === trimmed,
+    const installCatalogEntry = listOfficialExternalWebSearchProviderOwners().find(
+      (entry) => entry.providerId === trimmed,
     );
     if (installCatalogEntry) {
       const issue = {

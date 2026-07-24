@@ -496,7 +496,7 @@ describeLive("gateway live (cli backend)", () => {
           },
           // The live requests below use agent:dev:* session keys. Declare the
           // agent so the gateway recognizes those sessions as configured.
-          list: [{ id: "dev", default: true }],
+          entries: { dev: { default: true } },
         },
       };
       const tempConfigPath = path.join(tempDir, "openclaw.json");

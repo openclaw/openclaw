@@ -17,6 +17,9 @@ describe("gateway startup import boundaries", () => {
 
     expect(serverImpl).not.toContain('from "./server-cron.js"');
     expect(serverImpl).toContain('from "./server-cron-lazy.js"');
+    expect(serverImpl).not.toContain('from "./server-plugins.js"');
+    expect(serverImpl).toContain('from "./server-plugin-fallback-context.js"');
+    expect(serverImpl).toContain('import("./server-plugin-bootstrap.js")');
     expect(serverImpl).not.toContain('from "./server-methods.js"');
     expect(serverImpl).not.toContain('from "./config-reload.js"');
     expect(serverImpl).not.toMatch(
@@ -69,6 +72,32 @@ describe("gateway startup import boundaries", () => {
     expect(workerStartup).toContain(
       'import("../../packages/gateway-protocol/src/schema/worker-admission.js")',
     );
+  });
+
+  it("keeps full official-external catalogs out of Gateway startup imports", () => {
+    const projection = readSource("src/plugins/official-external-plugin-startup-metadata.ts");
+    const startupCallers = [
+      "src/channels/config-presence.ts",
+      "src/config/plugin-auto-enable.shared.ts",
+      "src/config/validation.ts",
+      "src/plugins/plugin-metadata-provider-facts.ts",
+      "src/plugins/manifest-registry.ts",
+      "src/commands/doctor/shared/startup-plugin-convergence-plan.ts",
+    ].map(readSource);
+
+    expect(projection).toContain('from "./official-external-plugin-startup-metadata.generated.js"');
+    expect(projection).not.toContain("official-external-plugin-catalog");
+    expect(projection).not.toContain("scripts/lib/official-external");
+    expect(readSource("src/config/validation.ts")).not.toContain(
+      'from "../plugins/web-search-install-catalog.js"',
+    );
+    for (const source of startupCallers) {
+      expect(source).not.toContain("official-external-plugin-catalog.js");
+      expect(source).not.toContain("official-external-plugin-bundled-catalogs.js");
+      expect(source).not.toContain("official-external-plugin-targets.js");
+      expect(source).not.toContain("official-external-provider-endpoints.js");
+      expect(source).not.toContain("scripts/lib/official-external");
+    }
   });
 
   it("defers retained plugin generation cleanup to the post-ready idle scheduler", () => {

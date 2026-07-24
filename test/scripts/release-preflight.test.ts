@@ -11,6 +11,7 @@ const CHECK_COMMANDS = [
   "node scripts/generate-npm-shrinkwrap.mjs --all --check",
   "node --import tsx scripts/sync-plugin-versions.ts --check",
   "node scripts/generate-plugin-inventory-doc.mjs --check",
+  "pnpm plugins:startup-metadata:check",
   "pnpm config:schema:check",
   "pnpm config:channels:check",
   "pnpm config:docs:check",
@@ -24,6 +25,7 @@ const FIX_COMMANDS = [
   "node --import tsx scripts/sync-plugin-versions.ts",
   "node scripts/generate-npm-shrinkwrap.mjs --changed",
   "node scripts/generate-plugin-inventory-doc.mjs --write",
+  "pnpm plugins:startup-metadata:gen",
   "pnpm config:schema:gen",
   "pnpm config:channels:gen",
   "pnpm config:docs:gen",
@@ -233,9 +235,11 @@ describe("scripts/release-preflight.mjs", () => {
         "node --import tsx scripts/sync-plugin-versions.ts",
         "node scripts/generate-npm-shrinkwrap.mjs --changed",
         "node scripts/generate-plugin-inventory-doc.mjs --write",
+        "pnpm plugins:startup-metadata:gen",
         "node --import tsx scripts/sync-plugin-versions.ts --check",
         "node scripts/generate-npm-shrinkwrap.mjs --all --check",
         "node scripts/generate-plugin-inventory-doc.mjs --check",
+        "pnpm plugins:startup-metadata:check",
       ].toSorted(),
     );
     expect(result.stdout).toContain("(plugins, jobs=4)");

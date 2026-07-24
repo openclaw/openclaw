@@ -1079,7 +1079,7 @@ describe("sendMessageIMessage receipts", () => {
       config: IMESSAGE_TEST_CFG,
       client,
     });
-    expect(getClientMocks(client).request).toHaveBeenCalled();
+    await vi.waitFor(() => expect(getClientMocks(client).request).toHaveBeenCalled());
 
     vi.advanceTimersByTime(61_000);
     expect(

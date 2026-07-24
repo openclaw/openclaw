@@ -14,7 +14,7 @@ import {
   hasOfficialExternalProviderTarget,
   hasOfficialExternalWebContractEnvTarget,
   hasOfficialExternalWebSearchTarget,
-} from "../../../plugins/official-external-plugin-targets.js";
+} from "../../../plugins/official-external-plugin-startup-metadata.js";
 import { collectConfiguredProviderSelectionIds } from "./configured-provider-selection-ids.js";
 import { collectConfiguredRuntimePluginIds } from "./configured-runtime-plugin-installs.js";
 

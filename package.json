@@ -106,6 +106,7 @@
     "!dist/plugin-sdk/json-unsafe-integers.d.ts",
     "!dist/plugin-sdk/keyed-async-queue.d.ts",
     "!dist/plugin-sdk/llm.d.ts",
+    "!dist/plugin-sdk/markdown-render-runtime.d.ts",
     "!dist/plugin-sdk/markdown-table-runtime.d.ts",
     "!dist/plugin-sdk/media-generation-runtime.d.ts",
     "!dist/plugin-sdk/memory-core-host-embedding-registry.d.ts",
@@ -768,6 +769,9 @@
     "./plugin-sdk/plugin-state-runtime": {
       "default": "./dist/plugin-sdk/plugin-state-runtime.js"
     },
+    "./plugin-sdk/markdown-render-runtime": {
+      "default": "./dist/plugin-sdk/markdown-render-runtime.js"
+    },
     "./plugin-sdk/markdown-table-runtime": {
       "default": "./dist/plugin-sdk/markdown-table-runtime.js"
     },
@@ -1416,6 +1420,7 @@
     "check:architecture": "pnpm check:import-cycles && pnpm check:madge-import-cycles && pnpm check:deprecated-api-usage && pnpm check:deprecated-jsdoc && pnpm db:kysely:check && pnpm lint:kysely && pnpm check:database-first-legacy-stores",
     "check:base-config-schema": "node --import tsx scripts/generate-base-config-schema.ts --check",
     "check:bundled-channel-config-metadata": "node --import tsx scripts/generate-bundled-channel-config-metadata.ts --check",
+    "check:official-external-plugin-startup-metadata": "node --import tsx scripts/generate-official-external-plugin-startup-metadata.ts --check",
     "check:changed": "node scripts/check-changed.mjs",
     "check:changelog-attributions": "node scripts/check-changelog-attributions.mjs",
     "check:database-first-legacy-stores": "node scripts/check-database-first-legacy-stores.mjs",
@@ -1607,6 +1612,8 @@
     "plugins:assets:copy": "node scripts/bundled-plugin-assets.mjs --phase copy",
     "plugins:inventory:check": "node scripts/generate-plugin-inventory-doc.mjs --check",
     "plugins:inventory:gen": "node scripts/generate-plugin-inventory-doc.mjs --write",
+    "plugins:startup-metadata:check": "node --import tsx scripts/generate-official-external-plugin-startup-metadata.ts --check",
+    "plugins:startup-metadata:gen": "node --import tsx scripts/generate-official-external-plugin-startup-metadata.ts --write",
     "plugins:sync": "node --import tsx scripts/sync-plugin-versions.ts",
     "plugins:sync:check": "node --import tsx scripts/sync-plugin-versions.ts --check",
     "postinstall": "node scripts/postinstall-bundled-plugins.mjs",

@@ -47,5 +47,24 @@ describe("package git fixture", () => {
         ),
       ).name,
     ).toBe("@openclaw/ai");
+
+    mkdirSync(path.join(root, "node_modules", "chalk"), { recursive: true });
+    writeFileSync(path.join(root, "node_modules", "chalk", "package.json"), "{}\n");
+    mkdirSync(path.join(root, ".openclaw-fixture", "packages", "ai", "node_modules", "zod"), {
+      recursive: true,
+    });
+    writeFileSync(
+      path.join(root, ".openclaw-fixture", "packages", "ai", "node_modules", "zod", "package.json"),
+      "{}\n",
+    );
+    writeFileSync(path.join(root, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+    expect(spawnSync("git", ["init", "-q", root], { encoding: "utf8" }).status).toBe(0);
+    expect(spawnSync("git", ["-C", root, "add", "-A"], { encoding: "utf8" }).status).toBe(0);
+    const staged = spawnSync("git", ["-C", root, "diff", "--cached", "--name-only"], {
+      encoding: "utf8",
+    });
+    expect(staged.status).toBe(0);
+    expect(staged.stdout).not.toContain("node_modules");
+    expect(staged.stdout).not.toContain("pnpm-lock.yaml");
   });
 });

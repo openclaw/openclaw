@@ -370,17 +370,16 @@ function createConfig(params: {
 
   return {
     agents: {
-      list: params.includePrimaryOnlyAcpAgent
-        ? [
-            {
-              id: "codex-acp-primary-only",
+      entries: params.includePrimaryOnlyAcpAgent
+        ? {
+            "codex-acp-primary-only": {
               runtime: {
                 type: "acp",
                 acp: { agent: params.acpAgentId },
               },
               model: "anthropic/claude-sonnet-4-6",
             },
-          ]
+          }
         : undefined,
       defaults: {
         model: {

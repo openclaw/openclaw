@@ -41,6 +41,13 @@ const releaseTasks = [
     check: nodeCommand("scripts/generate-plugin-inventory-doc.mjs", "--check"),
   },
   {
+    id: "plugin-startup-metadata",
+    name: "official external plugin startup metadata",
+    scopes: ["plugins"],
+    fix: pnpmCommand("plugins:startup-metadata:gen"),
+    check: pnpmCommand("plugins:startup-metadata:check"),
+  },
+  {
     id: "config-schema",
     name: "base config schema",
     scopes: ["config"],

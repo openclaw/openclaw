@@ -10,7 +10,6 @@ import {
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub.js";
-import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import {
   tracePluginLifecyclePhase,
   tracePluginLifecyclePhaseAsync,
@@ -18,6 +17,7 @@ import {
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { withClawPackageLifecycleLease } from "../state/claw-package-lifecycle-lease.js";
 import { shortenHomePath } from "../utils.js";
+import { withPluginLifecycleCommandLease } from "./plugin-lifecycle-command.js";
 
 type PluginUninstallOptions = {
   keepFiles?: boolean;
@@ -49,10 +49,9 @@ export async function runPluginUninstallCommand(
   if (!opts.force) {
     return await runPluginUninstallCommandUnlocked(id, opts, runtime);
   }
-  return await withPluginLifecycleLease(
-    {},
-    async () => await runPluginUninstallCommandUnlocked(id, opts, runtime),
-  );
+  return await withPluginLifecycleCommandLease(runtime, async (deferredExitRuntime) => {
+    return await runPluginUninstallCommandUnlocked(id, opts, deferredExitRuntime);
+  });
 }
 
 async function runPluginUninstallCommandUnlocked(
@@ -219,11 +218,14 @@ async function runPluginUninstallCommandUnlocked(
       runtime.log("Cancelled.");
       return;
     }
-    return await withPluginLifecycleLease(
-      {},
-      async () =>
-        await runPluginUninstallCommandUnlocked(id, { ...opts, force: true }, runtime, true),
-    );
+    return await withPluginLifecycleCommandLease(runtime, async (deferredExitRuntime) => {
+      return await runPluginUninstallCommandUnlocked(
+        id,
+        { ...opts, force: true },
+        deferredExitRuntime,
+        true,
+      );
+    });
   }
 
   const uninstall = async () => {

@@ -222,6 +222,9 @@
       "openclaw/plugin-sdk/plugin-state-test-runtime": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/plugin-state-test-runtime.d.ts"
       ],
+      "openclaw/plugin-sdk/markdown-render-runtime": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/markdown-render-runtime.d.ts"
+      ],
       "openclaw/plugin-sdk/markdown-table-runtime": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/markdown-table-runtime.d.ts"
       ],

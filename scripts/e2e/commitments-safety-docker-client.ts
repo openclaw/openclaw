@@ -131,7 +131,6 @@ async function runPackagedDoctor(stateDir: string): Promise<void> {
 async function verifyDoctorImportAndRuntimeIsolation() {
   await withStateDir("commitments-doctor", async (stateDir) => {
     const nowMs = Date.parse("2026-04-29T17:00:00.000Z");
-    const cfg = { commitments: { enabled: true } };
     const sourcePath = path.join(stateDir, "commitments", "commitments.json");
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
     await fs.writeFile(
@@ -140,12 +139,7 @@ async function verifyDoctorImportAndRuntimeIsolation() {
       "utf8",
     );
 
-    const beforeDoctor = await listDueCommitmentsForSession({
-      cfg,
-      agentId: "main",
-      sessionKey: "agent:main:qa-channel:commitments",
-      nowMs,
-    });
+    const beforeDoctor = await listCommitments({ nowMs });
     assert(beforeDoctor.length === 0, "runtime imported legacy JSON without doctor");
     await fs.access(sourcePath);
 
@@ -161,18 +155,20 @@ async function verifyDoctorImportAndRuntimeIsolation() {
         }
       });
 
+    const imported = await listCommitments({ nowMs });
+    assert(imported.length === 1, `unexpected imported commitment count ${imported.length}`);
+    assert(!("sourceUserText" in imported[0]), "legacy source user text surfaced after import");
+    assert(
+      !("sourceAssistantText" in imported[0]),
+      "legacy source assistant text surfaced after import",
+    );
+
     const due = await listDueCommitmentsForSession({
-      cfg,
       agentId: "main",
       sessionKey: "agent:main:qa-channel:commitments",
       nowMs,
     });
-    assert(due.length === 1, `unexpected imported due count ${due.length}`);
-    assert(!("sourceUserText" in due[0]), "legacy source user text surfaced after import");
-    assert(
-      !("sourceAssistantText" in due[0]),
-      "legacy source assistant text surfaced after import",
-    );
+    assert(due.length === 0, `retired delivery returned ${due.length} imported commitments`);
   });
 }
 
