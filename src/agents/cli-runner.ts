@@ -564,9 +564,31 @@ async function runCliAgentInternal(
     }
   }
   if (params.cleanupBundleMcpOnRunEnd === true) {
+    // Retire only this run's session-scoped MCP runtime. Closing the
+    // process-wide loopback server here would tear the MCP transport out from
+    // under concurrent CLI turns and restart-recovered live sessions, leaving
+    // them pinned to a dead loopback port (#98435). The embedded-runner and
+    // CLI dispatch paths retire session-scoped runtimes for the same reason.
     try {
-      const { closeMcpLoopbackServer } = await import("../gateway/mcp-http.js");
-      await closeMcpLoopbackServer();
+      const { retireSessionMcpRuntime, retireSessionMcpRuntimeForSessionKey } =
+        await import("./agent-bundle-mcp-tools.js");
+      let retireFailed = false;
+      const onRetireError = (error: unknown) => {
+        retireFailed = true;
+        recordCleanupError(error);
+      };
+      const retiredBySessionKey = await retireSessionMcpRuntimeForSessionKey({
+        sessionKey: params.sessionKey,
+        reason: "cli-run-end",
+        onError: onRetireError,
+      });
+      if (!retiredBySessionKey && !retireFailed) {
+        await retireSessionMcpRuntime({
+          sessionId: params.sessionId,
+          reason: "cli-run-end",
+          onError: onRetireError,
+        });
+      }
     } catch (error) {
       recordCleanupError(error);
     }

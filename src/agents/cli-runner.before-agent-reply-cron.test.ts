@@ -36,6 +36,8 @@ const {
   prepareCliRunContextMock,
   closeClaudeLiveSessionForContextMock,
   closeMcpLoopbackServerMock,
+  retireSessionMcpRuntimeForSessionKeyMock,
+  retireSessionMcpRuntimeMock,
 } = vi.hoisted(() => ({
   hasHooksMock: vi.fn<(hookName: string) => boolean>(() => false),
   runBeforeAgentReplyMock: vi.fn<(event: unknown, ctx: unknown) => Promise<BeforeAgentReplyResult>>(
@@ -47,6 +49,8 @@ const {
   prepareCliRunContextMock: vi.fn(),
   closeClaudeLiveSessionForContextMock: vi.fn(),
   closeMcpLoopbackServerMock: vi.fn(),
+  retireSessionMcpRuntimeForSessionKeyMock: vi.fn(),
+  retireSessionMcpRuntimeMock: vi.fn(),
 }));
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
@@ -73,6 +77,11 @@ vi.mock("./cli-runner/claude-live-session.js", () => ({
 
 vi.mock("../gateway/mcp-http.js", () => ({
   closeMcpLoopbackServer: closeMcpLoopbackServerMock,
+}));
+
+vi.mock("./agent-bundle-mcp-tools.js", () => ({
+  retireSessionMcpRuntimeForSessionKey: retireSessionMcpRuntimeForSessionKeyMock,
+  retireSessionMcpRuntime: retireSessionMcpRuntimeMock,
 }));
 
 const baseRunParams = {
@@ -144,6 +153,10 @@ beforeEach(() => {
   );
   closeClaudeLiveSessionForContextMock.mockReset();
   closeMcpLoopbackServerMock.mockReset();
+  retireSessionMcpRuntimeForSessionKeyMock.mockReset();
+  retireSessionMcpRuntimeForSessionKeyMock.mockResolvedValue(true);
+  retireSessionMcpRuntimeMock.mockReset();
+  retireSessionMcpRuntimeMock.mockResolvedValue(true);
 });
 
 beforeAll(async () => {
@@ -568,21 +581,46 @@ describe("runCliAgent before_agent_reply seam", () => {
     );
   });
 
-  it("can close temporary bundle MCP loopback resources after a run", async () => {
+  it("retires only the run's session-scoped MCP runtime, not the process-wide loopback server", async () => {
+    // Regression guard for #98435: closing the process-wide loopback server on
+    // a single run's cleanup strands concurrent CLI turns and restart-recovered
+    // sessions on a dead loopback port.
     executePreparedCliRunMock.mockResolvedValue({ text: "real reply" });
 
     await runCliAgent({ ...baseRunParams, cleanupBundleMcpOnRunEnd: true });
 
     expect(executePreparedCliRunMock).toHaveBeenCalledTimes(1);
-    expect(closeMcpLoopbackServerMock).toHaveBeenCalledTimes(1);
+    expect(retireSessionMcpRuntimeForSessionKeyMock).toHaveBeenCalledTimes(1);
+    expect(retireSessionMcpRuntimeForSessionKeyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: "test-session-key", reason: "cli-run-end" }),
+    );
+    expect(closeMcpLoopbackServerMock).not.toHaveBeenCalled();
   });
 
-  it("preserves confirmed delivery when bundle MCP cleanup fails", async () => {
+  it("falls back to sessionId retirement when the session key does not resolve", async () => {
+    executePreparedCliRunMock.mockResolvedValue({ text: "real reply" });
+    retireSessionMcpRuntimeForSessionKeyMock.mockResolvedValue(false);
+
+    await runCliAgent({ ...baseRunParams, cleanupBundleMcpOnRunEnd: true });
+
+    expect(retireSessionMcpRuntimeMock).toHaveBeenCalledTimes(1);
+    expect(retireSessionMcpRuntimeMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: "test-session", reason: "cli-run-end" }),
+    );
+    expect(closeMcpLoopbackServerMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves confirmed delivery when session MCP retirement fails", async () => {
     executePreparedCliRunMock.mockResolvedValue({
       text: "",
       didSendViaMessagingTool: true,
     });
-    closeMcpLoopbackServerMock.mockRejectedValue(new Error("loopback cleanup failed"));
+    retireSessionMcpRuntimeForSessionKeyMock.mockImplementation(
+      async ({ onError }: { onError?: (error: unknown) => void }) => {
+        onError?.(new Error("session mcp retire failed"));
+        return false;
+      },
+    );
 
     await expect(
       runCliAgent({ ...baseRunParams, cleanupBundleMcpOnRunEnd: true }),
@@ -591,12 +629,17 @@ describe("runCliAgent before_agent_reply seam", () => {
     });
   });
 
-  it("surfaces bundle MCP cleanup failures when nothing was delivered", async () => {
+  it("surfaces session MCP retirement failures when nothing was delivered", async () => {
     executePreparedCliRunMock.mockResolvedValue({ text: "real reply" });
-    closeMcpLoopbackServerMock.mockRejectedValue(new Error("loopback cleanup failed"));
+    retireSessionMcpRuntimeForSessionKeyMock.mockImplementation(
+      async ({ onError }: { onError?: (error: unknown) => void }) => {
+        onError?.(new Error("session mcp retire failed"));
+        return false;
+      },
+    );
 
     await expect(runCliAgent({ ...baseRunParams, cleanupBundleMcpOnRunEnd: true })).rejects.toThrow(
-      "loopback cleanup failed",
+      "session mcp retire failed",
     );
   });
 });
