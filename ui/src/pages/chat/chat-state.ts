@@ -1835,6 +1835,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     state.handleChatInputHistoryKey = (input) => {
       const result = navigateInputHistory(input);
       if (result.handled) {
+        renderLifecycle.invalidate();
         this.composerPersistence.schedule();
       }
       return result;
