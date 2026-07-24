@@ -14,11 +14,13 @@ import type {
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
+import { resolveOpenAIReasoningEffortMap } from "../transports/openai-reasoning-compat.js";
 import type {
   Api,
   AssistantMessage,
   Context,
   Model,
+  ModelThinkingLevel,
   SimpleStreamOptions,
   StreamOptions,
   TextContent,
@@ -546,6 +548,14 @@ export function resolveResponsesReasoningEffort<TApi extends Api>(
   return clampedReasoning;
 }
 
+function resolveResponsesReasoningEffortForPayload<TApi extends Api>(
+  model: Model<TApi>,
+  effort: ModelThinkingLevel,
+): string {
+  const reasoningEffortMap = resolveOpenAIReasoningEffortMap(model);
+  return reasoningEffortMap[effort] ?? model.thinkingLevelMap?.[effort] ?? effort;
+}
+
 export function applyCommonResponsesParams<TApi extends Api>(
   params: ResponseCreateParamsStreaming,
   model: Model<TApi>,
@@ -574,18 +584,18 @@ export function applyCommonResponsesParams<TApi extends Api>(
 
   if (options?.reasoningEffort || options?.reasoningSummary) {
     const effort = options?.reasoningEffort
-      ? (model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort)
-      : "medium";
+      ? resolveResponsesReasoningEffortForPayload(model, options.reasoningEffort)
+      : resolveResponsesReasoningEffortForPayload(model, "medium");
     params.reasoning = {
       effort: effort as NonNullable<typeof params.reasoning>["effort"],
       summary: options?.reasoningSummary || "auto",
     };
     params.include = ["reasoning.encrypted_content"];
   } else if ((config?.setDefaultReasoningOff ?? true) && model.thinkingLevelMap?.off !== null) {
+    const reasoningEffortMap = resolveOpenAIReasoningEffortMap(model);
+    const offEffort = reasoningEffortMap.off ?? model.thinkingLevelMap?.off ?? "none";
     params.reasoning = {
-      effort: (model.thinkingLevelMap?.off ?? "none") as NonNullable<
-        typeof params.reasoning
-      >["effort"],
+      effort: offEffort as NonNullable<typeof params.reasoning>["effort"],
     };
   }
 }
