@@ -119,6 +119,7 @@ import {
 } from "./source-reply-mirror.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
 import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
+import { normalizeTelegramMessageActionRequest } from "./telegram-message-action-normalization.js";
 
 export type MessageActionRunnerGateway = {
   url?: string;
@@ -144,6 +145,8 @@ export type RunMessageActionParams = {
   cfg: OpenClawConfig;
   action: ChannelMessageActionName;
   params: Record<string, unknown>;
+  /** @internal Identifies model-authored message-tool calls for channel-scoped repair. */
+  actionOrigin?: "message-tool";
   defaultAccountId?: string;
   requesterAccountId?: string | null;
   requesterSenderId?: string | null;
@@ -1880,6 +1883,13 @@ export async function runMessageAction(
   }
   const channel = await resolveChannel(cfg, params, input.toolContext, action);
   params.channel = channel;
+  const normalizedRequest = normalizeTelegramMessageActionRequest({
+    channel,
+    action,
+    args: params,
+    origin: input.actionOrigin ?? "direct",
+  });
+  params = { ...normalizedRequest.args, channel };
   const channelPlugin = resolveOutboundChannelPlugin({ channel, cfg });
   const pluginOwnedAction = action !== "send" && action !== "poll";
   if (

@@ -17,7 +17,10 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { sendDurableMessageBatch } from "../../channels/message/runtime.js";
 import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
-import type { ChannelThreadingToolContext } from "../../channels/plugins/types.public.js";
+import type {
+  ChannelMessageActionName,
+  ChannelThreadingToolContext,
+} from "../../channels/plugins/types.public.js";
 import type { InternalChannelThreadingToolContext } from "../../channels/threading-tool-context-internal.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
 import {
@@ -49,6 +52,7 @@ import {
 } from "../../infra/outbound/source-reply-mirror.js";
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
+import { normalizeTelegramMessageActionRequest } from "../../infra/outbound/telegram-message-action-normalization.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
@@ -541,12 +545,23 @@ export const sendHandlers: GatewayRequestHandlers = {
           normalizeOptionalString(request.agentId) ??
           (sessionKey ? resolveSessionAgentId({ sessionKey, config: cfg }) : undefined);
         const accountId = normalizeOptionalString(request.accountId) ?? undefined;
-        if (request.action === "send") {
+        const requestedAction = request.action as ChannelMessageActionName;
+        const normalizedRequest = normalizeTelegramMessageActionRequest({
+          channel,
+          action: requestedAction,
+          args: request.params,
+          origin: client?.internal?.agentRuntimeIdentity?.messageActionContext
+            ? "message-tool"
+            : "direct",
+        });
+        const action = normalizedRequest.action;
+        const actionParams = normalizedRequest.args;
+        if (action === "send") {
           await hydrateAttachmentParamsForAction({
             cfg,
             channel,
             accountId,
-            args: request.params,
+            args: actionParams,
             action: "send",
             mediaPolicy: resolveAttachmentMediaPolicy({
               mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, agentId),
@@ -554,9 +569,9 @@ export const sendHandlers: GatewayRequestHandlers = {
           });
         }
         const sourceReplyMirror = {
-          action: request.action,
+          action,
           channel,
-          actionParams: request.params,
+          actionParams,
           cfg,
           accountId,
           currentAccountId: trustedContext.requesterAccountId,
@@ -577,9 +592,9 @@ export const sendHandlers: GatewayRequestHandlers = {
         const gatewayClientScopes = client?.connect?.scopes ?? [];
         const handled = await dispatchChannelMessageAction({
           channel,
-          action: request.action as never,
+          action,
           cfg,
-          params: request.params,
+          params: actionParams,
           accountId,
           requesterAccountId: trustedContext.requesterAccountId,
           requesterSenderId: trustedContext.requesterSenderId,
@@ -600,7 +615,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           await cancelTerminalSourceReplyDelivery(terminalDeliveryReceipt);
           const error = errorShape(
             ErrorCodes.INVALID_REQUEST,
-            `Message action ${request.action} not supported for channel ${channel}.`,
+            `Message action ${action} not supported for channel ${channel}.`,
           );
           cacheGatewayDedupeFailure({ context, dedupeKey, error });
           return { ok: false, error, meta: { channel } };

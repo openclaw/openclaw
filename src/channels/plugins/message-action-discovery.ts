@@ -422,7 +422,9 @@ export function resolveChannelMessageToolSchemaProperties(
         }
         continue;
       }
-      mergeToolSchemaProperties(properties, contribution.properties);
+      if (visibility === "all-configured") {
+        mergeToolSchemaProperties(properties, contribution.properties);
+      }
     }
   }
   if (currentChannel && !seenPluginIds.has(currentChannel)) {
