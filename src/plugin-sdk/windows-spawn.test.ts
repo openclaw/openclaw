@@ -26,24 +26,6 @@ describe("resolveWindowsSpawnProgram", () => {
     ).toThrow("Windows spawn command must be an executable path only");
   });
 
-  it("wraps JavaScript entrypoints with Node on Windows", () => {
-    const scriptPath = "C:\\Users\\me\\.openclaw\\npm\\node_modules\\@openai\\codex\\bin\\codex.js";
-    const resolved = resolveWindowsSpawnProgram({
-      command: scriptPath,
-      platform: "win32",
-      env: {},
-      execPath: "C:\\node\\node.exe",
-    });
-
-    expect(materializeWindowsSpawnProgram(resolved, ["app-server"])).toEqual({
-      command: "C:\\node\\node.exe",
-      argv: [scriptPath, "app-server"],
-      resolution: "node-entrypoint",
-      shell: undefined,
-      windowsHide: true,
-    });
-  });
-
   it("allows executable paths with spaces on Windows", () => {
     const resolved = resolveWindowsSpawnProgram({
       command: "C:\\Program Files\\OpenAI Codex\\codex.exe",

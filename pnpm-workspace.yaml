@@ -16,6 +16,7 @@ minimumReleaseAgeExclude:
   - "acpx"
   - "tokenjuice"
   - "@agentclientprotocol/sdk"
+  - "@agentclientprotocol/codex-acp@1.1.7"
   - "axios"
   - "basic-ftp"
   - "baileys@7.0.0-rc13"
