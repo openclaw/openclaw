@@ -527,9 +527,7 @@ export function assertNonDestructiveReplacement(params: {
   }
 }
 
-type UnsetAtPathResult =
-  | { removed: true; leafContainer: "array" | "object" }
-  | { removed: false };
+type UnsetAtPathResult = { removed: true; leafContainer: "array" | "object" } | { removed: false };
 
 export function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]): UnsetAtPathResult {
   const last = path.at(-1);
