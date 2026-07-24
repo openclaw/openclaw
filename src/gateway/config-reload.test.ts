@@ -2913,6 +2913,50 @@ describe("startGatewayConfigReloader", () => {
     await reloader.stop();
   });
 
+  it("honors model runtime restart write intent in hot mode", async () => {
+    const previousConfig: OpenClawConfig = {
+      gateway: { reload: { mode: "hot" } },
+      agents: { defaults: { model: "openai-codex/gpt-5.5" } },
+    };
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { mode: "hot" } },
+      agents: { defaults: { model: "openai/gpt-5.5" } },
+    };
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
+      makeSnapshot({
+        sourceConfig: nextConfig,
+        runtimeConfig: nextConfig,
+        config: nextConfig,
+        hash: "hot-model-restart",
+      }),
+    );
+    const harness = createReloaderHarness(readSnapshot, {
+      initialConfig: previousConfig,
+      initialCompareConfig: previousConfig,
+    });
+
+    harness.emitWrite({
+      configPath: "/tmp/openclaw.json",
+      sourceConfig: nextConfig,
+      runtimeConfig: nextConfig,
+      persistedHash: "hot-model-restart",
+      revision: 1,
+      fingerprint: "runtime-hot-model-restart",
+      sourceFingerprint: "source-hot-model-restart",
+      writtenAtMs: Date.now(),
+      afterWrite: { mode: "restart", reason: "model/provider runtime changed" },
+    });
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(harness.onHotReload).not.toHaveBeenCalled();
+    const [plan, restartConfig] = getOnlyRestartCall(harness);
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toEqual(["model/provider runtime changed"]);
+    expect(restartConfig).toBe(nextConfig);
+
+    await harness.reloader.stop();
+  });
+
   it("skips invalid external config edits without recovery", async () => {
     const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
       makeSnapshot({

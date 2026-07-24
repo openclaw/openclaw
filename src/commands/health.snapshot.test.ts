@@ -3,10 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
-import type { ChannelPlugin } from "../channels/plugins/types.public.js";
+import type { ChannelAccountSnapshot, ChannelPlugin } from "../channels/plugins/types.public.js";
 import { createPluginRecord } from "../plugins/status.test-fixtures.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
+import { installHealthConfigMock } from "./health.config.test-mocks.js";
 import type { HealthSummary } from "./health.js";
 
 let testConfig: Record<string, unknown> = {};
@@ -53,10 +53,7 @@ type IMessageHealthAccount = {
 };
 
 async function loadFreshHealthModulesForTest() {
-  vi.doMock("../config/config.js", () => ({
-    getRuntimeConfig: () => testConfig,
-    loadConfig: () => testConfig,
-  }));
+  installHealthConfigMock(() => testConfig);
   vi.doMock("../config/sessions.js", () => ({
     resolveStorePath: () => "/tmp/sessions.json",
     resolveSessionFilePath: vi.fn(() => "/tmp/sessions.json"),

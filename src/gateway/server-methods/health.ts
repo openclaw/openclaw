@@ -2,10 +2,18 @@
 // detecting stale channel runtime state against live gateway snapshots.
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
-import { buildDeliveryQueueHealthSummary } from "../../commands/health.js";
-import type { ChannelHealthSummary, HealthSummary } from "../../commands/health.types.js";
+import {
+  buildDeliveryQueueHealthSummary,
+  buildRuntimeConfigHealth,
+} from "../../commands/health.js";
+import type {
+  ChannelHealthSummary,
+  HealthSummary,
+  RuntimeConfigHealthSummary,
+} from "../../commands/health.types.js";
 import { getStatusSummary } from "../../commands/status.js";
 import { listContextEngineQuarantines } from "../../context-engine/registry.js";
+import { getConfigReloadObservedGeneration } from "../config-reload-observed.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import { getGatewayModelPricingHealth } from "../model-pricing-cache-state.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
@@ -89,17 +97,51 @@ function cachedHealthDiffersFromRuntime(
   return false;
 }
 
+// Single-slot drift cache keyed by the reloader's disk-observation generation:
+// the reloader is the canonical observer of config-file changes, so a cache
+// hit with an unchanged generation reuses the last summary instead of
+// re-reading and re-parsing openclaw.json per health call (ClawSweeper P1
+// #89526). Any watcher or in-process write observation bumps the generation
+// and forces one fresh recompute.
+let lastRuntimeConfigHealth: {
+  generation: number;
+  includeSensitive: boolean;
+  summary: RuntimeConfigHealthSummary | undefined;
+} | null = null;
+
+async function resolveRuntimeConfigHealth(
+  includeSensitive: boolean,
+): Promise<RuntimeConfigHealthSummary | undefined> {
+  const generation = getConfigReloadObservedGeneration();
+  if (
+    lastRuntimeConfigHealth &&
+    lastRuntimeConfigHealth.generation === generation &&
+    lastRuntimeConfigHealth.includeSensitive === includeSensitive
+  ) {
+    return lastRuntimeConfigHealth.summary;
+  }
+  const summary = await buildRuntimeConfigHealth({ includeFingerprints: includeSensitive });
+  lastRuntimeConfigHealth = { generation, includeSensitive, summary };
+  return summary;
+}
+
 /** Merges cheap live runtime facts into a cached health summary before responding. */
-function mergeCachedHealthRuntimeState(params: {
+async function mergeCachedHealthRuntimeState(params: {
   cached: HealthSummary;
   eventLoop?: HealthSummary["eventLoop"];
   configReloadHotReloadStatus?: GatewayHotReloadStatus;
-}): HealthSummary {
+  includeSensitive: boolean;
+}): Promise<HealthSummary> {
   const {
     contextEngines: _cachedContextEngines,
     deliveryQueues: _cachedDeliveryQueues,
+    runtimeConfig: _cachedRuntimeConfig,
     ...cached
   } = params.cached;
+  // Runtime-config drift compares the live gateway config against the disk
+  // file, so a cached "ok" must not mask drift that appeared after the cache
+  // was filled. Fingerprints stay gated to admin-scoped callers.
+  const runtimeConfig = await resolveRuntimeConfigHealth(params.includeSensitive);
   // Dead-letter counts are cheap SQLite reads; recompute them like context
   // engines so a delivery that failed after the cache was filled is not hidden
   // for a refresh interval.
@@ -127,6 +169,7 @@ function mergeCachedHealthRuntimeState(params: {
     ...(params.configReloadHotReloadStatus
       ? { configReload: { hotReloadStatus: params.configReloadHotReloadStatus } }
       : {}),
+    ...(runtimeConfig ? { runtimeConfig } : {}),
     modelPricing: getGatewayModelPricingHealth({
       enabled: params.cached.modelPricing?.state !== "disabled",
     }),
@@ -161,10 +204,11 @@ export const healthHandlers: GatewayRequestHandlers = {
     ) {
       respond(
         true,
-        mergeCachedHealthRuntimeState({
+        await mergeCachedHealthRuntimeState({
           cached,
           eventLoop: context.getEventLoopHealth?.(),
           configReloadHotReloadStatus: context.getConfigReloaderHotReloadStatus?.(),
+          includeSensitive,
         }),
         undefined,
         { cached: true },

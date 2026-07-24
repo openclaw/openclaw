@@ -5,6 +5,7 @@ import { Value } from "typebox/value";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { SnapshotSchema } from "../../packages/gateway-protocol/src/schema/snapshot.js";
 import { createPluginRecord } from "../plugins/status.test-fixtures.js";
+import { installHealthConfigMock } from "./health.config.test-mocks.js";
 
 const testConfig = { session: { store: "/tmp/x" } };
 const tempPaths: string[] = [];
@@ -16,10 +17,7 @@ let getHealthSnapshot: typeof import("./health.js").getHealthSnapshot;
 
 describe("getHealthSnapshot plugin state", () => {
   beforeAll(async () => {
-    vi.doMock("../config/config.js", () => ({
-      getRuntimeConfig: () => testConfig,
-      loadConfig: () => testConfig,
-    }));
+    installHealthConfigMock(() => testConfig);
     vi.doMock("../config/sessions/paths.js", () => ({
       resolveStorePath: () => "/tmp/sessions.json",
     }));
