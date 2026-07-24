@@ -33,7 +33,7 @@ async function collectDoneMessage(
   return doneMessage;
 }
 
-function resolveModel(modelId: "k3" | "k3[1m]"): Model<"anthropic-messages"> {
+function resolveModel(modelId: "k3"): Model<"anthropic-messages"> {
   const provider = buildKimiCodingProvider();
   const definition = provider.models.find((model) => model.id === modelId);
   if (!definition) {
@@ -61,7 +61,7 @@ function countContentChars(message: AssistantMessage, type: "text" | "thinking")
 }
 
 async function runReasoningScenario(params: {
-  modelId: "k3" | "k3[1m]";
+  modelId: "k3";
   thinkingLevel: "off" | "max";
 }): Promise<AssistantMessage> {
   const registered = await registerSingleProviderPlugin(plugin);
@@ -98,7 +98,45 @@ async function runReasoningScenario(params: {
 }
 
 describeLive("Kimi Code K3 reasoning live", () => {
-  it.each(["k3", "k3[1m]"] as const)(
+  it("normalizes k3[1m] to k3 and calls the Kimi API successfully", async () => {
+    const registered = await registerSingleProviderPlugin(plugin);
+
+    const normalized = registered.normalizeResolvedModel?.({
+      provider: "kimi",
+      modelId: "k3[1m]",
+      model: {
+        id: "k3[1m]",
+        name: "Kimi K3",
+        provider: "kimi",
+        api: "anthropic-messages",
+      },
+    } as never);
+    expect(normalized).toBeDefined();
+    expect(normalized!.id).toBe("k3");
+
+    const context: Context = {
+      messages: [
+        {
+          role: "user",
+          content: "Reply with exactly LIVE_OK and no punctuation.",
+          timestamp: Date.now(),
+        },
+      ],
+    };
+    const done = await collectDoneMessage(
+      streamSimple(resolveModel("k3"), context, {
+        apiKey: process.env.KIMI_API_KEY?.trim() ?? "",
+        maxTokens: 4096,
+      }),
+    );
+    const text = done.content
+      .filter((b): b is { type: "text"; text: string } => b.type === "text")
+      .map((b) => b.text)
+      .join("");
+    expect(text.trim()).toMatch(/^LIVE_OK[.!]?$/);
+  }, 180_000);
+
+  it.each(["k3"] as const)(
     "%s honors off and max reasoning",
     async (modelId) => {
       const off = await runReasoningScenario({ modelId, thinkingLevel: "off" });

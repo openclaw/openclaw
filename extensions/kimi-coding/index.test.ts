@@ -26,6 +26,28 @@ describe("kimi provider plugin", () => {
     });
   });
 
+  it("normalizes k3[1m] to k3 for kimi-coding provider", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    expect(
+      provider.normalizeResolvedModel?.({
+        provider: "kimi-coding",
+        modelId: "k3[1m]",
+        model: {
+          id: "k3[1m]",
+          name: "Kimi K3",
+          provider: "kimi-coding",
+          api: "anthropic-messages",
+        },
+      } as never),
+    ).toEqual({
+      id: "k3",
+      name: "Kimi K3",
+      provider: "kimi-coding",
+      api: "anthropic-messages",
+    });
+  });
+
   it("uses binary thinking with thinking off by default", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
@@ -44,7 +66,7 @@ describe("kimi provider plugin", () => {
     });
   });
 
-  it.each(["k3", "k3[1m]"])("exposes %s off and max thinking", async (modelId) => {
+  it.each(["k3"])("exposes %s off and max thinking", async (modelId) => {
     const provider = await registerSingleProviderPlugin(plugin);
 
     expect(

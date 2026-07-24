@@ -268,7 +268,7 @@ describe("kimi tool-call markup wrapper", () => {
     });
   });
 
-  it.each(["k3", "k3[1m]"])("defaults %s to adaptive max thinking", (modelId) => {
+  it.each(["k3"])("defaults %s to adaptive max thinking", (modelId) => {
     const { streamFn: baseStreamFn, getCapturedPayload } = createPayloadCapturingStream({
       thinking: { type: "disabled", budget_tokens: 8192 },
       output_config: { effort: "low", format: { type: "json_schema" } },
@@ -302,8 +302,6 @@ describe("kimi tool-call markup wrapper", () => {
   it.each([
     { modelId: "k3", extraParams: undefined, thinkingLevel: "off" },
     { modelId: "k3", extraParams: { thinking: "off" }, thinkingLevel: "max" },
-    { modelId: "k3[1m]", extraParams: undefined, thinkingLevel: "off" },
-    { modelId: "k3[1m]", extraParams: { thinking: "off" }, thinkingLevel: "max" },
   ] as const)("honors $modelId thinking off", ({ modelId, extraParams, thinkingLevel }) => {
     const { streamFn: baseStreamFn, getCapturedPayload } = createPayloadCapturingStream({
       thinking: { type: "adaptive" },
@@ -337,34 +335,31 @@ describe("kimi tool-call markup wrapper", () => {
     });
   });
 
-  it.each(["k3", "k3[1m]"])(
-    "lets explicit %s thinking enablement override session off",
-    (modelId) => {
-      const { streamFn: baseStreamFn, getCapturedPayload } = createPayloadCapturingStream();
-      const wrapped = wrapKimiProviderStream({
+  it.each(["k3"])("lets explicit %s thinking enablement override session off", (modelId) => {
+    const { streamFn: baseStreamFn, getCapturedPayload } = createPayloadCapturingStream();
+    const wrapped = wrapKimiProviderStream({
+      provider: "kimi",
+      modelId,
+      extraParams: { thinking: "enabled" },
+      thinkingLevel: "off",
+      streamFn: baseStreamFn,
+    } as never);
+
+    void wrapped(
+      {
+        api: "anthropic-messages",
         provider: "kimi",
-        modelId,
-        extraParams: { thinking: "enabled" },
-        thinkingLevel: "off",
-        streamFn: baseStreamFn,
-      } as never);
+        id: modelId,
+      } as Model<"anthropic-messages">,
+      KIMI_CONTEXT,
+      {},
+    );
 
-      void wrapped(
-        {
-          api: "anthropic-messages",
-          provider: "kimi",
-          id: modelId,
-        } as Model<"anthropic-messages">,
-        KIMI_CONTEXT,
-        {},
-      );
-
-      expect(getCapturedPayload()).toEqual({
-        thinking: { type: "adaptive", display: "summarized" },
-        output_config: { effort: "max" },
-      });
-    },
-  );
+    expect(getCapturedPayload()).toEqual({
+      thinking: { type: "adaptive", display: "summarized" },
+      output_config: { effort: "max" },
+    });
+  });
 
   it("strips Anthropic cache_control markers before Kimi requests are sent", () => {
     const { streamFn: baseStreamFn, getCapturedPayload } = createPayloadCapturingStream({
