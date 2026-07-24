@@ -379,10 +379,13 @@ describe("resolveClaudeCliExecutionArgs", () => {
   });
 
   it("preserves Claude customizations when no exact per-run tool restriction exists", () => {
+    // --chrome passthrough is the seam for browser sign-in (for example 1Password
+    // agentic autofill); restricted runs above must keep forcing --no-chrome.
     const baseArgs = [
       "-p",
       "--setting-sources",
       "user",
+      "--chrome",
       "--plugin-dir",
       "/tmp/plugin",
       "--agents",

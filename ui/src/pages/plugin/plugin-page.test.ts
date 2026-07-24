@@ -125,9 +125,8 @@ function createExternalPluginPage(
   };
   const snapshot: ApplicationGatewaySnapshot = {
     client: null,
-    connected: true,
+    phase: "connected",
     offlineStable: false,
-    reconnecting: false,
     hello,
     assistantAgentId: null,
     sessionKey: "main",
@@ -352,9 +351,9 @@ describe("PluginPage", () => {
       await waitForFast(() => expect(page.querySelector("iframe")).not.toBeNull());
       const context = (page as unknown as { context: ApplicationContext<RouteId> }).context;
       const gateway = context.gateway;
-      const snapshot = gateway.snapshot as { connected: boolean };
+      const snapshot = gateway.snapshot;
 
-      snapshot.connected = false;
+      snapshot.phase = "stopped";
       (
         page as unknown as {
           updateGatewaySource: (source: ApplicationContext<RouteId>["gateway"]) => void;
@@ -363,7 +362,7 @@ describe("PluginPage", () => {
       await page.updateComplete;
       expect(page.querySelector("iframe")).toBeNull();
 
-      snapshot.connected = true;
+      snapshot.phase = "connected";
       (
         page as unknown as {
           updateGatewaySource: (source: ApplicationContext<RouteId>["gateway"]) => void;
@@ -424,9 +423,8 @@ describe("PluginPage", () => {
     };
     const snapshot: ApplicationGatewaySnapshot = {
       client: null,
-      connected: true,
+      phase: "connected",
       offlineStable: false,
-      reconnecting: false,
       hello,
       assistantAgentId: null,
       sessionKey: "main",
@@ -495,9 +493,8 @@ describe("PluginPage", () => {
     const createContext = (request: typeof firstRequest) => {
       const snapshot: ApplicationGatewaySnapshot = {
         client: { request } as unknown as GatewayBrowserClient,
-        connected: true,
+        phase: "connected",
         offlineStable: false,
-        reconnecting: false,
         hello,
         assistantAgentId: null,
         sessionKey: "main",
@@ -577,9 +574,8 @@ describe("PluginPage", () => {
     const client = { request } as unknown as GatewayBrowserClient;
     const snapshot: ApplicationGatewaySnapshot = {
       client,
-      connected: true,
+      phase: "connected",
       offlineStable: false,
-      reconnecting: false,
       hello,
       assistantAgentId: null,
       sessionKey: "main",
@@ -607,7 +603,7 @@ describe("PluginPage", () => {
       await waitForFast(() => expect(request).toHaveBeenCalledTimes(3));
       const staleHost = bundledViewHost(page);
 
-      snapshot.connected = false;
+      snapshot.phase = "stopped";
       listener?.(snapshot);
       await page.updateComplete;
       const disconnectedHost = bundledViewHost(page);
@@ -620,7 +616,7 @@ describe("PluginPage", () => {
       await waitForFast(() => expect(getLogbookState(staleHost).timeline).not.toBeNull());
       expect(getLogbookState(disconnectedHost).timeline).toBeNull();
 
-      snapshot.connected = true;
+      snapshot.phase = "connected";
       listener?.(snapshot);
       await page.updateComplete;
       expect(bundledViewHost(page)).not.toBe(disconnectedHost);
@@ -648,9 +644,8 @@ describe("PluginPage", () => {
     };
     const snapshot: ApplicationGatewaySnapshot = {
       client: null,
-      connected: true,
+      phase: "connected",
       offlineStable: false,
-      reconnecting: false,
       hello,
       assistantAgentId: null,
       sessionKey: "main",

@@ -4,6 +4,16 @@
   "glossaryHash": "47cf80de6cebb6ba1ac7a0bfd60e96de12a8611785bae9ca4f82c14912db9bd1",
   "entries": [
     {
+      "id": "native.android.8a2fec00ed1d71b5",
+      "source": "I can check Gateway status, repair configuration, change models, or connect channels.",
+      "translated": "يمكنني التحقق من حالة Gateway، أو إصلاح الإعدادات، أو تغيير النماذج، أو ربط القنوات."
+    },
+    {
+      "id": "native.android.53ec61863e575d82",
+      "source": "I’ll keep this conversation separate from ordinary agent chat.",
+      "translated": "سأبقي هذه المحادثة منفصلة عن الدردشة العادية مع الوكيل."
+    },
+    {
       "id": "native.android.85cc8de945e3929c",
       "source": "OpenClaw translations · $languageTag",
       "translated": "ترجمات OpenClaw · $languageTag"
@@ -1222,6 +1232,26 @@
       "id": "native.android.a79d6ccab877c9ca",
       "source": "OpenClaw Active",
       "translated": "OpenClaw نشط"
+    },
+    {
+      "id": "native.android.2aa3ad1a12683954",
+      "source": "Skip for now",
+      "translated": "تخطي الآن"
+    },
+    {
+      "id": "native.android.9fa262fa4e057a3b",
+      "source": "<redacted secret>",
+      "translated": "<redacted secret>"
+    },
+    {
+      "id": "native.android.e1a8681198e91766",
+      "source": "OpenClaw request failed.",
+      "translated": "فشل طلب OpenClaw."
+    },
+    {
+      "id": "native.android.a71a93ec69cee4d9",
+      "source": "The Gateway connection changed. Restart OpenClaw to reconnect.",
+      "translated": "تغيّر اتصال Gateway. أعد تشغيل OpenClaw لإعادة الاتصال."
     },
     {
       "id": "native.android.356609f717b92350",
@@ -5879,11 +5909,6 @@
       "translated": "المراقبة · $cronJobCount من المهام المجدولة"
     },
     {
-      "id": "native.android.4f369a09c8731092",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
-    },
-    {
       "id": "native.android.b5ee8fce135f41e6",
       "source": "Connect before chat, voice, and live status.",
       "translated": "اتصل قبل استخدام الدردشة والصوت والحالة المباشرة."
@@ -5947,6 +5972,16 @@
       "id": "native.android.7b1f86aeacad732c",
       "source": "Load from gateway",
       "translated": "التحميل من Gateway"
+    },
+    {
+      "id": "native.android.4f369a09c8731092",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.android.4878165188c0310c",
+      "source": "Setup, status, and repair",
+      "translated": "الإعداد والحالة والإصلاح"
     },
     {
       "id": "native.android.c6997ee4400492f6",
@@ -6902,6 +6937,106 @@
       "id": "native.android.14d7845e9790eaab",
       "source": "Skill",
       "translated": "مهارة"
+    },
+    {
+      "id": "native.android.9ee4764599e5979c",
+      "source": "Back",
+      "translated": "رجوع"
+    },
+    {
+      "id": "native.android.4b2c29c94377f235",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.android.7a7da7d8f8613d33",
+      "source": "Gateway Required",
+      "translated": "يلزم توفر Gateway"
+    },
+    {
+      "id": "native.android.aebc338b09b0a24d",
+      "source": "Full Access Required",
+      "translated": "يلزم الوصول الكامل"
+    },
+    {
+      "id": "native.android.69e0b2ce76a5ff7a",
+      "source": "Checking Gateway",
+      "translated": "جارٍ التحقق من Gateway"
+    },
+    {
+      "id": "native.android.93c293872c6deb49",
+      "source": "Gateway Update Required",
+      "translated": "يلزم تحديث Gateway"
+    },
+    {
+      "id": "native.android.06e5bfbad4b42e3b",
+      "source": "Connect this phone to a Gateway before opening OpenClaw.",
+      "translated": "اربط هذا الهاتف بـ Gateway قبل فتح OpenClaw."
+    },
+    {
+      "id": "native.android.44cca3625b125c19",
+      "source": "Reconnect with operator.admin access to review and change Gateway settings.",
+      "translated": "أعد الاتصال بصلاحية operator.admin لمراجعة إعدادات Gateway وتغييرها."
+    },
+    {
+      "id": "native.android.6089cc78ebd95573",
+      "source": "Checking whether this Gateway supports the OpenClaw settings assistant.",
+      "translated": "جارٍ التحقق مما إذا كان هذا الـ Gateway يدعم مساعد إعدادات OpenClaw."
+    },
+    {
+      "id": "native.android.3c3a35369bc2f1f9",
+      "source": "Update this Gateway to use the OpenClaw settings assistant.",
+      "translated": "حدّث هذا الـ Gateway لاستخدام مساعد إعدادات OpenClaw."
+    },
+    {
+      "id": "native.android.41b7b9cd883e3e81",
+      "source": "OpenClaw is working…",
+      "translated": "OpenClaw يعمل…"
+    },
+    {
+      "id": "native.android.072481856dd25c89",
+      "source": "Restart",
+      "translated": "إعادة التشغيل"
+    },
+    {
+      "id": "native.android.25fcaa5f2ef2546e",
+      "source": "OpenClaw is ready to continue in your ordinary chat.",
+      "translated": "‏OpenClaw جاهز للمتابعة في دردشتك العادية."
+    },
+    {
+      "id": "native.android.88377fbc76395226",
+      "source": "Open Chat",
+      "translated": "فتح المحادثة"
+    },
+    {
+      "id": "native.android.1e3b32696a4c4487",
+      "source": "${option.label} · ${nativeString(\"Recommended\")}",
+      "translated": "${option.label} · ${nativeString(\"Recommended\")}"
+    },
+    {
+      "id": "native.android.3ca44882cf461305",
+      "source": "Recommended",
+      "translated": "موصى به"
+    },
+    {
+      "id": "native.android.56968d3bbeb687f9",
+      "source": "Skip for now",
+      "translated": "تخطٍ الآن"
+    },
+    {
+      "id": "native.android.6b255d7620170498",
+      "source": "Enter secret…",
+      "translated": "أدخل السر…"
+    },
+    {
+      "id": "native.android.4753194a1f8c6c6b",
+      "source": "Reply to OpenClaw…",
+      "translated": "الرد على OpenClaw…"
+    },
+    {
+      "id": "native.android.07d2609a561a43b0",
+      "source": "Send",
+      "translated": "إرسال"
     },
     {
       "id": "native.android.efc938b5cc23e079",
@@ -9289,11 +9424,6 @@
       "translated": "وكيل الهاتف"
     },
     {
-      "id": "native.apple.8f741d09cc1d5495",
-      "source": "OpenClaw Activity",
-      "translated": "نشاط OpenClaw"
-    },
-    {
       "id": "native.apple.093081590556db7f",
       "source": "OPENCLAW",
       "translated": "OPENCLAW"
@@ -9367,11 +9497,6 @@
       "id": "native.apple.18d4f8a4eea7f930",
       "source": "Disconnected",
       "translated": "غير متصل"
-    },
-    {
-      "id": "native.apple.9168fcd110c3019a",
-      "source": "OpenClaw Share",
-      "translated": "OpenClaw Share"
     },
     {
       "id": "native.apple.382fd936eaf238f7",
