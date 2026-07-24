@@ -12,6 +12,7 @@ import {
   type MessagingToolSourceReplyPayload,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { attemptTerminal, type AttemptFailureSource } from "./attempt-terminal.js";
+import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { CodexAssistantProjection } from "./event-projector-assistant.js";
 import { CodexProjectionDiagnostics } from "./event-projector-diagnostics.js";
 import { CodexEventProjection } from "./event-projector-events.js";
@@ -58,6 +59,8 @@ import type { CodexTrajectoryRecorder } from "./trajectory.js";
 import { createCodexUsageLimitPromptError } from "./usage-limit-error.js";
 
 export { shouldEmitTranscriptToolProgress } from "./event-projector-tool-progress.js";
+
+type ApprovalFailure = Exclude<BeforeToolCallFailureDisposition, "blocked">;
 
 type CodexAppServerToolTelemetry = {
   didSendViaMessagingTool: boolean;
@@ -210,10 +213,7 @@ export class CodexAppServerEventProjector {
     }
   }
 
-  recordNativeToolApprovalFailure(
-    toolCallId: string,
-    disposition: Exclude<BeforeToolCallFailureDisposition, "blocked">,
-  ): void {
+  recordNativeToolApprovalFailure(toolCallId: string, disposition: ApprovalFailure): void {
     this.nativeToolLifecycleProjector.recordApprovalFailureDisposition(toolCallId, disposition);
   }
 
