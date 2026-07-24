@@ -297,6 +297,10 @@ export function detectCommandCarrierArgv(argv: string[]): CommandCarrierHit[] {
   if (normalizedExecutable === "xargs") {
     hits.push({ command: normalizedExecutable });
   }
+  const dispatchWrapper = unwrapKnownDispatchWrapperInvocation(argv);
+  if (dispatchWrapper.kind === "blocked") {
+    hits.push({ command: normalizedExecutable });
+  }
   const splitStringFlag = detectEnvSplitStringFlag(argv);
   if (splitStringFlag) {
     hits.push({ command: normalizedExecutable, flag: splitStringFlag });

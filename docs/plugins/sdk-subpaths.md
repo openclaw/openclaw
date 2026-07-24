@@ -296,7 +296,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/infra-runtime` | Deprecated compatibility shim; use the focused runtime subpaths above |
     | `plugin-sdk/collection-runtime` | Small bounded cache helpers |
     | `plugin-sdk/diagnostic-runtime` | Diagnostic flag, event, and trace-context helpers |
-    | `plugin-sdk/error-runtime` | Error graph, formatting, shared error classification helpers, `PlatformMessageNotDispatchedError`, `isApprovalNotFoundError` |
+    | `plugin-sdk/error-runtime` | Error graph, formatting, unknown-value coercion, shared error classification helpers, `PlatformMessageNotDispatchedError`, `isApprovalNotFoundError` |
     | `plugin-sdk/fetch-runtime` | Private-local after July 2026; Wrapped fetch, proxy, EnvHttpProxyAgent option, and pinned lookup helpers |
     | `plugin-sdk/runtime-fetch` | Private-local after July 2026; Dispatcher-aware runtime fetch without proxy/guarded-fetch imports |
     | `plugin-sdk/inline-image-data-url-runtime` | Private-local after July 2026; Inline image data URL sanitizer and signature sniffing helpers without the broad media runtime surface |
@@ -335,7 +335,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/music-generation` | Private-local after July 2026; Music generation provider/request/result types |
     | `plugin-sdk/video-generation` | Private-local after July 2026; Video generation provider/request/result types |
     | `plugin-sdk/video-generation-core` | Private-local after July 2026; Shared video-generation types, failover helpers, provider lookup, and model-ref parsing |
-    | `plugin-sdk/transcripts` | Private-local after July 2026; Shared transcripts source provider types, registry helpers, session descriptors, and utterance metadata |
+    | `plugin-sdk/transcripts` | Private-local after July 2026; Shared transcript source provider types, registry helpers, meeting-provider bridge factory, session descriptors, and utterance metadata |
     | `plugin-sdk/webhook-targets` | Private-local after July 2026; Webhook target registry and route-install helpers |
     | `plugin-sdk/web-media` | Shared remote/local media loading helpers |
     | `plugin-sdk/zod` | Deprecated compatibility re-export; import `zod` from `zod` directly |

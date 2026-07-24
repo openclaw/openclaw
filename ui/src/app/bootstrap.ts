@@ -340,7 +340,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       : null;
   let lastPostConnectClient: GatewayBrowserClient | null = null;
   const stopPostConnect = gateway.subscribe((snapshot) => {
-    if (!snapshot.connected || !snapshot.client) {
+    if (snapshot.phase !== "connected" || !snapshot.client) {
       lastPostConnectClient = null;
       return;
     }

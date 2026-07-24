@@ -107,6 +107,51 @@ async function waitAndQueueActiveRunMessage(
 }
 
 describe("runCodexAppServerAttempt steering", () => {
+  it("accepts Gateway transcript-backed steering for the active Codex turn", async () => {
+    const { requests, waitForMethod, completeTurn, notify } = createStartedThreadHarness();
+    const params = createSteeringParams();
+
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: { appServer: { mode: "yolo" } },
+    });
+    await waitForMethod("turn/start");
+
+    // This public queue returns immediate eligibility; the handle's delivery
+    // promise stays pending until the matching item/completed notification below.
+    await waitAndQueueActiveRunMessage(params.sessionId, "steer this active turn", {
+      debounceMs: 0,
+      isInboundUserMessage: true,
+      waitForTranscriptCommit: true,
+    });
+    await vi.waitFor(
+      () => expect(requests.map((entry) => entry.method)).toContain("turn/steer"),
+      fastWait,
+    );
+    const steer = requests.find((entry) => entry.method === "turn/steer");
+    const clientUserMessageId = (steer?.params as { clientUserMessageId?: string } | undefined)
+      ?.clientUserMessageId;
+    if (!clientUserMessageId) {
+      throw new Error("turn/steer clientUserMessageId missing");
+    }
+
+    await notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: { id: "steered-user-message", type: "userMessage", clientId: clientUserMessageId },
+      },
+    });
+    await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    expect(steer?.params).toMatchObject({
+      threadId: "thread-1",
+      expectedTurnId: "turn-1",
+      input: [{ type: "text", text: "steer this active turn" }],
+    });
+  });
+
   it("forwards queued text and images to the active app-server turn", async () => {
     const { requests, waitForMethod, completeTurn, notify } = createStartedThreadHarness();
     const params = createSteeringParams();
