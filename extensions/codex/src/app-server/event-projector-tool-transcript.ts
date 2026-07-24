@@ -96,12 +96,14 @@ export class CodexToolTranscriptProjection {
     tool: string;
     success: boolean;
     contentItems: CodexDynamicToolCallOutputContentItem[];
+    details?: unknown;
   }): void {
     this.recordToolResult({
       id: params.callId,
       name: params.tool,
       text: collectDynamicToolContentText(params.contentItems),
       isError: !params.success,
+      details: params.details,
     });
   }
 
@@ -368,6 +370,7 @@ export class CodexToolTranscriptProjection {
           text,
         },
       ],
+      ...(params.details !== undefined ? { details: params.details } : {}),
       timestamp: this.nextTranscriptTimestamp(),
     } as unknown as AgentMessage;
   }

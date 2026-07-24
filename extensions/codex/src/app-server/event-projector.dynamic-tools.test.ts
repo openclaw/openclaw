@@ -68,6 +68,35 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
     expect(toolResultContent.content).toBe("opened");
   });
 
+  it("retains MCP App preview details in mirrored dynamic tool results", async () => {
+    const projector = await createProjector();
+    const details = {
+      mcpAppPreview: {
+        kind: "canvas",
+        view: { id: "mcp-app-view-1" },
+        presentation: { target: "assistant_message", sandbox: "scripts" },
+        mcpApp: { viewId: "mcp-app-view-1" },
+      },
+    };
+
+    projector.recordDynamicToolCall({
+      callId: "call-app-1",
+      tool: "doordash__show_options",
+      arguments: { limit: 4 },
+    });
+    projector.recordDynamicToolResult({
+      callId: "call-app-1",
+      tool: "doordash__show_options",
+      success: true,
+      contentItems: [{ type: "inputText", text: "Found four nearby restaurants." }],
+      details,
+    });
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const toolResultMessage = requireRecord(result.messagesSnapshot[2], "tool result message");
+    expect(toolResultMessage.details).toEqual(details);
+  });
+
   it("does not mirror Codex-native web searches into transcript snapshots", async () => {
     const projector = await createProjector();
 

@@ -467,6 +467,7 @@ export class CodexAppServerEventProjector {
     terminalType?: "blocked" | "completed" | "error";
     sideEffectEvidence?: boolean;
     contentItems: CodexDynamicToolCallOutputContentItem[];
+    details?: unknown;
   }): void {
     this.toolProgressProjection.recordDynamicToolResult(params);
     this.toolTranscriptProjection.recordDynamicToolResult(params);
