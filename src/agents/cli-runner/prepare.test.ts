@@ -2797,7 +2797,7 @@ describe("prepareCliRunContext", () => {
     });
   });
 
-  it("fails closed when a backend cannot enforce a runtime toolsAllow", async () => {
+  it("fails closed with upgrade guidance when a backend cannot enforce a runtime toolsAllow", async () => {
     const getActiveMcpLoopbackRuntime = vi.fn(() => ({
       port: 31783,
       ownerToken: "loopback-owner-token",
@@ -2807,12 +2807,13 @@ describe("prepareCliRunContext", () => {
       getActiveMcpLoopbackRuntime,
     });
 
-    await expect(
-      fixture.prepare({
-        config: createCliBackendConfig({ bundleMcp: true }),
-        toolsAllow: ["read", "web_search"],
-      }),
-    ).rejects.toThrow("CLI backend test-cli cannot enforce exact per-run tool availability");
+    const run = fixture.prepare({
+      config: createCliBackendConfig({ bundleMcp: true }),
+      toolsAllow: ["read", "web_search"],
+    });
+    await expect(run).rejects.toThrow(
+      `CLI backend "test-cli" cannot enforce this run's tool cap. Upgrade its plugin and retry; if current, ask its maintainer to add exact-cap support. OpenClaw did not start the run.`,
+    );
 
     expect(getActiveMcpLoopbackRuntime).not.toHaveBeenCalled();
   });

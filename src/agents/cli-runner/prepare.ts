@@ -414,8 +414,10 @@ export async function prepareCliRunContext(
       (backendResolved.toolAvailabilityEnforcement === "prepare-execution" &&
         !backendResolved.prepareExecution))
   ) {
+    // Cron persists this verbatim and failure alerts truncate at 200 characters,
+    // so keep the upgrade recovery and fail-closed outcome compact.
     throw new Error(
-      `CLI backend ${backendResolved.id} cannot enforce exact per-run tool availability`,
+      `CLI backend "${backendResolved.id}" cannot enforce this run's tool cap. Upgrade its plugin and retry; if current, ask its maintainer to add exact-cap support. OpenClaw did not start the run.`,
     );
   }
   const sideQuestionDisablesNativeTools =
