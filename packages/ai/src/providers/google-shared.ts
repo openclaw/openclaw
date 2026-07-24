@@ -170,7 +170,7 @@ export function convertMessages<T extends GoogleApiType>(
     return id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
   };
 
-  const transformedMessages = transformMessages(context.messages, model, normalizeToolCallId);
+  const transformedMessages = transformMessages(context.messages, model, normalizeToolCallId, true);
 
   // Parallel calls need one immediate function-response turn. Gemini < 3 images cannot
   // live inside functionResponse, so hold them until the consecutive result run ends.

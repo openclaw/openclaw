@@ -1331,7 +1331,7 @@ async function convertMessages(
   const cacheBreakpointOptOutParamIndexes = new Set<number>();
 
   // Transform messages for cross-provider compatibility
-  const transformedMessages = transformMessages(messages, model, normalizeToolCallId);
+  const transformedMessages = transformMessages(messages, model, normalizeToolCallId, true);
   const activeToolTurnAssistantIndex = replayThinkingEnabled
     ? -1
     : findActiveAnthropicToolTurnAssistantIndex(transformedMessages);

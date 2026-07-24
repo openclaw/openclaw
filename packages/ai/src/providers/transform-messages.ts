@@ -72,11 +72,19 @@ function downgradeUnsupportedImages<TApi extends Api>(
  * Normalize tool call ID for cross-provider compatibility.
  * OpenAI Responses API generates IDs that are 450+ chars with special characters like `|`.
  * Anthropic APIs require IDs matching ^[a-zA-Z0-9_-]+$ (max 64 chars).
+ *
+ * `plugin-sdk/llm` re-exports this helper, so `normalizeToolCallId` keeps its required-`source`
+ * contract that existing provider plugins already implement. `targetSafeToolCallIds` is an
+ * additive opt-in (default off): when the normalizer is a charset scrub idempotent on the
+ * target's own native ids (Anthropic/Google), it is applied to every tool id reaching the
+ * target — same-model-tagged calls and orphaned results included — so other providers'
+ * non-idempotent/source-aware normalizers never rewrite valid native same-model ids (#95623).
  */
 export function transformMessages<TApi extends Api>(
   messages: Message[],
   model: Model<TApi>,
   normalizeToolCallId?: (id: string, model: Model<TApi>, source: AssistantMessage) => string,
+  targetSafeToolCallIds = false,
 ): Message[] {
   // Build a map of original tool call IDs to normalized IDs
   const toolCallIdMap = new Map<string, string>();
@@ -92,9 +100,19 @@ export function transformMessages<TApi extends Api>(
       return msg;
     }
 
-    // Handle toolResult messages - normalize toolCallId if we have a mapping
+    // Handle toolResult messages - normalize toolCallId from the map, or
+    // (target-safe) scrub directly when the paired call is absent (orphan result).
     if (msg.role === "toolResult") {
-      const normalizedId = toolCallIdMap.get(msg.toolCallId);
+      const mappedId = toolCallIdMap.get(msg.toolCallId);
+      // Target-safe normalizers (Anthropic/Google) are source-independent charset scrubs, so an
+      // orphaned result with no paired assistant call is normalized without a `source`. Cast to
+      // the source-less shape rather than widen the public `source`-required callback contract.
+      const scrubOrphanId = normalizeToolCallId as
+        | ((id: string, model: Model<TApi>) => string)
+        | undefined;
+      const normalizedId =
+        mappedId ??
+        (targetSafeToolCallIds && scrubOrphanId ? scrubOrphanId(msg.toolCallId, model) : undefined);
       if (normalizedId && normalizedId !== msg.toolCallId) {
         return Object.assign({}, msg, { toolCallId: normalizedId });
       }
@@ -179,7 +197,7 @@ export function transformMessages<TApi extends Api>(
             delete (normalizedToolCall as { thoughtSignature?: string }).thoughtSignature;
           }
 
-          if (!isSameModel && normalizeToolCallId) {
+          if ((targetSafeToolCallIds || !isSameModel) && normalizeToolCallId) {
             const normalizedId = normalizeToolCallId(toolCall.id, model, assistantMsg);
             if (normalizedId !== toolCall.id) {
               toolCallIdMap.set(toolCall.id, normalizedId);
