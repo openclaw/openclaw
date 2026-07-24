@@ -518,7 +518,7 @@ describe("runDoctorSessionSqlite", () => {
       agentHarnessId: "codex",
       lifecycleRevision: "rev-1",
       sessionId: "session-1",
-      sessionFile: expect.stringMatching(/^sqlite:/),
+      sessionFile: "agent:main:main",
     });
   });
 
@@ -601,7 +601,7 @@ describe("runDoctorSessionSqlite", () => {
         sessionKey: "agent:main:main",
         storePath: store.storePath,
       })?.entry.sessionFile,
-    ).toContain("sqlite:main:session-1:");
+    ).toBe("agent:main:main");
     expect(
       loadSqliteTranscriptEventsSync({
         agentId: "main",
@@ -962,7 +962,7 @@ describe("runDoctorSessionSqlite", () => {
         sessionKey: "agent:main:main",
         storePath: store.storePath,
       })?.entry.sessionFile,
-    ).toContain("sqlite:main:session-1:");
+    ).toBe("agent:main:main");
   });
 
   it("validates missing SQLite rows without creating the agent database", async () => {
