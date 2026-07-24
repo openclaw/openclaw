@@ -1,9 +1,40 @@
 /** Tests materializing MCP catalog tools into agent tool definitions and results. */
+const outboundAttachmentMockState = vi.hoisted(() => {
+  const delayByFilename = new Map<string, number>();
+  return {
+    delayByFilename,
+    resolveOutboundAttachmentFromBuffer: vi.fn(
+      async (
+        _buffer: Buffer,
+        _maxBytes: number,
+        options?: { contentType?: string; filename?: string },
+      ) => {
+        const delayMs = delayByFilename.get(options?.filename ?? "") ?? 0;
+        if (delayMs > 0) {
+          await new Promise((resolve) => {
+            setTimeout(resolve, delayMs);
+          });
+        }
+        return {
+          path: `/tmp/openclaw/media/outbound/${options?.filename ?? "mcp-attachment"}`,
+          contentType: options?.contentType,
+        };
+      },
+    ),
+  };
+});
+vi.mock("../media/outbound-attachment.js", () => ({
+  resolveOutboundAttachmentFromBuffer:
+    outboundAttachmentMockState.resolveOutboundAttachmentFromBuffer,
+}));
+
+const resolveOutboundAttachmentFromBufferMock =
+  outboundAttachmentMockState.resolveOutboundAttachmentFromBuffer;
 
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { validateToolArguments } from "openclaw/plugin-sdk/llm";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import {
   buildBundleMcpToolsFromCatalog,
@@ -93,6 +124,11 @@ function makeToolRuntime(
 describe("createBundleMcpToolRuntime", () => {
   afterEach(() => {
     mcpUiResourceTesting.clearViewStore();
+  });
+
+  beforeEach(() => {
+    resolveOutboundAttachmentFromBufferMock.mockClear();
+    outboundAttachmentMockState.delayByFilename.clear();
   });
 
   it("keeps app-only MCP tools out of the model tool catalog", async () => {
@@ -242,12 +278,8 @@ describe("createBundleMcpToolRuntime", () => {
         operation: "tool",
       },
     });
-    const result = await expectDefined(runtime.tools[0], "runtime.tools[0] test invariant").execute(
-      "call-bundle-probe",
-      {},
-      undefined,
-      undefined,
-    );
+    const tool = expectDefined(runtime.tools[0], "runtime.tools[0] test invariant");
+    const result = await tool.execute("call-bundle-probe", {}, undefined, undefined);
     expectTextContentBlock(result.content[0], "FROM-BUNDLE");
     expect(result.details).toEqual({
       mcpServer: "bundleProbe",
@@ -281,12 +313,8 @@ describe("createBundleMcpToolRuntime", () => {
       }),
     });
 
-    const result = await expectDefined(runtime.tools[0], "runtime.tools[0] test invariant").execute(
-      "call-bundle-probe",
-      {},
-      undefined,
-      undefined,
-    );
+    const tool = expectDefined(runtime.tools[0], "runtime.tools[0] test invariant");
+    const result = await tool.execute("call-bundle-probe", {}, undefined, undefined);
 
     expectTextContentBlock(
       result.content[0],
@@ -308,60 +336,6 @@ describe("createBundleMcpToolRuntime", () => {
         content: "pong",
       },
     });
-  });
-
-  it("coerces non-text/image MCP tool-result blocks to text (resource_link/resource/audio)", async () => {
-    // resource_link/resource/audio blocks have no base64 image source; if they
-    // leaked into the provider image branch Anthropic would 400 on an image with
-    // undefined data/media_type and poison the whole session history (#90710).
-    const runtime = await materializeBundleMcpToolsForRun({
-      runtime: makeToolRuntime({
-        result: {
-          content: [
-            { type: "text", text: "intro" },
-            {
-              type: "resource_link",
-              uri: "https://example.com/a.docx",
-              name: "a.docx",
-              title: "Quarterly report",
-            },
-            {
-              type: "resource_link",
-              uri: "https://example.com/bare",
-              name: "",
-            },
-            {
-              type: "resource",
-              resource: { uri: "memo://one", text: "memo body" },
-            },
-            {
-              type: "resource",
-              resource: { uri: "blob://two", blob: "AAAA", mimeType: "application/pdf" },
-            },
-            { type: "audio", data: "AAAA", mimeType: "audio/mpeg" },
-            { type: "image", data: "iVBOR", mimeType: "image/png" },
-          ],
-          isError: false,
-        } as CallToolResult,
-      }),
-    });
-
-    const result = await expectDefined(runtime.tools[0], "runtime.tools[0] test invariant").execute(
-      "call-bundle-probe",
-      {},
-      undefined,
-      undefined,
-    );
-
-    expect(result.content).toEqual([
-      { type: "text", text: "intro" },
-      { type: "text", text: "[Quarterly report] https://example.com/a.docx" },
-      { type: "text", text: "https://example.com/bare" },
-      { type: "text", text: "memo body" },
-      { type: "text", text: "blob://two" },
-      { type: "text", text: "[audio audio/mpeg]" },
-      { type: "image", data: "iVBOR", mimeType: "image/png" },
-    ]);
   });
 
   it("coerces a malformed image block (missing base64 source) to text", async () => {

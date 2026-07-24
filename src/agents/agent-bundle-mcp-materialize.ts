@@ -19,6 +19,7 @@ import type {
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
 import { mcpContentBlockToAgentContent } from "./mcp-content.js";
+import { stageMcpRelayMediaAttachments, type McpRelayMedia } from "./mcp-tool-result-media.js";
 import { buildMcpAppCanvasPayload, fetchMcpAppView } from "./mcp-ui-resource.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -87,13 +88,20 @@ function buildAppToolPolicyProjections(params: {
   return tools.toSorted((a, b) => a.name.localeCompare(b.name));
 }
 
-function toAgentToolResult(params: {
+async function toAgentToolResult(params: {
   serverName: string;
   toolName: string;
   result: CallToolResult;
-}): AgentToolResult<unknown> {
+}): Promise<AgentToolResult<unknown>> {
   const content: AgentToolResult<unknown>["content"] = Array.isArray(params.result.content)
     ? params.result.content.map(mcpContentBlockToAgentContent)
+    : [];
+  const mediaAttachments = Array.isArray(params.result.content)
+    ? await stageMcpRelayMediaAttachments({
+        serverName: params.serverName,
+        toolName: params.toolName,
+        content: params.result.content,
+      })
     : [];
   const structuredContentBlock =
     params.result.structuredContent !== undefined
@@ -128,6 +136,13 @@ function toAgentToolResult(params: {
   };
   if (params.result.structuredContent !== undefined) {
     details.structuredContent = params.result.structuredContent;
+  }
+  if (mediaAttachments.length > 0) {
+    details.media = {
+      source: "mcp",
+      hostOwned: true,
+      attachments: mediaAttachments,
+    } satisfies McpRelayMedia;
   }
   if (params.result.isError === true) {
     details.status = "error";
@@ -429,7 +444,7 @@ export async function materializeBundleMcpToolsForRun(params: {
     createExecute: (tool) => async (toolCallId: string, input: unknown) => {
       params.runtime.markUsed();
       const result = await params.runtime.callTool(tool.serverName, tool.toolName, input);
-      const agentResult = toAgentToolResult({
+      const agentResult = await toAgentToolResult({
         serverName: tool.serverName,
         toolName: tool.toolName,
         result,
