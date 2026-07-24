@@ -285,7 +285,10 @@ export function normalizeMentions(
   const escaped = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const escapeName = (value: string) => value.replace(/</g, "&lt;").replace(/>/g, "&gt;");
   let result = text;
-  for (const mention of mentions) {
+  // Feishu keys are not zero-padded, so @_user_1 is a prefix of @_user_10.
+  // Replace longer keys first while still trusting the mentions array as the source of truth.
+  const orderedMentions = mentions.toSorted((a, b) => b.key.length - a.key.length);
+  for (const mention of orderedMentions) {
     const mentionId = mention.id.open_id;
     const replacement =
       botStripId && mentionId === botStripId
