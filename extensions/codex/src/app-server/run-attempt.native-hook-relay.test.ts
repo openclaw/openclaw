@@ -16,7 +16,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as approvalBridge from "./approval-bridge.js";
-import { readAttemptTerminal } from "./attempt-terminal.js";
+import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { CodexAppServerRpcError } from "./client.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import {

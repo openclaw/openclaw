@@ -2,10 +2,7 @@
  * Test fixtures for embedded-run overflow compaction scenarios.
  */
 import type { ContextEngineSessionTarget } from "../../context-engine/types.js";
-import {
-  normalizeAgentRunAttemptTerminal,
-  type LegacyAgentRunAttemptTerminalInput,
-} from "../agent-run-terminal-outcome.js";
+import { normalizeAgentRunAttemptTerminal } from "../agent-run-terminal-outcome.js";
 import { isAgentToolReplaySafe } from "../tool-replay-safety.js";
 import { buildAttemptReplayMetadata } from "./run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
@@ -42,7 +39,7 @@ export function makeCompactionSuccess(params: {
 }
 
 type AttemptResultOverrides = Partial<EmbeddedRunAttemptResult> &
-  LegacyAgentRunAttemptTerminalInput;
+  Parameters<typeof normalizeAgentRunAttemptTerminal>[0];
 
 function resolveFixtureTerminal(overrides: AttemptResultOverrides) {
   return overrides.terminal ?? normalizeAgentRunAttemptTerminal(overrides);

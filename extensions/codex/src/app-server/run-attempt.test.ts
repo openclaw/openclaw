@@ -30,7 +30,7 @@ import {
   getCodexWorkspaceMemoryToolNames,
   prependCodexOpenClawPromptContext,
 } from "./attempt-context.js";
-import { readAttemptTerminal } from "./attempt-terminal.js";
+import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { withCodexStartupTimeout } from "./attempt-timeouts.js";
 import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
 import { resolveCodexAppServerFallbackApiKeyCacheKey } from "./auth-bridge.js";

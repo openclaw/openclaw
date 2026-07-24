@@ -20,7 +20,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT } from "openclaw/plugin-sdk/provider-model-shared";
 import { describe, expect, it, vi } from "vitest";
-import { readAttemptTerminal } from "./attempt-terminal.js";
+import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import {
   assistantMessage,
   createAppServerHarness,
@@ -421,7 +421,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), fastWait);
     expect(settled).toBe(false);
     releaseAgentEnd();
-    await expect(run).resolves.toMatchObject({ promptError: null });
+    expect(readAttemptTerminal(await run).promptError).toBeNull();
     expect(settled).toBe(true);
   });
 
@@ -479,7 +479,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     expect(resolveActiveEmbeddedRunSessionId("agent:main:session-1")).toBe("session-1");
     releaseAgentEnd();
 
-    await expect(run).resolves.toMatchObject({
+    expect(readAttemptTerminal(await run)).toMatchObject({
       aborted: false,
       timedOut: false,
       promptError: null,
@@ -549,12 +549,13 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     expect(onAttemptAbort).not.toHaveBeenCalled();
 
     releaseAgentEnd();
-    await expect(run).resolves.toMatchObject({
+    const result = await run;
+    expect(readAttemptTerminal(result)).toMatchObject({
       aborted: false,
       timedOut: false,
       promptError: null,
-      assistantTexts: ["Done before restart."],
     });
+    expect(result.assistantTexts).toEqual(["Done before restart."]);
     const [agentEndPayload] = mockCall(agentEnd, "agent_end") as [{ success?: boolean }, unknown];
     expect(agentEndPayload.success).toBe(true);
   });
@@ -597,7 +598,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     expect(onAttemptAbort).toHaveBeenCalledTimes(1);
 
     releaseAgentEnd();
-    await expect(run).resolves.toMatchObject({
+    expect(readAttemptTerminal(await run)).toMatchObject({
       aborted: false,
       promptError: null,
     });
@@ -645,13 +646,14 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     expect(onAttemptAbort).toHaveBeenCalledTimes(1);
 
     releaseAgentEnd();
-    await expect(run).resolves.toMatchObject({
+    const result = await run;
+    expect(readAttemptTerminal(result)).toMatchObject({
       aborted: false,
       promptError: "codex app-server client closed before turn completed",
-      codexAppServerFailure: {
-        kind: "client_closed_before_turn_completed",
-        replaySafe: true,
-      },
+    });
+    expect(result.codexAppServerFailure).toMatchObject({
+      kind: "client_closed_before_turn_completed",
+      replaySafe: true,
     });
     expect(freezeAbort).not.toHaveBeenCalled();
   });
@@ -728,7 +730,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
 
       releaseAgentEnd();
       const result = await run;
-      expect(result).toMatchObject({
+      expect(readAttemptTerminal(result)).toMatchObject({
         aborted: false,
         promptError: expectedPromptError,
       });
@@ -785,13 +787,12 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     expect(onAttemptAbort).toHaveBeenCalledTimes(1);
 
     releaseAgentEnd();
-    await expect(run).resolves.toMatchObject({
+    const result = await run;
+    expect(readAttemptTerminal(result)).toMatchObject({
       aborted: false,
       promptError: "codex app-server client closed before turn completed",
-      codexAppServerFailure: {
-        transport: "websocket",
-      },
     });
+    expect(result.codexAppServerFailure).toMatchObject({ transport: "websocket" });
   });
 
   it("clears a stale binding when completed-turn coverage persistence fails", async () => {
@@ -812,7 +813,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     await harness.waitForMethod("turn/start");
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await expect(run).resolves.toMatchObject({ promptError: null, aborted: false });
+    expect(readAttemptTerminal(await run)).toMatchObject({ promptError: null, aborted: false });
     expect(bindingStore.mutate).toHaveBeenCalled();
     await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
   });

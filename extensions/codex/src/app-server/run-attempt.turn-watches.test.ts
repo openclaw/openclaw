@@ -13,7 +13,8 @@ import {
 import * as mediaStore from "openclaw/plugin-sdk/media-store";
 import { describe, expect, it, vi } from "vitest";
 import { buildCodexAppServerPromptTimeoutOutcome } from "./attempt-results.js";
-import { readAttemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { createCodexAttemptTurnWatchController } from "./attempt-turn-watches.js";
 import * as authBridge from "./auth-bridge.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";

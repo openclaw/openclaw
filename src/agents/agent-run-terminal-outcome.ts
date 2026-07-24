@@ -65,7 +65,7 @@ export type AgentRunAttemptTerminal =
       timeoutObservation?: AgentRunAttemptTimeoutObservation;
     };
 
-export type LegacyAgentRunAttemptTerminalInput = {
+type LegacyAgentRunAttemptTerminalInput = {
   aborted?: boolean;
   externalAbort?: boolean;
   idleTimedOut?: boolean;

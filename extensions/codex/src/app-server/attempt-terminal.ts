@@ -9,5 +9,3 @@ export type AttemptFailureSource = Extract<
   { kind: "failed" }
 >["source"];
 export const attemptTerminal = agentHarnessAttemptTerminal;
-export const readAttemptTerminal = (result: EmbeddedRunAttemptResult) =>
-  attemptTerminal.project(result.terminal);
