@@ -122,6 +122,15 @@ describe("local media roots", () => {
     expect(roots.map(normalizeHostPath)).not.toContain(normalizeHostPath("/"));
   });
 
+  it("adds the resolved parent for relative local media sources", () => {
+    const roots = appendLocalMediaParentRoots(["/tmp/base"], [path.join("nested", "photo.png")]);
+
+    expect(roots.map(normalizeHostPath)).toStrictEqual([
+      normalizeHostPath("/tmp/base"),
+      normalizeHostPath(path.resolve("nested")),
+    ]);
+  });
+
   it("does not widen local roots for pass-through media schemes", () => {
     const roots = appendLocalMediaParentRoots(
       ["/tmp/base"],
