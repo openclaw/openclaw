@@ -19,15 +19,9 @@ const ts = require("typescript");
 const repoRoot = resolveRepoRoot(import.meta.url);
 const sourceRoots = [path.join(repoRoot, "src")];
 
-const kyselyRawAllowPaths = new Set([
-  "src/infra/kysely-node-sqlite.test.ts",
-  "src/infra/kysely-sync.ts",
-]);
+const kyselyRawAllowPaths = new Set(["src/infra/kysely-sync.ts"]);
 
-const compiledRawAllowPaths = new Set([
-  "src/infra/kysely-node-sqlite.ts",
-  "src/infra/kysely-node-sqlite.test.ts",
-]);
+const compiledRawAllowPaths = new Set(["src/infra/kysely-node-sqlite.ts"]);
 
 const rawSqliteAllowPathGroups = {
   "native Kysely adapter and sync execution": [
@@ -36,28 +30,76 @@ const rawSqliteAllowPathGroups = {
   ],
   "SQLite database lifecycle, schema, transactions, and pragmas": [
     "src/infra/node-sqlite.ts",
+    "src/infra/sqlite-index-schema.ts",
     "src/infra/sqlite-integrity.ts",
     "src/infra/sqlite-pragma.test-support.ts",
+    "src/infra/sqlite-schema-contract.ts",
+    "src/infra/sqlite-strict.ts",
     "src/infra/sqlite-transaction.ts",
     "src/infra/sqlite-user-version.ts",
     "src/infra/sqlite-wal.ts",
+    "src/state/openclaw-agent-db-maintenance.ts",
+    "src/state/openclaw-agent-db-registry.ts",
+    "src/state/openclaw-agent-db-schema-helpers.ts",
+    "src/state/openclaw-agent-db-schema.ts",
+    "src/state/openclaw-agent-db-session-nodes-migration.ts",
+    "src/state/openclaw-agent-db-session-migrations.ts",
+    "src/state/openclaw-agent-db-session-provenance.ts",
     "src/state/openclaw-agent-db.ts",
+    "src/state/openclaw-state-db-audit-migration.ts",
+    "src/state/openclaw-state-db-legacy-backfills.ts",
+    "src/state/openclaw-state-db-maintenance.ts",
+    "src/state/openclaw-state-db-operator-approval-migration.ts",
+    "src/state/openclaw-state-db-schema-additive.ts",
+    "src/state/openclaw-state-db-schema-helpers.ts",
+    "src/state/openclaw-state-db-schema-repair.ts",
+    "src/state/openclaw-state-db-startup-checkpoint.ts",
     "src/state/openclaw-state-db.ts",
+    "src/transcripts/sqlite-schema.ts",
     "src/state/sqlite-schema-shape.test-support.ts",
   ],
-  "backup snapshot maintenance": ["src/commands/backup-verify.ts", "src/infra/backup-create.ts"],
+  "cross-process SQLite coordination locks": ["src/infra/device-identity-coordinator.ts"],
+  "backup snapshot maintenance": [
+    "src/commands/backup-verify.ts",
+    "src/infra/backup-create.ts",
+    "src/snapshot/local-repository.ts",
+  ],
   "agent auth profile read-only bootstrap": ["src/agents/auth-profiles/sqlite.ts"],
-  "read-only SQLite status probes": ["src/commands/status.scan.shared.ts"],
-  "doctor legacy state migration": [
-    "src/infra/state-migrations.ts",
+  "read-only shared state database access": [
+    "src/state/openclaw-agent-db-readonly.ts",
+    "src/state/openclaw-state-db-readonly.ts",
+  ],
+  "read-only schema preflight and integrity verification access": [
+    "src/state/openclaw-database-preflight.ts",
+    "src/state/openclaw-database-verify.worker.ts",
+  ],
+  "quarantine store must work when other databases are damaged": [
+    "src/state/openclaw-quarantine-store.ts",
+  ],
+  "read-only SQLite status probes": [
+    "src/commands/doctor-db-bloat.ts",
+    "src/commands/status.scan.shared.ts",
+  ],
+  "doctor SQLite maintenance and legacy state migration": [
+    "src/commands/doctor/cron/legacy-run-log-migration.ts",
+    "src/commands/doctor/cron/migration-ledger.ts",
+    "src/commands/doctor-sqlite-compact.ts",
+    "src/commands/doctor-session-sqlite.ts",
+    "src/commands/doctor-session-sqlite-readers.ts",
+    "src/commands/doctor-session-sqlite-recover-report.ts",
+    "src/commands/doctor-state-sqlite-compact.ts",
+    "src/infra/state-migrations.task-sidecar-rows.ts",
+    "src/infra/state-migrations.storage.ts",
+    "src/infra/state-migrations.cron-run-logs.ts",
     "src/infra/state-migrations.debug-proxy.ts",
+    "src/infra/state-migrations.meeting-transcripts-detection.ts",
+    "src/infra/state-migrations.meeting-transcripts-files.ts",
+    "src/infra/state-migrations.meeting-transcripts-verify.ts",
   ],
   "shared database stores with direct DatabaseSync access": ["src/proxy-capture/store.sqlite.ts"],
   "Kysely-backed stores that own a DatabaseSync boundary": [
     "src/acp/event-ledger.ts",
-    "src/agents/subagent-registry.store.ts",
-    "src/cron/run-log.ts",
-    "src/cron/run-log/sqlite-store.ts",
+    "src/state/user-profiles.ts",
     "src/cron/store.ts",
     "src/infra/outbound/current-conversation-bindings.ts",
     "src/media/store.ts",
@@ -227,7 +269,7 @@ function isPersistedStringCastType(typeText) {
 /**
  * Collects Kysely/raw SQLite violations from one source file.
  */
-export function collectKyselyGuardrailViolations(content, relativePath) {
+function collectKyselyGuardrailViolations(content, relativePath) {
   const sourceFile = ts.createSourceFile(relativePath, content, ts.ScriptTarget.Latest, true);
   const imports = collectImports(sourceFile);
   const violations = [];
@@ -351,7 +393,7 @@ export function collectKyselyGuardrailViolations(content, relativePath) {
 /**
  * Collects Kysely guardrail violations across configured source roots.
  */
-export async function collectKyselyGuardrails() {
+async function collectKyselyGuardrails() {
   const files = await collectTypeScriptFilesFromRoots(sourceRoots, { includeTests: true });
   const violations = [];
   for (const filePath of files) {

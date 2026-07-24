@@ -46,8 +46,11 @@
       "provider": "ollama",
       "method": "local",
       "choiceId": "ollama",
+      "appGuidedDiscovery": true,
       "choiceLabel": "Ollama",
       "choiceHint": "Cloud and local open models",
+      "icon": "https://cdn.simpleicons.org/ollama",
+      "website": "https://ollama.com/download",
       "groupId": "ollama",
       "groupLabel": "Ollama",
       "groupHint": "Cloud and local open models"
@@ -56,8 +59,11 @@
       "provider": "ollama-cloud",
       "method": "api-key",
       "choiceId": "ollama-cloud",
+      "appGuidedSecret": true,
       "choiceLabel": "Ollama Cloud",
       "choiceHint": "Hosted models via ollama.com",
+      "icon": "https://cdn.simpleicons.org/ollama",
+      "website": "https://ollama.com/download",
       "groupId": "ollama",
       "groupLabel": "Ollama",
       "groupHint": "Cloud and local open models",
@@ -150,6 +156,7 @@
       }
     },
     "discovery": {
+      "ollama": "refreshable",
       "ollama-cloud": "refreshable"
     }
   },

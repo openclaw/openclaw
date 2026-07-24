@@ -477,6 +477,45 @@ describe("createMatrixGuardedFetch", () => {
     clearTestUndiciRuntimeDepsOverride();
   });
 
+  it("preserves redirect success when the discarded body fails to cancel", async () => {
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandledRejections.push(reason);
+    };
+    const cancel = vi.fn(() => {
+      throw new Error("cancel failed");
+    });
+    const runtimeFetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(new ReadableStream<Uint8Array>({ cancel }), {
+          status: 302,
+          headers: { location: "/final" },
+        }),
+      )
+      .mockResolvedValueOnce(new Response("{}", { status: 200 }));
+    stubRuntimeFetch(runtimeFetch);
+    process.on("unhandledRejection", onUnhandledRejection);
+
+    try {
+      const guardedFetch = createMatrixGuardedFetch({
+        ssrfPolicy: { allowPrivateNetwork: true },
+      });
+      const response = await guardedFetch("http://127.0.0.1:8008/start");
+
+      await expect(response.json()).resolves.toEqual({});
+      expect(runtimeFetch).toHaveBeenCalledTimes(2);
+      expect(cancel).toHaveBeenCalledOnce();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(unhandledRejections).toStrictEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+      expect(process.listeners("unhandledRejection")).not.toContain(onUnhandledRejection);
+    }
+  });
+
   it("rejects and cancels SDK responses above the declared size limit", async () => {
     const cancel = vi.fn();
     const stream = new ReadableStream<Uint8Array>({ cancel });
@@ -576,7 +615,14 @@ describe("matrix transport streaming OOM guard — real HTTP server without Cont
       // Deliberately omit Content-Length so enforceDeclaredResponseSize is a no-op.
       res.writeHead(200, { "content-type": "application/octet-stream" });
       let sent = 0;
+      let closed = false;
+      res.on("close", () => {
+        closed = true;
+      });
       const sendChunk = () => {
+        if (closed) {
+          return;
+        }
         if (sent >= TOTAL_CHUNKS) {
           res.end();
           return;
@@ -584,8 +630,14 @@ describe("matrix transport streaming OOM guard — real HTTP server without Cont
         sent++;
         chunksWritten++;
         const ok = res.write(CHUNK);
-        if (ok) { setImmediate(sendChunk); }
-        else { res.once("drain", sendChunk); }
+        const scheduleNextChunk = () => {
+          setTimeout(sendChunk, 5);
+        };
+        if (ok) {
+          scheduleNextChunk();
+        } else {
+          res.once("drain", scheduleNextChunk);
+        }
       };
       sendChunk();
     });
@@ -637,20 +689,21 @@ describe("matrix transport streaming OOM guard — real HTTP server without Cont
     const { port } = server.address() as { port: number };
 
     try {
-      const result = (await performMatrixRequest({
-        homeserver: `http://127.0.0.1:${port}`,
-        accessToken: "token",
-        method: "GET",
-        endpoint: "/_matrix/media/v3/download/example/id",
-        timeoutMs: 10_000,
-        raw: true,
-        maxBytes: 16 * 1024 * 1024,
-        ssrfPolicy: { allowPrivateNetwork: true },
-      })).buffer;
+      const result = (
+        await performMatrixRequest({
+          homeserver: `http://127.0.0.1:${port}`,
+          accessToken: "token",
+          method: "GET",
+          endpoint: "/_matrix/media/v3/download/example/id",
+          timeoutMs: 10_000,
+          raw: true,
+          maxBytes: 16 * 1024 * 1024,
+          ssrfPolicy: { allowPrivateNetwork: true },
+        })
+      ).buffer;
       expect(result).toEqual(payload);
       console.log(
-        "[matrix-bound-proof] under-cap: raw buffer returned correctly, size=" +
-          result.length,
+        "[matrix-bound-proof] under-cap: raw buffer returned correctly, size=" + result.length,
       );
     } finally {
       await new Promise<void>((resolve) => {

@@ -11,7 +11,7 @@ import type {
   SpeechProviderOverrides,
   SpeechProviderPlugin,
 } from "openclaw/plugin-sdk/speech-core";
-import { asObject } from "openclaw/plugin-sdk/speech-core";
+import { asObject, resolveSpeechProviderApiKey } from "openclaw/plugin-sdk/speech-core";
 import {
   DEFAULT_VYDRA_BASE_URL,
   DEFAULT_VYDRA_SPEECH_MODEL,
@@ -43,7 +43,7 @@ function normalizeVydraSpeechConfig(rawConfig: Record<string, unknown>): VydraSp
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
-      path: "messages.tts.providers.vydra.apiKey",
+      path: "tts.providers.vydra.apiKey",
     }),
     baseUrl: normalizeVydraBaseUrl(
       trimToUndefined(raw?.baseUrl) ?? trimToUndefined(process.env.VYDRA_BASE_URL),
@@ -91,11 +91,16 @@ export function buildVydraSpeechProvider(): SpeechProviderPlugin {
     resolveConfig: ({ rawConfig }) => normalizeVydraSpeechConfig(rawConfig),
     listVoices: async () => VYDRA_SPEECH_VOICES.map((voice) => Object.assign({}, voice)),
     isConfigured: ({ providerConfig }) =>
-      Boolean(readVydraSpeechConfig(providerConfig).apiKey || process.env.VYDRA_API_KEY),
+      Boolean(
+        resolveSpeechProviderApiKey(
+          readVydraSpeechConfig(providerConfig).apiKey,
+          process.env.VYDRA_API_KEY,
+        ),
+      ),
     synthesize: async (req) => {
       const config = readVydraSpeechConfig(req.providerConfig);
       const overrides = readVydraOverrides(req.providerOverrides);
-      const apiKey = config.apiKey || process.env.VYDRA_API_KEY;
+      const apiKey = resolveSpeechProviderApiKey(config.apiKey, process.env.VYDRA_API_KEY);
       if (!apiKey) {
         throw new Error("Vydra API key missing");
       }
@@ -141,6 +146,12 @@ export function buildVydraSpeechProvider(): SpeechProviderPlugin {
           timeoutMs: req.timeoutMs,
           fetchFn,
           maxBytes: resolveVydraGeneratedMediaMaxBytes({ cfg: req.cfg, kind: "audio" }),
+          requestPolicy: {
+            allowPrivateNetwork,
+            dispatcherPolicy,
+            headers,
+            headerOrigin: new URL(baseUrl).origin,
+          },
         });
         return {
           audioBuffer: audio.buffer,

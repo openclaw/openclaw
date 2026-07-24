@@ -55,7 +55,7 @@ vi.mock("./sender.js", () => ({
 }));
 
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
-import * as securityRuntime from "openclaw/plugin-sdk/security-runtime";
+import { resolveLocalPathFromRootsSync } from "openclaw/plugin-sdk/security-runtime";
 import {
   resolveOutboundMediaLocalRoots,
   resolveWorkspaceScopedLocalRoots,
@@ -70,6 +70,8 @@ import {
 import { OUTBOUND_ERROR_CODES } from "./outbound-types.js";
 import { sendMedia as sendOutboundMedia } from "./outbound.js";
 import { sendMedia as senderSendMedia } from "./sender.js";
+
+vi.mock("openclaw/plugin-sdk/security-runtime", { spy: true });
 
 const mockedLoadOutboundMediaFromUrl = vi.mocked(loadOutboundMediaFromUrl);
 const mockedSenderSendMedia = vi.mocked(senderSendMedia);
@@ -101,7 +103,11 @@ function makeCtx() {
 beforeEach(async () => {
   vi.clearAllMocks();
   originalOpenClawHome = process.env.OPENCLAW_HOME;
-  openclawHome = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-host-read-voice-"));
+  // realpath: macOS tmpdir is a /var -> /private/var symlink and trusted-root
+  // resolution returns canonicalized paths that assertions compare against.
+  openclawHome = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-host-read-voice-")),
+  );
   process.env.OPENCLAW_HOME = openclawHome;
   audioPortMock.audioFileToSilkBase64.mockResolvedValue(undefined);
   audioPortMock.isAudioFile.mockReturnValue(true);
@@ -123,7 +129,7 @@ afterEach(async () => {
 describe("resolveOutboundMediaPath", () => {
   it("maps virtual /workspace paths before checking host local roots", () => {
     const resolveLocalPathSpy = vi
-      .spyOn(securityRuntime, "resolveLocalPathFromRootsSync")
+      .mocked(resolveLocalPathFromRootsSync)
       .mockImplementation(({ filePath }) =>
         filePath === "/tmp/agent-workspace/attachments/report.docx"
           ? { path: "/tmp/agent-workspace/attachments/report.docx", root: "/tmp/agent-workspace" }
@@ -153,7 +159,7 @@ describe("resolveOutboundMediaPath", () => {
 
   it("resolves relative paths only against the virtual workspace", () => {
     const resolveLocalPathSpy = vi
-      .spyOn(securityRuntime, "resolveLocalPathFromRootsSync")
+      .mocked(resolveLocalPathFromRootsSync)
       .mockImplementation(({ filePath }) =>
         filePath === "/tmp/agent-workspace/report.docx"
           ? { path: "/tmp/agent-workspace/report.docx", root: "/tmp/agent-workspace" }
@@ -200,7 +206,7 @@ describe("resolveOutboundMediaPath", () => {
     "rejects virtual workspace escapes before checking sibling media roots: %s",
     (mediaPath) => {
       const resolveLocalPathSpy = vi
-        .spyOn(securityRuntime, "resolveLocalPathFromRootsSync")
+        .mocked(resolveLocalPathFromRootsSync)
         .mockImplementation(({ filePath }) =>
           filePath === "/tmp/media/secret.pdf"
             ? { path: "/tmp/media/secret.pdf", root: "/tmp/media" }

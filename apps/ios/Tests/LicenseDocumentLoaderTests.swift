@@ -33,8 +33,17 @@ struct LicenseDocumentLoaderTests {
 
     @Test func `derives readable titles from license filenames`() {
         #expect(LicenseDocumentLoader.title(from: "WebRTC.txt") == "WebRTC")
+        #expect(LicenseDocumentLoader.title(from: "SwiftUI Siri Waveform.txt") == "SwiftUI Siri Waveform")
         #expect(LicenseDocumentLoader.title(from: "openclaw_plugin_sdk.txt") == "openclaw plugin sdk")
         #expect(LicenseDocumentLoader.title(from: "010-WebRTC.txt") == "010 WebRTC")
+    }
+
+    @Test func `bundles the waveform attribution`() {
+        let waveform = LicenseDocumentLoader.bundledDocuments()
+            .first { $0.filename == "SwiftUI Siri Waveform.txt" }
+
+        #expect(waveform?.body.contains("Copyright (c) 2019 Noah Chalifour") == true)
+        #expect(waveform?.body.contains("MIT License") == true)
     }
 
     private static func makeTemporaryDirectory() throws -> URL {

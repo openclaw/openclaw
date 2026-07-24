@@ -9,6 +9,11 @@ import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
+import {
+  hasStagedMediaProjection,
+  resolveMediaFacts,
+  resolveStagedMediaFacts,
+} from "../media/media-facts.js";
 import type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
@@ -16,6 +21,8 @@ import type {
   PluginHookMessageReceivedEvent,
   PluginHookMessageSentEvent,
 } from "../plugins/hook-message.types.js";
+import { internalSessionConversationId } from "../utils/message-channel-constants.js";
+import { stripChannelPrefix } from "../utils/string-readers.js";
 import type {
   MessagePreprocessedHookContext,
   MessageReceivedHookContext,
@@ -23,7 +30,7 @@ import type {
   MessageTranscribedHookContext,
 } from "./internal-hooks.js";
 
-export type CanonicalInboundMessageHookContext = {
+type CanonicalInboundMessageHookContext = {
   from: string;
   to?: string;
   content: string;
@@ -35,6 +42,7 @@ export type CanonicalInboundMessageHookContext = {
   accountId?: string;
   conversationId?: string;
   sessionKey?: string;
+  agentId?: string;
   runId?: string;
   messageId?: string;
   senderId?: string;
@@ -77,7 +85,7 @@ export type CanonicalInboundMessageHookContext = {
   callDepth?: number;
 };
 
-export type CanonicalSentMessageHookContext = {
+type CanonicalSentMessageHookContext = {
   to: string;
   content: string;
   success: boolean;
@@ -135,23 +143,23 @@ export function deriveInboundMessageHookContext(
   const channelId = normalizeLowercaseStringOrEmpty(
     ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "",
   );
-  const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
+  const conversationId =
+    ctx.OriginatingTo ??
+    ctx.To ??
+    ctx.From ??
+    internalSessionConversationId(channelId, ctx.SessionKey);
   const isGroup = Boolean(ctx.GroupSubject || ctx.GroupChannel);
-  const mediaPaths = Array.isArray(ctx.MediaPaths)
-    ? ctx.MediaPaths.filter(
-        (value): value is string => typeof value === "string" && value.length > 0,
-      )
-    : undefined;
-  const mediaTypes = Array.isArray(ctx.MediaTypes)
-    ? ctx.MediaTypes.filter(
-        (value): value is string => typeof value === "string" && value.length > 0,
-      )
-    : undefined;
-  const mediaUrls = Array.isArray(ctx.MediaUrls)
-    ? ctx.MediaUrls.filter(
-        (value): value is string => typeof value === "string" && value.length > 0,
-      )
-    : undefined;
+  const media = hasStagedMediaProjection(ctx)
+    ? resolveStagedMediaFacts(ctx)
+    : resolveMediaFacts(ctx);
+  const compact = (values: Array<string | undefined>) => {
+    const entries = values.filter((value): value is string => Boolean(value));
+    return entries.length > 0 ? entries : undefined;
+  };
+  const mediaPaths = compact(media.map((fact) => fact.path));
+  const mediaUrls = compact(media.map((fact) => fact.url ?? fact.path));
+  const mediaTypes = compact(media.map((fact) => fact.contentType ?? fact.kind));
+  const firstMedia = media[0];
   return {
     from: ctx.From ?? "",
     to: ctx.To,
@@ -167,6 +175,7 @@ export function deriveInboundMessageHookContext(
     accountId: ctx.AccountId,
     conversationId,
     sessionKey: ctx.SessionKey,
+    agentId: ctx.AgentId,
     messageId:
       overrides?.messageId ??
       ctx.MessageSidFull ??
@@ -186,9 +195,9 @@ export function deriveInboundMessageHookContext(
     surface: ctx.Surface,
     threadId: ctx.MessageThreadId,
     threadParentId: ctx.ThreadParentId,
-    mediaPath: ctx.MediaPath ?? mediaPaths?.[0],
-    mediaUrl: ctx.MediaUrl ?? mediaUrls?.[0],
-    mediaType: ctx.MediaType ?? mediaTypes?.[0],
+    mediaPath: firstMedia?.path ?? mediaPaths?.[0],
+    mediaUrl: firstMedia?.url ?? firstMedia?.path ?? mediaUrls?.[0],
+    mediaType: firstMedia?.contentType ?? firstMedia?.kind ?? mediaTypes?.[0],
     mediaPaths,
     mediaUrls,
     mediaTypes,
@@ -234,6 +243,20 @@ export function buildCanonicalSentMessageHookContext(params: {
     isGroup: params.isGroup,
     groupId: params.groupId,
   };
+}
+
+/** Resolves the outbound hook target for a reply produced by an inbound channel turn. */
+export function resolveInboundReplyHookTarget(
+  finalized: FinalizedMsgContext,
+  hookCtx: CanonicalInboundMessageHookContext,
+): string {
+  if (typeof finalized.OriginatingTo === "string" && finalized.OriginatingTo.trim()) {
+    return finalized.OriginatingTo;
+  }
+  if (hookCtx.isGroup) {
+    return hookCtx.conversationId ?? hookCtx.to ?? hookCtx.from;
+  }
+  return hookCtx.from || hookCtx.conversationId || hookCtx.to || "";
 }
 
 type DiagnosticTraceHookFields = Pick<
@@ -301,20 +324,6 @@ export function toPluginMessageContext(
   return context;
 }
 
-function stripChannelPrefix(value: string | undefined, channelId: string): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const genericPrefixes = ["channel:", "chat:", "user:"];
-  for (const prefix of genericPrefixes) {
-    if (value.startsWith(prefix)) {
-      return value.slice(prefix.length);
-    }
-  }
-  const prefix = `${channelId}:`;
-  return value.startsWith(prefix) ? value.slice(prefix.length) : value;
-}
-
 function resolveInboundConversation(canonical: CanonicalInboundMessageHookContext): {
   conversationId?: string;
   parentConversationId?: string;
@@ -329,7 +338,11 @@ function resolveInboundConversation(canonical: CanonicalInboundMessageHookContex
         threadParentId: canonical.threadParentId,
         isGroup: canonical.isGroup,
       })
-    : null;
+    : undefined;
+  if (pluginResolved === null) {
+    // A plugin-owned null is an explicit rejection, so generic parsing must not reclaim it.
+    return {};
+  }
   if (pluginResolved) {
     return {
       conversationId: normalizeOptionalString(pluginResolved.conversationId),
@@ -352,6 +365,7 @@ export function toPluginInboundClaimContext(
     accountId: canonical.accountId,
     conversationId: conversation.conversationId,
     sessionKey: canonical.sessionKey,
+    agentId: canonical.agentId,
     parentConversationId: conversation.parentConversationId,
     senderId: canonical.senderId,
     messageId: canonical.messageId,

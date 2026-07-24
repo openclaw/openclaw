@@ -38,6 +38,7 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           repository: openclaw/clawhub
+          ref: main
           path: clawhub-source
           fetch-depth: 1
           persist-credentials: false
@@ -55,7 +56,7 @@ jobs:
           set -euo pipefail
           for attempt in 1 2 3 4 5; do
             rm -rf publish
-            if git clone \
+            if timeout --signal=TERM --kill-after=10s 120s git clone \
               "https://x-access-token:${OPENCLAW_DOCS_SYNC_TOKEN}@github.com/openclaw/docs.git" \
               publish; then
               exit 0

@@ -34,24 +34,31 @@ const sendTextMock = vi.hoisted(() =>
 );
 const audioFileToSilkBase64Mock = vi.hoisted(() => vi.fn(async () => "silk-base64"));
 
-vi.mock("../messaging/sender.js", () => ({
-  accountToCreds: (account: GatewayAccount) => ({
-    appId: account.appId,
-    clientSecret: account.clientSecret,
-  }),
-  buildDeliveryTarget: (target: { type: string; senderId: string; groupOpenid?: string }) => ({
-    type: target.type === "group" ? "group" : target.type === "c2c" ? "c2c" : target.type,
-    id: target.type === "group" ? target.groupOpenid : target.senderId,
-  }),
-  initApiConfig: vi.fn(),
-  sendFileMessage: vi.fn(),
-  sendImage: vi.fn(),
-  sendText: sendTextMock,
-  sendVideoMessage: vi.fn(),
-  sendVoiceMessage: sendVoiceMessageMock,
-  sendMedia: sendMediaMock,
-  withTokenRetry: async (_creds: unknown, fn: () => Promise<unknown>) => await fn(),
-}));
+vi.mock("../messaging/sender.js", async () => {
+  // Real error class so prod `instanceof UploadDailyLimitExceededError` checks
+  // in error paths don't trip vitest's missing-export guard on this mock.
+  const { UploadDailyLimitExceededError } =
+    await vi.importActual<typeof import("../api/media-chunked.js")>("../api/media-chunked.js");
+  return {
+    accountToCreds: (account: GatewayAccount) => ({
+      appId: account.appId,
+      clientSecret: account.clientSecret,
+    }),
+    buildDeliveryTarget: (target: { type: string; senderId: string; groupOpenid?: string }) => ({
+      type: target.type === "group" ? "group" : target.type === "c2c" ? "c2c" : target.type,
+      id: target.type === "group" ? target.groupOpenid : target.senderId,
+    }),
+    initApiConfig: vi.fn(),
+    sendFileMessage: vi.fn(),
+    sendImage: vi.fn(),
+    sendText: sendTextMock,
+    sendVideoMessage: vi.fn(),
+    sendVoiceMessage: sendVoiceMessageMock,
+    sendMedia: sendMediaMock,
+    UploadDailyLimitExceededError,
+    withTokenRetry: async (_creds: unknown, fn: () => Promise<unknown>) => await fn(),
+  };
+});
 
 vi.mock("../utils/image-size.js", async () => {
   const actual =
@@ -107,7 +114,11 @@ function makeInbound(overrides: Partial<InboundContext> = {}): InboundContext {
   };
 }
 
-function makeInboundRuntime(): GatewayPluginRuntime["channel"]["inbound"] {
+function makeInboundRuntime(
+  dispatchReplyWithBufferedBlockDispatcher: (params: unknown) => Promise<unknown>,
+  onResolvedContext?: (ctx: Record<string, unknown>) => void,
+  onResolvedTurn?: (turn: Record<string, unknown>) => void,
+): GatewayPluginRuntime["channel"]["inbound"] {
   return {
     run: vi.fn(async (rawParams: unknown) => {
       const params = rawParams as {
@@ -125,14 +136,37 @@ function makeInboundRuntime(): GatewayPluginRuntime["channel"]["inbound"] {
           kind: "message",
         },
         {},
-      )) as { runDispatch: () => Promise<unknown> };
-      return { dispatchResult: await turn.runDispatch() };
+      )) as {
+        cfg: unknown;
+        ctxPayload: Record<string, unknown>;
+        record?: Record<string, unknown>;
+        dispatcherOptions?: Record<string, unknown>;
+        delivery: { deliver: unknown; onError?: unknown };
+        replyOptions?: unknown;
+        replyResolver?: unknown;
+      };
+      onResolvedContext?.(turn.ctxPayload);
+      onResolvedTurn?.(turn as unknown as Record<string, unknown>);
+      return {
+        dispatchResult: await dispatchReplyWithBufferedBlockDispatcher({
+          ctx: turn.ctxPayload,
+          cfg: turn.cfg,
+          dispatcherOptions: {
+            ...turn.dispatcherOptions,
+            deliver: turn.delivery.deliver,
+            onError: turn.delivery.onError,
+          },
+          replyOptions: turn.replyOptions,
+          replyResolver: turn.replyResolver,
+        }),
+      };
     }),
   };
 }
 
 function makeRuntime(params: {
   onFinalize?: (ctx: Record<string, unknown>) => void;
+  onTurn?: (turn: Record<string, unknown>) => void;
   isControlCommandMessage?: (text?: string, cfg?: unknown) => boolean;
   skipFreshSettledDelivery?: boolean;
   onDispatch?: (dispatcherOptions: {
@@ -154,7 +188,50 @@ function makeRuntime(params: {
     ) => Promise<void>,
   ) => Promise<void>;
 }): GatewayPluginRuntime {
+  const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async (rawParams: unknown) => {
+    const dispatcherOptions = (
+      rawParams as {
+        dispatcherOptions: {
+          deliver: (
+            payload: {
+              text?: string;
+              mediaUrl?: string;
+              mediaUrls?: string[];
+              audioAsVoice?: boolean;
+            },
+            info: { kind: string },
+          ) => Promise<void>;
+          onSkip?: (
+            payload: {
+              text?: string;
+              mediaUrl?: string;
+              mediaUrls?: string[];
+              audioAsVoice?: boolean;
+            },
+            info: { kind: string; reason: "empty" | "silent" | "heartbeat" },
+          ) => void;
+          onSettled?: () => unknown;
+          onFreshSettledDelivery?: () => unknown;
+        };
+      }
+    ).dispatcherOptions;
+    if (params.onDispatch) {
+      await params.onDispatch(dispatcherOptions);
+    } else {
+      await params.onDeliver?.(dispatcherOptions.deliver);
+    }
+    await dispatcherOptions.onSettled?.();
+    if (!params.skipFreshSettledDelivery) {
+      await dispatcherOptions.onFreshSettledDelivery?.();
+    }
+    return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+  });
   return {
+    state: {
+      openChannelIngressQueue: () => {
+        throw new Error("unexpected durable ingress access");
+      },
+    },
     channel: {
       activity: { record: vi.fn() },
       routing: {
@@ -164,47 +241,8 @@ function makeRuntime(params: {
         })),
       },
       reply: {
-        dispatchReplyWithBufferedBlockDispatcher: vi.fn(async (rawParams: unknown) => {
-          const dispatcherOptions = (
-            rawParams as {
-              dispatcherOptions: {
-                deliver: (
-                  payload: {
-                    text?: string;
-                    mediaUrl?: string;
-                    mediaUrls?: string[];
-                    audioAsVoice?: boolean;
-                  },
-                  info: { kind: string },
-                ) => Promise<void>;
-                onSkip?: (
-                  payload: {
-                    text?: string;
-                    mediaUrl?: string;
-                    mediaUrls?: string[];
-                    audioAsVoice?: boolean;
-                  },
-                  info: { kind: string; reason: "empty" | "silent" | "heartbeat" },
-                ) => void;
-                onSettled?: () => unknown;
-                onFreshSettledDelivery?: () => unknown;
-              };
-            }
-          ).dispatcherOptions;
-          if (params.onDispatch) {
-            await params.onDispatch(dispatcherOptions);
-          } else {
-            await params.onDeliver?.(dispatcherOptions.deliver);
-          }
-          await dispatcherOptions.onSettled?.();
-          if (!params.skipFreshSettledDelivery) {
-            await dispatcherOptions.onFreshSettledDelivery?.();
-          }
-        }),
-        finalizeInboundContext: vi.fn((rawCtx: Record<string, unknown>) => {
-          params.onFinalize?.(rawCtx);
-          return rawCtx;
-        }),
+        dispatchReplyWithBufferedBlockDispatcher,
+        finalizeInboundContext: vi.fn((rawCtx: Record<string, unknown>) => rawCtx),
         formatInboundEnvelope: vi.fn(() => "voice"),
         resolveEffectiveMessagesConfig: vi.fn(() => ({})),
         resolveEnvelopeFormatOptions: vi.fn(() => ({})),
@@ -213,7 +251,11 @@ function makeRuntime(params: {
         resolveStorePath: vi.fn(() => "/tmp/openclaw/qqbot-sessions.json"),
         recordInboundSession: vi.fn(async () => undefined),
       },
-      inbound: makeInboundRuntime(),
+      inbound: makeInboundRuntime(
+        dispatchReplyWithBufferedBlockDispatcher,
+        params.onFinalize,
+        params.onTurn,
+      ),
       text: {
         chunkMarkdownText: (text: string) => [text],
       },
@@ -309,7 +351,9 @@ describe("dispatchOutbound", () => {
   });
 
   it("loads scoped media through host read callbacks", async () => {
-    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-host-read-"));
+    // realpath: macOS tmpdir is a /var -> /private/var symlink and root
+    // containment checks compare against canonicalized roots.
+    const tmpRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-host-read-")));
     try {
       const mediaPath = path.join(tmpRoot, "host-report.txt");
       const mediaReadFile = vi.fn(async () => Buffer.from("host report"));
@@ -370,7 +414,11 @@ describe("dispatchOutbound", () => {
   });
 
   it("lets missing voice files inside scoped outbound roots reach the voice wait path", async () => {
-    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-scoped-voice-"));
+    // realpath: missing-path resolution returns canonicalized-root joins, so a
+    // symlinked macOS tmpdir root would change the asserted voice path.
+    const tmpRoot = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-scoped-voice-")),
+    );
     try {
       const missingVoicePath = path.join(tmpRoot, "pending.wav");
       const runtime = makeRuntime({
@@ -562,9 +610,6 @@ describe("dispatchOutbound", () => {
         expect.anything(),
         "assistant",
       );
-      expect(runtime.channel.session.resolveStorePath).toHaveBeenCalledWith(undefined, {
-        agentId: "assistant",
-      });
       expect(finalized?.AgentId).toBe("assistant");
     } finally {
       await fs.rm(tmpRoot, { recursive: true, force: true });
@@ -848,7 +893,10 @@ describe("dispatchOutbound", () => {
         {
           runtime,
           cfg: { agents: { list: [{ id: "agent-1", workspace: tmpRoot }] } },
-          account: { ...account, config: { streaming: true } },
+          account: {
+            ...account,
+            config: { streaming: { mode: "partial", nativeTransport: true } },
+          },
         },
       );
 
@@ -907,7 +955,56 @@ describe("dispatchOutbound", () => {
     }
   });
 
-  it("marks voice-only inbound as audio without adding voice paths to MediaPaths", async () => {
+  it("keeps durable settlement with a dispatch that outlives the response watchdog", async () => {
+    vi.useFakeTimers();
+    try {
+      const lifecycle = {
+        abortSignal: new AbortController().signal,
+        onAdopted: vi.fn(async () => {}),
+        onDeferred: vi.fn(),
+        onAdoptionFinalizing: vi.fn(),
+        onAbandoned: vi.fn(async () => {}),
+      };
+      const inbound = makeInbound();
+      inbound.event.turnAdoptionLifecycle = lifecycle;
+      const runtime = makeRuntime({
+        onDeliver: async (deliver) => {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 301_000);
+          });
+          await deliver({ text: "late durable answer" }, { kind: "block" });
+        },
+      });
+      let settled = false;
+      const dispatchPromise = dispatchOutbound(inbound, {
+        runtime,
+        cfg: {},
+        account,
+      }).finally(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(300_000);
+
+      expect(settled).toBe(false);
+      expect(lifecycle.onAbandoned).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await dispatchPromise;
+
+      expect(sendTextMock).toHaveBeenCalledWith(
+        expect.anything(),
+        "late durable answer",
+        expect.anything(),
+        expect.anything(),
+      );
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("marks voice-only inbound as type-only audio facts", async () => {
     let finalized: Record<string, unknown> | undefined;
     const runtime = makeRuntime({ onFinalize: (ctx) => (finalized = ctx) });
 
@@ -919,11 +1016,35 @@ describe("dispatchOutbound", () => {
       { runtime, cfg: {}, account },
     );
 
-    expect(finalized?.MediaType).toBe("audio/wav");
-    expect(finalized?.MediaTypes).toEqual(["audio/wav"]);
+    expect(finalized?.media).toEqual([expect.objectContaining({ contentType: "audio/wav" })]);
     expect(finalized?.QQVoiceAttachmentPaths).toEqual(["/tmp/qqbot/voice.wav"]);
-    expect(finalized).not.toHaveProperty("MediaPath");
-    expect(finalized).not.toHaveProperty("MediaPaths");
+    expect(finalized?.MediaPath).toBeUndefined();
+    expect(finalized?.MediaPaths).toBeUndefined();
+  });
+
+  it("keeps disjoint local and remote images as separate ordered facts", async () => {
+    let finalized: Record<string, unknown> | undefined;
+    const runtime = makeRuntime({ onFinalize: (ctx) => (finalized = ctx) });
+
+    await dispatchOutbound(
+      makeInbound({
+        localMediaPaths: ["/tmp/qqbot/local.png"],
+        localMediaTypes: ["image/png"],
+        remoteMediaUrls: ["https://example.test/remote.png"],
+      }),
+      { runtime, cfg: {}, account },
+    );
+
+    expect(finalized?.media).toEqual([
+      expect.objectContaining({
+        path: "/tmp/qqbot/local.png",
+        contentType: "image/png",
+        kind: "image",
+      }),
+      // Remote URLs carry no MIME; without an explicit image kind the fact
+      // would classify as a generic file and skip image understanding.
+      expect.objectContaining({ url: "https://example.test/remote.png", kind: "image" }),
+    ]);
   });
 
   it("synthesizes plain audioAsVoice text as a QQ voice reply", async () => {
@@ -984,7 +1105,7 @@ describe("dispatchOutbound", () => {
     await dispatchOutbound(makeInbound(), {
       runtime,
       cfg: {},
-      account: { ...account, config: { streaming: true } },
+      account: { ...account, config: { streaming: { mode: "partial", nativeTransport: true } } },
     });
 
     expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual([
@@ -994,7 +1115,7 @@ describe("dispatchOutbound", () => {
     expect(sendMediaMock).not.toHaveBeenCalled();
   });
 
-  it("delivers text-only tool progress for legacy C2C stream API accounts", async () => {
+  it("delivers text-only tool progress when nativeTransport is on despite mode off", async () => {
     const runtime = makeRuntime({
       onDeliver: async (deliver) => {
         await deliver({ text: "Working: checking logs" }, { kind: "tool" });
@@ -1007,7 +1128,7 @@ describe("dispatchOutbound", () => {
       cfg: {},
       account: {
         ...account,
-        config: { streaming: { mode: "off", c2cStreamApi: true } },
+        config: { streaming: { mode: "off", nativeTransport: true } },
       },
     });
 
@@ -1049,7 +1170,7 @@ describe("dispatchOutbound", () => {
     await dispatchOutbound(makeInbound(), {
       runtime,
       cfg: {},
-      account: { ...account, config: { streaming: false } },
+      account: { ...account, config: { streaming: { mode: "off" } } },
     });
 
     expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual(["final answer"]);
@@ -1083,7 +1204,7 @@ describe("dispatchOutbound", () => {
         agentBody: "do it",
         body: "[member-openid] do it (@you)",
       }),
-      { runtime, cfg: {}, account: { ...account, config: { streaming: false } } },
+      { runtime, cfg: {}, account: { ...account, config: { streaming: { mode: "off" } } } },
     );
 
     expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual([
@@ -1105,7 +1226,7 @@ describe("dispatchOutbound", () => {
     await dispatchOutbound(makeInbound(), {
       runtime,
       cfg: {},
-      account: { ...account, config: { streaming: false } },
+      account: { ...account, config: { streaming: { mode: "off" } } },
     });
 
     expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual(["final answer"]);
@@ -1125,7 +1246,7 @@ describe("dispatchOutbound", () => {
     await dispatchOutbound(makeInbound(), {
       runtime,
       cfg: {},
-      account: { ...account, config: { streaming: false } },
+      account: { ...account, config: { streaming: { mode: "off" } } },
     });
 
     expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual(["visible tool message"]);
@@ -1146,7 +1267,7 @@ describe("dispatchOutbound", () => {
     await dispatchOutbound(makeInbound(), {
       runtime,
       cfg: {},
-      account: { ...account, config: { streaming: false } },
+      account: { ...account, config: { streaming: { mode: "off" } } },
     });
 
     expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual(["visible tool message"]);
@@ -1166,7 +1287,7 @@ describe("dispatchOutbound", () => {
     await dispatchOutbound(makeInbound(), {
       runtime,
       cfg: {},
-      account: { ...account, config: { streaming: false } },
+      account: { ...account, config: { streaming: { mode: "off" } } },
     });
 
     expect(sendTextMock).not.toHaveBeenCalled();
@@ -1189,7 +1310,7 @@ describe("dispatchOutbound", () => {
       await dispatchOutbound(makeInbound(), {
         runtime,
         cfg: {},
-        account: { ...account, config: { streaming: false } },
+        account: { ...account, config: { streaming: { mode: "off" } } },
       });
 
       expect(sendMediaMock).toHaveBeenCalledTimes(1);
@@ -1217,7 +1338,7 @@ describe("dispatchOutbound", () => {
     const dispatchPromise = dispatchOutbound(makeInbound(), {
       runtime,
       cfg: {},
-      account: { ...account, config: { streaming: false } },
+      account: { ...account, config: { streaming: { mode: "off" } } },
     });
 
     await vi.advanceTimersByTimeAsync(90_000);
@@ -1240,7 +1361,7 @@ describe("dispatchOutbound", () => {
     await dispatchOutbound(makeInbound(), {
       runtime,
       cfg: {},
-      account: { ...account, config: { streaming: false } },
+      account: { ...account, config: { streaming: { mode: "off" } } },
     });
 
     expect(sendMediaMock).toHaveBeenCalledTimes(1);
@@ -1261,7 +1382,7 @@ describe("dispatchOutbound", () => {
     await dispatchOutbound(makeInbound(), {
       runtime,
       cfg: {},
-      account: { ...account, config: { streaming: false } },
+      account: { ...account, config: { streaming: { mode: "off" } } },
     });
 
     expect(sendTextMock).not.toHaveBeenCalled();
@@ -1285,7 +1406,7 @@ describe("dispatchOutbound", () => {
     await dispatchOutbound(makeInbound(), {
       runtime,
       cfg: {},
-      account: { ...account, config: { streaming: true } },
+      account: { ...account, config: { streaming: { mode: "partial", nativeTransport: true } } },
     });
 
     expect(sendTextMock).not.toHaveBeenCalled();
@@ -1461,4 +1582,80 @@ describe("dispatchOutbound", () => {
       ].join("\n"),
     ]);
   });
+
+  it("persists announce routes only for group and guild turns", async () => {
+    const cases = [
+      {
+        type: "group" as const,
+        isGroupChat: true,
+        eventTarget: { groupOpenid: "group-1001" },
+        peerId: "group-1001",
+        qualifiedTarget: "qqbot:group:group-1001",
+      },
+      {
+        type: "guild" as const,
+        isGroupChat: true,
+        eventTarget: { channelId: "channel-2001", guildId: "guild-2001" },
+        peerId: "channel-2001",
+        qualifiedTarget: "qqbot:channel:channel-2001",
+      },
+      {
+        type: "c2c" as const,
+        isGroupChat: false,
+        eventTarget: {},
+        peerId: "user-openid",
+        qualifiedTarget: "qqbot:c2c:user-openid",
+      },
+      {
+        type: "dm" as const,
+        isGroupChat: false,
+        eventTarget: { guildId: "dm-guild-1" },
+        peerId: "user-openid",
+        qualifiedTarget: "qqbot:dm:dm-guild-1",
+      },
+    ];
+
+    for (const testCase of cases) {
+      let record: Record<string, unknown> | undefined;
+      const runtime = makeRuntime({
+        onTurn: (turn) => {
+          record = turn.record as Record<string, unknown> | undefined;
+        },
+        onDeliver: async (deliver) => {
+          await deliver({ text: "hello" }, { kind: "block" });
+        },
+      });
+      const sessionKey = `agent:main:qqbot:${testCase.type}:${testCase.peerId}`;
+      await dispatchOutbound(
+        makeInbound({
+          event: {
+            type: testCase.type,
+            senderId: "user-openid",
+            messageId: `msg-${testCase.type}`,
+            content: "hello",
+            timestamp: "2026-04-25T00:00:00.000Z",
+            ...testCase.eventTarget,
+          } as InboundContext["event"],
+          isGroupChat: testCase.isGroupChat,
+          peerId: testCase.peerId,
+          qualifiedTarget: testCase.qualifiedTarget,
+          route: { sessionKey, accountId: "qq-main" },
+        }),
+        { runtime, cfg: {}, account },
+      );
+
+      expect(record).toBeDefined();
+      expect(record?.updateLastRoute).toEqual(
+        testCase.isGroupChat
+          ? {
+              sessionKey,
+              channel: "qqbot",
+              to: testCase.qualifiedTarget,
+              accountId: "qq-main",
+            }
+          : undefined,
+      );
+    }
+  });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

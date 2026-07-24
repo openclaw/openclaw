@@ -18,7 +18,15 @@ extension AgentProTab {
             self.usageDestination
         case .dreaming:
             self.dreamingDestination
+        case .files:
+            self.filesDestination
         }
+    }
+
+    var filesDestination: some View {
+        AgentWorkspaceFilesScreen(
+            agentId: self.activeAgentID,
+            headerSidebarAction: self.directHeaderSidebarAction(for: .files))
     }
 
     var agentsDestination: some View {
@@ -40,15 +48,16 @@ extension AgentProTab {
         .refreshable {
             await self.refreshOverview(force: true)
         }
+        .font(OpenClawType.body)
         .toolbar {
-            if let headerLeadingAction {
-                ToolbarItem(placement: .topBarLeading) {
-                    OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
-                }
-            }
             ToolbarItemGroup(placement: .topBarTrailing) {
                 self.agentFilterMenu
                 self.gatewayToolbarButton
+            }
+            if let headerSidebarAction {
+                OpenClawSidebarToolbarItem(
+                    action: headerSidebarAction,
+                    placement: .topBarLeading)
             }
         }
     }
@@ -70,6 +79,7 @@ extension AgentProTab {
                     self.skillsList
                 }
                 .padding(.vertical, 18)
+                .font(OpenClawType.body)
             }
             .refreshable {
                 await self.refreshOverview(force: true)
@@ -82,7 +92,7 @@ extension AgentProTab {
 
     var instancesDestination: some View {
         AgentProNodesDestination(
-            headerLeadingAction: self.directHeaderLeadingAction(for: .instances),
+            headerSidebarAction: self.directHeaderSidebarAction(for: .instances),
             overview: self.overview,
             gatewayConnected: self.gatewayConnected,
             agentCount: self.appModel.gatewayAgents.count,
@@ -101,11 +111,11 @@ extension AgentProTab {
                 VStack(alignment: .leading, spacing: 16) {
                     self.directHeader(
                         for: .cron,
-                        title: "Cron Jobs",
+                        title: "Automations",
                         subtitle: self.cronDetail)
                     self.detailSummaryCard(
                         icon: "clock.arrow.circlepath",
-                        title: "Cron Jobs",
+                        title: "Automations",
                         value: self.cronValue,
                         detail: self.cronDetail,
                         color: self.cronColor)
@@ -113,13 +123,14 @@ extension AgentProTab {
                     self.cronJobsList(limit: nil)
                 }
                 .padding(.vertical, 18)
+                .font(OpenClawType.body)
             }
             .refreshable {
                 await self.refreshOverview(force: true)
             }
             .safeAreaPadding(.bottom, OpenClawProMetric.bottomScrollInset)
         }
-        .navigationTitle("Cron Jobs")
+        .navigationTitle("Automations")
         .navigationBarTitleDisplayMode(.inline)
     }
 
@@ -142,6 +153,7 @@ extension AgentProTab {
                     self.usageDailyList
                 }
                 .padding(.vertical, 18)
+                .font(OpenClawType.body)
             }
             .refreshable {
                 await self.refreshOverview(force: true)
@@ -154,7 +166,7 @@ extension AgentProTab {
 
     var dreamingDestination: some View {
         AgentProDreamingDestination(
-            headerLeadingAction: self.directHeaderLeadingAction(for: .dreaming),
+            headerSidebarAction: self.directHeaderSidebarAction(for: .dreaming),
             overview: self.overview,
             gatewayConnected: self.gatewayConnected,
             overviewLoading: self.overviewLoading,
@@ -168,14 +180,14 @@ extension AgentProTab {
 
     @ViewBuilder
     func directHeader(for route: AgentRoute, title: String, subtitle: String) -> some View {
-        if let headerLeadingAction = self.directHeaderLeadingAction(for: route) {
+        if let headerSidebarAction = self.directHeaderSidebarAction(for: route) {
             OpenClawAdaptiveHeaderRow(
-                title: title,
-                subtitle: subtitle,
-                titleFont: .title3.weight(.semibold),
-                subtitleFont: .callout)
+                title: .localized(title),
+                subtitle: .localized(subtitle),
+                titleFont: OpenClawType.title3SemiBold,
+                subtitleFont: OpenClawType.subheadMedium)
             {
-                OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
+                OpenClawSidebarHeaderLeadingSlot(action: headerSidebarAction)
             } accessory: {
                 EmptyView()
             }
@@ -183,8 +195,8 @@ extension AgentProTab {
         }
     }
 
-    func directHeaderLeadingAction(for route: AgentRoute) -> OpenClawSidebarHeaderAction? {
-        self.directRoute == route ? self.headerLeadingAction : nil
+    func directHeaderSidebarAction(for route: AgentRoute) -> OpenClawSidebarHeaderAction? {
+        self.directRoute == route ? self.headerSidebarAction : nil
     }
 
     func detailSummaryCard(
@@ -199,9 +211,9 @@ extension AgentProTab {
                 ProIconBadge(systemName: icon, color: color)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(title)
-                        .font(.headline)
+                        .font(OpenClawType.headline)
                     Text(detail)
-                        .font(.caption)
+                        .font(OpenClawType.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 8)
