@@ -71,7 +71,7 @@ import {
 } from "./task-registry.maintenance.js";
 import { configureTaskRegistryRuntime } from "./task-registry.store.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
-import { createAcpTaskRecord, createTaskRecord } from "./task-registry.test-support.js";
+import { createAcpTaskRecord, createTaskFixture } from "./task-registry.test-support.js";
 import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
 import {
   configureTaskFlowRegistryRuntime,
@@ -151,9 +151,9 @@ vi.mock("../utils/message-channel.js", () => ({
 }));
 
 function configureTaskRegistryMaintenanceRuntimeForTest(params: {
-  currentTasks: Map<string, ReturnType<typeof createTaskRecord>>;
-  snapshotTasks: ReturnType<typeof createTaskRecord>[];
-  listTaskRecords?: () => ReturnType<typeof createTaskRecord>[];
+  currentTasks: Map<string, ReturnType<typeof createTaskFixture>>;
+  snapshotTasks: ReturnType<typeof createTaskFixture>[];
+  listTaskRecords?: () => ReturnType<typeof createTaskFixture>[];
   acpEntry?: AcpSessionStoreEntry;
   acpEntries?: AcpSessionStoreEntry[];
   listAcpSessionEntries?: () => Promise<AcpSessionStoreEntry[]>;
@@ -549,7 +549,7 @@ describe("task-registry", () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
 
-      createTaskRecord("acp", {
+      createTaskFixture("acp", {
         childSessionKey: "agent:main:acp:child",
         runId: "run-1",
         task: "Do the thing",
@@ -629,7 +629,7 @@ describe("task-registry", () => {
       await withTaskRegistryTempDir(
         async () => {
           resetTaskRegistryForTests({ persist: false });
-          createTaskRecord("acp", {
+          createTaskFixture("acp", {
             requesterSessionKey: "agent:main:main",
             runId,
             task,
@@ -669,7 +669,7 @@ describe("task-registry", () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
 
-      createTaskRecord("subagent", {
+      createTaskFixture("subagent", {
         childSessionKey: "agent:main:subagent:tools",
         runId: "run-tools",
         task: "Sweep the repo",
@@ -708,7 +708,7 @@ describe("task-registry", () => {
   it("keeps subagent abort lifecycle projections provisional", async () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
-      createTaskRecord("subagent", {
+      createTaskFixture("subagent", {
         childSessionKey: "agent:main:subagent:abort-race",
         runId: "run-subagent-abort-race",
         task: "Finish while aborting",
@@ -744,7 +744,7 @@ describe("task-registry", () => {
   it("clears a provisional child session when the terminal outcome has none", async () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
-      createTaskRecord("cron", {
+      createTaskFixture("cron", {
         ownerKey: "",
         scopeKind: "system",
         childSessionKey: "agent:main:cron:provisional",
@@ -773,7 +773,7 @@ describe("task-registry", () => {
       resetTaskFlowRegistryForTests({ persist: false });
       configureInMemoryTaskStoresForTests();
 
-      const first = createTaskRecord("acp", {
+      const first = createTaskFixture("acp", {
         ownerKey: "agent:jarvis:main",
         childSessionKey: "agent:codex:acp:child",
         runId: "run-acp-derived-flow-dedupe",
@@ -788,7 +788,7 @@ describe("task-registry", () => {
       });
       expect(linked?.parentFlowId).toBe(flow.flowId);
 
-      const duplicateCreate = createTaskRecord("acp", {
+      const duplicateCreate = createTaskFixture("acp", {
         ownerKey: "agent:jarvis:main",
         childSessionKey: "agent:codex:acp:child",
         runId: "run-acp-derived-flow-dedupe",
@@ -807,7 +807,7 @@ describe("task-registry", () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
 
-      const task = createTaskRecord("cli", {
+      const task = createTaskFixture("cli", {
         childSessionKey: "agent:main:main",
         runId: "run-cancel-then-end",
         task: "Do the thing",
@@ -852,7 +852,7 @@ describe("task-registry", () => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetTaskRegistryForTests();
 
-      const task = createTaskRecord("cron", {
+      const task = createTaskFixture("cron", {
         ownerKey: "system:cron:test",
         scopeKind: "system",
         runId: "run-terminal-error-clear",
@@ -922,7 +922,7 @@ describe("task-registry", () => {
           expectedError: "Task cancellation requested.",
         },
       ]) {
-        createTaskRecord(entry.runtime, {
+        createTaskFixture(entry.runtime, {
           childSessionKey: entry.childSessionKey,
           runId: entry.runId,
           task: entry.runId,
@@ -954,7 +954,7 @@ describe("task-registry", () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
 
-      createTaskRecord("cli", {
+      createTaskFixture("cli", {
         childSessionKey: "agent:main:main",
         runId: "run-timeout-then-success",
         task: "Do the thing",
@@ -989,31 +989,31 @@ describe("task-registry", () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
 
-      createTaskRecord("cli", {
+      createTaskFixture("cli", {
         childSessionKey: "agent:main:main",
         runId: "run-hard-timeout-task",
         task: "Provider timeout should not look cancelled",
         startedAt: 100,
       });
-      createTaskRecord("cli", {
+      createTaskFixture("cli", {
         childSessionKey: "agent:main:main",
         runId: "run-rpc-cancel-task",
         task: "Caller abort should cancel task",
         startedAt: 100,
       });
-      createTaskRecord("cli", {
+      createTaskFixture("cli", {
         childSessionKey: "agent:main:main",
         runId: "run-aborted-task",
         task: "Aborted runner stop should cancel task",
         startedAt: 100,
       });
-      createTaskRecord("cli", {
+      createTaskFixture("cli", {
         childSessionKey: "agent:main:main",
         runId: "run-provider-error-timeout-task",
         task: "Provider timeout error should time out task",
         startedAt: 100,
       });
-      createTaskRecord("cli", {
+      createTaskFixture("cli", {
         childSessionKey: "agent:main:main",
         runId: "run-provider-end-timeout-task",
         task: "Provider timeout end metadata should time out task",
@@ -1104,7 +1104,7 @@ describe("task-registry", () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
 
-      createTaskRecord("cli", {
+      createTaskFixture("cli", {
         childSessionKey: "agent:main:main",
         runId: "run-fail-then-success",
         task: "Deliver result",
@@ -1138,7 +1138,7 @@ describe("task-registry", () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
 
-      createTaskRecord("cli", {
+      createTaskFixture("cli", {
         childSessionKey: "agent:main:main",
         runId: "run-success-then-fail",
         task: "Deliver result",
@@ -1173,19 +1173,19 @@ describe("task-registry", () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
 
-      createTaskRecord("acp", {
+      createTaskFixture("acp", {
         runId: "run-summary-acp",
         task: "Investigate issue",
         status: "queued",
         deliveryStatus: "pending",
       });
-      createTaskRecord("cron", {
+      createTaskFixture("cron", {
         ownerKey: "",
         scopeKind: "system",
         runId: "run-summary-cron",
         task: "Daily digest",
       });
-      createTaskRecord("subagent", {
+      createTaskFixture("subagent", {
         runId: "run-summary-subagent",
         task: "Write patch",
         status: "timed_out",
@@ -1251,7 +1251,7 @@ describe("task-registry", () => {
         goal: "Owner main flow",
       });
 
-      expect(() => createTaskRecord(runtime, { ...params, parentFlowId: flow.flowId })).toThrow(
+      expect(() => createTaskFixture(runtime, { ...params, parentFlowId: flow.flowId })).toThrow(
         error,
       );
     });
@@ -1263,7 +1263,7 @@ describe("task-registry", () => {
       resetTaskFlowRegistryForTests({ persist: false });
       configureInMemoryTaskStoresForTests();
 
-      const task = createTaskRecord("acp", {
+      const task = createTaskFixture("acp", {
         status: undefined,
         deliveryStatus: undefined,
         runId: "owner-main-task",
@@ -1301,7 +1301,7 @@ describe("task-registry", () => {
         store: createInMemoryTaskFlowRegistryStore(),
       });
 
-      const task = createTaskRecord("acp", {
+      const task = createTaskFixture("acp", {
         deliveryStatus: undefined,
         runId: "flow-restore-failed-task",
         task: "Preserve linked task state",
@@ -1344,7 +1344,7 @@ describe("task-registry", () => {
       expect(requireTaskById(task.taskId).taskId).toBe(task.taskId);
 
       expect(() =>
-        createTaskRecord("acp", {
+        createTaskFixture("acp", {
           deliveryStatus: undefined,
           requesterOrigin: NOTIFYCHAT_ORIGIN,
           runId: task.runId,
@@ -1354,7 +1354,7 @@ describe("task-registry", () => {
       expect(deliveryUpsert).not.toHaveBeenCalled();
       expect(loadSnapshot).toHaveBeenCalledTimes(1);
 
-      const standalone = createTaskRecord("cli", {
+      const standalone = createTaskFixture("cli", {
         runId: "standalone-during-flow-restore-failure",
         task: "Keep standalone task state available",
       });
@@ -1427,7 +1427,7 @@ describe("task-registry", () => {
       resetTaskFlowRegistryForTests({ persist: false });
       configureInMemoryTaskStoresForTests();
 
-      const task = createTaskRecord("acp", {
+      const task = createTaskFixture("acp", {
         deliveryStatus: undefined,
         runId: "mirrored-flow-sync-fail",
         task: "Sync mirrored flow",
@@ -1506,7 +1506,7 @@ describe("task-registry", () => {
       resetTaskFlowRegistryForTests({ persist: false });
       configureInMemoryTaskStoresForTests();
 
-      const task = createTaskRecord("acp", {
+      const task = createTaskFixture("acp", {
         deliveryStatus: undefined,
         runId: "mirrored-flow-stale-retry",
         task: "Initial blocked task",
@@ -1547,7 +1547,7 @@ describe("task-registry", () => {
       expect(getTaskFlowById(flow.flowId)?.status).toBe("running");
 
       failUpsert = false;
-      const newerTask = createTaskRecord("acp", {
+      const newerTask = createTaskFixture("acp", {
         deliveryStatus: undefined,
         parentFlowId: flow.flowId,
         runId: "mirrored-flow-newer-task",
@@ -1579,14 +1579,14 @@ describe("task-registry", () => {
       });
 
       try {
-        createTaskRecord("acp", {
+        createTaskFixture("acp", {
           status: undefined,
           deliveryStatus: undefined,
           parentFlowId: flow.flowId,
           runId: "cancel-requested-link",
           task: "Should be denied",
         });
-        throw new Error("Expected createTaskRecord to throw.");
+        throw new Error("Expected createTaskFixture to throw.");
       } catch (error) {
         expect(isParentFlowLinkError(error)).toBe(true);
         expectRecordFields(error, {
@@ -1604,7 +1604,7 @@ describe("task-registry", () => {
         controllerId: "tests/task-registry",
         goal: "Wait for canonical child state",
       });
-      const task = createTaskRecord("subagent", {
+      const task = createTaskFixture("subagent", {
         ownerKey: flow.ownerKey,
         parentFlowId: flow.flowId,
         childSessionKey: "agent:worker:subagent:provisional-flow",
@@ -1646,7 +1646,7 @@ describe("task-registry", () => {
       });
 
       expect(() =>
-        createTaskRecord("acp", {
+        createTaskFixture("acp", {
           status: undefined,
           deliveryStatus: undefined,
           parentFlowId: flow.flowId,
@@ -1749,7 +1749,7 @@ describe("task-registry", () => {
         via: "direct",
       });
 
-      createTaskRecord("acp", {
+      createTaskFixture("acp", {
         requesterOrigin: {
           channel: "notifychat",
           to: "notifychat:123",
@@ -2244,14 +2244,14 @@ describe("task-registry", () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
 
-      createTaskRecord("cli", {
+      createTaskFixture("cli", {
         ownerKey: "agent:codex:acp:child",
         childSessionKey: "agent:codex:acp:child",
         runId: "run-shared",
         task: "Child ACP execution",
       });
 
-      createTaskRecord("acp", {
+      createTaskFixture("acp", {
         childSessionKey: "agent:codex:acp:child",
         runId: "run-shared",
         task: "Spawn ACP child",
@@ -2270,7 +2270,7 @@ describe("task-registry", () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
 
-      const victimTask = createTaskRecord("acp", {
+      const victimTask = createTaskFixture("acp", {
         ownerKey: "agent:victim:main",
         childSessionKey: "agent:victim:acp:child",
         runId: "run-shared-scope",
@@ -2278,7 +2278,7 @@ describe("task-registry", () => {
         deliveryStatus: "pending",
       });
 
-      const attackerTask = createTaskRecord("cli", {
+      const attackerTask = createTaskFixture("cli", {
         ownerKey: "agent:attacker:main",
         childSessionKey: "agent:attacker:main",
         runId: "run-shared-scope",
@@ -2354,14 +2354,14 @@ describe("task-registry", () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
 
-      const victimTask = createTaskRecord("acp", {
+      const victimTask = createTaskFixture("acp", {
         ownerKey: "agent:victim:main",
         childSessionKey: "agent:victim:acp:child",
         runId: "run-cross-requester-delivery",
         task: "Victim ACP task",
         deliveryStatus: "pending",
       });
-      const attackerTask = createTaskRecord("acp", {
+      const attackerTask = createTaskFixture("acp", {
         ownerKey: "agent:attacker:main",
         childSessionKey: "agent:attacker:acp:child",
         runId: "run-cross-requester-delivery",
@@ -2432,7 +2432,7 @@ describe("task-registry", () => {
         task: "Spawn ACP child",
       });
 
-      const directTask = createTaskRecord("acp", {
+      const directTask = createTaskFixture("acp", {
         deliveryStatus: undefined,
         requesterOrigin: NOTIFYCHAT_ORIGIN,
         childSessionKey: "agent:main:acp:child",
@@ -2519,7 +2519,7 @@ describe("task-registry", () => {
       async () => {
         resetTaskRegistryForTests();
 
-        const task = createTaskRecord("subagent", {
+        const task = createTaskFixture("subagent", {
           childSessionKey: "agent:main:subagent:child",
           runId: "run-restore",
           task: "Restore me",
@@ -2546,14 +2546,14 @@ describe("task-registry", () => {
       const nowSpy = vi.spyOn(Date, "now");
       nowSpy.mockReturnValue(1_700_000_000_000);
 
-      const older = createTaskRecord("acp", {
+      const older = createTaskFixture("acp", {
         status: undefined,
         deliveryStatus: undefined,
         childSessionKey: "agent:main:subagent:child-1",
         runId: "run-session-lookup-1",
         task: "Older task",
       });
-      const latest = createTaskRecord("subagent", {
+      const latest = createTaskFixture("subagent", {
         status: undefined,
         deliveryStatus: undefined,
         childSessionKey: "agent:main:subagent:child-2",
@@ -2577,7 +2577,7 @@ describe("task-registry", () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest({ persist: false });
 
-      const created = createTaskRecord("cli", {
+      const created = createTaskFixture("cli", {
         ownerKey: undefined,
         scopeKind: undefined,
         taskKind: "video_generation",
@@ -2598,7 +2598,7 @@ describe("task-registry", () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest({ persist: false });
 
-      const created = createTaskRecord("subagent", {
+      const created = createTaskFixture("subagent", {
         childSessionKey: "agent:worker:subagent:child",
         runId: "run-worker-subagent",
         task: "Inspect worker state",
@@ -2614,7 +2614,7 @@ describe("task-registry", () => {
   it("retains live background exec tasks and marks missing process sessions lost", async () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
-      const task = createTaskRecord("cli", {
+      const task = createTaskFixture("cli", {
         taskKind: "exec",
         sourceId: "amber-reef",
         runId: "exec:amber-reef",
@@ -2659,7 +2659,7 @@ describe("task-registry", () => {
       resetTaskRegistryMemoryForTest();
       configureTaskRegistryMaintenance({ runtimeAuthoritative: true });
 
-      const task = createTaskRecord("acp", {
+      const task = createTaskFixture("acp", {
         childSessionKey: "agent:main:acp:missing",
         runId: "run-lost",
         task: "Missing child",
@@ -2686,7 +2686,7 @@ describe("task-registry", () => {
       vi.useFakeTimers();
       vi.setSystemTime(new Date("2026-06-16T00:00:00Z"));
 
-      const task = createTaskRecord("subagent", {
+      const task = createTaskFixture("subagent", {
         runId: "run-inspection-freshness",
         task: "Inspect fresh task state",
         deliveryStatus: "pending",
@@ -2713,7 +2713,7 @@ describe("task-registry", () => {
       configureTaskRegistryMaintenance({ runtimeAuthoritative: true });
       const now = Date.now();
 
-      const task = createTaskRecord("acp", {
+      const task = createTaskFixture("acp", {
         childSessionKey: "agent:main:acp:missing",
         runId: "run-lost-maintenance",
         task: "Missing child",
@@ -2794,7 +2794,7 @@ describe("task-registry", () => {
       resetTaskRegistryForTests();
       const now = Date.now();
       const lastEventAt = now - ageMinutes * 60_000;
-      const task = createTaskRecord("subagent", {
+      const task = createTaskFixture("subagent", {
         taskKind,
         sourceId,
         runId: sourceId,
@@ -2870,7 +2870,7 @@ describe("task-registry", () => {
         resetTaskRegistryMemoryForTest();
         const now = Date.now();
         const parentSessionKey = "agent:main:telegram:direct:owner";
-        const task = createTaskRecord("acp", {
+        const task = createTaskFixture("acp", {
           ownerKey: parentSessionKey,
           requesterSessionKey: parentSessionKey,
           childSessionKey,
@@ -2933,7 +2933,7 @@ describe("task-registry", () => {
       resetTaskRegistryMemoryForTest();
       const now = Date.now();
       const tasks = Array.from({ length: 20 }, (_, index) => {
-        const task = createTaskRecord("acp", {
+        const task = createTaskFixture("acp", {
           requesterSessionKey: "agent:main:main",
           childSessionKey: `agent:claude:acp:terminal-${index}`,
           runId: `run-terminal-acp-snapshot-${index}`,
@@ -2971,7 +2971,7 @@ describe("task-registry", () => {
       const now = Date.now();
       const parentSessionKey = "agent:main:telegram:direct:owner";
       const childSessionKey = "agent:claude:acp:shared-child";
-      const terminal = createTaskRecord("acp", {
+      const terminal = createTaskFixture("acp", {
         ownerKey: parentSessionKey,
         requesterSessionKey: parentSessionKey,
         childSessionKey,
@@ -2985,7 +2985,7 @@ describe("task-registry", () => {
         endedAt: now - 60_000,
         lastEventAt: now - 60_000,
       };
-      const active = createTaskRecord("acp", {
+      const active = createTaskFixture("acp", {
         ownerKey: parentSessionKey,
         requesterSessionKey: parentSessionKey,
         childSessionKey,
@@ -3079,7 +3079,7 @@ describe("task-registry", () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
 
-      createTaskRecord("cli", {
+      createTaskFixture("cli", {
         childSessionKey: "agent:main:main",
         runId: "run-prune",
         task: "Old completed task",
@@ -3161,7 +3161,7 @@ describe("task-registry", () => {
       resetTaskRegistryMemoryForTest();
       const now = Date.now();
 
-      const task = createTaskRecord("acp", {
+      const task = createTaskFixture("acp", {
         childSessionKey: "agent:main:acp:missing",
         runId: "run-deferred-maintenance-stop",
         task: "Missing child",
@@ -3261,7 +3261,7 @@ describe("task-registry", () => {
 
   it("rechecks current task state before marking a task lost", async () => {
     const now = Date.now();
-    const snapshotTask = createTaskRecord("acp", {
+    const snapshotTask = createTaskFixture("acp", {
       childSessionKey: "agent:main:acp:missing-stale",
       runId: "run-lost-stale",
       task: "Missing child",
@@ -3295,7 +3295,7 @@ describe("task-registry", () => {
 
   it("rechecks current task state before pruning a task", async () => {
     const now = Date.now();
-    const snapshotTask = createTaskRecord("cli", {
+    const snapshotTask = createTaskFixture("cli", {
       childSessionKey: "agent:main:main",
       runId: "run-prune-stale",
       task: "Old completed task",
@@ -3333,7 +3333,7 @@ describe("task-registry", () => {
   it("prunes retained lost tasks once the shorter lost retention window expires", async () => {
     const now = Date.now();
     const endedAt = now - LOST_TASK_RETENTION_MS - 1;
-    const snapshotTask = createTaskRecord("cli", {
+    const snapshotTask = createTaskFixture("cli", {
       childSessionKey: "agent:main:main",
       runId: "run-old-lost-cleanup",
       task: "Old lost task",
@@ -3366,7 +3366,7 @@ describe("task-registry", () => {
       resetTaskRegistryMemoryForTest();
       const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
 
-      const task = createTaskRecord("acp", {
+      const task = createTaskFixture("acp", {
         runId: "run-backdated-create",
         task: "Backdated create",
         deliveryStatus: "pending",
@@ -3389,7 +3389,7 @@ describe("task-registry", () => {
       resetTaskRegistryMemoryForTest();
       const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
 
-      const task = createTaskRecord("acp", {
+      const task = createTaskFixture("acp", {
         runId: "run-backdated-update",
         task: "Backdated update",
         status: "queued",
@@ -3457,7 +3457,7 @@ describe("task-registry", () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
       const now = Date.now();
-      let durableTasks = new Map<string, ReturnType<typeof createTaskRecord>>();
+      let durableTasks = new Map<string, ReturnType<typeof createTaskFixture>>();
       configureTaskRegistryRuntime({
         store: {
           loadSnapshot: () => ({
@@ -3470,7 +3470,7 @@ describe("task-registry", () => {
         },
       });
 
-      createTaskRecord("cli", {
+      createTaskFixture("cli", {
         requesterSessionKey: "agent:main:main",
         runId: "run-stale-memory",
         task: "Stale in-memory task",
@@ -3680,7 +3680,7 @@ describe("task-registry", () => {
         via: "direct",
       });
 
-      const task = createTaskRecord("acp", {
+      const task = createTaskFixture("acp", {
         deliveryStatus: undefined,
         requesterOrigin: GUILDCHAT_ORIGIN,
         childSessionKey: "agent:codex:acp:child",
@@ -3730,7 +3730,7 @@ describe("task-registry", () => {
       });
       vi.useFakeTimers();
 
-      createTaskRecord("acp", {
+      createTaskFixture("acp", {
         requesterOrigin: GUILDCHAT_ORIGIN,
         childSessionKey: "agent:codex:acp:child",
         runId: "run-quiet-terminal",
@@ -3791,7 +3791,7 @@ describe("task-registry", () => {
         via: "direct",
       });
 
-      createTaskRecord("acp", {
+      createTaskFixture("acp", {
         requesterOrigin: GUILDCHAT_ORIGIN,
         childSessionKey: "agent:codex:acp:child",
         runId: "run-failure-terminal",
@@ -3833,7 +3833,7 @@ describe("task-registry", () => {
       });
       vi.useFakeTimers();
 
-      createTaskRecord("acp", {
+      createTaskFixture("acp", {
         requesterOrigin: GUILDCHAT_ORIGIN,
         childSessionKey: "agent:codex:acp:child",
         runId: "run-state-stream",
@@ -3876,7 +3876,7 @@ describe("task-registry", () => {
   it("cancels background exec tasks through process control", async () => {
     await withTaskRegistryTempDir(async () => {
       hoisted.cancelBackgroundExecSessionMock.mockReturnValue(true);
-      const task = createTaskRecord("cli", {
+      const task = createTaskFixture("cli", {
         taskKind: "exec",
         sourceId: "amber-reef",
         runId: "exec:amber-reef",
@@ -3899,7 +3899,7 @@ describe("task-registry", () => {
     await withTaskRegistryTempDir(async () => {
       hoisted.cancelSessionMock.mockResolvedValue(undefined);
 
-      const task = createTaskRecord("acp", {
+      const task = createTaskFixture("acp", {
         requesterOrigin: NOTIFYCHAT_ORIGIN,
         childSessionKey: "agent:codex:acp:child",
         runId: "run-cancel-acp",
@@ -3936,20 +3936,20 @@ describe("task-registry", () => {
 
   it("cancels subagent-backed tasks through subagent control", async () => {
     await withTaskRegistryTempDir(async () => {
-      const silentTask = createTaskRecord("subagent", {
+      const silentTask = createTaskFixture("subagent", {
         childSessionKey: "agent:worker:subagent:child",
         runId: "run-cancel-subagent",
         task: "Silent projection",
         notifyPolicy: "silent",
       });
-      const task = createTaskRecord("subagent", {
+      const task = createTaskFixture("subagent", {
         requesterOrigin: NOTIFYCHAT_ORIGIN,
         childSessionKey: "agent:worker:subagent:child",
         runId: "run-cancel-subagent",
         task: "Investigate issue",
         deliveryStatus: "pending",
       });
-      const peerTask = createTaskRecord("subagent", {
+      const peerTask = createTaskFixture("subagent", {
         requesterOrigin: NOTIFYCHAT_ORIGIN,
         childSessionKey: "agent:worker:subagent:child",
         runId: "run-cancel-subagent",
@@ -4003,7 +4003,7 @@ describe("task-registry", () => {
 
   it("promotes a provisional subagent kill that races task cancellation", async () => {
     await withTaskRegistryTempDir(async () => {
-      const task = createTaskRecord("subagent", {
+      const task = createTaskFixture("subagent", {
         childSessionKey: "agent:worker:subagent:concurrent-kill",
         runId: "run-subagent-concurrent-kill",
         task: "Cancel during teardown",
@@ -4036,7 +4036,7 @@ describe("task-registry", () => {
 
   it("reconciles an already-provisional kill before making cancellation sticky", async () => {
     await withTaskRegistryTempDir(async () => {
-      const task = createTaskRecord("subagent", {
+      const task = createTaskFixture("subagent", {
         childSessionKey: "agent:worker:subagent:provisional-completion",
         runId: "run-subagent-provisional-completion",
         task: "Finish before explicit cancellation",
@@ -4081,12 +4081,12 @@ describe("task-registry", () => {
 
   it("preserves subagent success that completes during cancellation", async () => {
     await withTaskRegistryTempDir(async () => {
-      const task = createTaskRecord("subagent", {
+      const task = createTaskFixture("subagent", {
         childSessionKey: "agent:worker:subagent:cancel-race",
         runId: "run-subagent-cancel-race",
         task: "Finish during cancellation",
       });
-      const peerTask = createTaskRecord("subagent", {
+      const peerTask = createTaskFixture("subagent", {
         childSessionKey: "agent:worker:subagent:cancel-race",
         runId: "run-subagent-cancel-race",
         task: "Peer projection",
@@ -4127,7 +4127,7 @@ describe("task-registry", () => {
 
   it("does not cancel a lagging task projection after subagent completion wins", async () => {
     await withTaskRegistryTempDir(async () => {
-      const task = createTaskRecord("subagent", {
+      const task = createTaskFixture("subagent", {
         childSessionKey: "agent:worker:subagent:lagging-projection",
         runId: "run-subagent-lagging-projection",
         task: "Finish before task projection",
@@ -4169,7 +4169,7 @@ describe("task-registry", () => {
 
   it("reconciles a replacement run cancellation into the original task scope", async () => {
     await withTaskRegistryTempDir(async () => {
-      const task = createTaskRecord("subagent", {
+      const task = createTaskFixture("subagent", {
         childSessionKey: "agent:worker:subagent:replacement-run",
         runId: "run-subagent-before-replacement",
         task: "Cancel after recovery",
@@ -4203,7 +4203,7 @@ describe("task-registry", () => {
 
   it("ignores a stale killed snapshot after canonical completion persists", async () => {
     await withTaskRegistryTempDir(async () => {
-      const task = createTaskRecord("subagent", {
+      const task = createTaskFixture("subagent", {
         childSessionKey: "agent:worker:subagent:stale-kill-snapshot",
         runId: "run-subagent-stale-kill-snapshot",
         task: "Complete while admin kill unwinds",
@@ -4250,7 +4250,7 @@ describe("task-registry", () => {
 
   it("promotes an already-killed run projection during task cancellation", async () => {
     await withTaskRegistryTempDir(async () => {
-      const task = createTaskRecord("subagent", {
+      const task = createTaskFixture("subagent", {
         childSessionKey: "agent:worker:subagent:killed-projection",
         runId: "run-subagent-killed-projection",
         task: "Repair and cancel killed projection",
@@ -4293,7 +4293,7 @@ describe("task-registry", () => {
     await withTaskRegistryTempDir(async () => {
       const store = createInMemoryTaskRegistryStore();
       configureTaskRegistryRuntime({ store });
-      const task = createTaskRecord("subagent", {
+      const task = createTaskFixture("subagent", {
         childSessionKey: "agent:worker:subagent:persist-failure",
         runId: "run-subagent-persist-failure",
         task: "Finish before persistence fails",
@@ -4331,7 +4331,7 @@ describe("task-registry", () => {
 
   it("returns a subagent failure that wins during cancellation", async () => {
     await withTaskRegistryTempDir(async () => {
-      const task = createTaskRecord("subagent", {
+      const task = createTaskFixture("subagent", {
         childSessionKey: "agent:worker:subagent:failed-race",
         runId: "run-subagent-failed-race",
         task: "Fail during cancellation",
@@ -4374,7 +4374,7 @@ describe("task-registry", () => {
 
   it("defers cancellation while canonical subagent completion is still finalizing", async () => {
     await withTaskRegistryTempDir(async () => {
-      const task = createTaskRecord("subagent", {
+      const task = createTaskFixture("subagent", {
         childSessionKey: "agent:worker:subagent:finalizing-race",
         runId: "run-subagent-finalizing-race",
         task: "Capture final result",
@@ -4401,7 +4401,7 @@ describe("task-registry", () => {
 
   it("keeps subagent cancellation terminal when success arrives after cancellation", async () => {
     await withTaskRegistryTempDir(async () => {
-      const task = createTaskRecord("subagent", {
+      const task = createTaskFixture("subagent", {
         childSessionKey: "agent:worker:subagent:late-success",
         runId: "run-subagent-late-success",
         task: "Finish after cancellation",
@@ -4437,7 +4437,7 @@ describe("task-registry", () => {
 
   it("accepts subagent success that completed before cancellation", async () => {
     await withTaskRegistryTempDir(async () => {
-      const task = createTaskRecord("subagent", {
+      const task = createTaskFixture("subagent", {
         childSessionKey: "agent:worker:subagent:earlier-success",
         runId: "run-subagent-earlier-success",
         task: "Finish before cancellation",
@@ -4465,7 +4465,7 @@ describe("task-registry", () => {
 
   it("does not let a repeated kill restore the provisional marker after cancellation", async () => {
     await withTaskRegistryTempDir(async () => {
-      const task = createTaskRecord("subagent", {
+      const task = createTaskFixture("subagent", {
         childSessionKey: "agent:worker:subagent:repeated-kill",
         runId: "run-subagent-repeated-kill",
         task: "Stay cancelled",
@@ -4491,12 +4491,12 @@ describe("task-registry", () => {
 
   it("promotes an existing subagent kill marker to operator cancellation", async () => {
     await withTaskRegistryTempDir(async () => {
-      const task = createTaskRecord("subagent", {
+      const task = createTaskFixture("subagent", {
         childSessionKey: "agent:worker:subagent:already-killed",
         runId: "run-subagent-already-killed",
         task: "Promote killed task",
       });
-      const peerTask = createTaskRecord("subagent", {
+      const peerTask = createTaskFixture("subagent", {
         childSessionKey: "agent:worker:subagent:already-killed",
         runId: "run-subagent-already-killed",
         task: "Peer projection",
@@ -4546,7 +4546,7 @@ describe("task-registry", () => {
   it("suppresses terminal delivery when teardown finalizes a killed task", async () => {
     await withTaskRegistryTempDir(async () => {
       hoisted.sendMessageMock.mockClear();
-      const task = createTaskRecord("subagent", {
+      const task = createTaskFixture("subagent", {
         requesterOrigin: { channel: "notifychat", to: "notifychat:123" },
         childSessionKey: "agent:worker:subagent:teardown",
         runId: "run-subagent-teardown",
@@ -4579,7 +4579,7 @@ describe("task-registry", () => {
   it("stops a pending terminal notifier when teardown suppresses delivery", async () => {
     await withTaskRegistryTempDir(async () => {
       hoisted.sendMessageMock.mockClear();
-      const task = createTaskRecord("subagent", {
+      const task = createTaskFixture("subagent", {
         requesterOrigin: { channel: "notifychat", to: "notifychat:123" },
         childSessionKey: "agent:worker:subagent:pending-teardown",
         runId: "run-subagent-pending-teardown",
@@ -4630,7 +4630,7 @@ describe("task-registry", () => {
     "$name",
     async ({ runId, task: taskName, childSessionKey, expectedError, expectedMessage }) => {
       await withTaskRegistryTempDir(async () => {
-        const task = createTaskRecord("cli", {
+        const task = createTaskFixture("cli", {
           requesterOrigin: NOTIFYCHAT_ORIGIN,
           childSessionKey,
           runId,
@@ -4663,7 +4663,7 @@ describe("task-registry", () => {
   it("cancels active cron tasks through the cron runtime abort handle", async () => {
     await withTaskRegistryTempDir(async () => {
       const abortController = new AbortController();
-      const task = createTaskRecord("cron", {
+      const task = createTaskFixture("cron", {
         sourceId: "nightly-gmail-sync",
         ownerKey: "",
         scopeKind: "system",
@@ -4699,7 +4699,7 @@ describe("task-registry", () => {
 
   it("refuses terminal and unknown cron task cancellation before runtime dispatch", async () => {
     await withTaskRegistryTempDir(async () => {
-      const task = createTaskRecord("cron", {
+      const task = createTaskFixture("cron", {
         sourceId: "finished-cron",
         ownerKey: "",
         scopeKind: "system",
@@ -4744,7 +4744,7 @@ describe("task-registry", () => {
     },
   ])("$name", async ({ childSessionKey, cancelled, reason, status, error }) => {
     await withTaskRegistryTempDir(async () => {
-      const task = createTaskRecord("cron", {
+      const task = createTaskFixture("cron", {
         sourceId: "daily-repost",
         ownerKey: "",
         scopeKind: "system",
@@ -4794,7 +4794,7 @@ describe("task-registry", () => {
   ])("$name", async ({ taskKind, sourceId, task: taskName, cancellable }) => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryForTests();
-      const task = createTaskRecord("subagent", {
+      const task = createTaskFixture("subagent", {
         taskKind,
         sourceId,
         runId: sourceId,

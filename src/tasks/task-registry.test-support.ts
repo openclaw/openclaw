@@ -7,7 +7,7 @@ type TaskFixtureDefaults = "runtime" | "ownerKey" | "scopeKind" | "status" | "de
 type TaskFixtureParams = Omit<CreateTaskRecordParams, TaskFixtureDefaults> &
   Partial<Pick<CreateTaskRecordParams, Exclude<TaskFixtureDefaults, "runtime">>>;
 
-export function createTaskRecord(
+export function createTaskFixture(
   runtime: CreateTaskRecordParams["runtime"],
   params: TaskFixtureParams,
 ): TaskRecord {
@@ -28,7 +28,7 @@ export function createTaskRecord(
 export function createAcpTaskRecord(
   params: Omit<TaskFixtureParams, "task"> & { runId: string; task?: string },
 ): TaskRecord {
-  return createTaskRecord("acp", {
+  return createTaskFixture("acp", {
     childSessionKey: "agent:main:acp:child",
     task: "Investigate issue",
     deliveryStatus: "pending",
