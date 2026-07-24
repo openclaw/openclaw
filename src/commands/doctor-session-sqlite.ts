@@ -11,7 +11,6 @@ import {
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
-import { normalizeSessionEntryDelivery } from "../config/sessions/store-load.js";
 import {
   resolveAgentSessionStoreTargetsSync,
   resolveAllAgentSessionStoreCandidateTargetsSync,
@@ -23,6 +22,8 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveStoredSessionOwnerAgentId } from "../gateway/session-store-key.js";
 import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
+import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
+import { normalizeLegacySessionEntryDelivery as normalizeSessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { closeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
 import { compactDoctorSessionSqliteTarget } from "./doctor-session-sqlite-compact.js";
@@ -64,6 +65,10 @@ import {
   type DoctorSessionSqliteReport,
   type DoctorSessionSqliteTargetReport,
 } from "./doctor-session-sqlite-types.js";
+import {
+  assertDoctorSqliteMaintenancePathsNotHardLinked,
+  isDestructiveDoctorSessionSqliteMode,
+} from "./doctor-sqlite-maintenance-lock.js";
 export {
   restoreSessionSqliteMigrationRun,
   writeSessionSqliteMigrationFailureReports,
@@ -98,6 +103,12 @@ export async function runDoctorSessionSqlite(
     mode: options.mode,
     store: options.store,
   });
+  if (isDestructiveDoctorSessionSqliteMode(options.mode)) {
+    assertDoctorSqliteMaintenancePathsNotHardLinked(
+      `session SQLite ${options.mode}`,
+      resolveDoctorSessionSqliteMaintenancePaths(targets),
+    );
+  }
   if (options.mode === "restore") {
     return restoreDoctorSessionSqliteTargets({
       env,
@@ -147,6 +158,18 @@ export async function runDoctorSessionSqlite(
     writeSessionSqliteMigrationManifest(activeRun);
   }
   return summarizeDoctorSessionSqliteReport(options.mode, reports, activeRun);
+}
+
+function resolveDoctorSessionSqliteMaintenancePaths(
+  targets: readonly SessionStoreTarget[],
+): string[] {
+  const protectedPaths = new Set<string>();
+  for (const target of targets) {
+    for (const databasePath of resolveSqliteDatabaseFilePaths(resolveTargetSqlitePath(target))) {
+      protectedPaths.add(databasePath);
+    }
+  }
+  return [...protectedPaths];
 }
 
 // Direct store migrations are scoped by path; broader agent discovery needs runtime config.

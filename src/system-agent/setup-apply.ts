@@ -1,5 +1,7 @@
 // Applies OpenClaw's conversational setup: config, workspace files, gateway.
 import { isDeepStrictEqual } from "node:util";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
+import { resolveOnboardingAgentTarget } from "../commands/onboard-agent-target.js";
 import {
   readConfigFileSnapshot,
   readConfigFileSnapshotWithPluginMetadata,
@@ -149,7 +151,9 @@ function applySystemAgentModelSelectionWithModules(
   const agentId = targetAgentId ?? agentScope.resolveDefaultAgentId(nextConfig);
   if (
     targetAgentId &&
-    !nextConfig.agents?.list?.some((entry) => normalizeAgentId(entry.id) === targetAgentId)
+    !Object.keys(nextConfig.agents?.entries ?? {}).some(
+      (entryId) => normalizeAgentId(entryId) === targetAgentId,
+    )
   ) {
     throw new Error(`Could not resolve configured agent "${targetAgentId}".`);
   }
@@ -172,7 +176,12 @@ function applySystemAgentModelSelectionWithModules(
     nextConfig.agents.defaults.models = defaultModels;
   }
 
-  let agent = nextConfig.agents.list?.find((entry) => normalizeAgentId(entry.id) === agentId);
+  nextConfig.agents.entries ??= {};
+  const agentEntryKey =
+    Object.keys(nextConfig.agents.entries).find(
+      (entryId) => normalizeAgentId(entryId) === agentId,
+    ) ?? agentId;
+  let agent = nextConfig.agents.entries[agentEntryKey];
   if (writesAgent) {
     if (!agent) {
       throw new Error(`Could not resolve configured default agent "${agentId}".`);
@@ -184,8 +193,8 @@ function applySystemAgentModelSelectionWithModules(
 
   if (params.agentRuntimeId) {
     if (!agent) {
-      agent = { id: agentId, default: true };
-      nextConfig.agents.list = [...(nextConfig.agents.list ?? []), agent];
+      agent = { default: true };
+      nextConfig.agents.entries[agentEntryKey] = agent;
     }
     const agentModels = { ...agent.models };
     const agentKey = modelConfig.upsertCanonicalModelConfigEntry(agentModels, target);
@@ -372,8 +381,7 @@ export async function applySystemAgentSetup(
   const { configureGatewayForSetup } = await import("../wizard/setup.gateway-config.js");
   const buildSetupCandidate = async (currentBaseConfig: OpenClawConfig) => {
     const workspaceConflict = resolveOnboardingWorkspaceConflict(currentBaseConfig, workspace);
-    const currentHasRoster =
-      Array.isArray(currentBaseConfig.agents?.list) && currentBaseConfig.agents.list.length > 0;
+    const currentHasRoster = listAgentEntries(currentBaseConfig).length > 0;
     const allowWorkspaceWrite =
       params.allowWorkspaceChange || (!workspaceConflict && !currentHasRoster);
     let setupBaseConfig = currentBaseConfig;
@@ -390,7 +398,7 @@ export async function applySystemAgentSetup(
     if (currentHasRoster) {
       setupBaseConfig = {
         ...setupBaseConfig,
-        agents: { ...setupBaseConfig.agents, list: currentBaseConfig.agents?.list },
+        agents: { ...setupBaseConfig.agents, entries: currentBaseConfig.agents?.entries },
       };
     }
     const preserveWorkspace =
@@ -409,10 +417,6 @@ export async function applySystemAgentSetup(
       };
     }
 
-    const effectiveWorkspace =
-      workspaceConflict && !params.allowWorkspaceChange
-        ? workspaceConflict.currentWorkspaceDir
-        : workspace;
     let candidate = applyLocalSetupWorkspaceConfig(setupBaseConfig, workspace, {
       allowWorkspaceChange: allowWorkspaceWrite,
       preserveWorkspace,
@@ -441,7 +445,6 @@ export async function applySystemAgentSetup(
         mode: "local",
       }),
       settings: gateway.settings,
-      workspace: effectiveWorkspace,
     };
   };
   const committed = await commit(
@@ -486,7 +489,6 @@ export async function applySystemAgentSetup(
             nextConfig: finalizedConfig,
             result: {
               settings: setupCandidate.settings,
-              workspace: setupCandidate.workspace,
             },
           };
         },
@@ -498,7 +500,7 @@ export async function applySystemAgentSetup(
   if (!settings) {
     throw new Error("OpenClaw setup committed without resolved Gateway settings.");
   }
-  const effectiveWorkspace = setupResult.workspace;
+  const onboardingTarget = resolveOnboardingAgentTarget(nextConfig);
   if (params.expectedInferenceRoute) {
     const afterRead = await readConfigFileSnapshotWithPluginMetadata();
     const afterSnapshot = afterRead.snapshot;
@@ -526,7 +528,7 @@ export async function applySystemAgentSetup(
   }
 
   const lines: string[] = [
-    `Workspace: ${shortenHomePath(effectiveWorkspace)}`,
+    `Workspace: ${shortenHomePath(onboardingTarget.workspaceDir)}`,
     model ? `Default model: ${model}` : undefined,
   ].filter((line): line is string => line !== undefined);
 
@@ -554,9 +556,10 @@ export async function applySystemAgentSetup(
 
   const workspaceResult = await runCommittedFollowUp(
     async () =>
-      await onboardHelpers.ensureWorkspaceAndSessions(effectiveWorkspace, runtime, {
+      await onboardHelpers.ensureWorkspaceAndSessions(onboardingTarget.workspaceDir, runtime, {
         skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
         skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
+        agentId: onboardingTarget.agentId,
       }),
     (error) => lines.push(`Workspace files: ${formatErrorMessage(error)}`),
   );
@@ -593,7 +596,7 @@ export async function applySystemAgentSetup(
         await refreshPluginRegistryAfterConfigMutation({
           config: nextConfig,
           reason: "source-changed",
-          workspaceDir: effectiveWorkspace,
+          workspaceDir: onboardingTarget.workspaceDir,
           traceCommand: "openclaw-setup",
           logger: {
             warn: (message) => lines.push(message),

@@ -5,7 +5,7 @@ import { t } from "../../i18n/index.ts";
 import { renderCloudProfileMenuItems, renderSessionMenuItem } from "./cloud-target.ts";
 import type { BrowserTarget, DraftBranches, DraftCloudProfile, DraftNode } from "./discovery.ts";
 import { folderDisplayName } from "./path.ts";
-import { disambiguate, nodeTooltip } from "./place-labels.ts";
+import { disambiguate, isPhoneFamily, nodeTooltip } from "./place-labels.ts";
 import { recentPlaces, type RecentPlaceSource } from "./recent-places.ts";
 
 function parentFolderDisplayName(path: string): string | undefined {
@@ -141,9 +141,10 @@ export function renderPlaceSelect(params: {
   execNode: string;
   syncFolder: string;
   worktree: boolean;
+  worktreeVisible: boolean;
   worktreeAvailable: boolean;
+  worktreeDisabledReason?: string;
   cloudDisabledReason?: string;
-  customFolder: boolean;
   branches: DraftBranches | null;
   branchesLoading: boolean;
   baseRef: string;
@@ -221,10 +222,7 @@ export function renderPlaceSelect(params: {
   const browseTarget: BrowserTarget = params.execNode
     ? { nodeId: params.execNode, label: activeNode?.displayName ?? params.execNode }
     : { nodeId: "", label: gatewayLabel };
-  const deviceFamily = activeNode?.deviceFamily?.toLowerCase() ?? "";
-  const nodeIcon = ["iphone", "ipad", "ios", "android", "phone"].some((token) =>
-    deviceFamily.includes(token),
-  )
+  const nodeIcon = isPhoneFamily(activeNode?.deviceFamily)
     ? icons.monitorSmartphone
     : icons.monitor;
 
@@ -337,6 +335,7 @@ export function renderPlaceSelect(params: {
                       {
                         value: "gateway",
                         label: gatewayLabel,
+                        icon: icons.monitor,
                         checked: !params.execNode && !params.cloudProfileId,
                         onSelect: () => params.onSelectExecNode(""),
                       },
@@ -347,6 +346,9 @@ export function renderPlaceSelect(params: {
                         {
                           value: `node:${node.nodeId}`,
                           label: node.displayName,
+                          icon: isPhoneFamily(node.deviceFamily)
+                            ? icons.monitorSmartphone
+                            : icons.monitor,
                           sub: nodeSuffixes[index],
                           checked: params.execNode === node.nodeId,
                           title: nodeTooltip(node),
@@ -359,6 +361,7 @@ export function renderPlaceSelect(params: {
                       profiles: params.cloudProfiles,
                       selectedId: params.cloudProfileId,
                       submitting: params.submitting,
+                      icon: icons.server,
                       disabled: !params.worktreeAvailable || Boolean(params.cloudDisabledReason),
                       disabledReason: params.cloudDisabledReason,
                       onSelect: params.onSelectCloudProfile,
@@ -370,6 +373,7 @@ export function renderPlaceSelect(params: {
                             label: t("newSession.cloudWorker", {
                               profile: params.cloudProfileId,
                             }),
+                            icon: icons.server,
                             checked: true,
                             disabled: true,
                             title: t("newSession.catalogUnavailable"),
@@ -387,7 +391,7 @@ export function renderPlaceSelect(params: {
                       : nothing}
                   `
                 : nothing}
-              ${!params.execNode
+              ${!params.execNode && params.worktreeVisible
                 ? html`
                     <div class="session-menu__separator" role="separator"></div>
                     ${renderSessionMenuItem(
@@ -395,15 +399,13 @@ export function renderPlaceSelect(params: {
                         value: "worktree",
                         label: t("newSession.worktree"),
                         checked: params.worktree,
-                        disabled:
-                          Boolean(params.cloudProfileId) ||
-                          !params.worktreeAvailable ||
-                          params.customFolder,
+                        disabled: Boolean(params.cloudProfileId) || !params.worktreeAvailable,
                         title: params.cloudProfileId
                           ? t("newSession.cloudRequiresWorktree")
                           : params.worktreeAvailable
                             ? t("chat.runControls.newSessionWorktree")
-                            : t("newSession.worktreeUnavailable"),
+                            : (params.worktreeDisabledReason ??
+                              t("newSession.worktreeUnavailable")),
                         onSelect: params.onToggleWorktree,
                         keepOpen: true,
                       },

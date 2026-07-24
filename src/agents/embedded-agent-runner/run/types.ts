@@ -54,6 +54,8 @@ type EmbeddedRunContextWindowInfo = {
 
 export type EmbeddedRunFastModeParam = boolean | (() => boolean | undefined);
 
+type EmbeddedRunAttemptOperation = "attempt" | "settled-tool-finalization";
+
 type EmbeddedRunAttemptToolTerminalObservation = {
   toolCallId?: string;
   toolName: string;
@@ -92,6 +94,8 @@ export type EmbeddedRunAttemptTrajectoryRecorder = {
 };
 
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
+  /** Sticky operation identity used to suppress ordinary retry and hook policy. */
+  operation?: EmbeddedRunAttemptOperation;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   /** Active file-backed artifact target resolved by the run/session target seam. */
   sessionFile: string;
@@ -168,6 +172,8 @@ export type EmbeddedRunAttemptResult = {
   aborted: boolean;
   /** True when the runtime made the authoritative final-assistant transcript decision. */
   assistantTranscriptOwned?: boolean;
+  /** Exact idempotency key for the runtime-owned final-assistant transcript row. */
+  assistantTranscriptIdempotencyKey?: string;
   /** True when the abort originated from the caller-provided abortSignal. */
   externalAbort: boolean;
   timedOut: boolean;
@@ -258,6 +264,14 @@ export type EmbeddedRunAttemptResult = {
   systemPromptReport?: SessionSystemPromptReport;
   finalPromptText?: string;
   messagesSnapshot: AgentMessage[];
+  /**
+   * Complete application transcript frozen through a settled tool boundary.
+   * Projection-backed finalizers must fail closed when their harness does not provide it.
+   */
+  settledTurnFinalizationContext?: {
+    readonly source: "openclaw-transcript";
+    readonly messages: readonly AgentMessage[];
+  };
   beforeAgentFinalizeRevisionReason?: string;
   assistantTexts: string[];
   latestMcpAppChannelView?: McpAppChannelView;

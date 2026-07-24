@@ -1,4 +1,10 @@
+import { prettifyPlatform } from "../../lib/platform-label.ts";
 import type { DraftNode } from "./discovery.ts";
+
+export function isPhoneFamily(deviceFamily: string | undefined): boolean {
+  const family = deviceFamily?.toLowerCase() ?? "";
+  return ["iphone", "ipad", "ios", "android", "phone"].some((token) => family.includes(token));
+}
 
 export function disambiguate<T>(
   items: readonly T[],
@@ -35,8 +41,10 @@ export function disambiguate<T>(
 }
 
 export function nodeTooltip(node: DraftNode): string | undefined {
-  const facts = [node.platform, node.modelIdentifier, node.remoteIp].filter(
-    (fact): fact is string => fact !== undefined,
-  );
+  const facts = [
+    node.platform ? prettifyPlatform(node.platform) : undefined,
+    node.modelIdentifier,
+    node.remoteIp,
+  ].filter((fact): fact is string => fact !== undefined);
   return facts.length > 0 ? facts.join(" · ") : undefined;
 }

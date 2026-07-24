@@ -362,6 +362,10 @@ describe("scripts/test-projects changed-target routing", () => {
       mode: "targets",
       targets: ["test/scripts/check-file-utils.test.ts"],
     });
+    expect(resolveChangedTestTargetPlan(["scripts/install-trufflehog.sh"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/install-trufflehog.test.ts"],
+    });
   });
 
   it("routes nested scripts through conventional owner tests", () => {
@@ -813,10 +817,6 @@ describe("scripts/test-projects changed-target routing", () => {
           "test/scripts/browser-cdp-snapshot.test.ts",
           "test/scripts/e2e-helper-env-limits.test.ts",
         ],
-      ],
-      [
-        "scripts/e2e/channel-plugin-trust-docker.sh",
-        ["test/scripts/docker-build-helper.test.ts", "test/scripts/test-projects.test.ts"],
       ],
       [
         "scripts/e2e/config-reload-source-docker.sh",
@@ -1369,6 +1369,7 @@ describe("scripts/test-projects changed-target routing", () => {
           "test/scripts/ci-workflow-guards.test.ts",
           "test/scripts/package-acceptance-workflow.test.ts",
           "test/scripts/changed-lanes.test.ts",
+          "test/scripts/install-trufflehog.test.ts",
         ],
       ],
       [
@@ -1376,6 +1377,15 @@ describe("scripts/test-projects changed-target routing", () => {
         [
           "test/scripts/ci-workflow-guards.test.ts",
           "test/scripts/package-acceptance-workflow.test.ts",
+          "test/scripts/install-trufflehog.test.ts",
+        ],
+      ],
+      [
+        ".github/workflows/ci-build-artifacts-testbox.yml",
+        [
+          "test/scripts/install-trufflehog.test.ts",
+          "test/scripts/package-acceptance-workflow.test.ts",
+          "test/scripts/ci-workflow-guards.test.ts",
         ],
       ],
       [
@@ -1978,6 +1988,7 @@ describe("scripts/test-projects changed-target routing", () => {
       [
         ".github/actions/setup-node-env/action.yml",
         [
+          "test/scripts/install-trufflehog.test.ts",
           "test/scripts/package-acceptance-workflow.test.ts",
           "test/scripts/ci-workflow-guards.test.ts",
         ],
@@ -2178,6 +2189,29 @@ describe("scripts/test-projects changed-target routing", () => {
           "test/scripts/release-upgrade-baseline.test.ts",
           "test/scripts/android-version.test.ts",
           "test/scripts/ios-version.test.ts",
+          "test/scripts/upgrade-survivor-baselines.test.ts",
+          "test/scripts/upgrade-survivor-config-recipe.test.ts",
+        ],
+      ],
+      [
+        "scripts/lib/release-version.mjs",
+        [
+          "test/release-version.test.ts",
+          "test/npm-publish-plan.test.ts",
+          "test/openclaw-npm-release-check.test.ts",
+          "test/openclaw-npm-postpublish-verify.test.ts",
+          "test/plugin-npm-release.test.ts",
+          "test/plugin-clawhub-release.test.ts",
+          "test/scripts/android-version.test.ts",
+          "test/scripts/android-pin-version.test.ts",
+          "test/scripts/docker-release-policy.test.ts",
+          "test/scripts/ios-version.test.ts",
+          "test/scripts/openclaw-npm-extended-stable-release.test.ts",
+          "test/scripts/openclaw-npm-publish.test.ts",
+          "test/scripts/release-preflight.test.ts",
+          "test/scripts/release-prepare.test.ts",
+          "test/scripts/release-upgrade-baseline.test.ts",
+          "test/scripts/release-version.test.ts",
           "test/scripts/upgrade-survivor-baselines.test.ts",
           "test/scripts/upgrade-survivor-config-recipe.test.ts",
         ],
@@ -2663,9 +2697,6 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/e2e/parallels/update-job-timeout.ts",
         "scripts/e2e/parallels/windows-smoke.ts",
         "scripts/e2e/parallels-windows-smoke.sh",
-        "scripts/e2e/lib/parallels-package/build-info-commit.mjs",
-        "scripts/e2e/lib/parallels-macos-common.sh",
-        "scripts/e2e/lib/parallels-package-common.sh",
       ]),
     ).toEqual([
       {
@@ -2675,7 +2706,6 @@ describe("scripts/test-projects changed-target routing", () => {
           "test/scripts/parallels-smoke-model.test.ts",
           "test/scripts/parallels-npm-update-smoke.test.ts",
           "test/scripts/parallels-update-job-timeout.test.ts",
-          "test/scripts/parallels-lib-helpers.test.ts",
         ],
         watchMode: false,
       },
@@ -2687,18 +2717,6 @@ describe("scripts/test-projects changed-target routing", () => {
       mode: "targets",
       targets: ["test/scripts/restart-mac.test.ts"],
     });
-  });
-
-  it("routes Parallels common shell helpers through lib helper owner tests", () => {
-    for (const changedPath of [
-      "scripts/e2e/lib/parallels-macos-common.sh",
-      "scripts/e2e/lib/parallels-package-common.sh",
-    ]) {
-      expect(resolveChangedTestTargetPlan([changedPath]), changedPath).toEqual({
-        mode: "targets",
-        targets: ["test/scripts/parallels-lib-helpers.test.ts"],
-      });
-    }
   });
 
   it("routes MCP and cron Docker E2E script targets instead of skipping changed tests", () => {
@@ -3722,7 +3740,11 @@ describe("scripts/test-projects changed-target routing", () => {
   it("routes Google Meet CLI edits to the lightweight CLI tests", () => {
     expect(resolveChangedTestTargetPlan(["extensions/google-meet/src/cli.ts"])).toEqual({
       mode: "targets",
-      targets: ["extensions/google-meet/src/cli.test.ts"],
+      targets: [
+        "extensions/google-meet/src/cli-artifacts.test.ts",
+        "extensions/google-meet/src/cli-runtime.test.ts",
+        "extensions/google-meet/src/cli.test.ts",
+      ],
     });
   });
 
@@ -4716,6 +4738,7 @@ describe("scripts/test-projects full-suite sharding", () => {
       "test/vitest/vitest.tui.config.ts",
       "test/vitest/vitest.tui-pty.config.ts",
       "test/vitest/vitest.ui.config.ts",
+      "test/vitest/vitest.ui-isolated.config.ts",
       "test/vitest/vitest.utils.config.ts",
       "test/vitest/vitest.wizard.config.ts",
       "test/vitest/vitest.gateway-core.config.ts",

@@ -1,6 +1,7 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as assistantIdentity from "../../app/assistant-identity.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import {
   buildFallbackSlashCommands,
@@ -17,6 +18,7 @@ import {
 } from "./chat-queue.ts";
 import {
   ChatStateController,
+  createPageState,
   handlePageGatewayEvent,
   refreshChatMetadata,
   resetChatStateForRouteSession,
@@ -50,6 +52,92 @@ afterEach(() => {
 });
 
 describe("ChatStateController render lifecycle", () => {
+  it("rejects a run-less observer digest during an identified active run", () => {
+    const projectedDigest = {
+      sessionKey: "agent:main:current",
+      runId: "run-1",
+      revision: 1,
+      updatedAt: 1_000,
+      headline: "Projected current status",
+      health: "on-track" as const,
+    };
+    const requestUpdate = vi.fn();
+    const state = {
+      sessionKey: projectedDigest.sessionKey,
+      assistantAgentId: "main",
+      agentsList: { defaultId: "main" },
+      chatRunId: "run-1",
+      observerDigest: projectedDigest,
+      requestUpdate,
+    } as unknown as ChatPageHost;
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "session.observer",
+      payload: {
+        sessionKey: projectedDigest.sessionKey,
+        revision: 2,
+        updatedAt: 2_000,
+        headline: "Run-less live status",
+        health: "stuck",
+      },
+    });
+
+    expect(state.observerDigest).toBe(projectedDigest);
+    expect(requestUpdate).not.toHaveBeenCalled();
+  });
+
+  it("accepts only the row-active observer run when attaching mid-run", () => {
+    const projectedDigest = {
+      sessionKey: "agent:main:current",
+      runId: "r1",
+      revision: 1,
+      updatedAt: 1_000,
+      headline: "Projected current status",
+      health: "on-track" as const,
+    };
+    const requestUpdate = vi.fn();
+    const state = {
+      sessionKey: projectedDigest.sessionKey,
+      assistantAgentId: "main",
+      agentsList: { defaultId: "main" },
+      chatRunId: null,
+      observerDigest: projectedDigest,
+      sessionsResult: {
+        sessions: [
+          {
+            key: projectedDigest.sessionKey,
+            hasActiveRun: true,
+            activeRunIds: ["r1"],
+          },
+        ],
+      },
+      requestUpdate,
+    } as unknown as ChatPageHost;
+    const observerEvent = (runId?: string) =>
+      ({
+        type: "event" as const,
+        event: "session.observer",
+        payload: {
+          sessionKey: projectedDigest.sessionKey,
+          ...(runId ? { runId } : {}),
+          revision: 2,
+          updatedAt: 2_000,
+          headline: `Live status ${runId ?? "without run"}`,
+          health: "grinding",
+        },
+      }) satisfies Parameters<typeof handlePageGatewayEvent>[1];
+
+    handlePageGatewayEvent(state, observerEvent());
+    handlePageGatewayEvent(state, observerEvent("r2"));
+    expect(state.observerDigest).toBe(projectedDigest);
+    expect(requestUpdate).not.toHaveBeenCalled();
+
+    handlePageGatewayEvent(state, observerEvent("r1"));
+    expect(state.observerDigest?.headline).toBe("Live status r1");
+    expect(requestUpdate).toHaveBeenCalledOnce();
+  });
+
   it("tracks waiting approval only for the selected session until resolution", () => {
     const state = {
       sessionKey: "agent:main:current",
@@ -509,6 +597,52 @@ describe("session pull request refresh", () => {
   });
 });
 
+describe("image lightbox lifecycle", () => {
+  it("invalidates immediately when beginning a deferred image open", () => {
+    const invalidate = vi.fn();
+    const context = {
+      agents: {
+        state: { agentsList: null },
+        adoptList: vi.fn(),
+      },
+      agentSelection: { state: { selectedId: "main" } },
+      basePath: "",
+      config: {
+        current: {
+          allowExternalEmbedUrls: false,
+          assistantIdentity: { name: "Assistant" },
+          chatMessageMaxWidth: null,
+          embedSandboxMode: "scripts",
+          localMediaPreviewRoots: [],
+        },
+      },
+      initialUserMessage: createInitialUserMessageHandoff(),
+      sessions: {},
+    } as unknown as ApplicationContext;
+    const state = createPageState(
+      context,
+      {
+        invalidate,
+        afterCommit: () => () => {},
+      },
+      { querySelector: () => null },
+    );
+    const release = vi.fn();
+    state.imageLightbox = {
+      src: "blob:managed-image",
+      title: "Generated image",
+      release,
+    };
+
+    const requestVersion = state.beginImageOpen();
+
+    expect(requestVersion).toBe(1);
+    expect(state.imageLightbox).toBeNull();
+    expect(release).toHaveBeenCalledOnce();
+    expect(invalidate).toHaveBeenCalledOnce();
+  });
+});
+
 describe("route composer fallback", () => {
   function createRouteState(chatMessage: string) {
     const resetChatInputHistoryNavigation = vi.fn();
@@ -526,6 +660,8 @@ describe("route composer fallback", () => {
       chatQueueByScope: {},
       chatMessages: [],
       chatMessagesBySession: new Map(),
+      imageLightbox: null,
+      imageLightboxRequestVersion: 0,
       chatAttachments: [
         {
           id: "staged-image",
@@ -548,17 +684,34 @@ describe("route composer fallback", () => {
     return { resetChatInputHistoryNavigation, resetChatScroll, state };
   }
 
+  it("releases the active image lightbox on a route switch", () => {
+    const { state } = createRouteState("");
+    const release = vi.fn();
+    state.imageLightbox = {
+      src: "blob:managed-image",
+      title: "Generated image",
+      release,
+    };
+
+    resetChatStateForRouteSession(state, "agent:main:second");
+
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(state.imageLightbox).toBeNull();
+  });
+
   it("restores one atomic history snapshot when returning to a session", () => {
     vi.stubGlobal("sessionStorage", createStorageMock());
     const { state } = createRouteState("");
     state.chatMessages = [{ role: "assistant", content: "first session" }];
     state.chatHistoryPagination = { hasMore: true, nextOffset: 400, totalMessages: 718 };
     state.currentSessionId = "session-first";
+    state.chatDisplayedLeafEntryId = "leaf-first";
 
     resetChatStateForRouteSession(state, "agent:main:second");
     state.chatMessages = [{ role: "assistant", content: "second session" }];
     state.chatHistoryPagination = { hasMore: false, totalMessages: 1 };
     state.currentSessionId = "session-second";
+    state.chatDisplayedLeafEntryId = "leaf-second";
 
     resetChatStateForRouteSession(state, "agent:main:first");
 
@@ -569,6 +722,7 @@ describe("route composer fallback", () => {
       totalMessages: 718,
     });
     expect(state.currentSessionId).toBe("session-first");
+    expect(state.chatDisplayedLeafEntryId).toBe("leaf-first");
   });
 
   it("reapplies a live send projection when a subscribed pane switches into its scope", () => {

@@ -5,6 +5,7 @@ import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
 } from "../media-understanding/types.js";
+import type { MediaFact } from "../media/media-facts.js";
 import type { PluginHookChannelContext } from "../plugins/hook-channel-context.types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { CommandTurnContext } from "./command-turn-context.js";
@@ -42,6 +43,18 @@ type UntrustedStructuredContextEntry = {
   source?: string;
   type?: string;
   payload: unknown;
+  /** Internal exact-id hints for canonical transcript/live-cache deduplication. */
+  sessionTranscriptDedupeMessageIds?: string[];
+  /** Internal visible-text hints for legacy assistant rows without transcript ids. */
+  sessionTranscriptAssistantTextDedupeKeys?: string[];
+};
+
+export type SessionTranscriptContext = {
+  chatWindow?: boolean;
+  historyLimit: number;
+  beforeTimestampMs?: number;
+  minTimestampMs?: number;
+  senderLabels?: { assistant: string; user: string };
 };
 
 /** Structured supplemental facts projected into prompt context by inbound finalization. */
@@ -91,6 +104,8 @@ export type MsgContext = {
    * as structured context blocks in the user prompt rather than rendering plaintext envelopes.
    */
   InboundHistory?: HistoryEntry[];
+  /** Internal facts used to merge canonical transcript turns before dispatch. */
+  SessionTranscriptContext?: SessionTranscriptContext;
   /**
    * @deprecated Use CommandBody.
    *
@@ -206,6 +221,8 @@ export type MsgContext = {
   MediaPaths?: string[];
   MediaUrls?: string[];
   MediaTypes?: string[];
+  /** Ordered current-turn media facts; array position is attachment identity. */
+  media?: MediaFact[];
   /** Original message modality before transcription or other media normalization. */
   SourceModality?: InboundSourceModality;
   MediaWorkspaceDir?: string;
@@ -219,7 +236,7 @@ export type MsgContext = {
   MediaStaged?: boolean;
   /** Telegram sticker metadata (emoji, set name, file IDs, cached description). */
   Sticker?: StickerContextMetadata;
-  /** True when current-turn sticker media is present in MediaPaths. */
+  /** True when current-turn sticker media is present in structured facts. */
   StickerMediaIncluded?: boolean;
   /** Skip automatic understanding for the current sticker because its cached description is used. */
   SkipStickerMediaUnderstanding?: boolean;
@@ -259,6 +276,11 @@ export type MsgContext = {
   OwnerAllowFrom?: Array<string | number>;
   SenderName?: string;
   SenderId?: string;
+  /** Trusted in-process creation provenance; never populated from channel payloads. */
+  SessionCreation?: {
+    via: import("../config/sessions/session-entry-provenance.js").SessionCreatedVia;
+    actor?: import("../config/sessions/session-entry-provenance.js").SessionCreatedActor;
+  };
   SenderUsername?: string;
   SenderTag?: string;
   SenderE164?: string;
@@ -377,10 +399,35 @@ export type FinalizedMsgContext = Omit<MsgContext, "CommandAuthorized"> & {
   CommandTurn?: CommandTurnContext;
 };
 
-export type TemplateContext = MsgContext & {
+type RuntimeMediaContextKey =
+  | "MediaPath"
+  | "MediaUrl"
+  | "MediaType"
+  | "MediaDir"
+  | "MediaPaths"
+  | "MediaUrls"
+  | "MediaTypes"
+  | "MediaWorkspaceDir"
+  | "MediaTranscribedIndexes"
+  | "MediaStaged";
+
+/** Internal inbound context; legacy media fields exist only on the shipped SDK adapter. */
+export type RuntimeMsgContext = Omit<MsgContext, RuntimeMediaContextKey>;
+
+export type FinalizedRuntimeMsgContext = Omit<RuntimeMsgContext, "CommandAuthorized"> & {
+  CommandAuthorized: boolean;
+  CommandTurn?: CommandTurnContext;
+};
+
+export type TemplateContext = RuntimeMsgContext & {
   BodyStripped?: string;
   SessionId?: string;
   IsNewSession?: string;
+  /** Documented singular media variables projected only at template execution. */
+  MediaPath?: string;
+  MediaUrl?: string;
+  MediaType?: string;
+  MediaDir?: string;
 };
 
 function formatTemplateValue(value: unknown): string {

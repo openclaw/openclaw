@@ -1059,7 +1059,7 @@ function configApplyHintForPaths(paths: string[], afterConfig: OpenClawConfig): 
   }
   if (plan.hotReasons.length > 0) {
     const { mode } = resolveGatewayReloadSettings(afterConfig);
-    if (mode === "off" || mode === "restart") {
+    if (mode === "off") {
       return RESTART_HINT;
     }
     return HOT_RELOAD_HINT;
@@ -1508,7 +1508,7 @@ async function readConfigPatchInput(opts: ConfigPatchOptions): Promise<unknown> 
     raw = await readStdinText();
   } else {
     try {
-      raw = readConfigMutationFileSync(file as string);
+      raw = readConfigMutationFileSync(file as string, "--file");
     } catch (err) {
       if (hasErrnoCode(err, "ENOENT")) {
         throw new Error(`--file not found: ${file}`, { cause: err });

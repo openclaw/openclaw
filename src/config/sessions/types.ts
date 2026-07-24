@@ -6,6 +6,7 @@ import type {
   SessionAcpMeta,
 } from "@openclaw/acp-core/types";
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
+import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-icon.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
@@ -15,12 +16,17 @@ import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
 import type { MainRestartRecoveryState } from "./main-session-recovery.types.js";
 import type { SessionRestartRecoveryState } from "./restart-recovery-types.js";
-import type { SessionEntryProvenance } from "./session-entry-provenance.js";
+import type {
+  SessionCreatedActor,
+  SessionCreatedVia,
+  SessionEntryProvenance,
+} from "./session-entry-provenance.js";
 import { rewriteSessionFileForNewSessionId } from "./session-file-rotation.js";
 import type { AgentPatchedSessionModelFallback } from "./session-model-fallback.js";
 
 export type SessionScope = "per-sender" | "global";
 export type SessionChatType = ChatType;
+type SessionVisibility = "shared" | "read-only" | "suggest" | "draft";
 
 export type SessionOrigin = {
   label?: string;
@@ -226,6 +232,8 @@ export type RestartRecoveryRun = {
 
 export type SessionEntry = SessionRestartRecoveryState &
   SessionEntryProvenance & {
+    /** Collaboration mode. Missing legacy values are equivalent to "shared". */
+    visibility?: SessionVisibility;
     /**
      * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
      * Stored on the main session entry.
@@ -239,7 +247,7 @@ export type SessionEntry = SessionRestartRecoveryState &
      * a real user/session-scoped key that merely happens to end with `:heartbeat`.
      */
     heartbeatIsolatedBaseSessionKey?: string;
-    /** Heartbeat task state (task name -> last run timestamp ms). */
+    /** Legacy heartbeat task timestamps consumed and cleared only by doctor migration. */
     heartbeatTaskState?: Record<string, number>;
     /** Plugin-owned session state, grouped by plugin id then extension namespace. */
     pluginExtensions?: Record<string, Record<string, SessionPluginJsonValue>>;
@@ -251,6 +259,8 @@ export type SessionEntry = SessionRestartRecoveryState &
     pluginNextTurnInjections?: Record<string, SessionPluginNextTurnInjection[]>;
     sessionId: string;
     updatedAt: number;
+    /** Process-lifetime session whose entry and transcript stay in the in-memory agent database. */
+    incognito?: true;
     /** Opaque owner revision used to reject stale lifecycle mutations. */
     lifecycleRevision?: string;
     // archivedAt/pinnedAt mirror the Codex thread-management shape (state DB
@@ -260,6 +270,8 @@ export type SessionEntry = SessionRestartRecoveryState &
     // codex plugin seam when exchanging thread metadata.
     /** Timestamp (ms) when the session was archived from active session lists. */
     archivedAt?: number;
+    /** Actor that archived the session; cleared when the session is restored. */
+    archivedBy?: SessionCreatedActor;
     /** Timestamp (ms) when the session was pinned for quick access. */
     pinnedAt?: number;
     /** Custom sidebar icon in the format accepted by the gateway protocol session-icon helper. */
@@ -268,6 +280,8 @@ export type SessionEntry = SessionRestartRecoveryState &
     lastReadAt?: number;
     /** Agent-declared sidebar presence; projection drops it after expiresAt. */
     agentStatus?: SessionAgentStatus;
+    /** Latest utility-model status judgment for idle session status surfaces. */
+    observerDigest?: SessionObserverDigest;
     /** Timestamp (ms) when an operator explicitly marked the session unread; cleared on read. */
     markedUnreadAt?: number;
     /** Timestamp (ms) of the latest completed agent run; metadata patches do not update it. */
@@ -288,7 +302,17 @@ export type SessionEntry = SessionRestartRecoveryState &
     worktree?: { id: string; branch: string; repoRoot: string };
     /** Explicit parent session linkage for dashboard-created child sessions. */
     parentSessionKey?: string;
-    /** True after a thread/topic session has been forked from its parent transcript once. */
+    /** How this session node came to exist; written once and retained across sessionId rotations. */
+    createdVia?: SessionCreatedVia;
+    /** Actor that caused node creation, with an optional profile, session, or sender id; written once. */
+    createdActor?: SessionCreatedActor;
+    /** Node creation time (ms); unlike sessionStartedAt, survives sessionId rotations. */
+    createdAt?: number;
+    /** Exact source generation and optional cut entry for an actual transcript-copy fork. */
+    forkSource?: { sessionKey: string; sessionId: string; entryId?: string };
+    /** Session id of the prior transcript generation under this same session key. */
+    previousSessionId?: string;
+    /** Thread parent-seeding settled marker; also set when seeding is deliberately skipped. */
     forkedFromParent?: boolean;
     /** Subagent spawn depth (0 = main, 1 = sub-agent, 2 = sub-sub-agent). */
     spawnDepth?: number;
@@ -665,6 +689,20 @@ function mergeSessionEntryWithPolicy(
       (existing.sessionId === sessionId ? existing.sessionStartedAt : updatedAt),
   };
 
+  // Node creation and exact fork ancestry are write-once; patches may only fill absent values.
+  if (existing.createdVia !== undefined) {
+    next.createdVia = existing.createdVia;
+  }
+  if (existing.createdActor !== undefined) {
+    next.createdActor = existing.createdActor;
+  }
+  if (existing.createdAt !== undefined) {
+    next.createdAt = existing.createdAt;
+  }
+  if (existing.forkSource !== undefined) {
+    next.forkSource = existing.forkSource;
+  }
+
   if (existing.sessionId !== sessionId) {
     // Session id rotations should move transcript paths when they match known reset/fork shapes.
     const patchHasSessionFile = Object.hasOwn(patch, "sessionFile");
@@ -756,10 +794,9 @@ export type SessionSkillSnapshot = {
   /**
    * Runtime-only, never persisted. Carries the full parsed Skill[] (including
    * each SKILL.md body) so the embedded runner can skip a workspace skill
-   * scan within a turn. Stripped from sessions.json on every read and write
-   * via normalizeSessionStore — see store-load.ts. On a cold session resume
-   * this is undefined and src/skills/runtime/embedded-run-entries.ts
-   * rebuilds it by reloading skill entries from disk.
+   * scan within a turn. Persistence projections strip it before committing
+   * session state. On a cold session resume this is undefined and
+   * src/skills/runtime/embedded-run-entries.ts rebuilds it from disk.
    */
   resolvedSkills?: Skill[];
   version?: number;

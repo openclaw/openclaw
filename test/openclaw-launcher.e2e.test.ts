@@ -863,6 +863,55 @@ describe("openclaw launcher", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32").each([
+    { signal: "SIGINT" as const, exitCode: 130 },
+    { signal: "SIGTERM" as const, exitCode: 143 },
+  ])("exits $exitCode when the respawn child terminates from $signal", async (testCase) => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    await addGitMarker(fixtureRoot);
+    const childInfoPath = path.join(fixtureRoot, "child-info.json");
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "entry.js"),
+      [
+        'import { writeFileSync } from "node:fs";',
+        `writeFileSync(${JSON.stringify(childInfoPath)}, JSON.stringify({ pid: process.pid }) + "\\n");`,
+        'process.title = "openclaw-launcher-default-signal-test-child";',
+        "setInterval(() => {}, 1000);",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const launcher = spawn(process.execPath, [path.join(fixtureRoot, "openclaw.mjs")], {
+      cwd: fixtureRoot,
+      env: launcherEnv({
+        NODE_COMPILE_CACHE: path.join(fixtureRoot, ".node-compile-cache"),
+      }),
+      stdio: "ignore",
+    });
+    let respawnChildPid: number | undefined;
+
+    try {
+      const childInfo = await waitForJsonFile<{ pid: number }>(childInfoPath, 5000);
+      respawnChildPid = childInfo.pid;
+
+      launcher.kill(testCase.signal);
+
+      await expect(waitForProcessExit(launcher, "launcher", 5000)).resolves.toEqual({
+        code: testCase.exitCode,
+        signal: null,
+      });
+      expect(isProcessAlive(respawnChildPid)).toBe(false);
+    } finally {
+      if (isProcessAlive(respawnChildPid)) {
+        process.kill(respawnChildPid!, "SIGKILL");
+      }
+      if (isProcessAlive(launcher.pid)) {
+        process.kill(launcher.pid!, "SIGKILL");
+      }
+    }
+  });
+
   it.runIf(process.platform !== "win32")(
     "exits after SIGTERM when the respawn child ignores the forwarded signal",
     async () => {
@@ -873,9 +922,9 @@ describe("openclaw launcher", () => {
         path.join(fixtureRoot, "dist", "entry.js"),
         [
           'import { writeFileSync } from "node:fs";',
-          `writeFileSync(${JSON.stringify(childInfoPath)}, JSON.stringify({ pid: process.pid }) + "\\n");`,
           'process.title = "openclaw-launcher-sigterm-ignore-test-child";',
           'process.on("SIGTERM", () => {});',
+          `writeFileSync(${JSON.stringify(childInfoPath)}, JSON.stringify({ pid: process.pid }) + "\\n");`,
           "setInterval(() => {}, 1000);",
           "",
         ].join("\n"),

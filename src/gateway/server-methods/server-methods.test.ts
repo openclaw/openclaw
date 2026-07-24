@@ -37,6 +37,7 @@ import {
   sanitizeChatHistoryMessages,
 } from "../chat-display-projection.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
+import { createChatRunState } from "../server-chat-state.js";
 import { waitForAgentJob } from "./agent-job.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
@@ -833,21 +834,6 @@ describe("injectTimestamp", () => {
     });
 
     expect(result).toMatch(/^\[Fri 2025-07-04 12:00 EDT\]/);
-  });
-
-  it("leaves messages bare when config disables envelope timestamps", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          envelopeTimestamp: "off",
-          userTimezone: "America/New_York",
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(injectTimestamp("cache sensitive prompt", timestampOptsFromConfig(cfg))).toBe(
-      "cache sensitive prompt",
-    );
   });
 });
 
@@ -2676,21 +2662,14 @@ describe("timestampOptsFromConfig", () => {
     expect(timestampOptsFromConfig(cfg).timezone).toBe(expected);
   });
 
-  it("keeps timestamp injection enabled for upgraded configs unless explicitly disabled", () => {
+  it("keeps timestamp injection enabled for upgraded configs", () => {
     const upgradedConfigWithExistingDefaults = {
       agents: { defaults: { userTimezone: "America/Chicago" } },
     } as OpenClawConfig;
 
-    // Existing user configs do not store envelopeTimestamp; omission remains
-    // the shipped default even when other agent defaults are present, so no
-    // config migration is needed for this broadened use of the setting.
+    // Timestamp injection is fixed on even when other agent defaults exist.
     expect(timestampOptsFromConfig({} as OpenClawConfig).includeTimestamp).toBe(true);
     expect(timestampOptsFromConfig(upgradedConfigWithExistingDefaults).includeTimestamp).toBe(true);
-    expect(
-      timestampOptsFromConfig({
-        agents: { defaults: { envelopeTimestamp: "off" } },
-      } as OpenClawConfig).includeTimestamp,
-    ).toBe(false);
   });
 });
 
@@ -2977,7 +2956,7 @@ describe("exec approval handlers", () => {
         broadcasts.push({ event, payload });
       },
       hasExecApprovalClients: () => true,
-      chatAbortedRuns: new Map<string, number>(),
+      chatRunState: createChatRunState(),
     };
     return { manager, handlers, broadcasts, respond, context };
   }
@@ -3166,7 +3145,7 @@ describe("exec approval handlers", () => {
 
   it("rejects approval registration after the owning run was aborted", async () => {
     const { manager, handlers, broadcasts, respond, context } = createExecApprovalFixture();
-    context.chatAbortedRuns.set("run-aborted", Date.now());
+    context.chatRunState.getOrCreate("run-aborted").abortMarker = Date.now();
 
     await requestExecApproval({
       handlers,
@@ -3216,7 +3195,7 @@ describe("exec approval handlers", () => {
       "approval-allowed-before-abort",
     );
     expect(manager.resolve("approval-allowed-before-abort", "allow-once")).toBe(true);
-    context.chatAbortedRuns.set("run-allowed-before-abort", Date.now());
+    context.chatRunState.getOrCreate("run-allowed-before-abort").abortMarker = Date.now();
     await requestPromise;
 
     const waitRespond = vi.fn();

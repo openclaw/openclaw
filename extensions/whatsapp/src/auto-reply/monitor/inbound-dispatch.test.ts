@@ -468,10 +468,13 @@ describe("whatsapp inbound dispatch", () => {
       },
     });
 
-    expectRecordFields(requireRecord(ctx, "remote media inbound context"), {
-      MediaUrl: "https://media.example/image.jpg",
-      MediaUrls: ["https://media.example/image.jpg"],
-      MediaType: "image/jpeg",
+    expect(requireRecord(ctx, "remote media inbound context")).toMatchObject({
+      media: [
+        expect.objectContaining({
+          url: "https://media.example/image.jpg",
+          contentType: "image/jpeg",
+        }),
+      ],
     });
   });
 
@@ -678,6 +681,16 @@ describe("whatsapp inbound dispatch", () => {
     });
 
     expect(responsePrefix).toBeUndefined();
+  });
+
+  it("retains the global response prefix when the shared pipeline has no value", async () => {
+    const responsePrefix = resolveWhatsAppResponsePrefix({
+      cfg: { messages: { responsePrefix: "[legacy]" } } as never,
+      agentId: "main",
+      isSelfChat: false,
+    });
+
+    expect(responsePrefix).toBe("[legacy]");
   });
 
   it("clears pending group history when the dispatcher does not queue a final reply", async () => {

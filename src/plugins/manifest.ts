@@ -141,7 +141,7 @@ export type PluginManifestProviderEndpoint = {
   googleVertexRegionHostSuffix?: string;
 };
 
-type PluginManifestProviderRequestProvider = {
+export type PluginManifestProviderRequestProvider = {
   family?: string;
   compatibilityFamily?: "moonshot";
   openAICompletions?: {
@@ -1748,6 +1748,24 @@ function normalizeProviderAuthChoices(
   return normalized.length > 0 ? normalized : undefined;
 }
 
+function normalizeConfigUiHints(value: unknown): Record<string, PluginConfigUiHint> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const normalized: Record<string, PluginConfigUiHint> = Object.create(null);
+  for (const [hintPath, rawHint] of Object.entries(value)) {
+    if (!isRecord(rawHint)) {
+      continue;
+    }
+    const hint = { ...rawHint } as Record<string, unknown>;
+    if ("presentation" in hint && hint.presentation !== "phone-number") {
+      delete hint.presentation;
+    }
+    normalized[hintPath] = hint as PluginConfigUiHint;
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
 function normalizeChannelConfigs(
   value: unknown,
 ): Record<string, PluginManifestChannelConfig> | undefined {
@@ -1764,9 +1782,7 @@ function normalizeChannelConfigs(
     if (!schema) {
       continue;
     }
-    const uiHints = isRecord(rawEntry.uiHints)
-      ? (rawEntry.uiHints as Record<string, PluginConfigUiHint>)
-      : undefined;
+    const uiHints = normalizeConfigUiHints(rawEntry.uiHints);
     const runtime =
       isRecord(rawEntry.runtime) && typeof rawEntry.runtime.safeParse === "function"
         ? (rawEntry.runtime as ChannelConfigRuntimeSchema)
@@ -2031,10 +2047,7 @@ export function loadPluginManifest(
   const configContracts = normalizeManifestConfigContracts(raw.configContracts);
   const channelConfigs = normalizeChannelConfigs(raw.channelConfigs);
 
-  let uiHints: Record<string, PluginConfigUiHint> | undefined;
-  if (isRecord(raw.uiHints)) {
-    uiHints = raw.uiHints as Record<string, PluginConfigUiHint>;
-  }
+  const uiHints = normalizeConfigUiHints(raw.uiHints);
 
   return cacheResult({
     ok: true,
@@ -2092,6 +2105,8 @@ export function loadPluginManifest(
 }
 
 // package.json "openclaw" metadata (used for setup/catalog)
+import type { ChannelSetupMetadata } from "../channels/plugins/setup-contract.js";
+
 type PluginPackageChannelApprovalFlag = "native";
 
 export type PluginPackageChannel = {
@@ -2134,6 +2149,9 @@ export type PluginPackageChannel = {
     exportName?: string;
   };
   doctorCapabilities?: PluginPackageChannelDoctorCapabilities;
+  /** Typed, serializable setup fields available before plugin runtime load. */
+  setup?: ChannelSetupMetadata;
+  /** @deprecated Use setup.fields. */
   cliAddOptions?: readonly PluginPackageChannelCliOption[];
 };
 
@@ -2144,10 +2162,12 @@ export type PluginPackageChannelDoctorCapabilities = {
   warnOnEmptyGroupSenderAllowlist?: boolean;
 };
 
-type PluginPackageChannelCliOption = {
+export type PluginPackageChannelCliOption = {
   flags: string;
+  negatedFlags?: string;
   description: string;
   defaultValue?: boolean | string;
+  valueType?: "int" | "list";
 };
 
 export type PluginPackageInstall = {

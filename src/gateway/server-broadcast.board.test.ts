@@ -56,4 +56,29 @@ describe("board event scope guards", () => {
     expect(write.socket.events).toEqual(["board.changed", "board.command"]);
     expect(admin.socket.events).toEqual(["board.changed", "board.command"]);
   });
+
+  it("applies session visibility filtering from the event payload key", () => {
+    const hidden = makeClient("hidden", "operator", ["operator.read"]);
+    const visible = makeClient("visible", "operator", ["operator.read"]);
+    const canReceiveSessionEvent = vi.fn(
+      (client: GatewayWsClient, sessionKeys: readonly string[], agentId?: string) => {
+        expect(sessionKeys).toEqual(["global"]);
+        expect(agentId).toBe("work");
+        return client.connId === "visible";
+      },
+    );
+    const { broadcast } = createGatewayBroadcaster({
+      clients: new Set([hidden.client, visible.client]),
+      canReceiveSessionEvent,
+    });
+
+    broadcast("board.changed", {
+      request: { sessionKey: "global", agentId: "work" },
+      revision: 1,
+    });
+
+    expect(hidden.socket.events).toEqual([]);
+    expect(visible.socket.events).toEqual(["board.changed"]);
+    expect(canReceiveSessionEvent).toHaveBeenCalledTimes(2);
+  });
 });

@@ -19,11 +19,10 @@ import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
 import { COPY_LABEL } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
+import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
+import { handleMarkdownCodeBlockCopy } from "../../../components/markdown-code-blocks.ts";
+import { markdownFileLinkFromEvent } from "../../../components/markdown-file-links.ts";
 import "../../../components/tooltip.ts";
-import {
-  handleMarkdownCodeBlockCopy,
-  markdownFileLinkFromEvent,
-} from "../../../components/markdown.ts";
 import { McpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";
 import { i18n, t } from "../../../i18n/index.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
@@ -38,6 +37,7 @@ import {
   combineSideChatComposerDraft,
 } from "../../../lib/chat/side-question.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
+import { copyToClipboard } from "../../../lib/clipboard.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalScopeConfigured,
@@ -45,6 +45,8 @@ import {
   resolveUiGlobalAliasAgentId,
   type UiSessionDefaultsHost,
 } from "../../../lib/sessions/session-key.ts";
+import { resolveTurnRecap } from "../chat-progress.ts";
+import type { ChatRunStartupStatus } from "../chat-run-startup.ts";
 import {
   buildCachedChatItems,
   coalesceStreamRuns,
@@ -65,7 +67,7 @@ import type { PlanStatus } from "../tool-stream.ts";
 import { getToolTitlesVersion } from "../tool-titles.ts";
 import { renderBackgroundTasksStatusRow } from "./chat-background-tasks-status.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.ts";
-import { renderChatDivider } from "./chat-divider.ts";
+import { renderChatDivider, renderChatNotice } from "./chat-divider.ts";
 import {
   dismissConfirmedActionPopovers,
   getAssistantAttachmentAvailabilityRenderVersion,
@@ -80,6 +82,7 @@ import { renderRealtimeTalkConversation } from "./chat-realtime-controls.ts";
 import { handleChatSelectionPointerUp, removeChatSelectionPopup } from "./chat-selection-popup.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import { renderWelcomeState, resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
+import { renderTurnRecapRow } from "./chat-working-indicator.ts";
 
 const pinnedMessagesMap = new Map<string, PinnedMessages>();
 const deletedMessagesMap = new Map<string, DeletedMessages>();
@@ -106,6 +109,7 @@ type ChatThreadProps = {
   streamSegments: ChatStreamSegment[];
   stream: string | null;
   streamStartedAt: number | null;
+  runOutputTokens?: number | null;
   queue: ChatQueueItem[];
   showThinking: boolean;
   showToolCalls: boolean;
@@ -114,6 +118,8 @@ type ChatThreadProps = {
   runActive?: boolean;
   /** True while the agent is visibly working (isChatRunWorking); shows the working spark. */
   runWorking?: boolean;
+  /** Coarse startup stage shown until assistant or tool activity becomes visible. */
+  startupStatus?: ChatRunStartupStatus | null;
   /** Re-labels the working spark while the active run is parked on an approval. */
   waitingApproval?: boolean;
   planStatus?: PlanStatus | null;
@@ -142,6 +148,8 @@ type ChatThreadProps = {
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   onOpenSessionCheckpoints?: () => void | Promise<void>;
   onAssistantAttachmentLoaded?: () => void;
+  onRequestOpenImage?: () => number;
+  onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
   onRequestUpdate?: () => void;
   onChatScroll?: (event: Event) => void;
   onHistoryIntent?: (event: Event) => void;
@@ -785,6 +793,18 @@ function handleChatThreadSelectionPointerUp(event: PointerEvent, props: ChatThre
   });
 }
 
+function selectionIntersectsElement(selection: Selection | null, element: Element): boolean {
+  if (!selection || selection.isCollapsed) {
+    return false;
+  }
+  for (let index = 0; index < selection.rangeCount; index += 1) {
+    if (selection.getRangeAt(index).intersectsNode(element)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   if (event.composedPath().some((target) => target instanceof HTMLAnchorElement)) {
     return;
@@ -826,6 +846,10 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   if (!canReply && !canRewind && !canHide && !canOpenInCanvas && !canCopy && !canFork) {
     return;
   }
+
+  const selection = window.getSelection();
+  const selectedText = selectionIntersectsElement(selection, bubble) ? selection?.toString() : "";
+
   event.preventDefault();
   event.stopPropagation();
   removeReplyContextMenu();
@@ -836,6 +860,19 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   menu.style.left = `${event.clientX}px`;
   menu.style.top = `${event.clientY}px`;
   const focusCandidates: HTMLButtonElement[] = [];
+  if (selectedText) {
+    const action = createMessageActionContextButton({
+      label: t("chat.messages.copySelection"),
+      disabled: false,
+      tooltip: t("chat.messages.copySelection"),
+      onClick: () => {
+        void copyToClipboard(selectedText);
+        removeReplyContextMenu();
+      },
+    });
+    menu.append(action.element);
+    focusCandidates.push(action.button);
+  }
   if (canReply) {
     const replyMessageId = messageId || stableReplyMessageId(senderLabel, text);
     const replyButton = createReplyContextMenuButton(() => {
@@ -1217,11 +1254,14 @@ function renderChatThreadContents(
       onToggleToolExpanded: toggleToolCardExpanded,
       onRequestUpdate: requestUpdate,
       onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
+      onRequestOpenImage: props.onRequestOpenImage,
+      onOpenImage: props.onOpenImage,
       assistantName: props.assistantName,
       assistantAvatar: assistantIdentity.avatar,
       userId: props.userId ?? null,
       userName: props.userName ?? null,
       userAvatar: props.userAvatar ?? null,
+      showAvatarGutter: !isDirectThread,
       basePath: props.basePath,
       localMediaPreviewRoots: props.localMediaPreviewRoots ?? [],
       assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
@@ -1251,12 +1291,17 @@ function renderChatThreadContents(
     if (item.kind === "divider") {
       return renderChatDivider(item, props.onOpenSessionCheckpoints);
     }
+    if (item.kind === "notice") {
+      return renderChatNotice(item);
+    }
     if (item.kind === "stream-run") {
       return renderStreamGroup(item.parts, {
         questionPrompts,
         planStatus: props.planStatus,
         planActive: Boolean(props.runActive),
+        startupPhase: props.startupStatus?.phase,
         waitingApproval: props.waitingApproval,
+        runOutputTokens: props.runOutputTokens,
         onOpenSidebar: props.onOpenSidebar,
         assistant: assistantIdentity,
         basePath: props.basePath,
@@ -1304,6 +1349,18 @@ function renderChatThreadContents(
       content: realtimeConversation,
     });
   }
+  // Watch/settle on actual indicator visibility (not runWorking): queued
+  // sends show the claw before the run starts, and the recap must never
+  // stack under a visible working row.
+  const workingIndicatorVisible = chatItems.some((item) => item.kind === "reading-indicator");
+  const turnRecap = resolveTurnRecap(props.sessionKey, workingIndicatorVisible, activeSession);
+  if (turnRecap !== null && !isEmpty && !showLoadingSkeleton) {
+    transcriptRows.push({
+      kind: "content",
+      key: "turn-recap",
+      content: renderTurnRecapRow(turnRecap),
+    });
+  }
   const backgroundTasks =
     !props.runWorking && !isEmpty && !showLoadingSkeleton
       ? renderBackgroundTasksStatusRow(props.backgroundTasks)
@@ -1335,6 +1392,7 @@ function renderChatThreadContents(
     props.showToolCalls,
     Boolean(props.runActive),
     Boolean(props.runWorking),
+    props.startupStatus?.phase,
     Boolean(props.waitingApproval),
     props.planStatus,
     props.questionPrompts,
@@ -1352,6 +1410,7 @@ function renderChatThreadContents(
     props.allowExternalEmbedUrls ?? false,
     threadContextWindow,
     props.onSetReply,
+    turnRecap === null ? "" : `${turnRecap.runtimeMs}:${turnRecap.outputTokens ?? ""}`,
   ]);
   const transcriptContents =
     showLoadingSkeleton || isEmpty
