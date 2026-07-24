@@ -210,8 +210,10 @@ export function chunkMatrixText(
   const collisionRedacted = hasMatrixSpoilerMetadataCollision(preparedText.convertedText)
     ? markdownToMatrixBody(preparedText.convertedText)
     : undefined;
-  const chunkSegment = (text: string): string[] => {
-    const sourceText = hasMatrixSpoilerMetadataCollision(text) ? markdownToMatrixBody(text) : text;
+  const chunkSegment = (segmentText: string): string[] => {
+    const sourceText = hasMatrixSpoilerMetadataCollision(segmentText)
+      ? markdownToMatrixBody(segmentText)
+      : segmentText;
     const protectedUnderline = protectMatrixUnderlineTags(sourceText);
     const protectedSpoilers = protectMatrixSpoilerDelimiters(protectedUnderline.markdown);
     const wrapperReserve =

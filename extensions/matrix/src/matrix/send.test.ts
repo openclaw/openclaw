@@ -7,7 +7,6 @@ import { markdownToMatrixBody, markdownToMatrixHtml } from "./format.js";
 import {
   chunkMatrixText,
   editMessageMatrix,
-  prepareMatrixSingleText,
   sendMessageMatrix,
   sendPollMatrix,
   sendSingleTextMessageMatrix,

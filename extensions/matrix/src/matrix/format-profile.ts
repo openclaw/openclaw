@@ -15,7 +15,8 @@ export function createMatrixPrivateMarkers(
 ): MatrixSpoilerMarkers {
   const used = new Set(Array.from(markdown, (character) => character.charCodeAt(0)));
   for (const match of markdown.matchAll(/&#(?:x([0-9a-f]+)|(\d+));/giu)) {
-    const value = Number.parseInt(match[1] ?? match[2] ?? "", match[1] ? 16 : 10);
+    const radix = match[1] ? 16 : 10;
+    const value = Number.parseInt(match[1] ?? match[2] ?? "", radix);
     if (Number.isFinite(value) && value <= 0xffff) {
       used.add(value);
     }
