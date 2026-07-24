@@ -226,37 +226,23 @@ describe("native hook relay CLI", () => {
   it.each([
     {
       event: "pre_tool_use",
-      stdout: {
-        hookSpecificOutput: {
-          hookEventName: "PreToolUse",
-          permissionDecision: "deny",
-          permissionDecisionReason: "Native hook relay unavailable",
-        },
-      },
+      gatewayResponse: { stdout: "gateway-pre", stderr: "", exitCode: 0 },
     },
     {
       event: "permission_request",
-      stdout: {
-        hookSpecificOutput: {
-          hookEventName: "PermissionRequest",
-          decision: {
-            behavior: "deny",
-            message: "Native hook relay unavailable",
-          },
-        },
-      },
+      gatewayResponse: { stdout: "gateway-perm", stderr: "gw-err", exitCode: 1 },
     },
     {
       event: "post_tool_use",
-      stdout: null,
+      gatewayResponse: { stdout: "", stderr: "", exitCode: 0 },
     },
   ])(
-    "does not fall back to the gateway after a stale direct bridge error for $event",
+    "falls back to the gateway after a stale direct bridge error for $event",
     async (testCase) => {
       const invokeBridge = vi.fn(async () => {
         throw new Error("native hook relay bridge stale registration");
       });
-      const callGateway = vi.fn(async () => ({ stdout: "unexpected", stderr: "", exitCode: 0 }));
+      const callGateway = vi.fn(async () => testCase.gatewayResponse);
       const stdout = createWritableTextBuffer();
       const stderr = createWritableTextBuffer();
 
@@ -276,15 +262,18 @@ describe("native hook relay CLI", () => {
         },
       );
 
-      expect(exitCode).toBe(0);
-      if (testCase.stdout) {
-        expect(JSON.parse(stdout.text())).toEqual(testCase.stdout);
-      } else {
-        expect(stdout.text()).toBe("");
-      }
-      expect(stderr.text()).toContain("native hook relay unavailable");
+      // Stale bridge error now falls through to the gateway path so the gateway
+      // can resolve the request with its current relay registration.
+      expect(exitCode).toBe(testCase.gatewayResponse.exitCode);
+      expect(stdout.text()).toBe(testCase.gatewayResponse.stdout);
+      expect(stderr.text()).toContain(testCase.gatewayResponse.stderr);
+      expect(stderr.text()).toContain("native hook relay bridge restarted");
       expect(stderr.text()).toContain("native hook relay bridge stale registration");
-      expect(callGateway).not.toHaveBeenCalled();
+      expect(callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "nativeHook.invoke",
+        }),
+      );
     },
   );
 

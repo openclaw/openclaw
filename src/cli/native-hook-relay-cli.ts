@@ -118,8 +118,11 @@ export async function runNativeHookRelayCli(
         });
       }
       if (isNativeHookRelayBridgeStaleRegistrationError(error)) {
-        writeText(stderr, formatRelayCliError("native hook relay unavailable", error));
-        return writeNativeHookRelayUnavailableResponse({ stdout, stderr, opts, provider, event });
+        // The direct bridge has a newer registration. Fall through to the gateway
+        // path so the gateway can resolve the request with its current generation.
+        // This preserves native PreToolUse enforcement: if the gateway is also
+        // unavailable, the gateway-unavailable handler still fails closed below.
+        writeText(stderr, formatRelayCliError("native hook relay bridge restarted", error));
       }
       // Fall through to the gateway path for embedded/local gateway cases and
       // older registrations that predate the direct relay bridge.

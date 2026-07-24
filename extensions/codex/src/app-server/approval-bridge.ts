@@ -601,10 +601,10 @@ async function runNativeRelayToolPolicyForApprovalRequest(params: {
     }
     return { handled: true };
   } catch (error) {
-    // Only a relay that failed before invocation is unavailable. Once invoked,
-    // handler failures join explicit denials and malformed replies in failing closed.
+    // Pre-invocation unavailability (gateway restart, stale bridge, port
+    // mismatch): fall through to normal policy evaluation. Post-invocation
+    // failures (handler crash, malformed reply) stay fail-closed.
     if (
-      params.autoApprove === true &&
       !hasNativeHookRelayInvocation({
         relayId: params.nativeHookRelay.relayId,
         event: "pre_tool_use",
@@ -616,7 +616,7 @@ async function runNativeRelayToolPolicyForApprovalRequest(params: {
     return {
       handled: true,
       blocked: true,
-      reason: `OpenClaw native hook relay unavailable for Codex app-server approval: ${formatCodexDisplayText(
+      reason: `OpenClaw native hook relay failed for Codex app-server approval: ${formatCodexDisplayText(
         formatErrorMessage(error),
       )}`,
       failureDisposition: "failed",
