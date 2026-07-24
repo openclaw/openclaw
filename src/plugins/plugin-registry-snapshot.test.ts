@@ -177,13 +177,6 @@ function expectDiagnosticsContainCode(diagnostics: readonly { code?: unknown }[]
   expect(diagnostics.map((diagnostic) => diagnostic.code)).toContain(code);
 }
 
-function expectDiagnosticsContainSource(
-  diagnostics: readonly { source?: unknown }[],
-  source: string,
-) {
-  expect(diagnostics.map((diagnostic) => diagnostic.source)).toContain(source);
-}
-
 function expectDiagnosticsDoNotContainSource(
   diagnostics: readonly { source?: unknown }[],
   source: string,
