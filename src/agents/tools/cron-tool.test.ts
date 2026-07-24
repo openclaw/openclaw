@@ -1558,6 +1558,7 @@ describe("cron tool", () => {
       {
         agentSessionKey: "agent:main:discord:channel:ops",
         agentAccountId: "source-account",
+        selfRemoveOnlyJobId: "job-current",
         currentDeliveryContext: { accountId: "delivery-account" },
       },
       {
@@ -1574,6 +1575,7 @@ describe("cron tool", () => {
       agentId: "main",
       sessionKey: "agent:main:discord:channel:ops",
       turnSourceAccountId: "source-account",
+      cronSelfManagementJobId: "job-current",
     });
   });
 

@@ -526,6 +526,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         job,
         callerScope,
         defaultAgentId: context.cron.getDefaultAgentId(),
+        allowCurrentJob: true,
       })
     ) {
       respond(
@@ -1007,6 +1008,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         job,
         callerScope,
         defaultAgentId: context.cron.getDefaultAgentId(),
+        allowCurrentJob: true,
       })
     ) {
       respond(
@@ -1137,6 +1139,7 @@ export const cronHandlers: GatewayRequestHandlers = {
             job,
             callerScope,
             defaultAgentId: context.cron.getDefaultAgentId(),
+            allowCurrentJob: true,
           }),
       );
       if ((callerScope || p.agentId) && !matchedJob) {

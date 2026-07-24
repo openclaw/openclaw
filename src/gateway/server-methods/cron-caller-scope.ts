@@ -14,6 +14,7 @@ export type CronCallerScope = {
   agentId: string;
   sessionKey?: string;
   accountId: string;
+  currentJobId?: string;
 };
 
 export function readCronCallerScope(
@@ -23,11 +24,17 @@ export function readCronCallerScope(
   if (!identity?.agentId) {
     return undefined;
   }
+  const cronSelfManagementContext = identity.cronSelfManagementContext;
+  const currentJobId =
+    cronSelfManagementContext && Date.now() < cronSelfManagementContext.expiresAtMs
+      ? cronSelfManagementContext.jobId.trim() || undefined
+      : undefined;
   return {
     kind: "agentTool",
     agentId: normalizeAgentId(identity.agentId),
     sessionKey: identity.sessionKey?.trim() || undefined,
     accountId: normalizeAccountId(identity.turnSourceAccountId),
+    currentJobId,
   };
 }
 
@@ -111,10 +118,29 @@ function cronJobScheduledAuthorityMatchesCaller(
   );
 }
 
+function cronJobMatchesCurrentJobCapability(params: {
+  job: CronJob;
+  callerScope: CronCallerScope;
+  defaultAgentId?: string;
+}): boolean {
+  if (
+    params.callerScope.currentJobId !== params.job.id ||
+    resolveCronJobEffectiveAgentId(params.job, params.defaultAgentId) !== params.callerScope.agentId
+  ) {
+    return false;
+  }
+  const policy = params.job.scheduledToolPolicy;
+  return (
+    policy?.mode !== "account" ||
+    normalizeAccountId(policy.ownerAccountId) === params.callerScope.accountId
+  );
+}
+
 export function cronJobMatchesCallerScope(params: {
   job: CronJob;
   callerScope: CronCallerScope | undefined;
   defaultAgentId?: string;
+  allowCurrentJob?: boolean;
 }): boolean {
   if (!params.callerScope) {
     return true;
@@ -124,6 +150,18 @@ export function cronJobMatchesCallerScope(params: {
   // payload env, watched commands, or manual force-run controls.
   if (isOperatorCommandCronJob(params.job)) {
     return false;
+  }
+  // A signed scheduled-run claim restores only the cron tool's historical
+  // current-job surface. Callers must opt in per read/self-remove operation.
+  if (
+    params.allowCurrentJob === true &&
+    cronJobMatchesCurrentJobCapability({
+      job: params.job,
+      callerScope: params.callerScope,
+      defaultAgentId: params.defaultAgentId,
+    })
+  ) {
+    return true;
   }
   if (!cronJobScheduledAuthorityMatchesCaller(params.job, params.callerScope)) {
     return false;
