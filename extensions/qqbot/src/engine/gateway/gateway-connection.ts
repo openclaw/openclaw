@@ -299,13 +299,31 @@ export class GatewayConnection {
       }
 
       const accessToken = await getAccessToken(account.appId, account.clientSecret);
+      if (this.isAborted) {
+        this.isConnecting = false;
+        return;
+      }
       log?.info(`✅ Access token obtained successfully`);
       const gatewayUrl = await getGatewayUrl(accessToken, account.appId);
+      if (this.isAborted) {
+        this.isConnecting = false;
+        return;
+      }
       log?.info(`Connecting to ${gatewayUrl}`);
       const ws = await createQQWSClient({
         gatewayUrl,
         userAgent: getPluginUserAgent(),
       });
+      // Abort can land while socket creation is in flight. Never adopt a
+      // connection created after this lifecycle owner has already stopped.
+      if (this.isAborted) {
+        // ws.close() on a CONNECTING socket emits an error event from
+        // abortHandshake(); own it so Node does not treat it as unhandled.
+        ws.on("error", () => {});
+        ws.close();
+        this.isConnecting = false;
+        return;
+      }
       this.currentWs = ws;
 
       // ---- WebSocket: open ----
@@ -357,6 +375,9 @@ export class GatewayConnection {
       });
     } catch (err) {
       this.isConnecting = false;
+      if (this.isAborted) {
+        return;
+      }
       const errMsg = err instanceof Error ? err.message : String(err);
       log?.error(`Connection failed: ${errMsg}`);
       if (errMsg.includes("Too many requests") || errMsg.includes("100001")) {
