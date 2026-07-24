@@ -203,42 +203,54 @@ describe("transitive-manifest-risk-report", () => {
   it("fetches full npm packuments for the requested manifest version", async () => {
     const fetchCalls: Array<{ url: string; accept: string | null; signal: AbortSignal | null }> =
       [];
+    const fetchImpl = async (url: string | URL, init?: RequestInit) => {
+      fetchCalls.push({
+        url: String(url),
+        accept: new Headers(init?.headers).get("accept"),
+        signal: init?.signal instanceof AbortSignal ? init.signal : null,
+      });
+      return new Response(
+        JSON.stringify({
+          time: {
+            "1.0.0": "2026-05-12T00:00:00.000Z",
+          },
+          versions: {
+            "1.0.0": {
+              dependencies: {
+                exact: "1.2.3",
+              },
+              scripts: {
+                install: "node install.js",
+              },
+            },
+          },
+        }),
+        {
+          status: 200,
+        },
+      );
+    };
     const manifest = await fetchNpmManifest({
       packageName: "@scope/package",
       version: "1.0.0",
       registryBaseUrl: "https://registry.example.test",
-      fetchImpl: async (url, init) => {
-        fetchCalls.push({
-          url: String(url),
-          accept: new Headers(init?.headers).get("accept"),
-          signal: init?.signal instanceof AbortSignal ? init.signal : null,
-        });
-        return new Response(
-          JSON.stringify({
-            time: {
-              "1.0.0": "2026-05-12T00:00:00.000Z",
-            },
-            versions: {
-              "1.0.0": {
-                dependencies: {
-                  exact: "1.2.3",
-                },
-                scripts: {
-                  install: "node install.js",
-                },
-              },
-            },
-          }),
-          {
-            status: 200,
-          },
-        );
-      },
+      fetchImpl,
+    });
+    await fetchNpmManifest({
+      packageName: "@scope/package/extra",
+      version: "1.0.0",
+      registryBaseUrl: "https://registry.example.test",
+      fetchImpl,
     });
 
     expect(fetchCalls).toEqual([
       {
-        url: "https://registry.example.test/@scope%2fpackage",
+        url: "https://registry.example.test/@scope%2Fpackage",
+        accept: "application/json",
+        signal: expect.any(AbortSignal),
+      },
+      {
+        url: "https://registry.example.test/@scope%2Fpackage%2Fextra",
         accept: "application/json",
         signal: expect.any(AbortSignal),
       },

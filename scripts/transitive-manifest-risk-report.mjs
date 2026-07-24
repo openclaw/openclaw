@@ -48,7 +48,8 @@ function isAllowedPinnedSpec(spec) {
 }
 
 function encodePackageName(name) {
-  return name.startsWith("@") ? name.replace("/", "%2f") : name;
+  const encoded = encodeURIComponent(name);
+  return encoded.startsWith("%40") ? `@${encoded.slice("%40".length)}` : encoded;
 }
 
 function resolveRegistryBaseUrl() {
