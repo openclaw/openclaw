@@ -282,6 +282,12 @@ export function createTelegramInboundMediaGroupRuntime(
             ),
         }).catch(() => {});
       }
+      // Albums can carry a caption on any item, not only the primary message.
+      // Route multi-caption groups through the shared multi-message body path
+      // so every caption survives in album order instead of only the first.
+      const captionedCount = entry.messages.filter((item) =>
+        getTelegramTextParts(item.msg).text.trim(),
+      ).length;
       const result = await processMessageWithReplyChain({
         ctx: primary.ctx,
         msg: primary.msg,
@@ -289,6 +295,9 @@ export function createTelegramInboundMediaGroupRuntime(
         promptContextMessageSelection: selection,
         storeAllowFrom: entry.storeAllowFrom,
         options: {
+          ...(captionedCount > 1
+            ? { inboundDebounceMessages: entry.messages.map((item) => item.msg) }
+            : {}),
           ...promptContextBoundaryOptions(
             entry.promptContextMinTimestampMs,
             entry.promptContextAmbientWatermark,
