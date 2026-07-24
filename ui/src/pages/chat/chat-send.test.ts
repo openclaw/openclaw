@@ -8106,7 +8106,8 @@ describe("handleAbortChat", () => {
   });
 
   it("does not queue an unversioned session stop while disconnected", async () => {
-    const client = { request: vi.fn() } as unknown as NonNullable<ChatHost["client"]>;
+    const request = vi.fn();
+    const client = { request } as unknown as NonNullable<ChatHost["client"]>;
     const sessionKey = "agent:main:telegram:direct:queued-user";
     const host = makeHost({
       client,
@@ -8124,11 +8125,12 @@ describe("handleAbortChat", () => {
 
     expect(host.pendingAbort).toBeUndefined();
     expect(host.chatMessage).toBe("draft");
-    expect(client.request).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("does not queue an unversioned global stop while disconnected", async () => {
-    const client = { request: vi.fn() } as unknown as NonNullable<ChatHost["client"]>;
+    const request = vi.fn();
+    const client = { request } as unknown as NonNullable<ChatHost["client"]>;
     const host = makeHost({
       client,
       connected: false,
@@ -8146,7 +8148,7 @@ describe("handleAbortChat", () => {
 
     expect(host.pendingAbort).toBeUndefined();
     expect(host.chatMessage).toBe("draft");
-    expect(client.request).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
   });
 
   it.each([
