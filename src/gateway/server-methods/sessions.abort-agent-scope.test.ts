@@ -41,6 +41,8 @@ vi.mock("../session-utils.js", async () => {
       loadCombinedSessionStoreForGatewayMock(...args),
     loadSessionEntry: (...args: unknown[]) =>
       loadSessionEntryMock(...(args as [string, { agentId?: string }?])),
+    loadSessionEntryReadOnly: (...args: unknown[]) =>
+      loadSessionEntryMock(...(args as [string, { agentId?: string }?])),
   };
 });
 
@@ -348,7 +350,7 @@ describe("sessions.abort agent scope", () => {
         reason: "abort",
       }),
       new Set(["conn-1"]),
-      { dropIfSlow: true },
+      { agentId: "work", dropIfSlow: true },
     );
   });
 

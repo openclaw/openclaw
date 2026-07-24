@@ -6,7 +6,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { renderSessionsHubTabs } from "../../components/sessions-hub-tabs.ts";
+import { renderSessionsHubHeader } from "../../components/sessions-hub-header.ts";
 import {
   renderSettingsEmpty,
   renderSettingsPage,
@@ -90,10 +90,10 @@ class WorktreesPage extends OpenClawLightDomElement {
     sourceChanged = false,
   ) {
     const clientChanged = snapshot.client !== this.client;
-    const connectionChanged = snapshot.connected !== this.gatewayConnected;
+    const connectionChanged = (snapshot.phase === "connected") !== this.gatewayConnected;
     const identityChanged = sourceChanged || clientChanged;
     this.client = snapshot.client;
-    this.gatewayConnected = snapshot.connected;
+    this.gatewayConnected = snapshot.phase === "connected";
     if (identityChanged || connectionChanged) {
       this.invalidateLoad();
       this.invalidateOperations();
@@ -102,7 +102,7 @@ class WorktreesPage extends OpenClawLightDomElement {
       this.records = [];
       this.error = null;
     }
-    if (snapshot.connected && snapshot.client) {
+    if (snapshot.phase === "connected" && snapshot.client) {
       void this.load();
     }
   }
@@ -472,19 +472,15 @@ class WorktreesPage extends OpenClawLightDomElement {
       { wide: true },
     );
     return html`
-      <section class="content-header">
-        <div>
-          <div class="page-title">${titleForRoute("sessions")}</div>
-        </div>
-        ${renderSessionsHubTabs({
-          active: "worktrees",
-          onSelect: (tab) => {
-            if (tab !== "worktrees") {
-              this.context?.navigate(tab);
-            }
-          },
-        })}
-      </section>
+      ${renderSessionsHubHeader({
+        active: "worktrees",
+        title: titleForRoute("sessions"),
+        onSelect: (tab) => {
+          if (tab !== "worktrees") {
+            this.context?.navigate(tab);
+          }
+        },
+      })}
       ${renderSettingsWorkspace(body, { id: "sessions-hub-panel" })}
     `;
   }

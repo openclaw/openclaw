@@ -15,6 +15,7 @@ import {
 } from "./legacy-repair.js";
 import {
   formatLegacyIssuePreview,
+  formatScheduledToolPolicyAdvisory,
   formatUnresolvedCommandPromptAdvisory,
   formatUnresolvedShellPromptAdvisory,
 } from "./repair-plan.js";
@@ -32,6 +33,11 @@ function pluralize(count: number, noun: string) {
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+function readLegacyCronStorePath(cfg: OpenClawConfig): string | undefined {
+  return (cfg.cron as (NonNullable<OpenClawConfig["cron"]> & { store?: string }) | undefined)
+    ?.store;
 }
 
 // Count jobs the store still marks in-flight (`state.runningAtMs` is a number).
@@ -108,7 +114,7 @@ export async function collectLegacyCronStoreHealthFindings(params: {
   try {
     state = await loadLegacyCronRepairState({ cfg: params.cfg, readOnly: true });
   } catch (err) {
-    const storePath = resolveCronJobsStorePath(params.cfg.cron?.store);
+    const storePath = resolveCronJobsStorePath(readLegacyCronStorePath(params.cfg));
     return [
       legacyCronStoreFinding({
         message: `Unable to read cron job store at ${shortenHomePath(storePath)}.`,
@@ -196,6 +202,29 @@ export async function collectLegacyCronStoreHealthFindings(params: {
       }),
     );
   }
+  for (const [names, requirement, description] of [
+    [
+      normalized.legacyScheduledToolPolicyJobs,
+      "cron-scheduled-authority-reauthorization",
+      "require explicit scheduled authority reauthorization",
+    ],
+    [
+      normalized.invalidScheduledToolPolicyJobs,
+      "cron-scheduled-authority-valid",
+      "have invalid scheduled authority provenance",
+    ],
+  ] as const) {
+    if (names.length > 0) {
+      findings.push(
+        legacyCronStoreFinding({
+          message: `${pluralize(names.length, "tool-bearing cron job")} ${description}.`,
+          path: storePath,
+          requirement,
+          fixHint: `Review with ${formatCliCommand("openclaw cron list")} and reauthorize with ${formatCliCommand("openclaw cron edit <id> --tools <tool,...>")}.`,
+        }),
+      );
+    }
+  }
 
   if (sqliteProjectionBackfillCount > 0) {
     findings.push(
@@ -252,7 +281,7 @@ export async function maybeRepairLegacyCronStore(params: {
     state = await loadLegacyCronRepairState({ cfg: params.cfg });
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
-    const storePath = resolveCronJobsStorePath(params.cfg.cron?.store);
+    const storePath = resolveCronJobsStorePath(readLegacyCronStorePath(params.cfg));
     note(
       [
         `Unable to read cron job store at ${shortenHomePath(storePath)}.`,
@@ -370,6 +399,13 @@ export async function maybeRepairLegacyCronStore(params: {
   );
   if (shellPromptAdvisory) {
     note(shellPromptAdvisory, "Cron");
+  }
+  const scheduledToolPolicyAdvisory = formatScheduledToolPolicyAdvisory({
+    legacyJobs: normalized.legacyScheduledToolPolicyJobs,
+    invalidJobs: normalized.invalidScheduledToolPolicyJobs,
+  });
+  if (scheduledToolPolicyAdvisory) {
+    note(scheduledToolPolicyAdvisory, "Cron");
   }
   const previewLines = formatLegacyIssuePreview(normalized.issues);
   if (legacyStoreDetected) {

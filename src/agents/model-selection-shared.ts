@@ -22,6 +22,7 @@ import { resolveConfiguredProviderFallback } from "./configured-provider-fallbac
 import { DEFAULT_PROVIDER } from "./defaults.js";
 import { findModelCatalogEntry } from "./model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
+import { resolveCatalogOwnedModelCompat } from "./model-compat-catalog.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import {
   normalizeConfiguredProviderCatalogModelId,
@@ -30,12 +31,11 @@ import {
 import {
   type ModelManifestNormalizationContext,
   type ModelRef,
-  findNormalizedProviderValue,
   modelKey,
   normalizeModelRef,
   normalizeProviderId,
-  parseModelRef,
-} from "./model-selection-normalize.js";
+} from "./model-ref-shared.js";
+import { findNormalizedProviderValue, parseModelRef } from "./model-selection-normalize.js";
 
 // Shared model-selection helpers for config aliases, allowlists, provider
 // inference, and configured catalog rows used by CLI and runtime selectors.
@@ -98,15 +98,11 @@ function resolveManifestPluginsForModelIdNormalization(params: {
     if (currentManifestPlugins) {
       return currentManifestPlugins;
     }
-    return loadManifestMetadataSnapshot({
-      config: params.cfg,
-      env: process.env,
-    }).plugins;
   }
   return loadManifestMetadataSnapshot({
     config: params.cfg,
-    workspaceDir,
     env: process.env,
+    ...(workspaceDir ? { workspaceDir } : {}),
   }).plugins;
 }
 
@@ -706,10 +702,12 @@ function applyModelCatalogMetadata(params: {
     params.entry.params || configuredEntry?.params
       ? { ...params.entry.params, ...configuredEntry?.params }
       : undefined;
-  const nextCompat =
-    params.entry.compat || configuredEntry?.compat
-      ? { ...params.entry.compat, ...configuredEntry?.compat }
-      : undefined;
+  const nextCompat = resolveCatalogOwnedModelCompat({
+    catalogRoute: params.entry,
+    catalogCompat: params.entry.compat,
+    configuredRoute: configuredEntry,
+    configuredCompat: configuredEntry?.compat,
+  });
 
   return {
     ...params.entry,
@@ -1354,17 +1352,15 @@ function resolveConfiguredModelManifestPlugins(params: {
   }
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
   if (!workspaceDir) {
-    return (
-      getCurrentPluginMetadataSnapshot({
-        config: params.cfg,
-        env: process.env,
-      })?.plugins ?? []
-    );
+    return getCurrentPluginMetadataSnapshot({
+      config: params.cfg,
+      env: process.env,
+    })?.plugins;
   }
   return loadManifestMetadataSnapshot({
     config: params.cfg,
-    workspaceDir,
     env: process.env,
+    ...(workspaceDir ? { workspaceDir } : {}),
   }).plugins;
 }
 

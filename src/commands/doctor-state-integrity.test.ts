@@ -236,15 +236,15 @@ describe("structured state integrity findings", () => {
 async function runOrphanTranscriptCheckWithQmdSessions(enabled: boolean, homeDir: string) {
   const cfg: OpenClawConfig = {
     agents: {
-      defaults: {
-        memorySearch: { rememberAcrossConversations: false },
-      },
+      defaults: {},
     },
     memory: {
       backend: "qmd",
       qmd: {
         sessions: { enabled },
       },
+
+      search: { rememberAcrossConversations: false },
     },
   };
   setupSessionState(cfg, process.env, homeDir);
@@ -848,8 +848,7 @@ describe("doctor state integrity oauth dir checks", () => {
     const entry: SessionEntry = {
       sessionId: "session",
       updatedAt: 1,
-      lastTo: "heartbeat",
-      origin: { label: "heartbeat" },
+      delivery: { kind: "internal" },
     };
     expect(resolveHeartbeatMainSessionRepairCandidate({ entry })).toBeNull();
   });

@@ -13,6 +13,7 @@ import {
   TERMINAL_PANEL_TOGGLE_EVENT,
   UI_COMMAND_EVENT,
 } from "../components/panel-toggle-contract.ts";
+import { createStorageMock } from "../test-helpers/storage.ts";
 import "./app-host.ts";
 import type {
   ApplicationContext,
@@ -22,6 +23,7 @@ import type {
 import { shouldMergeChatChrome } from "./mobile-nav-layout.ts";
 import { navigationSurfaceIsHidden, renderFloatingUpdateCard } from "./navigation-surface.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
+import { resetServerUiPrefsSync } from "./server-prefs.ts";
 
 type AppLifecycleState = {
   loginToken: string;
@@ -35,13 +37,18 @@ type AppLifecycleState = {
 type ShellInitializationState = {
   routeState: { routeId?: string };
   ensureAgentsList: (
-    snapshot: { client: GatewayBrowserClient | null; connected: boolean },
+    snapshot: ApplicationGatewaySnapshot,
     agents: ApplicationContext["agents"],
   ) => void;
   ensureRuntimeConfig: (
-    snapshot: { client: GatewayBrowserClient | null; connected: boolean },
+    snapshot: ApplicationGatewaySnapshot,
     runtimeConfig: ApplicationContext["runtimeConfig"],
   ) => void;
+};
+
+type ShellServerPreferencesState = {
+  runtime: { context: ApplicationContext };
+  reconcileServerUiPrefs: (runtimeConfig: ApplicationContext["runtimeConfig"]) => void;
 };
 
 type ShellKeyboardState = {
@@ -237,8 +244,7 @@ describe("OpenClaw app lifecycle", () => {
     const app = document.createElement("openclaw-app") as unknown as AppLifecycleState;
     const snapshot = {
       client: null,
-      connected: false,
-      reconnecting: false,
+      phase: "stopped",
       lastError: null,
       lastErrorCode: null,
     } as ApplicationGatewaySnapshot;
@@ -310,7 +316,7 @@ describe("OpenClaw shell source initialization", () => {
     ) as unknown as ShellInitializationState;
     shell.routeState = { routeId: "usage" };
     const client = {} as GatewayBrowserClient;
-    const snapshot = { client, connected: true };
+    const snapshot = { client, phase: "connected" } as ApplicationGatewaySnapshot;
     const firstAgents = {
       state: { agentsList: null },
       ensureList: vi.fn(() => Promise.resolve(null)),
@@ -337,6 +343,39 @@ describe("OpenClaw shell source initialization", () => {
     expect(secondAgents.ensureList).toHaveBeenCalledOnce();
     expect(firstRuntimeConfig.ensureLoaded).toHaveBeenCalledOnce();
     expect(secondRuntimeConfig.ensureLoaded).toHaveBeenCalledOnce();
+  });
+});
+
+describe("OpenClaw shell server preferences", () => {
+  it("refreshes live navigation when a sidebar preference arrives from the gateway", () => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    resetServerUiPrefsSync();
+    const sidebarEntries = ["route:usage", "session:agent:main:test"];
+    const updateNavigation = vi.fn();
+    const refreshTheme = vi.fn();
+    const runtimeConfig = {
+      state: {
+        configSnapshot: {
+          config: { ui: { prefs: { sidebarEntries } } },
+          hash: "sidebar-config-hash",
+        },
+      },
+    } as unknown as ApplicationContext["runtimeConfig"];
+    const context = {
+      gateway: { connection: { gatewayUrl: "ws://sidebar.test" } },
+      navigation: { update: updateNavigation },
+      theme: { refresh: refreshTheme },
+    } as unknown as ApplicationContext;
+    const shell = document.createElement(
+      "openclaw-app-shell",
+    ) as unknown as ShellServerPreferencesState;
+    shell.runtime = { context };
+
+    shell.reconcileServerUiPrefs(runtimeConfig);
+
+    expect(updateNavigation).toHaveBeenCalledWith({ sidebarEntries });
+    expect(refreshTheme).toHaveBeenCalledOnce();
+    resetServerUiPrefsSync();
   });
 });
 
@@ -575,7 +614,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       context: {
         gateway: {
           snapshot: {
-            connected: true,
+            phase: "connected",
             hello: {
               auth: { role: "operator", scopes: ["operator.admin"] },
               features: { methods: ["terminal.open", "browser.request"] },
@@ -799,6 +838,28 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       key: "<",
       code: "Comma",
       metaKey: true,
+      shiftKey: true,
+      cancelable: true,
+    });
+
+    shell.handleDocumentKeydown(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(navigate).toHaveBeenCalledWith("config", undefined);
+  });
+
+  it("opens Settings with Ctrl-Shift-Comma", () => {
+    const navigate = vi.fn();
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellKeyboardState;
+    shell.runtime = {
+      context: {
+        navigate,
+      } as unknown as ApplicationContext,
+    };
+    const event = new KeyboardEvent("keydown", {
+      key: "<",
+      code: "Comma",
+      ctrlKey: true,
       shiftKey: true,
       cancelable: true,
     });

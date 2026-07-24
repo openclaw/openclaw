@@ -133,6 +133,7 @@ function isManagedCanvasDocumentPreview(preview: ToolPreview): boolean {
 const WIDGET_SIZE_MESSAGE_TYPE = "openclaw:widget-size";
 const WIDGET_PROMPT_OFFER_MESSAGE_TYPE = "openclaw:widget-prompt-offer";
 const WIDGET_PROMPT_MESSAGE_TYPE = "openclaw:widget-prompt";
+const WIDGET_PROMPT_HOST_READY_MESSAGE_TYPE = "openclaw:widget-prompt-host-ready";
 const WIDGET_FRAME_MIN_HEIGHT = 160;
 const WIDGET_FRAME_MAX_HEIGHT = 1200;
 // Preview frames render inside lit shadow roots, so a document query cannot
@@ -205,6 +206,9 @@ function tryAdoptWidgetPromptPort(frame: HTMLIFrameElement) {
     handleWidgetPromptMessage(frame, message.data);
   });
   port.start();
+  // The wrapper waits for this trusted adoption signal before using the
+  // legacy inline channel, so board widgets can wait for their view ticket.
+  port.postMessage({ type: WIDGET_PROMPT_HOST_READY_MESSAGE_TYPE });
 }
 
 function installWidgetPromptOfferListener() {
@@ -468,9 +472,13 @@ function renderWidgetCard(
       ? mcpAppWidgetNameForViewId(mcpAppViewId)
       : undefined
     : canvasWidgetName(preview);
-  const pinned = Boolean(
-    pinName && provider?.snapshot$.value.widgets.some((widget) => widget.name === pinName),
-  );
+  const pinnedWidget = pinName
+    ? provider?.snapshot$.value.widgets.find((widget) => widget.name === pinName)
+    : undefined;
+  const pinned = Boolean(pinnedWidget);
+  // Chat keeps its labeled card shell, but the inner inset follows the pinned
+  // widget's presentation so authored edge-to-edge content matches the board.
+  const bleed = pinned && (pinnedWidget?.presentation ?? "card") !== "card";
   const pinAction =
     provider &&
     (contentKind === "mcp-app" ? provider.canPinMcpApps : provider.canPinWidgets) &&
@@ -498,7 +506,12 @@ function renderWidgetCard(
         </button>`
       : nothing;
   return html`
-    <div class="chat-tool-card__preview" data-kind="canvas" data-surface=${surface}>
+    <div
+      class="chat-tool-card__preview"
+      data-content-kind=${contentKind}
+      data-kind="canvas"
+      data-surface=${surface}
+    >
       <div class="chat-tool-card__preview-header">
         <span class="chat-tool-card__preview-label">${label}</span>
         <div class="chat-tool-card__preview-actions">
@@ -506,7 +519,7 @@ function renderWidgetCard(
           ${renderWidgetActions(preview)}
         </div>
       </div>
-      <div class="chat-tool-card__preview-panel" data-side="canvas">
+      <div class="chat-tool-card__preview-panel" data-side="canvas" ?data-bleed=${bleed}>
         ${renderWidgetContent(contentKind, preview, options)}
       </div>
     </div>

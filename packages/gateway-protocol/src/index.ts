@@ -23,13 +23,23 @@ export type {
   GatewayErrorDetails,
   McpAppViewExpiredErrorDetails,
   MissingScopeErrorDetails,
+  WizardNotFoundErrorDetails,
 } from "./schema/error-codes.js";
 export * from "./schema/board.js";
+export {
+  SessionCreatedActorSchema,
+  type SessionCreatedActor,
+  type SessionRow,
+} from "./schema/sessions-row.js";
+export * from "./schema/sessions-suggestions.js";
 export * from "./migration-api.js";
 export type * from "./public-session-catalog.js";
 import {
+  BoardActionParamsSchema,
+  BoardDataReadParamsSchema,
   BoardEventParamsSchema,
   BoardGetParamsSchema,
+  BoardPromptAuthorizeParamsSchema,
   BoardUpdateParamsSchema,
   BoardWidgetContentSchema,
   BoardWidgetAppViewParamsSchema,
@@ -62,6 +72,7 @@ import {
   AgentIdentityResultSchema,
   AgentParamsSchema,
   MessageActionParamsSchema,
+  AgentKindSchema,
   AgentSummarySchema,
   AgentsFileEntrySchema,
   AgentsCreateParamsSchema,
@@ -99,6 +110,12 @@ import {
   ConversationTurnParamsSchema,
   ConversationTurnReplySchema,
   ConversationTurnResultSchema,
+  ChannelsPairingApproveParamsSchema,
+  ChannelsPairingApproveResultSchema,
+  ChannelsPairingDismissParamsSchema,
+  ChannelsPairingDismissResultSchema,
+  ChannelsPairingListParamsSchema,
+  ChannelsPairingListResultSchema,
   ChannelsStartParamsSchema,
   ChannelsStopParamsSchema,
   ChannelsLogoutParamsSchema,
@@ -140,6 +157,8 @@ import {
   CommandsListResultSchema,
   ChatAbortParamsSchema,
   ChatEventSchema,
+  ChatRunStartupPhaseSchema,
+  ChatStatusEventSchema,
   ChatHistoryParamsSchema,
   ChatMetadataParamsSchema,
   ChatMessageGetParamsSchema,
@@ -178,6 +197,10 @@ import {
   CronRemoveParamsSchema,
   CronRunParamsSchema,
   CronRunsParamsSchema,
+  CronScratchGetParamsSchema,
+  CronScratchGetResultSchema,
+  CronScratchSetParamsSchema,
+  CronScratchSetResultSchema,
   CronStatusParamsSchema,
   CronUpdateParamsSchema,
   DevicePairApproveParamsSchema,
@@ -265,6 +288,7 @@ import {
   GatewayErrorDetailCodes,
   GatewayErrorDetailsSchema,
   MissingScopeErrorDetailsSchema,
+  WizardNotFoundErrorDetailsSchema,
   EnvironmentSummarySchema,
   EnvironmentsCreateParamsSchema,
   EnvironmentsCreateResultSchema,
@@ -301,6 +325,7 @@ import {
   WorkerTranscriptCommitResultSchema,
   WorkerTranscriptMessageSchema,
   WORKER_HEARTBEAT_INTERVAL_MS,
+  WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
   WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
   WORKER_PROTOCOL_FEATURES,
   WORKER_PROTOCOL_MAX_FEATURE_LENGTH,
@@ -344,6 +369,8 @@ import {
   TerminalUploadParamsSchema,
   TerminalUploadResultSchema,
   UiCommandParamsSchema,
+  ModelsAuthLogoutParamsSchema,
+  ModelsAuthStatusParamsSchema,
   ModelsListParamsSchema,
   AuthProbeStatusSchema,
   ModelsProbeParamsSchema,
@@ -396,6 +423,7 @@ import {
   SecretsResolveParamsSchema,
   SecretsResolveResultSchema,
   SessionBranchSchema,
+  SessionRowSchema,
   SessionsAbortParamsSchema,
   SessionsCompactParamsSchema,
   SessionsCleanupParamsSchema,
@@ -419,6 +447,31 @@ import {
   SessionPlacementSchema,
   SessionPlacementStateSchema,
   isCloudWorkerPlacementState,
+  SESSION_OBSERVER_HEALTH_VALUES,
+  SessionObserverDigestSchema,
+  SessionObserverHealthSchema,
+  SessionObserverPlanProgressSchema,
+  SessionMemberAddParamsSchema,
+  SessionMemberMutationResultSchema,
+  SessionMemberRemoveParamsSchema,
+  SessionMemberSchema,
+  SessionMembersListParamsSchema,
+  SessionMembersListResultSchema,
+  SessionSharingActionSchema,
+  SessionSharingEventSchema,
+  SessionSharingIdentitySchema,
+  SessionSharingRoleSchema,
+  SessionSuggestionsAddParamsSchema,
+  SessionSuggestionsListParamsSchema,
+  SessionSuggestionsResolveParamsSchema,
+  SessionTypingParamsSchema,
+  SessionVisibilitySchema,
+  SessionVisibilitySetParamsSchema,
+  SessionVisibilitySetResultSchema,
+  SessionsObserverAskParamsSchema,
+  SessionsObserverAskResultSchema,
+  SessionsObserverVisibilityParamsSchema,
+  SessionsObserverVisibilityResultSchema,
   SessionWorktreeInfoSchema,
   SessionsCreateParamsSchema,
   SessionsCreateResultSchema,
@@ -453,6 +506,7 @@ import {
   SessionCatalogDescriptorSchema,
   SessionCatalogHostSchema,
   SessionCatalogLocatorSchema,
+  SessionCatalogPullRequestSummarySchema,
   SessionCatalogSessionSchema,
   SessionCatalogTranscriptItemSchema,
   SessionsCatalogArchiveParamsSchema,
@@ -581,6 +635,7 @@ import {
   WorktreesGcResultSchema,
   WorktreesBranchesParamsSchema,
   WorktreeBranchSchema,
+  WorktreeRepositoryStatusSchema,
   WorktreesBranchesResultSchema,
   FsDirEntrySchema,
   FsListDirParamsSchema,
@@ -684,6 +739,9 @@ export const validateBoardWidgetAppViewParams = lazyCompile(BoardWidgetAppViewPa
 export const validateBoardWidgetPutParams = lazyCompile(BoardWidgetPutParamsSchema);
 export const validateBoardWidgetGrantParams = lazyCompile(BoardWidgetGrantParamsSchema);
 export const validateBoardEventParams = lazyCompile(BoardEventParamsSchema);
+export const validateBoardPromptAuthorizeParams = lazyCompile(BoardPromptAuthorizeParamsSchema);
+export const validateBoardDataReadParams = lazyCompile(BoardDataReadParamsSchema);
+export const validateBoardActionParams = lazyCompile(BoardActionParamsSchema);
 export const validateWorktreesCreateParams = lazyCompile(WorktreesCreateParamsSchema);
 export const validateWorktreesRemoveParams = lazyCompile(WorktreesRemoveParamsSchema);
 export const validateWorktreesRestoreParams = lazyCompile(WorktreesRestoreParamsSchema);
@@ -755,6 +813,20 @@ export const validateSessionsFilesGetParams = lazyCompile(SessionsFilesGetParams
 export const validateSessionsFilesSetParams = lazyCompile(SessionsFilesSetParamsSchema);
 export const validateSessionsFilesRevealParams = lazyCompile(SessionsFilesRevealParamsSchema);
 export const validateSessionsDiffParams = lazyCompile(SessionsDiffParamsSchema);
+export const validateSessionsObserverAskParams = lazyCompile(SessionsObserverAskParamsSchema);
+export const validateSessionsObserverVisibilityParams = lazyCompile(
+  SessionsObserverVisibilityParamsSchema,
+);
+export const validateSessionVisibilitySetParams = lazyCompile(SessionVisibilitySetParamsSchema);
+export const validateSessionMembersListParams = lazyCompile(SessionMembersListParamsSchema);
+export const validateSessionMemberAddParams = lazyCompile(SessionMemberAddParamsSchema);
+export const validateSessionMemberRemoveParams = lazyCompile(SessionMemberRemoveParamsSchema);
+export const validateSessionSuggestionsAddParams = lazyCompile(SessionSuggestionsAddParamsSchema);
+export const validateSessionSuggestionsListParams = lazyCompile(SessionSuggestionsListParamsSchema);
+export const validateSessionSuggestionsResolveParams = lazyCompile(
+  SessionSuggestionsResolveParamsSchema,
+);
+export const validateSessionTypingParams = lazyCompile(SessionTypingParamsSchema);
 export const validateSessionsCreateParams = lazyCompile(SessionsCreateParamsSchema);
 export const validateSessionsSendParams = lazyCompile(SessionsSendParamsSchema);
 export const validateSessionsDispatchParams = lazyCompile(SessionsDispatchParamsSchema);
@@ -852,9 +924,14 @@ export const validateTalkSessionCloseParams = lazyCompile(TalkSessionCloseParams
 export const validateTalkSpeakParams = lazyCompile(TalkSpeakParamsSchema);
 export const validateTtsSpeakParams = lazyCompile(TtsSpeakParamsSchema);
 export const validateChannelsStatusParams = lazyCompile(ChannelsStatusParamsSchema);
+export const validateChannelsPairingListParams = lazyCompile(ChannelsPairingListParamsSchema);
+export const validateChannelsPairingApproveParams = lazyCompile(ChannelsPairingApproveParamsSchema);
+export const validateChannelsPairingDismissParams = lazyCompile(ChannelsPairingDismissParamsSchema);
 export const validateChannelsStartParams = lazyCompile(ChannelsStartParamsSchema);
 export const validateChannelsStopParams = lazyCompile(ChannelsStopParamsSchema);
 export const validateChannelsLogoutParams = lazyCompile(ChannelsLogoutParamsSchema);
+export const validateModelsAuthLogoutParams = lazyCompile(ModelsAuthLogoutParamsSchema);
+export const validateModelsAuthStatusParams = lazyCompile(ModelsAuthStatusParamsSchema);
 export const validateModelsListParams = lazyCompile(ModelsListParamsSchema);
 export const validateSkillsStatusParams = lazyCompile(SkillsStatusParamsSchema);
 export const validateToolsCatalogParams = lazyCompile(ToolsCatalogParamsSchema);
@@ -889,6 +966,8 @@ export const validateCronUpdateParams = lazyCompile(CronUpdateParamsSchema);
 export const validateCronRemoveParams = lazyCompile(CronRemoveParamsSchema);
 export const validateCronRunParams = lazyCompile(CronRunParamsSchema);
 export const validateCronRunsParams = lazyCompile(CronRunsParamsSchema);
+export const validateCronScratchGetParams = lazyCompile(CronScratchGetParamsSchema);
+export const validateCronScratchSetParams = lazyCompile(CronScratchSetParamsSchema);
 export const validateDevicePairListParams = lazyCompile(DevicePairListParamsSchema);
 export const validateDevicePairApproveParams = lazyCompile(DevicePairApproveParamsSchema);
 export const validateDevicePairRejectParams = lazyCompile(DevicePairRejectParamsSchema);
@@ -968,6 +1047,7 @@ export {
   ErrorShapeSchema,
   GatewayErrorDetailsSchema,
   MissingScopeErrorDetailsSchema,
+  WizardNotFoundErrorDetailsSchema,
   WorkerAdmissionFailureReasonSchema,
   WorkerAdmissionHandshakeSchema,
   WorkerAdmissionResponseFrameSchema,
@@ -991,6 +1071,7 @@ export {
   WorkerTranscriptCommitResultSchema,
   WorkerTranscriptMessageSchema,
   WORKER_HEARTBEAT_INTERVAL_MS,
+  WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
   WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
   WORKER_PROTOCOL_FEATURES,
   WORKER_PROTOCOL_MAX_FEATURE_LENGTH,
@@ -1034,6 +1115,8 @@ export {
   ConversationTurnResultSchema,
   MessageActionParamsSchema,
   ChatEventSchema,
+  ChatRunStartupPhaseSchema,
+  ChatStatusEventSchema,
   SendParamsSchema,
   PollParamsSchema,
   AgentParamsSchema,
@@ -1070,6 +1153,7 @@ export {
   SessionsListParamsSchema,
   SessionCatalogCapabilitiesSchema,
   SessionCatalogDescriptorSchema,
+  SessionCatalogPullRequestSummarySchema,
   SessionCatalogSessionSchema,
   SessionCatalogHostSchema,
   SessionCatalogLocatorSchema,
@@ -1113,6 +1197,7 @@ export {
   SessionsCompactionBranchParamsSchema,
   SessionsCompactionRestoreParamsSchema,
   SessionBranchSchema,
+  SessionRowSchema,
   SessionsBranchesListParamsSchema,
   SessionsBranchesListResultSchema,
   SessionsBranchesSwitchParamsSchema,
@@ -1123,6 +1208,27 @@ export {
   SessionsRewindResultSchema,
   SessionPlacementStateSchema,
   SessionPlacementSchema,
+  SESSION_OBSERVER_HEALTH_VALUES,
+  SessionObserverDigestSchema,
+  SessionObserverHealthSchema,
+  SessionObserverPlanProgressSchema,
+  SessionMemberAddParamsSchema,
+  SessionMemberMutationResultSchema,
+  SessionMemberRemoveParamsSchema,
+  SessionMemberSchema,
+  SessionMembersListParamsSchema,
+  SessionMembersListResultSchema,
+  SessionSharingActionSchema,
+  SessionSharingEventSchema,
+  SessionSharingIdentitySchema,
+  SessionSharingRoleSchema,
+  SessionVisibilitySchema,
+  SessionVisibilitySetParamsSchema,
+  SessionVisibilitySetResultSchema,
+  SessionsObserverAskParamsSchema,
+  SessionsObserverAskResultSchema,
+  SessionsObserverVisibilityParamsSchema,
+  SessionsObserverVisibilityResultSchema,
   SessionWorktreeInfoSchema,
   SessionsCreateParamsSchema,
   SessionsCreateResultSchema,
@@ -1264,11 +1370,18 @@ export {
   TtsSpeakResultSchema,
   ChannelsStatusParamsSchema,
   ChannelsStatusResultSchema,
+  ChannelsPairingListParamsSchema,
+  ChannelsPairingListResultSchema,
+  ChannelsPairingApproveParamsSchema,
+  ChannelsPairingApproveResultSchema,
+  ChannelsPairingDismissParamsSchema,
+  ChannelsPairingDismissResultSchema,
   ChannelsStartParamsSchema,
   ChannelsStopParamsSchema,
   ChannelsLogoutParamsSchema,
   WebLoginStartParamsSchema,
   WebLoginWaitParamsSchema,
+  AgentKindSchema,
   AgentSummarySchema,
   AgentsFileEntrySchema,
   AgentsCreateParamsSchema,
@@ -1313,6 +1426,8 @@ export {
   PluginsUiDescriptorsResultSchema,
   PluginsUninstallParamsSchema,
   PluginsUninstallResultSchema,
+  ModelsAuthLogoutParamsSchema,
+  ModelsAuthStatusParamsSchema,
   ModelsListParamsSchema,
   AuthProbeStatusSchema,
   ModelsProbeParamsSchema,
@@ -1362,6 +1477,10 @@ export {
   CronRemoveParamsSchema,
   CronRunParamsSchema,
   CronRunsParamsSchema,
+  CronScratchGetParamsSchema,
+  CronScratchGetResultSchema,
+  CronScratchSetParamsSchema,
+  CronScratchSetResultSchema,
   LogsTailParamsSchema,
   LogsTailResultSchema,
   TerminalOpenParamsSchema,
@@ -1448,6 +1567,7 @@ export {
   WorktreesGcResultSchema,
   WorktreesBranchesParamsSchema,
   WorktreeBranchSchema,
+  WorktreeRepositoryStatusSchema,
   WorktreesBranchesResultSchema,
   FsDirEntrySchema,
   FsListDirParamsSchema,
@@ -1524,6 +1644,8 @@ export type {
   AgentIdentityResult,
   AgentWaitParams,
   ChatEvent,
+  ChatRunStartupPhase,
+  ChatStatusEvent,
   TickEvent,
   ShutdownEvent,
   WakeParams,
@@ -1602,11 +1724,20 @@ export type {
   TalkModeParams,
   ChannelsStatusParams,
   ChannelsStatusResult,
+  ChannelsPairingListParams,
+  ChannelsPairingListResult,
+  ChannelsPairingApproveParams,
+  ChannelsPairingApproveResult,
+  ChannelsPairingDismissParams,
+  ChannelsPairingDismissResult,
+  ChannelsPairingAccount,
+  ChannelsPairingRequest,
   ChannelsStartParams,
   ChannelsStopParams,
   ChannelsLogoutParams,
   WebLoginStartParams,
   WebLoginWaitParams,
+  AgentKind,
   AgentSummary,
   AgentsFileEntry,
   AgentsCreateParams,
@@ -1766,6 +1897,26 @@ export type {
   SessionsDescribeParams,
   SessionsResolveParams,
   SessionOperationEvent,
+  SessionObserverDigest,
+  SessionObserverHealth,
+  SessionObserverPlanProgress,
+  SessionMember,
+  SessionMemberAddParams,
+  SessionMemberMutationResult,
+  SessionMemberRemoveParams,
+  SessionMembersListParams,
+  SessionMembersListResult,
+  SessionSharingAction,
+  SessionSharingEvent,
+  SessionSharingIdentity,
+  SessionSharingRole,
+  SessionVisibility,
+  SessionVisibilitySetParams,
+  SessionVisibilitySetResult,
+  SessionsObserverAskParams,
+  SessionsObserverAskResult,
+  SessionsObserverVisibilityParams,
+  SessionsObserverVisibilityResult,
   SessionPlacementState,
   SessionPlacement,
   SessionWorktreeInfo,
@@ -1838,6 +1989,10 @@ export type {
   CronRemoveParams,
   CronRunParams,
   CronRunsParams,
+  CronScratchGetParams,
+  CronScratchGetResult,
+  CronScratchSetParams,
+  CronScratchSetResult,
   CronRunLogEntry,
   ApprovalKind,
   ApprovalDecision,
@@ -1925,6 +2080,7 @@ export type {
   WorktreesGcResult,
   WorktreesBranchesParams,
   WorktreeBranch,
+  WorktreeRepositoryStatus,
   WorktreesBranchesResult,
   FsDirEntry,
   FsListDirParams,

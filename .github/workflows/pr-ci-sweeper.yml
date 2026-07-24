@@ -1,9 +1,8 @@
 name: PR CI Sweeper
 
-# Re-fires pull_request CI runs that GitHub dropped at PR open (merge-ref
-# race: no CI run attaches, or an un-rerunnable startup_failure is created).
-# Close/reopen with an app token re-fires the event; GITHUB_TOKEN events
-# would not trigger workflows.
+# Repairs dropped pull_request CI via close/reopen and non-destructively revives
+# cancelled GitHub Actions checks attached to auto-merge PR heads. The app token
+# authorizes reruns; GITHUB_TOKEN close/reopen events would not trigger CI.
 
 on:
   schedule:
@@ -11,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: Log intended re-fires without closing/reopening.
+        description: Log intended repairs without closing/reopening or rerunning workflows.
         required: false
         default: false
         type: boolean
@@ -41,12 +40,20 @@ jobs:
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          permission-actions: write
+          permission-checks: read
+          permission-issues: write
+          permission-pull-requests: write
       - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         id: app-token-fallback
         if: steps.app-token.outcome == 'failure'
         with:
           app-id: "2971289"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          permission-actions: write
+          permission-checks: read
+          permission-issues: write
+          permission-pull-requests: write
       - name: Sweep dropped PR CI runs
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
