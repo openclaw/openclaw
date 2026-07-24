@@ -1918,6 +1918,65 @@ describe("Anthropic provider", () => {
     expect(result.errorMessage).toContain("ended before message_stop");
   });
 
+  it("terminates the stream when the thrown error is a circular structure", async () => {
+    // Socket/HTTP layers raise self-referential error objects; a bare
+    // JSON.stringify in stream teardown throws and strands the run (#106568).
+    const circular: Record<string, unknown> = { code: "ECONNRESET" };
+    circular.self = circular;
+    // Transport layers reject with plain objects, not Error instances, which is
+    // what sends the formatter down the JSON.stringify branch.
+    const asResponse = vi.fn().mockRejectedValue(circular);
+    const client = {
+      messages: {
+        create: vi.fn(() => ({ asResponse })),
+      },
+    };
+    const stream = streamAnthropic(
+      makeAnthropicModel({ id: "claude-fable-5", name: "Claude Fable 5" }),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      { apiKey: "sk-ant-provider", client: client as never },
+    );
+    const eventTypes: string[] = [];
+    for await (const event of stream) {
+      eventTypes.push(event.type);
+    }
+    const result = await stream.result();
+
+    expect(eventTypes).toEqual(["error"]);
+    expect(result.stopReason).toBe("error");
+    // Must be a usable diagnostic, not just "a string" — an empty message would
+    // still leave the operator with nothing to act on.
+    expect(result.errorMessage).toBeTruthy();
+    expect(result.errorMessage).toBe("[object Object]");
+  });
+
+  it("keeps the message for Anthropic errors that carry no HTTP body", async () => {
+    // formatProviderError only substitutes status+body when a body is present, so
+    // ordinary Error rejections must still surface error.message — retry
+    // classification in src/llm/utils/retry.ts parses this string.
+    const asResponse = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error("Overloaded"), { status: 529 }));
+    const client = {
+      messages: {
+        create: vi.fn(() => ({ asResponse })),
+      },
+    };
+    const stream = streamAnthropic(
+      makeAnthropicModel({ id: "claude-fable-5", name: "Claude Fable 5" }),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      { apiKey: "sk-ant-provider", client: client as never },
+    );
+    const eventTypes: string[] = [];
+    for await (const event of stream) {
+      eventTypes.push(event.type);
+    }
+    const result = await stream.result();
+
+    expect(eventTypes).toEqual(["error"]);
+    expect(result.errorMessage).toBe("Overloaded");
+  });
+
   it("strips Fable thinking when replay targets Anthropic Vertex", async () => {
     let capturedPayload: unknown;
     const stream = streamAnthropic(
