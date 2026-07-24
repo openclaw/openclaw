@@ -245,7 +245,7 @@ export function deriveSessionMetaPatch(params: {
       !isInternalNonDeliveryChannel(nextProvider) &&
       !isSystemEventProvider(nextProvider),
     );
-    const deliveryIdentityChanged = Boolean(
+    const deliveryIdentityChanged =
       nextOwnsExternalRoute &&
       (!existingOrigin ||
         (existingOrigin.provider != null && nextProvider !== existingOrigin.provider) ||
@@ -254,8 +254,7 @@ export function deriveSessionMetaPatch(params: {
           origin.surface !== existingOrigin.surface) ||
         (existingOrigin.accountId != null &&
           origin?.accountId != null &&
-          origin.accountId !== existingOrigin.accountId)),
-    );
+          origin.accountId !== existingOrigin.accountId));
     patch.delivery = normalizeSessionDeliveryState({
       route: deliveryIdentityChanged ? undefined : sessionDeliveryRoute(params.existing),
       context: deliveryIdentityChanged
