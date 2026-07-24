@@ -87,7 +87,7 @@ describe("session sharing policy", () => {
         sessionId: "session-incognito",
         updatedAt: 1,
         visibility: "suggest" as const,
-        incognito: true,
+        incognito: true as const,
       },
     };
     expect(
