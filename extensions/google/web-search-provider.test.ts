@@ -367,6 +367,126 @@ describe("google web search provider", () => {
     });
   });
 
+  it("resolves configured Gemini env SecretRefs before GEMINI_API_KEY fallback", async () => {
+    await withEnvAsync(
+      {
+        GEMINI_API_KEY: "AIza-env-test",
+        GEMINI_SECRETREF_API_KEY: "AIza-ref-test",
+      },
+      async () => {
+        const mockFetch = installGeminiFetch();
+        const provider = createGeminiWebSearchProvider();
+        const tool = provider.createTool({
+          config: {
+            plugins: {
+              entries: {
+                google: {
+                  config: {
+                    webSearch: {
+                      apiKey: {
+                        source: "env",
+                        provider: "default",
+                        id: "GEMINI_SECRETREF_API_KEY",
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          searchConfig: { provider: "gemini" },
+        });
+
+        await tool?.execute({ query: "OpenClaw Gemini SecretRef precedence" });
+
+        expect(getFetchHeaders(mockFetch)["x-goog-api-key"]).toBe("AIza-ref-test");
+      },
+    );
+  });
+
+  it("does not use fallback credentials when configured Gemini SecretRefs are unavailable", async () => {
+    await withEnvAsync(
+      {
+        GEMINI_API_KEY: "AIza-env-test",
+        MISSING_GEMINI_SECRETREF_API_KEY: "",
+      },
+      async () => {
+        const mockFetch = installGeminiFetch();
+        const provider = createGeminiWebSearchProvider();
+        const tool = provider.createTool({
+          config: {
+            plugins: {
+              entries: {
+                google: {
+                  config: {
+                    webSearch: {
+                      apiKey: {
+                        source: "env",
+                        provider: "default",
+                        id: "MISSING_GEMINI_SECRETREF_API_KEY",
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            models: {
+              providers: {
+                google: createGoogleModelProviderConfig({
+                  apiKey: "AIza-provider-test",
+                }),
+              },
+            },
+          },
+          searchConfig: { provider: "gemini" },
+        });
+
+        await expect(
+          tool?.execute({ query: "OpenClaw Gemini missing SecretRef" }),
+        ).resolves.toEqual({
+          docs: "https://docs.openclaw.ai/tools/web",
+          error: "missing_gemini_api_key",
+          message:
+            "web_search (gemini) needs an API key. Set GEMINI_API_KEY in the Gateway environment, configure plugins.entries.google.config.webSearch.apiKey, or reuse models.providers.google.apiKey. If you do not want to configure a search API key, use web_fetch for a specific URL or the browser tool for interactive pages.",
+        });
+        expect(mockFetch).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  it("resolves Google model-provider env SecretRefs for Gemini search fallback", async () => {
+    await withEnvAsync(
+      {
+        GEMINI_API_KEY: undefined,
+        GOOGLE_PROVIDER_SECRETREF_API_KEY: "AIza-provider-ref-test",
+      },
+      async () => {
+        const mockFetch = installGeminiFetch();
+        const provider = createGeminiWebSearchProvider();
+        const tool = provider.createTool({
+          config: {
+            models: {
+              providers: {
+                google: createGoogleModelProviderConfig({
+                  apiKey: {
+                    source: "env",
+                    provider: "default",
+                    id: "GOOGLE_PROVIDER_SECRETREF_API_KEY",
+                  },
+                }),
+              },
+            },
+          },
+          searchConfig: { provider: "gemini" },
+        });
+
+        await tool?.execute({ query: "OpenClaw Gemini provider SecretRef fallback" });
+
+        expect(getFetchHeaders(mockFetch)["x-goog-api-key"]).toBe("AIza-provider-ref-test");
+      },
+    );
+  });
+
   it("routes Gemini web search through provider-level google.baseUrl as a fallback", async () => {
     const mockFetch = installGeminiFetch();
     const provider = createGeminiWebSearchProvider();
