@@ -41,8 +41,13 @@ function loadManifestCatalogRowsForPluginIds(params: {
   const eligibleProviders = new Set(
     plan.entries
       .filter((entry) =>
+        // `static-authoritative` accepts both explicitly-static and refreshable
+        // providers whose shipped manifest rows serve as the static fallback for
+        // the model selector and gateway-auth wizard. Live augmentation for
+        // refreshable providers still flows through the per-provider runtime
+        // catalog and is not gated by this list filter.
         params.mode === "static-authoritative"
-          ? entry.discovery === "static"
+          ? entry.discovery === "static" || entry.discovery === "refreshable"
           : entry.discovery !== "runtime",
       )
       .map((entry) => entry.provider),
