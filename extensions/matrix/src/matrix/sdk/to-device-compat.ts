@@ -48,9 +48,7 @@ function normalizeVerificationAcceptEvent(event: MatrixToDeviceEvent): {
   };
 }
 
-export function normalizeMatrixToDeviceEventsForRustCrypto(
-  events: unknown[],
-): MatrixToDeviceCompatResult {
+function normalizeMatrixToDeviceEventsForRustCrypto(events: unknown[]): MatrixToDeviceCompatResult {
   let normalizedAcceptEvents = 0;
   const normalizedEvents = events.map((event) => {
     if (!isRecord(event)) {

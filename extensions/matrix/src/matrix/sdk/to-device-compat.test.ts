@@ -1,12 +1,42 @@
 // Matrix tests cover to-device compatibility normalization before Rust crypto.
 import { describe, expect, it, vi } from "vitest";
-import {
-  normalizeMatrixToDeviceEventsForRustCrypto,
-  patchMatrixRustCryptoToDeviceCompatibility,
-} from "./to-device-compat.js";
+import { patchMatrixRustCryptoToDeviceCompatibility } from "./to-device-compat.js";
 
-describe("normalizeMatrixToDeviceEventsForRustCrypto", () => {
-  it("adds the SAS method to Matrix verification accept events when Element omits it", () => {
+/**
+ * Drives normalization through the only production seam: the patched Rust crypto
+ * preprocessor. Returns what the real preprocessor would have received.
+ */
+function preprocessThroughPatchedBackend(events: unknown[]): {
+  seenByRustCrypto: unknown[];
+  normalizedAcceptEvents: number | undefined;
+  run: () => Promise<unknown>;
+} {
+  const captured: { events: unknown[] } = { events: [] };
+  const original = vi.fn(async (received: unknown[]) => {
+    captured.events = received;
+    return received;
+  });
+  const backend = { preprocessToDeviceMessages: original };
+  let normalizedAcceptEvents: number | undefined;
+  patchMatrixRustCryptoToDeviceCompatibility({
+    client: { cryptoBackend: backend },
+    onNormalizedAcceptEvents: (count) => {
+      normalizedAcceptEvents = count;
+    },
+  });
+  return {
+    get seenByRustCrypto() {
+      return captured.events;
+    },
+    get normalizedAcceptEvents() {
+      return normalizedAcceptEvents;
+    },
+    run: () => backend.preprocessToDeviceMessages(events),
+  };
+}
+
+describe("matrix to-device normalization before Rust crypto", () => {
+  it("adds the SAS method to Matrix verification accept events when Element omits it", async () => {
     const event = {
       type: "m.key.verification.accept",
       sender: "@alice:example.org",
@@ -16,12 +46,13 @@ describe("normalizeMatrixToDeviceEventsForRustCrypto", () => {
       },
     };
     const events = [event];
+    const harness = preprocessThroughPatchedBackend(events);
 
-    const result = normalizeMatrixToDeviceEventsForRustCrypto(events);
+    await harness.run();
 
-    expect(result.normalizedAcceptEvents).toBe(1);
-    expect(result.events).not.toBe(events);
-    expect(result.events).toEqual([
+    expect(harness.normalizedAcceptEvents).toBe(1);
+    expect(harness.seenByRustCrypto).not.toBe(events);
+    expect(harness.seenByRustCrypto).toEqual([
       {
         ...event,
         content: {
@@ -30,10 +61,11 @@ describe("normalizeMatrixToDeviceEventsForRustCrypto", () => {
         },
       },
     ]);
+    // The caller's original event object must not be mutated.
     expect(event.content).not.toHaveProperty("method");
   });
 
-  it("leaves existing methods and unrelated to-device events untouched", () => {
+  it("leaves existing methods and unrelated to-device events untouched", async () => {
     const acceptWithMethod = {
       type: "m.key.verification.accept",
       content: { method: "m.qr_code.show.v1", transaction_id: "txn-1" },
@@ -43,14 +75,15 @@ describe("normalizeMatrixToDeviceEventsForRustCrypto", () => {
       content: { transaction_id: "txn-1", key: "abc" },
     };
     const events = [acceptWithMethod, keyEvent, "not-an-event"];
+    const harness = preprocessThroughPatchedBackend(events);
 
-    const result = normalizeMatrixToDeviceEventsForRustCrypto(events);
+    await harness.run();
 
-    expect(result.normalizedAcceptEvents).toBe(0);
-    expect(result.events).toBe(events);
+    expect(harness.normalizedAcceptEvents).toBeUndefined();
+    expect(harness.seenByRustCrypto).toBe(events);
   });
 
-  it("normalizes accept events whose method is blank or non-string", () => {
+  it("normalizes accept events whose method is blank or non-string", async () => {
     const blankMethod = {
       type: "m.key.verification.accept",
       content: { method: "   ", transaction_id: "txn-1" },
@@ -60,24 +93,28 @@ describe("normalizeMatrixToDeviceEventsForRustCrypto", () => {
       content: { method: null, transaction_id: "txn-2" },
     };
     const events = [blankMethod, nonStringMethod];
+    const harness = preprocessThroughPatchedBackend(events);
 
-    const result = normalizeMatrixToDeviceEventsForRustCrypto(events);
+    await harness.run();
 
-    expect(result.normalizedAcceptEvents).toBe(2);
-    expect(result.events).not.toBe(events);
+    expect(harness.normalizedAcceptEvents).toBe(2);
+    expect(harness.seenByRustCrypto).not.toBe(events);
     expect(
-      (result.events as Array<{ content: { method: string } }>).map((e) => e.content.method),
+      (harness.seenByRustCrypto as Array<{ content: { method: string } }>).map(
+        (e) => e.content.method,
+      ),
     ).toEqual(["m.sas.v1", "m.sas.v1"]);
   });
 
-  it("leaves accept events without a content object untouched", () => {
+  it("leaves accept events without a content object untouched", async () => {
     const noContent = { type: "m.key.verification.accept" };
     const events = [noContent];
+    const harness = preprocessThroughPatchedBackend(events);
 
-    const result = normalizeMatrixToDeviceEventsForRustCrypto(events);
+    await harness.run();
 
-    expect(result.normalizedAcceptEvents).toBe(0);
-    expect(result.events).toBe(events);
+    expect(harness.normalizedAcceptEvents).toBeUndefined();
+    expect(harness.seenByRustCrypto).toBe(events);
     expect(events[0]).not.toHaveProperty("content");
   });
 });
