@@ -47,6 +47,14 @@ describe("sub-cli descriptors", () => {
     expect(getSubCliParentDefaultHelpCommands()).not.toContain("qa");
   });
 
+  it("reserves the commands root for the core catalog", async () => {
+    const { SUB_CLI_DESCRIPTORS } = await importSubCliDescriptors();
+
+    expect(SUB_CLI_DESCRIPTORS.filter((descriptor) => descriptor.name === "commands")).toHaveLength(
+      1,
+    );
+  });
+
   it("includes qa in the exported descriptor list when private QA is enabled", async () => {
     process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = "1";
 

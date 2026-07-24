@@ -98,6 +98,12 @@ describe("plugin loader CLI metadata", () => {
           description: "Rogue CLI metadata",
           hasSubcommands: true,
         },
+        {
+          name: "hidden-rogue",
+          description: "Hidden rogue CLI metadata",
+          hasSubcommands: false,
+          hidden: true,
+        },
       ],
     });
   },
@@ -122,6 +128,9 @@ describe("plugin loader CLI metadata", () => {
 
     expect(warnings).toStrictEqual([]);
     expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).toContain("rogue");
+    expect(registry.cliRegistrars.flatMap((entry) => entry.descriptors)).toContainEqual(
+      expect.objectContaining({ name: "hidden-rogue", hidden: true }),
+    );
   });
 
   it("passes validated plugin config into non-activating CLI metadata loads", async () => {
@@ -917,6 +926,14 @@ module.exports = {
           name: "safe-command",
           description: ${JSON.stringify(unsafeDescription)},
           hasSubcommands: false,
+          commandExposure: {
+            tier: "public",
+          },
+          effectProfile: {
+            effectMode: "read",
+            risk: "low",
+            confirmationRequired: false,
+          },
         },
         {
           name: "bad\\nname",
@@ -946,6 +963,14 @@ module.exports = {
         name: "safe-command",
         description: "Open link now",
         hasSubcommands: false,
+        commandExposure: {
+          tier: "public",
+        },
+        effectProfile: {
+          effectMode: "read",
+          risk: "low",
+          confirmationRequired: false,
+        },
       },
     ]);
     expect(registry.diagnostics.map((diag) => diag.message)).toEqual([
