@@ -1,6 +1,5 @@
 // Slack plugin module implements probe behavior.
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
-import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { createSlackWebClient } from "./client.js";
 import { formatSlackError } from "./errors.js";
 import { formatSlackBotTokenIdentityWarning } from "./token.js";
@@ -19,10 +18,24 @@ export async function probeSlack(
   timeoutMs = 2500,
   opts?: { accountId?: string | null; identity?: "bot" | "user" },
 ): Promise<SlackProbe> {
-  const client = createSlackWebClient(token);
+  const deadlineSignal = timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined;
+  const client = createSlackWebClient(token, {
+    // Slack otherwise sleeps through Retry-After outside the request timeout.
+    rejectRateLimitedCalls: true,
+    // Axios's request timeout is inactivity-based; a wall-clock signal also aborts
+    // trickle responses so the transport cannot outlive the probe deadline.
+    requestInterceptor: deadlineSignal
+      ? (config) => {
+          config.signal = deadlineSignal;
+          return config;
+        }
+      : undefined,
+    retryConfig: { retries: 0 },
+    timeout: timeoutMs,
+  });
   const start = Date.now();
   try {
-    const result = await withTimeout(client.auth.test(), timeoutMs);
+    const result = await client.auth.test();
     if (!result.ok) {
       return {
         ok: false,
