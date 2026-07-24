@@ -16,7 +16,7 @@ const AGENT_RUNTIME_IDENTITY_TOKEN_KIND = "agent-runtime";
 const MESSAGE_ACTION_TOKEN_TTL_MS = 60_000;
 const CRON_SELF_MANAGEMENT_TOKEN_TTL_MS = 60_000;
 
-export type AgentRuntimeCronSelfManagementContext = {
+type AgentRuntimeCronSelfManagementContext = {
   jobId: string;
   expiresAtMs: number;
 };
