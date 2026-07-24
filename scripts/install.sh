@@ -2366,8 +2366,37 @@ checkout_git_openclaw_ref() {
         return 0
     fi
 
+    # Fail closed: never substitute an older base tag (for example v2026.7.1
+    # when the requested npm correction release is v2026.7.1-2). That would
+    # silently install different code than the resolved registry version.
     ui_error "Requested git version not found: ${ref}"
+    if [[ "$ref" =~ ^v[0-9] ]]; then
+        ui_error "No matching GitHub tag for this version. Correction releases must publish an immutable tag that matches the npm version (for example v2026.7.1-2 for npm 2026.7.1-2)."
+        ui_error "Publish the missing tag, or use --install-method npm to install the registry package."
+    fi
     return 1
+}
+
+# After checking out a version tag, require package.json to match exactly.
+# Prevents silent install of a different release if a wrong tag/commit is used.
+assert_git_checkout_matches_ref() {
+    local repo_dir="$1"
+    local ref="$2"
+    local expected=""
+    local actual=""
+
+    if [[ ! "$ref" =~ ^v[0-9] ]]; then
+        return 0
+    fi
+
+    expected="${ref#v}"
+    actual="$(openclaw_package_version "${repo_dir}/package.json")"
+    if [[ "$actual" != "$expected" ]]; then
+        ui_error "Git checkout version mismatch for ${ref}: package.json is ${actual}, expected ${expected}."
+        ui_error "Refusing to continue with a different OpenClaw version than the resolved git ref."
+        return 1
+    fi
+    return 0
 }
 
 git_install_lockfile_flag() {
@@ -2832,9 +2861,14 @@ install_openclaw_from_git() {
 
     local git_ref
     git_ref="$(resolve_git_openclaw_ref)"
-    if [[ -z "$(git -C "$repo_dir" status --porcelain 2>/dev/null || true)" ]]; then
+    if [[ "$GIT_UPDATE" == "0" && -d "$repo_dir/.git" ]]; then
+        # Honor --no-git-update: install the prepared checkout as-is.
+        # Do not rewrite it to npm latest (or any other resolved tag).
+        ui_info "Skipping git checkout/update (--no-git-update); using existing checkout"
+    elif [[ -z "$(git -C "$repo_dir" status --porcelain 2>/dev/null || true)" ]]; then
         ui_info "Using git ref: ${git_ref}"
         checkout_git_openclaw_ref "$repo_dir" "$git_ref"
+        assert_git_checkout_matches_ref "$repo_dir" "$git_ref"
     else
         ui_info "Repo has local changes; skipping git checkout/update"
     fi
