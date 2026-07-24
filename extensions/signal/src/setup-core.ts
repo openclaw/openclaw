@@ -348,7 +348,7 @@ export const signalNumberTextInputs: ChannelSetupWizardTextInput[] = [
   {
     ...signalNumberTextInput,
     shouldPrompt: ({ credentialValues }) =>
-      credentialValues[signalSetupStateKeys.transportKind] !== "external-native",
+      credentialValues[signalSetupStateKeys.transportKind] === "container",
   },
   {
     ...signalNumberTextInput,
@@ -366,8 +366,7 @@ export const signalNumberTextInputs: ChannelSetupWizardTextInput[] = [
 export const signalCompletionNote = {
   title: t("wizard.signal.nextStepsTitle"),
   lines: [
-    t("wizard.signal.nextLinkDevice"),
-    t("wizard.signal.nextScanQr"),
+    "Signal setup is validated and ready for the gateway.",
     `Then run: ${formatCliCommand("openclaw gateway call channels.status --params '{\"probe\":true}'")}`,
     `Docs: ${formatDocsLink("/signal", "signal")}`,
   ],

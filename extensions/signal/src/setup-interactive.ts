@@ -1,6 +1,5 @@
 import { isIP } from "node:net";
 import { hostname, networkInterfaces } from "node:os";
-import { runPluginCommandWithTimeout } from "openclaw/plugin-sdk/run-command";
 import {
   patchChannelConfigForAccount,
   WizardCancelledError,
@@ -10,7 +9,6 @@ import {
 } from "openclaw/plugin-sdk/setup";
 import { detectBinary } from "openclaw/plugin-sdk/setup-tools";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import type { SignalTransportConfig } from "./account-types.js";
 import {
@@ -22,6 +20,7 @@ import {
 import { spawnSignalDaemon } from "./daemon.js";
 import { installSignalCli } from "./install-signal-cli.js";
 import { normalizeSignalAccountInput, signalSetupStateKeys } from "./setup-core.js";
+import { resolveManagedSignalAccount } from "./setup-managed-account.js";
 import {
   detectSignalTransport,
   prepareSignalManagedNativeTransport,
@@ -44,8 +43,6 @@ type ExistingServerPromptParams = {
 };
 type ManagedSignalTransport = Extract<SignalTransportConfig, { kind: "managed-native" }>;
 type ResolvedManagedSignalTransport = Extract<ResolvedSignalTransport, { kind: "managed-native" }>;
-
-const SIGNAL_CLI_ACCOUNT_CHECK_TIMEOUT_MS = 10_000;
 
 export async function prepareSignalInteractiveSetup(params: SignalPrepareParams) {
   const resolvedAccount = resolveSignalAccount({
@@ -89,6 +86,7 @@ export async function finalizeSignalInteractiveSetup(params: SignalFinalizeParam
   });
   let account = normalizeSignalAccountInput(resolvedAccount.config.account) ?? undefined;
   let transport: SignalTransportConfig;
+  let resolvedManagedTransport: ResolvedManagedSignalTransport | undefined;
   if (kind === "managed-native") {
     let cliPath = params.credentialValues[signalSetupStateKeys.cliPath] ?? "signal-cli";
     if (
@@ -116,6 +114,27 @@ export async function finalizeSignalInteractiveSetup(params: SignalFinalizeParam
     throw new Error("Signal setup is missing its prepared transport candidate.");
   }
 
+  if (transport.kind === "managed-native") {
+    const resolvedTransport = resolveSignalTransport(transport);
+    if (resolvedTransport.kind !== "managed-native") {
+      throw new Error("Signal setup did not resolve a managed signal-cli transport.");
+    }
+    resolvedManagedTransport = resolvedTransport;
+    account = await resolveManagedSignalAccount({
+      transport: resolvedTransport,
+      configuredAccount: account,
+      selectionMode: "reuse-configured-or-only",
+      prompter: params.prompter,
+      beforePersistentEffect: params.options?.beforePersistentEffect,
+    });
+    cfg = patchChannelConfigForAccount({
+      cfg,
+      channel: "signal",
+      accountId: params.accountId,
+      patch: { account, accountUuid: undefined },
+    });
+  }
+
   let shouldPromptAccount = !account && transport.kind !== "external-native";
 
   while (true) {
@@ -132,11 +151,12 @@ export async function finalizeSignalInteractiveSetup(params: SignalFinalizeParam
     }
 
     const probe =
-      transport.kind === "managed-native" && account
+      transport.kind === "managed-native" && resolvedManagedTransport && account
         ? await probeManagedSignalSetup({
             cfg,
             accountId: params.accountId,
             transport,
+            resolvedTransport: resolvedManagedTransport,
             account,
             runtime: params.runtime,
           })
@@ -170,7 +190,22 @@ export async function finalizeSignalInteractiveSetup(params: SignalFinalizeParam
       throw new WizardCancelledError("Signal setup stopped");
     }
     if (recovery === "account") {
-      shouldPromptAccount = true;
+      if (transport.kind === "managed-native" && resolvedManagedTransport) {
+        account = await resolveManagedSignalAccount({
+          transport: resolvedManagedTransport,
+          selectionMode: "choose",
+          prompter: params.prompter,
+          beforePersistentEffect: params.options?.beforePersistentEffect,
+        });
+        cfg = patchChannelConfigForAccount({
+          cfg,
+          channel: "signal",
+          accountId: params.accountId,
+          patch: { account, accountUuid: undefined },
+        });
+      } else {
+        shouldPromptAccount = true;
+      }
       continue;
     }
     if (recovery === "url" && transport.kind !== "managed-native") {
@@ -196,32 +231,26 @@ async function probeManagedSignalSetup(params: {
   cfg: OpenClawConfig;
   accountId: string;
   transport: ManagedSignalTransport;
+  resolvedTransport: ResolvedManagedSignalTransport;
   account: string;
   runtime: SignalFinalizeParams["runtime"];
 }): Promise<SignalTransportProbeResult> {
-  const resolvedTransport = resolveSignalTransport(params.transport);
-  if (resolvedTransport.kind !== "managed-native") {
-    return { ok: false, error: "Signal setup did not resolve a managed signal-cli transport." };
-  }
-  const linkedAccount = await checkSignalCliAccount({
-    transport: resolvedTransport,
-    account: params.account,
-  });
-  if (!linkedAccount.ok) {
-    return linkedAccount;
-  }
-
   const daemon = spawnSignalDaemon({
-    cliPath: resolvedTransport.cliPath,
-    ...(resolvedTransport.configPath ? { configPath: resolvedTransport.configPath } : {}),
+    cliPath: params.resolvedTransport.cliPath,
+    ...(params.resolvedTransport.configPath
+      ? { configPath: params.resolvedTransport.configPath }
+      : {}),
     account: params.account,
-    httpHost: resolvedTransport.httpHost,
-    httpPort: resolvedTransport.httpPort,
+    httpHost: params.resolvedTransport.httpHost,
+    httpPort: params.resolvedTransport.httpPort,
     runtime: params.runtime,
   });
   let successfulProbe: SignalTransportProbeResult | undefined;
   try {
-    const startupTimeoutMs = Math.min(120_000, Math.max(1_000, resolvedTransport.startupTimeoutMs));
+    const startupTimeoutMs = Math.min(
+      120_000,
+      Math.max(1_000, params.resolvedTransport.startupTimeoutMs),
+    );
     await waitForTransportReady({
       label: "signal-cli setup daemon",
       timeoutMs: startupTimeoutMs,
@@ -252,96 +281,6 @@ async function probeManagedSignalSetup(params: {
   } finally {
     await daemon.stop();
   }
-}
-
-async function checkSignalCliAccount(params: {
-  transport: ResolvedManagedSignalTransport;
-  account: string;
-}): Promise<{ ok: true } | { ok: false; error: string }> {
-  const configPath = params.transport.configPath?.trim();
-  const result = await runPluginCommandWithTimeout({
-    argv: [
-      params.transport.cliPath,
-      ...(configPath ? ["--config", resolveUserPath(configPath)] : []),
-      "--output",
-      "json",
-      "listAccounts",
-    ],
-    timeoutMs: SIGNAL_CLI_ACCOUNT_CHECK_TIMEOUT_MS,
-  });
-  if (result.code !== 0) {
-    return {
-      ok: false,
-      error:
-        `signal-cli could not list its linked accounts (exit ${result.code}). ` +
-        "Check the signal-cli path and config path, then retry.",
-    };
-  }
-
-  const linkedAccounts = parseSignalCliAccounts(result.stdout);
-  if (!linkedAccounts) {
-    return {
-      ok: false,
-      error:
-        "signal-cli returned an unexpected account list. Check the signal-cli version and config path, then retry.",
-    };
-  }
-  if (linkedAccounts.has(params.account)) {
-    return { ok: true };
-  }
-
-  return {
-    ok: false,
-    error: [
-      "This signal-cli data directory does not contain the Signal account selected for OpenClaw.",
-      "Entering a phone number does not link signal-cli.",
-      `Run: ${formatSignalCliLinkCommand(params.transport)}`,
-      "Then, on your phone, open Signal > Settings > Linked devices, add a device, and scan the QR code.",
-      "Return here and choose Retry this setup.",
-    ].join("\n"),
-  };
-}
-
-function parseSignalCliAccounts(stdout: string): Set<string> | undefined {
-  try {
-    const value: unknown = JSON.parse(stdout);
-    if (!Array.isArray(value)) {
-      return undefined;
-    }
-    const accounts = new Set<string>();
-    for (const entry of value) {
-      if (
-        typeof entry !== "object" ||
-        entry === null ||
-        !("number" in entry) ||
-        typeof entry.number !== "string"
-      ) {
-        return undefined;
-      }
-      const account = normalizeSignalAccountInput(entry.number);
-      if (account) {
-        accounts.add(account);
-      }
-    }
-    return accounts;
-  } catch {
-    return undefined;
-  }
-}
-
-function formatSignalCliLinkCommand(transport: ResolvedManagedSignalTransport): string {
-  const configPath = transport.configPath?.trim();
-  return [
-    quoteShellArg(transport.cliPath),
-    ...(configPath ? ["--config", quoteShellArg(resolveUserPath(configPath))] : []),
-    "link",
-    "-n",
-    '"OpenClaw"',
-  ].join(" ");
-}
-
-function quoteShellArg(value: string): string {
-  return /^[A-Za-z0-9_./:@%+=,-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 async function promptSignalAccount(prompter: WizardPrompter) {
