@@ -202,6 +202,52 @@ describe("chat pane session suggestion lifecycle", () => {
     await vi.waitFor(() => expect(pane.sessionSuggestions).toEqual([fresh]));
   });
 
+  it("clears displayed typing actors when the session instance rotates", () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({
+      client,
+      sessions: {} as SessionCapability,
+    });
+    pane.presencePayload = {
+      presence: [{ user: { id: "owner" } }, { user: { id: "alice" } }],
+    };
+    const row = (sessionId: string): GatewaySessionRow =>
+      ({
+        key: state.sessionKey,
+        kind: "direct",
+        sessionId,
+        updatedAt: 1,
+        visibility: "suggest",
+        sharingRole: "owner",
+      }) as GatewaySessionRow;
+    const sessionA = row("session-a");
+    state.sessionsResult = {
+      count: 1,
+      path: "",
+      sessions: [sessionA],
+    } as never;
+    pane.syncSessionSuggestionTarget("main", sessionA);
+    pane.handleSessionTypingEvent({
+      sessionKey: state.sessionKey,
+      sessionId: "session-a",
+      agentId: "main",
+      actor: { type: "human", id: "alice", label: "Alice" },
+      typing: true,
+      ts: 1,
+    });
+    expect(pane.typingActors.size).toBe(1);
+
+    const sessionB = row("session-b");
+    state.sessionsResult = {
+      count: 1,
+      path: "",
+      sessions: [sessionB],
+    } as never;
+    pane.syncSessionSuggestionTarget("main", sessionB);
+
+    expect(pane.typingActors.size).toBe(0);
+  });
+
   it("preserves an author's resolved event while its role is still loading", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({

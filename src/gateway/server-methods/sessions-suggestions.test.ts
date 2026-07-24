@@ -254,8 +254,13 @@ describe("session suggestion handlers", () => {
         ),
       );
       expect(
-        (await call("session.typing", { sessionKey: draftKey, typing: true }, member))
-          .responses[0]?.[1],
+        (
+          await call(
+            "session.typing",
+            { sessionKey: draftKey, sessionId: "session-draft", typing: true },
+            member,
+          )
+        ).responses[0]?.[1],
       ).toEqual({ ok: true, broadcast: false });
 
       const ownerList = await call(
@@ -491,7 +496,7 @@ describe("session suggestion handlers", () => {
       mocks.presence = [{ user: { id: "alice" }, watchedSessions: [sessionKey] }];
       const solo = await call(
         "session.typing",
-        { sessionKey, typing: true },
+        { sessionKey, sessionId: "session-main", typing: true },
         client("alice", "Alice"),
         requestContext,
       );
@@ -501,7 +506,7 @@ describe("session suggestion handlers", () => {
       mocks.presence.push({ user: { id: "owner" }, watchedSessions: [sessionKey] });
       const collaborative = await call(
         "session.typing",
-        { sessionKey, typing: true },
+        { sessionKey, sessionId: "session-main", typing: true },
         client("alice", "Alice"),
         requestContext,
       );
@@ -515,7 +520,7 @@ describe("session suggestion handlers", () => {
       vi.setSystemTime(1_100);
       const earlyStop = await call(
         "session.typing",
-        { sessionKey, typing: false },
+        { sessionKey, sessionId: "session-main", typing: false },
         client("alice", "Alice"),
         requestContext,
       );
@@ -530,7 +535,7 @@ describe("session suggestion handlers", () => {
       vi.setSystemTime(2_100);
       const earlyRestart = await call(
         "session.typing",
-        { sessionKey, typing: true },
+        { sessionKey, sessionId: "session-main", typing: true },
         client("alice", "Alice"),
         requestContext,
       );
@@ -549,7 +554,7 @@ describe("session suggestion handlers", () => {
       vi.setSystemTime(4_000);
       const notViewing = await call(
         "session.typing",
-        { sessionKey, typing: true },
+        { sessionKey, sessionId: "session-main", typing: true },
         client("mallory", "Mallory"),
         requestContext,
       );
@@ -571,7 +576,7 @@ describe("session suggestion handlers", () => {
       vi.setSystemTime(5_000);
       const sharedViewer = await call(
         "session.typing",
-        { sessionKey, typing: true },
+        { sessionKey, sessionId: "session-main", typing: true },
         client("shared-alice", "Shared Alice"),
         requestContext,
       );
@@ -624,7 +629,7 @@ describe("session suggestion handlers", () => {
   it("responds once when a typing target is unknown", async () => {
     const unknown = await call(
       "session.typing",
-      { sessionKey: "agent:main:missing", typing: true },
+      { sessionKey: "agent:main:missing", sessionId: "session-missing", typing: true },
       client("alice", "Alice"),
     );
     expect(unknown.responses).toHaveLength(1);
@@ -957,26 +962,133 @@ describe("session suggestion handlers", () => {
       const tabTwo = { ...client("multi", "Multi"), connId: "multi-tab-2" };
 
       expect(
-        (await call("session.typing", { sessionKey, typing: true }, tabOne, requestContext))
-          .responses[0]?.[1],
+        (
+          await call(
+            "session.typing",
+            { sessionKey, sessionId: "session-main", typing: true },
+            tabOne,
+            requestContext,
+          )
+        ).responses[0]?.[1],
       ).toEqual({ ok: true, broadcast: true });
       await vi.advanceTimersByTimeAsync(100);
       expect(
-        (await call("session.typing", { sessionKey, typing: true }, tabTwo, requestContext))
-          .responses[0]?.[1],
+        (
+          await call(
+            "session.typing",
+            { sessionKey, sessionId: "session-main", typing: true },
+            tabTwo,
+            requestContext,
+          )
+        ).responses[0]?.[1],
       ).toEqual({ ok: true, broadcast: false });
       await vi.advanceTimersByTimeAsync(300);
       expect(
-        (await call("session.typing", { sessionKey, typing: false }, tabOne, requestContext))
-          .responses[0]?.[1],
+        (
+          await call(
+            "session.typing",
+            { sessionKey, sessionId: "session-main", typing: false },
+            tabOne,
+            requestContext,
+          )
+        ).responses[0]?.[1],
       ).toEqual({ ok: true, broadcast: false });
       await vi.advanceTimersByTimeAsync(100);
       expect(
-        (await call("session.typing", { sessionKey, typing: false }, tabTwo, requestContext))
-          .responses[0]?.[1],
+        (
+          await call(
+            "session.typing",
+            { sessionKey, sessionId: "session-main", typing: false },
+            tabTwo,
+            requestContext,
+          )
+        ).responses[0]?.[1],
       ).toEqual({ ok: true, broadcast: false });
       await vi.advanceTimersByTimeAsync(500);
       expect(broadcast.mock.calls.map((broadcastCall) => broadcastCall[1].typing)).toEqual([
+        true,
+        false,
+      ]);
+    });
+  });
+
+  it("does not carry active typing connections across a session replacement", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(15_000);
+      const resetKey = "agent:main:typing-instance";
+      const writeSession = (sessionId: string, updatedAt: number) =>
+        upsertSessionEntry(
+          { agentId: "main", sessionKey: resetKey },
+          {
+            sessionId,
+            updatedAt,
+            createdActor: { type: "human" as const, id: "owner" },
+            visibility: "shared" as const,
+          },
+        );
+      await writeSession("session-before-reset", 1);
+      mocks.presence = [
+        { user: { id: "alice-instance" }, watchedSessions: [resetKey] },
+        { user: { id: "owner" }, watchedSessions: [resetKey] },
+      ];
+      const broadcast = vi.fn();
+      const requestContext = context(broadcast);
+      const oldTab = { ...client("alice-instance", "Alice"), connId: "old-tab" };
+      const newTab = { ...client("alice-instance", "Alice"), connId: "new-tab" };
+
+      expect(
+        (
+          await call(
+            "session.typing",
+            { sessionKey: resetKey, sessionId: "session-before-reset", typing: true },
+            oldTab,
+            requestContext,
+          )
+        ).responses[0]?.[1],
+      ).toEqual({ ok: true, broadcast: true });
+      await writeSession("session-after-reset", 2);
+      expect(
+        (
+          await call(
+            "session.typing",
+            { sessionKey: resetKey, sessionId: "session-before-reset", typing: true },
+            oldTab,
+            requestContext,
+          )
+        ).responses[0]?.[1],
+      ).toEqual({ ok: true, broadcast: false });
+      expect(broadcast).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(
+        (
+          await call(
+            "session.typing",
+            { sessionKey: resetKey, sessionId: "session-after-reset", typing: true },
+            newTab,
+            requestContext,
+          )
+        ).responses[0]?.[1],
+      ).toEqual({ ok: true, broadcast: true });
+      expect(broadcast.mock.calls[1]?.[1]).toMatchObject({
+        sessionId: "session-after-reset",
+        typing: true,
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      expect(
+        (
+          await call(
+            "session.typing",
+            { sessionKey: resetKey, sessionId: "session-after-reset", typing: false },
+            newTab,
+            requestContext,
+          )
+        ).responses[0]?.[1],
+      ).toEqual({ ok: true, broadcast: false });
+      await vi.advanceTimersByTimeAsync(900);
+
+      expect(broadcast.mock.calls.map((broadcastCall) => broadcastCall[1].typing)).toEqual([
+        true,
         true,
         false,
       ]);
@@ -1009,7 +1121,7 @@ describe("session suggestion handlers", () => {
         (
           await call(
             "session.typing",
-            { sessionKey: resetKey, typing: true },
+            { sessionKey: resetKey, sessionId: "session-before-reset", typing: true },
             alice,
             requestContext,
           )
@@ -1020,7 +1132,7 @@ describe("session suggestion handlers", () => {
         (
           await call(
             "session.typing",
-            { sessionKey: resetKey, typing: true },
+            { sessionKey: resetKey, sessionId: "session-before-reset", typing: true },
             alice,
             requestContext,
           )

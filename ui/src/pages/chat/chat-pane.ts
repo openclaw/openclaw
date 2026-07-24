@@ -819,6 +819,7 @@ class ChatPane extends OpenClawLightDomElement {
     }
     this.sessionSuggestionTargetSignature = signature;
     this.resetSessionSuggestions();
+    this.clearTypingActors();
     void this.refreshSessionSuggestions();
   }
 
@@ -1091,15 +1092,20 @@ class ChatPane extends OpenClawLightDomElement {
 
   private handleSessionTypingEvent(event: SessionTypingEvent): void {
     const selfId = this.context.gateway.snapshot.selfUser?.id;
+    const state = this.state;
+    const selectedSession = state?.sessionsResult?.sessions.find((row) =>
+      areUiSessionKeysEquivalent(row.key, state.sessionKey),
+    );
     if (
       !this.hasMultipleIdentities() ||
       event.actor.id === selfId ||
-      !this.state ||
+      !state ||
+      selectedSession?.sessionId !== event.sessionId ||
       !uiSessionEventMatches(
         {
           agentsList: this.context.agents.state.agentsList,
           hello: this.context.gateway.snapshot.hello,
-          sessionKey: this.state.sessionKey,
+          sessionKey: state.sessionKey,
         },
         event.sessionKey,
         event.agentId,
@@ -1151,9 +1157,16 @@ class ChatPane extends OpenClawLightDomElement {
       return;
     }
     const sessionKey = scope.state.sessionKey;
+    const sessionId = scope.state.sessionsResult?.sessions.find((row) =>
+      areUiSessionKeysEquivalent(row.key, sessionKey),
+    )?.sessionId;
+    if (!sessionId) {
+      return;
+    }
     void scope.client
       .request("session.typing", {
         sessionKey,
+        sessionId,
         typing,
         ...scopedAgentParamsForSession(scope.state, sessionKey),
       })

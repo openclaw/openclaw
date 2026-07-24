@@ -6,6 +6,7 @@ import {
   SessionSuggestionsListResultSchema,
   SessionSuggestionsResolveParamsSchema,
   SessionTypingEventSchema,
+  SessionTypingParamsSchema,
 } from "./sessions-suggestions.js";
 
 const suggestion = {
@@ -41,8 +42,16 @@ describe("session suggestions protocol", () => {
     ).toBe(true);
     expect(Value.Check(SessionSuggestionEventSchema, { action: "added", suggestion })).toBe(true);
     expect(
+      Value.Check(SessionTypingParamsSchema, {
+        sessionKey: "agent:main:main",
+        sessionId: "session-main",
+        typing: true,
+      }),
+    ).toBe(true);
+    expect(
       Value.Check(SessionTypingEventSchema, {
         sessionKey: "agent:main:main",
+        sessionId: "session-main",
         agentId: "main",
         actor: { type: "human", id: "alice", label: "Alice" },
         typing: true,

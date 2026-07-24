@@ -53,6 +53,7 @@ function sessionRow(sharingRole: "owner" | "viewer") {
         key: sessionKey,
         kind: "direct",
         label: "Main",
+        sessionId: "session-main",
         status: "done",
         updatedAt: 1,
         visibility: "suggest",
@@ -119,6 +120,7 @@ describeControlUiE2e("Control UI session suggestions", () => {
     await expect(composer).toBeEnabled();
     await gateway.emitGatewayEvent("session.typing", {
       sessionKey: "main",
+      sessionId: "session-main",
       agentId: "main",
       actor: { type: "human", id: "owner", label: "Owner" },
       typing: true,
@@ -126,6 +128,8 @@ describeControlUiE2e("Control UI session suggestions", () => {
     });
     await expect(page.locator(".agent-chat__typing-indicator")).toHaveText("Owner is typing…");
     await composer.fill("Try the focused change");
+    const typing = await gateway.waitForRequest("session.typing");
+    expect(typing.params).toMatchObject({ sessionId: "session-main" });
     await page.getByRole("button", { name: "Suggest message" }).click();
     const add = await gateway.waitForRequest("session.suggestions.add");
     expect(add.params).toMatchObject({ sessionKey: "main", text: "Try the focused change" });

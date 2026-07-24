@@ -3,6 +3,7 @@ import { vi } from "vitest";
 import type {
   SessionSuggestion,
   SessionSuggestionEvent,
+  SessionTypingEvent,
   SessionCatalogSession,
   SessionCatalogTranscriptItem,
   TaskSuggestion,
@@ -52,6 +53,8 @@ export type TestChatPane = HTMLElement & {
   sessionSuggestionTargetSignature: string;
   syncSessionSuggestionTarget: (agentId: string, session: GatewaySessionRow | undefined) => void;
   handleSessionSuggestionEvent: (event: SessionSuggestionEvent) => void;
+  handleSessionTypingEvent: (event: SessionTypingEvent) => void;
+  typingActors: Map<string, { label: string; expiresAt: number }>;
   refreshSessionSuggestions: () => Promise<void>;
   resolveCurrentSessionSuggestion: (
     suggestion: SessionSuggestion,

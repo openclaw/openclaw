@@ -5611,21 +5611,25 @@ public struct SessionSuggestionEvent: Codable, Sendable {
 public struct SessionTypingParams: Codable, Sendable {
     public let sessionkey: String
     public let agentid: String?
+    public let sessionid: String
     public let typing: Bool
 
     public init(
         sessionkey: String,
         agentid: String? = nil,
+        sessionid: String,
         typing: Bool)
     {
         self.sessionkey = sessionkey
         self.agentid = agentid
+        self.sessionid = sessionid
         self.typing = typing
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
         case agentid = "agentId"
+        case sessionid = "sessionId"
         case typing
     }
 }
@@ -5650,6 +5654,7 @@ public struct SessionTypingResult: Codable, Sendable {
 
 public struct SessionTypingEvent: Codable, Sendable {
     public let sessionkey: String
+    public let sessionid: String
     public let agentid: String
     public let actor: SessionSharingIdentity
     public let typing: Bool
@@ -5657,12 +5662,14 @@ public struct SessionTypingEvent: Codable, Sendable {
 
     public init(
         sessionkey: String,
+        sessionid: String,
         agentid: String,
         actor: SessionSharingIdentity,
         typing: Bool,
         ts: Int)
     {
         self.sessionkey = sessionkey
+        self.sessionid = sessionid
         self.agentid = agentid
         self.actor = actor
         self.typing = typing
@@ -5671,6 +5678,7 @@ public struct SessionTypingEvent: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
+        case sessionid = "sessionId"
         case agentid = "agentId"
         case actor
         case typing

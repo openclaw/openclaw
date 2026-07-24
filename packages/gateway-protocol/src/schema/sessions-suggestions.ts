@@ -70,6 +70,7 @@ export const SessionSuggestionEventSchema = closedObject({
 
 export const SessionTypingParamsSchema = closedObject({
   ...SessionSuggestionTargetParamsSchema,
+  sessionId: NonEmptyString,
   typing: Type.Boolean(),
 });
 
@@ -80,6 +81,7 @@ export const SessionTypingResultSchema = closedObject({
 
 export const SessionTypingEventSchema = closedObject({
   sessionKey: NonEmptyString,
+  sessionId: NonEmptyString,
   agentId: NonEmptyString,
   actor: SessionSharingIdentitySchema,
   typing: Type.Boolean(),

@@ -574,6 +574,10 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     if (!target) {
       return;
     }
+    if (params.sessionId !== target.entry.sessionId) {
+      respond(true, { ok: true, broadcast: false });
+      return;
+    }
     if (!actor) {
       respond(true, { ok: true, broadcast: false });
       return;
@@ -590,7 +594,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     }
     const sessionKeys = new Set([params.sessionKey, target.canonicalKey, target.storeKey]);
     const now = Date.now();
-    const typingKey = `${actor.id}\0${target.agentId}\0${target.canonicalKey}`;
+    const typingKey = `${actor.id}\0${target.agentId}\0${target.canonicalKey}\0${target.entry.sessionId}`;
     const effectiveTyping = updateTypingConnections({
       key: typingKey,
       connectionId: client?.connId ?? actor.id,
@@ -632,6 +636,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
         }
         const event: SessionTypingEvent = {
           sessionKey: target.canonicalKey,
+          sessionId: current.entry.sessionId,
           agentId: target.agentId,
           actor,
           typing: effectiveTyping,
