@@ -111,6 +111,8 @@ const rootEntries = [
   "scripts/repro/tool-surface-live-bench.ts!",
   // Workflow/package-script entrypoints are not imported from production modules.
   "scripts/openclaw-cross-os-release-checks.ts!",
+  // Standalone demo for the termination algebra + GSAR scorer (PR #75165).
+  "scripts/demo-gsar-algebra.ts!",
   "scripts/bench-transcript-cursors.ts!",
   "scripts/bench-sqlite-reliability.ts!",
   // Docker/manual E2E executables and their nested assertion/probe entrypoints.
@@ -125,6 +127,9 @@ const rootEntries = [
   "src/agents/subagent-registry.runtime.ts!",
   // Loaded lazily by the registry; its callbacks form the orphan-recovery runtime contract.
   "src/agents/subagent-orphan-recovery.ts!",
+  // Termination algebra + GSAR scorer: library modules imported only by colocated coverage today.
+  "src/agents/termination.ts!",
+  "src/agents/gsar.ts!",
   // Task cancellation loads this control facade by string path to avoid a registry cycle.
   "src/tasks/task-registry-control.runtime.ts!",
   // Human plugin listing lazily loads its formatter to keep JSON startup lean.
