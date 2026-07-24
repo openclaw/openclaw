@@ -407,6 +407,8 @@ type OpenClawCodingToolsOptions = {
   inheritRuntimeToolAllowlist?: boolean;
   /** Mutable cron creator cap ref for callers that append final runtime tools later. */
   cronCreatorToolAllowlistRef?: CronCreatorToolAllowlistEntry[];
+  /** Mutable spawned-child cap ref for callers that append final runtime tools later. */
+  inheritedToolAllowlistRef?: string[];
   /** If true, the model has native vision capability */
   modelHasVision?: boolean;
   /** Mutable model-context generation used to expire screenshot coordinate frames. */
@@ -806,7 +808,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   const inheritedToolDenylist = [...pluginToolDenylist];
   // Passed by reference to sessions_spawn and populated after the final policy
   // pass so child sessions inherit the actual parent tool surface.
-  const inheritedToolAllowlist: string[] = [];
+  const inheritedToolAllowlist = options?.inheritedToolAllowlistRef ?? [];
   const toolPolicyInheritanceSources = capabilityProfile.policy.inheritancePolicies;
   const shouldInheritEffectiveToolAllowlist =
     toolPolicyInheritanceSources.some(hasRestrictiveAllowPolicy);

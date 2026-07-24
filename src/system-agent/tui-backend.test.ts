@@ -1,5 +1,5 @@
 // OpenClaw TUI backend tests cover rescue status integration with the TUI backend.
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
@@ -8,19 +8,21 @@ import type { SystemAgentOverview } from "./overview.js";
 import { createSystemAgentVerifiedInferenceTestFixture } from "./system-agent.test-helpers.js";
 import { runSystemAgentTui, type SystemAgentTuiOptions } from "./tui-backend.js";
 
-vi.mock("../agents/prepared-model-catalog.js", () => ({
-  loadPreparedModelCatalog: vi.fn(async () => []),
+const preparedModelCatalogMocks = vi.hoisted(() => ({
+  getSnapshot: vi.fn(() => undefined),
+  load: vi.fn(async () => []),
 }));
 
-vi.mock("../plugins/providers.js", () => ({
+vi.mock("../plugins/providers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/providers.js")>()),
   resolveOwningPluginIdsForModelRefs: vi.fn(() => []),
   resolveOwningPluginIdsForProviderRef: vi.fn(() => []),
 }));
 
 vi.mock("../agents/prepared-model-catalog.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/prepared-model-catalog.js")>()),
-  // These tests exercise the TUI boundary, not filesystem-backed catalog discovery.
-  loadPreparedModelCatalog: vi.fn(async () => []),
+  getPreparedModelCatalogSnapshot: preparedModelCatalogMocks.getSnapshot,
+  loadPreparedModelCatalog: preparedModelCatalogMocks.load,
 }));
 
 const overview: SystemAgentOverview = {
@@ -99,6 +101,11 @@ function createRuntime(): RuntimeEnv {
 }
 
 describe("runSystemAgentTui", () => {
+  beforeEach(() => {
+    preparedModelCatalogMocks.getSnapshot.mockClear();
+    preparedModelCatalogMocks.load.mockClear();
+  });
+
   it("rejects a missing inference binding before overview, planner, TUI, or setup", async () => {
     const loadOverview = vi.fn(async () => overview);
     const planWithAssistant = vi.fn(async () => ({ reply: "ready" }));
@@ -158,6 +165,14 @@ describe("runSystemAgentTui", () => {
     if (!options.backend || typeof options.backend !== "object") {
       throw new Error("expected openclaw TUI backend");
     }
+    expect(preparedModelCatalogMocks.getSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: verifiedConfig,
+        agentId: "main",
+        readOnly: true,
+      }),
+    );
+    expect(preparedModelCatalogMocks.load).not.toHaveBeenCalled();
   }, 240_000);
 
   it("reports the verified model without its auth profile and the effective thinking level", async () => {
