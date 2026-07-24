@@ -8,8 +8,11 @@ import type { SystemAgentOverview } from "./overview.js";
 import { createSystemAgentVerifiedInferenceTestFixture } from "./system-agent.test-helpers.js";
 import { runSystemAgentTui, type SystemAgentTuiOptions } from "./tui-backend.js";
 
-vi.mock("../plugins/providers.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../plugins/providers.js")>()),
+vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalog: vi.fn(async () => []),
+}));
+
+vi.mock("../plugins/providers.js", () => ({
   resolveOwningPluginIdsForModelRefs: vi.fn(() => []),
   resolveOwningPluginIdsForProviderRef: vi.fn(() => []),
 }));

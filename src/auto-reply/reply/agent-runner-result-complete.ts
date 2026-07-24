@@ -154,11 +154,7 @@ export async function completeReplyAgentRun(input: {
   const isHookBlockedRun = runResult.meta?.error?.kind === "hook_block";
   const rawUserText = isHookBlockedRun
     ? runResult.meta?.finalPromptText
-    : (runResult.meta?.finalPromptText ??
-      sessionCtx.CommandBody ??
-      sessionCtx.RawBody ??
-      sessionCtx.BodyForAgent ??
-      sessionCtx.Body);
+    : (runResult.meta?.finalPromptText ?? (sessionCtx.commandText || sessionCtx.agentText));
   const rawAssistantText = isHookBlockedRun
     ? undefined
     : (runResult.meta?.finalAssistantRawText ?? runResult.meta?.finalAssistantVisibleText);

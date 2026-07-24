@@ -1,7 +1,6 @@
 import { buildInboundMediaNoteProjection } from "../../../auto-reply/media-note.js";
 import {
   normalizeMediaFacts,
-  projectMediaFacts,
   readRuntimePromptMediaFacts,
   resolveMediaFacts,
   type MediaFact,
@@ -160,10 +159,7 @@ function replaceOwnedMediaProjection(text: string, media: MediaFact[]): string {
   }
   const projectionLines = new Set<string>();
   for (const facts of [media, ...media.map((fact) => [fact])]) {
-    const projection = buildInboundMediaNoteProjection({
-      media: facts,
-      ...projectMediaFacts(facts, "channel"),
-    }).text;
+    const projection = buildInboundMediaNoteProjection({ media: facts }).text;
     for (const line of projection?.split("\n") ?? []) {
       if (line) {
         projectionLines.add(line);

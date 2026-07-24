@@ -2170,10 +2170,13 @@ type OpenClawPackageSetupFeatures = {
 
 type OpenClawPackageCompat = {
   pluginApi?: string;
+  minGatewayVersion?: string;
 };
 
 export type OpenClawPackageBuild = {
   bundledDist?: boolean;
+  openclawVersion?: string;
+  pluginSdkVersion?: string;
 };
 
 export type OpenClawPackageManifest = {

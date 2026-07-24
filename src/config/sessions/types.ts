@@ -10,6 +10,7 @@ import type { SessionObserverDigest } from "../../../packages/gateway-protocol/s
 import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-icon.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
+import type { CronScheduledToolPolicy } from "../../cron/scheduled-tool-policy.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import type { Skill } from "../../skills/loading/skill-contract.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
@@ -247,7 +248,7 @@ export type SessionEntry = SessionRestartRecoveryState &
      * a real user/session-scoped key that merely happens to end with `:heartbeat`.
      */
     heartbeatIsolatedBaseSessionKey?: string;
-    /** Heartbeat task state (task name -> last run timestamp ms). */
+    /** Legacy heartbeat task timestamps consumed and cleared only by doctor migration. */
     heartbeatTaskState?: Record<string, number>;
     /** Plugin-owned session state, grouped by plugin id then extension namespace. */
     pluginExtensions?: Record<string, Record<string, SessionPluginJsonValue>>;
@@ -270,6 +271,8 @@ export type SessionEntry = SessionRestartRecoveryState &
     // codex plugin seam when exchanging thread metadata.
     /** Timestamp (ms) when the session was archived from active session lists. */
     archivedAt?: number;
+    /** Actor that archived the session; cleared when the session is restored. */
+    archivedBy?: SessionCreatedActor;
     /** Timestamp (ms) when the session was pinned for quick access. */
     pinnedAt?: number;
     /** Custom sidebar icon in the format accepted by the gateway protocol session-icon helper. */
@@ -384,6 +387,8 @@ export type SessionEntry = SessionRestartRecoveryState &
       cliExecutionProvider?: string;
       toolsAllow?: string[];
       toolsAllowIsDefault?: boolean;
+      /** Exact server-stamped authority provenance copied from the owning cron job. */
+      scheduledToolPolicy?: CronScheduledToolPolicy;
       cliSessionBindingFacts?: {
         extraSystemPromptStatic?: string;
         sourceReplyDeliveryMode?: "automatic" | "message_tool_only";

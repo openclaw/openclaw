@@ -947,6 +947,12 @@ describe("openclaw agent database", () => {
         '{"sessionId":"window-created-by","updatedAt":60,"createdBy":{"id":"legacy-human","label":"Legacy"}}',
         60,
         NULL
+      ), (
+        'agent:worker-1:newer-alias',
+        'window-current',
+        '{"sessionId":"window-current","updatedAt":100,"previousSessionId":"wrong-window"}',
+        100,
+        NULL
       );
       INSERT INTO transcript_events (session_id, seq, event_json, created_at)
       VALUES
