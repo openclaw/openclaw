@@ -563,6 +563,14 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.model = event.fromModel;
       assignReasonCode(record, event.reason);
       break;
+    case "ai_safety.eval.result":
+    case "ai_safety.external_content.consumed":
+    case "ai_safety.memory_context.selected":
+    case "ai_safety.prompt_injection.signal":
+    case "ai_safety.tool_policy.decision":
+    case "ai_safety.user_feedback.received":
+      record.channel = event.channel;
+      break;
   }
 
   return record;

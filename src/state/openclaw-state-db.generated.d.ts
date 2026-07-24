@@ -84,6 +84,18 @@ export interface AgentModelCatalogs {
   updated_at: number;
 }
 
+export interface AiSafetyEvents {
+  agent_id: string | null;
+  channel: string | null;
+  event_type: string;
+  message: string;
+  meta_json: Generated<string>;
+  recorded_at_ms: number;
+  sequence: Generated<number>;
+  session_id: string | null;
+  severity: string;
+}
+
 export interface AndroidNotificationRecentPackages {
   package_name: string;
   sort_order: number;
@@ -1484,6 +1496,7 @@ export interface DB {
   agent_databases: AgentDatabases;
   agent_deletion_journal: AgentDeletionJournal;
   agent_model_catalogs: AgentModelCatalogs;
+  ai_safety_events: AiSafetyEvents;
   android_notification_recent_packages: AndroidNotificationRecentPackages;
   apns_registration_tombstones: ApnsRegistrationTombstones;
   apns_registrations: ApnsRegistrations;

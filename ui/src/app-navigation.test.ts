@@ -124,6 +124,7 @@ describe("navigationIconForRoute", () => {
       advanced: "fileCode",
       debug: "bug",
       logs: "scrollText",
+      safety: "alertTriangle",
     });
   });
 
@@ -222,6 +223,7 @@ describe("titleForRoute", () => {
       advanced: "Advanced",
       debug: "Debug",
       logs: "Logs",
+      safety: "Safety",
     });
   });
 });
@@ -267,6 +269,7 @@ describe("subtitleForRoute", () => {
       advanced: "Every remaining config section, plus the raw file editor.",
       debug: "Snapshots, events, RPC.",
       logs: "Live gateway logs.",
+      safety: "AI safety taxonomy events and severity trends.",
     });
   });
 });
@@ -478,6 +481,7 @@ describe("SIDEBAR_NAV_ROUTES", () => {
       "advanced",
       "debug",
       "logs",
+      "safety",
       "about",
     ]);
   });

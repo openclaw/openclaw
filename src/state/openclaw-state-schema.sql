@@ -2017,6 +2017,26 @@ CREATE TABLE IF NOT EXISTS fleet_cells (
   data_dir TEXT NOT NULL
 ) STRICT;
 
+-- Durable, metadata-only AI safety/quality history. Raw prompts, responses,
+-- tool payloads, and memory content are deliberately excluded.
+CREATE TABLE IF NOT EXISTS ai_safety_events (
+  sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_type TEXT NOT NULL,
+  severity TEXT NOT NULL CHECK (severity IN ('info', 'low', 'medium', 'high', 'critical')),
+  session_id TEXT,
+  agent_id TEXT,
+  channel TEXT,
+  message TEXT NOT NULL,
+  meta_json TEXT NOT NULL DEFAULT '{}',
+  recorded_at_ms INTEGER NOT NULL CHECK (recorded_at_ms >= 0)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_ai_safety_events_recorded
+  ON ai_safety_events(recorded_at_ms, sequence);
+
+CREATE INDEX IF NOT EXISTS idx_ai_safety_events_session
+  ON ai_safety_events(session_id, sequence)
+  WHERE session_id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS claw_installs (
   agent_id TEXT NOT NULL PRIMARY KEY,
   schema_version TEXT NOT NULL,

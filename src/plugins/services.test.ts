@@ -30,6 +30,7 @@ function createRegistry(
   pluginId = "plugin:test",
   origin: PluginOrigin = "workspace",
   trustedOfficialInstall = false,
+  safetyEventTypes?: readonly string[],
 ) {
   const registry = createEmptyPluginRegistry();
   registry.services = services.map((service) => ({
@@ -38,6 +39,7 @@ function createRegistry(
     source: "test",
     origin,
     ...(trustedOfficialInstall ? { trustedOfficialInstall } : {}),
+    ...(safetyEventTypes ? { safetyEventTypes } : {}),
     rootDir: "/plugins/test-plugin",
   })) as typeof registry.services;
   return registry;
@@ -146,6 +148,31 @@ describe("startPluginServices", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetPluginRuntimeStateForTest();
+  });
+
+  it("does not expose safetyDiagnostics emit on plugin service context (deferred to follow-up PR)", async () => {
+    let capturedCtx: OpenClawPluginServiceContext | undefined;
+    await startPluginServices({
+      registry: createRegistry(
+        [
+          {
+            id: "safety-emitter",
+            start: (ctx) => {
+              capturedCtx = ctx;
+            },
+          },
+        ],
+        "external-safety-plugin",
+        "workspace",
+        false,
+        ["ai_safety.external_content.consumed"],
+      ),
+      config: createServiceConfig(),
+    });
+    expect(capturedCtx).toBeDefined();
+    expect(
+      (capturedCtx as unknown as Record<string, unknown>)["safetyDiagnostics"],
+    ).toBeUndefined();
   });
 
   it("starts services and stops them in reverse order", async () => {

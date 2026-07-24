@@ -1804,6 +1804,7 @@
                       "cli/agents",
                       "cli/claws",
                       "cli/audit",
+                      "cli/safety",
                       "cli/hooks",
                       "cli/infer",
                       "cli/memory",

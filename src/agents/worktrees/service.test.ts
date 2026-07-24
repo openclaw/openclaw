@@ -456,7 +456,9 @@ describe("ManagedWorktreeService", () => {
     });
 
     expect(await fs.readFile(path.join(created.path, "collision.txt"), "utf8")).toBe("from base\n");
-    expect((await fs.stat(path.join(created.path, "collision.txt"))).mode & 0o111).toBe(0);
+    if (process.platform !== "win32") {
+      expect((await fs.stat(path.join(created.path, "collision.txt"))).mode & 0o111).toBe(0);
+    }
     expect(getRegistryWorktreeProvisionedPaths(env, created.id)).toEqual([]);
   });
 
@@ -511,8 +513,7 @@ describe("ManagedWorktreeService", () => {
     await fs.writeFile(path.join(repo, ".worktreeinclude"), "provisioned.env\n");
     await git(repo, "add", ".gitignore", ".worktreeinclude");
     await git(repo, "commit", "-m", "configure worktree provisioning");
-    await fs.writeFile(path.join(repo, "provisioned.env"), "source value\n");
-    const mode = (await fs.stat(path.join(repo, "provisioned.env"))).mode & 0o7777;
+    await fs.writeFile(path.join(repo, "provisioned.env"), "source value\n", { mode: 0o644 });
     const created = await service.create({ repoRoot: repo, name: "roundtrip" });
     const originalHead = await git(created.path, "rev-parse", "HEAD");
     await fs.writeFile(path.join(created.path, "README.md"), "changed\n");
@@ -524,7 +525,7 @@ describe("ManagedWorktreeService", () => {
     await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await git(repo, "show-ref", "--verify", removed.snapshotRef!)).not.toBe("");
     const provisionedState = getRegistryWorktreeProvisionedState(env, created.id)!;
-    expect(provisionedState).toEqual([{ path: "provisioned.env", mode, chunks: 1 }]);
+    expect(provisionedState).toEqual([{ path: "provisioned.env", mode: 0o644, chunks: 1 }]);
     const snapshotFiles = await git(repo, "ls-tree", "-r", "--name-only", removed.snapshotRef!);
     expect(snapshotFiles).not.toContain("ignored.txt");
     expect(snapshotFiles).not.toContain("provisioned.env");

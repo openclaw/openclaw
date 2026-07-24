@@ -291,6 +291,47 @@ export function createDiagnosticsMetrics(meter: Meter) {
     unit: "1",
     description: "Diagnostic telemetry exporter lifecycle and failure events",
   });
+  const aiSafetyPromptInjectionSignalCounter = meter.createCounter(
+    "openclaw.ai_safety.prompt_injection.signal_total",
+    {
+      unit: "1",
+      description:
+        "Prompt injection signals detected by severity, category, action, source, and channel",
+    },
+  );
+  const aiSafetyToolPolicyDecisionCounter = meter.createCounter(
+    "openclaw.ai_safety.tool_policy.decision_total",
+    {
+      unit: "1",
+      description:
+        "Tool policy decisions by tool name, decision, policy source, severity, and channel",
+    },
+  );
+  const aiSafetyExternalContentConsumedCounter = meter.createCounter(
+    "openclaw.ai_safety.external_content.consumed_total",
+    {
+      unit: "1",
+      description: "External content consumption events by source type, trust, and channel",
+    },
+  );
+  const aiSafetyUserFeedbackReceivedCounter = meter.createCounter(
+    "openclaw.ai_safety.user_feedback.received_total",
+    {
+      unit: "1",
+      description: "User feedback events received by label and channel",
+    },
+  );
+  const aiSafetyMemoryContextSelectedCounter = meter.createCounter(
+    "openclaw.ai_safety.memory_context.selected_total",
+    {
+      unit: "1",
+      description: "Memory context selection events by memory type and channel",
+    },
+  );
+  const aiSafetyEvalResultCounter = meter.createCounter("openclaw.ai_safety.eval.result_total", {
+    unit: "1",
+    description: "Eval result events by eval name, pass/fail, severity, and channel",
+  });
   return {
     tokensCounter,
     genAiTokenUsageHistogram,
@@ -351,6 +392,12 @@ export function createDiagnosticsMetrics(meter: Meter) {
     livenessEventLoopUtilizationHistogram,
     livenessCpuCoreRatioHistogram,
     telemetryExporterCounter,
+    aiSafetyPromptInjectionSignalCounter,
+    aiSafetyToolPolicyDecisionCounter,
+    aiSafetyExternalContentConsumedCounter,
+    aiSafetyUserFeedbackReceivedCounter,
+    aiSafetyMemoryContextSelectedCounter,
+    aiSafetyEvalResultCounter,
   };
 }
 

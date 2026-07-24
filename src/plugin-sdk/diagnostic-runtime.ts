@@ -22,6 +22,21 @@ export {
 } from "../infra/diagnostic-events.js";
 export { resolveDiagnosticModelContentCapturePolicy } from "../infra/diagnostic-llm-content.js";
 export type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
+export type {
+  AISafetyEventEmitResult,
+  AISafetyEventInput,
+  AISafetyEventType,
+} from "../plugins/safety-event-emission.js";
+export type {
+  AISafetyEventMetadata,
+  DiagnosticAISafetyEventPayload,
+  DiagnosticEvalResultEvent,
+  DiagnosticExternalContentConsumedEvent,
+  DiagnosticMemoryContextSelectionEvent,
+  DiagnosticPromptInjectionSignalEvent,
+  DiagnosticToolPolicyDecisionEvent,
+  DiagnosticUserFeedbackReceivedEvent,
+} from "../infra/diagnostic-events.js";
 export {
   createChildDiagnosticTraceContext,
   createDiagnosticTraceContext,

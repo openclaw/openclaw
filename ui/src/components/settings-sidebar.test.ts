@@ -237,7 +237,8 @@ describe("settings sidebar search", () => {
     expect(allLabels).not.toContain("Activity");
     expect(allLabels).not.toContain("Sessions");
     expect(allLabels).toContain("Privacy & Security");
-    expect(allLabels.indexOf("About")).toBe(allLabels.indexOf("Logs") + 1);
+    expect(allLabels.indexOf("Safety")).toBe(allLabels.indexOf("Logs") + 1);
+    expect(allLabels.indexOf("About")).toBe(allLabels.indexOf("Safety") + 1);
 
     enterQuery("  ThEmE  ");
     expect(labels()).toEqual(["Appearance"]);

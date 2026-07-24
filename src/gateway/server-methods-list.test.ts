@@ -62,10 +62,14 @@ describe("listGatewayMethods", () => {
   });
 
   it("appends new methods after model probing without shifting older method indices", () => {
-    expect(listGatewayMethods().slice(-18)).toEqual([
+    expect(listGatewayMethods().slice(-22)).toEqual([
+      "sessions.dispatch",
+      "sessions.reclaim",
       "models.probe",
       "migrations.memory.plan",
       "migrations.memory.apply",
+      "safety.events.list",
+      "safety.events.summary",
       "ui.command",
       "approval.history",
       "plugin.surface.refresh",
@@ -83,12 +87,22 @@ describe("listGatewayMethods", () => {
       "session.members.remove",
     ]);
     const methods = listGatewayMethods();
+    const applyIdx = methods.indexOf("migrations.memory.apply");
+    expect(methods[applyIdx - 2]).toBe("models.probe");
+    expect(methods[applyIdx - 1]).toBe("migrations.memory.plan");
+    expect(methods[applyIdx + 1]).toBe("safety.events.list");
+    expect(methods[applyIdx + 2]).toBe("safety.events.summary");
     expect(methods.indexOf("node.pluginSurface.refresh")).toBe(
       methods.indexOf("node.describe") + 1,
     );
     expect(methods.indexOf("node.pluginTools.update")).toBe(
       methods.indexOf("node.pluginSurface.refresh") + 1,
     );
+    expect(methods.slice(-3)).toEqual([
+      "session.members.list",
+      "session.members.add",
+      "session.members.remove",
+    ]);
   });
 
   it("advertises ClawHub skill trust methods", () => {
@@ -141,7 +155,7 @@ describe("listGatewayMethods", () => {
       "exec.approval.get",
     ]);
     expect(methods).toContain("tts.speak");
-    expect(coreMethods.slice(-25)).toEqual([
+    expect(coreMethods.slice(-27)).toEqual([
       "sessions.catalog.continue",
       "sessions.catalog.archive",
       "approval.get",
@@ -152,6 +166,8 @@ describe("listGatewayMethods", () => {
       "models.probe",
       "migrations.memory.plan",
       "migrations.memory.apply",
+      "safety.events.list",
+      "safety.events.summary",
       "ui.command",
       "approval.history",
       "plugin.surface.refresh",

@@ -319,6 +319,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
       source: record.source,
       origin: record.origin,
       trustedOfficialInstall: record.trustedOfficialInstall,
+      safetyEventTypes: record.safetyEventTypes,
       rootDir: record.rootDir,
     });
   };

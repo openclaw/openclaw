@@ -77,6 +77,10 @@ const loadUsersHandlers = lazyHandlerModule(
   () => import("./server-methods/users.js"),
   (module) => module.usersHandlers,
 );
+const loadSafetyHandlers = lazyHandlerModule(
+  () => import("./server-methods/safety.js"),
+  (module) => module.safetyHandlers,
+);
 const loadAttachHandlers = lazyHandlerModule(
   () => import("./server-methods/attach.js"),
   (module) => module.attachHandlers,
@@ -643,6 +647,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "users.setAvatar",
     ],
     loadHandlers: loadUsersHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["safety.events.list", "safety.events.summary"],
+    loadHandlers: loadSafetyHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["tasks.list", "tasks.get", "tasks.cancel"],

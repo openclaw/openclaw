@@ -6,6 +6,7 @@ import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/
 import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { openRootFile } from "../../infra/boundary-file-read.js";
+import { emitTrustedAISafetyDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -1441,6 +1442,15 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           identifiers,
           latestAsk: latestUserAsk,
           identifierPolicy,
+        });
+        // Fix #3 (evaluation): emit at the real compaction quality-audit boundary.
+        emitTrustedAISafetyDiagnosticEvent({
+          type: "ai_safety.eval.result",
+          sessionId: ctx.sessionManager.getSessionId(),
+          evalName: "compaction.summary_quality",
+          score: quality.ok ? 1 : 0,
+          passed: quality.ok,
+          severity: quality.ok ? "info" : "warn",
         });
         summary = summaryWithPreservedTurns;
         if (quality.ok || attempt >= totalAttempts - 1) {

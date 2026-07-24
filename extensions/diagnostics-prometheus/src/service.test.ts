@@ -801,7 +801,7 @@ describe("diagnostics-prometheus service", () => {
 
     exporter.service.stop?.();
 
-    expect(unsubscribe).toHaveBeenCalledOnce();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
     expect(exporter.render()).toBe("");
   });
 });

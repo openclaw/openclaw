@@ -13,6 +13,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
 import { resolveWebProviderConfig } from "../../../packages/web-content-core/src/provider-runtime-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { emitTrustedAISafetyDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import { SsrFBlockedError, type LookupFn, type SsrFPolicy } from "../../infra/net/ssrf.js";
 import { logDebug } from "../../logger.js";
 import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
@@ -827,6 +828,9 @@ export function createWebFetchTool(options?: {
   runtimeWebFetch?: RuntimeWebFetchMetadata;
   lateBindRuntimeConfig?: boolean;
   lookupFn?: LookupFn;
+  sessionId?: string;
+  agentId?: string;
+  channel?: string;
 }): AnyAgentTool | null {
   const fetch = resolveFetchConfig(options?.config);
   if (!resolveFetchEnabled({ fetch, sandboxed: options?.sandboxed })) {
@@ -928,6 +932,17 @@ export function createWebFetchTool(options?: {
           signal,
           resolveProviderFallback,
         });
+        // Fix #3 (external-content): emit at real web_fetch boundary.
+        if (options?.sessionId) {
+          emitTrustedAISafetyDiagnosticEvent({
+            type: "ai_safety.external_content.consumed",
+            sessionId: options.sessionId,
+            ...(options.agentId ? { agentId: options.agentId } : {}),
+            ...(options.channel ? { channel: options.channel } : {}),
+            sourceType: "web_fetch",
+            trusted: false,
+          });
+        }
         return jsonResult(result);
       } finally {
         clearProgressTimer();

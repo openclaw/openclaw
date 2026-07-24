@@ -104,9 +104,9 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "config-contracts": 0,
   "inbound-reply-dispatch": 24,
   "channel-reply-pipeline": 12,
-  "interactive-runtime": 11,
+  "interactive-runtime": 13,
   // +3: canonical incognito classifier projected through deprecated compatibility barrels.
-  "infra-runtime": 596,
+  "infra-runtime": 604,
   "ssrf-policy": 1,
   "ssrf-runtime": 1,
   "media-runtime": 2,
@@ -146,6 +146,69 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
+      // +4: registerMcpServerConnectionResolver context/result/resolver/registration types (#106229).
+      // +2: materializeRequesterScopedMcpToolsForHarnessRun (agent-harness-runtime + compat mirror).
+      // +1: matchesNoProxy exposes canonical Undici-compatible bypass selection to plugins.
+      // +4: group scope encoder/key builder (channel-policy + compat mirror).
+      // +1: runDetachedWebhookWork gives post-ack work an independently tracked admission root.
+      // +9: app-guided provider setup context/candidate/hook types and their public mirrors.
+      // +3: atomic SQLite STRICT migration function, options, and result for plugin stores.
+      // Harvest: channel-ingress -64; dead channel-message dispatch aliases -23.
+      // Harvest: retired qa-live-transport-scenarios subpath -6.
+      // +12: typed plan step/status and checklist formatter across channel barrels.
+      // +8: plan-step ingress union and normalizer across channel barrels.
+      // Harvest: retired dual-field plan payload builder -1.
+      // +12: active plan-step consumers pinned through channel-outbound and mirrors.
+      // +6: app-guided provider setup types retained by plugin-entry and mirrors.
+      // +3: widget HTML validation helpers and tool input error.
+      // Used-union narrowing: 31 wildcard barrels drop to explicit used exports;
+      // proxy stream API and codex marker/scaffold pins retained.
+      // +2: generic channel retry runner and Retry-After parser.
+      // +1: shared speech-provider API key resolver.
+      // +32: shared channel setup, config-schema, policy, and status helpers.
+      // +2: shared channel replay-guard factory and claim handle.
+      // +6: lightweight speech settings types, normalizers, and config resolver.
+      // +4: unified implicit-mention config, schema, resolved policy, and resolver.
+      // Harvest: retired AudioConfig type -1.
+      // +4: bounded plugin blob store options, entry, entry info, and store types.
+      // +6: shared progress receipt tracker + compositor snapshot across channel barrels.
+      // +1: selectPreferredLocalModelId shares app-guided local model ranking across providers.
+      // +4: shared audio-energy stats and speech-threshold gate through realtime-voice.
+      // +2: supplemental sender decision and outbound text chunk sequencer.
+      // +2: shared realtime voice session harness through realtime-voice.
+      // +24: narrowed durable channel-ingress drain seam — factory, lifecycle binding,
+      // tuning constants, and telegram-consumed claim helpers with compat mirrors,
+      // after harvesting exports orphaned by the split-out WhatsApp adapter (#108656).
+      // +10: supplemental sender helpers plus host-owned SQLite lease contracts.
+      // Harvest: retired dual-field plan payload builder -1.
+      // +23: core channel, envelope, direct-DM, feedback, legacy-payload, and memory contracts.
+      // +81: meeting-runtime barrel: browser meeting-bot core behind MeetingPlatformAdapter.
+      // +3: question-gateway-runtime resolver plus request/result types.
+      // +1: async memory prompt preparation registration.
+      // +1: canonical memory host event normalization for SQLite storage.
+      // +1: centralized remember-across-conversations effective-default resolver.
+      // +4: gateway-backed harness question runner, claim/cancel helpers, and caller type.
+      // Harvest: internal question runtime exports -2.
+      // +1: ingress-effect-once factory.
+      // +1: shared persistent-dedupe claim loop.
+      // +3: bounded raw transcript cursor request, result, and reader.
+      // +3: bounded visible transcript cursor request, result, and reader.
+      // +1: explicit AgentModelPolicyConfig shared with provider setup surfaces.
+      // +1: AgentHarnessSessionSupersededError lets harness plugins stop stale-owner fallback.
+      // +1: AgentThinkingLevel shared by default-turn and compaction config.
+      // +9: shared ingress monitor factory and lifecycle/result contracts across
+      // channel-outbound and its two deprecated compatibility barrels.
+      // +1: SwarmConfig exposes the tools.swarm contract through config-types.
+      // +3: harness sessionFork capability params, result, and failure-code contracts.
+      // +2: upstream-link registry write/delete for harness-owned session forks.
+      // Harvest: mention-pattern schemas and helper exports -3.
+      // +1: config-backed main-session resolver for Gateway-hosted plugin services.
+      // +9: outbound echo identity type and record/query helpers across
+      // channel-outbound and its two compatibility barrels.
+      // Net +1: public session catalog locator types after the protocol cleanup harvest.
+      // +2: lifecycle-owned prepared model catalog sync and async readers.
+      // Harvest: retired tuning-knob config types -10.
+      // Harvest: removed process-global API-provider publication functions -2.
       // +4: session discussion state, info, provider, and registration contracts.
       // +2: structured media placeholder formatter and its text-fact contract.
       // +2: narrow settled-turn finalization result and safe full-attempt projector.
@@ -159,7 +222,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +3: plugin approval reviewer-detail cap/truncator and sanitize-with-status variant.
       // +1: canonical incognito session classifier for storage-safe plugin behavior.
       // +2: shipped Slack and Discord setup compatibility helpers.
-      4697,
+      // +11: host-observable AI safety taxonomy event and metadata types.
+      4743,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -176,14 +240,15 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: plugin approval detail truncator and sanitize-with-status variant.
       // +1: canonical incognito session classifier for storage-safe plugin behavior.
       // +2: shipped Slack and Discord setup compatibility helpers.
-      2845,
+      // +2: emitPluginSafetyEvent (diagnostic-runtime + compat mirror).
+      2881,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
       // +3: canonical incognito classifier projected through deprecated compatibility barrels.
       // +2: shipped Slack and Discord setup compatibility helpers.
-      1688,
+      1708,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

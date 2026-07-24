@@ -143,6 +143,31 @@ describe("loadPluginManifest JSON5 tolerance", () => {
     }
   });
 
+  it("normalizes declared AI safety event permissions from the manifest", () => {
+    const dir = makeTempDir();
+    fs.writeFileSync(
+      path.join(dir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "safety-emitter",
+        safetyEventTypes: [
+          "ai_safety.external_content.consumed",
+          "",
+          "ai_safety.external_content.consumed",
+          "ai_safety.not_real",
+        ],
+        configSchema: { type: "object" },
+      }),
+      "utf-8",
+    );
+
+    const result = loadPluginManifest(dir, false);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.manifest.safetyEventTypes).toEqual(["ai_safety.external_content.consumed"]);
+    }
+  });
+
   it("normalizes catalog curation metadata from the manifest", () => {
     const dir = makeTempDir();
     const json5Content = `{

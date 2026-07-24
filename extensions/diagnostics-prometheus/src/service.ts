@@ -2,6 +2,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type {
+  AISafetyEventMetadata,
+  DiagnosticAISafetyEventPayload,
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
   OpenClawPluginHttpRouteHandler,
@@ -556,6 +558,26 @@ function recordModelUsage(
   );
 }
 
+// Unified low-cardinality counter for all AI safety taxonomy events.
+// Labels are limited to {event_type, severity, channel} to stay within
+// MAX_PROMETHEUS_SERIES=2048. High-cardinality fields (tool_name, eval_name,
+// session_id) are excluded; use OTEL per-event counters for finer breakdowns.
+function recordAISafetyEvent(
+  store: PrometheusMetricStore,
+  evt: DiagnosticAISafetyEventPayload,
+  _metadata: AISafetyEventMetadata,
+): void {
+  store.counter(
+    "openclaw_ai_safety_events_total",
+    "AI safety taxonomy events by event type, severity, and channel.",
+    {
+      event_type: lowCardinalityLabel(evt.type),
+      severity: lowCardinalityLabel("severity" in evt ? evt.severity : undefined, "none"),
+      channel: lowCardinalityLabel(evt.channel, "none"),
+    },
+  );
+}
+
 function recordDiagnosticEvent(
   store: PrometheusMetricStore,
   evt: DiagnosticEventPayload,
@@ -993,6 +1015,7 @@ function recordDiagnosticEvent(
         numericValue(evt.bytes),
         BYTE_BUCKETS,
       );
+      break;
     default:
   }
 }
@@ -1033,7 +1056,14 @@ export function createDiagnosticsPrometheusExporter() {
       }
       unsubscribe = subscribe((event, metadata) => {
         try {
-          recordDiagnosticEvent(store, event, metadata);
+          if (event.type.startsWith("ai_safety.")) {
+            recordAISafetyEvent(store, event as DiagnosticAISafetyEventPayload, {
+              trusted: metadata.trusted,
+              ...(metadata.pluginId ? { pluginId: metadata.pluginId } : {}),
+            });
+          } else {
+            recordDiagnosticEvent(store, event, metadata);
+          }
         } catch (err) {
           ctx.logger.error(
             `diagnostics-prometheus: event handler failed (${event.type}): ${safeErrorMessage(err)}`,

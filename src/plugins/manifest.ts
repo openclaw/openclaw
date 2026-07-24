@@ -6,6 +6,15 @@ import { normalizeModelCatalogProviderId } from "@openclaw/model-catalog-core/mo
 import type { ModelCatalog } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
+
+const AI_SAFETY_EVENT_TYPES = new Set([
+  "ai_safety.prompt_injection.signal",
+  "ai_safety.tool_policy.decision",
+  "ai_safety.external_content.consumed",
+  "ai_safety.user_feedback.received",
+  "ai_safety.memory_context.selected",
+  "ai_safety.eval.result",
+]);
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { ENV_SECRET_REF_ID_RE } from "../config/types.secrets.js";
@@ -427,6 +436,16 @@ export type PluginManifest = {
   /** Manifest-owned config behavior consumed by generic core helpers. */
   configContracts?: PluginManifestConfigContracts;
   channelConfigs?: Record<string, PluginManifestChannelConfig>;
+  /**
+   * AI safety event types this plugin is permitted to emit via `emitSafetyEvent`.
+   * Non-bundled plugins that try to emit an undeclared type will have the call
+   * rejected at runtime. Bundled (trusted) plugins are not subject to this check.
+   *
+   * Valid values: "ai_safety.prompt_injection.signal" | "ai_safety.tool_policy.decision" |
+   *   "ai_safety.external_content.consumed" | "ai_safety.user_feedback.received" |
+   *   "ai_safety.memory_context.selected" | "ai_safety.eval.result"
+   */
+  safetyEventTypes?: string[];
 };
 
 export type PluginManifestContracts = {
@@ -1993,6 +2012,13 @@ export function loadPluginManifest(
   const providerAuthChoices = normalizeProviderAuthChoices(raw.providerAuthChoices);
   const activation = normalizeManifestActivation(raw.activation);
   const setup = normalizeManifestSetup(raw.setup);
+  const safetyEventTypes = [
+    ...new Set(
+      normalizeTrimmedStringList(raw.safetyEventTypes).filter((eventType) =>
+        AI_SAFETY_EVENT_TYPES.has(eventType),
+      ),
+    ),
+  ];
   const qaRunners = normalizeManifestQaRunners(raw.qaRunners);
   const dashboardResult = normalizeManifestDashboard(raw.dashboard);
   if (!dashboardResult.ok) {
@@ -2055,6 +2081,7 @@ export function loadPluginManifest(
       providerAuthChoices,
       activation,
       setup,
+      ...(safetyEventTypes.length > 0 ? { safetyEventTypes } : {}),
       qaRunners,
       dashboard,
       skills,

@@ -64,6 +64,7 @@ import {
   setGatewaySigusr1RestartPolicy,
   setPreRestartDeferralCheck,
 } from "../infra/restart.js";
+import { ensureSafetyEventStoreBridge } from "../infra/safety-event-store.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { upsertPresence } from "../infra/system-presence.js";
 import { withDiagnosticPhase } from "../logging/diagnostic-phase.js";
@@ -669,6 +670,9 @@ export async function startGatewayServer(
       ["supervisorMode", restartHandoff?.supervisorMode],
     ]);
   }
+  // Fix #4: Wire the AI safety event ring buffer at Gateway startup so events
+  // emitted before the first safety RPC call are not lost.
+  ensureSafetyEventStoreBridge();
   const startupTrace = createGatewayStartupTrace();
   const startupConfigModulePromise = import("./server-startup-config.js");
   const loadStartupPluginsModule = createLazyPromise(() => import("./server-startup-plugins.js"), {

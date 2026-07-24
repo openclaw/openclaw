@@ -674,6 +674,118 @@
       "text": "OpenClaw"
     },
     {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/pages/safety/view.ts",
+      "text": "ai_safety.refusal"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/safety/view.ts",
+      "text": "All"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/safety/view.ts",
+      "text": "Critical"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/safety/view.ts",
+      "text": "High"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/safety/view.ts",
+      "text": "Info"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/safety/view.ts",
+      "text": "Loading…"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/safety/view.ts",
+      "text": "Low"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/safety/view.ts",
+      "text": "Medium"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/safety/view.ts",
+      "text": "Message"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/safety/view.ts",
+      "text": "No AI safety events recorded yet."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/safety/view.ts",
+      "text": "Refresh"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/safety/view.ts",
+      "text": "Session"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/safety/view.ts",
+      "text": "Severity"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/safety/view.ts",
+      "text": "Time"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/safety/view.ts",
+      "text": "Type"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/safety/view.ts",
+      "text": "Type prefix"
+    },
+    {
       "count": 2,
       "kind": "html-text",
       "name": "text",

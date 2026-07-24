@@ -1,6 +1,7 @@
 // Resolves trusted tool policy for plugins from runtime config.
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { emitTrustedAISafetyDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { isPlainObject } from "../utils.js";
 import type {
   PluginHookBeforeToolCallEvent,
@@ -278,17 +279,37 @@ export async function runTrustedToolPolicies(
     try {
       // Policies run in order; block decisions are terminal, mutations feed later policies.
       if ("allow" in decision && decision.allow === false) {
+        const blockReason = decision.reason ?? trustedPolicyDefaultBlockReason(registration);
+        // Fix #3 (tool-policy): emit at the real block boundary.
+        emitTrustedAISafetyDiagnosticEvent({
+          type: "ai_safety.tool_policy.decision",
+          toolName: event.toolName,
+          decision: "blocked",
+          policySource: "plugin",
+          severity: "warn",
+          reason: blockReason,
+        });
         return {
           block: true,
-          blockReason: decision.reason ?? trustedPolicyDefaultBlockReason(registration),
+          blockReason,
         };
       }
       // `block: true` is terminal; normalize a missing blockReason to a deterministic
       // reason so downstream diagnostics match the `{ allow: false }` path above.
       if ("block" in decision && decision.block === true) {
+        const blockReason = decision.blockReason ?? trustedPolicyDefaultBlockReason(registration);
+        // Fix #3 (tool-policy): emit at the real block boundary.
+        emitTrustedAISafetyDiagnosticEvent({
+          type: "ai_safety.tool_policy.decision",
+          toolName: event.toolName,
+          decision: "blocked",
+          policySource: "plugin",
+          severity: "warn",
+          reason: blockReason,
+        });
         return {
           ...decision,
-          blockReason: decision.blockReason ?? trustedPolicyDefaultBlockReason(registration),
+          blockReason,
         };
       }
       // `block: false` is a no-op (matches the regular `before_tool_call` hook

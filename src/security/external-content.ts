@@ -1,5 +1,6 @@
 // Wraps external content with source tags and random boundary tokens.
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
+import { emitTrustedAISafetyDiagnosticEvent } from "../infra/diagnostic-events.js";
 export {
   resolveHookExternalContentSource,
   type HookExternalContentSource,
@@ -336,6 +337,20 @@ type WrapExternalContentOptions = {
  */
 export function wrapExternalContent(content: string, options: WrapExternalContentOptions): string {
   const { source, sender, subject, includeWarning = true } = options;
+
+  // Fix #3 (prompt-injection): detect and emit at real injection boundary.
+  const suspiciousMatches = detectSuspiciousPatterns(content);
+  if (suspiciousMatches.length > 0) {
+    const snippetHash = createHash("sha256").update(content.slice(0, 500)).digest("hex");
+    emitTrustedAISafetyDiagnosticEvent({
+      type: "ai_safety.prompt_injection.signal",
+      severity: suspiciousMatches.length >= 3 ? "error" : "warn",
+      category: "indirect",
+      actionTaken: "flagged",
+      sourceType: "external_content",
+      snippetHash,
+    });
+  }
 
   const sanitized = sanitizeExternalContentText(content);
   const sourceLabel = EXTERNAL_SOURCE_LABELS[source] ?? "External";

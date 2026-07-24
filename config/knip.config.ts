@@ -78,6 +78,7 @@ const repositoryScriptEntries = [
   "scripts/pre-commit/filter-staged-files.mjs!",
   "scripts/qa-coverage-report.ts!",
   "scripts/qa-parity-report.ts!",
+  "scripts/repro/ai-safety-gateway-proof.ts!",
   "scripts/repro/tsx-name-repro.ts!",
   "scripts/resolve-frozen-codex-live-suite.mjs!",
   "scripts/secrets/openclaw-bws-resolver.mjs!",
@@ -363,6 +364,9 @@ const config = {
     // GatewayBoardProvider and boardExists are constructed/asserted by the
     // focused Control UI provider tests, not by a separate production module.
     "ui/src/lib/board/provider.ts": ["exports"],
+    // emitPluginSafetyEvent is the plugin-facing emit surface; the caller
+    // site (plugin service context) is deferred to a follow-up PR.
+    "src/plugins/safety-event-emission.ts": ["exports"],
     // Greeting cache/fact contracts (hash, alert text, store shapes) are
     // asserted by the focused greeting unit tests, not by another prod module.
     "src/system-agent/greeting.ts": ["exports", "types"],

@@ -5,6 +5,7 @@ const hoisted = vi.hoisted(() => ({
   buildAgentHookContextChannelFields: vi.fn(() => ({ channel: "discord" })),
   buildAgentHookContextIdentityFields: vi.fn(() => ({ senderId: "sender-1" })),
   emitTrustedDiagnosticEvent: vi.fn(),
+  emitTrustedAISafetyDiagnosticEvent: vi.fn(),
   hasHooks: vi.fn(() => true),
   log: {
     debug: vi.fn(),
@@ -33,6 +34,7 @@ const hoisted = vi.hoisted(() => ({
 
 vi.mock("../../../infra/diagnostic-events.js", () => ({
   emitTrustedDiagnosticEvent: hoisted.emitTrustedDiagnosticEvent,
+  emitTrustedAISafetyDiagnosticEvent: hoisted.emitTrustedAISafetyDiagnosticEvent,
 }));
 vi.mock("../../../plugins/hook-agent-context.js", () => ({
   buildAgentHookContextChannelFields: hoisted.buildAgentHookContextChannelFields,

@@ -1640,6 +1640,7 @@
     "qa:otel:collector-smoke": "node --import tsx test/e2e/qa-lab/runtime/qa-otel-smoke-runtime.ts --collector docker",
     "qa:otel:smoke": "node --import tsx test/e2e/qa-lab/runtime/qa-otel-smoke-runtime.ts",
     "qa:prometheus:smoke": "node scripts/run-node.mjs qa suite --provider-mode mock-openai --scenario docker-prometheus-smoke --concurrency 1 --fast",
+    "qa:safety-events:simulate": "tsx scripts/simulate-ai-safety-events.ts",
     "release-metadata:check": "node scripts/check-release-metadata-only.mjs",
     "release:beta": "node scripts/release-candidate-checklist.mjs",
     "release:beta-smoke": "node --import tsx scripts/release-beta-smoke.ts",

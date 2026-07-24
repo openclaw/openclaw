@@ -1807,6 +1807,7 @@ export const en: TranslationMap = {
     security: "Privacy & Security",
     debug: "Debug",
     logs: "Logs",
+    safety: "Safety",
     plugin: "Plugin",
   },
   subtitles: {
@@ -1846,6 +1847,7 @@ export const en: TranslationMap = {
     advanced: "Every remaining config section, plus the raw file editor.",
     debug: "Snapshots, events, RPC.",
     logs: "Live gateway logs.",
+    safety: "AI safety taxonomy events and severity trends.",
     plugin: "Plugin-provided panel.",
   },
   modelSetup: {

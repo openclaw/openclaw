@@ -775,6 +775,103 @@ export type DiagnosticAsyncQueueDroppedEvent = DiagnosticBaseEvent & {
   drainBatchSize: number;
 };
 
+// ---------------------------------------------------------------------------
+// AI safety / quality event taxonomy — canonical definitions live here.
+// ---------------------------------------------------------------------------
+
+/** Emitted when a prompt injection signal is detected in model input or tool output. */
+export type DiagnosticPromptInjectionSignalEvent = DiagnosticBaseEvent & {
+  type: "ai_safety.prompt_injection.signal";
+  agentId?: string;
+  sessionId?: string;
+  severity: "info" | "warn" | "error" | "critical";
+  category: "direct" | "indirect" | "jailbreak" | "role_override" | "unknown";
+  actionTaken: "blocked" | "flagged" | "allowed" | "redacted";
+  sourceType: "user_input" | "tool_output" | "model_response" | "memory" | "external_content";
+  channel?: string;
+  snippetHash?: string;
+};
+
+/** Emitted when a tool policy decision is made (allow/block/approve). */
+export type DiagnosticToolPolicyDecisionEvent = DiagnosticBaseEvent & {
+  type: "ai_safety.tool_policy.decision";
+  agentId?: string;
+  sessionId?: string;
+  toolName: string;
+  decision: "allowed" | "blocked" | "approval_required" | "approved" | "denied";
+  policySource: "static_config" | "plugin" | "user_approval" | "hook";
+  severity: "info" | "warn" | "error";
+  channel?: string;
+  reason?: string;
+};
+
+/** Emitted when external content is fetched and consumed by an agent. */
+export type DiagnosticExternalContentConsumedEvent = DiagnosticBaseEvent & {
+  type: "ai_safety.external_content.consumed";
+  agentId?: string;
+  sessionId?: string;
+  sourceType: "web_fetch" | "file" | "mcp_tool" | "api" | "unknown";
+  trusted: boolean;
+  urlHash?: string;
+  byteSize?: number;
+  channel?: string;
+};
+
+/** Emitted when structured user feedback is captured (thumbs up/down, rating, correction). */
+export type DiagnosticUserFeedbackReceivedEvent = DiagnosticBaseEvent & {
+  type: "ai_safety.user_feedback.received";
+  agentId?: string;
+  sessionId?: string;
+  label: "positive" | "negative" | "correction" | "flag" | "other";
+  score?: number;
+  channel?: string;
+};
+
+/** Emitted when memory or context selection decisions are made. */
+export type DiagnosticMemoryContextSelectionEvent = DiagnosticBaseEvent & {
+  type: "ai_safety.memory_context.selected";
+  agentId?: string;
+  sessionId?: string;
+  memoryType: "short_term" | "long_term" | "project" | "workspace" | "external";
+  itemCount: number;
+  totalTokens?: number;
+  channel?: string;
+};
+
+/** Emitted when an eval or quality check produces a result. */
+export type DiagnosticEvalResultEvent = DiagnosticBaseEvent & {
+  type: "ai_safety.eval.result";
+  agentId?: string;
+  sessionId?: string;
+  evalName: string;
+  score: number;
+  passed: boolean;
+  severity: "info" | "warn" | "error" | "critical";
+  channel?: string;
+};
+
+/** Union of all AI safety/quality event types. */
+export type DiagnosticAISafetyEventPayload =
+  | DiagnosticPromptInjectionSignalEvent
+  | DiagnosticToolPolicyDecisionEvent
+  | DiagnosticExternalContentConsumedEvent
+  | DiagnosticUserFeedbackReceivedEvent
+  | DiagnosticMemoryContextSelectionEvent
+  | DiagnosticEvalResultEvent;
+
+/** Distributive Omit over the AI safety event union — preserves discriminated union structure. */
+export type DiagnosticAISafetyEventInput = DiagnosticAISafetyEventPayload extends infer Event
+  ? Event extends DiagnosticAISafetyEventPayload
+    ? Omit<Event, "seq" | "ts">
+    : never
+  : never;
+
+/** Metadata alias for backwards compatibility with consumers of the AI safety event channel. */
+export type AISafetyEventMetadata = {
+  trusted: boolean;
+  pluginId?: string;
+};
+
 export type DiagnosticEventPayload =
   | DiagnosticUsageEvent
   | DiagnosticWebhookReceivedEvent
@@ -828,7 +925,13 @@ export type DiagnosticEventPayload =
   | DiagnosticSecurityEvent
   | DiagnosticTelemetryExporterEvent
   | DiagnosticAsyncQueueDroppedEvent
-  | DiagnosticFailoverEvent;
+  | DiagnosticFailoverEvent
+  | DiagnosticPromptInjectionSignalEvent
+  | DiagnosticToolPolicyDecisionEvent
+  | DiagnosticExternalContentConsumedEvent
+  | DiagnosticUserFeedbackReceivedEvent
+  | DiagnosticMemoryContextSelectionEvent
+  | DiagnosticEvalResultEvent;
 
 type DiagnosticNonSecurityEventPayload = Exclude<DiagnosticEventPayload, DiagnosticSecurityEvent>;
 
@@ -850,6 +953,7 @@ export type DiagnosticEventMetadata = Readonly<{
   internal?: boolean;
   trustedTraceContext?: boolean;
   trusted: boolean;
+  pluginId?: string;
 }>;
 
 export type DiagnosticModelCallContent = Readonly<{
@@ -1249,6 +1353,7 @@ function createInternalDiagnosticMetadata(trusted: boolean): DiagnosticEventMeta
 type EmitDiagnosticEventOptions = {
   allowSecurityEvent?: boolean;
   internal?: boolean;
+  pluginId?: string;
   privateData?: DiagnosticEventPrivateData;
   trustedTraceContext?: boolean;
 };
@@ -1270,11 +1375,12 @@ function emitDiagnosticEventWithTrust(
   }
 
   const enriched = enrichDiagnosticEvent(state, event);
-  const { internal = false, privateData } = options;
+  const { internal = false, privateData, pluginId } = options;
   const trustedTraceContext = options.trustedTraceContext === true;
   const metadata = {
     ...(internal ? createInternalDiagnosticMetadata(trusted) : { trusted }),
     ...(trustedTraceContext ? { trustedTraceContext } : {}),
+    ...(pluginId ? { pluginId } : {}),
   };
 
   if (ASYNC_DIAGNOSTIC_EVENT_TYPES.has(enriched.type)) {
@@ -1490,6 +1596,35 @@ export function formatDiagnosticTraceparentForPropagation(
 /** Returns whether listener metadata marks dispatcher-internal provenance. */
 export function isInternalDiagnosticEventMetadata(metadata: DiagnosticEventMetadata): boolean {
   return metadata.internal === true;
+}
+
+/**
+ * Emits an AI safety taxonomy event via the main diagnostic pipeline.
+ * Carries pluginId in metadata so exporters can attribute plugin-originated emissions.
+ */
+export function emitTrustedAISafetyDiagnosticEvent(
+  event: DiagnosticAISafetyEventInput,
+  opts?: { pluginId?: string; trusted?: boolean },
+): void {
+  emitDiagnosticEventWithTrust(event as DiagnosticEventInput, opts?.trusted ?? true, {
+    allowSecurityEvent: false,
+    pluginId: opts?.pluginId,
+  });
+}
+
+/** Subscribe to ai_safety.* events via the main diagnostic pipeline. */
+export function onAISafetyDiagnosticEvent(
+  listener: (event: DiagnosticAISafetyEventPayload, metadata: AISafetyEventMetadata) => void,
+): () => void {
+  return onTrustedInternalDiagnosticEvent((evt, metadata) => {
+    if (!evt.type.startsWith("ai_safety.")) {
+      return;
+    }
+    listener(evt as DiagnosticAISafetyEventPayload, {
+      trusted: metadata.trusted,
+      ...(metadata.pluginId ? { pluginId: metadata.pluginId } : {}),
+    });
+  });
 }
 
 /** Resets dispatcher state between tests. */

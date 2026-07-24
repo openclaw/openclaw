@@ -112,6 +112,11 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: false,
   },
   {
+    name: "safety",
+    description: "Inspect AI safety taxonomy events",
+    hasSubcommands: true,
+  },
+  {
     name: "sessions",
     description: "List stored conversation sessions",
     hasSubcommands: true,
