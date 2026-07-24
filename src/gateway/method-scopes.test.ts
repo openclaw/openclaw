@@ -104,6 +104,9 @@ describe("method scope resolution", () => {
     ["talk.session.submitToolResult", ["operator.write"]],
     ["talk.session.steer", ["operator.write"]],
     ["talk.session.close", ["operator.write"]],
+    ["modelRecovery.status", ["operator.read"]],
+    ["modelRecovery.divertNew", ["operator.recovery"]],
+    ["modelRecovery.release", ["operator.recovery"]],
     ["update.status", ["operator.admin"]],
     ["config.schema", ["operator.admin"]],
     ["config.patch", ["operator.admin"]],
@@ -120,6 +123,19 @@ describe("method scope resolution", () => {
     ["conversations.turn.cancel", ["operator.admin"]],
   ])("resolves least-privilege scopes for %s", (method, expected) => {
     expect(resolveLeastPrivilegeOperatorScopesForMethod(method)).toEqual(expected);
+  });
+
+  it("allows recovery mutations only with recovery or admin scope", () => {
+    expect(authorizeOperatorScopesForMethod("modelRecovery.divertNew", ["operator.read"])).toEqual({
+      allowed: false,
+      missingScope: "operator.recovery",
+    });
+    expect(
+      authorizeOperatorScopesForMethod("modelRecovery.divertNew", ["operator.recovery"]),
+    ).toEqual({ allowed: true });
+    expect(authorizeOperatorScopesForMethod("modelRecovery.release", ["operator.admin"])).toEqual({
+      allowed: true,
+    });
   });
 
   it("leaves node-only pending drain outside operator scopes", () => {

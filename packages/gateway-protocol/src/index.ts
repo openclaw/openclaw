@@ -15,10 +15,16 @@ export {
 import type { ValidationError } from "./validation-errors.js";
 export { formatValidationErrors, type ValidationError } from "./validation-errors.js";
 import { lazyCompile } from "./protocol-validator.js";
+import {
+  ModelRecoveryDivertNewParamsSchema,
+  ModelRecoveryReleaseParamsSchema,
+  ModelRecoveryStatusParamsSchema,
+} from "./schema/model-recovery.js";
 export type { ProtocolValidator } from "./protocol-validator.js";
 export * from "./schema/worker-inference.js";
 export * from "./schema/skill-history.js";
 export * from "./schema/ui-command.js";
+export * from "./schema/model-recovery.js";
 export type {
   GatewayErrorDetails,
   McpAppViewExpiredErrorDetails,
@@ -921,6 +927,9 @@ export const validateChannelsLogoutParams = lazyCompile(ChannelsLogoutParamsSche
 export const validateModelsAuthLogoutParams = lazyCompile(ModelsAuthLogoutParamsSchema);
 export const validateModelsAuthStatusParams = lazyCompile(ModelsAuthStatusParamsSchema);
 export const validateModelsListParams = lazyCompile(ModelsListParamsSchema);
+export const validateModelRecoveryStatusParams = lazyCompile(ModelRecoveryStatusParamsSchema);
+export const validateModelRecoveryDivertNewParams = lazyCompile(ModelRecoveryDivertNewParamsSchema);
+export const validateModelRecoveryReleaseParams = lazyCompile(ModelRecoveryReleaseParamsSchema);
 export const validateSkillsStatusParams = lazyCompile(SkillsStatusParamsSchema);
 export const validateToolsCatalogParams = lazyCompile(ToolsCatalogParamsSchema);
 export const validateToolsEffectiveParams = lazyCompile(ToolsEffectiveParamsSchema);

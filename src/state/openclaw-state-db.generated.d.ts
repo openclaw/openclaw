@@ -873,6 +873,28 @@ export interface ModelCapabilityCache {
   updated_at_ms: number;
 }
 
+export interface ModelTargetFenceDenials {
+  denied_model: string;
+  denied_provider: string;
+  fence_epoch: number;
+  model: string;
+  provider: string;
+  topology_generation: string;
+}
+
+export interface ModelTargetFences {
+  created_at_ms: number;
+  fence_epoch: number;
+  fence_token: string;
+  mode: string;
+  model: string;
+  provider: string;
+  released_at_ms: number | null;
+  resource_domain: string | null;
+  state: string;
+  topology_generation: string;
+}
+
 export interface NativeHookRelayBridges {
   expires_at_ms: number;
   hostname: string;
@@ -1538,6 +1560,8 @@ export interface DB {
   migration_runs: MigrationRuns;
   migration_sources: MigrationSources;
   model_capability_cache: ModelCapabilityCache;
+  model_target_fence_denials: ModelTargetFenceDenials;
+  model_target_fences: ModelTargetFences;
   native_hook_relay_bridges: NativeHookRelayBridges;
   node_host_config: NodeHostConfig;
   official_external_plugin_catalog_snapshots: OfficialExternalPluginCatalogSnapshots;

@@ -177,6 +177,10 @@ const loadModelsProbeHandlers = lazyHandlerModule(
   () => import("./server-methods/models-probe.js"),
   (module) => module.modelsProbeHandlers,
 );
+const loadModelRecoveryHandlers = lazyHandlerModule(
+  () => import("./server-methods/model-recovery.js"),
+  (module) => module.modelRecoveryHandlers,
+);
 const loadNativeHookRelayHandlers = lazyHandlerModule(
   () => import("./server-methods/native-hook-relay.js"),
   (module) => module.nativeHookRelayHandlers,
@@ -552,6 +556,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["models.probe"],
     loadHandlers: loadModelsProbeHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["modelRecovery.status", "modelRecovery.divertNew", "modelRecovery.release"],
+    loadHandlers: loadModelRecoveryHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["models.authLogout", "models.authStatus"],

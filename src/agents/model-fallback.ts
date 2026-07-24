@@ -80,6 +80,10 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "./model-selection-resolve.js";
+import {
+  qualifyModelCandidatesForNewWork,
+  requireQualifiedModelCandidates,
+} from "./model-target-fence-qualification.js";
 import { isAgentRunDirectAbortReason, isAgentRunRestartAbortReason } from "./run-termination.js";
 import {
   resolveSessionSuspensionReason,
@@ -1433,13 +1437,17 @@ async function runWithModelFallbackInternal<T>(
   params: RunWithModelFallbackParams<T>,
   deferredSuspension: DeferredSessionSuspensionState,
 ): Promise<ModelFallbackRunResult<T>> {
-  const candidates = resolveModelCandidateChain({
+  const configuredCandidates = resolveModelCandidateChain({
     cfg: params.cfg,
     provider: params.provider,
     model: params.model,
     fallbacksOverride: params.fallbacksOverride,
     manifestPlugins: params.manifestPlugins,
   });
+  const requestedCandidate = configuredCandidates[0];
+  const candidates = requireQualifiedModelCandidates(
+    qualifyModelCandidatesForNewWork(configuredCandidates),
+  );
   const authRuntime =
     !params.skipAuthProfileRuntime && params.cfg && hasAnyAuthProfileStoreSource(params.agentDir)
       ? await loadModelFallbackAuthRuntime()
@@ -1499,8 +1507,6 @@ async function runWithModelFallbackInternal<T>(
   };
 
   const hasFallbackCandidates = candidates.length > 1;
-  const requestedCandidate = candidates[0];
-
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates.at(i);
     if (!candidate) {

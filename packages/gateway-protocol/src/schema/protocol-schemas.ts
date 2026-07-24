@@ -367,6 +367,16 @@ import {
   ChatToolTitlesResultSchema,
 } from "./logs-chat.js";
 import {
+  ModelRecoveryDivertNewParamsSchema,
+  ModelRecoveryDivertNewResultSchema,
+  ModelRecoveryFenceSchema,
+  ModelRecoveryReleaseParamsSchema,
+  ModelRecoveryReleaseResultSchema,
+  ModelRecoveryStatusParamsSchema,
+  ModelRecoveryStatusResultSchema,
+  ModelRecoveryTargetSchema,
+} from "./model-recovery.js";
+import {
   NodeDescribeParamsSchema,
   NodeEventParamsSchema,
   NodeEventResultSchema,
@@ -650,6 +660,14 @@ import {
 
 /** Public schema registry keyed by stable protocol schema name. */
 export const ProtocolSchemas = {
+  ModelRecoveryTarget: ModelRecoveryTargetSchema,
+  ModelRecoveryFence: ModelRecoveryFenceSchema,
+  ModelRecoveryStatusParams: ModelRecoveryStatusParamsSchema,
+  ModelRecoveryStatusResult: ModelRecoveryStatusResultSchema,
+  ModelRecoveryDivertNewParams: ModelRecoveryDivertNewParamsSchema,
+  ModelRecoveryDivertNewResult: ModelRecoveryDivertNewResultSchema,
+  ModelRecoveryReleaseParams: ModelRecoveryReleaseParamsSchema,
+  ModelRecoveryReleaseResult: ModelRecoveryReleaseResultSchema,
   BoardTab: BoardTabSchema,
   BoardWidget: BoardWidgetSchema,
   BoardWidgetDeclared: BoardWidgetDeclaredSchema,

@@ -2112,4 +2112,38 @@ CREATE TABLE IF NOT EXISTS outbound_media_provenance (
   sha256 TEXT NOT NULL,
   size_bytes INTEGER NOT NULL,
   created_at_ms INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS model_target_fences (
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  topology_generation TEXT NOT NULL,
+  fence_epoch INTEGER NOT NULL CHECK (fence_epoch > 0),
+  fence_token TEXT NOT NULL,
+  mode TEXT NOT NULL CHECK (mode = 'divert_new'),
+  state TEXT NOT NULL CHECK (state IN ('active', 'released')),
+  resource_domain TEXT,
+  created_at_ms INTEGER NOT NULL,
+  released_at_ms INTEGER,
+  PRIMARY KEY (provider, model, topology_generation, fence_epoch),
+  UNIQUE (fence_token)
+) STRICT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_model_target_fences_one_active_target
+  ON model_target_fences(provider, model)
+  WHERE state = 'active';
+
+CREATE TABLE IF NOT EXISTS model_target_fence_denials (
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  topology_generation TEXT NOT NULL,
+  fence_epoch INTEGER NOT NULL,
+  denied_provider TEXT NOT NULL,
+  denied_model TEXT NOT NULL,
+  PRIMARY KEY (
+    provider, model, topology_generation, fence_epoch, denied_provider, denied_model
+  ),
+  FOREIGN KEY (provider, model, topology_generation, fence_epoch)
+    REFERENCES model_target_fences(provider, model, topology_generation, fence_epoch)
+    ON DELETE CASCADE
 ) STRICT;\n`;
