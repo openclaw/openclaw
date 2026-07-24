@@ -56,9 +56,14 @@ export function resolveSlackProxyDispatcher(): SlackProxyDispatcher | undefined 
 function createSlackDispatcherFetch(
   dispatcher: SlackProxyDispatcher,
 ): NonNullable<WebClientOptions["fetch"]> {
-  const { fetch } = loadSlackUndiciRuntime();
-  return ((input: RequestInfo | URL, init?: RequestInit) =>
-    fetch(input, { ...init, dispatcher })) as NonNullable<WebClientOptions["fetch"]>;
+  const { fetch: slackFetch } = loadSlackUndiciRuntime();
+  return ((input: RequestInfo | URL, init?: RequestInit) => {
+    // Slack Web API invokes this hook with URL/string inputs. The cast only bridges
+    // duplicate Undici Request types while the package-owned fetch and dispatcher stay paired.
+    const slackInput = input as Parameters<typeof slackFetch>[0];
+    const slackInit = { ...init, dispatcher } as Parameters<typeof slackFetch>[1];
+    return slackFetch(slackInput, slackInit);
+  }) as NonNullable<WebClientOptions["fetch"]>;
 }
 
 function resolveSlackApiUrlFromEnv(): string | undefined {
