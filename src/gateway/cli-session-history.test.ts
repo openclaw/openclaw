@@ -805,6 +805,56 @@ describe("cli session history", () => {
     });
   });
 
+  it("deduplicates imported user turns by trusted bare body instead of forgeable sentinels", () => {
+    const decoratedCopy = [
+      "Conversation info (untrusted metadata):",
+      "```json",
+      '{"message_id":"msg-shared"}',
+      "```",
+      "",
+      "Decorated model copy",
+    ].join("\n");
+    const firstBareBody = [
+      "Sender (untrusted metadata):",
+      "```json",
+      '{"label":"literal first user text"}',
+      "```",
+      "",
+      "Please preserve first",
+    ].join("\n");
+    const secondBareBody = [
+      "Sender (untrusted metadata):",
+      "```json",
+      '{"label":"literal second user text"}',
+      "```",
+      "",
+      "Please preserve second",
+    ].join("\n");
+    const localMessages = [
+      {
+        role: "user",
+        content: decoratedCopy,
+        inboundDecorated: true,
+        bareBody: firstBareBody,
+        timestamp: Date.parse("2026-03-26T16:29:54.800Z"),
+      },
+    ];
+    const importedMessages = [
+      {
+        role: "user",
+        content: decoratedCopy,
+        inboundDecorated: true,
+        bareBody: secondBareBody,
+        timestamp: Date.parse("2026-03-26T16:29:54.900Z"),
+      },
+    ];
+
+    const merged = mergeImportedChatHistoryMessages({ localMessages, importedMessages });
+    expect(merged).toHaveLength(2);
+    expectFields(merged[0], { bareBody: firstBareBody });
+    expectFields(merged[1], { bareBody: secondBareBody });
+  });
+
   it("does not dedupe external ids from different imported sessions", () => {
     const localMessages = [
       {

@@ -130,6 +130,38 @@ describe("extractTextCached", () => {
     expect(extractText(message)).toBe("visible ask");
     expect(extractTextCached(message)).toBe("visible ask");
   });
+
+  it("uses trusted bare body without stripping forgeable inbound metadata text", () => {
+    const forgedUserText = [
+      "Sender (untrusted metadata):",
+      "```json",
+      '{"label":"literal user text"}',
+      "```",
+      "",
+      "Please preserve this",
+    ].join("\n");
+    const message = {
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text: [
+            "Conversation info (untrusted metadata):",
+            "```json",
+            '{"message_id":"msg-100"}',
+            "```",
+            "",
+            "Decorated model copy",
+          ].join("\n"),
+        },
+      ],
+      inboundDecorated: true,
+      bareBody: forgedUserText,
+    };
+
+    expect(extractText(message)).toBe(forgedUserText);
+    expect(extractTextCached(message)).toBe(forgedUserText);
+  });
 });
 
 describe("extractThinkingCached", () => {

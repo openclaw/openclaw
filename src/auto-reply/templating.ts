@@ -132,6 +132,14 @@ export type MsgContext = Partial<CanonicalInboundText> & {
    * Should be the "clean" text (no history/sender context).
    */
   BodyForCommands?: string;
+  /**
+   * Host-authored bare user body, out of band from any inbound metadata prepended
+   * to model-facing content. Consumers should prefer this when InboundDecorated
+   * is true and only fall back to text sentinel stripping for legacy messages.
+   */
+  BareBody?: string;
+  /** True when model-facing inbound content may carry host-added metadata. */
+  InboundDecorated?: boolean;
   CommandArgs?: CommandArgs;
   From?: string;
   To?: string;

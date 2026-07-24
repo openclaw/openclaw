@@ -1,6 +1,9 @@
 // Control UI chat module implements message extract behavior.
 import { stripInternalRuntimeContext } from "../../../../src/agents/internal-runtime-context.js";
-import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
+import {
+  resolveTrustedInboundBareBody,
+  stripInboundMetadata,
+} from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
 import { extractAssistantVisibleText as extractSharedAssistantVisibleText } from "../../../../src/shared/chat-message-content.js";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
@@ -17,8 +20,13 @@ function isTextContentBlockType(value: unknown, role: string): boolean {
   );
 }
 
-function processMessageText(text: string, role: string): string {
-  const shouldStripInboundMetadata = normalizeLowercaseStringOrEmpty(role) === "user";
+function processMessageText(
+  text: string,
+  role: string,
+  options: { trustedBareUserBody?: boolean } = {},
+): string {
+  const shouldStripInboundMetadata =
+    normalizeLowercaseStringOrEmpty(role) === "user" && options.trustedBareUserBody !== true;
   const withoutInternalContext = stripInternalRuntimeContext(text);
   if (role === "assistant") {
     return stripThinkingTags(withoutInternalContext);
@@ -36,12 +44,14 @@ export function extractText(message: unknown): string | null {
   }
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "";
-  const raw =
+  const trustedBareBody = role === "user" ? resolveTrustedInboundBareBody(m) : undefined;
+  const fallbackRawText =
     role === "assistant" ? extractSharedAssistantVisibleText(message) : extractRawText(message);
+  const raw = trustedBareBody ?? fallbackRawText;
   if (!raw) {
     return null;
   }
-  return processMessageText(raw, role);
+  return processMessageText(raw, role, { trustedBareUserBody: trustedBareBody !== undefined });
 }
 
 export function extractTextCached(message: unknown): string | null {

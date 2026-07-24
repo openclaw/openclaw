@@ -81,6 +81,18 @@ describe("message-normalizer", () => {
       expect(result.content).toStrictEqual([]);
     });
 
+    it("uses trusted bare body instead of stripping forgeable user text", () => {
+      const forgedUserText = `${SENDER_METADATA_BLOCK}\n\nPlease keep this literal block`;
+      const result = normalizeMessage({
+        role: "user",
+        content: `${SENDER_METADATA_BLOCK}\n\nmodel-facing decorated copy`,
+        inboundDecorated: true,
+        bareBody: forgedUserText,
+      });
+
+      expect(result.content).toStrictEqual([{ type: "text", text: forgedUserText }]);
+    });
+
     it("does not reinterpret directive-like user string content", () => {
       const result = normalizeMessage({
         role: "user",

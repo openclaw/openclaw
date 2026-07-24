@@ -1551,6 +1551,20 @@ export async function runPreparedReply(
     !hasUserBody && transcriptBody === MEDIA_ONLY_USER_TEXT
       ? ""
       : resolvePersistedUserTurnText(transcriptBody);
+  // Trusted inbound-decoration contract (#95279): the persisted
+  // `inboundDecorated`/`bareBody` pair must only be set when the host producer
+  // supplied authoritative markers. Falling back to the synthesized
+  // `currentInboundContext?.text` heuristic would mark fallback transcript text
+  // as trusted-decorated, and falling `bareBody` back to `userTurnTranscriptText`
+  // would persist the decorated text itself as the "bare" body — defeating the
+  // contract and leaving UI/replay/memory/usage readers trusting host
+  // decoration rather than the legacy stripping path.
+  const userTurnAuthoritativeBareBody =
+    promptSessionCtx.BareBody ?? sessionCtx.BareBody ?? ctx.BareBody;
+  const userTurnInboundDecorated =
+    promptSessionCtx.InboundDecorated === true ||
+    sessionCtx.InboundDecorated === true ||
+    ctx.InboundDecorated === true;
   const conversationIdentity = conversationIdentityFromMsgContext({ ctx: sessionCtx });
   const conversationRef = conversationIdentity?.conversationRef;
   const transportMessageId =
@@ -1586,6 +1600,10 @@ export async function runPreparedReply(
       ? {
           text: userTurnTranscriptText,
           senderIsOwner: command.senderIsOwner,
+          ...(userTurnInboundDecorated ? { inboundDecorated: true } : {}),
+          ...(userTurnInboundDecorated && userTurnAuthoritativeBareBody !== undefined
+            ? { bareBody: userTurnAuthoritativeBareBody }
+            : {}),
           ...(sourceTurnId ? { idempotencyKey: sourceTurnId } : {}),
           ...(inputProvenance && !isHeartbeat ? { provenance: inputProvenance } : {}),
           ...(isHeartbeat

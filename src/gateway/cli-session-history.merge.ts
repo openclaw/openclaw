@@ -5,7 +5,10 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
-import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
+import {
+  resolveTrustedInboundBareBody,
+  stripInboundMetadata,
+} from "../auto-reply/reply/strip-inbound-meta.js";
 
 const DEDUPE_TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
 
@@ -15,6 +18,11 @@ function extractComparableText(message: unknown): string | undefined {
   }
   const record = message as { role?: unknown; text?: unknown; content?: unknown };
   const role = readStringValue(record.role);
+  const trustedBareBody = role === "user" ? resolveTrustedInboundBareBody(record) : undefined;
+  if (trustedBareBody !== undefined) {
+    const normalized = trustedBareBody.replace(/\s+/g, " ").trim();
+    return normalized || undefined;
+  }
   const parts: string[] = [];
   const text = readStringValue(record.text);
   if (text !== undefined) {

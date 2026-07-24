@@ -135,6 +135,7 @@ function finalizeInboundContextImpl<T extends Record<string, unknown>>(
   );
   normalized.RawBody = normalizeTextField(normalized.RawBody);
   normalized.CommandBody = normalizeTextField(normalized.CommandBody);
+  normalized.BareBody = normalizeTextField(normalized.BareBody);
   normalized.Transcript = normalizeTextField(normalized.Transcript);
   normalized.ThreadStarterBody = normalizeTextField(normalized.ThreadStarterBody);
   normalized.ThreadHistoryBody = normalizeTextField(normalized.ThreadHistoryBody);

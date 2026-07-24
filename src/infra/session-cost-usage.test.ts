@@ -2457,7 +2457,7 @@ describe("session cost usage", () => {
     });
   });
 
-  it("strips inbound and untrusted metadata blocks from session usage logs", async () => {
+  it("uses trusted bare bodies for decorated session usage logs and strips legacy metadata", async () => {
     const root = await makeSessionCostRoot("logs-sanitize");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
@@ -2489,14 +2489,34 @@ example
 <<<END_EXTERNAL_UNTRUSTED_CONTENT id="deadbeefdeadbeef">>>`,
           },
         }),
+        JSON.stringify({
+          type: "message",
+          timestamp: "2026-02-21T17:48:00.000Z",
+          message: {
+            role: "user",
+            inboundDecorated: true,
+            bareBody:
+              "Conversation info (untrusted metadata):\nthis is user-authored text, not injected metadata",
+            content: `Conversation info (untrusted metadata):
+\`\`\`json
+{"message_id":"decorated"}
+\`\`\`
+
+transport-decorated body`,
+          },
+        }),
       ].join("\n"),
       "utf-8",
     );
 
     const logs = await loadSessionLogs({ sessionFile });
-    expect(logs).toHaveLength(1);
+    expect(logs).toHaveLength(2);
     expect(logs?.[0]?.role).toBe("user");
     expect(logs?.[0]?.content).toBe("hello there");
+    expect(logs?.[1]?.role).toBe("user");
+    expect(logs?.[1]?.content).toBe(
+      "Conversation info (untrusted metadata):\nthis is user-authored text, not injected metadata",
+    );
   });
 
   it("does not split surrogate pairs when truncating session log content", async () => {

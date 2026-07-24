@@ -2472,6 +2472,15 @@ describe("runPreparedReply media-only handling", () => {
         },
       },
     });
+    // #95279 trusted inbound-decoration contract: this room-event path threads
+    // synthesized current-turn context but does not supply an authoritative
+    // `BareBody`/`InboundDecorated` marker, so the persisted turn must not be
+    // marked trusted-decorated (which would otherwise persist the decorated
+    // transcript text as the "bare" body).
+    expect(call?.followupRun.userTurnTranscriptRecorder?.message).not.toHaveProperty(
+      "inboundDecorated",
+    );
+    expect(call?.followupRun.userTurnTranscriptRecorder?.message).not.toHaveProperty("bareBody");
     call?.followupRun.userTurnTranscriptRecorder?.markRuntimePersisted({
       role: "user",
       content: "#35676 Keśava: No wtf",
