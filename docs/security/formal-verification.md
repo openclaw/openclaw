@@ -61,7 +61,7 @@ There is no CI integration back into this repo yet; a future iteration could add
 | Green          | `make gateway-exposure-v2`, `make gateway-exposure-v2-protected` |
 | Red (expected) | `make gateway-exposure-v2-negative`                              |
 
-See also `docs/gateway-exposure-matrix.md` in the models repo.
+See also `docs/gateway-exposure-matrix.md` in the formal-models repository (separate from this docs tree).
 
 ### Node exec pipeline (highest-risk capability)
 
