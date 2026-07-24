@@ -1,4 +1,3 @@
-// Slack plugin module implements dispatch behavior.
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   createStatusReactionController,
@@ -369,7 +368,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   const cfg = ctx.cfg;
   const runtime = ctx.runtime;
 
-  // Resolve agent identity for Slack chat:write.customize overrides.
   const outboundIdentity = resolveAgentOutboundIdentity(cfg, route.agentId);
   const slackIdentity = outboundIdentity
     ? {
@@ -434,8 +432,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
   const suppressRoomEventTyping = prepared.ctxPayload.InboundEventKind === "room_event";
 
-  // Shared context for the `message_sent` plugin hook emitted on each delivered
-  // reply (both the `deliverReplies` paths and the native-streaming finalizer).
   const messageSentHookTarget =
     prepared.ctxPayload.OriginatingTo ?? prepared.ctxPayload.To ?? prepared.replyTarget;
   const messageSentHookContext = {
@@ -755,10 +751,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     kind: ReplyDispatchKind;
     forcedThreadTs?: string;
   }): string | undefined => {
-    const plannedThreadTs = params.forcedThreadTs ? undefined : replyPlan.nextThreadTs();
     return (
       params.forcedThreadTs ??
-      plannedThreadTs ??
+      replyPlan.peekThreadTs() ??
       (params.kind === "block" ? usedBlockReplyThreadTs : undefined)
     );
   };
@@ -813,7 +808,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       return false;
     }
     try {
-      await deliverReplies({
+      const result = await deliverReplies({
         cfg: ctx.cfg,
         replies: [{ text: fallbackText } as ReplyPayload],
         target: prepared.replyTarget,
@@ -828,8 +823,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
         ...messageSentDeliveryHookContext,
         deferMessageSentHooks: true,
+        suppressProgressChromeMessages: suppressProgressChromeReplyMessages,
         ...(prepared.eventScope ? { eventScope: prepared.eventScope } : {}),
       });
+      if (result?.suppressed) {
+        return false;
+      }
       markSlackStreamFallbackDelivered(session);
       if (!session.stopped) {
         try {
@@ -845,8 +844,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           );
         }
       }
-      // The combined fallback can span multiple logical payloads and Slack
-      // chunks, so no single message `ts` correctly identifies every event.
+      // Combined fallback spans payloads/chunks; no single `ts` identifies every event.
       emitSuccessfulPendingStreamedDeliveries();
       observedReplyDelivery = true;
       usedReplyThreadTs ??= session.threadTs;
@@ -888,7 +886,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       logVerbose("slack: suppressed duplicate normal delivery within the same turn");
       return deliveryReplyThreadTs;
     }
-    await deliverReplies({
+    const result = await deliverReplies({
       cfg: ctx.cfg,
       replies: [params.payload],
       target: prepared.replyTarget,
@@ -902,8 +900,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       ...(slackIdentity ? { identity: slackIdentity } : {}),
       ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
       ...messageSentDeliveryHookContext,
+      suppressProgressChromeMessages: suppressProgressChromeReplyMessages,
       ...(prepared.eventScope ? { eventScope: prepared.eventScope } : {}),
     });
+    if (result?.suppressed) {
+      return undefined;
+    }
     observedReplyDelivery = true;
     if (params.kind === "final") {
       observedFinalReplyDelivery = true;
@@ -1500,6 +1502,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       previewToolProgressEnabled,
       previewStreamingEnabled,
     });
+  const suppressProgressChromeReplyMessages =
+    slackStreaming.mode !== "progress" && !previewToolProgressEnabled
+      ? false
+      : suppressDefaultToolProgressMessages;
   let previewToolProgressSuppressed = false;
   let legacyPreviewToolProgressLines: ChannelProgressDraftLine[] = [];
   // Last task rows emitted to the native stream; reconciliation terminalizes
@@ -2262,9 +2268,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     await draftStream?.discardPending();
   }
 
-  // -----------------------------------------------------------------------
-  // Finalize the stream if one was started
-  // -----------------------------------------------------------------------
   let streamFallbackDelivered = false;
   const finalStream = streamSession as SlackStreamSession | null;
   if (finalStream && !finalStream.stopped) {
@@ -2353,9 +2356,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     }
   }
 
-  // Record thread participation only when we actually delivered a reply and
-  // know the thread ts that was used (set by deliverNormally, streaming start,
-  // or draft stream). Falls back to statusThreadTs for edge cases.
   const participationThreadTs = usedReplyThreadTs ?? statusThreadTs;
   if (anyReplyDelivered && participationThreadTs) {
     recordSlackThreadParticipation(account.accountId, message.channel, participationThreadTs, {

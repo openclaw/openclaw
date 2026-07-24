@@ -1,4 +1,3 @@
-// Slack plugin module implements replies behavior.
 import type { MessageMetadata } from "@slack/types";
 import type { Block, KnownBlock } from "@slack/web-api";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -32,6 +31,7 @@ import {
   chunkSlackTextAtHardLimit,
   type SlackFormattingDisabledMessage,
 } from "../native-data-fallback.js";
+import { hasSlackProgressChromeIntent } from "../progress-chrome.js";
 import {
   hasSlackReplyStructuredContent,
   resolveSlackReplyBlockResolution,
@@ -59,8 +59,6 @@ export function resolveDeliveredSlackReplyThreadTs(params: {
   payloadReplyToId?: string;
   replyThreadTs?: string;
 }): string | undefined {
-  // Keep reply tags opt-in: when replyToMode is off, explicit reply tags
-  // must not force threading.
   const inlineReplyToId = params.replyToMode === "off" ? undefined : params.payloadReplyToId;
   return inlineReplyToId ?? params.replyThreadTs;
 }
@@ -78,25 +76,13 @@ export async function deliverReplies(params: {
   replyToMode: "off" | "first" | "all" | "batched";
   identity?: SlackSendIdentity;
   metadata?: MessageMetadata;
-  /** Logical conversation target used by lifecycle hooks when delivery uses a physical Slack id. */
   messageSentHookTarget?: string;
-  /**
-   * Canonical session key for the internal `message:sent` hook. When set, the
-   * internal hook fires alongside the plugin `message_sent` hook. The plugin
-   * hook fires regardless (self-gated on registered listeners).
-   */
   sessionKeyForInternalHooks?: string;
-  /** Whether the reply target is a group/channel (vs a DM). */
   isGroup?: boolean;
-  /** Group/channel id for the `message_sent` event when `isGroup` is true. */
   groupId?: string;
-  /**
-   * Defer hook emission to a caller that must resolve another delivery path
-   * before reporting the terminal outcome.
-   */
   deferMessageSentHooks?: true;
-  /** Validated non-serializable client scope for an enterprise listener turn. */
   eventScope?: SlackEventScope;
+  suppressProgressChromeMessages?: boolean;
 }) {
   let latestResult: SlackSendResult | undefined;
   const sendReply = async (input: {
@@ -108,6 +94,7 @@ export async function deliverReplies(params: {
     nativeDataFallbackBaseText?: string;
     textIsSlackMrkdwn?: boolean;
     textIsSlackPlainText?: boolean;
+    progressChrome?: true;
   }): Promise<SlackSendResult> => {
     return await sendMessageSlack(params.target, input.text, {
       cfg: params.cfg,
@@ -124,6 +111,7 @@ export async function deliverReplies(params: {
         : {}),
       ...(input.textIsSlackMrkdwn ? { textIsSlackMrkdwn: true } : {}),
       ...(input.textIsSlackPlainText ? { textIsSlackPlainText: true } : {}),
+      ...(input.progressChrome ? { progressChrome: true } : {}),
       ...(params.eventScope
         ? {
             client: params.eventScope.client,
@@ -158,10 +146,6 @@ export async function deliverReplies(params: {
       continue;
     }
 
-    // Fire the `message_sent` hook(s) after delivery, mirroring Telegram's
-    // `emitMessageSentHooks` in `extensions/telegram/src/bot/delivery.replies.ts`.
-    // `emitSlackMessageSentHooks` self-gates on registered listeners, so this is
-    // a no-op when no plugin observes `message_sent`.
     const emitSent = (content: string, result?: SlackSendResult) => {
       if (params.deferMessageSentHooks) {
         return;
@@ -194,6 +178,10 @@ export async function deliverReplies(params: {
     };
 
     const spokenText = resolveSlackMediaHookSpokenText(payload);
+    const progressChrome =
+      params.suppressProgressChromeMessages && hasSlackProgressChromeIntent(payload)
+        ? true
+        : undefined;
     const hookParts: string[] = [];
     let outsideText = authoredTextPlacement === "outside-blocks" ? (textRaw ?? "") : "";
     let lastResult: SlackSendResult | undefined;
@@ -211,7 +199,7 @@ export async function deliverReplies(params: {
           payload,
           text: mediaCaption,
           sendText: async (text) => {
-            lastResult = await sendReply({ text, threadTs });
+            lastResult = await sendReply({ text, threadTs, progressChrome });
           },
           sendMedia: async ({ mediaUrl, caption }) => {
             lastResult = await sendReply({ text: caption ?? "", mediaUrl, threadTs });
@@ -229,7 +217,12 @@ export async function deliverReplies(params: {
           }
           hookParts.push(text);
           for (const chunk of chunkSlackTextAtHardLimit(text)) {
-            lastResult = await sendReply({ text: chunk, threadTs, textIsSlackPlainText: true });
+            lastResult = await sendReply({
+              text: chunk,
+              threadTs,
+              textIsSlackPlainText: true,
+              progressChrome,
+            });
             delivered = true;
           }
           continue;
@@ -257,7 +250,7 @@ export async function deliverReplies(params: {
 
       if (outsideText && !reply.hasMedia) {
         hookParts.push(outsideText);
-        lastResult = await sendReply({ text: outsideText, threadTs });
+        lastResult = await sendReply({ text: outsideText, threadTs, progressChrome });
         delivered = true;
       }
     } catch (error) {
@@ -267,8 +260,6 @@ export async function deliverReplies(params: {
     }
     if (delivered) {
       const hookContent = hookParts.join("\n\n") || textRaw || spokenText || "";
-      // Preserve the media hook contract even when a trailing block send has a
-      // message `ts`; the logical payload still spans multiple Slack objects.
       emitSent(hookContent, reply.hasMedia ? undefined : lastResult);
       latestResult = lastResult;
       params.runtime.log?.(`delivered reply to ${params.target}`);
@@ -286,12 +277,6 @@ type SlackRespondFn = (payload: {
 
 type SlackResponseUrlBudget = ResponseUrlBudget<Parameters<SlackRespondFn>[0]>;
 
-/**
- * Compute effective threadTs for a Slack reply based on replyToMode.
- * - "off": stay in thread if already in one, otherwise main channel
- * - "first": first reply goes to thread, subsequent replies to main channel
- * - "all": all replies go to thread
- */
 export function resolveSlackThreadTs(params: {
   replyToMode: "off" | "first" | "all" | "batched";
   incomingThreadTs: string | undefined;
@@ -506,7 +491,6 @@ export async function deliverSlackSlashReplies(params: {
     return;
   }
 
-  // Slack slash command responses can be multi-part by sending follow-ups via response_url.
   const responseType = params.ephemeral ? "ephemeral" : "in_channel";
   const respond = async (message: SlashReplyMessage) =>
     await responseBudget.respond({

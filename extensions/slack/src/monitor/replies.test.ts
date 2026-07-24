@@ -121,6 +121,44 @@ describe("deliverReplies identity passthrough", () => {
     expect(options.identity).toBe(identity);
   });
 
+  it("marks typed progress replies for Slack progress-chrome suppression when enabled", async () => {
+    sendMock.mockResolvedValue({ messageId: "suppressed", channelId: "C123", suppressed: true });
+
+    await deliverReplies(
+      baseParams({
+        suppressProgressChromeMessages: true,
+        replies: [
+          {
+            text: ":hammer_and_wrench: `pnpm test`",
+            channelData: { openclawProgressKind: "tool" },
+          },
+        ],
+      }),
+    );
+
+    expect(sendMock).toHaveBeenCalledOnce();
+    expect(requireSendCall()[2].progressChrome).toBe(true);
+  });
+
+  it("preserves typed progress replies as standalone messages when suppression is disabled", async () => {
+    sendMock.mockResolvedValue({ messageId: "progress-ts", channelId: "C123" });
+
+    await deliverReplies(
+      baseParams({
+        suppressProgressChromeMessages: false,
+        replies: [
+          {
+            text: ":hammer_and_wrench: `pnpm test`",
+            channelData: { openclawProgressKind: "tool" },
+          },
+        ],
+      }),
+    );
+
+    expect(sendMock).toHaveBeenCalledOnce();
+    expect(requireSendCall()[2].progressChrome).toBeUndefined();
+  });
+
   it("passes identity to sendMessageSlack for media replies", async () => {
     sendMock.mockResolvedValue(undefined);
     const identity = { username: "Bot", iconUrl: "https://example.com/icon.png" };

@@ -2,6 +2,7 @@
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSlackSendTestClient } from "./blocks.test-helpers.js";
+import { hasSlackThreadParticipation } from "./sent-thread-cache.js";
 
 vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   logVerbose: vi.fn(),
@@ -20,6 +21,12 @@ type SlackMissingScopeError = Error & {
     response_metadata?: { scopes?: string[]; acceptedScopes?: string[] };
   };
 };
+
+function buildSlackPlatformError(code: string): SlackMissingScopeError {
+  const err = new Error(`An API error occurred: ${code}`) as SlackMissingScopeError;
+  err.data = { error: code };
+  return err;
+}
 
 function buildMissingScopeError(overrides?: {
   needed?: string;
@@ -419,5 +426,303 @@ describe("sendMessageSlack customize-scope fallback", () => {
       "An API error occurred: missing_scope (needed: im:write; granted: chat:write)",
     );
     expect(client.chat.postMessage).not.toHaveBeenCalled();
+  });
+  // Ported progress-chrome guard coverage
+
+  it("converts progress chrome text to a thread reaction instead of chat.postMessage", async () => {
+    const client = createSlackSendTestClient();
+
+    const result = await sendMessageSlack("channel:C123", ":hammer_and_wrench: `pnpm test`", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      progressChrome: true,
+      threadTs: "171234.000",
+    });
+
+    expect(client.chat.postMessage).not.toHaveBeenCalled();
+    expect(client.reactions.add).toHaveBeenCalledWith({
+      channel: "C123",
+      timestamp: "171234.000",
+      name: "hammer_and_wrench",
+    });
+    expect(result.messageId).toBe("suppressed");
+    expect(result.suppressed).toBe(true);
+    expect(result.channelId).toBe("C123");
+    expect(hasSlackThreadParticipation("default", "C123", "171234.000")).toBe(false);
+  });
+
+  it("converts current unicode progress chrome text to a thread reaction", async () => {
+    const client = createSlackSendTestClient();
+
+    const result = await sendMessageSlack("channel:C123", "✍️ Write: to /tmp/demo/index.html", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      progressChrome: true,
+      threadTs: "171234.000",
+    });
+
+    expect(client.chat.postMessage).not.toHaveBeenCalled();
+    expect(client.reactions.add).toHaveBeenCalledWith({
+      channel: "C123",
+      timestamp: "171234.000",
+      name: "writing_hand",
+    });
+    expect(result.messageId).toBe("suppressed");
+    expect(result.suppressed).toBe(true);
+    expect(result.channelId).toBe("C123");
+    expect(hasSlackThreadParticipation("default", "C123", "171234.000")).toBe(false);
+  });
+
+  it("converts read progress chrome text to a thread reaction", async () => {
+    const client = createSlackSendTestClient();
+
+    const result = await sendMessageSlack("channel:C123", "📖 Read: /tmp/demo/index.html", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      progressChrome: true,
+      threadTs: "171234.000",
+    });
+
+    expect(client.chat.postMessage).not.toHaveBeenCalled();
+    expect(client.reactions.add).toHaveBeenCalledWith({
+      channel: "C123",
+      timestamp: "171234.000",
+      name: "open_book",
+    });
+    expect(result.messageId).toBe("suppressed");
+    expect(result.suppressed).toBe(true);
+    expect(result.channelId).toBe("C123");
+    expect(hasSlackThreadParticipation("default", "C123", "171234.000")).toBe(false);
+  });
+
+  it("converts compact command progress chrome text to a thread reaction", async () => {
+    const client = createSlackSendTestClient();
+
+    const result = await sendMessageSlack(
+      "channel:C123",
+      "🛠️ print lines 1-80 from extensions/discord/src/draft-stream.ts",
+      {
+        token: "xoxb-test",
+        cfg: SLACK_TEST_CFG,
+        client,
+        progressChrome: true,
+        threadTs: "171234.000",
+      },
+    );
+
+    expect(client.chat.postMessage).not.toHaveBeenCalled();
+    expect(client.reactions.add).toHaveBeenCalledWith({
+      channel: "C123",
+      timestamp: "171234.000",
+      name: "hammer_and_wrench",
+    });
+    expect(result.messageId).toBe("suppressed");
+    expect(result.suppressed).toBe(true);
+    expect(result.channelId).toBe("C123");
+    expect(hasSlackThreadParticipation("default", "C123", "171234.000")).toBe(false);
+  });
+
+  it("converts status-only command progress chrome text to a thread reaction", async () => {
+    const client = createSlackSendTestClient();
+
+    const result = await sendMessageSlack("channel:C123", "🛠️ Exec", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      progressChrome: true,
+      threadTs: "171234.000",
+    });
+
+    expect(client.chat.postMessage).not.toHaveBeenCalled();
+    expect(client.reactions.add).toHaveBeenCalledWith({
+      channel: "C123",
+      timestamp: "171234.000",
+      name: "hammer_and_wrench",
+    });
+    expect(result.messageId).toBe("suppressed");
+    expect(result.suppressed).toBe(true);
+    expect(result.channelId).toBe("C123");
+    expect(hasSlackThreadParticipation("default", "C123", "171234.000")).toBe(false);
+  });
+
+  it("converts plain generated exec progress chrome text to a thread reaction", async () => {
+    const client = createSlackSendTestClient();
+
+    const result = await sendMessageSlack("channel:C123", "🛠️ Exec: run tests", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      progressChrome: true,
+      threadTs: "171234.000",
+    });
+
+    expect(client.chat.postMessage).not.toHaveBeenCalled();
+    expect(client.reactions.add).toHaveBeenCalledWith({
+      channel: "C123",
+      timestamp: "171234.000",
+      name: "hammer_and_wrench",
+    });
+    expect(result.messageId).toBe("suppressed");
+    expect(result.suppressed).toBe(true);
+    expect(result.channelId).toBe("C123");
+    expect(hasSlackThreadParticipation("default", "C123", "171234.000")).toBe(false);
+  });
+
+  it("converts documented exec progress chrome summaries to a thread reaction", async () => {
+    const client = createSlackSendTestClient();
+
+    const result = await sendMessageSlack("channel:C123", "🛠️ Exec: checking JS syntax", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      progressChrome: true,
+      threadTs: "171234.000",
+    });
+
+    expect(client.chat.postMessage).not.toHaveBeenCalled();
+    expect(client.reactions.add).toHaveBeenCalledWith({
+      channel: "C123",
+      timestamp: "171234.000",
+      name: "hammer_and_wrench",
+    });
+    expect(result.messageId).toBe("suppressed");
+    expect(result.suppressed).toBe(true);
+    expect(result.channelId).toBe("C123");
+    expect(hasSlackThreadParticipation("default", "C123", "171234.000")).toBe(false);
+  });
+
+  it("converts apply-patch progress chrome text to a thread reaction", async () => {
+    const client = createSlackSendTestClient();
+
+    const result = await sendMessageSlack(
+      "channel:C123",
+      "🩹 Apply Patch: /tmp/demo/{index.html, style.css}",
+      {
+        token: "xoxb-test",
+        cfg: SLACK_TEST_CFG,
+        client,
+        progressChrome: true,
+        threadTs: "171234.000",
+      },
+    );
+
+    expect(client.chat.postMessage).not.toHaveBeenCalled();
+    expect(client.reactions.add).toHaveBeenCalledWith({
+      channel: "C123",
+      timestamp: "171234.000",
+      name: "adhesive_bandage",
+    });
+    expect(result.messageId).toBe("suppressed");
+    expect(result.suppressed).toBe(true);
+    expect(result.channelId).toBe("C123");
+    expect(hasSlackThreadParticipation("default", "C123", "171234.000")).toBe(false);
+  });
+
+  it("converts web-search progress chrome text to a thread reaction", async () => {
+    const client = createSlackSendTestClient();
+
+    const result = await sendMessageSlack(
+      "channel:C123",
+      '🔎 Web Search: for "Codex OAuth API key"',
+      {
+        token: "xoxb-test",
+        cfg: SLACK_TEST_CFG,
+        client,
+        progressChrome: true,
+        threadTs: "171234.000",
+      },
+    );
+
+    expect(client.chat.postMessage).not.toHaveBeenCalled();
+    expect(client.reactions.add).toHaveBeenCalledWith({
+      channel: "C123",
+      timestamp: "171234.000",
+      name: "mag",
+    });
+    expect(result.messageId).toBe("suppressed");
+    expect(result.suppressed).toBe(true);
+    expect(result.channelId).toBe("C123");
+    expect(hasSlackThreadParticipation("default", "C123", "171234.000")).toBe(false);
+  });
+
+  it("fails closed on progress chrome text without a reaction target", async () => {
+    const client = createSlackSendTestClient();
+
+    const result = await sendMessageSlack("channel:C123", ":writing_hand: Write: MEMORY.md", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      progressChrome: true,
+    });
+
+    expect(client.chat.postMessage).not.toHaveBeenCalled();
+    expect(client.reactions.add).not.toHaveBeenCalled();
+    expect(result.messageId).toBe("suppressed");
+    expect(result.suppressed).toBe(true);
+    expect(result.channelId).toBe("C123");
+  });
+
+  it("suppresses progress chrome text when the thread reaction fails", async () => {
+    const client = createSlackSendTestClient();
+    vi.mocked(client.reactions.add).mockRejectedValueOnce(buildSlackPlatformError("missing_scope"));
+
+    const result = await sendMessageSlack("channel:C123", ":hammer_and_wrench: `pnpm test`", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      progressChrome: true,
+      threadTs: "171234.000",
+    });
+
+    expect(client.chat.postMessage).not.toHaveBeenCalled();
+    expect(client.reactions.add).toHaveBeenCalledWith({
+      channel: "C123",
+      timestamp: "171234.000",
+      name: "hammer_and_wrench",
+    });
+    expect(result.messageId).toBe("suppressed");
+    expect(result.suppressed).toBe(true);
+    expect(result.channelId).toBe("C123");
+  });
+
+  it("does not convert semantic Slack replies into progress chrome reactions", async () => {
+    const client = createSlackSendTestClient();
+    client.chat.postMessage.mockResolvedValue({
+      ok: true,
+      ts: "171999.000",
+      channel: "C123",
+    });
+
+    const semanticMessages = [
+      ":hammer_and_wrench: I fixed the deployment issue and verified production.",
+      ":email: Message sent to the client.",
+      ":email: Message: invoice sent",
+      ":hammer_and_wrench: I ran `pnpm test` and it passed.",
+      ":hammer_and_wrench: I ran `pnpm test` and it passed",
+      "✍️ I wrote the summary and verified production.",
+      "🔍 Search: #general",
+      "✍️ Write: README.md",
+      "📧 Message: @alice",
+    ];
+
+    for (const message of semanticMessages) {
+      client.chat.postMessage.mockClear();
+      client.reactions.add.mockClear();
+
+      const result = await sendMessageSlack("channel:C123", message, {
+        token: "xoxb-test",
+        cfg: SLACK_TEST_CFG,
+        client,
+        threadTs: "171234.000",
+      });
+
+      expect(client.reactions.add).not.toHaveBeenCalled();
+      expect(client.chat.postMessage).toHaveBeenCalled();
+      expect(result.suppressed).not.toBe(true);
+      expect(result.messageId).toBe("171999.000");
+    }
   });
 });
