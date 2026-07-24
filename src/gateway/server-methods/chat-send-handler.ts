@@ -32,6 +32,10 @@ import { ensureChatQueuedTurns } from "./chat-abort-runtime.js";
 import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
 import { hasGatewayAdminScope } from "./chat-origin-routing.js";
 import { terminalizeRestartSafeChatAdmission } from "./chat-restart-recovery.js";
+import {
+  shouldFinalizeChatSendAsNonAgent,
+  shouldTerminalizeDeferredChatSend,
+} from "./chat-send-active-run-ownership.js";
 import { admitChatSend } from "./chat-send-admission.js";
 import { prepareChatSendAttachments } from "./chat-send-attachments.js";
 import {
@@ -342,6 +346,9 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
         userTurnRecorder,
       });
     let queuedFollowupEnqueued = false;
+    // Steer adoption owns transcript writes through the active embedded run.
+    // Gateway fallback must not append again while that run's prompt lock is released.
+    let activeRunTurnAdopted = false;
     const dispatchErrorLifecycle = createChatSendDispatchErrorLifecycle({
       admission: admitted.value,
       context,
@@ -443,7 +450,9 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
                   // Gateway cancel identity only — share collect key via ownerKey.
                   admission: "cancel-only",
                   ownerKey: queuedFollowupOwnerKey,
-                  onAdopted: async () => {},
+                  onAdopted: async () => {
+                    activeRunTurnAdopted = true;
+                  },
                   onDeferred: () => {
                     queuedFollowupEnqueued = registerQueuedChatTurn({
                       chatQueuedTurns: ensureChatQueuedTurns(context),
@@ -592,8 +601,14 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
             // Do not blindly mirror agent-run final payloads into JSONL or chat.history can
             // duplicate normal embedded-agent assistant turns. The non-agent branch below has no
             // runtime-owned assistant turn, so it appends a gateway-injected assistant entry before
-            // broadcasting the final UI event.
-            if (!agentRunStarted && !queuedFollowupEnqueued) {
+            // broadcasting the final UI event. Steered/queued turns already have a runtime owner.
+            if (
+              shouldFinalizeChatSendAsNonAgent({
+                agentRunStarted,
+                queuedFollowupEnqueued,
+                activeRunTurnAdopted,
+              })
+            ) {
               await finalizeChatSendNonAgentReplies({
                 accountId,
                 context,
@@ -663,9 +678,15 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
           },
           dispatchStartedAtMs,
         );
-        if (queuedFollowupEnqueued && !context.chatRunState.hasAbortMarker(clientRunId)) {
-          // Successful queue admission ends this client run. The later
-          // aggregate/followup owns its own run id.
+        if (
+          shouldTerminalizeDeferredChatSend({
+            queuedFollowupEnqueued,
+            activeRunTurnAdopted,
+          }) &&
+          !context.chatRunState.hasAbortMarker(clientRunId)
+        ) {
+          // Successful steer/queue admission ends this client run. The active
+          // runtime or a later aggregate/followup owns the remaining work.
           broadcastChatFinal({
             context,
             runId: clientRunId,
