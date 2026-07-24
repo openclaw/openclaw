@@ -584,7 +584,7 @@ constrained `min(...)`, `max(...)`, `clamp(...)`, `calc(...)`, and
 
     Open `https://<magicdns>/` (or your configured `gateway.controlUi.basePath`).
 
-    By default, Control UI/WebSocket Serve requests can authenticate via Tailscale identity headers (`tailscale-user-login`) when `gateway.auth.allowTailscale` is `true`. OpenClaw verifies the identity by resolving the `x-forwarded-for` address with `tailscale whois` and matching it to the header, and only accepts these when the request hits loopback with Tailscale's `x-forwarded-*` headers. For Control UI operator sessions with browser device identity, this verified Serve path also skips the device-pairing round trip; device-less browsers and node-role connections still follow the normal device checks. Set `gateway.auth.allowTailscale: false` if you want to require explicit shared-secret credentials even for Serve traffic, then use `gateway.auth.mode: "token"` or `"password"`.
+    By default, Control UI/WebSocket Serve requests can authenticate via Tailscale identity headers (`tailscale-user-login`) when `gateway.auth.allowTailscale` is `true`. OpenClaw verifies the identity by resolving the `x-forwarded-for` address with `tailscale whois` and matching it to the header, and only accepts these when the request hits loopback with Tailscale's `x-forwarded-*` headers. For Control UI operator sessions with browser device identity, this verified Serve path also skips the device-pairing round trip; device-less browsers and node-role connections still follow the normal device checks. The same verified identity also satisfies the Control UI's own HTTP read routes — the bootstrap config (`/control-ui-config.json`), assistant-media reads, and avatar reads — so the dashboard renders over Serve without a token; requests carrying a browser `Origin` header must still pass the Control UI browser-origin policy (same-origin or `gateway.controlUi.allowedOrigins`). Set `gateway.auth.allowTailscale: false` if you want to require explicit shared-secret credentials even for Serve traffic, then use `gateway.auth.mode: "token"` or `"password"`.
 
     For that async Serve identity path, failed auth attempts for the same client IP and auth scope are serialized before rate-limit writes. Concurrent bad retries from the same browser can therefore show `retry later` on the second request instead of two plain mismatches racing in parallel.
 
@@ -642,7 +642,7 @@ This is always on and not configurable.
 
 ## Avatar route auth
 
-When gateway auth is configured, the Control UI avatar endpoint requires the same gateway token as the rest of the API:
+When gateway auth is configured, the Control UI avatar endpoint requires the same gateway token as the rest of the API (or, over Tailscale Serve with `gateway.auth.allowTailscale: true`, a verified Tailscale identity subject to the browser-origin policy — see [Tailscale](/gateway/tailscale)):
 
 - `GET /avatar/<agentId>` returns the avatar image only to authenticated callers. `GET /avatar/<agentId>?meta=1` returns the avatar metadata under the same rule.
 - Unauthenticated requests to either route are rejected (matching the sibling assistant-media route), so the avatar route cannot leak agent identity on hosts that are otherwise protected.
@@ -654,7 +654,7 @@ If you disable gateway auth (not recommended on shared hosts), the avatar route 
 
 When gateway auth is configured, assistant local-media previews use a two-step route:
 
-- `GET /__openclaw__/assistant-media?meta=1&source=<path>` requires the normal Control UI operator auth; the browser sends the gateway token as a bearer header when checking availability.
+- `GET /__openclaw__/assistant-media?meta=1&source=<path>` requires the normal Control UI operator auth: the browser sends the gateway token as a bearer header when checking availability, or — over Tailscale Serve with `gateway.auth.allowTailscale` enabled — the request is authorized by the verified Tailscale identity that also satisfies the other Control UI HTTP reads (see [Tailnet access](#tailnet-access-recommended) above), subject to the same browser-origin policy.
 - Successful metadata responses include a short-lived `mediaTicket` scoped to that exact source path.
 - Browser-rendered image, audio, video, and document URLs use `mediaTicket=<ticket>` instead of the active gateway token or password. The ticket expires quickly and cannot authorize a different source.
 
