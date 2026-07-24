@@ -1562,6 +1562,89 @@ describe("subscribeEmbeddedAgentSession", () => {
     });
   });
 
+  it("preserves delivered block replies as replay-unsafe across compaction retries", async () => {
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createSubscribedHarness({
+      runId: "run-block-reply-compaction",
+      onBlockReply,
+      blockReplyBreak: "message_end",
+    });
+
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Partial answer" }],
+      } as AssistantMessage,
+    });
+    await flushBlockReplyCallbacks();
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(subscription.getReplayState()).toEqual({
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
+
+    emit({ type: "compaction_end", willRetry: true, result: { summary: "compacted" } });
+
+    expect(subscription.assistantTexts).toEqual([]);
+    expect(subscription.getReplayState()).toEqual({
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
+  });
+
+  it("preserves streamed partial replies as replay-unsafe across compaction retries", async () => {
+    const onPartialReply = vi.fn();
+    const { emit, subscription } = createSubscribedHarness({
+      runId: "run-partial-reply-compaction",
+      onPartialReply,
+    });
+
+    emitAssistantTextDelta(emit, "Partial answer");
+    await flushBlockReplyCallbacks();
+    expect(onPartialReply).toHaveBeenCalledTimes(1);
+    expect(subscription.assistantTexts).toEqual([]);
+
+    emit({ type: "compaction_end", willRetry: true, result: { summary: "compacted" } });
+
+    expect(subscription.getReplayState()).toEqual({
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
+  });
+
+  it.each([
+    { controlText: "NO_REPLY", callbackCount: 0 },
+    { controlText: "HEARTBEAT_OK", callbackCount: 1 },
+  ])(
+    "does not persist the $controlText control as a compaction delivery side effect",
+    async ({ controlText, callbackCount }) => {
+      const onBlockReply = vi.fn();
+      const { emit, subscription } = createSubscribedHarness({
+        runId: "run-silent-block-reply-compaction",
+        onBlockReply,
+        blockReplyBreak: "message_end",
+      });
+
+      emit({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: controlText }],
+        } as AssistantMessage,
+      });
+      await flushBlockReplyCallbacks();
+      expect(onBlockReply).toHaveBeenCalledTimes(callbackCount);
+
+      emit({ type: "compaction_end", willRetry: true, result: { summary: "compacted" } });
+
+      expect(subscription.getReplayState()).toEqual({
+        replayInvalid: false,
+        hadPotentialSideEffects: false,
+      });
+    },
+  );
+
   it("preserves deterministic side-effect liveness across compaction retries", () => {
     const { session, emit } = createStubSessionHarness();
     const onAgentEvent = vi.fn();

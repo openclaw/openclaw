@@ -1,9 +1,12 @@
+import { stripHeartbeatToken } from "../../../auto-reply/heartbeat.js";
+import { isSilentReplyPayloadText } from "../../../auto-reply/tokens.js";
 import { formatErrorMessage, toErrorObject } from "../../../infra/errors.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../defaults.js";
 import type { FailoverReason } from "../../embedded-agent-helpers.js";
 import { LiveSessionModelSwitchError } from "../../live-model-switch-error.js";
 import { shouldSwitchToLiveModel, clearLiveModelSwitchPending } from "../../live-model-switch.js";
 import type { normalizeUsage } from "../../usage.js";
+import { isRunnerAbortError } from "../abort.js";
 import { log } from "../logger.js";
 import type { EmbeddedAgentRunResult, TraceAttempt } from "../types.js";
 import type { createUsageAccumulator } from "../usage-accumulator.js";
@@ -90,6 +93,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     promptError,
     promptErrorSource,
     timedOut,
+    idleTimedOut,
     timedOutDuringCompaction,
     timedOutDuringToolExecution,
     timedOutByRunBudget,
@@ -276,6 +280,28 @@ export async function recoverEmbeddedRunAttempt(input: {
   const hasRecoverableCodexAppServerTimeoutOutcome = Boolean(
     attempt.codexAppServerFailure && attempt.promptTimeoutOutcome,
   );
+  const hasVisibleAssistantText = attempt.assistantTexts.some((text) => {
+    if (!text.trim() || isSilentReplyPayloadText(text)) {
+      return false;
+    }
+    return !stripHeartbeatToken(text, { mode: "message" }).shouldSkip;
+  });
+  // Some provider SDK stream aborts mark the attempt aborted without an external stop.
+  // Only replay the model call when no visible output, timeout, or side effect made it unsafe.
+  const replaySafePromptAbortFallback =
+    runInput.fallbackConfigured &&
+    aborted &&
+    !externalAbort &&
+    !signalOwnedInterruption &&
+    !timedOut &&
+    !idleTimedOut &&
+    !timedOutDuringCompaction &&
+    !timedOutDuringToolExecution &&
+    promptErrorSource === "prompt" &&
+    isRunnerAbortError(promptError) &&
+    !hasVisibleAssistantText &&
+    attempt.replayMetadata.replaySafe &&
+    !attempt.replayMetadata.hadPotentialSideEffects;
   let shouldSurfaceCodexCompletionTimeout = false;
   if (promptError && promptErrorSource !== "compaction" && attempt.codexAppServerFailure) {
     const recoveryRetry = resolveCodexAppServerRecoveryRetry({
@@ -303,7 +329,7 @@ export async function recoverEmbeddedRunAttempt(input: {
   }
   if (
     promptError &&
-    !terminalInterrupted &&
+    (!terminalInterrupted || replaySafePromptAbortFallback) &&
     promptErrorSource !== "compaction" &&
     !hasRecoverableCodexAppServerTimeoutOutcome &&
     !shouldSurfaceCodexCompletionTimeout
@@ -343,6 +369,7 @@ export async function recoverEmbeddedRunAttempt(input: {
       fallbackConfigured: runInput.fallbackConfigured,
       aborted,
       externalAbort,
+      replaySafePromptAbortFallback,
       pluginHarnessOwnsTransport: runtime.pluginHarnessOwnsTransport,
       timedOutByRunBudget,
       resolveAuthProfileFailureReason: failoverRetryController.resolveAuthProfileFailureReason,

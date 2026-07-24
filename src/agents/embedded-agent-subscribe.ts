@@ -9,9 +9,14 @@ import {
   createInlineCodeState,
 } from "../../packages/markdown-core/src/code-spans.js";
 import type { FenceScanState } from "../../packages/markdown-core/src/fences.js";
+import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import {
+  isSilentReplyPayloadText,
+  isSilentReplyText,
+  SILENT_REPLY_TOKEN,
+} from "../auto-reply/tokens.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { emitAgentEvent, emitAgentEventIfCurrent } from "../infra/agent-events.js";
 import { recordAgentRunOutputTokens } from "../infra/agent-run-usage.js";
@@ -275,10 +280,35 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   const partialReplyDirectiveAccumulator = createStreamingDirectiveAccumulator();
   const shouldAllowSilentTurnText = (text: string | undefined) =>
     Boolean(text && isSilentReplyText(text, SILENT_REPLY_TOKEN));
+  const hasDeliverableAssistantReply = (payload: BlockReplyPayload): boolean => {
+    if (hasAssistantVisibleReply({ ...payload, text: undefined })) {
+      return true;
+    }
+    return Boolean(
+      payload.text &&
+      !isSilentReplyPayloadText(payload.text, SILENT_REPLY_TOKEN) &&
+      !stripHeartbeatToken(payload.text, { mode: "message" }).shouldSkip,
+    );
+  };
+  const recordDeliveredAssistantReply = (payload: BlockReplyPayload): boolean => {
+    if (!hasDeliverableAssistantReply(payload)) {
+      return false;
+    }
+    state.replayState = mergeEmbeddedRunReplayState(state.replayState, {
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
+    return true;
+  };
   const emitAssistantStreamDataSafely = (
     delivery: EmbeddedAgentSubscribeContext["state"]["deferredAssistantEvents"][number],
   ) => {
     const { data } = delivery;
+    // Stream callbacks can expose output before assistantTexts or block replies exist.
+    // Persist replay safety now so compaction cannot erase that delivery evidence.
+    if (data.phase !== "commentary") {
+      recordDeliveredAssistantReply(data);
+    }
     emitAgentEvent({
       runId: params.runId,
       stream: "assistant",
@@ -389,7 +419,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       return;
     }
     const emitted = emitBlockReplySafely(withToolMedia, options);
-    if (emitted && !withToolMedia.isReasoning && hasAssistantVisibleReply(withToolMedia)) {
+    if (emitted && !withToolMedia.isReasoning && recordDeliveredAssistantReply(withToolMedia)) {
       state.visibleBlockReplyCount += 1;
       if (consumesPendingToolMedia) {
         state.hasToolMediaBlockReply = true;
@@ -403,7 +433,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     const deferred = state.deferredBlockReplies.splice(0);
     for (const payload of deferred) {
       const emitted = emitBlockReplySafely(payload);
-      if (emitted && !payload.isReasoning && hasAssistantVisibleReply(payload)) {
+      if (emitted && !payload.isReasoning && recordDeliveredAssistantReply(payload)) {
         state.visibleBlockReplyCount += 1;
         if (deferredToolMediaReplies.has(payload)) {
           state.hasToolMediaBlockReply = true;
@@ -1282,6 +1312,14 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       state.successfulCronAdds > 0 ||
       state.acceptedSessionSpawns.length > 0 ||
       state.visibleBlockReplyCount > 0;
+    if (state.hadDeterministicSideEffect) {
+      // Compaction clears delivery evidence below; retain replay safety so outer
+      // recovery cannot duplicate output or another completed side effect.
+      state.replayState = mergeEmbeddedRunReplayState(state.replayState, {
+        replayInvalid: true,
+        hadPotentialSideEffects: true,
+      });
+    }
     assistantTexts.length = 0;
     toolMetas.length = 0;
     toolMetaById.clear();

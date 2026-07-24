@@ -60,6 +60,7 @@ export async function handleEmbeddedPromptFailure(input: {
   fallbackConfigured: boolean;
   aborted: boolean;
   externalAbort: boolean;
+  replaySafePromptAbortFallback: boolean;
   pluginHarnessOwnsTransport: boolean;
   timedOutByRunBudget: boolean;
   resolveAuthProfileFailureReason: (
@@ -139,7 +140,9 @@ export async function handleEmbeddedPromptFailure(input: {
     promptFailoverReason === "timeout" &&
     !input.attempt.codexAppServerFailure &&
     input.attempt.promptTimeoutOutcome?.replayInvalid !== true &&
-    input.attempt.replayMetadata.replaySafe;
+    input.attempt.replayMetadata.replaySafe &&
+    !input.attempt.replayMetadata.hadPotentialSideEffects &&
+    (!input.aborted || input.replaySafePromptAbortFallback);
   const failedProfileId = input.authProfileId;
   const logFailoverDecision = createFailoverDecisionLogger({
     stage: "prompt",
