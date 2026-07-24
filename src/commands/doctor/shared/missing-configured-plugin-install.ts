@@ -1616,7 +1616,7 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
     if (
       !shouldReplaceBrokenOfficialInstall &&
       knownIds.has(candidate.pluginId) &&
-      hasUsableRecord
+      !Object.hasOwn(records, candidate.pluginId)
     ) {
       continue;
     }
@@ -2112,7 +2112,7 @@ async function repairMissingPluginInstalls(params: {
     if (
       !shouldReplaceBrokenOfficialInstall &&
       knownIds.has(candidate.pluginId) &&
-      hasUsableRecord
+      !Object.hasOwn(nextRecords, candidate.pluginId)
     ) {
       continue;
     }
