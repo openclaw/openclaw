@@ -19,6 +19,8 @@ import {
   resolveEntryInstallRoot,
   respawnWithoutOpenClawCompileCacheIfNeeded,
 } from "./entry.compile-cache.js";
+import { tryHandleNativeHookRelayFastPath } from "./entry.native-hook-relay-fast-path.js";
+import { resolveEntryProcessTitle } from "./entry.process-title.js";
 import { buildCliRespawnPlan, runCliRespawnPlan } from "./entry.respawn.js";
 import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";
 import { normalizeEnv } from "./infra/env.js";
@@ -66,7 +68,10 @@ if (
     installRoot,
   });
   if (!waitingForCompileCacheRespawn) {
-    process.title = "openclaw";
+    // Native relays open agent state during CLI bootstrap, before Commander
+    // can assign its command-specific title. Mark them at the entry boundary
+    // so their bounded integrity gate applies to the first database open.
+    process.title = resolveEntryProcessTitle(process.argv);
     ensureOpenClawExecMarkerOnProcess();
     installProcessWarningFilter();
     normalizeEnv();
@@ -127,7 +132,8 @@ if (
       }
       gatewayEntryStartupTrace.mark("argv");
 
-      if (!tryHandleRootVersionFastPath(process.argv)) {
+      const handledNativeHookRelay = await tryHandleNativeHookRelayFastPath(process.argv);
+      if (!handledNativeHookRelay && !tryHandleRootVersionFastPath(process.argv)) {
         await runMainOrRootHelp(process.argv);
       }
     }

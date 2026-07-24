@@ -3538,6 +3538,25 @@ describe("native hook relay registry", () => {
 });
 
 describe("native hook relay command builder", () => {
+  it("prefers the built relay entry over launcher scripts", async () => {
+    const packageRoot = await fs.mkdtemp(path.join(tmpdir(), "openclaw-hook-relay-root-"));
+    try {
+      await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
+      await fs.mkdir(path.join(packageRoot, "scripts"), { recursive: true });
+      await Promise.all([
+        fs.writeFile(path.join(packageRoot, "dist", "entry.js"), ""),
+        fs.writeFile(path.join(packageRoot, "openclaw.mjs"), ""),
+        fs.writeFile(path.join(packageRoot, "scripts", "run-node.mjs"), ""),
+      ]);
+
+      expect(testing.resolvePackageRootHookRelayExecutableForTests(packageRoot)).toBe(
+        path.join(packageRoot, "dist", "entry.js"),
+      );
+    } finally {
+      await fs.rm(packageRoot, { recursive: true, force: true });
+    }
+  });
+
   it("uses the Codex hook relay command shape", () => {
     expect(
       buildNativeHookRelayCommand({
