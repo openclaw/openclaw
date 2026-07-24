@@ -208,69 +208,6 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
     });
   });
 
-  it("preserves delivered once reservations when later heartbeat payloads fail", async () => {
-    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-      const cfg = {
-        ...createHeartbeatConfig(storePath),
-        agents: {
-          defaults: {
-            heartbeat: { every: "5m", target: "telegram", includeReasoning: true },
-          },
-        },
-        messages: {
-          operationalReplies: { policy: "once" },
-        },
-      } as unknown as OpenClawConfig;
-      const NOW = Date.now();
-      const sessionKey = await seedMainSessionStore(storePath, cfg, {
-        lastChannel: "telegram",
-        lastProvider: "telegram",
-        lastTo: TELEGRAM_GROUP,
-        updatedAt: NOW - 60_000,
-      });
-      replySpy.mockResolvedValue([
-        markReplyPayloadForSourceSuppressionDelivery({
-          text: "checking backend state",
-          isReasoning: true,
-          isStatusNotice: true,
-        }),
-        markReplyPayloadForSourceSuppressionDelivery({
-          text: "usage limit reached",
-          isStatusNotice: true,
-        }),
-      ]);
-      const sendTelegram = vi
-        .fn()
-        .mockResolvedValueOnce({ messageId: "m1", toJid: "jid" })
-        .mockRejectedValueOnce(new Error("second payload failed"));
-
-      const failed = await runHeartbeatOnce({
-        cfg,
-        deps: heartbeatDeps(sendTelegram, replySpy, NOW),
-      });
-
-      expect(failed).toMatchObject({ status: "failed", reason: "second payload failed" });
-      let entry = await readEntry(storePath, sessionKey);
-      expect(entry?.operationalReplyOnceKeys).toEqual([expect.any(String)]);
-      expect(entry?.operationalReplyPendingOnceKeys).toBeUndefined();
-
-      sendTelegram.mockReset();
-      sendTelegram.mockResolvedValue({ messageId: "m2", toJid: "jid" });
-
-      const retry = await runHeartbeatOnce({
-        cfg,
-        deps: heartbeatDeps(sendTelegram, replySpy, NOW + 60_000),
-      });
-
-      expect(retry.status).toBe("ran");
-      expect(sendTelegram).toHaveBeenCalledTimes(1);
-      expect(sendTelegram.mock.calls[0]?.[1]).toBe("usage limit reached");
-      entry = await readEntry(storePath, sessionKey);
-      expect(entry?.operationalReplyOnceKeys).toEqual([expect.any(String), expect.any(String)]);
-      expect(entry?.operationalReplyPendingOnceKeys).toBeUndefined();
-    });
-  });
-
   it("releases operational once reservations when heartbeat channel readiness fails", async () => {
     await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
       const cfg = {

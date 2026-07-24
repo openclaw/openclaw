@@ -20,11 +20,11 @@ import type { ChooseDispatchRouteReadyState } from "./dispatch-from-config.choos
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import { loadGetReplyFromConfigRuntime } from "./dispatch-from-config.runtime-loaders.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
+import { markOperationalReplyPolicyDelivered } from "./operational-reply-policy.js";
 import {
   captureReplyDispatchDeliveryOutcome,
   waitForReplyDispatcherIdle,
 } from "./reply-dispatcher.js";
-import { markOperationalReplyPolicyDelivered } from "./operational-reply-policy.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
 export async function prepareDispatchExecution(state: ChooseDispatchRouteReadyState) {

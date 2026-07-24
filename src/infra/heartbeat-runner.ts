@@ -43,11 +43,11 @@ import {
 import { copyReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { replaceGenericExternalRunFailureText } from "../auto-reply/reply/agent-runner-failure-copy.js";
 import { resolveDefaultModel } from "../auto-reply/reply/directive-handling.defaults.js";
-import { buildRecoverablePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import {
   applyOperationalReplyPolicy,
   markOperationalReplyPolicyDelivered,
 } from "../auto-reply/reply/operational-reply-policy.js";
+import { buildRecoverablePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
@@ -2224,7 +2224,6 @@ export async function runHeartbeatOnce(opts: {
         channel: delivery.channel,
         accountId: delivery.accountId,
       });
-      await updateTaskTimestamps();
       consumeInspectedSystemEvents();
       return { status: "ran", durationMs: Date.now() - startedAt };
     }

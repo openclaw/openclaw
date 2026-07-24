@@ -32,10 +32,7 @@ import {
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { resolveSilentReplyPolicyFromPolicies } from "../../shared/silent-reply-policy.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
-import {
-  copyReplyPayloadMetadata,
-  type ReplyPayload,
-} from "../reply-payload.js";
+import { copyReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import { capturePendingConversationTurnReply } from "./conversation-turn-capture.js";
 import {
@@ -52,13 +49,13 @@ import type { PrepareDispatchDeliveryReadyState } from "./dispatch-from-config.p
 import { createInternalHookEvent, triggerInternalHook } from "./dispatch-from-config.runtime.js";
 import type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
 import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
-import { resolveOriginMessageProvider } from "./origin-routing.js";
-import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import {
   applyOperationalReplyPolicy as applyOperationalReplyPolicyFromConfig,
   markOperationalReplyPolicyDelivered,
   resolveOperationalReplyPolicy,
 } from "./operational-reply-policy.js";
+import { resolveOriginMessageProvider } from "./origin-routing.js";
+import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import { isDuplicateRestartRecoverySource } from "./restart-recovery-claim.js";
 import {
   isExplicitSourceReplyCommand,
@@ -556,8 +553,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
       sendPolicyDenied,
       operationalReplyPolicy,
       applyDispatchOperationalReplyPolicy,
-      getOperationalReplyPolicyIntentionalSilence: () =>
-        operationalReplyPolicyIntentionalSilence,
+      getOperationalReplyPolicyIntentionalSilence: () => operationalReplyPolicyIntentionalSilence,
       deliverySuppressionReason,
       suppressHookUserDelivery,
       suppressHookReplyLifecycle,
