@@ -225,7 +225,10 @@ describe("plugins Docker assertions", () => {
     expect(script).toContain("run(controller.signal, timeoutPromise)");
     expect(
       script.match(/readBoundedResponseText\([\s\S]*?limits\.bodyMaxBytes,\n\s+timeoutPromise,/gu),
-    ).toHaveLength(2);
+    ).toHaveLength(1);
+    expect(script).toMatch(
+      /withTimeout\(\s*`ClawHub package preflight for \$\{packageName\}`,\s*limits\.timeoutMs,\s*async \(signal, timeoutPromise\) => \{[\s\S]*?fetch\([\s\S]*?readBoundedResponseText\([\s\S]*?JSON\.parse\(rawDetail\)/u,
+    );
   });
 
   it("keeps sweep artifact paths aligned with the assertion scratch root", () => {
@@ -1444,8 +1447,53 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
 
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain(
-        "ClawHub package preflight response for @openclaw/kitchen-sink timed out after 75ms",
+        "ClawHub package preflight for @openclaw/kitchen-sink timed out after 75ms",
       );
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  });
+
+  it("keeps ClawHub preflight wall time within one shared timeout budget", async () => {
+    const timeoutMs = 300;
+    const headerDelayMs = 250;
+    // Shared budget finishes near spawn + timeoutMs. Stacked per-phase budgets need at
+    // least spawn + headerDelayMs + timeoutMs, so they cannot pass this ceiling.
+    const maxSharedElapsedMs = timeoutMs + 240;
+    const server = createServer((_request, response) => {
+      const timer = setTimeout(() => {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.flushHeaders();
+        response.write("{");
+      }, headerDelayMs);
+      timer.unref?.();
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected TCP server address");
+      }
+      const started = Date.now();
+      const result = await runAssertionAsync(["clawhub-preflight"], {
+        CLAWHUB_PLUGIN_ID: "openclaw-kitchen-sink-fixture",
+        CLAWHUB_PLUGIN_SPEC: "clawhub:@openclaw/kitchen-sink",
+        OPENCLAW_CLAWHUB_URL: `http://127.0.0.1:${address.port}`,
+        OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS: String(timeoutMs),
+      });
+      const elapsedMs = Date.now() - started;
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(
+        `ClawHub package preflight for @openclaw/kitchen-sink timed out after ${timeoutMs}ms`,
+      );
+      expect(maxSharedElapsedMs).toBeLessThan(headerDelayMs + timeoutMs);
+      expect(elapsedMs).toBeLessThan(maxSharedElapsedMs);
     } finally {
       await new Promise<void>((resolve) => {
         server.close(() => resolve());

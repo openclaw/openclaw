@@ -846,46 +846,28 @@ async function assertClawHubPreflight() {
   ).replace(/\/+$/, "");
   const token = process.env.CLAWHUB_TOKEN || process.env.CLAWHUB_AUTH_TOKEN || "";
   const preflightUrl = `${baseUrl}/api/v1/packages/${encodeURIComponent(packageName)}`;
-  const response = await withTimeout(
+  // One deadline covers fetch + body read. timeoutMs is a total budget, not per phase.
+  const detail = await withTimeout(
     `ClawHub package preflight for ${packageName}`,
     limits.timeoutMs,
-    (signal) =>
-      fetch(preflightUrl, {
+    async (signal, timeoutPromise) => {
+      const response = await fetch(preflightUrl, {
         headers: token ? { Authorization: `Bearer ${token}` } : undefined,
         signal,
-      }),
-  );
-  if (!response.ok) {
-    const body = await withTimeout(
-      `ClawHub package preflight response for ${packageName}`,
-      limits.timeoutMs,
-      (_signal, timeoutPromise) =>
-        readBoundedResponseText(
-          response,
-          `ClawHub package preflight response for ${packageName}`,
-          limits.bodyMaxBytes,
-          timeoutPromise,
-        ),
-    );
-    throw new Error(
-      `ClawHub package preflight failed for ${packageName}: ${response.status} ${body}`,
-    );
-  }
-  const rawDetail = await withTimeout(
-    `ClawHub package preflight response for ${packageName}`,
-    limits.timeoutMs,
-    (_signal, timeoutPromise) =>
-      readBoundedResponseText(
+      });
+      const rawDetail = await readBoundedResponseText(
         response,
         `ClawHub package preflight response for ${packageName}`,
         limits.bodyMaxBytes,
         timeoutPromise,
-      ),
-  );
-  const detail = await withTimeout(
-    `ClawHub package preflight JSON for ${packageName}`,
-    limits.timeoutMs,
-    () => JSON.parse(rawDetail),
+      );
+      if (!response.ok) {
+        throw new Error(
+          `ClawHub package preflight failed for ${packageName}: ${response.status} ${rawDetail}`,
+        );
+      }
+      return JSON.parse(rawDetail);
+    },
   );
   const family = detail.package?.family;
   if (family !== "code-plugin" && family !== "bundle-plugin") {
