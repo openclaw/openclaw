@@ -765,6 +765,21 @@ describe("buildEmbeddedRunPayloads", () => {
     });
   });
 
+  it("does not append failed read-only command probes after a useful assistant reply", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Completed intake."],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: {
+        toolName: "exec",
+        meta: "ps -o pid,ppid,etime,pcpu,pmem,cmd -p 3865740,3865741,3865756 (agent)",
+        error: "Command exited with code 1",
+        mutatingAction: false,
+      },
+    });
+
+    expectSinglePayloadSummary(payloads, { text: "Completed intake." });
+  });
+
   it("shows mutating tool errors when assistant output does not acknowledge the failure", () => {
     const payloads = buildPayloads({
       assistantTexts: ["No issues found. The update is complete."],
