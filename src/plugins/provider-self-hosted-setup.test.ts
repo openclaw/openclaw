@@ -465,6 +465,85 @@ describe("discoverOpenAICompatibleLocalModels", () => {
     expect(propsRelease).toHaveBeenCalledOnce();
   });
 
+  it("reads provider-advertised context_size when meta.n_ctx_train is absent", async () => {
+    const modelsRelease = vi.fn(async () => undefined);
+    const propsRelease = vi.fn(async () => undefined);
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(
+        JSON.stringify({
+          data: [
+            {
+              id: "glm-5.2",
+              context_size: 1_048_576,
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+      finalUrl: "https://api.cortecs.ai/v1/models",
+      release: modelsRelease,
+    });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response("not found", { status: 404 }),
+      finalUrl: "https://api.cortecs.ai/props",
+      release: propsRelease,
+    });
+
+    const models = await discoverOpenAICompatibleLocalModels({
+      baseUrl: "https://api.cortecs.ai/v1",
+      apiKey: "self-hosted-test-key",
+      label: "cortecs",
+      env: {},
+    });
+
+    expect(models).toEqual([
+      {
+        id: "glm-5.2",
+        name: "glm-5.2",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_048_576,
+        maxTokens: 8192,
+      },
+    ]);
+  });
+
+  it("prefers context_length over context_window and context_size when multiple are present", async () => {
+    const modelsRelease = vi.fn(async () => undefined);
+    const propsRelease = vi.fn(async () => undefined);
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(
+        JSON.stringify({
+          data: [
+            {
+              id: "some-model",
+              context_length: 200_000,
+              context_window: 100_000,
+              context_size: 50_000,
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+      finalUrl: "http://127.0.0.1:8000/v1/models",
+      release: modelsRelease,
+    });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response("not found", { status: 404 }),
+      finalUrl: "http://127.0.0.1:8000/props",
+      release: propsRelease,
+    });
+
+    const models = await discoverOpenAICompatibleLocalModels({
+      baseUrl: "http://127.0.0.1:8000/v1",
+      label: "generic",
+      env: {},
+    });
+
+    expect(models[0]?.contextWindow).toBe(200_000);
+  });
+
   it("preserves explicit configured context windows ahead of llama.cpp /props", async () => {
     const release = vi.fn(async () => undefined);
     fetchWithSsrFGuardMock.mockResolvedValueOnce({

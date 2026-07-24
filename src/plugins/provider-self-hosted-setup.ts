@@ -49,6 +49,13 @@ const SELF_HOSTED_DISCOVERY_JSON_MAX_BYTES = 16 * 1024 * 1024;
 type OpenAICompatModelsResponse = {
   data?: Array<{
     id?: string;
+    // Some OpenAI-compatible catalogs (e.g. cortecs.ai) advertise the model's
+    // context window directly on the row instead of nesting it under `meta`.
+    // Field naming isn't standardized across providers, so accept the common
+    // variants seen in the wild.
+    context_length?: unknown;
+    context_window?: unknown;
+    context_size?: unknown;
     meta?: {
       n_ctx_train?: unknown;
     };
@@ -209,7 +216,15 @@ export async function discoverOpenAICompatibleLocalModels(params: {
         if (!modelId) {
           return [];
         }
-        return [{ id: modelId, meta: model.meta }];
+        return [
+          {
+            id: modelId,
+            meta: model.meta,
+            context_length: model.context_length,
+            context_window: model.context_window,
+            context_size: model.context_size,
+          },
+        ];
       });
       const runtimeContextTokensByModelId = new Map<string, number>();
       if (params.contextWindow === undefined) {
@@ -244,6 +259,9 @@ export async function discoverOpenAICompatibleLocalModels(params: {
           contextWindow:
             params.contextWindow ??
             readPositiveInteger(model.meta?.n_ctx_train) ??
+            readPositiveInteger(model.context_length) ??
+            readPositiveInteger(model.context_window) ??
+            readPositiveInteger(model.context_size) ??
             SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
           maxTokens: params.maxTokens ?? SELF_HOSTED_DEFAULT_MAX_TOKENS,
         };
