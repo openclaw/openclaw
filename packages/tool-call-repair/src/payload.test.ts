@@ -188,3 +188,98 @@ describe("stripPlainTextToolCallBlocks", () => {
     expect(tracked.indexedReads).toBeLessThan(raw.length * 16);
   });
 });
+
+describe("stripPlainTextToolCallBlocks: degraded invoke dialect (#97750)", () => {
+  // Build tags by concatenation so the source carries no literal invoke markup.
+  const LT = "<";
+  const tags = (ns: string) => ({
+    open: `${LT}${ns}invoke name="get_weather">`,
+    paramOpen: `${LT}${ns}parameter name="city">`,
+    paramClose: `${LT}/${ns}parameter>`,
+    close: `${LT}/${ns}invoke>`,
+  });
+  const block = (ns: string) => {
+    const t = tags(ns);
+    return [t.open, `${t.paramOpen}Paris${t.paramClose}`, t.close].join("\n");
+  };
+
+  it.each([
+    ["antml namespace", "antml:"],
+    ["mm namespace", "mm:"],
+  ])("scrubs a standalone %s invoke block", (_label, ns) => {
+    expect(stripPlainTextToolCallBlocks(`Here you go.\n${block(ns)}`)).toBe("Here you go.\n");
+  });
+
+  it("scrubs a function_calls-wrapped bare invoke block", () => {
+    const raw = `Done.\n${LT}function_calls>\n${block("")}\n${LT}/function_calls>`;
+    expect(stripPlainTextToolCallBlocks(raw)).toBe("Done.\n");
+  });
+
+  it("scrubs a self-closing zero-argument namespaced invoke block", () => {
+    expect(stripPlainTextToolCallBlocks(`Done.\n${LT}antml:invoke name="ping"/>`)).toBe("Done.\n");
+  });
+
+  it("scrubs a zero-parameter namespaced invoke block", () => {
+    const raw = `Done.\n${LT}antml:invoke name="ping">\n${LT}/antml:invoke>`;
+    expect(stripPlainTextToolCallBlocks(raw)).toBe("Done.\n");
+  });
+
+  it.each([
+    ["multi-parameter", block("")],
+    ["self-closing", `${LT}invoke name="ping"/>`],
+    ["zero-parameter", `${LT}invoke name="ping">\n${LT}/invoke>`],
+  ])("preserves a standalone bare %s invoke block (#97750)", (_label, form) => {
+    // A bare `<invoke>` with no `antml:`/`mm:` namespace and no `<function_calls>`
+    // wrapper is legitimate content (a documentation example), not a leaked call.
+    const raw = `Here you go.\n${form}`;
+    expect(stripPlainTextToolCallBlocks(raw)).toBe(raw);
+  });
+
+  it("preserves a bare invoke block even under the strict predicate (#97750)", () => {
+    // Strict mode scrubs qualified leaks inside code fences; a bare block is never a
+    // leaked call, so the strict predicate must not turn it into one.
+    const raw = `Here you go.\n${block("")}`;
+    expect(stripPlainTextToolCallBlocks(raw, () => false)).toBe(raw);
+  });
+
+  it("preserves a fenced namespaced invoke example by default (code-aware)", () => {
+    const raw = `See:\n\`\`\`xml\n${block("antml:")}\n\`\`\`\nDone.`;
+    expect(stripPlainTextToolCallBlocks(raw)).toBe(raw);
+  });
+
+  it("preserves an inline namespaced invoke example by default", () => {
+    const raw = `Use the \`${tags("antml:").open}\` opener.`;
+    expect(stripPlainTextToolCallBlocks(raw)).toBe(raw);
+  });
+
+  it("scrubs a fenced namespaced invoke when the predicate never preserves (strict)", () => {
+    const raw = `See:\n\`\`\`xml\n${block("antml:")}\n\`\`\`\nDone.`;
+    const stripped = stripPlainTextToolCallBlocks(raw, () => false);
+    expect(stripped).not.toContain("invoke");
+  });
+
+  it("preserves a namespaced invoke block flagged by a custom code-region predicate", () => {
+    const prefix = "Here you go.\n";
+    const raw = `${prefix}${block("antml:")}`;
+    const stripped = stripPlainTextToolCallBlocks(raw, (offset) => offset >= prefix.length);
+    expect(stripped).toBe(raw);
+  });
+
+  it("defers an unterminated namespaced invoke open (no close)", () => {
+    const raw = `Working.\n${tags("antml:").open}\n${tags("antml:").paramOpen}Paris`;
+    expect(stripPlainTextToolCallBlocks(raw)).toBe(raw);
+  });
+
+  it("stays linear on many unterminated invoke opens (no quadratic rescan)", () => {
+    // Each line opens a namespaced invoke + parameter that never closes. A per-line
+    // rescan of the unclosed tail would be O(n^2); the incomplete-block bail keeps
+    // it linear. The namespace arms the scrub pass so the scan loop is exercised
+    // (a bare open short-circuits the trigger guard). Linear finishes in well under a
+    // millisecond here; a reintroduced quadratic scan takes ~1s, so the bound is safe.
+    const line = `${tags("antml:").open}${tags("antml:").paramOpen}payload`;
+    const raw = Array.from({ length: 16000 }, () => line).join("\n");
+    const startedAt = performance.now();
+    expect(stripPlainTextToolCallBlocks(raw)).toBe(raw);
+    expect(performance.now() - startedAt).toBeLessThan(300);
+  });
+});

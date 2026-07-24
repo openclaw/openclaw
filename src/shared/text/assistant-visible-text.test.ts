@@ -821,6 +821,12 @@ describe("stripToolCallXmlTags", () => {
     expect(stripToolCallXmlTags(input)).toBe("prefix  suffix");
   });
 
+  it("strips mm:invoke/parameter tool call XML from visible content", () => {
+    const input =
+      'before <mm:invoke name="exec"><mm:parameter name="command">ls</mm:parameter></mm:invoke> after';
+    expect(stripToolCallXmlTags(input)).toBe("before  after");
+  });
+
   it("does not strip non-namespaced invoke tags (unrelated XML)", () => {
     const input = 'keep <invoke name="something">content</invoke> keep';
     expect(stripToolCallXmlTags(input)).toBe(input);
@@ -879,6 +885,20 @@ describe("sanitizeAssistantVisibleText", () => {
   it("preserves prose examples of plural function-call XML on the delivery path", () => {
     const input =
       'prefix <function_calls><invoke name="find">secret</invoke></function_calls> suffix';
+
+    expect(sanitizeAssistantVisibleText(input)).toBe(input);
+  });
+
+  it("preserves a bare standalone invoke example on the delivery path (#97750)", () => {
+    // A bare `<invoke>` (no antml:/mm: namespace, no <function_calls> wrapper) is
+    // legitimate content, not a leaked call, so the delivery scrub leaves it intact.
+    const input = [
+      "Here is the call shape:",
+      '<invoke name="get_weather">',
+      '<parameter name="city">Paris</parameter>',
+      "</invoke>",
+      "That is the format.",
+    ].join("\n");
 
     expect(sanitizeAssistantVisibleText(input)).toBe(input);
   });
@@ -986,6 +1006,20 @@ describe("sanitizeAssistantVisibleTextWithProfile", () => {
         "history",
       ),
     ).toBe(" Visible answer");
+  });
+
+  it("uses the history profile to preserve a bare standalone invoke example (#97750)", () => {
+    // Persisted transcripts must keep bare `<invoke>` examples verbatim; the history
+    // profile does no scrubbing that would delete legitimate documentation content.
+    const input = [
+      "Here is the call shape:",
+      '<invoke name="get_weather">',
+      '<parameter name="city">Paris</parameter>',
+      "</invoke>",
+      "That is the format.",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleTextWithProfile(input, "history")).toBe(input);
   });
 
   it("uses the internal-scaffolding profile to preserve downgraded tool text behavior", () => {

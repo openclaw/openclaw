@@ -34,9 +34,18 @@ export function parseStandalonePlainTextToolCallBlocks(
   return parseStandaloneRepairToolCallBlocks(text, options);
 }
 
-/** Removes full-line standalone plain-text tool call blocks from visible text. */
+/**
+ * Removes full-line standalone plain-text tool call blocks from visible text.
+ *
+ * Strict scrubber: a leaked block is removed even when it sits inside a Markdown
+ * code fence or inline span, preserving the SDK contract for callers that sanitize
+ * untrusted visible text where a tool-call-shaped block is always a leak. The
+ * code-region-aware path lives only in the internal packages/tool-call-repair helper.
+ */
 export function stripPlainTextToolCallBlocks(text: string): string {
-  return stripRepairToolCallBlocks(text);
+  // Force a strict scrub: the repair helper spares code-region examples by default,
+  // so an always-false predicate keeps the untrusted-text contract unchanged.
+  return stripRepairToolCallBlocks(text, () => false);
 }
 
 type ToolPayloadTextBlock = {

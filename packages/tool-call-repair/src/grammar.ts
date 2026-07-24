@@ -7,6 +7,9 @@ export const HARMONY_MESSAGE_MARKER = "<|message|>";
 /** Harmony stream marker that may close a serialized tool-call payload. */
 export const HARMONY_CALL_MARKER = "<|call|>";
 
+/** Default cap on the serialized payload size accepted for one repaired tool call. */
+export const DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES = 256_000;
+
 /** Tool names in bracket/plain-text repairs intentionally match provider-safe ids only. */
 export function isPlainTextToolNameChar(char: string | undefined): boolean {
   return Boolean(char && /[A-Za-z0-9_-]/.test(char));
@@ -15,6 +18,156 @@ export function isPlainTextToolNameChar(char: string | undefined): boolean {
 /** XML-ish function tags allow namespace punctuation used by some model families. */
 export function isXmlishNameChar(char: string | undefined): boolean {
   return Boolean(char && /[A-Za-z0-9_.:-]/.test(char));
+}
+
+// Some proxies degrade native Anthropic/MiniMax tool calls into namespaced XML
+// text (the attribute dialect: `<invoke name="..."><parameter name="...">`).
+// Accept only this closed prefix allow-list so namespaced markup is repaired
+// instead of leaking, without matching arbitrary `ns:` tokens in prose. Open and
+// close tags carry the prefix independently, and degraded proxy output routinely
+// drops the prefix on the close, so any open/close prefix combination is intended.
+// The prefix is a capturing group so the scanner can tell a namespace-qualified
+// leak (`antml:`/`mm:`) from a bare `<invoke>` example that must be preserved.
+// The `y` (sticky) matchers anchor at an explicit offset without slicing the tail,
+// keeping the scan linear; the parameter close uses `g` to search forward. All are
+// linear with no nested quantifiers, so they stay ReDoS-safe.
+const TOOL_CALL_TAG_NAMESPACE = "(antml:|mm:)?";
+/** Optional `<function_calls>` wrapper that brackets one or more invoke blocks. */
+const XMLISH_FUNCTION_CALLS_OPEN_RE = new RegExp(
+  `<\\s*${TOOL_CALL_TAG_NAMESPACE}function_calls\\s*>`,
+  "iy",
+);
+const XMLISH_FUNCTION_CALLS_CLOSE_RE = new RegExp(
+  `<\\s*/\\s*${TOOL_CALL_TAG_NAMESPACE}function_calls\\s*>`,
+  "iy",
+);
+/** Attribute-dialect invoke open carrying the tool name in a quoted attribute. */
+const XMLISH_INVOKE_OPEN_RE = new RegExp(
+  `<\\s*${TOOL_CALL_TAG_NAMESPACE}invoke\\s+name\\s*=\\s*("[^"]*"|'[^']*')\\s*>`,
+  "iy",
+);
+/** Self-closing invoke (`<invoke name="x"/>`): a complete, argument-less block. */
+const XMLISH_INVOKE_SELF_CLOSE_RE = new RegExp(
+  `<\\s*${TOOL_CALL_TAG_NAMESPACE}invoke\\s+name\\s*=\\s*("[^"]*"|'[^']*')\\s*/\\s*>`,
+  "iy",
+);
+const XMLISH_INVOKE_CLOSE_RE = new RegExp(`<\\s*/\\s*${TOOL_CALL_TAG_NAMESPACE}invoke\\s*>`, "iy");
+/** Parameter open in the equals (`<parameter=name>`) or attribute (`<parameter name="...">`) dialect. */
+const XMLISH_PARAMETER_OPEN_RE = new RegExp(
+  `<\\s*${TOOL_CALL_TAG_NAMESPACE}parameter(?:=[A-Za-z0-9_.:-]{1,120}|\\s+name\\s*=\\s*("[^"]*"|'[^']*'))\\s*>`,
+  "iy",
+);
+const XMLISH_PARAMETER_CLOSE_RE = new RegExp(
+  `<\\s*/\\s*${TOOL_CALL_TAG_NAMESPACE}parameter\\s*>`,
+  "ig",
+);
+
+/** Sticky-regex match anchored exactly at `at`, or null when it does not match there. */
+function stickyMatch(re: RegExp, text: string, at: number): RegExpExecArray | null {
+  re.lastIndex = at;
+  return re.exec(text);
+}
+
+/** Length of a sticky-regex match anchored exactly at `at`, or null when it does not match there. */
+function stickyMatchLength(re: RegExp, text: string, at: number): number | null {
+  return stickyMatch(re, text, at)?.[0].length ?? null;
+}
+
+/** Consumes one attribute/namespaced `<parameter ...>...</parameter>` child. */
+function consumeXmlishAttributeParameterEnd(text: string, start: number): number | null {
+  const openLength = stickyMatchLength(XMLISH_PARAMETER_OPEN_RE, text, start);
+  if (openLength === null) {
+    return null;
+  }
+  const payloadStart = start + openLength;
+  XMLISH_PARAMETER_CLOSE_RE.lastIndex = payloadStart;
+  const closeMatch = XMLISH_PARAMETER_CLOSE_RE.exec(text);
+  return closeMatch ? closeMatch.index + closeMatch[0].length : null;
+}
+
+/** Consumes the optional `<function_calls>` wrapper close after the final invoke. */
+function finishXmlishInvokeBlockEnd(text: string, invokeEnd: number): number {
+  // The wrapper close only follows the final invoke; leave it for the next block
+  // when several invokes share one `<function_calls>` wrapper.
+  const afterInvoke = skipWhitespace(text, invokeEnd);
+  const wrapperCloseLength = stickyMatchLength(XMLISH_FUNCTION_CALLS_CLOSE_RE, text, afterInvoke);
+  return wrapperCloseLength === null ? invokeEnd : afterInvoke + wrapperCloseLength;
+}
+
+/**
+ * Result of {@link scanStandaloneXmlishInvokeBlock}: `none` when the text at
+ * `start` does not open an invoke block (the caller falls through to the shared
+ * scanner), `complete` with the exclusive end offset of one whole block, or
+ * `incomplete` when an invoke/`function_calls` open was matched but the block
+ * never closes. `incomplete` must be terminal for the caller: it signals that the
+ * unclosed tail should not be rescanned line-by-line, which would be quadratic.
+ */
+export type StandaloneXmlishInvokeScan =
+  | { kind: "none" }
+  | { kind: "incomplete" }
+  | { kind: "complete"; end: number };
+
+/**
+ * Recognizes the attribute-dialect invoke tool call that degraded proxies emit as
+ * plain text: `<invoke name="tool"><parameter name="x">v</parameter></invoke>`,
+ * optionally wrapped in `<function_calls>`, optionally namespaced (`antml:`/`mm:`),
+ * self-closing (`<invoke name="x"/>`), or with zero parameters. An unterminated
+ * open reports `incomplete` (never greedily consumed) so the caller can stop
+ * instead of re-scanning the same unclosed tail at every following line start.
+ * This dialect is scrubbable but intentionally never promoted to an executable
+ * call, so it stays out of `scanXmlishToolCall`.
+ *
+ * Only a namespace-qualified (`antml:`/`mm:`) or `<function_calls>`-wrapped block is
+ * a leaked call; a bare `<invoke>` block is a documentation example and reports
+ * `none` so the caller leaves it untouched (#97750). Qualification is decided before
+ * `complete`, but only after the block is confirmed structurally closed so the
+ * `incomplete` bail that keeps the scan linear still fires for unterminated opens.
+ */
+export function scanStandaloneXmlishInvokeBlock(
+  text: string,
+  start = 0,
+): StandaloneXmlishInvokeScan {
+  let cursor = start;
+  const wrapperOpenLength = stickyMatchLength(XMLISH_FUNCTION_CALLS_OPEN_RE, text, cursor);
+  const hasWrapper = wrapperOpenLength !== null;
+  if (hasWrapper) {
+    cursor = skipWhitespace(text, cursor + wrapperOpenLength);
+  }
+  const selfClose = stickyMatch(XMLISH_INVOKE_SELF_CLOSE_RE, text, cursor);
+  if (selfClose !== null) {
+    // Bare `<invoke .../>` with no namespace and no wrapper is a preserved example.
+    if (!hasWrapper && selfClose[1] === undefined) {
+      return { kind: "none" };
+    }
+    const end = finishXmlishInvokeBlockEnd(text, cursor + selfClose[0].length);
+    return { kind: "complete", end };
+  }
+  const invokeOpen = stickyMatch(XMLISH_INVOKE_OPEN_RE, text, cursor);
+  if (invokeOpen === null) {
+    // A bare `<function_calls>` wrapper with no invoke is an unterminated block;
+    // anything else here simply is not an invoke block.
+    return hasWrapper ? { kind: "incomplete" } : { kind: "none" };
+  }
+  const qualified = hasWrapper || invokeOpen[1] !== undefined;
+  cursor = skipWhitespace(text, cursor + invokeOpen[0].length);
+  while (true) {
+    const parameterEnd = consumeXmlishAttributeParameterEnd(text, cursor);
+    if (parameterEnd === null) {
+      break;
+    }
+    cursor = skipWhitespace(text, parameterEnd);
+  }
+  // A real `</invoke>` close is still required: an unclosed open is `incomplete` so
+  // the caller defers the remainder rather than rescanning the unterminated tail.
+  const invokeCloseLength = stickyMatchLength(XMLISH_INVOKE_CLOSE_RE, text, cursor);
+  if (invokeCloseLength === null) {
+    return { kind: "incomplete" };
+  }
+  // Bare, unqualified block: a documentation example, not a leaked call (#97750).
+  if (!qualified) {
+    return { kind: "none" };
+  }
+  return { kind: "complete", end: finishXmlishInvokeBlockEnd(text, cursor + invokeCloseLength) };
 }
 
 /** Skips spaces and tabs only, preserving line boundaries for grammar decisions. */

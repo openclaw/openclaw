@@ -81,22 +81,25 @@ describe("extractAssistantText", () => {
     expect(result).toBe("Let me check that.");
   });
 
-  it("keeps invoke snippets without Minimax markers", () => {
+  it("preserves a bare unfenced invoke example in visible text (#97750)", () => {
+    const text = `Example:\n<invoke name="Bash">\n<parameter name="command">ls</parameter>\n</invoke>`;
     const msg = makeAssistantMessage({
       role: "assistant",
       content: [
         {
           type: "text",
-          text: `Example:\n<invoke name="Bash">\n<parameter name="command">ls</parameter>\n</invoke>`,
+          text,
         },
       ],
       timestamp: Date.now(),
     });
 
+    // A bare `<invoke>` (no antml:/mm: namespace, no <function_calls> wrapper) is
+    // legitimate content, not a leaked tool call, so it is preserved verbatim.
+    // Only namespaced/wrapper-qualified degraded forms are scrubbed (covered by the
+    // tool-call-repair strip tests).
     const result = extractAssistantText(msg);
-    expect(result).toBe(
-      `Example:\n<invoke name="Bash">\n<parameter name="command">ls</parameter>\n</invoke>`,
-    );
+    expect(result).toBe(text);
   });
 
   it("preserves normal text without tool invocations", () => {
