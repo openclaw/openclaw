@@ -66,7 +66,7 @@ import {
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
 const log = createSubsystemLogger("models-auth-status");
-const apiKeyUsageStatusProviders = new Set<UsageProviderId>(["clawrouter", "deepseek"]);
+const apiKeyUsageStatusProviders = new Set<UsageProviderId>(["clawrouter", "deepseek", "kimi"]);
 
 type ProviderUsageStatus = Pick<
   ProviderUsageSnapshot,

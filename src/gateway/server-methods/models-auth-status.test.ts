@@ -958,6 +958,46 @@ describe("models.authStatus", () => {
     });
   });
 
+  it("adds Kimi API-key quota windows to auth status usage", async () => {
+    mocks.buildAuthHealthSummary.mockReturnValue({
+      now: 0,
+      warnAfterMs: 0,
+      profiles: [createApiKeyProfile("kimi")],
+      providers: [createStaticApiKeyProvider("kimi")],
+    });
+    mocks.loadProviderUsageSummary.mockResolvedValue({
+      updatedAt: 0,
+      providers: [
+        {
+          provider: "kimi",
+          displayName: "Kimi",
+          windows: [
+            { label: "5h", usedPercent: 8 },
+            { label: "7d", usedPercent: 3 },
+          ],
+        },
+      ],
+    });
+
+    const opts = createOptions();
+    await handler(opts);
+
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith({
+      providers: ["kimi"],
+      agentDir: "/tmp/agent",
+      timeoutMs: 3500,
+    });
+    const [, payload] = firstRespondCall(opts) ?? [];
+    const result = payload as ModelAuthStatusResult;
+    expect(result.providers[0]?.usage).toEqual({
+      providerId: "kimi",
+      windows: [
+        { label: "5h", usedPercent: 8 },
+        { label: "7d", usedPercent: 3 },
+      ],
+    });
+  });
+
   it("scopes external CLI auth overlays to configured providers", async () => {
     mocks.getRuntimeConfig.mockReturnValue({
       auth: {
