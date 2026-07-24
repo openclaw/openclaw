@@ -8,6 +8,7 @@ import { resolveCodexNativeConfigFenceKey } from "./shared-client.js";
 import { createClientHarness } from "./test-support.js";
 
 const requestCodexAppServerJsonMock = vi.hoisted(() => vi.fn());
+const runExecMock = vi.hoisted(() => vi.fn());
 const sharedClientMocks = vi.hoisted(() => ({
   getLeasedSharedCodexAppServerClient: vi.fn(),
   releaseLeasedSharedCodexAppServerClient: vi.fn(),
@@ -15,6 +16,11 @@ const sharedClientMocks = vi.hoisted(() => ({
 
 vi.mock("./request.js", () => ({
   requestCodexAppServerJson: requestCodexAppServerJsonMock,
+}));
+
+vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>()),
+  runExec: runExecMock,
 }));
 
 vi.mock("./shared-client.js", async (importOriginal) => ({
@@ -25,6 +31,7 @@ vi.mock("./shared-client.js", async (importOriginal) => ({
 import {
   ensureCodexComputerUse,
   installCodexComputerUse,
+  killStaleComputerUseMcpChildren,
   readCodexComputerUseStatus,
   type CodexComputerUseStatus,
 } from "./computer-use.js";
@@ -80,7 +87,9 @@ describe("Codex Computer Use setup", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
     requestCodexAppServerJsonMock.mockReset();
+    runExecMock.mockReset();
     sharedClientMocks.getLeasedSharedCodexAppServerClient.mockReset();
     sharedClientMocks.releaseLeasedSharedCodexAppServerClient.mockReset();
   });
@@ -330,6 +339,29 @@ describe("Codex Computer Use setup", () => {
     expectRequestMethodNotCalled(request, "marketplace/add");
     expectRequestMethodNotCalled(request, "experimentalFeature/enablement/set");
     expectRequestMethodNotCalled(request, "plugin/install");
+  });
+
+  it("bounds stale child inspection and fails without terminating children", async () => {
+    runExecMock.mockRejectedValueOnce(new Error("process listing timed out"));
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    const killSpy = vi.spyOn(process, "kill");
+
+    const result = await killStaleComputerUseMcpChildren({ ancestorPid: 42 });
+
+    expect(runExecMock).toHaveBeenCalledWith("/bin/ps", ["-axo", "pid=,ppid=,command="], {
+      logOutput: false,
+      maxBuffer: 5 * 1024 * 1024,
+      timeoutMs: 2_000,
+    });
+    expect(result).toMatchObject({
+      attempted: true,
+      killedPids: [],
+      message: "Computer Use stale child repair could not inspect running processes.",
+    });
+    expect(result.warnings).toEqual([
+      expect.stringContaining("Could not list processes for Computer Use repair"),
+    ]);
+    expect(killSpy).not.toHaveBeenCalled();
   });
 
   it("repairs stale Computer Use MCP children and retries the live test once", async () => {
