@@ -156,6 +156,8 @@ async function seedDreamingSessionTranscript(params: {
     role: "assistant" | "user";
     content: unknown;
     timestamp: number | string;
+    /** Optional runtime provenance attached to the message record. */
+    provenance?: Record<string, unknown>;
   }>;
   sessionId: string;
   sessionKey?: string;
@@ -194,6 +196,7 @@ async function seedDreamingSessionTranscript(params: {
         role: message.role,
         content: message.content,
         timestamp: message.timestamp,
+        ...(message.provenance ? { provenance: message.provenance } : {}),
       },
     });
   }
@@ -1811,6 +1814,104 @@ describe("memory-core dreaming phases", () => {
     expect(corpus).not.toContain("Read HEARTBEAT.md");
     expect(corpus).not.toContain("HEARTBEAT_OK");
     expect(corpus).not.toContain("Run the qmd sync");
+  });
+
+  it("drops provenance-marked heartbeat turns with natural-language assistant responses from corpus", async () => {
+    // Regression test for #103720 Issue 2: the exact-token HEARTBEAT_OK match
+    // never fires when the model responds with a natural-language acknowledgment.
+    // buildSessionEntry now uses runtime-provenance coupling to detect and drop
+    // the paired assistant response regardless of its text content.
+    const workspaceDir = await createDreamingWorkspace();
+    setDreamingTestEnv(path.join(workspaceDir, ".state"));
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    await seedDreamingSessionTranscript({
+      sessionId: "heartbeat-provenance",
+      sessionKey: "agent:main:chat:heartbeat-provenance",
+      messages: [
+        {
+          role: "user",
+          timestamp: "2026-04-16T18:00:00.000Z",
+          content: "[OpenClaw heartbeat poll]",
+          // Runtime provenance injected by get-reply-run.ts for heartbeat ticks.
+          provenance: { kind: "internal_system", sourceTool: "heartbeat" },
+        },
+        {
+          role: "assistant",
+          timestamp: "2026-04-16T18:00:05.000Z",
+          // Natural-language response — does NOT contain "HEARTBEAT_OK".
+          content: "Heartbeat received. Main is active. No pending user request in this cron poll.",
+        },
+        {
+          role: "user",
+          timestamp: "2026-04-16T18:01:00.000Z",
+          content: "Can you document the new API endpoint?",
+        },
+        {
+          role: "assistant",
+          timestamp: "2026-04-16T18:01:30.000Z",
+          content: "I documented the new API endpoint in the workspace notes.",
+        },
+      ],
+    });
+
+    const { beforeAgentReply } = createHarness(
+      {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+          },
+          list: [{ id: "main", workspace: workspaceDir }],
+        },
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  phases: {
+                    light: {
+                      enabled: true,
+                      limit: 20,
+                      lookbackDays: 7,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      workspaceDir,
+    );
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-16T19:00:00.000Z"));
+    try {
+      await beforeAgentReply(
+        { cleanedBody: "__openclaw_memory_core_light_sleep__" },
+        { trigger: "heartbeat", workspaceDir },
+      );
+    } finally {
+      vi.useRealTimers();
+      restoreDreamingTestEnv();
+    }
+
+    const corpus = await fs.readFile(
+      path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-16.txt"),
+      "utf-8",
+    );
+    // Normal exchange must appear in the corpus.
+    expect(corpus).toContain("User: Can you document the new API endpoint?");
+    expect(corpus).toContain(
+      "Assistant: I documented the new API endpoint in the workspace notes.",
+    );
+    // Heartbeat user prompt and its natural-language acknowledgment must be absent.
+    expect(corpus).not.toContain("[OpenClaw heartbeat poll]");
+    expect(corpus).not.toContain(
+      "Heartbeat received. Main is active. No pending user request in this cron poll.",
+    );
   });
 
   it("ignores chat scaffolding tags when building rem reflections", () => {
