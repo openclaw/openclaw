@@ -729,7 +729,11 @@ function decodeOffset(cursor: string | undefined, label: string): number {
     throw new ClaudeCatalogParamsError(`${label} cursor is invalid`);
   }
   try {
-    const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as unknown;
+    const bytes = Buffer.from(cursor, "base64url");
+    if (bytes.toString("base64url") !== cursor) {
+      throw new Error("non-canonical base64url");
+    }
+    const parsed = JSON.parse(bytes.toString("utf8")) as unknown;
     if (
       !isRecord(parsed) ||
       !Number.isSafeInteger(parsed.offset) ||
@@ -737,7 +741,11 @@ function decodeOffset(cursor: string | undefined, label: string): number {
     ) {
       throw new Error("invalid offset");
     }
-    return parsed.offset as number;
+    const offset = parsed.offset as number;
+    if (encodeOffset(offset) !== cursor) {
+      throw new Error("non-canonical cursor payload");
+    }
+    return offset;
   } catch (error) {
     throw new ClaudeCatalogParamsError(`${label} cursor is invalid`, { cause: error });
   }
