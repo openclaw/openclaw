@@ -24,6 +24,12 @@ export type ChannelsPairingListResult =
   import("../../../packages/gateway-protocol/src/index.js").ChannelsPairingListResult;
 export type ChannelsPairingRequest =
   import("../../../packages/gateway-protocol/src/index.js").ChannelsPairingRequest;
+export type SessionVisibility =
+  import("../../../packages/gateway-protocol/src/index.js").SessionVisibility;
+type SessionSharingRole =
+  import("../../../packages/gateway-protocol/src/index.js").SessionSharingRole;
+export type SessionMembersListResult =
+  import("../../../packages/gateway-protocol/src/index.js").SessionMembersListResult;
 export type ChannelsStatusSnapshot = {
   ts: number;
   channelOrder: string[];
@@ -493,6 +499,9 @@ type SessionCompactionCheckpointPreview = Pick<
 
 export type GatewaySessionRow = {
   key: string;
+  visibility?: SessionVisibility;
+  sharingRole?: SessionSharingRole;
+  incognito?: true;
   spawnedBy?: string;
   controlOwnerSessionKey?: string;
   /** Collector swarm group that owns this child session, when applicable. */
@@ -537,6 +546,7 @@ export type GatewaySessionRow = {
   lastActivityAt?: number;
   archived?: boolean;
   archivedAt?: number;
+  archivedBy?: import("../../../packages/gateway-protocol/src/schema/sessions.js").SessionCreatedActor;
   pinned?: boolean;
   pinnedAt?: number;
   icon?: string;
@@ -564,6 +574,8 @@ export type GatewaySessionRow = {
   lastRunError?: string;
   hasActiveRun?: boolean;
   activeRunIds?: string[];
+  /** Active transcript-branch leaf returned with chat history. */
+  activeLeafEntryId?: string | null;
   /** An enabled cron job is bound to this session (runs in it or delivers to it). */
   hasAutomation?: boolean;
   subagentRunState?: SubagentRunState;

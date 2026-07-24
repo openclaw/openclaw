@@ -442,8 +442,8 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
           nowMs,
         }),
       ).resolves.toEqual({
-        // Only the removed entry's transcript is archived: the orphan's route
-        // row still targets it, and route-referenced history is retained.
+        // Only the removed entry's transcript is archived: the orphan's node
+        // still targets it, and node-referenced history is retained.
         removedEntries: 2,
         archivedTranscriptArtifacts: 1,
       });
@@ -476,19 +476,19 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
         const removedRoute = executeSqliteQueryTakeFirstSync(
           database.db,
           db
-            .selectFrom("session_routes")
-            .select("session_id")
+            .selectFrom("session_nodes")
+            .select("current_session_id")
             .where("session_key", "=", "agent:main:lifecycle-cleanup-removed"),
         );
         expect(removedRoute).toBeUndefined();
         const freshRoute = executeSqliteQueryTakeFirstSync(
           database.db,
           db
-            .selectFrom("session_routes")
-            .select("session_id")
+            .selectFrom("session_nodes")
+            .select("current_session_id")
             .where("session_key", "=", "agent:main:lifecycle-cleanup-fresh"),
         );
-        expect(freshRoute).toEqual({ session_id: "fresh-lifecycle" });
+        expect(freshRoute).toEqual({ current_session_id: "fresh-lifecycle" });
         await expect(
           adapter.loadTranscriptEvents(scopedTranscript("agent:main:regular", "referenced")),
         ).resolves.not.toEqual([]);
@@ -1148,7 +1148,7 @@ describe("sqlite session normalization", () => {
     fs.rmSync(paths.tempDir, { recursive: true, force: true });
   });
 
-  it("maintains normalized session root and route rows", async () => {
+  it("maintains normalized session node and window rows", async () => {
     const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
     await upsertSqliteSessionEntry(
       {
@@ -1190,7 +1190,7 @@ describe("sqlite session normalization", () => {
     const session = executeSqliteQueryTakeFirstSync(
       database.db,
       db
-        .selectFrom("sessions")
+        .selectFrom("session_windows")
         .select([
           "account_id",
           "agent_harness_id",
@@ -1233,12 +1233,12 @@ describe("sqlite session normalization", () => {
     const route = executeSqliteQueryTakeFirstSync(
       database.db,
       db
-        .selectFrom("session_routes")
-        .select(["session_id", "updated_at"])
+        .selectFrom("session_nodes")
+        .select(["current_session_id", "updated_at"])
         .where("session_key", "=", "agent:main:group:example"),
     );
     expect(route).toEqual({
-      session_id: "normalized-session",
+      current_session_id: "normalized-session",
       updated_at: expect.any(Number),
     });
   });
@@ -1401,7 +1401,7 @@ describe("sqlite session normalization", () => {
     expect(result.decision?.parentTokens).toBeGreaterThan(100_000);
   });
 
-  it("does not move current routes back to stale transcript session ids", async () => {
+  it("does not move current nodes back to stale transcript session ids", async () => {
     const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
     const scope = {
       agentId: "main",
@@ -1434,11 +1434,11 @@ describe("sqlite session normalization", () => {
     const route = executeSqliteQueryTakeFirstSync(
       database.db,
       db
-        .selectFrom("session_routes")
-        .select("session_id")
+        .selectFrom("session_nodes")
+        .select("current_session_id")
         .where("session_key", "=", "agent:main:main"),
     );
-    expect(route).toEqual({ session_id: "current-session" });
+    expect(route).toEqual({ current_session_id: "current-session" });
   });
 
   it("applies SQLite session-entry maintenance inside entry write transactions", async () => {
@@ -1887,17 +1887,15 @@ describe("sqlite session normalization", () => {
     const row = executeSqliteQueryTakeFirstSync(
       database.db,
       db
-        .selectFrom("sessions as s")
-        .innerJoin("session_entries as se", "se.session_id", "s.session_id")
-        .innerJoin("session_routes as sr", "sr.session_key", "se.session_key")
+        .selectFrom("session_windows as sw")
+        .innerJoin("session_nodes as sn", "sn.current_session_id", "sw.session_id")
         .select([
-          "s.created_at as root_created_at",
-          "s.updated_at as root_updated_at",
-          "se.entry_json",
-          "se.updated_at as entry_updated_at",
-          "sr.updated_at as route_updated_at",
+          "sw.created_at as window_created_at",
+          "sw.updated_at as window_updated_at",
+          "sn.entry_json",
+          "sn.updated_at as node_updated_at",
         ])
-        .where("s.session_id", "=", "minimal-session"),
+        .where("sw.session_id", "=", "minimal-session"),
     );
     expect(row).toEqual({
       entry_json: JSON.stringify({
@@ -1905,10 +1903,9 @@ describe("sqlite session normalization", () => {
         sessionStartedAt: 123,
         updatedAt: 123,
       }),
-      entry_updated_at: 123,
-      root_created_at: 123,
-      root_updated_at: 123,
-      route_updated_at: 123,
+      node_updated_at: 123,
+      window_created_at: 123,
+      window_updated_at: 123,
     });
 
     await upsertSqliteSessionEntry(
@@ -1925,7 +1922,7 @@ describe("sqlite session normalization", () => {
     const upsertRow = executeSqliteQueryTakeFirstSync(
       database.db,
       db
-        .selectFrom("session_entries")
+        .selectFrom("session_nodes")
         .select(["entry_json", "updated_at"])
         .where("session_key", "=", "agent:main:minimal-upsert"),
     );

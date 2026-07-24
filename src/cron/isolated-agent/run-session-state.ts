@@ -140,8 +140,23 @@ export function createPersistCronSessionEntry(params: {
             projectCronOwnershipFields(currentEntry),
             projectCronOwnershipFields(params.cronSession.initialSessionEntry),
           );
+        // Same-generation continuation: the row still carries the lifecycle
+        // revision this run resolved from, so no competing run has claimed it
+        // since. Benign concurrent field writes (delivery, token, status) then
+        // merge into the claim instead of aborting it. Exact ownership-field
+        // equality alone spuriously rejected these on large, busy stores where
+        // such an update lands between resolve and this first persist.
+        const initialEntry = params.cronSession.initialSessionEntry;
+        const initialLifecycleRevision = initialEntry?.lifecycleRevision;
+        const currentContinuesInitialGeneration =
+          currentEntry !== undefined &&
+          initialEntry !== undefined &&
+          initialLifecycleRevision !== undefined &&
+          currentEntry.lifecycleRevision === initialLifecycleRevision &&
+          currentEntry.sessionId === initialEntry.sessionId;
         const canClaimInitialRevision = params.cronSession.initialSessionEntry
-          ? !currentRevisionActive && initialEntryMatchesOwnershipFields
+          ? !currentRevisionActive &&
+            (initialEntryMatchesOwnershipFields || currentContinuesInitialGeneration)
           : currentEntry === undefined;
         // Concurrent persistent runs can resolve the same initial row. Once one
         // revision claims it, older owners must not reclaim it and delete newer state.

@@ -22,8 +22,8 @@ import {
   withTranscriptWriteLock,
 } from "../config/sessions/session-accessor.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
-import { invalidateSessionStoreCache } from "../config/sessions/store-cache.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { onDiagnosticEvent, type DiagnosticPayloadLargeEvent } from "../infra/diagnostic-events.js";
 import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
@@ -32,6 +32,7 @@ import { createDeferred } from "../test-utils/deferred.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { createChatRunState } from "./server-chat-state.js";
 import { getMaxChatHistoryMessagesBytes } from "./server-constants.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/shared-types.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
@@ -210,9 +211,13 @@ async function removeTempDir(dir: string): Promise<void> {
 }
 
 function createDirectChatContext(): GatewayRequestContext {
+  const config = {};
   return {
     loadGatewayModelCatalog: vi.fn().mockResolvedValue([]),
     loadGatewayModelCatalogSnapshot: vi.fn().mockResolvedValue({
+      agentId: "main",
+      agentDir: "/tmp/chat-model-catalog-agent",
+      config,
       entries: [],
       routeVariants: [],
     }),
@@ -224,15 +229,7 @@ function createDirectChatContext(): GatewayRequestContext {
     },
     agentRunSeq: new Map(),
     chatAbortControllers: new Map(),
-    chatAbortedRuns: new Map(),
-    chatRunBuffers: new Map(),
-    chatRunPlanSnapshots: new Map(),
-    chatDeltaSentAt: new Map(),
-    chatDeltaLastBroadcastLen: new Map(),
-    chatDeltaLastBroadcastText: new Map(),
-    agentDeltaSentAt: new Map(),
-    bufferedAgentEvents: new Map(),
-    clearChatRunState: vi.fn(),
+    chatRunState: createChatRunState(),
     addChatRun: vi.fn(),
     removeChatRun: vi.fn(),
     broadcast: vi.fn(),
@@ -240,7 +237,7 @@ function createDirectChatContext(): GatewayRequestContext {
     getSessionEventSubscriberConnIds: () => new Set(),
     nodeSendToSession: vi.fn(),
     registerToolEventRecipient: vi.fn(),
-    getRuntimeConfig: () => ({}),
+    getRuntimeConfig: () => config,
     recoveryRuntime: {
       dispatchAgent: vi.fn(),
       waitForAgent: vi.fn(),
@@ -462,11 +459,12 @@ describe("gateway server chat", () => {
           expiresAtMs: 10_000,
           projectSessionActive: true,
         });
-        context.chatRunBuffers.set("run-active", "partial reply");
-        context.chatRunPlanSnapshots?.set("run-active", {
+        const activeRun = context.chatRunState.getOrCreate("run-active");
+        activeRun.buffer = "partial reply";
+        activeRun.planSnapshot = {
           explanation: "Replay on reconnect",
           steps: [{ step: "Reconnect clients", status: "in_progress" }],
-        });
+        };
         const responses: Array<{ ok: boolean; payload?: unknown }> = [];
         const { chatHandlers } = await import("./server-methods/chat.js");
 
@@ -520,18 +518,28 @@ describe("gateway server chat", () => {
         },
       });
       const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const config = {
+        agents: { defaults: { model: { primary: "test-provider/catalog-model" } } },
+      };
+      const catalog = [
+        {
+          provider: "test-provider",
+          id: "catalog-model",
+          name: "Catalog Model",
+          reasoning: true,
+          compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+        },
+      ];
       const context = {
-        loadGatewayModelCatalog: vi
-          .fn<GatewayRequestContext["loadGatewayModelCatalog"]>()
-          .mockResolvedValue([
-            {
-              provider: "test-provider",
-              id: "catalog-model",
-              name: "Catalog Model",
-              reasoning: true,
-              compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
-            },
-          ]),
+        loadGatewayModelCatalogSnapshot: vi
+          .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
+          .mockResolvedValue({
+            agentId: "main",
+            agentDir: "/tmp/chat-history-agent",
+            config,
+            entries: catalog,
+            routeVariants: catalog,
+          }),
         logGateway: {
           info: vi.fn(),
           warn: vi.fn(),
@@ -560,7 +568,7 @@ describe("gateway server chat", () => {
         context,
       });
 
-      expect(context.loadGatewayModelCatalog).toHaveBeenCalledTimes(1);
+      expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledTimes(1);
       expect(responses).toHaveLength(1);
       expect(responses[0]?.ok).toBe(true);
       const payload = responses[0]?.payload as
@@ -764,6 +772,205 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.startup omits model metadata from a fallback owner", async () => {
+    const config = {
+      agents: {
+        defaults: {},
+        list: [{ id: "main", default: true }, { id: "work" }],
+      },
+    } as OpenClawConfig;
+    const context = {
+      getRuntimeConfig: () => config,
+      loadGatewayModelCatalogSnapshot: vi.fn(async () => ({
+        agentId: "main",
+        agentDir: "/tmp/chat-main-agent",
+        config,
+        entries: [{ id: "main-only", name: "Main only", provider: "test" }],
+        routeVariants: [],
+      })),
+      logGateway: { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() },
+      chatAbortControllers: new Map(),
+      chatRunState: createChatRunState(),
+    } as unknown as GatewayRequestContext;
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: { "agent:work:main": { sessionId: "sess-work", updatedAt: Date.now() } },
+      });
+      const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const { chatHandlers } = await import("./server-methods/chat.js");
+
+      await expectDefined(
+        chatHandlers["chat.startup"],
+        'chatHandlers["chat.startup"] test invariant',
+      )({
+        req: {
+          type: "req",
+          id: "startup-fallback-owner",
+          method: "chat.startup",
+          params: { sessionKey: "agent:work:main" },
+        },
+        params: { sessionKey: "agent:work:main" },
+        client: null,
+        isWebchatConnect: () => false,
+        respond: ((ok, payload, error) => responses.push({ ok, payload, error })) as RespondFn,
+        context,
+      });
+
+      expect(responses[0]?.ok).toBe(true);
+      expect(
+        (responses[0]?.payload as { metadata?: { models?: unknown[] } })?.metadata?.models,
+      ).toBe(undefined);
+      expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith({ agentId: "work" });
+    } finally {
+      testState.sessionStorePath = undefined;
+      await removeTempDir(sessionDir);
+    }
+  });
+
+  test("chat.startup omits model metadata when config advances after catalog load", async () => {
+    const initialConfig = {
+      agents: { defaults: {}, list: [{ id: "main", default: true }] },
+    } as OpenClawConfig;
+    const replacementConfig = {
+      agents: {
+        defaults: { models: { "test/*": {} } },
+        list: [{ id: "main", default: true }],
+      },
+    } as OpenClawConfig;
+    let currentConfig = initialConfig;
+    const context = {
+      getRuntimeConfig: () => currentConfig,
+      loadGatewayModelCatalogSnapshot: vi.fn(async () => {
+        currentConfig = replacementConfig;
+        return {
+          agentId: "main",
+          agentDir: "/tmp/chat-main-agent",
+          config: initialConfig,
+          entries: [{ id: "initial", name: "Initial", provider: "test" }],
+          routeVariants: [],
+        };
+      }),
+      logGateway: { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() },
+      chatAbortControllers: new Map(),
+      chatRunState: createChatRunState(),
+    } as unknown as GatewayRequestContext;
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: { main: { sessionId: "sess-main", updatedAt: Date.now() } },
+      });
+      const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const { chatHandlers } = await import("./server-methods/chat.js");
+
+      await expectDefined(
+        chatHandlers["chat.startup"],
+        'chatHandlers["chat.startup"] test invariant',
+      )({
+        req: {
+          type: "req",
+          id: "startup-config-advanced",
+          method: "chat.startup",
+          params: { sessionKey: "main" },
+        },
+        params: { sessionKey: "main" },
+        client: null,
+        isWebchatConnect: () => false,
+        respond: ((ok, payload, error) => responses.push({ ok, payload, error })) as RespondFn,
+        context,
+      });
+
+      expect(responses[0]?.ok).toBe(true);
+      expect(
+        (responses[0]?.payload as { metadata?: { models?: unknown[] } })?.metadata?.models,
+      ).toBe(undefined);
+      expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledOnce();
+    } finally {
+      testState.sessionStorePath = undefined;
+      await removeTempDir(sessionDir);
+    }
+  });
+
+  test("chat.startup keeps model metadata for an equivalent config replacement", async () => {
+    const initialConfig = {
+      agents: {
+        defaults: { models: { "test/initial": {} } },
+        list: [{ id: "main", default: true }],
+      },
+    } as OpenClawConfig;
+    const equivalentConfig = structuredClone(initialConfig);
+    let currentConfig = initialConfig;
+    const context = {
+      getRuntimeConfig: () => currentConfig,
+      loadGatewayModelCatalogSnapshot: vi.fn(async () => {
+        currentConfig = equivalentConfig;
+        return {
+          agentId: "main",
+          agentDir: "/tmp/chat-main-agent",
+          config: initialConfig,
+          entries: [
+            {
+              id: "initial",
+              name: "Catalog Initial",
+              provider: "test",
+              contextWindow: 123_456,
+            },
+          ],
+          routeVariants: [],
+        };
+      }),
+      logGateway: { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() },
+      chatAbortControllers: new Map(),
+      chatRunState: createChatRunState(),
+    } as unknown as GatewayRequestContext;
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: { main: { sessionId: "sess-main", updatedAt: Date.now() } },
+      });
+      const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const { chatHandlers } = await import("./server-methods/chat.js");
+
+      await expectDefined(
+        chatHandlers["chat.startup"],
+        'chatHandlers["chat.startup"] test invariant',
+      )({
+        req: {
+          type: "req",
+          id: "startup-config-equivalent",
+          method: "chat.startup",
+          params: { sessionKey: "main" },
+        },
+        params: { sessionKey: "main" },
+        client: null,
+        isWebchatConnect: () => false,
+        respond: ((ok, payload, error) => responses.push({ ok, payload, error })) as RespondFn,
+        context,
+      });
+
+      expect(responses[0]?.ok).toBe(true);
+      expect(
+        (responses[0]?.payload as { metadata?: { models?: unknown[] } })?.metadata?.models,
+      ).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "initial",
+            provider: "test",
+            name: "Catalog Initial",
+            contextWindow: 123_456,
+          }),
+        ]),
+      );
+      expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledOnce();
+    } finally {
+      testState.sessionStorePath = undefined;
+      await removeTempDir(sessionDir);
+    }
+  });
+
   test("chat.startup does not wait for slow optional model catalog metadata", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     try {
@@ -794,7 +1001,7 @@ describe("gateway server chat", () => {
           debug: vi.fn(),
         },
         chatAbortControllers: new Map(),
-        chatRunBuffers: new Map(),
+        chatRunState: createChatRunState(),
         getRuntimeConfig: () => ({}),
       } as unknown as GatewayRequestContext;
       const { chatHandlers } = await import("./server-methods/chat.js");
@@ -973,7 +1180,12 @@ describe("gateway server chat", () => {
           const context = {
             loadGatewayModelCatalogSnapshot: vi
               .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
-              .mockResolvedValue(catalogSnapshot),
+              .mockResolvedValue({
+                agentId: "work",
+                agentDir: "/tmp/chat-work-agent",
+                config,
+                ...catalogSnapshot,
+              }),
             logGateway: {
               info: vi.fn(),
               warn: vi.fn(),
@@ -981,7 +1193,7 @@ describe("gateway server chat", () => {
               debug: vi.fn(),
             },
             chatAbortControllers: new Map(),
-            chatRunBuffers: new Map(),
+            chatRunState: createChatRunState(),
             getRuntimeConfig: () => config,
           } as unknown as GatewayRequestContext;
           const { createGatewayAgentModelCatalogProjector } =
@@ -1025,6 +1237,7 @@ describe("gateway server chat", () => {
           });
 
           expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledTimes(1);
+          expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith({ agentId: "work" });
           expect(responses).toHaveLength(1);
           expect(responses[0]?.ok).toBe(true);
           const payload = responses[0]?.payload as
@@ -1194,7 +1407,7 @@ describe("gateway server chat", () => {
             },
           },
         },
-      };
+      } as unknown as OpenClawConfig;
       await writeGatewayConfig(config);
       const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
       const context = {
@@ -1215,7 +1428,13 @@ describe("gateway server chat", () => {
                 provider: "minimax",
               },
             ];
-            return { entries, routeVariants: entries };
+            return {
+              agentId: "work",
+              agentDir: "/tmp/chat-work-agent",
+              config,
+              entries,
+              routeVariants: entries,
+            };
           }),
         logGateway: {
           info: vi.fn(),
@@ -1224,7 +1443,7 @@ describe("gateway server chat", () => {
           debug: vi.fn(),
         },
         chatAbortControllers: new Map(),
-        chatRunBuffers: new Map(),
+        chatRunState: createChatRunState(),
         getRuntimeConfig: () => config,
       } as unknown as GatewayRequestContext;
       const { chatHandlers } = await import("./server-methods/chat.js");
@@ -1381,14 +1600,7 @@ describe("gateway server chat", () => {
         },
         agentRunSeq: new Map<string, number>(),
         chatAbortControllers: new Map(),
-        chatAbortedRuns: new Map(),
-        chatRunBuffers: new Map(),
-        chatDeltaSentAt: new Map(),
-        chatDeltaLastBroadcastLen: new Map(),
-        chatDeltaLastBroadcastText: new Map(),
-        agentDeltaSentAt: new Map(),
-        bufferedAgentEvents: new Map(),
-        clearChatRunState: vi.fn(),
+        chatRunState: createChatRunState(),
         addChatRun: vi.fn(),
         removeChatRun: vi.fn(),
         broadcast: vi.fn(),
@@ -1522,14 +1734,7 @@ describe("gateway server chat", () => {
         },
         agentRunSeq: new Map<string, number>(),
         chatAbortControllers: new Map(),
-        chatAbortedRuns: new Map(),
-        chatRunBuffers: new Map(),
-        chatDeltaSentAt: new Map(),
-        chatDeltaLastBroadcastLen: new Map(),
-        chatDeltaLastBroadcastText: new Map(),
-        agentDeltaSentAt: new Map(),
-        bufferedAgentEvents: new Map(),
-        clearChatRunState: vi.fn(),
+        chatRunState: createChatRunState(),
         addChatRun: vi.fn(),
         removeChatRun: vi.fn(),
         broadcast: vi.fn(),
@@ -1943,18 +2148,25 @@ describe("gateway server chat", () => {
         run: async () => {
           mutationStarted.resolve();
           await performDeletion.promise;
-          // Use the resolved store target: writeSessionStore also rewrites the
-          // suite config, adding an unrelated config-watcher race to this test.
+          // Read the authoritative row inside the mutation. Admission startup
+          // may refresh metadata before it blocks, but this test deletes that
+          // same session generation rather than a stale pre-admission snapshot.
+          const deletionSession = loadGatewaySessionEntry("main");
+          const deletionEntry = expectDefined(
+            deletionSession.entry,
+            "session deletion test invariant",
+          );
+          expect(deletionEntry.sessionId).toBe(seededSessionId);
           const deletion = await deleteSessionEntryLifecycle({
             agentId: "main",
             archiveTranscript: false,
-            expectedEntry: seededSession.entry,
+            expectedEntry: deletionEntry,
             expectedSessionId: seededSessionId,
             requireWriteSuccess: true,
-            storePath: seededSession.storePath,
+            storePath: deletionSession.storePath,
             target: {
-              canonicalKey: seededSession.canonicalKey,
-              storeKeys: seededSession.storeKeys,
+              canonicalKey: deletionSession.canonicalKey,
+              storeKeys: deletionSession.storeKeys,
             },
           });
           expect(deletion.deleted).toBe(true);
@@ -2234,7 +2446,7 @@ describe("gateway server chat", () => {
         { ok: true, payload: terminalResult.payload, error: undefined },
       ]);
       expect(context.dedupe.get(`chat:${terminalRunId}`)).toBe(terminalResult);
-      expect(context.chatAbortedRuns.has(terminalRunId)).toBe(false);
+      expect(context.chatRunState.runs.get(terminalRunId)?.abortMarker).toBeUndefined();
     } finally {
       releaseMutation.resolve();
       releaseTerminalMutation.resolve();
@@ -2310,11 +2522,7 @@ describe("gateway server chat", () => {
           },
           agentRunSeq: new Map<string, number>(),
           chatAbortControllers: new Map(),
-          chatAbortedRuns: new Map(),
-          chatRunBuffers: new Map(),
-          chatDeltaSentAt: new Map(),
-          chatDeltaLastBroadcastLen: new Map(),
-          chatDeltaLastBroadcastText: new Map(),
+          chatRunState: createChatRunState(),
           addChatRun: vi.fn(),
           removeChatRun: vi.fn(),
           broadcast: vi.fn(),
@@ -2386,11 +2594,13 @@ describe("gateway server chat", () => {
         expect(responses[0]?.ok).toBe(true);
         await waitForFast(() => expect(captured).toBeDefined(), FAST_WAIT_OPTS);
         expect(captured?.replyOptions?.images).toBeUndefined();
-        expect(captured?.ctx?.MediaPath).toEqual(expect.any(String));
-        expect(captured?.ctx?.MediaPaths).toEqual([expect.any(String)]);
-        expect(captured?.ctx?.MediaType).toBe("image/png");
-        expect(captured?.ctx?.MediaTypes).toEqual(["image/png"]);
-        expect(captured?.ctx?.MediaStaged).toBe(true);
+        expect(captured?.ctx?.media).toEqual([
+          expect.objectContaining({
+            path: expect.any(String),
+            contentType: "image/png",
+            workspaceDir: expect.any(String),
+          }),
+        ]);
         await waitForFast(() => expect(context.removeChatRun).toHaveBeenCalledTimes(1));
       } finally {
         dispatchInboundMessageMock.mockReset();
@@ -3509,14 +3719,7 @@ describe("gateway server chat", () => {
         },
         agentRunSeq: new Map<string, number>(),
         chatAbortControllers: new Map(),
-        chatAbortedRuns: new Map(),
-        chatRunBuffers: new Map(),
-        chatDeltaSentAt: new Map(),
-        chatDeltaLastBroadcastLen: new Map(),
-        chatDeltaLastBroadcastText: new Map(),
-        agentDeltaSentAt: new Map(),
-        bufferedAgentEvents: new Map(),
-        clearChatRunState: vi.fn(),
+        chatRunState: createChatRunState(),
         addChatRun: vi.fn(),
         removeChatRun: vi.fn(),
         broadcast: vi.fn(),
@@ -3722,86 +3925,6 @@ describe("gateway server chat", () => {
     }
   });
 
-  test("chat.send keeps distinct sends independent when a session ID appears during the first turn", async () => {
-    const sessionDir = autoCleanupTempDirs.make("openclaw-gw-");
-    const dispatchRelease = createDeferred();
-    try {
-      const storePath = path.join(sessionDir, "sessions.json");
-      testState.sessionStorePath = storePath;
-      await writeSessionStore({ entries: {} });
-      const responses: Array<{ id: string; ok: boolean; payload?: unknown; error?: unknown }> = [];
-      const context = createDirectChatContext();
-      dispatchInboundMessageMock.mockImplementation(async () => dispatchRelease.promise);
-      const { chatHandlers } = await import("./server-methods/chat.js");
-      const callSend = (id: string, idempotencyKey: string) => {
-        const params = {
-          sessionKey: "main",
-          message: "create this session once",
-          idempotencyKey,
-        };
-        return expectDefined(
-          chatHandlers["chat.send"],
-          'chatHandlers["chat.send"] test invariant',
-        )({
-          req: { type: "req", id, method: "chat.send", params },
-          params,
-          client: null,
-          isWebchatConnect: () => false,
-          respond: ((ok, payload, error) => {
-            responses.push({ id, ok, payload, error });
-          }) as RespondFn,
-          context,
-        });
-      };
-
-      const first = Promise.resolve(callSend("first", "idem-new-session-a"));
-      await waitForFast(() => {
-        expect(responses[0]).toEqual({
-          id: "first",
-          ok: true,
-          payload: expect.objectContaining({
-            runId: "idem-new-session-a",
-            status: "started",
-          }),
-          error: undefined,
-        });
-      }, FAST_WAIT_OPTS);
-      await fs.writeFile(
-        storePath,
-        JSON.stringify({
-          main: {
-            sessionId: "sess-created-during-run",
-            updatedAt: Date.now(),
-          },
-        }),
-        "utf8",
-      );
-      invalidateSessionStoreCache(storePath);
-
-      const duplicate = Promise.resolve(callSend("duplicate", "idem-new-session-b"));
-      await waitForFast(() => {
-        expect(responses.at(-1)).toEqual({
-          id: "duplicate",
-          ok: true,
-          payload: expect.objectContaining({ runId: "idem-new-session-b", status: "started" }),
-          error: undefined,
-        });
-      }, FAST_WAIT_OPTS);
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
-
-      dispatchRelease.resolve();
-      await Promise.all([first, duplicate]);
-      await waitForFast(() => {
-        expect(context.removeChatRun).toHaveBeenCalledTimes(2);
-      }, FAST_WAIT_OPTS);
-    } finally {
-      dispatchRelease.resolve();
-      dispatchInboundMessageMock.mockReset();
-      testState.sessionStorePath = undefined;
-      clearConfigCache();
-    }
-  });
-
   test("chat.send can suppress command interpretation for slash-prefixed system turns", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     try {
@@ -3827,14 +3950,7 @@ describe("gateway server chat", () => {
         },
         agentRunSeq: new Map<string, number>(),
         chatAbortControllers: new Map(),
-        chatAbortedRuns: new Map(),
-        chatRunBuffers: new Map(),
-        chatDeltaSentAt: new Map(),
-        chatDeltaLastBroadcastLen: new Map(),
-        chatDeltaLastBroadcastText: new Map(),
-        agentDeltaSentAt: new Map(),
-        bufferedAgentEvents: new Map(),
-        clearChatRunState: vi.fn(),
+        chatRunState: createChatRunState(),
         addChatRun: vi.fn(),
         removeChatRun: vi.fn(),
         broadcast: vi.fn(),
@@ -3946,14 +4062,7 @@ describe("gateway server chat", () => {
         },
         agentRunSeq: new Map<string, number>(),
         chatAbortControllers: new Map(),
-        chatAbortedRuns: new Map(),
-        chatRunBuffers: new Map(),
-        chatDeltaSentAt: new Map(),
-        chatDeltaLastBroadcastLen: new Map(),
-        chatDeltaLastBroadcastText: new Map(),
-        agentDeltaSentAt: new Map(),
-        bufferedAgentEvents: new Map(),
-        clearChatRunState: vi.fn(),
+        chatRunState: createChatRunState(),
         addChatRun: vi.fn(),
         removeChatRun: vi.fn(),
         broadcast: vi.fn(),
@@ -4085,15 +4194,8 @@ describe("gateway server chat", () => {
         },
         agentRunSeq: new Map<string, number>(),
         chatAbortControllers: new Map(),
-        chatAbortedRuns: new Map(),
+        chatRunState: createChatRunState(),
         chatQueuedTurns: new Map(),
-        chatRunBuffers: new Map(),
-        chatDeltaSentAt: new Map(),
-        chatDeltaLastBroadcastLen: new Map(),
-        chatDeltaLastBroadcastText: new Map(),
-        agentDeltaSentAt: new Map(),
-        bufferedAgentEvents: new Map(),
-        clearChatRunState: vi.fn(),
         addChatRun: vi.fn(),
         removeChatRun: vi.fn(),
         broadcast,
@@ -4321,14 +4423,7 @@ describe("gateway server chat", () => {
         },
         agentRunSeq: new Map<string, number>(),
         chatAbortControllers: new Map(),
-        chatAbortedRuns: new Map(),
-        chatRunBuffers: new Map(),
-        chatDeltaSentAt: new Map(),
-        chatDeltaLastBroadcastLen: new Map(),
-        chatDeltaLastBroadcastText: new Map(),
-        agentDeltaSentAt: new Map(),
-        bufferedAgentEvents: new Map(),
-        clearChatRunState: vi.fn(),
+        chatRunState: createChatRunState(),
         addChatRun: vi.fn(),
         removeChatRun: vi.fn(),
         broadcast: vi.fn(),
@@ -4477,14 +4572,7 @@ describe("gateway server chat", () => {
         },
         agentRunSeq: new Map<string, number>(),
         chatAbortControllers: new Map(),
-        chatAbortedRuns: new Map(),
-        chatRunBuffers: new Map(),
-        chatDeltaSentAt: new Map(),
-        chatDeltaLastBroadcastLen: new Map(),
-        chatDeltaLastBroadcastText: new Map(),
-        agentDeltaSentAt: new Map(),
-        bufferedAgentEvents: new Map(),
-        clearChatRunState: vi.fn(),
+        chatRunState: createChatRunState(),
         addChatRun: vi.fn(),
         removeChatRun: vi.fn(),
         broadcast,

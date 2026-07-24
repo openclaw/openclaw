@@ -150,7 +150,8 @@ struct RootTabs: View {
                 .accessibilityElement(children: .ignore)
                 .accessibilityIdentifier("RootTabs.Ready")
                 .accessibilityLabel(Text(verbatim: "OpenClaw test readiness"))
-                .accessibilityValue(self.scenePhase == .active ? "ready" : "inactive")
+                .accessibilityValue(
+                    "\(self.scenePhase == .active ? "ready" : "inactive"):\(self.selectedSidebarDestination.rawValue)")
         }
         #endif
     }

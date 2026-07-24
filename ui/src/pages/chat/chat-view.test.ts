@@ -406,7 +406,7 @@ function createChatHeaderState(
   });
   const client = { request } as unknown as GatewayBrowserClient;
   const sessions = createSessionCapability({
-    snapshot: { client, connected: true, hello: null },
+    snapshot: { client, phase: "connected", hello: null },
     subscribe: () => () => undefined,
     subscribeEvents: () => () => undefined,
   });

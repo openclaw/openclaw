@@ -23,6 +23,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
+import { hasStagedMediaProjection } from "../../media/media-facts.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   isModelSelectionLocked,
@@ -33,7 +34,7 @@ import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
 import type { ReplyPayload } from "../reply-payload.js";
-import type { MsgContext } from "../templating.js";
+import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 import { normalizeThinkLevel, normalizeVerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { resolveDefaultModel } from "./directive-handling.defaults.js";
@@ -139,7 +140,7 @@ function loadCommandsCoreRuntime() {
 }
 
 function hasLinkCandidate(ctx: MsgContext): boolean {
-  const message = ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.RawBody ?? ctx.Body;
+  const message = ctx.commandText;
   if (!message) {
     return false;
   }
@@ -235,6 +236,7 @@ export async function getReplyFromConfig(
       isFastTestEnv,
     }),
   );
+  const inboundMediaWasAlreadyStaged = hasStagedMediaProjection(ctx);
   const finalized = resolverTiming.measureSync("reply.finalize_context", () =>
     finalizeInboundContext(ctx),
   );
@@ -346,8 +348,7 @@ export async function getReplyFromConfig(
       };
     });
   const typing = resolverTiming.measureSync("reply.create_typing_controller", () => {
-    const configuredTypingSeconds =
-      agentEntry?.typingIntervalSeconds ?? agentCfg?.typingIntervalSeconds;
+    const configuredTypingSeconds = agentCfg?.typingIntervalSeconds;
     const typingIntervalSeconds =
       typeof configuredTypingSeconds === "number" ? configuredTypingSeconds : 6;
     const controller = createTypingController({
@@ -401,6 +402,7 @@ export async function getReplyFromConfig(
 
   if (
     !isFastTestEnv &&
+    !inboundMediaWasAlreadyStaged &&
     normalizeOptionalString(finalized.MediaRemoteHost) &&
     hasInboundMedia(finalized)
   ) {
@@ -527,7 +529,7 @@ export async function getReplyFromConfig(
   const resolvedOpts = attachProgressNarratorToReplyOptions({
     cfg,
     agentId,
-    userMessage: finalized.BodyForAgent ?? finalized.Body,
+    userMessage: finalized.agentText,
     opts: optsWithSkillFilter,
     disabled: sessionModelSelectionLocked,
   });
@@ -716,7 +718,7 @@ export async function getReplyFromConfig(
     })
   ) {
     const fastCommand = buildFastReplyCommandContext({
-      ctx,
+      ctx: finalized,
       cfg,
       agentId,
       sessionKey,
@@ -736,15 +738,12 @@ export async function getReplyFromConfig(
         sessionCfg,
         commandAuthorized,
         command: fastCommand,
-        commandSource:
-          finalized.BodyForCommands ?? finalized.CommandBody ?? finalized.RawBody ?? "",
+        commandSource: finalized.commandText,
         allowTextCommands: shouldHandleFastReplyTextCommands({
           cfg,
           commandSource: finalized.CommandSource,
         }),
-        directives: clearInlineDirectives(
-          finalized.BodyForCommands ?? finalized.CommandBody ?? finalized.RawBody ?? "",
-        ),
+        directives: clearInlineDirectives(finalized.commandText),
         defaultActivation: "always",
         resolvedThinkLevel: undefined,
         resolvedVerboseLevel: normalizeVerboseLevel(agentCfg?.verboseDefault),
@@ -1018,11 +1017,14 @@ export async function getReplyFromConfig(
     }
   }
 
-  // ctx.MediaStaged=true means the caller (e.g. chat.send RPC) already staged
-  // synchronously so it could surface 5xx before respond(). Skipping here keeps
-  // staging a single-call contract instead of relying on relative-path no-op
-  // semantics in stageSandboxMedia.
-  if (!useFastTestBootstrap && sessionKey && !ctx.MediaStaged && hasInboundMedia(ctx)) {
+  // Already-staged facts or SDK projections must remain a single-stage contract.
+  if (
+    !useFastTestBootstrap &&
+    sessionKey &&
+    !inboundMediaWasAlreadyStaged &&
+    !hasStagedMediaProjection(ctx) &&
+    hasInboundMedia(ctx)
+  ) {
     const { stageSandboxMedia } = await loadStageSandboxMediaRuntime();
     await traceGetReplyPhase("reply.stage_media", () =>
       stageSandboxMedia({
