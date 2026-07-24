@@ -1057,4 +1057,58 @@ describe("subagent-orphan-recovery", () => {
       { runIds: ["run-1"] },
     );
   });
+
+  it("does not double-resume one orphan across concurrent scans (#103724)", async () => {
+    vi.mocked(sessions.loadSessionStore).mockReturnValue({
+      "agent:main:subagent:test-session-1": {
+        sessionId: "session-abc",
+        updatedAt: Date.now(),
+        abortedLastRun: true,
+      },
+    });
+
+    // Slow gateway resume: hold scan A in flight while scan B runs its pass.
+    // Release opens the gate for every pending and future call, because the
+    // resume flow may call the gateway more than once.
+    let released = false;
+    const pendingResolvers: Array<() => void> = [];
+    const releaseResume = () => {
+      released = true;
+      for (const resolve of pendingResolvers.splice(0)) {
+        resolve();
+      }
+    };
+    vi.mocked(gateway.callGateway).mockImplementation(async () => {
+      if (!released) {
+        await new Promise<void>((resolve) => {
+          pendingResolvers.push(resolve);
+        });
+      }
+      return { runId: "resumed-run-id" };
+    });
+
+    const activeRuns = new Map<string, SubagentRunRecord>();
+    activeRuns.set("run-1", createTestRunRecord());
+
+    // Two uncoordinated schedules: each builds its own private de-dupe set, so
+    // only the module-level in-flight claim prevents a double resume.
+    const scanA = recoverOrphanedSubagentSessions({
+      getActiveRuns: () => activeRuns,
+      resumedSessionKeys: new Set(),
+    });
+    await vi.advanceTimersByTimeAsync(10);
+    const scanB = recoverOrphanedSubagentSessions({
+      getActiveRuns: () => activeRuns,
+      resumedSessionKeys: new Set(),
+    });
+    await vi.advanceTimersByTimeAsync(10);
+    releaseResume();
+    await vi.advanceTimersByTimeAsync(10);
+    const [resultA, resultB] = await Promise.all([scanA, scanB]);
+
+    // Exactly one resume turn may be dispatched for the orphan.
+    expect(gateway.callGateway).toHaveBeenCalledOnce();
+    expect(resultA.recovered + resultB.recovered).toBe(1);
+    expect(resultA.skipped + resultB.skipped).toBe(1);
+  });
 });

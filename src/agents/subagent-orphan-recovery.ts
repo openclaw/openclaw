@@ -44,6 +44,14 @@ const log = createSubsystemLogger("subagent-interrupted-resume");
 /** Delay before attempting recovery to let the gateway finish bootstrapping. */
 const DEFAULT_RECOVERY_DELAY_MS = 5_000;
 
+// Session keys with an in-flight resume in THIS process. `resumedSessionKeys`
+// only dedupes sequentially within a single scan, so two concurrent scans each
+// build a private set and can both pass the pre-resume check before either
+// records the resume. This module-level claim set prevents that concurrent
+// double-resume (#103724): a scan claims the key before the final store re-read
+// and resume, and releases it in a finally.
+const inFlightOrphanResumes = new Set<string>();
+
 function isLegacyRestartInterruptedTimeout(
   runRecord: SubagentRunRecord,
   entry: SessionEntry | undefined,
@@ -341,7 +349,7 @@ export async function recoverOrphanedSubagentSessions(params: {
         }
         continue;
       }
-      if (resumedSessionKeys.has(childSessionKey)) {
+      if (resumedSessionKeys.has(childSessionKey) || inFlightOrphanResumes.has(childSessionKey)) {
         result.skipped++;
         continue;
       }
@@ -472,57 +480,77 @@ export async function recoverOrphanedSubagentSessions(params: {
           return typeof text === "string" && configChangePattern.test(text);
         });
 
-        // Resume the session with the original task context.
-        // We intentionally do NOT clear abortedLastRun before attempting
-        // the resume — if instance dispatch fails (e.g. Gateway still booting),
-        // the flag stays true so the next restart can retry.
-        const resumeResult = await resumeOrphanedSession({
-          gatewayRuntime: params.gatewayRuntime,
-          sessionKey: childSessionKey,
-          task: runRecord.task,
-          lastHumanMessage: extractMessageText(lastHumanMessage),
-          configChangeHint: configChangeDetected
-            ? "\n\n[config changes from your previous run were already applied — do not re-modify openclaw.json or restart the gateway]"
-            : undefined,
-          originalRunId: runId,
-          originalRun: runRecord,
-        });
-
-        if (resumeResult.resumed) {
-          resumedSessionKeys.add(childSessionKey);
-          // Only clear the aborted flag after confirmed successful resume.
-          try {
-            await patchRecoverySessionEntry({
-              storePath,
-              childSessionKey,
-              update: (current) => {
-                current.abortedLastRun = false;
-                markSubagentRecoveryAttempt({
-                  entry: current,
-                  now: Date.now(),
-                  runId,
-                  attempt: recoveryGate.nextAttempt,
-                });
-                current.updatedAt = Date.now();
-              },
-            });
-          } catch (err) {
-            log.warn(
-              `resume succeeded but failed to update session store for ${childSessionKey}: ${String(err)}`,
-            );
+        // Claim the session before the final store re-read so a concurrent scan
+        // cannot slip in between — resumedSessionKeys only dedupes within one
+        // scan, so two uncoordinated scans can both pass the earlier check before
+        // either records the resume (#103724). Re-read the entry fresh so a resume
+        // another scan already completed is observed here.
+        if (inFlightOrphanResumes.has(childSessionKey)) {
+          result.skipped++;
+          continue;
+        }
+        inFlightOrphanResumes.add(childSessionKey);
+        try {
+          const freshEntry = loadRecoverySessionEntry({ childSessionKey, storePath });
+          if (!freshEntry?.abortedLastRun) {
+            result.skipped++;
+            continue;
           }
-          result.recovered++;
-        } else {
-          // Flag stays as abortedLastRun=true so next restart can retry
-          log.warn(
-            `resume failed for ${childSessionKey}; abortedLastRun flag preserved for retry on next restart`,
-          );
-          result.failed++;
-          result.failedRuns.push({
-            runId,
-            childSessionKey,
-            error: resumeResult.error,
+
+          // Resume the session with the original task context.
+          // We intentionally do NOT clear abortedLastRun before attempting
+          // the resume — if instance dispatch fails (e.g. Gateway still booting),
+          // the flag stays true so the next restart can retry.
+          const resumeResult = await resumeOrphanedSession({
+            gatewayRuntime: params.gatewayRuntime,
+            sessionKey: childSessionKey,
+            task: runRecord.task,
+            lastHumanMessage: extractMessageText(lastHumanMessage),
+            configChangeHint: configChangeDetected
+              ? "\n\n[config changes from your previous run were already applied — do not re-modify openclaw.json or restart the gateway]"
+              : undefined,
+            originalRunId: runId,
+            originalRun: runRecord,
           });
+
+          if (resumeResult.resumed) {
+            resumedSessionKeys.add(childSessionKey);
+            // Only clear the aborted flag after confirmed successful resume.
+            try {
+              await patchRecoverySessionEntry({
+                storePath,
+                childSessionKey,
+                update: (current) => {
+                  current.abortedLastRun = false;
+                  markSubagentRecoveryAttempt({
+                    entry: current,
+                    now: Date.now(),
+                    runId,
+                    attempt: recoveryGate.nextAttempt,
+                  });
+                  current.updatedAt = Date.now();
+                },
+              });
+            } catch (err) {
+              log.warn(
+                `resume succeeded but failed to update session store for ${childSessionKey}: ${String(err)}`,
+              );
+            }
+            result.recovered++;
+          } else {
+            // Flag stays as abortedLastRun=true so next restart can retry
+            log.warn(
+              `resume failed for ${childSessionKey}; abortedLastRun flag preserved for retry on next restart`,
+            );
+            result.failed++;
+            result.failedRuns.push({
+              runId,
+              childSessionKey,
+              error: resumeResult.error,
+            });
+          }
+        } finally {
+          inFlightOrphanResumes.delete(childSessionKey);
         }
       } catch (err) {
         const error = formatErrorMessage(err);
