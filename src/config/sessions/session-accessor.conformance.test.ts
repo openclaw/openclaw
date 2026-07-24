@@ -17,7 +17,6 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { readSessionArchiveContentSync } from "./archive-compression.js";
-import { parseSqliteSessionFileMarker } from "./legacy-sqlite-marker.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -669,16 +668,16 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
         ...scope,
         sessionId: "support-session",
       });
-      const marker = parseSqliteSessionFileMarker(runtimeTarget.sessionFile);
 
       expect(loadSqliteSessionEntry({ ...scope, storePath: customSqlitePath })).toMatchObject({
         model: "gpt-5.5",
         sessionId: "support-session",
       });
       expect(fs.existsSync(customSqlitePath)).toBe(true);
-      expect(marker).toMatchObject({
+      expect(runtimeTarget).toMatchObject({
         agentId: "support",
         sessionId: "support-session",
+        sessionKey: scope.sessionKey,
         storePath: customStorePath,
       });
     });
@@ -2031,7 +2030,6 @@ describe("sqlite session normalization", () => {
       expect.objectContaining({
         label: "Source (checkpoint)",
         parentSessionKey: sourceEntryScope.sessionKey,
-        sessionFile: expect.stringMatching(/^sqlite:main:/),
         totalTokens: 42,
         totalTokensFresh: true,
       }),
@@ -2161,7 +2159,6 @@ describe("sqlite session normalization", () => {
     await upsertSqliteSessionEntry(sourceEntryScope, {
       label: "Current",
       sessionId: "current-session",
-      sessionFile: "sqlite:main:current-session",
       updatedAt: 10,
       compactionCheckpoints: [checkpoint],
     });
@@ -2186,7 +2183,6 @@ describe("sqlite session normalization", () => {
       expect.objectContaining({
         label: "Current",
         compactionCheckpoints: [checkpoint],
-        sessionFile: expect.stringMatching(/^sqlite:main:/),
         totalTokens: 12,
         totalTokensFresh: true,
       }),

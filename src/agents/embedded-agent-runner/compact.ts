@@ -1279,6 +1279,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
       checkpointSnapshot = await compactionCheckpointStore.captureSnapshot({
         sessionManager,
         sessionFile: params.sessionFile,
+        sessionTarget: params.sessionTarget,
       });
       compactionSessionManager = sessionManager;
       const settingsManager = createPreparedEmbeddedAgentSettingsManager({
@@ -1580,6 +1581,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
             sessionId: activeSessionId,
             agentId: sessionAgentId,
             sessionFile: activeSessionFile,
+            sessionTarget: params.sessionTarget,
           });
           checkpointSnapshotRetained = await persistCompactionCheckpoint({
             config: params.config,

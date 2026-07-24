@@ -177,7 +177,7 @@ describe("resetReplyRunSession", () => {
       key: "main",
       previousSessionId: "session",
       nextSessionId: activeSessionEntry?.sessionId,
-      nextSessionFile: activeSessionEntry?.sessionFile,
+      nextSessionFile: "main",
     });
     expect(errorMock).toHaveBeenCalledWith("reset session");
 
@@ -342,13 +342,7 @@ describe("resetReplyRunSession", () => {
       onNewSession: () => {},
     });
 
-    expect(activeSessionEntry?.sessionFile).toBe(
-      formatSqliteSessionFileMarker({
-        agentId: "main",
-        sessionId: oldSessionId,
-        storePath,
-      }),
-    );
+    expect(activeSessionEntry).not.toHaveProperty("sessionFile");
     const replayed = await loadTranscriptEvents({
       agentId: "main",
       sessionId: oldSessionId,
@@ -399,9 +393,7 @@ describe("resetReplyRunSession", () => {
       onNewSession: () => {},
     });
 
-    expect(activeSessionEntry?.sessionFile).toBe(
-      formatSqliteSessionFileMarker({ agentId: "main", sessionId: "old-session", storePath }),
-    );
+    expect(activeSessionEntry).not.toHaveProperty("sessionFile");
     await expect(
       loadTranscriptEvents({
         agentId: "main",
@@ -447,9 +439,6 @@ describe("resetReplyRunSession", () => {
       onNewSession: () => {},
     });
 
-    expect(activeSessionEntry?.sessionFile).toBe(
-      formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath }),
-    );
-    expect(activeSessionEntry?.sessionFile).not.toBe(staleMarker);
+    expect(activeSessionEntry).not.toHaveProperty("sessionFile");
   });
 });
