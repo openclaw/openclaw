@@ -9,6 +9,7 @@
   "type": "module",
   "dependencies": {
     "@slack/bolt": "5.0.0",
+    "@slack/socket-mode": "3.0.0",
     "@slack/types": "3.0.0",
     "@slack/web-api": "8.0.0",
     "p-map": "7.0.5",

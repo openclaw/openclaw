@@ -53,11 +53,6 @@ const INDIRECT_RUNTIME_DEPENDENCIES = new Map<string, Set<string>>([
     // The Tlon plugin manifest exposes the bundled skill from this package path.
     new Set(["@tloncorp/tlon-skill"]),
   ],
-  [
-    "extensions/slack",
-    // Slack Socket Mode 3 imports Undici through its peer dependency at runtime.
-    new Set(["undici"]),
-  ],
 ]);
 const COMPUTED_RUNTIME_DEPENDENCIES = new Map<string, Set<string>>([
   [

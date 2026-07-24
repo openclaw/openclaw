@@ -1702,6 +1702,9 @@ importers:
       '@slack/bolt':
         specifier: 5.0.0
         version: 5.0.0(@types/express@5.0.6)(supports-color@7.2.0)(undici@7.28.0)
+      '@slack/socket-mode':
+        specifier: 3.0.0
+        version: 3.0.0(undici@7.28.0)
       '@slack/types':
         specifier: 3.0.0
         version: 3.0.0

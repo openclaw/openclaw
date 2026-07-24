@@ -736,11 +736,6 @@ const config = {
       "src/ci-smoke-plan.ts!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/senseaudio`]: bundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/slack`]: {
-      ...bundledPluginWorkspace(),
-      // Slack Socket Mode 3 imports Undici through its peer dependency at runtime.
-      ignoreDependencies: [...bundledPluginIgnoredRuntimeDependencies, "undici"],
-    },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/tavily`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/tencent`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/vllm`]: bundledPluginWorkspace(),

@@ -1,12 +1,23 @@
 // Slack plugin module implements client options behavior.
+import { createRequire } from "node:module";
 import type { RetryOptions, WebClientOptions } from "@slack/web-api";
 import {
-  createHttp1EnvHttpProxyAgent,
+  addActiveManagedProxyTlsOptions,
   resolveEnvHttpProxyAgentOptions,
 } from "openclaw/plugin-sdk/fetch-runtime";
-import { fetchWithRuntimeDispatcher } from "openclaw/plugin-sdk/runtime-fetch";
+import type { EnvHttpProxyAgent } from "undici";
 
-type SlackProxyDispatcher = ReturnType<typeof createHttp1EnvHttpProxyAgent>;
+type SlackUndiciRuntime = Pick<typeof import("undici"), "EnvHttpProxyAgent" | "fetch">;
+type SlackProxyDispatcher = EnvHttpProxyAgent;
+
+const requireFromSlackSocketMode = (() => {
+  const require = createRequire(import.meta.url);
+  return createRequire(require.resolve("@slack/socket-mode/package.json"));
+})();
+
+function loadSlackUndiciRuntime(): SlackUndiciRuntime {
+  return requireFromSlackSocketMode("undici") as SlackUndiciRuntime;
+}
 export type SlackLookupClientOptions = Pick<WebClientOptions, "fetch" | "slackApiUrl" | "timeout">;
 
 export const SLACK_DEFAULT_RETRY_OPTIONS: RetryOptions = {
@@ -34,7 +45,8 @@ export function resolveSlackProxyDispatcher(): SlackProxyDispatcher | undefined 
     return undefined;
   }
   try {
-    return createHttp1EnvHttpProxyAgent(options);
+    const { EnvHttpProxyAgent } = loadSlackUndiciRuntime();
+    return new EnvHttpProxyAgent(addActiveManagedProxyTlsOptions(options));
   } catch {
     // Malformed proxy URL; degrade gracefully to direct connections.
     return undefined;
@@ -44,10 +56,9 @@ export function resolveSlackProxyDispatcher(): SlackProxyDispatcher | undefined 
 function createSlackDispatcherFetch(
   dispatcher: SlackProxyDispatcher,
 ): NonNullable<WebClientOptions["fetch"]> {
+  const { fetch } = loadSlackUndiciRuntime();
   return ((input: RequestInfo | URL, init?: RequestInit) =>
-    fetchWithRuntimeDispatcher(input, { ...init, dispatcher })) as NonNullable<
-    WebClientOptions["fetch"]
-  >;
+    fetch(input, { ...init, dispatcher })) as NonNullable<WebClientOptions["fetch"]>;
 }
 
 function resolveSlackApiUrlFromEnv(): string | undefined {
