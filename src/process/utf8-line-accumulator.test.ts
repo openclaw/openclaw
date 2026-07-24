@@ -84,7 +84,7 @@ describe("UTF-8 line accumulator", () => {
     expect(
       appendUtf8Lines({
         accumulator,
-        chunk: split.subarray(0, split.length - 1),
+        chunk: split.subarray(0, -1),
         maxPendingLineBytes: 8192,
         splitOnCarriageReturn: true,
         emitPending: true,
@@ -93,7 +93,7 @@ describe("UTF-8 line accumulator", () => {
     expect(
       appendUtf8Lines({
         accumulator,
-        chunk: split.subarray(split.length - 1),
+        chunk: split.subarray(-1),
         maxPendingLineBytes: 8192,
         splitOnCarriageReturn: true,
         emitPending: true,
