@@ -263,6 +263,7 @@ import { admitInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
 import {
   hasAbortableSessionRun,
   reconcileStaleChatRunAfterSessionStatePublication,
+  replayPendingChatAbort,
 } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import {
@@ -3267,6 +3268,9 @@ class ChatPane extends OpenClawLightDomElement {
     state.client = snapshot.client;
     state.connected = snapshot.phase === "connected";
     state.connectionEpoch = this.connectionGeneration;
+    if (state.connected && state.pendingAbort) {
+      void replayPendingChatAbort(state).finally(() => state.requestUpdate?.());
+    }
     state.hello = snapshot.hello;
     if (sourceChanged && state.sidebarContent?.kind === "session-discussion") {
       // A reconnect may point at a different gateway/provider; an open panel
