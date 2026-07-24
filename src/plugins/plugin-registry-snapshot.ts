@@ -26,6 +26,7 @@ import {
   getInstalledPluginRecord,
   extractPluginInstallRecordsFromInstalledPluginIndex,
   hasMissingConfigPathActivationMetadata,
+  INSTALLED_PLUGIN_INDEX_VERSION,
   isInstalledPluginEnabled,
   loadInstalledPluginIndexWithDiscovery,
   resolveInstalledPluginIndexPolicyHash,
@@ -442,6 +443,15 @@ function resolveRecordPackageJsonPath(plugin: InstalledPluginIndexRecord): strin
 }
 
 function hasStalePersistedPluginDiagnostics(index: InstalledPluginIndex): boolean {
+  // Legacy indices (version < 2) lack the per-diagnostic code field.
+  // Force a one-time refresh so orphan-source-path diagnostics stored before
+  // the code marker was introduced are re-derived with the current schema.
+  if (index.version < INSTALLED_PLUGIN_INDEX_VERSION) {
+    return true;
+  }
+  if (index.diagnostics.some((diag) => diag.code === "orphan-source-path")) {
+    return true;
+  }
   return index.diagnostics.some((diag) => {
     const source = diag.source;
     return (

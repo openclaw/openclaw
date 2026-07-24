@@ -177,13 +177,6 @@ function expectDiagnosticsContainCode(diagnostics: readonly { code?: unknown }[]
   expect(diagnostics.map((diagnostic) => diagnostic.code)).toContain(code);
 }
 
-function expectDiagnosticsContainSource(
-  diagnostics: readonly { source?: unknown }[],
-  source: string,
-) {
-  expect(diagnostics.map((diagnostic) => diagnostic.source)).toContain(source);
-}
-
 function expectDiagnosticsDoNotContainSource(
   diagnostics: readonly { source?: unknown }[],
   source: string,
@@ -1100,12 +1093,12 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     expectDiagnosticsContainCode(result.diagnostics, "persisted-registry-stale-source");
   });
 
-  it("keeps persisted registry when a non-plugin diagnostic source path still does not exist", () => {
+  it("refreshes registry when an orphan diagnostic without pluginId exists", () => {
     const tempRoot = makeTempDir();
     const stateDir = path.join(tempRoot, "state");
     const env = { ...createHermeticEnv(tempRoot), OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
     const config = {};
-    const missingConfiguredPath = path.join(tempRoot, "missing-configured-plugin");
+    const missingConfiguredPath = path.join(tempRoot, "missing-configured-path.js");
     const index: InstalledPluginIndex = {
       ...loadInstalledPluginIndex({ config, env, stateDir, installRecords: {} }),
       diagnostics: [
@@ -1113,6 +1106,7 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
           level: "error",
           message: `plugin path not found: ${missingConfiguredPath}`,
           source: missingConfiguredPath,
+          code: "orphan-source-path",
         },
       ],
     };
@@ -1120,9 +1114,74 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
 
     const result = loadPluginRegistrySnapshotWithMetadata({ config, env, stateDir });
 
+    expect(result.source).toBe("derived");
+    expectDiagnosticsContainCode(result.diagnostics, "persisted-registry-stale-source");
+  });
+
+  it("refreshes registry for orphan diagnostics even when source path still does not exist", () => {
+    const tempRoot = makeTempDir();
+    const stateDir = path.join(tempRoot, "state");
+    const env = { ...createHermeticEnv(tempRoot), OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
+    const config = {};
+    const missingConfiguredPath = path.join(tempRoot, "missing-configured-path.js");
+    const index: InstalledPluginIndex = {
+      ...loadInstalledPluginIndex({ config, env, stateDir, installRecords: {} }),
+      diagnostics: [
+        {
+          level: "error",
+          message: `plugin path not found: ${missingConfiguredPath}`,
+          source: missingConfiguredPath,
+          code: "orphan-source-path",
+        },
+      ],
+    };
+    writePersistedInstalledPluginIndexSync(index, { stateDir });
+
+    const result = loadPluginRegistrySnapshotWithMetadata({ config, env, stateDir });
+
+    expect(result.source).toBe("derived");
+    expectDiagnosticsContainCode(result.diagnostics, "persisted-registry-stale-source");
+  });
+  it("refreshes registry when persisted index version is behind current schema version", () => {
+    const tempRoot = makeTempDir();
+    const stateDir = path.join(tempRoot, "state");
+    const env = { ...createHermeticEnv(tempRoot), OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
+    const config = {};
+    // Write a legacy index with version: 1 (before the code-marker migration).
+    // The index has no diagnostics at all, but the stale-check should still
+    // trigger a one-time refresh because the version is behind.
+    const index: InstalledPluginIndex = {
+      ...loadInstalledPluginIndex({ config, env, stateDir, installRecords: {} }),
+      version: 1,
+      diagnostics: [],
+    };
+    writePersistedInstalledPluginIndexSync(index, { stateDir });
+
+    const result = loadPluginRegistrySnapshotWithMetadata({ config, env, stateDir });
+
+    // The legacy version should force a derived refresh, writing the new version.
+    expect(result.source).toBe("derived");
+    expectDiagnosticsContainCode(result.diagnostics, "persisted-registry-stale-source");
+  });
+
+  it("reuses persisted registry at current schema version when diagnostics are clean", () => {
+    const tempRoot = makeTempDir();
+    const stateDir = path.join(tempRoot, "state");
+    const env = { ...createHermeticEnv(tempRoot), OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
+    const config = {};
+    // Write a registry at current version with no stale diagnostics.
+    const current = loadInstalledPluginIndex({ config, env, stateDir, installRecords: {} });
+    const index: InstalledPluginIndex = {
+      ...current,
+      version: current.version, // INSTALLED_PLUGIN_INDEX_VERSION (2)
+      diagnostics: [],
+    };
+    writePersistedInstalledPluginIndexSync(index, { stateDir });
+
+    const result = loadPluginRegistrySnapshotWithMetadata({ config, env, stateDir });
+
+    // Current version + no stale diagnostics => reuse persisted.
     expect(result.source).toBe("persisted");
-    expectDiagnosticsContainSource(result.snapshot.diagnostics, missingConfiguredPath);
-    expect(result.diagnostics).toStrictEqual([]);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
