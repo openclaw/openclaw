@@ -462,4 +462,34 @@ describe("resolveCronPayloadOutcome", () => {
     expect(result.hasFatalErrorPayload).toBe(true);
     expect(result.embeddedRunError).toBe("Exec failed before SYSTEM_RUN_DENIED could be retried");
   });
+
+  it("treats a clean sessions_yield as non-fatal despite an earlier benign tool error", () => {
+    // An isolated cron turn that spawns subagents then yields produces no final
+    // assistant reply. An earlier benign exec (exit 1 used as control flow)
+    // surfaces a ⚠️ 🛠️ tool warning that — absent yield-awareness — is treated
+    // as the fatal terminal payload and suppresses delivery.
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        { text: "Staged 2 calendar packet(s)." },
+        { text: "⚠️ 🛠️ list files in briefs/ (agent) failed", isError: true },
+      ],
+      yielded: true,
+    });
+
+    expect(result.hasFatalStructuredErrorPayload).toBe(false);
+    expect(result.hasFatalErrorPayload).toBe(false);
+    // The successful pre-yield work is preserved as the delivery payload.
+    expect(result.deliveryPayloads).toEqual([{ text: "Staged 2 calendar packet(s)." }]);
+  });
+
+  it("still marks a yielded turn fatal when a fatal failureSignal is present", () => {
+    // Yield-awareness must not mask a genuinely fatal run.
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "boom", isError: true }],
+      failureSignal: { fatalForCron: true, message: "run denied" },
+      yielded: true,
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(true);
+  });
 });

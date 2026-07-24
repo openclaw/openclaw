@@ -234,6 +234,7 @@ export function resolveCronPayloadOutcome(params: {
   failureSignal?: CronFailureSignal | undefined;
   finalAssistantVisibleText?: string | undefined;
   preferFinalAssistantVisibleText?: boolean;
+  yielded?: boolean;
 }): CronPayloadOutcome {
   const firstText =
     params.payloads.find((payload) => !isNonTerminalToolErrorWarning(payload))?.text ?? "";
@@ -292,6 +293,13 @@ export function resolveCronPayloadOutcome(params: {
     !hasStructuredDeliveryPayloads &&
     errorPayloads.length > 0 &&
     errorPayloads.every((payload) => isCronToolWarning(payload?.text));
+  // A clean sessions_yield is a deliberate pause (e.g. after spawning
+  // subagents), not a failure. A yielded turn produces no final assistant
+  // reply, so an earlier non-fatal tool error would otherwise remain the
+  // de-facto terminal payload and falsely fail the run. A genuinely fatal
+  // signal (failureSignal/runLevelError) still flips the run fatal below.
+  const hasCleanYieldTerminal =
+    params.yielded === true && !params.runLevelError && params.failureSignal?.fatalForCron !== true;
   // Structured error payloads are fatal unless later successful output or a
   // known non-terminal warning proves the agent recovered.
   const hasFatalStructuredErrorPayload =
@@ -299,7 +307,8 @@ export function resolveCronPayloadOutcome(params: {
     !hasSuccessfulPayloadAfterLastError &&
     !hasPendingPresentationWarning &&
     !hasNonTerminalToolErrorWarning &&
-    !hasRecoveredToolWarning;
+    !hasRecoveredToolWarning &&
+    !hasCleanYieldTerminal;
   // Fatal structured errors own the final delivery payload unless later output
   // proves recovery; otherwise cron would announce stale partial success text.
   // Keep structured/media announce payloads intact. Only collapse purely textual

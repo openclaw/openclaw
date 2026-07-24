@@ -1386,6 +1386,7 @@ async function finalizeCronRun(params: {
         deliveryRequested: prepared.deliveryRequested,
       })
     ).preferFinalAssistantVisibleText,
+    yielded: finalRunResult.meta?.yielded === true,
   });
   if (finalRunResult.meta?.aborted === true && !cronPayloadOutcome.hasFatalErrorPayload) {
     const metaErrorMessage = normalizeOptionalString(finalRunResult.meta.error?.message);
