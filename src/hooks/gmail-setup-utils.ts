@@ -141,6 +141,7 @@ async function resolvePythonExecutablePath(): Promise<string | undefined> {
     }
     if (pyVersion) {
       const [major, minor] = pyVersion.split(".").map(Number);
+      if (major == null || minor == null) continue;
       if (major !== 3 || minor < 10) {
         // Skip incompatible Python versions (gcloud requires 3.10–3.14)
         continue;
