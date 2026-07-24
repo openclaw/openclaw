@@ -155,8 +155,10 @@ export async function checkOllamaCloudAuth(
         return { signedIn: false, signinUrl: data.signin_url };
       }
       if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
         return { signedIn: false };
       }
+      await response.body?.cancel().catch(() => undefined);
       return { signedIn: true };
     } finally {
       await release();
@@ -248,6 +250,7 @@ async function pullOllamaModelCore(params: {
     clearTimeout(responseTimeout);
     try {
       if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
         return { ok: false, message: `Failed to download ${modelName} (HTTP ${response.status})` };
       }
       if (!response.body) {
@@ -610,6 +613,7 @@ async function inspectOllamaModelsForSetup(
           });
           try {
             if (!response.ok) {
+              await response.body?.cancel().catch(() => undefined);
               throw new Error(`Ollama model inspection failed with HTTP ${response.status}`);
             }
             const data = await readProviderJsonResponse<{
