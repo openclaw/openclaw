@@ -1381,6 +1381,17 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Command reference
   - H2: See also
 
+## cli/commands.md
+
+- Route: /cli/commands
+- Headings:
+  - H1: openclaw commands
+  - H2: List commands
+  - H2: Inspect one path
+  - H2: Inventory semantics
+  - H2: Options
+  - H2: Related
+
 ## cli/commitments.md
 
 - Route: /cli/commitments

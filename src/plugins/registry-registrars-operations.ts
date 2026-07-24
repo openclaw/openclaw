@@ -8,6 +8,10 @@ import {
   normalizeUniqueStringEntries,
 } from "@openclaw/normalization-core/string-normalization";
 import {
+  normalizeCommandEffectProfile,
+  normalizeCommandExposure,
+} from "../cli/catalog-metadata.js";
+import {
   normalizeCommandDescriptorName,
   sanitizeCommandDescriptorDescription,
 } from "../cli/program/command-descriptor-utils.js";
@@ -93,9 +97,26 @@ export function createOperationRegistrars(state: PluginRegistryState) {
       .map((descriptor) => {
         const name = normalizeCommandRoot(descriptor.name, "descriptor");
         const description = sanitizeCommandDescriptorDescription(descriptor.description);
-        return name && description
-          ? { name, description, hasSubcommands: descriptor.hasSubcommands }
-          : null;
+        const effectProfile = normalizeCommandEffectProfile(descriptor.effectProfile);
+        const commandExposure = normalizeCommandExposure(descriptor.commandExposure);
+        if (!name || !description) {
+          return null;
+        }
+        const normalized: OpenClawPluginCliCommandDescriptor = {
+          name,
+          description,
+          hasSubcommands: descriptor.hasSubcommands,
+        };
+        if (effectProfile) {
+          normalized.effectProfile = effectProfile;
+        }
+        if (commandExposure) {
+          normalized.commandExposure = commandExposure;
+        }
+        if (descriptor.hidden === true) {
+          normalized.hidden = true;
+        }
+        return normalized;
       })
       .filter(
         (descriptor): descriptor is OpenClawPluginCliCommandDescriptor => descriptor !== null,

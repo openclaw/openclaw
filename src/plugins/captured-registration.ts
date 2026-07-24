@@ -1,5 +1,9 @@
 // Captures plugin registrations for controlled registry assembly.
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import {
+  normalizeCommandEffectProfile,
+  normalizeCommandExposure,
+} from "../cli/catalog-metadata.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   AgentToolResultMiddleware,
@@ -186,11 +190,25 @@ export function createCapturedPluginRegistration(params?: {
         registerCli(registrar, opts) {
           const parentPath = normalizeStringEntries(opts?.parentPath ?? []);
           const descriptors = (opts?.descriptors ?? [])
-            .map((descriptor) => ({
-              name: descriptor.name.trim(),
-              description: descriptor.description.trim(),
-              hasSubcommands: descriptor.hasSubcommands,
-            }))
+            .map((descriptor) => {
+              const effectProfile = normalizeCommandEffectProfile(descriptor.effectProfile);
+              const commandExposure = normalizeCommandExposure(descriptor.commandExposure);
+              const normalized: OpenClawPluginCliCommandDescriptor = {
+                name: descriptor.name.trim(),
+                description: descriptor.description.trim(),
+                hasSubcommands: descriptor.hasSubcommands,
+              };
+              if (effectProfile) {
+                normalized.effectProfile = effectProfile;
+              }
+              if (commandExposure) {
+                normalized.commandExposure = commandExposure;
+              }
+              if (descriptor.hidden === true) {
+                normalized.hidden = true;
+              }
+              return normalized;
+            })
             .filter((descriptor) => descriptor.name && descriptor.description);
           const commands = normalizeStringEntries([
             ...(opts?.commands ?? []),
