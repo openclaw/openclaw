@@ -434,7 +434,7 @@ describe("ChatStateController render lifecycle", () => {
     expect(painted).not.toHaveBeenCalled();
   });
 
-  it("invalidates the composer render lifecycle when a handled history key mutates the draft", () => {
+  it("invalidates the render lifecycle when input history recall mutates the draft", () => {
     const requestUpdate = vi.fn();
     const host = {
       addController: () => undefined,
@@ -445,43 +445,38 @@ describe("ChatStateController render lifecycle", () => {
     const controller = new ChatStateController<ChatPageHost>(host);
     controller.hostConnected();
     const renderLifecycle = controller.createRenderLifecycle();
-    const invalidate = vi.fn();
-    renderLifecycle.invalidate = invalidate;
+
+    const navigateHistory = vi.fn().mockReturnValue({
+      handled: true,
+      preventDefault: true,
+      restoreCaret: "up" as const,
+      decision: "handled:history-up" as const,
+      historyNavigationActiveBefore: false,
+      historyNavigationActiveAfter: true,
+      selectionStart: 0,
+      selectionEnd: 0,
+      valueLength: 10,
+    });
 
     const state = {
+      settings: undefined,
+      assistantAgentId: null,
+      agentsList: null,
+      hello: null,
       sessionKey: "agent:main:current",
       chatLoading: false,
-      chatMessage: "",
       chatMessages: [],
-      chatLocalInputHistoryBySession: {
-        "agent:main:current": [{ text: "remembered prompt", ts: 1 }],
-      },
-      chatInputHistorySessionKey: null,
-      chatInputHistoryItems: null,
-      chatInputHistoryIndex: -1,
-      chatDraftBeforeHistory: null,
+      chatQueue: [],
       renderLifecycle,
-      requestUpdate: vi.fn(),
-      handleChatInputHistoryKey: (input: { key: "ArrowUp" | "ArrowDown" }) => {
-        if (input.key !== "ArrowUp" || state.chatMessage !== "") {
-          return { handled: false };
-        }
-        const recalled = state.chatLocalInputHistoryBySession[state.sessionKey]?.[0]?.text;
-        if (!recalled) {
-          return { handled: false };
-        }
-        state.chatMessage = recalled;
-        state.chatInputHistoryItems = [recalled];
-        state.chatInputHistorySessionKey = state.sessionKey;
-        state.chatInputHistoryIndex = 0;
-        return { handled: true };
-      },
+      handleSendChat: vi.fn().mockResolvedValue(undefined),
+      handleChatDraftChange: vi.fn(),
+      handleChatInputHistoryKey: navigateHistory,
     } as unknown as ChatPageHost;
 
     controller.attach(state);
 
-    const result = state.handleChatInputHistoryKey({
-      key: "ArrowUp",
+    const input = {
+      key: "ArrowUp" as const,
       selectionStart: 0,
       selectionEnd: 0,
       valueLength: 0,
@@ -491,10 +486,72 @@ describe("ChatStateController render lifecycle", () => {
       shiftKey: false,
       isComposing: false,
       keyCode: 0,
-    });
+    };
+    const result = state.handleChatInputHistoryKey!(input);
 
     expect(result.handled).toBe(true);
-    expect(invalidate).toHaveBeenCalledOnce();
+    expect(navigateHistory).toHaveBeenCalledWith(input);
+    expect(requestUpdate).toHaveBeenCalled();
+  });
+
+  it("does not invalidate the render lifecycle when input history key is not handled", () => {
+    const requestUpdate = vi.fn();
+    const host = {
+      addController: () => undefined,
+      removeController: () => undefined,
+      requestUpdate,
+      updateComplete: Promise.resolve(true),
+    } satisfies ReactiveControllerHost;
+    const controller = new ChatStateController<ChatPageHost>(host);
+    controller.hostConnected();
+    const renderLifecycle = controller.createRenderLifecycle();
+
+    const navigateHistory = vi.fn().mockReturnValue({
+      handled: false,
+      preventDefault: false,
+      restoreCaret: null,
+      decision: "blocked:modifier-or-composition" as const,
+      historyNavigationActiveBefore: false,
+      historyNavigationActiveAfter: false,
+      selectionStart: 0,
+      selectionEnd: 0,
+      valueLength: 10,
+    });
+
+    const state = {
+      settings: undefined,
+      assistantAgentId: null,
+      agentsList: null,
+      hello: null,
+      sessionKey: "agent:main:current",
+      chatLoading: false,
+      chatMessages: [],
+      chatQueue: [],
+      renderLifecycle,
+      handleSendChat: vi.fn().mockResolvedValue(undefined),
+      handleChatDraftChange: vi.fn(),
+      handleChatInputHistoryKey: navigateHistory,
+    } as unknown as ChatPageHost;
+
+    controller.attach(state);
+
+    const input = {
+      key: "ArrowUp" as const,
+      selectionStart: 5,
+      selectionEnd: 5,
+      valueLength: 10,
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+      isComposing: false,
+      keyCode: 0,
+    };
+    const result = state.handleChatInputHistoryKey!(input);
+
+    expect(result.handled).toBe(false);
+    expect(navigateHistory).toHaveBeenCalledWith(input);
+    expect(requestUpdate).not.toHaveBeenCalled();
   });
 });
 
