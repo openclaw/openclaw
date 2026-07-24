@@ -29,6 +29,25 @@ async function withTempDir<T>(prefix: string, fn: (dir: string) => Promise<T>) {
   }
 }
 
+/**
+ * Best-effort symlink creation.  Returns true when the symlink was created.
+ * On Windows without Developer Mode, symlinks require elevation (EACCES/EPERM);
+ * callers treat a `false` return as a "skip" signal so the test is not a hard
+ * failure on CI runners where symlinks are unavailable.
+ */
+async function tryCreateSymlink(target: string, link: string): Promise<boolean> {
+  try {
+    await fs.symlink(target, link);
+    return true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code === "EACCES" || code === "EPERM" || code === "ENOTSUP") {
+      return false;
+    }
+    throw err;
+  }
+}
+
 function createExecTool(workspaceDir: string) {
   const tools = createOpenClawCodingTools({
     workspaceDir,
@@ -470,6 +489,83 @@ describe("workspace path resolution", () => {
       await expect(readTool.execute("read-skill-symlink", { path: linkPath })).rejects.toThrow(
         /symlink|sandbox|outside|escape/i,
       );
+    });
+  });
+
+  it("redirects bare date filename to memory/ subdirectory on ENOENT", async () => {
+    await withTempDir("openclaw-ws-memory-redirect-", async (workspaceDir) => {
+      const memoryDir = path.join(workspaceDir, "memory");
+      await fs.mkdir(memoryDir, { recursive: true });
+      const dateFile = "2026-06-12.md";
+      const memoryFile = path.join(memoryDir, dateFile);
+      await fs.writeFile(memoryFile, "daily memory entry\n", "utf8");
+
+      const cfg: OpenClawConfig = { tools: { fs: { workspaceOnly: true } } };
+      const tools = createOpenClawCodingTools({ workspaceDir, config: cfg });
+      const { readTool } = expectReadWriteEditTools(tools);
+
+      // Model sends bare date filename without memory/ prefix.  Phase 1
+      // (root-level read) fails with ENOENT; Phase 2 retries with the
+      // canonical memory/YYYY-MM-DD.md path and succeeds.
+      const result = await readTool.execute("read-bare-date", { path: dateFile });
+      expect(getTextContent(result)).toContain("daily memory entry");
+    });
+  });
+
+  it("blocks symlink escape through synthesized memory/ retry path", async () => {
+    await withTempDir("openclaw-ws-memory-symlink-escape-", async (rootDir) => {
+      const workspaceDir = path.join(rootDir, "workspace");
+      const outsideDir = path.join(rootDir, "outside");
+      const aliasDir = path.join(workspaceDir, "memory");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.mkdir(outsideDir, { recursive: true });
+
+      // memory/ is a symlink pointing outside the workspace — the
+      // assertSandboxPath guard must block the retry before any FS access.
+      // On Windows without Developer Mode, symlinks require elevation;
+      // tryCreateSymlink returns false instead of throwing so the test
+      // is skipped rather than hard-failing on restricted CI runners.
+      const created = await tryCreateSymlink(outsideDir, aliasDir);
+      if (!created) {
+        // Symlink creation is unavailable (Windows without elevation /
+        // Developer Mode).  Skip the test — the guard is still exercised
+        // on POSIX CI and local dev machines.
+        return;
+      }
+      await fs.writeFile(path.join(outsideDir, "2026-06-12.md"), "top secret\n", "utf8");
+
+      const cfg: OpenClawConfig = { tools: { fs: { workspaceOnly: true } } };
+      const tools = createOpenClawCodingTools({ workspaceDir, config: cfg });
+      const { readTool } = expectReadWriteEditTools(tools);
+
+      // Bare date filename triggers Phase 2 retry with memory/2026-06-12.md.
+      // assertSandboxPath resolves the real path through the symlink and
+      // detects the escape before any file is read.
+      await expect(
+        readTool.execute("read-bare-date-symlink-escape", { path: "2026-06-12.md" }),
+      ).rejects.toThrow(/Path escapes sandbox root|outside-workspace|sandbox|escape/i);
+    });
+  });
+
+  it("reads root-level date file without triggering memory/ redirect", async () => {
+    await withTempDir("openclaw-ws-root-date-", async (workspaceDir) => {
+      const dateFile = "2026-06-12.md";
+      await fs.writeFile(path.join(workspaceDir, dateFile), "root-level entry\n", "utf8");
+      // Also create a memory/ version to prove the root-level file takes
+      // priority (no redirect).
+      const memoryDir = path.join(workspaceDir, "memory");
+      await fs.mkdir(memoryDir, { recursive: true });
+      await fs.writeFile(path.join(memoryDir, dateFile), "memory entry\n", "utf8");
+
+      const cfg: OpenClawConfig = { tools: { fs: { workspaceOnly: true } } };
+      const tools = createOpenClawCodingTools({ workspaceDir, config: cfg });
+      const { readTool } = expectReadWriteEditTools(tools);
+
+      // Phase 1 succeeds at the root — no ENOENT, no retry.  The root-level
+      // file is returned, not the memory/ version.
+      const result = await readTool.execute("read-root-date", { path: dateFile });
+      expect(getTextContent(result)).toContain("root-level entry");
+      expect(getTextContent(result)).not.toContain("memory entry");
     });
   });
 });

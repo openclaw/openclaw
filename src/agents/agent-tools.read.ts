@@ -62,6 +62,8 @@ const MAX_ADAPTIVE_READ_PAGES = 4;
 type OpenClawReadToolOptions = {
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
+  /** Workspace root for validating synthesized retry paths against sandbox boundaries. */
+  workspaceRoot?: string;
 };
 
 type SkillReadContent = {
@@ -78,7 +80,7 @@ type ReadTruncationDetails = {
 const OFFSET_BEYOND_EOF_RE = /^Offset \d+ is beyond end of file \(\d+ lines total\)$/;
 const READ_CONTINUATION_NOTICE_RE =
   /\n\n\[(?:Showing lines [^\]]*?Use offset=\d+ to continue\.|\d+ more lines in file\. Use offset=\d+ to continue\.)\]\s*$/;
-const DAILY_MEMORY_PATH_RE = /^memory\/\d{4}-\d{2}-\d{2}\.md$/;
+const DAILY_MEMORY_PATH_RE = /^(?:memory\/)?\d{4}-\d{2}-\d{2}\.md$/;
 
 function resolveAdaptiveReadMaxBytes(options?: OpenClawReadToolOptions): number {
   const contextWindowTokens = options?.modelContextWindowTokens;
@@ -260,7 +262,12 @@ function normalizeDailyMemoryReadPath(value: unknown): string | undefined {
     .trim()
     .replace(/\\/g, "/")
     .replace(/^\.\/+/, "");
-  return DAILY_MEMORY_PATH_RE.test(normalized) ? normalized : undefined;
+  if (!DAILY_MEMORY_PATH_RE.test(normalized)) {
+    return undefined;
+  }
+  // Prepend "memory/" to bare date filenames so they resolve to the
+  // canonical memory/YYYY-MM-DD.md location inside the workspace.
+  return normalized.startsWith("memory/") ? normalized : `memory/${normalized}`;
 }
 
 function isNotFoundError(error: unknown): boolean {
@@ -278,18 +285,59 @@ async function executeReadPage(params: {
   toolCallId: string;
   args: Record<string, unknown>;
   signal?: AbortSignal;
+  /** Workspace root for validating synthesized retry paths against sandbox boundaries. */
+  workspaceRoot?: string;
 }): Promise<AgentToolResult<unknown>> {
+  // Phase 1: try the original path first.
   try {
     return await params.base.execute(params.toolCallId, params.args, params.signal);
-  } catch (error) {
-    if (isOffsetBeyondEof(error, params.args)) {
+  } catch (firstError) {
+    if (isOffsetBeyondEof(firstError, params.args)) {
       return emptyReadResult();
     }
-    const missingDailyMemoryPath = normalizeDailyMemoryReadPath(params.args.path);
-    if (missingDailyMemoryPath && isNotFoundError(error)) {
-      return missingDailyMemoryReadResult(missingDailyMemoryPath);
+    if (!isNotFoundError(firstError)) {
+      throw firstError;
     }
-    throw error;
+
+    // Phase 2: the model may have sent a bare date filename (YYYY-MM-DD.md)
+    // without the memory/ prefix.  When the workspace-root read fails with
+    // ENOENT, retry with the canonical memory/YYYY-MM-DD.md path.
+    const requestedPath = normalizeDailyMemoryReadPath(params.args.path);
+    if (!requestedPath || requestedPath === params.args.path) {
+      // Already in canonical form or not a daily-memory path — file genuinely
+      // missing.  Return a soft-fail for daily-memory paths so the model can
+      // recover, or re-throw for non-memory files.
+      if (normalizeDailyMemoryReadPath(params.args.path)) {
+        return missingDailyMemoryReadResult(params.args.path as string);
+      }
+      throw firstError;
+    }
+
+    // Guard the synthesized path against workspace sandbox escape before any
+    // filesystem access (P1 security boundary — symlinked memory/ directory).
+    if (params.workspaceRoot) {
+      await assertSandboxPath({
+        filePath: requestedPath,
+        cwd: params.workspaceRoot,
+        root: params.workspaceRoot,
+      });
+    }
+
+    try {
+      return await params.base.execute(
+        params.toolCallId,
+        { ...params.args, path: requestedPath },
+        params.signal,
+      );
+    } catch (secondError) {
+      if (isOffsetBeyondEof(secondError, { ...params.args, path: requestedPath })) {
+        return emptyReadResult();
+      }
+      if (isNotFoundError(secondError)) {
+        return missingDailyMemoryReadResult(requestedPath);
+      }
+      throw secondError;
+    }
   }
 }
 
@@ -299,6 +347,7 @@ async function executeReadWithAdaptivePaging(params: {
   args: Record<string, unknown>;
   signal?: AbortSignal;
   maxBytes: number;
+  workspaceRoot?: string;
 }): Promise<AgentToolResult<unknown>> {
   const userLimit = params.args.limit;
   const hasExplicitLimit =
@@ -325,6 +374,7 @@ async function executeReadWithAdaptivePaging(params: {
       toolCallId: params.toolCallId,
       args: pageArgs,
       signal: params.signal,
+      workspaceRoot: params.workspaceRoot,
     });
     firstResult ??= pageResult;
 
@@ -946,6 +996,7 @@ export function createOpenClawReadTool(
         args: normalizedRecord ?? {},
         signal,
         maxBytes: resolveAdaptiveReadMaxBytes(options),
+        workspaceRoot: options?.workspaceRoot,
       });
       const filePath =
         typeof normalizedRecord?.path === "string" ? normalizedRecord.path : "<unknown>";

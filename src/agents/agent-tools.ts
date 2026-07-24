@@ -696,6 +696,10 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
         const wrapped = createOpenClawReadTool(freshReadTool, {
           modelContextWindowTokens: options?.modelContextWindowTokens,
           imageSanitization,
+          // When the outer workspace guard is active, re-validate the
+          // synthesized memory/YYYY-MM-DD.md retry path against the coding
+          // root so a symlinked memory/ directory cannot escape the sandbox.
+          workspaceRoot: workspaceOnly ? codingRoot : undefined,
         });
         const guarded = workspaceOnly
           ? wrapToolWorkspaceRootGuardWithOptions(wrapped, codingRoot, {
