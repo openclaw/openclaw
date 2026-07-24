@@ -44,6 +44,7 @@ import {
   MatrixRecoveryKeyStore,
   isRepairableSecretStorageAccessError,
 } from "./sdk/recovery-key-store.js";
+import { patchMatrixRustCryptoToDeviceCompatibility } from "./sdk/to-device-compat.js";
 import { createMatrixGuardedFetch, type HttpMethod, type QueryParams } from "./sdk/transport.js";
 import type {
   MatrixClientEventMap,
@@ -116,6 +117,7 @@ export type MatrixRoomKeyBackupStatus = {
 
 const MATRIX_STATUS_DIAGNOSTIC_TIMEOUT_MS = 10_000;
 const DEFAULT_MATRIX_LOCAL_TIMEOUT_MS = 60_000;
+let matrixVerificationAcceptCompatWarningEmitted = false;
 
 function resolveMatrixLocalTimeoutMs(raw: number | undefined): number {
   if (typeof raw !== "number" || !Number.isFinite(raw)) {
@@ -820,6 +822,19 @@ export class MatrixClient {
     try {
       await this.client.initRustCrypto({
         cryptoDatabasePrefix: this.cryptoDatabasePrefix,
+      });
+      patchMatrixRustCryptoToDeviceCompatibility({
+        client: this.client,
+        onNormalizedAcceptEvents: (count) => {
+          if (matrixVerificationAcceptCompatWarningEmitted) {
+            return;
+          }
+          matrixVerificationAcceptCompatWarningEmitted = true;
+          LogService.warn(
+            "MatrixClientLite",
+            `Normalized ${count} Matrix SAS verification accept event(s) missing method before Rust crypto preprocessing.`,
+          );
+        },
       });
       this.cryptoInitialized = true;
       throwIfMatrixStartupAborted(abortSignal);
