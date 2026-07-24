@@ -1,4 +1,5 @@
 // Openrouter provider module implements model/runtime integration.
+import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import {
   getCachedLiveProviderModelRows,
   type LiveModelCatalogFetchGuard,
@@ -7,6 +8,7 @@ import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
 export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const OPENROUTER_MODELS_ENDPOINT = `${OPENROUTER_BASE_URL}/models`;
@@ -190,6 +192,9 @@ function parseOpenRouterLiveModels(rows: readonly unknown[]): ModelDefinitionCon
   return [...new Map(models.map((model) => [model.id, model])).values()];
 }
 
+const defaultOpenRouterFetchGuard: LiveModelCatalogFetchGuard = (params) =>
+  fetchWithSsrFGuard(withTrustedEnvProxyGuardedFetchMode(params));
+
 export async function buildOpenrouterLiveProvider(params: {
   apiKey?: string;
   discoveryApiKey?: string;
@@ -206,7 +211,7 @@ export async function buildOpenrouterLiveProvider(params: {
       endpoint: OPENROUTER_MODELS_ENDPOINT,
       apiKey: params.apiKey,
       discoveryApiKey: params.discoveryApiKey,
-      fetchGuard: params.fetchGuard,
+      fetchGuard: params.fetchGuard ?? defaultOpenRouterFetchGuard,
       signal: params.signal,
       ttlMs: OPENROUTER_MODELS_CACHE_TTL_MS,
       auditContext: "openrouter-model-discovery",
