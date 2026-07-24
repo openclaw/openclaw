@@ -74,11 +74,39 @@ describe("scanOpenRouterModels", () => {
     if (byPricing === undefined) {
       throw new Error("Expected pricing-based model result.");
     }
+    expect(byPricing.contextLength).toBe(16_384);
+    expect(byPricing.maxCompletionTokens).toBe(1024);
     expect(byPricing.supportsToolsMeta).toBe(true);
     expect(byPricing.supportedParametersCount).toBe(3);
     expect(byPricing.isFree).toBe(true);
     expect(byPricing.tool.skipped).toBe(true);
     expect(byPricing.image.skipped).toBe(true);
+  });
+
+  it("uses OpenRouter top-provider limits for scan metadata", async () => {
+    const fetchImpl = createFetchFixture({
+      data: [
+        {
+          id: "acme/provider-limited:free",
+          name: "Provider Limited",
+          context_length: 32_768,
+          top_provider: {
+            context_length: 16_384,
+            max_completion_tokens: 4096,
+          },
+          supported_parameters: [],
+          pricing: { prompt: "0", completion: "0" },
+        },
+      ],
+    });
+
+    const [result] = await scanOpenRouterModels({
+      fetchImpl,
+      probe: false,
+    });
+
+    expect(result?.contextLength).toBe(16_384);
+    expect(result?.maxCompletionTokens).toBe(4096);
   });
 
   it("drops out-of-range OpenRouter created_at timestamps", async () => {

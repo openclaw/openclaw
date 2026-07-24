@@ -4,6 +4,7 @@ import { getEnvApiKey } from "@openclaw/ai/internal/runtime";
 import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
+  asFiniteNumber,
   asDateTimestampMs,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
@@ -244,19 +245,21 @@ async function fetchOpenRouterModels(
             return null;
           }
           const name = typeof obj.name === "string" && obj.name.trim() ? obj.name.trim() : id;
+          const topProvider =
+            obj.top_provider && typeof obj.top_provider === "object"
+              ? (obj.top_provider as Record<string, unknown>)
+              : undefined;
 
           const contextLength =
-            typeof obj.context_length === "number" && Number.isFinite(obj.context_length)
-              ? obj.context_length
-              : null;
+            asFiniteNumber(topProvider?.context_length) ??
+            asFiniteNumber(obj.context_length) ??
+            null;
 
           const maxCompletionTokens =
-            typeof obj.max_completion_tokens === "number" &&
-            Number.isFinite(obj.max_completion_tokens)
-              ? obj.max_completion_tokens
-              : typeof obj.max_output_tokens === "number" && Number.isFinite(obj.max_output_tokens)
-                ? obj.max_output_tokens
-                : null;
+            asFiniteNumber(topProvider?.max_completion_tokens) ??
+            asFiniteNumber(obj.max_completion_tokens) ??
+            asFiniteNumber(obj.max_output_tokens) ??
+            null;
 
           const supportedParameters = Array.isArray(obj.supported_parameters)
             ? normalizeStringEntries(
