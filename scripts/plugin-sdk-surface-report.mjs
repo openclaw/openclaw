@@ -159,7 +159,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +3: plugin approval reviewer-detail cap/truncator and sanitize-with-status variant.
       // +1: canonical incognito session classifier for storage-safe plugin behavior.
       // +2: shipped Slack and Discord setup compatibility helpers.
-      4697,
+      // +3: typed channel partial-delivery error, creator, and structural guard.
+      4700,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -176,7 +177,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: plugin approval detail truncator and sanitize-with-status variant.
       // +1: canonical incognito session classifier for storage-safe plugin behavior.
       // +2: shipped Slack and Discord setup compatibility helpers.
-      2845,
+      // +2: channel partial-delivery error creator and structural guard.
+      2847,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
