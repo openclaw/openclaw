@@ -1,4 +1,31 @@
 // Skill refresh tests cover runtime reload events and refresh-state updates.
+
+import _fsSync from "node:fs";
+import _os from "node:os";
+import _path from "node:path";
+
+const directorySymlinkType = process.platform === "win32" ? "junction" : "dir";
+
+const canCreateDirectorySymlinks = (() => {
+  let probeDir;
+  try {
+    probeDir = _fsSync.mkdtempSync(_path.join(_os.tmpdir(), "openclaw-dir-symlink-probe-"));
+    const targetDir = _path.join(probeDir, "target");
+    const linkDir = _path.join(probeDir, "link");
+    _fsSync.mkdirSync(targetDir);
+    _fsSync.symlinkSync(targetDir, linkDir, directorySymlinkType);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (probeDir) {
+      try {
+        _fsSync.rmSync(probeDir, { recursive: true, force: true });
+      } catch {}
+    }
+  }
+})();
+
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -333,7 +360,7 @@ describe("ensureSkillsWatcher", () => {
     }
   });
 
-  it.runIf(process.platform !== "win32")(
+  it.skipIf(!canCreateDirectorySymlinks)(
     "watches allowed symlink skill targets without following every root symlink",
     async () => {
       const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-watch-symlink-"));
@@ -348,7 +375,7 @@ describe("ensureSkillsWatcher", () => {
           path.join(targetSkillDir, "SKILL.md"),
           "---\nname: linked-skill\ndescription: Linked\n---\n",
         );
-        await fs.symlink(targetSkillDir, path.join(groupedLinkDir, "linked-skill"), "dir");
+        await fs.symlink(targetSkillDir, path.join(groupedLinkDir, "linked-skill"), directorySymlinkType);
 
         refreshModule.ensureSkillsWatcher({
           workspaceDir,
@@ -369,7 +396,7 @@ describe("ensureSkillsWatcher", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")("watches symlinked skill root targets", async () => {
+  it.skipIf(!canCreateDirectorySymlinks)("watches symlinked skill root targets", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-watch-root-link-"));
     const targetSkillsDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "openclaw-watch-root-link-target-"),
@@ -379,7 +406,7 @@ describe("ensureSkillsWatcher", () => {
         path.join(targetSkillsDir, "SKILL.md"),
         "---\nname: linked-root\ndescription: Linked root\n---\n",
       );
-      await fs.symlink(targetSkillsDir, path.join(workspaceDir, "skills"), "dir");
+      await fs.symlink(targetSkillsDir, path.join(workspaceDir, "skills"), directorySymlinkType);
 
       refreshModule.ensureSkillsWatcher({ workspaceDir });
 
@@ -396,7 +423,7 @@ describe("ensureSkillsWatcher", () => {
     }
   });
 
-  it.runIf(process.platform !== "win32")(
+  it.skipIf(!canCreateDirectorySymlinks)(
     "does not watch untrusted companion skills symlink targets",
     async () => {
       const workspaceDir = await fs.mkdtemp(
@@ -411,7 +438,7 @@ describe("ensureSkillsWatcher", () => {
           path.join(outsideDir, "SKILL.md"),
           "---\nname: untrusted\ndescription: Untrusted\n---\n",
         );
-        await fs.symlink(outsideDir, path.join(repoDir, "skills"), "dir");
+        await fs.symlink(outsideDir, path.join(repoDir, "skills"), directorySymlinkType);
 
         refreshModule.ensureSkillsWatcher({
           workspaceDir,
@@ -682,7 +709,7 @@ describe("ensureSkillsWatcher", () => {
     }
   });
 
-  it.runIf(process.platform !== "win32")(
+  it.skipIf(!canCreateDirectorySymlinks)(
     "does not watch untrusted plugin skill symlink targets",
     async () => {
       const pluginDir = await fs.mkdtemp(
@@ -697,7 +724,7 @@ describe("ensureSkillsWatcher", () => {
           path.join(outsideDir, "SKILL.md"),
           "---\nname: untrusted-plugin\ndescription: Untrusted plugin\n---\n",
         );
-        await fs.symlink(outsideDir, path.join(pluginDir, "skills", "untrusted"), "dir");
+        await fs.symlink(outsideDir, path.join(pluginDir, "skills", "untrusted"), directorySymlinkType);
         const pluginSkills = await import("../loading/plugin-skills.js");
         vi.mocked(pluginSkills.resolvePluginSkillDirs).mockReturnValueOnce([pluginDir]);
 
