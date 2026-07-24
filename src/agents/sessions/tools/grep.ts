@@ -33,7 +33,7 @@ import {
   truncateLine,
 } from "./truncate.js";
 
-const grepSchema = Type.Object({
+export const grepSchema = Type.Object({
   pattern: Type.String({ description: "Regex/literal pattern." }),
   path: Type.Optional(Type.String({ description: "File/dir; default cwd." })),
   glob: Type.Optional(Type.String({ description: "File glob, e.g. *.ts." })),
@@ -44,11 +44,11 @@ const grepSchema = Type.Object({
     }),
   ),
   context: Type.Optional(
-    Type.Number({
+    Type.Integer({
       description: "Context lines each side; default 0.",
     }),
   ),
-  limit: Type.Optional(Type.Number({ description: "Max matches; default 100." })),
+  limit: Type.Optional(Type.Integer({ description: "Max matches; default 100." })),
 });
 const DEFAULT_LIMIT = 100;
 
