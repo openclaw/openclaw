@@ -1504,7 +1504,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
   it("uses repaired no-drop prune output for summarization", async () => {
     mockSummarizeInStages.mockReset();
-    mockSummarizeInStages.mockResolvedValue("mock summary");
+    mockSummarizeInStages.mockResolvedValue(summaryResult("mock summary"));
 
     const sessionManager = stubSessionManager();
     const model = createAnthropicModelFixture();
@@ -1577,7 +1577,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     // without repair. The unconditional repair added after the splitPreservedRecentTurns
     // call must drop the orphaned aborted turn before summarizeInStages.
     mockSummarizeInStages.mockReset();
-    mockSummarizeInStages.mockResolvedValue("mock summary");
+    mockSummarizeInStages.mockResolvedValue(summaryResult("mock summary"));
 
     const sessionManager = stubSessionManager();
     const model = createAnthropicModelFixture();
@@ -1638,7 +1638,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
   it("repairs orphaned tool_use in pruned.messages when chunks are dropped", async () => {
     mockSummarizeInStages.mockReset();
-    mockSummarizeInStages.mockResolvedValue("mock summary");
+    mockSummarizeInStages.mockResolvedValue(summaryResult("mock summary"));
 
     const sessionManager = stubSessionManager();
     // maxHistoryShare=0.1 forces the prune path to drop older chunks.
