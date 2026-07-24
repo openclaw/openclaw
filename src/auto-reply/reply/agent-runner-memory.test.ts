@@ -1712,10 +1712,7 @@ describe("runMemoryFlushIfNeeded", () => {
       totalTokensFresh: true,
       compactionCount: 0,
     };
-    await upsertSessionEntry(
-      { agentId: "main", sessionId: "session", sessionKey, storePath },
-      sessionEntry,
-    );
+    await upsertSessionEntry({ agentId: "main", sessionKey, storePath }, sessionEntry);
 
     await runPreflightCompactionIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
