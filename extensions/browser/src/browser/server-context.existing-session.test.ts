@@ -126,6 +126,29 @@ afterEach(() => {
 });
 
 describe("browser server-context existing-session profile", () => {
+  it("fails closed for explicit Chrome MCP cdpUrl under the default CDP policy", async () => {
+    fs.mkdirSync("/tmp/brave-profile", { recursive: true });
+    const state = makeState();
+    state.resolved.ssrfPolicy = {};
+    state.resolved.profiles["chrome-live"] = {
+      ...state.resolved.profiles["chrome-live"],
+      cdpUrl: "http://127.0.0.1:9222",
+    };
+    const live = createBrowserRouteContext({ getState: () => state }).forProfile("chrome-live");
+
+    await expect(live.listTabs()).rejects.toThrow(/Chrome MCP cannot carry that pinned transport/);
+    await expect(live.openTab("https://example.com")).rejects.toThrow(
+      /Use driver "openclaw" for guarded CDP endpoints/,
+    );
+    await expect(live.ensureBrowserAvailable()).rejects.toThrow(
+      /remove cdpUrl from this existing-session profile/,
+    );
+
+    expect(chromeMcp.listChromeMcpTabs).not.toHaveBeenCalled();
+    expect(chromeMcp.openChromeMcpTab).not.toHaveBeenCalled();
+    expect(chromeMcp.ensureChromeMcpAvailable).not.toHaveBeenCalled();
+  });
+
   it("reports attach-only profiles as running when the MCP session is available but no page is selected", async () => {
     fs.mkdirSync("/tmp/brave-profile", { recursive: true });
     const state = makeState();
@@ -174,6 +197,7 @@ describe("browser server-context existing-session profile", () => {
       state.resolved.profiles["chrome-live"],
       "chrome-live browser profile",
     );
+    state.resolved.ssrfPolicy = undefined;
     state.resolved.profiles["chrome-live"] = {
       ...chromeLiveProfile,
       cdpUrl: "http://openclaw:relay-token@127.0.0.1:9222",

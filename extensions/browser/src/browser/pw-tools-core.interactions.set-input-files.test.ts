@@ -1,6 +1,10 @@
 // Browser tests cover pw tools core.interactions.set input files plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const readFile = vi.fn();
+const stat = vi.fn();
+const detectMime = vi.fn();
+
 let page: Record<string, unknown> | null = null;
 let locator: Record<string, unknown> | null = null;
 
@@ -58,6 +62,17 @@ vi.mock("./paths.js", () => {
   };
 });
 
+vi.mock("node:fs/promises", () => ({
+  default: {
+    readFile,
+    stat,
+  },
+}));
+
+vi.mock("openclaw/plugin-sdk/media-mime", () => ({
+  detectMime,
+}));
+
 const { setInputFilesViaPlaywright } = await import("./pw-tools-core.interactions.js");
 
 function seedSingleLocatorPage(): {
@@ -84,6 +99,9 @@ describe("setInputFilesViaPlaywright", () => {
     vi.clearAllMocks();
     page = null;
     locator = null;
+    readFile.mockResolvedValue(Buffer.from("upload contents"));
+    stat.mockResolvedValue({ size: Buffer.byteLength("upload contents") });
+    detectMime.mockResolvedValue("text/plain");
     resolveStrictExistingUploadPaths.mockResolvedValue({
       ok: true,
       paths: ["/private/tmp/openclaw/uploads/ok.txt"],
@@ -104,9 +122,79 @@ describe("setInputFilesViaPlaywright", () => {
       requestedPaths: ["/tmp/openclaw/uploads/ok.txt"],
     });
     expect(refLocator).toHaveBeenCalledWith(page, "e7");
+    expect(stat).not.toHaveBeenCalled();
+    expect(readFile).not.toHaveBeenCalled();
+    expect(detectMime).not.toHaveBeenCalled();
     expect(setInputFiles).toHaveBeenCalledWith(["/private/tmp/openclaw/uploads/ok.txt"]);
     expect(setInputFiles).toHaveBeenCalledTimes(1);
     expect(elementHandle).not.toHaveBeenCalled();
+  });
+
+  it("converts guarded remote uploads to payloads before Playwright path handoff", async () => {
+    const { setInputFiles, elementHandle } = seedSingleLocatorPage();
+
+    await setInputFilesViaPlaywright({
+      cdpUrl: "https://browser.example/cdp",
+      targetId: "T1",
+      inputRef: "e7",
+      paths: ["/tmp/openclaw/uploads/ok.txt"],
+      ssrfPolicy: {},
+    });
+
+    expect(stat).toHaveBeenCalledWith("/private/tmp/openclaw/uploads/ok.txt");
+    expect(readFile).toHaveBeenCalledWith("/private/tmp/openclaw/uploads/ok.txt");
+    expect(detectMime).toHaveBeenCalledWith({
+      buffer: Buffer.from("upload contents"),
+      filePath: "/private/tmp/openclaw/uploads/ok.txt",
+    });
+    expect(setInputFiles).toHaveBeenCalledWith([
+      {
+        name: "ok.txt",
+        mimeType: "text/plain",
+        buffer: Buffer.from("upload contents"),
+      },
+    ]);
+    expect(setInputFiles).toHaveBeenCalledTimes(1);
+    expect(elementHandle).not.toHaveBeenCalled();
+  });
+
+  it("falls back to an octet-stream payload when mime detection has no answer", async () => {
+    detectMime.mockResolvedValueOnce(undefined);
+    const { setInputFiles } = seedSingleLocatorPage();
+
+    await setInputFilesViaPlaywright({
+      cdpUrl: "https://browser.example/cdp",
+      targetId: "T1",
+      inputRef: "e7",
+      paths: ["/tmp/openclaw/uploads/ok.txt"],
+      ssrfPolicy: {},
+    });
+
+    expect(setInputFiles).toHaveBeenCalledWith([
+      {
+        name: "ok.txt",
+        mimeType: "application/octet-stream",
+        buffer: Buffer.from("upload contents"),
+      },
+    ]);
+  });
+
+  it("checks the Playwright payload size cap before reading guarded remote upload files", async () => {
+    stat.mockResolvedValueOnce({ size: 50 * 1024 * 1024 });
+    const { setInputFiles } = seedSingleLocatorPage();
+
+    await expect(
+      setInputFilesViaPlaywright({
+        cdpUrl: "https://browser.example/cdp",
+        targetId: "T1",
+        inputRef: "e7",
+        paths: ["/tmp/openclaw/uploads/too-large.bin"],
+        ssrfPolicy: {},
+      }),
+    ).rejects.toThrow("Cannot set buffer larger than 50Mb");
+
+    expect(readFile).not.toHaveBeenCalled();
+    expect(setInputFiles).not.toHaveBeenCalled();
   });
 
   it("keeps assignment-triggered navigation inside the browser policy guard", async () => {

@@ -335,6 +335,70 @@ describe("browser server-context tab selection state", () => {
     );
   });
 
+  it("preserves the opened tab lookup when a same-target listing lacks a WebSocket URL", async () => {
+    vi.spyOn(cdpModule, "createTargetViaCdp").mockRejectedValue(new Error("raw create failed"));
+    vi.spyOn(cdpModule, "waitForCdpCommittedNavigationUrl").mockResolvedValue(undefined);
+    let listCalls = 0;
+    const lookupHosts: string[] = [];
+    const fetchJson = vi.spyOn(cdpHelpersModule, "fetchJson").mockImplementation(async (url) => {
+      const value = String(url);
+      if (value.includes("/json/list")) {
+        listCalls += 1;
+        return listCalls === 1
+          ? []
+          : [
+              {
+                id: "NEW",
+                title: "Listed",
+                url: "about:blank",
+                type: "page",
+              },
+            ];
+      }
+      if (value.includes("/json/new")) {
+        return {
+          id: "NEW",
+          title: "Opened",
+          url: "about:blank",
+          webSocketDebuggerUrl: "ws://127.0.0.1:18800/devtools/page/NEW",
+          type: "page",
+        };
+      }
+      throw new Error(`unexpected fetchJson: ${value}`);
+    });
+    vi.spyOn(cdpHelpersModule, "assertCdpEndpointAllowed").mockImplementation(async () => ({
+      hostname: "browser.example",
+      addresses: ["127.0.0.1"],
+      lookup: ((hostname: string, _options: unknown, callback?: unknown) => {
+        lookupHosts.push(hostname);
+        if (typeof callback === "function") {
+          callback(null, "127.0.0.1", 4);
+        }
+      }) as never,
+    }));
+    const state = makeState("openclaw");
+    state.resolved.ssrfPolicy = {};
+    seedRunningProfileState(state);
+    const openclaw = createTestBrowserRouteContext({ getState: () => state }).forProfile(
+      "openclaw",
+    );
+
+    const selected = await openclaw.ensureTabAvailable();
+
+    expect(selected).toEqual(
+      expect.objectContaining({
+        targetId: "NEW",
+        title: "Listed",
+        url: "about:blank",
+        wsUrl: "ws://127.0.0.1:18800/devtools/page/NEW",
+      }),
+    );
+    expect(selected.wsLookup).toBeTypeOf("function");
+    selected.wsLookup?.("browser.example", {}, () => {});
+    expect(lookupHosts).toEqual(["browser.example"]);
+    expect(fetchJson.mock.calls.some(([url]) => String(url).includes("/json/new"))).toBe(true);
+  });
+
   it("returns an unadopted target when CDP cannot prove the committed navigation", async () => {
     vi.spyOn(cdpModule, "createTargetViaCdp").mockResolvedValue({
       targetId: "UNSETTLED",

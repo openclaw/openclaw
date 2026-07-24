@@ -3,7 +3,10 @@
  */
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { resolveBrowserNavigationProxyMode } from "./browser-proxy-mode.js";
-import { resolveCdpControlPolicy } from "./cdp-reachability-policy.js";
+import {
+  assertChromeMcpExplicitCdpUrlAllowed,
+  resolveCdpControlPolicy,
+} from "./cdp-reachability-policy.js";
 import { isSelectableCdpBrowserTarget } from "./cdp-target-filter.js";
 import { CDP_JSON_NEW_TIMEOUT_MS } from "./cdp-timeouts.js";
 import {
@@ -116,6 +119,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
 
   const readTabs = async (options?: BrowserOperationOptions): Promise<BrowserTab[]> => {
     if (capabilities.usesChromeMcp) {
+      assertChromeMcpExplicitCdpUrlAllowed(profile, getCdpControlPolicy());
       const { listChromeMcpTabs } = await getChromeMcpModule();
       return await listChromeMcpTabs(profile.name, profile, options);
     }
@@ -291,12 +295,14 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
 
     if (capabilities.usesChromeMcp) {
       await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
+      const cdpPolicy = getCdpControlPolicy();
+      assertChromeMcpExplicitCdpUrlAllowed(profile, cdpPolicy);
       const { openChromeMcpTab } = await getChromeMcpModule();
       const cdpTimeouts = getRemoteCdpActionTimeouts();
       const page = await openChromeMcpTab(profile.name, url, profile, {
         signal: opts?.signal,
         timeoutMs: opts?.timeoutMs,
-        cdpPolicy: getCdpControlPolicy(),
+        cdpPolicy,
         ...(cdpTimeouts ? { cdpTimeouts } : {}),
       });
       await assertBrowserNavigationResultAllowed({ url: page.url, ...ssrfPolicyOpts });

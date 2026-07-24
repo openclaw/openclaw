@@ -87,7 +87,9 @@ describe("cdp helpers", () => {
       assertCdpEndpointAllowed("http://127.0.0.1:9222/json/version", {
         dangerouslyAllowPrivateNetwork: false,
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual(
+      expect.objectContaining({ hostname: "127.0.0.1", lookup: expect.any(Function) }),
+    );
   });
 
   it("adds exact loopback hosts to the CDP hostname allowlist", async () => {
@@ -96,7 +98,9 @@ describe("cdp helpers", () => {
         dangerouslyAllowPrivateNetwork: false,
         allowedHostnames: ["*.corp.example"],
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual(
+      expect.objectContaining({ hostname: "127.0.0.1", lookup: expect.any(Function) }),
+    );
   });
 
   it("still enforces hostname allowlist for non-loopback CDP endpoints", async () => {
@@ -131,7 +135,9 @@ describe("cdp helpers", () => {
         source: "discovered",
         configuredUrl: "http://127.0.0.1:9222",
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual(
+      expect.objectContaining({ hostname: "127.0.0.1", lookup: expect.any(Function) }),
+    );
   });
 
   it("preserves broad private authority permission through exact-host scoping", async () => {
@@ -143,7 +149,9 @@ describe("cdp helpers", () => {
         source: "discovered",
         configuredUrl: "http://127.0.0.1:9222",
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual(
+      expect.objectContaining({ hostname: "127.0.0.1", lookup: expect.any(Function) }),
+    );
   });
 
   it("blocks a discovered endpoint on another port in strict SSRF mode", async () => {
@@ -161,7 +169,9 @@ describe("cdp helpers", () => {
       assertCdpEndpointAllowed("http://127.0.0.1:9222/json/version", {
         allowedHostnames: ["api.example.com"],
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual(
+      expect.objectContaining({ hostname: "127.0.0.1", lookup: expect.any(Function) }),
+    );
   });
 
   it("releases guarded CDP fetches for bodyless requests", async () => {
@@ -342,6 +352,27 @@ describe("cdp helpers", () => {
       Authorization: `Basic ${Buffer.from("alice:p@ss word").toString("base64")}`,
     });
     expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes the default remote CDP policy object into guarded discovery fetches", async () => {
+    const release = vi.fn(async () => {});
+    const policy = {};
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: {
+        ok: true,
+        status: 200,
+      },
+      release,
+    });
+
+    await expect(
+      fetchOk("https://browserless.example:9222/json/version", 250, undefined, policy),
+    ).resolves.toBeUndefined();
+
+    const request = requireGuardedFetchRequest();
+    expect(request?.url).toBe("https://browserless.example:9222/json/version");
+    expect(request?.policy).toBe(policy);
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it("replaces navigation grants with the exact loopback CDP host", async () => {

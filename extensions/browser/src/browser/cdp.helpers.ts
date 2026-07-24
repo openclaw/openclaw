@@ -13,7 +13,6 @@ import WebSocket from "ws";
 import { isLoopbackHost } from "../gateway/net.js";
 import {
   SsrFBlockedError,
-  isPrivateNetworkAllowedByPolicy,
   type SsrFPolicy,
   resolvePinnedHostnameWithPolicy,
 } from "../infra/net/ssrf.js";
@@ -36,6 +35,13 @@ import { normalizeBrowserTimerDelayMs } from "./timer-delay.js";
 
 const CDP_URL_IN_TEXT_RE = /\b(?:https?|wss?):\/\/[^\s"'<>`]+/gi;
 const CDP_WS_MAX_PAYLOAD_BYTES = 256 * 1024 * 1024;
+const PLAYWRIGHT_CDP_USER_AGENT = "Playwright/unknown";
+const PLAYWRIGHT_CDP_PER_MESSAGE_DEFLATE = {
+  clientNoContextTakeover: true,
+  zlibDeflateOptions: { level: 3 },
+  zlibInflateOptions: { chunkSize: 10 * 1024 },
+  threshold: 10 * 1024,
+} as const;
 
 export { isLoopbackHost };
 export { parseBrowserHttpUrl, redactCdpUrl };
@@ -202,6 +208,13 @@ export function getHeadersWithAuth(url: string, headers: Record<string, string> 
     // ignore
   }
   return mergedHeaders;
+}
+
+function withDefaultPlaywrightUserAgent(headers: Record<string, string>): Record<string, string> {
+  if (Object.keys(headers).some((key) => key.trim().toLowerCase() === "user-agent")) {
+    return headers;
+  }
+  return { ...headers, "User-Agent": PLAYWRIGHT_CDP_USER_AGENT };
 }
 
 /** Remove URL userinfo after callers have converted it to an Authorization header. */
@@ -680,9 +693,13 @@ export function openCdpWebSocket(
     headers?: Record<string, string>;
     handshakeTimeoutMs?: number;
     lookup?: CdpEndpointPin["lookup"];
+    playwrightTransportDefaults?: boolean;
   },
 ): WebSocket {
-  const headers = getHeadersWithAuth(wsUrl, opts?.headers ?? {});
+  const headersWithAuth = getHeadersWithAuth(wsUrl, opts?.headers ?? {});
+  const headers = opts?.playwrightTransportDefaults
+    ? withDefaultPlaywrightUserAgent(headersWithAuth)
+    : headersWithAuth;
   const handshakeTimeoutMs =
     typeof opts?.handshakeTimeoutMs === "number" && Number.isFinite(opts.handshakeTimeoutMs)
       ? Math.max(1, Math.floor(opts.handshakeTimeoutMs))
@@ -695,6 +712,9 @@ export function openCdpWebSocket(
       new WebSocket(connectionUrl, {
         handshakeTimeout: handshakeTimeoutMs,
         maxPayload: CDP_WS_MAX_PAYLOAD_BYTES,
+        ...(opts?.playwrightTransportDefaults
+          ? { perMessageDeflate: PLAYWRIGHT_CDP_PER_MESSAGE_DEFLATE }
+          : {}),
         ...(Object.keys(headers).length ? { headers } : {}),
         // getDirectAgentForCdp only returns a plain direct loopback agent, not
         // a proxy agent. Non-loopback pins must reach Node's lookup option.

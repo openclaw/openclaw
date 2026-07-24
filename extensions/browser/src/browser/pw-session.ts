@@ -23,6 +23,7 @@ import type {
   Response,
   Route,
 } from "playwright-core";
+import WebSocket from "ws";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { SsrFBlockedError, type SsrFPolicy } from "../infra/net/ssrf.js";
 import { rawDataToString } from "../infra/ws.js";
@@ -167,6 +168,7 @@ async function connectOverCdpPinnedTransport(
     headers: opts.headers,
     handshakeTimeoutMs: opts.timeout,
     lookup: opts.lookup,
+    playwrightTransportDefaults: true,
   });
   try {
     await new Promise<void>((resolve, reject) => {
@@ -178,12 +180,50 @@ async function connectOverCdpPinnedTransport(
     let onClose: ((reason?: string) => void) | undefined;
     const pendingMessages: object[] = [];
     let pendingCloseReason: string | undefined;
+    let transportClosed = false;
+    const notifyTransportClosed = (reason: string) => {
+      if (transportClosed) {
+        return;
+      }
+      transportClosed = true;
+      if (onClose) {
+        onClose(reason);
+        return;
+      }
+      pendingCloseReason = reason;
+    };
+    const closeTransportSocket = (reason = "CDP socket closed") => {
+      notifyTransportClosed(reason);
+      ws.close();
+      const terminateTimer = setTimeout(() => {
+        if (ws.readyState !== WebSocket.CLOSED) {
+          ws.terminate();
+        }
+      }, 100);
+      terminateTimer.unref?.();
+    };
+    const scheduleMessage = (message: object) => {
+      setImmediate(() => {
+        if (transportClosed) {
+          return;
+        }
+        if (!onMessage) {
+          pendingMessages.push(message);
+          return;
+        }
+        try {
+          onMessage(message);
+        } catch (error) {
+          closeTransportSocket(formatErrorMessage(error));
+        }
+      });
+    };
     const transport: ConnectOverCDPTransport = {
       send: (message) => {
         ws.send(JSON.stringify(message));
       },
       close: () => {
-        ws.close();
+        closeTransportSocket();
       },
       get onmessage() {
         return onMessage;
@@ -196,7 +236,7 @@ async function connectOverCdpPinnedTransport(
         while (pendingMessages.length > 0) {
           const pending = pendingMessages.shift();
           if (pending) {
-            handler(pending);
+            scheduleMessage(pending);
           }
         }
       },
@@ -212,28 +252,12 @@ async function connectOverCdpPinnedTransport(
         }
       },
     };
-    let transportClosed = false;
-    const notifyTransportClosed = (reason: string) => {
-      if (transportClosed) {
-        return;
-      }
-      transportClosed = true;
-      if (onClose) {
-        onClose(reason);
-        return;
-      }
-      pendingCloseReason = reason;
-    };
     ws.on("message", (raw) => {
       try {
         const parsed = JSON.parse(rawDataToString(raw)) as object;
-        if (onMessage) {
-          onMessage(parsed);
-          return;
-        }
-        pendingMessages.push(parsed);
+        scheduleMessage(parsed);
       } catch {
-        // Ignore malformed CDP frames; Playwright handles the eventual close.
+        closeTransportSocket();
       }
     });
     ws.on("close", () => {
@@ -1429,15 +1453,15 @@ async function connectBrowser(cdpUrl: string, ssrfPolicy?: SsrFPolicy): Promise<
           // Keep credentialed discovery in OpenClaw's guarded fetch path instead.
           throw new Error("Authenticated CDP HTTP endpoint did not expose a usable WebSocket URL.");
         }
-        const normalizedCdpHostname = new URL(normalized).hostname;
-        const needsPinnedDependencyConnect =
-          Boolean(configuredPin?.lookup) && !isLoopbackHost(normalizedCdpHostname);
-        if (!resolvedEndpoint && ssrfPolicy && needsPinnedDependencyConnect) {
+        if (!resolvedEndpoint && ssrfPolicy && !isWebSocketUrl(normalized)) {
           const detail = endpointDiscoveryError
             ? ` Reason: ${redactCdpErrorText(formatErrorMessage(endpointDiscoveryError))}`
             : "";
           throw new Error(`Guarded CDP endpoint did not expose a usable WebSocket URL.${detail}`);
         }
+        const normalizedCdpHostname = new URL(normalized).hostname;
+        const needsPinnedDependencyConnect =
+          Boolean(configuredPin?.lookup) && !isLoopbackHost(normalizedCdpHostname);
         const endpointUrl = resolvedEndpoint?.url ?? normalized;
         const endpointLookup =
           resolvedEndpoint?.lookup ??
