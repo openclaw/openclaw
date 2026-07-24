@@ -180,9 +180,9 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
             `Migrated shared state session watch cursors → provenance column (${sessionWatchResult.migratedAmbientWatches} ambient, ${sessionWatchResult.removedLegacySentinels} sentinels removed)`,
           );
         }
+        ensureAdditiveStateColumns(db);
         assertCanonicalStateSchemaShape(db, pathname);
         if (tableExists(db, "audit_events")) {
-          ensureAdditiveStateColumns(db);
           db.exec(OPENCLAW_STATE_SCHEMA_SQL);
           if (previousVersion < OPENCLAW_STATE_STRICT_SCHEMA_VERSION) {
             repairLegacyGatewayRestartHandoffsForStrictMigration(db);
