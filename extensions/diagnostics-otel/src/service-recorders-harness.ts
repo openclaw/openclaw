@@ -17,6 +17,7 @@ export function createHarnessRecorders(runtime: DiagnosticsRecorderRuntime) {
     spanWithDuration,
     trustedTraceContext,
     activeTrustedParentContext,
+    internalOrTrustedParentContext,
     trackTrustedSpan,
     takeTrackedTrustedSpan,
     setSpanAttrs,
@@ -49,7 +50,8 @@ export function createHarnessRecorders(runtime: DiagnosticsRecorderRuntime) {
       evt,
       metadata,
       spanWithDuration("openclaw.harness.run", harnessRunMetricAttrs(evt), undefined, {
-        parentContext: activeTrustedParentContext(evt, metadata),
+        parentContext: activeTrustedParentContext(evt, metadata) ??
+          internalOrTrustedParentContext(evt, metadata),
         startTimeMs: evt.ts,
       }),
     );
@@ -92,7 +94,8 @@ export function createHarnessRecorders(runtime: DiagnosticsRecorderRuntime) {
     const span =
       trackedSpan ??
       spanWithDuration("openclaw.harness.run", spanAttrs, evt.durationMs, {
-        parentContext: activeTrustedParentContext(evt, metadata),
+        parentContext: activeTrustedParentContext(evt, metadata) ??
+          internalOrTrustedParentContext(evt, metadata),
         endTimeMs: evt.ts,
       });
     setSpanAttrs(span, spanAttrs);
@@ -135,7 +138,8 @@ export function createHarnessRecorders(runtime: DiagnosticsRecorderRuntime) {
     const span =
       takeTrackedTrustedSpan(evt, metadata) ??
       spanWithDuration("openclaw.harness.run", spanAttrs, evt.durationMs, {
-        parentContext: activeTrustedParentContext(evt, metadata),
+        parentContext: activeTrustedParentContext(evt, metadata) ??
+          internalOrTrustedParentContext(evt, metadata),
         endTimeMs: evt.ts,
       });
     setSpanAttrs(span, spanAttrs);
