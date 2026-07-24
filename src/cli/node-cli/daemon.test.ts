@@ -1,225 +1,468 @@
-// Node daemon tests cover node daemon command runtime behavior and errors.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
-import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
-import { runNodeDaemonInstall, runNodeDaemonStatus } from "./daemon.js";
+import type { createDaemonInstallActionContext } from "../daemon-cli/shared.js";
+import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 
-const mocks = vi.hoisted(() => {
-  const service = {
-    label: "Node service",
-    loadedText: "loaded",
-    notLoadedText: "not loaded",
-    stage: vi.fn(),
-    install: vi.fn(),
-    uninstall: vi.fn(),
-    stop: vi.fn(),
-    restart: vi.fn(),
-    isLoaded: vi.fn(async () => true),
-    readCommand: vi.fn<() => Promise<GatewayServiceCommandConfig | null>>(async () => null),
-    readRuntime: vi.fn<() => Promise<GatewayServiceRuntime>>(async () => ({ status: "running" })),
-  };
-  return {
-    runtime: {
-      log: vi.fn<(line: string) => void>(),
-      error: vi.fn<(line: string) => void>(),
-      writeJson: vi.fn(),
-      exit: vi.fn(),
-    },
-    service,
-    buildNodeInstallPlan: vi.fn(async () => ({
-      programArguments: ["node", "node-host"],
-      environment: {},
-      environmentValueSources: {},
-    })),
-    loadNodeHostConfig: vi.fn(),
-  };
-});
+type DaemonActionResponse = Parameters<
+  ReturnType<typeof createDaemonInstallActionContext>["emit"]
+>[0];
 
-vi.mock("../../runtime.js", () => ({
-  defaultRuntime: mocks.runtime,
+const buildNodeInstallPlanMock = vi.hoisted(() =>
+  vi.fn(async (_params?: unknown) => ({
+    programArguments: ["openclaw", "node", "run"],
+    workingDirectory: "/tmp",
+    environment: {},
+    environmentValueSources: {},
+    description: "OpenClaw node service",
+  })),
+);
+const isNodeDaemonRuntimeMock = vi.hoisted(() =>
+  vi.fn((value: unknown) => value === "node" || value === "bun"),
+);
+const loadNodeHostConfigMock = vi.hoisted(() =>
+  vi.fn(
+    async (): Promise<{
+      version: number;
+      nodeId?: string;
+      gateway?: { host?: string; port?: number; tls?: boolean; tlsFingerprint?: string };
+    } | null> => null,
+  ),
+);
+const resolveNodeServiceMock = vi.hoisted(() => vi.fn());
+const installDaemonServiceAndEmitMock = vi.hoisted(() => vi.fn(async (_params?: unknown) => {}));
+const buildDaemonServiceSnapshotMock = vi.hoisted(() =>
+  vi.fn(() => ({ label: "Node", loaded: false })),
+);
+const runServiceStartMock = vi.hoisted(() => vi.fn(async (_params?: unknown) => {}));
+const runServiceStopMock = vi.hoisted(() => vi.fn(async (_params?: unknown) => {}));
+const runServiceRestartMock = vi.hoisted(() => vi.fn(async (_params?: unknown) => {}));
+const runServiceUninstallMock = vi.hoisted(() => vi.fn(async (_params?: unknown) => {}));
+const parsePortMock = vi.hoisted(() =>
+  vi.fn((value: unknown): number | null => {
+    if (typeof value === "number") {
+      return Number.isFinite(value) ? value : null;
+    }
+    if (typeof value === "string" && value.trim()) {
+      const n = Number(value);
+      return Number.isFinite(n) ? n : null;
+    }
+    return null;
+  }),
+);
+const resolveIsNixModeMock = vi.hoisted(() => vi.fn(() => false));
+
+const actionState = vi.hoisted(() => ({
+  warnings: [] as string[],
+  emitted: [] as DaemonActionResponse[],
+  failed: [] as Array<{ message: string; hints?: string[] }>,
 }));
 
-vi.mock("../../daemon/node-service.js", () => ({
-  resolveNodeService: () => mocks.service,
+const createService = vi.hoisted(() => () => ({
+  label: "Node",
+  loadedText: "loaded",
+  notLoadedText: "not loaded",
+  isLoaded: vi.fn(async () => false),
+  install: vi.fn(async () => {}),
+  uninstall: vi.fn(async () => {}),
+  readCommand: vi.fn<
+    () => Promise<{
+      programArguments?: string[];
+      sourcePath?: string;
+      workingDirectory?: string;
+      environment?: Record<string, string | undefined>;
+    } | null>
+  >(async () => null),
+  readRuntime: vi.fn<() => Promise<GatewayServiceRuntime>>(async () => ({ status: "stopped" })),
 }));
 
 vi.mock("../../commands/node-daemon-install-helpers.js", () => ({
-  buildNodeInstallPlan: mocks.buildNodeInstallPlan,
+  buildNodeInstallPlan: buildNodeInstallPlanMock,
+}));
+
+vi.mock("../../commands/node-daemon-runtime.js", () => ({
+  DEFAULT_NODE_DAEMON_RUNTIME: "node",
+  isNodeDaemonRuntime: isNodeDaemonRuntimeMock,
 }));
 
 vi.mock("../../node-host/config.js", () => ({
-  loadNodeHostConfig: mocks.loadNodeHostConfig,
+  loadNodeHostConfig: loadNodeHostConfigMock,
 }));
 
-vi.mock("../../daemon/runtime-hints.js", () => ({
-  buildPlatformRuntimeLogHints: () => [
-    "Logs: node service log",
-    "Restart attempts: node restart log",
-  ],
-  buildPlatformServiceStartHints: () => ["openclaw node install", "openclaw node start"],
+vi.mock("../../daemon/node-service.js", () => ({
+  resolveNodeService: resolveNodeServiceMock,
 }));
 
-vi.mock("../../../packages/terminal-core/src/theme.js", async () => {
-  const actual = await vi.importActual<
-    typeof import("../../../packages/terminal-core/src/theme.js")
-  >("../../../packages/terminal-core/src/theme.js");
-  return {
-    ...actual,
-    colorize: (_rich: boolean, _theme: unknown, text: string) => text,
-  };
-});
+vi.mock("../daemon-cli/response.js", () => ({
+  buildDaemonServiceSnapshot: buildDaemonServiceSnapshotMock,
+  installDaemonServiceAndEmit: installDaemonServiceAndEmitMock,
+}));
 
-vi.mock("../daemon-cli/shared.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../daemon-cli/shared.js")>("../daemon-cli/shared.js");
-  return {
-    ...actual,
-    createCliStatusTextStyles: () => ({
-      rich: false,
-      label: (text: string) => text,
-      accent: (text: string) => text,
-      infoText: (text: string) => text,
-      okText: (text: string) => text,
-      warnText: (text: string) => text,
-      errorText: (text: string) => text,
-    }),
-    formatRuntimeStatus: (runtime: GatewayServiceRuntime | undefined) => runtime?.status ?? "",
-    resolveRuntimeStatusColor: () => "",
-    failIfNixDaemonInstallMode: () => false,
-  };
-});
+vi.mock("../daemon-cli/lifecycle-core.js", () => ({
+  runServiceStart: runServiceStartMock,
+  runServiceStop: runServiceStopMock,
+  runServiceRestart: runServiceRestartMock,
+  runServiceUninstall: runServiceUninstallMock,
+}));
+
+vi.mock("../daemon-cli/shared.js", () => ({
+  parsePort: parsePortMock,
+  createCliStatusTextStyles: () => ({
+    rich: false,
+    label: (s: string) => s,
+    accent: (s: string) => s,
+    infoText: (s: string) => s,
+    okText: (s: string) => s,
+    warnText: (s: string) => s,
+    errorText: (s: string) => s,
+  }),
+  createDaemonInstallActionContext: (jsonFlag: unknown) => {
+    const json = Boolean(jsonFlag);
+    return {
+      json,
+      stdout: process.stdout,
+      warnings: actionState.warnings,
+      emit: (payload: DaemonActionResponse) => {
+        actionState.emitted.push(payload);
+      },
+      fail: (message: string, hints?: string[]) => {
+        actionState.failed.push({ message, hints });
+      },
+    };
+  },
+  failIfNixDaemonInstallMode: (fail: (message: string, hints?: string[]) => void) => {
+    if (!resolveIsNixModeMock()) {
+      return false;
+    }
+    fail("Nix mode detected; service install is disabled.");
+    return true;
+  },
+  formatRuntimeStatus: (runtime: unknown) =>
+    runtime && typeof runtime === "object" && "status" in runtime
+      ? String((runtime as { status: unknown }).status)
+      : "",
+  filterDaemonEnv: (env: Record<string, string> | undefined) =>
+    env?.OPENCLAW_PROFILE ? { OPENCLAW_PROFILE: env.OPENCLAW_PROFILE } : {},
+  resolveRuntimeStatusColor: () => "default",
+}));
+
+vi.mock("../error-format.js", () => ({
+  formatInvalidPortOption: (flag: string) => `Invalid ${flag} value`,
+  formatInvalidConfigPort: (path: string) => `Invalid ${path} value`,
+}));
+
+const { defaultRuntime, runtimeLogs, runtimeErrors, resetRuntimeCapture } =
+  createCliRuntimeCapture();
+vi.mock("../../runtime.js", () => ({
+  defaultRuntime,
+}));
+
+const {
+  runNodeDaemonInstall,
+  runNodeDaemonStart,
+  runNodeDaemonStop,
+  runNodeDaemonRestart,
+  runNodeDaemonUninstall,
+  runNodeDaemonStatus,
+} = await import("./daemon.js");
 
 describe("runNodeDaemonInstall", () => {
   beforeEach(() => {
-    mocks.runtime.log.mockClear();
-    mocks.runtime.error.mockClear();
-    mocks.runtime.writeJson.mockClear();
-    mocks.runtime.exit.mockClear();
-    mocks.service.install.mockReset().mockResolvedValue(undefined);
-    mocks.service.isLoaded.mockReset().mockResolvedValue(false);
-    mocks.buildNodeInstallPlan.mockReset().mockResolvedValue({
-      programArguments: ["node", "node-host"],
-      environment: {},
-      environmentValueSources: {},
+    actionState.warnings.length = 0;
+    actionState.emitted.length = 0;
+    actionState.failed.length = 0;
+    resetRuntimeCapture();
+    buildNodeInstallPlanMock.mockClear();
+    installDaemonServiceAndEmitMock.mockClear();
+    isNodeDaemonRuntimeMock.mockClear();
+    isNodeDaemonRuntimeMock.mockImplementation((v: unknown) => v === "node" || v === "bun");
+    parsePortMock.mockClear();
+    resolveIsNixModeMock.mockReturnValue(false);
+    loadNodeHostConfigMock.mockReset();
+    loadNodeHostConfigMock.mockResolvedValue(null);
+    resolveNodeServiceMock.mockImplementation(createService);
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("fails when --port is explicitly invalid", async () => {
+    parsePortMock.mockReturnValueOnce(null);
+
+    await runNodeDaemonInstall({ port: "abc" });
+
+    expect(actionState.failed[0]?.message).toBe("Invalid --port value");
+    expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
+  });
+
+  it("fails when configured node.gateway.port is out of range", async () => {
+    loadNodeHostConfigMock.mockResolvedValue({
+      version: 1,
+      nodeId: "node-1",
+      gateway: { host: "127.0.0.1", port: 0 },
     });
-    mocks.loadNodeHostConfig.mockReset().mockResolvedValue({
-      gateway: {
-        host: "saved-gateway.local",
-        port: 18789,
-        contextPath: "/saved",
-        tls: true,
-        tlsFingerprint: "saved-fingerprint",
-      },
+
+    await runNodeDaemonInstall({});
+
+    expect(actionState.failed[0]?.message).toBe("Invalid node.gateway.port value");
+    expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects an invalid --runtime value", async () => {
+    parsePortMock.mockReturnValueOnce(19000);
+
+    await runNodeDaemonInstall({ port: "19000", runtime: "deno" });
+
+    expect(actionState.failed[0]?.message).toContain('use "node"');
+    expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
+  });
+
+  it("returns already-installed without reinstalling when service is loaded and force is not set", async () => {
+    parsePortMock.mockReturnValueOnce(19000);
+    const loadedService = createService();
+    loadedService.isLoaded = vi.fn(async () => true);
+    resolveNodeServiceMock.mockReturnValueOnce(loadedService);
+
+    await runNodeDaemonInstall({ port: "19000", json: true });
+
+    const result = actionState.emitted[0]?.result;
+    expect(result).toBe("already-installed");
+    expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
+    expect(buildNodeInstallPlanMock).not.toHaveBeenCalled();
+  });
+
+  it("force-reinstalls when --force is set even if service is already loaded", async () => {
+    parsePortMock.mockReturnValueOnce(19000);
+    const loadedService = createService();
+    loadedService.isLoaded = vi.fn(async () => true);
+    resolveNodeServiceMock.mockReturnValueOnce(loadedService);
+
+    await runNodeDaemonInstall({ port: "19000", force: true });
+
+    expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
+    expect(buildNodeInstallPlanMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("inherits TLS settings from saved gateway config when host is unchanged", async () => {
+    parsePortMock.mockReturnValueOnce(null);
+    loadNodeHostConfigMock.mockResolvedValue({
+      version: 1,
+      nodeId: "node-saved",
+      gateway: { host: "10.0.0.5", port: 19002, tls: true, tlsFingerprint: "fp-saved" },
     });
+
+    await runNodeDaemonInstall({});
+
+    expect(buildNodeInstallPlanMock).toHaveBeenCalledTimes(1);
+    const planArgs = buildNodeInstallPlanMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(planArgs.host).toBe("10.0.0.5");
+    expect(planArgs.port).toBe(19002);
+    expect(planArgs.tls).toBe(true);
+    expect(planArgs.tlsFingerprint).toBe("fp-saved");
+    expect(planArgs.runtime).toBe("node");
   });
 
-  it.each([
-    ["host", { host: "new-gateway.local" }],
-    ["port", { port: 19_001 }],
-  ])("does not inherit saved TLS when %s explicitly retargets the gateway", async (_name, opts) => {
-    await runNodeDaemonInstall({ ...opts, force: true });
+  it("falls back to the default port 18789 when no override and no config is provided", async () => {
+    parsePortMock.mockReturnValueOnce(null);
 
-    expect(mocks.buildNodeInstallPlan).toHaveBeenCalledWith(
-      expect.objectContaining({
-        tls: false,
-        tlsFingerprint: undefined,
-      }),
-    );
+    await runNodeDaemonInstall({});
+
+    const planArgs = buildNodeInstallPlanMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(planArgs.port).toBe(18789);
+    expect(planArgs.host).toBe("127.0.0.1");
   });
 
-  it("inherits saved TLS when the gateway endpoint is unchanged", async () => {
-    await runNodeDaemonInstall({ force: true });
+  it("aborts install when running in nix daemon install mode", async () => {
+    resolveIsNixModeMock.mockReturnValue(true);
 
-    expect(mocks.buildNodeInstallPlan).toHaveBeenCalledWith(
-      expect.objectContaining({
-        host: "saved-gateway.local",
-        port: 18789,
-        contextPath: "/saved",
-        tls: true,
-        tlsFingerprint: "saved-fingerprint",
-      }),
-    );
+    await runNodeDaemonInstall({ port: "19000" });
+
+    expect(actionState.failed[0]?.message).toContain("Nix mode");
+    expect(buildNodeInstallPlanMock).not.toHaveBeenCalled();
+    expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("runNodeDaemonStart / Stop / Restart / Uninstall", () => {
+  beforeEach(() => {
+    runServiceStartMock.mockClear();
+    runServiceStopMock.mockClear();
+    runServiceRestartMock.mockClear();
+    runServiceUninstallMock.mockClear();
+    resolveNodeServiceMock.mockImplementation(createService);
   });
 
-  it.each([
-    ["host", { host: "saved-gateway.local" }],
-    ["port", { port: 18_789 }],
-  ])("keeps saved TLS when explicit %s resolves to the saved endpoint", async (_name, opts) => {
-    await runNodeDaemonInstall({ ...opts, force: true });
+  it("delegates start to runServiceStart with the Node service noun and start hints", async () => {
+    await runNodeDaemonStart({ json: true });
+    expect(runServiceStartMock).toHaveBeenCalledTimes(1);
+    const args = runServiceStartMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(args.serviceNoun).toBe("Node");
+    expect(typeof args.renderStartHints).toBe("function");
+    expect((args.opts as { json?: boolean }).json).toBe(true);
+  });
 
-    expect(mocks.buildNodeInstallPlan).toHaveBeenCalledWith(
-      expect.objectContaining({
-        tls: true,
-        tlsFingerprint: "saved-fingerprint",
-      }),
-    );
+  it("delegates stop to runServiceStop", async () => {
+    await runNodeDaemonStop({ json: false });
+    const args = runServiceStopMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(args.serviceNoun).toBe("Node");
+  });
+
+  it("delegates restart to runServiceRestart with start hints", async () => {
+    await runNodeDaemonRestart({});
+    const args = runServiceRestartMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(args.serviceNoun).toBe("Node");
+    expect(typeof args.renderStartHints).toBe("function");
+  });
+
+  it("delegates uninstall without stopBeforeUninstall and without post-assert", async () => {
+    await runNodeDaemonUninstall({});
+    const args = runServiceUninstallMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(args.serviceNoun).toBe("Node");
+    expect(args.stopBeforeUninstall).toBe(false);
+    expect(args.assertNotLoadedAfterUninstall).toBe(false);
   });
 });
 
 describe("runNodeDaemonStatus", () => {
-  function stdout(): string {
-    return mocks.runtime.log.mock.calls.map(([line]) => line).join("\n");
-  }
-
-  function stderr(): string {
-    return mocks.runtime.error.mock.calls.map(([line]) => line).join("\n");
-  }
-
   beforeEach(() => {
-    mocks.runtime.log.mockClear();
-    mocks.runtime.error.mockClear();
-    mocks.runtime.writeJson.mockClear();
-    mocks.runtime.exit.mockClear();
-    mocks.service.isLoaded.mockReset().mockResolvedValue(true);
-    mocks.service.readCommand.mockReset().mockResolvedValue(null);
-    mocks.service.readRuntime.mockReset().mockResolvedValue({ status: "running" });
+    resetRuntimeCapture();
+    defaultRuntime.writeJson.mockClear();
+    defaultRuntime.log.mockClear();
+    defaultRuntime.error.mockClear();
+    buildDaemonServiceSnapshotMock.mockClear();
+    buildDaemonServiceSnapshotMock.mockReturnValue({ label: "Node", loaded: false });
+    resolveNodeServiceMock.mockReset();
+    resolveNodeServiceMock.mockImplementation(createService);
   });
 
-  it("keeps missing service-unit status on stderr and prints recovery hints on stdout", async () => {
-    mocks.service.readRuntime.mockResolvedValue({ status: "stopped", missingUnit: true });
+  it("emits a JSON payload combining service snapshot, command, and runtime", async () => {
+    const svc = createService();
+    svc.isLoaded = vi.fn(async () => true);
+    svc.readCommand = vi.fn(async () => ({
+      programArguments: ["openclaw", "node", "run"],
+      sourcePath: "/etc/svc",
+    }));
+    svc.readRuntime = vi.fn(async (): Promise<GatewayServiceRuntime> => ({ status: "running" }));
+    resolveNodeServiceMock.mockReturnValueOnce(svc);
+    buildDaemonServiceSnapshotMock.mockReturnValueOnce({ label: "Node", loaded: true });
 
-    await runNodeDaemonStatus();
+    await runNodeDaemonStatus({ json: true });
 
-    expect(stderr()).toContain("Service unit not found.");
-    expect(stdout()).toContain("Logs: node service log");
-    expect(stdout()).toContain("Restart attempts: node restart log");
-    expect(stderr()).not.toContain("Logs: node service log");
-    expect(stderr()).not.toContain("Restart attempts: node restart log");
+    expect(defaultRuntime.writeJson).toHaveBeenCalledTimes(1);
+    const payload = defaultRuntime.writeJson.mock.calls[0]?.[0] as {
+      service?: Record<string, unknown>;
+    };
+    expect(payload.service?.command).toEqual({
+      programArguments: ["openclaw", "node", "run"],
+      sourcePath: "/etc/svc",
+    });
+    expect(payload.service?.runtime).toEqual({ status: "running" });
+    expect(payload.service?.loaded).toBe(true);
   });
 
-  it("keeps stopped status on stderr and prints recovery hints on stdout", async () => {
-    mocks.service.readRuntime.mockResolvedValue({ status: "stopped" });
+  it("prints start hints when the service is not loaded in human mode", async () => {
+    const svc = createService();
+    svc.isLoaded = vi.fn(async () => false);
+    resolveNodeServiceMock.mockReturnValueOnce(svc);
 
-    await runNodeDaemonStatus();
+    await runNodeDaemonStatus({ json: false });
 
-    expect(stderr()).toContain("Service is loaded but not running.");
-    expect(stdout()).toContain("Logs: node service log");
-    expect(stdout()).toContain("Restart attempts: node restart log");
-    expect(stderr()).not.toContain("Logs: node service log");
-    expect(stderr()).not.toContain("Restart attempts: node restart log");
+    const allOutput = runtimeLogs.join("\n");
+    expect(allOutput).toContain("openclaw node start");
+  });
+
+  it("falls back to a stable runtime status when the service throws on readRuntime", async () => {
+    const svc = createService();
+    svc.isLoaded = vi.fn(async () => true);
+    svc.readCommand = vi.fn(async () => null);
+    svc.readRuntime = vi.fn(async (): Promise<GatewayServiceRuntime> => {
+      throw new Error("permission denied");
+    });
+    resolveNodeServiceMock.mockReturnValueOnce(svc);
+    buildDaemonServiceSnapshotMock.mockReturnValueOnce({ label: "Node", loaded: true });
+
+    await runNodeDaemonStatus({ json: true });
+
+    const payload = defaultRuntime.writeJson.mock.calls[0]?.[0] as {
+      service?: { runtime?: Record<string, unknown> };
+    };
+    expect(payload.service?.runtime?.status).toBe("unknown");
+    const raw = payload.service?.runtime?.detail;
+    const detail = typeof raw === "string" ? raw : "";
+    expect(detail).toContain("permission denied");
   });
 
   it("redacts service credentials from JSON status output", async () => {
-    mocks.service.readCommand.mockResolvedValue({
-      programArguments: ["node", "node-host"],
+    const svc = createService();
+    svc.isLoaded = vi.fn(async () => true);
+    svc.readCommand = vi.fn(async () => ({
+      programArguments: ["openclaw", "node", "run"],
       environment: {
         OPENCLAW_PROFILE: "work",
         OPENCLAW_GATEWAY_TOKEN: "gateway-token",
         OPENCLAW_GATEWAY_PASSWORD: "gateway-password",
       },
-    });
+    }));
+    resolveNodeServiceMock.mockReturnValueOnce(svc);
+    buildDaemonServiceSnapshotMock.mockReturnValueOnce({ label: "Node", loaded: true });
 
     await runNodeDaemonStatus({ json: true });
 
-    expect(mocks.runtime.writeJson).toHaveBeenCalledWith({
-      service: expect.objectContaining({
-        command: expect.objectContaining({
-          environment: { OPENCLAW_PROFILE: "work" },
-        }),
-      }),
-    });
-    const payload = JSON.stringify(mocks.runtime.writeJson.mock.calls[0]?.[0]);
-    expect(payload).not.toContain("gateway-token");
-    expect(payload).not.toContain("gateway-password");
+    const payload = defaultRuntime.writeJson.mock.calls[0]?.[0] as {
+      service?: { command?: { environment?: Record<string, string> } };
+    };
+    expect(payload.service?.command?.environment).toEqual({ OPENCLAW_PROFILE: "work" });
+    expect(JSON.stringify(payload)).not.toContain("gateway-token");
+    expect(JSON.stringify(payload)).not.toContain("gateway-password");
+  });
+
+  it("emits a service-unit-not-found error to stderr while keeping recovery hints on stdout", async () => {
+    const svc = createService();
+    svc.isLoaded = vi.fn(async () => true);
+    svc.readCommand = vi.fn(async () => null);
+    svc.readRuntime = vi.fn(
+      async (): Promise<GatewayServiceRuntime> => ({ status: "running", missingUnit: true }),
+    );
+    resolveNodeServiceMock.mockReturnValueOnce(svc);
+    buildDaemonServiceSnapshotMock.mockReturnValueOnce({ label: "Node", loaded: true });
+
+    await runNodeDaemonStatus({ json: false });
+
+    // Diagnostic line goes to stderr only (defaultRuntime.error), never stdout.
+    expect(runtimeErrors.some((line) => line.includes("Service unit not found"))).toBe(true);
+    expect(runtimeLogs.some((line) => line.includes("Service unit not found"))).toBe(false);
+    // Recovery hints (log/restart instructions) must go to stdout (defaultRuntime.log)
+    // and must not also appear on stderr, so operators piping stderr to /dev/null still
+    // see actionable guidance.
+    const hintPatterns = [/journalctl/i, /Launchd stdout/i, /Restart attempts/i, /schtasks/i];
+    const stdoutText = runtimeLogs.join("\n");
+    const stderrText = runtimeErrors.join("\n");
+    const matchedHint = hintPatterns.find((rx) => rx.test(stdoutText));
+    expect(matchedHint).toBeTruthy();
+    if (matchedHint) {
+      expect(matchedHint.test(stderrText)).toBe(false);
+    }
+  });
+
+  it("emits a stopped-runtime error to stderr while keeping recovery hints on stdout", async () => {
+    const svc = createService();
+    svc.isLoaded = vi.fn(async () => true);
+    svc.readCommand = vi.fn(async () => null);
+    svc.readRuntime = vi.fn(async (): Promise<GatewayServiceRuntime> => ({ status: "stopped" }));
+    resolveNodeServiceMock.mockReturnValueOnce(svc);
+    buildDaemonServiceSnapshotMock.mockReturnValueOnce({ label: "Node", loaded: true });
+
+    await runNodeDaemonStatus({ json: false });
+
+    expect(runtimeErrors.some((line) => line.includes("not running"))).toBe(true);
+    expect(runtimeLogs.some((line) => line.includes("not running"))).toBe(false);
+    const hintPatterns = [/journalctl/i, /Launchd stdout/i, /Restart attempts/i, /schtasks/i];
+    const stdoutText = runtimeLogs.join("\n");
+    const stderrText = runtimeErrors.join("\n");
+    const matchedHint = hintPatterns.find((rx) => rx.test(stdoutText));
+    expect(matchedHint).toBeTruthy();
+    if (matchedHint) {
+      expect(matchedHint.test(stderrText)).toBe(false);
+    }
   });
 });
