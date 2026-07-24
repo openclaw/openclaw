@@ -325,6 +325,14 @@ export type AgentDefaultsConfig = {
      * avoiding the full session transcript.
      */
     isolatedSession?: boolean;
+    /**
+     * Maximum idle minutes before scheduled heartbeats are skipped.
+     * When the resolved session's lastInteractionAt exceeds this threshold,
+     * scheduled heartbeats are skipped with reason "session-idle" to avoid
+     * burning API tokens on stale sessions. Default: 2880 (48 hours).
+     * Set to 0 to disable the idle gate entirely.
+     */
+    maxIdleMinutes?: number;
   };
   /** Max concurrent agent runs across all conversations. Default: 4. */
   maxConcurrent?: number;
