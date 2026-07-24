@@ -213,7 +213,7 @@ export function normalizeSessionDeliveryState(params?: {
   if (!route) {
     return { kind: "none" };
   }
-  const origin: SessionOrigin = { ...(params.origin ?? {}) };
+  const origin: SessionOrigin = { ...params.origin };
   origin.provider ??= merged.channel;
   origin.to ??= merged.to;
   origin.accountId ??= merged.accountId;
