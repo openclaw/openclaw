@@ -140,15 +140,4 @@ describe("getChildLogger minLevel inheritance", () => {
     expect(getSubLoggerSpy).toHaveBeenCalledOnce();
     expect(firstMockArg(getSubLoggerSpy).minLevel).toBe(logging.levelToMinLevel("error"));
   });
-
-  it("pino adapter preserves variadic object-first calls", () => {
-    logging.setLoggerOverride({ level: "trace" });
-    const base = logging.getLogger();
-    const infoSpy = vi.spyOn(base, "info");
-    const context = { component: "test" };
-
-    logging.toPinoLikeLogger(base, "info").info(context, "message");
-
-    expect(infoSpy).toHaveBeenCalledWith(context, "message");
-  });
 });

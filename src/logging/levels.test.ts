@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { levelToMinLevel } from "./levels.js";
 
 describe("levelToMinLevel", () => {
-  it("returns tslog logLevelId values in ascending order", () => {
+  it("returns tslog v4 logLevelId values in ascending order", () => {
     expect(levelToMinLevel("trace")).toBe(1);
     expect(levelToMinLevel("debug")).toBe(2);
     expect(levelToMinLevel("info")).toBe(3);

@@ -63,7 +63,7 @@
         "semver": "7.8.5",
         "tar": "7.5.20",
         "tree-sitter-bash": "0.25.1",
-        "tslog": "5.1.0",
+        "tslog": "4.11.0",
         "typebox": "1.3.6",
         "typescript": "6.0.3",
         "undici": "8.6.0",
@@ -3618,15 +3618,12 @@
       "license": "0BSD"
     },
     "node_modules/tslog": {
-      "version": "5.1.0",
-      "resolved": "https://registry.npmjs.org/tslog/-/tslog-5.1.0.tgz",
-      "integrity": "sha512-g77ALovust2HNBX/63ePEJwetIeX0Vi/dlzqBO+ZAg+aERB54KMmaz/khNPxhFpaxKQ6RQj65sK6vIhj1SJgjQ==",
+      "version": "4.11.0",
+      "resolved": "https://registry.npmjs.org/tslog/-/tslog-4.11.0.tgz",
+      "integrity": "sha512-gBe0FTKkRpOv3DenGipjQWQe073jNd1cOLj3nYfVM0/NP29sQzAIx6kfyfTTsQOiWMC+B+tSr289lNXtu7HCmQ==",
       "license": "MIT",
-      "bin": {
-        "tslog": "esm/subpaths/cli.js"
-      },
       "engines": {
-        "node": ">=20"
+        "node": ">=16"
       },
       "funding": {
         "url": "https://github.com/fullstack-build/tslog?sponsor=1"

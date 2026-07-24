@@ -55,9 +55,6 @@ const DEFAULT_MAX_LOG_FILE_BYTES = 100 * 1024 * 1024; // 100 MB
 const MAX_ROTATED_LOG_FILES = 5;
 
 type LogObj = { date?: Date } & Record<string, unknown>;
-type LogMethodName = "trace" | "debug" | "info" | "warn" | "error" | "fatal";
-type OpenClawLogMethod = (...args: unknown[]) => unknown;
-type OpenClawLogger = TsLogger<LogObj> & Record<LogMethodName, OpenClawLogMethod>;
 
 type ResolvedSettings = {
   level: LogLevel;
@@ -584,16 +581,13 @@ export function isFileLogLevelEnabled(level: LogLevel): boolean {
   return levelToMinLevel(level) >= levelToMinLevel(settings.level);
 }
 
-function buildLogger(settings: ResolvedRuntimeSettings): OpenClawLogger {
+function buildLogger(settings: ResolvedRuntimeSettings): TsLogger<LogObj> {
   const logger = new TsLogger<LogObj>({
     name: "openclaw",
-    // Custom structured redaction runs at each transport boundary; avoid tslog pre-masking divergent records.
-    mask: { keys: [] },
-    // Keep the established JSONL and parser contract instead of tslog v5's `_logMeta` default.
-    meta: { property: "_meta" },
+    maskValuesOfKeys: [],
     minLevel: levelToMinLevel(settings.level),
     type: "hidden", // no ansi formatting
-  }) as unknown as OpenClawLogger;
+  });
 
   // Silent logging does not write files; skip all filesystem setup in this path.
   if (settings.level === "silent") {
@@ -686,21 +680,21 @@ function appendLogLine(file: string, line: string): boolean {
   }
 }
 
-export function getLogger(): OpenClawLogger {
+export function getLogger(): TsLogger<LogObj> {
   const settings = resolveSettings();
-  const cachedLogger = loggingState.cachedLogger as OpenClawLogger | null;
+  const cachedLogger = loggingState.cachedLogger as TsLogger<LogObj> | null;
   const cachedSettings = loggingState.cachedSettings as ResolvedRuntimeSettings | null;
   if (!cachedLogger || settingsChanged(cachedSettings, settings)) {
     loggingState.cachedLogger = buildLogger(settings);
     loggingState.cachedSettings = settings;
   }
-  return loggingState.cachedLogger as OpenClawLogger;
+  return loggingState.cachedLogger as TsLogger<LogObj>;
 }
 
 export function getChildLogger(
   bindings?: Record<string, unknown>,
   opts?: { level?: LogLevel },
-): OpenClawLogger {
+): TsLogger<LogObj> {
   const base = getLogger();
   const minLevel = opts?.level ? levelToMinLevel(opts.level) : base.settings.minLevel;
   const name = bindings ? JSON.stringify(bindings) : undefined;
@@ -708,35 +702,29 @@ export function getChildLogger(
     name,
     minLevel,
     prefix: bindings ? [name ?? ""] : [],
-  }) as unknown as OpenClawLogger;
+  });
 }
 
 // Baileys expects a pino-like logger shape. Provide a lightweight adapter.
-export function toPinoLikeLogger(logger: OpenClawLogger, level: LogLevel): PinoLikeLogger {
+export function toPinoLikeLogger(logger: TsLogger<LogObj>, level: LogLevel): PinoLikeLogger {
   const buildChild = (bindings?: Record<string, unknown>) =>
     toPinoLikeLogger(
       logger.getSubLogger({
         name: bindings ? JSON.stringify(bindings) : undefined,
         minLevel: logger.settings.minLevel,
-      }) as unknown as OpenClawLogger,
+      }),
       level,
     );
-
-  const forward = (method: LogMethodName) =>
-    function forwardToTsLog(...args: unknown[]): void {
-      const write = logger[method] as (...values: unknown[]) => unknown;
-      write.apply(logger, args);
-    };
 
   return {
     level,
     child: buildChild,
-    trace: forward("trace"),
-    debug: forward("debug"),
-    info: forward("info"),
-    warn: forward("warn"),
-    error: forward("error"),
-    fatal: forward("fatal"),
+    trace: (...args: unknown[]) => logger.trace(...args),
+    debug: (...args: unknown[]) => logger.debug(...args),
+    info: (...args: unknown[]) => logger.info(...args),
+    warn: (...args: unknown[]) => logger.warn(...args),
+    error: (...args: unknown[]) => logger.error(...args),
+    fatal: (...args: unknown[]) => logger.fatal(...args),
   };
 }
 
