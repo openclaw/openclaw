@@ -1072,6 +1072,65 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     });
   });
 
+  it("doctor migrates legacy BLOB values in TEXT columns to STRICT without losing rows", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = openOpenClawStateDatabase(options).path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacyDb = new DatabaseSync(databasePath);
+    legacyDb.exec(`
+      ALTER TABLE config_health_entries RENAME TO config_health_entries_strict;
+      CREATE TABLE config_health_entries (
+        config_path TEXT NOT NULL PRIMARY KEY,
+        last_known_good_json TEXT,
+        last_promoted_good_json TEXT,
+        last_observed_suspicious_signature TEXT,
+        updated_at_ms INTEGER NOT NULL
+      );
+      DROP TABLE config_health_entries_strict;
+    `);
+    legacyDb
+      .prepare(
+        "INSERT INTO config_health_entries (config_path, last_known_good_json, updated_at_ms) VALUES (?, ?, ?)",
+      )
+      .run("path1", '{"ok":true}', 1000);
+    legacyDb
+      .prepare(
+        "INSERT INTO config_health_entries (config_path, last_known_good_json, updated_at_ms) VALUES (?, ?, ?)",
+      )
+      .run("path2", Buffer.from('{"blob":true}'), 2000);
+    legacyDb
+      .prepare(
+        "INSERT INTO config_health_entries (config_path, last_known_good_json, updated_at_ms) VALUES (?, ?, ?)",
+      )
+      .run("path3", null, 3000);
+    legacyDb.close();
+
+    expect(repairOpenClawStateDatabaseSchema(options)).toMatchObject({
+      changes: [expect.stringContaining("STRICT")],
+      warnings: [],
+    });
+
+    const migrated = openOpenClawStateDatabase(options);
+    expect(
+      migrated.db
+        .prepare("SELECT strict FROM pragma_table_list WHERE name = 'config_health_entries'")
+        .get(),
+    ).toEqual({ strict: 1 });
+    const rows = migrated.db
+      .prepare(
+        "SELECT config_path, typeof(last_known_good_json) AS vtype, last_known_good_json FROM config_health_entries ORDER BY config_path",
+      )
+      .all();
+    expect(rows).toEqual([
+      { config_path: "path1", vtype: "text", last_known_good_json: '{"ok":true}' },
+      { config_path: "path2", vtype: "text", last_known_good_json: '{"blob":true}' },
+      { config_path: "path3", vtype: "null", last_known_good_json: null },
+    ]);
+  });
+
   it("doctor migrates version 2 tables to STRICT without losing rows", () => {
     const stateDir = createTempStateDir();
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };

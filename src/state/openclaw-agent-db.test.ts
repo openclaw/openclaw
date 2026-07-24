@@ -1375,6 +1375,53 @@ describe("openclaw agent database", () => {
     expect(migrated.db.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
   });
 
+  it("migrates legacy BLOB values in TEXT columns to STRICT without losing agent state", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const opened = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+    const databasePath = opened.path;
+    opened.db
+      .prepare(
+        "INSERT INTO auth_profile_state (state_key, state_json, updated_at) VALUES (?, ?, ?)",
+      )
+      .run("key1", '{"profile":"primary"}', 10);
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec(`
+      ALTER TABLE auth_profile_state RENAME TO auth_profile_state_strict;
+      CREATE TABLE auth_profile_state (
+        state_key TEXT NOT NULL PRIMARY KEY,
+        state_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      INSERT INTO auth_profile_state SELECT * FROM auth_profile_state_strict;
+      INSERT INTO auth_profile_state (state_key, state_json, updated_at) VALUES ('key2', X'7B22626C6F62223A747275657D', 20);
+      DROP TABLE auth_profile_state_strict;
+      PRAGMA user_version = 8;
+      UPDATE schema_meta SET schema_version = 8 WHERE meta_key = 'primary';
+    `);
+    legacy.close();
+
+    const migrated = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+    expect(
+      migrated.db
+        .prepare("SELECT strict FROM pragma_table_list WHERE name = 'auth_profile_state'")
+        .get(),
+    ).toEqual({ strict: 1 });
+    const rows = migrated.db
+      .prepare(
+        "SELECT state_key, typeof(state_json) AS jtype, state_json FROM auth_profile_state ORDER BY state_key",
+      )
+      .all();
+    expect(rows).toEqual([
+      { state_key: "key1", jtype: "text", state_json: '{"profile":"primary"}' },
+      { state_key: "key2", jtype: "text", state_json: '{"blob":true}' },
+    ]);
+  });
+
   it("generates stable typed memory source identities", () => {
     const stateDir = createTempStateDir();
     const database = openOpenClawAgentDatabase({

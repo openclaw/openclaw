@@ -33,9 +33,11 @@ type PreservedSchemaObject = {
 };
 
 type CanonicalStrictTable = {
+  columnTypes: Map<string, string>;
   columns: string[];
   createSql: string;
   name: string;
+  primaryKeyColumns: string[];
   rowidAlias: string | null;
   rowidStorage: TableRowidStorage;
   usesAutoincrement: boolean;
@@ -144,17 +146,39 @@ function readCanonicalStrictTables(schemaSql: string): CanonicalStrictTable[] {
         if (typeof row.name !== "string") {
           throw new Error("Canonical SQLite schema contains an unnamed table");
         }
+        const tableName = row.name;
         const schemaRow = canonical
           .prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?")
-          .get(row.name) as { sql?: unknown } | undefined;
+          .get(tableName) as { sql?: unknown } | undefined;
         if (typeof schemaRow?.sql !== "string") {
-          throw new Error(`Canonical SQLite table ${row.name} has no CREATE statement`);
+          throw new Error(`Canonical SQLite table ${tableName} has no CREATE statement`);
         }
-        const rowidModel = readTableRowidModel(canonical, row.name, row);
+        const rowidModel = readTableRowidModel(canonical, tableName, row);
+        const visibleColumns = readTableColumns(canonical, tableName).filter(
+          (column) => Number(column.hidden ?? 0) === 0,
+        );
+        const columnTypes = new Map<string, string>();
+        const primaryKeyColumns: string[] = [];
+        for (const column of visibleColumns) {
+          if (typeof column.name === "string" && typeof column.type === "string") {
+            columnTypes.set(column.name, column.type.toUpperCase());
+          }
+          if (typeof column.name === "string" && Number(column.pk ?? 0) > 0) {
+            primaryKeyColumns.push(column.name);
+          }
+        }
+        primaryKeyColumns.sort();
         return {
-          columns: readVisibleColumns(canonical, row.name),
+          columnTypes,
+          columns: visibleColumns.map((column) => {
+            if (typeof column.name !== "string" || column.name.length === 0) {
+              throw new Error(`Canonical SQLite table ${tableName} has an invalid column name`);
+            }
+            return column.name;
+          }),
           createSql: schemaRow.sql,
-          name: row.name,
+          name: tableName,
+          primaryKeyColumns,
           rowidAlias: rowidModel.alias,
           rowidStorage: rowidModel.storage,
           usesAutoincrement: /\bAUTOINCREMENT\b/iu.test(schemaRow.sql),
@@ -338,15 +362,60 @@ export function migrateSqliteSchemaToStrictInTransaction(
       ? readAutoincrementHighWater(db, table.name)
       : null;
     db.exec(rewriteCreateTableName(table.createSql, migrationTable));
-    const columns = table.columns.map(quoteSqliteIdentifier);
-    if (table.rowidAlias) {
-      columns.unshift(quoteSqliteIdentifier(table.rowidAlias));
+    const textPrimaryKeyColumns = table.primaryKeyColumns.filter(
+      (col) => table.columnTypes.get(col) === "TEXT",
+    );
+    if (textPrimaryKeyColumns.length > 0) {
+      const hasBlobPk = textPrimaryKeyColumns
+        .map((col) => `typeof(_row.${quoteSqliteIdentifier(col)}) = 'blob'`)
+        .join(" OR ");
+      const noBlobDup = textPrimaryKeyColumns
+        .map((col) => `typeof(_dup.${quoteSqliteIdentifier(col)}) != 'blob'`)
+        .join(" AND ");
+      const tupleMatch = textPrimaryKeyColumns
+        .map(
+          (col) =>
+            `CAST(_dup.${quoteSqliteIdentifier(col)} AS TEXT) = CAST(_row.${quoteSqliteIdentifier(col)} AS TEXT)`,
+        )
+        .join(" AND ");
+      const collisionCount = db
+        .prepare(
+          `SELECT COUNT(*) AS cnt FROM ${quoteSqliteIdentifier(table.name)} AS _row ` +
+            `WHERE (${hasBlobPk}) AND EXISTS (` +
+            `SELECT 1 FROM ${quoteSqliteIdentifier(table.name)} AS _dup ` +
+            `WHERE ${noBlobDup} AND ${tupleMatch}` +
+            `);`,
+        )
+        .get() as { cnt?: unknown } | undefined;
+      if (Number(collisionCount?.cnt ?? 0) > 0) {
+        throw new Error(
+          `SQLite table ${table.name} has ${String(collisionCount?.cnt)} primary-key row(s) whose BLOB and TEXT values would collide after CAST; remove the duplicate rows manually before upgrading`,
+        );
+      }
     }
-    const copyColumns = columns.join(", ");
+    const insertColumns = table.columns.map(quoteSqliteIdentifier);
+    if (table.rowidAlias) {
+      insertColumns.unshift(quoteSqliteIdentifier(table.rowidAlias));
+    }
+    const insertColumnList = insertColumns.join(", ");
+    const selectExpressions = insertColumns.map((quoted) => {
+      const bare = quoted.replaceAll('"', "");
+      if (bare === table.rowidAlias) {
+        return quoted;
+      }
+      const declaredType = table.columnTypes.get(bare);
+      if (declaredType === "TEXT") {
+        return `CAST(${quoted} AS TEXT)`;
+      }
+      if (declaredType === "BLOB") {
+        return `CAST(${quoted} AS BLOB)`;
+      }
+      return quoted;
+    });
     try {
       db.exec(
-        `INSERT INTO ${quoteSqliteIdentifier(migrationTable)} (${copyColumns}) ` +
-          `SELECT ${copyColumns} FROM ${quoteSqliteIdentifier(table.name)};`,
+        `INSERT INTO ${quoteSqliteIdentifier(migrationTable)} (${insertColumnList}) ` +
+          `SELECT ${selectExpressions.join(", ")} FROM ${quoteSqliteIdentifier(table.name)};`,
       );
     } catch (error) {
       throw new Error(`Failed migrating SQLite table ${table.name} to STRICT`, { cause: error });

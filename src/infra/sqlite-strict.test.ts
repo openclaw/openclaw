@@ -414,4 +414,184 @@ describe("migrateSqliteSchemaToStrict", () => {
       value: null,
     });
   });
+
+  it("normalizes BLOB values in TEXT columns during STRICT migration", () => {
+    const database = createDatabase();
+    database.exec("CREATE TABLE entries (id TEXT PRIMARY KEY, value TEXT NOT NULL)");
+    database.prepare("INSERT INTO entries (id, value) VALUES (?, ?)").run("key1", "normal-text");
+    database
+      .prepare("INSERT INTO entries (id, value) VALUES (?, ?)")
+      .run("key2", Buffer.from("blob-as-text"));
+
+    migrateSqliteSchemaToStrict(
+      database,
+      "CREATE TABLE IF NOT EXISTS entries (id TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;",
+    );
+
+    expect(readStrictFlag(database, "entries")).toBe(1);
+    expect(
+      database
+        .prepare("SELECT id, typeof(value) AS vtype, value FROM entries WHERE id = 'key1'")
+        .get(),
+    ).toEqual({ id: "key1", vtype: "text", value: "normal-text" });
+    expect(
+      database
+        .prepare("SELECT id, typeof(value) AS vtype, value FROM entries WHERE id = 'key2'")
+        .get(),
+    ).toEqual({ id: "key2", vtype: "text", value: "blob-as-text" });
+  });
+
+  it("normalizes TEXT values in BLOB columns during STRICT migration", () => {
+    const database = createDatabase();
+    database.exec("CREATE TABLE blobs (id INTEGER PRIMARY KEY, data BLOB NOT NULL)");
+    database.prepare("INSERT INTO blobs (id, data) VALUES (?, ?)").run(1, "text-as-blob");
+    database.prepare("INSERT INTO blobs (id, data) VALUES (?, ?)").run(2, Buffer.from("real-blob"));
+
+    migrateSqliteSchemaToStrict(
+      database,
+      "CREATE TABLE IF NOT EXISTS blobs (id INTEGER PRIMARY KEY, data BLOB NOT NULL) STRICT;",
+    );
+
+    expect(readStrictFlag(database, "blobs")).toBe(1);
+    expect(
+      database.prepare("SELECT id, typeof(data) AS dtype FROM blobs ORDER BY id").all(),
+    ).toEqual([
+      { id: 1, dtype: "blob" },
+      { id: 2, dtype: "blob" },
+    ]);
+  });
+
+  it("normalizes mixed-type rows in TEXT columns without losing values", () => {
+    const database = createDatabase();
+    database.exec("CREATE TABLE mixed (id INTEGER PRIMARY KEY, name TEXT, note TEXT)");
+    database
+      .prepare("INSERT INTO mixed (id, name, note) VALUES (?, ?, ?)")
+      .run(1, "text-name", "text-note");
+    database
+      .prepare("INSERT INTO mixed (id, name, note) VALUES (?, ?, ?)")
+      .run(2, Buffer.from("blob-name"), null);
+
+    migrateSqliteSchemaToStrict(
+      database,
+      "CREATE TABLE IF NOT EXISTS mixed (id INTEGER PRIMARY KEY, name TEXT, note TEXT) STRICT;",
+    );
+
+    expect(readStrictFlag(database, "mixed")).toBe(1);
+    expect(
+      database
+        .prepare(
+          "SELECT id, typeof(name) AS ntype, name, typeof(note) AS nntype, note FROM mixed ORDER BY id",
+        )
+        .all(),
+    ).toEqual([
+      { id: 1, ntype: "text", name: "text-name", nntype: "text", note: "text-note" },
+      { id: 2, ntype: "text", name: "blob-name", nntype: "null", note: null },
+    ]);
+  });
+
+  it("rejects STRICT migration when BLOB and TEXT primary key rows collide after CAST", () => {
+    const database = createDatabase();
+    database.exec("CREATE TABLE entries (id TEXT PRIMARY KEY, value TEXT NOT NULL)");
+    database.prepare("INSERT INTO entries (id, value) VALUES (?, ?)").run("key-a", "text-value");
+    database
+      .prepare("INSERT INTO entries (id, value) VALUES (?, ?)")
+      .run(Buffer.from("key-a"), "blob-value");
+
+    expect(() =>
+      migrateSqliteSchemaToStrict(
+        database,
+        "CREATE TABLE IF NOT EXISTS entries (id TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;",
+      ),
+    ).toThrow(/primary-key row.*collide/);
+
+    expect(readStrictFlag(database, "entries")).toBe(0);
+  });
+
+  it("preserves BLOB primary key rows when no TEXT collision exists", () => {
+    const database = createDatabase();
+    database.exec("CREATE TABLE entries (id TEXT PRIMARY KEY, value TEXT NOT NULL)");
+    database
+      .prepare("INSERT INTO entries (id, value) VALUES (?, ?)")
+      .run(Buffer.from("blob-key"), "blob-value");
+
+    migrateSqliteSchemaToStrict(
+      database,
+      "CREATE TABLE IF NOT EXISTS entries (id TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;",
+    );
+
+    expect(readStrictFlag(database, "entries")).toBe(1);
+    expect(
+      database
+        .prepare("SELECT id, typeof(id) AS idtype, value, typeof(value) AS vtype FROM entries")
+        .get(),
+    ).toEqual({ id: "blob-key", idtype: "text", value: "blob-value", vtype: "text" });
+  });
+
+  it("normalizes non-UTF-8 BLOB bytes in TEXT columns during STRICT migration", () => {
+    const database = createDatabase();
+    database.exec("CREATE TABLE entries (id INTEGER PRIMARY KEY, data TEXT NOT NULL)");
+    const nonUtf8Blob = Buffer.from([0x80, 0x81, 0xfe, 0xff]);
+    database.prepare("INSERT INTO entries (id, data) VALUES (?, ?)").run(1, nonUtf8Blob);
+
+    migrateSqliteSchemaToStrict(
+      database,
+      "CREATE TABLE IF NOT EXISTS entries (id INTEGER PRIMARY KEY, data TEXT NOT NULL) STRICT;",
+    );
+
+    expect(readStrictFlag(database, "entries")).toBe(1);
+    expect(
+      database.prepare("SELECT id, typeof(data) AS dtype, hex(data) AS hexdata FROM entries").get(),
+    ).toEqual({ id: 1, dtype: "text", hexdata: "8081FEFF" });
+  });
+
+  it("allows composite-key rows when BLOB component matches but full tuple is unique", () => {
+    const database = createDatabase();
+    database.exec(
+      "CREATE TABLE kv (scope TEXT NOT NULL, key TEXT NOT NULL, value TEXT, PRIMARY KEY (scope, key))",
+    );
+    database
+      .prepare("INSERT INTO kv (scope, key, value) VALUES (?, ?, ?)")
+      .run("scope-a", "key-one", "text-value");
+    database
+      .prepare("INSERT INTO kv (scope, key, value) VALUES (?, ?, ?)")
+      .run(Buffer.from("scope-a"), "key-two", "blob-value");
+
+    migrateSqliteSchemaToStrict(
+      database,
+      "CREATE TABLE IF NOT EXISTS kv (scope TEXT NOT NULL, key TEXT NOT NULL, value TEXT, PRIMARY KEY (scope, key)) STRICT;",
+    );
+
+    expect(readStrictFlag(database, "kv")).toBe(1);
+    expect(database.prepare("SELECT COUNT(*) AS cnt FROM kv").get()).toEqual({ cnt: 2 });
+    expect(
+      database
+        .prepare("SELECT scope, typeof(scope) AS stype, key, value FROM kv ORDER BY key")
+        .all(),
+    ).toEqual([
+      { scope: "scope-a", stype: "text", key: "key-one", value: "text-value" },
+      { scope: "scope-a", stype: "text", key: "key-two", value: "blob-value" },
+    ]);
+  });
+
+  it("rejects composite-key rows when full tuple collides after CAST", () => {
+    const database = createDatabase();
+    database.exec(
+      "CREATE TABLE kv (scope TEXT NOT NULL, key TEXT NOT NULL, value TEXT, PRIMARY KEY (scope, key))",
+    );
+    database
+      .prepare("INSERT INTO kv (scope, key, value) VALUES (?, ?, ?)")
+      .run("scope-a", "key-one", "text-value");
+    database
+      .prepare("INSERT INTO kv (scope, key, value) VALUES (?, ?, ?)")
+      .run(Buffer.from("scope-a"), Buffer.from("key-one"), "blob-value");
+
+    expect(() =>
+      migrateSqliteSchemaToStrict(
+        database,
+        "CREATE TABLE IF NOT EXISTS kv (scope TEXT NOT NULL, key TEXT NOT NULL, value TEXT, PRIMARY KEY (scope, key)) STRICT;",
+      ),
+    ).toThrow(/primary-key row.*collide/);
+
+    expect(readStrictFlag(database, "kv")).toBe(0);
+  });
 });
