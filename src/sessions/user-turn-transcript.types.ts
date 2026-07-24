@@ -36,11 +36,12 @@ export type UserTurnLogicalAdmission = {
     sessionId: string;
     sessionKey: string;
   }) => void;
-  claimAttempt: (
-    ownerId: string,
-  ) =>
+  claimAttempt: (ownerId: string) =>
     | { claimed: true; attemptEpoch: number; leaseExpiresAt: number }
-    | { claimed: false; reason: "active-attempt" | "missing-turn" | "terminal-turn" };
+    | {
+        claimed: false;
+        reason: "active-attempt" | "effect-unknown" | "missing-turn" | "terminal-turn";
+      };
   finishAttempt: (params: {
     outcome: "succeeded" | "failed" | "abandoned";
     terminal: boolean;

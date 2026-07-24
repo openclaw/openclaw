@@ -1445,6 +1445,7 @@ async function runWithModelFallbackInternal<T>(
     manifestPlugins: params.manifestPlugins,
   });
   const requestedCandidate = configuredCandidates[0];
+  const configuredPrimary = configuredCandidates[0];
   const candidates = requireQualifiedModelCandidates(
     qualifyModelCandidatesForNewWork(configuredCandidates),
   );
@@ -1520,7 +1521,7 @@ async function runWithModelFallbackInternal<T>(
       prepareAgentHarnessRuntime: params.prepareAgentHarnessRuntime,
       ...candidate,
     });
-    const isPrimary = i === 0;
+    const isPrimary = configuredPrimary ? sameModelCandidate(candidate, configuredPrimary) : false;
     const requestedModel = requestedCandidate
       ? sameModelCandidate(candidate, requestedCandidate)
       : false;

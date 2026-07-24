@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ModelTargetFenceStore } from "../../state/model-target-fence-store.js";
-import { createModelRecoveryHandlers } from "./model-recovery.js";
+import { createModelRecoveryHandlers, type ModelRecoveryMutationPolicy } from "./model-recovery.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 function invoke(
@@ -71,6 +71,10 @@ const target = {
   fenceToken: "fence-token-41",
 };
 
+const allowedTargetPolicy: ModelRecoveryMutationPolicy = {
+  allowedTargets: [{ provider: target.provider, model: target.model }],
+};
+
 describe("model recovery gateway methods", () => {
   it("serves status through the typed store", async () => {
     const store = createStore();
@@ -97,7 +101,7 @@ describe("model recovery gateway methods", () => {
 
   it("persists divert-new and exact release operations", async () => {
     const store = createStore();
-    const handlers = createModelRecoveryHandlers(store);
+    const handlers = createModelRecoveryHandlers(store, undefined, allowedTargetPolicy);
     const divert = invoke(handlers, "modelRecovery.divertNew", {
       capabilityVersion: 2,
       ...target,
@@ -126,6 +130,53 @@ describe("model recovery gateway methods", () => {
       true,
       expect.objectContaining({ state: "released" }),
       undefined,
+    );
+  });
+
+  it("denies mutations by default while keeping status available", async () => {
+    const store = createStore();
+    const handlers = createModelRecoveryHandlers(store);
+    const status = invoke(handlers, "modelRecovery.status", {
+      capabilityVersion: 2,
+    });
+    const denied = invoke(handlers, "modelRecovery.divertNew", {
+      capabilityVersion: 2,
+      ...target,
+    });
+    await status.result;
+    await denied.result;
+
+    expect(status.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ capability: "available" }),
+      undefined,
+    );
+    expect(store.divertNew).not.toHaveBeenCalled();
+    expect(denied.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "FORBIDDEN",
+        message: "Model recovery target is not allowed",
+      }),
+    );
+  });
+
+  it("matches the injected mutation allowlist by exact provider and model", async () => {
+    const store = createStore();
+    const handlers = createModelRecoveryHandlers(store, undefined, allowedTargetPolicy);
+    const denied = invoke(handlers, "modelRecovery.release", {
+      capabilityVersion: 2,
+      ...target,
+      model: `${target.model}-other`,
+    });
+    await denied.result;
+
+    expect(store.release).not.toHaveBeenCalled();
+    expect(denied.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "FORBIDDEN" }),
     );
   });
 
@@ -164,11 +215,15 @@ describe("model recovery gateway methods", () => {
 
   it("keeps diversion available while prepare waits for every durable capability", async () => {
     const store = createStore();
-    const handlers = createModelRecoveryHandlers(store, {
-      durableEffects: true,
-      durableDelivery: false,
-      submissionPermitsAtDispatch: false,
-    });
+    const handlers = createModelRecoveryHandlers(
+      store,
+      {
+        durableEffects: true,
+        durableDelivery: false,
+        submissionPermitsAtDispatch: false,
+      },
+      allowedTargetPolicy,
+    );
     const status = invoke(handlers, "modelRecovery.status", { capabilityVersion: 2 });
     const diverted = invoke(handlers, "modelRecovery.divertNew", {
       capabilityVersion: 2,
@@ -202,11 +257,15 @@ describe("model recovery gateway methods", () => {
 
     const enabledStore = createStore();
     const enabled = invoke(
-      createModelRecoveryHandlers(enabledStore, {
-        durableEffects: true,
-        durableDelivery: true,
-        submissionPermitsAtDispatch: true,
-      }),
+      createModelRecoveryHandlers(
+        enabledStore,
+        {
+          durableEffects: true,
+          durableDelivery: true,
+          submissionPermitsAtDispatch: true,
+        },
+        allowedTargetPolicy,
+      ),
       "modelRecovery.prepareRecovery",
       { capabilityVersion: 2, ...target },
     );

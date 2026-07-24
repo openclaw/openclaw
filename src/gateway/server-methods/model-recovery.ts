@@ -29,12 +29,23 @@ type ModelRecoveryCapabilities = {
   submissionPermitsAtDispatch: boolean;
 };
 
+export type ModelRecoveryMutationPolicy = {
+  allowedTargets: readonly {
+    provider: string;
+    model: string;
+  }[];
+};
+
 const AVAILABLE_CAPABILITIES: ModelRecoveryCapabilities = {
   durableEffects: true,
   durableDelivery: true,
   // Fail closed until every eligible provider dispatch acquires and settles
   // the global permit added by this slice.
   submissionPermitsAtDispatch: false,
+};
+
+const DENY_ALL_MUTATIONS: ModelRecoveryMutationPolicy = {
+  allowedTargets: [],
 };
 
 function respondStoreError(
@@ -60,7 +71,25 @@ function respondStoreError(
 export function createModelRecoveryHandlers(
   store: ModelTargetFenceStore,
   capabilities: ModelRecoveryCapabilities = AVAILABLE_CAPABILITIES,
+  mutationPolicy: ModelRecoveryMutationPolicy = DENY_ALL_MUTATIONS,
 ): GatewayRequestHandlers {
+  const allowedMutationTargets = new Set(
+    mutationPolicy.allowedTargets.map(({ provider, model }) => JSON.stringify([provider, model])),
+  );
+  const requireAllowedTarget = (
+    respond: Parameters<GatewayRequestHandlers[string]>[0]["respond"],
+    target: { provider: string; model: string },
+  ): boolean => {
+    if (allowedMutationTargets.has(JSON.stringify([target.provider, target.model]))) {
+      return true;
+    }
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.FORBIDDEN, "Model recovery target is not allowed"),
+    );
+    return false;
+  };
   const requireCapabilities = (
     respond: Parameters<GatewayRequestHandlers[string]>[0]["respond"],
   ): boolean => {
@@ -124,6 +153,9 @@ export function createModelRecoveryHandlers(
       ) {
         return;
       }
+      if (!requireAllowedTarget(respond, params as ModelRecoveryDivertNewParams)) {
+        return;
+      }
       try {
         const fence = store.divertNew({
           ...(params as ModelRecoveryDivertNewParams),
@@ -144,6 +176,9 @@ export function createModelRecoveryHandlers(
           respond,
         )
       ) {
+        return;
+      }
+      if (!requireAllowedTarget(respond, params as ModelRecoveryPrepareRecoveryParams)) {
         return;
       }
       if (!requireCapabilities(respond)) {
@@ -169,6 +204,9 @@ export function createModelRecoveryHandlers(
           respond,
         )
       ) {
+        return;
+      }
+      if (!requireAllowedTarget(respond, params as ModelRecoveryReleaseParams)) {
         return;
       }
       try {

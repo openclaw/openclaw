@@ -24,6 +24,7 @@ import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent
 import { abortable } from "./embedded-agent-runner/run/abortable.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 import { FailoverError } from "./failover-error.js";
+import { markFallbackCandidateSkipped } from "./fallback-skip-cache.js";
 import { resetFallbackSkipCacheForTest } from "./fallback-skip-cache.test-support.js";
 import { AgentHarnessSessionSupersededError, MissingAgentHarnessError } from "./harness/errors.js";
 import { clearAgentHarnesses, registerAgentHarness } from "./harness/registry.js";
@@ -202,6 +203,22 @@ const authRuntimeMock = vi.hoisted(() => {
 
 vi.mock("./auth-profiles.runtime.js", () => authRuntimeMock.runtime);
 
+const modelTargetFenceMock = vi.hoisted(() => ({
+  qualify: vi.fn((candidates: Array<{ provider: string; model: string }>) => ({
+    status: "available" as const,
+    allowed: candidates,
+    denied: [],
+  })),
+}));
+
+vi.mock("./model-target-fence-qualification.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./model-target-fence-qualification.js")>();
+  return {
+    ...actual,
+    qualifyModelCandidatesForNewWork: modelTargetFenceMock.qualify,
+  };
+});
+
 const makeCfg = makeModelFallbackCfg;
 let authTempRoot = "";
 let authTempCounter = 0;
@@ -230,6 +247,11 @@ function resetModelFallbackTestState(): void {
   providerModelNormalizationMock.normalizeProviderModelIdWithRuntime
     .mockReset()
     .mockReturnValue(undefined);
+  modelTargetFenceMock.qualify.mockReset().mockImplementation((candidates) => ({
+    status: "available",
+    allowed: candidates,
+    denied: [],
+  }));
   resetDiagnosticEventsForTest();
 }
 
@@ -580,6 +602,42 @@ function parseDiagnosticModelRef(ref: string): { provider: string; model: string
 }
 
 describe("runWithModelFallback", () => {
+  it("preserves fallback role when a fence removes the configured primary", async () => {
+    const sessionId = "session:fenced-primary";
+    const fallback = { provider: "anthropic", model: "claude-opus-4-6" };
+    markFallbackCandidateSkipped({
+      sessionId,
+      ...fallback,
+      reason: "auth",
+      ttlMs: 60_000,
+    });
+    modelTargetFenceMock.qualify.mockImplementationOnce((candidates) => ({
+      status: "available",
+      allowed: candidates.slice(1),
+      denied: [
+        {
+          ...candidates[0]!,
+          reason: "target_diverted",
+          fenceEpoch: 41,
+          resourceDomain: null,
+        },
+      ],
+    }));
+    const run = vi.fn().mockResolvedValue("must not run");
+
+    await expect(
+      runWithModelFallback({
+        cfg: makeDiagnosticFallbackConfig([`${fallback.provider}/${fallback.model}`]),
+        provider: "openai",
+        model: "gpt-5.5",
+        sessionId,
+        run,
+      }),
+    ).rejects.toSatisfy(isFallbackSummaryError);
+
+    expect(run).not.toHaveBeenCalled();
+  });
+
   it.each(DIAGNOSTIC_CASES)("$name", async ({ refs, reasons, expectError }) => {
     const candidates = refs.map(parseDiagnosticModelRef);
     const diagnostics = captureModelFailoverDiagnostics();
