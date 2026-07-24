@@ -250,6 +250,8 @@ export type PluginAgentToolResultMiddlewareRegistration = {
   rawHandler: AgentToolResultMiddleware;
   handler: AgentToolResultMiddleware;
   runtimes: AgentToolResultMiddlewareRuntime[];
+  /** Exact tool names this middleware targets; omitted means every tool. */
+  matcher?: readonly string[];
   source: string;
   rootDir?: string;
 };

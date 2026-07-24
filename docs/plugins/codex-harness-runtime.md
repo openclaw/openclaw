@@ -140,6 +140,14 @@ plugin behavior. For the native tool and permission bridge, OpenClaw injects
 per-thread Codex config for `PreToolUse`, `PostToolUse`, `PermissionRequest`,
 and `Stop`.
 
+When every registered `before_tool_call` hook and trusted tool policy declares
+a `matcher` (exact tool names) and native loop detection is off, the injected
+`PreToolUse` hook carries the union of those matchers, so Codex skips the
+relay process entirely for uncovered tools. `PostToolUse` does the same for
+`after_tool_call` hooks and Codex tool-result middleware. Any unscoped
+registration, an active loop detector, or a tool name Codex cannot match
+exactly keeps today's match-all install.
+
 When Codex app-server approvals are enabled (`approvalPolicy` is not
 `"never"`), the default injected native hook config omits `PermissionRequest`
 so Codex's app-server reviewer and OpenClaw's approval bridge handle real

@@ -312,6 +312,51 @@ describe("Codex native hook relay config", () => {
     );
   });
 
+  it("scopes tool-event matchers to the registered tool union and folds them into the trust hash", () => {
+    const matchAllConfig = buildCodexNativeHookRelayConfig({
+      relay: createRelay(),
+      events: ["pre_tool_use", "post_tool_use"],
+      loopDetectionPreToolUseRelay: true,
+    });
+    const scopedConfig = buildCodexNativeHookRelayConfig({
+      relay: createRelay({
+        toolScopes: {
+          pre_tool_use: { matchAll: false, toolNames: ["exec", "message"] },
+        },
+      }),
+      events: ["pre_tool_use", "post_tool_use"],
+      loopDetectionPreToolUseRelay: true,
+    });
+
+    expect((scopedConfig["hooks.PreToolUse"] as Array<{ matcher?: unknown }>)[0]?.matcher).toBe(
+      "Bash|exec|exec_command|message",
+    );
+    expect(
+      (scopedConfig["hooks.PostToolUse"] as Array<{ matcher?: unknown }>)[0],
+    ).not.toHaveProperty("matcher");
+
+    const readState = (config: Record<string, unknown>, key: string) =>
+      (config["hooks.state"] as Record<string, { trusted_hash?: string }>)[key]?.trusted_hash;
+    const preKey = "/<session-flags>/config.toml:pre_tool_use:0:0";
+    const postKey = "/<session-flags>/config.toml:post_tool_use:0:0";
+    expect(readState(scopedConfig, preKey)).not.toBe(readState(matchAllConfig, preKey));
+    expect(readState(scopedConfig, postKey)).toBe(readState(matchAllConfig, postKey));
+  });
+
+  it("keeps the selected no-policy PreToolUse no-op install match-all", () => {
+    const config = buildCodexNativeHookRelayConfig({
+      relay: createRelay({
+        inactiveEvents: ["pre_tool_use"],
+        toolScopes: { pre_tool_use: { matchAll: false, toolNames: ["message"] } },
+      }),
+      events: ["pre_tool_use"],
+      loopDetectionPreToolUseRelay: true,
+    });
+    expect((config["hooks.PreToolUse"] as Array<{ matcher?: unknown }>)[0]).not.toHaveProperty(
+      "matcher",
+    );
+  });
+
   it("builds deterministic clearing config when the relay is disabled", () => {
     expect(buildCodexNativeHookRelayDisabledConfig()).toEqual({
       "features.hooks": false,
@@ -373,6 +418,12 @@ describe("Codex native hook relay config", () => {
 
 function createRelay(options?: {
   inactiveEvents?: readonly NativeHookRelayRegistrationHandle["allowedEvents"][number][];
+  toolScopes?: Partial<
+    Record<
+      NativeHookRelayRegistrationHandle["allowedEvents"][number],
+      ReturnType<NativeHookRelayRegistrationHandle["toolScopeForEvent"]>
+    >
+  >;
 }): NativeHookRelayRegistrationHandle {
   const inactiveEvents = new Set(options?.inactiveEvents ?? []);
   return {
@@ -385,6 +436,7 @@ function createRelay(options?: {
     allowedEvents: ["pre_tool_use", "post_tool_use", "permission_request", "before_agent_finalize"],
     expiresAtMs: Date.now() + 1000,
     shouldRelayEvent: (event) => !inactiveEvents.has(event),
+    toolScopeForEvent: (event) => options?.toolScopes?.[event] ?? { matchAll: true },
     commandForEvent: (event, commandOptions) =>
       `openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event ${event}${
         event === "pre_tool_use" && inactiveEvents.has(event)
@@ -395,3 +447,46 @@ function createRelay(options?: {
     unregister: () => undefined,
   };
 }
+
+describe("Codex tool matcher scoping", () => {
+  function installedPreToolUseMatcher(
+    scope: ReturnType<NativeHookRelayRegistrationHandle["toolScopeForEvent"]>,
+  ): string | undefined {
+    const config = buildCodexNativeHookRelayConfig({
+      relay: createRelay({ toolScopes: { pre_tool_use: scope } }),
+      events: ["pre_tool_use"],
+      loopDetectionPreToolUseRelay: true,
+    });
+    return (config["hooks.PreToolUse"] as Array<{ matcher?: string }>)[0]?.matcher;
+  }
+
+  it("installs match-all as an omitted matcher", () => {
+    expect(installedPreToolUseMatcher({ matchAll: true })).toBeUndefined();
+  });
+
+  it("expands exec to the Codex shell spellings", () => {
+    expect(installedPreToolUseMatcher({ matchAll: false, toolNames: ["exec"] })).toBe(
+      "Bash|exec|exec_command",
+    );
+  });
+
+  it("keeps registered spellings for plugin-owned tools", () => {
+    expect(installedPreToolUseMatcher({ matchAll: false, toolNames: ["message", "myTool"] })).toBe(
+      "message|myTool",
+    );
+  });
+
+  it("falls back to match-all when a name is not exact-matcher safe", () => {
+    // A name outside [A-Za-z0-9_] would be treated as regex source by Codex;
+    // an invalid pattern silently disables the hook, losing policy coverage.
+    expect(
+      installedPreToolUseMatcher({ matchAll: false, toolNames: ["message", "my-tool"] }),
+    ).toBeUndefined();
+  });
+
+  it("falls back to match-all for an empty or oversized union", () => {
+    expect(installedPreToolUseMatcher({ matchAll: false, toolNames: [] })).toBeUndefined();
+    const oversized = Array.from({ length: 65 }, (_, index) => `tool_${index}`);
+    expect(installedPreToolUseMatcher({ matchAll: false, toolNames: oversized })).toBeUndefined();
+  });
+});

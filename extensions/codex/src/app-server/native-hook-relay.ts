@@ -44,6 +44,8 @@ const CODEX_NATIVE_HOOK_RELAY_UNREGISTER_EXTRA_GRACE_MS = 5_000;
 
 type CodexHookEventName = "PreToolUse" | "PostToolUse" | "PermissionRequest" | "Stop";
 
+type NativeHookRelayToolScope = ReturnType<NativeHookRelayRegistrationHandle["toolScopeForEvent"]>;
+
 export type CodexNativePreToolUseFailure = {
   toolName: string;
   toolCallId: string;
@@ -254,6 +256,49 @@ const CODEX_SESSION_FLAGS_HOOK_SOURCE_PATHS = [
   "<session-flags>/config.toml",
 ] as const;
 
+/**
+ * Codex-side spellings a policy-normalized OpenClaw tool name can surface as
+ * in hook matcher inputs. Codex serializes shell calls as `Bash` or
+ * `exec_command` depending on the runtime path, so a scoped `exec` policy must
+ * cover both; `apply_patch` already matches its Claude-style `Write`/`Edit`
+ * aliases upstream. Over-covering only costs an extra relay spawn, while a
+ * missing spelling would silently skip a registered policy.
+ */
+const CODEX_TOOL_MATCHER_NAMES_BY_OPENCLAW_TOOL: Record<string, readonly string[]> = {
+  exec: ["exec_command", "Bash"],
+};
+
+// Codex treats matchers containing anything outside [A-Za-z0-9_|] as regex
+// source (codex-rs/hooks/src/events/common.rs `is_exact_matcher`), and an
+// invalid pattern disables the hook entirely. Only exact-safe names may be
+// forwarded; anything else falls back to match-all to stay fail-closed.
+const CODEX_EXACT_MATCHER_SAFE_NAME = /^[A-Za-z0-9_]+$/;
+const CODEX_TOOL_MATCHER_MAX_NAMES = 64;
+
+/** Builds the Codex hook matcher for a relay tool scope; undefined installs match-all. */
+function codexNativeHookToolMatcher(scope: NativeHookRelayToolScope): string | undefined {
+  if (scope.matchAll) {
+    return undefined;
+  }
+  const names = new Set<string>();
+  for (const toolName of scope.toolNames) {
+    names.add(toolName);
+    for (const alias of CODEX_TOOL_MATCHER_NAMES_BY_OPENCLAW_TOOL[toolName] ?? []) {
+      names.add(alias);
+    }
+  }
+  const sorted = [...names].toSorted();
+  // An empty union means no registration targets any tool; the event gate
+  // already skips the install, and an empty matcher string would match all.
+  if (sorted.length === 0 || sorted.length > CODEX_TOOL_MATCHER_MAX_NAMES) {
+    return undefined;
+  }
+  if (sorted.some((name) => !CODEX_EXACT_MATCHER_SAFE_NAME.test(name))) {
+    return undefined;
+  }
+  return sorted.join("|");
+}
+
 /** Builds the Codex config overlay that installs trusted command hooks for relay events. */
 export function buildCodexNativeHookRelayConfig(params: {
   relay: NativeHookRelayRegistrationHandle;
@@ -293,8 +338,17 @@ export function buildCodexNativeHookRelayConfig(params: {
     const command = params.relay.commandForEvent(event, {
       timeoutMs: resolveCodexNativeHookRelayCommandTimeoutMs(timeout),
     });
+    // Scope the native hook to the registered tool union so Codex skips the
+    // relay spawn entirely for uncovered tools. The selected no-op PreToolUse
+    // install stays match-all: it exists to satisfy the shipped fallback
+    // contract, not to run policy.
+    const matcher =
+      (event === "pre_tool_use" || event === "post_tool_use") && !selectedNoopPreToolUse
+        ? codexNativeHookToolMatcher(params.relay.toolScopeForEvent(event))
+        : undefined;
     config[`hooks.${codexEvent}`] = [
       {
+        ...(matcher !== undefined ? { matcher } : {}),
         hooks: [
           {
             type: "command",
@@ -310,6 +364,7 @@ export function buildCodexNativeHookRelayConfig(params: {
       enabled: true,
       trusted_hash: codexCommandHookTrustedHash({
         event,
+        matcher,
         command,
         timeout,
         statusMessage: "OpenClaw native hook relay",
@@ -353,15 +408,18 @@ function resolveCodexNativeHookRelayCommandTimeoutMs(hookTimeoutSec: number | un
 
 function codexCommandHookTrustedHash(params: {
   event: NativeHookRelayEvent;
+  matcher?: string;
   command: string;
   timeout: number;
   statusMessage: string;
 }): string {
   // Keep the match-all matcher omitted rather than null. Codex app-server
   // converts JSON null to an empty TOML string before hashing, which changes the
-  // trust identity even though both forms match all tools.
+  // trust identity even though both forms match all tools. Scoped matchers fold
+  // into the identity exactly as Codex's normalized MatcherGroup serializes.
   const identity = {
     event_name: CODEX_HOOK_KEY_LABEL_BY_NATIVE_EVENT[params.event],
+    ...(params.matcher !== undefined ? { matcher: params.matcher } : {}),
     hooks: [
       {
         async: false,

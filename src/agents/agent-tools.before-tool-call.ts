@@ -49,11 +49,19 @@ import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { redactToolDetail } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunnerRegistry } from "../plugins/hook-runner-global-state.js";
-import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import {
+  getGlobalHookRunner,
+  getGlobalToolHookMatcherScope,
+} from "../plugins/hook-runner-global.js";
 import { deriveToolParams } from "../plugins/host-tool-param-parsers.js";
+import {
+  mergePluginToolScopes,
+  type PluginToolMatcherScope,
+} from "../plugins/tool-hook-matcher.js";
 import { copyPluginToolMeta, getPluginToolMeta } from "../plugins/tools.js";
 import {
   getTrustedToolPolicyDiagnosticEntries,
+  getTrustedToolPolicyMatcherScope,
   hasTrustedToolPolicies,
   runTrustedToolPolicies,
 } from "../plugins/trusted-tool-policy.js";
@@ -261,6 +269,14 @@ export function getBeforeToolCallPolicyDiagnosticState(): BeforeToolCallPolicyDi
 export function hasBeforeToolCallPolicy(): boolean {
   const state = getBeforeToolCallPolicyDiagnosticState();
   return state.hasBeforeToolCallHook || state.trustedToolPolicies.length > 0;
+}
+
+/** Union of tool coverage across before_tool_call hooks and trusted tool policies. */
+export function getBeforeToolCallPolicyToolScope(): PluginToolMatcherScope {
+  return mergePluginToolScopes([
+    getGlobalToolHookMatcherScope("before_tool_call"),
+    getTrustedToolPolicyMatcherScope(getGlobalHookRunnerRegistry() ?? undefined),
+  ]);
 }
 
 const log = createSubsystemLogger("agents/tools");

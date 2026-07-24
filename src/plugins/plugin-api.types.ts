@@ -460,10 +460,16 @@ export type OpenClawPluginApi = {
     adapter: import("./memory-embedding-providers.js").MemoryEmbeddingProviderAdapter,
   ) => void;
   resolvePath: (input: string) => string;
-  /** Register a lifecycle hook handler */
+  /**
+   * Register a lifecycle hook handler.
+   *
+   * `matcher` lists exact tool names for before_tool_call / after_tool_call
+   * hooks; omitted means every tool. Scoped hooks skip non-matching tools and
+   * let harness adapters avoid native hook fan-out for uncovered tools.
+   */
   on: <K extends PluginHookName>(
     hookName: K,
     handler: PluginHookHandlerMap[K],
-    opts?: { priority?: number; timeoutMs?: number },
+    opts?: { priority?: number; timeoutMs?: number; matcher?: readonly string[] },
   ) => void;
 };

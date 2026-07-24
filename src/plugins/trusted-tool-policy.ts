@@ -16,6 +16,12 @@ import type {
   PluginTrustedToolPolicyRegistryRegistration,
 } from "./registry-types.js";
 import { getActivePluginRegistry } from "./runtime.js";
+import {
+  normalizePluginToolMatcher,
+  pluginToolMatcherCoversTool,
+  pluginToolScopeFromMatchers,
+  type PluginToolMatcherScope,
+} from "./tool-hook-matcher.js";
 
 type TrustedPolicyRegistration = PluginTrustedToolPolicyRegistryRegistration;
 type TrustedToolPolicyRegistry =
@@ -126,6 +132,26 @@ function trustedPolicyDefaultBlockReason(registration: TrustedPolicyRegistration
   return `blocked by ${readTrustedPolicyId(registration)}`;
 }
 
+/** Guarded matcher read; unreadable matchers fall back to match-all so the policy still runs. */
+function readTrustedPolicyMatcher(
+  registration: TrustedPolicyRegistration,
+): readonly string[] | undefined {
+  try {
+    return normalizePluginToolMatcher(registration.policy.matcher);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Union of trusted policy tool matchers; any unscoped policy forces match-all. */
+export function getTrustedToolPolicyMatcherScope(
+  registry: TrustedToolPolicyRegistry = getActivePluginRegistry(),
+): PluginToolMatcherScope {
+  return pluginToolScopeFromMatchers(
+    copyTrustedPolicyRegistrations(registry).map(readTrustedPolicyMatcher),
+  );
+}
+
 function trustedPolicyFailureResult(
   registration: TrustedPolicyRegistration,
   detail: string,
@@ -233,6 +259,9 @@ export async function runTrustedToolPolicies(
     const pluginId = readTrustedPolicyPluginId(registration);
     if (!pluginId) {
       return trustedPolicyFailureResult(registration, "policy owner is unreadable");
+    }
+    if (!pluginToolMatcherCoversTool(readTrustedPolicyMatcher(registration), event.toolName)) {
+      continue;
     }
     const policyCtx: PluginHookToolContext = {
       ...ctxWithoutToolIdentity,

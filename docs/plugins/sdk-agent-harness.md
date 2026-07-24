@@ -248,6 +248,12 @@ targeted runtime ids in `contracts.agentToolResultMiddleware`. This trusted
 seam is for async tool-result transforms that must run before OpenClaw or
 Codex feeds tool output back into the model.
 
+The options bag accepts an optional `matcher` (exact tool names, e.g.
+`{ matcher: ["message"] }`). Scoped middleware is skipped for non-matching
+tools, and the Codex native hook relay narrows its `PostToolUse` install to the
+union of registered matchers so uncovered tools never spawn a relay process.
+Omitted means every tool.
+
 Legacy bundled plugins can still use
 `api.registerCodexAppServerExtensionFactory(...)` for Codex app-server-only
 middleware, but new result transforms should use the runtime-neutral API. The

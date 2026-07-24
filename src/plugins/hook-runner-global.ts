@@ -22,6 +22,7 @@ import {
 } from "./hook-runner-global-state.js";
 import type { PluginHookGatewayContext, PluginHookGatewayStopEvent } from "./hook-types.js";
 import { createHookRunner, type HookRunner } from "./hooks.js";
+import type { PluginToolMatcherScope } from "./tool-hook-matcher.js";
 
 const getLog = () => createSubsystemLogger("plugins");
 
@@ -80,6 +81,18 @@ export function getGlobalPluginRegistry(): GlobalHookRunnerRegistry | null {
  */
 export function hasGlobalHooks(hookName: Parameters<HookRunner["hasHooks"]>[0]): boolean {
   return getHookRunnerGlobalState().hookRunner?.hasHooks(hookName) ?? false;
+}
+
+/** Union of registered tool matchers for a tool hook; no runner means no coverage. */
+export function getGlobalToolHookMatcherScope(
+  hookName: Parameters<HookRunner["getToolHookMatcherScope"]>[0],
+): PluginToolMatcherScope {
+  return (
+    getHookRunnerGlobalState().hookRunner?.getToolHookMatcherScope(hookName) ?? {
+      matchAll: false,
+      toolNames: [],
+    }
+  );
 }
 
 export async function runGlobalGatewayStopSafely(params: {

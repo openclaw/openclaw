@@ -6,7 +6,6 @@ import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-
 import type { HookEntry } from "../hooks/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { withTimeout } from "../utils/with-timeout.js";
-import type { AgentToolResultMiddleware } from "./agent-tool-result-middleware-types.js";
 import {
   normalizeAgentToolResultMiddlewareRuntimeIds,
   normalizeAgentToolResultMiddlewareRuntimes,
@@ -19,12 +18,16 @@ import {
   type PluginRegistryState,
   type PluginTypedHookPolicy,
 } from "./registry-state.js";
-import type { PluginRecord } from "./registry-types.js";
+import type {
+  PluginAgentToolResultMiddlewareRegistration,
+  PluginRecord,
+} from "./registry-types.js";
 import {
   findUndeclaredPluginToolNames,
   normalizePluginToolContractNames,
   normalizePluginToolNames,
 } from "./tool-contracts.js";
+import { normalizePluginToolMatcher, pluginToolMatcherCoversTool } from "./tool-hook-matcher.js";
 import {
   DEPRECATED_PLUGIN_HOOKS,
   isConversationHookName,
@@ -199,15 +202,45 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       });
       return;
     }
+    const matcher = normalizePluginToolMatcher(options?.matcher);
     const existing = registry.agentToolResultMiddlewares.find(
       (entry) => entry.pluginId === record.id && entry.rawHandler === handler,
     );
     if (existing) {
       existing.runtimes = uniqueValues([...existing.runtimes, ...runtimes]);
+      // Re-registration must only widen coverage: an unscoped registration
+      // wins match-all, scoped registrations union. The dispatch wrapper
+      // reads the live entry matcher, so this merge takes effect immediately.
+      const merged =
+        matcher && existing.matcher
+          ? normalizePluginToolMatcher([...existing.matcher, ...matcher])
+          : undefined;
+      if (merged) {
+        existing.matcher = merged;
+      } else {
+        delete existing.matcher;
+      }
       return;
     }
     const timeoutMs = resolveTypedHookTimeoutMs({ hookName: "after_tool_call", policy });
-    const safeHandler: AgentToolResultMiddleware = async (event, ctx) => {
+    const entry: PluginAgentToolResultMiddlewareRegistration = {
+      pluginId: record.id,
+      pluginName: record.name,
+      rawHandler: handler,
+      handler,
+      runtimes,
+      ...(matcher ? { matcher } : {}),
+      source: record.source,
+      rootDir: record.rootDir,
+    };
+    entry.handler = async (event, ctx) => {
+      // Runners receive bare handler functions, so this wrapper is the only
+      // dispatch-time gate for matcher-scoped middleware. It reads the live
+      // entry matcher so same-handler re-registrations that widen coverage
+      // are honored at dispatch.
+      if (entry.matcher && !pluginToolMatcherCoversTool(entry.matcher, event.toolName)) {
+        return undefined;
+      }
       try {
         // fs-safe bounds only this await; it cannot cancel plugin work, so late side effects remain possible.
         return await withTimeout(
@@ -222,15 +255,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
         throw error;
       }
     };
-    registry.agentToolResultMiddlewares.push({
-      pluginId: record.id,
-      pluginName: record.name,
-      rawHandler: handler,
-      handler: safeHandler,
-      runtimes,
-      source: record.source,
-      rootDir: record.rootDir,
-    });
+    registry.agentToolResultMiddlewares.push(entry);
   };
 
   const registerTool = (
@@ -391,7 +416,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     record: PluginRecord,
     hookName: K,
     handler: PluginHookHandlerMap[K],
-    opts?: { priority?: number; timeoutMs?: number },
+    opts?: { priority?: number; timeoutMs?: number; matcher?: readonly string[] },
     policy?: PluginTypedHookPolicy,
   ) => {
     if (!isPluginHookName(hookName)) {
@@ -456,6 +481,17 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       }
     }
     const timeoutMs = resolveTypedHookTimeoutMs({ hookName: effectiveHookName, opts, policy });
+    const isToolMatcherHook =
+      effectiveHookName === "before_tool_call" || effectiveHookName === "after_tool_call";
+    const matcher = isToolMatcherHook ? normalizePluginToolMatcher(opts?.matcher) : undefined;
+    if (opts?.matcher && !isToolMatcherHook) {
+      pushDiagnostic({
+        level: "warn",
+        pluginId: record.id,
+        source: record.source,
+        message: `typed hook "${effectiveHookName}" ignores matcher; only before_tool_call/after_tool_call support tool matchers`,
+      });
+    }
     record.hookCount += 1;
     registry.typedHooks.push({
       pluginId: record.id,
@@ -463,6 +499,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       handler: effectiveHandler,
       priority: opts?.priority,
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      ...(matcher ? { matcher } : {}),
       source: record.source,
     } as TypedPluginHookRegistration);
   };

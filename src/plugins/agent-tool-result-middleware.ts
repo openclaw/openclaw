@@ -5,6 +5,7 @@ import type {
   AgentToolResultMiddlewareRuntime,
 } from "./agent-tool-result-middleware-types.js";
 import { getActivePluginRegistry } from "./runtime.js";
+import { pluginToolScopeFromMatchers, type PluginToolMatcherScope } from "./tool-hook-matcher.js";
 
 const AGENT_TOOL_RESULT_MIDDLEWARE_RUNTIMES = [
   "openclaw",
@@ -63,5 +64,16 @@ export function listAgentToolResultMiddlewares(
     getActivePluginRegistry()
       ?.agentToolResultMiddlewares?.filter((entry) => entry.runtimes.includes(runtime))
       .map((entry) => entry.handler) ?? []
+  );
+}
+
+/** Union of middleware tool matchers for a runtime; any unscoped middleware forces match-all. */
+export function getAgentToolResultMiddlewareMatcherScope(
+  runtime: AgentToolResultMiddlewareRuntime,
+): PluginToolMatcherScope {
+  return pluginToolScopeFromMatchers(
+    (getActivePluginRegistry()?.agentToolResultMiddlewares ?? [])
+      .filter((entry) => entry.runtimes.includes(runtime))
+      .map((entry) => entry.matcher),
   );
 }

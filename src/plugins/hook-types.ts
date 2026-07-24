@@ -1358,6 +1358,13 @@ export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = 
   handler: PluginHookHandlerMap[K];
   priority?: number;
   timeoutMs?: number;
+  /**
+   * Exact tool names this tool hook targets; omitted means every tool. Only
+   * before_tool_call / after_tool_call consult it — dispatch skips
+   * non-matching tools and harness adapters may scope native hook installs
+   * (e.g. Codex PreToolUse matchers) to the registered union.
+   */
+  matcher?: readonly string[];
   source: string;
 };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

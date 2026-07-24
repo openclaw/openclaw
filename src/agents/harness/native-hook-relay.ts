@@ -22,13 +22,21 @@ import { isApprovalNotFoundError } from "../../infra/approval-errors.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { listAgentToolResultMiddlewares } from "../../plugins/agent-tool-result-middleware.js";
-import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
+import {
+  getAgentToolResultMiddlewareMatcherScope,
+  listAgentToolResultMiddlewares,
+} from "../../plugins/agent-tool-result-middleware.js";
+import { getGlobalToolHookMatcherScope, hasGlobalHooks } from "../../plugins/hook-runner-global.js";
 import type { PluginHookToolRequesterContext } from "../../plugins/hook-types.js";
+import {
+  mergePluginToolScopes,
+  type PluginToolMatcherScope,
+} from "../../plugins/tool-hook-matcher.js";
 import { PluginApprovalResolutions } from "../../plugins/types.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
   cancelDeferredPluginToolApproval,
+  getBeforeToolCallPolicyToolScope,
   hasBeforeToolCallPolicy,
   requestDeferredPluginToolApproval,
   runBeforeToolCallHook,
@@ -122,6 +130,12 @@ type NativeHookRelayRegistration = {
 export type NativeHookRelayRegistrationHandle = NativeHookRelayRegistration & {
   generation?: string;
   shouldRelayEvent: (event: NativeHookRelayEvent) => boolean;
+  /**
+   * Tool coverage of the registrations behind a tool event. Harness adapters
+   * may narrow native hook installs (e.g. Codex PreToolUse matchers) to this
+   * scope so uncovered tools never spawn a relay process.
+   */
+  toolScopeForEvent: (event: NativeHookRelayEvent) => PluginToolMatcherScope;
   commandForEvent: (
     event: NativeHookRelayEvent,
     options?: NativeHookRelayCommandForEventOptions,
@@ -462,6 +476,7 @@ export function registerNativeHookRelay(
   const handle: ActiveNativeHookRelayRegistrationHandle = {
     ...registration,
     shouldRelayEvent: (event) => nativeHookRelayEventHasLocalWork(registration, event),
+    toolScopeForEvent: (event) => nativeHookRelayEventToolScope(registration, event),
     commandForEvent: (event, options) =>
       buildNativeHookRelayCommandWithStateDatabase({
         provider: params.provider,
@@ -669,6 +684,27 @@ function nativeHookRelayEventHasLocalWork(
     return hasGlobalHooks("before_agent_finalize");
   }
   return true;
+}
+
+function nativeHookRelayEventToolScope(
+  registration: ActiveNativeHookRelayRegistration,
+  event: NativeHookRelayEvent,
+): PluginToolMatcherScope {
+  if (event === "pre_tool_use") {
+    // Loop detection inspects every tool call, so it keeps the hook match-all
+    // even when every registered policy is tool-scoped.
+    if (nativePreToolUseMayRunLoopDetection(registration)) {
+      return { matchAll: true };
+    }
+    return getBeforeToolCallPolicyToolScope();
+  }
+  if (event === "post_tool_use") {
+    return mergePluginToolScopes([
+      getGlobalToolHookMatcherScope("after_tool_call"),
+      getAgentToolResultMiddlewareMatcherScope("codex"),
+    ]);
+  }
+  return { matchAll: true };
 }
 
 export async function invokeNativeHookRelay(
