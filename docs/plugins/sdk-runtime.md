@@ -630,6 +630,25 @@ two-party event loops that do not go through the shared inbound reply runner.
     gateway.
 
   </Accordion>
+  <Accordion title="api.runtime.talk">
+    Watch anonymous Talk activity without receiving audio, transcripts, or
+    session details. This is intended for ambient UI such as speaking avatars.
+
+    ```typescript
+    const stop = api.runtime.talk.watchActivity((event) => {
+      if (event.type === "speech") {
+        avatar.pulse();
+      }
+    });
+
+    // Call when the UI or plugin stops.
+    stop();
+    ```
+
+    Events report an opaque `activityId`, lifecycle, speaking state, and speech
+    pulses. They never include audio, transcripts, or session identifiers.
+
+  </Accordion>
   <Accordion title="api.runtime.system">
     System-level utilities.
 
