@@ -194,13 +194,9 @@ async function summarizeChunks(params: {
       );
       hasGeneratedChunk = true;
     } catch (err) {
-      // Propagate only when the caller explicitly cancelled. Provider-side
-      // AbortErrors (signal not aborted) fall through to partial/fallback paths.
+      // Caller cancellation is terminal. Provider-side failures, including
+      // timeouts, can still preserve chunks that already completed.
       if (params.signal.aborted) {
-        throw err;
-      }
-      // Real non-abort transport timeouts still propagate immediately.
-      if (!isAbortError(err) && isTimeoutError(err)) {
         throw err;
       }
       // No chunk has succeeded yet — rethrow so summarizeWithFallback
