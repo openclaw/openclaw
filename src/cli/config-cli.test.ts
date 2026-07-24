@@ -1094,6 +1094,79 @@ describe("config cli", () => {
       ]);
     });
 
+    it("merges provider objects without replacing existing model arrays", async () => {
+      const resolved = {
+        models: {
+          providers: {
+            ollama: {
+              api: "ollama",
+              apiKey: "keep-me",
+              models: [
+                { id: "llama3.2", name: "Llama 3.2", contextWindow: 131072 },
+                { id: "qwen3", name: "Qwen 3" },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "models.providers.ollama",
+        '{"models":[{"id":"llama3.2","name":"Llama 3.2 latest"},{"id":"gemma4","name":"Gemma 4"}]}',
+        "--strict-json",
+        "--merge",
+      ]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = firstWrittenConfig();
+      expect(written.models?.providers?.ollama).toEqual({
+        api: "ollama",
+        apiKey: "keep-me",
+        models: [
+          { id: "llama3.2", name: "Llama 3.2 latest", contextWindow: 131072 },
+          { id: "qwen3", name: "Qwen 3" },
+          { id: "gemma4", name: "Gemma 4" },
+        ],
+      });
+    });
+
+    it("merges provider object models by normalized catalog id", async () => {
+      const resolved = {
+        models: {
+          providers: {
+            openrouter: {
+              api: "openai-completions",
+              models: [
+                { id: "openrouter/foo", name: "Foo", contextWindow: 32000 },
+                { id: "openrouter/bar", name: "Bar" },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "models.providers.openrouter",
+        '{"models":[{"id":"foo","name":"Foo latest"},{"id":"baz","name":"Baz"}]}',
+        "--strict-json",
+        "--merge",
+      ]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = firstWrittenConfig();
+      expect(written.models?.providers?.openrouter?.models).toEqual([
+        { id: "openrouter/foo", name: "Foo latest", contextWindow: 32000 },
+        { id: "openrouter/bar", name: "Bar" },
+        { id: "openrouter/baz", name: "Baz" },
+      ]);
+    });
+
     it("drops gateway.auth.password when switching mode to token", async () => {
       const resolved: OpenClawConfig = {
         gateway: {

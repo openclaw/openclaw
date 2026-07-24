@@ -766,20 +766,29 @@ function modelArrayIds(value: unknown): Set<string> | null {
   return ids;
 }
 
-function mergeModelArrays(existing: unknown[], patch: unknown[]): unknown[] {
+function modelArrayMergeId(entry: unknown, provider?: string): string | null {
+  if (!isPlainRecord(entry) || typeof entry.id !== "string" || !entry.id.trim()) {
+    return null;
+  }
+  const id = entry.id.trim();
+  return provider ? normalizeConfiguredProviderCatalogModelId(provider, id) : id;
+}
+
+function mergeModelArrays(existing: unknown[], patch: unknown[], provider?: string): unknown[] {
   const merged = [...existing];
   const indexById = new Map<string, number>();
   for (const [index, entry] of merged.entries()) {
-    if (isPlainRecord(entry) && typeof entry.id === "string" && entry.id.trim()) {
-      indexById.set(entry.id.trim(), index);
+    const id = modelArrayMergeId(entry, provider);
+    if (id) {
+      indexById.set(id, index);
     }
   }
   for (const entry of patch) {
-    if (!isPlainRecord(entry) || typeof entry.id !== "string" || !entry.id.trim()) {
+    const id = modelArrayMergeId(entry, provider);
+    if (!id) {
       merged.push(entry);
       continue;
     }
-    const id = entry.id.trim();
     const existingIndex = indexById.get(id);
     if (existingIndex === undefined) {
       indexById.set(id, merged.length);
@@ -787,22 +796,43 @@ function mergeModelArrays(existing: unknown[], patch: unknown[]): unknown[] {
       continue;
     }
     const existingEntry = merged[existingIndex];
-    merged[existingIndex] = isPlainRecord(existingEntry) ? { ...existingEntry, ...entry } : entry;
+    merged[existingIndex] =
+      isPlainRecord(existingEntry) && isPlainRecord(entry) ? { ...existingEntry, ...entry } : entry;
   }
   return merged;
 }
 
 function mergeConfigValue(existing: unknown, patch: unknown, path: PathSegment[]): unknown {
   if (isProviderModelListPath(path) && Array.isArray(existing) && Array.isArray(patch)) {
-    return mergeModelArrays(existing, patch);
+    return mergeModelArrays(existing, patch, path[2]);
   }
   if (isPlainRecord(existing) && isPlainRecord(patch)) {
     const next: Record<string, unknown> = { ...existing };
     for (const [key, value] of Object.entries(patch)) {
-      next[key] =
-        hasOwnPathKey(next, key) && isPlainRecord(next[key]) && isPlainRecord(value)
-          ? mergeConfigValue(next[key], value, [...path, key])
-          : value;
+      const childPath = [...path, key];
+      if (!hasOwnPathKey(next, key)) {
+        next[key] = value;
+        continue;
+      }
+      const existingValue = next[key];
+      if (isPlainRecord(existingValue) && isPlainRecord(value)) {
+        next[key] = mergeConfigValue(existingValue, value, childPath);
+        continue;
+      }
+      if (
+        isProviderModelListPath(childPath) &&
+        Array.isArray(existingValue) &&
+        Array.isArray(value)
+      ) {
+        next[key] = mergeModelArrays(existingValue, value, childPath[2]);
+        continue;
+      }
+      assertNonDestructiveReplacementValue({
+        path: childPath,
+        existingValue,
+        value,
+      });
+      next[key] = value;
     }
     return next;
   }
@@ -872,13 +902,25 @@ function assertNonDestructiveReplacement(params: {
   if (!existing.found) {
     return;
   }
+  assertNonDestructiveReplacementValue({
+    path: params.path,
+    existingValue: existing.value,
+    value: params.value,
+  });
+}
+
+function assertNonDestructiveReplacementValue(params: {
+  path: PathSegment[];
+  existingValue: unknown;
+  value: unknown;
+}): void {
   const pathLabel = toDotPath(params.path);
-  if (isProtectedMapReplacementPath(params.path) && isPlainRecord(existing.value)) {
+  if (isProtectedMapReplacementPath(params.path) && isPlainRecord(params.existingValue)) {
     if (!isPlainRecord(params.value)) {
       return;
     }
     const nextKeys = new Set(Object.keys(params.value));
-    const removed = Object.keys(existing.value).filter((key) => !nextKeys.has(key));
+    const removed = Object.keys(params.existingValue).filter((key) => !nextKeys.has(key));
     if (removed.length > 0) {
       throw new Error(
         `Refusing to replace ${pathLabel}; it would remove existing entries: ${formatRemovedEntries(removed)}. Use --merge to merge object values or --replace to replace intentionally.`,
@@ -886,7 +928,7 @@ function assertNonDestructiveReplacement(params: {
     }
   }
   if (isProtectedArrayReplacementPath(params.path)) {
-    const existingIds = modelArrayIds(existing.value);
+    const existingIds = modelArrayIds(params.existingValue);
     const nextIds = modelArrayIds(params.value);
     if (!existingIds || !nextIds) {
       return;
