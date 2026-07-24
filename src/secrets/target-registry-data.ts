@@ -241,6 +241,19 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     providerIdPathSegmentIndex: 2,
   },
   {
+    id: "tts.personas.*.providers.*.apiKey",
+    targetType: "tts.personas.*.providers.*.apiKey",
+    configFile: "openclaw.json",
+    pathPattern: "tts.personas.*.providers.*.apiKey",
+    secretShape: SECRET_INPUT_SHAPE,
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: false,
+    includeInAudit: true,
+    providerIdPathSegmentIndex: 4,
+  },
+
+  {
     id: "agents.entries.*.tts.providers.*.apiKey",
     targetType: "agents.entries.*.tts.providers.*.apiKey",
     configFile: "openclaw.json",
@@ -252,6 +265,19 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     includeInAudit: true,
     providerIdPathSegmentIndex: 5,
   },
+  {
+    id: "agents.entries.*.tts.personas.*.providers.*.apiKey",
+    targetType: "agents.entries.*.tts.personas.*.providers.*.apiKey",
+    configFile: "openclaw.json",
+    pathPattern: "agents.entries.*.tts.personas.*.providers.*.apiKey",
+    secretShape: SECRET_INPUT_SHAPE,
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: false,
+    includeInAudit: true,
+    providerIdPathSegmentIndex: 6,
+  },
+
   {
     id: "models.providers.*.apiKey",
     targetType: "models.providers.apiKey",
