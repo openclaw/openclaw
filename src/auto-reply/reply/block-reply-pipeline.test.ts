@@ -112,6 +112,26 @@ describe("createBlockReplyPipeline dedup with threading", () => {
     );
   });
 
+  it("hasSentPayload matches finals that merge several streamed assistant messages", async () => {
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async () => {},
+      timeoutMs: 5000,
+    });
+
+    pipeline.enqueue(
+      setReplyPayloadMetadata({ text: "Interim findings." }, { assistantMessageIndex: 0 }),
+    );
+    pipeline.enqueue(
+      setReplyPayloadMetadata({ text: "Final wrap-up." }, { assistantMessageIndex: 1 }),
+    );
+    await pipeline.flush({ force: true });
+
+    // CLI terminal results join interim and final result text with a newline.
+    expect(pipeline.hasSentPayload({ text: "Interim findings.\nFinal wrap-up." })).toBe(true);
+    expect(pipeline.hasSentPayload({ text: "Interim findings." })).toBe(true);
+    expect(pipeline.hasSentPayload({ text: "Different text entirely." })).toBe(false);
+  });
+
   it("keeps exact payload evidence separate from streamed text coverage", async () => {
     const pipeline = createBlockReplyPipeline({
       onBlockReply: async () => {},

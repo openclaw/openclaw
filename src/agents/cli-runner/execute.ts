@@ -47,6 +47,7 @@ import {
   createCliJsonlStreamingParser,
   extractCliErrorMessage,
   parseCliOutput,
+  type CliAssistantBlockDelta,
   type CliOutput,
   type CliPlanUpdate,
   type CliStreamingDelta,
@@ -1578,6 +1579,30 @@ export async function executePreparedCliRun(
             },
           });
         };
+        // Completed segments ride the assistant stream without text/delta fields so
+        // preview and transcript consumers (which key on those fields) ignore them.
+        const emitCliAssistantBlockText = ({
+          text,
+          assistantMessageIndex,
+          assistantBlockIndex: blockIndex,
+        }: CliAssistantBlockDelta) => {
+          observedCliActivity = true;
+          if (!emitLiveEvents) {
+            return;
+          }
+          emitAgentEvent({
+            runId: params.runId,
+            stream: "assistant",
+            data: {
+              blockText: applyPluginTextReplacements(
+                text,
+                context.backendResolved.textTransforms?.output,
+              ),
+              assistantMessageIndex,
+              assistantBlockIndex: blockIndex,
+            },
+          });
+        };
         // Emit-always: thinking reaches the agent-event bus and session archive
         // like the embedded reasoning stream; /reasoning and /verbose gate only
         // presentation. Text stays raw here to match the thinking-stream contract
@@ -1662,6 +1687,10 @@ export async function executePreparedCliRun(
               emitLiveEvents && context.params.emitCommentaryText
                 ? emitCliCommentaryText
                 : undefined,
+            onAssistantBlockText:
+              emitLiveEvents && context.params.emitAssistantBlockText
+                ? emitCliAssistantBlockText
+                : undefined,
             onMcpCaptureReady: beginGatewayCapture,
             cleanup: async () => {
               await fallbackClaudeSkillsPlugin?.cleanup();
@@ -1700,6 +1729,10 @@ export async function executePreparedCliRun(
                 onCommentaryText:
                   emitLiveEvents && context.params.emitCommentaryText
                     ? emitCliCommentaryText
+                    : undefined,
+                onAssistantBlockText:
+                  emitLiveEvents && context.params.emitAssistantBlockText
+                    ? emitCliAssistantBlockText
                     : undefined,
                 onSessionId: (sessionId) => {
                   observeForkSuccessor(sessionId);

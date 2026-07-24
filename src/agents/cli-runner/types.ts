@@ -206,6 +206,8 @@ export type RunCliAgentParams = {
   }) => void;
   replyOperation?: ReplyOperation;
   emitCommentaryText?: boolean;
+  /** Emit completed assistant text segments as agent events for durable block delivery. */
+  emitAssistantBlockText?: boolean;
   /**
    * Close any long-lived CLI live session created for this run after the run
    * finishes. Intended for temporary helper calls that should not keep process

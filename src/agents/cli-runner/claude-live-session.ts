@@ -30,6 +30,7 @@ import {
   createCliJsonlStreamingParser,
   extractCliErrorMessage,
   parseCliOutput,
+  type CliAssistantBlockDelta,
   type CliOutput,
   type CliUsage,
   type CliStreamJsonOutputLimits,
@@ -1502,6 +1503,7 @@ function createTurn(params: {
     delta: CliToolResultDelta,
   ) => ClaudeLiveToolTerminalOutcome | undefined;
   onCommentaryText?: (text: string) => void;
+  onAssistantBlockText?: (delta: CliAssistantBlockDelta) => void;
   onSessionId?: (sessionId: string) => void;
   onAssistantMessage?: (message: unknown) => void;
   onUsage?: (usage: CliUsage, terminal: boolean) => void;
@@ -1551,6 +1553,7 @@ function createTurn(params: {
         params.onToolResult?.(delta);
       },
       onCommentaryText: params.onCommentaryText,
+      onAssistantBlockText: params.onAssistantBlockText,
       onSessionId: params.onSessionId,
       onAssistantMessage: params.onAssistantMessage,
       onUsage: params.onUsage,
@@ -1650,6 +1653,7 @@ export async function runClaudeLiveSessionTurn(params: {
     delta: CliToolResultDelta,
   ) => ClaudeLiveToolTerminalOutcome | undefined;
   onCommentaryText?: (text: string) => void;
+  onAssistantBlockText?: (delta: CliAssistantBlockDelta) => void;
   onMcpCaptureReady?: (captureKey: string) => void;
   onSessionId?: (sessionId: string) => void;
   onAssistantMessage?: (message: unknown) => void;
@@ -1880,6 +1884,7 @@ export async function runClaudeLiveSessionTurn(params: {
       onToolResult: params.onToolResult,
       resolveToolResultTerminalOutcome: params.resolveToolResultTerminalOutcome,
       onCommentaryText: params.onCommentaryText,
+      onAssistantBlockText: params.onAssistantBlockText,
       onSessionId: params.onSessionId,
       onAssistantMessage: params.onAssistantMessage,
       onUsage: params.onUsage,

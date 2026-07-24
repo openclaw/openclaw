@@ -13,6 +13,7 @@ import { clearRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { emitAgentEvent } from "../../infra/agent-events.js";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -2103,6 +2104,104 @@ describe("runReplyAgent claude-cli routing", () => {
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
     expectReplyText(result, "ok");
+  });
+
+  it("streams completed CLI text segments as durable block replies and dedupes the final", async () => {
+    runCliAgentMock.mockImplementationOnce(
+      async (params: { runId: string; emitAssistantBlockText?: boolean }) => {
+        expect(params.emitAssistantBlockText).toBe(true);
+        emitAgentEvent({
+          runId: params.runId,
+          stream: "assistant",
+          data: { blockText: "Reading the config files now.", assistantMessageIndex: 0 },
+        });
+        emitAgentEvent({
+          runId: params.runId,
+          stream: "assistant",
+          data: { blockText: "Short wrap-up.", assistantMessageIndex: 1 },
+        });
+        return {
+          payloads: [{ text: "Short wrap-up." }],
+          meta: {
+            agentMeta: { provider: "claude-cli", model: "opus-4.5" },
+            executionTrace: {
+              winnerProvider: "claude-cli",
+              winnerModel: "opus-4.5",
+              attempts: [],
+              fallbackUsed: false,
+              runner: "cli",
+            },
+          },
+        };
+      },
+    );
+    const blockReplies: Array<string | undefined> = [];
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "webchat",
+      OriginatingTo: "session:1",
+      AccountId: "primary",
+      MessageSid: "msg",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        sessionId: "session",
+        sessionKey: "main",
+        messageProvider: "webchat",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: { agents: { defaults: { cliBackends: { "claude-cli": {} } } } },
+        skillsSnapshot: {},
+        provider: "claude-cli",
+        model: "opus-4.5",
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+      },
+    } as unknown as FollowupRun;
+
+    const result = await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      defaultModel: "claude-cli/opus-4.5",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: true,
+      resolvedBlockStreamingBreak: "text_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+      opts: {
+        onBlockReply: async (payload: ReplyPayload) => {
+          blockReplies.push(payload.text);
+        },
+      },
+    });
+
+    // Mid-turn narration reaches the channel durably; the terminal CLI result
+    // matches the last streamed segment and must not be delivered again.
+    expect(blockReplies).toEqual(["Reading the config files now.", "Short wrap-up."]);
+    const returnedTexts = (Array.isArray(result) ? result : result ? [result] : []).map(
+      (payload) => payload.text,
+    );
+    expect(returnedTexts).not.toContain("Short wrap-up.");
   });
 
   it("does not leak hook-blocked CLI input in raw trace payloads", async () => {

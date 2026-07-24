@@ -86,6 +86,164 @@ describe("runCliAgentWithLifecycle", () => {
     });
   });
 
+  it("bridges completed assistant block segments and requests their emission", async () => {
+    cliDispatchState.runCliAgentMock.mockImplementationOnce(
+      async (params: { runId: string; emitAssistantBlockText?: boolean }) => {
+        expect(params.emitAssistantBlockText).toBe(true);
+        emitAgentEvent({
+          runId: params.runId,
+          stream: "assistant",
+          data: {
+            blockText: "Inspecting the repo.",
+            assistantMessageIndex: 0,
+            assistantBlockIndex: 0,
+          },
+        });
+        emitAgentEvent({
+          runId: params.runId,
+          stream: "assistant",
+          data: { text: "Inspecting the repo.", delta: "Inspecting the repo." },
+        });
+        emitAgentEvent({
+          runId: params.runId,
+          stream: "assistant",
+          data: {
+            blockText: "Short wrap-up.",
+            assistantMessageIndex: 1,
+            assistantBlockIndex: 0,
+          },
+        });
+        return { payloads: [{ text: "Short wrap-up." }], meta: { durationMs: 1 } };
+      },
+    );
+    const onAssistantBlockText = vi.fn<
+      (payload: {
+        text: string;
+        assistantMessageIndex?: number;
+        assistantBlockIndex?: number;
+      }) => Promise<void>
+    >(async () => undefined);
+    const onAssistantText = vi.fn<(text: string) => Promise<void>>(async () => undefined);
+
+    await runCliAgentWithLifecycle({
+      runId: "run-block-bridge",
+      provider: "claude-cli",
+      onAssistantText,
+      onAssistantBlockText,
+      runParams: {
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        prompt: "hello",
+        provider: "claude-cli",
+        model: "claude",
+        thinkLevel: "high",
+        timeoutMs: 1_000,
+        runId: "run-block-bridge",
+      },
+    });
+
+    expect(onAssistantBlockText.mock.calls.map(([payload]) => payload)).toEqual([
+      { text: "Inspecting the repo.", assistantMessageIndex: 0, assistantBlockIndex: 0 },
+      { text: "Short wrap-up.", assistantMessageIndex: 1, assistantBlockIndex: 0 },
+    ]);
+    // Snapshot preview lane stays isolated from block segment events.
+    expect(onAssistantText.mock.calls.map(([text]) => text)).toEqual(["Inspecting the repo."]);
+  });
+
+  it("forwards assistantBlockIndex through the bridge including within-message distinction", async () => {
+    cliDispatchState.runCliAgentMock.mockImplementationOnce(
+      async (params: { runId: string; emitAssistantBlockText?: boolean }) => {
+        expect(params.emitAssistantBlockText).toBe(true);
+        // text → tool → text within one assistant message — blocks 0 and 1.
+        emitAgentEvent({
+          runId: params.runId,
+          stream: "assistant",
+          data: {
+            blockText: "Pre-tool narration.",
+            assistantMessageIndex: 0,
+            assistantBlockIndex: 0,
+          },
+        });
+        emitAgentEvent({
+          runId: params.runId,
+          stream: "assistant",
+          data: {
+            blockText: "Post-tool wrap-up.",
+            assistantMessageIndex: 0,
+            assistantBlockIndex: 1,
+          },
+        });
+        return { payloads: [{ text: "Post-tool wrap-up." }], meta: { durationMs: 1 } };
+      },
+    );
+    const onAssistantBlockText = vi.fn<
+      (payload: {
+        text: string;
+        assistantMessageIndex?: number;
+        assistantBlockIndex?: number;
+      }) => Promise<void>
+    >(async () => undefined);
+
+    await runCliAgentWithLifecycle({
+      runId: "run-block-split",
+      provider: "claude-cli",
+      onAssistantBlockText,
+      runParams: {
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        prompt: "hello",
+        provider: "claude-cli",
+        model: "claude",
+        thinkLevel: "high",
+        timeoutMs: 1_000,
+        runId: "run-block-split",
+      },
+    });
+
+    expect(onAssistantBlockText.mock.calls.map(([payload]) => payload)).toEqual([
+      { text: "Pre-tool narration.", assistantMessageIndex: 0, assistantBlockIndex: 0 },
+      { text: "Post-tool wrap-up.", assistantMessageIndex: 0, assistantBlockIndex: 1 },
+    ]);
+  });
+
+  it("suppresses block segment delivery for silent-expected runs", async () => {
+    cliDispatchState.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "assistant",
+        data: {
+          blockText: "Hidden narration.",
+          assistantMessageIndex: 0,
+          assistantBlockIndex: 0,
+        },
+      });
+      return { payloads: [], meta: { durationMs: 1 } };
+    });
+    const onAssistantBlockText = vi.fn(async () => undefined);
+
+    await runCliAgentWithLifecycle({
+      runId: "run-block-silent",
+      provider: "claude-cli",
+      suppressAssistantBridge: true,
+      onAssistantBlockText,
+      runParams: {
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        prompt: "hello",
+        provider: "claude-cli",
+        model: "claude",
+        thinkLevel: "high",
+        timeoutMs: 1_000,
+        runId: "run-block-silent",
+      },
+    });
+
+    expect(onAssistantBlockText).not.toHaveBeenCalled();
+  });
+
   it("normalizes shipped string-step plan events to pending typed steps", async () => {
     cliDispatchState.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
       emitAgentEvent({

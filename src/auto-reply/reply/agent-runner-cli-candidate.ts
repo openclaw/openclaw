@@ -10,6 +10,7 @@ import {
 } from "../../agents/run-termination.js";
 import { withLocalSessionPlacementTurnAdmission } from "../../agents/session-placement-admission.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ThinkLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -35,7 +36,10 @@ import { isReplyOperationRestartAbort } from "./reply-operation-abort.js";
 
 type CliPresentation = Pick<
   ReturnType<typeof createAgentTurnPresentation>,
-  "handlePartialForTyping" | "preparePartialForTyping" | "startPresentationWhileTyping"
+  | "blockReplyHandler"
+  | "handlePartialForTyping"
+  | "preparePartialForTyping"
+  | "startPresentationWhileTyping"
 >;
 
 export async function runCliFallbackCandidate(params: {
@@ -118,6 +122,34 @@ export async function runCliFallbackCandidate(params: {
       await turn.opts?.onToolResult?.(payload);
     },
   });
+  // Durable segment lane: completed CLI text blocks reach the same block-reply
+  // handler embedded runs use, so blockStreaming applies to CLI turns and the
+  // pipeline's dedupe suppresses the terminal CLI result when already streamed.
+  // Each completed block receives a compound assistant-message identity encoding
+  // both the Claude message ordinal and the within-message block ordinal so the
+  // coalescer flushes on every completed-block boundary and transport rotation
+  // (e.g. Telegram's answer lane) does not overwrite an earlier block with a
+  // later block from the same assistant message.
+  const cliBlockReplyHandler = params.presentation.blockReplyHandler;
+  const deliverAssistantBlockText =
+    turn.blockStreamingEnabled && cliBlockReplyHandler
+      ? async (payload: {
+          text: string;
+          assistantMessageIndex?: number;
+          assistantBlockIndex?: number;
+        }) => {
+          const effectiveIndex =
+            payload.assistantMessageIndex !== undefined && payload.assistantBlockIndex !== undefined
+              ? payload.assistantMessageIndex * 1000 + payload.assistantBlockIndex
+              : payload.assistantMessageIndex;
+          await cliBlockReplyHandler(
+            setReplyPayloadMetadata(
+              { text: payload.text },
+              effectiveIndex !== undefined ? { assistantMessageIndex: effectiveIndex } : {},
+            ),
+          );
+        }
+      : undefined;
   const result = await params.timing.measure("cli_run", () =>
     withLocalSessionPlacementTurnAdmission(
       {
@@ -161,6 +193,7 @@ export async function runCliFallbackCandidate(params: {
             );
           },
           onReasoningText: createCliReasoningStreamBridge(turn.opts?.onReasoningStream),
+          onAssistantBlockText: deliverAssistantBlockText,
           onPlanUpdate: turn.opts?.onPlanUpdate,
           onReasoningProgress: async (payload) => {
             await turn.opts?.onReasoningProgress?.(payload);

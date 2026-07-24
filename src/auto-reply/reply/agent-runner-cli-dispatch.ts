@@ -162,6 +162,35 @@ type CommentaryTextPayload = {
   itemId?: string;
 };
 
+type AssistantBlockTextPayload = {
+  text: string;
+  assistantMessageIndex?: number;
+  assistantBlockIndex?: number;
+};
+
+function readAssistantBlockTextPayload(
+  evt: AgentEventPayload,
+): AssistantBlockTextPayload | undefined {
+  if (evt.stream !== "assistant" || typeof evt.data.blockText !== "string") {
+    return undefined;
+  }
+  const text = evt.data.blockText.trim();
+  if (!text) {
+    return undefined;
+  }
+  const assistantMessageIndex = evt.data.assistantMessageIndex;
+  const assistantBlockIndex = evt.data.assistantBlockIndex;
+  return {
+    text,
+    ...(typeof assistantMessageIndex === "number" && Number.isFinite(assistantMessageIndex)
+      ? { assistantMessageIndex }
+      : {}),
+    ...(typeof assistantBlockIndex === "number" && Number.isFinite(assistantBlockIndex)
+      ? { assistantBlockIndex }
+      : {}),
+  };
+}
+
 function readCommentaryTextPayload(evt: AgentEventPayload): CommentaryTextPayload | undefined {
   if (evt.stream !== "item" || evt.data.kind !== "preamble") {
     return undefined;
@@ -423,6 +452,8 @@ type RunCliAgentWithLifecycleParams = {
   onActivity?: () => void;
   preserveProgressCallbackStartOrder?: boolean;
   onAssistantText?: (text: string) => Promise<void>;
+  /** Delivers completed assistant text segments for durable block streaming. */
+  onAssistantBlockText?: (payload: AssistantBlockTextPayload) => Promise<void>;
   onReasoningText?: (payload: ReasoningTextPayload) => Promise<void>;
   onReasoningProgress?: (payload: ReasoningProgressPayload) => Promise<void>;
   onToolEvent?: (payload: CliToolEventPayload) => Promise<void>;
@@ -550,6 +581,13 @@ async function runCliAgentWithLifecycleInternal(
     deliver: params.onAssistantText,
     startOrder: progressStartOrder,
   });
+  const assistantBlockBridge = createAgentEventBridge({
+    runId: params.runId,
+    suppressed: params.suppressAssistantBridge,
+    deliver: params.onAssistantBlockText,
+    startOrder: progressStartOrder,
+    read: readAssistantBlockTextPayload,
+  });
   let finalReasoningText: string | undefined;
   const reasoningBridge = createReasoningTextBridge({
     runId: params.runId,
@@ -592,6 +630,7 @@ async function runCliAgentWithLifecycleInternal(
   const bridges = [
     activityBridge,
     assistantBridge,
+    assistantBlockBridge,
     reasoningBridge,
     reasoningProgressBridge,
     toolBridge,
@@ -604,6 +643,8 @@ async function runCliAgentWithLifecycleInternal(
     const rawResult = await runCliAgent({
       ...params.runParams,
       emitCommentaryText: params.runParams.emitCommentaryText ?? Boolean(params.onCommentaryText),
+      emitAssistantBlockText:
+        params.runParams.emitAssistantBlockText ?? Boolean(params.onAssistantBlockText),
     });
     const restartAbortReason = params.runParams.abortSignal?.reason;
     if (isAgentRunRestartAbortReason(restartAbortReason)) {
