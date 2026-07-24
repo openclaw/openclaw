@@ -18,6 +18,7 @@ import { resolveMatrixSharedDmContextNotice } from "./handler-helpers.js";
 import { loadMatrixSendModule } from "./handler-runtime.js";
 import type { MatrixLocationPayload } from "./location.js";
 import { createMatrixReplyContextResolver } from "./reply-context.js";
+import type { HistoryEntry } from "./room-history.js";
 import type { resolveMatrixInboundRoute } from "./route.js";
 import type { PluginRuntime, RuntimeEnv } from "./runtime-api.js";
 import { createMatrixThreadContextResolver } from "./thread-context.js";
@@ -57,7 +58,7 @@ export async function resolveMatrixInboundContext(config: {
   commandBodyText: string;
   roomConfig?: MatrixRoomConfig;
   messageId: string;
-  inboundHistory?: string;
+  inboundHistory?: HistoryEntry[];
   wasMentioned: boolean;
   effectiveWasMentioned: boolean;
   shouldBypassMention: boolean;

@@ -25,8 +25,9 @@ import { createMatrixReplyDispatcher } from "./handler-reply-dispatcher.js";
 import { loadMatrixSendModule, redactMatrixDraftEvent } from "./handler-runtime.js";
 import { createMatrixHandlerState } from "./handler-state.js";
 import type { MatrixHandlerRuntimeConfig, MatrixMonitorHandlerParams } from "./handler-types.js";
+import type { MatrixLocationPayload } from "./location.js";
 import { createMatrixReplyContextResolver } from "./reply-context.js";
-import { createRoomHistoryTracker } from "./room-history.js";
+import { createRoomHistoryTracker, type ReservedHistorySlot } from "./room-history.js";
 import {
   createReplyPrefixOptions,
   createTypingCallbacks,
@@ -606,7 +607,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const draftStream = draftControllerRef?.draftStream;
       if (draftStream) {
         const draftEventId = await draftStream.stop().catch(() => undefined);
-        if (draftEventId && !draftControllerRef.isDraftConsumed()) {
+        if (draftEventId && draftControllerRef?.isDraftConsumed() !== true) {
           await redactMatrixDraftEvent(client, roomId, draftEventId);
         }
       }
