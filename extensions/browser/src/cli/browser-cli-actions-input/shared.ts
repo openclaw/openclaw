@@ -130,7 +130,7 @@ export async function readFields(opts: {
 const ACTIONS_STDIN_MAX_BYTES = 1_000_000;
 
 /** Reads stdin to a UTF-8 string, throwing once the byte cap is exceeded. */
-export async function readStdinText(
+async function readStdinText(
   stream: NodeJS.ReadableStream = process.stdin,
   maxBytes = ACTIONS_STDIN_MAX_BYTES,
 ): Promise<string> {
