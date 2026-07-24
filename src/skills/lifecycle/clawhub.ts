@@ -211,6 +211,22 @@ function formatClawHubSkillRef(ref: ClawHubSkillRef): string {
   return ref.ownerHandle ? `@${ref.ownerHandle}/${ref.slug}` : ref.slug;
 }
 
+function assertClawHubOwnerMatch(params: {
+  slug: string;
+  requestedOwnerHandle: string | undefined;
+  trackedOwnerHandle: string | undefined;
+}): void {
+  if (!params.requestedOwnerHandle || params.trackedOwnerHandle === params.requestedOwnerHandle) {
+    return;
+  }
+  const trackedRef = params.trackedOwnerHandle
+    ? `@${params.trackedOwnerHandle}/${params.slug}`
+    : params.slug;
+  throw new Error(
+    `Skill "${params.slug}" is tracked as ${trackedRef}, not @${params.requestedOwnerHandle}/${params.slug}.`,
+  );
+}
+
 async function resolveRequestedUpdateSlug(params: {
   workspaceDir: string;
   requestedSlug: string;
@@ -225,13 +241,11 @@ async function resolveRequestedUpdateSlug(params: {
   const trackedOrigin = await readClawHubSkillOrigin(trackedTargetDir);
   const trackedLockEntry = params.lock.skills[trackedSlug];
   if (trackedOrigin || trackedLockEntry) {
-    const trackedOwnerHandle = trackedOrigin?.ownerHandle ?? trackedLockEntry?.ownerHandle;
-    if (requestedRef.ownerHandle && trackedOwnerHandle !== requestedRef.ownerHandle) {
-      const trackedRef = trackedOwnerHandle ? `@${trackedOwnerHandle}/${trackedSlug}` : trackedSlug;
-      throw new Error(
-        `Skill "${trackedSlug}" is tracked as ${trackedRef}, not @${requestedRef.ownerHandle}/${trackedSlug}.`,
-      );
-    }
+    assertClawHubOwnerMatch({
+      slug: trackedSlug,
+      requestedOwnerHandle: requestedRef.ownerHandle,
+      trackedOwnerHandle: trackedOrigin?.ownerHandle ?? trackedLockEntry?.ownerHandle,
+    });
     return trackedSlug;
   }
   return validateRequestedSkillSlug(requestedRef.slug);
@@ -1093,13 +1107,11 @@ export async function resolveClawHubSkillVerificationTarget(params: {
           error: `Skill "${trackedSlug}" ClawHub origin metadata does not match the workspace ClawHub lockfile. Reinstall it from ClawHub before verifying it as an installed ClawHub skill.`,
         };
       }
-      if (requestedRef.ownerHandle && lockedOwnerHandle !== requestedRef.ownerHandle) {
-        const trackedRef = lockedOwnerHandle ? `@${lockedOwnerHandle}/${trackedSlug}` : trackedSlug;
-        return {
-          ok: false,
-          error: `Skill "${trackedSlug}" is tracked as ${trackedRef}, not @${requestedRef.ownerHandle}/${trackedSlug}.`,
-        };
-      }
+      assertClawHubOwnerMatch({
+        slug: trackedSlug,
+        requestedOwnerHandle: requestedRef.ownerHandle,
+        trackedOwnerHandle: lockedOwnerHandle,
+      });
       const selector: ClawHubSkillVerificationSelector = version
         ? "version"
         : tag
@@ -1360,6 +1372,20 @@ async function performClawHubSkillInstall(
     const targetDir = resolveWorkspaceSkillInstallDir(params.workspaceDir, params.slug);
     const registry = resolveClawHubBaseUrl(params.baseUrl);
     const clawhubAuthority = isDefaultClawHubBaseUrl(params.baseUrl) ? "openclaw" : "third-party";
+    if (params.ownerHandle) {
+      const trackedOrigin = await readClawHubSkillOrigin(targetDir);
+      const trackedLockEntry = (await readClawHubSkillsLockfile(params.workspaceDir)).skills[
+        params.slug
+      ];
+      const trackedOwnerHandle = trackedOrigin?.ownerHandle ?? trackedLockEntry?.ownerHandle;
+      if (trackedOwnerHandle) {
+        assertClawHubOwnerMatch({
+          slug: params.slug,
+          requestedOwnerHandle: params.ownerHandle,
+          trackedOwnerHandle,
+        });
+      }
+    }
     if (!params.force && (await pathExists(targetDir))) {
       return {
         ok: false,
