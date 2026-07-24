@@ -31,7 +31,7 @@ function readMcpAppResourceUri(item: CodexThreadItem): string | undefined {
   return uri?.startsWith("ui://") ? uri : undefined;
 }
 
-export function readMcpToolResult(item: CodexThreadItem): NativeMcpCallToolResult | undefined {
+function readMcpToolResult(item: CodexThreadItem): NativeMcpCallToolResult | undefined {
   const result = asRecord(item.result);
   if (!result || !Array.isArray(result.content)) {
     return undefined;

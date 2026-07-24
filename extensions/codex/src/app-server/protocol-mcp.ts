@@ -1,4 +1,4 @@
-import type { JsonObject, JsonValue } from "./protocol.js";
+import type { JsonObject, JsonValue } from "./protocol-json.js";
 
 export type CodexMcpServerStatus = {
   name: string;

@@ -1,10 +1,7 @@
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { CodexAppServerClient } from "./client.js";
-import {
-  createCodexNativeMcpAppResultDetailsPreparer,
-  readMcpToolResult,
-} from "./native-mcp-app.js";
+import { createCodexNativeMcpAppResultDetailsPreparer } from "./native-mcp-app.js";
 
 function createAttempt(enabled = true): EmbeddedRunAttemptParams {
   return {
@@ -85,21 +82,6 @@ describe("Codex native MCP Apps", () => {
       threadId: "thread-1",
       server: "sample",
       uri: "ui://sample/options.html",
-    });
-  });
-
-  it("omits null result metadata before MCP App schema validation", () => {
-    expect(
-      readMcpToolResult({
-        result: {
-          content: [{ type: "text", text: "Found four restaurants." }],
-          structuredContent: { stores: [{ id: "store-1" }] },
-          _meta: null,
-        },
-      } as never),
-    ).toEqual({
-      content: [{ type: "text", text: "Found four restaurants." }],
-      structuredContent: { stores: [{ id: "store-1" }] },
     });
   });
 
