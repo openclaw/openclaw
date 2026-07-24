@@ -15,6 +15,7 @@ type CreateOpenClawToolsArg = {
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
   pluginToolDenylist?: string[];
+  requesterSenderId?: string;
   sandboxed?: boolean;
   requesterAgentIdOverride?: string;
 };
@@ -410,6 +411,19 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
 
     expect(result.tools.map((tool) => tool.name)).not.toContain("exec");
     expect(readCreateToolsArgs().pluginToolDenylist).toContain("exec");
+  });
+
+  it("forwards trusted channel sender id into OpenClaw tool construction", () => {
+    resolveGatewayScopedTools({
+      cfg: {} as OpenClawConfig,
+      sessionKey: "agent:main:discord:channel:dev",
+      surface: "loopback",
+      senderIsOwner: true,
+      messageProvider: "discord",
+      channelContext: { sender: { id: "discord-user-1" } },
+    });
+
+    expect(readCreateToolsArgs().requesterSenderId).toBe("discord-user-1");
   });
 
   it("uses persisted delegated policy instead of the sender wildcard", async () => {
