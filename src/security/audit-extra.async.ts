@@ -356,7 +356,11 @@ function parsePublishedHostFromDockerPortLine(line: string): string | null {
 
 function isLoopbackPublishHost(host: string): boolean {
   const normalized = normalizeOptionalLowercaseString(host);
-  return normalized === "127.0.0.1" || normalized === "::1" || normalized === "localhost";
+  return (
+    normalized === "::1" ||
+    normalized === "localhost" ||
+    (normalized !== undefined && normalized.startsWith("127."))
+  );
 }
 
 async function readSandboxBrowserPortMappings(params: {
