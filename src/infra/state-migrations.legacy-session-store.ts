@@ -312,7 +312,9 @@ function normalizeLegacySessionStore(store: Record<string, SessionEntry>): void 
     store[key] = stripPersistedSkillsCache(
       normalizePluginExtensionSlotKeys(
         normalizePluginExtensions(
-          normalizePendingFinalDeliveryFields(modelSelectionLocked ? shaped : runtimeFields),
+          normalizePendingFinalDeliveryFields(
+            normalizeLegacySessionEntryDelivery(modelSelectionLocked ? shaped : runtimeFields),
+          ),
         ),
       ),
     );
