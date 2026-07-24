@@ -1,6 +1,6 @@
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { FeishuPermissionError } from "./bot-sender-name.js";
-import type { FeishuMessageContext } from "./types.js";
+import type { FeishuMediaInfo, FeishuMessageContext } from "./types.js";
 
 const MAX_MENTION_CONTEXT_NAME_LENGTH = 80;
 
@@ -17,6 +17,27 @@ function formatMentionNameForAgentContext(name: string): string {
   return JSON.stringify(bounded || "unknown");
 }
 
+function inferAttachmentKind(placeholder: string | undefined): string {
+  if (!placeholder) return "file";
+  const match = /^<media:([^>]+)>$/.exec(placeholder);
+  return match ? match[1] : "file";
+}
+
+function formatAttachmentsBlock(mediaList: readonly FeishuMediaInfo[]): string {
+  const lines: string[] = ["<attachments>"];
+  for (const media of mediaList) {
+    if (!media?.path) continue;
+    lines.push(`- path: ${media.path}`);
+    lines.push(`  kind: ${inferAttachmentKind(media.placeholder)}`);
+    if (media.contentType) {
+      lines.push(`  contentType: ${media.contentType}`);
+    }
+  }
+  lines.push("</attachments>");
+  // Only emit the block if at least one attachment produced a path entry.
+  return lines.length > 2 ? lines.join("\n") : "";
+}
+
 export function buildFeishuAgentBody(params: {
   ctx: Pick<
     FeishuMessageContext,
@@ -25,8 +46,9 @@ export function buildFeishuAgentBody(params: {
   quotedContent?: string;
   permissionErrorForAgent?: FeishuPermissionError;
   botOpenId?: string;
+  mediaList?: readonly FeishuMediaInfo[];
 }): string {
-  const { ctx, quotedContent, permissionErrorForAgent, botOpenId } = params;
+  const { ctx, quotedContent, permissionErrorForAgent, botOpenId, mediaList } = params;
   let messageBody = ctx.content;
   if (quotedContent) {
     messageBody = `[Replying to: "${quotedContent}"]\n\n${ctx.content}`;
@@ -55,6 +77,15 @@ export function buildFeishuAgentBody(params: {
   if (permissionErrorForAgent) {
     const grantUrl = permissionErrorForAgent.grantUrl ?? "";
     messageBody += `\n\n[System: The bot encountered a Feishu API permission error. Please inform the user about this issue and provide the permission grant URL for the admin to authorize. Permission grant URL: ${grantUrl}]`;
+  }
+  if (mediaList && mediaList.length > 0) {
+    // Persist a durable, machine-readable reference to each downloaded attachment
+    // so follow-up turns can locate the file even when the inline preview was
+    // truncated (see #108534).
+    const attachmentsBlock = formatAttachmentsBlock(mediaList);
+    if (attachmentsBlock) {
+      messageBody += `\n\n${attachmentsBlock}`;
+    }
   }
   return messageBody;
 }

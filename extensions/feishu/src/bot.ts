@@ -1130,6 +1130,7 @@ export async function handleFeishuMessage(params: {
       quotedContent,
       permissionErrorForAgent,
       botOpenId,
+      mediaList,
     });
     const envelopeFrom = isGroup ? `${ctx.chatId}:${ctx.senderOpenId}` : ctx.senderOpenId;
     if (permissionErrorForAgent) {
