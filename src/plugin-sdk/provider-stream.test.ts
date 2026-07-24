@@ -5,6 +5,7 @@ import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js"
 import { VERSION } from "../version.js";
 import {
   composeProviderStreamWrappers as composeProviderStreamWrappersShared,
+  createGoogleThinkingPayloadWrapper,
   createMoonshotThinkingWrapper as createMoonshotThinkingWrapperShared,
   createPlainTextToolCallCompatWrapper as createPlainTextToolCallCompatWrapperShared,
   createToolStreamWrapper as createToolStreamWrapperShared,
@@ -199,6 +200,55 @@ describe("composeProviderStreamWrappers", () => {
 });
 
 describe("buildProviderStreamFamilyHooks", () => {
+  it("sanitizes Google thinking payloads for Vertex and Gemini CLI APIs", async () => {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      const payload = {
+        model: model.id,
+        config: { thinkingConfig: { thinkingBudget: -1 } },
+      } as Record<string, unknown>;
+      options?.onPayload?.(payload as never, model as never);
+      capturedPayload = payload;
+      return {} as never;
+    };
+    const stream = createGoogleThinkingPayloadWrapper(baseStreamFn, "high");
+
+    for (const api of ["google-generative-ai", "google-vertex", "google-gemini-cli"]) {
+      await stream({ api, id: "gemini-3.1-pro-preview" } as never, {} as never, {});
+      const payload = requirePayload(capturedPayload);
+      const config = requireRecord(payload.config, `${api} payload config`);
+      const thinkingConfig = requireRecord(config.thinkingConfig, `${api} thinking config`);
+      expect(thinkingConfig.thinkingLevel).toBe("HIGH");
+      expect(thinkingConfig).not.toHaveProperty("thinkingBudget");
+    }
+  });
+
+  it("does not sanitize non-Google thinking payloads", async () => {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      const payload = {
+        model: model.id,
+        config: { thinkingConfig: { thinkingBudget: -1 } },
+      } as Record<string, unknown>;
+      options?.onPayload?.(payload as never, model as never);
+      capturedPayload = payload;
+      return {} as never;
+    };
+    const stream = createGoogleThinkingPayloadWrapper(baseStreamFn, "high");
+
+    await stream(
+      { api: "openai-completions", id: "gemini-3.1-pro-preview" } as never,
+      {} as never,
+      {},
+    );
+
+    const payload = requirePayload(capturedPayload);
+    const config = requireRecord(payload.config, "non-Google payload config");
+    const thinkingConfig = requireRecord(config.thinkingConfig, "non-Google thinking config");
+    expect(thinkingConfig.thinkingBudget).toBe(-1);
+    expect(thinkingConfig).not.toHaveProperty("thinkingLevel");
+  });
+
   it("covers the stream family matrix", async () => {
     let capturedPayload: Record<string, unknown> | undefined;
     let capturedModelId: string | undefined;
