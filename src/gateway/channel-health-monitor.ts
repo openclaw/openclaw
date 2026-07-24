@@ -149,6 +149,10 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             );
             continue;
           }
+          const restartState = channelManager.getRestartState(channelId as ChannelId, accountId);
+          if (restartState === "backoff") {
+            continue;
+          }
 
           const record = restartRecords.get(key) ?? {
             lastRestartAt: 0,
@@ -156,9 +160,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           };
 
           const continuingPendingRestart =
-            status.running !== true &&
-            status.restartPending === true &&
-            (status.reconnectAttempts ?? 0) === 0;
+            status.running !== true && status.restartPending === true && restartState === "idle";
 
           // A timed-out recovery stop uses the first start request to mark
           // restartPending; the next monitor pass must finish that same recovery

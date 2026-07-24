@@ -261,6 +261,7 @@ export type ChannelManager = {
   isAmbientAutostartSuppressed: (channelId: string) => boolean;
   markChannelLoggedOut: (channelId: ChannelId, cleared: boolean, accountId?: string) => void;
   isManuallyStopped: (channelId: ChannelId, accountId: string) => boolean;
+  getRestartState: (channelId: ChannelId, accountId: string) => "idle" | "backoff" | "gave-up";
   resetRestartAttempts: (channelId: ChannelId, accountId: string) => void;
   isHealthMonitorEnabled: (channelId: ChannelId, accountId: string) => boolean;
 };
@@ -1122,6 +1123,25 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     return manuallyStopped.has(restartKey(channelId, accountId));
   };
 
+  const getRestartState = (
+    channelId: ChannelId,
+    accountId: string,
+  ): "idle" | "backoff" | "gave-up" => {
+    const rKey = restartKey(channelId, accountId);
+    // Timed-out stop recovery owns this lifecycle; retained crash attempts must
+    // not prevent the health monitor from issuing the second recovery start.
+    if (recoveryStopTimedOut.has(rKey)) {
+      return "idle";
+    }
+    const attempts = restarts.get(rKey)?.attempts ?? 0;
+    if (attempts > MAX_RESTARTS) {
+      return "gave-up";
+    }
+    return attempts > 0 && getRuntime(channelId, accountId).restartPending === true
+      ? "backoff"
+      : "idle";
+  };
+
   const resetRestartAttemptsForTest = (channelId: ChannelId, accountId: string): void => {
     restarts.delete(restartKey(channelId, accountId));
   };
@@ -1142,6 +1162,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       ambientAutostartSuppressedChannelIds.has(channelId),
     markChannelLoggedOut,
     isManuallyStopped: isManuallyStoppedFlag,
+    getRestartState,
     resetRestartAttempts: resetRestartAttemptsForTest,
     isHealthMonitorEnabled,
   };
