@@ -1325,6 +1325,10 @@ async function compactEmbeddedAgentSessionDirectOnce(
         provider,
         modelId,
         model: effectiveModel,
+        runId: params.runId ?? params.sessionId,
+        agentId: sessionAgentId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey ?? params.sandboxSessionKey,
       });
       const resourceLoader = createEmbeddedAgentResourceLoader({
         cwd: effectiveCwd,

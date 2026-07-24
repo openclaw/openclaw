@@ -19,6 +19,17 @@ vi.mock("../../plugins/provider-hook-runtime.js", () => ({
   resolveProviderRuntimePlugin: () => undefined,
 }));
 
+const createAgentToolResultMiddlewareRunnerMock = vi.hoisted(() =>
+  vi.fn((ctx: { runtime: string }) => ({
+    applyToolResultMiddleware: async (event: { result: unknown }) => event.result,
+    context: ctx,
+  })),
+);
+
+vi.mock("../harness/tool-result-middleware.js", () => ({
+  createAgentToolResultMiddlewareRunner: createAgentToolResultMiddlewareRunnerMock,
+}));
+
 function buildSafeguardFactories(cfg: OpenClawConfig, workspaceDir?: string) {
   // The safeguard runtime attaches to the session manager, so tests keep the
   // same manager instance around for both factory construction and inspection.
@@ -144,5 +155,54 @@ describe("buildEmbeddedExtensionFactories", () => {
     });
 
     expect(factories).toContain(contextPruningExtension);
+  });
+
+  it("forwards agent/session/run identity into OpenClaw tool-result middleware context", () => {
+    createAgentToolResultMiddlewareRunnerMock.mockClear();
+    const sessionManager = {
+      getSessionId: () => "session-from-manager",
+    } as SessionManager;
+
+    buildEmbeddedExtensionFactories({
+      cfg: undefined,
+      sessionManager,
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-20250514",
+      model: { id: "claude-sonnet-4-20250514", contextWindow: 200_000 } as Model,
+      runId: "run-abc",
+      agentId: "main",
+      sessionId: "session-explicit",
+      sessionKey: "agent:main:discord:group:1",
+    });
+
+    expect(createAgentToolResultMiddlewareRunnerMock).toHaveBeenCalledWith({
+      runtime: "openclaw",
+      agentId: "main",
+      sessionId: "session-explicit",
+      sessionKey: "agent:main:discord:group:1",
+      runId: "run-abc",
+    });
+  });
+
+  it("falls back to SessionManager.getSessionId when sessionId is omitted", () => {
+    createAgentToolResultMiddlewareRunnerMock.mockClear();
+    const sessionManager = {
+      getSessionId: () => "session-from-manager",
+    } as SessionManager;
+
+    buildEmbeddedExtensionFactories({
+      cfg: undefined,
+      sessionManager,
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-20250514",
+      model: { id: "claude-sonnet-4-20250514", contextWindow: 200_000 } as Model,
+      runId: "run-def",
+    });
+
+    expect(createAgentToolResultMiddlewareRunnerMock).toHaveBeenCalledWith({
+      runtime: "openclaw",
+      sessionId: "session-from-manager",
+      runId: "run-def",
+    });
   });
 });

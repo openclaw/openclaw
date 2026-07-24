@@ -52,9 +52,24 @@ function snapshotToolSendReceipt(details: unknown): unknown {
 
 function buildAgentToolResultMiddlewareFactory(
   sessionManager: SessionManager,
-  runId?: string,
+  context?: {
+    runId?: string;
+    agentId?: string;
+    sessionId?: string;
+    sessionKey?: string;
+  },
 ): ExtensionFactory {
-  const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" });
+  const runId = context?.runId;
+  const sessionIdFromManager =
+    typeof sessionManager.getSessionId === "function" ? sessionManager.getSessionId() : undefined;
+  const sessionId = context?.sessionId ?? sessionIdFromManager;
+  const runner = createAgentToolResultMiddlewareRunner({
+    runtime: "openclaw",
+    ...(context?.agentId ? { agentId: context.agentId } : {}),
+    ...(sessionId ? { sessionId } : {}),
+    ...(context?.sessionKey ? { sessionKey: context.sessionKey } : {}),
+    ...(runId ? { runId } : {}),
+  });
   return (agent) => {
     agent.on("tool_result", async (rawEvent: unknown, ctx: { cwd?: string }) => {
       const event = recordFromUnknown(rawEvent) as AgentToolResultEvent;
@@ -179,6 +194,9 @@ export function buildEmbeddedExtensionFactories(params: {
   modelId: string;
   model: ProviderRuntimeModel | undefined;
   runId?: string;
+  agentId?: string;
+  sessionId?: string;
+  sessionKey?: string;
 }): ExtensionFactory[] {
   const factories: ExtensionFactory[] = [];
   if (resolveEffectiveCompactionMode(params.cfg) === "safeguard") {
@@ -209,6 +227,13 @@ export function buildEmbeddedExtensionFactories(params: {
   if (pruningFactory) {
     factories.push(pruningFactory);
   }
-  factories.push(buildAgentToolResultMiddlewareFactory(params.sessionManager, params.runId));
+  factories.push(
+    buildAgentToolResultMiddlewareFactory(params.sessionManager, {
+      runId: params.runId,
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+    }),
+  );
   return factories;
 }
