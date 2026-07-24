@@ -11,7 +11,7 @@ vi.mock("./urbit/fetch.js", () => ({
   urbitFetch: vi.fn(),
 }));
 
-import { probeTlonAccount } from "./channel.runtime.js";
+import { createHttpPokeApi, probeTlonAccount } from "./channel.runtime.js";
 
 const account = {
   accountId: "default",
@@ -83,6 +83,72 @@ describe("probeTlonAccount", () => {
     });
 
     await expect(probeTlonAccount(account)).resolves.toEqual({ ok: true });
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+    expect(events).toEqual(["cancel", "release"]);
+  });
+});
+
+describe("createHttpPokeApi", () => {
+  const pokeParams = {
+    url: "https://example.com",
+    code: "sample-code",
+    ship: "~zod",
+  };
+
+  beforeEach(() => {
+    vi.mocked(authenticate).mockReset();
+    vi.mocked(urbitFetch).mockReset();
+    vi.mocked(authenticate).mockResolvedValue("urbauth-~zod=fake-cookie");
+  });
+
+  it("cancels a successful poke response body before releasing the guard", async () => {
+    const events: string[] = [];
+    const cancelBody = vi.fn(() => {
+      events.push("cancel");
+    });
+    const release = vi.fn(async () => {
+      events.push("release");
+    });
+    vi.mocked(urbitFetch).mockResolvedValue({
+      response: responseWithCancelableBody(200, cancelBody),
+      finalUrl: "https://example.com/~/channel/test",
+      release,
+      refreshTimeout: vi.fn(),
+    });
+
+    const api = await createHttpPokeApi(pokeParams);
+    await expect(api.poke({ app: "test-app", mark: "test-mark", json: {} })).resolves.toBeTypeOf(
+      "number",
+    );
+
+    expect(cancelBody).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+    expect(events).toEqual(["cancel", "release"]);
+  });
+
+  it("still releases when poke response cancellation fails", async () => {
+    const events: string[] = [];
+    const response = new Response(new ReadableStream<Uint8Array>());
+    const cancel = vi.spyOn(response.body!, "cancel").mockImplementationOnce(async () => {
+      events.push("cancel");
+      throw new Error("cancel failed");
+    });
+    const release = vi.fn(async () => {
+      events.push("release");
+    });
+    vi.mocked(urbitFetch).mockResolvedValue({
+      response,
+      finalUrl: "https://example.com/~/channel/test",
+      release,
+      refreshTimeout: vi.fn(),
+    });
+
+    const api = await createHttpPokeApi(pokeParams);
+    await expect(api.poke({ app: "test-app", mark: "test-mark", json: {} })).resolves.toBeTypeOf(
+      "number",
+    );
+
     expect(cancel).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();
     expect(events).toEqual(["cancel", "release"]);
