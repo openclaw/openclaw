@@ -1,8 +1,40 @@
 // Tests safe filesystem wrappers and protected file-handle behavior.
 import type { FileHandle } from "node:fs/promises";
 import fs from "node:fs/promises";
+import fsSync from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
+
+const canCreateFileSymlinks = (() => {
+  const probeDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-fs-file-symlink-probe-"));
+  const targetFile = path.join(probeDir, "target.txt");
+  const linkFile = path.join(probeDir, "link.txt");
+  try {
+    fsSync.writeFileSync(targetFile, "target", "utf8");
+    fsSync.symlinkSync(targetFile, linkFile, "file");
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fsSync.rmSync(probeDir, { recursive: true, force: true });
+  }
+})();
+
+const canCreateDirectorySymlinks = (() => {
+  const probeDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-fs-dir-symlink-probe-"));
+  const targetDir = path.join(probeDir, "target");
+  const linkDir = path.join(probeDir, "link");
+  try {
+    fsSync.mkdirSync(targetDir);
+    fsSync.symlinkSync(targetDir, linkDir, process.platform === "win32" ? "junction" : "dir");
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fsSync.rmSync(probeDir, { recursive: true, force: true });
+  }
+})();
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import {
@@ -163,7 +195,7 @@ describe("fs-safe", () => {
     await expectRejectCode(readLocalFileSafely({ filePath: file, maxBytes: 4 }), "too-large");
   });
 
-  it.runIf(process.platform !== "win32")("rejects symlinks", async () => {
+  it.skipIf(!canCreateFileSymlinks)("rejects symlinks", async () => {
     const dir = await tempDirs.make("openclaw-fs-safe-");
     const target = path.join(dir, "target.txt");
     const link = path.join(dir, "link.txt");
@@ -280,7 +312,7 @@ describe("fs-safe", () => {
     await expect(readScoped(scopedPath)).resolves.toEqual(Buffer.from("scoped"));
   });
 
-  it.runIf(process.platform !== "win32")("blocks symlink escapes under root", async () => {
+  it.skipIf(!canCreateFileSymlinks)("blocks symlink escapes under root", async () => {
     const root = await tempDirs.make("openclaw-fs-safe-root-");
     const outside = await tempDirs.make("openclaw-fs-safe-outside-");
     const target = path.join(outside, "outside.txt");
@@ -291,7 +323,7 @@ describe("fs-safe", () => {
     await expectRejectCode((await openRoot(root)).open("link.txt"), "symlink");
   });
 
-  it.runIf(process.platform !== "win32")(
+  it.skipIf(!canCreateFileSymlinks)(
     "rejects symlink-target reads when the path target changes after open",
     async () => {
       const root = await tempDirs.make("openclaw-fs-safe-root-");
@@ -413,14 +445,14 @@ describe("fs-safe", () => {
     expect(stat.isDirectory()).toBe(true);
   });
 
-  it.runIf(process.platform !== "win32")(
+  it.skipIf(!canCreateDirectorySymlinks)(
     "creates directories through in-root symlink parents",
     async () => {
       const root = await tempDirs.make("openclaw-fs-safe-root-");
       const realDir = path.join(root, "real");
       const aliasDir = path.join(root, "alias");
       await fs.mkdir(realDir, { recursive: true });
-      await fs.symlink(realDir, aliasDir);
+      await fs.symlink(realDir, aliasDir, process.platform === "win32" ? "junction" : "dir");
 
       await (await openRoot(root)).mkdir(path.join("alias", "nested", "deeper"));
 
@@ -429,14 +461,14 @@ describe("fs-safe", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")(
+  it.skipIf(!canCreateDirectorySymlinks)(
     "removes files through in-root symlink parents",
     async () => {
       const root = await tempDirs.make("openclaw-fs-safe-root-");
       const realDir = path.join(root, "real");
       const aliasDir = path.join(root, "alias");
       await fs.mkdir(realDir, { recursive: true });
-      await fs.symlink(realDir, aliasDir);
+      await fs.symlink(realDir, aliasDir, process.platform === "win32" ? "junction" : "dir");
       await fs.writeFile(path.join(realDir, "target.txt"), "hello");
 
       await (await openRoot(root)).remove(path.join("alias", "target.txt"));
@@ -543,7 +575,7 @@ describe("fs-safe", () => {
     await expect(fs.readFile(outsideTarget, "utf8")).resolves.toBe("X".repeat(4096));
   });
 
-  it.runIf(process.platform !== "win32")(
+  it.skipIf(!canCreateFileSymlinks)(
     "does not unlink out-of-root file when symlink retarget races remove",
     async () => {
       const { root, outside, slot, outsideTarget } = await setupSymlinkWriteRaceFixture({
@@ -567,7 +599,7 @@ describe("fs-safe", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")(
+  it.skipIf(!canCreateFileSymlinks)(
     "does not create out-of-root directories when symlink retarget races mkdir",
     async () => {
       const root = await tempDirs.make("openclaw-fs-safe-root-");
