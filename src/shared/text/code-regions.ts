@@ -23,6 +23,13 @@ export function findCodeRegions(text: string): CodeRegion[] {
   for (const match of text.matchAll(inlineRe)) {
     const start = match.index ?? 0;
     const end = start + match[0].length;
+    // Per CommonMark 0.31.2, opening and closing backtick runs must have
+    // equal length. Skip mismatched runs — they are not valid code spans.
+    const openingLen = (match[0].match(/^`+/) || [""])[0].length;
+    const closingLen = (match[0].match(/`+$/) || [""])[0].length;
+    if (openingLen !== closingLen) {
+      continue;
+    }
     const insideFenced = regions.some((r) => start >= r.start && end <= r.end);
     if (!insideFenced) {
       regions.push({ start, end });
