@@ -235,6 +235,9 @@ export function deriveSessionMetaPatch(params: {
   const existingOrigin = sessionDeliveryOrigin(params.existing);
   const mergedOrigin = mergeSessionOrigin(existingOrigin, origin);
   if (mergedOrigin) {
+    if (!patch.chatType && mergedOrigin.chatType) {
+      patch.chatType = mergedOrigin.chatType;
+    }
     const nextProvider = origin?.provider;
     const nextOwnsExternalRoute = Boolean(
       nextProvider &&

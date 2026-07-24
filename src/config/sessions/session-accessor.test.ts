@@ -530,6 +530,7 @@ describe("session accessor seam", () => {
     const recorded = await recordInboundSessionMeta({ storePath, sessionKey, ctx });
     expect(recorded?.delivery).toEqual({ kind: "internal" });
     expect(recorded).toMatchObject({
+      chatType: "direct",
       createdVia: "channel",
       createdActor: { type: "human", id: "webchat:user-1" },
       createdAt: expect.any(Number),

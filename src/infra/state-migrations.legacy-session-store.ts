@@ -615,6 +615,7 @@ export function normalizeLegacySessionEntryDelivery(entry: SessionEntry): Sessio
   const lastContext =
     isInternalContext(lastCandidate) ||
     hasExternalTarget(lastCandidate) ||
+    (lastChannel != null && lastCandidate?.channel != null) ||
     (lastCandidate?.channel && lastCandidate.channel === explicitContext?.channel)
       ? lastCandidate
       : undefined;

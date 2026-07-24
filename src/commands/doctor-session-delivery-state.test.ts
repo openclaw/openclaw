@@ -174,6 +174,27 @@ describe("doctor canonical session delivery state", () => {
     });
   });
 
+  it("preserves explicit legacy channel ownership without a recipient", () => {
+    const stateDir = fs.realpathSync(tempDirs.make("openclaw-delivery-channel-only-"));
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    insertSessionRow(env, "agent:main:channel-only", {
+      sessionId: "channel-only-session",
+      updatedAt: 10,
+      lastChannel: "slack",
+      lastAccountId: "work",
+    });
+
+    expect(repairCanonicalSessionDeliveryStates({ apply: true, cfg: {}, env })).toEqual({
+      found: 1,
+      repaired: 1,
+      scannedStores: 1,
+    });
+    expect(JSON.parse(readEntryJson(env, "agent:main:channel-only")).delivery).toMatchObject({
+      kind: "external",
+      context: { channel: "slack", accountId: "work" },
+    });
+  });
+
   it("skips structurally invalid row JSON while repairing valid sessions", () => {
     const stateDir = fs.realpathSync(tempDirs.make("openclaw-delivery-invalid-row-"));
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
