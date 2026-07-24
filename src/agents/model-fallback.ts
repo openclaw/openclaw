@@ -42,7 +42,7 @@ import {
   describeFailoverError,
   findCliMaxTurnsError,
   isFailoverError,
-  isNonProviderRuntimeError,
+  isNonProviderRuntimeCoordinationError,
   resolveModelFallbackError,
 } from "./failover-error.js";
 import {
@@ -420,7 +420,7 @@ async function runFallbackCandidate<T>(params: {
       sessionId: params.attribution?.sessionId,
       lane: params.attribution?.lane,
     });
-    if (fallbackError.kind === "non_provider") {
+    if (fallbackError.kind === "coordination") {
       throw err;
     }
     if (isTerminalAbort(params.abortSignal) || isCallerAbortSignal(params.abortSignal)) {
@@ -1398,7 +1398,7 @@ function shouldDiscardDeferredSessionSuspension(params: {
     isAgentRunRestartAbortReason(params.error) ||
     isTerminalAbortFromError(params.error) ||
     isCommandLaneTaskTimeoutError(params.error) ||
-    isNonProviderRuntimeError(params.error) ||
+    isNonProviderRuntimeCoordinationError(params.error) ||
     isTranscriptNotContinuableError(params.error) ||
     isLikelyContextOverflowError(formatErrorMessage(params.error))
   );
@@ -1842,7 +1842,7 @@ async function runWithModelFallbackInternal<T>(
       // timeout, embedded attempt takeover) are not provider/model failures.
       // Aborting prevents retries of the same condition and a misleading
       // "All models failed" summary. See #83510 and #106516.
-      if (isNonProviderRuntimeError(err)) {
+      if (isNonProviderRuntimeCoordinationError(err)) {
         throw err;
       }
       if (isTranscriptNotContinuableError(err)) {

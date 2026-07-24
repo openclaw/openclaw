@@ -495,9 +495,15 @@ function hasMissingToolResultFailure(err: unknown): boolean {
   return findErrorProperty(err, readMissingToolResultMarker) === true;
 }
 
-/** True for local runtime failures shared by every model candidate. See #83510, #95474, #106516. */
-export function isNonProviderRuntimeError(err: unknown): boolean {
-  return resolveModelFallbackError(err).kind === "non_provider";
+/**
+ * True when the error is a local runtime coordination/tool-execution error
+ * rather than a provider/model failure. The model fallback chain must abort on
+ * these instead of consuming candidate slots — retrying any model would hit the
+ * same local condition. Sandbox provisioning failures join this class because
+ * every candidate shares the same sandbox. See #83510, #95474 and #106516.
+ */
+export function isNonProviderRuntimeCoordinationError(err: unknown): boolean {
+  return resolveModelFallbackError(err).kind === "coordination";
 }
 
 function hasTimeoutHint(err: unknown): boolean {
@@ -825,7 +831,7 @@ type FailoverErrorContext = {
 
 type ModelFallbackErrorResolution =
   | { kind: "failover"; error: FailoverError }
-  | { kind: "non_provider"; error: unknown }
+  | { kind: "coordination"; error: unknown }
   | { kind: "unknown"; error: unknown };
 
 /** Convert a classified raw error into a FailoverError with optional request context. */
@@ -898,7 +904,7 @@ export function resolveModelFallbackError(
   // cleanup wrapper owns a preserved prompt error. Its message alone must not
   // reclassify session-state loss as a provider failure.
   if (isEmbeddedAttemptSessionTakeover(err) && !hasPreservedTakeoverPromptError(err)) {
-    return { kind: "non_provider", error: err };
+    return { kind: "coordination", error: err };
   }
   const failoverError = coerceToFailoverError(err, context);
   if (failoverError) {
@@ -910,7 +916,7 @@ export function resolveModelFallbackError(
     hasEmbeddedAttemptSessionTakeover(err) ||
     hasMissingToolResultFailure(err)
   ) {
-    return { kind: "non_provider", error: err };
+    return { kind: "coordination", error: err };
   }
   return { kind: "unknown", error: err };
 }
