@@ -1,25 +1,27 @@
 /**
  * Parser and formatter for ClickClack outbound target strings.
  */
+import { stripChannelTargetPrefix } from "openclaw/plugin-sdk/channel-core";
 import type { ClickClackTarget } from "./types.js";
 
 /**
  * Parses `channel:name`, `thread:msg_id`, `dm:usr_id`, or a bare channel name.
  */
 export function parseClickClackTarget(raw: string): ClickClackTarget {
-  const value = raw.trim();
+  const value = stripChannelTargetPrefix(raw, "clickclack", "cc");
   if (!value) {
     throw new Error("ClickClack target is required");
   }
   const [prefix, ...rest] = value.split(":");
+  const kind = prefix?.toLowerCase();
   const body = rest.join(":").trim();
-  if (prefix === "channel" && body) {
+  if (kind === "channel" && body) {
     return { chatType: "group", kind: "channel", id: body };
   }
-  if (prefix === "thread" && body) {
+  if (kind === "thread" && body) {
     return { chatType: "group", kind: "thread", id: body };
   }
-  if (prefix === "dm" && body) {
+  if (kind === "dm" && body) {
     return { chatType: "direct", kind: "dm", id: body };
   }
   if (!body) {
