@@ -1,3 +1,4 @@
+import { doctorCommand } from "../../commands/doctor.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV } from "../../infra/update-post-core-context.js";
@@ -9,11 +10,15 @@ import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
 import { readPackageVersion, type UpdateCommandOptions } from "./shared.js";
 import {
+  createUpdateConfigSnapshot,
   persistRequestedUpdateChannel,
   readPostCorePreUpdateSourceConfig,
   restoreDroppedPreUpdateChannels,
 } from "./update-command-config.js";
-import { completePostCorePluginUpdate } from "./update-command-fresh-doctor.js";
+import {
+  completePostCorePluginUpdate,
+  withUpdateFinalizationEnv,
+} from "./update-command-fresh-doctor.js";
 import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
 import {
   POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV,
@@ -70,6 +75,21 @@ async function resumePostCoreUpdateUnlocked(params: ResumePostCoreUpdateParams):
     sourceConfigPath: process.env[POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV],
     currentSnapshot: configSnapshot,
     updateStartedAtMs,
+  });
+  await withUpdateFinalizationEnv(async () => {
+    await createUpdateConfigSnapshot();
+    await doctorCommand(defaultRuntime, {
+      nonInteractive: true,
+      repair: true,
+      yes: params.opts.yes === true,
+    });
+  });
+  // The fresh process owns the updated migration contracts. Repair before
+  // plugin convergence writes config, or newly retired plugin keys can block
+  // the update before doctor gets a chance to migrate them.
+  configSnapshot = await readConfigFileSnapshot({
+    skipPluginValidation: true,
+    suppressFutureVersionWarning: true,
   });
   configSnapshot = await persistRequestedUpdateChannel({
     configSnapshot,

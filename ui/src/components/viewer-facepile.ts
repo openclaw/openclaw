@@ -102,6 +102,10 @@ export function hasSessionPresenceViewers(
   );
 }
 
+export function hasMultiplePresenceIdentities(value: unknown): boolean {
+  return projectPresencePayload(value).users.length >= 2;
+}
+
 export function presenceViewerLabel(user: PresenceViewer): string {
   return user.name ?? user.email ?? user.id;
 }
@@ -237,7 +241,9 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
         this.variant === "footer"
           ? html`<openclaw-viewer-avatar .user=${user} variant="footer"></openclaw-viewer-avatar>`
           : html`<openclaw-tooltip .content=${presenceViewerLabel(user)}>
-              <openclaw-viewer-avatar .user=${user} variant="session"></openclaw-viewer-avatar>
+              <span class="viewer-facepile__tooltip-anchor">
+                <openclaw-viewer-avatar .user=${user} variant="session"></openclaw-viewer-avatar>
+              </span>
             </openclaw-tooltip>`,
       )}
       ${overflow.length > 0
