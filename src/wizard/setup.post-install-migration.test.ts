@@ -1,8 +1,8 @@
 // Post-install migration tests cover migration prompts and command guidance.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createNonExitingRuntime } from "../runtime.js";
+import { createNonExitingRuntime, type RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "./prompts.js";
 
 const ensureStandaloneMigrationProviderRegistryLoaded = vi.hoisted(() => vi.fn());
@@ -79,10 +79,11 @@ function buildBaseArgs(overrides: {
   prompter?: WizardPrompter;
   installedPluginIds?: readonly string[];
   nonInteractive?: boolean;
+  runtime?: RuntimeEnv;
 }) {
   return {
     config: overrides.config ?? ({} as OpenClawConfig),
-    runtime: createNonExitingRuntime(),
+    runtime: overrides.runtime ?? createNonExitingRuntime(),
     prompter: overrides.prompter ?? createWizardPrompter(),
     installedPluginIds: overrides.installedPluginIds ?? ["codex"],
     ...(overrides.nonInteractive === undefined ? {} : { nonInteractive: overrides.nonInteractive }),
@@ -108,6 +109,10 @@ describe("offerPostInstallMigrations", () => {
     resolveStateDir.mockReset().mockReturnValue("/tmp/state");
     migrateDefaultCommand.mockReset().mockResolvedValue(undefined);
     setTTY(true);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("returns early when no plugins were installed in this onboarding step", async () => {
@@ -174,7 +179,10 @@ describe("offerPostInstallMigrations", () => {
     const result = await offerPostInstallMigrations(buildBaseArgs({ prompter }));
 
     expect(confirm).toHaveBeenCalledOnce();
-    expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ initialValue: false }));
+    expect(confirm).toHaveBeenCalledWith({
+      message: "Migrate Codex at /home/user/.codex into this agent now?",
+      initialValue: false,
+    });
     expect(migrateDefaultCommand).toHaveBeenCalledOnce();
     expect(migrateDefaultCommand).toHaveBeenCalledWith(
       expect.anything(),
@@ -296,11 +304,15 @@ describe("offerPostInstallMigrations", () => {
     setProviders([provider]);
     setOwnership("codex", ["codex"]);
     const prompter = createWizardPrompter();
+    const runtime = { ...createNonExitingRuntime(), log: vi.fn() };
 
-    await offerPostInstallMigrations(buildBaseArgs({ prompter, nonInteractive: true }));
+    await offerPostInstallMigrations(buildBaseArgs({ prompter, nonInteractive: true, runtime }));
 
     expect(prompter.confirm).not.toHaveBeenCalled();
     expect(migrateDefaultCommand).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Detected Codex at /home/user/.codex. Preview migration with openclaw migrate codex --dry-run.",
+    );
   });
 
   it("treats a non-TTY stdin as non-interactive even when nonInteractive flag is unset", async () => {
@@ -321,14 +333,40 @@ describe("offerPostInstallMigrations", () => {
     setProviders([provider]);
     setOwnership("codex", ["codex"]);
     migrateDefaultCommand.mockRejectedValueOnce(new Error("boom"));
+    const runtime = { ...createNonExitingRuntime(), log: vi.fn() };
     const prompter = createWizardPrompter({
       confirm: vi.fn(async () => true) as WizardPrompter["confirm"],
     });
 
-    await expect(offerPostInstallMigrations(buildBaseArgs({ prompter }))).resolves.toEqual({
-      config: {},
-    });
+    await expect(offerPostInstallMigrations(buildBaseArgs({ prompter, runtime }))).resolves.toEqual(
+      { config: {} },
+    );
     expect(migrateDefaultCommand).toHaveBeenCalledOnce();
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Codex migration failed: boom. Re-run with openclaw migrate codex --dry-run to inspect.",
+    );
+  });
+
+  it("falls back to reviewed English for an unsupported locale", async () => {
+    vi.stubEnv("OPENCLAW_LOCALE", "fr");
+    const provider = buildProvider();
+    setProviders([provider]);
+    setOwnership("codex", ["codex"]);
+    const runtime = { ...createNonExitingRuntime(), log: vi.fn() };
+    const prompter = createWizardPrompter({
+      confirm: vi.fn(async () => {
+        throw new Error("cancelled");
+      }) as WizardPrompter["confirm"],
+    });
+
+    await offerPostInstallMigrations(buildBaseArgs({ prompter, runtime }));
+
+    expect(migrateDefaultCommand).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenNthCalledWith(1, "Skipping Codex migration prompt: cancelled");
+    expect(runtime.log).toHaveBeenNthCalledWith(
+      2,
+      "Detected Codex at /home/user/.codex. Preview migration with openclaw migrate codex --dry-run.",
+    );
   });
 
   it("falls back to a hint when detect throws", async () => {
