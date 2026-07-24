@@ -162,7 +162,7 @@ export function meetSession(overrides: SessionOverrides = {}): GoogleMeetSession
   };
 }
 
-export function emptyRealtimeAudioHealth(): MeetingRealtimeAudioEngineHealth {
+function emptyRealtimeAudioHealth(): MeetingRealtimeAudioEngineHealth {
   return {
     providerConnected: false,
     realtimeReady: false,
@@ -202,7 +202,7 @@ export function meetRuntime(
   });
 }
 
-export type TestBridgeProcess = {
+type TestBridgeProcess = {
   stdin?: { write(chunk: unknown): unknown } | null;
   stdout?: PassThrough | null;
   stderr: PassThrough;
