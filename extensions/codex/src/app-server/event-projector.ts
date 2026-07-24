@@ -11,7 +11,7 @@ import {
   type MessagingToolSend,
   type MessagingToolSourceReplyPayload,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import { attemptTerminal, type AttemptFailureSource } from "./attempt-terminal.js";
 import { CodexAssistantProjection } from "./event-projector-assistant.js";
 import { CodexProjectionDiagnostics } from "./event-projector-diagnostics.js";
 import { CodexEventProjection } from "./event-projector-events.js";
@@ -56,11 +56,6 @@ import {
 import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
 import type { CodexTrajectoryRecorder } from "./trajectory.js";
 import { createCodexUsageLimitPromptError } from "./usage-limit-error.js";
-
-type AttemptFailureSource = Extract<
-  EmbeddedRunAttemptResult["terminal"],
-  { kind: "failed" }
->["source"];
 
 export { shouldEmitTranscriptToolProgress } from "./event-projector-tool-progress.js";
 
