@@ -1595,9 +1595,9 @@ export async function runPreparedReply(
           // Direct transcripts keep their existing identity-storage boundary.
           sender: persistGroupSender
             ? {
-                id: normalizeOptionalString(sessionCtx.SenderId),
-                name: normalizeOptionalString(sessionCtx.SenderName),
-                username: normalizeOptionalString(sessionCtx.SenderUsername),
+                id: normalizeOptionalString(ctx.SenderId ?? sessionCtx.SenderId),
+                name: normalizeOptionalString(ctx.SenderName ?? sessionCtx.SenderName),
+                username: normalizeOptionalString(ctx.SenderUsername ?? sessionCtx.SenderUsername),
               }
             : undefined,
         }

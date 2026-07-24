@@ -1319,6 +1319,55 @@ describe("runPreparedReply media-only handling", () => {
     }
   });
 
+  it("persists the live ctx sender, not a stale sessionCtx sender from a different group member", async () => {
+    // Two distinct members of the same group session: sessionCtx still reflects the
+    // first member's identity (carried over from session-level context), while ctx
+    // carries the second, current message's live sender. Before the fix, the
+    // sessionCtx-only read silently attributed the second member's message to the
+    // first member.
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "hello",
+          RawBody: "hello",
+          CommandBody: "hello",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "chat-1",
+          ChatType: "group",
+          SenderId: "user-bob",
+          SenderName: "Bob",
+          SenderUsername: "bob",
+        },
+        sessionCtx: {
+          Body: "hello",
+          BodyStripped: "hello",
+          Provider: "telegram",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "chat-1",
+          ChatType: "group",
+          SenderId: "user-alice",
+          SenderName: "Alice",
+          SenderUsername: "alice",
+        },
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: 1,
+          chatType: "group",
+          channel: "telegram",
+        } as SessionEntry,
+      }),
+    );
+
+    const message = requireRunReplyAgentCall().followupRun.userTurnTranscriptRecorder?.message;
+    expect(message).toMatchObject({
+      __openclaw: {
+        senderId: "user-bob",
+        senderName: "Bob",
+        senderUsername: "bob",
+      },
+    });
+  });
+
   it("normalizes second-based inbound timestamps before preparing user turns", async () => {
     await runPreparedReply(
       baseParams({
