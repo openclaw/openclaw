@@ -128,7 +128,7 @@ describe("browser action input batch command", () => {
       ),
     ).rejects.toThrow("__exit__:1");
 
-    expect(getBrowserCliRuntimeCapture().runtimeJson).toEqual([result]);
+    expect(getBrowserCliRuntimeCapture().defaultRuntime.writeJson).toHaveBeenCalledWith(result);
   });
 
   it("reads actions from a file via --actions-file", async () => {
