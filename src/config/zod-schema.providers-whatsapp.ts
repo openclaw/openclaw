@@ -10,15 +10,19 @@ import {
 } from "./zod-schema.channel-messaging-common.js";
 import { ChannelDeliveryStreamingConfigSchema } from "./zod-schema.core.js";
 
-const WhatsAppGroupEntrySchema = buildGroupEntrySchema(undefined, {
-  omit: ["skills", "enabled", "allowFrom"],
-}).optional();
+const WhatsAppGroupEntrySchema = buildGroupEntrySchema(
+  { debounceMs: z.number().int().nonnegative().optional() },
+  {
+    omit: ["skills", "enabled", "allowFrom"],
+  },
+).optional();
 
 const WhatsAppGroupsSchema = z.record(z.string(), WhatsAppGroupEntrySchema).optional();
 
 const WhatsAppDirectEntrySchema = z
   .object({
     systemPrompt: z.string().optional(),
+    debounceMs: z.number().int().nonnegative().optional(),
   })
   .strict()
   .optional();

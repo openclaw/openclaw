@@ -257,6 +257,7 @@ export function createWebListenerFactoryCapture(): AnyExport {
     | {
         onMessage: (msg: WebInboundMessageInput) => Promise<void>;
         shouldDebounce?: (msg: WebInboundMessageInput) => boolean;
+        resolveDebounceMs?: (msg: WebInboundMessageInput) => number | undefined;
         debounceMs?: number;
         appendReplyWindow?: { afterMs: number; untilMs: number; maxAgeMs: number };
         selfChatMode?: boolean;
@@ -265,6 +266,7 @@ export function createWebListenerFactoryCapture(): AnyExport {
   const listenerFactory = async (opts: {
     onMessage: (msg: WebInboundMessageInput) => Promise<void>;
     shouldDebounce?: (msg: WebInboundMessageInput) => boolean;
+    resolveDebounceMs?: (msg: WebInboundMessageInput) => number | undefined;
     debounceMs?: number;
     appendReplyWindow?: { afterMs: number; untilMs: number; maxAgeMs: number };
     selfChatMode?: boolean;

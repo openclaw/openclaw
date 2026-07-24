@@ -40,11 +40,13 @@ describe("WhatsApp prompt config Zod validation", () => {
       groups: {
         "*": {
           systemPrompt: "Default group prompt",
+          debounceMs: 3000,
         },
       },
       direct: {
         "+15551234567": {
           systemPrompt: "Direct VIP",
+          debounceMs: 0,
         },
       },
       accounts: {
@@ -52,11 +54,13 @@ describe("WhatsApp prompt config Zod validation", () => {
           groups: {
             "456@g.us": {
               systemPrompt: "Project team",
+              debounceMs: 1000,
             },
           },
           direct: {
             "*": {
               systemPrompt: "Work direct default",
+              debounceMs: 250,
             },
           },
         },
@@ -67,9 +71,13 @@ describe("WhatsApp prompt config Zod validation", () => {
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.groups?.["*"]?.systemPrompt).toBe("Default group prompt");
+      expect(result.data.groups?.["*"]?.debounceMs).toBe(3000);
       expect(result.data.direct?.["+15551234567"]?.systemPrompt).toBe("Direct VIP");
+      expect(result.data.direct?.["+15551234567"]?.debounceMs).toBe(0);
       expect(result.data.accounts?.work?.groups?.["456@g.us"]?.systemPrompt).toBe("Project team");
+      expect(result.data.accounts?.work?.groups?.["456@g.us"]?.debounceMs).toBe(1000);
       expect(result.data.accounts?.work?.direct?.["*"]?.systemPrompt).toBe("Work direct default");
+      expect(result.data.accounts?.work?.direct?.["*"]?.debounceMs).toBe(250);
     }
   });
 

@@ -1082,6 +1082,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Troubleshooting
   - H2: System prompts
   - H2: Configuration reference pointers
+  - H3: Per-conversation debounce
   - H2: Related
 
 ## channels/yuanbao.md

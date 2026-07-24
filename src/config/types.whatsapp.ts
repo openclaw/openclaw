@@ -23,11 +23,15 @@ export type WhatsAppGroupConfig = {
   toolsBySender?: GroupToolPolicyBySenderConfig;
   /** Optional system prompt for this group. */
   systemPrompt?: string;
+  /** Optional inbound debounce override for this group (ms, 0 disables). */
+  debounceMs?: number;
 };
 
 export type WhatsAppDirectConfig = {
   /** Optional system prompt for this direct chat. */
   systemPrompt?: string;
+  /** Optional inbound debounce override for this direct chat (ms, 0 disables). */
+  debounceMs?: number;
 };
 
 export type WhatsAppAckReactionConfig = {

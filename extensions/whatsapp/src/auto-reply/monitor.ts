@@ -48,6 +48,7 @@ import { getRuntimeConfig } from "./config.runtime.js";
 import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
 import { buildMentionConfig } from "./mentions.js";
 import { createWebChannelStatusController } from "./monitor-state.js";
+import { resolveWhatsAppConversationDebounceMs } from "./monitor/debounce-policy.js";
 import { createEchoTracker } from "./monitor/echo.js";
 import { formatWhatsAppInboundListeningLog } from "./monitor/listener-log.js";
 import { createWebOnMessageHandler } from "./monitor/on-message.js";
@@ -97,6 +98,7 @@ function resolveWebMonitorConfigSnapshot(params: {
         streaming: account.streaming,
         mediaMaxMb: account.mediaMaxMb,
         groups: account.groups,
+        direct: account.direct,
       },
     },
   } satisfies WhatsAppRuntimeConfig;
@@ -284,6 +286,12 @@ export async function monitorWebChannel(
               sendReadReceipts: account.sendReadReceipts,
               socketTiming,
               debounceMs: inboundDebounceMs,
+              resolveDebounceMs: (msg) =>
+                resolveWhatsAppConversationDebounceMs({
+                  cfg: loadCurrentMonitorConfig(),
+                  msg,
+                  defaultMs: inboundDebounceMs,
+                }),
               appendReplyWindow: connectionLocal.openedAfterRecentInbound
                 ? {
                     afterMs: connectionLocal.startedAt - reconnectCatchUpWindowMs,
