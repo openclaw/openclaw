@@ -1966,6 +1966,14 @@ describe("scripts/test-projects changed-target routing", () => {
         ["test/scripts/android-version.test.ts", "test/scripts/android-pin-version.test.ts"],
       ],
       ["scripts/lib/ios-version.ts", ["test/scripts/ios-version.test.ts"]],
+      ["scripts/lib/vitest-local-scheduling.mjs", ["test/scripts/vitest-local-scheduling.test.ts"]],
+      ["scripts/qa-e2e.ts", ["test/scripts/qa-e2e.test.ts"]],
+      ["scripts/qa-lab-up.ts", ["test/scripts/qa-lab-up.test.ts"]],
+      ["scripts/qa-coverage-report.ts", ["test/scripts/qa-report-cli.test.ts"]],
+      ["scripts/qa-parity-report.ts", ["test/scripts/qa-report-cli.test.ts"]],
+      ["scripts/qa/render-maturity-docs.ts", ["test/scripts/render-maturity-docs.test.ts"]],
+      ["scripts/watch-node.mjs", ["test/scripts/watch-node.test.ts"]],
+
       [
         ".github/images/live-media-runner/Dockerfile",
         ["test/scripts/package-acceptance-workflow.test.ts"],
