@@ -1117,7 +1117,7 @@ export async function killStaleComputerUseMcpChildren(
   }
   let stdout: string;
   try {
-    const result = await runExec("/bin/ps", ["-axo", "pid=,ppid=,command="], {
+    const result = await runExec("/bin/ps", ["-axo", "pid=,ppid=,lstart=,command="], {
       logOutput: false,
       maxBuffer: 5 * 1024 * 1024,
     });
@@ -1145,6 +1145,42 @@ export async function killStaleComputerUseMcpChildren(
     try {
       process.kill(processInfo.pid, "SIGTERM");
       killedPids.push(processInfo.pid);
+      // Schedule a SIGKILL escalation after a grace period, in case the
+      // process traps or ignores SIGTERM. Revalidate process identity
+      // before escalating — the PID could have been reused.
+      const ancestorPid = options.ancestorPid;
+      const launchStart = processInfo.lstart;
+      const sigkillTimer = setTimeout(() => {
+        void (async () => {
+          try {
+            // Quick existence check before running ps.
+            process.kill(processInfo.pid, 0);
+          } catch {
+            return; // already exited
+          }
+          try {
+            const result = await runExec("/bin/ps", ["-axo", "pid=,ppid=,lstart=,command="], {
+              logOutput: false,
+              maxBuffer: 5 * 1024 * 1024,
+            });
+            const currentInfos = parsePsOutput(result.stdout);
+            const current = currentInfos.find((info) => info.pid === processInfo.pid);
+            if (
+              !current ||
+              current.lstart !== launchStart ||
+              !isStaleComputerUseMcpChild(current.command) ||
+              !isDescendantOfPid(current.pid, ancestorPid, currentInfos)
+            ) {
+              // Process identity changed — abort SIGKILL.
+              return;
+            }
+            process.kill(processInfo.pid, "SIGKILL");
+          } catch {
+            // ps failure or ESRCH — process is gone, no-op.
+          }
+        })();
+      }, 2_000);
+      sigkillTimer.unref();
     } catch (error) {
       warnings.push(
         `Could not terminate stale Computer Use MCP child pid ${processInfo.pid}: ${describeControlFailure(error)}`,
@@ -1162,15 +1198,28 @@ export async function killStaleComputerUseMcpChildren(
   };
 }
 
-function parsePsOutput(stdout: string): Array<{ pid: number; ppid: number; command: string }> {
+function parsePsOutput(
+  stdout: string,
+): Array<{ pid: number; ppid: number; lstart: string; command: string }> {
   return stdout
     .split(/\r?\n/u)
     .flatMap((line) => {
-      const match = /^\s*(\d+)\s+(\d+)\s+(.+)$/u.exec(line);
+      // pid ppid lstart(5 tokens: day, mon, date, time, year) command
+      const match =
+        /^\s*(\d+)\s+(\d+)\s+((?:Sun|Mon|Tue|Wed|Thu|Fri|Sat)\s+\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.+)$/u.exec(
+          line,
+        );
       if (!match) {
         return [];
       }
-      return [{ pid: Number(match[1]), ppid: Number(match[2]), command: match[3] ?? "" }];
+      return [
+        {
+          pid: Number(match[1]),
+          ppid: Number(match[2]),
+          lstart: match[3] ?? "",
+          command: match[4] ?? "",
+        },
+      ];
     })
     .filter(
       (processInfo) =>

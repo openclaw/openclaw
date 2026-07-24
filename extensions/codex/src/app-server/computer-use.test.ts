@@ -1,7 +1,7 @@
 // Codex tests cover computer use plugin behavior.
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
 import { resolveCodexNativeConfigFenceKey } from "./shared-client.js";
@@ -1404,3 +1404,90 @@ function pluginSummary(
   };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+// killStaleComputerUseMcpChildren — SIGTERM → revalidated SIGKILL escalation
+const runExecMock = vi.hoisted(() => vi.fn());
+vi.mock("openclaw/plugin-sdk/process-runtime", () => ({ runExec: runExecMock }));
+import { killStaleComputerUseMcpChildren } from "./computer-use.js";
+
+describe("killStaleComputerUseMcpChildren SIGKILL escalation", () => {
+  const LSTART = "Sat Jul 18 14:00:00 2026";
+  const PS = [
+    `  1234     1 ${LSTART} /usr/bin/node SkyComputerUseClient mcp --flag`,
+    `  5678     1 Sat Jul 18 14:00:01 2026 /bin/bash`,
+  ].join("\n");
+
+  let platformSpy: ReturnType<typeof vi.spyOn>;
+  beforeAll(() => {
+    platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+  });
+  afterAll(() => {
+    platformSpy.mockRestore();
+  });
+  afterEach(() => {
+    runExecMock.mockReset();
+    vi.useRealTimers();
+  });
+
+  async function runWithTimers(killImpl: (pid: number, signal?: string | number) => boolean) {
+    vi.useFakeTimers();
+    const killSpy = vi
+      .spyOn(process, "kill")
+      .mockImplementation(killImpl as unknown as typeof process.kill);
+    const promise = killStaleComputerUseMcpChildren({ ancestorPid: 1 });
+    await vi.advanceTimersByTimeAsync(0);
+    await promise;
+    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(0);
+    return killSpy;
+  }
+
+  it("SIGTERM then SIGKILL after revalidating the same scoped child", async () => {
+    runExecMock.mockResolvedValueOnce({ stdout: PS }).mockResolvedValueOnce({ stdout: PS });
+    const killSpy = await runWithTimers(() => true);
+    expect(killSpy).toHaveBeenCalledWith(1234, "SIGTERM");
+    expect(killSpy).toHaveBeenCalledWith(1234, 0);
+    expect(killSpy).toHaveBeenCalledWith(1234, "SIGKILL");
+    killSpy.mockRestore();
+  });
+
+  it.each([
+    {
+      name: "process already exited",
+      setupKill: () => {
+        let n = 0;
+        return (_pid: number, signal?: string | number) => {
+          n += 1;
+          if (n === 2 && signal === 0) {
+            const err = new Error("ESRCH") as NodeJS.ErrnoException;
+            err.code = "ESRCH";
+            throw err;
+          }
+          return true;
+        };
+      },
+      revalidateStdout: undefined as string | undefined,
+    },
+    {
+      name: "command no longer matches stale MCP child",
+      setupKill: () => () => true,
+      revalidateStdout: `  1234     1 ${LSTART} /usr/bin/node something-else`,
+    },
+    {
+      name: "PID reused with same command but different lstart",
+      setupKill: () => () => true,
+      revalidateStdout: `  1234     1 Sat Jul 18 14:00:05 2026 /usr/bin/node SkyComputerUseClient mcp --flag`,
+    },
+  ])("skips SIGKILL when $name", async ({ setupKill, revalidateStdout }) => {
+    runExecMock.mockResolvedValueOnce({ stdout: PS });
+    if (revalidateStdout !== undefined) {
+      runExecMock.mockResolvedValueOnce({ stdout: revalidateStdout });
+    }
+    const killSpy = await runWithTimers(setupKill());
+    expect(killSpy).toHaveBeenCalledWith(1234, "SIGTERM");
+    expect(killSpy.mock.calls.some((call) => call[0] === 1234 && call[1] === "SIGKILL")).toBe(
+      false,
+    );
+    killSpy.mockRestore();
+  });
+});
