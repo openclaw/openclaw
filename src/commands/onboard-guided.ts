@@ -12,7 +12,11 @@ import type {
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { requireRiskAcknowledgement } from "../wizard/setup.shared.js";
+import {
+  mergeWizardConfigOntoLatest,
+  requireRiskAcknowledgement,
+  writeWizardConfigFile,
+} from "../wizard/setup.shared.js";
 import type {
   probeBrowserHatchGateway,
   runBrowserHatchHandoff,
@@ -488,8 +492,6 @@ async function runGuidedOnboardingFlow(
         throw new Error("App recommendations could not update an invalid OpenClaw config.");
       }
       const latestConfig = latestSnapshot.sourceConfig ?? latestSnapshot.config;
-      const { mergeWizardConfigOntoLatest, writeWizardConfigFile } =
-        await import("../wizard/setup.shared.js");
       const mergedConfig = mergeWizardConfigOntoLatest(
         latestConfig,
         persistedConfig,
