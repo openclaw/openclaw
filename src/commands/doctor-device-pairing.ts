@@ -7,7 +7,7 @@ import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { callGateway } from "../gateway/call.js";
-import { loadDeviceAuthTokens } from "../infra/device-auth-store.js";
+import { legacyDeviceAuthStorePath, loadDeviceAuthTokens } from "../infra/device-auth-store.js";
 import { loadDeviceIdentityIfPresent } from "../infra/device-identity.js";
 import {
   listApprovedPairedDeviceRoles,
@@ -486,6 +486,16 @@ async function collectLegacyPairingStoreIssues(cfg: OpenClawConfig): Promise<str
   return (await listLegacyDevicePairingStoreFiles()).map(formatLegacyPairingStoreIssue);
 }
 
+function formatLegacyDeviceAuthStoreIssue(filePath: string): string {
+  const fixCommand = formatCliArgs(["openclaw", "doctor", "--fix"]);
+  return `- Legacy device auth store ${filePath} has not been imported into the SQLite state store yet, so doctor cannot inspect locally cached device tokens. Stop the gateway and run ${fixCommand} to import it.`;
+}
+
+function collectLegacyDeviceAuthStoreIssues(): string[] {
+  const filePath = legacyDeviceAuthStorePath();
+  return filePath ? [formatLegacyDeviceAuthStoreIssue(filePath)] : [];
+}
+
 function stripListMarker(message: string): string {
   return message.startsWith("- ") ? message.slice(2) : message;
 }
@@ -542,13 +552,28 @@ function legacyPairingStoreIssueToHealthFinding(message: string): HealthFinding 
   };
 }
 
+function legacyDeviceAuthStoreIssueToHealthFinding(message: string): HealthFinding {
+  const fixCommand = formatCliArgs(["openclaw", "doctor", "--fix"]);
+  return {
+    checkId: DEVICE_PAIRING_CHECK_ID,
+    severity: "warning",
+    message: stripListMarker(message),
+    path: "identity.device-auth",
+    requirement: "device-auth-store-legacy-file",
+    fixHint: `Stop the gateway and run ${fixCommand} to import the legacy device auth store.`,
+  };
+}
+
 export async function collectDevicePairingHealthFindings(params: {
   cfg: OpenClawConfig;
   healthOk?: boolean;
 }): Promise<HealthFinding[]> {
-  const legacyStoreFindings = (await collectLegacyPairingStoreIssues(params.cfg)).map(
-    legacyPairingStoreIssueToHealthFinding,
-  );
+  const legacyStoreFindings = [
+    ...(await collectLegacyPairingStoreIssues(params.cfg)).map(
+      legacyPairingStoreIssueToHealthFinding,
+    ),
+    ...collectLegacyDeviceAuthStoreIssues().map(legacyDeviceAuthStoreIssueToHealthFinding),
+  ];
   const snapshot = await loadDoctorPairingSnapshot({
     cfg: params.cfg,
     healthOk: params.healthOk ?? false,
@@ -574,7 +599,10 @@ export async function noteDevicePairingHealth(params: {
   cfg: OpenClawConfig;
   healthOk: boolean;
 }): Promise<void> {
-  const legacyStoreLines = await collectLegacyPairingStoreIssues(params.cfg);
+  const legacyStoreLines = [
+    ...(await collectLegacyPairingStoreIssues(params.cfg)),
+    ...collectLegacyDeviceAuthStoreIssues(),
+  ];
   const snapshot = await loadDoctorPairingSnapshot(params);
   const lines = [
     ...legacyStoreLines,
