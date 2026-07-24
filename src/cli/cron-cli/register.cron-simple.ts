@@ -5,6 +5,13 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
+import {
+  formatCronRunCostRollup,
+  mergeCronRunCostRollups,
+  rollupCronRunCost,
+  type CronRunCostRollup,
+} from "../../cron/run-cost-rollup.js";
+import type { CronRunLogEntry } from "../../cron/run-log-types.js";
 import type { CronDeliveryPreview, CronJob } from "../../cron/types.js";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -246,6 +253,78 @@ export function registerCronSimpleCommands(cron: Command) {
             limit,
           });
           printCronJson(res);
+        } catch (err) {
+          handleCronCliError(err);
+        }
+      }),
+  );
+
+  addGatewayClientOptions(
+    cron
+      .command("stats")
+      .description("Roll up cron run history into cost/efficiency stats (skipped vs ran vs tokens)")
+      .option("--id <id>", "Limit stats to a single job id")
+      .option("--limit <n>", "Max run-history entries per job (default 200)", "200")
+      .option("--json", "Output JSON", false)
+      .action(async (opts) => {
+        try {
+          const limit = parseStrictPositiveInteger(opts.limit ?? "200");
+          if (limit === undefined) {
+            throw new Error("Invalid --limit (must be a positive integer).");
+          }
+          const jobIds: string[] = [];
+          if (typeof opts.id === "string" && opts.id.trim()) {
+            jobIds.push(opts.id.trim());
+          } else {
+            let offset = 0;
+            for (let page = 0; page < CRON_SHOW_LOOKUP_MAX_PAGES; page += 1) {
+              const res = await callGatewayFromCli("cron.list", opts, {
+                includeDisabled: true,
+                limit: CRON_SHOW_PAGE_SIZE,
+                offset,
+              });
+              const listed = res as {
+                jobs?: CronJob[];
+                hasMore?: boolean;
+                nextOffset?: number | null;
+              };
+              for (const job of listed.jobs ?? []) {
+                jobIds.push(job.id);
+              }
+              if (!listed.hasMore || typeof listed.nextOffset !== "number") {
+                break;
+              }
+              if (listed.nextOffset <= offset) {
+                break;
+              }
+              offset = listed.nextOffset;
+            }
+          }
+
+          const perJob: Array<{ jobId: string; rollup: CronRunCostRollup }> = [];
+          for (const jobId of jobIds) {
+            const page = (await callGatewayFromCli("cron.runs", opts, {
+              id: jobId,
+              limit,
+            })) as { entries?: CronRunLogEntry[] };
+            const rollup = rollupCronRunCost(page.entries ?? []);
+            if (rollup.totalRuns > 0) {
+              perJob.push({ jobId, rollup });
+            }
+          }
+
+          const fleet = mergeCronRunCostRollups(perJob.map((p) => p.rollup));
+          if (opts.json) {
+            printCronJson({ fleet, jobs: perJob });
+            return;
+          }
+          defaultRuntime.log(`Cron cost stats (last ${limit} runs/job):`);
+          defaultRuntime.log(`  FLEET  ${formatCronRunCostRollup(fleet)}`);
+          for (const { jobId, rollup } of perJob
+            .slice()
+            .toSorted((a, b) => b.rollup.skipped - a.rollup.skipped)) {
+            defaultRuntime.log(`  ${jobId}  ${formatCronRunCostRollup(rollup)}`);
+          }
         } catch (err) {
           handleCronCliError(err);
         }

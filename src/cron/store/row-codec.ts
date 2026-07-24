@@ -2,6 +2,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { normalizeCronJobPrecheck } from "../job-precheck.js";
 import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
@@ -312,6 +313,11 @@ function rowToCronJob(row: CronJobRow): CronJob | null {
     payload,
     ...(delivery ? { delivery } : {}),
     ...(failureAlert !== undefined ? { failureAlert } : {}),
+    ...(() => {
+      const cfg = parseJsonObject<Record<string, unknown>>(row.job_json, {});
+      const precheck = normalizeCronJobPrecheck(cfg.precheck);
+      return precheck ? { precheck } : {};
+    })(),
     state: stateFromRow(row),
   };
 }

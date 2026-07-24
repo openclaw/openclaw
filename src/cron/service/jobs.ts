@@ -1125,6 +1125,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
       input.payload.kind === "script"
         ? normalizeCronScriptPayload(structuredClone(input.payload))
         : structuredClone(input.payload),
+    ...(input.precheck ? { precheck: structuredClone(input.precheck) } : {}),
     delivery: resolveInitialCronDelivery(input),
     failureAlert: input.failureAlert,
     ...(input.trigger ? { trigger: structuredClone(input.trigger) } : {}),
@@ -1258,6 +1259,13 @@ export function applyJobPatch(
     job.payload = mergeCronPayload(job.payload, patch.payload);
     if (job.payload.kind === "script") {
       job.payload = normalizeCronScriptPayload(job.payload);
+    }
+  }
+  if ("precheck" in patch) {
+    if (patch.precheck === null || patch.precheck === undefined) {
+      delete job.precheck;
+    } else {
+      job.precheck = structuredClone(patch.precheck);
     }
   }
   if (cronJobUsesToolRuntime(job) && (!previouslyUsedToolRuntime || explicitlyClearsToolsAllow)) {
