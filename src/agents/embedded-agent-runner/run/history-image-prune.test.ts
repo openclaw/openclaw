@@ -583,6 +583,55 @@ describe("pruneProcessedHistoryImages", () => {
     const firstUser = messages[0] as Extract<AgentMessage, { role: "user" }> | undefined;
     expect(firstUser?.content).toBe("noop");
   });
+
+  it("prunes image blocks from a compaction-style workload across many turns", () => {
+    // Simulates the compaction scenario reported in #111856: many turns with
+    // image-bearing toolResults across a long session where only the last
+    // 3 completed turns should retain their images.
+    const imagePayload = "FILLER_".repeat(400); // ~2800 chars, simulating real base64
+    const imageBlock: ImageContent = { type: "image", data: imagePayload, mimeType: "image/png" };
+    const messages: AgentMessage[] = [];
+
+    // 15 turns where each user message + toolResult carries an image block
+    for (let i = 0; i < 15; i++) {
+      messages.push(
+        castAgentMessage({ role: "user", content: [{ type: "text", text: "prompt" }, imageBlock] }),
+      );
+      messages.push(
+        castAgentMessage({
+          role: "toolResult",
+          toolName: "read",
+          content: [{ type: "text", text: "result" }, imageBlock],
+        }),
+      );
+      messages.push(castAgentMessage({ role: "assistant", content: "ack" }));
+    }
+
+    const charsBefore = JSON.stringify(messages).length;
+    const pruned = expectPrunedMessages(messages);
+    const charsAfter = JSON.stringify(pruned).length;
+
+    // First 12 turns' images should be pruned to text markers
+    for (let i = 0; i < 12; i++) {
+      const userContent = expectArrayMessageContent(pruned[i * 3], "expected user content");
+      expect(JSON.stringify(userContent)).not.toContain("FILLER_");
+      expect(JSON.stringify(userContent)).toContain("[image data removed");
+      const trContent = expectArrayMessageContent(pruned[i * 3 + 1], "expected toolResult content");
+      expect(JSON.stringify(trContent)).not.toContain("FILLER_");
+      expect(JSON.stringify(trContent)).toContain("[image data removed");
+    }
+
+    // Last 3 turns' images preserved
+    for (let i = 12; i < 15; i++) {
+      const userContent = expectArrayMessageContent(pruned[i * 3], "expected user content");
+      expect(JSON.stringify(userContent)).toContain("FILLER_");
+      const trContent = expectArrayMessageContent(pruned[i * 3 + 1], "expected toolResult content");
+      expect(JSON.stringify(trContent)).toContain("FILLER_");
+    }
+
+    expect(charsAfter).toBeLessThan(charsBefore);
+    expect(charsAfter / charsBefore).toBeLessThan(0.6);
+  });
 });
 
 describe("installHistoryImagePruneContextTransform", () => {

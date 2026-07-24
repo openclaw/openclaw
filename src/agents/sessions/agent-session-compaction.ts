@@ -1,5 +1,6 @@
 import { isContextOverflow } from "@openclaw/ai/internal/runtime";
 import type { AssistantMessage, Model } from "../../llm/types.js";
+import { pruneProcessedHistoryImages } from "../embedded-agent-runner/run/history-image-prune.js";
 import {
   calculateContextTokens,
   compact,
@@ -178,6 +179,21 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       if (extensionResult?.compaction) {
         compactionResult = extensionResult.compaction;
         fromExtension = true;
+      }
+    }
+
+    // Prune old image blocks from the summarization input so compaction
+    // does not send full base64 payloads to the summarization model.
+    // Same invariant as per-turn history-image-prune: images older than
+    // the last 3 completed turns are replaced with a text marker.
+    if (!compactionResult) {
+      const prunedMain = pruneProcessedHistoryImages(preparation.messagesToSummarize);
+      if (prunedMain) {
+        preparation.messagesToSummarize = prunedMain;
+      }
+      const prunedPrefix = pruneProcessedHistoryImages(preparation.turnPrefixMessages);
+      if (prunedPrefix) {
+        preparation.turnPrefixMessages = prunedPrefix;
       }
     }
 
