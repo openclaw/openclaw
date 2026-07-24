@@ -3,7 +3,18 @@
  *
  * Loads extensions, skills, prompts, themes, AGENTS files, and system prompt fragments for a cwd.
  */
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  fstatSync,
+  openSync,
+  readdirSync,
+  readSync,
+  statSync,
+} from "node:fs";
+
+// Cap user-supplied prompt input files at 10 MiB.
+const MAX_PROMPT_INPUT_FILE_BYTES = 10 * 1024 * 1024;
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import chalk from "chalk";
@@ -50,6 +61,56 @@ export interface ResourceLoader {
   reload(): Promise<void>;
 }
 
+/**
+ * Read a text file with an optional size cap to prevent OOM from oversized files.
+ * Opens the file first, stats the descriptor, then reads into a bounded buffer —
+ * this avoids the TOCTOU race where the file is replaced between check and read
+ * because the file descriptor is atomically bound to the opened inode.
+ *
+ * When `maxBytes` is provided, the file is rejected (returns undefined) if its
+ * size exceeds the limit. Without a cap, the full file is read through the
+ * descriptor with no upper bound (callers should apply their own policy).
+ *
+ * Returns the file content when the file is a regular file (within the optional
+ * byte limit). Returns undefined when the file is missing or not a regular file.
+ */
+function readTextFileSafely(filePath: string, maxBytes?: number): string | undefined {
+  let fd: number | undefined;
+  try {
+    fd = openSync(filePath, "r");
+    const stats = fstatSync(fd);
+    if (!stats.isFile()) {
+      console.error(chalk.yellow(`Warning: Could not read ${filePath}: not a regular file`));
+      return undefined;
+    }
+    if (maxBytes !== undefined && stats.size > maxBytes) {
+      console.error(
+        chalk.yellow(
+          `Warning: File too large (${stats.size} bytes > ${maxBytes} byte limit): ${filePath}`,
+        ),
+      );
+      return undefined;
+    }
+    // Read through the same descriptor so the bound is on the opened inode, not a re-resolved path.
+    const buffer = Buffer.alloc(stats.size);
+    const bytesRead = readSync(fd, buffer, 0, stats.size, 0);
+    return buffer.subarray(0, bytesRead).toString("utf-8");
+  } catch (error) {
+    // Missing candidates are an ordinary absence, not a warning: the ancestor walk
+    // probes all four filenames in every parent directory, so warning on ENOENT
+    // would spam every session startup (existsSync gated this silently before).
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT" && code !== "ENOTDIR") {
+      console.error(chalk.yellow(`Warning: Could not read ${filePath}: ${String(error)}`));
+    }
+    return undefined;
+  } finally {
+    if (fd !== undefined) {
+      closeSync(fd);
+    }
+  }
+}
+
 function resolvePromptInput(input: string | undefined, description: string): string | undefined {
   if (!input) {
     return undefined;
@@ -57,7 +118,7 @@ function resolvePromptInput(input: string | undefined, description: string): str
 
   if (existsSync(input)) {
     try {
-      return readFileSync(input, "utf-8");
+      return readTextFileSafely(input, MAX_PROMPT_INPUT_FILE_BYTES);
     } catch (error) {
       console.error(
         chalk.yellow(`Warning: Could not read ${description} file ${input}: ${String(error)}`),
@@ -73,15 +134,14 @@ function loadContextFileFromDir(dir: string): { path: string; content: string } 
   const candidates = ["AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"];
   for (const filename of candidates) {
     const filePath = join(dir, filename);
-    if (existsSync(filePath)) {
-      try {
-        return {
-          path: filePath,
-          content: readFileSync(filePath, "utf-8"),
-        };
-      } catch (error) {
-        console.error(chalk.yellow(`Warning: Could not read ${filePath}: ${String(error)}`));
-      }
+    // Project-context files use descriptor-level reads for TOCTOU safety but
+    // without a size cap — they are user-authored workspace files that may be
+    // large, and skipping them would silently change project instructions.
+    // Prompt-input files (--system-prompt, discovered SYSTEM.md) still use the
+    // capped variant in resolvePromptInput.
+    const content = readTextFileSafely(filePath);
+    if (content !== undefined) {
+      return { path: filePath, content };
     }
   }
   return null;
