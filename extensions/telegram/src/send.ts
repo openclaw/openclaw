@@ -49,6 +49,7 @@ import {
   recordOutboundMessageForPromptContext,
   type TelegramOutboundPromptContextMessage as TelegramMessageLike,
 } from "./outbound-message-context.js";
+import { recordTelegramPollRegistryEntry } from "./poll-registry.js";
 import type { createTelegramPromptContextProjectionCursor } from "./prompt-context-projection.js";
 import { makeProxyFetch } from "./proxy.js";
 import {
@@ -2641,6 +2642,27 @@ async function sendPollTelegramWithContext(
   const messageId = resolveTelegramMessageIdOrThrow(result, "poll send");
   const resolvedChatId = String(result?.chat?.id ?? chatId);
   const pollId = result?.poll?.id;
+  // Public poll answers omit chat/thread routing metadata. Record the origin at
+  // the central send boundary so every caller gets the same inbound route.
+  // This is best-effort because the poll already exists and retrying could duplicate it.
+  if (pollId && opts.isAnonymous === false) {
+    try {
+      await recordTelegramPollRegistryEntry({
+        accountId: account.accountId,
+        pollId,
+        chatId: resolvedChatId,
+        messageThreadId: threadParams.message_thread_id,
+        question: normalizedPoll.question,
+        options: pollOptions,
+      });
+    } catch (err) {
+      logVerbose(
+        `telegram: failed to record poll registry entry for poll ${pollId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
   recordSentMessage(chatId, messageId, opts.cfg);
   await recordOutboundMessageForPromptContext({
     cfg,

@@ -42,6 +42,7 @@ type TelegramSequentialKeyContext = {
     edited_channel_post?: Message;
     callback_query?: { message?: Message; data?: string };
     message_reaction?: { chat?: { id?: number } };
+    poll_answer?: { poll_id?: string };
   };
 };
 
@@ -149,6 +150,12 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
   const reaction = ctx.update?.message_reaction;
   if (reaction?.chat?.id) {
     return `telegram:${reaction.chat.id}`;
+  }
+  const pollId = ctx.update?.poll_answer?.poll_id;
+  if (pollId) {
+    // Poll answers do not include their originating chat. Serialize answers for
+    // the same poll without forcing unrelated polls through the global unknown lane.
+    return `telegram:poll:${pollId}`;
   }
   const msg =
     ctx.message ??

@@ -5,6 +5,7 @@ import { createTelegramHandlerInboundRuntime } from "./bot-handlers.inbound.runt
 import { registerTelegramMessageHandlers } from "./bot-handlers.message-events.runtime.js";
 import { createTelegramHandlerMessageRuntime } from "./bot-handlers.message.runtime.js";
 import { registerTelegramMigrationHandler } from "./bot-handlers.migration.runtime.js";
+import { registerTelegramPollAnswerHandler } from "./bot-handlers.poll-answer.runtime.js";
 import { registerTelegramReactionHandler } from "./bot-handlers.reaction.runtime.js";
 import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
 
@@ -14,6 +15,7 @@ export const registerTelegramHandlers = (params: RegisterTelegramHandlerParams) 
   const inboundRuntime = createTelegramHandlerInboundRuntime(params, messageRuntime);
 
   registerTelegramReactionHandler(params, authorizationRuntime);
+  registerTelegramPollAnswerHandler(params, authorizationRuntime);
   registerTelegramCallbackQueryHandler(params, messageRuntime, authorizationRuntime);
   registerTelegramMigrationHandler(params);
   registerTelegramMessageHandlers(params, messageRuntime, authorizationRuntime, inboundRuntime);
