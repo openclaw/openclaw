@@ -158,40 +158,110 @@ export function dispatchAgentRunFromGateway(params: {
       const aborted = result?.meta?.aborted === true;
       const stopReason = aborted ? (result?.meta?.stopReason ?? "rpc") : undefined;
       const timeoutAttribution = readAgentRunTimeoutAttribution(result?.meta);
-      if (taskTracked) {
-        tryFinalizeTrackedAgentTask({
-          runId: params.runId,
-          status: aborted ? resolveAbortedAgentTaskStatus(stopReason) : "succeeded",
-          terminalSummary: aborted ? "aborted" : "completed",
-          log: params.context.logGateway,
-        });
-      }
-      const payload = {
-        runId: params.runId,
-        status: aborted ? ("timeout" as const) : ("ok" as const),
-        summary: aborted ? "aborted" : "completed",
-        ...(aborted ? { stopReason } : {}),
-        ...(aborted && timeoutAttribution.timeoutPhase
-          ? { timeoutPhase: timeoutAttribution.timeoutPhase }
-          : {}),
-        ...(aborted && timeoutAttribution.providerStarted !== undefined
-          ? { providerStarted: timeoutAttribution.providerStarted }
-          : {}),
-        result,
-      };
+      // Non-terminal stop reasons (toolUse, tool_calls) indicate the run was
+      // interrupted before reaching a final assistant reply — CLI timeout is a
+      // common trigger. Only applies to non-aborted runs; aborted runs already
+      // carry an explicit AbortSignal stop reason and preserve their old behaviour.
+      const metaStopReason = result?.meta?.stopReason;
+      const isNonTerminalStop =
+        !aborted && (metaStopReason === "toolUse" || metaStopReason === "tool_calls");
       const terminalOutcome = buildAgentRunTerminalOutcome({
-        status:
-          aborted || result?.meta?.stopReason === "timeout" || timeoutAttribution.timeoutPhase
+        status: aborted
+          ? "timeout"
+          : metaStopReason === "timeout" || timeoutAttribution.timeoutPhase || isNonTerminalStop
             ? "timeout"
-            : result?.meta?.error || result?.meta?.stopReason === "error"
+            : result?.meta?.error || metaStopReason === "error"
               ? "error"
               : "ok",
         error: result?.meta?.error,
-        stopReason: result?.meta?.stopReason,
+        stopReason: metaStopReason,
         livenessState: result?.meta?.livenessState,
         timeoutPhase: timeoutAttribution.timeoutPhase,
         providerStarted: timeoutAttribution.providerStarted,
       });
+      if (taskTracked) {
+        // Aborted runs (AbortSignal) preserve the existing stop-reason-based
+        // resolution: "timeout" → timed_out, everything else → cancelled.
+        // Non-aborted runs use terminalOutcome.reason so genuine failures
+        // (context_overflow etc.) are persisted as "failed" while RPC/stop
+        // cancellations stay "cancelled".
+        if (aborted) {
+          tryFinalizeTrackedAgentTask({
+            runId: params.runId,
+            status: resolveAbortedAgentTaskStatus(stopReason),
+            terminalSummary: "aborted",
+            log: params.context.logGateway,
+          });
+        } else {
+          const isTerminalTimeout = terminalOutcome.status === "timeout";
+          const isTerminalError = terminalOutcome.status === "error";
+          const isTerminalCancelled =
+            terminalOutcome.reason === "cancelled" || terminalOutcome.reason === "aborted";
+          tryFinalizeTrackedAgentTask({
+            runId: params.runId,
+            status: isTerminalTimeout
+              ? "timed_out"
+              : isTerminalCancelled
+                ? resolveAbortedAgentTaskStatus(terminalOutcome.stopReason)
+                : isTerminalError
+                  ? resolveFailedTrackedAgentTaskStatus(new Error(terminalOutcome.error ?? "error"))
+                  : "succeeded",
+            ...(isTerminalError && !isTerminalCancelled && terminalOutcome.error
+              ? { error: terminalOutcome.error }
+              : {}),
+            terminalSummary:
+              isTerminalTimeout || isTerminalCancelled
+                ? "aborted"
+                : isTerminalError
+                  ? (terminalOutcome.error ?? "error")
+                  : "completed",
+            log: params.context.logGateway,
+          });
+        }
+      }
+      const payload = aborted
+        ? ({
+            runId: params.runId,
+            status: "timeout" as const,
+            summary: "aborted",
+            stopReason,
+            ...(timeoutAttribution.timeoutPhase
+              ? { timeoutPhase: timeoutAttribution.timeoutPhase }
+              : {}),
+            ...(timeoutAttribution.providerStarted !== undefined
+              ? { providerStarted: timeoutAttribution.providerStarted }
+              : {}),
+            result,
+          } as const)
+        : ({
+            runId: params.runId,
+            status:
+              terminalOutcome.status === "timeout"
+                ? ("timeout" as const)
+                : terminalOutcome.status === "error"
+                  ? ("error" as const)
+                  : ("ok" as const),
+            summary:
+              terminalOutcome.status === "timeout" ||
+              terminalOutcome.reason === "cancelled" ||
+              terminalOutcome.reason === "aborted"
+                ? "aborted"
+                : terminalOutcome.status === "error"
+                  ? (terminalOutcome.error ?? "error")
+                  : "completed",
+            ...(terminalOutcome.status === "timeout"
+              ? {
+                  stopReason: result?.meta?.stopReason ?? "timeout",
+                  ...(timeoutAttribution.timeoutPhase
+                    ? { timeoutPhase: timeoutAttribution.timeoutPhase }
+                    : {}),
+                  ...(timeoutAttribution.providerStarted !== undefined
+                    ? { providerStarted: timeoutAttribution.providerStarted }
+                    : {}),
+                }
+              : {}),
+            result,
+          } as const);
       const persistTerminalDedupe = () => {
         setGatewayDedupeEntries({
           dedupe: params.context.dedupe,
