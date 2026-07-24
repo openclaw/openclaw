@@ -3205,6 +3205,55 @@ describe("task-registry", () => {
     });
   });
 
+  it("does not mutate tasks when a scheduled sweep cannot restore task-flow state", async () => {
+    await withTaskRegistryTempDir(async () => {
+      vi.useFakeTimers();
+      const now = Date.now();
+      const task = createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:main",
+        runId: "run-scheduled-corrupt-flow-store",
+        task: "Retain while task-flow state is unavailable",
+        status: "succeeded",
+        deliveryStatus: "not_applicable",
+      });
+      const staleTask = {
+        ...task,
+        endedAt: now - 8 * 24 * 60 * 60_000,
+        lastEventAt: now - 8 * 24 * 60 * 60_000,
+        cleanupAfter: now - 1,
+      };
+      const currentTasks = new Map([[task.taskId, staleTask]]);
+      configureTaskRegistryMaintenanceRuntimeForTest({
+        currentTasks,
+        snapshotTasks: [staleTask],
+      });
+      resetTaskFlowRegistryForTests({ persist: false });
+      const loadSnapshot = vi.fn(() => {
+        throw new Error("SQLITE_CORRUPT: scheduled task-flow restore failed");
+      });
+      configureTaskFlowRegistryRuntime({
+        store: {
+          loadSnapshot,
+          saveSnapshot: vi.fn(),
+        },
+      });
+
+      startTaskRegistryMaintenance();
+      try {
+        await vi.advanceTimersByTimeAsync(5_000);
+        await flushAsyncWork();
+
+        expect(loadSnapshot).toHaveBeenCalledTimes(1);
+        expect(currentTasks.get(task.taskId)).toEqual(staleTask);
+      } finally {
+        stopTaskRegistryMaintenance();
+      }
+    });
+  });
+
   it("does not leak unhandled rejections when the scheduled maintenance sweep fails", async () => {
     await withTaskRegistryTempDir(async () => {
       vi.useFakeTimers();
