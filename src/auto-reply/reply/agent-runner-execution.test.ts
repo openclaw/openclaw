@@ -8826,7 +8826,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("success");
     const successResult = result as Extract<typeof result, { kind: "success" }>;
     expect(successResult.terminalFailurePayload).toMatchObject({
-      text: "The agent run failed before producing a reply.",
+      text: GENERIC_RUN_FAILURE_TEXT,
       isError: true,
     });
   });

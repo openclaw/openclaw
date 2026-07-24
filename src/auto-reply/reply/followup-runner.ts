@@ -1748,6 +1748,20 @@ export function createFollowupRunner(params: {
         return;
       }
 
+      // When message_tool_only is active but nonDeliverableTerminalTurn requires a fallback,
+      // deliver the terminal failure payload directly via the dispatcher (onBlockReply)
+      // rather than the normal origin routing path, since message_tool_only channels
+      // communicate back through the dispatcher interface.
+      if (
+        run.sourceReplyDeliveryMode === "message_tool_only" &&
+        runResult.meta?.nonDeliverableTerminalTurn === true &&
+        fallbackPayload &&
+        opts?.onBlockReply
+      ) {
+        await opts.onBlockReply(fallbackPayload);
+        return;
+      }
+
       await sendRunPayloads(
         deliveryPayloads,
         effectiveQueued,

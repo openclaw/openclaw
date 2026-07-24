@@ -5457,9 +5457,9 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     // message_tool_only.  Both message_tool_only gates in followup-runner are exempted
     // when nonDeliverableTerminalTurn=true.
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    const call = onBlockReply.mock.calls[0]?.[0] as { text?: string; isError?: boolean };
+    const call = onBlockReply.mock.calls[0]?.[0] as unknown as { text?: string; isError?: boolean };
     expect(call).toMatchObject({
-      text: "The agent run failed before producing a reply.",
+      text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
       isError: true,
     });
   });
