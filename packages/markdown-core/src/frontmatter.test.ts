@@ -267,6 +267,46 @@ Body text`;
     expect(result.name).toBe("windows-skill");
     expect(result.description).toBe("Written by PowerShell");
   });
+
+  it("tolerates JSON5 trailing commas in flow-mapping metadata block (#108432)", () => {
+    // Trailing commas inside {…} and […] are not valid YAML 1.2 but are
+    // common in JSON5-style frontmatter authored by users. The parser
+    // must strip them before handing the block to the YAML library.
+    const content = `---
+name: example
+description: Example skill.
+metadata:
+  {
+    "openclaw":
+      {
+        "requires":
+          {
+            "env": ["EXAMPLE_VAR"],
+          },
+      },
+  }
+---
+Body text`;
+    const result = parseFrontmatterBlock(content);
+    expect(result.name).toBe("example");
+    expect(result.description).toBe("Example skill.");
+    expect(result.metadata).toBe(
+      '{"openclaw":{"requires":{"env":["EXAMPLE_VAR"]}}}',
+    );
+    // Verify the stripped content survives JSON round-trip
+    const parsed = JSON.parse(expectDefined(result.metadata, "result.metadata test invariant"));
+    expect(parsed.openclaw?.requires?.env).toEqual(["EXAMPLE_VAR"]);
+  });
+
+  it("tolerates inline flow arrays with trailing commas", () => {
+    const content = `---
+name: tags-demo
+tags: ["alpha", "beta",]
+---`;
+    const result = parseFrontmatterBlock(content);
+    expect(result.name).toBe("tags-demo");
+    expect(result.tags).toBe('["alpha","beta"]');
+  });
 });
 
 describe("stripFrontmatterBlock", () => {
