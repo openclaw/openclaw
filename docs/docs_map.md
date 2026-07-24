@@ -2608,6 +2608,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Prerequisites
   - H3: Enable
   - H2: How the sidecar works
+  - H3: CPU-only VPS guidance
   - H2: Search performance and compatibility
   - H2: Model overrides
   - H2: Indexing extra paths

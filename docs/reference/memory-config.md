@@ -561,7 +561,7 @@ Set `memory.backend = "qmd"` to enable. All QMD settings live under `memory.qmd`
 | `sessions.retentionDays` | `number`  | --       | Transcript retention                                                                  |
 | `sessions.exportDir`     | `string`  | --       | Export directory                                                                      |
 
-`searchMode: "search"` is lexical/BM25-only. OpenClaw does not run semantic vector readiness probes or QMD embedding maintenance for that mode, including during `memory status --deep`; `vsearch` and `query` continue to require QMD vector readiness and embeddings.
+`searchMode: "search"` is lexical/BM25-only. OpenClaw does not run semantic vector readiness probes or QMD embedding maintenance for that mode, including during `memory status --deep`; `vsearch` and `query` continue to require QMD vector readiness and embeddings. Start with `search` on small CPU-only VPS deployments, then opt into `query`/`vsearch` only after you have CPU headroom for embedding and optional reranking. See the [QMD CPU-only VPS guidance](/concepts/memory-qmd#cpu-only-vps-guidance) for a safe rollout pattern.
 
 `rerank: false` only changes QMD `query` mode and requires QMD 2.1 or newer. In direct CLI mode OpenClaw passes `--no-rerank`; in mcporter-backed MCP mode it passes `rerank: false` to QMD's unified query tool. Leave it unset to use QMD's default query reranking behavior.
 
