@@ -40,6 +40,7 @@ type MockEmitter = {
   emit: (eventName: string | symbol, ...args: unknown[]) => boolean;
   on: (eventName: string | symbol, listener: (...args: unknown[]) => void) => MockEmitter;
   once: (eventName: string | symbol, listener: (...args: unknown[]) => void) => MockEmitter;
+  listenerCount: (eventName: string | symbol) => number;
 };
 
 type MockChildProcess = MockEmitter & {
@@ -119,6 +120,34 @@ describe("qa suite runtime agent process helpers", () => {
     );
     expect((spawnCall?.[2] as { env?: unknown } | undefined)?.env).toEqual({ PATH: "/usr/bin" });
   });
+
+  it.runIf(process.platform !== "win32")(
+    "detaches stdout/stderr data listeners on close so the resolved stream is not retained",
+    async () => {
+      const child = createSpawnedProcess();
+      spawnMock.mockReturnValue(child);
+
+      const pending = runQaCli(
+        {
+          repoRoot: "/repo",
+          gateway: { tempRoot: "/tmp/runtime", runtimeEnv: { PATH: "/usr/bin" } },
+          primaryModel: "openai/gpt-5.6-luna",
+          alternateModel: "openai/gpt-5.6-luna-mini",
+          providerMode: "mock-openai",
+        } as never,
+        ["qa", "suite"],
+      );
+
+      await waitForSpawnCount(1);
+      child.stdout.emit("data", Buffer.from("ok\n"));
+      child.emit("close", 0);
+
+      await expect(pending).resolves.toBe("ok");
+      // Listeners must be detached on close so the resolved stream is not retained.
+      expect(child.stdout.listenerCount("data")).toBe(0);
+      expect(child.stderr.listenerCount("data")).toBe(0);
+    },
+  );
 
   it("caps oversized qa cli timeout timers", async () => {
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");

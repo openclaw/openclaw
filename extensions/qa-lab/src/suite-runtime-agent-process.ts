@@ -282,14 +282,18 @@ async function runQaCli(
         new QaSuiteInfraError("qa_cli_timeout", `qa cli timed out: openclaw ${args.join(" ")}`),
       );
     }, timeoutMs);
-    child.stdout.on("data", (chunk) => appendQaChildOutput(stdout, chunk));
-    child.stderr.on("data", (chunk) => appendQaChildOutputTail(stderr, chunk));
+    const onStdout = (chunk: Buffer) => appendQaChildOutput(stdout, chunk);
+    const onStderr = (chunk: Buffer) => appendQaChildOutputTail(stderr, chunk);
+    child.stdout.on("data", onStdout);
+    child.stderr.on("data", onStderr);
     child.once("error", (error) => {
       clearTimeout(timeout);
       reject(error);
     });
     child.once("close", (code) => {
       clearTimeout(timeout);
+      child.stdout.off("data", onStdout);
+      child.stderr.off("data", onStderr);
       if (code === 0) {
         if (stdout.exceeded) {
           reject(
