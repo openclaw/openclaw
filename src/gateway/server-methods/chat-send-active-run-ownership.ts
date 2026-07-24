@@ -6,7 +6,7 @@
  * prompt lock is released appends a foreign user turn and kills the active run
  * with EmbeddedAttemptSessionTakeoverError (#113194).
  */
-export function shouldFinalizeChatSendAsNonAgent(params: {
+function shouldFinalizeChatSendAsNonAgent(params: {
   agentRunStarted: boolean;
   queuedFollowupEnqueued: boolean;
   activeRunTurnAdopted: boolean;
@@ -15,7 +15,7 @@ export function shouldFinalizeChatSendAsNonAgent(params: {
 }
 
 /** Successful steer/queue admission ends this client run; a later turn owns work. */
-export function shouldTerminalizeDeferredChatSend(params: {
+function shouldTerminalizeDeferredChatSend(params: {
   queuedFollowupEnqueued: boolean;
   activeRunTurnAdopted: boolean;
 }): boolean {
