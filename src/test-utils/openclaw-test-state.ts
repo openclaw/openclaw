@@ -10,7 +10,7 @@ import * as configRuntime from "../config/config.js";
 import { isPathInside } from "../infra/path-guards.js";
 import {
   closeOpenClawAgentDatabaseByPath,
-  listOpenClawRegisteredAgentDatabases,
+  listOpenClawAgentDatabasesForTest,
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -366,8 +366,7 @@ export async function createOpenClawTestState(
       await cleanupSessionStateForTest().catch(() => undefined);
       // Agent close releases leases through shared state; closing shared state first
       // can reopen it during teardown and leave Windows handles under the fixture root.
-      const registeredAgentDatabases = listOpenClawRegisteredAgentDatabases({ env });
-      for (const database of registeredAgentDatabases) {
+      for (const database of listOpenClawAgentDatabasesForTest()) {
         if (isPathInside(paths.stateDir, database.path)) {
           closeOpenClawAgentDatabaseByPath(database.path);
         }
