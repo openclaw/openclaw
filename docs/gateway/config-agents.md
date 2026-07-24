@@ -227,7 +227,6 @@ Shared defaults for bounded runtime context surfaces.
     defaults: {
       contextLimits: {
         memoryGetMaxChars: 12000,
-        memoryGetDefaultLines: 120,
         postCompactionMaxChars: 1800,
       },
     },
@@ -237,15 +236,10 @@ Shared defaults for bounded runtime context surfaces.
 
 - `memoryGetMaxChars`: default `memory_get` excerpt cap before truncation
   metadata and continuation notice are added.
-- `memoryGetDefaultLines`: default `memory_get` line window when `lines` is
-  omitted.
-- `toolResultMaxChars`: advanced live tool-result ceiling used for persisted
-  results and overflow recovery. Leave unset for the model-context auto cap:
-  `16000` chars below 100K tokens, `32000` chars at 100K+ tokens, and `64000`
-  chars at 200K+ tokens. Explicit values up to `1000000` are accepted for
-  long-context models, but the effective cap is still limited to about 30% of
-  the model context window. `openclaw doctor --deep` prints the effective cap,
-  and doctor warns only when an explicit override is stale or has no effect.
+- When `memory_get` omits `lines`, OpenClaw uses a built-in 120-line window and
+  then applies `memoryGetMaxChars`.
+- Live tool results use a model-context auto cap: `16000` chars below 100K
+  tokens, `32000` chars at 100K+ tokens, and `64000` chars at 200K+ tokens.
 - `postCompactionMaxChars`: AGENTS.md excerpt cap used during post-compaction
   refresh injection.
 
@@ -265,7 +259,6 @@ from `agents.defaults.contextLimits`.
         id: "tiny-local",
         contextLimits: {
           memoryGetMaxChars: 6000,
-          toolResultMaxChars: 8000, // advanced ceiling for this agent
         },
       },
     ],
@@ -712,7 +705,7 @@ See [Streaming](/concepts/streaming) for behavior + chunking details.
 
 - Defaults: `instant` for direct chats/mentions, `message` for unmentioned group chats.
 - `typingIntervalSeconds` default: `6`.
-- Per-agent overrides: `agents.entries.*.typingMode` and `agents.entries.*.typingIntervalSeconds`.
+- Per-agent override: `agents.entries.*.typingMode`.
 
 See [Typing Indicators](/concepts/typing-indicators).
 

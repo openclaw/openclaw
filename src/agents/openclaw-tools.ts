@@ -398,6 +398,7 @@ export function createOpenClawTools(
         sessionId: options?.sessionId,
         messageActionTurnCapability: options?.messageActionTurnCapability,
         config: options?.config,
+        preparedMessageToolCatalog: options?.preparedModelRuntime?.messageToolCatalog,
         currentChannelId: options?.currentChannelId,
         currentChatType: options?.currentChatType,
         currentMessagingTarget: options?.currentMessagingTarget,

@@ -2160,6 +2160,7 @@ describe("ci workflow guards", () => {
       "Sticky dependency snapshot matches the install fingerprint and importer contents; skipping pnpm install",
     );
     expect(installStep.run).toContain("timeout --signal=TERM --kill-after=15s 4m");
+    expect(installStep.run).toContain("timeout --signal=TERM --kill-after=15s 15m");
     expect(installStep.run).toContain('pnpm "${install_args[@]}" --config.fetch-retries=0');
     const forceStickyWriterInstall =
       'if [ "$STICKY_DISK" = "true" ] && [ "$STICKY_WRITER" = "true" ] &&\n' +
@@ -2169,6 +2170,9 @@ describe("ci workflow guards", () => {
       'find "$GITHUB_WORKSPACE/node_modules" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +';
     expect(installStep.run).toContain(clearStickyModules);
     expect(installStep.run).toContain("install_args+=(--force)");
+    expect(installStep.run).toContain('sticky_writer_rebuild="true"');
+    expect(installStep.run).toContain('if [ "$sticky_writer_rebuild" = "true" ]; then');
+    expect(installStep.run).toContain("install_attempts=1");
     expect(installStep.run.indexOf(forceStickyWriterInstall)).toBeLessThan(
       installStep.run.indexOf(clearStickyModules),
     );

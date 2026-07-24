@@ -9,7 +9,6 @@ import { LEGACY_SECRETREF_ENV_MARKER_PREFIX } from "../config/types.secrets.js";
 import { migrateLegacySecretRefEnvMarkers } from "../secrets/legacy-secretref-env-marker.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
-import "./doctor-tool-result-cap-advice.js";
 import { resolveDoctorContributionHealthChecks } from "./doctor-health-contributions.js";
 import {
   createDoctorHealthContribution,
@@ -110,6 +109,8 @@ const mocks = vi.hoisted(() => ({
   maybeMigrateHeartbeatCadenceToCron: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
   collectHeartbeatScratchMigrationFindings: vi.fn(async () => [] as unknown[]),
   maybeMigrateHeartbeatFilesToScratch: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
+  collectHeartbeatTaskMigrationFindings: vi.fn(async () => [] as unknown[]),
+  maybeMigrateHeartbeatTasksToCron: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
   collectWhatsappResponsivenessHealthFindings: vi.fn((): readonly HealthFinding[] => []),
   noteWhatsappResponsivenessHealth: vi.fn().mockResolvedValue(undefined),
   collectDevicePairingHealthFindings: vi.fn(async () => []),
@@ -417,6 +418,11 @@ vi.mock("../commands/doctor-heartbeat-scratch-migration.js", () => ({
   maybeMigrateHeartbeatFilesToScratch: mocks.maybeMigrateHeartbeatFilesToScratch,
 }));
 
+vi.mock("../commands/doctor-heartbeat-task-migration.js", () => ({
+  collectHeartbeatTaskMigrationFindings: mocks.collectHeartbeatTaskMigrationFindings,
+  maybeMigrateHeartbeatTasksToCron: mocks.maybeMigrateHeartbeatTasksToCron,
+}));
+
 vi.mock("../commands/doctor-whatsapp-responsiveness.js", () => ({
   collectWhatsappResponsivenessHealthFindings: mocks.collectWhatsappResponsivenessHealthFindings,
   noteWhatsappResponsivenessHealth: mocks.noteWhatsappResponsivenessHealth,
@@ -690,6 +696,10 @@ describe("doctor health contributions", () => {
     mocks.collectHeartbeatScratchMigrationFindings.mockResolvedValue([]);
     mocks.maybeMigrateHeartbeatFilesToScratch.mockReset();
     mocks.maybeMigrateHeartbeatFilesToScratch.mockResolvedValue({ changes: [], warnings: [] });
+    mocks.collectHeartbeatTaskMigrationFindings.mockReset();
+    mocks.collectHeartbeatTaskMigrationFindings.mockResolvedValue([]);
+    mocks.maybeMigrateHeartbeatTasksToCron.mockReset();
+    mocks.maybeMigrateHeartbeatTasksToCron.mockResolvedValue({ changes: [], warnings: [] });
     mocks.collectWhatsappResponsivenessHealthFindings.mockReset();
     mocks.collectWhatsappResponsivenessHealthFindings.mockReturnValue([]);
     mocks.noteWhatsappResponsivenessHealth.mockReset();
@@ -1379,6 +1389,38 @@ describe("doctor health contributions", () => {
     expect(mocks.collectHeartbeatCadenceMigrationFindings).toHaveBeenCalledWith(cfg, env);
   });
 
+  it("migrates heartbeat files before converting their task blocks", () => {
+    const ids = resolveDoctorHealthContributions().map((entry) => entry.id);
+    const cadenceIndex = ids.indexOf("doctor:heartbeat-cadence-migration");
+    const scratchIndex = ids.indexOf("doctor:heartbeat-scratch-migration");
+    const taskIndex = ids.indexOf("doctor:heartbeat-task-cron-migration");
+
+    expect(cadenceIndex).toBeGreaterThan(-1);
+    expect(scratchIndex).toBeGreaterThan(cadenceIndex);
+    expect(scratchIndex).toBeGreaterThan(-1);
+    expect(taskIndex).toBeGreaterThan(scratchIndex);
+    expect(taskIndex).toBeLessThan(ids.indexOf("doctor:write-config"));
+  });
+
+  it("forwards the health-check environment to heartbeat task detection", async () => {
+    const checks = await resolveDoctorContributionHealthChecks();
+    const check = checks.find(
+      (candidate) => candidate.id === "core/doctor/heartbeat-task-cron-migration",
+    );
+    expect(check).toBeDefined();
+    const cfg = { agents: { defaults: { heartbeat: { every: "15m" } } } };
+    const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw-task-detector-state" };
+
+    await check!.detect({
+      mode: "lint",
+      cfg,
+      env,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    });
+
+    expect(mocks.collectHeartbeatTaskMigrationFindings).toHaveBeenCalledWith(cfg, env);
+  });
+
   it("keeps heartbeat template lint opt-in for default lint selection", async () => {
     const contributionChecks = await resolveDoctorContributionHealthChecks();
     const heartbeatTemplateCheck = contributionChecks.find(
@@ -1822,7 +1864,6 @@ describe("doctor health contributions", () => {
     expect(contributionIds).toContain("core/doctor/device-pairing");
     expect(contributionIds).toContain("core/doctor/channel-plugin-blockers");
     expect(contributionIds).toContain("core/doctor/channel-preview-warnings");
-    expect(contributionIds).toContain("core/doctor/tool-result-cap");
     expect(contributionIds).toContain("core/doctor/systemd-linger");
     expect(contributionChecks.map((check) => check.id)).toEqual(contributionIds);
   });
@@ -1892,60 +1933,6 @@ describe("doctor health contributions", () => {
     expect(mocks.readSystemdUserLingerStatus).not.toHaveBeenCalled();
   });
 
-  it("keeps tool result cap opt-in for default lint selection", async () => {
-    const contributionChecks = await resolveDoctorContributionHealthChecks();
-    const toolResultCapCheck = contributionChecks.find(
-      (check) => check.id === "core/doctor/tool-result-cap",
-    );
-    expect(toolResultCapCheck).toMatchObject({ defaultEnabled: false });
-    expect(toolResultCapCheck).toBeDefined();
-
-    const ctx = {
-      cfg: {
-        agents: {
-          defaults: { contextLimits: { toolResultMaxChars: 16_000 } },
-        },
-      },
-      mode: "lint",
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-    } as const;
-    const detect = vi.fn(async () => [
-      {
-        checkId: "core/doctor/tool-result-cap",
-        severity: "warning" as const,
-        message: "Configured tool result cap overrides the model-window default.",
-        path: "agents.defaults.contextLimits.toolResultMaxChars",
-      },
-    ]);
-    // This case owns lint selection; the real cap detector is exercised below.
-    const checks = [{ ...toolResultCapCheck!, detect }];
-
-    await expect(runDoctorLintChecks(ctx, { checks })).resolves.toMatchObject({
-      checksRun: 0,
-      checksSkipped: 1,
-    });
-    expect(detect).not.toHaveBeenCalled();
-    await expect(
-      runDoctorLintChecks(ctx, { checks, includeAllChecks: true }),
-    ).resolves.toMatchObject({
-      checksRun: 1,
-      checksSkipped: 0,
-      findings: [
-        expect.objectContaining({
-          checkId: "core/doctor/tool-result-cap",
-          path: "agents.defaults.contextLimits.toolResultMaxChars",
-        }),
-      ],
-    });
-    await expect(
-      runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/tool-result-cap"] }),
-    ).resolves.toMatchObject({
-      checksRun: 1,
-      checksSkipped: 0,
-    });
-    expect(detect).toHaveBeenCalledTimes(2);
-  });
-
   it("keeps stale plugin-runtime symlinks opt-in for structured lint selection", async () => {
     const contributionChecks = await resolveDoctorContributionHealthChecks();
     const check = contributionChecks.find(
@@ -1991,56 +1978,6 @@ describe("doctor health contributions", () => {
       ],
     });
     expect(mocks.collectStalePluginRuntimeSymlinkHealthFindings).toHaveBeenCalledTimes(1);
-  });
-
-  it("reports agent findings for inherited default tool result caps", async () => {
-    const contributionChecks = await resolveDoctorContributionHealthChecks();
-    const toolResultCapCheck = contributionChecks.find(
-      (check) => check.id === "core/doctor/tool-result-cap",
-    );
-    expect(toolResultCapCheck).toBeDefined();
-
-    mocks.resolveAgentContextLimits.mockImplementation(
-      (cfg: { agents?: { defaults?: { contextLimits?: unknown } } }) =>
-        cfg.agents?.defaults?.contextLimits ?? {},
-    );
-    mocks.resolveDefaultModelForAgent.mockImplementation((...args: unknown[]) => {
-      const params = args[0] as { agentId?: string };
-      return params.agentId === "writer"
-        ? { provider: "openai", model: "gpt-5.5" }
-        : { provider: "local", model: "tiny" };
-    });
-    mocks.findModelCatalogEntry.mockImplementation((...args: unknown[]) => {
-      const params = args[1] as { modelId?: string };
-      return params.modelId === "gpt-5.5" ? { contextTokens: 200_000 } : { contextTokens: 8_000 };
-    });
-
-    const ctx = {
-      cfg: {
-        agents: {
-          defaults: { contextLimits: { toolResultMaxChars: 16_000 } },
-          list: [{ id: "writer" }],
-        },
-      },
-      mode: "lint" as const,
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-    };
-
-    await expect(
-      runDoctorLintChecks(ctx, {
-        checks: [toolResultCapCheck!],
-        onlyIds: ["core/doctor/tool-result-cap"],
-      }),
-    ).resolves.toMatchObject({
-      checksRun: 1,
-      findings: expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "core/doctor/tool-result-cap",
-          path: "agents.defaults.contextLimits.toolResultMaxChars",
-          target: "agents.list.writer",
-        }),
-      ]),
-    });
   });
 
   it("keeps legacy plugin dependency lint opt-in and read-only", async () => {

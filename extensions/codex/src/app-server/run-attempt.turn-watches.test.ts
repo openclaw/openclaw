@@ -13,6 +13,8 @@ import {
 import * as mediaStore from "openclaw/plugin-sdk/media-store";
 import { describe, expect, it, vi } from "vitest";
 import { buildCodexAppServerPromptTimeoutOutcome } from "./attempt-results.js";
+import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { createCodexAttemptTurnWatchController } from "./attempt-turn-watches.js";
 import * as authBridge from "./auth-bridge.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
@@ -49,6 +51,11 @@ import {
   readCodexAppServerBinding,
   writeCodexAppServerBinding as writeRawCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
+
+const projectAttemptResult = (result: EmbeddedRunAttemptResult) => ({
+  ...result,
+  ...readAttemptTerminal(result),
+});
 
 setupRunAttemptTestHooks();
 
@@ -276,7 +283,10 @@ describe("runCodexAppServerAttempt turn watches", () => {
       },
     });
 
-    await expect(run).resolves.toMatchObject({ aborted: false, timedOut: false });
+    await expect(run.then(projectAttemptResult)).resolves.toMatchObject({
+      aborted: false,
+      timedOut: false,
+    });
   });
 
   it("releases the session when Codex never completes after a dynamic tool response", async () => {
@@ -349,9 +359,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
     );
 
     const result = await run;
-    expect(result.aborted).toBe(true);
-    expect(result.timedOut).toBe(true);
-    expect(result.promptError).toBe(
+    expect(readAttemptTerminal(result).aborted).toBe(true);
+    expect(readAttemptTerminal(result).timedOut).toBe(true);
+    expect(readAttemptTerminal(result).promptError).toBe(
       "codex app-server turn idle timed out waiting for turn/completed",
     );
     await vi.waitFor(
@@ -399,7 +409,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     });
     const result = await run;
 
-    expect(result.timedOut).toBe(true);
+    expect(readAttemptTerminal(result).timedOut).toBe(true);
     expect(result.itemLifecycle.completedCount).toBe(1);
     expect(result.promptTimeoutOutcome).toEqual({
       message:
@@ -435,7 +445,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
 
     const result = await run;
 
-    expect(result).toMatchObject({
+    expect(projectAttemptResult(result)).toMatchObject({
       aborted: true,
       timedOut: true,
       promptError: "codex app-server turn idle timed out waiting for turn/completed",
@@ -481,8 +491,8 @@ describe("runCodexAppServerAttempt turn watches", () => {
     const result = await run;
     const mediaUrl = result.toolMediaUrls?.[0];
 
-    expect(result.timedOut).toBe(true);
-    expect(result.promptError).toBe(
+    expect(readAttemptTerminal(result).timedOut).toBe(true);
+    expect(readAttemptTerminal(result).promptError).toBe(
       "codex app-server turn idle timed out waiting for turn/completed",
     );
     expect(result.toolMediaUrls).toHaveLength(1);
@@ -574,7 +584,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
 
     const result = await run;
 
-    expect(result.timedOut).toBe(true);
+    expect(readAttemptTerminal(result).timedOut).toBe(true);
     expect(result.itemLifecycle).toMatchObject({ activeCount: 1, completedCount: 0 });
     expect(result.codexAppServerFailure?.turnWatchTimeoutKind).toBe("terminal");
     expect(result.codexAppServerFailure?.replaySafe).toBe(false);
@@ -594,7 +604,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
       completedAssistant("msg-1", "Finished."),
     ]);
 
-    expect(result).toMatchObject({
+    expect(projectAttemptResult(result)).toMatchObject({
       aborted: false,
       timedOut: false,
       promptError: null,
@@ -637,7 +647,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
       },
     ]);
 
-    expect(result).toMatchObject({
+    expect(projectAttemptResult(result)).toMatchObject({
       aborted: false,
       timedOut: false,
       promptError: null,
@@ -663,7 +673,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
       },
     ]);
 
-    expect(result).toMatchObject({
+    expect(projectAttemptResult(result)).toMatchObject({
       aborted: false,
       timedOut: false,
       promptError: null,
@@ -690,9 +700,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
       },
     ]);
 
-    expect(result.aborted).toBe(true);
-    expect(result.timedOut).toBe(true);
-    expect(result.promptError).toBe(
+    expect(readAttemptTerminal(result).aborted).toBe(true);
+    expect(readAttemptTerminal(result).timedOut).toBe(true);
+    expect(readAttemptTerminal(result).promptError).toBe(
       "codex app-server turn idle timed out waiting for turn/completed",
     );
     expect(result.assistantTexts).toEqual(["I will run a tool."]);
@@ -758,7 +768,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
   }>)("keeps completed assistant output on the timeout path $name", async (scenario) => {
     const { result } = await runTurnWatchTimeoutScenario(scenario.notifications);
 
-    expect(result).toMatchObject({
+    expect(projectAttemptResult(result)).toMatchObject({
       aborted: true,
       timedOut: true,
       promptError: "codex app-server turn idle timed out waiting for turn/completed",
@@ -809,9 +819,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
 
     const result = await runCodexAppServerAttempt(params);
 
-    expect(result.aborted).toBe(true);
-    expect(result.timedOut).toBe(true);
-    expect(result.promptError).toBe(
+    expect(readAttemptTerminal(result).aborted).toBe(true);
+    expect(readAttemptTerminal(result).timedOut).toBe(true);
+    expect(readAttemptTerminal(result).promptError).toBe(
       "codex app-server turn idle timed out waiting for turn/completed",
     );
     expect(request).toHaveBeenCalledWith(
@@ -894,9 +904,11 @@ describe("runCodexAppServerAttempt turn watches", () => {
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
 
     const result = await run;
-    expect(result.aborted).toBe(false);
-    expect(result.timedOut).toBe(false);
-    expect(result.promptError).toBeNull();
+    expect(readAttemptTerminal(result)).toMatchObject({
+      aborted: false,
+      timedOut: false,
+      promptError: null,
+    });
     expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
     const progressReasons = onRunProgress.mock.calls.map(([info]) => info.reason);
     expect(progressReasons).toContain("turn:start");
@@ -940,9 +952,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
     });
 
     const result = await run;
-    expect(result.aborted).toBe(true);
-    expect(result.timedOut).toBe(true);
-    expect(result.promptError).toBe(
+    expect(readAttemptTerminal(result).aborted).toBe(true);
+    expect(readAttemptTerminal(result).timedOut).toBe(true);
+    expect(readAttemptTerminal(result).promptError).toBe(
       "codex app-server turn idle timed out waiting for turn/completed",
     );
     const warnCall = warn.mock.calls.find(
@@ -1005,9 +1017,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
     resolveRefresh?.();
 
     const result = await run;
-    expect(result.aborted).toBe(true);
-    expect(result.timedOut).toBe(true);
-    expect(result.promptError).toBe(
+    expect(readAttemptTerminal(result).aborted).toBe(true);
+    expect(readAttemptTerminal(result).timedOut).toBe(true);
+    expect(readAttemptTerminal(result).promptError).toBe(
       "codex app-server turn idle timed out waiting for turn/completed",
     );
     const warnCall = warn.mock.calls.find(
@@ -1087,9 +1099,11 @@ describe("runCodexAppServerAttempt turn watches", () => {
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
 
     const result = await run;
-    expect(result.aborted).toBe(false);
-    expect(result.timedOut).toBe(false);
-    expect(result.promptError).toBeNull();
+    expect(readAttemptTerminal(result)).toMatchObject({
+      aborted: false,
+      timedOut: false,
+      promptError: null,
+    });
   });
 
   it("keeps turn request activity active until elicitation handling resolves", async () => {
@@ -1168,9 +1182,11 @@ describe("runCodexAppServerAttempt turn watches", () => {
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
 
     const result = await run;
-    expect(result.aborted).toBe(false);
-    expect(result.timedOut).toBe(false);
-    expect(result.promptError).toBeNull();
+    expect(readAttemptTerminal(result)).toMatchObject({
+      aborted: false,
+      timedOut: false,
+      promptError: null,
+    });
   });
 
   it("keeps an eliciting MCP tool active past the completion timeout", async () => {
@@ -1255,9 +1271,11 @@ describe("runCodexAppServerAttempt turn watches", () => {
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
 
     const result = await run;
-    expect(result.aborted).toBe(false);
-    expect(result.timedOut).toBe(false);
-    expect(result.promptError).toBeNull();
+    expect(readAttemptTerminal(result)).toMatchObject({
+      aborted: false,
+      timedOut: false,
+      promptError: null,
+    });
   });
 
   it("counts pending secret user input requests as turn attempt progress", async () => {
@@ -1323,9 +1341,11 @@ describe("runCodexAppServerAttempt turn watches", () => {
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
 
     const result = await run;
-    expect(result.aborted).toBe(false);
-    expect(result.timedOut).toBe(false);
-    expect(result.promptError).toBeNull();
+    expect(readAttemptTerminal(result)).toMatchObject({
+      aborted: false,
+      timedOut: false,
+      promptError: null,
+    });
   });
 
   it("does not count mismatched turn-scoped requests as turn attempt progress", async () => {
@@ -1381,9 +1401,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
     });
 
     const result = await run;
-    expect(result.aborted).toBe(true);
-    expect(result.timedOut).toBe(true);
-    expect(result.promptError).toBe(
+    expect(readAttemptTerminal(result).aborted).toBe(true);
+    expect(readAttemptTerminal(result).timedOut).toBe(true);
+    expect(readAttemptTerminal(result).promptError).toBe(
       "codex app-server turn idle timed out waiting for turn/completed",
     );
     const warnCall = warn.mock.calls.find(
@@ -1429,9 +1449,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
     await harness.notify(rateLimitsUpdated(Math.ceil(Date.now() / 1000) + 120));
 
     const result = await run;
-    expect(result.aborted).toBe(true);
-    expect(result.timedOut).toBe(true);
-    expect(result.promptError).toBe(
+    expect(readAttemptTerminal(result).aborted).toBe(true);
+    expect(readAttemptTerminal(result).timedOut).toBe(true);
+    expect(readAttemptTerminal(result).promptError).toBe(
       "codex app-server turn idle timed out waiting for turn/completed",
     );
     const warnCall = warn.mock.calls.find(
@@ -1520,7 +1540,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
       );
 
       const result = await run;
-      expect(result).toMatchObject({
+      expect(projectAttemptResult(result)).toMatchObject({
         aborted: true,
         timedOut: true,
         promptError: "codex app-server turn idle timed out waiting for turn/completed",
@@ -1604,9 +1624,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
     });
 
     const result = await run;
-    expect(result.aborted).toBe(false);
-    expect(result.timedOut).toBe(false);
-    expect(result.promptError).toBeNull();
+    expect(readAttemptTerminal(result).aborted).toBe(false);
+    expect(readAttemptTerminal(result).timedOut).toBe(false);
+    expect(readAttemptTerminal(result).promptError).toBeNull();
     expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
   });
 
@@ -1659,9 +1679,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
     });
 
     const result = await run;
-    expect(result.aborted).toBe(false);
-    expect(result.timedOut).toBe(false);
-    expect(result.promptError).toBeNull();
+    expect(readAttemptTerminal(result).aborted).toBe(false);
+    expect(readAttemptTerminal(result).timedOut).toBe(false);
+    expect(readAttemptTerminal(result).promptError).toBeNull();
   });
 
   it("keeps waiting after native tool completion before final synthesis", async () => {
@@ -1717,9 +1737,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     const result = await run;
-    expect(result.aborted).toBe(false);
-    expect(result.timedOut).toBe(false);
-    expect(result.promptError).toBeNull();
+    expect(readAttemptTerminal(result).aborted).toBe(false);
+    expect(readAttemptTerminal(result).timedOut).toBe(false);
+    expect(readAttemptTerminal(result).promptError).toBeNull();
   });
 
   it("preserves post-tool budget for native tool completion buffered during turn start", async () => {
@@ -1808,9 +1828,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
     });
 
     const result = await run;
-    expect(result.aborted).toBe(false);
-    expect(result.timedOut).toBe(false);
-    expect(result.promptError).toBeNull();
+    expect(readAttemptTerminal(result).aborted).toBe(false);
+    expect(readAttemptTerminal(result).timedOut).toBe(false);
+    expect(readAttemptTerminal(result).promptError).toBeNull();
   });
 
   it("times out post-tool raw assistant progress after the post-tool timeout", async () => {
@@ -1857,9 +1877,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
     });
 
     const result = await run;
-    expect(result.aborted).toBe(true);
-    expect(result.timedOut).toBe(true);
-    expect(result.promptError).toBe(
+    expect(readAttemptTerminal(result).aborted).toBe(true);
+    expect(readAttemptTerminal(result).timedOut).toBe(true);
+    expect(readAttemptTerminal(result).promptError).toBe(
       "codex app-server turn idle timed out waiting for turn/completed",
     );
     await vi.waitFor(
@@ -1929,9 +1949,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
     expect(settled).toBe(false);
 
     const result = await run;
-    expect(result.aborted).toBe(true);
-    expect(result.timedOut).toBe(true);
-    expect(result.promptError).toBe(
+    expect(readAttemptTerminal(result).aborted).toBe(true);
+    expect(readAttemptTerminal(result).timedOut).toBe(true);
+    expect(readAttemptTerminal(result).promptError).toBe(
       "codex app-server turn idle timed out waiting for turn/completed",
     );
     await vi.waitFor(
@@ -2018,8 +2038,8 @@ describe("runCodexAppServerAttempt turn watches", () => {
     expect(settled).toBe(false);
 
     const result = await run;
-    expect(result.aborted).toBe(true);
-    expect(result.timedOut).toBe(true);
+    expect(readAttemptTerminal(result).aborted).toBe(true);
+    expect(readAttemptTerminal(result).timedOut).toBe(true);
     const completionWarnCall = warn.mock.calls.find(
       ([message]) => message === "codex app-server turn idle timed out waiting for completion",
     );
@@ -2084,8 +2104,8 @@ describe("runCodexAppServerAttempt turn watches", () => {
     });
 
     const result = await run;
-    expect(result.timedOut).toBe(true);
-    expect(result.promptError).toBe(
+    expect(readAttemptTerminal(result).timedOut).toBe(true);
+    expect(readAttemptTerminal(result).promptError).toBe(
       "codex app-server turn idle timed out waiting for turn/completed",
     );
     const completionWarnCall = warn.mock.calls.find(
@@ -2151,9 +2171,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
     });
 
     const result = await run;
-    expect(result.aborted).toBe(true);
-    expect(result.timedOut).toBe(true);
-    expect(result.promptError).toBe(
+    expect(readAttemptTerminal(result).aborted).toBe(true);
+    expect(readAttemptTerminal(result).timedOut).toBe(true);
+    expect(readAttemptTerminal(result).promptError).toBe(
       "codex app-server turn idle timed out waiting for turn/completed",
     );
     await vi.waitFor(
@@ -2214,9 +2234,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
     });
 
     const result = await run;
-    expect(result.aborted).toBe(true);
-    expect(result.timedOut).toBe(true);
-    expect(result.promptError).toBe(
+    expect(readAttemptTerminal(result).aborted).toBe(true);
+    expect(readAttemptTerminal(result).timedOut).toBe(true);
+    expect(readAttemptTerminal(result).promptError).toBe(
       "codex app-server turn idle timed out waiting for turn/completed",
     );
     const terminalWarnCall = warn.mock.calls.find(
@@ -2298,9 +2318,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
     });
 
     const result = await run;
-    expect(result.aborted).toBe(true);
-    expect(result.timedOut).toBe(true);
-    expect(result.promptError).toBe(
+    expect(readAttemptTerminal(result).aborted).toBe(true);
+    expect(readAttemptTerminal(result).timedOut).toBe(true);
+    expect(readAttemptTerminal(result).promptError).toBe(
       "codex app-server turn idle timed out waiting for turn/completed",
     );
     const completionWarnCall = warn.mock.calls.find(
@@ -2391,9 +2411,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
       });
 
       const result = await run;
-      expect(result.aborted).toBe(true);
-      expect(result.timedOut).toBe(true);
-      expect(result.promptError).toBe(
+      expect(readAttemptTerminal(result).aborted).toBe(true);
+      expect(readAttemptTerminal(result).timedOut).toBe(true);
+      expect(readAttemptTerminal(result).promptError).toBe(
         "codex app-server turn idle timed out waiting for turn/completed",
       );
       const completionWarnCall = warn.mock.calls.find(
@@ -2426,9 +2446,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
     await harness.waitForMethod("turn/start");
 
     const result = await run;
-    expect(result.aborted).toBe(true);
-    expect(result.timedOut).toBe(true);
-    expect(result.promptError).toBe(
+    expect(readAttemptTerminal(result).aborted).toBe(true);
+    expect(readAttemptTerminal(result).timedOut).toBe(true);
+    expect(readAttemptTerminal(result).promptError).toBe(
       "codex app-server turn idle timed out waiting for turn/completed",
     );
     await vi.waitFor(
@@ -2487,9 +2507,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     const result = await run;
-    expect(result.aborted).toBe(false);
-    expect(result.timedOut).toBe(false);
-    expect(result.promptError).toBeNull();
+    expect(readAttemptTerminal(result).aborted).toBe(false);
+    expect(readAttemptTerminal(result).timedOut).toBe(false);
+    expect(readAttemptTerminal(result).promptError).toBeNull();
     expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
   });
 
@@ -2542,9 +2562,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     const result = await run;
-    expect(result.aborted).toBe(false);
-    expect(result.timedOut).toBe(false);
-    expect(result.promptError).toBeNull();
+    expect(readAttemptTerminal(result).aborted).toBe(false);
+    expect(readAttemptTerminal(result).timedOut).toBe(false);
+    expect(readAttemptTerminal(result).promptError).toBeNull();
     expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
   });
 
@@ -2580,9 +2600,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     const result = await run;
-    expect(result.aborted).toBe(false);
-    expect(result.timedOut).toBe(false);
-    expect(result.promptError).toBeNull();
+    expect(readAttemptTerminal(result).aborted).toBe(false);
+    expect(readAttemptTerminal(result).timedOut).toBe(false);
+    expect(readAttemptTerminal(result).promptError).toBeNull();
     expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
   });
 
@@ -2636,9 +2656,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     const result = await run;
-    expect(result.aborted).toBe(false);
-    expect(result.timedOut).toBe(false);
-    expect(result.promptError).toBeNull();
+    expect(readAttemptTerminal(result).aborted).toBe(false);
+    expect(readAttemptTerminal(result).timedOut).toBe(false);
+    expect(readAttemptTerminal(result).promptError).toBeNull();
     expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
   });
 
@@ -2662,9 +2682,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
 
     const result = await run;
     expect({
-      aborted: result.aborted,
-      timedOut: result.timedOut,
-      promptError: result.promptError,
+      aborted: readAttemptTerminal(result).aborted,
+      timedOut: readAttemptTerminal(result).timedOut,
+      promptError: readAttemptTerminal(result).promptError,
       promptTimeoutOutcome: result.promptTimeoutOutcome,
       codexAppServerFailure: result.codexAppServerFailure,
     }).toMatchObject({
@@ -2751,8 +2771,8 @@ describe("runCodexAppServerAttempt turn watches", () => {
     expect(firstHarness.requests.some((entry) => entry.method === "thread/resume")).toBe(true);
 
     const firstResult = await firstRun;
-    expect(firstResult.timedOut).toBe(true);
-    expect(firstResult.promptError).toBe(
+    expect(readAttemptTerminal(firstResult).timedOut).toBe(true);
+    expect(readAttemptTerminal(firstResult).promptError).toBe(
       "codex app-server turn idle timed out waiting for turn/completed",
     );
     expect(firstResult.codexAppServerFailure?.kind).toBe("turn_completion_idle_timeout");
@@ -2789,7 +2809,10 @@ describe("runCodexAppServerAttempt turn watches", () => {
     expect(readRecentCodexRateLimits(harness.client)).toEqual(notification.params);
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await expect(run).resolves.toMatchObject({ aborted: false, timedOut: false });
+    await expect(run.then(projectAttemptResult)).resolves.toMatchObject({
+      aborted: false,
+      timedOut: false,
+    });
   });
 
   it("does not idle-timeout when terminal completion queues behind projection", async () => {
@@ -2856,9 +2879,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
     releaseProjection();
     await queuedTerminal;
     const result = await run;
-    expect(result.aborted).toBe(false);
-    expect(result.timedOut).toBe(false);
-    expect(result.promptError).toBeNull();
+    expect(readAttemptTerminal(result).aborted).toBe(false);
+    expect(readAttemptTerminal(result).timedOut).toBe(false);
+    expect(readAttemptTerminal(result).promptError).toBeNull();
   });
 
   it.each([
@@ -2919,7 +2942,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     }
 
     const result = await run;
-    expect(result).toMatchObject({
+    expect(projectAttemptResult(result)).toMatchObject({
       aborted: false,
       timedOut: false,
       promptError: null,
@@ -2996,7 +3019,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     await harness.notify(completion);
 
     const result = await run;
-    expect(result).toMatchObject({
+    expect(projectAttemptResult(result)).toMatchObject({
       aborted: false,
       timedOut: false,
       promptError: null,
@@ -3034,9 +3057,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
 
     const result = await run;
     expect({
-      aborted: result.aborted,
-      timedOut: result.timedOut,
-      promptError: result.promptError,
+      aborted: readAttemptTerminal(result).aborted,
+      timedOut: readAttemptTerminal(result).timedOut,
+      promptError: readAttemptTerminal(result).promptError,
       assistantTexts: result.assistantTexts,
     }).toEqual({
       aborted: false,
@@ -3086,7 +3109,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
       await harness.notify(finalizationHookNotification("hook/completed", "completed", eventName));
       const result = await run;
 
-      expect(result).toMatchObject({
+      expect(projectAttemptResult(result)).toMatchObject({
         aborted: false,
         timedOut: false,
         promptError: null,
@@ -3151,7 +3174,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     );
 
     await harness.notify(finalizationHookNotification("hook/completed", "completed"));
-    await expect(run).resolves.toMatchObject({
+    await expect(run.then(projectAttemptResult)).resolves.toMatchObject({
       aborted: false,
       timedOut: false,
       promptError: null,
@@ -3209,7 +3232,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
 
     releaseProjection();
     await Promise.all([pendingProjection, pendingAssistant]);
-    await expect(run).resolves.toMatchObject({
+    await expect(run.then(projectAttemptResult)).resolves.toMatchObject({
       aborted: false,
       timedOut: false,
       promptError: null,
@@ -3248,7 +3271,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     );
 
     harness.close();
-    await expect(run).resolves.toMatchObject({
+    await expect(run.then(projectAttemptResult)).resolves.toMatchObject({
       aborted: false,
       timedOut: false,
       promptError: "codex app-server client closed before turn completed",
@@ -3301,7 +3324,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     );
 
     harness.close();
-    await expect(run).resolves.toMatchObject({
+    await expect(run.then(projectAttemptResult)).resolves.toMatchObject({
       aborted: false,
       timedOut: false,
       promptError: "codex app-server client closed before turn completed",
@@ -3362,7 +3385,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     );
 
     harness.close();
-    await expect(run).resolves.toMatchObject({
+    await expect(run.then(projectAttemptResult)).resolves.toMatchObject({
       aborted: false,
       timedOut: false,
       promptError: "codex app-server client closed before turn completed",
@@ -3402,7 +3425,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
       },
     });
 
-    await expect(run).resolves.toMatchObject({
+    await expect(run.then(projectAttemptResult)).resolves.toMatchObject({
       aborted: false,
       timedOut: false,
       promptError: null,
@@ -3439,7 +3462,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
       },
     });
 
-    await expect(run).resolves.toMatchObject({
+    await expect(run.then(projectAttemptResult)).resolves.toMatchObject({
       aborted: false,
       timedOut: false,
       promptError: null,
@@ -3499,7 +3522,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
       },
     });
 
-    await expect(run).resolves.toMatchObject({
+    await expect(run.then(projectAttemptResult)).resolves.toMatchObject({
       aborted: false,
       timedOut: false,
       promptError: null,
@@ -3545,7 +3568,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     );
 
     harness.close();
-    await expect(run).resolves.toMatchObject({
+    await expect(run.then(projectAttemptResult)).resolves.toMatchObject({
       aborted: false,
       timedOut: false,
       promptError: "codex app-server client closed before turn completed",
@@ -3598,7 +3621,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
       );
     }
 
-    await expect(run).resolves.toMatchObject({
+    await expect(run.then(projectAttemptResult)).resolves.toMatchObject({
       aborted: false,
       timedOut: false,
       promptError: null,
@@ -3635,7 +3658,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     await harness.notify(finalizationHookNotification("hook/started", "running"));
     await harness.notify(finalizationHookNotification("hook/completed", "completed"));
 
-    await expect(run).resolves.toMatchObject({
+    await expect(run.then(projectAttemptResult)).resolves.toMatchObject({
       aborted: false,
       timedOut: false,
       promptError: null,
@@ -3685,7 +3708,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
       },
     });
 
-    await expect(run).resolves.toMatchObject({
+    await expect(run.then(projectAttemptResult)).resolves.toMatchObject({
       aborted: false,
       timedOut: false,
       promptError: null,
@@ -3732,7 +3755,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     await harness.notify(completedAssistant("msg-final-2", "Revised answer."));
     const result = await run;
 
-    expect(result).toMatchObject({
+    expect(projectAttemptResult(result)).toMatchObject({
       aborted: false,
       timedOut: false,
       promptError: null,
@@ -3794,7 +3817,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     releaseProjection();
     await pendingProjection;
 
-    await expect(run).resolves.toMatchObject({
+    await expect(run.then(projectAttemptResult)).resolves.toMatchObject({
       aborted: true,
       timedOut: false,
       promptError: null,
@@ -3888,7 +3911,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
       },
     });
 
-    await expect(run).resolves.toMatchObject({
+    await expect(run.then(projectAttemptResult)).resolves.toMatchObject({
       aborted: true,
       timedOut: false,
       promptError: null,
@@ -3944,9 +3967,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
 
     const result = await run;
     expect({
-      aborted: result.aborted,
-      timedOut: result.timedOut,
-      promptError: result.promptError,
+      aborted: readAttemptTerminal(result).aborted,
+      timedOut: readAttemptTerminal(result).timedOut,
+      promptError: readAttemptTerminal(result).promptError,
       assistantTexts: result.assistantTexts,
     }).toEqual({
       aborted: false,
@@ -4012,7 +4035,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
       },
     });
 
-    await expect(run).resolves.toMatchObject({
+    await expect(run.then(projectAttemptResult)).resolves.toMatchObject({
       aborted: true,
       timedOut: true,
       promptError: "codex app-server turn idle timed out waiting for turn/completed",
@@ -4081,9 +4104,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
 
     const result = await run;
     expect(resolved).toBe(true);
-    expect(result.aborted).toBe(true);
-    expect(result.timedOut).toBe(false);
-    expect(result.promptError).toBeNull();
+    expect(readAttemptTerminal(result).aborted).toBe(true);
+    expect(readAttemptTerminal(result).timedOut).toBe(false);
+    expect(readAttemptTerminal(result).promptError).toBeNull();
     expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
     await expect(
@@ -4122,9 +4145,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
     });
 
     const result = await run;
-    expect(result.aborted).toBe(false);
-    expect(result.timedOut).toBe(false);
-    expect(result.promptError).toBeNull();
+    expect(readAttemptTerminal(result).aborted).toBe(false);
+    expect(readAttemptTerminal(result).timedOut).toBe(false);
+    expect(readAttemptTerminal(result).promptError).toBeNull();
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
     await expect(
       invokeNativeHookRelay({
@@ -4166,9 +4189,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
     });
 
     const result = await run;
-    expect(result.aborted).toBe(true);
-    expect(result.timedOut).toBe(false);
-    expect(result.promptError).toBeNull();
+    expect(readAttemptTerminal(result).aborted).toBe(true);
+    expect(readAttemptTerminal(result).timedOut).toBe(false);
+    expect(readAttemptTerminal(result).promptError).toBeNull();
     expect(
       onRunAgentEvent.mock.calls
         .map(([event]) => event)
@@ -4202,8 +4225,8 @@ describe("runCodexAppServerAttempt turn watches", () => {
     });
 
     const result = await run;
-    expect(result.aborted).toBe(true);
-    expect(result.promptError).toBeNull();
+    expect(readAttemptTerminal(result).aborted).toBe(true);
+    expect(readAttemptTerminal(result).promptError).toBeNull();
     expect(
       onRunAgentEvent.mock.calls
         .map(([event]) => event)
@@ -4231,9 +4254,11 @@ describe("runCodexAppServerAttempt turn watches", () => {
     harness.close();
 
     const result = await run;
-    expect(result.promptError).toBe("codex app-server client closed before turn completed");
-    expect(result.aborted).toBe(false);
-    expect(result.timedOut).toBe(false);
+    expect(readAttemptTerminal(result).promptError).toBe(
+      "codex app-server client closed before turn completed",
+    );
+    expect(readAttemptTerminal(result).aborted).toBe(false);
+    expect(readAttemptTerminal(result).timedOut).toBe(false);
     expect(result.codexAppServerFailure).toEqual({
       kind: "client_closed_before_turn_completed",
       transport: "stdio",
@@ -4266,9 +4291,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
     harness.close();
 
     const result = await run;
-    expect(result.promptError).toBeNull();
-    expect(result.aborted).toBe(false);
-    expect(result.timedOut).toBe(false);
+    expect(readAttemptTerminal(result).promptError).toBeNull();
+    expect(readAttemptTerminal(result).aborted).toBe(false);
+    expect(readAttemptTerminal(result).timedOut).toBe(false);
     expect(result.assistantTexts).toEqual(["Done before restart."]);
     expect(result.codexAppServerFailure).toBeUndefined();
   });
@@ -4293,7 +4318,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
     harness.close();
 
     const result = await run;
-    expect(result.promptError).toBe("codex app-server client closed before turn completed");
+    expect(readAttemptTerminal(result).promptError).toBe(
+      "codex app-server client closed before turn completed",
+    );
     expect(result.assistantTexts).toEqual(["Still writing"]);
     expect(result.codexAppServerFailure).toEqual({
       kind: "client_closed_before_turn_completed",
@@ -4337,7 +4364,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
     harness.close();
 
     const result = await run;
-    expect(result.promptError).toBe("codex app-server client closed before turn completed");
+    expect(readAttemptTerminal(result).promptError).toBe(
+      "codex app-server client closed before turn completed",
+    );
     expect(result.assistantTexts).toEqual(["Later partial reply"]);
     expect(result.codexAppServerFailure).toEqual({
       kind: "client_closed_before_turn_completed",
@@ -4408,7 +4437,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
   }>)("keeps completed assistant output as a client-close failure $name", async (scenario) => {
     const result = await runClientCloseScenario(scenario.notifications);
 
-    expect(result.promptError).toBe("codex app-server client closed before turn completed");
+    expect(readAttemptTerminal(result).promptError).toBe(
+      "codex app-server client closed before turn completed",
+    );
     expect(result.assistantTexts).toEqual([scenario.assistantText]);
     expect(result.codexAppServerFailure).toEqual({
       kind: "client_closed_before_turn_completed",
@@ -4455,7 +4486,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
     harness.close();
 
     const result = await run;
-    expect(result.promptError).toBe("codex app-server client closed before turn completed");
+    expect(readAttemptTerminal(result).promptError).toBe(
+      "codex app-server client closed before turn completed",
+    );
     expect(result.assistantTexts).toEqual(["Done before restart."]);
     expect(result.codexAppServerFailure).toEqual({
       kind: "client_closed_before_turn_completed",
@@ -4480,9 +4513,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
     await completed;
 
     const result = await run;
-    expect(result.promptError ?? undefined).toBeUndefined();
-    expect(result.aborted).toBe(false);
-    expect(result.timedOut).toBe(false);
+    expect(readAttemptTerminal(result).promptError ?? undefined).toBeUndefined();
+    expect(readAttemptTerminal(result).aborted).toBe(false);
+    expect(readAttemptTerminal(result).timedOut).toBe(false);
   });
 
   it("does not treat a user prompt containing the interrupted marker as terminal", async () => {
@@ -4537,8 +4570,8 @@ describe("runCodexAppServerAttempt turn watches", () => {
 
     const result = await run;
     expect(resolved).toBe(true);
-    expect(result.aborted).toBe(false);
-    expect(result.timedOut).toBe(false);
+    expect(readAttemptTerminal(result).aborted).toBe(false);
+    expect(readAttemptTerminal(result).timedOut).toBe(false);
     expect(result.assistantTexts).toEqual(["It marks an interrupted turn."]);
   });
 
@@ -4600,8 +4633,8 @@ describe("runCodexAppServerAttempt turn watches", () => {
       },
     });
     const result = await run;
-    expect(result.aborted).toBe(false);
-    expect(result.timedOut).toBe(false);
+    expect(readAttemptTerminal(result).aborted).toBe(false);
+    expect(readAttemptTerminal(result).timedOut).toBe(false);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -66,6 +66,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Quick start
   - H2: How cron works
   - H2: Schedule types
+  - H3: Heartbeat task migration
   - H3: Stream sources
   - H3: Dynamic cadence (pacing)
   - H3: Day-of-month and day-of-week use OR logic
@@ -3602,7 +3603,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Per-channel vs per-account examples
   - H3: Common patterns
   - H2: Monitor scratch (optional)
-  - H3: tasks: blocks
+  - H3: Schedule recurring checks with cron
   - H3: Can the agent update its scratch?
   - H2: Manual wake (on-demand)
   - H2: Cost awareness
@@ -7483,6 +7484,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /plugins/sdk-channel-inbound
 - Headings:
   - H2: Core helpers
+  - H2: Delivery settlement contract
   - H2: Migration
 
 ## plugins/sdk-channel-ingress.md
@@ -9712,6 +9714,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: How it works (internal)
   - H2: CLI quick reference
   - H2: Snapshots and refs
+  - H2: Browser batch CLI
   - H2: Wait power-ups
   - H2: Debug workflows
   - H2: JSON output

@@ -2544,6 +2544,146 @@ describe("session accessor seam", () => {
     expect(await loadTranscriptEvents(scope)).toEqual(records);
   });
 
+  it("keeps no-op manual compaction tolerant of a missing current session entry", async () => {
+    await expect(
+      trimSqliteTranscriptForManualCompact(
+        {
+          agentId: "main",
+          sessionId: "99999999-9999-4999-8999-999999999999",
+          sessionKey: "agent:main:main",
+          storePath,
+        },
+        () => null,
+      ),
+    ).resolves.toEqual({ trimmed: false });
+  });
+
+  it("rolls back the manual compact row trim when token metadata cannot be cleared", async () => {
+    const sessionId = "77777777-7777-4777-8777-777777777777";
+    const sessionKey = "agent:main:main";
+    const scope = {
+      agentId: "main",
+      sessionId,
+      sessionKey,
+      storePath,
+    };
+    const records = [
+      { type: "session", version: 3, id: sessionId, timestamp: "2026-06-19T12:00:00.000Z" },
+      ...[1, 2, 3, 4].map((index) => ({
+        type: "message",
+        id: `entry-${index}`,
+        parentId: index === 1 ? null : `entry-${index - 1}`,
+        timestamp: `2026-06-19T12:00:0${index}.000Z`,
+        message: { role: "user", content: `message ${index}`, timestamp: index },
+      })),
+    ];
+    await upsertSessionEntry(scope, {
+      inputTokens: 10,
+      outputTokens: 20,
+      sessionId,
+      totalTokens: 30,
+      totalTokensFresh: true,
+      updatedAt: 100,
+    });
+    await replaceSqliteTranscriptEvents(
+      scope,
+      records as Parameters<typeof replaceSqliteTranscriptEvents>[1],
+    );
+    const entryBeforeCompact = loadSessionEntry(scope);
+    const databasePath = expectDefined(
+      resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
+      "manual compact database path",
+    );
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+    database.db.exec(`
+      CREATE TRIGGER reject_manual_compact_metadata_update
+      BEFORE UPDATE OF entry_json ON session_nodes
+      WHEN OLD.session_key = '${sessionKey}'
+      BEGIN
+        SELECT RAISE(ABORT, 'injected manual compact metadata failure');
+      END;
+    `);
+
+    await expect(
+      trimSessionTranscriptForManualCompact(scope, { maxLines: 3, nowMs: 500 }),
+    ).rejects.toThrow("injected manual compact metadata failure");
+    database.db.exec("DROP TRIGGER reject_manual_compact_metadata_update;");
+
+    expect(await loadTranscriptEvents(scope)).toEqual(records);
+    expect(loadSessionEntry(scope)).toEqual(entryBeforeCompact);
+    const archiveNames = fs.readdirSync(tempDir).filter((name) => name.includes(".bak."));
+    expect(archiveNames).toHaveLength(1);
+    expect(
+      readSessionArchiveContentSync(
+        path.join(tempDir, expectDefined(archiveNames[0], "manual compact archive name")),
+      ),
+    ).toBe(`${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
+  });
+
+  it("rejects a manual compact when session metadata changes after its snapshot", async () => {
+    const sessionId = "88888888-8888-4888-8888-888888888888";
+    const scope = {
+      agentId: "main",
+      sessionId,
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    const records = [
+      { type: "session", version: 3, id: sessionId, timestamp: "2026-06-19T12:00:00.000Z" },
+      ...[1, 2, 3, 4].map((index) => ({
+        type: "message",
+        id: `entry-${index}`,
+        parentId: index === 1 ? null : `entry-${index - 1}`,
+        timestamp: `2026-06-19T12:00:0${index}.000Z`,
+        message: { role: "user", content: `message ${index}`, timestamp: index },
+      })),
+    ];
+    await upsertSessionEntry(scope, {
+      sessionId,
+      totalTokens: 30,
+      totalTokensFresh: true,
+      updatedAt: 100,
+    });
+    await replaceSqliteTranscriptEvents(
+      scope,
+      records as Parameters<typeof replaceSqliteTranscriptEvents>[1],
+    );
+
+    await expect(
+      trimSqliteTranscriptForManualCompact(
+        scope,
+        (lines) => {
+          replaceSqliteSessionEntrySync(scope, {
+            label: "concurrent metadata",
+            sessionId,
+            totalTokens: 40,
+            totalTokensFresh: true,
+            updatedAt: 200,
+          });
+          return lines.slice(0, 1);
+        },
+        { nowMs: 500 },
+      ),
+    ).rejects.toThrow(
+      "SQLite session state changed while preparing session.transcript.manual-compact",
+    );
+
+    expect(await loadTranscriptEvents(scope)).toEqual(records);
+    expect(loadSessionEntry(scope)).toMatchObject({
+      label: "concurrent metadata",
+      totalTokens: 40,
+      totalTokensFresh: true,
+      updatedAt: 200,
+    });
+    const archiveNames = fs.readdirSync(tempDir).filter((name) => name.includes(".bak."));
+    expect(archiveNames).toHaveLength(1);
+    expect(
+      readSessionArchiveContentSync(
+        path.join(tempDir, expectDefined(archiveNames[0], "manual compact archive name")),
+      ),
+    ).toBe(`${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
+  });
+
   it("preserves the backup and rows written after the manual compact snapshot", async () => {
     const sessionId = "55555555-5555-4555-8555-555555555555";
     const scope = {

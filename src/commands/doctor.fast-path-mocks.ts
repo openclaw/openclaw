@@ -163,6 +163,11 @@ vi.mock("./doctor-heartbeat-scratch-migration.js", () => ({
   maybeMigrateHeartbeatFilesToScratch: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
 }));
 
+vi.mock("./doctor-heartbeat-task-migration.js", () => ({
+  collectHeartbeatTaskMigrationFindings: vi.fn().mockResolvedValue([]),
+  maybeMigrateHeartbeatTasksToCron: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
+}));
+
 vi.mock("../plugins/provider-openai-chatgpt-oauth-tls.js", () => ({
   noteOpenAIOAuthTlsPrerequisites: vi.fn().mockResolvedValue(undefined),
 }));

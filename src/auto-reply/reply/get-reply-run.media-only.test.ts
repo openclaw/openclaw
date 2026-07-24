@@ -11,6 +11,7 @@ import {
 import type { SessionEntry } from "../../config/sessions.js";
 import { HEARTBEAT_RUN_SCOPE } from "../../infra/heartbeat-run-scope.js";
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
+import { finalizeInboundContextForSdk } from "./inbound-context.js";
 import { createReplyOperation } from "./reply-run-registry.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
 
@@ -180,7 +181,7 @@ const ROOM_EVENT_MESSAGE_TOOL_DIRECTIVE =
 function baseParams(
   overrides: Partial<Parameters<typeof runPreparedReply>[0]> = {},
 ): Parameters<typeof runPreparedReply>[0] {
-  return {
+  const defaults = {
     ctx: {
       Body: "",
       RawBody: "",
@@ -249,8 +250,27 @@ function baseParams(
     sessionKey: "session-key",
     workspaceDir: "/tmp/workspace",
     abortedLastRun: false,
-    ...overrides,
   };
+  const ctx = overrides.ctx ?? defaults.ctx;
+  const sessionCtx = overrides.sessionCtx ?? defaults.sessionCtx;
+  const resolveTestCanonicalText = (value: Record<string, unknown>) => {
+    const { commandText, agentText, rawText } = finalizeInboundContextForSdk({ ...value });
+    return { commandText, agentText, rawText };
+  };
+  const sessionText = resolveTestCanonicalText(sessionCtx);
+  return {
+    ...defaults,
+    ...overrides,
+    ctx: { ...ctx, ...resolveTestCanonicalText(ctx) },
+    sessionCtx: {
+      ...sessionCtx,
+      ...sessionText,
+      agentText:
+        typeof sessionCtx.BodyStripped === "string"
+          ? sessionCtx.BodyStripped
+          : sessionText.agentText,
+    },
+  } as Parameters<typeof runPreparedReply>[0];
 }
 
 function ownerParams(): Parameters<typeof runPreparedReply>[0] {
@@ -593,6 +613,9 @@ describe("runPreparedReply media-only handling", () => {
         OriginatingTo: "telegram-direct-test-id",
         InboundHistory: undefined,
         ThreadStarterBody: undefined,
+        commandText: "yo",
+        agentText: "yo",
+        rawText: "yo",
       },
       expect.anything(),
       undefined,

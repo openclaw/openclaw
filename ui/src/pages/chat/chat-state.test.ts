@@ -611,7 +611,6 @@ describe("image lightbox lifecycle", () => {
         current: {
           allowExternalEmbedUrls: false,
           assistantIdentity: { name: "Assistant" },
-          chatMessageMaxWidth: null,
           embedSandboxMode: "scripts",
           localMediaPreviewRoots: [],
         },

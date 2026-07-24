@@ -21107,7 +21107,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 261,
+      "line": 264,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Scan QR Code",
       "surface": "apple",
@@ -21115,7 +21115,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 283,
+      "line": 286,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Reset Onboarding?",
       "surface": "apple",
@@ -21123,7 +21123,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 287,
+      "line": 290,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Reset",
       "surface": "apple",
@@ -21131,7 +21131,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 295,
+      "line": 298,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "This disconnects, clears saved gateway credentials, and reopens onboarding.",
       "surface": "apple",
@@ -21139,7 +21139,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 299,
+      "line": 302,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "QR Scanner Unavailable",
       "surface": "apple",
@@ -21147,7 +21147,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 308,
+      "line": 311,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "OK",
       "surface": "apple",
@@ -21155,7 +21155,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 317,
+      "line": 320,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Forget %@?",
       "surface": "apple",
@@ -21163,7 +21163,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 318,
+      "line": 321,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "gateway",
       "surface": "apple",
@@ -21171,7 +21171,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 331,
+      "line": 334,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Forget Gateway",
       "surface": "apple",
@@ -21179,7 +21179,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 337,
+      "line": 340,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Cancel",
       "surface": "apple",
@@ -21187,7 +21187,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 345,
+      "line": 348,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "This removes saved credentials, device access, TLS trust, and cached chats for this gateway.",
       "surface": "apple",
@@ -21195,7 +21195,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 399,
+      "line": 402,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Enable OpenClaw Hosted Push Relay?",
       "surface": "apple",
@@ -21203,7 +21203,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 413,
+      "line": 416,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Continue",
       "surface": "apple",
@@ -21211,7 +21211,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 421,
+      "line": 424,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Not Now",
       "surface": "apple",
@@ -24459,7 +24459,7 @@
     },
     {
       "kind": "ui-localized-call-multiline",
-      "line": 1437,
+      "line": 1443,
       "path": "apps/ios/Sources/Gateway/GatewayConnectionController.swift",
       "source": "Can't reach gateway at %1$@:%2$@. Verify Tailscale Serve is enabled and publishes this Gateway.",
       "surface": "apple",
@@ -24467,7 +24467,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1446,
+      "line": 1452,
       "path": "apps/ios/Sources/Gateway/GatewayConnectionController.swift",
       "source": "Can't reach gateway at %1$@:%2$@. Check Tailscale or LAN.",
       "surface": "apple",
@@ -24475,7 +24475,7 @@
     },
     {
       "kind": "ui-localized-call-multiline",
-      "line": 1452,
+      "line": 1458,
       "path": "apps/ios/Sources/Gateway/GatewayConnectionController.swift",
       "source": "TLS fingerprint verification timed out for %1$@:%2$@. Secure endpoint was reached, but TLS did not finish in time.",
       "surface": "apple",
@@ -24483,7 +24483,7 @@
     },
     {
       "kind": "ui-localized-call-multiline",
-      "line": 1460,
+      "line": 1466,
       "path": "apps/ios/Sources/Gateway/GatewayConnectionController.swift",
       "source": "No secure gateway endpoint was detected at %1$@:%2$@. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected.",
       "surface": "apple",
@@ -24491,7 +24491,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1470,
+      "line": 1476,
       "path": "apps/ios/Sources/Gateway/GatewayConnectionController.swift",
       "source": "Could not read the TLS certificate from %1$@:%2$@.",
       "surface": "apple",
@@ -25155,7 +25155,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 43,
+      "line": 52,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Off",
       "surface": "apple",
@@ -25163,7 +25163,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 45,
+      "line": 54,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "While Using",
       "surface": "apple",
@@ -25171,7 +25171,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 47,
+      "line": 56,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Always",
       "surface": "apple",
@@ -25179,7 +25179,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 59,
+      "line": 68,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Location sharing is disabled in OpenClaw. Location Services are off in iOS Settings.",
       "surface": "apple",
@@ -25187,7 +25187,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 61,
+      "line": 70,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Location sharing is disabled in OpenClaw. iOS currently allows Always.",
       "surface": "apple",
@@ -25195,7 +25195,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 63,
+      "line": 72,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Location sharing is disabled in OpenClaw. iOS currently allows While Using.",
       "surface": "apple",
@@ -25203,7 +25203,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 65,
+      "line": 74,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Location sharing is disabled.",
       "surface": "apple",
@@ -25211,7 +25211,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 67,
+      "line": 76,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Location Services are off in iOS Settings.",
       "surface": "apple",
@@ -25219,7 +25219,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 71,
+      "line": 80,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Foreground location requests are allowed. Precise Location is on.",
       "surface": "apple",
@@ -25227,7 +25227,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 75,
+      "line": 84,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Foreground location requests are allowed. Precise Location is off.",
       "surface": "apple",
@@ -25235,7 +25235,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 79,
+      "line": 88,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Foreground location requests are allowed.",
       "surface": "apple",
@@ -25243,7 +25243,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 81,
+      "line": 90,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Background location requests and significant-change updates are allowed. Precise Location is on.",
       "surface": "apple",
@@ -25251,7 +25251,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 83,
+      "line": 92,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Background location requests and significant-change updates are allowed. Precise Location is off.",
       "surface": "apple",
@@ -25259,7 +25259,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 85,
+      "line": 94,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Background location requests and significant-change updates are allowed.",
       "surface": "apple",
@@ -25267,7 +25267,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 87,
+      "line": 96,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Always is selected, but iOS currently allows location only while using the app. Precise Location is on.",
       "surface": "apple",
@@ -25275,7 +25275,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 89,
+      "line": 98,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Always is selected, but iOS currently allows location only while using the app. Precise Location is off.",
       "surface": "apple",
@@ -25283,7 +25283,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 91,
+      "line": 100,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Always is selected, but iOS currently allows location only while using the app.",
       "surface": "apple",
@@ -25291,7 +25291,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 93,
+      "line": 102,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Location permission is denied in iOS Settings.",
       "surface": "apple",
@@ -25299,7 +25299,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 95,
+      "line": 104,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Location permission is restricted on this device.",
       "surface": "apple",
@@ -25307,7 +25307,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 97,
+      "line": 106,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Choose a location mode to request iOS permission.",
       "surface": "apple",
@@ -25315,7 +25315,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 99,
+      "line": 108,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "OpenClaw cannot determine the current iOS location permission.",
       "surface": "apple",
@@ -25387,7 +25387,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4304,
+      "line": 4307,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Approval needed",
       "surface": "apple",
@@ -25395,7 +25395,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4305,
+      "line": 4308,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Action required",
       "surface": "apple",
@@ -25403,7 +25403,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 5020,
+      "line": 5023,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Connecting...",
       "surface": "apple",
@@ -25411,7 +25411,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 5021,
+      "line": 5024,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Reconnecting...",
       "surface": "apple",
@@ -25419,7 +25419,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 5376,
+      "line": 5379,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Connected",
       "surface": "apple",
@@ -25427,7 +25427,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 5376,
+      "line": 5379,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Offline",
       "surface": "apple",
@@ -25435,7 +25435,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 6546,
+      "line": 6549,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "No chat messages yet",
       "surface": "apple",
@@ -25443,7 +25443,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 6745,
+      "line": 6748,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Connecting…",
       "surface": "apple",
@@ -25451,7 +25451,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 6745,
+      "line": 6748,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Reconnecting…",
       "surface": "apple",
@@ -25459,7 +25459,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 9154,
+      "line": 9157,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Approval",
       "surface": "apple",
@@ -25467,7 +25467,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 9154,
+      "line": 9157,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "This approval was already",
       "surface": "apple",
@@ -25475,7 +25475,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 9160,
+      "line": 9163,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "This approval was already set to Always Allow.",
       "surface": "apple",
@@ -25483,7 +25483,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 9161,
+      "line": 9164,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Approval set to Always Allow.",
       "surface": "apple",
@@ -25491,7 +25491,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 10498,
+      "line": 10501,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "\\(urlText.prefix(500))…",
       "surface": "apple",

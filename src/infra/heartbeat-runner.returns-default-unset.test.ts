@@ -816,6 +816,31 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
+  it("keeps active-hours protection for cron-carried heartbeat tasks", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          userTimezone: "UTC",
+          heartbeat: {
+            every: "30m",
+            activeHours: { start: "08:00", end: "24:00", timezone: "user" },
+          },
+        },
+      },
+    };
+
+    await expect(
+      runHeartbeatOnce({
+        cfg,
+        source: "interval",
+        intent: "task",
+        reason: "heartbeat-task:job-inbox",
+        tasks: [{ jobId: "job-inbox", name: "inbox", prompt: "Check inbox" }],
+        deps: { nowMs: () => Date.UTC(2025, 0, 1, 7, 0, 0) },
+      }),
+    ).resolves.toEqual({ status: "skipped", reason: "quiet-hours" });
+  });
+
   it("uses the last non-empty payload for delivery", async () => {
     const tmpDir = await createCaseDir("hb-last-payload");
     const storePath = path.join(tmpDir, "sessions.json");
@@ -1601,7 +1626,7 @@ describe("runHeartbeatOnce", () => {
     expect(replyBody(replySpy).Body).toContain("Check the custom cron partition");
   });
 
-  it("keeps non-task scratch context while stripping blank-line-separated task blocks", async () => {
+  it("treats blank-line-separated legacy task blocks as ordinary scratch", async () => {
     const tmpDir = await createCaseDir("openclaw-hb-tasks-context");
     const storePath = path.join(tmpDir, "sessions.json");
     const workspaceDir = path.join(tmpDir, "workspace");
@@ -1652,19 +1677,18 @@ Some global directive after tasks.
     expect(res.status).toBe("ran");
     expect(replySpy).toHaveBeenCalledTimes(1);
     const calledCtx = replyBody(replySpy);
-    expect(calledCtx.Body).toContain("- inbox: Check urgent inbox items");
-    expect(calledCtx.Body).toContain("- calendar: Check calendar changes");
+    expect(calledCtx.Body).not.toContain("Run the following periodic tasks");
     expect(calledCtx.Body).toContain("Heartbeat monitor scratch");
     expect(calledCtx.Body).toContain("# Keep this header");
     expect(calledCtx.Body).toContain("Remember escalation policy.");
     expect(calledCtx.Body).toContain("Some global directive after tasks.");
     expect(calledCtx.Body).toContain("- Keep this top-level directive too.");
-    expect(calledCtx.Body).not.toContain("name: inbox");
-    expect(calledCtx.Body).not.toContain("name: calendar");
+    expect(calledCtx.Body).toContain("name: inbox");
+    expect(calledCtx.Body).toContain("name: calendar");
     replySpy.mockReset();
   });
 
-  it("strips documented unindented task entries while keeping following top-level bullets", async () => {
+  it("keeps unindented legacy task entries as ordinary scratch", async () => {
     const tmpDir = await createCaseDir("openclaw-hb-unindented-tasks-context");
     const storePath = path.join(tmpDir, "sessions.json");
     const workspaceDir = path.join(tmpDir, "workspace");
@@ -1711,15 +1735,14 @@ tasks:
     expect(res.status).toBe("ran");
     expect(replySpy).toHaveBeenCalledTimes(1);
     const calledCtx = replyBody(replySpy);
-    expect(calledCtx.Body).toContain("- inbox: Check urgent inbox items");
-    expect(calledCtx.Body).toContain("- calendar: Check calendar changes");
+    expect(calledCtx.Body).not.toContain("Run the following periodic tasks");
     expect(calledCtx.Body).toContain("Heartbeat monitor scratch");
     expect(calledCtx.Body).toContain("# Keep this header");
     expect(calledCtx.Body).toContain("- Keep this top-level directive after tasks.");
-    expect(calledCtx.Body).not.toContain("name: inbox");
-    expect(calledCtx.Body).not.toContain("name: calendar");
-    expect(calledCtx.Body).not.toContain("interval: 5m");
-    expect(calledCtx.Body).not.toContain("prompt: Check urgent");
+    expect(calledCtx.Body).toContain("name: inbox");
+    expect(calledCtx.Body).toContain("name: calendar");
+    expect(calledCtx.Body).toContain("interval: 5m");
+    expect(calledCtx.Body).toContain("prompt: Check urgent");
     replySpy.mockReset();
   });
 

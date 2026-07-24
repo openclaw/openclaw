@@ -216,7 +216,6 @@ export type ChatPageHost = ChatHost &
     localMediaPreviewRoots: string[];
     embedSandboxMode: EmbedSandboxMode;
     allowExternalEmbedUrls: boolean;
-    chatMessageMaxWidth: string | null;
     chatToolMessages: Record<string, unknown>[];
     chatAttachments: ChatAttachment[];
     chatQueue: ChatQueueItem[];
@@ -1272,7 +1271,6 @@ export function createPageState(
     localMediaPreviewRoots: appConfig.localMediaPreviewRoots,
     embedSandboxMode: appConfig.embedSandboxMode,
     allowExternalEmbedUrls: appConfig.allowExternalEmbedUrls,
-    chatMessageMaxWidth: appConfig.chatMessageMaxWidth,
     client: null,
     connected: false,
     connectionEpoch: 0,
