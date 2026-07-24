@@ -74,6 +74,9 @@ For coordinated change sets that genuinely need more than 20 PRs, join the **#cl
 - Ensure CI checks pass
 - Keep PRs focused (one thing per PR; do not mix unrelated concerns)
 - Describe what & why
+- When adding or changing product-owned text, follow the
+  [localization contributor guide](docs/reference/localization.md) and run the
+  owning surface's validation.
 - **Include screenshots** — one showing the problem/before, one showing the fix/after (for UI or visual changes)
 - Use American English spelling and grammar in code, comments, docs, and UI strings
 - Do not edit files covered by `CODEOWNERS` security ownership unless a listed owner explicitly asked for the change or is already reviewing it with you. Treat those paths as restricted review surfaces, not opportunistic cleanup targets.
