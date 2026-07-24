@@ -97,6 +97,40 @@ describe("browser action input batch command", () => {
     expect(getLastActionBody()).toMatchObject({ kind: "batch", stopOnError: false });
   });
 
+  it("reports a failed batch action and exits nonzero in text mode", async () => {
+    mocks.readActionsPayload.mockResolvedValueOnce(JSON.stringify(SAMPLE_ACTIONS));
+    mocks.callBrowserRequest.mockResolvedValueOnce({
+      results: [{ ok: true }, { ok: false, error: "ref is stale" }],
+    });
+    const program = createActionInputProgram();
+
+    await expect(
+      program.parseAsync(["browser", "batch", "--actions", JSON.stringify(SAMPLE_ACTIONS)], {
+        from: "user",
+      }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(getBrowserCliRuntimeCapture().runtimeErrors.join("\n")).toContain(
+      "batch failed: action 2: ref is stale",
+    );
+  });
+
+  it("preserves failed batch results in JSON mode before exiting nonzero", async () => {
+    const result = { results: [{ ok: false, error: "ref is stale" }] };
+    mocks.readActionsPayload.mockResolvedValueOnce(JSON.stringify(SAMPLE_ACTIONS));
+    mocks.callBrowserRequest.mockResolvedValueOnce(result);
+    const program = createActionInputProgram();
+
+    await expect(
+      program.parseAsync(
+        ["browser", "--json", "batch", "--actions", JSON.stringify(SAMPLE_ACTIONS)],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(getBrowserCliRuntimeCapture().runtimeJson).toEqual([result]);
+  });
+
   it("reads actions from a file via --actions-file", async () => {
     mocks.readActionsPayload.mockResolvedValueOnce(JSON.stringify(SAMPLE_ACTIONS));
     const program = createActionInputProgram();

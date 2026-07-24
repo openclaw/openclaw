@@ -41,7 +41,7 @@ Use this skill when you need the `browser` tool for anything beyond a single pag
 - CLI: `openclaw browser batch --actions '<json>'`, `--actions-file plan.json`, or `--actions-file -` for stdin. `--continue` sets `stopOnError=false`; default stops on first error.
 - Ref lifecycle: refs come from a `snapshot` run before the batch (snapshot is not a nested action). A nested action that changes page state — such as a `click` that triggers navigation, or an `evaluate` that mutates the DOM — can invalidate earlier refs for the rest of the batch; put state-changing actions first, or split into a follow-up batch after re-snapshotting. Navigation and re-snapshotting happen outside the batch, since `open`, `navigate`, and `snapshot` are not `/act` kinds.
 - Target id: nested actions share the request's tab; an explicit nested `targetId` that resolves to a different tab is rejected with `ACT_TARGET_ID_MISMATCH`.
-- Response: `{ "results": [{ "ok": true } | { "ok": false, "error": "..." }, ...] }` in order; with default `stopOnError` the array ends at the first failure.
+- Response: `{ "results": [{ "ok": true } | { "ok": false, "error": "..." }, ...] }` in order; with default `stopOnError` the array ends at the first failure. Any failed entry exits nonzero; use `--json` to preserve the full response in scripts.
 
 ## Tab Hygiene
 

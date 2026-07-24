@@ -375,7 +375,8 @@ profiles; send actions individually there.
 - Error summary: the response is `{ "results": [{ "ok": true }, { "ok": false,
 "error": "<message>" }, ...] }`, one entry per action in order. When
   `stopOnError` is the default, the array ends at the first failure; with
-  `--continue` it covers every action.
+  `--continue` it covers every action. Any failed entry makes the CLI exit
+  nonzero; pass `--json` to preserve the full ordered response for scripts.
 
 ## Wait power-ups
 

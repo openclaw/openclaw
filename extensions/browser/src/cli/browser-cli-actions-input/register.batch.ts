@@ -33,6 +33,8 @@ export function registerBrowserBatchCommands(
         defaultRuntime.exit(1);
         return;
       }
+      let actions: unknown[];
+      let result: { results?: Array<{ ok: boolean; error?: string }> };
       try {
         const payload = await readActionsPayload({
           actions: opts.actions,
@@ -53,15 +55,16 @@ export function registerBrowserBatchCommands(
         if (!parsed.length) {
           throw new Error("actions must contain at least one entry");
         }
+        actions = parsed;
         const targetId = normalizeOptionalString(opts.targetId);
         const body: Record<string, unknown> = {
           kind: "batch",
-          actions: parsed,
+          actions,
           ...(targetId ? { targetId } : {}),
           ...(opts.continue ? { stopOnError: false } : {}),
         };
         const request = body as unknown as BrowserActRequest;
-        const result = await callBrowserAct<{
+        result = await callBrowserAct<{
           results?: Array<{ ok: boolean; error?: string }>;
         }>({
           parent,
@@ -69,10 +72,25 @@ export function registerBrowserBatchCommands(
           body,
           timeoutMs: resolveBrowserActExecutionBudgetMs(request),
         });
-        logBrowserActionResult(parent, result, `batch ran ${parsed.length} action(s)`);
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);
+        return;
       }
+      const failures = (result.results ?? []).flatMap((entry, index) =>
+        entry.ok ? [] : [`action ${index + 1}: ${entry.error ?? "failed"}`],
+      );
+      // /act represents recoverable child errors in a successful response.
+      // Surface them as a command failure so text-mode scripts do not report a false success.
+      if (failures.length) {
+        if (parent?.json) {
+          defaultRuntime.writeJson(result);
+        } else {
+          defaultRuntime.error(danger(`batch failed: ${failures.join("; ")}`));
+        }
+        defaultRuntime.exit(1);
+        return;
+      }
+      logBrowserActionResult(parent, result, `batch ran ${actions.length} action(s)`);
     });
 }
