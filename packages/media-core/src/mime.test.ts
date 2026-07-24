@@ -32,10 +32,27 @@ const ISOM_BRAND_BUFFER = Buffer.from(
   "hex",
 );
 
+async function makeApkZip(opts: { signed?: boolean } = {}): Promise<Buffer> {
+  const zip = new JSZip();
+  if (opts.signed) {
+    zip.file("META-INF/MANIFEST.MF", "Manifest-Version: 1.0\n");
+  }
+  zip.file("AndroidManifest.xml", "manifest");
+  zip.file("classes.dex", "dex");
+  return await zip.generateAsync({ type: "nodebuffer" });
+}
+
+async function makeSplitApkZip(payloadPath: string): Promise<Buffer> {
+  const zip = new JSZip();
+  zip.file("AndroidManifest.xml", "manifest");
+  zip.file(payloadPath, "payload");
+  return await zip.generateAsync({ type: "nodebuffer" });
+}
+
 describe("mime detection", () => {
   async function expectDetectedMime(params: {
     input: Parameters<typeof detectMime>[0];
-    expected: string;
+    expected: string | undefined;
   }) {
     expect(await detectMime(params.input)).toBe(params.expected);
   }
@@ -86,6 +103,114 @@ describe("mime detection", () => {
         };
       },
       expected: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    },
+    {
+      name: "detects buffer-verified APK structure",
+      input: async () => ({ buffer: await makeApkZip(), filePath: "/tmp/build.apk" }),
+      expected: "application/vnd.android.package-archive",
+    },
+    {
+      name: "verifies a signed APK even when file-type stops at the JAR manifest",
+      input: async () => ({
+        buffer: await makeApkZip({ signed: true }),
+        requireCompleteApkVerification: true,
+      }),
+      expected: "application/vnd.android.package-archive",
+    },
+    {
+      name: "verifies a resource-only split APK without classes.dex",
+      input: async () => ({
+        buffer: await makeSplitApkZip("resources.arsc"),
+        requireCompleteApkVerification: true,
+      }),
+      expected: "application/vnd.android.package-archive",
+    },
+    {
+      name: "verifies an ABI split APK without classes.dex",
+      input: async () => ({
+        buffer: await makeSplitApkZip("lib/arm64-v8a/libexample.so"),
+        requireCompleteApkVerification: true,
+      }),
+      expected: "application/vnd.android.package-archive",
+    },
+    {
+      name: "preserves dependency APK detection for bounded prefix callers",
+      input: async () => {
+        const apk = await makeApkZip();
+        const centralDirectoryOffset = apk.lastIndexOf(Buffer.from("PK\u0001\u0002", "binary"));
+        return { buffer: apk.subarray(0, centralDirectoryOffset) };
+      },
+      expected: "application/vnd.android.package-archive",
+    },
+    {
+      name: "requires a complete APK directory at security boundaries",
+      input: async () => {
+        const apk = await makeApkZip();
+        const centralDirectoryOffset = apk.lastIndexOf(Buffer.from("PK\u0001\u0002", "binary"));
+        return {
+          buffer: apk.subarray(0, centralDirectoryOffset),
+          requireCompleteApkVerification: true,
+        };
+      },
+      expected: "application/zip",
+    },
+    {
+      name: "preserves a trusted APK header for bounded-prefix callers",
+      input: async () => {
+        const zip = new JSZip();
+        zip.file("AndroidManifest.xml", "manifest");
+        zip.file("padding.bin", Buffer.alloc(32 * 1024));
+        zip.file("classes.dex", "dex");
+        const apk = await zip.generateAsync({ type: "nodebuffer", compression: "STORE" });
+        return {
+          buffer: apk.subarray(0, 16 * 1024),
+          headerMime: "application/vnd.android.package-archive",
+        };
+      },
+      expected: "application/vnd.android.package-archive",
+    },
+    {
+      name: "does not trust an APK header at a complete-verification boundary",
+      input: async () => {
+        const zip = new JSZip();
+        zip.file("hello.txt", "hi");
+        return {
+          buffer: await zip.generateAsync({ type: "nodebuffer" }),
+          headerMime: "application/vnd.android.package-archive",
+          requireCompleteApkVerification: true,
+        };
+      },
+      expected: "application/zip",
+    },
+    {
+      name: "rejects an ordinary JAR renamed to APK",
+      input: async () => {
+        const zip = new JSZip();
+        zip.file("META-INF/MANIFEST.MF", "Manifest-Version: 1.0\n");
+        zip.file("Example.class", "bytecode");
+        return {
+          buffer: await zip.generateAsync({ type: "nodebuffer" }),
+          filePath: "/tmp/renamed.apk",
+        };
+      },
+      expected: "application/java-archive",
+    },
+    {
+      name: "does not classify a generic ZIP as APK from its extension",
+      input: async () => {
+        const zip = new JSZip();
+        zip.file("hello.txt", "hi");
+        return {
+          buffer: await zip.generateAsync({ type: "nodebuffer" }),
+          filePath: "/tmp/renamed.apk",
+        };
+      },
+      expected: "application/zip",
+    },
+    {
+      name: "does not classify a path-only APK from its extension",
+      input: async () => ({ filePath: "/tmp/unread.apk" }),
+      expected: undefined,
     },
     {
       name: "does not let image extensions override generic zip bytes",
@@ -437,6 +562,7 @@ describe("extensionForMime", () => {
     { mime: "video/x-flv", expected: ".flv" },
     { mime: "video/x-ms-wmv", expected: ".wmv" },
     { mime: "video/quicktime", expected: ".mov" },
+    { mime: "application/vnd.android.package-archive", expected: ".apk" },
     { mime: "application/pdf", expected: ".pdf" },
     { mime: "application/yaml", expected: ".yaml" },
     { mime: "text/plain", expected: ".txt" },

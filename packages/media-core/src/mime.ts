@@ -6,6 +6,12 @@ import { extnameFromAnyPath } from "./file-name.js";
 /** Maximum byte prefix passed to dependency MIME sniffers for bounded memory/CPU work. */
 export const FILE_TYPE_SNIFF_MAX_BYTES = 1024 * 1024;
 
+const APK_MIME = "application/vnd.android.package-archive";
+const ZIP_EOCD_SIGNATURE = 0x06054b50;
+const ZIP_CENTRAL_FILE_HEADER_SIGNATURE = 0x02014b50;
+const ZIP_EOCD_MIN_BYTES = 22;
+const ZIP_MAX_COMMENT_BYTES = 0xffff;
+
 // Map common mimes to preferred file extensions.
 const EXT_BY_MIME: Record<string, string> = {
   "image/heic": ".heic",
@@ -38,6 +44,7 @@ const EXT_BY_MIME: Record<string, string> = {
   "video/x-flv": ".flv",
   "video/x-ms-wmv": ".wmv",
   "video/quicktime": ".mov",
+  "application/vnd.android.package-archive": ".apk",
   "application/pdf": ".pdf",
   "application/json": ".json",
   "application/yaml": ".yaml",
@@ -64,6 +71,11 @@ const EXT_BY_MIME: Record<string, string> = {
 function buildMimeByExt(): Record<string, string> {
   const byExt: Record<string, string> = {};
   for (const [mime, ext] of Object.entries(EXT_BY_MIME)) {
+    // APK is content-verified. Keep MIME -> extension naming without making a
+    // path-only `.apk` claim in the reverse extension lookup.
+    if (mime === APK_MIME) {
+      continue;
+    }
     byExt[ext] ??= mime;
   }
   return byExt;
@@ -139,6 +151,71 @@ function isZipContainerMime(mime: string): boolean {
   return mime.endsWith("+zip") || ZIP_CONTAINER_MIMES.has(mime);
 }
 
+function hasVerifiedApkZipEntries(buffer: Buffer): boolean {
+  const minimumEocdOffset = Math.max(0, buffer.length - ZIP_EOCD_MIN_BYTES - ZIP_MAX_COMMENT_BYTES);
+  let eocdOffset = buffer.length - ZIP_EOCD_MIN_BYTES;
+  for (; eocdOffset >= minimumEocdOffset; eocdOffset -= 1) {
+    if (buffer.readUInt32LE(eocdOffset) !== ZIP_EOCD_SIGNATURE) {
+      continue;
+    }
+    const commentLength = buffer.readUInt16LE(eocdOffset + 20);
+    if (eocdOffset + ZIP_EOCD_MIN_BYTES + commentLength === buffer.length) {
+      break;
+    }
+  }
+  if (eocdOffset < minimumEocdOffset) {
+    return false;
+  }
+
+  const diskNumber = buffer.readUInt16LE(eocdOffset + 4);
+  const centralDirectoryDisk = buffer.readUInt16LE(eocdOffset + 6);
+  const diskEntryCount = buffer.readUInt16LE(eocdOffset + 8);
+  const entryCount = buffer.readUInt16LE(eocdOffset + 10);
+  const centralDirectorySize = buffer.readUInt32LE(eocdOffset + 12);
+  const centralDirectoryOffset = buffer.readUInt32LE(eocdOffset + 16);
+  if (
+    diskNumber !== 0 ||
+    centralDirectoryDisk !== 0 ||
+    diskEntryCount !== entryCount ||
+    entryCount === 0xffff ||
+    centralDirectorySize === 0xffffffff ||
+    centralDirectoryOffset === 0xffffffff ||
+    centralDirectoryOffset + centralDirectorySize !== eocdOffset
+  ) {
+    return false;
+  }
+
+  let hasManifest = false;
+  let hasAndroidPayload = false;
+  let cursor = centralDirectoryOffset;
+  const centralDirectoryEnd = centralDirectoryOffset + centralDirectorySize;
+  for (let index = 0; index < entryCount; index += 1) {
+    if (
+      cursor + 46 > centralDirectoryEnd ||
+      buffer.readUInt32LE(cursor) !== ZIP_CENTRAL_FILE_HEADER_SIGNATURE
+    ) {
+      return false;
+    }
+    const fileNameLength = buffer.readUInt16LE(cursor + 28);
+    const extraLength = buffer.readUInt16LE(cursor + 30);
+    const commentLength = buffer.readUInt16LE(cursor + 32);
+    const entryEnd = cursor + 46 + fileNameLength + extraLength + commentLength;
+    if (entryEnd > centralDirectoryEnd) {
+      return false;
+    }
+    const fileName = buffer.toString("utf8", cursor + 46, cursor + 46 + fileNameLength);
+    hasManifest ||= fileName === "AndroidManifest.xml";
+    hasAndroidPayload ||=
+      /^classes\d*\.dex$/u.test(fileName) ||
+      fileName === "resources.arsc" ||
+      /^lib\/[^/]+\/[^/]+\.so$/u.test(fileName);
+    cursor = entryEnd;
+  }
+  // Do not accept an APK-shaped prefix of a malformed central directory: the
+  // host-read boundary promises complete archive verification.
+  return cursor === centralDirectoryEnd && hasManifest && hasAndroidPayload;
+}
+
 /** Normalizes MIME strings by dropping parameters, lowercasing, and folding APNG to PNG. */
 export function normalizeMimeType(mime?: string | null): string | undefined {
   if (!mime) {
@@ -159,7 +236,10 @@ export function sliceMimeSniffBuffer(buffer: Buffer): Buffer {
   return buffer.subarray(0, FILE_TYPE_SNIFF_MAX_BYTES);
 }
 
-async function sniffMime(buffer?: Buffer): Promise<string | undefined> {
+async function sniffMime(
+  buffer?: Buffer,
+  requireCompleteApkVerification = false,
+): Promise<string | undefined> {
   if (!buffer) {
     return undefined;
   }
@@ -167,7 +247,23 @@ async function sniffMime(buffer?: Buffer): Promise<string | undefined> {
     const { fileTypeFromBuffer } = await import("file-type");
     const type = await fileTypeFromBuffer(sliceMimeSniffBuffer(buffer));
     if (type?.mime) {
-      return normalizeMimeType(type.mime);
+      const sniffed = normalizeMimeType(type.mime);
+      const isApkLikeZip =
+        sniffed === "application/java-archive" ||
+        sniffed === "application/zip" ||
+        sniffed === APK_MIME;
+      if (isApkLikeZip && hasVerifiedApkZipEntries(buffer)) {
+        // file-type stops at an early JAR manifest in signed APKs. Verify the
+        // central directory so the host-read gate can trust the same result.
+        return APK_MIME;
+      }
+      // file-type identifies APKs from a local classes*.dex entry and is
+      // intentionally useful on bounded prefixes. Only security boundaries
+      // with the complete file should require central-directory verification.
+      if (sniffed === APK_MIME && requireCompleteApkVerification) {
+        return "application/zip";
+      }
+      return sniffed;
     }
   } catch {
     // fall through to manual magic-byte sniffs
@@ -221,13 +317,22 @@ export async function detectMime(opts: {
   headerMime?: string | null;
   additionalMimeHints?: readonly (string | null | undefined)[];
   filePath?: string;
+  requireCompleteApkVerification?: boolean;
 }): Promise<string | undefined> {
+  const requireCompleteApkVerification = opts.requireCompleteApkVerification === true;
   const extMime = MIME_BY_EXT[getFileExtension(opts.filePath) ?? ""];
-  const mimeHints = [opts.headerMime, ...(opts.additionalMimeHints ?? [])]
+  const rawMimeHints = [opts.headerMime, ...(opts.additionalMimeHints ?? [])]
     .map((mime) => normalizeMimeType(mime))
     .filter((mime): mime is string => Boolean(mime));
+  // An APK header/filename is only a hint. At the host-read boundary it must
+  // never restore APK classification after complete ZIP validation failed.
+  const hasVerifiedApk = opts.buffer ? hasVerifiedApkZipEntries(opts.buffer) : false;
+  const rejectUnverifiedApk = requireCompleteApkVerification && !hasVerifiedApk;
+  const mimeHints = rejectUnverifiedApk
+    ? rawMimeHints.filter((mime) => mime !== APK_MIME)
+    : rawMimeHints;
   const headerMime = mimeHints[0];
-  const sniffed = await sniffMime(opts.buffer);
+  const sniffed = await sniffMime(opts.buffer, requireCompleteApkVerification);
   const sniffedGenericContainer =
     sniffed === "application/octet-stream" || sniffed === "application/zip";
 
@@ -235,15 +340,23 @@ export async function detectMime(opts: {
   // specific extension or known container metadata (e.g. XLSX vs ZIP).
   const specificExtMime =
     extMime && extMime !== sniffed && !extMime.startsWith("image/") ? extMime : undefined;
+  const effectiveExtMime = rejectUnverifiedApk && extMime === APK_MIME ? undefined : extMime;
   const genericContainerMime =
     sniffed === "application/zip"
-      ? [extMime, ...mimeHints].find((mime) => mime && isZipContainerMime(mime))
+      ? [effectiveExtMime, ...mimeHints].find(
+          (mime) =>
+            mime &&
+            (mime !== APK_MIME || opts.requireCompleteApkVerification !== true) &&
+            isZipContainerMime(mime),
+        )
       : sniffed === "application/octet-stream"
-        ? (specificExtMime ?? mimeHints.find((mime) => mime !== "application/octet-stream"))
+        ? specificExtMime && !(rejectUnverifiedApk && specificExtMime === APK_MIME)
+          ? specificExtMime
+          : mimeHints.find((mime) => mime !== "application/octet-stream")
         : undefined;
   const inferred = sniffedGenericContainer
     ? (genericContainerMime ?? sniffed)
-    : (sniffed ?? extMime);
+    : (sniffed ?? effectiveExtMime);
   // file-type defaults these containers to video without parsing their tracks.
   // Preserve a concrete audio hint only for those documented ambiguous results.
   const audioContainerHint =

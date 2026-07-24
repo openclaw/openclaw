@@ -3,6 +3,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import JSZip from "jszip";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
@@ -22,6 +23,14 @@ const onePixelPng = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO5m8gAAAABJRU5ErkJggg==",
   "base64",
 );
+
+async function makeSignedApkZip(): Promise<Buffer> {
+  const zip = new JSZip();
+  zip.file("META-INF/MANIFEST.MF", "Manifest-Version: 1.0\n");
+  zip.file("AndroidManifest.xml", "manifest");
+  zip.file("classes.dex", "dex");
+  return await zip.generateAsync({ type: "nodebuffer" });
+}
 
 const channelResolutionMocks = vi.hoisted(() => ({
   resolveOutboundChannelPlugin: vi.fn(),
@@ -763,6 +772,68 @@ describe("runMessageAction media behavior", () => {
         expect(payload.ok).toBe(true);
         expect(payload.filename).toBe("photo.png");
         expect(payload.contentType).toBe("image/png");
+      } finally {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it("allows host-local APK attachments when fs root expansion is enabled", async () => {
+      await restoreRealMediaLoader();
+
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-attachment-apk-"));
+      try {
+        const outsidePath = path.join(tempDir, "build.apk");
+        await fs.writeFile(outsidePath, await makeSignedApkZip());
+
+        const result = await runMessageAction({
+          cfg: {
+            ...cfg,
+            tools: { fs: { workspaceOnly: false } },
+          },
+          action: "sendAttachment",
+          params: {
+            channel: "attachmentchat",
+            target: "+15551234567",
+            media: outsidePath,
+            message: "caption",
+          },
+        });
+
+        const payload = requireActionPayload(result);
+        expect(payload.ok).toBe(true);
+        expect(payload.filename).toBe("build.apk");
+        expect(payload.contentType).toBe("application/vnd.android.package-archive");
+      } finally {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it("rejects a host-local JAR renamed to APK", async () => {
+      await restoreRealMediaLoader();
+
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-attachment-fake-apk-"));
+      try {
+        const outsidePath = path.join(tempDir, "renamed.apk");
+        const jar = new JSZip();
+        jar.file("META-INF/MANIFEST.MF", "Manifest-Version: 1.0\n");
+        jar.file("Example.class", "bytecode");
+        await fs.writeFile(outsidePath, await jar.generateAsync({ type: "nodebuffer" }));
+
+        await expect(
+          runMessageAction({
+            cfg: {
+              ...cfg,
+              tools: { fs: { workspaceOnly: false } },
+            },
+            action: "sendAttachment",
+            params: {
+              channel: "attachmentchat",
+              target: "+15551234567",
+              media: outsidePath,
+              message: "caption",
+            },
+          }),
+        ).rejects.toThrow(/application\/java-archive/i);
       } finally {
         await fs.rm(tempDir, { recursive: true, force: true });
       }
