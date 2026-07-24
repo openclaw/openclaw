@@ -7,6 +7,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
 import {
   formatSessionArchiveTimestamp,
+  parseSessionArchiveSourceFileName,
   parseSessionArchiveTimestamp,
   type SessionArchiveReason,
 } from "../config/sessions/artifacts.js";
@@ -19,84 +20,21 @@ import {
 import { readFileWindowFully } from "../infra/file-read.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import {
+  clearSessionTranscriptResetArchiveDiscoveryCache,
+  getResetArchiveDiscoveryCacheEntry,
+  getResetArchiveHeaderMatchCacheEntry,
+  MAX_RESET_ARCHIVE_CANDIDATES_PER_TRANSCRIPT,
+  setResetArchiveDiscoveryCacheEntry,
+  setResetArchiveHeaderMatchCacheEntry,
+  type ResetArchiveCandidate,
+} from "./session-transcript-reset-archive-cache.js";
 
 type ArchiveFileReason = SessionArchiveReason;
-type ResetArchiveCandidate = { archivePath: string; name: string; timestamp: number };
 export type ArchivedSessionTranscript = {
   sourcePath: string;
   archivedPath: string;
 };
-
-const MAX_RESET_ARCHIVE_DISCOVERY_CACHE_ENTRIES = 2048;
-const MAX_RESET_ARCHIVE_HEADER_MATCH_CACHE_ENTRIES = 4096;
-const MAX_RESET_ARCHIVE_CANDIDATES_PER_TRANSCRIPT = 128;
-
-const resetArchiveDiscoveryCache = new Map<
-  string,
-  {
-    dirMtimeMs: number;
-    dirSize: number;
-    archives: ResetArchiveCandidate[];
-  }
->();
-const resetArchiveHeaderMatchCache = new Map<
-  string,
-  {
-    mtimeMs: number;
-    size: number;
-    matches: boolean;
-  }
->();
-
-function clearSessionTranscriptResetArchiveDiscoveryCache(): void {
-  resetArchiveDiscoveryCache.clear();
-  resetArchiveHeaderMatchCache.clear();
-}
-
-function deleteResetArchiveHeaderMatchesForArchives(archives: ResetArchiveCandidate[]): void {
-  if (archives.length === 0 || resetArchiveHeaderMatchCache.size === 0) {
-    return;
-  }
-  const archivePaths = new Set(archives.map((archive) => archive.archivePath));
-  for (const cacheKey of resetArchiveHeaderMatchCache.keys()) {
-    const archivePath = cacheKey.slice(cacheKey.indexOf("\0") + 1);
-    if (archivePaths.has(archivePath)) {
-      resetArchiveHeaderMatchCache.delete(cacheKey);
-    }
-  }
-}
-
-function setResetArchiveDiscoveryCacheEntry(
-  cacheKey: string,
-  entry: { dirMtimeMs: number; dirSize: number; archives: ResetArchiveCandidate[] },
-): void {
-  resetArchiveDiscoveryCache.set(cacheKey, entry);
-  while (resetArchiveDiscoveryCache.size > MAX_RESET_ARCHIVE_DISCOVERY_CACHE_ENTRIES) {
-    const oldestKey = resetArchiveDiscoveryCache.keys().next().value;
-    if (typeof oldestKey !== "string") {
-      break;
-    }
-    const oldestEntry = resetArchiveDiscoveryCache.get(oldestKey);
-    if (oldestEntry) {
-      deleteResetArchiveHeaderMatchesForArchives(oldestEntry.archives);
-    }
-    resetArchiveDiscoveryCache.delete(oldestKey);
-  }
-}
-
-function setResetArchiveHeaderMatchCacheEntry(
-  cacheKey: string,
-  entry: { mtimeMs: number; size: number; matches: boolean },
-): void {
-  resetArchiveHeaderMatchCache.set(cacheKey, entry);
-  while (resetArchiveHeaderMatchCache.size > MAX_RESET_ARCHIVE_HEADER_MATCH_CACHE_ENTRIES) {
-    const oldestKey = resetArchiveHeaderMatchCache.keys().next().value;
-    if (typeof oldestKey !== "string") {
-      break;
-    }
-    resetArchiveHeaderMatchCache.delete(oldestKey);
-  }
-}
 
 function classifySessionTranscriptCandidate(
   sessionId: string,
@@ -194,11 +132,12 @@ async function resetArchiveHeaderMatchesSessionId(
     return false;
   }
   const cacheKey = `${sessionId}\0${archivePath}`;
-  const cached = resetArchiveHeaderMatchCache.get(cacheKey);
-  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
-    resetArchiveHeaderMatchCache.delete(cacheKey);
-    resetArchiveHeaderMatchCache.set(cacheKey, cached);
-    return cached.matches;
+  const cachedMatch = getResetArchiveHeaderMatchCacheEntry(cacheKey, {
+    mtimeMs: stat.mtimeMs,
+    size: stat.size,
+  });
+  if (cachedMatch !== undefined) {
+    return cachedMatch;
   }
 
   let matches = false;
@@ -250,11 +189,12 @@ async function listResetArchiveCandidatesForTranscriptAsync(
     return undefined;
   }
   const cacheKey = `${dir}\0${base}`;
-  const cached = resetArchiveDiscoveryCache.get(cacheKey);
-  if (cached && cached.dirMtimeMs === dirStat.mtimeMs && cached.dirSize === dirStat.size) {
-    resetArchiveDiscoveryCache.delete(cacheKey);
-    resetArchiveDiscoveryCache.set(cacheKey, cached);
-    return cached.archives;
+  const cachedArchives = getResetArchiveDiscoveryCacheEntry(cacheKey, {
+    dirMtimeMs: dirStat.mtimeMs,
+    dirSize: dirStat.size,
+  });
+  if (cachedArchives) {
+    return cachedArchives;
   }
 
   const archives: ResetArchiveCandidate[] = [];
@@ -367,7 +307,6 @@ function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): string 
   const ts = formatSessionArchiveTimestamp();
   const archived = `${filePath}.${reason}.${ts}`;
   fs.renameSync(filePath, archived);
-  clearSessionTranscriptResetArchiveDiscoveryCache();
   // Notify the session transcript subscribers (memory index, sessions-history
   // HTTP, etc.) that a mutation landed on a session-owned path. Without this
   // emit the memory sync's incremental path never learns the new archive
@@ -377,8 +316,16 @@ function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): string 
   // chat inject, command execution) already emit here; archive was the sole
   // remaining gap, which is why `.jsonl.reset.<iso>` / `.jsonl.deleted.<iso>`
   // files only surfaced in the index after a full reindex.
-  emitSessionTranscriptUpdate({ sessionFile: archived });
+  emitSessionTranscriptArchiveMutation(archived, filePath);
   return archived;
+}
+
+function emitSessionTranscriptArchiveMutation(sessionFile: string, sourceFile?: string): void {
+  clearSessionTranscriptResetArchiveDiscoveryCache();
+  emitSessionTranscriptUpdate({ sessionFile });
+  if (sourceFile && sourceFile !== sessionFile) {
+    emitSessionTranscriptUpdate({ sessionFile: sourceFile });
+  }
 }
 
 export function archiveSessionTranscriptPaths(opts: {
@@ -517,6 +464,9 @@ export async function cleanupArchivedSessionTranscripts(opts: {
   directories: string[];
   rules: SessionArchiveCleanupRule[];
   nowMs?: number;
+  dryRun?: boolean;
+  excludeCanonicalPaths?: ReadonlySet<string>;
+  onRemoveFile?: (canonicalPath: string) => void;
 }): Promise<{ removed: number; scanned: number }> {
   const rules = opts.rules.filter(
     (rule) => Number.isFinite(rule.olderThanMs) && rule.olderThanMs >= 0,
@@ -537,13 +487,32 @@ export async function cleanupArchivedSessionTranscripts(opts: {
         if (timestamp == null) {
           continue;
         }
+        const fullPath = path.join(dir, entry);
+        const sourceFileName = parseSessionArchiveSourceFileName(entry, rule.reason);
+        if (opts.excludeCanonicalPaths?.has(canonicalizePathForComparison(fullPath))) {
+          break;
+        }
         scanned += 1;
         if (now - timestamp > rule.olderThanMs) {
-          const fullPath = path.join(dir, entry);
           const stat = await fs.promises.stat(fullPath).catch(() => null);
           if (stat?.isFile()) {
-            await fs.promises.rm(fullPath).catch(() => undefined);
-            removed += 1;
+            if (opts.dryRun) {
+              opts.onRemoveFile?.(canonicalizePathForComparison(fullPath));
+              removed += 1;
+            } else {
+              const didRemove = await fs.promises.rm(fullPath).then(
+                () => true,
+                () => false,
+              );
+              if (didRemove) {
+                emitSessionTranscriptArchiveMutation(
+                  fullPath,
+                  sourceFileName ? path.join(dir, sourceFileName) : undefined,
+                );
+                opts.onRemoveFile?.(canonicalizePathForComparison(fullPath));
+                removed += 1;
+              }
+            }
           }
         }
         // An archive name carries exactly one `.{reason}.{timestamp}` suffix,

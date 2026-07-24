@@ -1,6 +1,9 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import {
+  resolveSessionTranscriptArchiveDirectoryFromStorePath,
+  resolveSqliteTargetFromSessionStorePath,
+} from "./session-sqlite-target.js";
 
 describe("resolveSqliteTargetFromSessionStorePath", () => {
   it("keeps custom store targets distinct when templates share a directory", () => {
@@ -34,5 +37,15 @@ describe("resolveSqliteTargetFromSessionStorePath", () => {
     expect(resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "work" })).toMatchObject({
       path: path.resolve("tmp", "stores", "openclaw-agent.work.sqlite"),
     });
+  });
+
+  it("resolves direct agent SQLite archives to the sibling sessions directory", () => {
+    const agentDir = path.join("tmp", "agents", "work");
+
+    expect(
+      resolveSessionTranscriptArchiveDirectoryFromStorePath(
+        path.join(agentDir, "agent", "custom.sqlite"),
+      ),
+    ).toBe(path.resolve(agentDir, "sessions"));
   });
 });

@@ -1,5 +1,6 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import {
   clearPluginHostCleanupTarget,
   hasPluginHostCleanupTarget,
@@ -57,9 +58,17 @@ import type {
   ResetSessionEntryLifecycleParams,
   DeleteSessionEntryLifecycleParams,
 } from "./session-accessor.types.js";
+import type {
+  SessionArchivedTranscriptFileCleanupParams,
+  SessionArchivedTranscriptFileCleanupResult,
+} from "./session-archive-accessor.js";
 import { resolveProjectionExistingEntry } from "./session-entry-selection.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
+
+const loadSessionArchiveRuntime = createLazyRuntimeModule(
+  () => import("../../gateway/session-archive.runtime.js"),
+);
 
 type TemporarySessionMappingSnapshot =
   | {
@@ -332,6 +341,14 @@ export async function cleanupSessionLifecycleArtifacts(
   params: SessionLifecycleArtifactCleanupParams,
 ): Promise<SessionLifecycleArtifactCleanupResult> {
   return await cleanupSqliteSessionLifecycleArtifacts(params);
+}
+
+/** Cleans archived transcript files through the session storage boundary. */
+export async function cleanupSessionArchivedTranscriptFiles(
+  params: SessionArchivedTranscriptFileCleanupParams,
+): Promise<SessionArchivedTranscriptFileCleanupResult> {
+  const { cleanupArchivedSessionTranscripts } = await loadSessionArchiveRuntime();
+  return await cleanupArchivedSessionTranscripts(params);
 }
 
 /** Resets one persisted session entry and transitions its transcript state. */
