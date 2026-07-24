@@ -673,9 +673,15 @@ wait for that conversation.
 
 ```ts
 export default {
+  messages: {
+    inbound: {
+      byChannel: {
+        whatsapp: 3000,
+      },
+    },
+  },
   channels: {
     whatsapp: {
-      debounceMs: 3000,
       direct: {
         // Owner/admin chats can start immediately.
         "+15551234567": { debounceMs: 0 },
