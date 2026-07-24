@@ -21,6 +21,8 @@ Dreaming is **opt-in** and disabled by default.
 
 Long-term promotion still writes only to `MEMORY.md`.
 
+Dreaming reads at most 16 MiB from a daily inline memory file or `DREAMS.md` before updating its managed block. If either file is larger, dreaming uses a bounded streaming update for its managed block so existing large notes and diary text can stay in place without blocking the sweep.
+
 ## Phase model
 
 Dreaming runs three cooperative phases per sweep, in order: light -> REM -> deep. These are internal implementation phases, not separate user-configured modes.

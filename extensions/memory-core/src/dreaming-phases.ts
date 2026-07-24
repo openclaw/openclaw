@@ -635,6 +635,14 @@ function normalizeSessionCorpusSnippet(value: string): string {
   return truncateUtf16Safe(value.replace(/\s+/g, " ").trim(), SESSION_INGESTION_MAX_SNIPPET_CHARS);
 }
 
+function isSessionCorpusChatterSnippet(snippet: string): boolean {
+  return (
+    /\bRead HEARTBEAT\.md\b/.test(snippet) ||
+    /\bHEARTBEAT_OK\b/.test(snippet) ||
+    /^(?:User|Assistant|System): \[cron:[^\]]+\]/.test(snippet)
+  );
+}
+
 function hashSessionMessageId(value: string): string {
   return createHash("sha1").update(value).digest("hex");
 }
@@ -995,6 +1003,9 @@ async function collectSessionIngestionBatches(params: {
       const rawSnippet = lines[index] ?? "";
       const snippet = normalizeSessionCorpusSnippet(rawSnippet);
       if (snippet.length < SESSION_INGESTION_MIN_SNIPPET_CHARS) {
+        continue;
+      }
+      if (isSessionCorpusChatterSnippet(snippet)) {
         continue;
       }
       const lineNumber = entry.lineMap[index] ?? index + 1;
