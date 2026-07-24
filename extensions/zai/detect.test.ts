@@ -298,6 +298,55 @@ describe("detectZaiEndpoint", () => {
     expect(detected?.modelId).toBe("glm-4.7");
   });
 
+  it("distinguishes fatal UTF-8 decode from forgiving decode for error classification", async () => {
+    // With the old forgiving TextDecoder, 0xFF silently becomes U+FFFD inside a
+    // JSON string. The body below stays valid JSON, the probe extracts
+    // errorCode "1211" (which matches UNSUPPORTED_MODEL_ERROR_CODES), and the
+    // probe proceeds to the glm-5.1 fallback — success.
+    //
+    // With fatal:true, TextDecoder throws immediately on 0xFF, the probe's
+    // inner catch clears errorCode, isUnsupportedModelResult returns false
+    // (status 400 but no matching code or message pattern), and the glm-5.1
+    // fallback is SKIPPED — probe returns null.
+    //
+    // This test FAILS with the old non-fatal decoder (returns endpoint instead
+    // of null) and PASSES with the new fatal decoder.
+    const corruptedBody = new Uint8Array([
+      ...new TextEncoder().encode('{"code":"1211","msg":"'),
+      0xff,
+      ...new TextEncoder().encode('some message"}'),
+    ]);
+    const codingGlobal = "https://api.z.ai/api/coding/paas/v4/chat/completions";
+    const fetchFn = (async (url: string, init?: RequestInit) => {
+      const rawBody = typeof init?.body === "string" ? JSON.parse(init.body) : null;
+      const model = rawBody?.model ?? "";
+      if (url === codingGlobal && model === "glm-5.2") {
+        return new Response(corruptedBody, {
+          status: 400,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url === codingGlobal && model === "glm-5.1") {
+        return new Response("{}", {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      throw new Error(`unexpected url: ${url} model=${model}`);
+    }) as typeof fetch;
+
+    const detected = await detectZaiEndpoint({
+      apiKey: "sk-test", // pragma: allowlist secret
+      endpoint: "coding-global",
+      fetchFn,
+    });
+
+    // With fatal decode: errorCode cleared → fallback skipped → null.
+    // With forgiving decode: errorCode "1211" extracted → fallback runs → glm-5.1 200 → endpoint returned.
+    // This assertion FAILS with the old non-fatal decoder.
+    expect(detected).toBeNull();
+  });
+
   it("fails closed on oversized probe error bodies without buffering unbounded", async () => {
     const { fetchFn, state } = makeOversizedStreamFetch({
       url: "https://api.z.ai/api/paas/v4/chat/completions",

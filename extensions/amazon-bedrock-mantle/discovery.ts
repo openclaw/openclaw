@@ -274,7 +274,12 @@ async function readMantleModelDiscoveryJson(response: Response): Promise<OpenAIM
         `Mantle model discovery response stalled: no data received for ${chunkTimeoutMs}ms`,
       ),
   });
-  const body = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+  let body: unknown;
+  try {
+    body = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } catch (cause) {
+    throw new Error("Mantle model discovery response is malformed JSON", { cause });
+  }
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     return {};
   }
