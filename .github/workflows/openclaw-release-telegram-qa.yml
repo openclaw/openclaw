@@ -437,6 +437,7 @@ jobs:
       - name: Install candidate dependencies without runner credentials
         id: install_candidate
         shell: bash
+        working-directory: .candidate
         run: |
           set -euo pipefail
           candidate_home="${RUNNER_TEMP}/openclaw-telegram-candidate-home"
@@ -449,7 +450,7 @@ jobs:
             NPM_CONFIG_USERCONFIG=/dev/null \
             PATH="$PATH" \
             RUNNER_TEMP="$RUNNER_TEMP" \
-            pnpm --dir .candidate install \
+            pnpm install \
               --store-dir "$RUNNER_TEMP/openclaw-telegram-candidate-pnpm-store" \
               --prefer-offline \
               --frozen-lockfile \
@@ -462,6 +463,7 @@ jobs:
       - name: Build candidate runtime without runner credentials
         id: build_candidate
         shell: bash
+        working-directory: .candidate
         run: |
           set -euo pipefail
           candidate_home="${RUNNER_TEMP}/openclaw-telegram-candidate-home"
@@ -475,7 +477,7 @@ jobs:
             OPENCLAW_BUILD_PRIVATE_QA=1 \
             PATH="$PATH" \
             RUNNER_TEMP="$RUNNER_TEMP" \
-            pnpm --dir .candidate exec node scripts/build-all.mjs qaRuntime
+            pnpm exec node scripts/build-all.mjs qaRuntime
 
       - name: Move built candidate outside trusted workspace
         id: move_candidate

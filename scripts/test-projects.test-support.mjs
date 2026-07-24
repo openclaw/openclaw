@@ -1130,6 +1130,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   ["apps/android/fastlane/Fastfile", ["test/scripts/android-release-fastlane-gates.test.ts"]],
   ["scripts/ios-release-archive.sh", ["test/scripts/ios-release-wrapper-args.test.ts"]],
+  ["scripts/ios-release-cut.sh", ["test/scripts/ios-release-plan.test.ts"]],
+  ["scripts/ios-release-cut.ts", ["test/scripts/ios-release-plan.test.ts"]],
+  ["scripts/ios-release-plan.sh", ["test/scripts/ios-release-plan.test.ts"]],
+  ["scripts/ios-release-plan.ts", ["test/scripts/ios-release-plan.test.ts"]],
   [
     "scripts/ios-release-prepare.sh",
     ["test/scripts/ios-release-prepare.test.ts", "test/scripts/ios-release-wrapper-args.test.ts"],
@@ -1305,6 +1309,8 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   ["scripts/lib/format-generated-module.mjs", ["test/scripts/format-generated-module.test.ts"]],
   ["scripts/lib/ios-version.ts", ["test/scripts/ios-version.test.ts"]],
+  ["scripts/lib/ios-release-plan.ts", ["test/scripts/ios-release-plan.test.ts"]],
+  ["scripts/lib/ios-fastlane.sh", ["test/scripts/ios-release-wrapper-args.test.ts"]],
   ["scripts/lib/live-docker-stage.sh", ["test/scripts/live-docker-stage.test.ts"]],
   ["scripts/live-docker-stage-private-sdk-exports.mjs", ["test/scripts/live-docker-stage.test.ts"]],
   [
@@ -2882,6 +2888,8 @@ function isPathLikeTargetArg(arg, cwd) {
     isFileLikeTarget(arg) ||
     isVitestConfigPathLikeTarget(relative) ||
     isExistingPathTarget(arg, cwd) ||
+    (path.posix.extname(relative) === "" &&
+      /^(?:src|test|extensions|ui|packages|apps)\//u.test(relative)) ||
     Boolean(resolveExplicitTestPrefixTargets(arg, cwd)?.length)
   );
 }
@@ -3140,6 +3148,9 @@ export function findUnmatchedExplicitTestTargets(args, cwd = process.cwd()) {
       unmatched.push({
         target: targetArg,
         reason: "path-does-not-exist",
+        ...(path.posix.extname(relative) === ""
+          ? { includePattern: `${relative}{,.*}.{test,spec}.{js,jsx,ts,tsx,mjs,cjs,mts,cts}` }
+          : {}),
       });
       continue;
     }

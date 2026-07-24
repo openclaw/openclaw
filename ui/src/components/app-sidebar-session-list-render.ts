@@ -168,7 +168,9 @@ function renderSessionSection(params: {
             ? html`
                 <button
                   type="button"
-                  class="sidebar-session-group-actions sidebar-session-sort"
+                  class="sidebar-session-group-actions sidebar-session-sort ${host.sessionCreatorFilterActive
+                    ? "sidebar-session-sort--filtered"
+                    : ""}"
                   title=${t("chat.sidebar.sortSessions")}
                   aria-label=${t("chat.sidebar.sortSessions")}
                   aria-haspopup="menu"
@@ -356,12 +358,13 @@ function renderSessionListBody(params: {
           trailing: params.codingTrailing ?? nothing,
         });
       }
-      // Threads hides its bare empty header; unfiltered custom categories stay
-      // visible because creation and drag flows depend on them as drop targets.
+      // Threads hides its bare empty header unless it owns the collaborative
+      // creator filter; custom categories stay visible as drop targets.
       if (
         section.id === "ungrouped" &&
         section.totalRowCount === 0 &&
         !showDraft &&
+        !host.sessionOwnershipVisible &&
         host.sessionsStatusFilter === "active" &&
         host.sessionOrganizer.draggingSessionKey === null
       ) {
@@ -384,7 +387,6 @@ export function renderSessionList(params: {
   expandedRows: SidebarRecentSession[];
   visibleRowCount: number;
   showDraft: boolean;
-  creatorFilter: TemplateResult | typeof nothing;
   catalogs: SessionCatalogRenderSnapshot;
 }) {
   const { host } = params;
@@ -419,7 +421,6 @@ export function renderSessionList(params: {
           `
         : nothing}
       <div class="sidebar-recent-sessions" aria-label=${titleForRoute("sessions")}>
-        ${params.creatorFilter}
         ${renderSessionListBody({
           host,
           sections: params.sections,
