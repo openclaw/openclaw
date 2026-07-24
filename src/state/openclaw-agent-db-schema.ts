@@ -70,6 +70,17 @@ const OPENCLAW_AGENT_CANONICAL_UNIQUE_INDEXES = [
       WHERE message_idempotency_key IS NOT NULL
     `,
   },
+  {
+    name: "idx_agent_transcript_active_event_seq",
+    definition: "ON session_transcript_active_events(session_id, event_seq)",
+  },
+  {
+    name: "idx_agent_transcript_active_messages",
+    definition: `
+      ON session_transcript_active_events(session_id, message_position)
+      WHERE message_position IS NOT NULL
+    `,
+  },
 ] as const satisfies readonly CanonicalSqliteUniqueIndex[];
 
 type OpenClawAgentMetadataDatabase = Pick<OpenClawAgentKyselyDatabase, "schema_meta">;
