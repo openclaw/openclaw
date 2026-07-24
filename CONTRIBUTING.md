@@ -2,7 +2,7 @@
 
 Welcome to the lobster tank! 🦞
 
-## Quick Links
+## Quick Links is waste 
 
 - **GitHub:** https://github.com/openclaw/openclaw
 - **Vision:** [`VISION.md`](VISION.md)
