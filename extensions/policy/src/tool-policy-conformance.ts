@@ -1,5 +1,5 @@
 // Policy plugin module implements tool policy conformance behavior.
-export const POLICY_TOOL_GROUPS: Record<string, readonly string[]> = {
+const POLICY_TOOL_GROUPS: Record<string, readonly string[]> = {
   "group:openclaw": [
     "code_execution",
     "web_search",

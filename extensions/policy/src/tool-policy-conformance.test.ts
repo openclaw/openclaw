@@ -1,16 +1,14 @@
 import { describe, expect, it } from "vitest";
-import {
-  expandPolicyToolRequirement,
-  POLICY_TOOL_GROUPS,
-  toolListCoversTool,
-} from "./tool-policy-conformance.js";
+import { expandPolicyToolRequirement, toolListCoversTool } from "./tool-policy-conformance.js";
 
 describe("policy tool group conformance", () => {
   it("keeps computer control in both node and OpenClaw policy groups", () => {
-    expect(POLICY_TOOL_GROUPS["group:nodes"]).toContain("computer");
-    expect(POLICY_TOOL_GROUPS["group:openclaw"]).toContain("computer");
-    expect(POLICY_TOOL_GROUPS["group:nodes"]).toContain("mobile_ui");
-    expect(POLICY_TOOL_GROUPS["group:openclaw"]).toContain("mobile_ui");
+    expect(expandPolicyToolRequirement("group:nodes")).toEqual(
+      expect.arrayContaining(["computer", "mobile_ui"]),
+    );
+    expect(expandPolicyToolRequirement("group:openclaw")).toEqual(
+      expect.arrayContaining(["computer", "mobile_ui"]),
+    );
   });
 
   it("normalizes aliases and expands groups", () => {
