@@ -5,18 +5,17 @@ import { setTimeout as sleep } from "node:timers/promises";
 import {
   startOpenClawCrablineAdapter,
   type OpenClawCrablineChannelDriverSelection,
-  type OpenClawCrablineInbound,
   type StartedOpenClawCrablineAdapter,
 } from "@openclaw/crabline";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   isRecord,
   normalizeStringifiedOptionalString,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createQaBusState, type QaBusState } from "./bus-state.js";
+import { postCrablineInbound } from "./crabline-inbound.js";
 import {
   createCrablineProviderDelivery,
   createCrablineProviderInboundInput,
@@ -24,7 +23,6 @@ import {
   resolveTelegramQaSenderId,
 } from "./crabline-provider-targets.js";
 import { QaSuiteInfraError } from "./errors.js";
-import { discardIgnoredResponseBody } from "./ignored-response-body.js";
 import {
   QaStateBackedTransportAdapter,
   waitForQaTransportOutboundSequence,
@@ -220,51 +218,6 @@ async function waitForCrablineReady(params: {
       ...(lastProbeError ? [`last probe error: ${lastProbeError}`] : []),
     ].join("; "),
   );
-}
-
-async function postCrablineInbound(params: {
-  adapter: StartedOpenClawCrablineAdapter;
-  providerInbound: OpenClawCrablineInbound;
-}) {
-  const { response, release } = await fetchWithSsrFGuard({
-    url: params.adapter.manifest.endpoints.adminInboundUrl,
-    init: {
-      body: JSON.stringify(params.providerInbound.providerBody),
-      headers: {
-        "content-type": "application/json",
-        "x-crabline-admin-token": params.adapter.manifest.adminToken,
-      },
-      method: "POST",
-    },
-    policy: { allowPrivateNetwork: true },
-    auditContext: `qa-lab-crabline-${params.adapter.channel}-inbound`,
-  });
-  try {
-    if (!response.ok) {
-      await discardIgnoredResponseBody(response);
-      throw new Error(
-        `Crabline ${params.adapter.channel} inbound injection failed with HTTP ${response.status}.`,
-      );
-    }
-    const result: unknown = await response.json();
-    if (params.adapter.channel === "matrix" && isRecord(result) && isRecord(result.event)) {
-      return readStringValue(result.event.event_id);
-    }
-    if (params.adapter.channel === "slack" && isRecord(result) && isRecord(result.message)) {
-      return readStringValue(result.message.ts);
-    }
-    if (
-      params.adapter.channel === "telegram" &&
-      isRecord(result) &&
-      isRecord(result.update) &&
-      isRecord(result.update.message)
-    ) {
-      return normalizeStringifiedOptionalString(result.update.message.message_id);
-    }
-    return undefined;
-  } finally {
-    await release();
-  }
 }
 
 function createCrablineState(params: {

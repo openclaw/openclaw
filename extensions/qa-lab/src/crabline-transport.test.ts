@@ -1,11 +1,14 @@
 // Qa Lab tests cover Crabline local-provider transport integration behavior.
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import path from "node:path";
 import type { OpenClawCrablineChannelDriverSelection } from "@openclaw/crabline";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
+import { postCrablineInbound } from "./crabline-inbound.js";
 import { createQaCrablineTransportAdapter } from "./crabline-transport.js";
 
 afterEach(() => {
@@ -64,6 +67,45 @@ describe("crabline transport", () => {
       }
     });
   });
+
+  it("bounds and times out inbound adapter responses", async () => {
+    for (const mode of ["oversized", "stalled"] as const) {
+      const server = createServer((_request, response) => {
+        response.writeHead(200, { "content-type": "application/json" });
+        if (mode === "oversized") {
+          response.end(JSON.stringify({ update: { padding: "x".repeat(1024 * 1024) } }));
+          return;
+        }
+        response.write('{"update":');
+      });
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const address = server.address() as AddressInfo;
+      try {
+        const result = postCrablineInbound({
+          adapter: {
+            channel: "telegram",
+            manifest: {
+              adminToken: ["qa", "fixture"].join("-"),
+              endpoints: { adminInboundUrl: `http://127.0.0.1:${address.port}/inbound` },
+            },
+          } as never,
+          providerInbound: { providerBody: { message: "bounded" } } as never,
+        });
+        await expect(result).rejects.toThrow(
+          mode === "oversized"
+            ? "Crabline inbound response exceeds 1048576 bytes"
+            : "Media download stalled: no data received for 5000ms",
+        );
+      } finally {
+        server.closeAllConnections();
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    }
+  }, 15_000);
 
   it("configures OpenClaw's Telegram plugin against a Crabline local provider server", async () => {
     await withTempDir("qa-crabline-transport-", async (outputDir) => {

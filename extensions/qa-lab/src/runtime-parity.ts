@@ -1,8 +1,9 @@
+// Qa Lab plugin module implements runtime parity behavior.
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   listSessionEntries,
   loadTranscriptEventsSync,
 } from "openclaw/plugin-sdk/session-store-runtime";
-// Qa Lab plugin module implements runtime parity behavior.
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asFiniteNumber as readFiniteNumber,
@@ -170,6 +171,9 @@ const TOOL_RESULT_MISSING_ERROR_CLASS = "tool-result-missing";
 const BOOT_STATE_LINE_RE =
   /\b(?:FailoverError|No API key found|Codex app-server|auth profile|runtime policy|restart mode:|plugin|doctor)\b/i;
 const TOOL_RESULT_ERROR_RE = /\b(?:error|failed|failure|timeout|denied|enoent|not found)\b/i;
+const RUNTIME_PARITY_MOCK_RESPONSE_MAX_BYTES = 1024 * 1024;
+const QA_INTERNAL_RESPONSE_IDLE_TIMEOUT_MS = 5_000;
+const QA_INTERNAL_RESPONSE_TIMEOUT_MS = 15_000;
 
 function normalizeTextForParity(text: string) {
   return text.replace(/\s+/gu, " ").trim();
@@ -1057,7 +1061,13 @@ async function loadRuntimeParityMockToolCalls(
         await discardIgnoredResponseBody(response);
         return null;
       }
-      payload = await response.json();
+      const bytes = await readResponseWithLimit(response, RUNTIME_PARITY_MOCK_RESPONSE_MAX_BYTES, {
+        chunkTimeoutMs: QA_INTERNAL_RESPONSE_IDLE_TIMEOUT_MS,
+        timeoutMs: QA_INTERNAL_RESPONSE_TIMEOUT_MS,
+        onOverflow: ({ maxBytes }) =>
+          new Error(`Runtime parity mock response exceeds ${maxBytes} bytes`),
+      });
+      payload = JSON.parse(bytes.toString("utf8")) as unknown;
     } finally {
       await release();
     }
