@@ -32,8 +32,98 @@ describe("page share core", () => {
     });
     expect(executeScript.mock.calls[1]?.[0]).toMatchObject({
       target: { tabId: 17 },
-      args: ["document-id_123"],
+      args: ["document-id_123", 30_000],
     });
+  });
+
+  it("aborts a stalled Google Docs export and returns its error", async () => {
+    type ExecuteScriptDetails = {
+      args?: unknown[];
+      func: (...args: unknown[]) => unknown;
+    };
+    let exportCall: ExecuteScriptDetails | undefined;
+    const executeScript = vi.fn(async (details: ExecuteScriptDetails) => {
+      if (!details.args) {
+        return [{ result: "" }];
+      }
+      exportCall = details;
+      const result = await details.func(details.args[0], 1);
+      return [{ result }];
+    });
+    const fetchImpl = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      const signal = init?.signal;
+      if (!signal) {
+        return Promise.reject(new Error("Expected export timeout signal"));
+      }
+      return new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener(
+          "abort",
+          () =>
+            reject(
+              signal.reason instanceof Error ? signal.reason : new Error(String(signal.reason)),
+            ),
+          { once: true },
+        );
+      });
+    });
+    vi.stubGlobal("chrome", { scripting: { executeScript } });
+    vi.stubGlobal("fetch", fetchImpl);
+
+    await expect(
+      capturePageShare({
+        id: 17,
+        url: "https://docs.google.com/document/d/document-id_123/edit",
+        title: "Document",
+      }),
+    ).rejects.toThrow(/timeout|abort/i);
+    expect(exportCall?.args).toEqual(["document-id_123", 30_000]);
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://docs.google.com/document/d/document-id_123/export?format=txt",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
+
+  it("aborts a Google Docs export stalled while reading the response body", async () => {
+    const executeScript = vi.fn(
+      async (details: { args?: unknown[]; func: (...args: unknown[]) => unknown }) => {
+        if (!details.args) {
+          return [{ result: "" }];
+        }
+        const result = await details.func(details.args[0], 1);
+        return [{ result }];
+      },
+    );
+    const fetchImpl = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      const signal = init?.signal;
+      if (!signal) {
+        return Promise.reject(new Error("Expected export timeout signal"));
+      }
+      const body = new ReadableStream({
+        start(controller) {
+          const abort = () => controller.error(signal.reason);
+          if (signal.aborted) {
+            abort();
+          } else {
+            signal.addEventListener("abort", abort, { once: true });
+          }
+        },
+      });
+      return Promise.resolve(new Response(body));
+    });
+    vi.stubGlobal("chrome", { scripting: { executeScript } });
+    vi.stubGlobal("fetch", fetchImpl);
+
+    await expect(
+      capturePageShare({
+        id: 17,
+        url: "https://docs.google.com/document/d/document-id_123/edit",
+        title: "Document",
+      }),
+    ).rejects.toThrow(/timeout|abort/i);
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://docs.google.com/document/d/document-id_123/export?format=txt",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
   });
 
   it("keeps text at the boundary and marks truncation beyond it", () => {
