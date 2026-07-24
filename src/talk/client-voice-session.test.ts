@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import {
   emitTrustedDiagnosticEvent,
   waitForDiagnosticEventsDrained,
@@ -14,6 +14,7 @@ import {
   closeClientVoiceSession,
   closeStaleClientVoiceSessions,
   createOrResumeClientVoiceSession,
+  ensureClientVoiceAgentSessionEntry,
   isClientVoiceSessionConfirmable,
   registerClientVoiceConsultRun,
   resolveClientVoiceRunBinding,
@@ -148,6 +149,35 @@ describe("client voice session", () => {
         voiceSessionId,
       }),
     ).toThrow("already closed");
+  });
+
+  it("stamps the agent session row when Talk creates it", async () => {
+    const sessionKey = "agent:main:talk:new";
+    await ensureClientVoiceAgentSessionEntry({ agentId: "main", sessionKey });
+
+    expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
+      createdVia: "talk",
+      createdActor: { type: "human" },
+      createdAt: expect.any(Number),
+    });
+
+    await ensureClientVoiceAgentSessionEntry({ agentId: "main", sessionKey });
+    expect(loadSessionEntry({ agentId: "main", sessionKey })?.createdVia).toBe("talk");
+  });
+
+  it("repairs an incomplete existing row without claiming its creation actor", async () => {
+    const sessionKey = "agent:main:talk:incomplete";
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey },
+      { sessionId: "", updatedAt: 1, createdVia: "internal", createdAt: 1 },
+    );
+
+    await ensureClientVoiceAgentSessionEntry({ agentId: "main", sessionKey });
+
+    const repaired = loadSessionEntry({ agentId: "main", sessionKey });
+    expect(repaired?.sessionId).toBeTruthy();
+    expect(repaired).toMatchObject({ createdVia: "internal", createdAt: 1 });
+    expect(repaired?.createdActor).toBeUndefined();
   });
 
   it("marks confirmability by declared capability, relay origin, or observed transcript", () => {

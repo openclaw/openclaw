@@ -17,6 +17,7 @@ import {
   createWorkerPlacementDispatchService,
   type WorkerPlacementDispatchService,
 } from "./worker-environments/placement-dispatch.js";
+import { FORCED_WORKER_ABANDONMENT_ERROR } from "./worker-environments/placement-force-abandon.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { createReclaimedPlacementRedispatch } from "./worker-environments/reclaimed-placement-redispatch.js";
 import type { WorkerEnvironmentService } from "./worker-environments/service.js";
@@ -127,8 +128,10 @@ function coordinateWorkerPlacementDispatch(
   };
   return {
     dispatch: async (request) => await runPlacementOperation(() => service.dispatch(request)),
-    forceDestroyEnvironment: (environmentId) =>
-      runExclusivePlacementOperation(() => service.forceDestroyEnvironment(environmentId)),
+    forceDestroyEnvironment: (environmentId, onCleanupError) =>
+      runExclusivePlacementOperation(() =>
+        service.forceDestroyEnvironment(environmentId, onCleanupError),
+      ),
     reclaim: async (request) => await runPlacementOperation(() => service.reclaim(request)),
     reconcile: () => runReconciliation(service.reconcile),
     reconcileActive: () => runReconciliation(service.reconcileActive),
@@ -472,6 +475,13 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
     workspaceOperations,
   });
   const recoverPendingWorkspaceReconciliations = async (): Promise<void> => {
+    const orphanedJournals = params.placements.pruneOrphanedWorkspaceReconciliations({
+      retainFailedOwner: (recoveryError) =>
+        recoveryError.startsWith(FORCED_WORKER_ABANDONMENT_ERROR),
+    });
+    for (const owner of orphanedJournals) {
+      workerPlacementLog.warn(`discarded orphaned cloud workspace journal for ${owner.sessionId}`);
+    }
     for (const owner of params.placements.listWorkspaceReconciliationOwners()) {
       try {
         const placement = params.placements.get(owner.sessionId);

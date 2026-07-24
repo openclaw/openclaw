@@ -65,6 +65,19 @@ function bindScheduleColumns(
       stagger_ms: null,
     };
   }
+  if (schedule.kind === "stream") {
+    // argv-shaped stream schedules live in the existing additive job_json
+    // envelope; normalized columns retain only the discriminant (no DDL).
+    return {
+      schedule_kind: "stream",
+      at: null,
+      every_ms: null,
+      anchor_ms: null,
+      schedule_expr: null,
+      schedule_tz: null,
+      stagger_ms: null,
+    };
+  }
   return {
     schedule_kind: "cron",
     at: null,
@@ -236,6 +249,13 @@ function scheduleFromRow(row: CronJobRow): CronSchedule | null {
       ...(row.schedule_tz ? { cwd: row.schedule_tz } : {}),
     };
   }
+  if (row.schedule_kind === "stream") {
+    const schedule = parseJsonObject<Record<string, unknown>>(row.job_json, {}).schedule;
+    if (!isRecord(schedule) || schedule.kind !== "stream" || !Array.isArray(schedule.command)) {
+      return null;
+    }
+    return structuredClone(schedule) as CronSchedule;
+  }
   return null;
 }
 
@@ -342,6 +362,27 @@ export function replaceCronRows(db: DatabaseSync, storeKey: string, store: CronS
         .values(bindCronJobRow(storeKey, normalized, index)),
     );
   }
+}
+
+/** Upserts one persisted cron row without rewriting unrelated jobs in its store partition. */
+export function upsertCronJobRow(
+  db: DatabaseSync,
+  storeKey: string,
+  job: CronJob,
+  sortOrder: number,
+): void {
+  const normalized = normalizeCronJobForSqlite(job);
+  if (!normalized) {
+    throw new Error(`Cannot persist invalid cron job ${job.id}`);
+  }
+  const values = bindCronJobRow(storeKey, normalized, sortOrder);
+  executeSqliteQuerySync(
+    db,
+    getCronStoreKysely(db)
+      .insertInto("cron_jobs")
+      .values(values)
+      .onConflict((conflict) => conflict.columns(["store_key", "job_id"]).doUpdateSet(values)),
+  );
 }
 
 /** Updates only mutable runtime columns without rewriting full job config JSON. */

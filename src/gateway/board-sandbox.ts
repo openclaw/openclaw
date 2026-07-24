@@ -11,7 +11,12 @@ function grantedConnectOrigins(document: BoardWidgetDocument): string[] | undefi
 
 export function buildBoardWidgetSandboxPath(document: BoardWidgetDocument): string {
   const connectDomains = grantedConnectOrigins(document);
-  return buildSandboxHostPath(connectDomains ? { connectDomains } : undefined);
+  return buildSandboxHostPath({
+    // Best-effort hardening for the documented WebRTC residual; the DOM guard
+    // reduces fresh descendant realms but is not an authorization boundary.
+    blockDescendantFrames: true,
+    ...(connectDomains ? { connectDomains } : {}),
+  });
 }
 
 /** Defense in depth for direct/legacy widget document loads outside the proxy host. */

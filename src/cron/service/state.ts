@@ -76,6 +76,7 @@ export type CronServiceDeps = {
     job: CronJob;
     script: string;
     state: unknown;
+    streamBatch?: string;
     abortSignal?: AbortSignal;
   }) => Promise<CronTriggerEvaluationResult>;
   /** Default agent id for jobs without an agent id. */
@@ -184,7 +185,11 @@ export type CronServiceDeps = {
       delivery?: CronDeliveryTrace;
     } & CronRunOutcome
   >;
-  runScriptJob?: (params: { job: CronJob; abortSignal?: AbortSignal }) => Promise<
+  runScriptJob?: (params: {
+    job: CronJob;
+    streamBatch?: string;
+    abortSignal?: AbortSignal;
+  }) => Promise<
     {
       delivered?: boolean;
       deliveryAttempted?: boolean;
@@ -353,6 +358,8 @@ export type CronAddInput = CronJobCreate;
 export type CronAddOptions = {
   matchesExisting?: (job: CronJob) => boolean;
   enabledExplicit?: boolean;
+  /** Gateway-owned system payloads (heartbeat monitors) require this opt-in. */
+  systemOwned?: boolean;
 };
 /** Normalized patch input accepted by cron service updates. */
 export type CronUpdateInput = CronJobPatch;

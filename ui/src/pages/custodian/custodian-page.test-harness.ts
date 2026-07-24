@@ -34,8 +34,8 @@ export function createContext(
   const client = { request } as unknown as GatewayBrowserClient;
   let snapshot: ApplicationGatewaySnapshot = {
     client,
-    connected: true,
-    reconnecting: false,
+    phase: "connected",
+    offlineStable: false,
     hello: {
       type: "hello-ok" as const,
       protocol: 1,

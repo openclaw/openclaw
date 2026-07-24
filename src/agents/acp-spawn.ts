@@ -34,10 +34,13 @@ import { parseDurationMs } from "../cli/parse-duration.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import {
-  listSessionEntries,
+  listSessionEntriesReadOnly,
   loadSessionEntry,
+  loadSessionEntryReadOnly,
   resolveSessionTranscriptRuntimeTarget,
+  upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
 import type { SessionAcpMeta, SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
@@ -58,7 +61,7 @@ import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
-import { recordSubagentSpawned } from "../sessions/session-state-events.js";
+import { recordSessionCreated, recordSubagentSpawned } from "../sessions/session-state-events.js";
 import { listTasksForOwnerKey } from "../tasks/runtime-internal.js";
 import { deliveryContextFromSession, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import {
@@ -417,7 +420,7 @@ function hasSessionLocalHeartbeatRelayRoute(params: {
   const storePath = resolveStorePath(params.cfg.session?.store, {
     agentId: params.requesterAgentId,
   });
-  const parentEntry = loadSessionEntry({
+  const parentEntry = loadSessionEntryReadOnly({
     storePath,
     sessionKey: params.parentSessionKey,
     clone: false,
@@ -586,7 +589,7 @@ async function persistAcpSpawnSessionFileBestEffort(params: {
       threadId: params.threadId,
     });
     return (
-      loadSessionEntry({
+      loadSessionEntryReadOnly({
         storePath: params.storePath,
         sessionKey: resolvedSessionFile.sessionKey,
         clone: false,
@@ -724,7 +727,7 @@ function validateAcpResumeSessionOwnership(params: {
   }
 
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.targetAgentId });
-  for (const { sessionKey, entry } of listSessionEntries({ storePath, clone: false })) {
+  for (const { sessionKey, entry } of listSessionEntriesReadOnly({ storePath, clone: false })) {
     const acp = readAcpSessionMeta({ sessionKey, cfg: params.cfg });
     if (!sessionEntryMatchesAcpResumeSessionId(acp, resumeSessionId)) {
       continue;
@@ -1239,6 +1242,7 @@ export async function spawnAcpDirect(
   }
 
   let sessionCreated = false;
+  let childCreationEntry: SessionEntry | undefined;
   let initializedRuntime: AcpSpawnRuntimeCloseHandle | undefined;
   const childIdem = crypto.randomUUID();
   const parentAgentId = parentSessionKey
@@ -1249,7 +1253,7 @@ export async function spawnAcpDirect(
   const parentDeliveryCtx =
     effectiveStreamToParent && parentSessionKey
       ? deliveryContextFromSession(
-          loadSessionEntry({
+          loadSessionEntryReadOnly({
             sessionKey: parentSessionKey,
             ...(parentAgentId ? { agentId: parentAgentId } : {}),
             clone: false,
@@ -1284,18 +1288,37 @@ export async function spawnAcpDirect(
   };
   const adapter: SpawnBackendAdapter<AcpBackendState> = {
     async initialize() {
-      await callGateway({
-        method: "sessions.patch",
-        params: {
-          key: sessionKey,
-          spawnedBy: requesterInternalKey,
-          ...admission.childSessionPatch,
-          ...inheritedToolAllowPatch(ctx.inheritedToolAllowlist),
-          ...inheritedToolDenyPatch(ctx.inheritedToolDenylist),
-          ...(params.label ? { label: params.label } : {}),
-        },
-        timeoutMs: 10_000,
+      const creationStamp = buildSessionCreationStamp({
+        via: "spawn",
+        actor: { type: "agent", id: requesterInternalKey },
       });
+      const storePath = resolveStorePath(cfg.session?.store, { agentId: targetAgentId });
+      const childSessionPatch = admission.childSessionPatch
+        ? {
+            spawnDepth: admission.childSessionPatch.spawnDepth,
+            ...(admission.childSessionPatch.subagentRole
+              ? { subagentRole: admission.childSessionPatch.subagentRole }
+              : {}),
+            subagentControlScope: admission.childSessionPatch.subagentControlScope,
+          }
+        : {};
+      childCreationEntry =
+        (await upsertSessionEntry(
+          { storePath, sessionKey },
+          {
+            ...creationStamp,
+            spawnedBy: requesterInternalKey,
+            completionOwnerSessionKey: ownership.completionRequesterSessionKey,
+            // Navigation parent is stamped at creation so the durable tree edge
+            // does not depend on the control-lineage field.
+            parentSessionKey: requesterInternalKey,
+            ...childSessionPatch,
+            inheritedToolPolicyVersion: 1,
+            ...inheritedToolAllowPatch(ctx.inheritedToolAllowlist),
+            ...inheritedToolDenyPatch(ctx.inheritedToolDenylist),
+            ...(params.label ? { label: params.label } : {}),
+          },
+        )) ?? undefined;
       sessionCreated = true;
       const initializedSession = await initializeAcpSpawnRuntime({
         cfg,
@@ -1332,6 +1355,13 @@ export async function spawnAcpDirect(
         binding: state.binding,
       });
       // ACP bypasses the native adapter, so seed the same child lineage before dispatch.
+      if (childCreationEntry) {
+        recordSessionCreated({
+          sessionKey,
+          agentId: targetAgentId,
+          entry: childCreationEntry,
+        });
+      }
       recordSubagentSpawned({
         childSessionKey: sessionKey,
         childRunId: childIdem,

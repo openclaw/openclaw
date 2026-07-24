@@ -1233,6 +1233,7 @@
                 "group": "Sessions and memory",
                 "pages": [
                   "concepts/main-session",
+                  "concepts/multi-user",
                   "concepts/session",
                   "concepts/session-search",
                   "concepts/channel-docking",
@@ -1758,6 +1759,7 @@
                   "web/index",
                   "web/control-ui",
                   "web/dashboard",
+                  "web/dashboards",
                   "web/dashboard-architecture",
                   "web/webchat",
                   "web/tui",
@@ -1800,6 +1802,7 @@
                     "pages": [
                       "cli/agent",
                       "cli/agents",
+                      "cli/claws",
                       "cli/audit",
                       "cli/hooks",
                       "cli/infer",

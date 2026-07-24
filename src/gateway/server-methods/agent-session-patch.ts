@@ -17,7 +17,7 @@ import {
   normalizeSessionDeliveryFields,
   type DeliveryContext,
 } from "../../utils/delivery-context.shared.js";
-import { canonicalizeSpawnedByForAgent, loadSessionEntry } from "../session-utils.js";
+import { canonicalizeSpawnedByForAgent, loadSessionEntryReadOnly } from "../session-utils.js";
 import {
   normalizeTrustedGroupMetadata,
   requestGroupMatchesTrusted,
@@ -73,7 +73,7 @@ export function buildAgentSessionPatch(params: {
     (!storedGroup.groupId || !storedGroup.groupChannel || !storedGroup.groupSpace)
   ) {
     try {
-      const parentEntry = loadSessionEntry(freshSpawnedBy)?.entry;
+      const parentEntry = loadSessionEntryReadOnly(freshSpawnedBy)?.entry;
       inheritedGroup = normalizeTrustedGroupMetadata({
         groupId: parentEntry?.groupId,
         groupChannel: parentEntry?.groupChannel,

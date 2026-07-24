@@ -70,6 +70,7 @@ export function createPluginApprovalHandlers(
         pluginId?: string | null;
         title: string;
         description: string;
+        detail?: string | null;
         severity?: string | null;
         toolName?: string | null;
         toolCallId?: string | null;
@@ -94,6 +95,7 @@ export function createPluginApprovalHandlers(
         pluginId: p.pluginId ?? null,
         title: p.title,
         description: p.description,
+        detail: normalizeTrimmedString(p.detail),
         severity: (p.severity as PluginApprovalRequestPayload["severity"]) ?? null,
         toolName: p.toolName ?? null,
         toolCallId: p.toolCallId ?? null,

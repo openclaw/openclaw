@@ -51,6 +51,36 @@ function renderComposer(overrides: Partial<ComposerProps> = {}) {
   return { container, props: composerProps };
 }
 
+describe("suggestion composer", () => {
+  it("labels the send action as Suggest and emits ephemeral typing state", () => {
+    const onTypingChange = vi.fn();
+    const view = renderComposer({
+      suggestionComposer: true,
+      draft: "",
+      onTypingChange,
+    });
+    expect(view.container.querySelector(".agent-chat__control-label")?.textContent).toContain(
+      "Suggest",
+    );
+    expect(
+      view.container.querySelector<HTMLButtonElement>('button[aria-label="Add attachment"]')
+        ?.disabled,
+    ).toBe(true);
+
+    const textarea = view.container.querySelector<HTMLTextAreaElement>("textarea");
+    expect(textarea).not.toBeNull();
+    if (!textarea) {
+      return;
+    }
+    textarea.value = "hello";
+    textarea.dispatchEvent(new InputEvent("beforeinput", { bubbles: true }));
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    textarea.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
+    expect(onTypingChange).toHaveBeenNthCalledWith(1, true);
+    expect(onTypingChange).toHaveBeenLastCalledWith(false);
+  });
+});
+
 function questionPrompt(id: string, question: string): QuestionPrompt {
   return {
     id,
@@ -143,19 +173,44 @@ afterEach(async () => {
 });
 
 describe("renderChatComposer controls", () => {
-  it("renders and invokes an action beside the disabled reason", () => {
-    const onDisabledAction = vi.fn();
+  it("keeps composing enabled and explains queued delivery while offline", () => {
     const { container } = renderComposer({
-      canSend: false,
-      disabledReason: "This session is archived.",
-      disabledActionLabel: "Restore",
-      onDisabledAction,
+      offline: true,
+      queuedOutboxCount: 3,
+      draft: "Queue this message",
     });
 
-    const reason = container.querySelector(".agent-chat__disabled-reason");
-    expect(reason?.textContent).toContain("This session is archived.");
-    reason?.querySelector<HTMLButtonElement>("button")?.click();
-    expect(onDisabledAction).toHaveBeenCalledOnce();
+    expect(container.querySelector(".agent-chat__input--offline")).not.toBeNull();
+    expect(container.querySelector(".agent-chat__offline-hint")?.textContent?.trim()).toBe(
+      "Offline — 3 queued; messages send when the connection returns.",
+    );
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(false);
+    expect(button(container, t("chat.runControls.sendMessage")).disabled).toBe(false);
+
+    const empty = renderComposer({ offline: true, queuedOutboxCount: 0 });
+    expect(empty.container.querySelector(".agent-chat__offline-hint")?.textContent?.trim()).toBe(
+      "Offline — messages will be queued and sent when the connection returns.",
+    );
+
+    const online = renderComposer({ queuedOutboxCount: 3 });
+    expect(online.container.querySelector(".agent-chat__offline-hint")).toBeNull();
+  });
+
+  it("renders and invokes the archived-session banner action", () => {
+    const onAction = vi.fn();
+    const { container } = renderComposer({
+      canSend: false,
+      disabledBanner: {
+        text: "This session is archived. Unarchive it to continue the conversation.",
+        actionLabel: "Unarchive",
+        onAction,
+      },
+    });
+
+    const banner = container.querySelector(".agent-chat__disabled-banner");
+    expect(banner?.textContent).toContain("This session is archived.");
+    banner?.querySelector<HTMLButtonElement>("button")?.click();
+    expect(onAction).toHaveBeenCalledOnce();
   });
 
   it("switches the primary action between voice, send, queue, and stop", () => {
