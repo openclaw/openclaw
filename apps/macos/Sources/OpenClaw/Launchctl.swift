@@ -1,5 +1,31 @@
 import Foundation
 
+enum Launchctl {
+    struct Result {
+        let status: Int32
+        let output: String
+    }
+
+    @discardableResult
+    static func run(_ args: [String]) async -> Result {
+        await Task.detached(priority: .utility) { () -> Result in
+            let process = Process()
+            process.launchPath = "/bin/launchctl"
+            process.arguments = args
+            let pipe = Pipe()
+            process.standardOutput = pipe
+            process.standardError = pipe
+            do {
+                let data = try process.runAndReadToEnd(from: pipe)
+                let output = String(data: data, encoding: .utf8) ?? ""
+                return Result(status: process.terminationStatus, output: output)
+            } catch {
+                return Result(status: -1, output: error.localizedDescription)
+            }
+        }.value
+    }
+}
+
 struct LaunchAgentPlistSnapshot: Equatable {
     let programArguments: [String]
     let environment: [String: String]
@@ -13,11 +39,7 @@ struct LaunchAgentPlistSnapshot: Equatable {
 }
 
 enum LaunchAgentPlist {
-    static func snapshot(
-        url: URL,
-        generatedEnvironmentFileURL: URL? = nil,
-        generatedEnvironmentWrapperURL: URL? = nil) -> LaunchAgentPlistSnapshot?
-    {
+    static func snapshot(url: URL) -> LaunchAgentPlistSnapshot? {
         guard let data = try? Data(contentsOf: url) else { return nil }
         let rootAny: Any
         do {
@@ -29,13 +51,11 @@ enum LaunchAgentPlist {
             return nil
         }
         guard let root = rootAny as? [String: Any] else { return nil }
-        let programArguments = root["ProgramArguments"] as? [String] ?? []
-        let inlineEnvironment = root["EnvironmentVariables"] as? [String: String] ?? [:]
-        let generatedEnvironment = self.readGeneratedEnvironment(
-            programArguments: programArguments,
-            fileURL: generatedEnvironmentFileURL,
-            wrapperURL: generatedEnvironmentWrapperURL)
-        let env = inlineEnvironment.merging(generatedEnvironment) { _, generated in generated }
+        let rawProgramArguments = root["ProgramArguments"] as? [String] ?? []
+        let inlineEnv = root["EnvironmentVariables"] as? [String: String] ?? [:]
+        let fileEnv = Self.readGeneratedEnvironmentFile(programArguments: rawProgramArguments)
+        let env = inlineEnv.merging(fileEnv) { _, fileValue in fileValue }
+        let programArguments = Self.unwrapGeneratedEnvironmentWrapperArgs(rawProgramArguments)
         let stdoutPath = (root["StandardOutPath"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
         let stderrPath = (root["StandardErrorPath"] as? String)?
@@ -55,44 +75,65 @@ enum LaunchAgentPlist {
             password: password)
     }
 
-    private static func readGeneratedEnvironment(
-        programArguments: [String],
-        fileURL: URL?,
-        wrapperURL: URL?) -> [String: String]
-    {
-        guard let fileURL, let wrapperURL else { return [:] }
-        let filePath = fileURL.standardizedFileURL.path
-        let wrapperPath = wrapperURL.standardizedFileURL.path
-        let usesShellWrapper = programArguments.count >= 3 &&
-            programArguments[0] == "/bin/sh" &&
-            programArguments[1] == wrapperPath &&
-            programArguments[2] == filePath
-        let usesDirectWrapper = programArguments.count >= 2 &&
-            programArguments[0] == wrapperPath &&
-            programArguments[1] == filePath
-        // Read only the canonical file when the LaunchAgent uses OpenClaw's generated wrapper.
-        // This keeps arbitrary ProgramArguments paths from becoming app-readable secret sources.
-        guard usesShellWrapper || usesDirectWrapper,
-              FileManager.default.fileExists(atPath: wrapperPath),
-              let content = try? String(contentsOf: fileURL, encoding: .utf8)
-        else { return [:] }
+    private static func unwrapGeneratedEnvironmentWrapperArgs(_ args: [String]) -> [String] {
+        guard self.isGeneratedEnvironmentWrapperArgs(args) else { return args }
+        return Array(args.dropFirst(2))
+    }
 
+    private static func isGeneratedEnvironmentWrapperArgs(_ args: [String]) -> Bool {
+        guard let wrapperPath = args.first, args.count >= 2 else { return false }
+        let wrapperURL = URL(fileURLWithPath: wrapperPath)
+        let envFileURL = URL(fileURLWithPath: args[1])
+        let wrapperDirURL = wrapperURL.deletingLastPathComponent()
+        let envFileDirURL = envFileURL.deletingLastPathComponent()
+        guard wrapperDirURL.lastPathComponent == "service-env",
+              wrapperDirURL.path == envFileDirURL.path
+        else { return false }
+        let wrapperName = wrapperURL.lastPathComponent
+        let suffix = "-env-wrapper.sh"
+        guard wrapperName.hasSuffix(suffix) else { return false }
+        let label = String(wrapperName.dropLast(suffix.count))
+        return !label.isEmpty && envFileURL.lastPathComponent == "\(label).env"
+    }
+
+    private static func readGeneratedEnvironmentFile(programArguments: [String]) -> [String: String] {
+        guard self.isGeneratedEnvironmentWrapperArgs(programArguments),
+              programArguments.indices.contains(1)
+        else { return [:] }
+        let envFileURL = URL(fileURLWithPath: programArguments[1])
+        guard let content = try? String(contentsOf: envFileURL, encoding: .utf8) else {
+            return [:]
+        }
         var environment: [String: String] = [:]
         for rawLine in content.components(separatedBy: .newlines) {
             let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard line.hasPrefix("export ") else { continue }
-            let assignment = line.dropFirst("export ".count)
-            guard let separator = assignment.firstIndex(of: "=") else { continue }
-            let key = String(assignment[..<separator])
-            guard key.range(of: #"^[A-Za-z_][A-Za-z0-9_]*$"#, options: .regularExpression) != nil else {
+            guard !line.isEmpty, !line.hasPrefix("#"), line.hasPrefix("export ") else {
                 continue
             }
-            let rawValue = String(assignment[assignment.index(after: separator)...])
-            guard rawValue.hasPrefix("'"), rawValue.hasSuffix("'") else { continue }
-            environment[key] = String(rawValue.dropFirst().dropLast())
-                .replacingOccurrences(of: #"'\''"#, with: "'")
+            let assignment = line.dropFirst("export ".count)
+            guard let equalsIndex = assignment.firstIndex(of: "=") else { continue }
+            let key = String(assignment[..<equalsIndex])
+            guard self.isEnvironmentKey(key) else { continue }
+            let value = String(assignment[assignment.index(after: equalsIndex)...])
+            environment[key] = self.parseGeneratedEnvironmentValue(value)
         }
         return environment
+    }
+
+    private static func isEnvironmentKey(_ key: String) -> Bool {
+        guard let first = key.unicodeScalars.first,
+              first == "_" || CharacterSet.letters.contains(first)
+        else { return false }
+        return key.unicodeScalars.allSatisfy {
+            $0 == "_" || CharacterSet.alphanumerics.contains($0)
+        }
+    }
+
+    private static func parseGeneratedEnvironmentValue(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("'"), trimmed.hasSuffix("'") else { return trimmed }
+        return String(trimmed.dropFirst().dropLast())
+            .replacingOccurrences(of: "'\\''", with: "'")
     }
 
     private static func extractFlagInt(_ args: [String], flag: String) -> Int? {
