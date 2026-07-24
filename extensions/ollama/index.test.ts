@@ -206,6 +206,40 @@ describe("ollama plugin", () => {
     },
   );
 
+  it.each(["ollama", "ollama-cloud"])(
+    "projects %s tool schemas through the llama.cpp GBNF compat family",
+    (providerId) => {
+      const provider = registerProvidersWithPluginConfig({}).find(
+        (candidate) => candidate.id === providerId,
+      );
+      const [tool] =
+        provider?.normalizeToolSchemas?.({
+          provider: providerId,
+          tools: [
+            {
+              name: "cron",
+              description: "Manage cron jobs",
+              parameters: {
+                type: "object",
+                properties: {
+                  declarationKey: { type: "string", pattern: "\\S", maxLength: 200 },
+                  script: { type: "string", maxLength: 65_536 },
+                },
+              },
+            },
+          ],
+        } as never) ?? [];
+
+      expect(tool?.parameters).toEqual({
+        type: "object",
+        properties: {
+          declarationKey: { type: "string", maxLength: 200 },
+          script: { type: "string" },
+        },
+      });
+    },
+  );
+
   it("registers node-local inference commands, policy, and agent tool", () => {
     const registerNodeHostCommand = vi.fn();
     const registerNodeInvokePolicy = vi.fn();

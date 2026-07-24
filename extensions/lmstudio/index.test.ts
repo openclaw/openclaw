@@ -34,6 +34,35 @@ function createRemoteProviderConfig(overrides?: Partial<ModelProviderConfig>): M
 }
 
 describe("lmstudio plugin", () => {
+  it("projects tool schemas through the llama.cpp GBNF compat family", () => {
+    const provider = registerProvider();
+    const [tool] =
+      provider?.normalizeToolSchemas?.({
+        provider: "lmstudio",
+        tools: [
+          {
+            name: "cron",
+            description: "Manage cron jobs",
+            parameters: {
+              type: "object",
+              properties: {
+                declarationKey: { type: "string", pattern: "\\S", maxLength: 200 },
+                script: { type: "string", maxLength: 65_536 },
+              },
+            },
+          },
+        ],
+      } as never) ?? [];
+
+    expect(tool?.parameters).toEqual({
+      type: "object",
+      properties: {
+        declarationKey: { type: "string", maxLength: 200 },
+        script: { type: "string" },
+      },
+    });
+  });
+
   it("canonicalizes base URLs during provider normalization", () => {
     const provider = registerProvider();
     const providerConfig = createRemoteProviderConfig({

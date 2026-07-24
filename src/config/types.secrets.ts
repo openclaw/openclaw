@@ -324,6 +324,8 @@ export type ManualExecSecretProviderConfig = {
   env?: Record<string, string>;
   passEnv?: string[];
   trustedDirs?: string[];
+  /** Skip POSIX permission checks on command/path when the operator trusts the install layout. */
+  allowInsecurePath?: boolean;
 };
 
 export type PluginIntegrationSecretProviderConfig = {

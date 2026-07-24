@@ -247,6 +247,9 @@ function materializeExecProviderConfig(
     ...(integration.env ? { env: integration.env } : {}),
     ...(integration.passEnv ? { passEnv: integration.passEnv } : {}),
     trustedDirs,
+    // ${node} always runs the current runtime; preserve the manifest opt-in for
+    // operators/tests that need it on layouts where Node itself is group-writable.
+    ...(integration.allowInsecurePath === true ? { allowInsecurePath: true } : {}),
   };
 }
 

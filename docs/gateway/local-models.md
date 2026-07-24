@@ -190,6 +190,33 @@ Compat overrides for stricter OpenAI-compatible backends:
 
 - **String-only content**: some servers accept only string `messages[].content`, not structured content-part arrays. Set `models.providers.<provider>.models[].compat.requiresStringContent: true`.
 - **Strict message keys**: if the server rejects message entries with more than `role`/`content`, set `compat.strictMessageKeys: true`.
+- **llama.cpp GBNF tool schemas**: the bundled `ollama`, `ollama-cloud`, `lmstudio`, and `llama-cpp` providers automatically project tool schemas through their provider-owned compatibility hooks. For a custom OpenAI-compatible endpoint backed by llama.cpp, opt in per model with `compat.toolSchemaProfile: "llamacpp"`:
+
+  ```json5
+  {
+    models: {
+      providers: {
+        local: {
+          baseUrl: "http://127.0.0.1:8080/v1",
+          api: "openai-completions",
+          models: [
+            {
+              id: "my-llama-model",
+              name: "My llama.cpp model",
+              compat: {
+                supportsTools: true,
+                toolSchemaProfile: "llamacpp",
+              },
+            },
+          ],
+        },
+      },
+    },
+  }
+  ```
+
+  The profile removes `pattern` constraints, closes open `additionalProperties`, and drops `maxLength` values above 2,000 from the model-facing schema because llama.cpp's JSON Schema-to-GBNF converter rejects or explodes on those forms. Smaller bounds remain, and OpenClaw's tool execution path still validates canonical arguments. Do not enable this profile for ordinary providers: without the explicit profile or a bundled llama.cpp-backed provider hook, canonical tool-schema constraints remain unchanged.
+
 - **Bracketed tool text**: some local models emit standalone bracketed tool requests as text, like `[tool_name]` followed by JSON and `[END_TOOL_REQUEST]`. OpenClaw promotes those to real tool calls only when the name exactly matches a registered tool for the turn; otherwise it stays as hidden, unsupported text.
 - **Unstructured tool-call-looking text**: if a model emits JSON/XML/ReAct-style text that looks like a tool call but wasn't a structured invocation, OpenClaw leaves it as text and logs a warning with the run id, provider/model, detected pattern, and tool name when available. That is provider/model incompatibility, not a completed tool run.
 - **Forcing tool use**: if tools show up as assistant text (raw JSON/XML/ReAct, or an empty `tool_calls` array), first confirm the server's chat template/parser supports tool calls. If the parser only works when tool use is forced, override the default proxy value of `tool_choice: "auto"` per model:
