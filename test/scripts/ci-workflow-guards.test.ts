@@ -2996,7 +2996,7 @@ describe("ci workflow guards", () => {
     expect(paddedKey.status).not.toBe(0);
     expect(paddedKey.stderr).toContain("key must be non-empty and canonical");
     expect(deleteStep).toMatchObject({
-      uses: "useblacksmith/stickydisk-delete@3bd8d43f9da764c6b80c2cd6db129bdb568c79b6",
+      uses: "useblacksmith/stickydisk-delete@b41313d28b8647d72114c9ba3c96bb04061562b6",
       with: {
         "delete-docker-cache": "false",
         "delete-key": "${{ inputs.retired_key }}",
