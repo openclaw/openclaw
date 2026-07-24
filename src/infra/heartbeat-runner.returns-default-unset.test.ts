@@ -455,15 +455,16 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     sessionId: "sid",
     updatedAt: Date.now(),
   };
+  const entryWithDelivery = (channel: string, to: string) => ({
+    ...baseEntry,
+    delivery: normalizeSessionDeliveryState({ context: { channel, to } }),
+  });
 
   it("resolves target variants across route and allowlist rules", () => {
     const cases: Array<{
       name: string;
       cfg: OpenClawConfig;
-      entry: typeof baseEntry & {
-        lastChannel?: "whatsapp" | "telegram" | "webchat";
-        lastTo?: string;
-      };
+      entry: typeof baseEntry & { delivery?: ReturnType<typeof normalizeSessionDeliveryState> };
       expected: ReturnType<typeof resolveHeartbeatDeliveryTarget>;
     }> = [
       {
@@ -481,7 +482,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
       {
         name: "target defaults to none when unset",
         cfg: {},
-        entry: { ...baseEntry, lastChannel: "whatsapp", lastTo: "120363401234567890@g.us" },
+        entry: entryWithDelivery("whatsapp", "120363401234567890@g.us"),
         expected: {
           channel: "none",
           reason: "target-none",
@@ -510,7 +511,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
       {
         name: "skip webchat last route",
         cfg: {},
-        entry: { ...baseEntry, lastChannel: "webchat", lastTo: "web" },
+        entry: entryWithDelivery("webchat", "web"),
         expected: {
           channel: "none",
           reason: "target-none",
@@ -525,7 +526,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
           agents: { defaults: { heartbeat: { target: "whatsapp", to: "+1999" } } },
           channels: { whatsapp: { allowFrom: ["120363401234567890@g.us", "+1666"] } },
         },
-        entry: { ...baseEntry, lastChannel: "whatsapp", lastTo: "+1222" },
+        entry: entryWithDelivery("whatsapp", "+1222"),
         expected: {
           channel: "none",
           reason: "no-target",
@@ -540,11 +541,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
           agents: { defaults: { heartbeat: { target: "last" } } },
           channels: { whatsapp: { allowFrom: ["120363401234567890@g.us"] } },
         },
-        entry: {
-          ...baseEntry,
-          lastChannel: "whatsapp",
-          lastTo: "whatsapp:120363401234567890@G.US",
-        },
+        entry: entryWithDelivery("whatsapp", "whatsapp:120363401234567890@G.US"),
         expected: {
           channel: "whatsapp",
           to: "120363401234567890@g.us",
@@ -582,7 +579,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
       {
         name: "allow direct target by default",
         cfg: { agents: { defaults: { heartbeat: { target: "last" } } } },
-        entry: { ...baseEntry, lastChannel: "telegram", lastTo: "5232990709" },
+        entry: entryWithDelivery("telegram", "5232990709"),
         expected: {
           channel: "telegram",
           to: "5232990709",
@@ -595,7 +592,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
       {
         name: "block direct target when directPolicy is block",
         cfg: { agents: { defaults: { heartbeat: { target: "last", directPolicy: "block" } } } },
-        entry: { ...baseEntry, lastChannel: "telegram", lastTo: "5232990709" },
+        entry: entryWithDelivery("telegram", "5232990709"),
         expected: {
           channel: "none",
           reason: "dm-blocked",
