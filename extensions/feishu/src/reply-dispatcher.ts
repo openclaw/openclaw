@@ -680,11 +680,17 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         replyLifecycleStateInitialized = true;
         deliveredFinalTexts.clear();
         sentIndependentBlockText = false;
-        streamingClosedForReply = false;
-        streamingCloseErroredForReply = false;
         visibleReplySent = false;
         skippedFinalReason = null;
       }
+      // A new reply run within the same turn must not inherit the previous
+      // run's closed-streaming terminal state: after a tool-failure warning
+      // closed the card, the recovered final answer would otherwise be
+      // swallowed by the closed-streaming skip (#110352). Exact duplicates are
+      // still suppressed via deliveredFinalTexts, and visibleReplySent /
+      // skippedFinalReason stay sticky across keepalives (#87896).
+      streamingClosedForReply = false;
+      streamingCloseErroredForReply = false;
       if (streamingEnabled && renderMode === "card") {
         startStreaming();
       }
