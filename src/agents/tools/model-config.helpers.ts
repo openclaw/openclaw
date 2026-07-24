@@ -138,6 +138,14 @@ export function hasProviderAuthForTool(params: {
       cfg: params.cfg,
       workspaceDir: params.workspaceDir,
       allowPluginSyntheticAuth: false,
+      // Without the store, inline provider keys in billing cooldown would
+      // still be advertised as available to model-backed tools.
+      store: loadAuthStoreForProvider({
+        provider: params.provider,
+        cfg: params.cfg,
+        agentDir: params.agentDir,
+        authStore: params.authStore,
+      }),
     })
   ) {
     return true;
@@ -259,6 +267,14 @@ function hasDirectProviderApiKeyAuthForTool(params: {
       workspaceDir: params.workspaceDir,
       modelApi: params.modelApi,
       allowPluginSyntheticAuth: false,
+      // Without the store, inline provider keys in billing cooldown would
+      // still be advertised as direct API-key auth for tools.
+      store: loadAuthStoreForProvider({
+        provider: params.provider,
+        cfg: params.cfg,
+        agentDir: params.agentDir,
+        authStore: params.authStore,
+      }),
     })
   ) {
     return true;
