@@ -182,3 +182,9 @@ user service (no lingering needed). See [Gateway runbook](/gateway) for the syst
 - [Discord](/channels/discord) and [Telegram](/channels/telegram) (reply tags + replyToMode settings)
 - [OpenClaw assistant setup](/start/openclaw)
 - [macOS app](/platforms/macos) (gateway lifecycle)
+
+> **Windows note:** If `corepack enable` fails with an `EPERM` error while creating the `pnpm` shim, install the repository's pinned pnpm version:
+>
+> ```bash
+> npm install -g pnpm@11.2.2
+> ```
