@@ -1751,7 +1751,10 @@ describe("ci workflow guards", () => {
     expect(action).toContain("docs_only=false");
     expect(action).toContain("docs_changed=false");
     expect(action).toContain("test/fixtures/*)");
-    expect(action).toContain("docs/* | *.md | *.mdx)");
+    expect(action).toContain(
+      "docs/* | *.md | *.mdx | src/cli/program/subcli-descriptors.ts | scripts/generate-command-reference-doc.ts)",
+    );
+    expect(action).toContain("*) non_docs=true ;;");
   });
 
   it("bounds matrix fan-out for runner-registration pressure", () => {

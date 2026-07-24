@@ -9,6 +9,15 @@ title: "CLI reference"
 `openclaw` is the main CLI entry point. Each core command has a dedicated
 reference page or is documented with the command it aliases; this index lists
 the commands, global flags, and output styling rules that apply across the CLI.
+For a machine-readable inventory of command descriptors, routes, runtime registrations, and
+opt-in plugin descriptors, see [`openclaw commands`](/cli/commands).
+
+## Command inventory
+
+The generated [command inventory](/cli/commands) lists top-level command
+descriptions, provenance, and declared effects from the static command
+descriptors. Run `openclaw commands list` for the current runtime tree and
+opt-in plugin descriptors.
 
 Setup commands by intent:
 
