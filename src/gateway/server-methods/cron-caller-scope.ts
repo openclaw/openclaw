@@ -90,6 +90,27 @@ function isOperatorCommandCronJob(job: CronJob): boolean {
   );
 }
 
+function cronJobScheduledAuthorityMatchesCaller(
+  job: CronJob,
+  callerScope: CronCallerScope,
+): boolean {
+  const policy = job.scheduledToolPolicy;
+  if (!policy) {
+    return true;
+  }
+  // Trusted jobs remain operator-only. Account jobs reuse the exact persisted
+  // session's group authority, so sibling sessions must not control them.
+  if (policy.mode === "trusted") {
+    return false;
+  }
+  const callerSessionKey = callerScope.sessionKey?.trim();
+  return (
+    callerSessionKey === policy.ownerSessionKey &&
+    job.owner?.sessionKey?.trim() === policy.ownerSessionKey &&
+    callerScope.accountId === normalizeAccountId(policy.ownerAccountId)
+  );
+}
+
 export function cronJobMatchesCallerScope(params: {
   job: CronJob;
   callerScope: CronCallerScope | undefined;
@@ -102,6 +123,9 @@ export function cronJobMatchesCallerScope(params: {
   // agent tool capability. Hide it before owner/routing fallback can expose
   // payload env, watched commands, or manual force-run controls.
   if (isOperatorCommandCronJob(params.job)) {
+    return false;
+  }
+  if (!cronJobScheduledAuthorityMatchesCaller(params.job, params.callerScope)) {
     return false;
   }
   const ownerAccountId = params.job.owner?.accountId;

@@ -264,14 +264,14 @@ function createCronJob(overrides: Partial<CronJob> = {}): CronJob {
   };
 }
 
-function callerClient(agentId: string, accountId?: string): GatewayClient {
+function callerClient(agentId: string, accountId?: string, sessionKey?: string): GatewayClient {
   return {
     connect: {} as GatewayClient["connect"],
     internal: {
       agentRuntimeIdentity: {
         kind: "agentRuntime",
         agentId,
-        sessionKey: `agent:${agentId}:main`,
+        sessionKey: sessionKey ?? `agent:${agentId}:main`,
         ...(accountId ? { turnSourceAccountId: accountId } : {}),
       },
     },
@@ -1232,6 +1232,86 @@ describe("cron method validation", () => {
       expect.objectContaining({ total: 1 }),
       undefined,
     );
+  });
+
+  it("binds scheduled authority access to its exact creator session", async () => {
+    const ownerSessionKey = "agent:ops:discord:work:group:creator";
+    const accountJob = createCronJob({
+      owner: { agentId: "ops", sessionKey: ownerSessionKey, accountId: "work" },
+      scheduledToolPolicy: {
+        version: 1,
+        mode: "account",
+        ownerSessionKey,
+        ownerAccountId: "work",
+      },
+    });
+    const context = createCronContext(accountJob);
+
+    const siblingClient = callerClient("ops", "work", "agent:ops:discord:work:group:sibling");
+    const siblingList = await invokeCron(
+      "cron.list",
+      { compact: true },
+      { context, client: siblingClient },
+    );
+    expect(siblingList.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ total: 0, jobs: [] }),
+      undefined,
+    );
+
+    const siblingUpdate = await invokeCron(
+      "cron.update",
+      {
+        id: accountJob.id,
+        patch: {
+          payload: {
+            kind: "agentTurn",
+            message: "replace creator prompt",
+            toolsAllow: ["*"],
+          },
+        },
+      },
+      { context, client: siblingClient },
+    );
+    expect(siblingUpdate.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: "invalid cron.update params: id not found" }),
+    );
+    expect(context.cron.updateWithPrecondition).not.toHaveBeenCalled();
+
+    const ownerList = await invokeCron(
+      "cron.list",
+      { compact: true },
+      { context, client: callerClient("ops", "work", ownerSessionKey) },
+    );
+    expect(ownerList.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ total: 1 }),
+      undefined,
+    );
+  });
+
+  it("keeps trusted scheduled authority operator-only", async () => {
+    const trustedJob = createCronJob({
+      owner: { agentId: "ops", sessionKey: "agent:ops:main", accountId: "default" },
+      scheduledToolPolicy: { version: 1, mode: "trusted" },
+    });
+    const context = createCronContext(trustedJob);
+
+    const agentList = await invokeCron(
+      "cron.list",
+      { compact: true },
+      { context, client: callerClient("ops") },
+    );
+    expect(agentList.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ total: 0, jobs: [] }),
+      undefined,
+    );
+
+    const operatorGet = await invokeCron("cron.get", { id: trustedJob.id }, { context });
+    expectCronSuccess(operatorGet.respond);
   });
 
   it("keeps explicit declaration ownership for operator callers", async () => {
