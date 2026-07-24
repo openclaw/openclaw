@@ -94,6 +94,21 @@ export function resolveBackgroundTaskTerminalResult(progressSummary: string): {
   return {};
 }
 
+/** Preserves useful progress text when a child ACP task fails after producing output. */
+export function resolveBackgroundTaskFailureTerminalSummary(
+  error: AcpRuntimeError,
+  progressSummary: string,
+): string | null {
+  if (resolveBackgroundTaskFailureStatus(error) === "timed_out") {
+    return normalizeText(progressSummary)?.replace(/\s+/g, " ").trim() || null;
+  }
+  const terminalResult = resolveBackgroundTaskTerminalResult(progressSummary);
+  if (terminalResult.terminalSummary) {
+    return terminalResult.terminalSummary;
+  }
+  return null;
+}
+
 /** Resolves the requester task context for a spawned child ACP session. */
 export function resolveBackgroundTaskContext(params: {
   deps: AcpSessionManagerDeps;
