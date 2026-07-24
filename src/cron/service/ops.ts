@@ -992,7 +992,7 @@ export async function remove(
       state.deps.log.info({ jobId: id }, "cron: aborting active job before removal");
       advanceCronActiveJobGeneration();
       // Wait for the job to finish/abort (bounded wait)
-      await waitForActiveCronJobs(state, id, 30_000);
+      await waitForActiveCronJobs(30_000);
     }
 
     state.store.jobs = state.store.jobs.filter((j) => j.id !== id);
