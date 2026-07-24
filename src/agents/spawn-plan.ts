@@ -18,6 +18,7 @@ import {
 } from "../config/agent-limits.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { resolveChildAdmission, type ChildAdmissionCap } from "./child-admission.js";
 import { resolveSubagentCapabilities } from "./subagent-capabilities.js";
@@ -292,6 +293,8 @@ export function resolveSpawnAdmission(params: {
   targetAgentId: string;
   requestedAgentId?: string;
   configuredAgentIds: string[];
+  /** Host-verified one-shot target authorization, for example an active allow lease. */
+  authorizedTargetAgentId?: string;
   additionalActiveChildren?: number;
 }):
   | {
@@ -343,6 +346,15 @@ export function resolveSpawnAdmission(params: {
     params.cfg,
     params.requesterAgentId,
   )?.subagents;
+  const configuredAllowAgents =
+    requesterSubagentConfig?.allowAgents ?? params.cfg.agents?.defaults?.subagents?.allowAgents;
+  const authorizedTargetAgentId = params.authorizedTargetAgentId?.trim();
+  if (
+    authorizedTargetAgentId &&
+    normalizeAgentId(authorizedTargetAgentId) !== normalizeAgentId(params.targetAgentId)
+  ) {
+    return { ok: false, error: "host target authorization does not match requested agentId" };
+  }
   const requireAgentId =
     requesterSubagentConfig?.requireAgentId ??
     params.cfg.agents?.defaults?.subagents?.requireAgentId ??
@@ -358,8 +370,9 @@ export function resolveSpawnAdmission(params: {
     requesterAgentId: params.requesterAgentId,
     targetAgentId: params.targetAgentId,
     requestedAgentId: params.requestedAgentId,
-    allowAgents:
-      requesterSubagentConfig?.allowAgents ?? params.cfg.agents?.defaults?.subagents?.allowAgents,
+    allowAgents: authorizedTargetAgentId
+      ? [...(configuredAllowAgents ?? []), authorizedTargetAgentId]
+      : configuredAllowAgents,
     configuredAgentIds: params.configuredAgentIds,
   });
   if (!targetPolicy.ok) {

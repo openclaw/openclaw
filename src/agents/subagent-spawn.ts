@@ -220,6 +220,8 @@ type SpawnSubagentContext = {
   agentGroupSpace?: string | null;
   agentMemberRoleIds?: string[];
   requesterAgentIdOverride?: string;
+  /** Exact target authorized by a host-validated, active allow lease. */
+  authorizedTargetAgentId?: string;
   /** Explicit workspace directory for subagent to inherit (optional). */
   workspaceDir?: string;
   inheritedToolAllowlist?: string[];
@@ -1190,6 +1192,7 @@ export async function spawnSubagentDirect(
       targetAgentId,
       requestedAgentId,
       configuredAgentIds,
+      authorizedTargetAgentId: ctx.authorizedTargetAgentId,
     });
   };
   const admission = resolveAdmission();

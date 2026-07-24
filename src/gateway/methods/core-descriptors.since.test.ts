@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { listCoreGatewayMethodMetadata } from "./core-descriptors.js";
+import { listCoreGatewayMethodMetadata, listCoreGatewayMethodNames } from "./core-descriptors.js";
 
 const CURRENT_TRAIN_METHODS = [
   "question.request",
@@ -63,6 +63,13 @@ const CURRENT_TRAIN_METHODS = [
   "device.pair.rename",
   "sessions.observer.ask",
   "sessions.observer.visibility",
+  "subagents.allowLease.acquire",
+  "subagents.allowLease.status",
+  "subagents.allowLease.release",
+  "sessions_spawn",
+  "sessions_list",
+  "sessions_status",
+  "sessions_history",
   "channels.pairing.list",
   "channels.pairing.approve",
   "channels.pairing.dismiss",
@@ -71,6 +78,58 @@ const CURRENT_TRAIN_METHODS = [
 ] as const;
 
 describe("core gateway method release trains", () => {
+  it("keeps external orchestrator aliases out of generated native protocol enums", () => {
+    const coreMethods = listCoreGatewayMethodNames();
+    const nativeMethods = listCoreGatewayMethodMetadata()
+      .filter((method) => method.nativeProtocol !== false)
+      .map((method) => method.name);
+    const externalAliases = [
+      "subagents.allowLease.acquire",
+      "subagents.allowLease.status",
+      "subagents.allowLease.release",
+      "sessions_spawn",
+      "sessions_list",
+      "sessions_status",
+      "sessions_history",
+    ];
+
+    for (const method of externalAliases) {
+      expect(coreMethods).toContain(method);
+      expect(nativeMethods).not.toContain(method);
+    }
+    expect(nativeMethods).toContain("sessions.list");
+  });
+
+  it("keeps allow-lease acquisition behind the admin-scoped spawn gate", () => {
+    const byName = new Map(listCoreGatewayMethodMetadata().map((method) => [method.name, method]));
+
+    expect(byName.get("subagents.allowLease.acquire")).toMatchObject({
+      scope: "operator.admin",
+      nativeProtocol: false,
+    });
+    expect(byName.get("sessions_spawn")).toMatchObject({
+      scope: "operator.write",
+      nativeProtocol: false,
+    });
+    expect(byName.get("subagents.allowLease.status")).toMatchObject({
+      scope: "operator.read",
+      nativeProtocol: false,
+    });
+  });
+
+  it("appends Agentic OS runtime aliases after the existing core protocol table", () => {
+    const methods = listCoreGatewayMethodMetadata().map((method) => method.name);
+    expect(methods.slice(-7)).toEqual([
+      "subagents.allowLease.acquire",
+      "subagents.allowLease.status",
+      "subagents.allowLease.release",
+      "sessions_spawn",
+      "sessions_list",
+      "sessions_status",
+      "sessions_history",
+    ]);
+  });
+
   it("records a valid train for every method and dates the 2026.7 families", () => {
     const methods = listCoreGatewayMethodMetadata();
 

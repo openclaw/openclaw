@@ -273,6 +273,10 @@ const loadToolsInvokeHandlers = lazyHandlerModule(
   () => import("./server-methods/tools-invoke.js"),
   (module) => module.toolsInvokeHandlers,
 );
+const loadAgenticOsRuntimeContractHandlers = lazyHandlerModule(
+  () => import("./server-methods/agentic-os-runtime-contract.js"),
+  (module) => module.agenticOsRuntimeContractHandlers,
+);
 const loadMcpAppHandlers = lazyHandlerModule(
   () => import("./server-methods/mcp-app.js"),
   (module) => module.mcpAppHandlers,
@@ -668,6 +672,18 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["tools.invoke"],
     loadHandlers: loadToolsInvokeHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: [
+      "subagents.allowLease.acquire",
+      "subagents.allowLease.status",
+      "subagents.allowLease.release",
+      "sessions_spawn",
+      "sessions_list",
+      "sessions_status",
+      "sessions_history",
+    ],
+    loadHandlers: loadAgenticOsRuntimeContractHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [
