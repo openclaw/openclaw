@@ -10,6 +10,13 @@ import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { enqueueCommandInLane } from "../process/command-queue.js";
+import {
+  getActiveGatewayRootWorkCount,
+  isGatewayRestartDraining,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { IMAGE_ONLY_USER_MESSAGE } from "./agent-prompt.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import {
@@ -19,6 +26,7 @@ import {
   startGatewayServerWithRetries,
   testState,
 } from "./test-helpers.js";
+import { createPostHandlerGate, waitForRootWorkCount } from "./test-helpers.root-work.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -1093,6 +1101,73 @@ describe("OpenResponses HTTP API (e2e)", () => {
     } finally {
       await server.close({ reason: "openresponses token auth owner test done" });
     }
+  });
+
+  it("streams the answer when the agent queues lane work after the handler returned", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    const gate = createPostHandlerGate();
+    agentCommand.mockImplementationOnce((async () => {
+      await gate.opened;
+      // The command queue refuses subordinate work whose root was already
+      // released, which is how a detached streaming continuation used to fail.
+      const lane = await enqueueCommandInLane(
+        "openresponses-http-admission-probe",
+        async () => "queued",
+      );
+      return { payloads: [{ text: `answer ${lane}` }] };
+    }) as never);
+
+    const res = await postResponses(port, { stream: true, model: "openclaw", input: "hi" });
+    await gate.openAfterHandlerReturned();
+
+    expect(res.status).toBe(200);
+    const events = parseSseEvents(await res.text());
+    expect(collectSseEventTypes(events)).toContain("response.completed");
+    expect(collectSseEventTypes(events)).not.toContain("response.failed");
+    expect(findSseEvent(events, "response.completed").data).toContain("answer queued");
+  });
+
+  it("keeps one root-work lease alive from handler return to stream end", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    const gate = createPostHandlerGate();
+    let leasesDuringRun = -1;
+    agentCommand.mockImplementationOnce((async () => {
+      await gate.opened;
+      // Counted without `excludeCurrent`: the lease being proven is the one the
+      // streaming continuation owns right here, so it must be part of the count.
+      leasesDuringRun = getActiveGatewayRootWorkCount();
+      return { payloads: [{ text: "late answer" }] };
+    }) as never);
+
+    const idleLeases = getActiveGatewayRootWorkCount();
+    const res = await postResponses(port, { stream: true, model: "openclaw", input: "hi" });
+    await gate.openAfterHandlerReturned();
+    await res.text();
+
+    expect(leasesDuringRun).toBeGreaterThan(idleLeases);
+    // A leaked lease would stall a later restart drain forever.
+    await expect(waitForRootWorkCount(idleLeases)).resolves.toBe(idleLeases);
+  });
+
+  it("refuses streaming responses while the gateway drains for restart", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    markGatewayRestartDraining();
+    try {
+      expect(isGatewayRestartDraining()).toBe(true);
+      const res = await postResponses(port, { stream: true, model: "openclaw", input: "hi" });
+
+      expect(res.status).toBe(503);
+      expect(res.headers.get("retry-after")).toBe("1");
+      const body = (await res.json()) as { error?: { code?: string } };
+      expect(body.error?.code).toBe("gateway_unavailable");
+      expect(agentCommand).not.toHaveBeenCalled();
+    } finally {
+      resetGatewayWorkAdmission();
+    }
+    expect(isGatewayRestartDraining()).toBe(false);
   });
 
   it("preserves assistant text alongside non-stream function_call output", async () => {
