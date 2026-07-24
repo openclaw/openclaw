@@ -676,7 +676,7 @@ describe("foreground reply freshness", () => {
     expect(deliveries).toEqual([{ kind: "final", text: "old rewritten final" }]);
   });
 
-  it("suppresses an older foreground final when a newer settled hook reports visible delivery", async () => {
+  it("keeps an older foreground final active after a newer settled hook reports visible delivery", async () => {
     const deliveries: Delivery[] = [];
     const beforeDeliverStarted = createDeferred<void>();
     const releaseBeforeDeliver = createDeferred<ReplyPayload | null>();
@@ -724,10 +724,10 @@ describe("foreground reply freshness", () => {
       counts: { tool: 0, block: 0, final: 1 },
     });
     expect(olderResult).toEqual({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
     });
-    expect(deliveries).toEqual([]);
+    expect(deliveries).toEqual([{ kind: "final", text: "old rewritten final" }]);
   });
 
   it("still runs stale generic settled hooks after a newer visible reply", async () => {
