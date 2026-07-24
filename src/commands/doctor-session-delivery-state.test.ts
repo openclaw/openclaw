@@ -151,6 +151,29 @@ describe("doctor canonical session delivery state", () => {
     });
   });
 
+  it("recovers a legacy route after an unrelated runtime write stamps delivery none", () => {
+    const stateDir = fs.realpathSync(tempDirs.make("openclaw-delivery-none-stamp-"));
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    insertSessionRow(env, "agent:main:stamped-none", {
+      sessionId: "stamped-none-session",
+      updatedAt: 10,
+      delivery: { kind: "none" },
+      lastChannel: "telegram",
+      lastTo: "-100123",
+      lastAccountId: "bot",
+    });
+
+    expect(repairCanonicalSessionDeliveryStates({ apply: true, cfg: {}, env })).toEqual({
+      found: 1,
+      repaired: 1,
+      scannedStores: 1,
+    });
+    expect(JSON.parse(readEntryJson(env, "agent:main:stamped-none")).delivery).toMatchObject({
+      kind: "external",
+      context: { channel: "telegram", to: "-100123", accountId: "bot" },
+    });
+  });
+
   it("skips structurally invalid row JSON while repairing valid sessions", () => {
     const stateDir = fs.realpathSync(tempDirs.make("openclaw-delivery-invalid-row-"));
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };

@@ -641,13 +641,16 @@ export function normalizeLegacySessionEntryDelivery(entry: SessionEntry): Sessio
   const context = hasInternalFallback
     ? mergeExternalOverInternal(explicitContext, internalFallbackContext)
     : mergeDeliveryContext(routeContext, fallbackContext);
-  const delivery = isCanonicalSessionDeliveryState(entry.delivery)
-    ? entry.delivery
-    : normalizeSessionDeliveryState({
-        route: hasInternalFallback ? undefined : route,
-        context,
-        origin: legacy.origin,
-      });
+  const migratedDelivery = normalizeSessionDeliveryState({
+    route: hasInternalFallback ? undefined : route,
+    context,
+    origin: legacy.origin,
+  });
+  const delivery =
+    isCanonicalSessionDeliveryState(entry.delivery) &&
+    !(entry.delivery.kind === "none" && migratedDelivery.kind !== "none")
+      ? entry.delivery
+      : migratedDelivery;
   const next = { ...entry, delivery } as LegacySessionDeliveryEntry;
   for (const key of LEGACY_SESSION_DELIVERY_KEYS) {
     delete next[key];
