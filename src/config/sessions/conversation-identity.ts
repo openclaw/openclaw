@@ -217,11 +217,28 @@ export function conversationIdentityFromMsgContext(params: {
   // An explicit delivery context is already a paired route. Otherwise direct ingress
   // addresses the sender (`From`), while OriginatingTo can describe the local endpoint.
   const useDirectIngressTarget = Boolean(directIngressTarget && !explicitDeliveryContext?.to);
-  const deliveryTarget = useDirectIngressTarget
+  const resolvedThreadId = normalizeThreadId(
+    useDirectIngressTarget
+      ? (route?.threadId ?? params.ctx.MessageThreadId)
+      : (deliveryContext?.threadId ?? params.ctx.MessageThreadId),
+  );
+  let deliveryTarget = useDirectIngressTarget
     ? directIngressTarget
     : (normalizeText(deliveryContext?.to) ??
       normalizeText(params.ctx.OriginatingTo) ??
       normalizeText(params.ctx.To));
+  // A forum-topic group message must carry its topic in the delivery target. When a
+  // caller supplies only the group-level address (no `:topic:`) while a thread id is
+  // present, the derived peer/id is group-scoped even though the conversation ref
+  // folds in threadId — producing a second, topic-less "shadow" conversation for the
+  // same topic that also answers the message. Canonicalize the suffix so live-context
+  // and persisted-route derivations converge on one topic-scoped identity.
+  if (kind === "group" && resolvedThreadId && deliveryTarget) {
+    const topicSuffix = `:topic:${resolvedThreadId}`;
+    if (!deliveryTarget.endsWith(topicSuffix)) {
+      deliveryTarget = `${deliveryTarget}${topicSuffix}`;
+    }
+  }
   const channel = useDirectIngressTarget
     ? (normalizeText(route?.provider) ??
       normalizeText(params.ctx.OriginatingChannel) ??
@@ -239,9 +256,7 @@ export function conversationIdentityFromMsgContext(params: {
     kind,
     peerId: deliveryTarget,
     deliveryTarget,
-    threadId: useDirectIngressTarget
-      ? (route?.threadId ?? params.ctx.MessageThreadId)
-      : (deliveryContext?.threadId ?? params.ctx.MessageThreadId),
+    threadId: resolvedThreadId,
     nativeChannelId: params.ctx.NativeChannelId ?? route?.nativeChannelId,
     nativeDirectUserId: params.ctx.NativeDirectUserId ?? route?.nativeDirectUserId,
     label: normalizeText(resolveConversationLabel(params.ctx)) ?? route?.label,

@@ -284,4 +284,44 @@ describe("conversation identity", () => {
     expect(persisted?.deliveryTarget).toBe("channel:ops-room");
     expect(live?.parentConversationRef).toBeUndefined();
   });
+
+  it("gives a group forum topic one identity from live and persisted routes", () => {
+    // A topic session persists a topic-scoped delivery target.
+    const persisted = conversationIdentityFromSessionEntry({
+      sessionId: "topic-session",
+      updatedAt: 100,
+      chatType: "group",
+      deliveryContext: {
+        channel: "telegram",
+        accountId: "default",
+        to: "telegram:-100:topic:42",
+        threadId: "42",
+      },
+      origin: { provider: "telegram", accountId: "default", nativeChannelId: "-100:topic:42" },
+    });
+    // But one live turn path supplies only the group-level reply target (no `:topic:`)
+    // while the thread id is present. Without canonicalization this derived a second,
+    // topic-less "shadow" conversation that also answered the message.
+    const live = conversationIdentityFromMsgContext({
+      ctx: {
+        Provider: "telegram",
+        AccountId: "default",
+        ChatType: "group",
+        From: "telegram:-100",
+        OriginatingTo: "telegram:-100",
+        NativeChannelId: "-100:topic:42",
+        MessageThreadId: "42",
+      },
+      groupResolution: {
+        key: "telegram:-100:topic:42",
+        channel: "telegram",
+        id: "-100",
+        chatType: "group",
+      },
+    });
+
+    expect(live?.deliveryTarget).toBe("telegram:-100:topic:42");
+    expect(live?.peerId).toBe("-100:topic:42");
+    expect(live?.conversationRef).toBe(persisted?.conversationRef);
+  });
 });
