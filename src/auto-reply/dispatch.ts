@@ -1,8 +1,10 @@
 /** Auto-reply dispatch orchestration, hook composition, and foreground delivery fencing. */
 import { normalizeChatType } from "../channels/chat-type.js";
+import { isChannelPartialDeliveryError } from "../channels/turn/delivery-result.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   deriveInboundMessageHookContext,
+  resolveInboundReplyHookTarget,
   toPluginMessageContext,
 } from "../hooks/message-hook-mappers.js";
 import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
@@ -263,6 +265,9 @@ function isVisiblePartialDeliveryError(error: unknown): boolean {
   if (isOutboundDeliveryError(error)) {
     return error.sentBeforeError;
   }
+  if (isChannelPartialDeliveryError(error)) {
+    return true;
+  }
   return (
     typeof error === "object" &&
     error !== null &&
@@ -337,19 +342,6 @@ function resolveDispatcherSilentReplyContext(
     surface: finalized.Surface ?? finalized.Provider,
     conversationType,
   };
-}
-
-function resolveInboundReplyHookTarget(
-  finalized: FinalizedMsgContext,
-  hookCtx: ReturnType<typeof deriveInboundMessageHookContext>,
-): string {
-  if (typeof finalized.OriginatingTo === "string" && finalized.OriginatingTo.trim()) {
-    return finalized.OriginatingTo;
-  }
-  if (hookCtx.isGroup) {
-    return hookCtx.conversationId ?? hookCtx.to ?? hookCtx.from;
-  }
-  return hookCtx.from || hookCtx.conversationId || hookCtx.to || "";
 }
 
 function buildMessageSendingBeforeDeliver(
@@ -519,6 +511,7 @@ export async function dispatchInboundMessage(params: {
   replyResolver?: InternalGetReplyFromConfig;
   onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
   replyPayloadRunState?: ReplyPayloadRunState;
+  onSettled?: () => void | Promise<void>;
 }): Promise<DispatchInboundResult> {
   const replyOptions = applyRuntimeToolsAllow(params.replyOptions, params.toolsAllow);
   const replyPayloadRunState = params.replyPayloadRunState ?? {
@@ -546,6 +539,7 @@ export async function dispatchInboundMessage(params: {
   installReplyPayloadSendingBeforeDeliver(params.dispatcher, finalized, replyPayloadRunState);
   const result = await withReplyDispatcher({
     dispatcher: params.dispatcher,
+    onSettled: params.onSettled,
     run: () =>
       measureDiagnosticsTimelineSpan(
         "auto_reply.dispatch_reply_from_config",
@@ -649,6 +643,12 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
       beforeDeliver,
       silentReplyContext: params.dispatcherOptions.silentReplyContext ?? silentReplyContext,
     });
+  const onTypingController = params.replyOptions?.onTypingController
+    ? (typing: Parameters<NonNullable<typeof params.replyOptions.onTypingController>>[0]) => {
+        replyOptions.onTypingController?.(typing);
+        params.replyOptions?.onTypingController?.(typing);
+      }
+    : replyOptions.onTypingController;
   markReplyPayloadSendingBeforeDeliverInstalled(dispatcher, replyPayloadBeforeDeliver);
   try {
     return await dispatchInboundMessage({
@@ -660,9 +660,10 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
       replyOptions: {
         ...params.replyOptions,
         ...replyOptions,
-        onFollowupAdmissionWaitChange: (waiting) => {
-          // An admission wait depends on the older owner finishing delivery.
-          // Suspending only that generation breaks the cycle without weakening newer-turn fencing.
+        onTypingController,
+        onReplyAdmissionWaitChange: (waiting) => {
+          // A turn waiting to own the lane cannot make the current owner's reply stale.
+          // Suspend only that generation so independent newer turns still fence old replies.
           setForegroundReplyFenceAdmissionWaiting(foregroundReplyFence, waiting);
         },
       },

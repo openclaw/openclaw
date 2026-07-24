@@ -164,9 +164,12 @@ async function maybeApplyAcpTts(params: {
 type AcpDispatchDeliveryState = {
   startedReplyLifecycle: boolean;
   accumulatedBlockText: string;
+  accumulatedDeliveredBlockText: string;
   accumulatedVisibleBlockText: string;
   accumulatedBlockTtsText: string;
   accumulatedFinalText: string;
+  accumulatedDeliveredFinalText: string;
+  pendingTranscriptOutcomes: Promise<void>[];
   cleanBlockTtsDirectiveText?: ReturnType<typeof createTtsDirectiveTextStreamCleaner>;
   blockCount: number;
   deliveredFinalReply: boolean;
@@ -190,6 +193,8 @@ export type AcpDispatchDeliveryCoordinator = {
   getAccumulatedVisibleBlockText: () => string;
   getAccumulatedBlockTtsText: () => string;
   getAccumulatedFinalText: () => string;
+  getAccumulatedTranscriptText: () => string;
+  resolveAccumulatedDeliveredTranscriptText: () => Promise<string>;
   settleVisibleText: () => Promise<void>;
   hasDeliveredFinalReply: () => boolean;
   hasDeliveredVisibleText: () => boolean;
@@ -271,9 +276,12 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   const state: AcpDispatchDeliveryState = {
     startedReplyLifecycle: false,
     accumulatedBlockText: "",
+    accumulatedDeliveredBlockText: "",
     accumulatedVisibleBlockText: "",
     accumulatedBlockTtsText: "",
     accumulatedFinalText: "",
+    accumulatedDeliveredFinalText: "",
+    pendingTranscriptOutcomes: [],
     cleanBlockTtsDirectiveText: shouldCleanTtsDirectiveText({
       cfg: params.cfg,
       ttsAuto: params.sessionTtsAuto,
@@ -297,6 +305,25 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     toolMessageByCallId: new Map(),
   };
   let hasPendingDirectBlockReplyDelivery = false;
+
+  const appendDeliveredTranscriptText = (
+    kind: ReplyDispatchKind,
+    blockText: string | undefined,
+    finalText: string | undefined,
+  ) => {
+    // ACP history keeps canonical runtime text, while delivery hooks may render
+    // transport-specific text. Only the delivery outcome gates this snapshot.
+    if (kind === "block" && blockText) {
+      state.accumulatedDeliveredBlockText = state.accumulatedDeliveredBlockText
+        ? `${state.accumulatedDeliveredBlockText}\n${blockText}`
+        : blockText;
+    }
+    if (kind === "final" && finalText) {
+      state.accumulatedDeliveredFinalText = state.accumulatedDeliveredFinalText
+        ? `${state.accumulatedDeliveredFinalText}\n${finalText}`
+        : finalText;
+    }
+  };
   const waitForPendingDirectBlockReplyDelivery = async () => {
     if (!hasPendingDirectBlockReplyDelivery) {
       return;
@@ -389,20 +416,46 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     meta?: AcpDispatchDeliveryMeta,
   ): Promise<boolean> => {
     let visiblePayload = payload;
-    const rawBlockText = kind === "block" ? normalizeOptionalString(payload.text) : undefined;
     const isStatusNotice = isReplyPayloadStatusNotice(payload);
-    const joinsBufferedTtsDirective =
-      rawBlockText && !isStatusNotice
-        ? state.cleanBlockTtsDirectiveText?.hasBufferedDirectiveText() === true
-        : false;
-    if (rawBlockText) {
-      if (state.cleanBlockTtsDirectiveText && !isStatusNotice) {
-        const text = state.cleanBlockTtsDirectiveText.push(rawBlockText);
+    const rawBlockPayloadText =
+      kind === "block" ? normalizeOptionalString(payload.text) : undefined;
+    const rawBlockText = isStatusNotice ? undefined : rawBlockPayloadText;
+    if (rawBlockPayloadText) {
+      const joinsBufferedTtsDirective =
+        state.cleanBlockTtsDirectiveText?.hasBufferedDirectiveText() === true;
+      if (rawBlockText) {
+        if (state.accumulatedBlockText.length > 0) {
+          state.accumulatedBlockText += "\n";
+        }
+        state.accumulatedBlockText += rawBlockText;
+        if (state.accumulatedBlockTtsText.length > 0 && !joinsBufferedTtsDirective) {
+          state.accumulatedBlockTtsText += "\n";
+        }
+        state.accumulatedBlockTtsText += rawBlockText;
+        state.blockCount += 1;
+      }
+
+      if (state.cleanBlockTtsDirectiveText && rawBlockText) {
+        const text = state.cleanBlockTtsDirectiveText.push(rawBlockPayloadText);
         visiblePayload = copyReplyPayloadMetadata(payload, {
           ...payload,
           text: text.trim() ? text : undefined,
         });
       }
+      if (visiblePayload.text) {
+        if (state.accumulatedVisibleBlockText.length > 0) {
+          state.accumulatedVisibleBlockText += "\n";
+        }
+        state.accumulatedVisibleBlockText += visiblePayload.text;
+      }
+    }
+    const rawFinalText =
+      kind === "final" && !isStatusNotice ? normalizeOptionalString(payload.text) : undefined;
+    if (rawFinalText) {
+      if (state.accumulatedFinalText.length > 0) {
+        state.accumulatedFinalText += "\n";
+      }
+      state.accumulatedFinalText += rawFinalText;
     }
 
     const policyResult = await applyAcpOperationalReplyPolicy(visiblePayload);
@@ -421,34 +474,6 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         payload: visiblePayload,
         explicitCommandTurn: false,
       });
-
-      if (rawBlockText) {
-        if (!isStatusNotice) {
-          if (state.accumulatedBlockText.length > 0) {
-            state.accumulatedBlockText += "\n";
-          }
-          state.accumulatedBlockText += rawBlockText;
-          if (state.accumulatedBlockTtsText.length > 0 && !joinsBufferedTtsDirective) {
-            state.accumulatedBlockTtsText += "\n";
-          }
-          state.accumulatedBlockTtsText += rawBlockText;
-          state.blockCount += 1;
-        }
-        if (visiblePayload.text) {
-          if (state.accumulatedVisibleBlockText.length > 0) {
-            state.accumulatedVisibleBlockText += "\n";
-          }
-          state.accumulatedVisibleBlockText += visiblePayload.text;
-        }
-      }
-      const rawFinalText =
-        kind === "final" && !isStatusNotice ? normalizeOptionalString(payload.text) : undefined;
-      if (rawFinalText) {
-        if (state.accumulatedFinalText.length > 0) {
-          state.accumulatedFinalText += "\n";
-        }
-        state.accumulatedFinalText += rawFinalText;
-      }
 
       if (hasOutboundReplyContent(visiblePayload, { trimText: true })) {
         await startReplyLifecycleOnce();
@@ -521,6 +546,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
           threadId,
           replyDelivery: routedReplyDelivery,
           cfg: params.cfg,
+          abortSignal: params.abortSignal,
           mirror: false,
           replyKind: kind,
           runId: params.runId,
@@ -556,6 +582,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
             messageId: result.messageId,
           });
         }
+        appendDeliveredTranscriptText(kind, rawBlockText, rawFinalText);
         if (kind === "final") {
           state.deliveredFinalReply = true;
         }
@@ -587,6 +614,15 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         state.deliveredFinalReply = true;
       }
       if (delivered && deliveryOutcome.isTracked()) {
+        if (rawBlockText || rawFinalText) {
+          state.pendingTranscriptOutcomes.push(
+            deliveryOutcome.promise.then((outcome) => {
+              if (outcome === "delivered") {
+                appendDeliveredTranscriptText(kind, rawBlockText, rawFinalText);
+              }
+            }),
+          );
+        }
         policySettled = true;
         const settleOperationalPolicyFromOutcome = deliveryOutcome.promise
           .then(async (outcome) => {
@@ -635,6 +671,11 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     getAccumulatedVisibleBlockText: () => state.accumulatedVisibleBlockText,
     getAccumulatedBlockTtsText: () => state.accumulatedBlockTtsText,
     getAccumulatedFinalText: () => state.accumulatedFinalText,
+    getAccumulatedTranscriptText: () => state.accumulatedFinalText || state.accumulatedBlockText,
+    resolveAccumulatedDeliveredTranscriptText: async () => {
+      await Promise.all(state.pendingTranscriptOutcomes.splice(0));
+      return state.accumulatedDeliveredFinalText || state.accumulatedDeliveredBlockText;
+    },
     settleVisibleText: settleDirectVisibleText,
     hasDeliveredFinalReply: () => state.deliveredFinalReply,
     hasDeliveredVisibleText: () => state.deliveredVisibleText,

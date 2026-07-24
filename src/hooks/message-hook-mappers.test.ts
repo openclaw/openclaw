@@ -46,9 +46,13 @@ function makeInboundCtx(overrides: Partial<FinalizedMsgContext> = {}): Finalized
     SenderUsername: "userone",
     SenderE164: "+15551234567",
     MessageThreadId: 42,
-    MediaPath: "/tmp/audio.ogg",
-    MediaUrl: "https://cdn.example.com/audio.ogg",
-    MediaType: "audio/ogg",
+    media: [
+      {
+        path: "/tmp/audio.ogg",
+        url: "https://cdn.example.com/audio.ogg",
+        contentType: "audio/ogg",
+      },
+    ],
     GroupSubject: "ops",
     GroupChannel: "ops-room",
     GroupSpace: "guild-1",
@@ -126,6 +130,23 @@ describe("message hook mappers", () => {
     expect(canonical.isGroup).toBe(true);
     expect(canonical.groupId).toBe("demo-chat:chat:456");
     expect(canonical.guildId).toBe("guild-1");
+  });
+
+  it("uses the session key as the Control UI conversation id", () => {
+    const canonical = deriveInboundMessageHookContext(
+      makeInboundCtx({
+        From: undefined,
+        To: undefined,
+        OriginatingTo: undefined,
+        Provider: "webchat",
+        Surface: "webchat",
+        OriginatingChannel: "webchat",
+        SessionKey: "agent:main:adopted",
+      }),
+    );
+
+    expect(canonical.channelId).toBe("webchat");
+    expect(canonical.conversationId).toBe("agent:main:adopted");
   });
 
   it("maps inbound reply metadata into canonical and plugin payloads", () => {
@@ -259,12 +280,18 @@ describe("message hook mappers", () => {
   it("preserves multi-attachment arrays for inbound claim metadata", () => {
     const canonical = deriveInboundMessageHookContext(
       makeInboundCtx({
-        MediaPath: undefined,
-        MediaUrl: undefined,
-        MediaType: undefined,
-        MediaPaths: ["/tmp/tree.jpg", "/tmp/ramp.jpg"],
-        MediaUrls: ["https://example.test/tree.jpg", "https://example.test/ramp.jpg"],
-        MediaTypes: ["image/jpeg", "image/jpeg"],
+        media: [
+          {
+            path: "/tmp/tree.jpg",
+            url: "https://example.test/tree.jpg",
+            contentType: "image/jpeg",
+          },
+          {
+            path: "/tmp/ramp.jpg",
+            url: "https://example.test/ramp.jpg",
+            contentType: "image/jpeg",
+          },
+        ],
       }),
     );
 
@@ -289,6 +316,69 @@ describe("message hook mappers", () => {
     expect(claimEvent.metadata?.mediaTypes).toEqual(["image/jpeg", "image/jpeg"]);
   });
 
+  it("projects retained facts into hook media metadata", () => {
+    const canonical = deriveInboundMessageHookContext(
+      makeInboundCtx({
+        media: [
+          { path: "/tmp/tree.jpg", contentType: "image/jpeg" },
+          { url: "https://example.test/ramp.jpg", kind: "image" },
+        ],
+      }),
+    );
+
+    expect(canonical).toMatchObject({
+      mediaPath: "/tmp/tree.jpg",
+      mediaUrl: "/tmp/tree.jpg",
+      mediaType: "image/jpeg",
+      mediaPaths: ["/tmp/tree.jpg"],
+      mediaUrls: ["/tmp/tree.jpg", "https://example.test/ramp.jpg"],
+      mediaTypes: ["image/jpeg", "image"],
+    });
+
+    const staged = deriveInboundMessageHookContext(
+      makeInboundCtx({
+        media: [
+          {
+            path: "/tmp/staged/tree.jpg",
+            url: "/tmp/staged/tree.jpg",
+            contentType: "image/jpeg",
+            workspaceDir: "/tmp/staged",
+          },
+        ],
+      }),
+    );
+    expect(staged).toMatchObject({
+      mediaPath: "/tmp/staged/tree.jpg",
+      mediaUrl: "/tmp/staged/tree.jpg",
+      mediaPaths: ["/tmp/staged/tree.jpg"],
+      mediaUrls: ["/tmp/staged/tree.jpg"],
+    });
+  });
+
+  it("uses complete staged compatibility projections in hook media metadata", () => {
+    const canonical = deriveInboundMessageHookContext(
+      makeInboundCtx({
+        media: [
+          { path: "/remote/tree.jpg", contentType: "image/jpeg", messageId: "tree" },
+          { path: "/remote/ramp.jpg", contentType: "image/jpeg", messageId: "ramp" },
+        ],
+        MediaPaths: ["/tmp/staged/tree.jpg", "/tmp/staged/ramp.jpg"],
+        MediaUrls: ["file:///tmp/staged/tree.jpg", "file:///tmp/staged/ramp.jpg"],
+        MediaTypes: ["image/jpeg", "image/jpeg"],
+        MediaStaged: true,
+      }),
+    );
+
+    expect(canonical).toMatchObject({
+      mediaPath: "/tmp/staged/tree.jpg",
+      mediaUrl: "file:///tmp/staged/tree.jpg",
+      mediaType: "image/jpeg",
+      mediaPaths: ["/tmp/staged/tree.jpg", "/tmp/staged/ramp.jpg"],
+      mediaUrls: ["file:///tmp/staged/tree.jpg", "file:///tmp/staged/ramp.jpg"],
+      mediaTypes: ["image/jpeg", "image/jpeg"],
+    });
+  });
+
   it("maps canonical inbound context to plugin/internal received payloads", () => {
     const trace: DiagnosticTraceContext = {
       traceId: "11111111111111111111111111111111",
@@ -299,9 +389,18 @@ describe("message hook mappers", () => {
       ...deriveInboundMessageHookContext(
         makeInboundCtx({
           TopicName: "Deployments",
-          MediaPaths: ["/tmp/audio.ogg", "/tmp/photo.jpg"],
-          MediaUrls: ["https://cdn.example.com/audio.ogg", "https://cdn.example.com/photo.jpg"],
-          MediaTypes: ["audio/ogg", "image/jpeg"],
+          media: [
+            {
+              path: "/tmp/audio.ogg",
+              url: "https://cdn.example.com/audio.ogg",
+              contentType: "audio/ogg",
+            },
+            {
+              path: "/tmp/photo.jpg",
+              url: "https://cdn.example.com/photo.jpg",
+              contentType: "image/jpeg",
+            },
+          ],
         }),
       ),
       runId: "run-1",
@@ -445,6 +544,24 @@ describe("message hook mappers", () => {
       parentSpanId: undefined,
       callDepth: undefined,
     });
+  });
+
+  it("does not fall back when a channel rejects inbound claim resolution", () => {
+    const canonical = deriveInboundMessageHookContext(
+      makeInboundCtx({
+        Provider: "claim-chat",
+        Surface: "claim-chat",
+        OriginatingChannel: "claim-chat",
+        From: undefined,
+        To: "channel:room-123",
+        OriginatingTo: "channel:room-123",
+        GroupChannel: undefined,
+        GroupSubject: undefined,
+      }),
+    );
+
+    expect(toPluginInboundClaimContext(canonical).conversationId).toBeUndefined();
+    expect(toPluginInboundClaimEvent(canonical).conversationId).toBeUndefined();
   });
 
   it("passes thread parent ids to channel plugin claim resolvers", () => {

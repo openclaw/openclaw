@@ -37,9 +37,10 @@ import {
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
-import { CRITICAL_THRESHOLD } from "./tool-loop-detection.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
+
+const CRITICAL_THRESHOLD = 20;
 
 vi.mock("../plugins/hook-runner-global.js", async () => {
   const actual = await vi.importActual<typeof import("../plugins/hook-runner-global.js")>(
@@ -796,6 +797,33 @@ describe("before_tool_call loop detection behavior", () => {
       expect(JSON.stringify(emitted)).not.toContain("private");
       expect(JSON.stringify(emitted)).not.toContain("Review before running");
     });
+    mockCallGateway.mockReset();
+  });
+
+  it("returns a structured denial without an approval request in deny mode", async () => {
+    const onResolution = vi.fn();
+    hookRunner.hasHooks.mockImplementation((hookName: string) => hookName === "before_tool_call");
+    hookRunner.runBeforeToolCall.mockResolvedValueOnce({
+      requireApproval: { title: "Approve", description: "Approval required", onResolution },
+    });
+    const mockCallGateway = vi.mocked(callGatewayTool);
+    const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "ok" }] });
+    const tool = wrapToolWithBeforeToolCallHook(
+      { name: "exec", execute } as unknown as AnyAgentTool,
+      { agentId: "main", sessionKey: "session-key", runId: "run-1" },
+      { approvalMode: "deny" },
+    );
+
+    const result = await tool.execute("tool-call-deny", { command: "private" });
+
+    expect(result.details).toEqual({
+      status: "blocked",
+      deniedReason: "plugin-approval",
+      reason: "approval_required",
+    });
+    expect(execute).not.toHaveBeenCalled();
+    expect(mockCallGateway).not.toHaveBeenCalled();
+    expect(onResolution).toHaveBeenCalledWith(PluginApprovalResolutions.DENY);
     mockCallGateway.mockReset();
   });
 
@@ -2758,3 +2786,4 @@ describe("before_tool_call tool content private-data capture", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

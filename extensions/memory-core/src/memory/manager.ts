@@ -1,8 +1,10 @@
 // Memory Core plugin module implements manager behavior.
 import type { DatabaseSync } from "node:sqlite";
 import type { FSWatcher } from "chokidar";
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { listRegisteredMemoryEmbeddingProviderAdapters } from "openclaw/plugin-sdk/memory-core-host-embedding-registry";
+import { classifyMemoryMultimodalPath } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   createSubsystemLogger,
   resolveAgentDir,
@@ -102,7 +104,7 @@ const FTS_TABLE = MEMORY_INDEX_FTS_TABLE;
 const PATH_FTS_TABLE = MEMORY_INDEX_PATHS_FTS_TABLE;
 const EMBEDDING_CACHE_TABLE = MEMORY_EMBEDDING_CACHE_TABLE;
 const MEMORY_INDEX_MANAGER_CACHE_KEY = Symbol.for("openclaw.memoryIndexManagerCache");
-export const EMBEDDING_PROBE_CACHE_TTL_MS = 30_000;
+const EMBEDDING_PROBE_CACHE_TTL_MS = 30_000;
 const KEYWORD_FALLBACK_SEARCH_TERM_LIMIT = 6;
 const EXACT_PATH_CANDIDATE_LIMIT = 200;
 const log = createSubsystemLogger("memory");
@@ -210,11 +212,8 @@ function resolveConfiguredMemoryEmbeddingProvider(params: {
   cfg: OpenClawConfig;
   agentId: string;
 }): string | undefined {
-  const normalizedAgentId = normalizeAgentId(params.agentId);
-  const agentEntry = params.cfg.agents?.list?.find(
-    (entry) => entry && normalizeAgentId(entry.id) === normalizedAgentId,
-  );
-  return agentEntry?.memorySearch?.provider ?? params.cfg.agents?.defaults?.memorySearch?.provider;
+  const agentEntry = resolveAgentConfig(params.cfg, normalizeAgentId(params.agentId));
+  return agentEntry?.memory?.search?.provider ?? params.cfg.memory?.search?.provider;
 }
 
 function resolveMemoryEmbeddingProviderRequirement(params: {
@@ -518,11 +517,29 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         this.ensureSessionListener();
         this.ensureIntervalSync();
       }
-      this.dirty = resolveInitialMemoryDirty({
-        hasMemorySource: this.sources.has("memory"),
-        statusOnly: params.purpose === "status",
-        hasIndexedMeta: Boolean(meta),
-      });
+      const invalidatedSources = new Set(
+        (
+          this.db
+            .prepare("SELECT DISTINCT source FROM memory_index_sources WHERE hash = ''")
+            .all() as Array<{ source?: unknown }>
+        ).flatMap((row) =>
+          row.source === "memory" || row.source === "sessions" ? [row.source] : [],
+        ),
+      );
+      this.dirty =
+        resolveInitialMemoryDirty({
+          hasMemorySource: this.sources.has("memory"),
+          statusOnly: params.purpose === "status",
+          hasIndexedMeta: Boolean(meta),
+        }) ||
+        (this.sources.has("memory") && invalidatedSources.has("memory"));
+      if (this.sources.has("sessions") && invalidatedSources.has("sessions")) {
+        // Migration cannot map a durable session source path back to one live
+        // transcript file. Carry a full-session retry so unchanged and deleted
+        // transcripts both converge on the next startup/search sync.
+        this.sessionsDirty = true;
+        this.sessionsFullRetryDirty = true;
+      }
       this.batch = this.resolveBatchConfig();
       if (!transient) {
         this.ensureSessionStartupCatchup();
@@ -779,7 +796,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     ) {
       return [];
     }
-    const sourceFilterList = searchSources ?? [...this.sources];
+    // The manager may index recall-only transcripts without making them part of
+    // ordinary searches. Trusted recall passes an explicit source override;
+    // every other caller defaults to the configured search corpus.
+    const sourceFilterList = searchSources ?? this.settings.searchSources;
     const hybrid = this.settings.query.hybrid;
     const candidates = Math.min(
       200,
@@ -1210,14 +1230,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private mergeHybridResults(params: {
     query: string;
     vector: Array<MemorySearchResult & { id: string }>;
-    keyword: Array<
-      MemorySearchResult & {
-        id: string;
-        textScore: number;
-        pathScore: number;
-        exactPathSpecificity: ExactPathSpecificity;
-      }
-    >;
+    keyword: KeywordSearchHit[];
     vectorWeight: number;
     textWeight: number;
     mmr?: { enabled: boolean; lambda: number };
@@ -1248,6 +1261,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       })),
       vectorWeight: params.vectorWeight,
       textWeight: params.textWeight,
+      isNonTextMediaPath: (path) =>
+        classifyMemoryMultimodalPath(path, this.settings.multimodal) !== null,
       mmr: params.mmr,
       temporalDecay: params.temporalDecay,
       workspaceDir: this.workspaceDir,
@@ -1669,3 +1684,4 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   }
   return error;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

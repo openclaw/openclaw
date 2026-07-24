@@ -3,9 +3,10 @@
  * screenshots, batch actions, and SSRF-aware post-interaction navigation checks.
  */
 import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { FileChooser, Frame, Page } from "playwright-core";
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import {
   ACT_MAX_BATCH_ACTIONS,
   ACT_MAX_BATCH_DEPTH,
@@ -115,7 +116,7 @@ function reconcileRemoteDialogAfterActionSettled(page: Page, signal?: AbortSigna
 
 function throwIfInteractionAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
-    throw toLintErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection");
+    throw toErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection");
   }
 }
 
@@ -236,7 +237,7 @@ async function assertObservedDelayedNavigations(
     });
   }
   if (subframeError) {
-    throw toLintErrorObject(subframeError, "Non-Error thrown");
+    throw toErrorObject(subframeError, "Non-Error thrown");
   }
 }
 
@@ -322,7 +323,7 @@ function scheduleDelayedInteractionNavigationGuard(
     const settle = (err?: unknown) => {
       cleanup();
       if (err) {
-        reject(toLintErrorObject(err, "Non-Error rejection"));
+        reject(toErrorObject(err, "Non-Error rejection"));
         return;
       }
       resolve();
@@ -476,11 +477,11 @@ async function assertInteractionNavigationCompletedSafely<T>(
   }
 
   if (subframeError) {
-    throw toLintErrorObject(subframeError, "Non-Error thrown");
+    throw toErrorObject(subframeError, "Non-Error thrown");
   }
 
   if (actionError) {
-    throw toLintErrorObject(actionError, "Non-Error thrown");
+    throw toErrorObject(actionError, "Non-Error thrown");
   }
   return result as T;
 }
@@ -613,7 +614,7 @@ async function awaitNavigationGuardedInteraction<T>(
       // alive until the raw action settles; otherwise an aborted caller could
       // select a page before a later preservation failure is quarantined.
       await guardedAction;
-      throw toLintErrorObject(observedPolicyError, "Non-Error thrown");
+      throw toErrorObject(observedPolicyError, "Non-Error thrown");
     }
     throw err;
   }
@@ -641,13 +642,13 @@ function createAbortPromiseWithListener(
     ? (() => {
         onAbort?.(signal.reason);
         return Promise.reject(
-          toLintErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"),
+          toErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"),
         );
       })()
     : new Promise((_, reject) => {
         abortListener = () => {
           onAbort?.(signal.reason);
-          reject(toLintErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"));
+          reject(toErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"));
         };
         signal.addEventListener("abort", abortListener, { once: true });
       });
@@ -705,38 +706,19 @@ export async function clickViaPlaywright(
     : page.locator(resolved.selector!);
   const timeout = resolveInteractionTimeoutMs(opts.timeoutMs);
   const signal = opts.signal;
-  let abortListener: (() => void) | undefined;
-  let abortReject: ((reason: unknown) => void) | undefined;
-  let abortPromise: Promise<never> | undefined;
-  if (signal) {
-    abortPromise = new Promise((_, reject) => {
-      abortReject = reject;
-    });
-    void abortPromise.catch(() => {});
-    const disconnect = () => {
-      if (isBrowserObservedDialogBlockedError(signal.reason)) {
-        return;
-      }
-      void forceDisconnectPlaywrightForTarget({
-        cdpUrl: opts.cdpUrl,
-        targetId: opts.targetId,
-        ssrfPolicy: opts.ssrfPolicy,
-        reason: "click aborted",
-      }).catch(() => {});
-    };
-    if (signal.aborted) {
-      disconnect();
-      throw signal.reason ?? new Error("aborted");
+  const { abortPromise, cleanup } = createAbortPromiseWithListener(signal, (reason) => {
+    if (isBrowserObservedDialogBlockedError(reason)) {
+      return;
     }
-    abortListener = () => {
-      disconnect();
-      abortReject?.(signal.reason ?? new Error("aborted"));
-    };
-    signal.addEventListener("abort", abortListener, { once: true });
-    if (signal.aborted) {
-      abortListener();
-      throw signal.reason ?? new Error("aborted");
-    }
+    void forceDisconnectPlaywrightForTarget({
+      cdpUrl: opts.cdpUrl,
+      targetId: opts.targetId,
+      ssrfPolicy: opts.ssrfPolicy,
+      reason: "click aborted",
+    }).catch(() => {});
+  });
+  if (signal?.aborted) {
+    throw signal.reason ?? new Error("aborted");
   }
   const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, signal);
   try {
@@ -751,9 +733,10 @@ export async function clickViaPlaywright(
           if (delayMs > 0) {
             await locator.hover({ timeout });
             throwIfInteractionAborted(signal);
-            await new Promise((resolve) => {
-              setTimeout(resolve, delayMs);
-            });
+            // Abortable hold: a bare setTimeout would keep the orphaned action
+            // chain (and its navigation-guard teardown) alive for the full
+            // delayMs after the caller already lost the abort race.
+            await sleepWithAbort(delayMs, signal);
             throwIfInteractionAborted(signal);
           }
           if (opts.doubleClick) {
@@ -782,9 +765,7 @@ export async function clickViaPlaywright(
   } catch (err) {
     throw toFriendlyInteractionError(err, label);
   } finally {
-    if (signal && abortListener) {
-      signal.removeEventListener("abort", abortListener);
-    }
+    cleanup();
   }
 }
 
@@ -2126,16 +2107,4 @@ export async function batchViaPlaywright(
   return { results };
 }
 
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

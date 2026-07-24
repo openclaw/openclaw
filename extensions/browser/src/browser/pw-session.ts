@@ -22,7 +22,7 @@ import type {
   Response,
   Route,
 } from "playwright-core";
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { SsrFBlockedError, type SsrFPolicy } from "../infra/net/ssrf.js";
 import { withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
 import {
@@ -55,7 +55,7 @@ import {
   type BrowserDownloadCaptureOptions,
   type PlaywrightDownload,
 } from "./pw-download-capture.js";
-import { BROWSER_REF_MARKER_ATTRIBUTE, withPageScopedCdpClient } from "./pw-session.page-cdp.js";
+import { BROWSER_REF_MARKER_ATTRIBUTE } from "./pw-session.page-cdp.js";
 
 const { chromium } = playwrightCore;
 
@@ -729,7 +729,7 @@ export function retirePlaywrightBrowserConnectionExact(opts: {
         if (connection && closeAttempts.get(connection) === closing) {
           closeAttempts.delete(connection);
         }
-        firstError ??= toLintErrorObject(result.reason, "Playwright adapter disconnect failed.");
+        firstError ??= toErrorObject(result.reason, "Playwright adapter disconnect failed.");
       }
     }
     if (firstError) {
@@ -1878,13 +1878,13 @@ export async function withPageNavigationRequestGuard<T>(
         sourcePreservedPolicyDenials.delete(firstGuardError);
       }
     }
-    throw toLintErrorObject(firstGuardError, "Non-Error thrown");
+    throw toErrorObject(firstGuardError, "Non-Error thrown");
   }
   if (actionFailed) {
-    throw toLintErrorObject(actionError, "Non-Error thrown");
+    throw toErrorObject(actionError, "Non-Error thrown");
   }
   if (cleanupError !== undefined) {
-    throw toLintErrorObject(cleanupError, "Non-Error thrown");
+    throw toErrorObject(cleanupError, "Non-Error thrown");
   }
   return result as T;
 }
@@ -1936,12 +1936,12 @@ export async function gotoPageWithNavigationGuard(
   try {
     const response = await opts.page.goto(opts.url, { timeout: opts.timeoutMs });
     if (blockedError) {
-      throw toLintErrorObject(blockedError, "Non-Error thrown");
+      throw toErrorObject(blockedError, "Non-Error thrown");
     }
     return response;
   } catch (err) {
     if (blockedError) {
-      throw toLintErrorObject(blockedError, "Non-Error thrown");
+      throw toErrorObject(blockedError, "Non-Error thrown");
     }
     throw err;
   } finally {
@@ -2429,34 +2429,7 @@ export async function focusPageByTargetIdViaPlaywright(opts: {
   ssrfPolicy?: SsrFPolicy;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
-  try {
-    await page.bringToFront();
-  } catch (err) {
-    try {
-      await withPageScopedCdpClient({
-        cdpUrl: opts.cdpUrl,
-        page,
-        targetId: opts.targetId,
-        fn: async (send) => {
-          await send("Page.bringToFront");
-        },
-      });
-    } catch {
-      throw err;
-    }
-  }
+  await page.bringToFront();
 }
 
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -11,6 +11,7 @@ import {
   recordDroppedChannelInboundHistory,
   toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { isRecentOutboundMessageIdentity } from "openclaw/plugin-sdk/channel-outbound";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
@@ -37,6 +38,7 @@ import { resolveDiscordPreflightChannelAccess } from "./message-handler.prefligh
 import { resolveDiscordPreflightChannelContext } from "./message-handler.preflight-channel-context.js";
 import { buildDiscordMessagePreflightContext } from "./message-handler.preflight-context.js";
 import {
+  hasRawDiscordUserMention,
   isBoundThreadBotSystemMessage,
   isDiscordThreadChannelMessage,
   resolveDiscordMentionState,
@@ -163,7 +165,15 @@ async function resolveDiscordHistoryMediaForPendingRecord(params: {
       abortSignal: params.preflight.abortSignal,
     },
   );
-  return toInboundMediaFacts(mediaList, { kind: "image", messageId: params.message.id });
+  const stickerStartIndex = Math.max(0, mediaList.length - stickers.length);
+  return toInboundMediaFacts(mediaList, { messageId: params.message.id }).map((media, index) => ({
+    path: media.path,
+    url: media.url,
+    contentType: media.contentType,
+    kind: index >= stickerStartIndex ? "sticker" : (media.kind ?? "image"),
+    transcribed: media.transcribed,
+    messageId: media.messageId,
+  }));
 }
 
 async function recordDiscordPendingHistoryEntry(params: {
@@ -240,17 +250,32 @@ export async function preflightDiscordMessage(
     return null;
   }
 
-  message = await hydrateDiscordMessageIfNeeded({
+  const hydration = await hydrateDiscordMessageIfNeeded({
     client: params.client,
     message,
     messageChannelId,
   });
+  message = hydration.message;
   if (isPreflightAborted(params.abortSignal)) {
     return null;
   }
 
   const pluralkitConfig = params.discordConfig?.pluralkit;
   const webhookId = resolveDiscordWebhookId(message);
+  // Shared turn admission cannot undo pending history recorded by channel preflight.
+  // Consult the same generic registry before mention/history drops can admit an echo.
+  if (
+    isRecentOutboundMessageIdentity({
+      channel: "discord",
+      accountId: params.accountId,
+      conversationId: messageChannelId,
+      messageId: message.id,
+      ...(webhookId ? { sourceId: webhookId } : {}),
+    })
+  ) {
+    logVerbose(`discord: drop recent outbound echo message ${message.id}`);
+    return null;
+  }
   const isGuildMessage = Boolean(params.data.guild_id);
   const channelInfo = await resolveDiscordChannelInfo(params.client, messageChannelId);
   if (isPreflightAborted(params.abortSignal)) {
@@ -272,7 +297,6 @@ export async function preflightDiscordMessage(
       : undefined;
   if (
     shouldIgnoreBoundThreadWebhookMessage({
-      accountId: params.accountId,
       threadId: messageChannelId,
       webhookId,
       threadBinding: injectedBoundThreadBinding,
@@ -411,7 +435,6 @@ export async function preflightDiscordMessage(
   } = routeState;
   if (
     shouldIgnoreBoundThreadWebhookMessage({
-      accountId: params.accountId,
       threadId: messageChannelId,
       webhookId,
       threadBinding,
@@ -438,7 +461,9 @@ export async function preflightDiscordMessage(
     providerPolicy: params.discordConfig?.mentionPatterns,
   });
   const explicitlyMentioned = Boolean(
-    botId && message.mentionedUsers?.some((user: User) => user.id === botId),
+    botId &&
+    (message.mentionedUsers?.some((user: User) => user.id === botId) ||
+      (hydration.kind === "unavailable" && hasRawDiscordUserMention(baseText, botId))),
   );
   const hasAnyMention =
     !isDirectMessage &&
@@ -739,7 +764,9 @@ export async function preflightDiscordMessage(
     return null;
   }
 
-  if (!messageText) {
+  const hasNativeMedia =
+    (message.attachments?.length ?? 0) > 0 || resolveDiscordMessageStickers(message).length > 0;
+  if (!messageText && !hasNativeMedia) {
     logDebug(`[discord-preflight] drop: empty content`);
     logVerbose(`discord: drop message ${message.id} (empty content)`);
     return null;
@@ -862,3 +889,4 @@ export async function preflightDiscordMessage(
     historyEntry,
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -20,7 +20,8 @@ import {
   optionalNumber,
   optionalString,
 } from "./control-ui-github-api.js";
-import { loadSessionEntry } from "./session-utils.js";
+import { parseGitHubRemoteUrl } from "./github-remote.js";
+import { loadSessionEntryReadOnly } from "./session-utils.js";
 
 const SUCCESS_CACHE_MS = 60_000;
 // Back off refetches while GitHub reports quota exhaustion; the UI keeps
@@ -33,10 +34,11 @@ const MAX_PULL_REQUESTS = 3;
 export type ControlUiSessionPullRequestsParams = {
   sessionKey: string;
   agentId?: string;
+  refresh?: boolean;
 };
 
 /** GitHub repo + branch resolved from a session's git checkout. */
-export type SessionPullRequestGitContext = {
+type SessionPullRequestGitContext = {
   owner: string;
   repo: string;
   branch: string;
@@ -59,16 +61,13 @@ type PullListItem = {
 type CacheEntry = {
   expiresAt: number;
   promise: Promise<ControlUiSessionPullRequests>;
+  refreshMode: "normal" | "forced" | null;
   // Survives refetch failures so rate-limited refreshes degrade to stale
   // chips instead of clearing the row.
   lastGood?: ControlUiSessionPullRequest[];
 };
 
 const branchCache = new Map<string, CacheEntry>();
-
-export function resetControlUiSessionPullRequestCacheForTests(): void {
-  branchCache.clear();
-}
 
 export function parseControlUiSessionPullRequestsParams(
   value: unknown,
@@ -81,48 +80,20 @@ export function parseControlUiSessionPullRequestsParams(
     return null;
   }
   const agentId = typeof value.agentId === "string" ? value.agentId.trim() : "";
-  return agentId ? { sessionKey, agentId } : { sessionKey };
+  return {
+    sessionKey,
+    ...(agentId ? { agentId } : {}),
+    ...(value.refresh === true ? { refresh: true } : {}),
+  };
 }
 
 async function gitOutput(cwd: string, args: string[]): Promise<string | null> {
   try {
     const result = await runGit(cwd, args);
-    if (result.code !== 0) {
-      return null;
-    }
-    return result.stdout.trim() || null;
+    return result.code === 0 ? result.stdout.trim() || null : null;
   } catch {
     return null;
   }
-}
-
-/** Parses a GitHub `origin` remote (https, ssh, or scp-like) to owner/repo. */
-export function parseGitHubRemoteUrl(raw: string): { owner: string; repo: string } | null {
-  const trimmed = raw.trim();
-  let path: string | undefined;
-  const scpMatch = /^git@github\.com:(.+)$/i.exec(trimmed);
-  if (scpMatch) {
-    path = scpMatch[1];
-  } else {
-    try {
-      const url = new URL(trimmed);
-      const protocolOk =
-        url.protocol === "https:" || url.protocol === "http:" || url.protocol === "ssh:";
-      if (!protocolOk || url.hostname.toLowerCase() !== "github.com") {
-        return null;
-      }
-      path = url.pathname;
-    } catch {
-      return null;
-    }
-  }
-  const segments = (path ?? "").split("/").filter(Boolean);
-  const owner = segments[0];
-  const repo = segments[1]?.replace(/\.git$/i, "");
-  if (segments.length !== 2 || !owner || !repo) {
-    return null;
-  }
-  return { owner, repo };
 }
 
 /**
@@ -132,10 +103,10 @@ export function parseGitHubRemoteUrl(raw: string): { owner: string; repo: string
  * the same checkout, and skipping it protects the anonymous GitHub quota for
  * plain sessions).
  */
-export async function resolveSessionPullRequestGitContext(
+async function resolveSessionPullRequestGitContext(
   params: ControlUiSessionPullRequestsParams,
 ): Promise<SessionPullRequestGitContext | null> {
-  const { cfg, entry, storePath, canonicalKey } = loadSessionEntry(params.sessionKey, {
+  const { cfg, entry, storePath, canonicalKey } = loadSessionEntryReadOnly(params.sessionKey, {
     agentId: params.agentId,
   });
   // Same session/agent scoping as sessions.files.*: a missing entry means an
@@ -183,6 +154,7 @@ function branchCreateUrl(context: SessionPullRequestGitContext): string {
   return `https://github.com/${owner}/${repo}/pull/new/${branch}`;
 }
 
+const SHORTSTAT_FILES = /(\d+) files? changed/;
 const SHORTSTAT_INSERTIONS = /(\d+) insertion/;
 const SHORTSTAT_DELETIONS = /(\d+) deletion/;
 // Matches sessions-diff's untracked scan bound; stats degrade to an
@@ -225,28 +197,27 @@ async function untrackedFileAdditions(root: string, filePath: string): Promise<n
   }
 }
 
-async function untrackedAdditions(root: string): Promise<number> {
+async function untrackedStats(root: string): Promise<{ additions: number; files: number }> {
   const listing = await gitOutput(root, ["ls-files", "--others", "--exclude-standard", "-z"]);
-  if (!listing) {
-    return 0;
-  }
-  const paths = listing.split("\0").filter(Boolean);
+  const paths = (listing ?? "").split("\0").filter(Boolean);
   let additions = 0;
   for (const filePath of paths.slice(0, MAX_UNTRACKED_STAT_FILES)) {
     additions += await untrackedFileAdditions(root, filePath);
   }
-  return additions;
+  return { additions, files: paths.length };
 }
 
 /**
  * Working-tree diff counts vs the merge base with the remote default branch,
  * untracked files included: the size the PR would have if the current work
- * were committed and pushed.
+ * were committed and pushed; changedFiles decides row visibility for
+ * unpushed branches. Unlike bare `git diff`, diffing against an explicit
+ * base counts unmerged (conflict) paths, so conflict-only trees still show.
  */
 async function loadBranchDiffStats(
   root: string,
   defaultBranch: string,
-): Promise<{ additions: number; deletions: number } | null> {
+): Promise<{ additions: number; deletions: number; changedFiles: number } | null> {
   const mergeBase = await gitOutput(root, [
     "merge-base",
     `refs/remotes/origin/${defaultBranch}`,
@@ -270,10 +241,11 @@ async function loadBranchDiffStats(
     }
     // Empty output means an empty diff, not a failure.
     const summary = result.stdout.trim();
+    const untracked = await untrackedStats(root);
     return {
-      additions:
-        Number(SHORTSTAT_INSERTIONS.exec(summary)?.[1] ?? 0) + (await untrackedAdditions(root)),
+      additions: Number(SHORTSTAT_INSERTIONS.exec(summary)?.[1] ?? 0) + untracked.additions,
       deletions: Number(SHORTSTAT_DELETIONS.exec(summary)?.[1] ?? 0),
+      changedFiles: Number(SHORTSTAT_FILES.exec(summary)?.[1] ?? 0) + untracked.files,
     };
   } catch {
     return null;
@@ -283,9 +255,9 @@ async function loadBranchDiffStats(
 /**
  * GitHub's pull/new page only has something to offer once the pushed branch
  * carries commits the default branch lacks; unpushed or fully-merged remote
- * branches get "nothing to compare" (or a 404), so the row stays hidden.
- * Rename-only or zero-line-delta commits still count — visibility keys on
- * commits, not on line counts.
+ * branches get "nothing to compare" (or a 404), so createUrl is withheld and
+ * the row only reports local changed files. Rename-only commits still count —
+ * this gate keys on commits, not line counts.
  */
 async function branchHasCreatablePullRequest(
   root: string,
@@ -313,20 +285,22 @@ async function branchHasCreatablePullRequest(
 async function resolveSessionBranch(
   context: SessionPullRequestGitContext,
 ): Promise<ControlUiSessionBranch | undefined> {
-  // Stubbed test contexts without a root skip the local-git gate.
-  if (context.root && !(await branchHasCreatablePullRequest(context.root, context))) {
-    return undefined;
-  }
+  // Stubbed test contexts without a root skip the local-git gates.
+  const creatable = !context.root || (await branchHasCreatablePullRequest(context.root, context));
   const stats =
     context.root && context.defaultBranch
       ? await loadBranchDiffStats(context.root, context.defaultBranch)
       : null;
+  // No createUrl until GitHub can compare, but local changes still get a row.
+  if (!creatable && !(stats && stats.changedFiles > 0)) {
+    return undefined;
+  }
   return {
     owner: context.owner,
     repo: context.repo,
     branch: context.branch,
-    createUrl: branchCreateUrl(context),
-    ...stats,
+    ...(creatable ? { createUrl: branchCreateUrl(context) } : {}),
+    ...(stats ? { additions: stats.additions, deletions: stats.deletions } : {}),
   };
 }
 
@@ -590,7 +564,7 @@ async function refreshBranchPullRequests(
   }
 }
 
-export type LoadSessionPullRequestDeps = {
+type LoadSessionPullRequestDeps = {
   fetchImpl?: typeof fetch;
   resolveGitContext?: (
     params: ControlUiSessionPullRequestsParams,
@@ -611,30 +585,67 @@ export async function loadControlUiSessionPullRequests(
   // alive when GitHub is rate limited; only the GitHub fetch is cached.
   const [branch, snapshot] = await Promise.all([
     resolveSessionBranch(context),
-    cachedBranchPullRequests(context, deps),
+    cachedBranchPullRequests(context, deps, params.refresh === true),
   ]);
   return branch ? { ...snapshot, branch } : snapshot;
 }
 
-function cachedBranchPullRequests(
+function trackBranchRefresh(
+  entry: CacheEntry,
+  mode: "normal" | "forced",
+  load: () => Promise<ControlUiSessionPullRequests>,
+): Promise<ControlUiSessionPullRequests> {
+  // Publish the replacement promise before any awaited work so later callers
+  // cannot overtake a queued forced refresh with an older normal result.
+  entry.expiresAt = Date.now() + SUCCESS_CACHE_MS;
+  entry.refreshMode = mode;
+  const refreshPromise = load();
+  const trackedPromise = refreshPromise.finally(() => {
+    if (entry.promise === trackedPromise) {
+      entry.refreshMode = null;
+    }
+  });
+  entry.promise = trackedPromise;
+  return trackedPromise;
+}
+
+async function cachedBranchPullRequests(
   context: SessionPullRequestGitContext,
   deps: LoadSessionPullRequestDeps,
+  refresh: boolean,
 ): Promise<ControlUiSessionPullRequests> {
   const key = `${context.owner.toLowerCase()}/${context.repo.toLowerCase()}#${context.branch}`;
   const cached = branchCache.get(key);
   if (cached && cached.expiresAt > Date.now()) {
     branchCache.delete(key);
     branchCache.set(key, cached);
-    return cached.promise;
+    if (!refresh || cached.refreshMode === "forced") {
+      return cached.promise;
+    }
+    const pendingSnapshot = cached.promise;
+    const pendingRefreshMode = cached.refreshMode;
+    const pendingExpiresAt = cached.expiresAt;
+    return trackBranchRefresh(cached, "forced", async () => {
+      const snapshot = await pendingSnapshot;
+      // GitHub quota backoff stays authoritative even when a PR announcement
+      // queues this lookup behind an older normal or settled request.
+      if (snapshot.rateLimited) {
+        if (pendingRefreshMode === null) {
+          cached.expiresAt = pendingExpiresAt;
+        }
+        return snapshot;
+      }
+      return refreshBranchPullRequests(context, deps.fetchImpl ?? fetch, cached);
+    });
   }
   const entry: CacheEntry = cached ?? {
     expiresAt: 0,
     promise: Promise.resolve({ pullRequests: [], rateLimited: false }),
+    refreshMode: null,
   };
-  // Optimistic expiry dedupes concurrent panes while the refresh is in
-  // flight; failures shorten it inside refreshBranchPullRequests.
-  entry.expiresAt = Date.now() + SUCCESS_CACHE_MS;
-  entry.promise = refreshBranchPullRequests(context, deps.fetchImpl ?? fetch, entry);
+  const promise = trackBranchRefresh(entry, refresh ? "forced" : "normal", () =>
+    refreshBranchPullRequests(context, deps.fetchImpl ?? fetch, entry),
+  );
   branchCache.delete(key);
   branchCache.set(key, entry);
   while (branchCache.size > CACHE_LIMIT) {
@@ -644,5 +655,5 @@ function cachedBranchPullRequests(
     }
     branchCache.delete(oldestKey);
   }
-  return entry.promise;
+  return promise;
 }

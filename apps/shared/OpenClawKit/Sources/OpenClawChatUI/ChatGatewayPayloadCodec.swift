@@ -48,6 +48,16 @@ public enum OpenClawChatGatewayPayloadCodec {
         return decoded.models.map(self.modelChoice)
     }
 
+    public static func decodeSessionRoutingIdentity(_ data: Data) throws -> OpenClawChatSessionRoutingIdentity {
+        let decoded = try JSONDecoder().decode(AgentsListResult.self, from: data)
+        guard let identity = OpenClawChatSessionRoutingIdentity(
+            scope: decoded.scope.value as? String,
+            mainSessionKey: decoded.mainkey,
+            defaultAgentID: decoded.defaultid)
+        else { throw CancellationError() }
+        return identity
+    }
+
     public static func modelChoice(_ model: ModelChoice) -> OpenClawChatModelChoice {
         let name = model.name.trimmingCharacters(in: .whitespacesAndNewlines)
         return OpenClawChatModelChoice(
@@ -100,6 +110,13 @@ public enum OpenClawChatGatewayPayloadCodec {
                       as: OpenClawChatSessionsChangedEvent.self)
             else { return nil }
             return .sessionsChanged(change)
+        case "session.observer":
+            guard let payload = frame.payload,
+                  let digest = try? GatewayPayloadDecoding.decode(
+                      payload,
+                      as: SessionObserverDigest.self)
+            else { return nil }
+            return .sessionObserver(digest)
         case "seqGap":
             return .seqGap
         case "health":
@@ -129,6 +146,18 @@ public enum OpenClawChatGatewayPayloadCodec {
                       as: OpenClawAgentEventPayload.self)
             else { return nil }
             return .agent(agent)
+        case "question.requested":
+            guard let payload = frame.payload,
+                  let question = try? GatewayPayloadDecoding.decode(payload, as: QuestionRecord.self)
+            else { return nil }
+            return .questionRequested(question)
+        case "question.resolved":
+            guard let payload = frame.payload,
+                  let resolved = try? GatewayPayloadDecoding.decode(
+                      payload,
+                      as: OpenClawQuestionResolvedEvent.self)
+            else { return nil }
+            return .questionResolved(resolved)
         default:
             return nil
         }

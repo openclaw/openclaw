@@ -13,6 +13,7 @@ import {
   parseArgs,
   prepareBundledAiRuntimePackage,
   runCommandForTest,
+  writePackageInventoryForDocker,
 } from "../../../../scripts/package-openclaw-for-docker.mjs";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
@@ -46,7 +47,7 @@ async function readPid(filePath: string, timeoutMs: number): Promise<number> {
         return pid;
       }
     }
-    await sleep(25);
+    await sleep(5);
   }
   throw new Error(`timeout waiting for a positive pid in ${filePath}`);
 }
@@ -57,7 +58,7 @@ async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
     if (!isProcessAlive(pid)) {
       return;
     }
-    await sleep(25);
+    await sleep(5);
   }
   throw new Error(`process still alive: ${pid}`);
 }
@@ -175,6 +176,52 @@ describe("package-openclaw-for-docker", () => {
     }
   });
 
+  it("writes inventory for a frozen source checkout without the trusted helper", async () => {
+    const sourceDir = tempDirs.make("openclaw-package-frozen-source-");
+    fs.mkdirSync(path.join(sourceDir, "dist"), { recursive: true });
+    fs.mkdirSync(path.join(sourceDir, "scripts"), { recursive: true });
+    fs.mkdirSync(path.join(sourceDir, "node_modules", "tsx"), { recursive: true });
+    fs.writeFileSync(path.join(sourceDir, "package.json"), '{"name":"openclaw"}\n');
+    fs.writeFileSync(
+      path.join(sourceDir, "node_modules", "tsx", "package.json"),
+      '{"name":"tsx","exports":"./loader.mjs","type":"module"}\n',
+    );
+    fs.writeFileSync(path.join(sourceDir, "node_modules", "tsx", "loader.mjs"), "export {};\n");
+    fs.writeFileSync(path.join(sourceDir, "dist", "entry.js"), "export {};\n");
+    fs.writeFileSync(
+      path.join(sourceDir, "scripts", "write-package-dist-inventory.ts"),
+      [
+        'import fs from "node:fs";',
+        'fs.writeFileSync("dist/postinstall-inventory.json", JSON.stringify(["dist/entry.js"]));',
+      ].join("\n"),
+    );
+
+    await writePackageInventoryForDocker(
+      sourceDir,
+      async (command: string, args: string[], cwd: string) => {
+        expect({ command, cwd }).toEqual({ command: "node", cwd: sourceDir });
+        expect(args).toEqual([
+          "--import",
+          pathToFileURL(path.join(sourceDir, "node_modules", "tsx", "loader.mjs")).href,
+          path.join(sourceDir, "scripts", "write-package-dist-inventory.ts"),
+        ]);
+        fs.writeFileSync(
+          path.join(sourceDir, "dist", "postinstall-inventory.json"),
+          JSON.stringify(["dist/entry.js"]),
+        );
+      },
+    );
+
+    expect(
+      JSON.parse(
+        fs.readFileSync(path.join(sourceDir, "dist", "postinstall-inventory.json"), "utf8"),
+      ),
+    ).toEqual(["dist/entry.js"]);
+    expect(fs.existsSync(path.join(sourceDir, "scripts", "lib", "package-dist-inventory.ts"))).toBe(
+      false,
+    );
+  });
+
   it("rejects pnpm pack with npm metadata output", () => {
     expect(parseArgs(["--pnpm-pack"]).pnpmPack).toBe(true);
     expect(() => parseArgs(["--pnpm-pack", "--pack-json", "pack.json"])).toThrow(
@@ -270,7 +317,7 @@ describe("package-openclaw-for-docker", () => {
     expect(calls).toEqual([
       {
         command: "node",
-        args: ["scripts/build-all.mjs", "ciArtifacts"],
+        args: ["scripts/build-all.mjs", "full"],
         cwd: "/repo",
         dockerBuildExtensions: undefined,
         internalDockerBuildPluginIds: undefined,

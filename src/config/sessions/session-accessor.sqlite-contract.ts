@@ -1,6 +1,5 @@
 import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type {
   DeletedAgentSessionEntryPurgeParams,
   DeleteSessionEntryLifecycleResult,
@@ -13,7 +12,8 @@ import type {
   SessionLifecycleArtifactCleanupParams,
   SessionLifecycleArtifactCleanupResult,
   SessionLifecycleStoreTarget,
-} from "./store.js";
+} from "./session-accessor.lifecycle-types.js";
+import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
 export type SessionAccessScope = {
@@ -60,6 +60,17 @@ export type SessionEntrySummary = {
 
 export type SessionEntryStatus = NonNullable<SessionEntry["status"]>;
 
+export type SessionTranscriptInstance = SessionEntrySummary & {
+  /** Stable transcript identity, including rotated history for one logical session key. */
+  sessionId: string;
+  /** True when this transcript instance was owned by an ACP runtime. */
+  acpOwned: boolean;
+  /** True when exclusion-sensitive session ownership was captured for this transcript id. */
+  provenanceKnown: boolean;
+  /** Activity timestamp for this transcript instance, not the current logical session row. */
+  updatedAtMs: number;
+};
+
 export type TranscriptEvent = unknown;
 
 export type SessionTranscriptStats = {
@@ -69,6 +80,18 @@ export type SessionTranscriptStats = {
   maxSeq: number;
   sizeBytes: number;
 };
+
+export type SessionTranscriptEventRow = {
+  event: TranscriptEvent;
+  seq: number;
+};
+
+export type {
+  SessionTranscriptRawDeltaLimits,
+  SessionTranscriptRawDeltaResult,
+  SessionTranscriptVisibleMessageDeltaLimits,
+  SessionTranscriptVisibleMessageDeltaResult,
+} from "./session-accessor.types.js";
 
 export type TranscriptMessageAppendOptions<TMessage> = {
   config?: OpenClawConfig;
@@ -230,12 +253,14 @@ export type ForkSessionEntryFromParentTargetParams = {
 };
 
 export type ResetSessionEntryLifecycleParams = {
+  archivePreviousTranscript?: boolean;
   afterEntryMutation?: (mutation: ResetSessionEntryLifecycleMutation) => Promise<void> | void;
   agentId?: string;
   buildNextEntry: (context: {
     currentEntry?: SessionEntry;
     primaryKey: string;
   }) => Promise<SessionEntry> | SessionEntry;
+  resetBoundaryReason?: import("./session-reset-boundary-event.js").SessionResetBoundaryReason;
   storePath: string;
   target: SessionLifecycleStoreTarget;
 };
@@ -243,8 +268,9 @@ export type ResetSessionEntryLifecycleParams = {
 export type DeleteSessionEntryLifecycleParams = {
   agentId?: string;
   archiveTranscript: boolean;
+  deleteTranscriptWithoutArchive?: boolean;
   expectedEntry?: SessionEntry;
-  expectedSessionId?: string;
+  expectedSessionId?: string | null;
   expectedLifecycleRevision?: string;
   expectedUpdatedAt?: number;
   storePath: string;

@@ -4,7 +4,6 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import {
   prepareGatewaySuspend,
-  resetGatewaySuspendCoordinatorForTest,
   resumeGatewaySuspend,
 } from "../infra/gateway-suspend-coordinator.js";
 import { isGatewayDraining } from "../process/command-queue.js";
@@ -57,7 +56,6 @@ describe("gateway OpenAI-compatible disabled HTTP routes", () => {
 
 describe("gateway probe endpoints", () => {
   it("keeps liveness green while a prepared suspension lease makes readiness red", async () => {
-    resetGatewaySuspendCoordinatorForTest();
     resetGatewayWorkAdmission();
     const channelManager = {
       getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
@@ -121,6 +119,14 @@ describe("gateway probe endpoints", () => {
             error: { code: "gateway_unavailable" },
           });
 
+          const blockedBoard = await sendGatewayRequest(server, {
+            path: "/__openclaw__/board/agent%3Amain%3Amain/status/index.html?bt=garbage",
+          });
+          expect(blockedBoard.res.statusCode).toBe(503);
+          expect(JSON.parse(blockedBoard.getBody())).toMatchObject({
+            error: { code: "gateway_unavailable" },
+          });
+
           expect(resumeGatewaySuspend(prepared.suspensionId)).toEqual({
             ok: true,
             status: "running",
@@ -136,13 +142,11 @@ describe("gateway probe endpoints", () => {
         },
       });
     } finally {
-      resetGatewaySuspendCoordinatorForTest();
       resetGatewayWorkAdmission();
     }
   });
 
   it("keeps in-flight core HTTP work visible to suspension preparation", async () => {
-    resetGatewaySuspendCoordinatorForTest();
     resetGatewayWorkAdmission();
     let releaseWatch = () => {};
     let markWatchStarted = () => {};
@@ -205,7 +209,6 @@ describe("gateway probe endpoints", () => {
       });
     } finally {
       releaseWatch();
-      resetGatewaySuspendCoordinatorForTest();
       resetGatewayWorkAdmission();
     }
   });

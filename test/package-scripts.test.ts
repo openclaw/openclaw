@@ -169,6 +169,24 @@ describe("package scripts", () => {
     );
   });
 
+  it("runs legacy session importer atomicity coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/infra/state-migrations.legacy-session-store.test.ts",
+    );
+  });
+
+  it("runs SQLite snapshot path coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/infra/sqlite-snapshot.test.ts",
+    );
+  });
+
+  it("runs cross-OS installer behavior coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "test/scripts/openclaw-cross-os-installer.windows.test.ts",
+    );
+  });
+
   it("runs env launcher coverage in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
       "test/scripts/run-with-env.test.ts",

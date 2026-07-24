@@ -64,19 +64,34 @@ import {
   cloneFirstTemplateModel,
   findCatalogTemplate,
   matchesExactOrPrefix,
+  OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
 } from "./shared.js";
 import { resolveUnifiedOpenAIThinkingProfile } from "./thinking-policy.js";
 
 const PROVIDER_ID = "openai";
+
+// OpenAI-native error codes stay with the OpenAI provider hook.
+function classifyOpenAiFailoverCode(code: string | undefined) {
+  switch (code?.trim().toUpperCase()) {
+    case "SERVER_ERROR":
+      return "server_error" as const;
+    case "INSUFFICIENT_QUOTA":
+      return "billing" as const;
+    default:
+      return undefined;
+  }
+}
 const OPENAI_MODELS_ENDPOINT = "https://api.openai.com/v1/models";
-const OPENAI_CODEX_MODELS_ENDPOINT = `${OPENAI_CODEX_RESPONSES_BASE_URL}/models?client_version=1.0.0`;
+// Keep synchronized with extensions/codex's exact @openai/codex dependency;
+// the provider contract test fails when that managed-runtime pin changes.
+const OPENAI_CODEX_CLIENT_VERSION = "0.144.6";
+const OPENAI_CODEX_MODELS_ENDPOINT = `${OPENAI_CODEX_RESPONSES_BASE_URL}/models?client_version=${OPENAI_CODEX_CLIENT_VERSION}`;
 const OPENAI_MODELS_CACHE_TTL_MS = 60_000;
 const OPENAI_CODEX_MODELS_CACHE_TTL_MS = 60_000;
-const OPENAI_GPT_56_DIRECT_CONTEXT_TOKENS = 1_050_000;
-const OPENAI_CODEX_GPT_56_CONTEXT_TOKENS = 372_000;
-const OPENAI_GPT_55_CONTEXT_WINDOW = 1_000_000;
-const OPENAI_GPT_55_CONTEXT_TOKENS = 272_000;
-const OPENAI_GPT_55_PRO_CONTEXT_TOKENS = 1_000_000;
+const OPENAI_GPT_56_DIRECT_CONTEXT_WINDOW = 1_050_000;
+const OPENAI_CODEX_GPT_56_CONTEXT_WINDOW = 372_000;
+const OPENAI_GPT_55_CONTEXT_WINDOW = 1_050_000;
+const OPENAI_GPT_55_PRO_CONTEXT_WINDOW = 1_050_000;
 const OPENAI_GPT_54_CONTEXT_TOKENS = 1_050_000;
 const OPENAI_GPT_54_PRO_CONTEXT_TOKENS = 1_050_000;
 const OPENAI_GPT_54_MINI_CONTEXT_TOKENS = 400_000;
@@ -171,7 +186,7 @@ function buildOpenAIManifestModelsForBaseUrl(baseUrl: string): ModelDefinitionCo
   );
 }
 
-export async function buildOpenAILiveProviderConfig(
+async function buildOpenAILiveProviderConfig(
   params: BuildOpenAILiveProviderConfigParams,
 ): Promise<ModelProviderConfig> {
   const baseUrl =
@@ -339,8 +354,8 @@ function normalizeOpenAICodexCatalogModel(
       : undefined;
     return {
       ...model,
-      contextWindow: OPENAI_CODEX_GPT_56_CONTEXT_TOKENS,
-      contextTokens: OPENAI_CODEX_GPT_56_CONTEXT_TOKENS,
+      contextWindow: OPENAI_CODEX_GPT_56_CONTEXT_WINDOW,
+      contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
       thinkingLevelMap: { ...model.thinkingLevelMap, off: null },
       ...(model.compat
         ? {
@@ -371,13 +386,24 @@ function buildOpenAICodexModelFromLiveRow(row: unknown): ModelDefinitionConfig |
   if (!modelId) {
     return undefined;
   }
+  const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
   const fallback = resolveCodexModelFallback(modelId);
   const reasoningLevels = readCodexReasoningLevels(row);
-  const contextTokens = readCodexModelPositiveInteger(row, ["context_window", "contextWindow"]);
+  const observedContextTokens = readCodexModelPositiveInteger(row, [
+    "context_window",
+    "contextWindow",
+  ]);
+  const isGpt56Model = matchesExactOrPrefix(normalizedModelId, [OPENAI_GPT_56_MODEL_ID]);
+  const contextTokens = isGpt56Model
+    ? Math.min(
+        observedContextTokens ?? fallback?.contextTokens ?? OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
+        OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
+      )
+    : observedContextTokens;
   const contextWindow =
     readCodexModelPositiveInteger(row, ["max_context_window", "maxContextWindow"]) ??
     fallback?.contextWindow ??
-    contextTokens ??
+    observedContextTokens ??
     DEFAULT_CONTEXT_TOKENS;
   const maxTokens =
     readCodexModelPositiveInteger(row, [
@@ -398,7 +424,7 @@ function buildOpenAICodexModelFromLiveRow(row: unknown): ModelDefinitionConfig |
       : fallback?.compat;
   const thinkingLevelMap = {
     ...(reasoningLevels === undefined ? fallback?.thinkingLevelMap : {}),
-    ...(normalizeLowercaseStringOrEmpty(modelId).startsWith("gpt-5.6") ? { off: null } : {}),
+    ...(normalizedModelId.startsWith("gpt-5.6") ? { off: null } : {}),
     ...(reasoningLevels?.includes("xhigh") ? { xhigh: "xhigh" as const } : {}),
     ...(reasoningLevels?.includes("max") ? { max: "max" as const } : {}),
   };
@@ -428,13 +454,19 @@ function buildOpenAICodexStaticProviderConfig(): ModelProviderConfig {
     api: "openai-chatgpt-responses",
     auth: "oauth",
     models: OPENAI_MANIFEST_PROVIDER.models.flatMap((model) => {
+      const modelId = normalizeLowercaseStringOrEmpty(model.id);
+      // Static OAuth rows are offline hints, not entitlement claims. Keep only
+      // the proven GPT-5.6 subscription route; live discovery may add others.
+      if (modelId.startsWith("gpt-5.6") && modelId !== OPENAI_GPT_56_SOL_MODEL_ID) {
+        return [];
+      }
       const normalized = normalizeOpenAICodexCatalogModel(model);
       return normalized ? [normalized] : [];
     }),
   };
 }
 
-export async function buildOpenAICodexLiveProviderConfig(params: {
+async function buildOpenAICodexLiveProviderConfig(params: {
   discoveryApiKey: string;
   accountId?: string;
   fetchGuard?: LiveModelCatalogFetchGuard;
@@ -467,6 +499,9 @@ export async function buildOpenAICodexLiveProviderConfig(params: {
       .map(buildOpenAICodexModelFromLiveRow)
       .filter((model): model is ModelDefinitionConfig => Boolean(model));
     if (models.length > 0) {
+      // Successful Codex OAuth discovery is account-scoped and authoritative
+      // for the picker/list catalog. Do not merge static OpenAI fallback rows
+      // into a successful live catalog.
       return {
         baseUrl: OPENAI_CODEX_RESPONSES_BASE_URL,
         api: "openai-chatgpt-responses",
@@ -720,8 +755,8 @@ function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelCont
       reasoning: true,
       input: ["text", "image"],
       cost,
-      contextWindow: OPENAI_GPT_56_DIRECT_CONTEXT_TOKENS,
-      contextTokens: OPENAI_GPT_56_DIRECT_CONTEXT_TOKENS,
+      contextWindow: OPENAI_GPT_56_DIRECT_CONTEXT_WINDOW,
+      contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
       maxTokens: OPENAI_GPT_54_MAX_TOKENS,
       thinkingLevelMap: OPENAI_GPT_56_THINKING_LEVEL_MAP,
     };
@@ -736,7 +771,7 @@ function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelCont
       mediaInput: OPENAI_GPT_55_MEDIA_INPUT,
       cost: OPENAI_GPT_55_COST,
       contextWindow: OPENAI_GPT_55_CONTEXT_WINDOW,
-      contextTokens: OPENAI_GPT_55_CONTEXT_TOKENS,
+      contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
       maxTokens: OPENAI_GPT_54_MAX_TOKENS,
     };
   } else if (lower === OPENAI_GPT_55_PRO_MODEL_ID) {
@@ -748,7 +783,8 @@ function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelCont
       reasoning: true,
       input: ["text", "image"],
       cost: OPENAI_GPT_55_PRO_COST,
-      contextWindow: OPENAI_GPT_55_PRO_CONTEXT_TOKENS,
+      contextWindow: OPENAI_GPT_55_PRO_CONTEXT_WINDOW,
+      contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
       maxTokens: OPENAI_GPT_54_MAX_TOKENS,
     };
   } else if (lower === OPENAI_GPT_54_MODEL_ID) {
@@ -993,10 +1029,11 @@ export function buildOpenAIProvider(): ProviderPlugin {
     },
     matchesContextOverflowError: ({ errorMessage }) =>
       /content_filter.*(?:prompt|input).*(?:too long|exceed)/i.test(errorMessage),
+    classifyFailoverReason: ({ code }) => classifyOpenAiFailoverCode(code),
     resolveReasoningOutputMode: () => "native",
-    resolveThinkingProfile: ({ provider, modelId, agentRuntime, compat }) =>
+    resolveThinkingProfile: ({ provider, modelId, agentRuntime, api, compat }) =>
       normalizeProviderId(provider) === PROVIDER_ID
-        ? resolveUnifiedOpenAIThinkingProfile(modelId, agentRuntime, compat)
+        ? resolveUnifiedOpenAIThinkingProfile(modelId, agentRuntime, compat, api)
         : null,
     isModernModelRef: ({ modelId }) =>
       matchesExactOrPrefix(modelId, OPENAI_PROVIDER_MODERN_MODEL_IDS),
@@ -1031,7 +1068,8 @@ export function buildOpenAIProvider(): ProviderPlugin {
           id: OPENAI_GPT_55_PRO_MODEL_ID,
           reasoning: true,
           input: ["text", "image"],
-          contextWindow: OPENAI_GPT_55_PRO_CONTEXT_TOKENS,
+          contextWindow: OPENAI_GPT_55_PRO_CONTEXT_WINDOW,
+          contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
         }),
         buildOpenAISyntheticCatalogEntry(openAiGpt54Template, {
           id: OPENAI_GPT_54_MODEL_ID,
@@ -1066,3 +1104,4 @@ export function buildOpenAIProvider(): ProviderPlugin {
 export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
   return buildOpenAIProvider();
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

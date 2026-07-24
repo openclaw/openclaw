@@ -8,7 +8,6 @@ import {
   restoreEnvRefsFromMap,
   resolvePersistCandidateForWrite,
   resolveWriteEnvSnapshotForPath,
-  unsetPathForWrite,
 } from "./io.write-prepare.js";
 import type { OpenClawConfig } from "./types.js";
 
@@ -255,9 +254,8 @@ describe("config io write prepare", () => {
             },
           },
         },
-        list: [
-          {
-            id: "ops",
+        entries: {
+          ops: {
             model: {
               primary: "google/gemini-3-pro-preview",
               fallbacks: ["google/gemini-3-pro-preview"],
@@ -271,7 +269,7 @@ describe("config io write prepare", () => {
               },
             },
           },
-        ],
+        },
       },
       gateway: { port: 18789 },
     };
@@ -300,9 +298,8 @@ describe("config io write prepare", () => {
             },
           },
         },
-        list: [
-          {
-            id: "ops",
+        entries: {
+          ops: {
             model: {
               primary: "google/gemini-3.1-pro-preview",
               fallbacks: ["google/gemini-3.1-pro-preview"],
@@ -316,7 +313,7 @@ describe("config io write prepare", () => {
               },
             },
           },
-        ],
+        },
       },
       gateway: { port: 18789 },
     };
@@ -348,14 +345,14 @@ describe("config io write prepare", () => {
         alias: "Gemini",
       },
     });
-    expect(persisted.agents?.list?.[0]?.model).toEqual({
+    expect(persisted.agents?.entries?.ops?.model).toEqual({
       primary: "google/gemini-3.1-pro-preview",
       fallbacks: ["google/gemini-3.1-pro-preview"],
     });
-    expect(persisted.agents?.list?.[0]?.utilityModel).toBe("google/gemini-3.1-pro-preview");
-    expect(persisted.agents?.list?.[0]?.heartbeat?.model).toBe("google/gemini-3.1-pro-preview");
-    expect(persisted.agents?.list?.[0]?.subagents?.model).toBe("google/gemini-3.1-pro-preview");
-    expect(persisted.agents?.list?.[0]?.models).toEqual({
+    expect(persisted.agents?.entries?.ops?.utilityModel).toBe("google/gemini-3.1-pro-preview");
+    expect(persisted.agents?.entries?.ops?.heartbeat?.model).toBe("google/gemini-3.1-pro-preview");
+    expect(persisted.agents?.entries?.ops?.subagents?.model).toBe("google/gemini-3.1-pro-preview");
+    expect(persisted.agents?.entries?.ops?.models).toEqual({
       "google/gemini-3.1-pro-preview": {
         alias: "Ops Gemini",
       },
@@ -502,6 +499,46 @@ describe("config io write prepare", () => {
 
     expect(persisted.agents?.defaults).not.toHaveProperty("params");
     expect(persisted.agents?.defaults?.models?.["openai/gpt-5.4"]).not.toHaveProperty("params");
+  });
+
+  it("applies explicit unsets without mutating caller config", () => {
+    const input: OpenClawConfig = {
+      gateway: { mode: "local" },
+      commands: { ownerDisplay: "hash" },
+      tools: { alsoAllow: ["exec", "fetch", "read"] },
+    };
+
+    const next = applyUnsetPathsForWrite(input, [
+      ["commands", "ownerDisplay"],
+      ["tools", "alsoAllow", "1"],
+    ]);
+
+    expect(input).toEqual({
+      gateway: { mode: "local" },
+      commands: { ownerDisplay: "hash" },
+      tools: { alsoAllow: ["exec", "fetch", "read"] },
+    });
+    expect(next.commands ?? {}).not.toHaveProperty("ownerDisplay");
+    expect(next.tools?.alsoAllow).toEqual(["exec", "read"]);
+  });
+
+  it.each([
+    ["invalid array suffix", ["tools", "alsoAllow", "1abc"]],
+    ["signed array index", ["tools", "alsoAllow", "+0"]],
+    ["unsafe integer", ["tools", "alsoAllow", "9007199254740993"]],
+    ["maximum array key", ["tools", "alsoAllow", "4294967294"]],
+    ["missing key", ["commands", "missingKey"]],
+    ["prototype key", ["commands", "__proto__"]],
+    ["constructor key", ["commands", "constructor"]],
+    ["prototype constructor property", ["commands", "prototype"]],
+  ] as const)("treats %s unset paths as immutable no-ops", (_name, unsetPath) => {
+    const input: OpenClawConfig = {
+      gateway: { mode: "local" },
+      commands: { ownerDisplay: "hash" },
+      tools: { alsoAllow: ["exec", "fetch"] },
+    };
+
+    expect(applyUnsetPathsForWrite(input, [[...unsetPath]])).toBe(input);
   });
 
   it("preserves untouched include-owned subtrees during unrelated writes", () => {
@@ -822,130 +859,15 @@ describe("config io write prepare", () => {
     expect(message).toContain('openclaw config set channels.telegram.dmPolicy "pairing"');
   });
 
-  it("unsets explicit paths when runtime defaults would otherwise reappear", () => {
-    const next = unsetPathForWrite(
-      {
-        gateway: { auth: { mode: "none" } },
-        commands: { ownerDisplay: "hash" },
-      },
-      ["commands", "ownerDisplay"],
-    );
-
-    expect(next.changed).toBe(true);
-    expect(next.next.commands ?? {}).not.toHaveProperty("ownerDisplay");
-  });
-
-  it("does not mutate caller config when unsetting existing config objects", () => {
-    const input: OpenClawConfig = {
-      gateway: { mode: "local" },
-      commands: { ownerDisplay: "hash" },
-    } satisfies OpenClawConfig;
-
-    const next = unsetPathForWrite(input, ["commands", "ownerDisplay"]);
-
-    expect(input).toEqual({
-      gateway: { mode: "local" },
-      commands: { ownerDisplay: "hash" },
-    });
-    expect(next.next.commands ?? {}).not.toHaveProperty("ownerDisplay");
-  });
-
-  it("keeps caller arrays immutable when unsetting array entries", () => {
-    const input: OpenClawConfig = {
-      gateway: { mode: "local" },
-      tools: { alsoAllow: ["exec", "fetch", "read"] },
-    } satisfies OpenClawConfig;
-
-    const next = unsetPathForWrite(input, ["tools", "alsoAllow", "1"]);
-
-    expect(input.tools!.alsoAllow).toEqual(["exec", "fetch", "read"]);
-    expect((next.next.tools as { alsoAllow?: string[] } | undefined)?.alsoAllow).toEqual([
-      "exec",
-      "read",
-    ]);
-  });
-
-  it("treats invalid array-index unset paths as no-ops", () => {
-    const input: OpenClawConfig = {
-      gateway: { mode: "local" },
-      tools: { alsoAllow: ["exec", "fetch"] },
-    } satisfies OpenClawConfig;
-
-    for (const path of [
-      ["tools", "alsoAllow", "1abc"],
-      ["tools", "alsoAllow", "+0"],
-      ["tools", "alsoAllow", "9007199254740993"],
-      ["tools", "alsoAllow", "4294967294"],
-    ]) {
-      const next = unsetPathForWrite(input, path);
-      expect(next.changed).toBe(false);
-      expect(next.next).toBe(input);
-    }
-  });
-
-  it("treats missing unset paths as no-op without mutating caller config", () => {
-    const input: OpenClawConfig = {
-      gateway: { mode: "local" },
-      commands: { ownerDisplay: "hash" },
-    } satisfies OpenClawConfig;
-
-    const next = unsetPathForWrite(input, ["commands", "missingKey"]);
-
-    expect(next.changed).toBe(false);
-    expect(next.next).toBe(input);
-    expect(input).toEqual({
-      gateway: { mode: "local" },
-      commands: { ownerDisplay: "hash" },
-    });
-  });
-
-  it("ignores blocked prototype-key unset path segments", () => {
-    const input: OpenClawConfig = {
-      gateway: { mode: "local" },
-      commands: { ownerDisplay: "hash" },
-    } satisfies OpenClawConfig;
-
-    const blocked = [
-      ["commands", "__proto__"],
-      ["commands", "constructor"],
-      ["commands", "prototype"],
-    ].map((segments) => unsetPathForWrite(input, segments));
-
-    for (const result of blocked) {
-      expect(result.changed).toBe(false);
-      expect(result.next).toBe(input);
-    }
-    expect(input).toEqual({
-      gateway: { mode: "local" },
-      commands: { ownerDisplay: "hash" },
-    });
-  });
-
   it("preserves env refs on unchanged paths while keeping changed paths resolved", () => {
     const changedPaths = new Set<string>();
     collectChangedPaths(
       {
-        agents: {
-          defaults: {
-            cliBackends: {
-              codex: {
-                env: { OPENAI_API_KEY: "sk-secret" },
-              },
-            },
-          },
-        },
+        plugins: { entries: { acme: { config: { env: { API_KEY: "secret" } } } } },
         gateway: { port: 18789 },
       },
       {
-        agents: {
-          defaults: {
-            cliBackends: {
-              codex: {
-                env: { OPENAI_API_KEY: "sk-secret" },
-              },
-            },
-          },
-        },
+        plugins: { entries: { acme: { config: { env: { API_KEY: "secret" } } } } },
         gateway: {
           port: 18789,
           auth: { mode: "token" },
@@ -957,29 +879,21 @@ describe("config io write prepare", () => {
 
     const restored = restoreEnvRefsFromMap(
       {
-        agents: {
-          defaults: {
-            cliBackends: {
-              codex: {
-                env: { OPENAI_API_KEY: "sk-secret" },
-              },
-            },
-          },
-        },
+        plugins: { entries: { acme: { config: { env: { API_KEY: "secret" } } } } },
         gateway: {
           port: 18789,
           auth: { mode: "token" },
         },
       },
       "",
-      new Map([["agents.defaults.cliBackends.codex.env.OPENAI_API_KEY", "${OPENAI_API_KEY}"]]),
+      new Map([["plugins.entries.acme.config.env.API_KEY", "${ACME_API_KEY}"]]),
       changedPaths,
     ) as {
-      agents: { defaults: { cliBackends: { codex: { env: { OPENAI_API_KEY: string } } } } };
+      plugins: { entries: { acme: { config: { env: { API_KEY: string } } } } };
       gateway: { port: number; auth: { mode: string } };
     };
 
-    expect(restored.agents.defaults.cliBackends.codex.env.OPENAI_API_KEY).toBe("${OPENAI_API_KEY}");
+    expect(restored.plugins.entries.acme.config.env.API_KEY).toBe("${ACME_API_KEY}");
     expect(restored.gateway).toEqual({
       port: 18789,
       auth: { mode: "token" },
@@ -990,25 +904,11 @@ describe("config io write prepare", () => {
     const changedPaths = new Set<string>();
     collectChangedPaths(
       {
-        agents: {
-          defaults: {
-            cliBackends: {
-              codex: {
-                args: ["${DISCORD_USER_ID}", "123"],
-              },
-            },
-          },
-        },
+        plugins: { entries: { acme: { config: { args: ["${USER_ID}", "123"] } } } },
       },
       {
-        agents: {
-          defaults: {
-            cliBackends: {
-              codex: {
-                args: ["${DISCORD_USER_ID}", "123", "456"],
-              },
-            },
-          },
+        plugins: {
+          entries: { acme: { config: { args: ["${USER_ID}", "123", "456"] } } },
         },
       },
       "",
@@ -1017,28 +917,16 @@ describe("config io write prepare", () => {
 
     const restored = restoreEnvRefsFromMap(
       {
-        agents: {
-          defaults: {
-            cliBackends: {
-              codex: {
-                args: ["999", "123", "456"],
-              },
-            },
-          },
-        },
+        plugins: { entries: { acme: { config: { args: ["999", "123", "456"] } } } },
       },
       "",
-      new Map([["agents.defaults.cliBackends.codex.args[0]", "${DISCORD_USER_ID}"]]),
+      new Map([["plugins.entries.acme.config.args[0]", "${USER_ID}"]]),
       changedPaths,
     ) as {
-      agents: { defaults: { cliBackends: { codex: { args: string[] } } } };
+      plugins: { entries: { acme: { config: { args: string[] } } } };
     };
 
-    expect(restored.agents.defaults.cliBackends.codex.args).toEqual([
-      "${DISCORD_USER_ID}",
-      "123",
-      "456",
-    ]);
+    expect(restored.plugins.entries.acme.config.args).toEqual(["${USER_ID}", "123", "456"]);
   });
 
   it("does not overwrite identity-restored env refs with positional map entries", () => {
@@ -1202,7 +1090,7 @@ describe("config io write prepare", () => {
   });
 
   it("does not reintroduce legacy nested dm.policy defaults in the persisted candidate", () => {
-    const sourceConfig: OpenClawConfig = {
+    const sourceConfig = {
       channels: {
         discord: {
           dmPolicy: "pairing",
@@ -1214,7 +1102,7 @@ describe("config io write prepare", () => {
         },
       },
       gateway: { port: 18789 },
-    } satisfies OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     const nextConfig = structuredClone(sourceConfig);
     delete (nextConfig.channels?.discord?.dm as { enabled?: boolean; policy?: string } | undefined)
@@ -1555,3 +1443,4 @@ describe("config io write prepare", () => {
     ).toThrow("Config write would flatten $include-owned config at agents.defaults");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -27,7 +27,7 @@ import {
   REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
 } from "openclaw/plugin-sdk/realtime-voice";
-import { warn } from "openclaw/plugin-sdk/runtime-env";
+import { sleepWithAbort, warn } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
@@ -174,7 +174,7 @@ type RealtimeGaSessionUpdate = {
         format: OpenAIRealtimeAudioFormatConfig;
         turn_detection: RealtimeTurnDetectionConfig;
         noise_reduction?: { type: "near_field" } | null;
-        transcription?: { model: string };
+        transcription?: { model: string; language?: string };
       };
       output: {
         format: OpenAIRealtimeAudioFormatConfig;
@@ -195,7 +195,7 @@ type RealtimeAzureDeploymentSessionUpdate = {
     voice: OpenAIRealtimeVoice;
     input_audio_format: "g711_ulaw" | "pcm16";
     output_audio_format: "g711_ulaw" | "pcm16";
-    input_audio_transcription?: { model: string };
+    input_audio_transcription?: { model: string; language?: string };
     turn_detection: RealtimeTurnDetectionConfig;
     temperature: number;
     tools?: RealtimeVoiceTool[];
@@ -506,6 +506,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private sessionReadyFired = false;
   private reconnectReason: string | undefined;
   private activeConnectionReason: string | undefined;
+  private reconnectAbortController = new AbortController();
   private readonly audioFormat: RealtimeVoiceAudioFormat;
 
   constructor(private readonly config: OpenAIRealtimeVoiceBridgeConfig) {
@@ -514,6 +515,9 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
   async connect(): Promise<void> {
     this.intentionallyClosed = false;
+    if (this.reconnectAbortController.signal.aborted) {
+      this.reconnectAbortController = new AbortController();
+    }
     this.reconnectAttempts = 0;
     await this.doConnect();
   }
@@ -578,15 +582,18 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.requestResponseCreate();
   }
 
-  acknowledgeMark(): void {
-    if (this.markQueue.length === 0) {
-      return;
+  acknowledgeMark(markName?: string): void {
+    const index = markName === undefined ? 0 : this.markQueue.indexOf(markName);
+    if (index >= 0) {
+      this.markQueue.splice(index, 1);
     }
-    this.markQueue.shift();
   }
 
   close(): void {
     this.intentionallyClosed = true;
+    // The bridge owns both its active socket and reconnect delay; canceling
+    // both keeps terminal close from retaining callbacks for the full backoff.
+    this.reconnectAbortController.abort();
     this.connected = false;
     this.sessionConfigured = false;
     if (this.ws) {
@@ -881,9 +888,15 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       type: "session.reconnect.scheduled",
       detail: `reason=${reason} attempt=${attempt} delayMs=${delay}`,
     });
-    await new Promise((resolve) => {
-      setTimeout(resolve, delay);
-    });
+    const reconnectSignal = this.reconnectAbortController.signal;
+    try {
+      await sleepWithAbort(delay, reconnectSignal);
+    } catch (error) {
+      if (!reconnectSignal.aborted) {
+        throw error;
+      }
+      return;
+    }
     if (this.intentionallyClosed) {
       return;
     }
@@ -923,7 +936,10 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           input: {
             format: this.resolveRealtimeAudioFormat(),
             noise_reduction: null,
-            transcription: { model: OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL },
+            transcription: {
+              model: OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL,
+              ...(cfg.language ? { language: cfg.language } : {}),
+            },
             turn_detection: this.buildTurnDetectionConfig({ includeInterruptResponse: true }),
           },
           output: {
@@ -961,7 +977,10 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         voice: cfg.voice ?? "alloy",
         input_audio_format: format,
         output_audio_format: format,
-        input_audio_transcription: { model: "whisper-1" },
+        input_audio_transcription: {
+          model: "whisper-1",
+          ...(cfg.language ? { language: cfg.language } : {}),
+        },
         turn_detection: this.buildTurnDetectionConfig(),
         temperature: cfg.temperature ?? 0.8,
         ...(tools
@@ -1547,6 +1566,7 @@ export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
       supportsBargeIn: true,
       handlesInputAudioBargeIn: true,
       supportsToolCalls: true,
+      supportsVideoFrames: true,
     },
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
     isConfigured: ({ cfg, providerConfig }) => {
@@ -1585,3 +1605,4 @@ export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
     createBrowserSession: createOpenAIRealtimeBrowserSession,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

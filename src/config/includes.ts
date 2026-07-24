@@ -23,10 +23,10 @@ import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 
 export const INCLUDE_KEY = "$include";
 export const MAX_INCLUDE_DEPTH = 10;
-export const MAX_INCLUDE_FILE_BYTES = 2 * 1024 * 1024;
+const MAX_INCLUDE_FILE_BYTES = 2 * 1024 * 1024;
 
 /** Maximum length for $include path and resolved path (CWE-22 hardening). */
-export const MAX_INCLUDE_PATH_LENGTH = 4096;
+const MAX_INCLUDE_PATH_LENGTH = 4096;
 
 export function hashConfigIncludeRaw(raw: string | null): string {
   const hash = crypto.createHash("sha256");
@@ -75,6 +75,8 @@ export type IncludeResolver = {
   readFile: (path: string) => string;
   readFileWithGuards?: (params: IncludeFileReadParams) => string;
   parseJson: (raw: string) => unknown;
+  /** Reports lexically contained paths before canonical/open checks for watcher repair flows. */
+  onLexicalPath?: (resolvedPath: string) => void;
 };
 
 type IncludeFileReadParams = {
@@ -136,7 +138,7 @@ export class CircularIncludeError extends ConfigIncludeError {
 // ============================================================================
 
 /** Deep merge: arrays concatenate, objects merge recursively, primitives: source wins */
-export function deepMerge(target: unknown, source: unknown): unknown {
+function deepMerge(target: unknown, source: unknown): unknown {
   return mergeDeepValues(target, source, { arrays: "concat", undefinedValues: "replace" });
 }
 
@@ -278,6 +280,7 @@ class IncludeProcessor {
         includePath,
       );
     }
+    this.resolver.onLexicalPath?.(normalized);
 
     // SECURITY: Resolve symlinks and re-validate to prevent symlink bypass.
     // The realpath may legitimately land in a different allowed root than the

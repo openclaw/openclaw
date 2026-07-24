@@ -25,7 +25,6 @@ import {
   collectQaBaselineRegressionObservations,
   detectCommandDiagnosticFailure,
   discoverBundledPluginManifests,
-  schemaHasRequiredFields,
   selectPluginEntries,
 } from "../../scripts/lib/plugin-gateway-gauntlet.mjs";
 
@@ -89,7 +88,7 @@ describe("plugin gateway gauntlet helpers", () => {
       if (await predicate()) {
         return;
       }
-      await delay(25);
+      await delay(5);
     }
     throw new Error("condition was not met before timeout");
   }
@@ -340,22 +339,6 @@ describe("plugin gateway gauntlet helpers", () => {
     ).toThrow("Bundled plugin dependency cycle detected: alpha -> beta -> alpha");
   });
 
-  it("detects required schema fields recursively", () => {
-    expect(
-      schemaHasRequiredFields({
-        type: "object",
-        properties: {
-          auth: {
-            oneOf: [{ type: "object" }, { type: "object", required: ["token"] }],
-          },
-        },
-      }),
-    ).toBe(true);
-    expect(
-      schemaHasRequiredFields({ type: "object", properties: { enabled: { type: "boolean" } } }),
-    ).toBe(false);
-  });
-
   it("flags gateway startup CPU observations using bench summary keys", () => {
     expect(
       collectGatewayCpuObservations({
@@ -506,7 +489,7 @@ describe("plugin gateway gauntlet helpers", () => {
     expect(buildGauntletPrebuildEnv({ EXISTING: "1" }, { includePrivateQa: true })).toEqual({
       EXISTING: "1",
       OPENCLAW_BUILD_PRIVATE_QA: "1",
-      OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "qa-channel,qa-lab,qa-matrix",
+      OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "qa-channel,qa-lab",
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
       PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
     });
@@ -543,7 +526,7 @@ describe("plugin gateway gauntlet helpers", () => {
     ).toEqual({
       EXISTING: "1",
       OPENCLAW_BUILD_PRIVATE_QA: "1",
-      OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "acpx,active-memory,qa-channel,qa-lab,qa-matrix",
+      OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "acpx,active-memory,qa-channel,qa-lab",
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
       PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
     });
@@ -709,7 +692,7 @@ const grandchildScript = [
   "  setTimeout(() => {",
   "    fs.writeFileSync(process.argv[3], 'drained');",
   "    process.exit(0);",
-  "  }, 50);",
+  "  }, 20);",
   "});",
   "fs.writeFileSync(process.argv[2], 'ready');",
   "setInterval(() => {}, 1000);",
@@ -731,7 +714,7 @@ setInterval(() => {}, 1000);
         args: [scriptPath, readyPath, drainedPath],
         label: "timeout-leader-drain",
         phase: "probe",
-        timeoutKillGraceMs: 1_000,
+        timeoutKillGraceMs: 200,
         timeoutMs: 500,
         timeMode: "none",
       });
@@ -953,19 +936,19 @@ const promise = runMeasuredCommandLive({
   )}, ${JSON.stringify(leaderExitedPath)}],
   label: "timeout-parent-termination",
   phase: "probe",
-  timeoutKillGraceMs: 250,
+  timeoutKillGraceMs: 150,
   timeoutMs: 200,
   timeMode: "none",
 });
 for (let attempt = 0; attempt < 200 && !fs.existsSync(${JSON.stringify(
           leaderExitedPath,
         )}); attempt += 1) {
-  await delay(25);
+  await delay(10);
 }
 if (!fs.existsSync(${JSON.stringify(leaderExitedPath)})) {
   process.exit(2);
 }
-await delay(50);
+await delay(20);
 process.kill(process.pid, "SIGTERM");
 await promise;
 process.exit(7);
@@ -1067,7 +1050,7 @@ process.exit(7);
           "const marker = process.argv[1];",
           "fs.writeFileSync(marker, 'start\\n');",
           "process.on('SIGTERM', () => fs.appendFileSync(marker, 'term\\n'));",
-          "setInterval(() => fs.appendFileSync(marker, 'tick\\n'), 5);",
+          "setInterval(() => fs.appendFileSync(marker, 'tick\\n'), 1);",
         ].join(""),
         markerPath,
       ],
@@ -1083,7 +1066,7 @@ process.exit(7);
     expect(row.wallMs).toBeLessThan(5_000);
     const afterReturn = await fs.readFile(markerPath, "utf8");
     await new Promise((resolve) => {
-      setTimeout(resolve, 250);
+      setTimeout(resolve, 30);
     });
     await expect(fs.readFile(markerPath, "utf8")).resolves.toBe(afterReturn);
   });
@@ -1550,7 +1533,7 @@ process.exit(7);
     expect(result.status, result.stderr).toBe(0);
     await expect(
       fs.readFile(path.join(outputDir, "qa-suite", "chunk-00", "env.txt"), "utf8"),
-    ).resolves.toBe("alpha,beta,qa-channel,qa-lab,qa-matrix");
+    ).resolves.toBe("alpha,beta,qa-channel,qa-lab");
     await expect(
       fs.readFile(path.join(outputDir, "qa-suite", "chunk-00", "args.txt"), "utf8"),
     ).resolves.toContain(["--enable-plugin", "beta", "--enable-plugin", "alpha"].join("\n"));

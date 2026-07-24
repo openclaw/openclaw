@@ -7,6 +7,7 @@ import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
 import {
   agentSessionKeysMatchByRequestKey,
+  isIncognitoSessionKey,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { truncateUtf16Safe } from "../../utils.js";
@@ -42,6 +43,37 @@ const SessionsSearchToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
   limit: optionalPositiveIntegerSchema({ maximum: SESSIONS_SEARCH_MAX_LIMIT }),
 });
+
+const SessionsSearchHitSchema = Type.Object(
+  {
+    sessionKey: Type.String(),
+    timestamp: Type.Number(),
+    role: Type.Union([Type.Literal("assistant"), Type.Literal("user")]),
+    snippet: Type.String(),
+    score: Type.Number(),
+    sessionId: Type.Optional(Type.String()),
+    messageId: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+const SessionsSearchOutputSchema = Type.Union([
+  Type.Object(
+    {
+      results: Type.Array(SessionsSearchHitSchema),
+      indexing: Type.Optional(Type.Literal(true)),
+      truncated: Type.Optional(Type.Literal(true)),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      status: Type.Union([Type.Literal("error"), Type.Literal("forbidden")]),
+      error: Type.String(),
+    },
+    { additionalProperties: false },
+  ),
+]);
 
 type GatewayCaller = typeof callGateway;
 
@@ -299,6 +331,7 @@ export function createSessionsSearchTool(opts?: {
     displaySummary: SESSIONS_SEARCH_TOOL_DISPLAY_SUMMARY,
     description: describeSessionsSearchTool(),
     parameters: SessionsSearchToolSchema,
+    outputSchema: SessionsSearchOutputSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const query = readStringParam(params, "query")?.trim() ?? "";
@@ -336,6 +369,7 @@ export function createSessionsSearchTool(opts?: {
           return jsonResult({ status: resolved.status, error: resolved.error });
         }
         const visible = await resolveVisibleSessionReference({
+          action: "list",
           resolvedSession: resolved,
           requesterSessionKey: effectiveRequesterKey,
           restrictToSpawned,
@@ -378,24 +412,29 @@ export function createSessionsSearchTool(opts?: {
       const requesterAgentId =
         opts?.agentId ?? resolveSessionAgentId({ sessionKey: effectiveRequesterKey, config: cfg });
 
-      const searchSessions = sessionKey
-        ? [
-            {
-              key: sessionKey,
-              access: "direct" as const,
-              ...(opts?.agentId && !parseAgentSessionKey(sessionKey)
-                ? { agentId: opts.agentId }
-                : {}),
-            },
-          ]
-        : await listVisibleSearchSessions({
-            unscopedAgentId: requesterAgentId,
-            effectiveRequesterAgentId: opts?.agentId,
-            effectiveRequesterKey,
-            gatewayCall,
-            rowGuard,
-            restrictToSpawned,
-          });
+      const searchSessions = (
+        sessionKey
+          ? [
+              {
+                key: sessionKey,
+                access: "direct" as const,
+                ...(opts?.agentId && !parseAgentSessionKey(sessionKey)
+                  ? { agentId: opts.agentId }
+                  : {}),
+              },
+            ]
+          : await listVisibleSearchSessions({
+              unscopedAgentId: requesterAgentId,
+              effectiveRequesterAgentId: opts?.agentId,
+              effectiveRequesterKey,
+              gatewayCall,
+              rowGuard,
+              restrictToSpawned,
+            })
+      )
+        // Search excerpts are re-persisted in the caller transcript; incognito
+        // sessions therefore stay absent even when the caller could otherwise see them.
+        .filter((candidate) => !isIncognitoSessionKey(candidate.key));
       const visibleHits: SanitizedSearchHit[] = [];
       let indexing = false;
       let backendTruncated = false;

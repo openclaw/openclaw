@@ -20,7 +20,6 @@ import {
   resolveFallbackAgentId,
   resolveEffectiveModelFallbacks,
   resolveAgentModelFallbacksOverride,
-  resolveAgentModelPrimary,
   resolveRunModelFallbacksOverride,
   resolveSubagentModelConfigSelection,
   resolveSubagentModelFallbacksOverride,
@@ -102,8 +101,6 @@ describe("resolveAgentConfig", () => {
         defaults: {
           contextLimits: {
             memoryGetMaxChars: 20_000,
-            memoryGetDefaultLines: 180,
-            toolResultMaxChars: 18_000,
           },
         },
         list: [
@@ -122,8 +119,6 @@ describe("resolveAgentConfig", () => {
 
     expect(resolveAgentConfig(cfg, "main")?.contextLimits).toEqual({
       memoryGetMaxChars: 24_000,
-      memoryGetDefaultLines: 180,
-      toolResultMaxChars: 18_000,
     });
   });
 
@@ -148,36 +143,6 @@ describe("resolveAgentConfig", () => {
 
     expect(resolveAgentConfig(cfg, "main")?.experimental).toEqual({
       localModelLean: false,
-    });
-  });
-
-  it("merges runRetries from defaults with per-agent overrides", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          runRetries: {
-            base: 24,
-            perProfile: 8,
-            min: 32,
-            max: 160,
-          },
-        },
-        list: [
-          {
-            id: "main",
-            runRetries: {
-              max: 50,
-            },
-          },
-        ],
-      },
-    };
-
-    expect(resolveAgentConfig(cfg, "main")?.runRetries).toEqual({
-      base: 24,
-      perProfile: 8,
-      min: 32,
-      max: 50,
     });
   });
 
@@ -239,7 +204,6 @@ describe("resolveAgentConfig", () => {
       },
     };
 
-    expect(resolveAgentModelPrimary(cfg, "linus")).toBe("anthropic/claude-sonnet-4-6");
     expect(resolveAgentExplicitModelPrimary(cfg, "linus")).toBe("anthropic/claude-sonnet-4-6");
     expect(resolveAgentEffectiveModelPrimary(cfg, "linus")).toBe("anthropic/claude-sonnet-4-6");
     expect(resolveAgentModelFallbacksOverride(cfg, "linus")).toEqual(["openai/gpt-5.4"]);
@@ -1359,3 +1323,4 @@ describe("resolveAgentSkillsFilter", () => {
     expect(resolveAgentSkillsFilter(cfg, "writer")).toStrictEqual([]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

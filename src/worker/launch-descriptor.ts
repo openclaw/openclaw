@@ -23,14 +23,16 @@ import {
   WorkerInferenceOptionsSchema,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
+import { isWorkerLocalToolName, type WorkerToolAuthority } from "./tool-authority.js";
 import { isWorkerTranscriptMessageFrameSafe } from "./transcript-message.js";
 
-const LAUNCH_VERSION = 1;
+const LAUNCH_VERSION = 2;
 
 type WorkerLaunchAssignment = {
   runId: string;
   turnId: string;
   prompt: string;
+  suppressPromptTranscript: boolean;
   workspaceDir: string;
   modelRef: WorkerInferenceModelRef;
   inferenceOptions: WorkerInferenceOptions;
@@ -44,14 +46,15 @@ type WorkerLaunchAssignment = {
     ackedSeq: number;
     nextSeq: number;
   };
+  toolAuthority: WorkerToolAuthority;
 };
 
-type WorkerLaunchAdmission = WorkerConnectParams["admission"] & {
+type WorkerLaunchAdmission = Omit<WorkerConnectParams["admission"], "runId"> & {
   sessionId: string;
 };
 
 export type WorkerLaunchDescriptor = {
-  version: 1;
+  version: 2;
   socketPath: string;
   admission: WorkerLaunchAdmission;
   assignment: WorkerLaunchAssignment;
@@ -85,6 +88,19 @@ function isInferenceOptions(value: unknown): value is WorkerInferenceOptions {
   return Value.Check(WorkerInferenceOptionsSchema, value);
 }
 
+function parseToolAuthority(value: unknown): WorkerToolAuthority | undefined {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["allowedToolNames"]) ||
+    !Array.isArray(value.allowedToolNames) ||
+    !value.allowedToolNames.every(isWorkerLocalToolName) ||
+    new Set(value.allowedToolNames).size !== value.allowedToolNames.length
+  ) {
+    return undefined;
+  }
+  return { allowedToolNames: [...value.allowedToolNames] };
+}
+
 function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
   if (
     !isRecord(value) ||
@@ -94,12 +110,14 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
         "runId",
         "turnId",
         "prompt",
+        "suppressPromptTranscript",
         "workspaceDir",
         "modelRef",
         "inferenceOptions",
         "initialMessages",
         "transcript",
         "liveEvents",
+        "toolAuthority",
       ],
       ["systemPrompt"],
     )
@@ -110,6 +128,7 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
     !isIdentifier(value.runId) ||
     !isIdentifier(value.turnId) ||
     typeof value.prompt !== "string" ||
+    typeof value.suppressPromptTranscript !== "boolean" ||
     !isIdentifier(value.workspaceDir) ||
     !path.isAbsolute(value.workspaceDir) ||
     (value.systemPrompt !== undefined && typeof value.systemPrompt !== "string") ||
@@ -117,6 +136,10 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
     value.initialMessages.length > WORKER_INFERENCE_MAX_CONTEXT_MESSAGES ||
     !value.initialMessages.every((message) => Value.Check(WorkerTranscriptMessageSchema, message))
   ) {
+    return undefined;
+  }
+  const toolAuthority = parseToolAuthority(value.toolAuthority);
+  if (!toolAuthority) {
     return undefined;
   }
   if (
@@ -142,11 +165,11 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
   ) {
     return undefined;
   }
-  return value as WorkerLaunchAssignment;
+  return { ...value, toolAuthority } as WorkerLaunchAssignment;
 }
 
 export function buildWorkerConnectParams(
-  descriptor: Pick<WorkerLaunchDescriptor, "admission">,
+  descriptor: Pick<WorkerLaunchDescriptor, "admission" | "assignment">,
 ): WorkerConnectParams {
   return {
     minProtocol: PROTOCOL_VERSION,
@@ -158,7 +181,10 @@ export function buildWorkerConnectParams(
       mode: GATEWAY_CLIENT_MODES.WORKER,
     },
     role: "worker",
-    admission: descriptor.admission,
+    admission: {
+      ...descriptor.admission,
+      runId: descriptor.assignment.runId,
+    },
   };
 }
 

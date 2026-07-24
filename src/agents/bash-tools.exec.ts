@@ -24,10 +24,7 @@ import {
   resolveExecApprovalsFromFile,
   resolveExecModePolicy,
 } from "../infra/exec-approvals.js";
-import {
-  parseOpenClawChannelsLoginShellCommand,
-  rejectUnsafeExecControlShellCommand,
-} from "../infra/exec-control-command-guard.js";
+import { rejectUnsafeExecControlShellCommand } from "../infra/exec-control-command-guard.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   isDangerousHostEnvOverrideVarName,
@@ -74,6 +71,11 @@ import {
   runExecProcess,
   execSchema,
 } from "./bash-tools.exec-runtime.js";
+import {
+  type BackgroundExecTaskHandle,
+  createBackgroundExecTask,
+  finalizeBackgroundExecTask,
+} from "./bash-tools.exec-task-tracking.js";
 import type { ExecToolDefaults, ExecToolDetails } from "./bash-tools.exec-types.js";
 import {
   type ExecWorkdirResolution,
@@ -1360,7 +1362,9 @@ export function createExecTool(
   }
   const notifyOnExit = defaults?.notifyOnExit !== false;
   const notifyOnExitEmptySuccess = resolveNotifyOnExitEmptySuccess(defaults);
-  const notifySessionKey = normalizeOptionalString(defaults?.sessionKey);
+  const notifySessionKey = normalizeOptionalString(
+    defaults?.notifySessionKey ?? defaults?.sessionKey,
+  );
   const notifyDeliveryContext = normalizeDeliveryContext({
     channel: defaults?.messageProvider,
     to: defaults?.currentChannelId,
@@ -1579,7 +1583,7 @@ export function createExecTool(
       }
       return execParams;
     },
-    execute: async (_toolCallId, args, signal, onUpdate) => {
+    execute: async (toolCallId, args, signal, onUpdate) => {
       signal?.throwIfAborted();
       let params = stripMalformedXmlArgValueSuffixFromKeys(
         args as ExecToolArgs,
@@ -1785,6 +1789,8 @@ export function createExecTool(
         workdir = workdirResolution.remoteCwd;
       }
       let run: ExecProcessHandle;
+      let backgroundTask: BackgroundExecTaskHandle | null = null;
+      let settledOutcome: ExecProcessOutcome | null = null;
       let effectiveTimeout: number;
       try {
         if (elevatedRequested) {
@@ -1879,6 +1885,7 @@ export function createExecTool(
         if (host === "node") {
           return executeNodeHostCommand({
             command: params.command,
+            toolCallId,
             workdir,
             env,
             requestedEnv,
@@ -1889,6 +1896,7 @@ export function createExecTool(
             sessionStore: defaults?.sessionStore,
             bashElevated: elevatedDefaults,
             approvalReviewerDeviceId: defaults?.approvalReviewerDeviceId,
+            nonInteractiveApproval: defaults?.nonInteractiveApproval,
             turnSourceChannel: defaults?.messageProvider,
             turnSourceTo: defaults?.currentChannelId,
             turnSourceAccountId: defaults?.accountId,
@@ -1939,10 +1947,13 @@ export function createExecTool(
             trigger: defaults?.trigger,
             agentId,
             sessionKey: defaults?.sessionKey,
+            runId: defaults?.runId,
+            toolCallId,
             sessionId: defaults?.sessionId,
             sessionStore: defaults?.sessionStore,
             bashElevated: elevatedDefaults,
             approvalReviewerDeviceId: defaults?.approvalReviewerDeviceId,
+            nonInteractiveApproval: defaults?.nonInteractiveApproval,
             turnSourceChannel: defaults?.messageProvider,
             turnSourceTo: defaults?.currentChannelId,
             turnSourceAccountId: defaults?.accountId,
@@ -2013,6 +2024,10 @@ export function createExecTool(
           notifyDeliveryContext,
           timeoutSec: effectiveTimeout,
           onUpdate,
+          onSettledBeforeNotify: (outcome) => {
+            settledOutcome = outcome;
+            finalizeBackgroundExecTask({ handle: backgroundTask, outcome });
+          },
         });
         discardPreparedSandboxWorkdir = null;
       } catch (error) {
@@ -2085,8 +2100,27 @@ export function createExecTool(
           if (yielded) {
             return;
           }
+          if (settledOutcome) {
+            cleanupToolRunListeners();
+            resolve(
+              buildExecForegroundResult({
+                outcome: settledOutcome,
+                cwd: run.session.cwd,
+                warningText: getWarningText(),
+              }),
+            );
+            return;
+          }
           yielded = true;
           markBackgrounded(run.session);
+          // Only the guarded yield transition owns task registration. A process
+          // that settles before this timer fires must stay out of the task ledger.
+          backgroundTask = createBackgroundExecTask({
+            processSessionId: run.session.id,
+            sessionKey: notifySessionKey,
+            agentId,
+            startedAt: run.startedAt,
+          });
           resolveRunning();
         };
 
@@ -2095,12 +2129,7 @@ export function createExecTool(
             onYieldNow();
           } else {
             yieldTimer = setTimeout(() => {
-              if (yielded) {
-                return;
-              }
-              yielded = true;
-              markBackgrounded(run.session);
-              resolveRunning();
+              onYieldNow();
             }, yieldWindow);
           }
         }
@@ -2133,9 +2162,4 @@ export function createExecTool(
 
 /** Default exec tool instance used by agent tool registries. */
 export const execTool = createExecTool();
-
-/** Test-only seams for parser/preflight helpers. */
-export const testing = {
-  parseOpenClawChannelsLoginShellCommand,
-  validateScriptFileForShellBleed,
-};
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

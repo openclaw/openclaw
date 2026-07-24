@@ -2,7 +2,7 @@ import { consume } from "@lit/context";
 import { html } from "lit";
 import { state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { titleForRoute } from "../../app-navigation.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -143,7 +143,7 @@ class TasksPage extends OpenClawLightDomElement {
 
   private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot, sourceChanged: boolean) {
     const identityChanged = sourceChanged || this.client !== snapshot.client;
-    const connectionChanged = this.connected !== snapshot.connected;
+    const connectionChanged = this.connected !== (snapshot.phase === "connected");
     if (identityChanged || connectionChanged) {
       this.invalidateGatewayWork();
     }
@@ -152,8 +152,8 @@ class TasksPage extends OpenClawLightDomElement {
       this.tasks = [];
       this.error = null;
     }
-    this.connected = snapshot.connected;
-    if (snapshot.connected) {
+    this.connected = snapshot.phase === "connected";
+    if (snapshot.phase === "connected") {
       void this.context.agents.ensureList();
     }
   }
@@ -285,7 +285,6 @@ class TasksPage extends OpenClawLightDomElement {
       <section class="content-header content-header--page">
         <div>
           <div class="page-title">${titleForRoute("tasks")}</div>
-          <div class="page-sub">${subtitleForRoute("tasks")}</div>
         </div>
         <div class="page-header-actions">
           ${renderAgentScopeControl({

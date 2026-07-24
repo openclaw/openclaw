@@ -27,14 +27,10 @@ import type {
   PluginManifestModelPricingProvider,
   PluginManifestModelPricingSource,
 } from "../plugins/manifest.js";
-import {
-  clearLoadPluginMetadataSnapshotMemo,
-  resolvePluginMetadataSnapshot,
-} from "../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataRegistryView } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistrySnapshot } from "../plugins/plugin-registry.js";
 import {
-  clearGatewayModelPricingCacheState,
   clearGatewayModelPricingFailures,
   clearGatewayModelPricingSourceFailure,
   getCachedGatewayModelPricing,
@@ -921,7 +917,7 @@ function filterExternalPricingRefs(params: {
   );
 }
 
-export function collectConfiguredModelPricingRefs(
+function collectConfiguredModelPricingRefs(
   config: OpenClawConfig,
   options: { manifestRegistry?: PluginManifestRegistry } = {},
 ): ModelRef[] {
@@ -982,7 +978,7 @@ export function collectConfiguredModelPricingRefs(
     ...normalizationParams,
   });
   addResolvedModelRef({
-    raw: config.messages?.tts?.summaryModel,
+    raw: config.tts?.summaryModel,
     aliasIndex,
     refs,
     ...normalizationParams,
@@ -1054,31 +1050,6 @@ export function collectConfiguredModelPricingRefs(
       ...normalizationParams,
     });
   }
-  for (const entry of config.tools?.media?.image?.models ?? []) {
-    addProviderModelPair({
-      provider: entry.provider,
-      model: entry.model,
-      refs,
-      ...normalizationParams,
-    });
-  }
-  for (const entry of config.tools?.media?.audio?.models ?? []) {
-    addProviderModelPair({
-      provider: entry.provider,
-      model: entry.model,
-      refs,
-      ...normalizationParams,
-    });
-  }
-  for (const entry of config.tools?.media?.video?.models ?? []) {
-    addProviderModelPair({
-      provider: entry.provider,
-      model: entry.model,
-      refs,
-      ...normalizationParams,
-    });
-  }
-
   return Array.from(refs.values());
 }
 
@@ -1222,7 +1193,7 @@ function collectSeededPricing(params: {
   return seeded;
 }
 
-export async function refreshGatewayModelPricingCache(
+async function refreshGatewayModelPricingCache(
   params: GatewayModelPricingRefreshParams,
 ): Promise<void> {
   if (!isGatewayModelPricingEnabled(params.config)) {
@@ -1445,10 +1416,4 @@ export function startGatewayModelPricingRefresh(
     clearRefreshTimer();
   };
 }
-
-export function resetGatewayModelPricingCacheForTest(): void {
-  clearGatewayModelPricingCacheState();
-  clearLoadPluginMetadataSnapshotMemo();
-  clearRefreshTimer();
-  inFlightRefresh = null;
-}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

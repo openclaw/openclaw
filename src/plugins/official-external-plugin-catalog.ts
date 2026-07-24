@@ -107,8 +107,11 @@ export type OfficialExternalPluginCatalogEntry = {
   name?: string;
   version?: string;
   description?: string;
+  icon?: string;
   source?: string;
   kind?: string;
+  featured?: boolean;
+  featuredAt?: number;
   install?: {
     candidates?: readonly OfficialExternalPluginCatalogInstallCandidate[];
   };
@@ -202,10 +205,17 @@ export type HostedOfficialExternalPluginCatalogTrustState = {
   verifiedAt: string;
 };
 
+export class HostedCatalogSignedFeedMonotonicityError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "HostedCatalogSignedFeedMonotonicityError";
+  }
+}
+
 export type HostedOfficialExternalPluginCatalogSnapshotMonotonicState = {
   mode: "signed-feed";
   sequence: number;
-  generatedAt: string;
+  generatedAt?: string;
 };
 
 export type HostedOfficialExternalPluginCatalogLoadResult =
@@ -270,6 +280,34 @@ const DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_TIMEOUT_MS = 5000;
 const DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_MAX_BYTES = 1024 * 1024;
 const DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CHUNK_TIMEOUT_MS = 5000;
 const OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_HOSTNAME_ALLOWLIST = ["clawhub.ai"];
+const ISO_CALENDAR_DATE_PREFIX_RE = /^(\d{4})-(\d{2})-(\d{2})/u;
+
+export function parseOfficialExternalPluginCatalogTimestamp(value: string): number | undefined {
+  const timestamp = value.trim();
+  const parsed = Date.parse(timestamp);
+  if (!Number.isFinite(parsed)) {
+    return undefined;
+  }
+  const calendarDate = ISO_CALENDAR_DATE_PREFIX_RE.exec(timestamp);
+  if (!calendarDate) {
+    return parsed;
+  }
+  const year = Number(calendarDate[1]);
+  const month = Number(calendarDate[2]);
+  const day = Number(calendarDate[3]);
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+  // Shipped releases accepted every Date.parse-compatible serialization. Keep those
+  // formats, but reject ISO-shaped impossible dates that Date.parse normalizes.
+  return month >= 1 && month <= 12 && day >= 1 && day <= daysInMonth[month - 1]!
+    ? parsed
+    : undefined;
+}
+
+export function isOfficialExternalPluginCatalogSequence(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
 
 export function isOfficialExternalPluginCatalogFeed(
   raw: unknown,
@@ -278,17 +316,21 @@ export function isOfficialExternalPluginCatalogFeed(
     return false;
   }
   const sequence = raw.sequence;
+  const generatedAt = raw.generatedAt;
+  const generatedAtMs =
+    typeof generatedAt === "string"
+      ? parseOfficialExternalPluginCatalogTimestamp(generatedAt)
+      : undefined;
   const entries = raw.entries;
   return (
     typeof raw.schemaVersion === "number" &&
     SUPPORTED_OFFICIAL_EXTERNAL_CATALOG_FEED_SCHEMA_VERSIONS.has(raw.schemaVersion) &&
     typeof raw.id === "string" &&
     raw.id.trim().length > 0 &&
-    typeof raw.generatedAt === "string" &&
-    raw.generatedAt.trim().length > 0 &&
-    typeof sequence === "number" &&
-    Number.isInteger(sequence) &&
-    sequence >= 0 &&
+    typeof generatedAt === "string" &&
+    generatedAt.trim().length > 0 &&
+    generatedAtMs !== undefined &&
+    isOfficialExternalPluginCatalogSequence(sequence) &&
     Array.isArray(entries)
   );
 }
@@ -637,6 +679,7 @@ async function parseHostedCatalogFeedBody(params: {
   body: string;
   verification?: OfficialExternalPluginCatalogFeedVerification;
   verifiedAt: string;
+  allowLegacyBetaEnvelope?: boolean;
 }): Promise<{
   feed: OfficialExternalPluginCatalogFeed;
   trust?: HostedOfficialExternalPluginCatalogTrustState;
@@ -649,8 +692,18 @@ async function parseHostedCatalogFeedBody(params: {
     const verification = verifyOfficialExternalPluginCatalogSignedEnvelope(raw, {
       trustedKeys: params.verification.keys,
       threshold,
+      ...(params.allowLegacyBetaEnvelope ? { allowLegacyBetaEnvelope: true } : {}),
     });
     if (!verification.ok) {
+      const invalidTimestampSequence =
+        verification.error === "invalid-payload" && "authenticatedPayload" in verification
+          ? readOfficialExternalPluginCatalogInvalidTimestampSequence(
+              verification.authenticatedPayload,
+            )
+          : undefined;
+      if (invalidTimestampSequence !== undefined) {
+        throw new HostedCatalogFeedTimestampError(verification.message, invalidTimestampSequence);
+      }
       throw new Error(verification.message);
     }
     return {
@@ -668,6 +721,34 @@ async function parseHostedCatalogFeedBody(params: {
     throw new Error("hosted catalog feed did not match a supported schema version");
   }
   return { feed: raw };
+}
+
+class HostedCatalogFeedTimestampError extends Error {
+  constructor(
+    message: string,
+    readonly sequence: number,
+  ) {
+    super(message);
+  }
+}
+
+function readOfficialExternalPluginCatalogInvalidTimestampSequence(
+  raw: unknown,
+): number | undefined {
+  if (!isRecord(raw)) {
+    return undefined;
+  }
+  if (
+    typeof raw.generatedAt === "string" &&
+    parseOfficialExternalPluginCatalogTimestamp(raw.generatedAt) !== undefined
+  ) {
+    return undefined;
+  }
+  const normalized = {
+    ...raw,
+    generatedAt: "1970-01-01T00:00:00.000Z",
+  };
+  return isOfficialExternalPluginCatalogFeed(normalized) ? normalized.sequence : undefined;
 }
 
 async function loadHostedCatalogSnapshotResult(params: {
@@ -696,6 +777,7 @@ async function loadHostedCatalogSnapshotResult(params: {
     body: params.snapshot.body,
     verification: params.verification,
     verifiedAt: params.snapshot.trust?.verifiedAt ?? params.snapshot.savedAt,
+    allowLegacyBetaEnvelope: true,
   });
   return {
     source: "hosted-snapshot",
@@ -718,12 +800,15 @@ async function loadHostedCatalogSnapshotResult(params: {
 
 function isHostedCatalogSignedFeedRollback(params: {
   candidate: OfficialExternalPluginCatalogFeed;
-  current: OfficialExternalPluginCatalogFeed;
+  current: Pick<OfficialExternalPluginCatalogFeed, "sequence"> & { generatedAt?: string };
 }): boolean {
   if (params.candidate.sequence < params.current.sequence) {
     return true;
   }
   if (params.candidate.sequence > params.current.sequence) {
+    return false;
+  }
+  if (params.current.generatedAt === undefined) {
     return false;
   }
   return Date.parse(params.candidate.generatedAt) < Date.parse(params.current.generatedAt);
@@ -976,18 +1061,33 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
     if (snapshotStore && parsed.trust?.mode === "signed") {
       const currentSnapshot = await snapshotStore.read(url.href);
       if (currentSnapshot?.trust?.mode === "signed") {
-        const current = await parseHostedCatalogFeedBody({
-          body: currentSnapshot.body,
-          verification: source.verification,
-          verifiedAt: currentSnapshot.trust.verifiedAt,
-        });
+        const current =
+          currentSnapshot.monotonic?.mode === "signed-feed"
+            ? currentSnapshot.monotonic
+            : (
+                await parseHostedCatalogFeedBody({
+                  body: currentSnapshot.body,
+                  verification: source.verification,
+                  verifiedAt: currentSnapshot.trust.verifiedAt,
+                  allowLegacyBetaEnvelope: true,
+                }).catch((err: unknown) => {
+                  // Only an authenticated invalid-timestamp payload is repairable. Signature
+                  // and trust failures must remain fail-closed so rollback checks cannot be bypassed.
+                  if (err instanceof HostedCatalogFeedTimestampError) {
+                    return { feed: { sequence: err.sequence } };
+                  }
+                  throw err;
+                })
+              ).feed;
         if (
           isHostedCatalogSignedFeedRollback({
             candidate: parsed.feed,
-            current: current.feed,
+            current,
           })
         ) {
-          throw new Error("hosted catalog signed feed sequence is older than current snapshot");
+          throw new HostedCatalogSignedFeedMonotonicityError(
+            "hosted catalog signed feed sequence is older than current snapshot",
+          );
         }
       }
     }
@@ -1015,10 +1115,7 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
           : {}),
       })
       .catch((err: unknown) => {
-        if (
-          err instanceof Error &&
-          err.message.includes("hosted catalog signed feed sequence is older")
-        ) {
+        if (err instanceof HostedCatalogSignedFeedMonotonicityError) {
           throw err;
         }
         if (params?.requireSnapshotWrite) {
@@ -1248,27 +1345,25 @@ export function resolveOfficialExternalPluginInstall(
   };
 }
 
-function resolveOfficialExternalPluginCatalogProfileConfigFromConfig(config?: {
-  marketplaces?: OfficialExternalPluginCatalogProfileConfig;
-}): OfficialExternalPluginCatalogProfileConfig | undefined {
-  return config?.marketplaces;
-}
-
 export async function loadConfiguredHostedOfficialExternalPluginCatalogEntries(
-  config: { marketplaces?: OfficialExternalPluginCatalogProfileConfig } | undefined,
-  params?: Omit<
-    NonNullable<Parameters<typeof loadHostedOfficialExternalPluginCatalogEntries>[0]>,
-    "catalogConfig"
-  >,
+  params?: Parameters<typeof loadHostedOfficialExternalPluginCatalogEntries>[0],
 ): Promise<HostedOfficialExternalPluginCatalogLoadResult> {
-  return await loadHostedOfficialExternalPluginCatalogEntries({
-    ...params,
-    catalogConfig: resolveOfficialExternalPluginCatalogProfileConfigFromConfig(config),
-  });
+  return await loadHostedOfficialExternalPluginCatalogEntries(params);
 }
 
 export function listOfficialExternalPluginCatalogEntries(): OfficialExternalPluginCatalogEntry[] {
   return dedupeOfficialExternalPluginCatalogEntries(bundledOfficialExternalPluginCatalogEntries());
+}
+
+/** Returns whether an id is the canonical id of an official external plugin. */
+export function isOfficialExternalPluginId(pluginId: string): boolean {
+  const normalized = normalizeOptionalString(pluginId)?.toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return listOfficialExternalPluginCatalogEntries().some(
+    (entry) => resolveOfficialExternalPluginId(entry)?.toLowerCase() === normalized,
+  );
 }
 
 /** Resolves official external plugin owners for configured capability provider ids. */
@@ -1434,3 +1529,4 @@ export function getOfficialExternalPluginCatalogEntryForPackage(
     (entry) => normalizeOptionalString(entry.name) === normalized,
   );
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

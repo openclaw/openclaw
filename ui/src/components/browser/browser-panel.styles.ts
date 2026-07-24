@@ -64,63 +64,6 @@ export const browserPanelStyles = css`
     border-bottom: 1px solid var(--border, #262b34);
     min-height: 36px;
   }
-  .bp-tabs {
-    display: flex;
-    align-items: stretch;
-    gap: 1px;
-    overflow-x: auto;
-    scrollbar-width: none;
-    min-width: 0;
-  }
-  .bp-tabs::-webkit-scrollbar {
-    display: none;
-  }
-  .bp-tab {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    padding: 0 10px;
-    height: 36px;
-    max-width: 220px;
-    color: var(--muted, #8a919e);
-    white-space: nowrap;
-    font-size: 12.5px;
-    border-bottom: 2px solid transparent;
-    cursor: default;
-    transition:
-      color 0.12s ease,
-      background 0.12s ease;
-  }
-  .bp-tab:hover {
-    color: var(--text, #d7dae0);
-    background: color-mix(in srgb, var(--text, #d7dae0) 6%, transparent);
-  }
-  .bp-tab.is-active {
-    color: var(--text, #d7dae0);
-    border-bottom-color: var(--accent, #ff5c5c);
-  }
-  .bp-tab__label {
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .bp-tab__close {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 16px;
-    height: 16px;
-    opacity: 0;
-    border: none;
-    background: transparent;
-    color: inherit;
-    border-radius: 4px;
-    padding: 0;
-  }
-  .bp-tab:hover .bp-tab__close,
-  .bp-tab.is-active .bp-tab__close {
-    opacity: 0.7;
-  }
-  .bp-new,
   .bp-icon {
     display: inline-flex;
     align-items: center;
@@ -133,12 +76,6 @@ export const browserPanelStyles = css`
     border-radius: 6px;
     padding: 0;
   }
-  .bp-new {
-    align-self: center;
-    flex: none;
-  }
-  .bp-tab__close:hover,
-  .bp-new:hover,
   .bp-icon:hover {
     background: color-mix(in srgb, var(--text, #d7dae0) 12%, transparent);
     color: var(--text, #d7dae0);

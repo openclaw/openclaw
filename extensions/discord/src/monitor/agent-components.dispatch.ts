@@ -71,7 +71,7 @@ function resolveDiscordComponentChatType(interactionCtx: ComponentInteractionCon
   return "channel";
 }
 
-export function resolveDiscordComponentOriginatingTo(
+function resolveDiscordComponentOriginatingTo(
   interactionCtx: Pick<ComponentInteractionContext, "isDirectMessage" | "userId" | "channelId">,
 ) {
   return resolveDiscordConversationIdentity({
@@ -178,11 +178,9 @@ export async function dispatchDiscordComponentEvent(params: {
 
   const {
     createReplyReferencePlanner,
-    dispatchReplyWithBufferedBlockDispatcher,
     finalizeInboundContext,
     resolveChunkMode,
     resolveTextChunkLimit,
-    recordInboundSession,
   } = await (async () => {
     const conversationRuntime = await loadConversationRuntime();
     return {
@@ -273,12 +271,8 @@ export async function dispatchDiscordComponentEvent(params: {
         cfg: ctx.cfg,
         channel: "discord",
         accountId,
-        agentId,
-        routeSessionKey: sessionKey,
-        storePath,
+        route: { agentId, sessionKey },
         ctxPayload,
-        recordInboundSession,
-        dispatchReplyWithBufferedBlockDispatcher,
         record: {
           updateLastRoute: interactionCtx.isDirectMessage
             ? {

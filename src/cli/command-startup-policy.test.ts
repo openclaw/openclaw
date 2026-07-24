@@ -24,6 +24,7 @@ describe("command-startup-policy", () => {
     expect(shouldBypassConfigGuardForCommandPath(["config"])).toBe(true);
     expect(shouldBypassConfigGuardForCommandPath(["config", "validate"])).toBe(true);
     expect(shouldBypassConfigGuardForCommandPath(["config", "schema"])).toBe(true);
+    expect(shouldBypassConfigGuardForCommandPath(["docs"])).toBe(true);
     expect(shouldBypassConfigGuardForCommandPath(["config", "set"])).toBe(false);
     expect(shouldBypassConfigGuardForCommandPath(["status"])).toBe(false);
   });
@@ -254,6 +255,7 @@ describe("command-startup-policy", () => {
     expect(shouldBypassConfigGuardForCommandPath(["worker"])).toBe(true);
     expect(policy.hideBanner).toBe(true);
     expect(policy.loadPlugins).toBe(false);
+    expect(policy.suppressDoctorStdout).toBe(true);
   });
 
   it("suppresses startup stdout for the bare acp protocol", () => {

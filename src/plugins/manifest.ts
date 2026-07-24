@@ -21,6 +21,7 @@ import {
 import type { PluginConfigUiHint } from "./manifest-types.js";
 import { createPluginCacheKey, PluginLruCache } from "./plugin-cache-primitives.js";
 import type { PluginKind } from "./plugin-kind.types.js";
+import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 
 /** Canonical plugin manifest filename inside plugin roots. */
 export const PLUGIN_MANIFEST_FILENAME = "openclaw.plugin.json";
@@ -34,6 +35,10 @@ const MAX_SECRET_PROVIDER_EXEC_OUTPUT_BYTES = 20 * 1024 * 1024;
 const MAX_SECRET_PROVIDER_EXEC_PASS_ENV = 128;
 const SECRET_PROVIDER_NODE_COMMAND_PLACEHOLDER = "${node}";
 const CORE_RESERVED_PLUGIN_IDS = new Set(["node-mcp"]);
+
+export function isCoreReservedPluginId(id: string): boolean {
+  return CORE_RESERVED_PLUGIN_IDS.has(normalizePluginPolicyId(id));
+}
 
 type PluginManifestLoadCacheEntry = {
   result: PluginManifestLoadResult;
@@ -127,7 +132,7 @@ export type PluginManifestProviderEndpoint = {
   googleVertexRegionHostSuffix?: string;
 };
 
-type PluginManifestProviderRequestProvider = {
+export type PluginManifestProviderRequestProvider = {
   family?: string;
   compatibilityFamily?: "moonshot";
   openAICompletions?: {
@@ -238,6 +243,31 @@ export type PluginManifestQaRunner = {
   description?: string;
 };
 
+export type PluginManifestDashboardDataBinding = {
+  /** Plugin-local id. Widget grants receive the plugin-id prefix. */
+  id: string;
+  /** Read-scoped Gateway method registered by this plugin. */
+  method: string;
+  description: string;
+};
+
+export type PluginManifestDashboardActionVerb = {
+  /** Plugin-local id. Widget grants receive the plugin-id prefix. */
+  id: string;
+  /** Write-scoped Gateway method registered by this plugin. */
+  method: string;
+  description: string;
+  /** Optional JSON Schema for the action params object. */
+  paramShape?: JsonSchemaObject;
+};
+
+export type PluginManifestDashboard = {
+  dataBindings?: PluginManifestDashboardDataBinding[];
+  actionVerbs?: PluginManifestDashboardActionVerb[];
+};
+
+export type PluginManifestMcpServer = Record<string, unknown>;
+
 type PluginManifestConfigLiteral = string | number | boolean | null;
 
 type PluginManifestDangerousConfigFlag = {
@@ -258,6 +288,8 @@ type PluginManifestSecretInputPath = {
   path: string;
   /** Expected resolved type for SecretRef materialization. */
   expected?: "string";
+  /** Runtime owner kind used to isolate this surface when resolution fails. */
+  ownerKind?: "route";
 };
 
 type PluginManifestSecretInputContracts = {
@@ -350,20 +382,10 @@ export type PluginManifest = {
    * config diagnostics before runtime loads.
    */
   commandAliases?: PluginManifestCommandAlias[];
-  /**
-   * Cheap provider-auth env lookup without booting plugin runtime.
-   *
-   * @deprecated Prefer setup.providers[].envVars for generic setup/status env
-   * metadata. This field remains supported through the provider env-var
-   * compatibility adapter during the deprecation window.
-   */
-  providerAuthEnvVars?: Record<string, string[]>;
   /** Usage/billing credentials excluded from inference auth but included in secret scrubbing. */
   providerUsageAuthEnvVars?: Record<string, string[]>;
   /** Provider ids that should reuse another provider id for auth lookup. */
   providerAuthAliases?: Record<string, string>;
-  /** Cheap channel env lookup without booting plugin runtime. */
-  channelEnvVars?: Record<string, string[]>;
   /**
    * Cheap onboarding/auth-choice metadata used by config validation, CLI help,
    * and non-runtime auth-choice routing before provider runtime loads.
@@ -375,6 +397,10 @@ export type PluginManifest = {
   setup?: PluginManifestSetup;
   /** Cheap QA runner metadata exposed before plugin runtime loads. */
   qaRunners?: PluginManifestQaRunner[];
+  /** Widget data and action capabilities validated against runtime registrations. */
+  dashboard?: PluginManifestDashboard;
+  /** Static MCP servers contributed while this plugin is enabled. */
+  mcpServers?: Record<string, PluginManifestMcpServer>;
   skills?: string[];
   name?: string;
   description?: string;
@@ -508,6 +534,10 @@ type PluginManifestProviderAuthChoice = {
   /** Optional user-facing choice label/hint for grouped onboarding UI. */
   choiceLabel?: string;
   choiceHint?: string;
+  /** Optional HTTPS artwork URL for native and web onboarding surfaces. */
+  icon?: string;
+  /** Optional HTTPS product or installation URL for onboarding surfaces. */
+  website?: string;
   /** Lower values sort earlier in interactive assistant pickers. */
   assistantPriority?: number;
   /** Keep the choice out of interactive assistant pickers while preserving manual CLI support. */
@@ -537,6 +567,8 @@ type PluginManifestProviderAuthChoice = {
    * Defaults to `["text-inference"]` when omitted.
    */
   onboardingScopes?: PluginManifestOnboardingScope[];
+  /** Provider runtime can discover and prepare an already-installed local model. */
+  appGuidedDiscovery?: boolean;
 };
 
 type PluginManifestOnboardingScope = "text-inference" | "image-generation" | "music-generation";
@@ -576,6 +608,23 @@ function normalizeStringRecord(value: unknown): Record<string, string> | undefin
       continue;
     }
     normalized[key] = valueLocal;
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizeManifestMcpServers(
+  value: unknown,
+): Record<string, PluginManifestMcpServer> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const normalized: Record<string, PluginManifestMcpServer> = Object.create(null);
+  for (const [rawName, rawServer] of Object.entries(value)) {
+    const name = normalizeOptionalString(rawName) ?? "";
+    if (!name || isBlockedObjectKey(name) || !isRecord(rawServer)) {
+      continue;
+    }
+    normalized[name] = { ...rawServer };
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
@@ -969,9 +1018,11 @@ function normalizeManifestSecretInputPaths(
       continue;
     }
     const expected = entry.expected === "string" ? entry.expected : undefined;
+    const ownerKind = entry.ownerKind === "route" ? entry.ownerKind : undefined;
     normalized.push({
       path: pathLocal,
       ...(expected ? { expected } : {}),
+      ...(ownerKind ? { ownerKind } : {}),
     });
   }
   return normalized.length > 0 ? normalized : undefined;
@@ -1522,6 +1573,107 @@ function normalizeManifestQaRunners(value: unknown): PluginManifestQaRunner[] | 
   return normalized.length > 0 ? normalized : undefined;
 }
 
+type DashboardManifestResult =
+  | { ok: true; dashboard?: PluginManifestDashboard }
+  | { ok: false; error: string };
+
+function normalizeDashboardCapabilityBase(
+  value: unknown,
+  field: string,
+  index: number,
+): { id: string; method: string; description: string } | string {
+  if (!isRecord(value)) {
+    return `${field}[${index}] must be an object`;
+  }
+  const id = normalizeOptionalString(value.id);
+  const method = normalizeOptionalString(value.method);
+  const description = normalizeOptionalString(value.description);
+  if (!id || !/^[a-z0-9][a-z0-9._-]*$/u.test(id)) {
+    return `${field}[${index}].id must be a lowercase capability id`;
+  }
+  if (!method) {
+    return `${field}[${index}].method must be a non-empty string`;
+  }
+  if (!description) {
+    return `${field}[${index}].description must be a non-empty string`;
+  }
+  return { id, method, description };
+}
+
+function normalizeManifestDashboard(value: unknown): DashboardManifestResult {
+  if (value === undefined) {
+    return { ok: true };
+  }
+  if (!isRecord(value)) {
+    return { ok: false, error: "dashboard must be an object" };
+  }
+  if (value.dataBindings !== undefined && !Array.isArray(value.dataBindings)) {
+    return { ok: false, error: "dashboard.dataBindings must be an array" };
+  }
+  if (value.actionVerbs !== undefined && !Array.isArray(value.actionVerbs)) {
+    return { ok: false, error: "dashboard.actionVerbs must be an array" };
+  }
+
+  const dataBindings: PluginManifestDashboardDataBinding[] = [];
+  for (const [index, entry] of (value.dataBindings ?? []).entries()) {
+    const normalized = normalizeDashboardCapabilityBase(entry, "dashboard.dataBindings", index);
+    if (typeof normalized === "string") {
+      return { ok: false, error: normalized };
+    }
+    dataBindings.push(normalized);
+  }
+
+  const actionVerbs: PluginManifestDashboardActionVerb[] = [];
+  for (const [index, entry] of (value.actionVerbs ?? []).entries()) {
+    const normalized = normalizeDashboardCapabilityBase(entry, "dashboard.actionVerbs", index);
+    if (typeof normalized === "string") {
+      return { ok: false, error: normalized };
+    }
+    const rawParamShape = isRecord(entry) ? entry.paramShape : undefined;
+    if (rawParamShape !== undefined && !isRecord(rawParamShape)) {
+      return {
+        ok: false,
+        error: `dashboard.actionVerbs[${index}].paramShape must be a JSON Schema object`,
+      };
+    }
+    actionVerbs.push({
+      ...normalized,
+      ...(rawParamShape ? { paramShape: rawParamShape as JsonSchemaObject } : {}),
+    });
+  }
+
+  if (dataBindings.length === 0 && actionVerbs.length === 0) {
+    return { ok: true };
+  }
+  return {
+    ok: true,
+    dashboard: {
+      ...(dataBindings.length > 0 ? { dataBindings } : {}),
+      ...(actionVerbs.length > 0 ? { actionVerbs } : {}),
+    },
+  };
+}
+
+function normalizeManifestHttpsUrl(value: unknown): string | undefined {
+  const normalized = normalizeOptionalString(value);
+  if (!normalized) {
+    return undefined;
+  }
+  try {
+    const url = new URL(normalized);
+    const canonical = url.toString();
+    return url.protocol === "https:" &&
+      url.hostname &&
+      !url.username &&
+      !url.password &&
+      canonical.length <= 2048
+      ? canonical
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function normalizeProviderAuthChoices(
   value: unknown,
 ): PluginManifestProviderAuthChoice[] | undefined {
@@ -1541,6 +1693,8 @@ function normalizeProviderAuthChoices(
     }
     const choiceLabel = normalizeOptionalString(entry.choiceLabel) ?? "";
     const choiceHint = normalizeOptionalString(entry.choiceHint) ?? "";
+    const icon = normalizeManifestHttpsUrl(entry.icon);
+    const website = normalizeManifestHttpsUrl(entry.website);
     const assistantPriority =
       typeof entry.assistantPriority === "number" && Number.isFinite(entry.assistantPriority)
         ? entry.assistantPriority
@@ -1567,12 +1721,15 @@ function normalizeProviderAuthChoices(
       (scope): scope is PluginManifestOnboardingScope =>
         scope === "text-inference" || scope === "image-generation" || scope === "music-generation",
     );
+    const appGuidedDiscovery = entry.appGuidedDiscovery === true;
     normalized.push({
       provider,
       method,
       choiceId,
       ...(choiceLabel ? { choiceLabel } : {}),
       ...(choiceHint ? { choiceHint } : {}),
+      ...(icon ? { icon } : {}),
+      ...(website ? { website } : {}),
       ...(assistantPriority !== undefined ? { assistantPriority } : {}),
       ...(assistantVisibility ? { assistantVisibility } : {}),
       ...(deprecatedChoiceIds.length > 0 ? { deprecatedChoiceIds } : {}),
@@ -1580,6 +1737,7 @@ function normalizeProviderAuthChoices(
       ...(groupLabel ? { groupLabel } : {}),
       ...(groupHint ? { groupHint } : {}),
       ...(onboardingFeatured ? { onboardingFeatured: true } : {}),
+      ...(appGuidedDiscovery ? { appGuidedDiscovery: true } : {}),
       ...(optionKey ? { optionKey } : {}),
       ...(cliFlag ? { cliFlag } : {}),
       ...(cliOption ? { cliOption } : {}),
@@ -1590,6 +1748,24 @@ function normalizeProviderAuthChoices(
     });
   }
   return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeConfigUiHints(value: unknown): Record<string, PluginConfigUiHint> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const normalized: Record<string, PluginConfigUiHint> = Object.create(null);
+  for (const [hintPath, rawHint] of Object.entries(value)) {
+    if (!isRecord(rawHint)) {
+      continue;
+    }
+    const hint = { ...rawHint } as Record<string, unknown>;
+    if ("presentation" in hint && hint.presentation !== "phone-number") {
+      delete hint.presentation;
+    }
+    normalized[hintPath] = hint as PluginConfigUiHint;
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
 function normalizeChannelConfigs(
@@ -1608,9 +1784,7 @@ function normalizeChannelConfigs(
     if (!schema) {
       continue;
     }
-    const uiHints = isRecord(rawEntry.uiHints)
-      ? (rawEntry.uiHints as Record<string, PluginConfigUiHint>)
-      : undefined;
+    const uiHints = normalizeConfigUiHints(rawEntry.uiHints);
     const runtime =
       isRecord(rawEntry.runtime) && typeof rawEntry.runtime.safeParse === "function"
         ? (rawEntry.runtime as ChannelConfigRuntimeSchema)
@@ -1784,7 +1958,7 @@ export function loadPluginManifest(
   if (!id) {
     return cacheResult({ ok: false, error: "plugin manifest requires id", manifestPath });
   }
-  if (CORE_RESERVED_PLUGIN_IDS.has(id)) {
+  if (isCoreReservedPluginId(id)) {
     return cacheResult({
       ok: false,
       error: `plugin manifest id "${id}" is reserved by OpenClaw core`,
@@ -1835,14 +2009,22 @@ export function loadPluginManifest(
   const syntheticAuthRefs = normalizeTrimmedStringList(raw.syntheticAuthRefs);
   const nonSecretAuthMarkers = normalizeTrimmedStringList(raw.nonSecretAuthMarkers);
   const commandAliases = normalizeManifestCommandAliases(raw.commandAliases);
-  const providerAuthEnvVars = normalizeStringListRecord(raw.providerAuthEnvVars);
   const providerUsageAuthEnvVars = normalizeStringListRecord(raw.providerUsageAuthEnvVars);
   const providerAuthAliases = normalizeStringRecord(raw.providerAuthAliases);
-  const channelEnvVars = normalizeStringListRecord(raw.channelEnvVars);
   const providerAuthChoices = normalizeProviderAuthChoices(raw.providerAuthChoices);
   const activation = normalizeManifestActivation(raw.activation);
   const setup = normalizeManifestSetup(raw.setup);
   const qaRunners = normalizeManifestQaRunners(raw.qaRunners);
+  const dashboardResult = normalizeManifestDashboard(raw.dashboard);
+  if (!dashboardResult.ok) {
+    return cacheResult({
+      ok: false,
+      error: `invalid plugin manifest dashboard: ${dashboardResult.error}`,
+      manifestPath,
+    });
+  }
+  const dashboard = dashboardResult.dashboard;
+  const mcpServers = normalizeManifestMcpServers(raw.mcpServers);
   const skills = normalizeTrimmedStringList(raw.skills);
   const contracts = normalizeManifestContracts(raw.contracts);
   const mediaUnderstandingProviderMetadata = normalizeMediaUnderstandingProviderMetadata(
@@ -1861,10 +2043,7 @@ export function loadPluginManifest(
   const configContracts = normalizeManifestConfigContracts(raw.configContracts);
   const channelConfigs = normalizeChannelConfigs(raw.channelConfigs);
 
-  let uiHints: Record<string, PluginConfigUiHint> | undefined;
-  if (isRecord(raw.uiHints)) {
-    uiHints = raw.uiHints as Record<string, PluginConfigUiHint>;
-  }
+  const uiHints = normalizeConfigUiHints(raw.uiHints);
 
   return cacheResult({
     ok: true,
@@ -1893,14 +2072,14 @@ export function loadPluginManifest(
       syntheticAuthRefs,
       nonSecretAuthMarkers,
       commandAliases,
-      providerAuthEnvVars,
       providerUsageAuthEnvVars,
       providerAuthAliases,
-      channelEnvVars,
       providerAuthChoices,
       activation,
       setup,
       qaRunners,
+      dashboard,
+      mcpServers,
       skills,
       name,
       description,
@@ -1922,6 +2101,10 @@ export function loadPluginManifest(
 }
 
 // package.json "openclaw" metadata (used for setup/catalog)
+import type { ChannelSetupMetadata } from "../channels/plugins/setup-contract.js";
+
+type PluginPackageChannelApprovalFlag = "native";
+
 export type PluginPackageChannel = {
   id?: string;
   label?: string;
@@ -1938,13 +2121,13 @@ export type PluginPackageChannel = {
   selectionDocsOmitLabel?: boolean;
   selectionExtras?: readonly string[];
   markdownCapable?: boolean;
+  /** Closed manifest flags for approval behavior available before the channel runtime loads. */
+  approvalFlags?: readonly PluginPackageChannelApprovalFlag[];
   exposure?: {
     configured?: boolean;
     setup?: boolean;
     docs?: boolean;
   };
-  showConfigured?: boolean;
-  showInSetup?: boolean;
   quickstartAllowFrom?: boolean;
   forceAccountBinding?: boolean;
   preferSessionLookupForAnnounceTarget?: boolean;
@@ -1962,6 +2145,9 @@ export type PluginPackageChannel = {
     exportName?: string;
   };
   doctorCapabilities?: PluginPackageChannelDoctorCapabilities;
+  /** Typed, serializable setup fields available before plugin runtime load. */
+  setup?: ChannelSetupMetadata;
+  /** @deprecated Use setup.fields. */
   cliAddOptions?: readonly PluginPackageChannelCliOption[];
 };
 
@@ -1972,10 +2158,12 @@ export type PluginPackageChannelDoctorCapabilities = {
   warnOnEmptyGroupSenderAllowlist?: boolean;
 };
 
-type PluginPackageChannelCliOption = {
+export type PluginPackageChannelCliOption = {
   flags: string;
+  negatedFlags?: string;
   description: string;
   defaultValue?: boolean | string;
+  valueType?: "int" | "list";
 };
 
 export type PluginPackageInstall = {
@@ -2005,10 +2193,13 @@ type OpenClawPackageSetupFeatures = {
 
 type OpenClawPackageCompat = {
   pluginApi?: string;
+  minGatewayVersion?: string;
 };
 
 export type OpenClawPackageBuild = {
   bundledDist?: boolean;
+  openclawVersion?: string;
+  pluginSdkVersion?: string;
 };
 
 export type OpenClawPackageManifest = {
@@ -2102,3 +2293,4 @@ export function resolvePackageExtensionEntries(
   }
   return { status: "ok", entries };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

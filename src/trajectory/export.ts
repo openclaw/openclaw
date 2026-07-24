@@ -556,6 +556,12 @@ function buildTranscriptEvents(params: {
           fromHook: entry.fromHook ?? false,
         });
         break;
+      case "reset":
+        push("session.reset", {
+          reason: entry.reason,
+          firstKeptEntryId: entry.firstKeptEntryId,
+        });
+        break;
       case "branch_summary":
         push("session.branch_summary", {
           fromId: entry.fromId,
@@ -1216,3 +1222,4 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
     supplementalFiles,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
