@@ -83,6 +83,7 @@ import {
 import type {
   CronAddOptions,
   CronEvent,
+  CronRunOrigin,
   CronServiceState,
   CronUpdateOptions,
   CronUpdatePrecondition,
@@ -1110,6 +1111,7 @@ type PreparedManualRun =
       streamScheduleKey?: string;
       streamSourceIdentity?: string;
       onTriggerDisposition?: (disposition: "fired" | "dropped" | "busy" | "error") => void;
+      origin: CronRunOrigin;
     }
   | { ok: false };
 
@@ -1118,6 +1120,7 @@ type ActivatedManualRun = Extract<PreparedManualRun, { ran: true }> & {
   taskRunId?: string;
   activeJobMarker?: CronActiveJobMarker;
   executionJob: CronJob;
+  preserveExpiredPacedSlot?: boolean;
 };
 
 type ManualRunOptions = {
@@ -1130,6 +1133,7 @@ type ManualRunOptions = {
   streamScheduleKey?: string;
   streamSourceIdentity?: string;
   onTriggerDisposition?: (disposition: "fired" | "dropped" | "busy" | "error") => void;
+  origin?: CronRunOrigin;
 };
 
 type ManualRunTerminalTracker = { emitted: boolean };
@@ -1206,10 +1210,10 @@ function admitsStreamSourceRun(
 async function skipInvalidPersistedManualRun(params: {
   state: CronServiceState;
   job: CronJob;
-  mode?: "due" | "force";
   runId?: string;
   terminalTracker?: ManualRunTerminalTracker;
   error: unknown;
+  origin: CronRunOrigin;
 }) {
   const rollbackSnapshot = snapshotStoreForRollback(params.state);
   const endedAt = params.state.deps.nowMs();
@@ -1228,7 +1232,7 @@ async function skipInvalidPersistedManualRun(params: {
       startedAt: endedAt,
       endedAt,
     },
-    { scheduleMode: params.mode === "force" ? "preserve" : "advance" },
+    { origin: params.origin },
   );
 
   emitCronRunFinished(
@@ -1253,7 +1257,10 @@ async function skipInvalidPersistedManualRun(params: {
 
   recomputeNextRunsForMaintenance(params.state, {
     recomputeExpired: true,
-    ...(params.mode === "force"
+    // Operator runs never consume the paced slot (see applyJobResult), so an
+    // invalid-spec skip on an operator run must keep the pending expired slot
+    // rather than let maintenance advance past it.
+    ...(params.origin === "operator"
       ? {
           preserveExpiredPacedNextRunJobId: params.job.id,
         }
@@ -1271,6 +1278,7 @@ async function inspectManualRunPreflight(
   terminalTracker?: ManualRunTerminalTracker,
   streamScheduleKey?: string,
   streamSourceIdentity?: string,
+  origin: CronRunOrigin = "operator",
 ): Promise<ManualRunPreflightResult> {
   return await locked(state, async () => {
     warnIfDisabled(state, "run");
@@ -1295,7 +1303,7 @@ async function inspectManualRunPreflight(
     try {
       assertSupportedJobSpec(job);
     } catch (error) {
-      await skipInvalidPersistedManualRun({ state, job, mode, runId, terminalTracker, error });
+      await skipInvalidPersistedManualRun({ state, job, runId, terminalTracker, error, origin });
       return { ok: true, ran: false, reason: "invalid-spec" as const };
     }
     if (hasActiveCronRun(job)) {
@@ -1341,6 +1349,7 @@ async function prepareManualRun(
     opts?.terminalTracker,
     opts?.streamScheduleKey,
     opts?.streamSourceIdentity,
+    opts?.origin ?? "operator",
   );
   if (!preflight.ok) {
     return preflight;
@@ -1378,10 +1387,10 @@ async function prepareManualRun(
       await skipInvalidPersistedManualRun({
         state,
         job,
-        mode,
         runId: opts?.runId,
         terminalTracker: opts?.terminalTracker,
         error,
+        origin: opts?.origin ?? "operator",
       });
       return { ok: true, ran: false, reason: "invalid-spec" as const };
     }
@@ -1445,6 +1454,7 @@ async function prepareManualRun(
       reservationAt,
       reservationIdentity,
       wasEnabled: isJobEnabled(job),
+      origin: opts?.origin ?? "operator",
       ...(opts?.payload ? { payload: structuredClone(opts.payload) } : {}),
       ...(opts?.evaluateTrigger ? { evaluateTrigger: true } : {}),
       ...(opts?.streamBatch !== undefined ? { streamBatch: opts.streamBatch } : {}),
@@ -1511,10 +1521,10 @@ async function activatePreparedManualRun(
       await skipInvalidPersistedManualRun({
         state,
         job,
-        mode,
         runId: prepared.runId,
         terminalTracker: prepared.terminalTracker,
         error,
+        origin: prepared.origin,
       });
       releaseQueuedCronRun(state, prepared.jobId, prepared.reservationIdentity);
       return { ok: true, ran: false, reason: "invalid-spec" } as const;
@@ -1579,6 +1589,7 @@ async function activatePreparedManualRun(
       taskRunId,
       activeJobMarker,
       executionJob,
+      preserveExpiredPacedSlot: mode === "force",
     } as const;
   });
 }
@@ -1651,7 +1662,6 @@ async function releasePreparedManualReservationAfterReloadWithRetry(
 async function finishPreparedManualRun(
   state: CronServiceState,
   prepared: ActivatedManualRun,
-  mode?: "due" | "force",
 ): Promise<void> {
   const executionJob = prepared.executionJob;
   const startedAt = prepared.startedAt;
@@ -1763,7 +1773,8 @@ async function finishPreparedManualRun(
       let shouldDelete = false;
       if (coreResult.status === "ok" && coreResult.triggerEval?.fired === false) {
         // Manual due checks share scheduled quiet-tick semantics: persist the
-        // evaluation but create no finished event or run-history entry.
+        // evaluation but create no finished event or run-history entry. Origin
+        // keeps an operator due-check from perturbing scheduler-owned state.
         applyTriggerNoFireResult(
           state,
           job,
@@ -1772,9 +1783,14 @@ async function finishPreparedManualRun(
             endedAt,
             triggerEval: coreResult.triggerEval,
           },
-          { scheduleMode: mode === "force" ? "preserve" : "advance" },
+          prepared.origin,
         );
       } else {
+        // A fired trigger or a stripped-trigger force run executed the payload,
+        // so run attribution follows the invocation origin: operator runs record
+        // the outcome without consuming deleteAfterRun or perturbing scheduler
+        // state, while a watcher-terminal force still consumes it (#83538,
+        // #83933).
         shouldDelete = applyJobResult(
           state,
           job,
@@ -1783,7 +1799,7 @@ async function finishPreparedManualRun(
             startedAt,
             endedAt,
           },
-          { scheduleMode: mode === "force" ? "preserve" : "advance" },
+          { origin: prepared.origin },
         );
         applyTriggerRunResult(job, {
           status: coreResult.status,
@@ -1860,13 +1876,12 @@ async function finishPreparedManualRun(
         snapshot: postRunSnapshot,
         removed: postRunRemoved,
       });
+      // A forced operator run pins its own expired paced slot so the pending
+      // scheduled fire is preserved; a plain due run repairs expired slots
+      // normally without pinning (#83538, #111331).
       recomputeNextRunsForMaintenance(state, {
         recomputeExpired: true,
-        ...(mode === "force"
-          ? {
-              preserveExpiredPacedNextRunJobId: jobId,
-            }
-          : {}),
+        ...(prepared.preserveExpiredPacedSlot ? { preserveExpiredPacedNextRunJobId: jobId } : {}),
       });
       await persistOrRestore(state, rollbackSnapshot);
       if (removedJob) {
@@ -1934,7 +1949,7 @@ export async function run(
     if (!activeRun.ran) {
       return activeRun;
     }
-    await finishPreparedManualRun(state, activeRun, mode);
+    await finishPreparedManualRun(state, activeRun);
     return { ok: true, ran: true } as const;
   });
   if (admission.kind === "stopped") {

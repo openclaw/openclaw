@@ -22,6 +22,7 @@ type CronWakeResult = { ok: true } | { ok: false; reason?: "unwakeable-session-k
 /** Result shape for direct/queued cron runs. */
 export type CronServiceRunResult = CronRunResult;
 export type CronServiceRunOptions = {
+  /** Optional payload override forwarded to the manual run. */
   payload?: CronPayload;
   /** Internal event-source runs keep their persisted trigger on force execution. */
   evaluateTrigger?: boolean;

@@ -12,6 +12,7 @@ import {
   peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "../infra/system-events.js";
+import type { CronServiceContract } from "./service-contract.js";
 import type { CronEvent } from "./service.js";
 import { CronService } from "./service.js";
 import {
@@ -20,7 +21,10 @@ import {
   createNoopLogger,
   installCronTestHooks,
 } from "./service.test-harness.js";
-import type { CronServiceDeps } from "./service/state.js";
+import { createCronServiceState, type CronServiceDeps } from "./service/state.js";
+import { onTimer } from "./service/timer.test-support.js";
+import { saveCronStore } from "./store.js";
+import type { CronJob } from "./types.js";
 
 const noopLogger = createNoopLogger();
 installCronTestHooks({ logger: noopLogger });
@@ -75,26 +79,33 @@ type CronHarnessOptions = {
   withEvents?: boolean;
 };
 
+// Mirrors the runtime queue contract: enqueue returns a `remove` handle the
+// cron wake path calls to drop the event when a heartbeat skip means it never
+// reached the agent. Shared by the CronService and direct-timer harnesses.
+function createRemovableEnqueueSystemEvent() {
+  return vi.fn((text: string, opts?: Parameters<CronServiceDeps["enqueueSystemEvent"]>[1]) => {
+    if (!opts?.sessionKey) {
+      throw new Error("test removable queue requires a sessionKey");
+    }
+    const event = enqueueSystemEventEntry(text, {
+      sessionKey: opts.sessionKey,
+      contextKey: opts.contextKey,
+      deliveryContext: opts.deliveryContext,
+    });
+    return event
+      ? {
+          accepted: true,
+          remove: () =>
+            consumeSelectedSystemEventEntries(opts.sessionKey as string, [event]).length > 0,
+        }
+      : { accepted: false };
+  });
+}
+
 async function createCronHarness(options: CronHarnessOptions = {}) {
   const store = await makeStorePath();
   const enqueueSystemEvent = options.useRemovableSystemEventQueue
-    ? vi.fn((text: string, opts?: Parameters<CronServiceDeps["enqueueSystemEvent"]>[1]) => {
-        if (!opts?.sessionKey) {
-          throw new Error("test removable queue requires a sessionKey");
-        }
-        const event = enqueueSystemEventEntry(text, {
-          sessionKey: opts.sessionKey,
-          contextKey: opts.contextKey,
-          deliveryContext: opts.deliveryContext,
-        });
-        return event
-          ? {
-              accepted: true,
-              remove: () =>
-                consumeSelectedSystemEventEntries(opts.sessionKey as string, [event]).length > 0,
-            }
-          : { accepted: false };
-      })
+    ? createRemovableEnqueueSystemEvent()
     : vi.fn();
   const requestHeartbeat = vi.fn();
   const events = options.withEvents === false ? undefined : createCronEventHarness();
@@ -232,6 +243,64 @@ async function addMainOneShotHelloJob(
     wakeMode: "now",
     payload: { kind: "systemEvent", text: "hello" },
   });
+}
+
+// One-shot main wake-now job persisted directly so the scheduled timer path
+// (onTimer) can drive retry/backoff/disable transitions, which only fire for
+// scheduled — never manual — runs (#83538).
+function buildMainOneShotDisabledHeartbeatJob(params: {
+  id: string;
+  name: string;
+  atMs: number;
+}): CronJob {
+  return {
+    id: params.id,
+    name: params.name,
+    enabled: true,
+    createdAtMs: params.atMs - 60_000,
+    updatedAtMs: params.atMs - 60_000,
+    deleteAfterRun: true,
+    schedule: { kind: "at", at: new Date(params.atMs).toISOString() },
+    sessionTarget: "main",
+    wakeMode: "now",
+    payload: { kind: "systemEvent", text: "hello" },
+    state: { nextRunAtMs: params.atMs },
+  };
+}
+
+// Drives the real scheduled tick handler (onTimer) instead of a manual
+// cron.run, so the assertions exercise scheduler-owned retry/disable state.
+async function createScheduledOneShotTimerHarness(params: {
+  id: string;
+  name: string;
+  atMs: number;
+  nowMs: () => number;
+  runHeartbeatOnce: NonNullable<CronServiceDeps["runHeartbeatOnce"]>;
+}) {
+  const store = await makeStorePath();
+  const enqueueSystemEvent = createRemovableEnqueueSystemEvent();
+  const requestHeartbeat = vi.fn();
+  await saveCronStore(store.storePath, {
+    version: 1,
+    jobs: [buildMainOneShotDisabledHeartbeatJob(params)],
+  });
+  const state = createCronServiceState({
+    cronEnabled: true,
+    storePath: store.storePath,
+    log: noopLogger,
+    nowMs: params.nowMs,
+    enqueueSystemEvent,
+    requestHeartbeat,
+    runHeartbeatOnce: params.runHeartbeatOnce,
+    runIsolatedAgentJob: vi.fn(async () => ({
+      status: "ok" as const,
+    })) as unknown as CronServiceDeps["runIsolatedAgentJob"],
+  });
+  return { store, state, enqueueSystemEvent, requestHeartbeat };
+}
+
+function findCronJob(state: ReturnType<typeof createCronServiceState>, id: string) {
+  return state.store?.jobs.find((job) => job.id === id);
 }
 
 function expectMainSystemEventPosted(
@@ -421,6 +490,63 @@ describe("CronService", () => {
     await stopCronAndCleanup(cron, store);
   });
 
+  it("public run cannot obtain watcher-terminal semantics: a deleteAfterRun one-shot is preserved (#83538, #83933)", async () => {
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const, summary: "done" }));
+    const { store, cron, events } = await createIsolatedAnnounceHarness(runIsolatedAgentJob);
+    const { job } = await addDefaultIsolatedAnnounceJob(cron, "public-run-operator-semantics");
+    // "at" one-shots default to deleteAfterRun; a scheduled/watcher run would
+    // consume this, but a public run never can.
+    expect(job.deleteAfterRun).toBe(true);
+
+    // Public callers reach cron only through the origin-free CronServiceContract,
+    // so run() always resolves to operator semantics and can never request the
+    // watcher-terminal consuming path (#83538, #83933).
+    const publicCron: CronServiceContract = cron;
+    await expect(publicCron.run(job.id, "force")).resolves.toEqual({ ok: true, ran: true });
+
+    const updated = (await cron.list({ includeDisabled: true })).find(
+      (entry) => entry.id === job.id,
+    );
+    // Preserved, not consumed; scheduler counters untouched.
+    expect(updated).toBeDefined();
+    expect(updated?.state.lastRunWasManual).toBe(true);
+    expect(updated?.state.consecutiveErrors ?? 0).toBe(0);
+    expect(updated?.state.consecutiveSkipped ?? 0).toBe(0);
+    expect(events.events.some((evt) => evt.jobId === job.id && evt.action === "removed")).toBe(
+      false,
+    );
+
+    await stopCronAndCleanup(cron, store);
+  });
+
+  it("runOnExitTerminal consumes a successful on-exit deleteAfterRun one-shot (#83538, #83933)", async () => {
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const, summary: "done" }));
+    const { store, cron, events } = await createIsolatedAnnounceHarness(runIsolatedAgentJob);
+    const job = await cron.add({
+      // The gateway watcher disables the job before force-running its payload.
+      enabled: false,
+      name: "on-exit watcher consume",
+      schedule: { kind: "on-exit", command: 'sh -c "exit 0"' },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      deleteAfterRun: true,
+      payload: { kind: "agentTurn", message: "post-exit payload" },
+      delivery: { mode: "announce" },
+    });
+
+    // The private watcher entry runs with watcher-terminal origin, so a
+    // successful deleteAfterRun on-exit one-shot is still consumed.
+    await expect(cron.runOnExitTerminal(job.id)).resolves.toEqual({ ok: true, ran: true });
+
+    const jobs = await cron.list({ includeDisabled: true });
+    expect(jobs.find((entry) => entry.id === job.id)).toBeUndefined();
+    expect(events.events.some((evt) => evt.jobId === job.id && evt.action === "removed")).toBe(
+      true,
+    );
+
+    await stopCronAndCleanup(cron, store);
+  });
+
   it("wakeMode now waits for heartbeat completion when available", async () => {
     let now = 0;
     const nowMs = () => {
@@ -554,20 +680,19 @@ describe("CronService", () => {
         return { status: "ran" as const, durationMs: 1 };
       },
     );
-    const { store, cron, enqueueSystemEvent, requestHeartbeat } = await createCronHarness({
-      runHeartbeatOnce,
-      nowMs: () => now,
-      useRemovableSystemEventQueue: true,
-      withEvents: false,
-    });
-    const job = await addMainOneShotHelloJob(cron, {
-      atMs,
-      name: "one-shot disabled heartbeat retries cleanly",
-    });
+    const { state, enqueueSystemEvent, requestHeartbeat } =
+      await createScheduledOneShotTimerHarness({
+        id: "one-shot-disabled-heartbeat-retries-cleanly",
+        name: "one-shot disabled heartbeat retries cleanly",
+        atMs,
+        nowMs: () => now,
+        runHeartbeatOnce,
+      });
 
-    await cron.run(job.id, "due");
-    let jobs = await cron.list({ includeDisabled: true });
-    let updated = jobs.find((j) => j.id === job.id);
+    // First scheduled tick: heartbeat skip increments the skip counter and arms
+    // the retry backoff. Manual cron.run no longer drives this path (#83538).
+    await onTimer(state);
+    let updated = findCronJob(state, "one-shot-disabled-heartbeat-retries-cleanly");
     expect(updated?.enabled).toBe(true);
     expect(updated?.state.lastStatus).toBe("skipped");
     expect(updated?.state.lastError).toBe("disabled");
@@ -576,23 +701,56 @@ describe("CronService", () => {
     expectNoQueuedEvents(getPostedSystemEventSessionKeys(enqueueSystemEvent));
 
     now = updated?.state.nextRunAtMs ?? now;
-    await cron.run(job.id, "due");
-    jobs = await cron.list({ includeDisabled: true });
-    updated = jobs.find((j) => j.id === job.id);
+    await onTimer(state);
+    updated = findCronJob(state, "one-shot-disabled-heartbeat-retries-cleanly");
     expect(updated?.enabled).toBe(true);
     expect(updated?.state.consecutiveSkipped).toBe(2);
     expect(updated?.state.nextRunAtMs).toBe(atMs + 90_000);
     expectNoQueuedEvents(getPostedSystemEventSessionKeys(enqueueSystemEvent));
 
     now = updated?.state.nextRunAtMs ?? now;
-    await cron.run(job.id, "due");
+    await onTimer(state);
 
-    jobs = await cron.list({ includeDisabled: true });
-    expect(jobs.find((j) => j.id === job.id)).toBeUndefined();
+    expect(findCronJob(state, "one-shot-disabled-heartbeat-retries-cleanly")).toBeUndefined();
     expect(runHeartbeatOnce).toHaveBeenCalledTimes(3);
     expect(requestHeartbeat).not.toHaveBeenCalled();
     expect(consumedTexts).toEqual(["hello"]);
     expectNoQueuedEvents(getPostedSystemEventSessionKeys(enqueueSystemEvent));
+
+    resetSystemEventsForTest();
+  });
+
+  it("records a manual due run outcome without advancing scheduled retry state (#83538)", async () => {
+    resetSystemEventsForTest();
+    const atMs = Date.parse("2025-12-13T00:00:02.000Z");
+    const runHeartbeatOnce = vi.fn(async () => ({
+      status: "skipped" as const,
+      reason: "disabled",
+    }));
+    const { store, cron, requestHeartbeat } = await createCronHarness({
+      runHeartbeatOnce,
+      nowMs: () => atMs,
+      withEvents: false,
+    });
+    const job = await addMainOneShotHelloJob(cron, {
+      atMs,
+      name: "manual due isolation",
+    });
+
+    await cron.run(job.id, "due");
+
+    const jobs = await cron.list({ includeDisabled: true });
+    const updated = jobs.find((j) => j.id === job.id);
+    // The manual run records its outcome...
+    expect(updated?.state.lastStatus).toBe("skipped");
+    expect(updated?.state.lastError).toBe("disabled");
+    expect(updated?.state.lastRunWasManual).toBe(true);
+    // ...but leaves the scheduled retry/backoff/disable state untouched so the
+    // timer still fires the one-shot at its original slot (#83538).
+    expect(updated?.enabled).toBe(true);
+    expect(updated?.state.consecutiveSkipped ?? 0).toBe(0);
+    expect(updated?.state.nextRunAtMs).toBe(atMs);
+    expect(requestHeartbeat).not.toHaveBeenCalled();
 
     await stopCronAndCleanup(cron, store);
   });

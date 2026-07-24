@@ -114,6 +114,11 @@ export function resolveJobErrorBackoffUntilMs(
   if (resolveJobLastRunStatus(job) !== "error" || !isFiniteTimestamp(job.state.lastRunAtMs)) {
     return undefined;
   }
+  // Manual (force/due) errors are recorded but must not open a backoff window:
+  // doing so would delay the next timer-scheduled fire of a recurring job.
+  if (job.state.lastRunWasManual === true) {
+    return undefined;
+  }
   const consecutiveErrorsRaw = job.state.consecutiveErrors;
   const consecutiveErrors =
     typeof consecutiveErrorsRaw === "number" && Number.isFinite(consecutiveErrorsRaw)
@@ -619,7 +624,16 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
     const atMs = parseAbsoluteTimeMs(job.schedule.at);
     // One-shot jobs stay due until they successfully finish, but if the
     // schedule was updated to a time after the last run, re-arm the job.
-    if (resolveJobLastRunStatus(job) === "ok" && job.state.lastRunAtMs) {
+    // A manual/operator ok run must not clear the pending scheduled slot: it
+    // preserves nextRunAtMs (origin=operator does not consume the one-shot), so
+    // collapsing it here would strand the job as a zombie that never fires or
+    // deletes (#83538). Only a scheduler-owned (timer) ok run collapses it;
+    // timer/watcher runs have lastRunWasManual=false.
+    if (
+      resolveJobLastRunStatus(job) === "ok" &&
+      job.state.lastRunWasManual !== true &&
+      job.state.lastRunAtMs
+    ) {
       if (atMs !== null && Number.isFinite(atMs) && atMs > job.state.lastRunAtMs) {
         return atMs;
       }
