@@ -150,7 +150,10 @@ describe("session origin across a channel switch", () => {
     });
 
     expect(afterSurfaceSwitch.origin?.surface).toBe("slack-canvas");
-    expect(afterSurfaceSwitch.deliveryContext).toBeUndefined();
+    expect(afterSurfaceSwitch.delivery).toMatchObject({
+      kind: "external",
+      route: { channel: "slack-canvas", target: { to: "slack:D222SLACK" } },
+    });
   });
 
   it("preserves sparse existing channel metadata when optional identity fields are first populated", () => {
