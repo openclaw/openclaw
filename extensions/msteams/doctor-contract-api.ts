@@ -198,6 +198,16 @@ function parseLegacyConversationStore(value: unknown): MSTeamsLegacyConversation
   });
 }
 
+function resolveLegacyConversationId(
+  rawConversationId: string,
+  reference: StoredConversationReference,
+): string {
+  const storedConversationId = reference.conversation?.id
+    ? normalizeStoredConversationId(reference.conversation.id)
+    : "";
+  return storedConversationId || normalizeStoredConversationId(rawConversationId);
+}
+
 function parseLegacyPoll(value: unknown): MSTeamsPoll | null {
   if (!isRecord(value)) {
     return null;
@@ -333,25 +343,40 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         namespace: MSTEAMS_CONVERSATIONS_NAMESPACE,
         maxEntries: MSTEAMS_SQLITE_MAX_CONVERSATION_ROWS,
       });
+      let attempted = 0;
       let imported = 0;
-      for (const [rawConversationId, reference] of selectRetainedMSTeamsConversations(
-        state.conversations,
-      )) {
-        const conversationId = normalizeStoredConversationId(rawConversationId);
+      let present = 0;
+      let skipped = 0;
+      const retainedConversations = selectRetainedMSTeamsConversations(state.conversations);
+      for (const [rawConversationId, reference] of retainedConversations) {
+        const conversationId = resolveLegacyConversationId(rawConversationId, reference);
         if (!conversationId) {
+          skipped++;
           continue;
         }
+        attempted++;
+        const key = buildMSTeamsConversationStateKey(conversationId);
         const didImport = await store.registerIfAbsent(
-          buildMSTeamsConversationStateKey(conversationId),
+          key,
           prepareMSTeamsConversationReferenceForStorage(conversationId, reference),
         );
         if (didImport) {
           imported++;
         }
+        if (await store.lookup(key)) {
+          present++;
+        }
       }
       changes.push(
         `Migrated ${imported} ${MSTEAMS_PLUGIN_ID} conversation ${imported === 1 ? "entry" : "entries"} -> plugin state`,
       );
+      if ((attempted > 0 && present < attempted) || skipped > 0) {
+        const retained = retainedConversations.length;
+        warnings.push(
+          `Left ${MSTEAMS_PLUGIN_ID} conversation legacy source in place because ${present} of ${retained} retained ${retained === 1 ? "entry was" : "entries were"} visible in plugin state after migration`,
+        );
+        return { changes, warnings };
+      }
       await archiveLegacyStateSource({
         filePath,
         label: `${MSTEAMS_PLUGIN_ID} conversation`,
