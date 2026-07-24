@@ -398,7 +398,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       allowFrom: ["users/1234567890"],
       groupPolicy: "allowlist",
       groups: {
-        "spaces/AAAA": { allow: true, requireMention: true },
+        "spaces/AAAA": { enabled: true, requireMention: true },
       },
       actions: { reactions: true },
       typingIndicator: "message",
@@ -412,6 +412,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - `serviceAccount` accepts a SecretRef directly.
 - Env fallbacks: `GOOGLE_CHAT_SERVICE_ACCOUNT` or `GOOGLE_CHAT_SERVICE_ACCOUNT_FILE` (default account only).
 - Use `spaces/<spaceId>` or `users/<userId>` for delivery targets.
+- Allowlisted spaces use `channels.googlechat.groups.<space>.enabled`; legacy `allow` entries are rejected by the schema and rewritten by `openclaw doctor --fix`.
 - `channels.googlechat.dangerouslyAllowNameMatching` re-enables mutable email principal matching (break-glass compatibility mode).
 
 ### Slack
