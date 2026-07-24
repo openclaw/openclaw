@@ -84,6 +84,17 @@ function hasPersistedChannelState(env: NodeJS.ProcessEnv): boolean {
 
 let persistedAuthStateChannelIds: readonly string[] | null = null;
 
+/**
+ * The persisted-auth id list is process-stable for a fixed plugin registry, but
+ * installing a plugin or hot-reloading config introduces new channels. Without an
+ * invalidation path the module-level cache keeps serving stale presence data after
+ * such a mutation. Callers that mutate the registry or apply a config reload must
+ * call this so the next presence scan re-reads bundled plugin metadata.
+ */
+export function invalidatePersistedAuthStateCache(): void {
+  persistedAuthStateChannelIds = null;
+}
+
 function listPersistedAuthStateChannelIds(options: ChannelPresenceOptions): readonly string[] {
   const override = options.persistedAuthStateProbe?.listChannelIds();
   if (override) {

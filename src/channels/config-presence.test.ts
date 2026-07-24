@@ -2,14 +2,22 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   hasMeaningfulChannelConfig,
+  invalidatePersistedAuthStateCache,
   listExplicitlyDisabledChannelIdsForConfig,
   listPotentialConfiguredChannelPresenceSignals,
   listPotentialConfiguredChannelIds,
 } from "./config-presence.js";
+
+vi.mock("../channels/plugins/persisted-auth-state.js", () => ({
+  listBundledChannelIdsWithPersistedAuthState: vi.fn(() => ["matrix"]),
+  hasBundledChannelPersistedAuthState: vi.fn(() => true),
+}));
+
+import { listBundledChannelIdsWithPersistedAuthState } from "../channels/plugins/persisted-auth-state.js";
 
 const tempDirs: string[] = [];
 
@@ -139,5 +147,101 @@ describe("config presence", () => {
         },
       },
     });
+  });
+
+  it("re-reads persisted-auth channel ids after registry mutation", () => {
+    // Exercises the module-level cache in listPersistedAuthStateChannelIds, which
+    // is bypassed by persistedAuthStateProbe (used elsewhere) but live for
+    // doctor / non-discovery callers. A newly installed plugin can add a channel
+    // with persisted auth state; without invalidation the stale cache hides it.
+    const stateDir = makeTempStateDir().replace(
+      "openclaw-channel-config-presence-",
+      "persisted-matrix-",
+    );
+    fs.mkdirSync(stateDir, { recursive: true });
+    tempDirs.push(stateDir);
+    const env = { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv;
+
+    const options = { channelIds: ["matrix", "signal"] };
+    const before = listPotentialConfiguredChannelIds({}, env, options);
+    expect(before).toEqual(["matrix"]);
+
+    // Registry now reports a second persisted-auth channel.
+    vi.mocked(listBundledChannelIdsWithPersistedAuthState).mockReturnValue(["matrix", "signal"]);
+
+    const stale = listPotentialConfiguredChannelIds({}, env, options);
+    expect(stale).toEqual(["matrix"]);
+
+    invalidatePersistedAuthStateCache();
+    const after = listPotentialConfiguredChannelIds({}, env, options);
+    expect(after).toEqual(["matrix", "signal"]);
+  });
+
+  it("handles plugin uninstallation reducing persisted-auth channels", () => {
+    const stateDir = makeTempStateDir().replace(
+      "openclaw-channel-config-presence-",
+      "persisted-multi-",
+    );
+    fs.mkdirSync(stateDir, { recursive: true });
+    tempDirs.push(stateDir);
+    const env = { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv;
+
+    // Start with matrix and signal both available
+    vi.mocked(listBundledChannelIdsWithPersistedAuthState).mockReturnValue(["matrix", "signal"]);
+    invalidatePersistedAuthStateCache();
+
+    const options = { channelIds: ["matrix", "signal"] };
+    const before = listPotentialConfiguredChannelIds({}, env, options);
+    expect(before).toEqual(["matrix", "signal"]);
+
+    // Uninstall signal plugin - registry now reports only matrix
+    vi.mocked(listBundledChannelIdsWithPersistedAuthState).mockReturnValue(["matrix"]);
+
+    // Without cache invalidation, stale data still shows signal
+    const stale = listPotentialConfiguredChannelIds({}, env, options);
+    expect(stale).toEqual(["matrix", "signal"]);
+
+    // After invalidation, only matrix is reported
+    invalidatePersistedAuthStateCache();
+    const after = listPotentialConfiguredChannelIds({}, env, options);
+    expect(after).toEqual(["matrix"]);
+  });
+
+  it("handles multiple install/uninstall cycles", () => {
+    const stateDir = makeTempStateDir().replace(
+      "openclaw-channel-config-presence-",
+      "persisted-cycles-",
+    );
+    fs.mkdirSync(stateDir, { recursive: true });
+    tempDirs.push(stateDir);
+    const env = { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv;
+
+    const options = { channelIds: ["matrix", "signal", "whatsapp"] };
+
+    // Initial state: only matrix
+    const initial = listPotentialConfiguredChannelIds({}, env, options);
+    expect(initial).toEqual(["matrix"]);
+
+    // Install signal
+    vi.mocked(listBundledChannelIdsWithPersistedAuthState).mockReturnValue(["matrix", "signal"]);
+    invalidatePersistedAuthStateCache();
+    const afterInstall = listPotentialConfiguredChannelIds({}, env, options);
+    expect(afterInstall).toEqual(["matrix", "signal"]);
+
+    // Install whatsapp
+    vi.mocked(listBundledChannelIdsWithPersistedAuthState).mockReturnValue([
+      "matrix",
+      "signal",
+      "whatsapp",
+    ]);
+    invalidatePersistedAuthStateCache();
+    const afterSecondInstall = listPotentialConfiguredChannelIds({}, env, options);
+    expect(afterSecondInstall).toEqual(["matrix", "signal", "whatsapp"]);
+
+    // Uninstall signal
+    vi.mocked(listBundledChannelIdsWithPersistedAuthState).mockReturnValue(["matrix", "whatsapp"]);
+    invalidatePersistedAuthStateCache();
+    const afterUninstall = listPotentialConfiguredChannelIds({}, env, options);
+    expect(afterUninstall).toEqual(["matrix", "whatsapp"]);
   });
 });

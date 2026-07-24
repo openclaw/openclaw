@@ -1,3 +1,4 @@
+import { invalidatePersistedAuthStateCache } from "../channels/config-presence.js";
 // Registry refresh helper shared by plugin config mutations that need post-write discovery repair.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -60,5 +61,16 @@ export async function invalidatePluginRuntimeDiscoveryAfterConfigMutation(params
     clearPluginRegistryLoadCache();
   } catch (error) {
     params.logger?.warn?.(`Plugin runtime cache invalidation failed: ${formatErrorMessage(error)}`);
+  }
+  // Installing, removing, enabling, disabling, or reloading a plugin mutates the
+  // bundled channel registry, so the module-level persisted-auth presence cache
+  // must not keep serving the pre-mutation channel list. Invalidate on the same
+  // shared registry-mutation boundary that clears discovery caches.
+  try {
+    invalidatePersistedAuthStateCache();
+  } catch (error) {
+    params.logger?.warn?.(
+      `Persisted-auth presence cache invalidation failed: ${formatErrorMessage(error)}`,
+    );
   }
 }
