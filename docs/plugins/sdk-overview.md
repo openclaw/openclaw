@@ -241,8 +241,8 @@ before returning do not need this helper.
 
 #### Requester-scoped MCP connections
 
-Keep the MCP server **identity** static (name, tool filter) in `mcp.servers` or a
-bundle manifest. Optionally register a connection resolver so each trusted
+Keep the MCP server **identity** static (name, tool filter) in `mcp.servers`, a
+native plugin's `mcpServers` manifest field, or a bundle manifest. Optionally register a connection resolver so each trusted
 message requester gets their own transport:
 
 ```ts
