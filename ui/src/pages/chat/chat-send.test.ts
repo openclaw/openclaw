@@ -8105,7 +8105,7 @@ describe("handleAbortChat", () => {
     expect(host.chatRunId).toBe("run-main");
   });
 
-  it("queues a session-scoped abort while disconnected after active run state is recovered", async () => {
+  it("does not queue an unversioned session stop while disconnected", async () => {
     const client = { request: vi.fn() } as unknown as NonNullable<ChatHost["client"]>;
     const sessionKey = "agent:main:telegram:direct:queued-user";
     const host = makeHost({
@@ -8122,16 +8122,12 @@ describe("handleAbortChat", () => {
 
     await handleAbortChat(host);
 
-    expect(host.pendingAbort).toEqual({
-      sourceClient: client,
-      runId: null,
-      sessionKey,
-      clearQueued: true,
-    });
-    expect(host.chatMessage).toBe("");
+    expect(host.pendingAbort).toBeUndefined();
+    expect(host.chatMessage).toBe("draft");
+    expect(client.request).not.toHaveBeenCalled();
   });
 
-  it("queues selected-agent global aborts with agent scope while disconnected", async () => {
+  it("does not queue an unversioned global stop while disconnected", async () => {
     const client = { request: vi.fn() } as unknown as NonNullable<ChatHost["client"]>;
     const host = makeHost({
       client,
@@ -8148,13 +8144,9 @@ describe("handleAbortChat", () => {
 
     await handleAbortChat(host);
 
-    expect(host.pendingAbort).toEqual({
-      sourceClient: client,
-      runId: null,
-      sessionKey: "global",
-      agentId: "work",
-    });
-    expect(host.chatMessage).toBe("");
+    expect(host.pendingAbort).toBeUndefined();
+    expect(host.chatMessage).toBe("draft");
+    expect(client.request).not.toHaveBeenCalled();
   });
 
   it.each([

@@ -701,15 +701,13 @@ describe("chat pane presentation teardown", () => {
 });
 
 describe("chat pane connection lifecycle", () => {
-  it("replays a pending channel stop when the gateway reconnects", async () => {
+  it("replays a pending exact-run stop when the gateway reconnects", async () => {
     const request = vi.fn((method: string) =>
-      method === "sessions.abort"
-        ? Promise.resolve({ abortedRunId: null, status: "aborted" })
-        : new Promise<never>(() => {}),
+      method === "chat.abort" ? Promise.resolve({ aborted: true }) : new Promise<never>(() => {}),
     );
     const client = { request } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
-    const sessionKey = "agent:main:telegram:direct:queued-user";
+    const sessionKey = "agent:main";
     pane.context = {
       ...pane.context,
       config: {
@@ -731,7 +729,7 @@ describe("chat pane connection lifecycle", () => {
     };
 
     pane.applyGatewaySnapshot({ ...snapshot, phase: "reconnecting", hello: null });
-    state.pendingAbort = { sourceClient: client, runId: null, sessionKey, clearQueued: true };
+    state.pendingAbort = { sourceClient: client, runId: "run-main", sessionKey };
 
     pane.applyGatewaySnapshot({
       ...snapshot,
@@ -739,14 +737,14 @@ describe("chat pane connection lifecycle", () => {
     });
 
     await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith("sessions.abort", {
-        key: sessionKey,
-        clearQueued: true,
+      expect(request).toHaveBeenCalledWith("chat.abort", {
+        sessionKey,
+        runId: "run-main",
       }),
     );
     expect(state.pendingAbort).toBeNull();
 
     pane.applyGatewaySnapshot({ ...snapshot, phase: "connected" });
-    expect(request.mock.calls.filter(([method]) => method === "sessions.abort")).toHaveLength(1);
+    expect(request.mock.calls.filter(([method]) => method === "chat.abort")).toHaveLength(1);
   });
 });

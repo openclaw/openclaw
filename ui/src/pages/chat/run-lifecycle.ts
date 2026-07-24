@@ -101,13 +101,24 @@ type ChatAbortRunState = SessionScopeHost & {
   chatError?: string | null;
 };
 
-export type PendingChatAbort = {
+type ChatAbortIntentBase = {
   sourceClient: GatewayBrowserClient;
-  runId: string | null;
   sessionKey: string;
   agentId?: string;
-  clearQueued?: true;
 };
+
+export type PendingChatAbort = ChatAbortIntentBase & {
+  // Session-key-only stops can become stale and target a newer run after reconnect.
+  // Only an exact run identity is safe to replay.
+  runId: string;
+};
+
+type ChatAbortIntent =
+  | PendingChatAbort
+  | (ChatAbortIntentBase & {
+      runId: null;
+      clearQueued?: true;
+    });
 
 type ChatAbortHost = ChatAbortRunState &
   ChatInputHistoryState & {
@@ -167,7 +178,7 @@ type ChatAbortOptions = { preserveDraft?: boolean };
 
 async function requestChatAbort(
   client: GatewayBrowserClient,
-  intent: PendingChatAbort,
+  intent: ChatAbortIntent,
 ): Promise<{ ok: true } | { ok: false; error: unknown }> {
   try {
     if (intent.runId) {
@@ -194,15 +205,20 @@ async function requestChatAbort(
 function currentChatAbortIntent(
   state: ChatAbortRunState,
   sourceClient: GatewayBrowserClient,
-): PendingChatAbort {
+): ChatAbortIntent {
   const runId = state.chatRunId ?? null;
-  return {
+  const base = {
     sourceClient,
-    runId,
     sessionKey: state.sessionKey,
     ...scopedAgentParamsForSession(state, state.sessionKey),
-    ...(runId ? {} : queuedSessionAbortParams(state, state.sessionKey)),
   };
+  return runId
+    ? { ...base, runId }
+    : {
+        ...base,
+        runId: null,
+        ...queuedSessionAbortParams(state, state.sessionKey),
+      };
 }
 
 async function abortChatRun(state: ChatAbortRunState): Promise<boolean> {
@@ -224,8 +240,7 @@ export async function replayPendingChatAbort(host: ChatAbortHost): Promise<boole
     return false;
   }
   // Consume before sending so repeated connected snapshots cannot duplicate
-  // the request. A rejected request may have reached the Gateway before its
-  // ACK was lost; retrying a session-wide abort could stop newer work.
+  // the exact-run request.
   host.pendingAbort = null;
   // Automatic reconnects retain the browser client. A replacement client may
   // target another Gateway, where the same session key can name unrelated work.
@@ -242,16 +257,19 @@ export async function replayPendingChatAbort(host: ChatAbortHost): Promise<boole
 
 export async function handleAbortChat(host: ChatAbortHost, opts?: ChatAbortOptions) {
   const disconnectedClient = host.connected ? null : host.client;
-  const queueAbort = Boolean(disconnectedClient && hasAbortableSessionRun(host));
-  if (!host.connected && !queueAbort) {
+  const disconnectedIntent = disconnectedClient
+    ? currentChatAbortIntent(host, disconnectedClient)
+    : null;
+  const pendingAbort = disconnectedIntent?.runId ? disconnectedIntent : null;
+  if (!host.connected && !pendingAbort) {
     return;
   }
   if (!opts?.preserveDraft) {
     host.chatMessage = "";
     resetChatInputHistoryNavigation(host);
   }
-  if (queueAbort && disconnectedClient) {
-    host.pendingAbort = currentChatAbortIntent(host, disconnectedClient);
+  if (pendingAbort) {
+    host.pendingAbort = pendingAbort;
     return;
   }
   await abortChatRun(host);

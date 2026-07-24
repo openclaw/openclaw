@@ -63,27 +63,6 @@ function makeAbortHost(over: Partial<AbortHost> = {}): AbortHost {
 }
 
 describe("replayPendingChatAbort", () => {
-  it("dispatches a queued channel-session stop through sessions.abort", async () => {
-    const request = vi.fn(async () => {
-      expect(host.pendingAbort).toBeNull();
-      return { abortedRunId: null, status: "aborted" };
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const sessionKey = "agent:main:telegram:direct:queued-user";
-    const host = makeAbortHost({
-      client,
-      pendingAbort: { sourceClient: client, runId: null, sessionKey, clearQueued: true },
-    });
-
-    await expect(replayPendingChatAbort(host)).resolves.toBe(true);
-
-    expect(request).toHaveBeenCalledWith("sessions.abort", {
-      key: sessionKey,
-      clearQueued: true,
-    });
-    expect(host.pendingAbort).toBeNull();
-  });
-
   it("dispatches a queued exact browser run stop through chat.abort", async () => {
     const request = vi.fn(async () => ({ aborted: true }));
     const client = { request } as unknown as GatewayBrowserClient;
@@ -107,7 +86,7 @@ describe("replayPendingChatAbort", () => {
     expect(host.pendingAbort).toBeNull();
   });
 
-  it("consumes an ambiguously failed session stop without retrying it", async () => {
+  it("consumes an ambiguously failed exact-run stop without retrying it", async () => {
     const request = vi.fn(async () => {
       throw new Error("gateway closed before acknowledgement");
     });
@@ -116,9 +95,8 @@ describe("replayPendingChatAbort", () => {
       client,
       pendingAbort: {
         sourceClient: client,
-        runId: null,
+        runId: "run-main",
         sessionKey: "agent:main:telegram:direct:queued-user",
-        clearQueued: true,
       },
     });
 
@@ -137,9 +115,8 @@ describe("replayPendingChatAbort", () => {
       client: { request: replacementRequest } as unknown as GatewayBrowserClient,
       pendingAbort: {
         sourceClient,
-        runId: null,
+        runId: "run-main",
         sessionKey: "agent:main:telegram:direct:queued-user",
-        clearQueued: true,
       },
     });
 
