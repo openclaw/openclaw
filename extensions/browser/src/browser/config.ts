@@ -610,7 +610,10 @@ export function resolveManagedBrowserHeadlessMode(
 
   const profileHeadlessSource = profile.headlessSource ?? "default";
   if (profileHeadlessSource !== "default") {
-    return { headless: profile.headless, source: profileHeadlessSource };
+    return {
+      headless: profile.headless ?? resolved.headless,
+      source: profileHeadlessSource,
+    };
   }
 
   if (platform === "linux" && !hasLinuxDisplay(env)) {
