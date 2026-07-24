@@ -16,8 +16,23 @@ const MCP_APP_VIEW_TTL_MS = 10 * 60_000;
 
 function runtime(
   readResource: SessionMcpRuntime["readResource"],
-  requestTimeoutMs = 60_000,
+  options: { requestTimeoutMs?: number } = { requestTimeoutMs: 60_000 },
 ): SessionMcpRuntime {
+  const catalog = {
+    version: 1,
+    generatedAt: 0,
+    servers: {
+      demo: {
+        serverName: "demo",
+        launchSummary: "demo",
+        toolCount: 0,
+        ...(options.requestTimeoutMs === undefined
+          ? {}
+          : { requestTimeoutMs: options.requestTimeoutMs }),
+      },
+    },
+    tools: [],
+  };
   return {
     sessionId: "session-1",
     sessionKey: "agent:main:main",
@@ -29,9 +44,8 @@ function runtime(
     activeLeases: 0,
     acquireLease: vi.fn(() => vi.fn()),
     markUsed: () => {},
-    getCatalog: async () => ({ version: 1, generatedAt: 0, servers: {}, tools: [] }),
-    peekCatalog: () => null,
-    getServerRequestTimeoutMs: () => requestTimeoutMs,
+    getCatalog: async () => catalog,
+    peekCatalog: () => catalog,
     callTool: vi.fn(),
     readResource,
     dispose: async () => {},
@@ -106,7 +120,40 @@ describe("MCP App UI resources", () => {
           },
         ],
       }),
+      { requestTimeoutMs },
+    );
+
+    const result = await fetchMcpAppView({
+      runtime: sessionRuntime,
+      serverName: "demo",
+      toolName: "show",
+      uiResourceUri: "ui://demo/app",
+      toolInput: {},
+      toolResult: { content: [] },
+    });
+
+    expect(getMcpAppViewLease(result?.viewId ?? "", sessionRuntime)?.operationTimeoutMs).toBe(
       requestTimeoutMs,
+    );
+  });
+
+  it("retains the timeout snapshot when resource reading invalidates the catalog", async () => {
+    const requestTimeoutMs = 15 * 60_000;
+    let sessionRuntime: SessionMcpRuntime;
+    sessionRuntime = runtime(
+      async () => {
+        sessionRuntime.peekCatalog = () => null;
+        return {
+          contents: [
+            {
+              uri: "ui://demo/app",
+              mimeType: MCP_APP_RESOURCE_MIME_TYPE,
+              text: "<html>demo</html>",
+            },
+          ],
+        };
+      },
+      { requestTimeoutMs },
     );
 
     const result = await fetchMcpAppView({
@@ -124,16 +171,18 @@ describe("MCP App UI resources", () => {
   });
 
   it("keeps materialized Apps when the server timeout snapshot is unavailable", async () => {
-    const sessionRuntime = runtime(async () => ({
-      contents: [
-        {
-          uri: "ui://demo/app",
-          mimeType: MCP_APP_RESOURCE_MIME_TYPE,
-          text: "<html>demo</html>",
-        },
-      ],
-    }));
-    sessionRuntime.getServerRequestTimeoutMs = () => undefined;
+    const sessionRuntime = runtime(
+      async () => ({
+        contents: [
+          {
+            uri: "ui://demo/app",
+            mimeType: MCP_APP_RESOURCE_MIME_TYPE,
+            text: "<html>demo</html>",
+          },
+        ],
+      }),
+      {},
+    );
 
     const result = await fetchMcpAppView({
       runtime: sessionRuntime,

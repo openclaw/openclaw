@@ -389,51 +389,24 @@ describe("MCP App standalone host", () => {
     );
   });
 
-  it("bounds a stalled standalone view fetch", async () => {
-    vi.useFakeTimers();
-    try {
-      const host = await launchStandaloneHostWithStalledFetch();
-      expect(host.fetch).toHaveBeenCalledOnce();
-      expect(host.getRequestSignal()).toBeDefined();
-      await vi.advanceTimersByTimeAsync(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
-      expect(host.getRequestSignal()?.aborted).toBe(true);
-      expect(host.replaceChildren).toHaveBeenCalledWith(
-        expect.objectContaining({ textContent: "MCP App request timed out" }),
-      );
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("aborts a pending standalone view fetch when the page is hidden", async () => {
-    const host = await launchStandaloneHostWithStalledFetch();
-    expect(host.getRequestSignal()).toBeDefined();
-    host.emit("pagehide");
-    expect(host.getRequestSignal()?.aborted).toBe(true);
-  });
-
-  it("bounds a stalled standalone view response body", async () => {
-    vi.useFakeTimers();
-    try {
-      const host = await launchStandaloneHostWithStalledFetch("body");
-      expect(host.fetch).toHaveBeenCalledOnce();
-      expect(host.getRequestSignal()).toBeDefined();
-      await vi.advanceTimersByTimeAsync(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
-      expect(host.getRequestSignal()?.aborted).toBe(true);
-      expect(host.replaceChildren).toHaveBeenCalledWith(
-        expect.objectContaining({ textContent: "MCP App request timed out" }),
-      );
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("aborts a pending standalone view response body when the page is hidden", async () => {
-    const host = await launchStandaloneHostWithStalledFetch("body");
-    expect(host.getRequestSignal()).toBeDefined();
-    host.emit("pagehide");
-    expect(host.getRequestSignal()?.aborted).toBe(true);
-  });
+  it.each(["fetch", "body"] as const)(
+    "leaves the stalled standalone view %s to the server deadline and page lifecycle",
+    async (stallPhase) => {
+      vi.useFakeTimers();
+      try {
+        const host = await launchStandaloneHostWithStalledFetch(stallPhase);
+        expect(host.fetch).toHaveBeenCalledOnce();
+        expect(host.getRequestSignal()).toBeDefined();
+        await vi.advanceTimersByTimeAsync(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
+        expect(host.getRequestSignal()?.aborted).toBe(false);
+        expect(host.replaceChildren).not.toHaveBeenCalled();
+        host.emit("pagehide");
+        expect(host.getRequestSignal()?.aborted).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("cancels a running standalone operation when the HTTP client disconnects", async () => {
     view.operationTimeoutMs = 300;

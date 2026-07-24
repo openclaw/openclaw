@@ -413,7 +413,6 @@ function makeRuntime(
       lastUsedAt = Date.now();
     },
     peekCatalog: () => catalog,
-    getServerRequestTimeoutMs: () => 60_000,
     getCatalog: async () =>
       (catalog ??= {
         version: 1,
@@ -1380,6 +1379,7 @@ process.on("SIGINT", shutdown);`,
     try {
       const firstCatalog = await runtime.getCatalog();
       expect(firstCatalog.tools.map((tool) => tool.toolName)).toEqual(["ok_tool"]);
+      expect(firstCatalog.servers.volatile?.requestTimeoutMs).toBe(90_000);
 
       await waitForFileText(logPath, "sent tools/list_changed", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
       await waitForPredicate(
@@ -1387,8 +1387,6 @@ process.on("SIGINT", shutdown);`,
         "list_changed to invalidate the catalog",
         LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
       );
-      expect(runtime.getServerRequestTimeoutMs("volatile")).toBe(90_000);
-
       const refreshedCatalog = await runtime.getCatalog();
       expect(refreshedCatalog.tools).toEqual([]);
       expect(refreshedCatalog.diagnostics?.[0]?.serverName).toBe("volatile");
@@ -1429,6 +1427,7 @@ process.on("SIGINT", shutdown);`,
       await expect(runtime.callTool("child", "slow_tool", {})).resolves.toMatchObject({
         isError: false,
       });
+      expect(runtime.peekCatalog()?.servers.child?.requestTimeoutMs).toBe(90_000);
       await waitForFileText(pidPath, "", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
       const pid = Number.parseInt((await fs.readFile(pidPath, "utf8")).trim(), 10);
       process.kill(pid);
@@ -1439,7 +1438,6 @@ process.on("SIGINT", shutdown);`,
         LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
       );
       expect(message).toBe('bundle-mcp server "child" is disconnected: mcp transport closed');
-      expect(runtime.getServerRequestTimeoutMs("child")).toBe(90_000);
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });
@@ -1454,7 +1452,7 @@ process.on("SIGINT", shutdown);`,
       filePath: serverPath,
       logPath,
       capabilities: { tools: { listChanged: true } },
-      notifyListChangedAfterFirstList: true,
+      notifyListChangedOnCallTool: true,
       exitOnListCall: 2,
     });
 
@@ -1473,6 +1471,9 @@ process.on("SIGINT", shutdown);`,
 
     try {
       expect((await runtime.getCatalog()).tools).toHaveLength(1);
+      await expect(runtime.callTool("child", "slow_tool", {})).resolves.toMatchObject({
+        isError: false,
+      });
       await waitForFileText(logPath, "notify tools/list_changed", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
       await waitForPredicate(
         () => runtime.peekCatalog() === null,
@@ -1611,6 +1612,115 @@ process.on("SIGINT", shutdown);`,
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails a catalog load after a second consecutive generation invalidation", async () => {
+    const tempDir = makeTempDir(tempDirs, "bundle-mcp-repeated-invalidation-");
+    const serverPath = path.join(tempDir, "repeated-invalidation.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeExecutable(
+      serverPath,
+      `#!/usr/bin/env node
+import fs from "node:fs/promises";
+
+const logPath = ${JSON.stringify(logPath)};
+let buffer = "";
+let listCount = 0;
+function log(line) {
+  void fs.appendFile(logPath, line + "\\n", "utf8").catch(() => {});
+}
+function send(message) {
+  process.stdout.write(JSON.stringify(message) + "\\n");
+}
+function handle(message) {
+  if (!message || typeof message !== "object") {
+    return;
+  }
+  if (message.method === "initialize") {
+    send({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: {
+        protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
+        capabilities: { tools: { listChanged: true } },
+        serverInfo: { name: "repeated-invalidation", version: "1.0.0" },
+      },
+    });
+    return;
+  }
+  if (message.method === "tools/list") {
+    listCount += 1;
+    log("tools/list " + listCount);
+    const messages = [
+      {
+        jsonrpc: "2.0",
+        id: message.id,
+        result: {
+          tools: [
+            {
+              name: "tool_" + listCount,
+              inputSchema: { type: "object", properties: {} },
+            },
+          ],
+        },
+      },
+    ];
+    if (listCount <= 2) {
+      messages.push({
+        jsonrpc: "2.0",
+        method: "notifications/tools/list_changed",
+      });
+    }
+    process.stdout.write(messages.map((entry) => JSON.stringify(entry)).join("\\n") + "\\n");
+  }
+}
+process.stdin.setEncoding("utf8");
+function shutdown() {
+  process.exit(0);
+}
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  while (true) {
+    const newline = buffer.indexOf("\\n");
+    if (newline < 0) {
+      return;
+    }
+    const line = buffer.slice(0, newline).replace(/\\r$/, "");
+    buffer = buffer.slice(newline + 1);
+    if (line.trim()) {
+      handle(JSON.parse(line));
+    }
+  }
+});
+process.stdin.on("end", shutdown);
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);`,
+    );
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-repeated-invalidation",
+      sessionKey: "agent:test:session-repeated-invalidation",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            changing: { command: process.execPath, args: [serverPath] },
+          },
+        },
+      },
+    });
+
+    try {
+      await expect(runtime.getCatalog()).rejects.toThrow(
+        "bundle-mcp catalog changed repeatedly while refreshing",
+      );
+      const catalog = await runtime.getCatalog();
+      expect(catalog.tools.map((tool) => tool.toolName)).toEqual(["tool_3"]);
+      const logText = await fs.readFile(logPath, "utf8");
+      expect(logText.match(/tools\/list/g)).toHaveLength(3);
+    } finally {
+      await runtime.dispose();
     }
   });
 
@@ -3593,6 +3703,63 @@ describe("requester-scoped MCP connection resolution", () => {
     expect(runtime.peekCatalog()).toBe(catalog);
     expect(sharedLoadCount).toBe(2);
     expect(requesterLoadCount).toBe(2);
+
+    await runtime.dispose();
+  });
+
+  it("fails a combined catalog load after a second consecutive source supersession", async () => {
+    const makeCatalog = (serverName: string, toolName: string): McpToolCatalog => ({
+      version: 1,
+      generatedAt: 0,
+      servers: {
+        [serverName]: { serverName, launchSummary: serverName, toolCount: 1 },
+      },
+      tools: [
+        {
+          serverName,
+          safeServerName: serverName,
+          toolName,
+          description: toolName,
+          inputSchema: { type: "object", properties: {} },
+          fallbackDescription: toolName,
+        },
+      ],
+    });
+    let current = makeCatalog("shared", "shared_v1");
+    const stableCatalog = makeCatalog("stable", "stable_tool");
+    let loadCount = 0;
+    const changingPart: SessionMcpRuntime = {
+      ...makeRuntime([], "shared"),
+      peekCatalog: () => current,
+      getCatalog: async () => {
+        loadCount += 1;
+        const loaded = current;
+        if (loadCount <= 2) {
+          current = makeCatalog("shared", `shared_v${loadCount + 1}`);
+        }
+        return loaded;
+      },
+    };
+    const stablePart: SessionMcpRuntime = {
+      ...makeRuntime([], "stable"),
+      peekCatalog: () => stableCatalog,
+      getCatalog: async () => stableCatalog,
+    };
+    const runtime = createCombinedSessionMcpRuntime({
+      sessionId: "session-combined-repeated-supersession",
+      workspaceDir: "/workspace",
+      parts: [changingPart, stablePart],
+    });
+
+    await expect(runtime.getCatalog()).rejects.toThrow(
+      "combined bundle-mcp catalog sources changed repeatedly while refreshing",
+    );
+    const recoveredCatalog = await runtime.getCatalog();
+    expect(recoveredCatalog.tools.map((tool) => tool.toolName).toSorted()).toEqual([
+      "shared_v3",
+      "stable_tool",
+    ]);
+    expect(loadCount).toBe(3);
 
     await runtime.dispose();
   });

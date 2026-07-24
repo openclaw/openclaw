@@ -1002,6 +1002,15 @@ export function createSessionMcpRuntime(params: {
   const getCatalog = async (
     options?: Pick<McpRequestOptions, "signal">,
   ): Promise<McpToolCatalog> => {
+    let retriedAfterSupersession = false;
+    const retryAfterSupersession = (cause?: unknown) => {
+      if (retriedAfterSupersession) {
+        throw new Error("bundle-mcp catalog changed repeatedly while refreshing", {
+          ...(cause === undefined ? {} : { cause }),
+        });
+      }
+      retriedAfterSupersession = true;
+    };
     while (true) {
       failIfDisposed();
       options?.signal?.throwIfAborted();
@@ -1010,23 +1019,26 @@ export function createSessionMcpRuntime(params: {
       }
 
       const refresh = catalogInFlight ?? startCatalogRefresh();
+      let nextCatalog: McpToolCatalog;
       try {
-        const nextCatalog = await waitForSessionMcpSharedTask({
+        nextCatalog = await waitForSessionMcpSharedTask({
           task: refresh,
           signal: options?.signal,
         });
-        if (refresh.generation !== catalogInvalidationGeneration) {
-          continue;
-        }
-        return nextCatalog;
       } catch (error) {
         options?.signal?.throwIfAborted();
         failIfDisposed();
         if (refresh.generation !== catalogInvalidationGeneration) {
+          retryAfterSupersession(error);
           continue;
         }
         throw error;
       }
+      if (refresh.generation !== catalogInvalidationGeneration) {
+        retryAfterSupersession();
+        continue;
+      }
+      return nextCatalog;
     }
   };
 
@@ -1063,9 +1075,6 @@ export function createSessionMcpRuntime(params: {
     /** Synchronous catalog snapshot only; must not connect transports or issue tools/list. */
     peekCatalog() {
       return catalog;
-    },
-    getServerRequestTimeoutMs(serverName) {
-      return sessions.get(serverName)?.requestTimeoutMs;
     },
     markUsed() {
       lastUsedAt = Date.now();

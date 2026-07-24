@@ -69,7 +69,6 @@ function makeConfiguredRuntime(
       },
       tools,
     }),
-    getServerRequestTimeoutMs: () => 60_000,
     callTool: async () => ({
       content: [{ type: "text", text: "FROM-CONFIG" }],
       isError: false,

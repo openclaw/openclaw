@@ -81,7 +81,6 @@ function makeToolRuntime(
       tools,
       ...(params.diagnostics ? { diagnostics: params.diagnostics } : {}),
     }),
-    getServerRequestTimeoutMs: () => 60_000,
     callTool: async () =>
       params.result ?? {
         content: [{ type: "text", text: params.resultText ?? "FROM-BUNDLE" }],

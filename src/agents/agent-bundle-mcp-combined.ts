@@ -105,6 +105,7 @@ export function createCombinedSessionMcpRuntime(params: {
       // The combined generation is the real waiter on its parts. Propagating its
       // lifetime lets each part retain work needed by other callers without
       // keeping abandoned merged-catalog work alive.
+      let retriedAfterSupersession = false;
       while (true) {
         const catalogs = await Promise.all(
           parts.map((part) => part.getCatalog({ signal: controller.signal })),
@@ -112,6 +113,12 @@ export function createCombinedSessionMcpRuntime(params: {
         // A part can replace its catalog while another part is still loading.
         // Publish only a snapshot whose source identities are still current.
         if (!sourceCatalogsAreCurrent(catalogs)) {
+          if (retriedAfterSupersession) {
+            throw new Error(
+              "combined bundle-mcp catalog sources changed repeatedly while refreshing",
+            );
+          }
+          retriedAfterSupersession = true;
           continue;
         }
         serverOwner.clear();
@@ -211,9 +218,6 @@ export function createCombinedSessionMcpRuntime(params: {
         return null;
       }
       return mergeMcpToolCatalogs(peeked as McpToolCatalog[]);
-    },
-    getServerRequestTimeoutMs(serverName) {
-      return serverOwner.get(serverName)?.getServerRequestTimeoutMs(serverName);
     },
     markUsed() {
       lastUsedAt = Date.now();

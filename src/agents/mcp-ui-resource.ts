@@ -245,6 +245,9 @@ export async function fetchMcpAppView(params: {
     if (!params.runtime.readResource || !params.uiResourceUri.startsWith("ui://")) {
       return undefined;
     }
+    // Capture the catalog generation before resource I/O. A tools/list_changed
+    // notification may clear the runtime cache while this view is materializing.
+    const catalog = params.runtime.peekCatalog() ?? (await params.runtime.getCatalog());
     const result = asRecord(
       await params.runtime.readResource(params.serverName, params.uiResourceUri, {
         failureBackoff: "ignore",
@@ -270,9 +273,10 @@ export async function fetchMcpAppView(params: {
     const permissions = normalizePermissions(uiMeta?.permissions);
     const title = `${params.toolName} UI`;
     const viewId = params.viewId ?? `mcp-app-${randomUUID()}`;
+    const requestTimeoutMs = catalog.servers[params.serverName]?.requestTimeoutMs;
     const operationTimeoutMs = Math.max(
       MCP_APP_VIEW_TTL_MS,
-      params.runtime.getServerRequestTimeoutMs(params.serverName) ?? MCP_APP_VIEW_TTL_MS,
+      requestTimeoutMs ?? MCP_APP_VIEW_TTL_MS,
     );
     releaseRuntimeLease = params.runtime.acquireLease?.();
     deleteView(viewId);
