@@ -20,6 +20,7 @@ describe("buildSystemdUnit", () => {
       environment: {},
     });
     expect(unit).toContain("KillMode=control-group");
+    expect(unit).toContain("RestartKillSignal=SIGUSR1");
     expect(unit).toContain("TimeoutStopSec=30");
     expect(unit).toContain("TimeoutStartSec=30");
     expect(unit).toContain("SuccessExitStatus=0 143");

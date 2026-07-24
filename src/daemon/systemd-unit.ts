@@ -77,6 +77,10 @@ export function buildSystemdUnit({
     `ExecStart=${execStart}`,
     "Restart=always",
     "RestartSec=5",
+    // systemctl restart uses RestartKillSignal= when present. Route restarts
+    // through the gateway SIGUSR1 handler so active turns can use restart
+    // recovery instead of being surfaced as ordinary SIGTERM shutdowns.
+    "RestartKillSignal=SIGUSR1",
     "RestartPreventExitStatus=78",
     "TimeoutStopSec=30",
     "TimeoutStartSec=30",
