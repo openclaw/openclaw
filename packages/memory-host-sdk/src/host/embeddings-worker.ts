@@ -245,6 +245,7 @@ class LocalEmbeddingWorkerClient {
     }
 
     const child = fork(this.scriptPath, [], {
+      execPath: process.argv[0],
       execArgv: resolveWorkerExecArgv(),
       serialization: "json",
       stdio: ["ignore", "ignore", "ignore", "ipc"],
