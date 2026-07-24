@@ -20,6 +20,8 @@ const ENVIRONMENT_INPUTS = [
   "scripts/crabbox-wrapper.mjs",
 ];
 
+const TESTBOX_LEASE_TIMEOUT_MS = 120_000;
+
 function optionValue(args, name, fallback = "") {
   const shortName = name.replace(/^--/u, "-");
   for (let index = 0; index < args.length; index += 1) {
@@ -38,6 +40,8 @@ function git(repoRoot, args) {
   return execFileSync("git", ["-C", repoRoot, ...args], {
     encoding: "utf8",
     env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null" },
+    killSignal: "SIGKILL",
+    timeout: TESTBOX_LEASE_TIMEOUT_MS,
   }).trim();
 }
 
