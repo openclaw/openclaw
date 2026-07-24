@@ -76,11 +76,19 @@ export function resolveInitialThinkLevel(params: {
   });
 }
 
-/** Marks only request parameters that OpenClaw applies to provider egress. */
+/** Marks only request parameters that OpenClaw applies to provider egress.
+ * Filters out `transport` since it is a transport-level setting, not a
+ * stream parameter override — including it would cause the Codex harness
+ * to reject the request and fall back to the embedded runtime, which
+ * silently ignores the authored WebSocket transport. */
 export function resolveRequestStreamTransportOverrides(
   streamParams: RunEmbeddedAgentParams["streamParams"],
 ): "present" | undefined {
-  return streamParams && Object.keys(streamParams).length > 0 ? "present" : undefined;
+  if (!streamParams) {
+    return undefined;
+  }
+  const keys = Object.keys(streamParams).filter((k) => k !== "transport");
+  return keys.length > 0 ? "present" : undefined;
 }
 
 export function resolveInitialEmbeddedRunModel(params: {
