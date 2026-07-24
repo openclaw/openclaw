@@ -4,6 +4,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import net from "node:net";
+import type { Readable, Writable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import { URL } from "node:url";
 import { ensureDebugProxyCa } from "./ca.js";
@@ -36,7 +37,7 @@ function allowsDirectConnectWithManagedProxy(env: NodeJS.ProcessEnv = process.en
   return isTruthyEnvValue(env[DEBUG_PROXY_DIRECT_CONNECT_OVERRIDE]);
 }
 
-function assertDebugProxyDirectUpstreamAllowed(env: NodeJS.ProcessEnv = process.env): void {
+export function assertDebugProxyDirectUpstreamAllowed(env: NodeJS.ProcessEnv = process.env): void {
   if (!isManagedProxyActive(env) || allowsDirectConnectWithManagedProxy(env)) {
     return;
   }
@@ -71,7 +72,7 @@ function createProxyCaptureRecorder(params: {
   };
 }
 
-function parseConnectTarget(rawTarget: string | undefined): {
+export function parseConnectTarget(rawTarget: string | undefined): {
   hostname: string;
   port: number;
 } {
@@ -170,6 +171,85 @@ function finishProxyResponseAfterUpstreamError(res: ServerResponse): void {
   res.end(BAD_GATEWAY_BODY);
 }
 
+/**
+ * Forwards an upstream HTTP response body with Node's native pipe backpressure.
+ * Preview capture stays a separate `data` observer; client abort cancels upstream;
+ * upstream errors keep the proxy's pre-header 502 / post-header abort hooks.
+ */
+export function pipeUpstreamBodyToClient(params: {
+  upstreamRes: Readable;
+  res: Writable;
+  onChunk: (buffer: Buffer) => void;
+  onEnd: () => void;
+  onUpstreamError: (error: Error) => void;
+}): void {
+  const { upstreamRes, res, onChunk, onEnd, onUpstreamError } = params;
+  let closed = false;
+
+  const cancelUpstream = (): void => {
+    try {
+      upstreamRes.unpipe(res);
+    } catch {
+      // ignore unpipe races after destroy
+    }
+    if (!upstreamRes.destroyed) {
+      upstreamRes.destroy();
+    }
+  };
+
+  // Client left early (abort/reset): stop reading upstream so a dead socket
+  // cannot keep buffering response bytes or throw write-after-end crashes.
+  const onClientGone = (): void => {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    cancelUpstream();
+  };
+
+  res.on("close", () => {
+    // writableFinished is ServerResponse-specific; Writable may omit it.
+    const finished = "writableFinished" in res && Boolean((res as ServerResponse).writableFinished);
+    if (!finished) {
+      onClientGone();
+    }
+  });
+  res.on("error", onClientGone);
+
+  // Independent capture observer. pipe() owns write backpressure and ending res.
+  upstreamRes.on("data", (chunk: Buffer | string) => {
+    if (closed) {
+      return;
+    }
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    onChunk(buffer);
+  });
+
+  upstreamRes.on("end", () => {
+    if (closed) {
+      return;
+    }
+    onEnd();
+  });
+
+  upstreamRes.on("error", (error: Error) => {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    try {
+      upstreamRes.unpipe(res);
+    } catch {
+      // ignore
+    }
+    onUpstreamError(error);
+  });
+
+  // Native contract: Readable.pipe pauses the source when the destination
+  // applies backpressure and resumes on drain; ends res when upstream ends.
+  upstreamRes.pipe(res);
+}
+
 export async function startDebugProxyServer(params: {
   host?: string;
   port?: number;
@@ -247,30 +327,32 @@ export async function startDebugProxyServer(params: {
         },
         (upstreamRes) => {
           const responseCapture = createBodyPreviewCapture();
-          upstreamRes.on("data", (chunk) => {
-            const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-            appendBodyPreviewCapture(responseCapture, buffer);
-            res.write(buffer);
-          });
-          upstreamRes.on("end", () => {
-            recordTargetEvent({
-              direction: "inbound",
-              kind: "response",
-              status: upstreamRes.statusCode ?? undefined,
-              headersJson: JSON.stringify(upstreamRes.headers),
-              ...finishBodyPreviewCapture(responseCapture),
-            });
-            res.end();
-          });
-          upstreamRes.on("error", (error) => {
-            recordTargetEvent({
-              direction: "inbound",
-              kind: "error",
-              errorText: error.message,
-            });
-            finishProxyResponseAfterUpstreamError(res);
-          });
+          // Headers before pipe so the first body chunk cannot race an implicit writeHead.
           res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
+          pipeUpstreamBodyToClient({
+            upstreamRes,
+            res,
+            onChunk: (buffer) => {
+              appendBodyPreviewCapture(responseCapture, buffer);
+            },
+            onEnd: () => {
+              recordTargetEvent({
+                direction: "inbound",
+                kind: "response",
+                status: upstreamRes.statusCode ?? undefined,
+                headersJson: JSON.stringify(upstreamRes.headers),
+                ...finishBodyPreviewCapture(responseCapture),
+              });
+            },
+            onUpstreamError: (error) => {
+              recordTargetEvent({
+                direction: "inbound",
+                kind: "error",
+                errorText: error.message,
+              });
+              finishProxyResponseAfterUpstreamError(res);
+            },
+          });
         },
       );
       req.on("data", (chunk) => {

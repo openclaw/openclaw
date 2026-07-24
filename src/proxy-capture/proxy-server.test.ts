@@ -8,10 +8,15 @@ import {
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { PassThrough, Writable } from "node:stream";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import type { DebugProxySettings } from "./env.js";
-import { startDebugProxyServer } from "./proxy-server.js";
+import {
+  parseConnectTarget,
+  pipeUpstreamBodyToClient,
+  startDebugProxyServer,
+} from "./proxy-server.js";
 import { closeDebugProxyCaptureStore, getDebugProxyCaptureStore } from "./store.sqlite.js";
 
 let testRoot: string | undefined;
@@ -232,6 +237,28 @@ afterEach(async () => {
   await cleanupTestRoot();
 });
 
+describe("parseConnectTarget", () => {
+  it("parses bracketed IPv6 CONNECT targets safely", () => {
+    expect(parseConnectTarget("[::1]:8443")).toEqual({
+      hostname: "::1",
+      port: 8443,
+    });
+  });
+
+  it("parses unbracketed host:port CONNECT targets", () => {
+    expect(parseConnectTarget("api.openai.com:443")).toEqual({
+      hostname: "api.openai.com",
+      port: 443,
+    });
+  });
+
+  it("rejects invalid CONNECT ports", () => {
+    expect(() => parseConnectTarget("[::1]:99999")).toThrow("Invalid CONNECT target port");
+    expect(() => parseConnectTarget("api.openai.com:1e3")).toThrow("Invalid CONNECT target port");
+    expect(() => parseConnectTarget("api.openai.com:0x50")).toThrow("Invalid CONNECT target port");
+  });
+});
+
 describe("startDebugProxyServer", () => {
   it("caps UTF-8 previews on character boundaries while forwarding full bodies", async () => {
     const settings = await makeSettings();
@@ -317,4 +344,201 @@ describe("startDebugProxyServer", () => {
       await origin.stop();
     }
   });
+
+  it("survives a mid-response client abort and still serves later requests", async () => {
+    const settings = await makeSettings();
+    const origin = await startStreamingOrigin();
+    const proxy = await startDebugProxyServer({ settings });
+
+    try {
+      const proxyUrl = new URL(proxy.proxyUrl);
+      await new Promise<void>((resolve, reject) => {
+        const req = httpRequest(
+          {
+            host: proxyUrl.hostname,
+            port: Number(proxyUrl.port),
+            method: "GET",
+            path: origin.url,
+            headers: { connection: "close" },
+          },
+          (res) => {
+            res.once("data", () => {
+              // Abort after the first chunk so the proxy must cancel upstream
+              // without an unhandled write-after-end crash.
+              req.destroy();
+              resolve();
+            });
+            res.on("error", () => {
+              // expected when the client tears down mid-body
+            });
+          },
+        );
+        req.on("error", () => {
+          // destroy can surface as a request error; still treat as success if
+          // the subsequent healthy request works.
+          resolve();
+        });
+        req.setTimeout(5_000, () => reject(new Error("client abort timed out")));
+        req.end();
+      });
+
+      // Give the proxy a tick to finish cancel cleanup before the next request.
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 50);
+      });
+
+      const healthy = await getThroughProxy(proxy.proxyUrl, origin.healthyUrl);
+      expect(healthy).toMatchObject({ body: "ok", complete: true, statusCode: 200 });
+    } finally {
+      await proxy.stop();
+      await origin.stop();
+    }
+  });
 });
+
+describe("pipeUpstreamBodyToClient", () => {
+  it("uses native pipe backpressure and still captures chunks", async () => {
+    const upstream = new PassThrough({ highWaterMark: 16 });
+    const written: string[] = [];
+    const chunks: string[] = [];
+    let releaseFirstWrite: (() => void) | undefined;
+    const firstWriteBlocked = new Promise<void>((resolve) => {
+      releaseFirstWrite = resolve;
+    });
+    let writeCount = 0;
+    const downstream = new Writable({
+      highWaterMark: 1,
+      write(chunk, _encoding, callback) {
+        writeCount += 1;
+        written.push(Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk));
+        if (writeCount === 1) {
+          // Hold the first write open so pipe applies backpressure to upstream.
+          void firstWriteBlocked.then(() => callback());
+          return;
+        }
+        callback();
+      },
+    });
+    const onEnd = vi.fn();
+    const onUpstreamError = vi.fn();
+
+    pipeUpstreamBodyToClient({
+      upstreamRes: upstream,
+      res: downstream,
+      onChunk: (buffer) => {
+        chunks.push(buffer.toString("utf8"));
+      },
+      onEnd,
+      onUpstreamError,
+    });
+
+    const done = new Promise<void>((resolve, reject) => {
+      downstream.on("finish", () => resolve());
+      downstream.on("error", reject);
+      upstream.on("error", reject);
+    });
+
+    expect(upstream.write("aaaa")).toBe(true);
+    // Fill past destination highWaterMark while first write is blocked.
+    const secondWriteAccepted = upstream.write("bbbb");
+    // Native pipe may refuse further reads until drain; either paused or
+    // buffered without completing until we release the first write.
+    expect(chunks[0]).toBe("aaaa");
+    releaseFirstWrite?.();
+    if (!secondWriteAccepted) {
+      await new Promise<void>((resolve) => {
+        upstream.once("drain", resolve);
+      });
+    }
+    upstream.end("cccc");
+    await done;
+
+    expect(chunks.join("")).toBe("aaaabbbbcccc");
+    expect(written.join("")).toBe("aaaabbbbcccc");
+    expect(onEnd).toHaveBeenCalledOnce();
+    expect(onUpstreamError).not.toHaveBeenCalled();
+  });
+
+  it("destroys the upstream source when the client leaves before end", async () => {
+    const upstream = new PassThrough();
+    const downstream = new PassThrough();
+    const onEnd = vi.fn();
+
+    pipeUpstreamBodyToClient({
+      upstreamRes: upstream,
+      res: downstream,
+      onChunk: () => {},
+      onEnd,
+      onUpstreamError: () => {},
+    });
+
+    upstream.write("partial");
+    // Simulate client abort: close without finishing a complete response.
+    Object.defineProperty(downstream, "writableFinished", {
+      configurable: true,
+      value: false,
+    });
+    downstream.destroy();
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    expect(upstream.destroyed).toBe(true);
+    expect(onEnd).not.toHaveBeenCalled();
+  });
+});
+
+async function startStreamingOrigin(): Promise<{
+  healthyUrl: string;
+  stop: () => Promise<void>;
+  url: string;
+}> {
+  const server = createHttpServer((req, res) => {
+    if (req.url === "/healthy") {
+      res.writeHead(200, {
+        "content-length": 2,
+        "content-type": "text/plain; charset=utf-8",
+      });
+      res.end("ok");
+      return;
+    }
+    res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+    let i = 0;
+    const timer = setInterval(() => {
+      if (res.destroyed || res.writableEnded) {
+        clearInterval(timer);
+        return;
+      }
+      res.write(`chunk-${i++}\n`);
+      if (i > 200) {
+        clearInterval(timer);
+        res.end();
+      }
+    }, 5);
+    res.on("close", () => {
+      clearInterval(timer);
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  const address = server.address() as AddressInfo;
+  const base = `http://127.0.0.1:${address.port}`;
+  return {
+    healthyUrl: `${base}/healthy`,
+    url: `${base}/stream`,
+    stop: async () =>
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve();
+        });
+      }),
+  };
+}
