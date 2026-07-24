@@ -35,6 +35,7 @@ import type {
   ZaloGroupContext,
   ZaloGroup,
   ZaloGroupMember,
+  ZaloInboundMedia,
   ZaloInboundMessage,
   ZaloSendOptions,
   ZaloSendResult,
@@ -214,6 +215,49 @@ function normalizeMessageContent(content: unknown): string {
   } catch {
     return "";
   }
+}
+
+/**
+ * Detect whether an inbound zca-js message carries a photo attachment, and
+ * extract its CDN URL + thumbnail if so. zca-js delivers photos as
+ * `TAttachmentContent` objects with `{type:"photo", href, thumb, ...}` -
+ * see src/models/Message.ts in the zca-js repo. The `href` field is a
+ * public Zalo CDN URL that does not require auth to GET.
+ *
+ * Returns null for plain-text or non-photo content (links, files, stickers
+ * etc.) - those flow through `normalizeMessageContent` as text. Detection is
+ * deliberately CONSERVATIVE: a photo only matches on an explicit
+ * `type === "photo"` or a recognisable image file extension in the href.
+ *
+ * We do NOT treat `thumb` presence as a photo signal: zca-js link previews
+ * (`type === "link"`) also carry `href` + `thumb`, so a thumb-only match
+ * would mislabel a webpage link as an image and make the runtime fetch the
+ * non-image href and tag the bytes as image/jpeg (maintainer review on
+ * openclaw#84924). `type === "link"` is rejected outright.
+ */
+export function extractInboundMedia(content: unknown): ZaloInboundMedia | null {
+  if (!content || typeof content !== "object") {
+    return null;
+  }
+  const record = content as Record<string, unknown>;
+  const href = typeof record.href === "string" ? record.href.trim() : "";
+  if (!href) {
+    return null;
+  }
+  const type = typeof record.type === "string" ? record.type : "";
+  if (type === "link") {
+    return null;
+  }
+  const looksLikeImage = type === "photo" || /\.(jpe?g|png|gif|webp|bmp)(\?|$)/i.test(href);
+  if (!looksLikeImage) {
+    return null;
+  }
+  const thumbUrl = typeof record.thumb === "string" ? record.thumb.trim() : "";
+  return {
+    kind: "image",
+    url: href,
+    thumbUrl: thumbUrl || undefined,
+  };
 }
 
 function resolveInboundTimestamp(rawTs: unknown): number {
@@ -902,6 +946,7 @@ export function normalizeZaloInboundMessage(
     normalizedOwnUserId && quoteOwnerId && quoteOwnerId === normalizedOwnUserId,
   );
   const eventMessage = buildEventMessage(data);
+  const media = extractInboundMedia(data.content);
   return {
     threadId,
     isGroup,
@@ -921,6 +966,7 @@ export function normalizeZaloInboundMessage(
     quotedOwnerId: quoteOwnerId || undefined,
     quotedBody: quotedBody || undefined,
     eventMessage,
+    media: media ?? undefined,
     raw: message,
   };
 }
