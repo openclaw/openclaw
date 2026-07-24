@@ -195,6 +195,50 @@ describe("doctor canonical session delivery state", () => {
     });
   });
 
+  it("recovers an external legacy route after an internal transition stamp", () => {
+    const stateDir = fs.realpathSync(tempDirs.make("openclaw-delivery-internal-stamp-"));
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    insertSessionRow(env, "agent:main:stamped-internal", {
+      sessionId: "stamped-internal-session",
+      updatedAt: 10,
+      delivery: { kind: "internal" },
+      lastChannel: "telegram",
+      lastTo: "-100456",
+      lastAccountId: "bot",
+    });
+
+    expect(repairCanonicalSessionDeliveryStates({ apply: true, cfg: {}, env })).toEqual({
+      found: 1,
+      repaired: 1,
+      scannedStores: 1,
+    });
+    expect(JSON.parse(readEntryJson(env, "agent:main:stamped-internal")).delivery).toMatchObject({
+      kind: "external",
+      context: { channel: "telegram", to: "-100456", accountId: "bot" },
+    });
+  });
+
+  it("promotes legacy internal origin chat type before removing origin", () => {
+    const stateDir = fs.realpathSync(tempDirs.make("openclaw-delivery-internal-chat-type-"));
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    insertSessionRow(env, "agent:main:internal-chat", {
+      sessionId: "internal-chat-session",
+      updatedAt: 10,
+      channel: "webchat",
+      origin: { provider: "webchat", chatType: "direct" },
+    });
+
+    expect(repairCanonicalSessionDeliveryStates({ apply: true, cfg: {}, env })).toEqual({
+      found: 1,
+      repaired: 1,
+      scannedStores: 1,
+    });
+    expect(JSON.parse(readEntryJson(env, "agent:main:internal-chat"))).toMatchObject({
+      chatType: "direct",
+      delivery: { kind: "internal" },
+    });
+  });
+
   it("skips structurally invalid row JSON while repairing valid sessions", () => {
     const stateDir = fs.realpathSync(tempDirs.make("openclaw-delivery-invalid-row-"));
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };

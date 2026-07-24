@@ -649,12 +649,22 @@ export function normalizeLegacySessionEntryDelivery(entry: SessionEntry): Sessio
     context,
     origin: legacy.origin,
   });
-  const delivery =
+  const recoverLegacyDelivery =
     isCanonicalSessionDeliveryState(entry.delivery) &&
-    !(entry.delivery.kind === "none" && migratedDelivery.kind !== "none")
+    ((entry.delivery.kind === "none" && migratedDelivery.kind !== "none") ||
+      (entry.delivery.kind === "internal" && migratedDelivery.kind === "external"));
+  const delivery =
+    isCanonicalSessionDeliveryState(entry.delivery) && !recoverLegacyDelivery
       ? entry.delivery
       : migratedDelivery;
   const next = { ...entry, delivery } as LegacySessionDeliveryEntry;
+  const legacyChatType = legacy.origin?.chatType;
+  if (
+    next.chatType == null &&
+    (legacyChatType === "direct" || legacyChatType === "group" || legacyChatType === "channel")
+  ) {
+    next.chatType = legacyChatType;
+  }
   for (const key of LEGACY_SESSION_DELIVERY_KEYS) {
     delete next[key];
   }
