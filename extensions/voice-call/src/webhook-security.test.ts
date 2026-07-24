@@ -648,6 +648,66 @@ describe("verifyTwilioWebhook", () => {
     expect(result.verificationUrl).toBe(urlWithQuery);
   });
 
+  it("pins Twilio publicUrl verification to the configured path behind a path-rewriting proxy", () => {
+    const authToken = "test-auth-token";
+    // Twilio signs the public URL it was configured to call, including the proxy prefix.
+    const publicUrl = "https://voice.openclaw.ai/proxy/voice/webhook";
+    const signedUrl = `${publicUrl}?callId=abc`;
+    const postBody = "CallSid=CS123&CallStatus=completed&From=%2B15550000000";
+
+    const signature = twilioSignature({ authToken, url: signedUrl, postBody });
+
+    const result = verifyTwilioWebhook(
+      {
+        headers: {
+          host: "voice.openclaw.ai",
+          "x-forwarded-proto": "https",
+          "x-twilio-signature": signature,
+        },
+        // Reverse proxy rewrote the public /proxy/voice/webhook path to the local path.
+        rawBody: postBody,
+        url: "http://local/voice/webhook?callId=abc",
+        method: "POST",
+        query: { callId: "abc" },
+      },
+      authToken,
+      { publicUrl },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.verificationUrl).toBe(signedUrl);
+  });
+
+  it("rejects a Twilio signature for the local path when publicUrl configures a different path", () => {
+    const authToken = "test-auth-token";
+    const publicUrl = "https://voice.openclaw.ai/proxy/voice/webhook";
+    // Signature computed over the local (proxy-rewritten) path, not the configured public path.
+    const localSignedUrl = "https://voice.openclaw.ai/voice/webhook?callId=abc";
+    const postBody = "CallSid=CS123&CallStatus=completed&From=%2B15550000000";
+
+    const signature = twilioSignature({ authToken, url: localSignedUrl, postBody });
+
+    const result = verifyTwilioWebhook(
+      {
+        headers: {
+          host: "voice.openclaw.ai",
+          "x-forwarded-proto": "https",
+          "x-twilio-signature": signature,
+        },
+        rawBody: postBody,
+        url: "http://local/voice/webhook?callId=abc",
+        method: "POST",
+        query: { callId: "abc" },
+      },
+      authToken,
+      { publicUrl },
+    );
+
+    // Before the fix the request path was used, so this local-path signature validated;
+    // now verification is bound to the configured public path and rejects it.
+    expect(result.ok).toBe(false);
+  });
+
   it("redacts query params from invalid Twilio signature diagnostics", () => {
     const result = verifyTwilioWebhook(
       {
