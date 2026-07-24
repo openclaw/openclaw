@@ -16,7 +16,7 @@ const DREAMS_FILENAMES = ["DREAMS.md", "dreams.md"] as const;
 const DEEP_START_MARKER = "<!-- openclaw:dreaming:deep:start -->";
 const DEEP_END_MARKER = "<!-- openclaw:dreaming:deep:end -->";
 const DREAMS_FILE_LOCKS_KEY = Symbol.for("openclaw.memoryCore.dreamingNarrative.fileLocks");
-export const MEMORY_DREAMING_MARKDOWN_MAX_BYTES = 16 * 1024 * 1024;
+const MEMORY_DREAMING_MARKDOWN_MAX_BYTES = 16 * 1024 * 1024;
 
 type DreamsFileLockEntry = {
   withLock: ReturnType<typeof createAsyncLock>;
@@ -34,7 +34,7 @@ type ManagedMarkdownUpdateParams = {
 
 const dreamsFileLocks = resolveGlobalMap<string, DreamsFileLockEntry>(DREAMS_FILE_LOCKS_KEY);
 
-export function rethrowDreamingMarkdownReadError(err: unknown, filePath: string): never {
+function rethrowDreamingMarkdownReadError(err: unknown, filePath: string): never {
   if (extractErrorCode(err) === "too-large") {
     throw new Error(
       `Dreaming left ${filePath} unchanged because it exceeds ${MEMORY_DREAMING_MARKDOWN_MAX_BYTES} bytes. ` +
@@ -197,7 +197,7 @@ async function replaceManagedMarkdownBlockStreaming(
       await fs.rm(withheldPath, { force: true }).catch(() => undefined);
     };
     const writeManagedBlock = async (trailingText: string): Promise<void> => {
-      await output?.write(`${managedBlock}`);
+      await output?.write(managedBlock);
       if (
         trailingText.length > 0 &&
         !trailingText.startsWith("\n") &&
