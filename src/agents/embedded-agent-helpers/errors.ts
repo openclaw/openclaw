@@ -1012,6 +1012,19 @@ function isUnsupportedImageInputErrorMessage(raw: string | undefined): boolean {
   );
 }
 
+function isMiniMaxSensitiveFailoverMessage(raw: string, provider?: string): boolean {
+  if (!isProvider(provider, "minimax")) {
+    return false;
+  }
+  const normalized = normalizeOptionalLowercaseString(raw) ?? "";
+  // MiniMax emits provider-specific 1027/new_sensitive errors for output moderation.
+  // Keep this narrower than generic content-policy text so unrelated safety blocks stay terminal.
+  return (
+    /\b(?:output\s+)?new_sensitive\b/.test(normalized) ||
+    (/\b1027\b/.test(normalized) && /\bsensitive\b/.test(normalized))
+  );
+}
+
 function classifyFailoverClassificationFromMessage(
   raw: string,
   provider?: string,
@@ -1034,6 +1047,9 @@ function classifyFailoverClassificationFromMessage(
   }
   if (isContextOverflowError(raw)) {
     return { kind: "context_overflow" };
+  }
+  if (isMiniMaxSensitiveFailoverMessage(raw, provider)) {
+    return toReasonClassification("rate_limit");
   }
   const reasonFrom402Text = classifyFailoverReasonFrom402Text(raw);
   if (reasonFrom402Text) {
