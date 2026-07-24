@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { compileSafeRegexDetailed } from "../security/safe-regex.js";
 import { matchesExecAllowlistPattern } from "./exec-allowlist-pattern.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 import { resolveExecWrapperTrustPlan } from "./exec-wrapper-trust-plan.js";
@@ -333,6 +334,17 @@ function matchArgPattern(argPattern: string, argv: string[], platform?: string |
   const argsString =
     sep === "\x00" ? renderGeneratedArgPatternSubject(argv) : argv.slice(1).join(sep);
   try {
+    // Safety-check via compileSafeRegexDetailed (nested-repetition / invalid).
+    // That helper trims before compiling, which would change whitespace semantics
+    // of legacy allowlist entries. Reject unsafe patterns, then compile the
+    // original argPattern text so match behavior stays exact.
+    const safety = compileSafeRegexDetailed(argPattern);
+    if (!safety.regex) {
+      if (safety.reason === "unsafe-nested-repetition") {
+        console.warn("[exec-approvals] Rejected argPattern with unsafe nested repetition");
+      }
+      return false;
+    }
     const regex = new RegExp(argPattern);
     if (regex.test(argsString)) {
       return true;

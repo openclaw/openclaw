@@ -1,7 +1,8 @@
 // Covers exec command resolution and allowlist paths.
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { compileSafeRegex, compileSafeRegexDetailed } from "../security/safe-regex.js";
 import { makeExecutable, makePathEnv, makeTempDir } from "./exec-approvals-test-helpers.js";
 import {
   evaluateExecAllowlist,
@@ -17,6 +18,8 @@ import {
   resolvePolicyTargetCandidatePath,
   resolvePolicyTargetTrustPath,
 } from "./exec-approvals.js";
+import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
+import { matchAllowlist } from "./exec-command-resolution.js";
 
 function buildNestedEnvShellCommand(params: {
   envExecutable: string;
@@ -575,5 +578,229 @@ describe("exec-command-resolution", () => {
         String.raw`C:\Users\demo\AI\system\openclaw`,
       ),
     ).toBeUndefined();
+  });
+
+  describe("matchArgPattern ReDoS safety via hasNestedRepetition guard", () => {
+    const resolution = {
+      rawExecutable: "python3",
+      resolvedPath: "/usr/bin/python3",
+      resolvedRealPath: "/usr/bin/python3",
+      executableName: "python3",
+    };
+
+    it("rejects ReDoS-vulnerable argPattern instead of hanging", () => {
+      // (a+)+$ is the classic ReDoS pattern — nested unbounded repetition.
+      // Before the hasNestedRepetition guard this would hang on crafted input.
+      const redosEntry: ExecAllowlistEntry = {
+        pattern: "/usr/bin/python3",
+        argPattern: "(a+)+$",
+      };
+      const entries: ExecAllowlistEntry[] = [redosEntry];
+      // Must return null (no match) — the pattern is rejected as unsafe.
+      expect(
+        matchAllowlist(entries, resolution, ["python3", "aaaaaaaaaaaaaaaaaaaaaaaa!"]),
+      ).toBeNull();
+    });
+
+    it("still matches a safe regex argPattern correctly", () => {
+      const safeEntry: ExecAllowlistEntry = {
+        pattern: "/usr/bin/python3",
+        argPattern: "^script\\.py$",
+      };
+      const entries: ExecAllowlistEntry[] = [safeEntry];
+      expect(matchAllowlist(entries, resolution, ["python3", "script.py"])).toBe(safeEntry);
+      expect(matchAllowlist(entries, resolution, ["python3", "other.py"])).toBeNull();
+    });
+
+    it("rejects an invalid regex argPattern gracefully", () => {
+      const invalidEntry: ExecAllowlistEntry = {
+        pattern: "/usr/bin/python3",
+        argPattern: "[unclosed",
+      };
+      const entries: ExecAllowlistEntry[] = [invalidEntry];
+      expect(matchAllowlist(entries, resolution, ["python3", "anything"])).toBeNull();
+    });
+
+    it("rejects nested-repetition variants beyond the classic (a+)+$", () => {
+      // Several nested-repetition patterns that hasNestedRepetition flags as unsafe.
+      const variants = ["(\\d+)+$", "([a-z]+)*$", "(x+x+)+y"];
+      for (const pattern of variants) {
+        const entry: ExecAllowlistEntry = {
+          pattern: "/usr/bin/python3",
+          argPattern: pattern,
+        };
+        expect(
+          matchAllowlist([entry], resolution, ["python3", "test-input"]),
+          `pattern "${pattern}" should be rejected`,
+        ).toBeNull();
+      }
+    });
+
+    it("falls back to path-only entry when argPattern is ReDoS-unsafe", () => {
+      const pathOnlyEntry: ExecAllowlistEntry = { pattern: "/usr/bin/python3" };
+      const redosEntry: ExecAllowlistEntry = {
+        pattern: "/usr/bin/python3",
+        argPattern: "(a+)+$",
+      };
+      const entries: ExecAllowlistEntry[] = [pathOnlyEntry, redosEntry];
+      // The unsafe argPattern entry is skipped; the path-only entry is returned.
+      expect(matchAllowlist(entries, resolution, ["python3", "a.py"])).toBe(pathOnlyEntry);
+    });
+
+    // --- Enhanced proof-of-rejection tests below ---
+
+    it("compileSafeRegex directly rejects ReDoS patterns that new RegExp would accept", () => {
+      // This is the core before/after proof: new RegExp() happily compiles
+      // these patterns (the vulnerability), but compileSafeRegex rejects them.
+      const redosPatterns = [
+        "(a+)+$",
+        "(\\d+)+$",
+        "([a-z]+)*$",
+        "(x+x+)+y",
+        "(a|a?)+$",
+        "(.*a){25}",
+        "(\\w+)+$",
+      ];
+      for (const pattern of redosPatterns) {
+        // BEFORE the guard: new RegExp succeeds — the pattern is syntactically valid JS regex
+        expect(
+          () => new RegExp(pattern),
+          `new RegExp("${pattern}") should not throw`,
+        ).not.toThrow();
+
+        // AFTER the guard: compileSafeRegex rejects it as unsafe
+        expect(
+          compileSafeRegex(pattern),
+          `compileSafeRegex("${pattern}") must return null`,
+        ).toBeNull();
+      }
+    });
+
+    it("compileSafeRegexDetailed returns unsafe-nested-repetition reason for ReDoS patterns", () => {
+      // Prove the structured rejection reason is correct — not just "rejected"
+      // but specifically "unsafe-nested-repetition".
+      const redosPatterns = [
+        "(a+)+$",
+        "(\\d+)+$",
+        "([a-z]+)*$",
+        "(x+x+)+y",
+        "(a|a?)+$",
+        "(\\w+)+$",
+      ];
+      for (const pattern of redosPatterns) {
+        const result = compileSafeRegexDetailed(pattern);
+        expect(result.regex, `regex for "${pattern}" must be null`).toBeNull();
+        expect(result.reason, `reason for "${pattern}"`).toBe("unsafe-nested-repetition");
+      }
+    });
+
+    it("compileSafeRegex accepts safe patterns and returns working RegExp instances", () => {
+      const safePatterns = [
+        { pattern: "^script\\.py$", input: "script.py", shouldMatch: true },
+        { pattern: "^--flag=\\w+$", input: "--flag=value", shouldMatch: true },
+        { pattern: "^(foo|bar)$", input: "baz", shouldMatch: false },
+        { pattern: "^[a-z0-9_-]+\\.txt$", input: "my-file_01.txt", shouldMatch: true },
+        { pattern: "install\\b", input: "install packages", shouldMatch: true },
+      ];
+      for (const { pattern, input, shouldMatch } of safePatterns) {
+        const regex = compileSafeRegex(pattern);
+        expect(regex, `compileSafeRegex("${pattern}") must return a RegExp`).toBeInstanceOf(RegExp);
+        expect(
+          regex!.test(input),
+          `"${pattern}" against "${input}" should ${shouldMatch ? "match" : "not match"}`,
+        ).toBe(shouldMatch);
+      }
+    });
+
+    it("matchAllowlist rejects all known ReDoS vectors end-to-end", () => {
+      // End-to-end integration: every known attack vector must be rejected
+      // through the full matchAllowlist → matchArgPattern → hasNestedRepetition path.
+      // The crafted input "aaaaaaaaaaaaaaaaaaaaaaaa!" would cause catastrophic
+      // backtracking in an unguarded engine.
+      const attackVectors = [
+        "(a+)+$",
+        "(\\d+)+$",
+        "([a-z]+)*$",
+        "(x+x+)+y",
+        "(a|a?)+$",
+        "(.*a){25}",
+        "(\\w+)+$",
+        "(a|aa)+$",
+      ];
+      const craftedInput = "aaaaaaaaaaaaaaaaaaaaaaaa!";
+      for (const pattern of attackVectors) {
+        const entry: ExecAllowlistEntry = {
+          pattern: "/usr/bin/python3",
+          argPattern: pattern,
+        };
+        expect(
+          matchAllowlist([entry], resolution, ["python3", craftedInput]),
+          `matchAllowlist must reject argPattern "${pattern}"`,
+        ).toBeNull();
+      }
+    });
+
+    it("returns within a bounded time even when given a ReDoS payload", () => {
+      // The guard rejects the pattern at compile time, so even a worst-case
+      // backtracking payload completes near-instantly.  We use a generous
+      // 500 ms budget — catastrophic backtracking would take minutes/hours.
+      const redosEntry: ExecAllowlistEntry = {
+        pattern: "/usr/bin/python3",
+        argPattern: "(a+)+$",
+      };
+      // 30 'a' characters followed by '!' — a classic backtracking bomb
+      const bomb = "a".repeat(30) + "!";
+      const start = performance.now();
+      const result = matchAllowlist([redosEntry], resolution, ["python3", bomb]);
+      const elapsed = performance.now() - start;
+      expect(result).toBeNull();
+      expect(elapsed, "must complete in < 500 ms (guard rejects at compile time)").toBeLessThan(
+        500,
+      );
+    });
+
+    it("emits a console.warn diagnostic when rejecting an unsafe argPattern", () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const redosEntry: ExecAllowlistEntry = {
+          pattern: "/usr/bin/python3",
+          argPattern: "(a+)+$",
+        };
+        matchAllowlist([redosEntry], resolution, ["python3", "input"]);
+        expect(warnSpy).toHaveBeenCalledOnce();
+        expect(warnSpy.mock.calls[0]?.[0]).toBe(
+          "[exec-approvals] Rejected argPattern with unsafe nested repetition",
+        );
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it("preserves leading/trailing whitespace semantics of original argPattern", () => {
+      // compileSafeRegexDetailed trims; compiling the original must not broaden matches.
+      const entry: ExecAllowlistEntry = {
+        pattern: "/usr/bin/python3",
+        argPattern: " script\\.py ",
+      };
+      const entries: ExecAllowlistEntry[] = [entry];
+      // Without surrounding spaces in argv, the untrimmed pattern must not match.
+      expect(matchAllowlist(entries, resolution, ["python3", "script.py"])).toBeNull();
+      // Exact whitespace in the joined args string matches the original pattern.
+      expect(matchAllowlist(entries, resolution, ["python3", " script.py "])).toBe(entry);
+    });
+
+    it("does not emit a warning for safe argPattern entries", () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const safeEntry: ExecAllowlistEntry = {
+          pattern: "/usr/bin/python3",
+          argPattern: "^script\\.py$",
+        };
+        matchAllowlist([safeEntry], resolution, ["python3", "script.py"]);
+        expect(warnSpy).not.toHaveBeenCalled();
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
   });
 });

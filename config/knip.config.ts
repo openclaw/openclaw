@@ -87,6 +87,7 @@ const repositoryScriptEntries = [
   "scripts/verify-stable-main-closeout.mjs!",
   "scripts/write-package-dist-inventory.ts!",
   "scripts/write-plugin-sdk-entry-dts.ts!",
+  "scripts/proof-exec-argpattern-redos.mjs!",
   "security/opengrep/check-rule-metadata.mjs!",
   "security/opengrep/compile-rules.mjs!",
   "skills/meme-maker/scripts/meme.mjs!",
