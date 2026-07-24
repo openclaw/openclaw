@@ -8,10 +8,7 @@ import {
   createChannelTestPluginBase,
   createDirectOutboundTestAdapter,
 } from "../test-utils/channel-plugins.js";
-import {
-  projectSessionDeliveryFields,
-  type SessionDeliveryProjection,
-} from "../utils/delivery-context.shared.js";
+import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import { installConnectedSessionStoreGatewaySuite } from "./test-helpers.connected-session-store.js";
@@ -49,7 +46,7 @@ const defaultRegistry = createRegistry([
   },
 ]);
 
-type StoredEntry = SessionEntry & SessionDeliveryProjection;
+type StoredEntry = SessionEntry & ReturnType<typeof projectSessionDeliveryFields>;
 
 type StoreEntries = Parameters<typeof writeSessionStore>[0]["entries"];
 
