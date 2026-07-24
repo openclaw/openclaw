@@ -1,6 +1,7 @@
 // Codex helper module supports config behavior.
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { isIP } from "node:net";
 import { homedir as readHomeDir, hostname as readHostName } from "node:os";
 import path from "node:path";
 import {
@@ -1344,7 +1345,10 @@ function isLoopbackWebSocketUrl(value: string): boolean {
     host === "127.0.0.1" ||
     host === "::1" ||
     host === "[::1]" ||
-    host.startsWith("127.")
+    // Guard with isIP so DNS hostnames like 127.evil.com don't bypass
+    // the remote-auth boundary — only literal IPv4 loopback addresses
+    // starting with 127. qualify.
+    (isIP(host) === 4 && host.startsWith("127."))
   );
 }
 
