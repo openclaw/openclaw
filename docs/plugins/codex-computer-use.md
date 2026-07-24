@@ -115,6 +115,16 @@ also tries to register the bundled Codex marketplace from
 as a fallback for legacy standalone installs. If setup still cannot make the
 MCP server available, the turn fails before the thread starts.
 
+Current desktop bundles ship the Computer Use plugin separately from its
+signed macOS service app. For isolated agent Codex homes, `autoInstall: true`
+and explicit `/codex computer-use install` therefore also copy the
+desktop-bundled `Codex Computer Use.app` into the canonical
+`$CODEX_HOME/computer-use/` location before app-server startup. OpenClaw uses
+the same quarantine-free `ditto` copy strategy as ChatGPT desktop and leaves an
+existing matching service app unchanged. When the desktop-bundled app changes,
+OpenClaw atomically refreshes the isolated copy so the plugin and service do not
+drift across upgrades.
+
 After changing Computer Use config, use `/new` or `/reset` in the affected
 chat before testing if an existing Codex thread has already started.
 
@@ -353,6 +363,13 @@ installed through the current app-server API.
 **Status says the MCP server is unavailable.** Re-run install once so MCP
 servers reload. If it remains unavailable, fix the Codex Computer Use app,
 Codex app-server MCP status, or macOS permissions.
+
+**A readiness `thread/start` times out and Codex logs say the Computer Use
+client was not found.** Newer thin plugin bundles expect the signed service app
+under the active `$CODEX_HOME`, while older bundles carried it inside the
+plugin. Enable `autoInstall` or run `/codex computer-use install` so OpenClaw
+can provision the desktop-bundled app into an isolated agent home. This repair
+requires ChatGPT.app or the legacy Codex.app to be installed locally.
 
 **Status or a probe times out on `computer-use.list_apps`.** The plugin and
 MCP server are present, but the local Computer Use bridge did not answer.

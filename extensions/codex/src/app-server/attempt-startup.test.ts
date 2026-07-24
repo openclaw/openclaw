@@ -674,7 +674,9 @@ describe("startCodexAttemptThread", () => {
     });
 
     await expect(run).rejects.toThrow("stop after option capture");
-    expect(clientFactory).toHaveBeenCalledWith(expect.objectContaining({ preparedAuth }));
+    expect(clientFactory).toHaveBeenCalledWith(
+      expect.objectContaining({ preparedAuth, pluginConfig }),
+    );
     expect(clientFactory.mock.calls[0]?.[0]?.preparedAuth).toBe(preparedAuth);
     expect(clientFactory).not.toHaveBeenCalledWith(
       expect.objectContaining({ authProfileId: expect.anything() }),

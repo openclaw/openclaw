@@ -30,6 +30,14 @@ const oauthMocks = vi.hoisted(() => ({
   refreshOpenAICodexToken: vi.fn(),
 }));
 
+const computerUseServiceMocks = vi.hoisted(() => ({
+  ensureCodexComputerUseServiceApp: vi.fn(async () => ({
+    status: "already_installed" as const,
+    changed: false,
+    message: "Computer Use service app is installed.",
+  })),
+}));
+
 const providerRuntimeMocks = vi.hoisted(() => ({
   formatProviderAuthProfileApiKeyWithPlugin: vi.fn(),
   refreshProviderOAuthCredentialWithPlugin: vi.fn(
@@ -117,12 +125,17 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
   };
 });
 
+vi.mock("./computer-use-service.js", () => ({
+  ensureCodexComputerUseServiceApp: computerUseServiceMocks.ensureCodexComputerUseServiceApp,
+}));
+
 afterEach(() => {
   vi.unstubAllEnvs();
   clearRuntimeAuthProfileStoreSnapshots();
   oauthMocks.refreshOpenAICodexToken.mockReset();
   providerRuntimeMocks.formatProviderAuthProfileApiKeyWithPlugin.mockReset();
   providerRuntimeMocks.refreshProviderOAuthCredentialWithPlugin.mockClear();
+  computerUseServiceMocks.ensureCodexComputerUseServiceApp.mockClear();
 });
 
 function createStartOptions(
@@ -239,6 +252,36 @@ describe("bridgeCodexAppServerStartOptions", () => {
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
+  });
+
+  it("provisions the Computer Use service app before auto-install startup", async () => {
+    await withTempDir("openclaw-codex-computer-use-service-", async (agentDir) => {
+      const startOptions = createStartOptions();
+      const codexHome = resolveCodexAppServerHomeDir(agentDir);
+
+      await bridgeCodexAppServerStartOptions({
+        startOptions,
+        agentDir,
+        pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
+      });
+
+      expect(computerUseServiceMocks.ensureCodexComputerUseServiceApp).toHaveBeenCalledWith({
+        codexHome,
+        appServerCommand: startOptions.command,
+      });
+    });
+  });
+
+  it("does not provision the Computer Use service app without auto-install authorization", async () => {
+    await withTempDir("openclaw-codex-computer-use-service-", async (agentDir) => {
+      await bridgeCodexAppServerStartOptions({
+        startOptions: createStartOptions(),
+        agentDir,
+        pluginConfig: { computerUse: { enabled: true, autoInstall: false } },
+      });
+
+      expect(computerUseServiceMocks.ensureCodexComputerUseServiceApp).not.toHaveBeenCalled();
+    });
   });
 
   it("uses the native user Codex home for coexistence mode", async () => {
