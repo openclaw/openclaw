@@ -31,18 +31,22 @@ function readMcpAppResourceUri(item: CodexThreadItem): string | undefined {
   return uri?.startsWith("ui://") ? uri : undefined;
 }
 
-function readMcpToolResult(item: CodexThreadItem): NativeMcpCallToolResult | undefined {
+export function readMcpToolResult(item: CodexThreadItem): NativeMcpCallToolResult | undefined {
   const result = asRecord(item.result);
   if (!result || !Array.isArray(result.content)) {
     return undefined;
   }
+  const resultMeta = asRecord(result._meta);
   return {
     content: result.content as JsonValue[],
     ...(result.structuredContent !== undefined
       ? { structuredContent: result.structuredContent as JsonValue }
       : {}),
     ...(result.isError === true ? { isError: true } : {}),
-    ...(result._meta !== undefined ? { _meta: result._meta as JsonValue } : {}),
+    // Codex serializes absent MCP result metadata as null. The MCP SDK accepts
+    // only an object when `_meta` is present, so forwarding null makes Apps
+    // discard the complete tool-result notification during schema validation.
+    ...(resultMeta ? { _meta: resultMeta as JsonValue } : {}),
   };
 }
 

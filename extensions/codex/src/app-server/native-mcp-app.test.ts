@@ -1,7 +1,10 @@
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { CodexAppServerClient } from "./client.js";
-import { createCodexNativeMcpAppResultDetailsPreparer } from "./native-mcp-app.js";
+import {
+  createCodexNativeMcpAppResultDetailsPreparer,
+  readMcpToolResult,
+} from "./native-mcp-app.js";
 
 function createAttempt(enabled = true): EmbeddedRunAttemptParams {
   return {
@@ -47,21 +50,21 @@ describe("Codex native MCP Apps", () => {
       attempt: createAttempt(),
     });
 
-    await expect(
-      prepare?.({
-        id: "call-options",
-        type: "mcpToolCall",
-        server: "doordash",
-        tool: "show_options",
-        status: "completed",
-        appContext: { connectorId: "doordash", resourceUri: "ui://doordash/options.html" },
-        arguments: { limit: 4 },
-        result: {
-          content: [{ type: "text", text: "Found four restaurants." }],
-          structuredContent: { stores: [{ id: "store-1" }] },
-        },
-      } as never),
-    ).resolves.toMatchObject({
+    const details = await prepare?.({
+      id: "call-options",
+      type: "mcpToolCall",
+      server: "doordash",
+      tool: "show_options",
+      status: "completed",
+      appContext: { connectorId: "doordash", resourceUri: "ui://doordash/options.html" },
+      arguments: { limit: 4 },
+      result: {
+        content: [{ type: "text", text: "Found four restaurants." }],
+        structuredContent: { stores: [{ id: "store-1" }] },
+        _meta: null,
+      },
+    } as never);
+    expect(details).toMatchObject({
       mcpAppPreview: {
         kind: "canvas",
         view: { id: expect.stringMatching(/^mcp-app-/u), title: "show_options UI" },
@@ -82,6 +85,21 @@ describe("Codex native MCP Apps", () => {
       threadId: "thread-1",
       server: "doordash",
       uri: "ui://doordash/options.html",
+    });
+  });
+
+  it("omits null result metadata before MCP App schema validation", () => {
+    expect(
+      readMcpToolResult({
+        result: {
+          content: [{ type: "text", text: "Found four restaurants." }],
+          structuredContent: { stores: [{ id: "store-1" }] },
+          _meta: null,
+        },
+      } as never),
+    ).toEqual({
+      content: [{ type: "text", text: "Found four restaurants." }],
+      structuredContent: { stores: [{ id: "store-1" }] },
     });
   });
 
