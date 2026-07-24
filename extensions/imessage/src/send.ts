@@ -725,11 +725,12 @@ export async function sendMessageIMessage(
     replyToId: opts.replyToId,
     conversationReadOrigin: opts.conversationReadOrigin,
   });
-  // Sends use a dedicated longer default (not the 10s probe timeout) so macOS 26
-  // bridge stalls aren't aborted mid-send. Explicit opts/probeTimeoutMs still win
-  // for callers that tuned them. See DEFAULT_IMESSAGE_SEND_TIMEOUT_MS.
+  // Sends use a dedicated longer floor (not the 10s probe timeout) so macOS 26
+  // bridge stalls aren't aborted mid-send. A configured probe timeout may extend
+  // sends, but only an explicit per-call timeout may shorten them.
   const timeoutMs =
-    opts.timeoutMs ?? account.config.probeTimeoutMs ?? DEFAULT_IMESSAGE_SEND_TIMEOUT_MS;
+    opts.timeoutMs ??
+    Math.max(account.config.probeTimeoutMs ?? 0, DEFAULT_IMESSAGE_SEND_TIMEOUT_MS);
   const pendingEchoTtlMs = resolvePendingPersistedEchoTtlMs(timeoutMs);
   const region = opts.region?.trim() || account.config.region?.trim() || "US";
   const maxBytes =
