@@ -1,30 +1,11 @@
 // Moonshot tests cover kimi web search provider plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
-import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
+import { withEnv, withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { testing } from "../test-api.js";
 import { createKimiWebSearchProvider } from "./kimi-web-search-provider.js";
 
 const kimiApiKeyEnv = ["KIMI_API", "KEY"].join("_");
-
-function withEnv(overrides: Record<string, string>, run: () => void): void {
-  const previous = new Map<string, string | undefined>();
-  for (const [key, value] of Object.entries(overrides)) {
-    previous.set(key, process.env[key]);
-    process.env[key] = value;
-  }
-  try {
-    run();
-  } finally {
-    for (const [key, value] of previous) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  }
-}
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -284,6 +265,52 @@ describe("kimi web search provider", () => {
         },
       }),
     ).toBeUndefined();
+  });
+
+  it("forwards the execution abort signal to the Kimi search client", async () => {
+    // Capture the signal passed to fetch and wire the mock to reject
+    // when the captured signal fires.  This proves the exact AbortSignal
+    // from the execution context reaches fetch() — reverting signal
+    // forwarding leaves fetchSignal undefined and the test fails.
+    let fetchSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
+      fetchSignal = init?.signal ?? undefined;
+      return new Promise<Response>((_, reject) => {
+        if (init?.signal?.aborted) {
+          reject(new Error(String(init.signal.reason ?? "Aborted")));
+          return;
+        }
+        init?.signal?.addEventListener("abort", () => {
+          reject(new Error(String(init.signal?.reason ?? "Aborted")));
+        });
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await withEnvAsync({ KIMI_API_KEY: "kimi-test-key" }, async () => {
+      const controller = new AbortController();
+      const provider = createKimiWebSearchProvider();
+      const tool = provider.createTool({ config: {}, searchConfig: {} });
+      if (!tool) {
+        throw new Error("Expected tool definition");
+      }
+
+      const searchPromise = tool.execute({ query: "OpenClaw docs" }, { signal: controller.signal });
+
+      // Wait for the fetch to be dispatched, then abort mid-flight.
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled(), { timeout: 5000 });
+      controller.abort(new Error("test: cancellation"));
+
+      await expect(searchPromise).rejects.toThrow("test: cancellation");
+
+      // The abort signal must reach fetch so the platform can cancel the
+      // underlying HTTP request.  buildTimeoutAbortSignal creates a combined
+      // signal (not the identical object), so verify it exists and that the
+      // abort propagated through it.  If signal forwarding is reverted,
+      // fetchSignal stays undefined and the test fails.
+      expect(fetchSignal).toBeDefined();
+      expect(fetchSignal?.aborted).toBe(true);
+    });
   });
 
   it("uses config apiKey when provided", () => {
