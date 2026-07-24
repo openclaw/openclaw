@@ -177,7 +177,9 @@ describe("preflightCronModelProvider", () => {
     // fetch aborts with Error (name="TimeoutError") as abort reason
     const timeoutCause = new Error("request timed out");
     timeoutCause.name = "TimeoutError";
-    fetchWithSsrFGuardMock.mockRejectedValueOnce(new TypeError("fetch failed", { cause: timeoutCause }));
+    fetchWithSsrFGuardMock.mockRejectedValueOnce(
+      new TypeError("fetch failed", { cause: timeoutCause }),
+    );
 
     const result = await preflightCronModelProvider({
       cfg: {
@@ -210,7 +212,9 @@ describe("preflightCronModelProvider", () => {
     const causeErr = new Error("Response body length does not match content-length header");
     causeErr.name = "ResponseContentLengthMismatchError";
     (causeErr as unknown as Record<string, string>).code = "UND_ERR_RES_CONTENT_LENGTH_MISMATCH";
-    fetchWithSsrFGuardMock.mockRejectedValueOnce(new TypeError("fetch failed", { cause: causeErr }));
+    fetchWithSsrFGuardMock.mockRejectedValueOnce(
+      new TypeError("fetch failed", { cause: causeErr }),
+    );
 
     const result = await preflightCronModelProvider({
       cfg: {
