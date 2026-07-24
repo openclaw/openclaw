@@ -318,7 +318,7 @@ export async function resolveMatrixInboundContext(config: {
   const replyTarget = ctxPayload.To;
   if (!replyTarget) {
     runtime.error?.("matrix: missing reply target");
-    return;
+    return null;
   }
 
   const { ackReaction, ackReactionScope: ackScope } = resolveMatrixAckReactionConfig({
