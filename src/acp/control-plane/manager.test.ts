@@ -32,6 +32,19 @@ import {
   type SessionAcpMeta,
 } from "./manager.test-helpers.js";
 
+const subsystemWarnMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => ({
+      ...actual.createSubsystemLogger(subsystem),
+      warn: subsystemWarnMock,
+    }),
+  };
+});
+
 describe("AcpSessionManager", () => {
   installAcpSessionManagerTestLifecycle();
 
@@ -1479,6 +1492,62 @@ describe("AcpSessionManager", () => {
         clearMeta: true,
       }),
     ).rejects.toThrow("disk locked");
+  });
+
+  it("warns with the session and sanitized ACP error when startup reconcile fails", async () => {
+    subsystemWarnMock.mockReset();
+    const sessionKey = "agent:codex:acp:session-1";
+    const currentMeta: SessionAcpMeta = {
+      ...readySessionMeta(),
+      identity: {
+        state: "pending",
+        source: "ensure",
+        acpxSessionId: "acpx-stale",
+        lastUpdatedAt: Date.now(),
+      },
+    };
+    hoisted.listAcpSessionEntriesMock.mockResolvedValue([
+      {
+        cfg: baseCfg,
+        storePath: "/tmp/sessions-acp.json",
+        sessionKey,
+        storeSessionKey: sessionKey,
+        entry: {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+          acp: currentMeta,
+        },
+        acp: currentMeta,
+      },
+    ]);
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey,
+      storeSessionKey: sessionKey,
+      acp: currentMeta,
+    });
+    const escape = String.fromCharCode(0x1b);
+    const rawSecret = "sk-startup-reconcile-secret-1234567890";
+    const obfuscatedSecret = `sk-startup-${escape}[31mreconcile-secret-1234567890`;
+    hoisted.requireAcpRuntimeBackendMock.mockImplementation(() => {
+      throw new AcpRuntimeError(
+        "ACP_BACKEND_UNAVAILABLE",
+        `backend unavailable: OPENAI_API_KEY=${obfuscatedSecret}`,
+      );
+    });
+
+    const manager = new AcpSessionManager();
+    const result = await manager.reconcilePendingSessionIdentities({ cfg: baseCfg });
+
+    expect(result).toEqual({ checked: 1, resolved: 0, failed: 1 });
+    expect(subsystemWarnMock).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining(
+        `acp-manager: startup identity reconcile failed for ${sessionKey}: code=ACP_BACKEND_UNAVAILABLE message=backend unavailable: OPENAI_API_KEY=`,
+      ),
+    );
+    const warnMessage = subsystemWarnMock.mock.calls[0]?.[0] ?? "";
+    expect(warnMessage).not.toContain(rawSecret);
+    expect(warnMessage).not.toContain(obfuscatedSecret);
+    expect(warnMessage).not.toContain("/tmp/sessions-acp.json");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

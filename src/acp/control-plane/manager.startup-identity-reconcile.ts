@@ -6,6 +6,10 @@ import {
 } from "@openclaw/acp-core/runtime/session-identity";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import { redactSensitiveText } from "../../logging/redact.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
+import { toAcpRuntimeError } from "../runtime/errors.js";
 import type {
   AcpSessionManagerDeps,
   AcpStartupIdentityReconcileResult,
@@ -14,6 +18,34 @@ import type {
   ResolveManagerSession,
   WithManagerSessionActor,
 } from "./manager.types.js";
+
+const ACP_RECONCILE_LOG_FIELD_MAX_LENGTH = 500;
+const acpManagerLog = createSubsystemLogger("acp/manager");
+
+function sanitizeAcpReconcileLogValue(value: string): string {
+  const normalized = sanitizeForLog(value);
+  const sanitized = sanitizeForLog(redactSensitiveText(normalized)).replace(/\s+/g, " ").trim();
+  if (!sanitized) {
+    return "<empty>";
+  }
+  if (sanitized.length <= ACP_RECONCILE_LOG_FIELD_MAX_LENGTH) {
+    return sanitized;
+  }
+  return `${sanitized.slice(0, ACP_RECONCILE_LOG_FIELD_MAX_LENGTH - 3)}...`;
+}
+
+function logStartupIdentityReconcileFailure(sessionKey: string, error: unknown) {
+  const acpError = toAcpRuntimeError({
+    error,
+    fallbackCode: "ACP_TURN_FAILED",
+    fallbackMessage: "ACP startup identity reconcile failed.",
+  });
+  const safeSessionKey = sanitizeAcpReconcileLogValue(sessionKey);
+  const safeMessage = sanitizeAcpReconcileLogValue(acpError.message);
+  acpManagerLog.warn(
+    `acp-manager: startup identity reconcile failed for ${safeSessionKey}: code=${acpError.code} message=${safeMessage}`,
+  );
+}
 
 /** Resolves pending ACP session identities opportunistically during manager startup. */
 export async function runManagerStartupIdentityReconcile(params: {
@@ -83,6 +115,7 @@ export async function runManagerStartupIdentityReconcile(params: {
       }
     } catch (error) {
       failed += 1;
+      logStartupIdentityReconcileFailure(session.sessionKey, error);
       logVerbose(
         `acp-manager: startup identity reconcile failed for ${session.sessionKey}: ${String(error)}`,
       );
