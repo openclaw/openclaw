@@ -5,7 +5,6 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { PollInput } from "../runtime-api.js";
-import { getMatrixRuntime } from "../runtime.js";
 import type { CoreConfig } from "../types.js";
 import { loadOutboundMediaFromUrl } from "./outbound-media-runtime.js";
 import { buildPollStartContent, M_POLL_START } from "./poll-types.js";
@@ -46,8 +45,6 @@ import {
   type MatrixSendResult,
   type MatrixTextMsgType,
 } from "./send/types.js";
-
-const getCore = () => getMatrixRuntime();
 
 export { chunkMatrixText, prepareMatrixSingleText } from "./send/chunking.js";
 export { resolveMatrixMentionsForBody } from "./send/formatting.js";
