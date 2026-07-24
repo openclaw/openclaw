@@ -2,6 +2,7 @@ import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
   ModelRecoveryDivertNewParamsSchema,
+  ModelRecoveryPrepareRecoveryParamsSchema,
   ModelRecoveryReleaseParamsSchema,
   ModelRecoveryStatusParamsSchema,
   ModelRecoveryStatusResultSchema,
@@ -21,12 +22,16 @@ describe("model recovery gateway schemas", () => {
     expect(ProtocolSchemas.ModelRecoveryStatusParams).toBe(ModelRecoveryStatusParamsSchema);
     expect(ProtocolSchemas.ModelRecoveryStatusResult).toBe(ModelRecoveryStatusResultSchema);
     expect(ProtocolSchemas.ModelRecoveryDivertNewParams).toBe(ModelRecoveryDivertNewParamsSchema);
+    expect(ProtocolSchemas.ModelRecoveryPrepareRecoveryParams).toBe(
+      ModelRecoveryPrepareRecoveryParamsSchema,
+    );
     expect(ProtocolSchemas.ModelRecoveryReleaseParams).toBe(ModelRecoveryReleaseParamsSchema);
   });
 
   it("accepts exact divert-new and release fence identities", () => {
     expect(
       Value.Check(ModelRecoveryDivertNewParamsSchema, {
+        capabilityVersion: 2,
         ...target,
         resourceDomain: "mama-gpu-residency",
         deniedTargets: [
@@ -35,26 +40,38 @@ describe("model recovery gateway schemas", () => {
         ],
       }),
     ).toBe(true);
-    expect(Value.Check(ModelRecoveryReleaseParamsSchema, target)).toBe(true);
+    expect(
+      Value.Check(ModelRecoveryPrepareRecoveryParamsSchema, {
+        capabilityVersion: 2,
+        ...target,
+        deniedTargets: [{ provider: "ornith", model: "qwen3.6:27b" }],
+      }),
+    ).toBe(true);
+    expect(Value.Check(ModelRecoveryReleaseParamsSchema, { capabilityVersion: 2, ...target })).toBe(
+      true,
+    );
   });
 
   it("keeps status read-only and rejects blank or unknown fence fields", () => {
-    expect(Value.Check(ModelRecoveryStatusParamsSchema, {})).toBe(true);
+    expect(Value.Check(ModelRecoveryStatusParamsSchema, { capabilityVersion: 2 })).toBe(true);
     expect(Value.Check(ModelRecoveryStatusParamsSchema, { provider: "kalliope" })).toBe(false);
     expect(
       Value.Check(ModelRecoveryDivertNewParamsSchema, {
+        capabilityVersion: 2,
         ...target,
         fenceToken: "",
       }),
     ).toBe(false);
     expect(
       Value.Check(ModelRecoveryReleaseParamsSchema, {
+        capabilityVersion: 2,
         ...target,
         extra: true,
       }),
     ).toBe(false);
     expect(
       Value.Check(ModelRecoveryReleaseParamsSchema, {
+        capabilityVersion: 2,
         ...target,
         fenceToken: "embedded whitespace",
       }),
@@ -65,6 +82,11 @@ describe("model recovery gateway schemas", () => {
     expect(
       Value.Check(ModelRecoveryStatusResultSchema, {
         capability: "available",
+        capabilityVersion: 2,
+        durableEffectCapabilityVersion: 1,
+        durableDeliveryCapabilityVersion: 1,
+        submissionPermitCapabilityVersion: 1,
+        prepareRecoveryAvailable: true,
         activeFences: [
           {
             ...target,
@@ -73,6 +95,8 @@ describe("model recovery gateway schemas", () => {
             resourceDomain: "mama-gpu-residency",
             deniedTargets: [{ provider: "ornith", model: "qwen3.6:27b" }],
             createdAtMs: 1_000,
+            preparedAtMs: null,
+            generationGoneAtMs: null,
             releasedAtMs: null,
           },
         ],

@@ -34,6 +34,19 @@ function createStore(): ModelTargetFenceStore {
       resourceDomain: params.resourceDomain ?? null,
       deniedTargets: [...(params.deniedTargets ?? [])],
       createdAtMs: params.nowMs ?? 1_000,
+      preparedAtMs: null,
+      generationGoneAtMs: null,
+      releasedAtMs: null,
+    })),
+    prepareRecovery: vi.fn((params) => ({
+      ...params,
+      mode: "prepare_recovery" as const,
+      state: "prepared" as const,
+      resourceDomain: params.resourceDomain ?? null,
+      deniedTargets: [],
+      createdAtMs: params.nowMs ?? 1_000,
+      preparedAtMs: params.nowMs ?? 1_000,
+      generationGoneAtMs: null,
       releasedAtMs: null,
     })),
     release: vi.fn((params) => ({
@@ -43,6 +56,8 @@ function createStore(): ModelTargetFenceStore {
       resourceDomain: null,
       deniedTargets: [],
       createdAtMs: 1_000,
+      preparedAtMs: null,
+      generationGoneAtMs: null,
       releasedAtMs: params.nowMs ?? 2_000,
     })),
   };
@@ -59,17 +74,23 @@ const target = {
 describe("model recovery gateway methods", () => {
   it("serves status through the typed store", async () => {
     const store = createStore();
-    const { respond, result } = invoke(
-      createModelRecoveryHandlers(store),
-      "modelRecovery.status",
-      {},
-    );
+    const { respond, result } = invoke(createModelRecoveryHandlers(store), "modelRecovery.status", {
+      capabilityVersion: 2,
+    });
     await result;
 
     expect(store.status).toHaveBeenCalledOnce();
     expect(respond).toHaveBeenCalledWith(
       true,
-      { capability: "available", activeFences: [] },
+      {
+        capability: "available",
+        capabilityVersion: 2,
+        durableEffectCapabilityVersion: 1,
+        durableDeliveryCapabilityVersion: 1,
+        submissionPermitCapabilityVersion: 1,
+        prepareRecoveryAvailable: false,
+        activeFences: [],
+      },
       undefined,
     );
   });
@@ -78,12 +99,16 @@ describe("model recovery gateway methods", () => {
     const store = createStore();
     const handlers = createModelRecoveryHandlers(store);
     const divert = invoke(handlers, "modelRecovery.divertNew", {
+      capabilityVersion: 2,
       ...target,
       resourceDomain: "mama-gpu-residency",
       deniedTargets: [{ provider: "ornith", model: "qwen3.6:27b" }],
     });
     await divert.result;
-    const release = invoke(handlers, "modelRecovery.release", target);
+    const release = invoke(handlers, "modelRecovery.release", {
+      capabilityVersion: 2,
+      ...target,
+    });
     await release.result;
 
     expect(store.divertNew).toHaveBeenCalledWith(
@@ -107,6 +132,7 @@ describe("model recovery gateway methods", () => {
   it("fails closed on invalid input and unavailable capability", async () => {
     const store = createStore();
     const invalid = invoke(createModelRecoveryHandlers(store), "modelRecovery.divertNew", {
+      capabilityVersion: 2,
       ...target,
       fenceEpoch: 0,
     });
@@ -121,7 +147,9 @@ describe("model recovery gateway methods", () => {
     vi.mocked(store.status).mockImplementation(() => {
       throw new Error("database /sensitive/path/model-recovery.sqlite failed");
     });
-    const unavailable = invoke(createModelRecoveryHandlers(store), "modelRecovery.status", {});
+    const unavailable = invoke(createModelRecoveryHandlers(store), "modelRecovery.status", {
+      capabilityVersion: 2,
+    });
     await unavailable.result;
     expect(unavailable.respond).toHaveBeenCalledWith(
       false,
@@ -132,5 +160,62 @@ describe("model recovery gateway methods", () => {
       }),
     );
     expect(JSON.stringify(unavailable.respond.mock.calls)).not.toContain("/sensitive/path");
+  });
+
+  it("keeps diversion available while prepare waits for every durable capability", async () => {
+    const store = createStore();
+    const handlers = createModelRecoveryHandlers(store, {
+      durableEffects: true,
+      durableDelivery: false,
+      submissionPermitsAtDispatch: false,
+    });
+    const status = invoke(handlers, "modelRecovery.status", { capabilityVersion: 2 });
+    const diverted = invoke(handlers, "modelRecovery.divertNew", {
+      capabilityVersion: 2,
+      ...target,
+    });
+    const unavailable = invoke(handlers, "modelRecovery.prepareRecovery", {
+      capabilityVersion: 2,
+      ...target,
+    });
+    await status.result;
+    await diverted.result;
+    await unavailable.result;
+
+    expect(status.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ prepareRecoveryAvailable: false }),
+      undefined,
+    );
+    expect(store.divertNew).toHaveBeenCalledOnce();
+    expect(diverted.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ state: "active" }),
+      undefined,
+    );
+    expect(store.prepareRecovery).not.toHaveBeenCalled();
+    expect(unavailable.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "UNAVAILABLE" }),
+    );
+
+    const enabledStore = createStore();
+    const enabled = invoke(
+      createModelRecoveryHandlers(enabledStore, {
+        durableEffects: true,
+        durableDelivery: true,
+        submissionPermitsAtDispatch: true,
+      }),
+      "modelRecovery.prepareRecovery",
+      { capabilityVersion: 2, ...target },
+    );
+    await enabled.result;
+    expect(enabledStore.prepareRecovery).toHaveBeenCalledOnce();
+    expect(enabled.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ mode: "prepare_recovery", state: "prepared" }),
+      undefined,
+    );
   });
 });

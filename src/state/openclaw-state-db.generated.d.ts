@@ -873,6 +873,24 @@ export interface ModelCapabilityCache {
   updated_at_ms: number;
 }
 
+export interface ModelSubmissionPermits {
+  agent_id: string;
+  attempt_epoch: number;
+  fence_epoch: number;
+  fence_token: string;
+  issued_at_ms: number;
+  logical_turn_id: string;
+  model: string;
+  owner_id: string;
+  permit_id: string;
+  provider: string;
+  reconciled_at_ms: number | null;
+  run_id: string;
+  state: string;
+  terminal_at_ms: number | null;
+  topology_generation: string;
+}
+
 export interface ModelTargetFenceDenials {
   denied_model: string;
   denied_provider: string;
@@ -886,8 +904,11 @@ export interface ModelTargetFences {
   created_at_ms: number;
   fence_epoch: number;
   fence_token: string;
+  generation_gone_at_ms: number | null;
+  generation_gone_proof: string | null;
   mode: string;
   model: string;
+  prepared_at_ms: number | null;
   provider: string;
   released_at_ms: number | null;
   resource_domain: string | null;
@@ -1560,6 +1581,7 @@ export interface DB {
   migration_runs: MigrationRuns;
   migration_sources: MigrationSources;
   model_capability_cache: ModelCapabilityCache;
+  model_submission_permits: ModelSubmissionPermits;
   model_target_fence_denials: ModelTargetFenceDenials;
   model_target_fences: ModelTargetFences;
   native_hook_relay_bridges: NativeHookRelayBridges;

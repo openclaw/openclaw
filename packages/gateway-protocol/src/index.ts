@@ -17,6 +17,7 @@ export { formatValidationErrors, type ValidationError } from "./validation-error
 import { lazyCompile } from "./protocol-validator.js";
 import {
   ModelRecoveryDivertNewParamsSchema,
+  ModelRecoveryPrepareRecoveryParamsSchema,
   ModelRecoveryReleaseParamsSchema,
   ModelRecoveryStatusParamsSchema,
 } from "./schema/model-recovery.js";
@@ -929,6 +930,9 @@ export const validateModelsAuthStatusParams = lazyCompile(ModelsAuthStatusParams
 export const validateModelsListParams = lazyCompile(ModelsListParamsSchema);
 export const validateModelRecoveryStatusParams = lazyCompile(ModelRecoveryStatusParamsSchema);
 export const validateModelRecoveryDivertNewParams = lazyCompile(ModelRecoveryDivertNewParamsSchema);
+export const validateModelRecoveryPrepareRecoveryParams = lazyCompile(
+  ModelRecoveryPrepareRecoveryParamsSchema,
+);
 export const validateModelRecoveryReleaseParams = lazyCompile(ModelRecoveryReleaseParamsSchema);
 export const validateSkillsStatusParams = lazyCompile(SkillsStatusParamsSchema);
 export const validateToolsCatalogParams = lazyCompile(ToolsCatalogParamsSchema);

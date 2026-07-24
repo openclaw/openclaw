@@ -470,6 +470,12 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
     controlPlaneWrite: true,
   },
   {
+    name: "modelRecovery.prepareRecovery",
+    scope: "operator.recovery",
+    since: "2026.7",
+    controlPlaneWrite: true,
+  },
+  {
     name: "modelRecovery.release",
     scope: "operator.recovery",
     since: "2026.7",

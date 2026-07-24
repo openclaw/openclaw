@@ -558,7 +558,12 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadModelsProbeHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["modelRecovery.status", "modelRecovery.divertNew", "modelRecovery.release"],
+    methods: [
+      "modelRecovery.status",
+      "modelRecovery.divertNew",
+      "modelRecovery.prepareRecovery",
+      "modelRecovery.release",
+    ],
     loadHandlers: loadModelRecoveryHandlers,
   }),
   ...createLazyCoreHandlers({

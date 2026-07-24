@@ -2115,18 +2115,21 @@ CREATE TABLE IF NOT EXISTS model_target_fences (
   topology_generation TEXT NOT NULL,
   fence_epoch INTEGER NOT NULL CHECK (fence_epoch > 0),
   fence_token TEXT NOT NULL,
-  mode TEXT NOT NULL CHECK (mode = 'divert_new'),
-  state TEXT NOT NULL CHECK (state IN ('active', 'released')),
+  mode TEXT NOT NULL CHECK (mode IN ('divert_new', 'prepare_recovery')),
+  state TEXT NOT NULL CHECK (state IN ('active', 'prepared', 'released')),
   resource_domain TEXT,
   created_at_ms INTEGER NOT NULL,
+  prepared_at_ms INTEGER,
+  generation_gone_at_ms INTEGER,
+  generation_gone_proof TEXT,
   released_at_ms INTEGER,
   PRIMARY KEY (provider, model, topology_generation, fence_epoch),
   UNIQUE (fence_token)
 ) STRICT;
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_model_target_fences_one_active_target
+CREATE UNIQUE INDEX IF NOT EXISTS idx_model_target_fences_one_unreleased_target
   ON model_target_fences(provider, model)
-  WHERE state = 'active';
+  WHERE state != 'released';
 
 CREATE TABLE IF NOT EXISTS model_target_fence_denials (
   provider TEXT NOT NULL,
@@ -2142,3 +2145,34 @@ CREATE TABLE IF NOT EXISTS model_target_fence_denials (
     REFERENCES model_target_fences(provider, model, topology_generation, fence_epoch)
     ON DELETE CASCADE
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS model_submission_permits (
+  permit_id TEXT NOT NULL PRIMARY KEY,
+  agent_id TEXT NOT NULL,
+  logical_turn_id TEXT NOT NULL,
+  attempt_epoch INTEGER NOT NULL CHECK (attempt_epoch > 0),
+  owner_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  topology_generation TEXT NOT NULL,
+  fence_epoch INTEGER NOT NULL CHECK (fence_epoch > 0),
+  fence_token TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('active', 'terminal', 'reconciled')),
+  issued_at_ms INTEGER NOT NULL,
+  terminal_at_ms INTEGER,
+  reconciled_at_ms INTEGER,
+  UNIQUE (
+    logical_turn_id, attempt_epoch, provider, model, topology_generation, fence_epoch
+  ),
+  FOREIGN KEY (provider, model, topology_generation, fence_epoch)
+    REFERENCES model_target_fences(provider, model, topology_generation, fence_epoch)
+) STRICT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_model_submission_permits_one_active_logical_turn
+  ON model_submission_permits(logical_turn_id)
+  WHERE state = 'active';
+
+CREATE INDEX IF NOT EXISTS idx_model_submission_permits_active_generation
+  ON model_submission_permits(provider, model, topology_generation)
+  WHERE state = 'active';

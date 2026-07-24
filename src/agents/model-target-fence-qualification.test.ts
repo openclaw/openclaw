@@ -19,6 +19,8 @@ const activeFence = {
     { provider: "ornith", model: "qwen3.6:27b" },
   ],
   createdAtMs: 1_000,
+  preparedAtMs: null,
+  generationGoneAtMs: null,
   releasedAtMs: null,
 } as const;
 

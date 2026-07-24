@@ -124,4 +124,42 @@ describe("model target fence store", () => {
       }),
     ).toThrow(ModelTargetFenceStaleError);
   });
+
+  it("prepares only after old-generation permits drain or generation death is proven", () => {
+    const store = createStore();
+
+    const preparing = store.prepareRecovery({
+      ...qwen35Fence,
+      fenceEpoch: 42,
+      fenceToken: "prepare-token-42",
+      nowMs: 3_000,
+    });
+
+    expect(preparing).toEqual(
+      expect.objectContaining({
+        mode: "prepare_recovery",
+        state: "prepared",
+        preparedAtMs: 3_000,
+        deniedTargets: qwen35Fence.deniedTargets,
+      }),
+    );
+    expect(
+      store.prepareRecovery({
+        ...qwen35Fence,
+        fenceEpoch: 42,
+        fenceToken: "prepare-token-42",
+        nowMs: 3_500,
+      }),
+    ).toEqual(preparing);
+    expect(() =>
+      store.release({
+        provider: qwen35Fence.provider,
+        model: qwen35Fence.model,
+        topologyGeneration: qwen35Fence.topologyGeneration,
+        fenceEpoch: 42,
+        fenceToken: "prepare-token-42",
+        nowMs: 4_000,
+      }),
+    ).toThrow(ModelTargetFenceConflictError);
+  });
 });

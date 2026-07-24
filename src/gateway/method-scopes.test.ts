@@ -106,6 +106,7 @@ describe("method scope resolution", () => {
     ["talk.session.close", ["operator.write"]],
     ["modelRecovery.status", ["operator.read"]],
     ["modelRecovery.divertNew", ["operator.recovery"]],
+    ["modelRecovery.prepareRecovery", ["operator.recovery"]],
     ["modelRecovery.release", ["operator.recovery"]],
     ["update.status", ["operator.admin"]],
     ["config.schema", ["operator.admin"]],
@@ -132,6 +133,9 @@ describe("method scope resolution", () => {
     });
     expect(
       authorizeOperatorScopesForMethod("modelRecovery.divertNew", ["operator.recovery"]),
+    ).toEqual({ allowed: true });
+    expect(
+      authorizeOperatorScopesForMethod("modelRecovery.prepareRecovery", ["operator.recovery"]),
     ).toEqual({ allowed: true });
     expect(authorizeOperatorScopesForMethod("modelRecovery.release", ["operator.admin"])).toEqual({
       allowed: true,

@@ -43,7 +43,7 @@ export function qualifyModelCandidatesAgainstFences(
   const denied: ModelTargetFenceDenial[] = [];
   for (const candidate of candidates) {
     const exactFence = activeFences.find(
-      (fence) => fence.state === "active" && sameTarget(candidate, fence),
+      (fence) => fence.state !== "released" && sameTarget(candidate, fence),
     );
     if (exactFence) {
       denied.push({
@@ -56,7 +56,7 @@ export function qualifyModelCandidatesAgainstFences(
     }
     const resourceFence = activeFences.find(
       (fence) =>
-        fence.state === "active" &&
+        fence.state !== "released" &&
         fence.deniedTargets.some((target) => sameTarget(candidate, target)),
     );
     if (resourceFence) {

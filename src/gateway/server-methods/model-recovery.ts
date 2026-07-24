@@ -1,10 +1,15 @@
 // Gateway control-plane methods for durable new-work model diversion fences.
 import {
   ErrorCodes,
+  MODEL_RECOVERY_CAPABILITY_VERSION,
+  MODEL_RECOVERY_DELIVERY_CAPABILITY_VERSION,
+  MODEL_RECOVERY_EFFECT_CAPABILITY_VERSION,
   errorShape,
   type ModelRecoveryDivertNewParams,
+  type ModelRecoveryPrepareRecoveryParams,
   type ModelRecoveryReleaseParams,
   validateModelRecoveryDivertNewParams,
+  validateModelRecoveryPrepareRecoveryParams,
   validateModelRecoveryReleaseParams,
   validateModelRecoveryStatusParams,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -17,6 +22,20 @@ import {
 } from "../../state/model-target-fence-store.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
+
+type ModelRecoveryCapabilities = {
+  durableEffects: boolean;
+  durableDelivery: boolean;
+  submissionPermitsAtDispatch: boolean;
+};
+
+const AVAILABLE_CAPABILITIES: ModelRecoveryCapabilities = {
+  durableEffects: true,
+  durableDelivery: true,
+  // Fail closed until every eligible provider dispatch acquires and settles
+  // the global permit added by this slice.
+  submissionPermitsAtDispatch: false,
+};
 
 function respondStoreError(
   respond: Parameters<GatewayRequestHandlers[string]>[0]["respond"],
@@ -38,7 +57,29 @@ function respondStoreError(
   );
 }
 
-export function createModelRecoveryHandlers(store: ModelTargetFenceStore): GatewayRequestHandlers {
+export function createModelRecoveryHandlers(
+  store: ModelTargetFenceStore,
+  capabilities: ModelRecoveryCapabilities = AVAILABLE_CAPABILITIES,
+): GatewayRequestHandlers {
+  const requireCapabilities = (
+    respond: Parameters<GatewayRequestHandlers[string]>[0]["respond"],
+  ): boolean => {
+    if (
+      capabilities.durableEffects &&
+      capabilities.durableDelivery &&
+      capabilities.submissionPermitsAtDispatch
+    ) {
+      return true;
+    }
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.UNAVAILABLE, "Model recovery capability is unavailable", {
+        retryable: false,
+      }),
+    );
+    return false;
+  };
   return {
     "modelRecovery.status": ({ params, respond }) => {
       if (
@@ -52,7 +93,22 @@ export function createModelRecoveryHandlers(store: ModelTargetFenceStore): Gatew
         return;
       }
       try {
-        respond(true, { capability: "available", ...store.status() }, undefined);
+        respond(
+          true,
+          {
+            capability: "available",
+            capabilityVersion: MODEL_RECOVERY_CAPABILITY_VERSION,
+            durableEffectCapabilityVersion: MODEL_RECOVERY_EFFECT_CAPABILITY_VERSION,
+            durableDeliveryCapabilityVersion: MODEL_RECOVERY_DELIVERY_CAPABILITY_VERSION,
+            submissionPermitCapabilityVersion: 1,
+            prepareRecoveryAvailable:
+              capabilities.durableEffects &&
+              capabilities.durableDelivery &&
+              capabilities.submissionPermitsAtDispatch,
+            ...store.status(),
+          },
+          undefined,
+        );
       } catch (error) {
         respondStoreError(respond, error);
       }
@@ -71,6 +127,31 @@ export function createModelRecoveryHandlers(store: ModelTargetFenceStore): Gatew
       try {
         const fence = store.divertNew({
           ...(params as ModelRecoveryDivertNewParams),
+          nowMs: Date.now(),
+        });
+        invalidateModelTargetFenceSnapshot();
+        respond(true, fence, undefined);
+      } catch (error) {
+        respondStoreError(respond, error);
+      }
+    },
+    "modelRecovery.prepareRecovery": ({ params, respond }) => {
+      if (
+        !assertValidParams(
+          params,
+          validateModelRecoveryPrepareRecoveryParams,
+          "modelRecovery.prepareRecovery",
+          respond,
+        )
+      ) {
+        return;
+      }
+      if (!requireCapabilities(respond)) {
+        return;
+      }
+      try {
+        const fence = store.prepareRecovery({
+          ...(params as ModelRecoveryPrepareRecoveryParams),
           nowMs: Date.now(),
         });
         invalidateModelTargetFenceSnapshot();

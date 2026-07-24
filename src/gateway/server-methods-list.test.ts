@@ -66,13 +66,14 @@ describe("listGatewayMethods", () => {
       expect.arrayContaining([
         "modelRecovery.status",
         "modelRecovery.divertNew",
+        "modelRecovery.prepareRecovery",
         "modelRecovery.release",
       ]),
     );
   });
 
   it("appends new methods after model probing without shifting older method indices", () => {
-    expect(listGatewayMethods().slice(-21)).toEqual([
+    expect(listGatewayMethods().slice(-22)).toEqual([
       "models.probe",
       "migrations.memory.plan",
       "migrations.memory.apply",
@@ -93,6 +94,7 @@ describe("listGatewayMethods", () => {
       "session.members.remove",
       "modelRecovery.status",
       "modelRecovery.divertNew",
+      "modelRecovery.prepareRecovery",
       "modelRecovery.release",
     ]);
     const methods = listGatewayMethods();
@@ -182,6 +184,7 @@ describe("listGatewayMethods", () => {
       "session.members.remove",
       "modelRecovery.status",
       "modelRecovery.divertNew",
+      "modelRecovery.prepareRecovery",
       "modelRecovery.release",
     ]);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
