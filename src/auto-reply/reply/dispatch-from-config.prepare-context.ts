@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -373,8 +374,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     normalizeOptionalString(ctx.MessageSidLast) ??
     normalizeOptionalString(ctx.MessageSidFirst) ??
     params.replyOptions?.runId ??
-    operationalReplySourceSessionKey ??
-    "unknown";
+    crypto.randomUUID();
   let operationalReplyPolicyIntentionalSilence = false;
   const applyDispatchOperationalReplyPolicy = async (payload: ReplyPayload) => {
     const result = await applyOperationalReplyPolicyFromConfig({
