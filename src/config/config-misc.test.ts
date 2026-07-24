@@ -774,6 +774,23 @@ describe("web search provider config", () => {
   });
 });
 
+describe("gateway.port", () => {
+  it.each([1, 65_535])("accepts TCP port %s", (port) => {
+    const res = validateConfigObject({ gateway: { port } });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it.each([0, 65_536])("rejects TCP port %s", (port) => {
+    const res = validateConfigObject({ gateway: { port } });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("gateway.port");
+    }
+  });
+});
+
 describe("gateway.remote.transport", () => {
   it("accepts direct transport", () => {
     const res = validateConfigObject({
