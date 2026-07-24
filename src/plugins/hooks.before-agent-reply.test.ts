@@ -120,4 +120,33 @@ describe("before_agent_reply hook runner (claiming pattern)", () => {
 
     expect(runner.hasHooks("before_agent_reply")).toBe(true);
   });
+
+  it("does not inherit modifyingHookTimeoutMsByHook fallback for claiming hooks", async () => {
+    // Regression: getClaimingHookTimeoutMs used to fall back to modifyingHookTimeoutMsByHook,
+    // causing claiming hooks to inherit modifying timeouts they should not have.
+    // A claiming hook with no explicit timeoutMs must NOT be bound by the
+    // modifyingHookTimeoutMsByHook entry for the same hook name.
+    const slowHandler = vi.fn().mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      return { handled: false };
+    });
+    const registry = createMockPluginRegistry([
+      { hookName: "before_agent_reply", handler: slowHandler },
+    ]);
+    // Inject a very short modifying timeout (50ms). On buggy code, the claiming
+    // hook would inherit this 50ms timeout and abort early. On fixed code, the
+    // claiming hook runs to completion (~200ms).
+    const runner = createHookRunner(registry, {
+      modifyingHookTimeoutMsByHook: { before_agent_reply: 50 },
+      catchErrors: true,
+    });
+
+    const start = Date.now();
+    await runner.runBeforeAgentReply(EVENT, TEST_PLUGIN_AGENT_CTX);
+    const elapsed = Date.now() - start;
+
+    // Hook should complete (~200ms), not time out at 50ms.
+    expect(elapsed).toBeGreaterThanOrEqual(150);
+    expect(slowHandler).toHaveBeenCalledTimes(1);
+  });
 });
