@@ -2171,3 +2171,90 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     ).toThrow("git install");
   });
 });
+
+// ---------------------------------------------------------------------------
+// appendBoundedCommandOutput UTF-8 safety
+// ---------------------------------------------------------------------------
+// The function is module-private in process.ts so tests reconstruct it here.
+// Keep in sync with scripts/lib/cross-os-release-checks/process.ts.
+
+function appendBoundedCommandOutputFixed(
+  current: string,
+  chunk: Uint8Array | string,
+  maxBytes: number,
+): string {
+  const chunkBuffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+  // SAFETY: skip leading continuation bytes so the suffix starts at a character boundary.
+  function safeTail(buffer: Buffer, limit: number): Buffer {
+    if (buffer.byteLength <= limit) {
+      return buffer;
+    }
+    const raw = buffer.subarray(buffer.byteLength - limit);
+    let start = 0;
+    while (start < raw.length) {
+      const byte = raw.at(start);
+      if (byte === undefined || (byte & 0xc0) !== 0x80) {
+        break;
+      }
+      start += 1;
+    }
+    return start > 0 ? raw.subarray(start) : raw;
+  }
+  if (chunkBuffer.byteLength >= maxBytes) {
+    return safeTail(chunkBuffer, maxBytes).toString("utf8");
+  }
+  const currentBuffer = Buffer.from(current);
+  const nextBytes = currentBuffer.byteLength + chunkBuffer.byteLength;
+  if (nextBytes <= maxBytes) {
+    return `${current}${chunkBuffer.toString("utf8")}`;
+  }
+  const currentTailBytes = maxBytes - chunkBuffer.byteLength;
+  let currentTail = currentBuffer.subarray(
+    Math.max(0, currentBuffer.byteLength - currentTailBytes),
+  );
+  let skip = 0;
+  while (skip < currentTail.length) {
+    const byte = currentTail.at(skip);
+    if (byte === undefined || (byte & 0xc0) !== 0x80) {
+      break;
+    }
+    skip += 1;
+  }
+  if (skip > 0) currentTail = currentTail.subarray(skip);
+  return Buffer.concat([currentTail, chunkBuffer]).toString("utf8");
+}
+
+describe("appendBoundedCommandOutput UTF-8 safety", () => {
+  it("skips leading continuation bytes when a single chunk exceeds maxBytes", () => {
+    // "a😀bbbb" = 1 + 4 + 4 = 9 UTF-8 bytes.  maxBytes=6 → subarray(-6)
+    // starts at byte 3 = 0x98 (continuation byte of 😀).  Without the fix
+    // the two continuation bytes produce "��bbbb"; with the fix they are
+    // skipped and the output starts cleanly at "bbbb".
+    const result = appendBoundedCommandOutputFixed("", "a😀bbbb", 6);
+    expect(result).not.toContain("�");
+    // The emoji was split by the truncation and cannot be recovered,
+    // but the ASCII suffix survives intact.
+    expect(result).toBe("bbbb");
+  });
+
+  it("skips leading continuation bytes when rolling current + chunk exceeds maxBytes", () => {
+    // current="a😀" (5 bytes) + chunk="bbbb" (4 bytes) = 9 bytes.
+    // maxBytes=7 → currentTailBytes=3.  currentBuffer.subarray(-3) =
+    // [0x9F, 0x98, 0x80] — all continuation bytes of the split emoji.
+    // All three are skipped, leaving only the chunk text.
+    const result = appendBoundedCommandOutputFixed("a😀", "bbbb", 7);
+    expect(result).not.toContain("�");
+    expect(result).toBe("bbbb");
+  });
+
+  it("passes through ASCII-only output unchanged", () => {
+    const result = appendBoundedCommandOutputFixed("hello ", "world", 100);
+    expect(result).toBe("hello world");
+    expect(result).not.toContain("�");
+  });
+
+  it("keeps output within the configured byte budget", () => {
+    const result = appendBoundedCommandOutputFixed("", "a".repeat(200), 50);
+    expect(Buffer.byteLength(result, "utf8")).toBeLessThanOrEqual(50);
+  });
+});

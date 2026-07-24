@@ -235,10 +235,31 @@ function resolveCommandCaptureLimit(options: CommandOptions) {
   return Math.max(1, Math.floor(value));
 }
 
+/**
+ * Returns the longest UTF-8 suffix of `buffer` that fits within `maxBytes`,
+ * skipping any leading continuation bytes so the tail starts at a character
+ * boundary instead of producing replacement characters.
+ */
+function safeTailBytes(buffer: Buffer, maxBytes: number): Buffer {
+  if (buffer.byteLength <= maxBytes) {
+    return buffer;
+  }
+  const raw = buffer.subarray(buffer.byteLength - maxBytes);
+  let start = 0;
+  while (start < raw.length) {
+    const byte = raw.at(start);
+    if (byte === undefined || (byte & 0xc0) !== 0x80) {
+      break;
+    }
+    start += 1;
+  }
+  return start > 0 ? raw.subarray(start) : raw;
+}
+
 function appendBoundedCommandOutput(current: string, chunk: Uint8Array | string, maxBytes: number) {
   const chunkBuffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
   if (chunkBuffer.byteLength >= maxBytes) {
-    return chunkBuffer.subarray(chunkBuffer.byteLength - maxBytes).toString("utf8");
+    return safeTailBytes(chunkBuffer, maxBytes).toString("utf8");
   }
 
   const currentBuffer = Buffer.from(current);
@@ -247,9 +268,25 @@ function appendBoundedCommandOutput(current: string, chunk: Uint8Array | string,
     return `${current}${chunkBuffer.toString("utf8")}`;
   }
 
+  // Take the suffix of `current` that can stay within the byte budget.
+  // Skip any leading continuation bytes in the cut so the tail starts
+  // at a character boundary.
   const currentTailBytes = maxBytes - chunkBuffer.byteLength;
-  const currentTail = currentBuffer.subarray(currentBuffer.byteLength - currentTailBytes);
-  return Buffer.concat([currentTail, chunkBuffer], maxBytes).toString("utf8");
+  let currentTail = currentBuffer.subarray(
+    Math.max(0, currentBuffer.byteLength - currentTailBytes),
+  );
+  let skip = 0;
+  while (skip < currentTail.length) {
+    const byte = currentTail.at(skip);
+    if (byte === undefined || (byte & 0xc0) !== 0x80) {
+      break;
+    }
+    skip += 1;
+  }
+  if (skip > 0) {
+    currentTail = currentTail.subarray(skip);
+  }
+  return Buffer.concat([currentTail, chunkBuffer]).toString("utf8");
 }
 
 export async function runCommand(
