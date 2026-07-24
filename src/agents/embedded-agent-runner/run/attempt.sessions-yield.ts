@@ -205,9 +205,7 @@ export function stripSessionsYieldArtifacts(activeSession: {
   // After sessions_yield, the transcript must not end with an assistant role
   // so that subagent completion auto-announce can inject a continuation turn.
   while (strippedMessages.length > 0) {
-    const last = strippedMessages.at(-1) as
-      | AgentMessage
-      | { role?: string; stopReason?: string };
+    const last = strippedMessages.at(-1) as AgentMessage | { role?: string; stopReason?: string };
     if (last?.role === "assistant" && last.stopReason !== "aborted") {
       strippedMessages.pop();
       continue;
@@ -271,8 +269,7 @@ export function stripSessionsYieldArtifacts(activeSession: {
             entry.type === "custom" ||
             entry.type === "label" ||
             entry.type === "session_info" ||
-            (entry.type === "message" &&
-              isTranscriptOnlyOpenClawAssistantMessage(entry.message)),
+            (entry.type === "message" && isTranscriptOnlyOpenClawAssistantMessage(entry.message)),
         },
       );
     }
