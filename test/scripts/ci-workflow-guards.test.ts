@@ -392,6 +392,18 @@ function readWorkflow(path: string) {
   return parse(readFileSync(path, "utf8"));
 }
 
+function readAppTokenPermissions(path: string, jobName: string) {
+  const workflow = readWorkflow(path);
+  const tokenSteps = (workflow.jobs[jobName].steps as WorkflowStep[]).filter(
+    (step) => step.uses === CREATE_GITHUB_APP_TOKEN_V3,
+  );
+  return tokenSteps.map((step) =>
+    Object.fromEntries(
+      Object.entries(step.with ?? {}).filter(([key]) => key.startsWith("permission-")),
+    ),
+  );
+}
+
 const PULL_REQUEST_EDIT_FIELDS = ["title", "body", "base"] as const;
 
 function readPullRequestEditFields(condition: unknown) {
@@ -744,6 +756,78 @@ function runGeneratedPublisherScenario(
 }
 
 describe("ci workflow guards", () => {
+  it("scopes GitHub App tokens to each automation job's API surface", () => {
+    const cases: Array<[string, string, Record<string, string>]> = [
+      [
+        ".github/workflows/auto-response.yml",
+        "auto-response",
+        {
+          "permission-issues": "write",
+          "permission-members": "read",
+          "permission-metadata": "read",
+          "permission-pull-requests": "write",
+        },
+      ],
+      [
+        ".github/workflows/labeler.yml",
+        "label",
+        {
+          "permission-contents": "read",
+          "permission-issues": "write",
+          "permission-members": "read",
+          "permission-metadata": "read",
+          "permission-pull-requests": "write",
+        },
+      ],
+      [
+        ".github/workflows/labeler.yml",
+        "backfill-pr-labels",
+        {
+          "permission-issues": "write",
+          "permission-members": "read",
+          "permission-metadata": "read",
+          "permission-pull-requests": "write",
+        },
+      ],
+      [
+        ".github/workflows/labeler.yml",
+        "label-issues",
+        { "permission-issues": "write", "permission-members": "read" },
+      ],
+      [
+        ".github/workflows/pr-ci-sweeper.yml",
+        "sweep",
+        {
+          "permission-actions": "write",
+          "permission-checks": "read",
+          "permission-issues": "write",
+          "permission-pull-requests": "write",
+        },
+      ],
+      [
+        ".github/workflows/stale.yml",
+        "stale",
+        {
+          "permission-actions": "read",
+          "permission-issues": "write",
+          "permission-pull-requests": "write",
+        },
+      ],
+      [
+        ".github/workflows/stale.yml",
+        "backfill-stale-closures",
+        { "permission-issues": "write", "permission-pull-requests": "write" },
+      ],
+      [".github/workflows/stale.yml", "lock-closed-issues", { "permission-issues": "write" }],
+    ];
+
+    for (const [path, jobName, expected] of cases) {
+      const permissions = readAppTokenPermissions(path, jobName);
+      expect(permissions, `${path} job ${jobName}`).not.toHaveLength(0);
+      expect(permissions, `${path} job ${jobName}`).toEqual(permissions.map(() => expected));
+    }
+  });
+
   it("routes PR edited metadata only to interested automation", () => {
     const autoResponse = readWorkflow(".github/workflows/auto-response.yml");
     const clawsweeperDispatch = readWorkflow(".github/workflows/clawsweeper-dispatch.yml");
