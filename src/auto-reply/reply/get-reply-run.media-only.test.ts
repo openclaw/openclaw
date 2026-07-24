@@ -2937,18 +2937,18 @@ describe("runPreparedReply media-only handling", () => {
           updatedAt: 1,
           systemSent: true,
           chatType: "channel",
-          channel: "discord",
           groupId: "guild-1",
           groupChannel: "#ops",
-          lastChannel: "discord",
-          lastTo: "channel-1",
-          origin: {
-            provider: "discord",
-            surface: "discord",
-            chatType: "channel",
-            to: "channel-1",
-          },
-        } as SessionEntry,
+          delivery: normalizeSessionDeliveryState({
+            context: { channel: "discord", to: "channel-1" },
+            origin: {
+              provider: "discord",
+              surface: "discord",
+              chatType: "channel",
+              to: "channel-1",
+            },
+          }),
+        },
       }),
     );
 
@@ -3580,23 +3580,21 @@ describe("runPreparedReply media-only handling", () => {
           sessionId: "session-1",
           updatedAt: 1,
           chatType: "direct",
-          channel: "matrix",
-          lastChannel: "slack",
-          lastTo: "user:U1",
-          lastAccountId: "work",
-          deliveryContext: {
-            channel: "slack",
-            to: "user:U1",
-            accountId: "work",
-          },
-          origin: {
-            provider: "matrix",
-            surface: "matrix",
-            chatType: "direct",
-            to: "room:origin",
-            accountId: "origin",
-          },
-        } as SessionEntry,
+          delivery: normalizeSessionDeliveryState({
+            context: {
+              channel: "slack",
+              to: "user:U1",
+              accountId: "work",
+            },
+            origin: {
+              provider: "matrix",
+              surface: "matrix",
+              chatType: "direct",
+              to: "room:origin",
+              accountId: "origin",
+            },
+          }),
+        },
       }),
     );
 
