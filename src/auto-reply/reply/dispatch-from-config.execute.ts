@@ -20,11 +20,11 @@ import {
 } from "./dispatch-from-config.events.js";
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import type { PrepareDispatchExecutionReadyState } from "./dispatch-from-config.prepare-execution.js";
-import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import {
   isOperationalReplyPayload,
   markOperationalReplyPolicyDelivered,
 } from "./operational-reply-policy.js";
+import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 
 export async function executeDispatch(state: PrepareDispatchExecutionReadyState) {
   const {
@@ -223,10 +223,12 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     const isForcedToolProgress =
                       shouldDeliverForcedToolProgressDespiteSourceSuppression();
                     const shouldEvaluateOperationalPayload =
+                      !sendPolicyDenied &&
                       isOperationalReplyPayload({
                         payload,
                         explicitCommandTurn: false,
-                      }) && state.operationalReplyPolicy.policy !== "always";
+                      }) &&
+                      state.operationalReplyPolicy.policy !== "always";
                     const progressCallbackForwarded = shouldForwardToolResultProgressCallback(
                       payload,
                       isFastModeAutoProgress,
@@ -323,8 +325,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     if (isDispatchOperationAborted()) {
                       return;
                     }
-                    const policyResult =
-                      await applyDispatchOperationalReplyPolicy(deliveryPayload);
+                    const policyResult = await applyDispatchOperationalReplyPolicy(deliveryPayload);
                     if (!policyResult.shouldDeliver) {
                       return;
                     }
@@ -528,13 +529,20 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     if (!hasOutboundReplyContent(visiblePayload, { trimText: true })) {
                       return;
                     }
-                    const policyResult =
-                      await applyDispatchOperationalReplyPolicy(visiblePayload);
-                    if (!policyResult.shouldDeliver) {
+                    const isOperationalPayload = isOperationalReplyPayload({
+                      payload: visiblePayload,
+                      explicitCommandTurn: false,
+                    });
+                    if (
+                      suppressDelivery &&
+                      (sendPolicyDenied ||
+                        !isOperationalPayload ||
+                        state.operationalReplyPolicy.policy === "always")
+                    ) {
                       return;
                     }
-                    if (suppressDelivery && state.operationalReplyPolicy.policy === "always") {
-                      await markOperationalReplyPolicyDelivered(policyResult, false);
+                    const policyResult = await applyDispatchOperationalReplyPolicy(visiblePayload);
+                    if (!policyResult.shouldDeliver) {
                       return;
                     }
                     // Channels that keep a live draft preview may need to rotate their

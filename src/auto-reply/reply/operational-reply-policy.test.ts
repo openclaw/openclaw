@@ -10,6 +10,7 @@ import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.j
 import {
   applyOperationalReplyPolicy,
   clearOperationalReplyPolicyStateForTest,
+  isOperationalReplyPayload,
   markOperationalReplyPolicyDelivered,
 } from "./operational-reply-policy.js";
 
@@ -97,6 +98,21 @@ describe("operational reply policy", () => {
     await Promise.all(
       tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
     );
+  });
+
+  it("classifies plain error payloads without delivery metadata as operational", async () => {
+    const payload = { text: "provider failed", isError: true };
+
+    expect(isOperationalReplyPayload({ payload, explicitCommandTurn: false })).toBe(true);
+    await expect(
+      applyOperationalReplyPolicy({
+        cfg: { messages: { operationalReplies: { policy: "silent" } } } as OpenClawConfig,
+        payload,
+        explicitCommandTurn: false,
+        sendPolicyDenied: false,
+        sourceEventKey: "event-1",
+      }),
+    ).resolves.toMatchObject({ intentionalSilence: true, shouldDeliver: false });
   });
 
   it("reserves once keys before delivery and releases failed deliveries", async () => {
