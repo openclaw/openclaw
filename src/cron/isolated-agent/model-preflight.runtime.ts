@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 
@@ -29,6 +30,7 @@ type EndpointPreflightResult =
   | {
       status: "unavailable";
       error: unknown;
+      elapsedMs: number;
     };
 
 type CachedEndpointPreflightResult = {
@@ -130,16 +132,42 @@ function buildLocalProviderSsrFPolicy(baseUrl: string): SsrFPolicy | undefined {
   }
 }
 
+function isTimeoutError(error: unknown): boolean {
+  let current: unknown = error;
+  const seen = new Set<unknown>();
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    if (
+      typeof current === "object" &&
+      current !== null &&
+      "name" in current &&
+      (current as { name: unknown }).name === "TimeoutError"
+    ) {
+      return true;
+    }
+    current =
+      typeof current === "object" && current !== null && "cause" in current
+        ? (current as { cause: unknown }).cause
+        : undefined;
+  }
+  return false;
+}
+
 function formatUnavailableReason(params: {
   provider: string;
   model: string;
   baseUrl: string;
   error: unknown;
+  elapsedMs: number;
 }): string {
+  const isTimeout = isTimeoutError(params.error);
+  const probeDesc = isTimeout
+    ? `timed out after ${params.elapsedMs}ms`
+    : `failed after ${params.elapsedMs}ms — the endpoint may have responded, but the response could not be used`;
   return [
-    `Agent cron job uses ${params.provider}/${params.model} but the local provider endpoint is not reachable at ${params.baseUrl}.`,
+    `Agent cron job uses ${params.provider}/${params.model} but the local provider preflight ${probeDesc} at ${params.baseUrl}.`,
     `Skipping this cron run; OpenClaw will retry the provider preflight on a later scheduled run.`,
-    `Last error: ${String(params.error)}`,
+    `Last error: ${formatErrorMessage(params.error)}`,
   ].join(" ");
 }
 
@@ -148,6 +176,7 @@ function buildUnavailableResult(params: {
   model: string;
   baseUrl: string;
   error: unknown;
+  elapsedMs: number;
 }): CronModelProviderPreflightResult {
   return {
     status: "unavailable",
@@ -160,6 +189,7 @@ function buildUnavailableResult(params: {
       model: params.model,
       baseUrl: params.baseUrl,
       error: params.error,
+      elapsedMs: params.elapsedMs,
     }),
   };
 }
@@ -218,15 +248,21 @@ export async function preflightCronModelProvider(params: {
       model: params.model,
       baseUrl,
       error: cached.result.error,
+      elapsedMs: cached.result.elapsedMs,
     });
   }
 
   let result: EndpointPreflightResult;
+  const probeStartedAt = Date.now();
   try {
     await probeLocalProviderEndpoint({ api, baseUrl });
     result = { status: "available" };
   } catch (error) {
-    result = { status: "unavailable", error };
+    result = {
+      status: "unavailable",
+      error,
+      elapsedMs: Math.round(Date.now() - probeStartedAt),
+    };
   }
   preflightCache.set(cacheKey, { checkedAtMs: nowMs, result });
   if (result.status === "available") {
@@ -237,6 +273,7 @@ export async function preflightCronModelProvider(params: {
     model: params.model,
     baseUrl,
     error: result.error,
+    elapsedMs: result.elapsedMs,
   });
 }
 
