@@ -228,6 +228,19 @@ const ModelCompatSchema = z
     unsupportedToolSchemaKeywords: z.array(z.string().min(1)).optional(),
     toolCallArgumentsEncoding: z.string().optional(),
     requiresOpenAiAnthropicToolPayload: z.boolean().optional(),
+    supportsLongCacheRetention: z.boolean().optional(),
+    // Opaque interface types (OpenRouterRouting / VercelGatewayRouting) must use
+    // z.any() to satisfy the bidirectional TS AssertAssignable contract at the
+    // bottom of this block. Using z.object({}).passthrough() or z.record() would
+    // fail direction 1: a structural object type is not assignable to the nominal
+    // interface. The TS type check is the narrowest guard available for these fields.
+    openRouterRouting: z.any().optional(),
+    vercelGatewayRouting: z.any().optional(),
+    cacheControlFormat: z.literal("anthropic").optional(),
+    sendSessionIdHeader: z.boolean().optional(),
+    supportsEagerToolInputStreaming: z.boolean().optional(),
+    sendSessionAffinityHeaders: z.boolean().optional(),
+    zaiToolStream: z.boolean().optional(),
   })
   .strict()
   .optional();
