@@ -151,7 +151,7 @@ private fun AccessibilityDevScreen(
     lastResult =
       ActionResult(
         ActionOutcomeCode.Completed,
-        nativeString("Observed \$count nodes", observed.nodes.size),
+        nativeString("Observed nodes: \$count", observed.nodes.size),
       )
     refreshForegroundPackage()
   }

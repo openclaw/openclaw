@@ -14405,9 +14405,9 @@
       "kind": "ui-call",
       "line": 154,
       "path": "apps/android/app/src/thirdParty/java/ai/openclaw/app/accessibility/AccessibilityDevActivity.kt",
-      "source": "Observed $count nodes",
+      "source": "Observed nodes: $count",
       "surface": "android",
-      "id": "native.android.5f3b2d7b6372291a"
+      "id": "native.android.522a27f673db3ea7"
     },
     {
       "kind": "ui-call",
