@@ -30,13 +30,17 @@ describe("FormatCapabilityProfile", () => {
   });
 
   it("rejects unknown construct overrides", () => {
-    const defineMisspelledProfile = () =>
-      FormatCapabilityProfile.define({
-        mechanism: "markdown",
-        // @ts-expect-error Format profiles reject misspelled construct names.
-        constructs: { blockqoute: "fallback" },
-        chunk: { limit: 1_000, unit: "chars" },
-      });
-    expectTypeOf(defineMisspelledProfile).toBeFunction();
+    type MisspelledProfile = {
+      mechanism: "markdown";
+      constructs: { table: "fallback"; blockqoute: "fallback" };
+      chunk: { limit: number; unit: "chars" };
+    };
+    type AcceptsMisspelledProfile = typeof FormatCapabilityProfile.define extends (
+      profile: MisspelledProfile,
+    ) => unknown
+      ? true
+      : false;
+
+    expectTypeOf<AcceptsMisspelledProfile>().toEqualTypeOf<false>();
   });
 });
