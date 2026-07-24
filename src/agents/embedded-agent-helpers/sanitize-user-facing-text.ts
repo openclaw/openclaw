@@ -74,6 +74,11 @@ const MODEL_CAPACITY_ERROR_USER_MESSAGE =
 const OVERLOADED_ERROR_USER_MESSAGE =
   "The AI service is temporarily overloaded. Please try again in a moment.";
 const TOOL_CALLS_OMITTED_PLACEHOLDER_LINE_RE = /^[ \t]*\[tool calls omitted\][ \t]*$/i;
+const NO_OUTPUT_PLACEHOLDER_LINE_RE = /^[ \t]*\(no output\)[ \t]*$/i;
+const HISTORY_CONTEXT_MARKER_LINE_RE =
+  /^[ \t]*\[Chat messages since your last reply - for context\][ \t]*$/i;
+const CURRENT_MESSAGE_MARKER_LINE_RE = /^[ \t]*\[Current message - respond to this\][ \t]*$/i;
+const CURRENT_MESSAGE_PRIORITY_LINE_RE = /^[ \t]*Current message priority:[^\n]*$/i;
 const ERROR_PREFIX_RE =
   /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|codex\s*error|request failed|failed|exception)(?:\s+\d{3})?[:\s-]+/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
@@ -374,7 +379,7 @@ function stripFinalTagsFromText(text: unknown): string {
   return stripFinalTags(normalized);
 }
 
-function stripToolCallsOmittedPlaceholderLines(text: string): string {
+function stripPlaceholderLines(text: string): string {
   let result = "";
   let start = 0;
   while (start < text.length) {
@@ -382,12 +387,78 @@ function stripToolCallsOmittedPlaceholderLines(text: string): string {
     const end = newlineIndex === -1 ? text.length : newlineIndex + 1;
     const chunk = text.slice(start, end);
     const line = chunk.endsWith("\n") ? chunk.slice(0, -1).replace(/\r$/, "") : chunk;
-    if (!TOOL_CALLS_OMITTED_PLACEHOLDER_LINE_RE.test(line)) {
+    if (
+      !TOOL_CALLS_OMITTED_PLACEHOLDER_LINE_RE.test(line) &&
+      !NO_OUTPUT_PLACEHOLDER_LINE_RE.test(line)
+    ) {
       result += chunk;
     }
     start = end;
   }
   return result;
+}
+
+/**
+ * Drop copied current-message/history scaffolding blocks (the
+ * "[Chat messages since your last reply - for context]" / "[Current message -
+ * respond to this]" / "Current message priority:" prompt headers and their
+ * indented payload) that can leak into a final reply when the model echoes its
+ * own input. Only standalone blocks led by a bracketed marker (or a
+ * "Current message priority:" line that sits alongside one) are removed, so
+ * ordinary prose that merely mentions or starts with the phrase is preserved.
+ * (#78177)
+ */
+function stripCopiedCurrentMessageScaffolding(text: string): string {
+  // Split on blank-line separators, matching both LF and CRLF so copied
+  // scaffolding that uses Windows line endings still parses as its own block
+  // (otherwise the scaffold and the genuine reply would be one droppable
+  // block and the real answer would be suppressed). (#78177)
+  const blocks = text.split(/(\r?\n[ \t]*\r?\n)/);
+  let changed = false;
+  const kept: string[] = [];
+
+  for (let index = 0; index < blocks.length; index += 1) {
+    const block = blocks[index];
+    if (/^\r?\n[ \t]*\r?\n$/.test(block)) {
+      kept.push(block);
+      continue;
+    }
+
+    const firstLine = block.split(/\r?\n/, 1)[0] ?? "";
+    // The bracketed "[Chat messages …]" / "[Current message - respond to this]"
+    // headers are unambiguous copied scaffolding. A plain-text "Current message
+    // priority:" line is not — it can legitimately begin a reply that explains
+    // the marker — so only treat it as scaffolding when the block also carries
+    // one of the bracketed markers, as real copied blocks always do. (#78177)
+    const blockHasBracketedScaffoldMarker = block
+      .split(/\r?\n/)
+      .some(
+        (line) =>
+          HISTORY_CONTEXT_MARKER_LINE_RE.test(line) || CURRENT_MESSAGE_MARKER_LINE_RE.test(line),
+      );
+    const shouldDrop =
+      HISTORY_CONTEXT_MARKER_LINE_RE.test(firstLine) ||
+      CURRENT_MESSAGE_MARKER_LINE_RE.test(firstLine) ||
+      (CURRENT_MESSAGE_PRIORITY_LINE_RE.test(firstLine) && blockHasBracketedScaffoldMarker);
+    if (shouldDrop) {
+      changed = true;
+      if (/^\r?\n[ \t]*\r?\n$/.test(blocks[index + 1] ?? "")) {
+        index += 1;
+      }
+      continue;
+    }
+
+    kept.push(block);
+  }
+
+  if (!changed) {
+    return text;
+  }
+
+  return kept
+    .join("")
+    .replace(/^(?:[ \t]*\r?\n)+/, "")
+    .replace(/(?:\r?\n[ \t]*)+$/, "");
 }
 
 function collapseConsecutiveDuplicateBlocks(text: string): string {
@@ -447,10 +518,11 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
   // Replay repair may synthesize this placeholder to keep provider transcripts valid.
   // It is internal scaffolding, so drop standalone placeholder lines before delivery
   // while preserving ordinary inline mentions a user may be discussing.
-  const withoutPlaceholder = stripToolCallsOmittedPlaceholderLines(withoutToolCallXml);
+  const withoutPlaceholder = stripPlaceholderLines(withoutToolCallXml);
+  const withoutCurrentMessageScaffolding = stripCopiedCurrentMessageScaffolding(withoutPlaceholder);
   const withoutInternalTraceLines = errorContext
-    ? stripAssistantInternalTraceLines(withoutPlaceholder)
-    : withoutPlaceholder;
+    ? stripAssistantInternalTraceLines(withoutCurrentMessageScaffolding)
+    : withoutCurrentMessageScaffolding;
   const withoutToolCallBlocks = stripPlainTextToolCallBlocks(
     stripLegacyBracketToolCallBlocks(withoutInternalTraceLines),
   );

@@ -502,6 +502,98 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(input)).toBe("Done. Clean answer only.");
   });
 
+  it("strips leaked current-message scaffolding while preserving reply text", () => {
+    const input = [
+      "Current message priority: high",
+      "[Current message - respond to this]",
+      "[Telegram 2026-05-05T20:20:00Z] Danny: ping",
+      "[from: Danny]",
+      "",
+      "Pong.",
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe("Pong.");
+  });
+
+  it("strips copied history/current-message scaffolding blocks", () => {
+    const input = [
+      "[Chat messages since your last reply - for context]",
+      "[Telegram 2026-05-05T20:19:00Z] Danny: previous",
+      "",
+      "[Current message - respond to this]",
+      "[Telegram 2026-05-05T20:20:00Z] Danny: current",
+      "",
+      "Visible reply.",
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe("Visible reply.");
+  });
+
+  it("preserves ordinary replies that begin with the priority-marker phrase", () => {
+    // A genuine reply that explains the marker must not be erased just because
+    // its first line starts with "Current message priority:". Only copied
+    // scaffolding — the phrase alongside a bracketed scaffold marker — is
+    // stripped. (#78177)
+    const prose = "Current message priority: high means the sender flagged the message as urgent.";
+    expect(sanitizeUserFacingText(prose)).toBe(prose);
+
+    const multiLine = [
+      "Current message priority: high",
+      "is how that runtime header is labeled, in case you were asking.",
+    ].join("\n");
+    expect(sanitizeUserFacingText(multiLine)).toBe(multiLine);
+  });
+
+  it("still strips a priority-marker line when it heads a copied scaffold block", () => {
+    const input = [
+      "Current message priority: high",
+      "[Current message - respond to this]",
+      "[Telegram 2026-05-05T20:20:00Z] Danny: ping",
+      "",
+      "Pong.",
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe("Pong.");
+  });
+
+  it("strips a CRLF copied scaffold block while preserving the genuine reply (#78177)", () => {
+    // Windows/CRLF line endings must still split the scaffold from the answer;
+    // before the CRLF-aware blank-line split the scaffold and the reply were a
+    // single block and the genuine reply was suppressed along with it.
+    const scaffolded = [
+      "Current message priority: high",
+      "[Current message - respond to this]",
+      "[Telegram 2026-05-05T20:20:00Z] Danny: ping",
+      "[from: Danny]",
+      "",
+      "Pong.",
+    ].join("\r\n");
+    expect(sanitizeUserFacingText(scaffolded)).toBe("Pong.");
+
+    const history = [
+      "[Chat messages since your last reply - for context]",
+      "[Telegram 2026-05-05T20:19:00Z] Danny: previous",
+      "",
+      "[Current message - respond to this]",
+      "[Telegram 2026-05-05T20:20:00Z] Danny: current",
+      "",
+      "Visible reply.",
+    ].join("\r\n");
+    expect(sanitizeUserFacingText(history)).toBe("Visible reply.");
+
+    // A CRLF reply that merely begins with the phrase (no bracketed marker) is kept.
+    const prose = ["Current message priority: high", "means the sender flagged it."].join("\r\n");
+    expect(sanitizeUserFacingText(prose)).toContain("means the sender flagged it.");
+  });
+
+  it("suppresses standalone no-output placeholders without stripping inline mentions", () => {
+    expect(sanitizeUserFacingText("(no output)")).toBe("");
+    expect(sanitizeUserFacingText("Before\n(no output)\nAfter")).toBe("Before\nAfter");
+    expect(sanitizeUserFacingText("The literal (no output) text is relevant.")).toBe(
+      "The literal (no output) text is relevant.",
+    );
+  });
+
   it("strips copied inbound metadata blocks from user-facing assistant text", () => {
     const input = [
       "Conversation info (untrusted metadata):",

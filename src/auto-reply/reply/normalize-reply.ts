@@ -20,7 +20,7 @@ import {
   type ResponsePrefixContext,
 } from "./response-prefix-template.js";
 
-export type NormalizeReplySkipReason = "empty" | "silent" | "heartbeat";
+export type NormalizeReplySkipReason = "empty" | "silent" | "heartbeat" | "empty-tool-output";
 
 type NormalizeReplyOptions = {
   responsePrefix?: string;
@@ -101,6 +101,19 @@ export function normalizeReplyPayload(
   if (text && isInternalFormattingArtifact(text) && !hasContent("")) {
     opts.onSkip?.("silent");
     return null;
+  }
+
+  // A bare "(no output)" payload is internal tool scaffolding, never a real
+  // reply, so clear it before sanitization empties it to "".  Preserve any
+  // sendable non-text payload (media, presentation, interactive, channelData)
+  // via the existing content gate so those still deliver; only skip when
+  // nothing sendable remains. (#78177)
+  if (text?.trim().toLowerCase() === "(no output)") {
+    if (!hasContent("")) {
+      opts.onSkip?.("empty-tool-output");
+      return null;
+    }
+    text = "";
   }
 
   if (text) {
