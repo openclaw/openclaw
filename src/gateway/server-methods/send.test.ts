@@ -554,6 +554,64 @@ describe("gateway send mirroring", () => {
     expect(response?.[0]).toBe(true);
   });
 
+  it("uses the resolved runtime config for gateway sends when Feishu appSecret is SecretRef-backed", async () => {
+    const sourceConfig = {
+      channels: {
+        feishu: {
+          appId: "cli_source",
+          appSecret: {
+            source: "env",
+            provider: "default",
+            id: "FEISHU_APP_SECRET",
+          },
+        },
+      },
+    };
+    const runtimeConfig = {
+      channels: {
+        feishu: {
+          appId: "cli_source",
+          appSecret: "resolved-feishu-secret",
+        },
+      },
+    };
+    mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({
+      config,
+      changes: [],
+      autoEnabledReasons: {},
+    }));
+    mocks.getRuntimeConfigSnapshot.mockReturnValue(runtimeConfig);
+    mocks.getRuntimeConfigSourceSnapshot.mockReturnValue(sourceConfig);
+    mocks.deliverOutboundPayloads.mockResolvedValue([
+      { messageId: "feishu-media", channel: "feishu" },
+    ]);
+
+    const context = {
+      ...makeContext(),
+      getRuntimeConfig: () => sourceConfig,
+    } as unknown as GatewayRequestContext;
+    const respond = vi.fn();
+    await sendHandlers.send({
+      params: {
+        channel: "feishu",
+        to: "chat:oc_target",
+        mediaUrl: "https://example.com/image.png",
+        idempotencyKey: "idem-feishu-runtime-config",
+      } as never,
+      respond,
+      context,
+      req: { type: "req", id: "1", method: "send" },
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+
+    expect(deliveryCall()?.cfg).toBe(runtimeConfig);
+    expect(JSON.stringify(deliveryCall()?.cfg)).toContain("resolved-feishu-secret");
+    expect(JSON.stringify(deliveryCall()?.cfg)).not.toContain("FEISHU_APP_SECRET");
+    const response = firstRespondCall(respond);
+    expect(response?.[0]).toBe(true);
+  });
+
   it("matches message.action runtime config against the canonical pre-auto-enable source config", async () => {
     const sourceConfig = {
       channels: {
@@ -730,18 +788,19 @@ describe("gateway send mirroring", () => {
     expect(lastDispatchChannelMessageActionCall()?.cfg).toBe(autoEnabledRequestConfig);
   });
 
-  it("does not read the runtime config snapshot for send requests", async () => {
-    mockDeliverySuccess("m-no-runtime-config-read");
+  it("checks the runtime config snapshot for send requests", async () => {
+    mockDeliverySuccess("m-runtime-config-checked");
 
     await runSend({
       to: "channel:C1",
       message: "hi",
       channel: "slack",
-      idempotencyKey: "idem-send-no-runtime-config-read",
+      idempotencyKey: "idem-send-runtime-config-checked",
     });
 
-    expect(mocks.getRuntimeConfigSnapshot).not.toHaveBeenCalled();
-    expect(mocks.getRuntimeConfigSourceSnapshot).not.toHaveBeenCalled();
+    expect(mocks.getRuntimeConfigSnapshot).toHaveBeenCalledTimes(1);
+    expect(mocks.getRuntimeConfigSourceSnapshot).toHaveBeenCalledTimes(1);
+    expect(deliveryCall()?.cfg).toEqual({});
   });
 
   it("dedupes concurrent message.action requests while inflight", async () => {

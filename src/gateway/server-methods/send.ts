@@ -287,7 +287,7 @@ function resolveGatewayOutboundTarget(params: {
   return { ok: true, to: resolved.to };
 }
 
-function resolveMessageActionRuntimeConfig(params: {
+function resolveCurrentMessageRuntimeConfig(params: {
   cfg: OpenClawConfig;
   sourceCfg: OpenClawConfig;
 }): OpenClawConfig {
@@ -301,7 +301,7 @@ function resolveMessageActionRuntimeConfig(params: {
     runtimeConfig,
     runtimeSourceConfig,
   });
-  // Message actions must use the hot runtime snapshot when it matches the caller's source config.
+  // Message sends/actions must use the hot runtime snapshot when it matches the caller's source config.
   if (selected === runtimeConfig && selected !== params.cfg) {
     return resolveGatewayPluginConfig({ config: selected });
   }
@@ -523,7 +523,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         return { ok: false, error: resolvedChannel.error };
       }
       const { cfg: selectedCfg, sourceCfg, channel } = resolvedChannel;
-      const cfg = resolveMessageActionRuntimeConfig({ cfg: selectedCfg, sourceCfg });
+      const cfg = resolveCurrentMessageRuntimeConfig({ cfg: selectedCfg, sourceCfg });
       const plugin = resolveOutboundChannelPlugin({ channel, cfg });
       if (!plugin?.actions?.handleAction) {
         return {
@@ -707,7 +707,8 @@ export const sendHandlers: GatewayRequestHandlers = {
       if (resolvedChannel.kind !== "ready") {
         return resolvedChannel.result;
       }
-      const { cfg, channel } = resolvedChannel;
+      const { cfg: selectedCfg, sourceCfg, channel } = resolvedChannel;
+      const cfg = resolveCurrentMessageRuntimeConfig({ cfg: selectedCfg, sourceCfg });
       const outboundChannel = channel;
       const plugin = resolveOutboundChannelPlugin({ channel, cfg });
       if (!plugin) {

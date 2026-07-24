@@ -349,6 +349,48 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("media");
   });
 
+  it("uses resolved runtime account credentials when creating the media upload client", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      configured: true,
+      accountId: "main",
+      config: {},
+      appId: "cli_resolved",
+      appSecret: "resolved-feishu-app-secret", // pragma: allowlist secret
+      domain: "feishu",
+    });
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: Buffer.from("remote-image"),
+      fileName: "photo.png",
+      kind: "image",
+      contentType: "image/png",
+    });
+
+    await sendMediaFeishu({
+      cfg: {
+        channels: {
+          feishu: {
+            appId: "cli_resolved",
+            appSecret: {
+              source: "env",
+              provider: "default",
+              id: "FEISHU_SECRET_REF_NOT_FOR_CLIENT",
+            },
+          },
+        },
+      } as never,
+      to: "user:ou_target",
+      mediaUrl: "https://example.com/photo.png",
+      accountId: "main",
+    });
+
+    const clientConfig = mockCallArg<{ appSecret?: string }>(createFeishuClientMock, 0, 0);
+    expect(clientConfig.appSecret).toBe("resolved-feishu-app-secret");
+    expect(JSON.stringify(createFeishuClientMock.mock.calls)).not.toContain(
+      "FEISHU_SECRET_REF_NOT_FOR_CLIENT",
+    );
+    expect(JSON.stringify(loadWebMediaMock.mock.calls)).toContain("https://example.com/photo.png");
+  });
+
   it("falls back to generic file for unsupported audio formats", async () => {
     loadWebMediaMock.mockResolvedValueOnce({
       buffer: Buffer.from("remote-mp3"),
