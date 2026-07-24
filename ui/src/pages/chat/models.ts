@@ -24,12 +24,12 @@ type LoadModelsOptions = {
 
 export function loadModels(
   client: GatewayBrowserClient,
-  opts?: { refresh?: boolean },
-): Promise<ModelCatalogEntry[]>;
-export function loadModels(
-  client: GatewayBrowserClient,
   opts: { refresh?: boolean; includeMetadata: true },
 ): Promise<ModelCatalogResult>;
+export function loadModels(
+  client: GatewayBrowserClient,
+  opts?: { refresh?: boolean },
+): Promise<ModelCatalogEntry[]>;
 export async function loadModels(
   client: GatewayBrowserClient,
   opts?: LoadModelsOptions,
