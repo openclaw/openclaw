@@ -4,6 +4,10 @@
     "target": "OpenClaw"
   },
   {
+    "source": "Localization contributor guide",
+    "target": "本地化贡献者指南"
+  },
+  {
     "source": "macOS platform notes",
     "target": "macOS 平台说明"
   },
