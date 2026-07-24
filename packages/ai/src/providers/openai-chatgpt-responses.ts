@@ -60,6 +60,7 @@ import {
 } from "../utils/stream-first-event-timeout.js";
 import { createSseByteGuard } from "../utils/streaming-byte-guard.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
+import { inspectTlsCertificateError } from "../utils/tls-certificate-errors.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import { supportsOpenAITemperature } from "./openai-reasoning-effort.js";
 import {
@@ -134,66 +135,6 @@ interface RequestBody {
 // ============================================================================
 // Retry Helpers
 // ============================================================================
-
-const TLS_CERTIFICATE_ERROR_CODES = new Set([
-  "CERT_HAS_EXPIRED",
-  "CERT_REJECTED",
-  "CERT_REVOKED",
-  "CERT_SIGNATURE_FAILURE",
-  "CERT_UNTRUSTED",
-  "CERT_CHAIN_TOO_LONG",
-  "CERT_NOT_YET_VALID",
-  "CRL_HAS_EXPIRED",
-  "CRL_NOT_YET_VALID",
-  "CRL_SIGNATURE_FAILURE",
-  "DEPTH_ZERO_SELF_SIGNED_CERT",
-  "ERROR_IN_CERT_NOT_AFTER_FIELD",
-  "ERROR_IN_CERT_NOT_BEFORE_FIELD",
-  "ERROR_IN_CRL_LAST_UPDATE_FIELD",
-  "ERROR_IN_CRL_NEXT_UPDATE_FIELD",
-  "ERR_TLS_CERT_ALTNAME_INVALID",
-  "HOSTNAME_MISMATCH",
-  "INVALID_CA",
-  "INVALID_PURPOSE",
-  "PATH_LENGTH_EXCEEDED",
-  "SELF_SIGNED_CERT_IN_CHAIN",
-  "UNABLE_TO_DECODE_ISSUER_PUBLIC_KEY",
-  "UNABLE_TO_DECRYPT_CERT_SIGNATURE",
-  "UNABLE_TO_DECRYPT_CRL_SIGNATURE",
-  "UNABLE_TO_GET_CRL",
-  "UNABLE_TO_GET_ISSUER_CERT",
-  "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
-  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
-]);
-
-const TLS_CERTIFICATE_ERROR_PATTERNS = [
-  /certificate has expired/i,
-  /certificate is not yet valid/i,
-  /self[- ]signed certificate/i,
-  /unable to get local issuer certificate/i,
-  /unable to verify the first certificate/i,
-];
-
-function isTlsCertificateError(error: unknown, seen = new Set<object>()): boolean {
-  if (
-    error instanceof Error &&
-    TLS_CERTIFICATE_ERROR_PATTERNS.some((re) => re.test(error.message))
-  ) {
-    return true;
-  }
-  if (!error || typeof error !== "object" || seen.has(error)) {
-    return false;
-  }
-  seen.add(error);
-  const candidate = error as { cause?: unknown; code?: unknown };
-  if (
-    typeof candidate.code === "string" &&
-    TLS_CERTIFICATE_ERROR_CODES.has(candidate.code.trim().toUpperCase())
-  ) {
-    return true;
-  }
-  return isTlsCertificateError(candidate.cause, seen);
-}
 
 function isRetryableError(status: number, errorText: string): boolean {
   if (status === 429 || status === 500 || status === 502 || status === 503 || status === 504) {
@@ -498,7 +439,7 @@ export const streamOpenAICodexResponses: StreamFunction<
               throw new Error(`Request timed out after ${requestTimeoutMs}ms`, { cause: error });
             }
           }
-          const tlsCertificateError = isTlsCertificateError(error);
+          const tlsCertificateError = inspectTlsCertificateError(error);
           lastError = toLintErrorObject(error, String(error));
           // Deterministic certificate failures cannot recover through backoff.
           if (

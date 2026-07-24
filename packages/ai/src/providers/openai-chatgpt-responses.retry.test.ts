@@ -15,37 +15,6 @@ function createTestJwt(payload: Record<string, unknown>): string {
 }
 
 describe("streamOpenAICodexResponses retry classification", () => {
-  const deterministicTlsCertificateCodes = [
-    "CERT_HAS_EXPIRED",
-    "CERT_REJECTED",
-    "CERT_REVOKED",
-    "CERT_SIGNATURE_FAILURE",
-    "CERT_UNTRUSTED",
-    "CERT_CHAIN_TOO_LONG",
-    "CERT_NOT_YET_VALID",
-    "CRL_HAS_EXPIRED",
-    "CRL_NOT_YET_VALID",
-    "CRL_SIGNATURE_FAILURE",
-    "DEPTH_ZERO_SELF_SIGNED_CERT",
-    "ERROR_IN_CERT_NOT_AFTER_FIELD",
-    "ERROR_IN_CERT_NOT_BEFORE_FIELD",
-    "ERROR_IN_CRL_LAST_UPDATE_FIELD",
-    "ERROR_IN_CRL_NEXT_UPDATE_FIELD",
-    "ERR_TLS_CERT_ALTNAME_INVALID",
-    "HOSTNAME_MISMATCH",
-    "INVALID_CA",
-    "INVALID_PURPOSE",
-    "PATH_LENGTH_EXCEEDED",
-    "SELF_SIGNED_CERT_IN_CHAIN",
-    "UNABLE_TO_DECODE_ISSUER_PUBLIC_KEY",
-    "UNABLE_TO_DECRYPT_CERT_SIGNATURE",
-    "UNABLE_TO_DECRYPT_CRL_SIGNATURE",
-    "UNABLE_TO_GET_CRL",
-    "UNABLE_TO_GET_ISSUER_CERT",
-    "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
-    "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
-  ];
-
   afterEach(() => {
     closeOpenAICodexWebSocketSessions();
     vi.restoreAllMocks();
@@ -147,6 +116,9 @@ describe("streamOpenAICodexResponses retry classification", () => {
       }),
     }),
     new Error("certificate is not yet valid"),
+    Object.assign(new Error("TLS validation failed"), {
+      code: "ERR_TLS_CERT_ALTNAME_INVALID",
+    }),
   ])("does not retry deterministic TLS certificate failures", async (error) => {
     const fetchMock = vi.fn<typeof fetch>().mockRejectedValue(error);
     vi.stubGlobal("fetch", fetchMock);
@@ -161,27 +133,6 @@ describe("streamOpenAICodexResponses retry classification", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(setTimeoutSpy).not.toHaveBeenCalled();
   });
-
-  it.each(deterministicTlsCertificateCodes)(
-    "does not retry Node/OpenSSL certificate code %s from a non-Error rejection",
-    async (code) => {
-      const fetchMock = vi.fn<typeof fetch>().mockRejectedValue({
-        code,
-        message: "TLS certificate validation failed",
-      });
-      vi.stubGlobal("fetch", fetchMock);
-      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-
-      const result = await streamOpenAICodexResponses(model, context, {
-        apiKey: jwt,
-        transport: "sse",
-      }).result();
-
-      expect(result.stopReason).toBe("error");
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-      expect(setTimeoutSpy).not.toHaveBeenCalled();
-    },
-  );
 
   it("does not retry a non-Error rejection with a wrapped certificate code", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockRejectedValue({
