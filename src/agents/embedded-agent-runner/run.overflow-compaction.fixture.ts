@@ -2,6 +2,10 @@
  * Test fixtures for embedded-run overflow compaction scenarios.
  */
 import type { ContextEngineSessionTarget } from "../../context-engine/types.js";
+import {
+  normalizeAgentRunAttemptTerminal,
+  type LegacyAgentRunAttemptTerminalInput,
+} from "../agent-run-terminal-outcome.js";
 import { isAgentToolReplaySafe } from "../tool-replay-safety.js";
 import { buildAttemptReplayMetadata } from "./run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
@@ -37,8 +41,15 @@ export function makeCompactionSuccess(params: {
   };
 }
 
+type AttemptResultOverrides = Partial<EmbeddedRunAttemptResult> &
+  LegacyAgentRunAttemptTerminalInput;
+
+function resolveFixtureTerminal(overrides: AttemptResultOverrides) {
+  return overrides.terminal ?? normalizeAgentRunAttemptTerminal(overrides);
+}
+
 export function makeAttemptResult(
-  overrides: Partial<EmbeddedRunAttemptResult> = {},
+  overrides: AttemptResultOverrides = {},
 ): EmbeddedRunAttemptResult {
   const toolMetas = (overrides.toolMetas ?? []).map((entry) =>
     Object.assign({}, entry, {
@@ -51,15 +62,20 @@ export function makeAttemptResult(
   const messagingToolSentTargets = overrides.messagingToolSentTargets ?? [];
   const successfulCronAdds = overrides.successfulCronAdds;
   const acceptedSessionSpawns = overrides.acceptedSessionSpawns ?? [];
+  const {
+    aborted: _aborted,
+    externalAbort: _externalAbort,
+    idleTimedOut: _idleTimedOut,
+    promptError: _promptError,
+    promptErrorSource: _promptErrorSource,
+    timedOut: _timedOut,
+    timedOutByRunBudget: _timedOutByRunBudget,
+    timedOutDuringCompaction: _timedOutDuringCompaction,
+    timedOutDuringToolExecution: _timedOutDuringToolExecution,
+    ...canonicalOverrides
+  } = overrides;
   return {
-    aborted: false,
-    externalAbort: false,
-    timedOut: false,
-    idleTimedOut: false,
-    timedOutDuringCompaction: false,
-    timedOutDuringToolExecution: false,
-    promptError: null,
-    promptErrorSource: null,
+    terminal: resolveFixtureTerminal(overrides),
     sessionIdUsed: "test-session",
     assistantTexts: ["Hello!"],
     acceptedSessionSpawns,
@@ -88,7 +104,7 @@ export function makeAttemptResult(
     messagingToolSentMediaUrls,
     messagingToolSentTargets,
     cloudCodeAssistFormatError: false,
-    ...overrides,
+    ...canonicalOverrides,
     toolMetas,
   };
 }
@@ -121,9 +137,9 @@ export function mockOverflowRetrySuccess(params: {
   const overflowError = makeOverflowError(params.overflowMessage);
 
   params.runEmbeddedAttempt.mockResolvedValueOnce(
-    makeAttemptResult({ promptError: overflowError }),
+    makeAttemptResult({ terminal: { kind: "failed", source: "prompt", error: overflowError } }),
   );
-  params.runEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+  params.runEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult());
 
   params.compactDirect.mockResolvedValueOnce(
     makeCompactionSuccess({
@@ -142,7 +158,7 @@ export function queueOverflowAttemptWithOversizedToolOutput(
 ): Error {
   runEmbeddedAttempt.mockResolvedValueOnce(
     makeAttemptResult({
-      promptError: overflowError,
+      terminal: { kind: "failed", source: "prompt", error: overflowError },
       messagesSnapshot: [
         {
           role: "toolResult",

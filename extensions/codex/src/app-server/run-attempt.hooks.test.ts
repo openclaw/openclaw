@@ -20,6 +20,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT } from "openclaw/plugin-sdk/provider-model-shared";
 import { describe, expect, it, vi } from "vitest";
+import { readAttemptTerminal } from "./attempt-terminal.js";
 import {
   assistantMessage,
   createAppServerHarness,
@@ -388,7 +389,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       const errorEvent = diagnosticEvents.find((event) => event.type === "model.call.error") as
         | ({ failureKind?: string; errorCategory?: string } & DiagnosticEventPayload)
         | undefined;
-      expect(result.timedOut).toBe(true);
+      expect(readAttemptTerminal(result).timedOut).toBe(true);
       expect(errorEvent?.failureKind).toBe("timeout");
       expect(errorEvent?.errorCategory).toBe("timeout");
     } finally {
@@ -837,7 +838,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     const result = await run;
 
-    expect(result.promptError).toBeNull();
+    expect(readAttemptTerminal(result).promptError).toBeNull();
     expect(agentEnd).toHaveBeenCalledTimes(1);
     releaseAgentEnd();
   });
@@ -901,7 +902,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
 
     const result = await run;
 
-    expect(result.promptError).toBe("codex exploded");
+    expect(readAttemptTerminal(result).promptError).toBe("codex exploded");
     expect(agentEnd).toHaveBeenCalledTimes(1);
     const agentEvents = onRunAgentEvent.mock.calls.map(([event]) => event) as Array<{
       data: { endedAt?: number; error?: string; phase?: string; startedAt?: number };
@@ -1036,7 +1037,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     expect(abortAgentHarnessRun("session-1")).toBe(true);
 
     const result = await run;
-    expect(result.aborted).toBe(true);
+    expect(readAttemptTerminal(result).aborted).toBe(true);
     expect(agentEnd).toHaveBeenCalledTimes(1);
     const [agentEndPayload] = mockCall(agentEnd, "agent_end") as [{ success?: boolean }, unknown];
     expect(agentEndPayload.success).toBe(false);

@@ -38,6 +38,8 @@ import {
 } from "./test-support.js";
 import { codexWorkspaceDirCache } from "./workspace-dir-cache.js";
 
+export { readAttemptTerminal } from "./attempt-terminal.js";
+
 export let tempDir: string;
 let codexAppServerClientFactoryForTest: CodexAppServerClientFactory | undefined;
 const multiplexedTestClients = new WeakSet<CodexAppServerClient>();

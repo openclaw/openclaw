@@ -25,6 +25,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import { createCodexTestModel, createCodexTestToolTerminalObserver } from "./test-support.js";
 
+export { readAttemptTerminal } from "./attempt-terminal.js";
+
 export {
   CodexAppServerEventProjector,
   createCodexTestModel,

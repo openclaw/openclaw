@@ -2,6 +2,12 @@
 // Keep heavyweight tool construction out of this module so harness imports can
 // register quickly inside gateway startup and Docker e2e runs.
 
+import {
+  mergeAgentRunAttemptTerminal,
+  normalizeAgentRunAttemptTerminal,
+  projectAgentRunAttemptTerminal,
+  setAgentRunAttemptTerminalFailure,
+} from "../agents/agent-run-terminal-outcome.js";
 import type {
   CodexBundleMcpThreadConfig,
   LoadCodexBundleMcpThreadConfigParams,
@@ -60,6 +66,12 @@ export type {
 } from "../agents/harness/types.js";
 export { AgentHarnessSessionSupersededError } from "../agents/harness/errors.js";
 export { projectSettledTurnFinalizationAttemptResult } from "../agents/harness/settled-turn-finalization-result.js";
+export const agentHarnessAttemptTerminal = {
+  merge: mergeAgentRunAttemptTerminal,
+  normalize: normalizeAgentRunAttemptTerminal,
+  project: projectAgentRunAttemptTerminal,
+  setFailure: setAgentRunAttemptTerminalFailure,
+};
 export { projectAgentHarnessTranscriptMessageForDisplay } from "../agents/harness/transcript-visibility.js";
 export { fingerprintResolvedAuthProfileCredential } from "../agents/execution-auth-binding.js";
 export type {

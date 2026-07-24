@@ -30,6 +30,7 @@ import {
   getCodexWorkspaceMemoryToolNames,
   prependCodexOpenClawPromptContext,
 } from "./attempt-context.js";
+import { readAttemptTerminal } from "./attempt-terminal.js";
 import { withCodexStartupTimeout } from "./attempt-timeouts.js";
 import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
 import { resolveCodexAppServerFallbackApiKeyCacheKey } from "./auth-bridge.js";
@@ -1895,7 +1896,7 @@ describe("runCodexAppServerAttempt", () => {
       },
     });
     const result = await run;
-    expect(result.promptError).toBeNull();
+    expect(readAttemptTerminal(result).promptError).toBeNull();
     expect(result.lastToolError).toMatchObject({
       toolName: "bash",
       error: expect.stringContaining("without a matching tool.result"),
@@ -4017,7 +4018,7 @@ describe("runCodexAppServerAttempt", () => {
       await waitForMethod("turn/start");
       abortController.abort("shutdown");
       const result = await run;
-      expect(result.aborted).toBe(true);
+      expect(readAttemptTerminal(result).aborted).toBe(true);
       await new Promise((resolve) => {
         setImmediate(resolve);
       });
@@ -4066,8 +4067,7 @@ describe("runCodexAppServerAttempt", () => {
       },
     );
     const result = await runCodexAppServerAttempt(createRunParams());
-    expect(result.aborted).toBe(false);
-    expect(result.timedOut).toBe(false);
+    expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, timedOut: false });
   });
   it("does not fail when a buffered terminal notification is followed by client close", async () => {
     let resolveBufferedTerminal!: () => void;
@@ -4102,9 +4102,11 @@ describe("runCodexAppServerAttempt", () => {
     });
     harness.close();
     const result = await run;
-    expect(result.promptError ?? undefined).toBeUndefined();
-    expect(result.aborted).toBe(false);
-    expect(result.timedOut).toBe(false);
+    expect(readAttemptTerminal(result)).toMatchObject({
+      promptError: null,
+      aborted: false,
+      timedOut: false,
+    });
   });
 
   it("does not time out when turn progress arrives before turn/start returns", async () => {
@@ -4140,8 +4142,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     const result = await run;
-    expect(result.aborted).toBe(false);
-    expect(result.timedOut).toBe(false);
+    expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, timedOut: false });
   });
   it("completes when turn/start returns a terminal turn without a follow-up notification", async () => {
     const harness = createAppServerHarness(async (method) => {
@@ -4162,8 +4163,7 @@ describe("runCodexAppServerAttempt", () => {
     const result = await runCodexAppServerAttempt(createRunParams());
     expect(harness.requests.map((entry) => entry.method)).toContain("turn/start");
     expect(result.assistantTexts).toEqual(["done from response"]);
-    expect(result.aborted).toBe(false);
-    expect(result.timedOut).toBe(false);
+    expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, timedOut: false });
   });
 
   it("surfaces Codex-native image generation saved paths as reply media", async () => {
@@ -4233,8 +4233,7 @@ describe("runCodexAppServerAttempt", () => {
     });
     const result = await run;
     expect(result.assistantTexts).toEqual(["final completion"]);
-    expect(result.aborted).toBe(false);
-    expect(result.timedOut).toBe(false);
+    expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, timedOut: false });
   });
 
   it("ignores turn/completed notifications for other subscribed threads", async () => {
@@ -4279,8 +4278,7 @@ describe("runCodexAppServerAttempt", () => {
     });
     const result = await run;
     expect(result.assistantTexts).toEqual(["final completion"]);
-    expect(result.aborted).toBe(false);
-    expect(result.timedOut).toBe(false);
+    expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, timedOut: false });
   });
   it("routes Computer Use MCP elicitations through the native bridge", async () => {
     const bridgeSpy = vi
@@ -4884,7 +4882,7 @@ describe("runCodexAppServerAttempt", () => {
   });
   it("restarts the app-server once when a shared client closes during startup", async () => {
     const { result, requests } = await runSharedClientRestartTest(1);
-    expect(result.aborted).toBe(false);
+    expect(readAttemptTerminal(result).aborted).toBe(false);
     expect(requests).toEqual([
       ["thread/resume"],
       ["thread/resume", "turn/start", "thread/unsubscribe"],
@@ -4893,7 +4891,7 @@ describe("runCodexAppServerAttempt", () => {
 
   it("tolerates a second app-server close while retrying startup", async () => {
     const { result, requests } = await runSharedClientRestartTest(2);
-    expect(result.aborted).toBe(false);
+    expect(readAttemptTerminal(result).aborted).toBe(false);
     expect(requests).toEqual([
       ["thread/resume"],
       ["thread/resume"],

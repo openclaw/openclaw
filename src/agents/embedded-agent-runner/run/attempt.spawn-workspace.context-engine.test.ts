@@ -16,6 +16,7 @@ import {
   registerTestMemoryPromptBuilder,
 } from "../../../plugins/memory-state.test-fixtures.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
+import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import {
   addSubagentRunForTests,
   leasePendingAgentSteeringItems,
@@ -2321,7 +2322,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
 
     expect(sessionPrompt).not.toHaveBeenCalled();
     expect(result.finalPromptText).toBeUndefined();
-    expect(result.promptError).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBeNull();
     expect(result.messagesSnapshot).toHaveLength(1);
     expectFields(requireRecord(result.messagesSnapshot[0], "messages snapshot seed"), {
       role: "user",
@@ -2362,7 +2363,9 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(runBeforeAgentRun).toHaveBeenCalledTimes(1);
     expect(sessionPrompt).not.toHaveBeenCalled();
     expect(result.finalPromptText).toBeUndefined();
-    expect(result.promptErrorSource).toBe("hook:before_agent_run");
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBe(
+      "hook:before_agent_run",
+    );
     expectInitialLockReleasedBeforePostTurnWrite(lockEvents);
   });
 
@@ -2454,8 +2457,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
 
     expect(sawPrompt).toBe(true);
-    expect(result.promptError).toBeNull();
-    expect(result.promptErrorSource).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBeNull();
     expect(hoisted.preemptiveCompactionCalls.at(-1)).not.toHaveProperty("unwindowedMessages");
   });
 
@@ -2494,8 +2497,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
 
     expect(sawPrompt).toBe(true);
-    expect(result.promptError).toBeNull();
-    expect(result.promptErrorSource).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBeNull();
     expect(hoisted.preemptiveCompactionCalls).toHaveLength(0);
   });
 
@@ -2531,8 +2534,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
 
     expect(sawPrompt).toBe(true);
-    expect(result.promptError).toBeNull();
-    expect(result.promptErrorSource).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBeNull();
     expect(result.preflightRecovery).toBeUndefined();
     expect(hoisted.preemptiveCompactionCalls).toHaveLength(1);
     expect(hoisted.preemptiveCompactionCalls.at(-1)).not.toHaveProperty("unwindowedMessages");
@@ -2606,8 +2609,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
 
     expect(sawPrompt).toBe(true);
-    expect(result.promptError).toBeNull();
-    expect(result.promptErrorSource).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBeNull();
     expect(result.preflightRecovery).toBeUndefined();
     expect(hoisted.preemptiveCompactionCalls).toHaveLength(1);
     expect(hoisted.preemptiveCompactionCalls.at(-1)).toHaveProperty("unwindowedMessages");
@@ -2649,8 +2652,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
 
     expect(sawPrompt).toBe(true);
-    expect(result.promptError).toBeNull();
-    expect(result.promptErrorSource).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBeNull();
     expect(result.preflightRecovery).toBeUndefined();
     expect(hoisted.preemptiveCompactionCalls).toHaveLength(1);
     expect(hoisted.preemptiveCompactionCalls.at(-1)).toHaveProperty("unwindowedMessages");
@@ -3463,7 +3466,7 @@ describe("runEmbeddedAttempt context engine mid-turn precheck integration", () =
       },
     });
 
-    expect(result.promptErrorSource).toBe("precheck");
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBe("precheck");
     expect(result.preflightRecovery).toEqual({
       route: "compact_only",
       source: "mid-turn",
@@ -3733,8 +3736,8 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
     });
 
     expect(sawPrompt).toBe(true);
-    expect(result.promptError).toBeNull();
-    expect(result.promptErrorSource).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBeNull();
     expect(result.preflightRecovery).toBeUndefined();
     expect(hoisted.preemptiveCompactionCalls).toHaveLength(1);
   });
@@ -3779,8 +3782,8 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
     });
 
     expect(sawPrompt).toBe(true);
-    expect(result.promptError).toBeNull();
-    expect(result.promptErrorSource).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBeNull();
     expect(result.preflightRecovery).toBeUndefined();
     expect(hoisted.preemptiveCompactionCalls).toHaveLength(1);
   });

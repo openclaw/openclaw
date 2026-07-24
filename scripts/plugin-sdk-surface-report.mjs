@@ -160,7 +160,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: canonical incognito session classifier for storage-safe plugin behavior.
       // +2: shipped Slack and Discord setup compatibility helpers.
       // +3: typed channel partial-delivery error, creator, and structural guard.
-      4700,
+      // +1: closed attempt-terminal merge, normalization, and projection helper.
+      4701,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
