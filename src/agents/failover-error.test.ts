@@ -20,6 +20,7 @@ import {
   resolveModelFallbackError,
 } from "./failover-error.js";
 import { AgentHarnessSessionSupersededError } from "./harness/errors.js";
+import { SandboxProvisioningError } from "./sandbox/errors.js";
 import { SessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 
 // OpenAI 429 example shape: https://help.openai.com/en/articles/5955604-how-can-i-solve-429-too-many-requests-errors
@@ -1397,6 +1398,33 @@ describe("failover-error", () => {
       expect(isNonProviderRuntimeCoordinationError(wrappedTakeover)).toBe(true);
     });
 
+    it("returns true for sandbox provisioning errors without parsing their messages", () => {
+      const provisioningError = new SandboxProvisioningError(
+        "docker",
+        new Error("Sandbox image not found"),
+      );
+      expect(isNonProviderRuntimeCoordinationError(provisioningError)).toBe(true);
+      expect(isNonProviderRuntimeCoordinationError(new Error("wrapper", { cause: provisioningError }))).toBe(
+        true,
+      );
+      expect(resolveFailoverReasonFromError(provisioningError)).toBeNull();
+    });
+
+    it("preserves explicit provider classification over a nested provisioning error", () => {
+      const providerError = Object.assign(
+        new Error("upstream quota pressure", {
+          cause: new SandboxProvisioningError("docker", new Error("image missing")),
+        }),
+        { status: 429, code: "RESOURCE_EXHAUSTED" },
+      );
+
+      expect(isNonProviderRuntimeCoordinationError(providerError)).toBe(false);
+      expect(resolveModelFallbackError(providerError)).toMatchObject({
+        kind: "failover",
+        error: { reason: "rate_limit" },
+      });
+    });
+
     it("returns true for Codex missing tool-result local execution failures", () => {
       const missingToolResultMessage =
         "OpenClaw recorded a native Codex tool.call without a matching tool.result before the turn completed.";
@@ -1414,9 +1442,7 @@ describe("failover-error", () => {
     it("returns false for plain timeouts and provider errors", () => {
       const timeoutErr = Object.assign(new Error("operation timed out"), { name: "TimeoutError" });
       expect(isNonProviderRuntimeCoordinationError(timeoutErr)).toBe(false);
-      expect(isNonProviderRuntimeCoordinationError({ status: 429, message: "rate limit" })).toBe(
-        false,
-      );
+      expect(isNonProviderRuntimeCoordinationError({ status: 429, message: "rate limit" })).toBe(false);
       expect(
         isNonProviderRuntimeCoordinationError({
           status: 429,
