@@ -11,6 +11,7 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
   loadTranscriptEvents,
   persistSessionTranscriptTurn,
@@ -679,8 +680,12 @@ describe("session.message websocket events", () => {
         throw new Error(`append failed: ${appended.reason}`);
       }
       const emitParams = requireRecord(emitSpy.mock.calls.at(0)?.[0], "transcript update params");
-      expect(emitParams.sessionFile).toBe(appended.sessionFile);
       expect(emitParams.sessionKey).toBe("agent:main:main");
+      expect(emitParams.target).toMatchObject({
+        agentId: "main",
+        sessionId: "sess-main",
+        sessionKey: "agent:main:main",
+      });
       expect(emitParams.messageId).toBe(appended.messageId);
       expectRecordFields(emitParams.message, {
         role: "assistant",
@@ -968,7 +973,7 @@ describe("session.message websocket events", () => {
       },
       timestamp: Date.now(),
     };
-    const turn = await persistSessionTranscriptTurn(
+    await persistSessionTranscriptTurn(
       {
         agentId: "main",
         sessionId: "sess-main",
@@ -985,7 +990,7 @@ describe("session.message websocket events", () => {
       const { messageEvent } = await emitTranscriptUpdateAndCollectMessageEvent({
         ws,
         sessionKey: "agent:main:main",
-        sessionFile: turn.sessionFile,
+        sessionFile: "agent:main:main",
         message: transcriptMessage,
         messageId: "msg-usage",
       });
@@ -1055,7 +1060,7 @@ describe("session.message websocket events", () => {
       content: [{ type: "text", text: "early selected prompt" }],
       timestamp: Date.now(),
     };
-    const turn = await persistSessionTranscriptTurn(
+    await persistSessionTranscriptTurn(
       {
         agentId: "main",
         sessionId: "sess-main",
@@ -1079,8 +1084,12 @@ describe("session.message websocket events", () => {
 
       const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:main");
       emitSessionTranscriptUpdate({
-        sessionFile: turn.sessionFile,
-        sessionKey: "agent:main:main",
+        target: {
+          agentId: "main",
+          sessionId: "sess-main",
+          sessionKey: "agent:main:main",
+          storePath,
+        },
         message: transcriptMessage,
         messageId: "msg-selected",
       });
@@ -1760,7 +1769,7 @@ describe("session.message websocket events", () => {
       content: [{ type: "text", text: "shared transcript update" }],
       timestamp: Date.now(),
     };
-    const turn = await persistSessionTranscriptTurn(
+    await persistSessionTranscriptTurn(
       {
         agentId: "main",
         sessionId: "sess-new",
@@ -1777,7 +1786,11 @@ describe("session.message websocket events", () => {
       const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:newer");
 
       emitSessionTranscriptUpdate({
-        sessionFile: turn.sessionFile,
+        sessionFile: formatSqliteSessionFileMarker({
+          agentId: "main",
+          sessionId: "sess-new",
+          storePath,
+        }),
         message,
         messageId: "msg-shared",
       });

@@ -48,6 +48,7 @@ type SqliteCompactionCheckpointSessionMutationResult =
   | { status: "missing-session" }
   | { status: "missing-checkpoint" }
   | { status: "missing-boundary" }
+  | { status: "model-selection-locked" }
   | { status: "failed" };
 
 /** Parameters for branching a SQLite session from a compaction checkpoint. */
@@ -74,7 +75,7 @@ type SqliteRestoreCheckpointSessionParams = {
 export async function branchSqliteCompactionCheckpointSession(
   params: SqliteBranchCheckpointSessionParams,
 ): Promise<SqliteCompactionCheckpointSessionMutationResult> {
-  const sourceKey = normalizeSqliteSessionKey(params.sourceStoreKey ?? params.sourceKey);
+  const sourceKey = normalizeSqliteSessionKey(params.sourceKey);
   const targetKey = normalizeSqliteSessionKey(params.nextKey);
   const resolved = resolveSqliteScope({
     ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -110,7 +111,7 @@ export async function branchSqliteCompactionCheckpointSession(
 export async function restoreSqliteCompactionCheckpointSession(
   params: SqliteRestoreCheckpointSessionParams,
 ): Promise<SqliteCompactionCheckpointSessionMutationResult> {
-  const sessionKey = normalizeSqliteSessionKey(params.sessionStoreKey ?? params.sessionKey);
+  const sessionKey = normalizeSqliteSessionKey(params.sessionKey);
   const targetKey = normalizeSqliteSessionKey(params.sessionKey);
   const resolved = resolveSqliteScope({
     ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -157,6 +158,9 @@ function branchSqliteCompactionCheckpointSessionInTransaction(
   if (!currentEntry?.sessionId) {
     return { status: "missing-session" };
   }
+  if (currentEntry.modelSelectionLocked === true) {
+    return { status: "model-selection-locked" };
+  }
   const checkpoint = readSessionCompactionCheckpoint(currentEntry, params.checkpointId);
   if (!checkpoint) {
     return { status: "missing-checkpoint" };
@@ -175,7 +179,6 @@ function branchSqliteCompactionCheckpointSessionInTransaction(
   const nextEntry = cloneSqliteCheckpointSessionEntry({
     currentEntry,
     label,
-    nextSessionFile: forked.sessionFile,
     nextSessionId: forked.sessionId,
     parentSessionKey: params.parentSessionKey,
     totalTokens: forked.totalTokens,
@@ -202,6 +205,9 @@ function restoreSqliteCompactionCheckpointSessionInTransaction(
   if (!currentEntry?.sessionId) {
     return { status: "missing-session" };
   }
+  if (currentEntry.modelSelectionLocked === true) {
+    return { status: "model-selection-locked" };
+  }
   const checkpoint = readSessionCompactionCheckpoint(currentEntry, params.checkpointId);
   if (!checkpoint) {
     return { status: "missing-checkpoint" };
@@ -216,7 +222,6 @@ function restoreSqliteCompactionCheckpointSessionInTransaction(
 
   const nextEntry = cloneSqliteCheckpointSessionEntry({
     currentEntry,
-    nextSessionFile: restored.sessionFile,
     nextSessionId: restored.sessionId,
     preserveCompactionCheckpoints: true,
     totalTokens: restored.totalTokens,
@@ -374,7 +379,6 @@ function readSessionCompactionCheckpoint(
 function cloneSqliteCheckpointSessionEntry(params: {
   currentEntry: SessionEntry;
   nextSessionId: string;
-  nextSessionFile: string;
   label?: string;
   parentSessionKey?: string;
   totalTokens?: number;
@@ -385,7 +389,6 @@ function cloneSqliteCheckpointSessionEntry(params: {
   return {
     ...params.currentEntry,
     sessionId: params.nextSessionId,
-    sessionFile: params.nextSessionFile,
     updatedAt: Date.now(),
     systemSent: false,
     abortedLastRun: false,

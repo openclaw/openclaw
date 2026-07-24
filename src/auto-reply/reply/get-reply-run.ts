@@ -25,16 +25,8 @@ import { normalizeChatType } from "../../channels/chat-type.js";
 import { updateAmbientTranscriptWatermark } from "../../config/sessions/ambient-transcript-watermark.js";
 import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
-import {
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
-} from "../../config/sessions/paths.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { consumeSessionSkillSuggestion } from "../../config/sessions/skill-suggestions.js";
-import {
-  formatSqliteSessionFileMarker,
-  sqliteSessionFileMarkerMatchesSession,
-} from "../../config/sessions/sqlite-marker.js";
 import type { PendingSkillSuggestion, SessionEntry } from "../../config/sessions/types.js";
 import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -1157,7 +1149,6 @@ export async function runPreparedReply(
     providedReplyOperation.phase === "queued" &&
     candidateSessionId === providedReplyOperation.sessionId;
   const sessionIdFinal = sessionId ?? providedReplyOperation?.sessionId ?? crypto.randomUUID();
-  const sessionFilePathOptions = resolveSessionFilePathOptions({ agentId, storePath });
   const resolvePreparedSessionState = (): {
     sessionEntry: SessionEntry | undefined;
     sessionId: string;
@@ -1183,18 +1174,7 @@ export async function runPreparedReply(
       sessionId: latestSessionId,
       storePath,
     });
-    const existingSessionFile = latestSessionEntry?.sessionFile;
-    const sessionFile =
-      existingSessionFile &&
-      sqliteSessionFileMarkerMatchesSession(existingSessionFile, latestSessionId)
-        ? existingSessionFile
-        : storePath
-          ? formatSqliteSessionFileMarker({
-              agentId,
-              sessionId: latestSessionId,
-              storePath,
-            })
-          : resolveSessionFilePath(latestSessionId, latestSessionEntry, sessionFilePathOptions);
+    const sessionFile = sessionKey;
     return {
       sessionEntry: latestSessionEntry,
       sessionId: latestSessionId,

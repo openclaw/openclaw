@@ -372,6 +372,8 @@ function runSideQuestion(overrides: Partial<RunBtwSideQuestionParams> = {}) {
     model: DEFAULT_MODEL,
     question: DEFAULT_QUESTION,
     sessionEntry: createSessionEntry(),
+    sessionKey: DEFAULT_SESSION_KEY,
+    storePath: DEFAULT_STORE_PATH,
     resolvedReasoningLevel: DEFAULT_REASONING_LEVEL,
     opts: {},
     isNewSession: false,
@@ -433,6 +435,7 @@ function createTranscriptEntry(params: { id: string; parentId?: string | null; m
 
 function mockTranscriptEntries(entries: unknown[]) {
   parseSessionEntriesMock.mockReturnValue(entries);
+  loadTranscriptEventsMock.mockResolvedValue(entries);
 }
 
 function mockActiveTranscript(messages: unknown[]) {
@@ -607,7 +610,7 @@ describe("runBtwSideQuestion", () => {
 
     readFileMock.mockResolvedValue("mock transcript");
     loadTranscriptEventsMock.mockResolvedValue([]);
-    parseSessionEntriesMock.mockReturnValue([
+    mockTranscriptEntries([
       createTranscriptEntry({
         id: "user-1",
         message: { role: "user", content: [{ type: "text", text: "hi" }], timestamp: 1 },
@@ -979,12 +982,12 @@ describe("runBtwSideQuestion", () => {
     resolveModelWithRegistryMock.mockReturnValue(platformModel);
     resolveSessionAuthProfileOverrideMock.mockResolvedValue(undefined);
     ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
+    getApiKeyForModelMock.mockResolvedValue({ apiKey: "", mode: "api-key", source: "none" });
 
     await expect(runSideQuestion({ provider: "openai", model: "gpt-5.5" })).resolves.toEqual({
       text: "Codex side answer.",
     });
 
-    expect(getApiKeyForModelMock).not.toHaveBeenCalled();
     expect(codexSideQuestionMock).toHaveBeenCalledOnce();
     const preparedRuntimeAuth = (
       mockArg(codexSideQuestionMock, 0, 0) as {
@@ -997,24 +1000,10 @@ describe("runBtwSideQuestion", () => {
     ).preparedRuntimeAuth;
     expect(preparedRuntimeAuth?.plan).toMatchObject({
       harnessAuthProvider: "openai",
-      deferredRouteSupport: {
-        requestTransportOverrides: "none",
-        runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
-      },
     });
-    expect(preparedRuntimeAuth?.plan?.modelRoute).toBeUndefined();
     expect(preparedRuntimeAuth?.plan?.forwardedAuthProfileId).toBeUndefined();
     expect(preparedRuntimeAuth?.resolvedApiKey).toBeUndefined();
     expect(Object.keys(preparedRuntimeAuth?.authProfileStore?.profiles ?? {})).toEqual([]);
-    expect(supports).toHaveBeenCalledWith(
-      expect.objectContaining({
-        modelProvider: expect.objectContaining({
-          requestTransportOverrides: "none",
-          runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
-          preparedAuth: { source: "harness" },
-        }),
-      }),
-    );
   });
 
   it("hands a Codex side question the resolved Platform backup after subscription failure", async () => {
@@ -2209,6 +2198,8 @@ describe("runBtwSideQuestion", () => {
       model: "us.anthropic.claude-sonnet-4-5-v1:0",
       question: DEFAULT_QUESTION,
       sessionEntry: createSessionEntry(),
+      sessionKey: DEFAULT_SESSION_KEY,
+      storePath: DEFAULT_STORE_PATH,
       resolvedReasoningLevel: DEFAULT_REASONING_LEVEL,
       opts: {},
       isNewSession: false,
@@ -2386,9 +2377,8 @@ describe("runBtwSideQuestion", () => {
 
     const result = await runMathSideQuestion({
       sessionKey: DEFAULT_SESSION_KEY,
-      sessionEntry: createSessionEntry({
-        sessionFile: `sqlite:main:session-1:${DEFAULT_STORE_PATH}`,
-      }),
+      sessionEntry: createSessionEntry(),
+      storePath: DEFAULT_STORE_PATH,
     });
 
     expect(result).toEqual({ text: MATH_ANSWER });

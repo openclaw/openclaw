@@ -13,11 +13,8 @@ import {
   resolveAgentWorkspaceDir,
 } from "../../../agents/agent-scope.js";
 import { resolveStateDir } from "../../../config/paths.js";
+import { resolveStorePath } from "../../../config/sessions/paths.js";
 import { loadTranscriptEvents } from "../../../config/sessions/session-accessor.js";
-import {
-  parseSqliteSessionFileMarker,
-  type SqliteSessionFileMarker,
-} from "../../../config/sessions/sqlite-marker.js";
 import { selectVisibleTranscriptEvents } from "../../../config/sessions/transcript-visible-events.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isVitestRuntimeEnv } from "../../../infra/env.js";
@@ -32,11 +29,7 @@ import { shortenHomePath } from "../../../utils.js";
 import { resolveHookConfig } from "../../config.js";
 import type { HookHandler } from "../../hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
-import {
-  findPreviousSessionFile,
-  getRecentSessionContentFromEvents,
-  getRecentSessionContentWithResetFallback,
-} from "./transcript.js";
+import { getRecentSessionContentFromEvents } from "./transcript.js";
 
 const log = createSubsystemLogger("hooks/session-memory");
 
@@ -120,16 +113,14 @@ async function resolveAvailableMemoryFilename(params: {
 }
 
 async function getRecentSqliteSessionContent(
-  marker: SqliteSessionFileMarker,
+  scope: { agentId: string; sessionId: string; sessionKey: string; storePath: string },
   messageCount: number,
 ): Promise<string | null> {
   try {
     return getRecentSessionContentFromEvents(
       selectVisibleTranscriptEvents(
         await loadTranscriptEvents({
-          agentId: marker.agentId,
-          sessionId: marker.sessionId,
-          storePath: marker.storePath,
+          ...scope,
         }),
       ),
       messageCount,
@@ -202,39 +193,15 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
       string,
       unknown
     >;
-    const currentSessionId = sessionEntry.sessionId as string;
-    let currentSessionFile = (sessionEntry.sessionFile as string) || undefined;
-
-    // If sessionFile is empty or looks like a new/reset file, try to find the previous session file.
-    if (!currentSessionFile || currentSessionFile.includes(".reset.")) {
-      const sessionsDirs = new Set<string>();
-      if (currentSessionFile) {
-        sessionsDirs.add(path.dirname(currentSessionFile));
-      }
-      sessionsDirs.add(path.join(workspaceDir, "sessions"));
-
-      for (const sessionsDir of sessionsDirs) {
-        const recoveredSessionFile = await findPreviousSessionFile({
-          sessionsDir,
-          currentSessionFile,
-          sessionId: currentSessionId,
-        });
-        if (!recoveredSessionFile) {
-          continue;
-        }
-        currentSessionFile = recoveredSessionFile;
-        log.debug("Found previous session file", { file: currentSessionFile });
-        break;
-      }
-    }
+    const currentSessionId =
+      typeof sessionEntry.sessionId === "string" && sessionEntry.sessionId.trim()
+        ? sessionEntry.sessionId.trim()
+        : undefined;
 
     log.debug("Session context resolved", {
       sessionId: currentSessionId,
-      sessionFile: currentSessionFile,
       hasCfg: Boolean(cfg),
     });
-
-    const sessionFile = currentSessionFile || undefined;
 
     // Read message count from hook config (default: 15)
     const hookConfig = resolveHookConfig(cfg, "session-memory");
@@ -246,13 +213,16 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
     let slug: string | null = null;
     let sessionContent: string | null = null;
 
-    if (sessionFile) {
-      const sqliteMarker = parseSqliteSessionFileMarker(sessionFile);
-      // SQLite-backed runtime sessions carry a marker in the legacy sessionFile
-      // slot; file artifact helpers only run for real transcript paths.
-      sessionContent = sqliteMarker
-        ? await getRecentSqliteSessionContent(sqliteMarker, messageCount)
-        : await getRecentSessionContentWithResetFallback(sessionFile, messageCount);
+    if (currentSessionId) {
+      sessionContent = await getRecentSqliteSessionContent(
+        {
+          agentId,
+          sessionId: currentSessionId,
+          sessionKey: event.sessionKey,
+          storePath: resolveStorePath(cfg?.session?.store, { agentId }),
+        },
+        messageCount,
+      );
       log.debug("Session content loaded", {
         length: sessionContent?.length ?? 0,
         messageCount,

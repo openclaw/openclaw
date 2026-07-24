@@ -1,14 +1,12 @@
 /**
  * Reads prior session transcript context for `/btw` side-question handoffs.
  */
-import { readFile } from "node:fs/promises";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   type SessionEntry as StoredSessionEntry,
 } from "../config/sessions.js";
 import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
-import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import {
   scanSessionTranscriptTree,
   type SessionTranscriptTree,
@@ -17,7 +15,6 @@ import { diagnosticLogger as diag } from "../logging/diagnostic.js";
 import {
   buildSessionContext,
   migrateSessionEntries,
-  parseSessionEntries,
   type SessionEntry as AgentSessionEntry,
 } from "./sessions/session-manager.js";
 
@@ -101,25 +98,24 @@ function isTrailingUserMessage(entry: AgentSessionEntry | undefined): boolean {
  * messages.
  */
 export async function readBtwTranscriptMessages(params: {
+  agentId?: string;
   sessionFile: string;
   sessionId: string;
   sessionKey?: string;
+  storePath?: string;
   snapshotLeafId?: string | null;
 }): Promise<unknown[]> {
   try {
-    const marker = parseSqliteSessionFileMarker(params.sessionFile);
-    const entries = marker
-      ? ((await loadTranscriptEvents({
-          agentId: marker.agentId,
-          sessionId: marker.sessionId,
-          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-          storePath: marker.storePath,
-        })) as AgentSessionEntry[])
-      : parseSessionEntries(await readFile(params.sessionFile, "utf-8"));
-    migrateSessionEntries(entries);
-    const sessionEntries = entries.filter(
-      (entry): entry is AgentSessionEntry => entry.type !== "session",
-    );
+    if (!params.sessionKey || !params.storePath) {
+      return [];
+    }
+    const sessionEntries = (await loadTranscriptEvents({
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    })) as AgentSessionEntry[];
+    migrateSessionEntries(sessionEntries);
     const tree = scanSessionTranscriptTree(sessionEntries);
     if (!tree.hasLeafUpdate) {
       return buildSessionContext(sessionEntries).messages;

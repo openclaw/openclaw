@@ -1,14 +1,17 @@
+import path from "node:path";
 import { createAssistantMessageEventStream, type AssistantMessage } from "openclaw/plugin-sdk/llm";
 // Agent session SDK tests cover default tool wiring, prompt preservation, and
 // session write-lock behavior.
 import { Type } from "typebox";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { ImageContent, Model, SimpleStreamOptions } from "../../llm/types.js";
 import { readRuntimePromptImageOrder } from "../../media/media-facts.js";
 import { finalizeRuntimePromptImages } from "../../media/runtime-prompt-image-provenance.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
+import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
 
 const thinkingMocks = vi.hoisted(() => ({
   resolveThinkingDefaultForModel: vi.fn(() => "medium"),
@@ -16,6 +19,7 @@ const thinkingMocks = vi.hoisted(() => ({
 const streamMocks = vi.hoisted(() => ({
   streamSimple: vi.fn(),
 }));
+const sdkSessionTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../../auto-reply/thinking.js", () => ({
   resolveThinkingDefaultForModel: thinkingMocks.resolveThinkingDefaultForModel,
@@ -67,6 +71,26 @@ describe("createAgentSession runtime ownership", () => {
     expect(getStreamLlmRuntime(session.agent.streamFn)).toBe(
       getModelRegistryRuntime(modelRegistry).llmRuntime,
     );
+  });
+
+  it("keeps the default SQLite session inside an explicit agent directory", async () => {
+    const root = sdkSessionTempDirs.make("openclaw-sdk-session-");
+    const agentDir = path.join(root, "isolated-agent");
+    const databasePath = path.join(agentDir, "openclaw-agent.sqlite");
+    try {
+      const { session } = await createAgentSession({
+        agentDir,
+        model: testModel,
+        resourceLoader: createEmptyResourceLoader(),
+        settingsManager: SettingsManager.inMemory(),
+        modelRegistry: createTestModelRegistry(),
+      });
+
+      expect(session.sessionManager.getSessionTarget()?.storePath).toBe(databasePath);
+      session.dispose();
+    } finally {
+      disposeOpenClawAgentDatabaseByPath(databasePath);
+    }
   });
 });
 

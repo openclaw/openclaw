@@ -22,6 +22,11 @@ import {
   parseUsageCountedSessionIdFromFileName,
 } from "../config/sessions/artifacts.js";
 import {
+  formatSqliteSessionFileMarker,
+  parseSqliteSessionFileMarker,
+  type SqliteSessionFileMarker,
+} from "../config/sessions/legacy-sqlite-marker.js";
+import {
   resolveDefaultSessionStorePath,
   resolveSessionFilePath,
   resolveSessionTranscriptsDirForAgent,
@@ -34,11 +39,6 @@ import {
   readTranscriptStatsSync,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import {
-  formatSqliteSessionFileMarker,
-  parseSqliteSessionFileMarker,
-  type SqliteSessionFileMarker,
-} from "../config/sessions/sqlite-marker.js";
 import {
   isCanonicalSessionTranscriptEntry,
   isSessionTranscriptLeafControl,
@@ -326,10 +326,11 @@ function listUsageCountedSqliteTranscriptStats(
   });
   const files: UsageCostTranscriptFile[] = [];
   for (const instance of listSessionTranscriptInstances({ agentId, storePath })) {
-    const marker = parseSqliteSessionFileMarker(instance.entry.sessionFile);
-    if (!marker) {
+    const sessionId = instance.entry.sessionId?.trim();
+    if (!sessionId) {
       continue;
     }
+    const marker = { agentId: agentId ?? "main", sessionId, storePath };
     const mtimeMs = instance.updatedAtMs;
     if (params?.minMtimeMs !== undefined && mtimeMs < params.minMtimeMs) {
       continue;
@@ -1157,9 +1158,8 @@ export function resolveExistingUsageSessionFile(params: {
   agentId?: string;
 }): string | undefined {
   const sessionId = params.sessionId?.trim();
-  const entryMarker = parseSqliteSessionFileMarker(params.sessionEntry?.sessionFile);
   const explicitMarker = parseSqliteSessionFileMarker(params.sessionFile);
-  const sqliteMarker = entryMarker ?? explicitMarker;
+  const sqliteMarker = explicitMarker;
   if (sqliteMarker) {
     if (sessionId && sqliteMarker.sessionId !== sessionId) {
       return undefined;

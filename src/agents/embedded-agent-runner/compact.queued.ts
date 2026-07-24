@@ -1,7 +1,6 @@
 /**
  * Queues embedded-agent session compaction onto the correct command lane.
  */
-import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import {
@@ -48,10 +47,6 @@ import {
   compactContextEngineWithSafetyTimeout,
   resolveCompactionTimeoutMs,
 } from "./compaction-safety-timeout.js";
-import {
-  rotateTranscriptFileAfterCompaction,
-  shouldRotateCompactionTranscript,
-} from "./compaction-successor-transcript.js";
 import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
@@ -128,13 +123,12 @@ function shouldDeferOwningContextEngineBudgetCompaction(params: {
 function buildContextEngineCompactionSessionTarget(
   params: CompactEmbeddedAgentSessionParams,
 ): ContextEngineSessionTarget {
-  const sqliteMarker = parseSqliteSessionFileMarker(params.sessionFile);
-  const agentId = params.sessionTarget?.agentId ?? params.agentId ?? sqliteMarker?.agentId;
+  const agentId = params.sessionTarget?.agentId ?? params.agentId;
   const sessionKey = params.sessionTarget?.sessionKey ?? params.sessionKey ?? params.sessionId;
-  const storePath = params.sessionTarget?.storePath ?? sqliteMarker?.storePath;
+  const storePath = params.sessionTarget?.storePath;
   return {
     ...(agentId ? { agentId } : {}),
-    sessionId: params.sessionTarget?.sessionId ?? sqliteMarker?.sessionId ?? params.sessionId,
+    sessionId: params.sessionTarget?.sessionId ?? params.sessionId,
     ...(sessionKey ? { sessionKey } : {}),
     ...(storePath ? { storePath } : {}),
     ...(params.sessionTarget?.threadId !== undefined
@@ -278,22 +272,31 @@ export async function compactEmbeddedAgentSession(
 }
 
 async function compactEmbeddedAgentSessionImpl(
-  params: CompactEmbeddedAgentSessionParams,
+  inputParams: CompactEmbeddedAgentSessionParams,
 ): Promise<EmbeddedAgentCompactResult> {
-  if (params.abortSignal?.aborted) {
+  if (inputParams.abortSignal?.aborted) {
     return createCompactionAbortedResult();
   }
   ensureRuntimePluginsLoaded({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
+    config: inputParams.config,
+    workspaceDir: inputParams.workspaceDir,
+    allowGatewaySubagentBinding: inputParams.allowGatewaySubagentBinding,
   });
   ensureContextEnginesInitialized();
   const agentIds = resolveSessionAgentIds({
-    sessionKey: params.sessionKey,
-    config: params.config,
-    agentId: params.agentId,
+    sessionKey: inputParams.sessionKey,
+    config: inputParams.config,
+    agentId: inputParams.agentId,
   });
+  const runtimeTarget = await resolveAgentRunSessionTarget({
+    ...inputParams,
+    agentId: inputParams.agentId ?? agentIds.sessionAgentId,
+  });
+  const params = {
+    ...inputParams,
+    sessionTarget: runtimeTarget,
+    sessionFile: runtimeTarget.sessionKey,
+  };
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, agentIds.sessionAgentId);
   const resolvedWorkspaceDir = resolveUserPath(params.workspaceDir);
   const contextEngine = await resolveContextEngine(params.config, {
@@ -327,6 +330,7 @@ async function compactResolvedContextEngine(
   resolvedWorkspaceDir: string,
   releaseContextEngineOwnership: () => void,
 ): Promise<EmbeddedAgentCompactResult> {
+  const runtimeTarget = await resolveAgentRunSessionTarget(params);
   const lockedHarnessRuntime =
     params.modelSelectionLocked === true
       ? normalizeOptionalAgentRuntimeId(params.agentHarnessId)
@@ -542,13 +546,10 @@ async function compactResolvedContextEngine(
         // Fire before_compaction / after_compaction hooks here so plugin subscribers
         // are notified regardless of which engine is active.
         const engineOwnsCompaction = contextEngine.info.ownsCompaction === true;
-        const isSqliteSessionTranscript = Boolean(parseSqliteSessionFileMarker(params.sessionFile));
         checkpointSnapshot = engineOwnsCompaction
           ? await compactionCheckpointStore.captureSnapshot({
               sessionFile: params.sessionFile,
-              ...(isSqliteSessionTranscript
-                ? { sessionManager: SessionManager.open(params.sessionFile) }
-                : {}),
+              sessionManager: SessionManager.open(runtimeTarget),
             })
           : null;
         const hookRunner = engineOwnsCompaction
@@ -644,9 +645,6 @@ async function compactResolvedContextEngine(
         const delegatedSessionTarget = result.result?.sessionTarget;
         const delegatedSessionId = delegatedSuccessor.sessionId;
         const delegatedSessionFile = delegatedSuccessor.sessionFile;
-        const delegatedRotatedTranscript =
-          (typeof delegatedSessionId === "string" && delegatedSessionId !== params.sessionId) ||
-          (typeof delegatedSessionFile === "string" && delegatedSessionFile !== params.sessionFile);
         let postCompactionSessionId = delegatedSessionId ?? params.sessionId;
         // Shipped pre-sessionTarget engines report rotation via the deprecated
         // sessionFile field; honor it when no typed target is present.
@@ -660,34 +658,9 @@ async function compactResolvedContextEngine(
             sessionTarget: delegatedSessionTarget,
           });
           postCompactionSessionId = resolvedDelegatedTarget.sessionId;
-          postCompactionSessionFile = resolvedDelegatedTarget.sessionFile;
+          postCompactionSessionFile = resolvedDelegatedTarget.sessionKey;
         }
-        let postCompactionLeafId: string | undefined;
         if (result.ok && result.compacted) {
-          if (
-            shouldRotateCompactionTranscript(params.config) &&
-            !delegatedRotatedTranscript &&
-            !isSqliteSessionTranscript
-          ) {
-            try {
-              const rotation = await rotateTranscriptFileAfterCompaction({
-                sessionFile: params.sessionFile,
-              });
-              if (rotation.rotated) {
-                postCompactionSessionId = rotation.sessionId ?? postCompactionSessionId;
-                postCompactionSessionFile = rotation.sessionFile ?? postCompactionSessionFile;
-                postCompactionLeafId = rotation.leafId;
-                log.info(
-                  `[compaction] rotated active transcript after context-engine compaction ` +
-                    `(sessionKey=${params.sessionKey ?? params.sessionId})`,
-                );
-              }
-            } catch (err) {
-              log.warn("failed to rotate compacted transcript", {
-                errorMessage: formatErrorMessage(err),
-              });
-            }
-          }
           checkpointSnapshotRetained = await persistCompactionCheckpoint({
             config: params.config,
             sessionKey: params.sessionKey,
@@ -699,7 +672,6 @@ async function compactResolvedContextEngine(
             tokensBefore: result.result?.tokensBefore,
             tokensAfter: result.result?.tokensAfter,
             sessionFile: postCompactionSessionFile,
-            leafId: postCompactionLeafId,
           });
           await runContextEngineMaintenance({
             contextEngine,

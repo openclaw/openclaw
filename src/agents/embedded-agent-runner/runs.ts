@@ -31,13 +31,11 @@ import {
   diagnosticLogger as diag,
   logMessageQueued,
   logSessionStateChange,
-  updateDiagnosticSessionFile,
 } from "../../logging/diagnostic.js";
 import { resolveTimerTimeoutMs } from "../../shared/number-coercion.js";
 import {
   ACTIVE_EMBEDDED_RUNS,
   ACTIVE_EMBEDDED_RUNS_BY_RUN_ID,
-  ACTIVE_EMBEDDED_RUN_LIFECYCLE_GENERATIONS,
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE,
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY,
   ACTIVE_EMBEDDED_RUN_SNAPSHOTS,
@@ -54,7 +52,6 @@ import {
   type EmbeddedAgentQueueMessageOptions,
   type EmbeddedRunWaiter,
 } from "./run-state.js";
-import { resolveEmbeddedSessionFileKey } from "./session-file-key.js";
 
 export {
   getActiveEmbeddedRunCount,
@@ -153,10 +150,7 @@ function setActiveRunSessionFile(sessionFile: string | undefined, sessionId: str
   if (!sessionFile?.trim()) {
     return;
   }
-  ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.set(
-    resolveEmbeddedSessionFileKey(sessionFile),
-    sessionId,
-  );
+  ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.set(sessionFile, sessionId);
 }
 
 function clearEmbeddedRunAbandonmentBySessionId(sessionId: string): void {
@@ -174,7 +168,7 @@ function clearEmbeddedRunAbandonmentBySessionId(sessionId: string): void {
   }
   const normalizedSessionFile = abandonedRun.sessionFile?.trim();
   if (normalizedSessionFile) {
-    const sessionFileKey = resolveEmbeddedSessionFileKey(normalizedSessionFile);
+    const sessionFileKey = normalizedSessionFile;
     if (ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(sessionFileKey) === sessionId) {
       ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.delete(sessionFileKey);
     }
@@ -197,7 +191,7 @@ function clearEmbeddedRunAbandonmentBySessionFile(sessionFile: string | undefine
   if (!normalizedSessionFile) {
     return;
   }
-  const sessionFileKey = resolveEmbeddedSessionFileKey(normalizedSessionFile);
+  const sessionFileKey = normalizedSessionFile;
   const sessionId = ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(sessionFileKey);
   if (sessionId) {
     clearEmbeddedRunAbandonmentBySessionId(sessionId);
@@ -244,10 +238,7 @@ function markEmbeddedRunAbandoned(params: {
     ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.set(abandonedRun.sessionKey, sessionId);
   }
   if (abandonedRun.sessionFile) {
-    ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.set(
-      resolveEmbeddedSessionFileKey(abandonedRun.sessionFile),
-      sessionId,
-    );
+    ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.set(abandonedRun.sessionFile, sessionId);
   }
 }
 
@@ -281,17 +272,14 @@ export function isEmbeddedRunAbandoned(params: {
   }
   const normalizedSessionFile = params.sessionFile?.trim();
   return Boolean(
-    normalizedSessionFile &&
-    ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.has(
-      resolveEmbeddedSessionFileKey(normalizedSessionFile),
-    ),
+    normalizedSessionFile && ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.has(normalizedSessionFile),
   );
 }
 
 function clearActiveRunSessionFiles(sessionId: string, sessionFile?: string): void {
   const normalizedSessionFile = sessionFile?.trim();
   if (normalizedSessionFile) {
-    const sessionFileKey = resolveEmbeddedSessionFileKey(normalizedSessionFile);
+    const sessionFileKey = normalizedSessionFile;
     if (ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(sessionFileKey) === sessionId) {
       ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.delete(sessionFileKey);
     }
@@ -665,9 +653,7 @@ export function resolveActiveEmbeddedRunHandleSessionIdBySessionFile(
   if (!normalizedSessionFile) {
     return undefined;
   }
-  return ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(
-    resolveEmbeddedSessionFileKey(normalizedSessionFile),
-  );
+  return ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(normalizedSessionFile);
 }
 
 export function resolveActiveEmbeddedRunSessionIdBySessionFile(
@@ -892,24 +878,6 @@ export function updateActiveEmbeddedRunSnapshot(
     return;
   }
   ACTIVE_EMBEDDED_RUN_SNAPSHOTS.set(sessionId, snapshot);
-}
-
-export function updateActiveEmbeddedRunSessionFile(
-  sessionId: string,
-  sessionFile: string | undefined,
-  lifecycleGeneration: string,
-): void {
-  const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
-  if (
-    handle === undefined ||
-    ACTIVE_EMBEDDED_RUN_LIFECYCLE_GENERATIONS.get(handle) !== lifecycleGeneration ||
-    !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)
-  ) {
-    return;
-  }
-  clearActiveRunSessionFiles(sessionId);
-  setActiveRunSessionFile(sessionFile, sessionId);
-  updateDiagnosticSessionFile({ sessionId, sessionFile });
 }
 
 export function clearActiveEmbeddedRun(

@@ -4,11 +4,8 @@ import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coerc
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/io.js";
-import {
-  loadSessionEntryReadOnly as loadAccessorSessionEntry,
-  resolveTranscriptSessionKeyBySessionId,
-} from "../config/sessions/session-accessor.js";
-import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
+import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import { resolveTranscriptSessionKeyBySessionId } from "../config/sessions/session-accessor.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { SessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
@@ -150,19 +147,16 @@ async function handleTranscriptUpdateBroadcast(
   },
   update: InternalSessionTranscriptUpdate,
 ): Promise<void> {
-  const sqliteMarker = parseSqliteSessionFileMarker(update.sessionFile);
-  const storageAgentId = update.target?.agentId ?? update.agentId ?? sqliteMarker?.agentId;
-  const sessionKey =
-    update.target?.sessionKey ??
-    update.sessionKey ??
-    (sqliteMarker
-      ? resolveTranscriptSessionKeyBySessionId({
-          agentId: storageAgentId,
-          sessionId: sqliteMarker.sessionId,
-          storePath: sqliteMarker.storePath,
-        })
-      : undefined) ??
-    (update.sessionFile ? resolveSessionKeyForTranscriptFile(update.sessionFile) : undefined);
+  const legacyMarker = parseSqliteSessionFileMarker(update.sessionFile);
+  const storageAgentId = update.target?.agentId ?? update.agentId ?? legacyMarker?.agentId;
+  let sessionKey = update.target?.sessionKey ?? update.sessionKey;
+  if (!sessionKey && legacyMarker) {
+    sessionKey = resolveTranscriptSessionKeyBySessionId(legacyMarker);
+  }
+  sessionKey ??=
+    update.sessionFile && !legacyMarker
+      ? resolveSessionKeyForTranscriptFile(update.sessionFile)
+      : undefined;
   if (!sessionKey || update.message === undefined) {
     return;
   }
@@ -190,24 +184,19 @@ async function handleTranscriptUpdateBroadcast(
   if (messageSeq === undefined) {
     // Updates from raw transcript events may not carry seq; fall back to the
     // current transcript line count for cursor-compatible live history.
-    const markerEntry = sqliteMarker
-      ? loadAccessorSessionEntry({
-          agentId: storageAgentId,
-          sessionKey,
-          storePath: sqliteMarker.storePath,
-        })
-      : undefined;
-    const fallbackTarget = markerEntry
+    const updateStorePath = update.target?.storePath ?? legacyMarker?.storePath;
+    const fallbackTarget = updateStorePath
       ? undefined
       : loadSessionEntryReadOnly(sessionKey, { agentId: visibleAgentId });
-    const entry = markerEntry ?? fallbackTarget?.entry;
-    const storePath = sqliteMarker?.storePath ?? fallbackTarget?.storePath;
-    messageSeq = entry?.sessionId
+    const entry = fallbackTarget?.entry;
+    const targetSessionId = update.target?.sessionId ?? legacyMarker?.sessionId ?? entry?.sessionId;
+    const storePath = updateStorePath ?? fallbackTarget?.storePath;
+    messageSeq = targetSessionId
       ? asPositiveSafeInteger(
           await readSessionMessageCountAsync({
-            agentId: storageAgentId ?? visibleAgentId,
+            agentId: update.target?.agentId ?? storageAgentId ?? visibleAgentId,
             sessionEntry: entry,
-            sessionId: entry.sessionId,
+            sessionId: targetSessionId,
             sessionKey,
             storePath,
           }),

@@ -193,7 +193,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       if (!result.ok) {
         throw new Error(result.reason);
       }
-      expect(result.sessionFile).toContain("sqlite:main:configured-session-id:");
+      expect(result.sessionFile).toBe(configuredSessionKey);
       await expect(
         loadTranscriptEvents({
           agentId: "main",
@@ -251,7 +251,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       if (!result.ok) {
         throw new Error(result.reason);
       }
-      expect(result.sessionFile).toContain("sqlite:worker:worker-session-id:");
+      expect(result.sessionFile).toBe(configuredSessionKey);
       await expect(
         loadTranscriptEvents({
           agentId: "worker",
@@ -298,7 +298,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.sessionFile).toContain("sqlite:main:test-session-id:");
+      expect(result.sessionFile).toBe(sessionKey);
       const events = await loadFixtureMessages();
       expect(events).toContainEqual(
         expect.objectContaining({
@@ -537,7 +537,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.sessionFile).toContain("sqlite:main:test-session-id:");
+      expect(result.sessionFile).toBe(sessionKey);
       await expect(loadFixtureMessages()).resolves.toContainEqual(
         expect.objectContaining({
           message: expect.objectContaining({
@@ -569,7 +569,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
           content?: unknown;
         }
       | undefined;
-    expect(event?.sessionFile).toContain("sqlite:main:test-session-id:");
+    expect(event?.target).toMatchObject({ agentId: "main", sessionId, sessionKey });
     expect(event?.sessionKey).toBe(sessionKey);
     expect(event?.messageId).toBeTypeOf("string");
     expect(message?.role).toBe("assistant");
@@ -945,9 +945,12 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       },
     );
 
-    const latestAssistantText = await readLatestAssistantTextFromSessionTranscript(
-      exactResult.sessionFile,
-    );
+    const latestAssistantText = await readLatestAssistantTextFromSessionTranscript({
+      agentId: "main",
+      sessionId,
+      sessionKey,
+      storePath: fixture.storePath(),
+    });
     if (!latestAssistantText) {
       throw new Error("expected latest assistant text");
     }
@@ -1237,9 +1240,12 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       }),
     });
 
-    const latestAssistantText = await readLatestAssistantTextFromSessionTranscript(
-      finalResult.sessionFile,
-    );
+    const latestAssistantText = await readLatestAssistantTextFromSessionTranscript({
+      agentId: "main",
+      sessionId,
+      sessionKey,
+      storePath: fixture.storePath(),
+    });
     expect(latestAssistantText?.id).toBe(finalResult.messageId);
     expect(latestAssistantText?.text).toBe("Complete final answer");
   });
@@ -1257,9 +1263,12 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       return;
     }
 
-    const latestAssistantText = await readLatestAssistantTextFromSessionTranscript(
-      mirrorResult.sessionFile,
-    );
+    const latestAssistantText = await readLatestAssistantTextFromSessionTranscript({
+      agentId: "main",
+      sessionId,
+      sessionKey,
+      storePath: fixture.storePath(),
+    });
     expect(latestAssistantText).toBeUndefined();
   });
 
@@ -1276,9 +1285,12 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       return;
     }
 
-    const tailAssistantText = await readTailAssistantTextFromSessionTranscript(
-      mirrorResult.sessionFile,
-    );
+    const tailAssistantText = await readTailAssistantTextFromSessionTranscript({
+      agentId: "main",
+      sessionId,
+      sessionKey,
+      storePath: fixture.storePath(),
+    });
     expect(tailAssistantText?.id).toBe(mirrorResult.messageId);
     expect(tailAssistantText?.text).toBe("Tail delivery mirror");
   });
@@ -1324,9 +1336,12 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       JSON.parse(cacheTtlEntry),
     );
 
-    const tailAssistantText = await readTailAssistantTextFromSessionTranscript(
-      assistantResult.sessionFile,
-    );
+    const tailAssistantText = await readTailAssistantTextFromSessionTranscript({
+      agentId: "main",
+      sessionId,
+      sessionKey,
+      storePath: fixture.storePath(),
+    });
     expect(tailAssistantText?.id).toBe(assistantResult.messageId);
     expect(tailAssistantText?.text).toBe("Canonical answer");
   });
@@ -1982,7 +1997,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     if (result.ok) {
       expect(emitSpy).toHaveBeenCalledWith({
         agentId: "main",
-        sessionFile: result.sessionFile,
         sessionKey,
         target: {
           agentId: "main",

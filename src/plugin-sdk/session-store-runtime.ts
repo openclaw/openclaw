@@ -8,6 +8,10 @@ import {
   updateAmbientTranscriptWatermark,
   type AmbientTranscriptWatermarkScope,
 } from "../config/sessions/ambient-transcript-watermark.js";
+import {
+  formatSqliteSessionFileMarker,
+  parseSqliteSessionFileMarker,
+} from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveStorePath as resolveSessionStorePath } from "../config/sessions/paths.js";
 import { resolveSessionFilePath as resolveLegacySessionFilePath } from "../config/sessions/paths.js";
 import {
@@ -25,10 +29,6 @@ import {
   updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import {
-  formatSqliteSessionFileMarker,
-  parseSqliteSessionFileMarker,
-} from "../config/sessions/sqlite-marker.js";
 import { resolveSessionStoreEntry as resolveSessionStoreEntryFromStore } from "../config/sessions/store-entry.js";
 import { normalizeResolvedMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
 import type { ResolvedSessionMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
@@ -256,7 +256,7 @@ export function loadSessionStore(
     }).map(({ sessionKey, entry }) => {
       const sessionId = entry.sessionId?.trim();
       const projectedEntry = projectPluginSessionEntry(entry as InternalSessionEntry);
-      if (projectedEntry.sessionFile || !sessionId) {
+      if (!sessionId) {
         return [sessionKey, projectedEntry];
       }
       return [
@@ -583,7 +583,7 @@ export {
   parseSqliteSessionFileMarker,
   sqliteSessionFileMarkerMatchesSession,
   type SqliteSessionFileMarker,
-} from "../config/sessions/sqlite-marker.js";
+} from "../config/sessions/legacy-sqlite-marker.js";
 export {
   readRecentUserAssistantTextForSession,
   type SessionRecentConversationText,

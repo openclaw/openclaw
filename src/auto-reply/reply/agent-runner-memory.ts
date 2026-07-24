@@ -33,18 +33,16 @@ import {
 import {
   resolveAgentIdFromSessionKey,
   resolveFreshSessionTotalTokens,
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
   type SessionEntry,
 } from "../../config/sessions.js";
+import { parseSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
+  loadTranscriptEventsSync,
+  loadTranscriptTailEventsSync,
   readTranscriptStatsSync,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import {
-  formatSqliteSessionFileMarker,
-  parseSqliteSessionFileMarker,
-} from "../../config/sessions/sqlite-marker.js";
+import { selectSessionTranscriptLeafControlledPath } from "../../config/sessions/transcript-tree.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readSessionMessagesAsync } from "../../gateway/session-utils.fs.js";
 import { logVerbose } from "../../globals.js";
@@ -166,6 +164,7 @@ const memoryDeps = {
   incrementCompactionCount,
   updateSessionEntry: updateSessionEntryDefault,
   emitAgentEvent,
+  resolveSessionLogPath,
   randomUUID: () => crypto.randomUUID(),
   now: () => Date.now(),
 };
@@ -182,6 +181,7 @@ function setAgentRunnerMemoryTestDeps(overrides?: Partial<typeof memoryDeps>): v
     incrementCompactionCount,
     updateSessionEntry: updateSessionEntryDefault,
     emitAgentEvent,
+    resolveSessionLogPath,
     randomUUID: () => crypto.randomUUID(),
     now: () => Date.now(),
     ...overrides,
@@ -383,6 +383,7 @@ type SessionTranscriptUsageSnapshot = {
 // transcript reads in time to flip memory-flush gating when needed.
 const TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS = 8192;
 const TRANSCRIPT_TAIL_CHUNK_BYTES = 64 * 1024;
+const SQLITE_USAGE_TAIL_MAX_EVENTS = 512;
 const FALLBACK_TRANSCRIPT_BYTES_PER_TOKEN = 4;
 
 function parseUsageFromTranscriptLine(line: string): ReturnType<typeof normalizeUsage> | undefined {
@@ -407,44 +408,12 @@ function parseUsageFromTranscriptLine(line: string): ReturnType<typeof normalize
 }
 
 function resolveSessionLogPath(
-  sessionId?: string,
-  sessionEntry?: SessionEntry,
-  sessionKey?: string,
-  opts?: { storePath?: string },
+  _sessionId?: string,
+  _sessionEntry?: SessionEntry,
+  _sessionKey?: string,
+  _opts?: { storePath?: string },
 ): string | undefined {
-  if (!sessionId) {
-    return undefined;
-  }
-
-  try {
-    const transcriptPath = normalizeOptionalString(
-      (sessionEntry as (SessionEntry & { transcriptPath?: string }) | undefined)?.transcriptPath,
-    );
-    const sessionFile = normalizeOptionalString(sessionEntry?.sessionFile) || transcriptPath;
-    if (parseSqliteSessionFileMarker(sessionFile)) {
-      return sessionFile;
-    }
-    const agentId = resolveAgentIdFromSessionKey(sessionKey);
-    if (!sessionFile && agentId && opts?.storePath) {
-      return formatSqliteSessionFileMarker({
-        agentId,
-        sessionId,
-        storePath: opts.storePath,
-      });
-    }
-    if (!sessionFile) {
-      return undefined;
-    }
-    const pathOpts = resolveSessionFilePathOptions({
-      agentId,
-      storePath: opts?.storePath,
-    });
-    // Normalize sessionFile through resolveSessionFilePath so relative entries
-    // are resolved against the sessions dir/store layout, not process.cwd().
-    return resolveSessionFilePath(sessionId, { sessionFile }, pathOpts);
-  } catch {
-    return undefined;
-  }
+  return undefined;
 }
 
 function deriveTranscriptUsageSnapshot(
@@ -478,6 +447,62 @@ function deriveTranscriptUsageSnapshot(
         ? Math.ceil(snapshot.trailingBytes / FALLBACK_TRANSCRIPT_BYTES_PER_TOKEN)
         : undefined,
   };
+}
+
+function readLatestNonzeroUsageFromTranscriptEvents(
+  events: readonly unknown[],
+): ReturnType<typeof normalizeUsage> | undefined {
+  const activeEvents = selectSessionTranscriptLeafControlledPath(events) ?? events;
+  for (const event of activeEvents.toReversed()) {
+    if (!event || typeof event !== "object" || Array.isArray(event)) {
+      continue;
+    }
+    const record = event as { message?: unknown; type?: unknown; usage?: UsageLike };
+    if (record.type === "compaction" || record.type === "reset") {
+      return undefined;
+    }
+    const message =
+      record.message && typeof record.message === "object" && !Array.isArray(record.message)
+        ? (record.message as { usage?: UsageLike })
+        : undefined;
+    const usage = normalizeUsage(message?.usage ?? record.usage);
+    if (usage && hasNonzeroUsage(usage)) {
+      return usage;
+    }
+  }
+  return undefined;
+}
+
+function readSqliteSessionLogSnapshot(
+  scope: { agentId?: string; sessionId: string; sessionKey?: string; storePath: string },
+  options: { includeByteSize: boolean; includeUsage: boolean },
+): SessionLogSnapshot {
+  const snapshot: SessionLogSnapshot = {};
+  try {
+    if (options.includeByteSize) {
+      snapshot.byteSize = readTranscriptStatsSync(scope).sizeBytes;
+    }
+    if (options.includeUsage) {
+      let events = loadTranscriptTailEventsSync(scope, SQLITE_USAGE_TAIL_MAX_EVENTS);
+      if (selectSessionTranscriptLeafControlledPath(events) === undefined) {
+        // A bounded tail can contain a leaf control whose target predates the
+        // window. Resolve that uncommon branch switch from the full transcript
+        // before scanning the bounded active tail for usage.
+        const activeEvents = selectSessionTranscriptLeafControlledPath(
+          loadTranscriptEventsSync(scope),
+        );
+        if (activeEvents) {
+          events = activeEvents.slice(-SQLITE_USAGE_TAIL_MAX_EVENTS);
+        }
+      }
+      snapshot.usage = deriveTranscriptUsageSnapshot({
+        usage: readLatestNonzeroUsageFromTranscriptEvents(events),
+      });
+    }
+  } catch {
+    return snapshot;
+  }
+  return snapshot;
 }
 
 type SessionLogSnapshot = {
@@ -515,30 +540,38 @@ async function readSessionLogSnapshot(params: {
   includeByteSize: boolean;
   includeUsage: boolean;
 }): Promise<SessionLogSnapshot> {
-  const logPath = resolveSessionLogPath(
+  const logPath = memoryDeps.resolveSessionLogPath(
     params.sessionId,
     params.sessionEntry,
     params.sessionKey,
     params.opts,
   );
-  if (!logPath) {
-    return {};
+  const sqliteMarker = logPath ? parseSqliteSessionFileMarker(logPath) : undefined;
+  if (logPath && !sqliteMarker) {
+    return await readFileSessionLogSnapshot(logPath, params);
   }
-  const sqliteMarker = parseSqliteSessionFileMarker(logPath);
+  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+  if (params.sessionId && params.sessionKey && params.opts?.storePath && agentId) {
+    return readSqliteSessionLogSnapshot(
+      {
+        agentId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        storePath: params.opts.storePath,
+      },
+      params,
+    );
+  }
   if (sqliteMarker) {
-    // SQLite-backed transcripts intentionally skip the legacy JSONL tail scan
-    // (there is no usage line to parse), but the byte-size guard below still
-    // needs a real value or it silently degrades to token-only triggering.
-    if (!params.includeByteSize) {
-      return {};
-    }
-    try {
-      return { byteSize: readTranscriptStatsSync(sqliteMarker).sizeBytes };
-    } catch {
-      return {};
-    }
+    return readSqliteSessionLogSnapshot(sqliteMarker, params);
   }
+  return {};
+}
 
+async function readFileSessionLogSnapshot(
+  logPath: string,
+  params: { includeByteSize: boolean; includeUsage: boolean },
+): Promise<SessionLogSnapshot> {
   const snapshot: SessionLogSnapshot = {};
   let usageScan: SessionLogUsageScan | undefined;
 
@@ -695,16 +728,11 @@ async function estimatePromptTokensFromSessionTranscript(params: {
         transcriptBytesTokens,
       };
     }
-    const messages = (await readSessionMessagesAsync(
-      sessionId,
-      params.storePath,
-      params.sessionEntry?.sessionFile,
-      {
-        mode: "recent",
-        maxMessages: 200,
-        maxBytes: 1024 * 1024,
-      },
-    )) as AgentMessage[];
+    const messages = (await readSessionMessagesAsync(sessionId, params.storePath, undefined, {
+      mode: "recent",
+      maxMessages: 200,
+      maxBytes: 1024 * 1024,
+    })) as AgentMessage[];
     const estimatedMessageTokens = (() => {
       if (messages.length === 0) {
         return undefined;
@@ -950,12 +978,13 @@ export async function runPreflightCompactionIfNeeded(params: {
   };
   try {
     await notifyStartCompaction();
-    const sessionFile = resolveSessionLogPath(
-      entry.sessionId,
-      entry,
-      params.sessionKey ?? params.followupRun.run.sessionKey,
-      { storePath: params.storePath },
-    );
+    const sessionFile =
+      memoryDeps.resolveSessionLogPath(
+        entry.sessionId,
+        entry,
+        params.sessionKey ?? params.followupRun.run.sessionKey,
+        { storePath: params.storePath },
+      ) ?? normalizeOptionalString(params.sessionKey ?? params.followupRun.run.sessionKey);
     if (!sessionFile) {
       await notifyTerminalCompaction("skipped");
       return entry ?? params.sessionEntry;
@@ -1038,7 +1067,6 @@ export async function runPreflightCompactionIfNeeded(params: {
       storePath: params.storePath,
       tokensAfter: result.result?.tokensAfter,
       newSessionId: result.result?.sessionId,
-      newSessionFile: result.result?.sessionFile,
     });
     await appendPostCompactionRefreshPrompt({
       cfg: params.cfg,
@@ -1050,16 +1078,14 @@ export async function runPreflightCompactionIfNeeded(params: {
       const previousSessionId = params.followupRun.run.sessionId;
       params.followupRun.run.sessionId = entry.sessionId;
       params.replyOperation.updateSessionId(entry.sessionId);
-      if (entry.sessionFile) {
-        params.followupRun.run.sessionFile = entry.sessionFile;
-      }
       const queueKey = params.followupRun.run.sessionKey ?? params.sessionKey;
       if (queueKey) {
+        params.followupRun.run.sessionFile = queueKey;
         deps.refreshQueuedFollowupSession({
           key: queueKey,
           previousSessionId,
           nextSessionId: entry.sessionId,
-          nextSessionFile: entry.sessionFile,
+          nextSessionFile: queueKey,
         });
       }
     }
@@ -1341,7 +1367,6 @@ export async function runMemoryFlushIfNeeded(params: {
     .filter(Boolean)
     .join("\n\n");
   let postCompactionSessionId: string | undefined;
-  let postCompactionSessionFile: string | undefined;
   try {
     const selection = resolveMemoryFlushModelFallbackOptions(
       params.followupRun.run,
@@ -1442,9 +1467,6 @@ export async function runMemoryFlushIfNeeded(params: {
         if (result.meta?.agentMeta?.sessionId) {
           postCompactionSessionId = result.meta.agentMeta.sessionId;
         }
-        if (result.meta?.agentMeta?.sessionFile) {
-          postCompactionSessionFile = result.meta.agentMeta.sessionFile;
-        }
         bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
           result.meta?.systemPromptReport,
         );
@@ -1464,23 +1486,20 @@ export async function runMemoryFlushIfNeeded(params: {
         sessionKey: params.sessionKey,
         storePath: params.storePath,
         newSessionId: postCompactionSessionId,
-        newSessionFile: postCompactionSessionFile,
       });
       const updatedEntry = params.sessionKey ? activeSessionStore?.[params.sessionKey] : undefined;
       if (updatedEntry) {
         activeSessionEntry = updatedEntry;
         params.followupRun.run.sessionId = updatedEntry.sessionId;
         params.replyOperation.updateSessionId(updatedEntry.sessionId);
-        if (updatedEntry.sessionFile) {
-          params.followupRun.run.sessionFile = updatedEntry.sessionFile;
-        }
         const queueKey = params.followupRun.run.sessionKey ?? params.sessionKey;
         if (queueKey) {
+          params.followupRun.run.sessionFile = queueKey;
           memoryDeps.refreshQueuedFollowupSession({
             key: queueKey,
             previousSessionId,
             nextSessionId: updatedEntry.sessionId,
-            nextSessionFile: updatedEntry.sessionFile,
+            nextSessionFile: queueKey,
           });
         }
       }
@@ -1509,9 +1528,7 @@ export async function runMemoryFlushIfNeeded(params: {
           activeSessionEntry = updatedEntry;
           params.followupRun.run.sessionId = updatedEntry.sessionId;
           params.replyOperation.updateSessionId(updatedEntry.sessionId);
-          if (updatedEntry.sessionFile) {
-            params.followupRun.run.sessionFile = updatedEntry.sessionFile;
-          }
+          params.followupRun.run.sessionFile = params.sessionKey;
         }
       } catch (err) {
         logVerbose(`failed to persist memory flush metadata: ${String(err)}`);

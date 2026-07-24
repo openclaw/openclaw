@@ -706,9 +706,7 @@ export function createFollowupRunner(params: {
         // snapshot may predate catalog adoption, but a replacement session must not inherit it.
         run = {
           ...run,
-          ...(admittedSessionEntry.sessionFile
-            ? { sessionFile: admittedSessionEntry.sessionFile }
-            : {}),
+          ...(replySessionKey ? { sessionFile: replySessionKey } : {}),
           modelSelectionLocked: admittedSessionEntry.modelSelectionLocked === true,
         };
         effectiveQueued = { ...effectiveQueued, run };
@@ -1954,7 +1952,6 @@ export function createFollowupRunner(params: {
           lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
           contextTokensUsed,
           newSessionId: runResult.meta?.agentMeta?.sessionId,
-          newSessionFile: runResult.meta?.agentMeta?.sessionFile,
         });
         const refreshedSessionEntry =
           replySessionKey && sessionStore ? sessionStore[replySessionKey] : undefined;
@@ -1965,7 +1962,7 @@ export function createFollowupRunner(params: {
               key: queueKey,
               previousSessionId,
               nextSessionId: refreshedSessionEntry.sessionId,
-              nextSessionFile: refreshedSessionEntry.sessionFile,
+              nextSessionFile: queueKey,
             });
           }
         }
