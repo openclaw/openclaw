@@ -2,23 +2,32 @@
  * Telegram inline button utilities for model selection.
  *
  * Callback data patterns (max 64 bytes for Telegram):
- * - mdl_prov              - show providers list
- * - mdl_list_{prov}_{pg}  - show models for provider (page N, 1-indexed)
- * - mdl_sel_{provider/id} - select model (standard)
- * - mdl_sel/{model}       - select model (compact fallback when standard is >64 bytes)
- * - mdl_back              - back to providers list
+ * - mdl_prov                      - show providers list
+ * - mdl_list_{prov}_{pg}          - show models for provider (page N, 1-indexed)
+ * - mdl_sel_{prov}_{pg}_{idx}     - select model by page + absolute index
+ * - mdl_back                      - back to providers list
+ *
+ * The index-based select format avoids the 64-byte callback_data limit:
+ * model names are never embedded in the button data (#98221).
  */
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { fitsTelegramCallbackData } from "./approval-callback-data.js";
 
 export type ButtonRow = Array<{ text: string; callback_data: string }>;
 
 export type ParsedModelCallback =
   | { type: "providers" }
   | { type: "list"; provider: string; page: number }
-  | { type: "select"; provider?: string; model: string }
+  | {
+      type: "select";
+      provider?: string;
+      page: number;
+      modelIndex: number;
+      totalCount: number;
+      fingerprint?: string;
+      model?: string;
+    }
   | { type: "back" };
 
 export type ProviderInfo = {
@@ -48,8 +57,7 @@ const CALLBACK_PREFIX = {
   providers: "mdl_prov",
   back: "mdl_back",
   list: "mdl_list_",
-  selectStandard: "mdl_sel_",
-  selectCompact: "mdl_sel/",
+  select: "mdl_sel_",
 } as const;
 
 /**
@@ -76,19 +84,36 @@ export function parseModelCallbackData(data: string): ParsedModelCallback | null
     }
   }
 
-  // mdl_sel/{model} (compact fallback)
-  const compactSelMatch = trimmed.match(/^mdl_sel\/(.+)$/);
-  if (compactSelMatch) {
-    const modelRef = compactSelMatch[1];
-    if (modelRef) {
+  // mdl_sel_{provider}_{page}_{modelIndex}_{totalCount}[_{fingerprint}]  (1-based)
+  const idxMatch = trimmed.match(/^mdl_sel_([a-z0-9_.-]+)_(\d+)_(\d+)_(\d+)(?:_([a-f0-9]{4}))?$/i);
+  if (idxMatch) {
+    const [, provider, pageStr, idxStr, totalStr, fingerprint] = idxMatch;
+    const page = parseStrictPositiveInteger(pageStr);
+    const modelIndex = parseStrictPositiveInteger(idxStr);
+    const totalCount = parseStrictPositiveInteger(totalStr);
+    if (provider && page !== undefined && modelIndex !== undefined && totalCount !== undefined) {
       return {
         type: "select",
-        model: modelRef,
+        provider,
+        page,
+        modelIndex,
+        totalCount,
+        fingerprint: fingerprint || undefined,
       };
     }
   }
 
-  // mdl_sel_{provider/model}
+  // Legacy formats (backward compat for in-flight buttons rendered before the index scheme):
+  // mdl_sel/{model} (compact)
+  const compactMatch = trimmed.match(/^mdl_sel\/(.+)$/);
+  if (compactMatch) {
+    const modelRef = compactMatch[1];
+    if (modelRef) {
+      return { type: "select", page: 1, modelIndex: 0, totalCount: 0, model: modelRef };
+    }
+  }
+
+  // mdl_sel_{provider/model} (standard)
   const selMatch = trimmed.match(/^mdl_sel_(.+)$/);
   if (selMatch) {
     const modelRef = selMatch[1];
@@ -98,6 +123,9 @@ export function parseModelCallbackData(data: string): ParsedModelCallback | null
         return {
           type: "select",
           provider: modelRef.slice(0, slashIndex),
+          page: 1,
+          modelIndex: 0,
+          totalCount: 0,
           model: modelRef.slice(slashIndex + 1),
         };
       }
@@ -107,16 +135,39 @@ export function parseModelCallbackData(data: string): ParsedModelCallback | null
   return null;
 }
 
+/**
+ * Compute a short fingerprint of the model list for stale-button detection.
+ * Catches same-count-but-different-content changes that totalCount alone misses.
+ */
+function computeModelListFingerprint(sortedModels: readonly string[]): string {
+  // Rolling hash over model names separated by a delimiter so that
+  // ["ab","c"] and ["a","bc"] produce different fingerprints.
+  let hash = 0;
+  for (const name of sortedModels) {
+    for (let i = 0; i < name.length; i++) {
+      hash = (hash << 5) - hash + name.charCodeAt(i);
+      hash |= 0;
+    }
+    // Delimiter between model names prevents concatenation ambiguity
+    hash = (hash << 5) - hash + 0x7c; // '|'
+    hash |= 0;
+  }
+  return (hash >>> 0).toString(16).slice(0, 4);
+}
+
 export function buildModelSelectionCallbackData(params: {
   provider: string;
-  model: string;
-}): string | null {
-  const fullCallbackData = `${CALLBACK_PREFIX.selectStandard}${params.provider}/${params.model}`;
-  if (fitsTelegramCallbackData(fullCallbackData)) {
-    return fullCallbackData;
-  }
-  const compactCallbackData = `${CALLBACK_PREFIX.selectCompact}${params.model}`;
-  return fitsTelegramCallbackData(compactCallbackData) ? compactCallbackData : null;
+  page: number;
+  modelIndex: number;
+  totalCount: number;
+  models: readonly string[];
+}): string {
+  // Fixed-length callback (page, modelIndex, totalCount are 1-based).
+  // Never embeds model names, always fits in 64 bytes (#98221).
+  // totalCount + fingerprint guard against stale buttons: if the provider's
+  // model list changes between render and click, the mismatch is detected.
+  const snapshot = computeModelListFingerprint(params.models);
+  return `${CALLBACK_PREFIX.select}${params.provider}_${params.page}_${params.modelIndex}_${params.totalCount}_${snapshot}`;
 }
 
 export function resolveModelSelection(params: {
@@ -124,28 +175,53 @@ export function resolveModelSelection(params: {
   providers: readonly string[];
   byProvider: ReadonlyMap<string, ReadonlySet<string>>;
 }): ResolveModelSelectionResult {
-  if (params.callback.provider) {
-    return {
-      kind: "resolved",
-      provider: params.callback.provider,
-      model: params.callback.model,
-    };
+  const { provider, modelIndex, totalCount, model: legacyModel } = params.callback;
+
+  // Legacy callback (pre-index format): resolve by model name across providers.
+  if (legacyModel) {
+    if (provider) {
+      return { kind: "resolved", provider, model: legacyModel };
+    }
+    const matchingProviders = params.providers.filter((id) =>
+      params.byProvider.get(id)?.has(legacyModel),
+    );
+    if (matchingProviders.length === 1) {
+      return {
+        kind: "resolved",
+        provider: expectDefined(matchingProviders.at(0), "single matching model provider"),
+        model: legacyModel,
+      };
+    }
+    return { kind: "ambiguous", model: legacyModel, matchingProviders };
   }
-  const matchingProviders = params.providers.filter((id) =>
-    params.byProvider.get(id)?.has(params.callback.model),
-  );
-  if (matchingProviders.length === 1) {
-    return {
-      kind: "resolved",
-      provider: expectDefined(matchingProviders.at(0), "single matching model provider"),
-      model: params.callback.model,
-    };
+
+  // Index-based callback: resolve by provider + index, with stale guards.
+  if (!provider) {
+    return { kind: "ambiguous", model: "", matchingProviders: [...params.providers] };
   }
-  return {
-    kind: "ambiguous",
-    model: params.callback.model,
-    matchingProviders,
-  };
+  const models = params.byProvider.get(provider);
+  if (!models || models.size === 0) {
+    return { kind: "ambiguous", model: "", matchingProviders: [...params.providers] };
+  }
+  if (totalCount > 0) {
+    // Reject stale buttons via count mismatch (add/remove detected).
+    if (models.size !== totalCount) {
+      return { kind: "ambiguous", model: "", matchingProviders: [...params.providers] };
+    }
+    // Reject stale buttons via fingerprint mismatch (same-count-different-content).
+    const sorted = [...models].toSorted((a, b) => a.localeCompare(b));
+    const expectedFingerprint = computeModelListFingerprint(sorted);
+    if (params.callback.fingerprint && params.callback.fingerprint !== expectedFingerprint) {
+      return { kind: "ambiguous", model: "", matchingProviders: [...params.providers] };
+    }
+    const model = sorted[modelIndex - 1]; // modelIndex is 1-based
+    if (!model) {
+      return { kind: "ambiguous", model: "", matchingProviders: [...params.providers] };
+    }
+    return { kind: "resolved", provider, model };
+  }
+  // totalCount === 0 means legacy callback with model name — handled above.
+  return { kind: "ambiguous", model: "", matchingProviders: [...params.providers] };
 }
 
 function isCurrentModelSelection(params: {
@@ -213,12 +289,15 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
   const endIndex = Math.min(startIndex + pageSize, models.length);
   const pageModels = models.slice(startIndex, endIndex);
 
-  for (const model of pageModels) {
-    const callbackData = buildModelSelectionCallbackData({ provider, model });
-    // Skip models that still exceed Telegram's callback_data limit.
-    if (!callbackData) {
-      continue;
-    }
+  for (const [pageIdx, model] of pageModels.entries()) {
+    const modelIndex = startIndex + pageIdx + 1; // 1-based absolute index in sorted models (#98221)
+    const callbackData = buildModelSelectionCallbackData({
+      provider,
+      page: currentPage,
+      modelIndex,
+      totalCount: models.length,
+      models, // snapshot for stale-button detection
+    });
 
     const isCurrentModel = isCurrentModelSelection({ currentModel, provider, model });
     const fallbackLabel = model.includes("/") ? `${provider}/${model}` : model;

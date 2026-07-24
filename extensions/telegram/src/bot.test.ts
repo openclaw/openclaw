@@ -2489,8 +2489,18 @@ describe("createTelegramBot", () => {
       ).reply_markup?.inline_keyboard;
 
       expect(inlineKeyboard).toStrictEqual([
-        [{ text: "GPT 4.1 Bridge", callback_data: "mdl_sel_openai/gpt-4.1" }],
-        [{ text: "GPT Five Bridge ✓", callback_data: "mdl_sel_openai/gpt-5" }],
+        [
+          {
+            text: "GPT 4.1 Bridge",
+            callback_data: expect.stringMatching(/^mdl_sel_openai_\d+_\d+_\d+_[a-f0-9]{4}$/),
+          },
+        ],
+        [
+          {
+            text: "GPT Five Bridge ✓",
+            callback_data: expect.stringMatching(/^mdl_sel_openai_\d+_\d+_\d+_[a-f0-9]{4}$/),
+          },
+        ],
         [{ text: "<< Back", callback_data: "mdl_back" }],
       ]);
       expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-display-names-1");
