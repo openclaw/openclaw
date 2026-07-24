@@ -101,8 +101,10 @@ import { validateSandboxSecurity } from "./validate-sandbox-security.js";
 import {
   appendReadOnlyWorkspaceSkillMountArgs,
   appendWorkspaceMountArgs,
+  filterBindsConflictingWithProtectedMounts,
   formatReadOnlyWorkspaceSkillMountHashState,
   resolveReadOnlyWorkspaceSkillMounts,
+  resolveProtectedSkillMountContainerPaths,
   SANDBOX_MOUNT_FORMAT_VERSION,
   type ReadOnlyWorkspaceSkillMount,
 } from "./workspace-mounts.js";
@@ -474,7 +476,23 @@ async function createSandboxContainer(params: {
     readOnlyWorkspaceSkillMounts: params.readOnlyWorkspaceSkillMounts,
     includeReadOnlyWorkspaceSkillMounts: false,
   });
-  appendCustomBinds(args, cfg);
+  // Skip user binds that conflict with protected skill mount container paths so
+  // the read-only skill overlay remains authoritative and Docker does not reject
+  // the container with a "Duplicate mount point" error.
+  const protectedPaths = resolveProtectedSkillMountContainerPaths(
+    params.readOnlyWorkspaceSkillMounts,
+  );
+  let safeBinds = cfg.binds;
+  if (protectedPaths.size > 0 && cfg.binds?.length) {
+    safeBinds = filterBindsConflictingWithProtectedMounts(cfg.binds, protectedPaths);
+    const skipped = cfg.binds.filter((b) => !safeBinds!.includes(b));
+    for (const bind of skipped) {
+      log.warn(
+        `sandbox: skipping user bind "${bind}" — container path conflicts with a protected read-only skill mount`,
+      );
+    }
+  }
+  appendCustomBinds(args, safeBinds ? { ...cfg, binds: safeBinds } : cfg);
   appendReadOnlyWorkspaceSkillMountArgs({
     args,
     readOnlyWorkspaceSkillMounts: params.readOnlyWorkspaceSkillMounts,
