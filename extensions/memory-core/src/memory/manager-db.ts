@@ -57,6 +57,10 @@ function isRegularFile(filePath: string): boolean {
   }
 }
 
+function asError(value: unknown): Error {
+  return value instanceof Error ? value : new Error(String(value));
+}
+
 function tableExists(db: DatabaseSync, schema: string, tableName: string): boolean {
   const row = db
     .prepare(`SELECT 1 AS ok FROM ${schema}.sqlite_master WHERE type = 'table' AND name = ?`)
@@ -236,8 +240,16 @@ export async function publishMemoryDatabaseTables(params: {
 
 /** Remove one closed shadow memory database and its journal-mode sidecars. */
 export function removeMemoryDatabaseFiles(dbPath: string): void {
+  let firstError: Error | undefined;
   for (const suffix of MEMORY_DATABASE_FILE_SUFFIXES) {
-    fs.rmSync(`${dbPath}${suffix}`, { force: true });
+    try {
+      fs.rmSync(`${dbPath}${suffix}`, { force: true });
+    } catch (err) {
+      firstError ??= asError(err);
+    }
+  }
+  if (firstError) {
+    throw firstError;
   }
 }
 
@@ -303,10 +315,12 @@ export function cleanupAgedMemoryReindexTempFiles(dbPath: string, nowMs = Date.n
       ) {
         continue;
       }
-      for (const filePath of filePaths) {
-        try {
-          fs.rmSync(filePath, { force: true });
-        } catch {}
+      try {
+        removeMemoryDatabaseFiles(path.join(dir, shadowBaseName));
+      } catch {
+        // This is startup preflight for stale crash leftovers. A locked old
+        // sidecar should not block the new full reindex from doing useful work.
+        continue;
       }
     }
   } finally {
