@@ -161,18 +161,43 @@ describe("resolveMcpTransport", () => {
     stderr.write(output.subarray(0, utf8Split));
     stderr.write(output.subarray(utf8Split, carriageReturn + 1));
 
-    expect(logDebugMock).not.toHaveBeenCalled();
+    expect(logDebugMock).toHaveBeenCalledTimes(2);
+    expect(logDebugMock).toHaveBeenNthCalledWith(1, "bundle-mcp:unicode: alpha");
+    expect(logDebugMock).toHaveBeenNthCalledWith(2, "bundle-mcp:unicode: 你好 omega");
 
     stderr.write(output.subarray(carriageReturn + 1, carriageReturn + 8));
     stderr.write(output.subarray(carriageReturn + 8));
 
-    expect(logDebugMock).toHaveBeenCalledTimes(1);
-    expect(logDebugMock).toHaveBeenCalledWith("bundle-mcp:unicode: alpha 你好 omega");
+    expect(logDebugMock).toHaveBeenCalledTimes(4);
+    expect(logDebugMock).toHaveBeenNthCalledWith(3, "bundle-mcp:unicode: final");
+    expect(logDebugMock).toHaveBeenNthCalledWith(4, "bundle-mcp:unicode: tail");
 
     resolved?.detachStderr?.();
 
-    expect(logDebugMock).toHaveBeenCalledTimes(2);
-    expect(logDebugMock).toHaveBeenLastCalledWith("bundle-mcp:unicode: final tail");
+    expect(logDebugMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("keeps unterminated MCP stderr progress visible across a split UTF-8 character", () => {
+    const resolved = resolveMcpTransport("progress", {
+      command: process.execPath,
+    });
+    if (!resolved) {
+      throw new Error("expected resolved stdio transport");
+    }
+    const stderr = (
+      resolved.transport as { stderr?: { write: (chunk: Buffer | string) => boolean } }
+    ).stderr;
+    if (!stderr) {
+      throw new Error("expected stdio stderr stream");
+    }
+
+    const progress = Buffer.from("loading 你\r", "utf8");
+    stderr.write(progress.subarray(0, progress.length - 2));
+    expect(logDebugMock).toHaveBeenCalledWith("bundle-mcp:progress: loading");
+    expect(logDebugMock).not.toHaveBeenCalledWith("bundle-mcp:progress: �");
+
+    stderr.write(progress.subarray(progress.length - 2));
+    expect(logDebugMock).toHaveBeenLastCalledWith("bundle-mcp:progress: 你");
   });
 
   it("flushes the final MCP stderr line when the stream ends", async () => {
@@ -224,8 +249,7 @@ describe("resolveMcpTransport", () => {
     }
 
     const oversizedLine = `xx😀${"y".repeat(8189)}`;
-    stderr.write(oversizedLine.slice(0, 4 * 1024));
-    stderr.write(`${oversizedLine.slice(4 * 1024)}\n`);
+    stderr.write(oversizedLine);
 
     expect(logDebugMock).toHaveBeenCalledTimes(1);
     expect(logDebugMock).toHaveBeenCalledWith(

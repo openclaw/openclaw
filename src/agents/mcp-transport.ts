@@ -62,6 +62,10 @@ function attachStderrLogging(serverName: string, transport: OpenClawStdioClientT
       chunk,
       maxLineBytes: DEFAULT_MAX_PENDING_UTF8_LINE_BYTES,
       maxPendingLineBytes: DEFAULT_MAX_PENDING_UTF8_LINE_BYTES,
+      // MCP servers use CR and unterminated writes for live progress. Emit each
+      // UTF-8-complete fragment so those diagnostics remain visible promptly.
+      splitOnCarriageReturn: true,
+      emitPending: true,
     })) {
       logLine(line, truncated);
     }

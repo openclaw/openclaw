@@ -38,6 +38,7 @@ export function appendUtf8Lines(params: {
   maxPendingLineBytes: number;
   maxLineBytes?: number;
   splitOnCarriageReturn?: boolean;
+  emitPending?: boolean;
 }): AccumulatedUtf8Line[] {
   let text = params.accumulator.decoder.write(
     Buffer.isBuffer(params.chunk) ? params.chunk : Buffer.from(params.chunk, "utf8"),
@@ -70,6 +71,14 @@ export function appendUtf8Lines(params: {
   const pending = boundLine(params.accumulator.pendingLine, params.maxPendingLineBytes);
   params.accumulator.pendingLine = pending.line;
   params.accumulator.pendingLineTruncated ||= pending.truncated;
+  if (params.emitPending && params.accumulator.pendingLine) {
+    completed.push({
+      line: params.accumulator.pendingLine,
+      truncated: params.accumulator.pendingLineTruncated,
+    });
+    params.accumulator.pendingLine = "";
+    params.accumulator.pendingLineTruncated = false;
+  }
   return completed;
 }
 
