@@ -668,6 +668,12 @@ function createApprovalHandlers<
     }
 
     const cfg = params.getConfig();
+    const forwardingConfig = params.strategy.config(cfg);
+    const outcome = forwardingConfig?.outcome ?? "message";
+    if (outcome === "none") {
+      return;
+    }
+
     let targets = entry?.targets;
     if (!targets) {
       const routeRequest = params.strategy.getRouteRequestFromResolved(resolved);
