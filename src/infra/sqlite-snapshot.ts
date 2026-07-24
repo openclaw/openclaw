@@ -122,7 +122,9 @@ export async function createPrivateSqliteDirectory(directoryPath: string): Promi
     await fs.mkdir(directoryPath, { mode: SQLITE_DIRECTORY_MODE });
     return;
   }
-  const encodedPath = Buffer.from(directoryPath, "utf8").toString("base64");
+  // This raw Win32 call bypasses Node's automatic long-path normalization.
+  const nativeDirectoryPath = path.toNamespacedPath(path.resolve(directoryPath));
+  const encodedPath = Buffer.from(nativeDirectoryPath, "utf8").toString("base64");
   const encodedNativeSource = Buffer.from(WINDOWS_PRIVATE_DIRECTORY_NATIVE_SOURCE, "utf8").toString(
     "base64",
   );
