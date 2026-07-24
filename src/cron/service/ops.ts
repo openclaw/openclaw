@@ -28,6 +28,10 @@ import {
   readCronJobScratchState,
   writeCronJobScratch,
 } from "../scratch-store.js";
+import {
+  cancelActiveCronTaskRun,
+  waitForActiveCronTaskRuns,
+} from "../service/active-run-cancellation.js";
 import { createCronStreamSourceIdentity, cronStreamScheduleKey } from "../stream-schedule.js";
 import { normalizeCronTaskRunJobId } from "../task-run-history.js";
 import type {
@@ -983,6 +987,17 @@ export async function remove(
         "heartbeat monitor jobs are system-owned; edit agents.*.heartbeat config instead",
       );
     }
+
+    // If the job is currently running, cancel it by its runId
+    // and wait for it to finish draining before removing.
+    if (removedJob && isCronJobActive(id)) {
+      state.deps.log.info({ jobId: id }, "cron: aborting active job before removal");
+      const runId = `cron-active:${id}`;
+      cancelActiveCronTaskRun({ runId, reason: "Job removed via cron remove" });
+      // Wait for the specific job run to finish draining (bounded wait)
+      await waitForActiveCronTaskRuns(30_000);
+    }
+
     state.store.jobs = state.store.jobs.filter((j) => j.id !== id);
     const removed = (state.store.jobs.length ?? 0) !== before;
 
