@@ -293,6 +293,7 @@ export function createManifestPluginRecord(params: {
     name: manifestRecord.name ?? manifestRecord.id,
     description: manifestRecord.description,
     version: manifestRecord.version,
+    builtWithOpenClawVersion: candidate.packageManifest?.build?.openclawVersion?.trim(),
     packageName: manifestRecord.packageName,
     format: manifestRecord.format,
     bundleFormat: manifestRecord.bundleFormat,

@@ -2884,7 +2884,7 @@ describe("prepareCliRunContext", () => {
       "did not enforce exact per-run tool availability during execution preparation",
     );
     expect(prepareExecution).toHaveBeenCalledWith(
-      expect.objectContaining({ toolAvailability: { native: [], openClaw: [] } }),
+      expect.objectContaining({ toolAvailability: { native: [], openClaw: [], mcp: [] } }),
     );
     expect(cleanup).toHaveBeenCalledOnce();
   });
@@ -2941,7 +2941,7 @@ describe("prepareCliRunContext", () => {
 
     expect(prepareExecution).toHaveBeenCalledWith(
       expect.objectContaining({
-        toolAvailability: { native: ["Read"], openClaw: [] },
+        toolAvailability: { native: ["Read"], openClaw: [], mcp: [] },
       }),
     );
     expect(context.params.cliToolAvailability).toEqual({ native: ["Read"], openClaw: [] });

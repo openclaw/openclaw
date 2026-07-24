@@ -149,6 +149,11 @@ export type CliBackendToolAvailability = {
   native: readonly string[];
   /** Canonical OpenClaw tool names served through the host-isolated transport. */
   openClaw: readonly string[];
+  /**
+   * @deprecated Compatibility projection for CLI backend plugins built against
+   * v2026.7.2-beta.1 through v2026.7.2-beta.3. Use `openClaw` for canonical names.
+   */
+  mcp: readonly string[];
 };
 
 export type CliBackendResolveExecutionArgsContext = {

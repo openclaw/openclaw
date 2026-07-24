@@ -247,7 +247,11 @@ describe("google gemini cli backend auth bridge", () => {
                   modelId: "gemini-3.1-pro-preview",
                 };
         context.env = { GEMINI_CLI_SYSTEM_SETTINGS_PATH: inheritedSettingsPath };
-        context.toolAvailability = { native: [], openClaw: [...allowed] };
+        context.toolAvailability = {
+          native: [],
+          openClaw: [...allowed],
+          mcp: allowed.map((toolName) => `mcp__openclaw__${toolName}`),
+        };
         const prepared = await backend.prepareExecution?.(context);
         try {
           expect(prepared?.toolAvailabilityEnforced).toBe(true);
@@ -312,7 +316,7 @@ describe("google gemini cli backend auth bridge", () => {
           provider: "google-gemini-cli",
           modelId: "gemini-3.1-pro-preview",
           env: { GEMINI_CLI_SYSTEM_SETTINGS_PATH: inheritedSettingsPath },
-          toolAvailability: { native: ["run_shell_command"], openClaw: [] },
+          toolAvailability: { native: ["run_shell_command"], openClaw: [], mcp: [] },
         }),
       ).rejects.toThrow("cannot expose backend-native tools");
     });

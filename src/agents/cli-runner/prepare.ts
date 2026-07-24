@@ -115,6 +115,7 @@ import {
   loadCliSessionReseedMessages,
   resolveAutoCliSessionReseedHistoryChars,
 } from "./session-history.js";
+import { buildCliBackendToolAvailability } from "./tool-policy.js";
 import type {
   CliReusableSession,
   CliSecretInput,
@@ -862,7 +863,9 @@ export async function prepareCliRunContext(
       contextTokenBudget: contextWindowInfo.tokens,
       authProfileId: effectiveAuthProfileId,
       executionMode,
-      toolAvailability: params.cliToolAvailability,
+      toolAvailability: params.cliToolAvailability
+        ? buildCliBackendToolAvailability(params.cliToolAvailability)
+        : undefined,
       env: preparedBackend.env,
     } satisfies Parameters<NonNullable<typeof backendResolved.prepareExecution>>[0];
     preparedExecution =

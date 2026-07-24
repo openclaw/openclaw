@@ -62,8 +62,9 @@ function createBackend(overrides: Partial<CliBackendPlugin> = {}): CliBackendPlu
 function runtimeEntry(
   overrides: Partial<CliBackendPlugin> = {},
   pluginId = "acme-plugin",
+  metadata: { builtWithOpenClawVersion?: string } = {},
 ): RuntimeBackendEntry {
-  return { ...createBackend(overrides), pluginId } as RuntimeBackendEntry;
+  return { ...createBackend(overrides), pluginId, ...metadata } as RuntimeBackendEntry;
 }
 
 function setupEntry(
@@ -217,6 +218,43 @@ describe("resolveCliBackendConfig", () => {
     expect(resolved.nativeToolMode).toBe("selectable");
     expect(resolved.toolAvailabilityEnforcement).toBe("execution-args");
     expect(resolved.sideQuestionToolMode).toBe("disabled");
+  });
+
+  it("normalizes the shipped beta selectable-hook contract to execution-args enforcement", () => {
+    const resolveExecutionArgs = vi.fn(({ baseArgs }: { baseArgs: readonly string[] }) => baseArgs);
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [
+        runtimeEntry(
+          {
+            nativeToolMode: "selectable",
+            resolveExecutionArgs: resolveExecutionArgs as never,
+          },
+          "acme-plugin",
+          { builtWithOpenClawVersion: "2026.7.2-beta.3" },
+        ),
+      ],
+      resolvePluginSetupCliBackend: () => undefined,
+    });
+
+    const resolved = requireBackend();
+
+    expect(resolved.resolveExecutionArgs).toBe(resolveExecutionArgs);
+    expect(resolved.toolAvailabilityEnforcement).toBe("execution-args");
+  });
+
+  it("does not infer enforcement for an unversioned selectable hook", () => {
+    const resolveExecutionArgs = vi.fn(({ baseArgs }: { baseArgs: readonly string[] }) => baseArgs);
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [
+        runtimeEntry({
+          nativeToolMode: "selectable",
+          resolveExecutionArgs: resolveExecutionArgs as never,
+        }),
+      ],
+      resolvePluginSetupCliBackend: () => undefined,
+    });
+
+    expect(requireBackend().toolAvailabilityEnforcement).toBeUndefined();
   });
 });
 
