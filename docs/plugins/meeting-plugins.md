@@ -13,13 +13,13 @@ These plugins participate in meetings. They are separate from messaging channels
 
 ## Choose a plugin
 
-| Platform        | Plugin                                      | Accepted meeting links                                                                                      | Installation                             | Participation paths                                      | Platform-specific capabilities                                                                                |
-| --------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ---------------------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| Google Meet     | [`google-meet`](/plugins/google-meet)       | `meet.google.com/...`                                                                                       | Install from npm or ClawHub, then enable | Local Chrome, Chrome on a paired node, or Twilio dial-in | Can create meetings through the Meet API or a signed-in browser; can read supported Meet artifacts with OAuth |
-| Microsoft Teams | [`teams-meetings`](/plugins/teams-meetings) | Work links under `teams.microsoft.com/l/meetup-join/...` and consumer links under `teams.live.com/meet/...` | Included; enabled by default             | Local Chrome or Chrome on a paired node                  | Guest join for work and consumer meetings                                                                     |
-| Zoom            | [`zoom-meetings`](/plugins/zoom-meetings)   | `zoom.us/j/...` and account subdomains such as `example.zoom.us/j/...`                                      | Included; enabled by default             | Local Chrome or Chrome on a paired node                  | Guest join through the Zoom Web App                                                                           |
+| Platform        | Plugin                                      | Accepted meeting links                                                                                      | Installation                                    | Participation paths                                      | Platform-specific capabilities                                                                                |
+| --------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Google Meet     | [`google-meet`](/plugins/google-meet)       | `meet.google.com/...`                                                                                       | Install from npm or ClawHub; enabled by default | Local Chrome, Chrome on a paired node, or Twilio dial-in | Can create meetings through the Meet API or a signed-in browser; can read supported Meet artifacts with OAuth |
+| Microsoft Teams | [`teams-meetings`](/plugins/teams-meetings) | Work links under `teams.microsoft.com/l/meetup-join/...` and consumer links under `teams.live.com/meet/...` | Included; enabled by default                    | Local Chrome or Chrome on a paired node                  | Guest join for work and consumer meetings                                                                     |
+| Zoom            | [`zoom-meetings`](/plugins/zoom-meetings)   | `zoom.us/j/...` and account subdomains such as `example.zoom.us/j/...`                                      | Included; enabled by default                    | Local Chrome or Chrome on a paired node                  | Guest join through the Zoom Web App                                                                           |
 
-Choose Google Meet when you need meeting creation, Google API artifacts, or a Twilio phone path. Choose Teams or Zoom for direct browser guest participation on those platforms. The Teams and Zoom plugins do not create meetings, dial in, call the vendor API, or record meetings.
+Choose Google Meet when you need meeting creation, Google API artifacts, or a Twilio phone path. Choose Teams or Zoom for direct browser guest participation on those platforms. The Teams and Zoom plugins do not create meetings, dial in, call the vendor API, or capture audio/video recordings.
 
 ## Choose a mode
 
@@ -33,7 +33,17 @@ The three plugins share the same modes:
 
 Use `transcribe` when the agent only needs meeting text. Use `agent` for normal OpenClaw reasoning and tools. Use `bidi` when low-latency direct voice is more important than routing each turn through the regular agent.
 
-Caption transcripts are session-scoped runtime data, not durable meeting recordings. Caption availability still depends on the meeting platform, account, language, and host policy. See the platform guide for its transcript limits and status fields.
+The bounded live transcript remains available only in `transcribe` mode. In all
+three modes, browser joins also persist completed caption rows and a derived
+summary to the shared state database. Leaving the meeting finalizes visible
+captions and writes the summary; use [`openclaw transcripts`](/cli/transcripts)
+to list, inspect, or export it. This durable notes path does not change the live
+agent-consult transcript or create an audio/video recording.
+
+Automatic notes are on by default. Set `transcripts.enabled: false` to disable
+durable notes globally. An explicitly selected `transcribe` session retains its
+bounded live-caption tail without writing durable rows. Caption availability
+still depends on the meeting platform, account, language, and host policy.
 
 ## Prepare Chrome and audio
 
@@ -58,17 +68,17 @@ The Gateway host still owns the OpenClaw agent and model credentials when Chrome
 
 ## Install or disable plugins
 
-Install and enable Google Meet separately. Teams meetings and Zoom are included with OpenClaw and enabled by default:
+Install Google Meet separately; it is enabled by default after installation. Teams meetings and Zoom are included with OpenClaw and enabled by default:
 
 ```bash
 # Google Meet only
 openclaw plugins install npm:@openclaw/google-meet
-openclaw plugins enable google-meet
 ```
 
-Disable either included plugin if you do not use it:
+Disable any meeting plugin you do not use:
 
 ```bash
+openclaw plugins disable google-meet
 openclaw plugins disable teams-meetings
 openclaw plugins disable zoom-meetings
 ```

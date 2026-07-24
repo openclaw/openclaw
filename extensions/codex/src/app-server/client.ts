@@ -63,6 +63,11 @@ export function getCodexAppServerClientInstanceId(client: object): string {
   return created;
 }
 
+export function resolveCodexAppServerClientInstanceId(client: object): string {
+  const getInstanceId = (client as { getInstanceId?: () => string }).getInstanceId;
+  return getInstanceId?.call(client) ?? getCodexAppServerClientInstanceId(client);
+}
+
 /** RPC error wrapper that preserves app-server error code and data. */
 export class CodexAppServerRpcError extends Error {
   readonly code?: number;

@@ -457,7 +457,7 @@ test("sessions.reset infers selected global agent from agent-prefixed aliases", 
     });
 
     expect(reset.ok).toBe(true);
-    if (!reset.ok) {
+    if (!reset.ok || "incognitoDeleted" in reset) {
       throw new Error("expected reset to succeed");
     }
     expect(reset.key).toBe("global");

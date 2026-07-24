@@ -26,8 +26,7 @@ function createGateway(options: { connected?: boolean; admin?: boolean } = {}): 
   const admin = options.admin ?? true;
   const snapshot = {
     client: null,
-    connected,
-    reconnecting: !connected,
+    phase: connected ? "connected" : "reconnecting",
     hello: {
       type: "hello-ok" as const,
       protocol: 1,

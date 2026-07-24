@@ -17,13 +17,13 @@ function sessionsResult(sessions: SessionsListResult["sessions"], ts: number): S
 function createGatewayHarness(client: GatewayBrowserClient) {
   const snapshot: {
     client: GatewayBrowserClient | null;
-    connected: boolean;
+    phase: "connected";
     sessionKey: string;
     assistantAgentId: string | null;
     hello: GatewayHelloOk | null;
   } = {
     client,
-    connected: true,
+    phase: "connected" as const,
     sessionKey: "agent:main:main",
     assistantAgentId: "main",
     hello: null,
