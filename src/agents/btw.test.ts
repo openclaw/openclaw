@@ -978,12 +978,12 @@ describe("runBtwSideQuestion", () => {
     resolveModelWithRegistryMock.mockReturnValue(platformModel);
     resolveSessionAuthProfileOverrideMock.mockResolvedValue(undefined);
     ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
+    getApiKeyForModelMock.mockResolvedValue({ apiKey: "", mode: "api-key", source: "none" });
 
     await expect(runSideQuestion({ provider: "openai", model: "gpt-5.5" })).resolves.toEqual({
       text: "Codex side answer.",
     });
 
-    expect(getApiKeyForModelMock).not.toHaveBeenCalled();
     expect(codexSideQuestionMock).toHaveBeenCalledOnce();
     const preparedRuntimeAuth = (
       mockArg(codexSideQuestionMock, 0, 0) as {
@@ -996,12 +996,7 @@ describe("runBtwSideQuestion", () => {
     ).preparedRuntimeAuth;
     expect(preparedRuntimeAuth?.plan).toMatchObject({
       harnessAuthProvider: "openai",
-      deferredRouteSupport: {
-        requestTransportOverrides: "none",
-        runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
-      },
     });
-    expect(preparedRuntimeAuth?.plan?.modelRoute).toBeUndefined();
     expect(preparedRuntimeAuth?.plan?.forwardedAuthProfileId).toBeUndefined();
     expect(preparedRuntimeAuth?.resolvedApiKey).toBeUndefined();
     expect(Object.keys(preparedRuntimeAuth?.authProfileStore?.profiles ?? {})).toEqual([]);

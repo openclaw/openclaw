@@ -11,6 +11,7 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
   loadTranscriptEvents,
   persistSessionTranscriptTurn,
@@ -1785,12 +1786,11 @@ describe("session.message websocket events", () => {
       const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:newer");
 
       emitSessionTranscriptUpdate({
-        target: {
+        sessionFile: formatSqliteSessionFileMarker({
           agentId: "main",
           sessionId: "sess-new",
-          sessionKey: "agent:main:newer",
           storePath,
-        },
+        }),
         message,
         messageId: "msg-shared",
       });
