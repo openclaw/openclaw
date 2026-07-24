@@ -2,11 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
-  createLobsterPetLook,
-  LOBSTER_LOGO_VISIT_EVENT,
-  type LobsterLogoVisitDetail,
-} from "../../components/lobster-pet.ts";
-import {
   createContext,
   createGateway,
   createGatewayHarness,
@@ -206,65 +201,6 @@ describe("AppSidebar lobster outcome wiring", () => {
   );
 });
 
-describe("AppSidebar logo stand-in wiring", () => {
-  it("swaps the brand mark while the pet's logo visit is in, leaving, then out", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-    const pet = sidebar.querySelector("openclaw-lobster-pet");
-    if (!pet) {
-      throw new Error("Expected sidebar lobster pet");
-    }
-    const dispatch = (detail: LobsterLogoVisitDetail) =>
-      pet.dispatchEvent(
-        new CustomEvent(LOBSTER_LOGO_VISIT_EVENT, { detail, bubbles: true, composed: true }),
-      );
-    const logo = () => sidebar.querySelector(".sidebar-brand__logo");
-    const standIn = () => sidebar.querySelector(".sidebar-brand__pet");
-    const standInHost = sidebar.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-      "openclaw-lobster-logo-standin",
-    );
-    const settleStandIn = async () => {
-      await sidebar.updateComplete;
-      await standInHost?.updateComplete;
-    };
-
-    expect(standInHost).not.toBeNull();
-    await standInHost?.updateComplete;
-    expect(logo()?.classList.contains("sidebar-brand__logo--vacated")).toBe(false);
-    expect(standIn()).toBeNull();
-
-    const look = createLobsterPetLook(70);
-    dispatch({ phase: "in", look, name: "Pinchy" });
-    await settleStandIn();
-    expect(logo()?.classList.contains("sidebar-brand__logo--vacated")).toBe(true);
-    const sprite = standIn();
-    expect(sprite).not.toBeNull();
-    expect(sprite?.classList.contains(`lobster-pet--palette-${look.palette.id}`)).toBe(true);
-    expect(sprite?.getAttribute("title")).toContain("Pinchy");
-    expect(sprite?.querySelector(".lobster-pet__svg")).not.toBeNull();
-
-    dispatch({ phase: "leaving", look, name: "Pinchy" });
-    await settleStandIn();
-    expect(standIn()?.classList.contains("sidebar-brand__pet--leaving")).toBe(true);
-
-    dispatch({ phase: "out", look: null, name: null });
-    await settleStandIn();
-    expect(standIn()).toBeNull();
-    expect(logo()?.classList.contains("sidebar-brand__logo--vacated")).toBe(false);
-
-    // A lookless scare phase hides the logo with no stand-in crab, and the
-    // "out" edge restores it.
-    dispatch({ phase: "in", look: null, name: null });
-    await settleStandIn();
-    expect(logo()?.classList.contains("sidebar-brand__logo--vacated")).toBe(true);
-    expect(standIn()).toBeNull();
-
-    dispatch({ phase: "out", look: null, name: null });
-    await settleStandIn();
-    expect(logo()?.classList.contains("sidebar-brand__logo--vacated")).toBe(false);
-  });
-});
-
 describe("AppSidebar session source lifecycle", () => {
   it("disables Fork session for model-selection-locked rows", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
@@ -335,7 +271,7 @@ describe("AppSidebar session source lifecycle", () => {
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
     const cachedResult = sidebar.sessionData.sessionsResult;
 
-    gateway.publish({ connected: false, reconnecting: true });
+    gateway.publish({ phase: "reconnecting" });
     sessions.publish({ result: null, agentId: null, loading: false });
     await sidebar.updateComplete;
 
@@ -344,7 +280,7 @@ describe("AppSidebar session source lifecycle", () => {
     expect(Object.keys(sidebar.sessionData.sessionRowsByAgent)).toEqual(["main"]);
     expect([...sidebar.sessionData.sessionCreatedOrder.keys()]).toEqual(["main-a", "main-b"]);
 
-    gateway.publish({ connected: true, reconnecting: false });
+    gateway.publish({ phase: "connected" });
     const partial = createSessionState("main", ["main-a"]);
     sessions.publish({ result: partial.result, agentId: partial.agentId });
     await sidebar.updateComplete;
@@ -375,8 +311,7 @@ describe("AppSidebar session source lifecycle", () => {
 
     gateway.publish({
       client: {} as GatewayBrowserClient,
-      connected: false,
-      reconnecting: true,
+      phase: "reconnecting",
     });
     await sidebar.updateComplete;
 
@@ -678,8 +613,8 @@ describe("AppSidebar session mutation feedback", () => {
     menu.querySelector<HTMLButtonElement>('[data-shortcut="p"]')?.click();
     await waitForFast(() => expect(harness.patch).toHaveBeenCalledOnce());
 
-    gateway.publish({ connected: false, reconnecting: true });
-    gateway.publish({ connected: true, reconnecting: false });
+    gateway.publish({ phase: "reconnecting" });
+    gateway.publish({ phase: "connected" });
     pending.reject(new Error("late old-connection rejection"));
     await pending.promise.catch(() => undefined);
     await Promise.resolve();
@@ -703,8 +638,8 @@ describe("AppSidebar session mutation feedback", () => {
     menu?.querySelector<HTMLButtonElement>('[data-shortcut="a"]')?.click();
     await waitForFast(() => expect(harness.patch).toHaveBeenCalledOnce());
 
-    gateway.publish({ connected: false, reconnecting: true });
-    gateway.publish({ connected: true, reconnecting: false });
+    gateway.publish({ phase: "reconnecting" });
+    gateway.publish({ phase: "connected" });
     pending.resolve(successfulSessionPatch("agent:main:a"));
     await pending.promise;
     await new Promise<void>((resolve) => {
@@ -762,8 +697,8 @@ describe("AppSidebar session mutation feedback", () => {
     const confirmSpy = vi.spyOn(window, "confirm").mockImplementation(() => {
       confirmations += 1;
       if (confirmations === 2) {
-        gateway.publish({ connected: false, reconnecting: true });
-        gateway.publish({ connected: true, reconnecting: false });
+        gateway.publish({ phase: "reconnecting" });
+        gateway.publish({ phase: "connected" });
       }
       return true;
     });

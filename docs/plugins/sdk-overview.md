@@ -96,26 +96,26 @@ and external URLs. Registering another provider replaces the current provider.
 
 ### Capability registration
 
-| Method                                           | What it registers                                                                 |
-| ------------------------------------------------ | --------------------------------------------------------------------------------- |
-| `api.registerProvider(...)`                      | Text inference (LLM)                                                              |
-| `api.registerWorkerProvider(...)`                | Cloud-worker lifecycle leases                                                     |
-| `api.registerModelCatalogProvider(...)`          | Model catalog rows for text and media generation                                  |
-| `api.registerAgentHarness(...)`                  | [Experimental](/plugins/sdk-agent-harness) native agent executor (Codex, Copilot) |
-| `api.registerCliBackend(...)`                    | Local CLI inference backend                                                       |
-| `api.registerChannel(...)`                       | Messaging channel                                                                 |
-| `api.registerEmbeddingProvider(...)`             | Reusable vector embedding provider                                                |
-| `api.registerSpeechProvider(...)`                | Text-to-speech / STT synthesis                                                    |
-| `api.registerRealtimeTranscriptionProvider(...)` | Streaming realtime transcription                                                  |
-| `api.registerRealtimeVoiceProvider(...)`         | Duplex realtime voice sessions                                                    |
-| `api.registerMediaUnderstandingProvider(...)`    | Image/audio/video analysis                                                        |
-| `api.registerTranscriptSourceProvider(...)`      | Live or imported meeting transcript source                                        |
-| `api.registerImageGenerationProvider(...)`       | Image generation                                                                  |
-| `api.registerMusicGenerationProvider(...)`       | Music generation                                                                  |
-| `api.registerVideoGenerationProvider(...)`       | Video generation                                                                  |
-| `api.registerWebFetchProvider(...)`              | Web fetch / scrape provider                                                       |
-| `api.registerWebSearchProvider(...)`             | Web search                                                                        |
-| `api.registerCompactionProvider(...)`            | Pluggable transcript-compaction backend                                           |
+| Method                                           | What it registers                                                                                                                         |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `api.registerProvider(...)`                      | Text inference (LLM)                                                                                                                      |
+| `api.registerWorkerProvider(...)`                | Cloud-worker lifecycle leases                                                                                                             |
+| `api.registerModelCatalogProvider(...)`          | Model catalog rows for text and media generation                                                                                          |
+| `api.registerAgentHarness(...)`                  | [Experimental](/plugins/sdk-agent-harness) native agent executor (Codex, Copilot)                                                         |
+| `api.registerCliBackend(...)`                    | Local CLI inference backend                                                                                                               |
+| `api.registerChannel(...)`                       | Messaging channel                                                                                                                         |
+| `api.registerEmbeddingProvider(...)`             | Reusable vector embedding provider                                                                                                        |
+| `api.registerSpeechProvider(...)`                | Text-to-speech / STT synthesis                                                                                                            |
+| `api.registerRealtimeTranscriptionProvider(...)` | Streaming realtime transcription                                                                                                          |
+| `api.registerRealtimeVoiceProvider(...)`         | Duplex realtime voice sessions                                                                                                            |
+| `api.registerMediaUnderstandingProvider(...)`    | Image/audio/video analysis                                                                                                                |
+| `api.registerTranscriptSourceProvider(...)`      | Live or imported meeting transcript source; meeting plugins can use `createMeetingTranscriptSourceProvider` from `plugin-sdk/transcripts` |
+| `api.registerImageGenerationProvider(...)`       | Image generation                                                                                                                          |
+| `api.registerMusicGenerationProvider(...)`       | Music generation                                                                                                                          |
+| `api.registerVideoGenerationProvider(...)`       | Video generation                                                                                                                          |
+| `api.registerWebFetchProvider(...)`              | Web fetch / scrape provider                                                                                                               |
+| `api.registerWebSearchProvider(...)`             | Web search                                                                                                                                |
+| `api.registerCompactionProvider(...)`            | Pluggable transcript-compaction backend                                                                                                   |
 
 Worker providers must also declare their id in `contracts.workerProviders`.
 Core persists durable intent before `provision(profile, operationId)`. Providers validate settings before external allocation and throw `WorkerProviderError` for permanent profile rejection. `provision` must adopt the same lease when the operation id repeats.

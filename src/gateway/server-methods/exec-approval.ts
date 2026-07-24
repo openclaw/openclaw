@@ -348,7 +348,7 @@ export function createExecApprovalHandlers(
       };
       // This check is adjacent to manager creation with no await between them.
       // The abort owner records the tombstone before sweeping pending approvals.
-      if (requestRunId && context.chatAbortedRuns?.has(requestRunId)) {
+      if (requestRunId && context.chatRunState.hasAbortMarker(requestRunId)) {
         respond(
           false,
           undefined,
@@ -472,7 +472,7 @@ export function createExecApprovalHandlers(
         respond,
         resolveTerminalReason: (snapshot) => {
           const runId = normalizeOptionalString(snapshot.request.runId);
-          return runId && context.chatAbortedRuns?.has(runId) ? "run-aborted" : undefined;
+          return runId && context.chatRunState.hasAbortMarker(runId) ? "run-aborted" : undefined;
         },
       });
     },

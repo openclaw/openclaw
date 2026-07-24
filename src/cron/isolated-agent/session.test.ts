@@ -16,6 +16,11 @@ vi.mock("../../config/sessions/reset-policy.js", () => ({
 
 vi.mock("../../agents/bootstrap-cache.js", () => ({
   clearBootstrapSnapshot: vi.fn(),
+  clearBootstrapSnapshotOnSessionBoundary: vi.fn(({ sessionKey, boundaryAppended }) => {
+    if (sessionKey && boundaryAppended) {
+      clearBootstrapSnapshot(sessionKey);
+    }
+  }),
   clearBootstrapSnapshotOnSessionRollover: vi.fn(({ sessionKey, previousSessionId }) => {
     if (sessionKey && previousSessionId) {
       clearBootstrapSnapshot(sessionKey);
@@ -23,8 +28,16 @@ vi.mock("../../agents/bootstrap-cache.js", () => ({
   }),
 }));
 
+vi.mock("../../agents/sessions/reset-boundary.js", () => ({
+  appendSessionResetBoundary: vi.fn(() => ({
+    boundaryEntryId: "cron-reset-boundary",
+    keptEntryIds: [],
+  })),
+}));
+
 import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
 import { evaluateSessionFreshness } from "../../config/sessions/reset-policy.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { resolveCronSession } from "./session.js";
 
 const NOW_MS = 1_737_600_000_000;
@@ -153,27 +166,42 @@ describe("resolveCronSession", () => {
       expect(clearBootstrapSnapshot).not.toHaveBeenCalled();
     });
 
-    it("creates new sessionId when session is stale", () => {
+    it("appends a boundary without changing sessionId when session is stale", () => {
       const result = resolveWithStoredEntry({
         entry: {
           sessionId: "old-session-id",
+          sessionFile: "/tmp/legacy-session.jsonl",
           updatedAt: NOW_MS - 86_400_000, // 1 day ago
           systemSent: true,
           modelOverride: "gpt-4.1-mini",
           providerOverride: "openai",
+          agentHarnessId: "codex",
+          claudeCliSessionId: "native-before-boundary",
+          compactionCount: 9,
           sendPolicy: "allow",
         },
         fresh: false,
       });
 
-      expect(result.sessionEntry.sessionId).not.toBe("old-session-id");
+      expect(result.sessionEntry.sessionId).toBe("old-session-id");
       expect(result.isNewSession).toBe(true);
-      expect(result.previousSessionId).toBe("old-session-id");
+      expect(result.previousSessionId).toBeUndefined();
       expect(result.systemSent).toBe(false);
       expect(result.sessionEntry.modelOverride).toBe("gpt-4.1-mini");
       expect(result.sessionEntry.providerOverride).toBe("openai");
+      expect(result.sessionEntry.agentHarnessId).toBeUndefined();
+      expect(result.sessionEntry.claudeCliSessionId).toBeUndefined();
+      expect(result.sessionEntry.compactionCount).toBe(0);
       expect(result.sessionEntry.sendPolicy).toBe("allow");
-      expect(clearBootstrapSnapshot).toHaveBeenCalledWith("webhook:stable-key");
+      expect(result.sessionEntry.sessionFile).toBe(
+        formatSqliteSessionFileMarker({
+          agentId: "main",
+          sessionId: "old-session-id",
+          storePath: "/tmp/test-store.json",
+        }),
+      );
+      expect(result.resetBoundaryPending).toMatchObject({ reason: "cron-stale" });
+      expect(clearBootstrapSnapshot).not.toHaveBeenCalled();
     });
 
     it("creates new sessionId when forceNew is true", () => {

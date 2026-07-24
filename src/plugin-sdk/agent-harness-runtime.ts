@@ -254,6 +254,7 @@ export async function detectAndLoadAgentHarnessPromptImages(params: {
   model: { input?: string[] };
   existingImages?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
+  media?: import("../media/media-facts.js").MediaFact[];
   config?: import("../config/types.openclaw.js").OpenClawConfig;
   workspaceOnly?: boolean;
   localRoots?: readonly string[];
@@ -277,6 +278,7 @@ export async function detectAndLoadAgentHarnessPromptImages(params: {
     model: params.model,
     existingImages: params.existingImages,
     imageOrder: params.imageOrder,
+    media: params.media,
     maxBytes: MAX_IMAGE_BYTES,
     maxDimensionPx: resolveImageSanitizationLimits(params.config).maxDimensionPx,
     workspaceOnly: params.workspaceOnly,

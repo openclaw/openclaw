@@ -23,6 +23,11 @@ import {
 import { resolveCronListSnapshotRevision } from "../list-snapshot-revision.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
+import {
+  deleteCronJobScratch,
+  readCronJobScratchState,
+  writeCronJobScratch,
+} from "../scratch-store.js";
 import { createCronStreamSourceIdentity, cronStreamScheduleKey } from "../stream-schedule.js";
 import { normalizeCronTaskRunJobId } from "../task-run-history.js";
 import type {
@@ -358,6 +363,39 @@ export async function readJob(state: CronServiceState, id: string) {
   return await locked(state, async () => {
     await ensureLoadedForRead(state);
     return state.store?.jobs.find((job) => job.id === id);
+  });
+}
+
+/** Reads one job's private scratch state after proving the job exists in this store. */
+export async function readScratch(state: CronServiceState, id: string) {
+  return await locked(state, async () => {
+    await ensureLoaded(state, { skipRecompute: true });
+    findJobOrThrow(state, id);
+    // Scratch intentionally opens the process-global state DB, matching every
+    // other cron store write in this service (see saveCronJobsStore); threading
+    // injected state-db options through CronServiceState is a service-wide
+    // refactor that must move jobs and scratch together, not scratch alone.
+    return readCronJobScratchState(state.deps.storePath, id);
+  });
+}
+
+/** Writes or clears one job's private scratch under the cron mutation lock. */
+export async function writeScratch(
+  state: CronServiceState,
+  id: string,
+  params: { content: string | null; expectedRevision?: number; sourceSha256?: string },
+) {
+  return await locked(state, async () => {
+    await ensureLoaded(state, { skipRecompute: true });
+    findJobOrThrow(state, id);
+    return writeCronJobScratch({
+      storePath: state.deps.storePath,
+      jobId: id,
+      content: params.content,
+      expectedRevision: params.expectedRevision,
+      sourceSha256: params.sourceSha256,
+      nowMs: state.deps.nowMs(),
+    });
   });
 }
 
@@ -941,6 +979,15 @@ export async function remove(
       postPersistAutoDisableNotifications,
       suppressScheduledJobId: id,
     });
+    if (removed) {
+      try {
+        deleteCronJobScratch(state.deps.storePath, id);
+      } catch (error) {
+        // The job deletion is already durable. Scratch cleanup is idempotent and
+        // must not turn a committed removal into a retryable API failure.
+        state.deps.log.warn({ jobId: id, err: String(error) }, "cron: scratch cleanup failed");
+      }
+    }
     armTimer(state);
     if (removed) {
       emit(state, { jobId: id, action: "removed", job: removedJob });
@@ -1001,6 +1048,16 @@ export async function removeAgentJobsTransactional<T>(
         );
       }
       throw error;
+    }
+    for (const job of removedJobs) {
+      try {
+        deleteCronJobScratch(state.deps.storePath, job.id);
+      } catch (error) {
+        state.deps.log.warn(
+          { jobId: job.id, err: String(error) },
+          "cron: agent scratch cleanup failed",
+        );
+      }
     }
     armTimer(state);
     for (const job of removedJobs) {

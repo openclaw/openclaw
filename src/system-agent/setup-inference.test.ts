@@ -451,11 +451,16 @@ describe("detectSetupInference", () => {
     expect(detection.candidates).toHaveLength(2);
     expect(detection.candidates[0]).toMatchObject({
       kind: "claude-cli",
+      brandId: "claude",
       recommended: false,
       icon: "https://cdn.example.com/claude.svg",
       website: "https://claude.example.com/download",
     });
-    expect(detection.candidates[1]).toMatchObject({ kind: "codex-cli", recommended: false });
+    expect(detection.candidates[1]).toMatchObject({
+      kind: "codex-cli",
+      brandId: "openai",
+      recommended: false,
+    });
     expect(detection.setupComplete).toBe(false);
     expect(detection.recommendedInstalls).toHaveLength(9);
     expect(detection.workspace.length).toBeGreaterThan(0);
@@ -525,6 +530,7 @@ describe("detectSetupInference", () => {
       expect.objectContaining({ kind: "claude-cli" }),
       {
         kind: "provider-auto:local-model",
+        brandId: "local",
         label: "Local Server",
         detail: "qwen-tool at http://127.0.0.1:9999",
         modelRef: "local/qwen-tool",
@@ -613,14 +619,17 @@ describe("detectSetupInference", () => {
     expect(listSetupInferenceManualProviders(choices)).toEqual([
       {
         id: "alpha-api-key",
+        brandId: "alpha",
         label: "Alpha API key",
       },
       {
         id: "github-copilot",
+        brandId: "github-copilot",
         label: "GitHub Copilot",
       },
       {
         id: "zeta-api-key",
+        brandId: "zeta",
         label: "Zeta API key",
         hint: "Direct key",
         icon: "https://cdn.example.com/zeta.svg",
@@ -699,6 +708,7 @@ describe("detectSetupInference", () => {
     expect(listSetupInferenceAuthOptions(choices)).toEqual([
       {
         id: "openai",
+        brandId: "openai",
         label: "ChatGPT Login",
         hint: "Browser sign-in",
         groupLabel: "OpenAI",
@@ -709,6 +719,7 @@ describe("detectSetupInference", () => {
       },
       {
         id: "openrouter-oauth",
+        brandId: "openrouter",
         label: "OpenRouter OAuth",
         groupLabel: "OpenRouter",
         kind: "oauth",
@@ -716,6 +727,7 @@ describe("detectSetupInference", () => {
       },
       {
         id: "xai-oauth",
+        brandId: "xai",
         label: "xAI OAuth",
         groupLabel: "xAI (Grok)",
         kind: "device-code",
@@ -723,6 +735,7 @@ describe("detectSetupInference", () => {
       },
       {
         id: "google-gemini-cli",
+        brandId: "google-gemini-cli",
         label: "Gemini CLI OAuth",
         groupLabel: "Google",
         kind: "oauth",
@@ -730,6 +743,7 @@ describe("detectSetupInference", () => {
       },
       {
         id: "github-copilot",
+        brandId: "github-copilot",
         label: "GitHub Copilot",
         kind: "device-code",
         featured: false,

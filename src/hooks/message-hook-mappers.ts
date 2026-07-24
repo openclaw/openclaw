@@ -11,8 +11,8 @@ import {
 } from "../infra/diagnostic-trace-context.js";
 import {
   hasStagedMediaProjection,
-  projectMediaFacts,
   resolveMediaFacts,
+  resolveStagedMediaFacts,
 } from "../media/media-facts.js";
 import type {
   PluginHookInboundClaimContext,
@@ -149,14 +149,17 @@ export function deriveInboundMessageHookContext(
     ctx.From ??
     internalSessionConversationId(channelId, ctx.SessionKey);
   const isGroup = Boolean(ctx.GroupSubject || ctx.GroupChannel);
-  const mediaPayload = hasStagedMediaProjection(ctx)
-    ? ctx
-    : ctx.media?.length
-      ? projectMediaFacts(resolveMediaFacts(ctx))
-      : ctx;
-  const mediaPaths = mediaPayload.MediaPaths?.filter(Boolean);
-  const mediaTypes = mediaPayload.MediaTypes?.filter(Boolean);
-  const mediaUrls = mediaPayload.MediaUrls?.filter(Boolean);
+  const media = hasStagedMediaProjection(ctx)
+    ? resolveStagedMediaFacts(ctx)
+    : resolveMediaFacts(ctx);
+  const compact = (values: Array<string | undefined>) => {
+    const entries = values.filter((value): value is string => Boolean(value));
+    return entries.length > 0 ? entries : undefined;
+  };
+  const mediaPaths = compact(media.map((fact) => fact.path));
+  const mediaUrls = compact(media.map((fact) => fact.url ?? fact.path));
+  const mediaTypes = compact(media.map((fact) => fact.contentType ?? fact.kind));
+  const firstMedia = media[0];
   return {
     from: ctx.From ?? "",
     to: ctx.To,
@@ -192,9 +195,9 @@ export function deriveInboundMessageHookContext(
     surface: ctx.Surface,
     threadId: ctx.MessageThreadId,
     threadParentId: ctx.ThreadParentId,
-    mediaPath: mediaPayload.MediaPath ?? mediaPaths?.[0],
-    mediaUrl: mediaPayload.MediaUrl ?? mediaUrls?.[0],
-    mediaType: mediaPayload.MediaType ?? mediaTypes?.[0],
+    mediaPath: firstMedia?.path ?? mediaPaths?.[0],
+    mediaUrl: firstMedia?.url ?? firstMedia?.path ?? mediaUrls?.[0],
+    mediaType: firstMedia?.contentType ?? firstMedia?.kind ?? mediaTypes?.[0],
     mediaPaths,
     mediaUrls,
     mediaTypes,

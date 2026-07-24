@@ -25,6 +25,7 @@ type WorkflowJob = {
     run?: string;
     uses?: string;
     with?: Record<string, unknown>;
+    "working-directory"?: string;
   }>;
   uses?: string;
   with?: Record<string, unknown>;
@@ -435,8 +436,12 @@ describe("release Telegram QA workflow", () => {
     };
     const buildJob = workflow.jobs?.build_candidate;
     const runJob = workflow.jobs?.run_telegram;
+    const buildRuntimeStep = buildJob?.steps?.find(
+      (step) => step.name === "Build candidate runtime without runner credentials",
+    );
 
     expect(JSON.stringify(buildJob)).not.toContain("secrets.");
+    expect(buildRuntimeStep?.run).toContain("OPENCLAW_BUILD_PRIVATE_QA=1");
     expect(runJob?.environment).toBe("qa-live-shared");
     const secretSteps = runJob?.steps
       ?.filter((step) => JSON.stringify(step).includes("secrets."))
@@ -453,6 +458,22 @@ describe("release Telegram QA workflow", () => {
         }
       }
     }
+  });
+
+  it("resolves pnpm from the candidate package-manager pin", () => {
+    const buildJob = workflowJob("build_candidate");
+    const installStep = workflowStep(
+      buildJob,
+      "Install candidate dependencies without runner credentials",
+    );
+    const buildStep = workflowStep(buildJob, "Build candidate runtime without runner credentials");
+
+    expect(installStep["working-directory"]).toBe(".candidate");
+    expect(installStep.run).toContain("pnpm install");
+    expect(installStep.run).not.toContain("pnpm --dir .candidate");
+    expect(buildStep["working-directory"]).toBe(".candidate");
+    expect(buildStep.run).toContain("pnpm exec node scripts/build-all.mjs qaRuntime");
+    expect(buildStep.run).not.toContain("pnpm --dir .candidate");
   });
 
   it("allows the tracked-file index to exceed Node's default child-process buffer", () => {
