@@ -2240,11 +2240,12 @@ export function installPromptSubmissionLockRelease(params: {
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 
 // Pin SDK retries to 0 for calls made inside the embedded prompt lock window.
-// The in-window default is always 0, never the configured provider retry: the
-// lock is released across the model call, model-fallback owns the one whole-attempt
-// retry, and an in-window SDK retry would race session takeover and silently lose
-// the message (#87180). Only an explicit per-call options.maxRetries overrides it,
-// because the caller-provided options spread last over the injected default.
+// The in-window value is always 0, never the configured provider retry and never
+// a caller-provided maxRetries: the lock is released across the model call, the
+// outer reply orchestrator owns the one whole-attempt retry (which reacquires the
+// lock), and an in-window SDK retry would race session takeover and silently lose
+// the message (#87180). maxRetries:0 is applied last so nothing — config default
+// or explicit per-call override — can widen the retry count in this window.
 export function installEmbeddedPromptRetryDefault(session: unknown): void {
   const agent = (session as SessionWithAgentPrompt).agent;
   if (typeof agent?.streamFn !== "function") {
@@ -2260,9 +2261,11 @@ export function installEmbeddedPromptRetryDefault(session: unknown): void {
   const wrappedStreamFn: PromptReleaseStreamFn = (...args: unknown[]) => {
     const [model, context, callOptions] = args;
     const requestOptions = callOptions as { maxRetries?: number } | undefined;
-    // Inject maxRetries:0 as the in-window default; caller-provided options spread
-    // last so an explicit maxRetries still wins.
-    return innerStreamFn(model, context, { maxRetries: 0, ...requestOptions });
+    // Force maxRetries:0 last so it wins over both the configured provider default
+    // (resolved downstream in sdk.ts) and any explicit per-call maxRetries. The
+    // released-lock window must never retry in-window (#87180); the outer owner
+    // restores the configured retry budget where each retry reacquires the lock.
+    return innerStreamFn(model, context, { ...requestOptions, maxRetries: 0 });
   };
   wrappedStreamFn["__openclawEmbeddedPromptRetryDefaultInstalled"] = true;
   // The outermost wrapper hides inner markers, so carry the lock-release marker
