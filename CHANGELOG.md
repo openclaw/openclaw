@@ -71,6 +71,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Package upgrade migrations:** run the updated doctor before post-core plugin convergence so shipped channel config aliases are migrated before strict config writes.
 - **Agent database and cron upgrades:** open v13 agent databases on supported SQLite/Node combinations and treat benign same-generation session updates as claimable so isolated cron and subagent runs do not fail under large session stores. (#113151, #113088, #113085) Thanks @jalehman and @metahacker.
 - **Control UI continuity:** preserve question access across upgrades and render managed image replies exactly once when the UI is hosted under a base path. (#113153, #113163, #113161) Thanks @fuller-stack-dev.
 - **Trusted shell snapshots:** resolve snapshot `HOME` from the trusted login environment instead of injected process state so agent shell setup uses the intended user profile. (#113103) Thanks @zenglingbiao.
