@@ -4143,6 +4143,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Command ladder
   - H2: After an update
+  - H2: Plugin install metadata conflict after an update
   - H2: Split brain installs and newer config guard
   - H2: Protocol mismatch after rollback
   - H2: Skill symlink skipped as path escape
