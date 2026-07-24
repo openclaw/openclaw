@@ -53,7 +53,40 @@ describe("resolveNodeIdFromList defaults", () => {
     expect(resolveNodeIdFromList(nodes, undefined, true)).toBe("mac-1");
   });
 
-  it("uses stable nodeId ordering when connectedAtMs is unavailable", () => {
+  it("prefers most recently seen node when all candidates are disconnected", () => {
+    const nodes: NodeListNode[] = [
+      node({
+        nodeId: "abc123-desktop",
+        platform: "macos",
+        connectedAtMs: undefined,
+        lastSeenAtMs: 1000,
+      }),
+      node({
+        nodeId: "def456-phone",
+        platform: "ios",
+        connectedAtMs: undefined,
+        lastSeenAtMs: 5000,
+      }),
+    ];
+
+    expect(resolveNodeIdFromList(nodes, undefined, true)).toBe("def456-phone");
+  });
+
+  it("prefers node with lastSeenAtMs over node without when all disconnected", () => {
+    const nodes: NodeListNode[] = [
+      node({ nodeId: "abc-no-seen", platform: "ios", connectedAtMs: undefined }),
+      node({
+        nodeId: "def-has-seen",
+        platform: "android",
+        connectedAtMs: undefined,
+        lastSeenAtMs: 3000,
+      }),
+    ];
+
+    expect(resolveNodeIdFromList(nodes, undefined, true)).toBe("def-has-seen");
+  });
+
+  it("uses stable nodeId ordering when both connectedAtMs and lastSeenAtMs are unavailable", () => {
     // Deterministic tie-breaking keeps repeated tool calls from bouncing
     // between connected nodes.
     const nodes: NodeListNode[] = [

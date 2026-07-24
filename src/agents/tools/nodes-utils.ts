@@ -92,6 +92,11 @@ function compareDefaultNodeOrder(a: NodeListNode, b: NodeListNode): number {
   if (aConnectedAt !== bConnectedAt) {
     return bConnectedAt - aConnectedAt;
   }
+  const aLastSeen = Number.isFinite(a.lastSeenAtMs) ? (a.lastSeenAtMs ?? 0) : -1;
+  const bLastSeen = Number.isFinite(b.lastSeenAtMs) ? (b.lastSeenAtMs ?? 0) : -1;
+  if (aLastSeen !== bLastSeen) {
+    return bLastSeen - aLastSeen;
+  }
   return a.nodeId.localeCompare(b.nodeId);
 }
 
