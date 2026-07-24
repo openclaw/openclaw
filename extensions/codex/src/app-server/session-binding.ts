@@ -37,9 +37,15 @@ export const CODEX_APP_SERVER_BINDING_GUARDED_REQUEST_TIMEOUT_MS = 60_000;
 const BINDING_LEASE_STALE_MS = CODEX_APP_SERVER_BINDING_GUARDED_REQUEST_TIMEOUT_MS + 5_000;
 const BINDING_LEASE_WAIT_MS = BINDING_LEASE_STALE_MS + 5_000;
 const BINDING_LEASE_RENEW_INTERVAL_MS = Math.floor(BINDING_LEASE_STALE_MS / 3);
-// Physical session keys cannot have a successor generation. Retain their
-// retirement fence only long enough for bounded stale lease work to drain.
-const PHYSICAL_SESSION_RETIRE_TTL_MS = BINDING_LEASE_WAIT_MS;
+// Retain retirement fences only long enough for bounded stale lease work to
+// drain. Physical session keys cannot have a successor generation. Stable
+// session-key identities (web/dashboard sessions) reuse their sessionId across
+// a retire, so reclaim can never get past their fence — a permanent
+// (expires_at NULL) fence bricks the session's Codex binding until the row is
+// deleted by hand. The lease-wait bound is the longest a pre-retire guarded
+// request can still be in flight, which is exactly the window the fence must
+// cover for either key shape.
+const SESSION_RETIRE_TTL_MS = BINDING_LEASE_WAIT_MS;
 
 type ProviderAuthAliasLookupParams = Parameters<typeof resolveProviderIdForAuth>[1];
 type ProviderAuthAliasConfig = NonNullable<ProviderAuthAliasLookupParams>["config"];
@@ -961,7 +967,7 @@ export function createCodexAppServerBindingStore(
               },
             };
           },
-          identity.sessionKey?.trim() ? undefined : PHYSICAL_SESSION_RETIRE_TTL_MS,
+          SESSION_RETIRE_TTL_MS,
         );
       });
     },
@@ -1069,7 +1075,7 @@ export function createCodexAppServerBindingStore(
                   raw,
                   (current) => current.state === "cleared" && current.retired === true,
                 ),
-              key.startsWith("session:") ? { ttlMs: PHYSICAL_SESSION_RETIRE_TTL_MS } : undefined,
+              { ttlMs: SESSION_RETIRE_TTL_MS },
             );
             if (!releasedRetired) {
               update(
