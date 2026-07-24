@@ -283,6 +283,53 @@ describe("fetchMinimaxUsage", () => {
       },
     },
     {
+      name: "handles current MiniMax coding-plan API shape with model_name general and zero totals (#110887)",
+      payload: {
+        data: {
+          model_remains: [
+            {
+              start_time: 1_784_386_800_000,
+              end_time: 1_784_404_800_000,
+              remains_time: 4_878_202,
+              current_interval_total_count: 0,
+              current_interval_usage_count: 0,
+              model_name: "general",
+              current_weekly_total_count: 0,
+              current_weekly_usage_count: 0,
+              weekly_start_time: 1_783_900_800_000,
+              weekly_end_time: 1_784_505_600_000,
+              weekly_remains_time: 105_678_202,
+              current_interval_status: 1,
+              current_interval_remaining_percent: 97,
+              current_weekly_status: 1,
+              current_weekly_remaining_percent: 77,
+            },
+            {
+              start_time: 1_784_332_800_000,
+              end_time: 1_784_419_200_000,
+              remains_time: 19_278_202,
+              current_interval_total_count: 0,
+              current_interval_usage_count: 0,
+              model_name: "video",
+              current_weekly_total_count: 0,
+              current_weekly_usage_count: 0,
+              weekly_start_time: 1_783_900_800_000,
+              weekly_end_time: 1_784_505_600_000,
+              weekly_remains_time: 105_678_202,
+              current_interval_status: 3,
+              current_interval_remaining_percent: 100,
+              current_weekly_status: 3,
+              current_weekly_remaining_percent: 100,
+            },
+          ],
+        },
+      },
+      expected: {
+        plan: "Coding Plan · general",
+        windows: [{ label: "5h", usedPercent: 3, resetAt: 1_784_404_800_000 }],
+      },
+    },
+    {
       name: "falls back to the first non-zero model_remains record when no MiniMax chat entry exists",
       payload: {
         data: {
@@ -317,6 +364,29 @@ describe("fetchMinimaxUsage", () => {
     );
     const result = await fetchMinimaxUsage("key", 5000, mockFetch);
 
+    expect(result.error).toBe("Unsupported response shape");
+    expect(result.windows).toHaveLength(0);
+  });
+
+  it("omits weekly remaining-percent when interval is absent (keeps metadata paired)", async () => {
+    // When a model_remains entry carries only weekly remaining-percent fields
+    // without any interval remaining-percent, the fetcher must NOT fall back to
+    // the weekly value.  Displaying weekly quota with interval timing metadata
+    // (start_time / end_time) would misrepresent the data.
+    const payload = {
+      data: {
+        model_remains: [
+          {
+            model_name: "general",
+            current_interval_total_count: 0,
+            current_interval_usage_count: 0,
+            current_weekly_remaining_percent: 77,
+          },
+        ],
+      },
+    };
+    const mockFetch = createProviderUsageFetch(async () => makeResponse(200, payload));
+    const result = await fetchMinimaxUsage("key", 5000, mockFetch);
     expect(result.error).toBe("Unsupported response shape");
     expect(result.windows).toHaveLength(0);
   });
