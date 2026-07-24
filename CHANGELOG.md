@@ -71,6 +71,13 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Agent database and cron upgrades:** open v13 agent databases on supported SQLite/Node combinations and treat benign same-generation session updates as claimable so isolated cron and subagent runs do not fail under large session stores. (#113151, #113088, #113085) Thanks @jalehman and @metahacker.
+- **Control UI continuity:** preserve question access across upgrades and render managed image replies exactly once when the UI is hosted under a base path. (#113153, #113163, #113161) Thanks @fuller-stack-dev.
+- **Trusted shell snapshots:** resolve snapshot `HOME` from the trusted login environment instead of injected process state so agent shell setup uses the intended user profile. (#113103) Thanks @zenglingbiao.
+- **Visible partial channel delivery:** retain user-visible partial output when a later delivery step fails, observe deferred delivery rejection, and settle Feishu outbound lifecycle state after partial sends.
+- **Marketplace feed rotation:** accept trusted catalog signing-key rotation without discarding the verified feed or requiring an unsafe marketplace reset.
+- **WhatsApp reaction routing:** bind message reactions to the resolved chat target so channel aliases and current-conversation actions cannot drift to a stale JID.
+- **Microsoft Teams package installs:** keep the official plugin tarball within parser-safety budgets and let npm install its declared Teams/Azure runtime dependencies, avoiding oversized bundled archives without changing runtime behavior.
 - **Session replacement and MCP writes:** reject stale mutations after a session is replaced, and serialize MCP config updates without leaking diagnostics across concurrent requests. (#113023, #113026)
 - **Plugin install and uninstall lifecycle:** preserve shipped SDK and lifecycle state, keep channel ownership intact while uninstalling, release install leases before CLI exit, and record ClawHub-managed installs correctly. (#113101, #113133) Thanks @Patrick-Erichsen.
 - **Channel Markdown rendering:** preserve WhatsApp CommonMark italics, Google Chat outbound formatting, Discord bold text, and Mattermost tables across their native renderers. (#113010, #113024, #113037)
@@ -257,7 +264,7 @@ Docs: https://docs.openclaw.ai
 
 ### Complete contribution record
 
-This audited record covers the complete a5b2e4167de860fe3fe3da7284cd5f36883560c8..2a64c35486b67d114048a3db97e1a7dbe143feeb history: 5197 merged PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
+This audited record covers the complete a5b2e4167de860fe3fe3da7284cd5f36883560c8..c1ad6d278bba2d5345939b03ba43e532bb05066b history: 5205 merged PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
 
 #### Pull requests
 
@@ -3331,6 +3338,14 @@ This audited record covers the complete a5b2e4167de860fe3fe3da7284cd5f36883560c8
 - **PR #112478** Related #112341. Thanks @loulanyue and @p0pfan.
 - **PR #113138**
 - **PR #110037** Thanks @giodl73-repo.
+- **PR #113151** Thanks @jalehman.
+- **PR #108342** Thanks @giodl73-repo.
+- **PR #113153**
+- **PR #113088** Related #113085. Thanks @metahacker.
+- **PR #113103** Thanks @zenglingbiao.
+- **PR #113163** Related #113161. Thanks @fuller-stack-dev.
+- **PR #113152** Thanks @joshavant.
+- **PR #113178** Related #113177. Thanks @joshavant.
 - **PR #106355** Related #106145.
 - **PR #107081** Related #107080.
 - **PR #106490** Related #81961. Thanks @alexandre-leng.
