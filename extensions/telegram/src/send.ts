@@ -1,3 +1,5 @@
+import { splitTelegramPlainTextChunks } from "./rich-plain-fallback.js";
+
 export { buildInlineKeyboard } from "./inline-keyboard.js";
 export {
   resetTelegramClientOptionsCacheForTests,
@@ -19,4 +21,9 @@ export { editMessageReplyMarkupTelegram, editMessageTelegram } from "./send-edit
 export { sendLocationTelegram } from "./send-location.js";
 export { sendMessageTelegram } from "./send-message.js";
 export { sendPollTelegram, sendStickerTelegram } from "./send-special.js";
-export { splitTelegramPlainTextChunksForTests } from "./send-test-helpers.js";
+
+// Test-only handle: the plain-text splitter is internal, but its surrogate-safe
+// chunk boundary needs direct behavior coverage.
+export function splitTelegramPlainTextChunksForTests(text: string, limit: number): string[] {
+  return splitTelegramPlainTextChunks(text, limit);
+}
