@@ -97,8 +97,8 @@ describe("install.sh", () => {
     `);
 
     expect(result.status).toBe(0);
+    expect(result.stdout).toContain("--connect-timeout 20");
     expect(result.stdout).toContain("--speed-limit 1 --speed-time 30");
-    expect(result.stdout).not.toContain("--connect-timeout");
     expect(result.stdout).toContain("--retry 3 --retry-delay 1 --retry-connrefused");
     expect(result.stdout).toContain("status=28");
   });
