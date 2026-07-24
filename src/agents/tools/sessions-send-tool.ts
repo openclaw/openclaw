@@ -37,6 +37,10 @@ import {
   queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunSessionId,
 } from "../embedded-agent-runner/runs.js";
+import {
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+} from "../internal-runtime-context.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import {
   type AgentWaitResult,
@@ -719,15 +723,19 @@ export function createSessionsSendTool(opts?: {
             sourceChannel: requesterChannel,
             sourceTool: "sessions_send",
           };
+          const baseMessage = annotateInterSessionPromptText(message, inputProvenance);
+          const messageWithContext = agentMessageContext
+            ? `${baseMessage}\n\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}\n${agentMessageContext}\n${INTERNAL_RUNTIME_CONTEXT_END}`
+            : baseMessage;
+
           const sendParams = {
-            message: annotateInterSessionPromptText(message, inputProvenance),
+            message: messageWithContext,
             sessionKey: resolvedKey,
             idempotencyKey,
             deliver: false,
             sourceReplyDeliveryMode: "message_tool_only" as const,
             channel: INTERNAL_MESSAGE_CHANNEL,
             lane: resolveNestedAgentLaneForSession(resolvedKey),
-            extraSystemPrompt: agentMessageContext,
             inputProvenance,
           };
           const maxPingPongTurns = resolvePingPongTurns();
