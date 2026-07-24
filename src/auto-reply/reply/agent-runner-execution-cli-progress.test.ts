@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { TemplateContext } from "../templating.js";
-import type { GetReplyOptions } from "../types.js";
+import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   setupAgentRunnerExecutionTestState,
   getRunAgentTurnWithFallback,
@@ -12,6 +12,7 @@ import type {
   FallbackRunnerParams,
   EmbeddedAgentParams,
 } from "./agent-runner-execution.test-support.js";
+import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
 
 const state = setupAgentRunnerExecutionTestState();
 
@@ -479,6 +480,133 @@ describe("runAgentTurnWithFallback: CLI progress bridging", () => {
     expect(call?.progressText).toBe("Let me check the files.");
     expect(call?.itemId).toBe("commentary-1");
   });
+
+  it.each([
+    {
+      label: "without progress preambles",
+      progressPreambleEnabled: false,
+      blockDeliveryFails: false,
+    },
+    {
+      label: "alongside progress preambles",
+      progressPreambleEnabled: true,
+      blockDeliveryFails: false,
+    },
+    {
+      label: "when durable delivery fails",
+      progressPreambleEnabled: true,
+      blockDeliveryFails: true,
+    },
+  ])(
+    "preserves CLI pre-tool delivery $label",
+    async ({ progressPreambleEnabled, blockDeliveryFails }) => {
+      state.isCliProviderMock.mockReturnValue(true);
+      state.runWithModelFallbackMock.mockImplementationOnce(
+        async (params: FallbackRunnerParams) => ({
+          result: await params.run("claude-cli", "claude-opus-4-6"),
+          provider: "claude-cli",
+          model: "claude-opus-4-6",
+          attempts: [],
+        }),
+      );
+      state.runCliAgentMock.mockImplementationOnce(
+        async (params: { runId: string; emitCommentaryText?: boolean }) => {
+          expect(params.emitCommentaryText).toBe(true);
+          const agentEvents = await import("../../infra/agent-events.js");
+          agentEvents.emitAgentEvent({
+            runId: params.runId,
+            stream: "item",
+            data: {
+              kind: "preamble",
+              itemId: "commentary-1",
+              progressText: "Findings before the tool.",
+            },
+          });
+          agentEvents.emitAgentEvent({
+            runId: params.runId,
+            stream: "tool",
+            data: {
+              phase: "start",
+              name: "Bash",
+              toolCallId: "toolu_1",
+              args: { command: "pwd" },
+            },
+          });
+          return { payloads: [{ text: "Done." }], meta: {} };
+        },
+      );
+
+      const deliveryOrder: string[] = [];
+      const onItemEvent = vi.fn<NonNullable<GetReplyOptions["onItemEvent"]>>(async (payload) => {
+        deliveryOrder.push(`item:${payload.progressText}`);
+      });
+      const onBlockReply = vi.fn<NonNullable<GetReplyOptions["onBlockReply"]>>(async (payload) => {
+        deliveryOrder.push(`block:${payload.text}`);
+      });
+      const blockReplyPipeline = createBlockReplyPipeline({
+        onBlockReply,
+        timeoutMs: 5_000,
+      });
+      state.createBlockReplyDeliveryHandlerMock.mockReturnValueOnce(
+        async (payload: ReplyPayload) => {
+          if (blockDeliveryFails) {
+            throw new Error("block delivery failed");
+          }
+          blockReplyPipeline.enqueue(payload);
+        },
+      );
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      const followupRun = createFollowupRun();
+      followupRun.run.provider = "claude-cli";
+      followupRun.run.model = "claude-opus-4-6";
+
+      try {
+        const result = await runAgentTurnWithFallback({
+          commandBody: "hi",
+          followupRun,
+          sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
+          opts: {
+            onBlockReply,
+            onItemEvent,
+            commentaryProgressEnabled: false,
+            progressPreambleEnabled,
+          },
+          typingSignals: createMockTypingSignaler(),
+          blockReplyPipeline,
+          blockStreamingEnabled: true,
+          resolvedBlockStreamingBreak: "text_end",
+          applyReplyToMode: (payload) => payload,
+          shouldEmitToolResult: () => true,
+          shouldEmitToolOutput: () => false,
+          pendingToolTasks: new Set(),
+          resetSessionAfterRoleOrderingConflict: async () => false,
+          isHeartbeat: false,
+          sessionKey: "main",
+          getActiveSessionEntry: () => undefined,
+          resolvedVerboseLevel: "off",
+        });
+
+        expect(onBlockReply.mock.calls.map(([payload]) => payload.text)).toEqual(
+          blockDeliveryFails ? [] : ["Findings before the tool."],
+        );
+        expect(onItemEvent).toHaveBeenCalledTimes(progressPreambleEnabled ? 1 : 0);
+        expect(deliveryOrder).toEqual(
+          progressPreambleEnabled
+            ? [
+                "item:Findings before the tool.",
+                ...(blockDeliveryFails ? [] : ["block:Findings before the tool."]),
+              ]
+            : ["block:Findings before the tool."],
+        );
+        expect(result).toMatchObject({
+          kind: "success",
+          runResult: { payloads: [{ text: "Done." }] },
+        });
+      } finally {
+        blockReplyPipeline.stop();
+      }
+    },
+  );
 
   it("does not emit CLI preambles when both progress lanes are disabled", async () => {
     state.isCliProviderMock.mockReturnValue(true);

@@ -35,7 +35,10 @@ import { isReplyOperationRestartAbort } from "./reply-operation-abort.js";
 
 type CliPresentation = Pick<
   ReturnType<typeof createAgentTurnPresentation>,
-  "handlePartialForTyping" | "preparePartialForTyping" | "startPresentationWhileTyping"
+  | "handlePartialForTyping"
+  | "preparePartialForTyping"
+  | "startPresentationWhileTyping"
+  | "blockReplyHandler"
 >;
 
 export async function runCliFallbackCandidate(params: {
@@ -118,6 +121,11 @@ export async function runCliFallbackCandidate(params: {
       await turn.opts?.onToolResult?.(payload);
     },
   });
+  const bridgeCliPreambleEvents =
+    turn.opts?.onItemEvent !== undefined && shouldBridgeCliPreambleEvents(turn.opts);
+  const cliBlockReplyHandler = turn.blockStreamingEnabled
+    ? params.presentation.blockReplyHandler
+    : undefined;
   const result = await params.timing.measure("cli_run", () =>
     withLocalSessionPlacementTurnAdmission(
       {
@@ -205,13 +213,33 @@ export async function runCliFallbackCandidate(params: {
             ]);
           },
           onCommentaryText:
-            turn.opts?.onItemEvent && shouldBridgeCliPreambleEvents(turn.opts)
+            cliBlockReplyHandler || bridgeCliPreambleEvents
               ? async (payload) => {
-                  await turn.opts?.onItemEvent?.({
-                    itemId: payload.itemId,
-                    kind: "preamble",
-                    progressText: payload.text,
-                  });
+                  const preambleProgressDelivery = bridgeCliPreambleEvents
+                    ? (async () => {
+                        await turn.opts?.onItemEvent?.({
+                          itemId: payload.itemId,
+                          kind: "preamble",
+                          progressText: payload.text,
+                        });
+                      })()
+                    : Promise.resolve();
+                  const durableBlockDelivery = cliBlockReplyHandler
+                    ? (async () => {
+                        await cliBlockReplyHandler({ text: payload.text });
+                        await turn.blockReplyPipeline?.flush({ force: true });
+                      })()
+                    : Promise.resolve();
+                  const [progressResult, blockResult] = await Promise.allSettled([
+                    preambleProgressDelivery,
+                    durableBlockDelivery,
+                  ]);
+                  if (progressResult.status === "rejected") {
+                    throw progressResult.reason;
+                  }
+                  if (blockResult.status === "rejected") {
+                    throw blockResult.reason;
+                  }
                 }
               : undefined,
           onFastModeAutoProgress: async (payload) => {
