@@ -349,6 +349,102 @@ describe("model-pricing-cache", () => {
     ).toBeUndefined();
   });
 
+  it("skips remote pricing catalogs for CGNAT provider base URLs", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "cgnat-provider/llama3.2:latest" },
+        },
+      },
+      models: {
+        providers: {
+          "cgnat-provider": {
+            baseUrl: "http://100.64.0.1:11434",
+            api: "ollama",
+            models: [{ id: "llama3.2:latest" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const fetchImpl = vi.fn<typeof fetch>();
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("skips remote pricing catalogs for .local mDNS provider base URLs", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "ollama/llama3.2:latest" },
+        },
+      },
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://my-rig.local:11434",
+            api: "ollama",
+            models: [{ id: "llama3.2:latest" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const fetchImpl = vi.fn<typeof fetch>();
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("skips remote pricing catalogs for .localhost provider base URLs", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "ollama/llama3.2:latest" },
+        },
+      },
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://ollama.localhost:11434",
+            api: "ollama",
+            models: [{ id: "llama3.2:latest" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const fetchImpl = vi.fn<typeof fetch>();
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("skips remote pricing catalogs for localhost.localdomain provider base URLs", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "ollama/llama3.2:latest" },
+        },
+      },
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost.localdomain:11434",
+            api: "ollama",
+            models: [{ id: "llama3.2:latest" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const fetchImpl = vi.fn<typeof fetch>();
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("records and clears remote pricing source failures for health surfaces", async () => {
     const config = {
       agents: {
