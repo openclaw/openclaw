@@ -30,7 +30,7 @@ Bun remains usable as an optional dependency installer and package-script runner
   <Step title="Build and test">
     ```sh
     bun run build
-    bun run vitest run
+    pnpm test
     ```
 
     Commands that launch OpenClaw itself must still run through Node.
