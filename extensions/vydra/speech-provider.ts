@@ -4,6 +4,7 @@ import {
   postJsonRequest,
   readProviderJsonResponse,
   resolveProviderHttpRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
@@ -117,6 +118,9 @@ export function buildVydraSpeechProvider(): SpeechProviderPlugin {
           },
           provider: "vydra",
           capability: "audio",
+          request: sanitizeConfiguredModelProviderRequest(
+            req.cfg?.models?.providers?.vydra?.request,
+          ),
           transport: "http",
         });
 
