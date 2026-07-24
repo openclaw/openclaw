@@ -1303,7 +1303,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     }
   });
 
-  it("does not directly deliver failed subagent placeholder output", async () => {
+  it("delivers a synthesized terminal notice when a direct-message subagent fails with no output (#89095)", async () => {
     const callGateway = createGatewayMock({
       result: {
         payloads: [],
@@ -1323,12 +1323,239 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
 
     expectRecordFields(result, {
-      delivered: false,
+      delivered: true,
       path: "direct",
-      reason: "visible_reply_missing",
-      error: "completion agent did not produce a visible reply",
     });
-    expect(sendMessage).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringMatching(
+          /^Background task finished without producing a visible reply \(status: error, reason: no visible reply\)\.$/,
+        ),
+        idempotencyKey: "announce-dm-fallback-empty:text-direct",
+      }),
+    );
+  });
+
+  it("delivers a synthesized terminal notice for a clean completion with empty payload (#89095)", async () => {
+    // jrex-jooni's 2026-06-22 verified data point: context-overflow-driven
+    // mid-turn compaction reliably produces a cleanly-stopped child (no error,
+    // stopReason=stop) whose wrap-up completion turn emits no visible payload.
+    // Internally this surfaces as a task_completion with status:"ok" and an
+    // empty result. The old fallback only returned ok-with-content, so this
+    // case dropped to visible_reply_missing and the parent yielded via
+    // sessions_yield never woke.
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "clean stop empty payload",
+          status: "ok",
+          statusLabel: "completed",
+          result: "",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content:
+          "Background task finished without producing a visible reply (status: ok, reason: no visible reply).",
+      }),
+    );
+  });
+
+  it("delivers a synthesized terminal notice for a timeout-killed subagent with no output (#89095)", async () => {
+    // sunnydongbo's verified case: runTimeoutSeconds force-kill of a blocking
+    // child (sleep 600) produced status: "timeout" + result: "(no output)";
+    // wait-timer fix alone is necessary but not sufficient — without the synth
+    // path, delivery still abandons after 3 retries with
+    // "completion agent did not produce a visible reply".
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "timeout-killed child",
+          status: "timeout",
+          statusLabel: "timed out",
+          result: "(no output)",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content:
+          "Background task finished without producing a visible reply (status: timeout, reason: no visible reply).",
+      }),
+    );
+  });
+
+  it("synthesized terminal notice does not leak raw child output (#89095)", async () => {
+    // Maintainer-stated design constraint: the synth notice must be bounded
+    // and must not echo raw child output. Verify both for an error-status
+    // completion that carries a long, sensitive-looking error string.
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+
+    const sensitiveStatusLabel =
+      "failed: API key sk-redacted-1234567890abcdef expired; rotate via https://internal/keys/123";
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "long error completion",
+          status: "error",
+          statusLabel: sensitiveStatusLabel,
+          result: "(no output)",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    const deliveredContent = (sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]
+      ?.content as string;
+    expect(deliveredContent).toBeTruthy();
+    // Notice is bounded: well under any channel's per-message budget.
+    expect(deliveredContent.length).toBeLessThan(200);
+    // Notice includes the error reason but not the raw secret-bearing fragment.
+    expect(deliveredContent).toContain(
+      "Background task finished without producing a visible reply",
+    );
+    expect(deliveredContent).not.toContain("sk-redacted-1234567890abcdef");
+    expect(deliveredContent).not.toContain("https://internal/keys/123");
+  });
+
+  it("never echoes statusLabel in the synth notice, even for non-empty results (#89095)", async () => {
+    // Review-hardened path: when the completion carries content the first pass
+    // rejects (non-ok status), the synth reason previously fell through to the
+    // raw statusLabel — which is outcome.error-derived and can carry provider
+    // error text, paths, or secrets. The reason must come from the closed
+    // vocabulary only.
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "error completion with partial output",
+          status: "error",
+          statusLabel: "failed: ENOENT reading /Users/someone/.ssh/id_rsa during provider call",
+          result: "partial output the child produced before dying",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content:
+          "Background task finished without producing a visible reply (status: error, reason: failed (details withheld)).",
+      }),
+    );
+  });
+
+  it("maps a timeout completion with partial output to the closed timed-out reason (#89095)", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "timeout completion with partial output",
+          status: "timeout",
+          statusLabel: "timed out after runTimeoutSeconds=600 killed pid 12345",
+          result: "partial output before the force-kill",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content:
+          "Background task finished without producing a visible reply (status: timeout, reason: timed out).",
+      }),
+    );
   });
 
   it("directly delivers unprefixed direct targets recognized by the channel grammar", async () => {

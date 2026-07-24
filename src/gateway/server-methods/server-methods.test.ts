@@ -657,6 +657,90 @@ describe("waitForAgentJob", () => {
       endedAt: 10_100,
     });
   });
+
+  it("resolves with the pending timeout snapshot when the wait timer expires before the grace fires (#89095)", async () => {
+    // Locks in the wait-timer hard-timeout forwarding that landed on main via
+    // #89367: a subagent force-killed by runTimeoutSeconds records a pending
+    // *timeout* snapshot (not a pending error), and the wait-timer fallback
+    // must publish it instead of resolving null — otherwise a parent waiting
+    // via sessions_yield hangs in state=processing. See issue #89095.
+    vi.useFakeTimers();
+    try {
+      const runId = `run-pending-timeout-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const waitPromise = waitForAgentJob({ runId, timeoutMs: 5_000 });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 100 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          startedAt: 100,
+          endedAt: 200,
+          aborted: true,
+          timeoutPhase: "provider",
+          providerStarted: true,
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(6_000);
+
+      const result = await waitPromise;
+      expect(result).not.toBeNull();
+      expectRecordFields(result as Record<string, unknown>, {
+        status: "timeout",
+        startedAt: 100,
+        endedAt: 200,
+        timeoutPhase: "provider",
+        providerStarted: true,
+      });
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not forward a soft queue-timeout pending snapshot when the wait timer expires (#89095)", async () => {
+    // Review-hardened: only hard timeouts (runTimeoutSeconds force-kills) may be
+    // published by the wait-timer fallback. A queue/draining timeout is
+    // wait-layer uncertainty still inside grace — a lifecycle start can cancel
+    // it, so handing it to the waiter would report a false terminal cause.
+    vi.useFakeTimers();
+    try {
+      const runId = `run-soft-timeout-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const waitPromise = waitForAgentJob({ runId, timeoutMs: 5_000 });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 100 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          startedAt: 100,
+          endedAt: 200,
+          aborted: true,
+          timeoutPhase: "queue",
+          providerStarted: false,
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(6_000);
+
+      const result = await waitPromise;
+      expect(result).toBeNull();
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("augmentChatHistoryWithCanvasBlocks", () => {
