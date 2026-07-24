@@ -54,7 +54,10 @@ describe("TelegramPollingLivenessTracker", () => {
 
   it("reports active stuck getUpdates calls", () => {
     let now = 0;
-    const tracker = new TelegramPollingLivenessTracker({ now: () => now });
+    const tracker = new TelegramPollingLivenessTracker({
+      now: () => now,
+      monotonicNow: () => now,
+    });
 
     now = 1;
     tracker.noteGetUpdatesStarted({ offset: 7 });
@@ -70,5 +73,32 @@ describe("TelegramPollingLivenessTracker", () => {
 
     tracker.noteGetUpdatesSuccess([]);
     tracker.noteGetUpdatesFinished();
+  });
+
+  it("does not treat wall-clock sleep as an active getUpdates stall", () => {
+    let now = 1_000;
+    let monotonicNow = 1_000;
+    const tracker = new TelegramPollingLivenessTracker({
+      now: () => now,
+      monotonicNow: () => monotonicNow,
+    });
+
+    tracker.noteGetUpdatesStarted({ offset: 7 });
+
+    now += 10 * 60 * 60 * 1_000;
+    monotonicNow += 10 * 60 * 60 * 1_000;
+
+    expect(
+      tracker.detectStall({
+        thresholdMs: POLL_STALL_THRESHOLD_MS,
+      }),
+    ).toBeNull();
+
+    monotonicNow += POLL_STALL_THRESHOLD_MS + 1;
+    const stall = tracker.detectStall({
+      thresholdMs: POLL_STALL_THRESHOLD_MS,
+    });
+
+    expect(stall?.message).toContain("active getUpdates stuck");
   });
 });
