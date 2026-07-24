@@ -40,6 +40,7 @@ import {
   createOutboundPayloadPlan,
   projectOutboundPayloadPlanForMirror,
 } from "../../infra/outbound/payloads.js";
+import { normalizeSendMediaParams } from "../../infra/outbound/send-media-sources.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import {
   beginTerminalSourceReplyDelivery,
@@ -552,6 +553,9 @@ export const sendHandlers: GatewayRequestHandlers = {
               mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, agentId),
             }),
           });
+          // Gateway dispatch does not run the outbound runner's send payload build, so
+          // resolve the canonical media alias chain here or channels never see the media.
+          normalizeSendMediaParams(request.params);
         }
         const sourceReplyMirror = {
           action: request.action,

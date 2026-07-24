@@ -2005,6 +2005,60 @@ describe("gateway send mirroring", () => {
     );
   });
 
+  // Gateway dispatch does not run the outbound runner's send payload build, so without an
+  // explicit resolve step a canonical attachment reaches the adapter with no `media` set and
+  // is silently dropped as a text-only send. Regression guard for that resolve call.
+  it("resolves canonical attachments into media before dispatching message action sends", async () => {
+    const sendPlugin: ChannelPlugin = {
+      id: "whatsapp",
+      meta: {
+        id: "whatsapp",
+        label: "WhatsApp",
+        selectionLabel: "WhatsApp",
+        docsPath: "/channels/whatsapp",
+        blurb: "WhatsApp send dispatch test plugin.",
+      },
+      capabilities: { chatTypes: ["direct"], media: true },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ enabled: true }),
+        isConfigured: () => true,
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        supportsAction: ({ action }) => action === "send",
+        handleAction: async () => jsonResult({ ok: true }),
+      },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "whatsapp", source: "test", plugin: sendPlugin }]),
+      "send-test-attachment-resolve",
+    );
+
+    await runMessageActionRequest({
+      channel: "whatsapp",
+      action: "send",
+      idempotencyKey: "message-action-attachment-resolve",
+      params: {
+        target: "user:15551234567",
+        message: "see attached",
+        attachments: [{ media: "/tmp/script.py" }],
+      },
+      requesterAccountId: "default",
+      sessionKey: "agent:main:whatsapp:direct:15551234567",
+      agentId: "main",
+    });
+
+    expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          media: "/tmp/script.py",
+          mediaUrls: ["/tmp/script.py"],
+        }),
+      }),
+    );
+  });
+
   it("strips current-turn context from unauthenticated message action callers", async () => {
     mocks.getChannelPlugin.mockReturnValue({
       actions: {

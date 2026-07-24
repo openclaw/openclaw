@@ -112,12 +112,92 @@ import { feishuSetupWizard, runFeishuLogin } from "./setup-surface.js";
 import { looksLikeFeishuId, normalizeFeishuTarget } from "./targets.js";
 import type { FeishuConfig, FeishuProbeResult, ResolvedFeishuAccount } from "./types.js";
 
-function readFeishuMediaParam(params: Record<string, unknown>): string | undefined {
-  const media = params.media;
-  if (typeof media !== "string") {
+/**
+ * Media sources core never resolves into `media`. Core folds its own aliases (`media`,
+ * `path`, `filePath`, `mediaUrl`, `fileUrl`, `image`, `mediaUrls`, `attachments[]`, and the
+ * snake_case spelling of each) into `media` before dispatch, so those arrive here already
+ * resolved. These two have no such handling and would be dropped without telling the caller.
+ */
+const FEISHU_UNRECOGNIZED_MEDIA_SOURCE_PARAM_NAMES = ["attachment", "file"] as const;
+
+/**
+ * Every spelling a caller can use to declare media. Core resolves the recognized ones into
+ * `media` for `send`, but no dispatch path does so for `thread-reply`, so a thread reply
+ * carrying any of these would deliver text only.
+ */
+const FEISHU_MEDIA_SOURCE_PARAM_NAMES = [
+  ...FEISHU_UNRECOGNIZED_MEDIA_SOURCE_PARAM_NAMES,
+  "attachments",
+  "file_path",
+  "file_url",
+  "filePath",
+  "fileUrl",
+  "image",
+  "media",
+  "media_url",
+  "media_urls",
+  "mediaUrl",
+  "mediaUrls",
+  "path",
+] as const;
+
+function hasFeishuAttachmentIntent(
+  params: Readonly<Record<string, unknown>>,
+  key: string,
+): boolean {
+  if (!Object.hasOwn(params, key)) {
+    return false;
+  }
+  const value = params[key];
+  if (typeof value === "string") {
+    return Boolean(value.trim());
+  }
+  if (Array.isArray(value)) {
+    return value.length > 0;
+  }
+  if (value && typeof value === "object") {
+    return Object.keys(value).length > 0;
+  }
+  return Boolean(value);
+}
+
+function readFeishuMediaParam(
+  params: Readonly<Record<string, unknown>>,
+  action: "send" | "thread-reply",
+): string | undefined {
+  if (action === "thread-reply") {
+    const declaredMedia = FEISHU_MEDIA_SOURCE_PARAM_NAMES.find((key) =>
+      hasFeishuAttachmentIntent(params, key),
+    );
+    if (declaredMedia) {
+      throw new Error(
+        `Feishu thread-reply does not support media attachments; ${declaredMedia} is not supported.`,
+      );
+    }
     return undefined;
   }
-  return media.trim() ? media : undefined;
+  const unsupportedParam = FEISHU_UNRECOGNIZED_MEDIA_SOURCE_PARAM_NAMES.find((key) =>
+    hasFeishuAttachmentIntent(params, key),
+  );
+  if (unsupportedParam) {
+    throw new Error(
+      `Feishu send supports media attachments through the media parameter; ${unsupportedParam} is not supported.`,
+    );
+  }
+  const media = params.media;
+  const normalizedMedia = typeof media === "string" && media.trim() ? media : undefined;
+  // Feishu delivers a single media item per message; a second one would be dropped silently.
+  const mediaUrls = params.mediaUrls;
+  if (Array.isArray(mediaUrls) && mediaUrls.length > 1) {
+    throw new Error("Feishu send supports a single media attachment.");
+  }
+  if (media !== undefined) {
+    if (normalizedMedia) {
+      return normalizedMedia;
+    }
+    throw new Error("Feishu send media must be a non-empty string.");
+  }
+  return undefined;
 }
 
 function readBooleanParam(params: Record<string, unknown>, keys: string[]): boolean | undefined {
@@ -1084,7 +1164,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             const presentation =
               normalizeMessagePresentation(ctx.params.presentation) ??
               (interactive ? legacyInteractiveReplyToPresentation(interactive) : undefined);
-            const mediaUrl = readFeishuMediaParam(ctx.params);
+            const mediaUrl = readFeishuMediaParam(ctx.params, ctx.action);
             const audioAsVoice = readBooleanParam(ctx.params, ["asVoice", "audioAsVoice"]);
             if (textCard && !presentation) {
               assertFeishuCardWithinEnvelope(textCard, "Feishu native card");

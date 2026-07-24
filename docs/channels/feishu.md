@@ -712,6 +712,10 @@ resource payload.
 - ✅ Interactive cards (including streaming updates)
 - ⚠️ Rich text (post-style formatting; doesn't support full Feishu/Lark authoring capabilities)
 
+Feishu delivers one media item per message. A send declaring more than one
+attachment is rejected rather than silently delivering only the first, and
+`thread-reply` rejects media outright because it delivers text only.
+
 Native Feishu/Lark audio bubbles use the Feishu `audio` message type and require
 Ogg/Opus upload media (`file_type: "opus"`). Existing `.opus` and `.ogg` media
 is sent directly as native audio. MP3/WAV/M4A and other likely audio formats are
