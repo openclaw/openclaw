@@ -78,10 +78,14 @@ function renderSessionSection(params: {
     "sidebar-recent-sessions__group",
     `sidebar-recent-sessions__group--zone-${zone}`,
     collapsed ? "sidebar-recent-sessions__group--collapsed" : "",
-    group && host.draggingSessionGroup === group ? "sidebar-recent-sessions__group--dragging" : "",
-    host.sessionDropTarget === section.id ? "sidebar-recent-sessions__group--session-drop" : "",
-    group && host.sessionGroupDropTarget?.group === group
-      ? `sidebar-recent-sessions__group--group-drop-${host.sessionGroupDropTarget.position}`
+    group && host.sessionOrganizer.draggingSessionGroup === group
+      ? "sidebar-recent-sessions__group--dragging"
+      : "",
+    host.sessionOrganizer.sessionDropTarget === section.id
+      ? "sidebar-recent-sessions__group--session-drop"
+      : "",
+    group && host.sessionOrganizer.sessionGroupDropTarget?.group === group
+      ? `sidebar-recent-sessions__group--group-drop-${host.sessionOrganizer.sessionGroupDropTarget.position}`
       : "",
   ]
     .filter(Boolean)
@@ -122,7 +126,7 @@ function renderSessionSection(params: {
           @contextmenu=${group
             ? (event: MouseEvent) => {
                 event.preventDefault();
-                host.openSessionGroupMenu(group, event.clientX, event.clientY, null);
+                host.sidebarMenus.openSessionGroupMenu(group, event.clientX, event.clientY, null);
               }
             : nothing}
         >
@@ -164,14 +168,16 @@ function renderSessionSection(params: {
             ? html`
                 <button
                   type="button"
-                  class="sidebar-session-group-actions sidebar-session-sort"
+                  class="sidebar-session-group-actions sidebar-session-sort ${host.sessionCreatorFilterActive
+                    ? "sidebar-session-sort--filtered"
+                    : ""}"
                   title=${t("chat.sidebar.sortSessions")}
                   aria-label=${t("chat.sidebar.sortSessions")}
                   aria-haspopup="menu"
-                  aria-expanded=${String(host.sessionSortMenuPosition !== null)}
+                  aria-expanded=${String(host.sidebarMenus.sessionSortMenuPosition !== null)}
                   @click=${(event: MouseEvent) => {
                     event.stopPropagation();
-                    host.toggleSessionSortMenu(event.currentTarget as HTMLElement);
+                    host.sidebarMenus.toggleSessionSortMenu(event.currentTarget as HTMLElement);
                   }}
                 >
                   ${icons.listFilter}
@@ -201,12 +207,17 @@ function renderSessionSection(params: {
                   title=${t("sessionsView.groupMenu", { group })}
                   aria-label=${t("sessionsView.groupMenu", { group })}
                   aria-haspopup="menu"
-                  aria-expanded=${String(host.sessionGroupMenu?.group === group)}
+                  aria-expanded=${String(host.sidebarMenus.sessionGroupMenu?.group === group)}
                   @click=${(event: MouseEvent) => {
                     event.stopPropagation();
                     const trigger = event.currentTarget as HTMLElement;
                     const rect = trigger.getBoundingClientRect();
-                    host.openSessionGroupMenu(group, rect.right, rect.bottom + 4, trigger);
+                    host.sidebarMenus.openSessionGroupMenu(
+                      group,
+                      rect.right,
+                      rect.bottom + 4,
+                      trigger,
+                    );
                   }}
                 >
                   ${icons.moreHorizontal}
@@ -347,14 +358,15 @@ function renderSessionListBody(params: {
           trailing: params.codingTrailing ?? nothing,
         });
       }
-      // Threads hides its bare empty header; unfiltered custom categories stay
-      // visible because creation and drag flows depend on them as drop targets.
+      // Threads hides its bare empty header unless it owns the collaborative
+      // creator filter; custom categories stay visible as drop targets.
       if (
         section.id === "ungrouped" &&
         section.totalRowCount === 0 &&
         !showDraft &&
+        !host.sessionOwnershipVisible &&
         host.sessionsStatusFilter === "active" &&
-        host.draggingSessionKey === null
+        host.sessionOrganizer.draggingSessionKey === null
       ) {
         return nothing;
       }
@@ -375,13 +387,12 @@ export function renderSessionList(params: {
   expandedRows: SidebarRecentSession[];
   visibleRowCount: number;
   showDraft: boolean;
-  creatorFilter: TemplateResult | typeof nothing;
   catalogs: SessionCatalogRenderSnapshot;
 }) {
   const { host } = params;
   return html`
     <section
-      class="sidebar-sessions ${host.sessionListRemovalDrop
+      class="sidebar-sessions ${host.sessionOrganizer.sessionListRemovalDrop
         ? "sidebar-sessions--removal-drop"
         : ""}"
       @dragover=${(event: DragEvent) => host.handleSessionListDragOver(event)}
@@ -410,7 +421,6 @@ export function renderSessionList(params: {
           `
         : nothing}
       <div class="sidebar-recent-sessions" aria-label=${titleForRoute("sessions")}>
-        ${params.creatorFilter}
         ${renderSessionListBody({
           host,
           sections: params.sections,
