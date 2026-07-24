@@ -2,6 +2,7 @@
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { backupCaptureFinalCommand } from "../../commands/backup-capture-final.js";
 import {
   backupSqliteCreateCommand,
   backupSqliteListCommand,
@@ -99,6 +100,15 @@ export function registerBackupCommand(program: Command) {
     });
 
   registerBackupSqliteCommands(backup);
+
+  backup
+    .command("capture-final", { hidden: true })
+    .description("Capture one host-fenced final RFC 0013 recovery point")
+    .action(async () => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await backupCaptureFinalCommand(defaultRuntime);
+      });
+    });
 }
 
 function registerBackupSqliteCommands(backup: Command): void {
