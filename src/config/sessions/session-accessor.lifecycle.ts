@@ -455,6 +455,22 @@ function snapshotTemporarySessionMapping(
   scope: SessionAccessScope,
 ): TemporarySessionMappingSnapshot {
   const storePath = resolveAccessStorePath(scope);
+
+  // Boot session keys (agent:<id>:boot) are temporary one-shot runs.
+  // Legacy versions may have left stale entries whose outdated `sessionId`
+  // fails the admission check inside agentCommand. Force `hadEntry: false`
+  // so the restore phase deletes them, self-healing after one failed boot.
+  // Tracked in #112912: remove this workaround once a doctor migration or
+  // docs entry cleans up legacy boot entries.
+  if (scope.sessionKey?.endsWith(":boot")) {
+    return {
+      canRestore: true,
+      hadEntry: false,
+      sessionKey: scope.sessionKey,
+      storePath,
+    };
+  }
+
   try {
     const exact = loadExactSessionEntry({
       ...scope,
