@@ -7,6 +7,7 @@ export type Utf8LineAccumulator = {
   decoder: StringDecoder;
   pendingLine: string;
   pendingLineTruncated: boolean;
+  skipLeadingLf: boolean;
 };
 
 type AccumulatedUtf8Line = {
@@ -19,6 +20,7 @@ export function createUtf8LineAccumulator(): Utf8LineAccumulator {
     decoder: new StringDecoder("utf8"),
     pendingLine: "",
     pendingLineTruncated: false,
+    skipLeadingLf: false,
   };
 }
 
@@ -35,16 +37,30 @@ export function appendUtf8Lines(params: {
   chunk: Buffer | string;
   maxPendingLineBytes: number;
   maxLineBytes?: number;
+  splitOnCarriageReturn?: boolean;
+  emitPending?: boolean;
 }): AccumulatedUtf8Line[] {
-  const text = Buffer.isBuffer(params.chunk)
-    ? params.accumulator.decoder.write(params.chunk)
-    : params.chunk;
+  let text = params.accumulator.decoder.write(
+    Buffer.isBuffer(params.chunk) ? params.chunk : Buffer.from(params.chunk, "utf8"),
+  );
+  if (!text) {
+    return [];
+  }
+  if (params.accumulator.skipLeadingLf && text.startsWith("\n")) {
+    text = text.slice(1);
+  }
+  params.accumulator.skipLeadingLf = false;
   if (!text) {
     return [];
   }
 
   const hadTruncatedCarry = params.accumulator.pendingLineTruncated;
-  const lines = (params.accumulator.pendingLine + text).split(/\r?\n/);
+  const combined = params.accumulator.pendingLine + text;
+  params.accumulator.skipLeadingLf =
+    params.splitOnCarriageReturn === true && combined.endsWith("\r");
+  const lines = params.splitOnCarriageReturn
+    ? combined.split(/\r\n|[\r\n]/u)
+    : combined.split(/\r?\n/u);
   params.accumulator.pendingLine = lines.pop() ?? "";
   params.accumulator.pendingLineTruncated = lines.length === 0 && hadTruncatedCarry;
 
@@ -58,6 +74,15 @@ export function appendUtf8Lines(params: {
   const pending = boundLine(params.accumulator.pendingLine, params.maxPendingLineBytes);
   params.accumulator.pendingLine = pending.line;
   params.accumulator.pendingLineTruncated ||= pending.truncated;
+  if (params.emitPending && params.accumulator.pendingLine) {
+    const emitted = boundLine(params.accumulator.pendingLine, params.maxLineBytes);
+    completed.push({
+      line: emitted.line,
+      truncated: emitted.truncated || params.accumulator.pendingLineTruncated,
+    });
+    params.accumulator.pendingLine = "";
+    params.accumulator.pendingLineTruncated = false;
+  }
   return completed;
 }
 
@@ -70,5 +95,6 @@ export function flushUtf8Line(
   const truncated = accumulator.pendingLineTruncated || bounded.truncated;
   accumulator.pendingLine = "";
   accumulator.pendingLineTruncated = false;
+  accumulator.skipLeadingLf = false;
   return bounded.line ? { line: bounded.line, truncated } : undefined;
 }
