@@ -27,6 +27,7 @@ import {
   shouldRetryGatewayWithDeviceToken,
   isRetryableGatewayStartupUnavailableError,
   resolveGatewayStartupRetryAfterMs,
+  resolveSafeTimeoutDelayMs,
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
 } from "@openclaw/gateway-client/browser";
@@ -302,6 +303,10 @@ export class GatewayBrowserClient {
   private pendingDeviceTokenRetry = false;
   private deviceTokenRetryBudgetUsed = false;
   private readonly recoveryScopeTracker = new GatewayRecoveryScopeTracker();
+  // Track last inbound activity to detect silent stalls.
+  private lastTick: number | null = null;
+  private tickIntervalMs = 30_000;
+  private tickTimer: ReturnType<typeof setInterval> | undefined;
 
   constructor(private opts: GatewayBrowserClientOptions) {
     this.client = new GatewayProtocolClient<ConnectPlan>({
@@ -343,7 +348,10 @@ export class GatewayBrowserClient {
       onSocketFactoryError: (error) => this.handleSocketFactoryError(error),
       onEvent: (event) => this.opts.onEvent?.(event),
       onGap: (info) => this.opts.onGap?.(info),
-      onActivity: () => (this.inboundActivitySeq += 1),
+      onActivity: () => {
+        this.inboundActivitySeq += 1;
+        this.lastTick = Date.now();
+      },
       onTiming: ({ plan, detail, ...timing }) => {
         this.opts.onConnectTiming?.({
           ...timing,
@@ -371,6 +379,7 @@ export class GatewayBrowserClient {
   }
 
   stop() {
+    this.stopTickWatch();
     this.client.stop();
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
@@ -500,7 +509,43 @@ export class GatewayBrowserClient {
         scopes: hello.auth.scopes ?? [],
       });
     }
+    this.tickIntervalMs =
+      typeof hello?.policy?.tickIntervalMs === "number" ? hello.policy.tickIntervalMs : 30_000;
+    this.lastTick = Date.now();
+    this.startTickWatch();
     void this.updateRecoveryScopeForHello(hello, plan);
+  }
+
+  private stopTickWatch() {
+    if (this.tickTimer) {
+      clearInterval(this.tickTimer);
+      this.tickTimer = undefined;
+    }
+  }
+
+  /**
+   * Mirrors the reference client watchdog documented in `docs/gateway/protocol.md`:
+   * finite requests own their deadline, but an unbounded request keeps the transport
+   * watchdog armed so a silent socket cannot strand it forever. Control UI issues every
+   * request without a deadline, so without this the socket is the only liveness signal
+   * and a stalled gateway leaves the caller pending indefinitely.
+   */
+  private startTickWatch() {
+    this.stopTickWatch();
+    const interval = resolveSafeTimeoutDelayMs(Math.max(this.tickIntervalMs, 1000));
+    this.tickTimer = setInterval(() => {
+      // While disconnected the reconnect supervisor owns recovery and pending
+      // requests are already rejected, so there is nothing to rescue here.
+      if (!this.client.connected || this.lastTick === null) {
+        return;
+      }
+      if (this.client.hasPendingRequests && !this.client.hasUnboundedPendingRequests) {
+        return;
+      }
+      if (Date.now() - this.lastTick > this.tickIntervalMs * 2) {
+        this.client.closeSocket(4000, "tick timeout");
+      }
+    }, interval);
   }
 
   private async updateRecoveryScopeForHello(hello: GatewayHelloOk, plan: ConnectPlan) {

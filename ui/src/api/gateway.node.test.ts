@@ -1681,5 +1681,75 @@ describe("GatewayBrowserClient", () => {
 
     vi.useRealTimers();
   });
+
+  describe("tick watchdog", () => {
+    async function connectWithTickPolicy(tickIntervalMs: number) {
+      const client = new GatewayBrowserClient({
+        url: "ws://127.0.0.1:18789",
+        token: "shared-auth-token",
+      });
+      const { ws, connectFrame } = await startConnect(client);
+      ws.emitMessage({
+        type: "res",
+        id: connectFrame.id,
+        ok: true,
+        payload: {
+          type: "hello-ok",
+          protocol: 4,
+          auth: { role: "operator", scopes: [] },
+          policy: { maxPayload: 1024, maxBufferedBytes: 1024, tickIntervalMs },
+        },
+      });
+      return { client, ws };
+    }
+
+    it("closes a silent socket that is stranding an unbounded request", async () => {
+      useNodeFakeTimers();
+      const { client, ws } = await connectWithTickPolicy(1_000);
+
+      // Control UI issues requests without a deadline, so the socket is the only
+      // liveness signal for this call.
+      const pending = client.request("mcp.app.callTool", { toolName: "slow-tool" });
+      const rejection = expect(pending).rejects.toThrow();
+
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(ws.lastClose?.code).toBe(4000);
+      expect(ws.lastClose?.reason).toBe("tick timeout");
+      ws.emitClose(4000, "tick timeout");
+      await rejection;
+
+      client.stop();
+      vi.useRealTimers();
+    });
+
+    it("keeps a long unbounded request alive while the socket still ticks", async () => {
+      useNodeFakeTimers();
+      const { client, ws } = await connectWithTickPolicy(1_000);
+
+      let settled = false;
+      const pending = client.request("mcp.app.callTool", { toolName: "slow-tool" });
+      void pending.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+
+      // A healthy gateway keeps emitting inbound traffic while the tool runs.
+      for (let i = 0; i < 10; i += 1) {
+        await vi.advanceTimersByTimeAsync(1_000);
+        ws.emitMessage({ type: "event", event: "tick", payload: {} });
+      }
+
+      expect(ws.lastClose).toBeNull();
+      expect(settled).toBe(false);
+
+      client.stop();
+      vi.useRealTimers();
+    });
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
