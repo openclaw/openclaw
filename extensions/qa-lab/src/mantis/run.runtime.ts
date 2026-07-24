@@ -1,17 +1,30 @@
 // Qa Lab plugin module implements run behavior.
-import { spawn, type SpawnOptions } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
 import { QA_EVIDENCE_FILENAME, validateQaEvidenceSummaryJson } from "../evidence-summary.js";
 import { trimToValue } from "../mantis-options.runtime.js";
+import {
+  assertMantisCommandNotAborted,
+  createMantisWorktreeDirectory,
+  defaultMantisCommandRunner,
+  removeMantisWorktree,
+  resolveMantisCommandTimeouts,
+  runMantisCommand,
+  type MantisCommandExecution,
+  type MantisCommandRunner,
+  type MantisCommandTimeoutOverrides,
+  type MantisCommandTimeouts,
+  type MantisWorktreeOwnership,
+} from "./run-command.runtime.js";
 
 export type MantisBeforeAfterOptions = {
   allowFailures?: boolean;
   baseline?: string;
   candidate?: string;
-  commandRunner?: CommandRunner;
+  commandRunner?: MantisCommandRunner;
+  commandTimeouts?: MantisCommandTimeoutOverrides;
   credentialRole?: string;
   credentialSource?: string;
   fastMode?: boolean;
@@ -20,6 +33,7 @@ export type MantisBeforeAfterOptions = {
   providerMode?: string;
   repoRoot?: string;
   scenario?: string;
+  signal?: AbortSignal;
   skipBuild?: boolean;
   skipInstall?: boolean;
   transport?: string;
@@ -32,12 +46,6 @@ type MantisBeforeAfterResult = {
   reportPath: string;
   status: "pass" | "fail";
 };
-
-type CommandRunner = (
-  command: string,
-  args: readonly string[],
-  options: SpawnOptions,
-) => Promise<void>;
 
 type DiscordQaSummary = {
   scenarios?: {
@@ -109,7 +117,6 @@ const DEFAULT_PROVIDER_MODE = "live-frontier";
 const DEFAULT_MODEL = "openai/gpt-5.4";
 const DEFAULT_CREDENTIAL_SOURCE = "convex";
 const DEFAULT_CREDENTIAL_ROLE = "ci";
-
 const MANTIS_SCENARIO_CONFIGS: Record<string, MantisScenarioConfig> = {
   [DEFAULT_SCENARIO]: {
     baselineExpected: "queued-only",
@@ -151,41 +158,6 @@ function normalizeRequiredLiteral<T extends string>(
 function defaultOutputDir(repoRoot: string, startedAt: Date) {
   const stamp = startedAt.toISOString().replace(/[:.]/gu, "-");
   return path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", `run-${stamp}`);
-}
-
-function defaultCommandRunner(
-  command: string,
-  args: readonly string[],
-  options: SpawnOptions,
-): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      ...options,
-      stdio: options.stdio ?? "inherit",
-    });
-    child.on("error", reject);
-    child.on("close", (code, signal) => {
-      if (code === 0) {
-        resolve();
-        return;
-      }
-      const detail = signal ? `signal ${signal}` : `exit code ${code ?? "unknown"}`;
-      reject(new Error(`${command} ${args.join(" ")} failed with ${detail}`));
-    });
-  });
-}
-
-async function runCommand(params: {
-  args: readonly string[];
-  command: string;
-  cwd: string;
-  runner: CommandRunner;
-}) {
-  await params.runner(params.command, params.args, {
-    cwd: params.cwd,
-    env: process.env,
-    stdio: "inherit",
-  });
 }
 
 async function copyDirContents(sourceDir: string, targetDir: string) {
@@ -311,6 +283,19 @@ function relativeArtifactPath(outputDir: string, artifactPath: string | undefine
   return path.isAbsolute(artifactPath) ? path.relative(outputDir, artifactPath) : artifactPath;
 }
 
+function formatMantisFailure(error: unknown): string {
+  const lines: string[] = [];
+  const append = (entry: unknown, pathParts: number[]) => {
+    const prefix = pathParts.length > 0 ? `${pathParts.join(".")}. ` : "";
+    lines.push(`${prefix}${formatErrorMessage(entry)}`);
+    if (entry instanceof AggregateError) {
+      entry.errors.forEach((nestedError, index) => append(nestedError, [...pathParts, index + 1]));
+    }
+  };
+  append(error, []);
+  return lines.join("\n");
+}
+
 function buildEvidenceManifest(params: {
   baseline: LaneResult;
   candidate: LaneResult;
@@ -434,8 +419,10 @@ async function runLane(params: {
   outputDir: string;
   ref: string;
   repoRoot: string;
-  runner: CommandRunner;
+  runner: MantisCommandRunner;
   scenario: string;
+  signal?: AbortSignal;
+  commandTimeouts: MantisCommandTimeouts;
   worktreeRoot: string;
   opts: Required<
     Pick<
@@ -451,72 +438,168 @@ async function runLane(params: {
 }) {
   const worktreeDir = path.join(params.worktreeRoot, params.lane);
   const worktreeOutputDir = path.join(".artifacts", "qa-e2e", "mantis", "run", params.lane);
-  await runCommand({
-    command: "git",
-    args: ["worktree", "add", "--detach", "--", worktreeDir, params.ref],
+  const worktreeAddArgs = ["worktree", "add", "--detach", "--", worktreeDir, params.ref];
+  const worktreeAddExecution = {
     cwd: params.repoRoot,
-    runner: params.runner,
-  });
-  if (!params.opts.skipInstall) {
-    await runCommand({
-      command: "pnpm",
-      args: ["--dir", worktreeDir, "install", "--frozen-lockfile"],
-      cwd: params.repoRoot,
+    env: process.env,
+    signal: params.signal,
+    stage: "worktree-add",
+    timeoutMs: params.commandTimeouts["worktree-add"],
+  } satisfies MantisCommandExecution;
+  let worktreeOwnership: MantisWorktreeOwnership | undefined;
+  let laneResult: LaneResult | undefined;
+  let workloadFailed = false;
+  let workloadError: unknown;
+  let cleanupFailed = false;
+  let cleanupError: unknown;
+
+  try {
+    assertMantisCommandNotAborted({
+      command: "git",
+      args: worktreeAddArgs,
+      execution: worktreeAddExecution,
+      lane: params.lane,
+    });
+    try {
+      worktreeOwnership = await createMantisWorktreeDirectory({
+        repoRoot: params.repoRoot,
+        worktreeDir,
+      });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        throw new Error(
+          `${params.lane} worktree path already exists; refusing to reuse ${worktreeDir}`,
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+    await runMantisCommand({
+      command: "git",
+      args: worktreeAddArgs,
+      execution: worktreeAddExecution,
+      lane: params.lane,
       runner: params.runner,
     });
-  }
-  if (!params.opts.skipBuild) {
-    await runCommand({
+    if (!params.opts.skipInstall) {
+      await runMantisCommand({
+        command: "pnpm",
+        args: ["--dir", worktreeDir, "install", "--frozen-lockfile"],
+        execution: {
+          cwd: params.repoRoot,
+          env: process.env,
+          signal: params.signal,
+          stage: "install",
+          timeoutMs: params.commandTimeouts.install,
+        },
+        lane: params.lane,
+        runner: params.runner,
+      });
+    }
+    if (!params.opts.skipBuild) {
+      await runMantisCommand({
+        command: "pnpm",
+        args: ["--dir", worktreeDir, "build"],
+        execution: {
+          cwd: params.repoRoot,
+          env: process.env,
+          signal: params.signal,
+          stage: "build",
+          timeoutMs: params.commandTimeouts.build,
+        },
+        lane: params.lane,
+        runner: params.runner,
+      });
+    }
+    await runMantisCommand({
       command: "pnpm",
-      args: ["--dir", worktreeDir, "build"],
-      cwd: params.repoRoot,
+      args: [
+        "--dir",
+        worktreeDir,
+        "openclaw",
+        "qa",
+        "discord",
+        "--repo-root",
+        worktreeDir,
+        "--output-dir",
+        worktreeOutputDir,
+        "--provider-mode",
+        params.opts.providerMode,
+        "--model",
+        DEFAULT_MODEL,
+        "--alt-model",
+        DEFAULT_MODEL,
+        ...(params.opts.fastMode ? ["--fast"] : []),
+        "--credential-source",
+        params.opts.credentialSource,
+        "--credential-role",
+        params.opts.credentialRole,
+        "--scenario",
+        params.scenario,
+        "--allow-failures",
+      ],
+      execution: {
+        cwd: params.repoRoot,
+        env: process.env,
+        signal: params.signal,
+        stage: "qa",
+        timeoutMs: params.commandTimeouts.qa,
+      },
+      lane: params.lane,
       runner: params.runner,
     });
+    const publishedLaneDir = path.join(params.outputDir, params.lane);
+    await copyDirContents(path.join(worktreeDir, worktreeOutputDir), publishedLaneDir);
+    const result = await readLaneResult({
+      laneOutputDir: path.join(worktreeDir, worktreeOutputDir),
+      publishedLaneDir,
+      scenario: params.scenario,
+    });
+    const copiedScreenshot = await copyScreenshot({ lane: params.lane, result });
+    const copiedVideo = await copyVideo({ lane: params.lane, result });
+    laneResult = {
+      ...result,
+      screenshotPath: copiedScreenshot ?? result.screenshotPath,
+      videoPath: copiedVideo ?? result.videoPath,
+    } satisfies LaneResult;
+  } catch (error) {
+    workloadFailed = true;
+    workloadError = error;
+  } finally {
+    if (worktreeOwnership) {
+      try {
+        await removeMantisWorktree({
+          commandTimeouts: params.commandTimeouts,
+          lane: params.lane,
+          repoRoot: params.repoRoot,
+          runner: params.runner,
+          worktreeDir,
+          ownership: worktreeOwnership,
+        });
+      } catch (error) {
+        cleanupFailed = true;
+        cleanupError = error;
+      }
+    }
   }
-  await runCommand({
-    command: "pnpm",
-    args: [
-      "--dir",
-      worktreeDir,
-      "openclaw",
-      "qa",
-      "discord",
-      "--repo-root",
-      worktreeDir,
-      "--output-dir",
-      worktreeOutputDir,
-      "--provider-mode",
-      params.opts.providerMode,
-      "--model",
-      DEFAULT_MODEL,
-      "--alt-model",
-      DEFAULT_MODEL,
-      ...(params.opts.fastMode ? ["--fast"] : []),
-      "--credential-source",
-      params.opts.credentialSource,
-      "--credential-role",
-      params.opts.credentialRole,
-      "--scenario",
-      params.scenario,
-      "--allow-failures",
-    ],
-    cwd: params.repoRoot,
-    runner: params.runner,
-  });
-  const publishedLaneDir = path.join(params.outputDir, params.lane);
-  await copyDirContents(path.join(worktreeDir, worktreeOutputDir), publishedLaneDir);
-  const result = await readLaneResult({
-    laneOutputDir: path.join(worktreeDir, worktreeOutputDir),
-    publishedLaneDir,
-    scenario: params.scenario,
-  });
-  const copiedScreenshot = await copyScreenshot({ lane: params.lane, result });
-  const copiedVideo = await copyVideo({ lane: params.lane, result });
-  return {
-    ...result,
-    screenshotPath: copiedScreenshot ?? result.screenshotPath,
-    videoPath: copiedVideo ?? result.videoPath,
-  } satisfies LaneResult;
+
+  if (workloadFailed && cleanupFailed) {
+    throw new AggregateError(
+      [workloadError, cleanupError],
+      "Mantis lane failed and worktree cleanup failed",
+      { cause: workloadError },
+    );
+  }
+  if (workloadFailed) {
+    throw workloadError;
+  }
+  if (cleanupFailed) {
+    throw cleanupError;
+  }
+  if (!laneResult) {
+    throw new Error("Mantis lane completed without a result.");
+  }
+  return laneResult;
 }
 
 export async function runMantisBeforeAfter(
@@ -548,7 +631,8 @@ export async function runMantisBeforeAfter(
   }
   const baseline = trimToValue(opts.baseline) ?? scenarioConfig.defaultBaselineRef;
   const candidate = trimToValue(opts.candidate) ?? DEFAULT_CANDIDATE_REF;
-  const runner = opts.commandRunner ?? defaultCommandRunner;
+  const commandTimeouts = resolveMantisCommandTimeouts(scenario, opts.commandTimeouts);
+  const runner = opts.commandRunner ?? defaultMantisCommandRunner;
   const worktreeRoot = path.join(outputDir, "worktrees");
   const comparisonPath = path.join(outputDir, "comparison.json");
   const manifestPath = path.join(outputDir, "mantis-evidence.json");
@@ -571,6 +655,8 @@ export async function runMantisBeforeAfter(
       repoRoot,
       runner,
       scenario,
+      signal: opts.signal,
+      commandTimeouts,
       worktreeRoot,
       opts: commonOpts,
     });
@@ -581,6 +667,8 @@ export async function runMantisBeforeAfter(
       repoRoot,
       runner,
       scenario,
+      signal: opts.signal,
+      commandTimeouts,
       worktreeRoot,
       opts: commonOpts,
     });
@@ -640,7 +728,11 @@ export async function runMantisBeforeAfter(
       status: comparison.pass ? "pass" : "fail",
     };
   } catch (error) {
-    await fs.writeFile(path.join(outputDir, "error.txt"), `${formatErrorMessage(error)}\n`, "utf8");
+    await fs.writeFile(
+      path.join(outputDir, "error.txt"),
+      `${formatMantisFailure(error)}\n`,
+      "utf8",
+    );
     throw error;
   }
 }
