@@ -176,6 +176,87 @@ describe("cron service timer regressions", () => {
     timeoutSpy.mockRestore();
   });
 
+  it("finalizes settled siblings and wakes later jobs while one due run remains active", async () => {
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const store = timerRegressionFixtures.makeStorePath();
+    const firstDueAt = Date.parse("2026-07-24T01:00:00.000Z");
+    const laterDueAt = firstDueAt + 5 * 60_000;
+    const fastJob = createDueIsolatedJob({
+      id: "fast-sibling",
+      nowMs: firstDueAt,
+      nextRunAtMs: firstDueAt,
+    });
+    const slowJob = createDueIsolatedJob({
+      id: "slow-sibling",
+      nowMs: firstDueAt,
+      nextRunAtMs: firstDueAt,
+    });
+    const laterJob = createDueIsolatedJob({
+      id: "later-due",
+      nowMs: firstDueAt,
+      nextRunAtMs: laterDueAt,
+    });
+    await saveCronStore(store.storePath, {
+      version: 1,
+      jobs: [fastJob, slowJob, laterJob],
+    });
+
+    let now = firstDueAt;
+    const slowStarted = createDeferred<void>();
+    const releaseSlow = createDeferred<{ status: "ok"; summary: string }>();
+    const laterStarted = createDeferred<void>();
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async ({ job }: { job: { id: string } }) => {
+        if (job.id === slowJob.id) {
+          slowStarted.resolve();
+          return await releaseSlow.promise;
+        }
+        if (job.id === laterJob.id) {
+          laterStarted.resolve();
+        }
+        return { status: "ok" as const, summary: job.id };
+      }),
+    });
+
+    const firstTick = onTimer(state);
+    await slowStarted.promise;
+    await vi.waitFor(async () => {
+      const persistedFast = (await loadCronStore(store.storePath)).jobs.find(
+        (job) => job.id === fastJob.id,
+      );
+      expect(persistedFast?.state.lastRunStatus).toBe("ok");
+      expect(persistedFast?.state.runningAtMs).toBeUndefined();
+    });
+    expect(
+      timeoutSpy.mock.calls
+        .map(([, delay]) => delay)
+        .filter((delay): delay is number => typeof delay === "number"),
+    ).toContain(60_000);
+
+    now = laterDueAt;
+    const laterTick = onTimer(state);
+    await laterStarted.promise;
+    await laterTick;
+
+    const persistedWhileSlow = await loadCronStore(store.storePath);
+    expect(persistedWhileSlow.jobs.find((job) => job.id === laterJob.id)?.state.lastRunStatus).toBe(
+      "ok",
+    );
+    expect(persistedWhileSlow.jobs.find((job) => job.id === slowJob.id)?.state.runningAtMs).toBe(
+      firstDueAt,
+    );
+
+    releaseSlow.resolve({ status: "ok", summary: "slow-sibling" });
+    await firstTick;
+    timeoutSpy.mockRestore();
+  });
+
   it("#24355: one-shot job retries then succeeds", async () => {
     const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
 
@@ -2278,8 +2359,9 @@ describe("cron service timer regressions", () => {
 
       const timerPromise = onTimer(state);
       await secondStarted.promise;
-      expect(isCronJobActive(first.id)).toBe(true);
+      expect(isCronJobActive(first.id)).toBe(false);
       expect(isCronJobActive(second.id)).toBe(true);
+      expect(state.store?.jobs.find((job) => job.id === first.id)?.state.lastStatus).toBe("ok");
       await vi.advanceTimersByTimeAsync(60_100);
       now += 60_100;
       await timerPromise;

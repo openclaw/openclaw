@@ -1,6 +1,4 @@
 // Cron rearm tests cover timer rearming while scheduled jobs are already running.
-import fs from "node:fs/promises";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createNoopLogger,
@@ -9,6 +7,7 @@ import {
 } from "./service.test-harness.js";
 import { createCronServiceState } from "./service/state.js";
 import { onTimer } from "./service/timer.test-support.js";
+import { saveCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
 
 const noopLogger = createNoopLogger();
@@ -105,31 +104,23 @@ describe("CronService - timer re-arm when running (#12025)", () => {
     await store.cleanup();
   });
 
-  it("arms a watchdog timer while a timer tick is still executing", async () => {
+  it("arms the next scheduler wake while a reserved job is still executing", async () => {
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const store = await makeStorePath();
     const now = Date.parse("2026-02-06T10:05:00.000Z");
+    const runStarted = createDeferred<void>();
     const deferredRun = createDeferred<{ status: "ok"; summary: string }>();
 
-    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
-    await fs.writeFile(
-      store.storePath,
-      JSON.stringify(
-        {
-          version: 1,
-          jobs: [
-            createDueRecurringJob({
-              id: "long-running-job",
-              nowMs: now,
-              nextRunAtMs: now,
-            }),
-          ],
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    await saveCronStore(store.storePath, {
+      version: 1,
+      jobs: [
+        createDueRecurringJob({
+          id: "long-running-job",
+          nowMs: now,
+          nextRunAtMs: now,
+        }),
+      ],
+    });
 
     const state = createCronServiceState({
       storePath: store.storePath,
@@ -138,7 +129,10 @@ describe("CronService - timer re-arm when running (#12025)", () => {
       nowMs: () => now,
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => await deferredRun.promise),
+      runIsolatedAgentJob: vi.fn(async () => {
+        runStarted.resolve();
+        return await deferredRun.promise;
+      }),
     });
 
     let settled = false;
@@ -147,10 +141,15 @@ describe("CronService - timer re-arm when running (#12025)", () => {
       settled = true;
     });
 
-    await Promise.resolve();
+    await Promise.race([
+      runStarted.promise,
+      timerPromise.then(() => {
+        throw new Error("Expected reserved cron job to start");
+      }),
+    ]);
     expect(settled).toBe(false);
-    expect(state.running).toBe(true);
-    expect(state.timer).toBe(latestTimeoutHandle(timeoutSpy));
+    expect(state.running).toBe(false);
+    expect(state.timer).not.toBeNull();
 
     const delays = timeoutSpy.mock.calls
       .map(([, delay]) => delay)

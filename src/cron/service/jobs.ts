@@ -1035,8 +1035,14 @@ export function recomputeNextRunsForMaintenance(
 /** Returns the next enabled wake timestamp from the in-memory cron store. */
 export function nextWakeAtMs(state: CronServiceState) {
   const jobs = state.store?.jobs ?? [];
+  // Active reservations retain their original due timestamp until finalization.
+  // Excluding them lets the timer target later jobs instead of polling a past slot.
   const enabled = jobs.filter(
-    (j) => isJobEnabled(j) && hasScheduledNextRunAtMs(j.state.nextRunAtMs),
+    (j) =>
+      isJobEnabled(j) &&
+      typeof j.state.queuedAtMs !== "number" &&
+      typeof j.state.runningAtMs !== "number" &&
+      hasScheduledNextRunAtMs(j.state.nextRunAtMs),
   );
   if (enabled.length === 0) {
     return undefined;

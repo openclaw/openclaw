@@ -181,8 +181,9 @@ async function onAdmittedTimer(state: CronServiceState) {
     return;
   }
   state.running = true;
+  let ownsSchedulingPass = true;
   // Keep a watchdog timer armed while a tick is executing. If execution hangs
-  // (for example in a provider call), the scheduler still wakes to re-check.
+  // while reserving due work, the scheduler still wakes to re-check.
   armRunningRecheckTimer(state);
   try {
     const dueJobs = await locked(state, async () => {
@@ -279,6 +280,12 @@ async function onAdmittedTimer(state: CronServiceState) {
 
       return reservedDue;
     });
+    // The scheduler pass owns only discovery and reservation. Payload execution
+    // continues under per-job durable markers and the shared admission cap, so a
+    // slow sibling must not prevent later-due jobs from being discovered.
+    state.running = false;
+    ownsSchedulingPass = false;
+    armTimer(state);
 
     const runDueJob = async (params: {
       id: string;
@@ -538,7 +545,8 @@ async function onAdmittedTimer(state: CronServiceState) {
                 throw error;
               }
               if (!result.isolatedAgentSetupTimeout) {
-                return result;
+                await finalizeCompletedResults([result]);
+                return pMapSkip;
               }
               let finalizedResults: TimedCronRunOutcome[];
               try {
@@ -616,9 +624,7 @@ async function onAdmittedTimer(state: CronServiceState) {
     }
   } finally {
     // Piggyback session reaper on timer tick (self-throttled to every 5 min).
-    // Placed in `finally` so the reaper runs even when a long-running job keeps
-    // `state.running` true across multiple timer ticks — the early return at the
-    // top of onTimer would otherwise skip the reaper indefinitely.
+    // Keep it in `finally` so execution or finalization failures cannot skip it.
     const storePaths = new Set<string>();
     if (state.deps.resolveSessionStorePath) {
       const defaultAgentId = state.deps.defaultAgentId ?? DEFAULT_AGENT_ID;
@@ -651,7 +657,9 @@ async function onAdmittedTimer(state: CronServiceState) {
       }
     }
 
-    state.running = false;
-    armTimer(state);
+    if (ownsSchedulingPass) {
+      state.running = false;
+      armTimer(state);
+    }
   }
 }
