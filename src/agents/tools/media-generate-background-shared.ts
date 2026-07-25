@@ -39,6 +39,7 @@ import {
   loadRequesterSessionEntry,
 } from "../subagent-announce-delivery.js";
 import { resolveAnnounceOrigin } from "../subagent-announce-origin.js";
+import { markOriginatingCronRunFailedFromMediaGeneration } from "./media-generate-cron-failure-state.js";
 
 const log = createSubsystemLogger("agents/tools/media-generate-background-shared");
 const MEDIA_GENERATION_TASK_KEEPALIVE_INTERVAL_MS = 60_000;
@@ -517,7 +518,15 @@ export function scheduleMediaGenerationTaskCompletion<
           error: wakeError,
         });
       }
-      params.lifecycle.failTaskRun({ handle: params.handle, error });
+      params.lifecycle.failTaskRun({
+        handle: params.handle,
+        error,
+      });
+      await markOriginatingCronRunFailedFromMediaGeneration({
+        handle: params.handle,
+        error,
+        toolName: params.toolName,
+      });
       return;
     }
 

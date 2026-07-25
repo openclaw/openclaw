@@ -278,6 +278,9 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
     async enqueueRun(id, mode) {
       return await (await load()).state.cron.enqueueRun(id, mode);
     },
+    async recordDetachedMediaFailure(request) {
+      return await (await load()).state.cron.recordDetachedMediaFailure(request);
+    },
     getJob(id) {
       if (!loaded) {
         return undefined;

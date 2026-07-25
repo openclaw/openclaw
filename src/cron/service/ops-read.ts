@@ -1,6 +1,8 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { resolveCronListSnapshotRevision } from "../list-snapshot-revision.js";
+import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { readCronJobScratchState, writeCronJobScratch } from "../scratch-store.js";
 import { createCronStreamSourceIdentity } from "../stream-schedule.js";
 import type { CronJob } from "../types.js";
@@ -17,6 +19,7 @@ import type {
 import { locked } from "./locked.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
 import { updateLoadedJob } from "./ops-mutations.js";
+import { emitCronRunFinished } from "./ops-run-preparation.js";
 import {
   ensureLoadedForRead,
   ownsStreamSource,
@@ -26,6 +29,7 @@ import {
 import type { CronServiceState } from "./state.js";
 import { emit } from "./state.js";
 import { ensureLoaded, persistOrRestore, snapshotStoreForRollback } from "./store.js";
+import { normalizeCronLaneSegment } from "./task-runs.js";
 import { applyJobResult, armTimer } from "./timer.js";
 
 /** Returns cron service status after a read-only maintenance pass. */
@@ -140,6 +144,103 @@ export async function recordExternalFailure(
     await persistOrRestore(state, snapshot);
     armTimer(state);
   });
+}
+
+/** Record a detached media generation failure on its originating cron run. */
+export async function recordDetachedMediaFailure(
+  state: CronServiceState,
+  params: {
+    requesterSessionKey: string;
+    taskId: string;
+    runId: string;
+    toolName: string;
+    error: string;
+  },
+) {
+  await locked(state, async () => {
+    const origin = resolveDetachedMediaCronRunOrigin(params.requesterSessionKey);
+    if (!origin) {
+      return;
+    }
+    await ensureLoaded(state, { skipRecompute: true });
+    const job = findJobByCronRunSegment(state, origin.jobSegment);
+    if (!job) {
+      return;
+    }
+    const existingLastRunAtMs = job.state.lastRunAtMs;
+    if (typeof existingLastRunAtMs === "number" && existingLastRunAtMs > origin.runStartedAtMs) {
+      return;
+    }
+    if (existingLastRunAtMs === origin.runStartedAtMs && job.state.lastRunStatus === "error") {
+      return;
+    }
+
+    const snapshot = snapshotStoreForRollback(state);
+    const endedAt = state.deps.nowMs();
+    const startedAt = origin.runStartedAtMs;
+    const diagnostics = createCronRunDiagnosticsFromError("tool", params.error, {
+      nowMs: state.deps.nowMs,
+      toolName: params.toolName,
+    });
+    applyJobResult(
+      state,
+      job,
+      {
+        status: "error",
+        error: params.error,
+        diagnostics,
+        executionStarted: true,
+        sessionKey: origin.sessionKey,
+        startedAt,
+        endedAt,
+      },
+      { scheduleMode: "preserve" },
+    );
+    emitCronRunFinished(state, {
+      jobId: job.id,
+      action: "finished",
+      job,
+      status: "error",
+      error: params.error,
+      diagnostics,
+      runId: params.runId,
+      sessionKey: origin.sessionKey,
+      runAtMs: startedAt,
+      durationMs: job.state.lastDurationMs,
+      nextRunAtMs: job.state.nextRunAtMs,
+      deliveryStatus: job.state.lastDeliveryStatus,
+      failureNotificationDelivery: failureNotificationDeliveryFromJobState(job),
+    });
+    await persistOrRestore(state, snapshot);
+    armTimer(state);
+  });
+}
+
+function resolveDetachedMediaCronRunOrigin(
+  requesterSessionKey: string,
+): { jobSegment: string; runStartedAtMs: number; sessionKey: string } | undefined {
+  const parsed = parseAgentSessionKey(requesterSessionKey);
+  if (!parsed) {
+    return undefined;
+  }
+  const parts = parsed.rest.split(":");
+  const runMarkerIndex = parts.indexOf("run");
+  if (parts[0] !== "cron" || runMarkerIndex < 2) {
+    return undefined;
+  }
+  const jobSegment = parts.slice(1, runMarkerIndex).join(":");
+  const runStartedAtMs = Number(parts[runMarkerIndex + 1]);
+  if (!jobSegment || !Number.isFinite(runStartedAtMs)) {
+    return undefined;
+  }
+  return { jobSegment, runStartedAtMs, sessionKey: requesterSessionKey };
+}
+
+function findJobByCronRunSegment(state: CronServiceState, jobSegment: string): CronJob | undefined {
+  const normalizedSegment = normalizeCronLaneSegment(jobSegment, "job");
+  return state.store?.jobs.find(
+    (job) => job.id === jobSegment || normalizeCronLaneSegment(job.id, "job") === normalizedSegment,
+  );
 }
 
 /** Atomically persist owner state only while its logical stream source still matches. */

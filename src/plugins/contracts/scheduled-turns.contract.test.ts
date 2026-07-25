@@ -117,6 +117,7 @@ function createMockCronService(): CronServiceContract {
     remove: workflowMocks.cronRemove,
     run: vi.fn(async () => ({ ok: true, ran: false, reason: "not-due" })),
     enqueueRun: vi.fn(async () => ({ ok: true, ran: false, reason: "not-due" })),
+    recordDetachedMediaFailure: vi.fn(async () => undefined),
     getJob: vi.fn(() => undefined),
     readJob: vi.fn(async () => undefined),
     getDefaultAgentId: vi.fn(() => undefined),

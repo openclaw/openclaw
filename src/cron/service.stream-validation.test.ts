@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
+import { resolveMainSessionCronRunSessionKey } from "./service/task-runs.js";
 import { cronStreamScheduleKey } from "./stream-schedule.js";
 import type { CronJobCreate } from "./types.js";
 
@@ -18,7 +19,7 @@ function streamJob(overrides: Partial<CronJobCreate> = {}): CronJobCreate {
   };
 }
 
-async function createCron(triggersEnabled: boolean) {
+async function createCron(triggersEnabled: boolean, nowMs?: () => number) {
   const { storePath } = await makeStorePath();
   const cron = new CronService({
     storePath,
@@ -27,6 +28,7 @@ async function createCron(triggersEnabled: boolean) {
     log: logger,
     enqueueSystemEvent: vi.fn(),
     requestHeartbeat: vi.fn(),
+    ...(nowMs ? { nowMs } : {}),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
   });
   await cron.start();
@@ -172,6 +174,105 @@ describe("cron stream schedule validation", () => {
         expect.stringContaining("stream source exhausted restarts"),
         expect.any(Object),
       );
+    } finally {
+      cron.stop();
+    }
+  });
+
+  it("records detached media failures through the cron owner without clobbering newer state", async () => {
+    let now = 12_345;
+    const cron = await createCron(true, () => now);
+    try {
+      const runStartedAtMs = 10_000;
+      const created = await cron.add({
+        id: "hourly-music-track",
+        name: "Hourly music",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 3_600_000 },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: {
+          kind: "script",
+          script: "return await tools.music_generate({ prompt: 'Generate music' })",
+        },
+        state: {
+          lastRunAtMs: runStartedAtMs,
+          lastRunStatus: "ok",
+          lastStatus: "ok",
+          nextRunAtMs: 20_000,
+          consecutiveErrors: 0,
+        },
+      });
+      const requesterSessionKey = resolveMainSessionCronRunSessionKey(
+        created,
+        runStartedAtMs,
+        "main",
+      );
+
+      await cron.recordDetachedMediaFailure({
+        requesterSessionKey,
+        taskId: "task-music-generation",
+        runId: "tool:music_generate:late",
+        toolName: "music_generate",
+        error: "Detached music_generate failed: provider high-demand 503",
+      });
+
+      const failed = cron.getJob(created.id);
+      expect(failed?.state).toMatchObject({
+        lastRunAtMs: runStartedAtMs,
+        lastRunStatus: "error",
+        lastStatus: "error",
+        lastError: "Detached music_generate failed: provider high-demand 503",
+        consecutiveErrors: 1,
+      });
+      expect(failed?.state.lastDiagnosticSummary).toContain("provider high-demand 503");
+
+      await cron.recordDetachedMediaFailure({
+        requesterSessionKey,
+        taskId: "task-music-generation-duplicate",
+        runId: "tool:music_generate:duplicate",
+        toolName: "music_generate",
+        error: "Detached music_generate failed: duplicate provider error",
+      });
+
+      const duplicate = cron.getJob(created.id);
+      expect(duplicate?.state).toMatchObject({
+        lastRunAtMs: runStartedAtMs,
+        lastRunStatus: "error",
+        lastStatus: "error",
+        lastError: "Detached music_generate failed: provider high-demand 503",
+        consecutiveErrors: 1,
+      });
+      expect(duplicate?.state.lastDiagnosticSummary).toContain("provider high-demand 503");
+      expect(duplicate?.state.lastDiagnosticSummary).not.toContain("duplicate provider error");
+
+      await cron.update(created.id, {
+        state: {
+          lastRunAtMs: 30_000,
+          lastRunStatus: "ok",
+          lastStatus: "ok",
+          nextRunAtMs: 40_000,
+          consecutiveErrors: 0,
+        },
+      });
+      const newerState = cron.getJob(created.id)?.state;
+      now = 31_000;
+      await cron.recordDetachedMediaFailure({
+        requesterSessionKey,
+        taskId: "task-music-generation-stale",
+        runId: "tool:music_generate:stale",
+        toolName: "music_generate",
+        error: "Detached music_generate failed: stale provider error",
+      });
+
+      expect(cron.getJob(created.id)?.state).toMatchObject({
+        lastRunAtMs: 30_000,
+        lastRunStatus: "ok",
+        lastStatus: "ok",
+        lastError: "Detached music_generate failed: provider high-demand 503",
+        nextRunAtMs: newerState?.nextRunAtMs,
+        consecutiveErrors: 0,
+      });
     } finally {
       cron.stop();
     }

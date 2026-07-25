@@ -26,6 +26,7 @@ import {
 import { runCronCommandJob } from "../cron/command-runner.js";
 import { resolveCronStoredDeliveryContext } from "../cron/delivery-context.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
+import { registerDetachedMediaCronFailureRecorder } from "../cron/detached-media-failure-recorder.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
 import { toPublicCronJob } from "../cron/public-job.js";
@@ -1090,6 +1091,11 @@ export function buildGatewayCronService(params: {
       }
     },
   });
+  const unregisterDetachedMediaCronFailureRecorder = registerDetachedMediaCronFailureRecorder(
+    async (request) => {
+      await cron.recordDetachedMediaFailure(request);
+    },
+  );
 
   exitWatchersRef.current = createCronExitWatchers({
     getProcessSupervisor,
@@ -1336,6 +1342,7 @@ export function buildGatewayCronService(params: {
   const automationEpoch = claimSessionAutomationEpoch();
   const stopCron = cron.stop.bind(cron);
   cron.stop = () => {
+    unregisterDetachedMediaCronFailureRecorder();
     stopCron();
     stopExitWatchers();
     stopHeartbeatReconcileRetry();
@@ -1350,6 +1357,7 @@ export function buildGatewayCronService(params: {
     unregisterSessionAutomationSource(automationSource);
   };
   cron.stopAndDrain = async () => {
+    unregisterDetachedMediaCronFailureRecorder();
     stopCron();
     stopExitWatchers();
     stopHeartbeatReconcileRetry();

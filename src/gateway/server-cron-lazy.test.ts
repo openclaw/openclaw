@@ -333,6 +333,7 @@ function createCronService(): GatewayCronServiceContract {
     removeAgentJobsTransactional: vi.fn(async (_agentId, commit) => await commit()),
     run: vi.fn(async () => ({ ok: true, ran: false, reason: "invalid-spec" }) as never),
     enqueueRun: vi.fn(async () => ({ ok: true, ran: false, reason: "invalid-spec" }) as never),
+    recordDetachedMediaFailure: vi.fn(async () => undefined),
     getJob: vi.fn(() => undefined),
     readJob: vi.fn(async () => undefined),
     readScratch: vi.fn(async () => ({ currentRevision: 0 })),

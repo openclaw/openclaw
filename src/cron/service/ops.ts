@@ -5,6 +5,7 @@ export {
   listPage,
   readJob,
   readScratch,
+  recordDetachedMediaFailure,
   recordExternalFailure,
   retireExternalStreamSource,
   status,
