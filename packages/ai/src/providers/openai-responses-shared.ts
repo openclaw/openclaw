@@ -535,11 +535,17 @@ export function applyCommonResponsesParams<TApi extends Api>(
     const effort = options?.reasoningEffort
       ? resolveResponsesReasoningEffortForPayload(model, options.reasoningEffort)
       : resolveResponsesReasoningEffortForPayload(model, "medium");
-    params.reasoning = {
-      effort: effort as NonNullable<typeof params.reasoning>["effort"],
-      summary: options?.reasoningSummary || "auto",
-    };
-    params.include = ["reasoning.encrypted_content"];
+    if (model.provider === "openai") {
+      params.reasoning = {
+        effort: effort as NonNullable<typeof params.reasoning>["effort"],
+        summary: options?.reasoningSummary || "auto",
+      };
+      params.include = ["reasoning.encrypted_content"];
+    } else {
+      params.reasoning = {
+        effort: effort as NonNullable<typeof params.reasoning>["effort"],
+      };
+    }
   } else if ((config?.setDefaultReasoningOff ?? true) && model.thinkingLevelMap?.off !== null) {
     const reasoningEffortMap = resolveOpenAIReasoningEffortMap(model);
     const offEffort = reasoningEffortMap.off ?? model.thinkingLevelMap?.off ?? "none";

@@ -387,12 +387,28 @@ describe("Responses reasoning effort", () => {
     const disabled = {} as never;
     applyCommonResponsesParams(disabled, providerNativeModel, { messages: [] });
 
-    expect(enabled).toMatchObject({ reasoning: { effort: "default", summary: "auto" } });
+    expect(enabled).toMatchObject({ reasoning: { effort: "default" } });
     expect(summaryOnly).toMatchObject({
-      reasoning: { effort: "default", summary: "concise" },
+      reasoning: { effort: "default" },
     });
     expect(disabled).toMatchObject({ reasoning: { effort: "none" } });
+    expect(enabled).not.toHaveProperty("include");
+    expect(summaryOnly).not.toHaveProperty("include");
     expect(disabled).not.toHaveProperty("include");
+
+    const nativeOpenAI = {} as never;
+    applyCommonResponsesParams(
+      nativeOpenAI,
+      nativeOpenAIModel,
+      { messages: [] },
+      {
+        reasoningEffort: "medium",
+      },
+    );
+    expect(nativeOpenAI).toMatchObject({
+      reasoning: { effort: "medium", summary: "auto" },
+      include: ["reasoning.encrypted_content"],
+    });
   });
 
   it("keeps max clamped to xhigh for earlier models", () => {
