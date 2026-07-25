@@ -325,6 +325,7 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
             ? identityEmoji
             : "👀";
     }
+    let dropsDirectAcks = false;
     if (messages.ackReactionScope === undefined) {
       const direct = ack.direct !== false;
       const group = ack.group ?? "mentions";
@@ -342,10 +343,17 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
                   : undefined;
       if (scope) {
         messages.ackReactionScope = scope;
+      } else {
+        dropsDirectAcks = direct && group === "mentions";
       }
     }
     delete entry.ackReaction;
     changes.push(`Moved translatable ${path}.ackReaction settings to messages ack settings.`);
+    if (dropsDirectAcks) {
+      changes.push(
+        `${path}.ackReaction acknowledged direct messages plus mentioned groups, and messages.ackReactionScope has no value for that combination, so the default "group-mentions" scope stops acknowledging direct messages. Set messages.ackReactionScope to "direct" or "all" to keep acknowledging them.`,
+      );
+    }
   });
 
   visitChannelEntries(raw, "slack", (entry, path) => {

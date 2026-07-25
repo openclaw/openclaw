@@ -43,6 +43,9 @@ function getPath(value: unknown, path: string): unknown {
   }, value);
 }
 
+const UNREPRESENTABLE_WHATSAPP_ACK_SCOPE_CHANGE =
+  'channels.whatsapp.ackReaction acknowledged direct messages plus mentioned groups, and messages.ackReactionScope has no value for that combination, so the default "group-mentions" scope stops acknowledging direct messages. Set messages.ackReactionScope to "direct" or "all" to keep acknowledging them.';
+
 describe("retired runtime config migrations", () => {
   it("uses a dedicated, actionable migration for the retired device-auth bypass", () => {
     const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY.find(
@@ -490,6 +493,53 @@ describe("retired runtime config migrations", () => {
     });
 
     expect(result.raw).toHaveProperty("messages.inbound.byChannel.whatsapp", 3_000);
+  });
+
+  it("flags the legacy WhatsApp ack combination no canonical scope represents", () => {
+    const result = applyAll({
+      channels: {
+        whatsapp: { ackReaction: { emoji: "👀", direct: true, group: "mentions" } },
+      },
+    });
+
+    expect(result.raw).not.toHaveProperty("channels.whatsapp.ackReaction");
+    expect(result.raw).toHaveProperty("messages.ackReaction", "👀");
+    expect(result.raw).not.toHaveProperty("messages.ackReactionScope");
+    expect(result.changes).toContain(UNREPRESENTABLE_WHATSAPP_ACK_SCOPE_CHANGE);
+  });
+
+  it("flags the emoji-only legacy WhatsApp ack object that inherits both defaults", () => {
+    const result = applyAll({
+      channels: { whatsapp: { ackReaction: { emoji: "👀" } } },
+    });
+
+    expect(result.raw).not.toHaveProperty("messages.ackReactionScope");
+    expect(result.changes).toContain(UNREPRESENTABLE_WHATSAPP_ACK_SCOPE_CHANGE);
+  });
+
+  it("migrates representable legacy WhatsApp ack scopes without extra notes", () => {
+    const result = applyAll({
+      channels: {
+        whatsapp: { ackReaction: { emoji: "👀", direct: true, group: "never" } },
+      },
+    });
+
+    expect(result.raw).toHaveProperty("messages.ackReactionScope", "direct");
+    expect(result.changes).toStrictEqual([
+      "Moved translatable channels.whatsapp.ackReaction settings to messages ack settings.",
+    ]);
+  });
+
+  it("keeps a canonical ack scope and stays quiet about direct acknowledgements", () => {
+    const result = applyAll({
+      messages: { ackReactionScope: "all" },
+      channels: {
+        whatsapp: { ackReaction: { emoji: "👀", direct: true, group: "mentions" } },
+      },
+    });
+
+    expect(result.raw).toHaveProperty("messages.ackReactionScope", "all");
+    expect(result.changes).not.toContain(UNREPRESENTABLE_WHATSAPP_ACK_SCOPE_CHANGE);
   });
 
   it("moves aliases and strips dead keys", () => {
