@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { AgentMessage } from "../../types.js";
 import type { SessionTreeEntry } from "../types.js";
 import { buildSessionContext } from "./session.js";
 
@@ -15,6 +16,35 @@ function userEntry(id: string, parentId: string | null, content: string): Sessio
 }
 
 describe("buildSessionContext", () => {
+  it("keeps invalid custom and branch timestamps non-fatal during replay", () => {
+    const entries: SessionTreeEntry[] = [
+      {
+        type: "custom_message",
+        id: "custom",
+        parentId: null,
+        timestamp: "9999-12-31",
+        customType: "note",
+        content: "custom content",
+        display: true,
+      },
+      {
+        type: "branch_summary",
+        id: "branch",
+        parentId: "custom",
+        timestamp: "01/02/03",
+        fromId: "branch-root",
+        summary: "branch content",
+      },
+    ];
+
+    expect(buildSessionContext(entries).messages).toMatchObject([
+      { role: "custom", content: "custom content" },
+      { role: "branchSummary", summary: "branch content" },
+    ]);
+    expect(buildSessionContext(entries).messages[0]).not.toHaveProperty("timestamp");
+    expect(buildSessionContext(entries).messages[1]).not.toHaveProperty("timestamp");
+  });
+
   it("replays only the retained tail and newer entries after compaction", () => {
     const entries: SessionTreeEntry[] = [
       userEntry("old", null, "discarded"),
@@ -51,10 +81,45 @@ describe("buildSessionContext", () => {
       "user",
     ]);
     expect(context.messages).toMatchObject([
-      { summary: "older context" },
+      { summary: "older context", retainedMessageCount: 1 },
       { content: "retained" },
       { content: "new turn" },
     ]);
+    const retainedBoundary = Symbol.for("openclaw.compactionRetainedBoundary");
+    expect(
+      (context.messages[0] as AgentMessage & { [retainedBoundary]?: string })[retainedBoundary],
+    ).toBe("compaction");
+    expect(
+      (context.messages[1] as AgentMessage & { [retainedBoundary]?: string })[retainedBoundary],
+    ).toBe("compaction");
+    expect(
+      (context.messages[2] as AgentMessage & { [retainedBoundary]?: string })[retainedBoundary],
+    ).toBeUndefined();
+  });
+
+  it("preserves the retained range when a compaction timestamp is invalid", () => {
+    const entries: SessionTreeEntry[] = [
+      userEntry("kept", null, "retained"),
+      {
+        type: "compaction",
+        id: "compaction",
+        parentId: "kept",
+        timestamp: "9999-12-31",
+        summary: "older context",
+        firstKeptEntryId: "kept",
+        tokensBefore: 123,
+      },
+      userEntry("new", "compaction", "new turn"),
+    ];
+
+    const messages = buildSessionContext(entries).messages;
+
+    expect(messages).toMatchObject([
+      { role: "compactionSummary", retainedMessageCount: 1 },
+      { role: "user", content: "retained" },
+      { role: "user", content: "new turn" },
+    ]);
+    expect(messages[0]).not.toHaveProperty("timestamp");
   });
 
   it("treats the latest reset as a hard cut with a user/assistant-only kept tail", () => {

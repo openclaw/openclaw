@@ -12,6 +12,7 @@ const streamMocks = vi.hoisted(() => ({
   streamSimple: vi.fn(),
 }));
 
+import { limitHistoryTurns } from "../embedded-agent-runner/history.js";
 import type { AgentTool } from "../runtime/index.js";
 import type { AgentSessionEvent } from "./agent-session-types.js";
 import { AgentSession } from "./agent-session.js";
@@ -281,6 +282,161 @@ describe("AgentSession loop correctness", () => {
         content: [{ type: "text", text: "complete answer" }],
       }),
     );
+    expect(compactionEvents).toContainEqual(
+      expect.objectContaining({ type: "compaction_end", reason: "threshold", willRetry: false }),
+    );
+  });
+
+  it("does not let a loose future compaction timestamp suppress threshold maintenance", async () => {
+    const sessionManager = SessionManager.inMemory();
+    const userId = sessionManager.appendMessage({
+      role: "user",
+      content: "old prompt",
+      timestamp: Date.now() - 2,
+    });
+    sessionManager.appendCompaction("older context", userId, 10);
+    const compaction = sessionManager.getEntries().find((entry) => entry.type === "compaction");
+    if (!compaction || compaction.type !== "compaction") {
+      throw new Error("expected compaction entry");
+    }
+    compaction.timestamp = "9999-12-31";
+    const settingsManager = SettingsManager.inMemory({
+      compaction: { enabled: true, reserveTokens: 0, keepRecentTokens: 1 },
+      retry: { enabled: false },
+    });
+    const compactionEvents: AgentSessionEvent[] = [];
+    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
+      createAssistantResultStream(
+        createAssistant(activeModel, [{ type: "text", text: "complete answer" }], "stop", 100),
+      ),
+    );
+    const { session } = await createTestSession({
+      sessionManager,
+      settingsManager,
+      resourceLoader: createResourceLoader(createCompactionHandlers()),
+    });
+    session.subscribe((event) => {
+      if (event.type === "compaction_end") {
+        compactionEvents.push(event);
+      }
+    });
+
+    await session.prompt("new prompt");
+
+    expect(compactionEvents).toContainEqual(
+      expect.objectContaining({ type: "compaction_end", reason: "threshold", willRetry: false }),
+    );
+  });
+
+  it("does not reuse retained high usage after an invalid compaction timestamp", async () => {
+    const sessionManager = SessionManager.inMemory();
+    const retainedUserId = sessionManager.appendMessage({
+      role: "user",
+      content: "retained prompt",
+      timestamp: 1_000,
+    });
+    sessionManager.appendMessage({
+      ...createAssistant(testModel, [{ type: "text", text: "retained answer" }], "stop", 100),
+      timestamp: 2_000,
+    });
+    sessionManager.appendCompaction("older context", retainedUserId, 100);
+    const compaction = sessionManager.getEntries().find((entry) => entry.type === "compaction");
+    if (!compaction || compaction.type !== "compaction") {
+      throw new Error("expected compaction entry");
+    }
+    compaction.timestamp = "9999-12-31";
+    sessionManager.appendMessage({ role: "user", content: "fresh prompt", timestamp: 3_000 });
+    const settingsManager = SettingsManager.inMemory({
+      compaction: { enabled: true, reserveTokens: 0, keepRecentTokens: 1 },
+      retry: { enabled: false },
+    });
+    const compactionEvents: AgentSessionEvent[] = [];
+    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
+      createAssistantResultStream({
+        ...createAssistant(activeModel, [], "error", 0),
+        errorMessage: "temporary upstream failure",
+      }),
+    );
+    const { session } = await createTestSession({
+      sessionManager,
+      settingsManager,
+      resourceLoader: createResourceLoader(createCompactionHandlers()),
+    });
+    session.subscribe((event) => {
+      if (event.type === "compaction_end") {
+        compactionEvents.push(event);
+      }
+    });
+
+    await session.prompt("retry later");
+
+    expect(compactionEvents).toEqual([]);
+    const retainedAssistant = session.messages.find(
+      (message) =>
+        message.role === "assistant" &&
+        message.content.some((block) => block.type === "text" && block.text === "retained answer"),
+    );
+    if (!retainedAssistant || retainedAssistant.role !== "assistant") {
+      throw new Error("expected retained assistant message");
+    }
+    expect(retainedAssistant.usage.totalTokens).toBe(0);
+  });
+
+  it("compacts a fresh high-usage response after history limiting retained messages", async () => {
+    const sessionManager = SessionManager.inMemory();
+    const retainedUserId = sessionManager.appendMessage({
+      role: "user",
+      content: "first retained prompt",
+      timestamp: 1_000,
+    });
+    sessionManager.appendMessage({
+      ...createAssistant(testModel, [{ type: "text", text: "first retained answer" }]),
+      timestamp: 2_000,
+    });
+    sessionManager.appendMessage({
+      role: "user",
+      content: "second retained prompt",
+      timestamp: 3_000,
+    });
+    sessionManager.appendMessage({
+      ...createAssistant(testModel, [{ type: "text", text: "second retained answer" }]),
+      timestamp: 4_000,
+    });
+    sessionManager.appendCompaction("older context", retainedUserId, 100);
+    const compaction = sessionManager.getEntries().find((entry) => entry.type === "compaction");
+    if (!compaction || compaction.type !== "compaction") {
+      throw new Error("expected compaction entry");
+    }
+    compaction.timestamp = "9999-12-31";
+    sessionManager.appendMessage({ role: "user", content: "current prompt", timestamp: 5_000 });
+    sessionManager.appendMessage({
+      ...createAssistant(testModel, [{ type: "text", text: "current answer" }]),
+      timestamp: 6_000,
+    });
+    const settingsManager = SettingsManager.inMemory({
+      compaction: { enabled: true, reserveTokens: 0, keepRecentTokens: 1 },
+      retry: { enabled: false },
+    });
+    const compactionEvents: AgentSessionEvent[] = [];
+    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
+      createAssistantResultStream(
+        createAssistant(activeModel, [{ type: "text", text: "fresh answer" }], "stop", 100),
+      ),
+    );
+    const { session } = await createTestSession({
+      sessionManager,
+      settingsManager,
+      resourceLoader: createResourceLoader(createCompactionHandlers()),
+    });
+    session.agent.state.messages = limitHistoryTurns(session.agent.state.messages, 1);
+    session.subscribe((event) => {
+      if (event.type === "compaction_end") {
+        compactionEvents.push(event);
+      }
+    });
+
+    await session.prompt("fresh prompt");
+
     expect(compactionEvents).toContainEqual(
       expect.objectContaining({ type: "compaction_end", reason: "threshold", willRetry: false }),
     );

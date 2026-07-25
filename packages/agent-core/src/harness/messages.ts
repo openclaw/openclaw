@@ -1,5 +1,9 @@
 // Agent Core module implements messages behavior.
 import type { ImageContent, Message, TextContent } from "@openclaw/llm-core";
+import {
+  asDateTimestampMs,
+  parseStrictTimestampStringMs,
+} from "@openclaw/normalization-core/number-coercion";
 import type {
   AgentMessage,
   BashExecutionMessage,
@@ -33,25 +37,18 @@ function parseSessionTimestampMs(value: unknown): number | undefined {
   if (typeof value !== "string" || !value.trim()) {
     return undefined;
   }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
+  return parseStrictTimestampStringMs(value);
 }
 
-function requireSessionTimestampMs(value: string, label: string): number {
-  const parsed = parseSessionTimestampMs(value);
-  if (parsed === undefined) {
-    throw new Error(`${label} must be a valid timestamp`);
-  }
-  return parsed;
-}
-
-function normalizeCompactionSummaryTimestamp(timestamp: number | string): number {
+function normalizeCompactionSummaryTimestamp(
+  timestamp: number | string | undefined,
+): number | undefined {
   if (typeof timestamp === "number") {
-    return timestamp;
+    return asDateTimestampMs(timestamp);
   }
   const parsed = parseSessionTimestampMs(timestamp);
-  // Corrupt persisted rows should not abort context conversion; session order is already preserved.
-  return parsed ?? 0;
+  // Corrupt persisted rows should not abort context conversion or become a real epoch boundary.
+  return parsed;
 }
 
 export const COMPACTION_SUMMARY_PREFIX = `The conversation history before this point was compacted into the following summary:
@@ -94,12 +91,13 @@ export function createBranchSummaryMessage(
   fromId: string,
   timestamp: string,
 ): BranchSummaryMessage {
+  const normalizedTimestamp = parseSessionTimestampMs(timestamp);
   return {
     role: "branchSummary",
     summary,
     fromId,
-    timestamp: requireSessionTimestampMs(timestamp, "branch summary timestamp"),
-  };
+    ...(normalizedTimestamp !== undefined ? { timestamp: normalizedTimestamp } : {}),
+  } as BranchSummaryMessage;
 }
 
 /** Build a persisted compaction summary message from the repository timestamp string. */
@@ -108,11 +106,12 @@ export function createCompactionSummaryMessage(
   tokensBefore: number,
   timestamp: string,
 ): CompactionSummaryMessage {
+  const normalizedTimestamp = normalizeCompactionSummaryTimestamp(timestamp);
   return {
     role: "compactionSummary",
     summary,
     tokensBefore,
-    timestamp: requireSessionTimestampMs(timestamp, "compaction summary timestamp"),
+    ...(normalizedTimestamp !== undefined ? { timestamp: normalizedTimestamp } : {}),
   };
 }
 
@@ -124,14 +123,15 @@ export function createCustomMessage(
   details: unknown,
   timestamp: string,
 ): CustomMessage {
+  const normalizedTimestamp = parseSessionTimestampMs(timestamp);
   return {
     role: "custom",
     customType,
     content,
     display,
     details,
-    timestamp: requireSessionTimestampMs(timestamp, "custom message timestamp"),
-  };
+    ...(normalizedTimestamp !== undefined ? { timestamp: normalizedTimestamp } : {}),
+  } as CustomMessage;
 }
 
 /** Convert harness transcript messages into the LLM-facing message sequence. */
@@ -162,9 +162,9 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
           return {
             role: "user",
             content,
-            timestamp: message.timestamp,
+            ...(typeof message.timestamp === "number" ? { timestamp: message.timestamp } : {}),
             ...(runtimeContextCarrier ? { runtimeContextCarrier: true } : {}),
-          };
+          } as Message;
         }
         case "branchSummary":
           return {
@@ -175,9 +175,10 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
                 text: BRANCH_SUMMARY_PREFIX + message.summary + BRANCH_SUMMARY_SUFFIX,
               },
             ],
-            timestamp: message.timestamp,
-          };
-        case "compactionSummary":
+            ...(typeof message.timestamp === "number" ? { timestamp: message.timestamp } : {}),
+          } as Message;
+        case "compactionSummary": {
+          const timestamp = normalizeCompactionSummaryTimestamp(message.timestamp);
           return {
             role: "user",
             content: [
@@ -186,8 +187,9 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
                 text: COMPACTION_SUMMARY_PREFIX + message.summary + COMPACTION_SUMMARY_SUFFIX,
               },
             ],
-            timestamp: normalizeCompactionSummaryTimestamp(message.timestamp),
-          };
+            ...(timestamp !== undefined ? { timestamp } : {}),
+          } as Message;
+        }
         case "user":
         case "assistant":
         case "toolResult":
