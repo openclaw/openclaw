@@ -11,6 +11,10 @@ import {
   createChannelProgressDraftCompositor,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
+import {
+  isReplyPayloadNonTerminalToolErrorWarning,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
@@ -166,6 +170,13 @@ function resolveRuntime(opts: MonitorMattermostOpts): RuntimeEnv {
 
 function isSystemPost(post: MattermostPost): boolean {
   return normalizeOptionalString(post.type) !== undefined;
+}
+
+function isFallbackOnlyToolWarningFinal(payload: ReplyPayload): boolean {
+  if (payload.isError !== true || !isReplyPayloadNonTerminalToolErrorWarning(payload)) {
+    return false;
+  }
+  return !resolveSendableOutboundReplyParts(payload).hasMedia;
 }
 
 function channelChatType(kind: ChatType): "direct" | "group" | "channel" {
@@ -1546,15 +1557,45 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       isDirect: kind === "direct",
       dmRetryOptions: account.config.dmChannelRetry,
     });
+    let userFacingFinalDelivered = false;
+    let allowFallbackOnlyToolWarning = false;
+    let pendingToolWarningFinal:
+      | { payload: ReplyPayload; info: { kind: "tool" | "block" | "final" } }
+      | undefined;
     const dispatcherOptions: NonNullable<ChannelInboundTurnPlan["dispatcherOptions"]> = {
       ...replyPipeline,
       resolveFollowupAdmissionBarrierTimeoutPolicy: deliveryBarrier.resolveTimeoutPolicy,
       onDeliverySettled: deliveryBarrier.markDeliverySettled,
+      onFreshSettledDelivery: async () => {
+        if (!pendingToolWarningFinal || userFacingFinalDelivered) {
+          return;
+        }
+        const pending = pendingToolWarningFinal;
+        pendingToolWarningFinal = undefined;
+        try {
+          allowFallbackOnlyToolWarning = true;
+          await delivery.deliver(pending.payload, pending.info);
+        } catch (err) {
+          runtime.error?.(`mattermost ${pending.info.kind} reply failed: ${String(err)}`);
+        } finally {
+          allowFallbackOnlyToolWarning = false;
+        }
+      },
       humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
       typingCallbacks,
     };
     const delivery: ChannelInboundTurnPlan["delivery"] = {
       deliver: async (payloadEntry: ReplyPayload, info) => {
+        if (
+          info.kind === "final" &&
+          !allowFallbackOnlyToolWarning &&
+          isFallbackOnlyToolWarningFinal(payloadEntry)
+        ) {
+          if (!userFacingFinalDelivered) {
+            pendingToolWarningFinal = { payload: payloadEntry, info };
+          }
+          return;
+        }
         if (info.kind === "final") {
           await enterBlockPreviewActivity("text");
           // Final text resolution uses only generations confirmed visible. Join prior
@@ -1637,6 +1678,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           },
         });
         if (info.kind === "final") {
+          userFacingFinalDelivered = true;
+          pendingToolWarningFinal = undefined;
           progressDraft.markFinalReplyDelivered();
         }
       },
