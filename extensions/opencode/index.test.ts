@@ -10,6 +10,7 @@ import { NON_ENV_SECRETREF_MARKER } from "openclaw/plugin-sdk/provider-auth-runt
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { expectPassthroughReplayPolicy } from "openclaw/plugin-sdk/provider-test-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { clearOpencodeHybridCatalogStateForTests } from "./hybrid-catalog.js";
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildOpencodeZenLiveProviderConfig } from "./provider-catalog.js";
@@ -43,6 +44,7 @@ function requireCatalogEntry(entries: readonly unknown[] | null | undefined, id:
 describe("opencode provider plugin", () => {
   beforeEach(() => {
     clearLiveCatalogCacheForTests();
+    clearOpencodeHybridCatalogStateForTests();
   });
   it("registers image media understanding through the OpenCode plugin", async () => {
     const { mediaProviders } = await registerProviderPlugin({
@@ -554,18 +556,25 @@ describe("opencode provider plugin", () => {
   });
 
   it("uses cached live OpenCode Zen discovery and filters live-only rows", async () => {
-    const fetchGuard = vi.fn(async () => ({
-      response: new Response(
-        JSON.stringify({
-          data: [
-            { id: "claude-opus-4-8", object: "model" },
-            { id: "gpt-6-experimental", object: "model" },
-          ],
-        }),
-      ),
-      finalUrl: "https://opencode.ai/zen/v1/models",
-      release: vi.fn(async () => undefined),
-    }));
+    let gatewayIds = ["claude-opus-4-8", "gpt-6-experimental"];
+    const fetchGuard = vi.fn(async (req: { url: string }) => {
+      if (req.url.includes("models.dev")) {
+        return {
+          response: new Response(JSON.stringify({ opencode: { models: {} } })),
+          finalUrl: req.url,
+          release: vi.fn(async () => undefined),
+        };
+      }
+      return {
+        response: new Response(
+          JSON.stringify({
+            data: gatewayIds.map((id) => ({ id, object: "model" })),
+          }),
+        ),
+        finalUrl: "https://opencode.ai/zen/v1/models",
+        release: vi.fn(async () => undefined),
+      };
+    });
 
     const first = await buildOpencodeZenLiveProviderConfig({
       apiKey: "OPENCODE_API_KEY",
@@ -578,7 +587,8 @@ describe("opencode provider plugin", () => {
       fetchGuard,
     });
 
-    expect(fetchGuard).toHaveBeenCalledTimes(1);
+    // Hybrid catalog fetches gateway IDs + models.dev (process sticky after success).
+    expect(fetchGuard).toHaveBeenCalledTimes(2);
     expect(first.apiKey).toBe("OPENCODE_API_KEY");
     expect(first.models.map((model) => model.id)).toEqual(["claude-opus-4-8"]);
     expect(second.models.map((model) => model.id)).toEqual(["claude-opus-4-8"]);
@@ -592,15 +602,8 @@ describe("opencode provider plugin", () => {
     expect(liveOnlyModel).toBeUndefined();
 
     clearLiveCatalogCacheForTests();
-    fetchGuard.mockResolvedValueOnce({
-      response: new Response(
-        JSON.stringify({
-          data: [{ id: "gpt-6-experimental", object: "model" }],
-        }),
-      ),
-      finalUrl: "https://opencode.ai/zen/v1/models",
-      release: vi.fn(async () => undefined),
-    });
+    clearOpencodeHybridCatalogStateForTests();
+    gatewayIds = ["gpt-6-experimental"];
     const unknownOnly = await buildOpencodeZenLiveProviderConfig({
       apiKey: "OPENCODE_API_KEY",
       discoveryApiKey: "resolved-opencode-key",
@@ -609,6 +612,7 @@ describe("opencode provider plugin", () => {
     expect(unknownOnly.models.map((model) => model.id)).toContain("claude-opus-4-8");
 
     clearLiveCatalogCacheForTests();
+    clearOpencodeHybridCatalogStateForTests();
     fetchGuard.mockRejectedValueOnce(new Error("network unavailable"));
     const fallback = await buildOpencodeZenLiveProviderConfig({
       apiKey: "OPENCODE_API_KEY",
@@ -621,20 +625,30 @@ describe("opencode provider plugin", () => {
   });
 
   it("keeps live OpenCode Zen discovery caches scoped to discovery credentials", async () => {
-    const fetchGuard = vi
-      .fn()
-      .mockResolvedValueOnce({
+    const gatewayByKey = new Map([
+      ["discovery-a", ["claude-opus-4-8"]],
+      ["discovery-b", ["gpt-5.5"]],
+    ]);
+    const fetchGuard = vi.fn(async (req: { url: string; init?: { headers?: HeadersInit } }) => {
+      if (req.url.includes("models.dev")) {
+        return {
+          response: new Response(JSON.stringify({ opencode: { models: {} } })),
+          finalUrl: req.url,
+          release: vi.fn(async () => undefined),
+        };
+      }
+      const headers = new Headers(req.init?.headers);
+      const auth = headers.get("authorization") ?? "";
+      const key = auth.replace(/^Bearer\s+/i, "");
+      const ids = gatewayByKey.get(key) ?? [];
+      return {
         response: new Response(
-          JSON.stringify({ data: [{ id: "claude-opus-4-8", object: "model" }] }),
+          JSON.stringify({ data: ids.map((id) => ({ id, object: "model" })) }),
         ),
         finalUrl: "https://opencode.ai/zen/v1/models",
         release: vi.fn(async () => undefined),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(JSON.stringify({ data: [{ id: "gpt-5.5", object: "model" }] })),
-        finalUrl: "https://opencode.ai/zen/v1/models",
-        release: vi.fn(async () => undefined),
-      });
+      };
+    });
 
     const first = await buildOpencodeZenLiveProviderConfig({
       apiKey: "runtime-a",
@@ -652,7 +666,8 @@ describe("opencode provider plugin", () => {
       fetchGuard,
     });
 
-    expect(fetchGuard).toHaveBeenCalledTimes(2);
+    // Two discovery keys each load gateway IDs; models.dev is process-shared.
+    expect(fetchGuard.mock.calls.length).toBeGreaterThanOrEqual(3);
     expect(first.apiKey).toBe("runtime-a");
     expect(first.models.map((model) => model.id)).toEqual(["claude-opus-4-8"]);
     expect(second.apiKey).toBe("runtime-b");
