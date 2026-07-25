@@ -541,6 +541,9 @@ and troubleshooting see the main [FAQ](/help/faq).
     eligible for long-context billing. OpenClaw classifies this body as a context overflow
     and automatically attempts **compact + retry**, so if the
     session fits after compaction the retry succeeds without operator intervention.
+    If compaction cannot refit the session, the run ends blocked; fallback models are
+    not tried for context overflow. Start a fresh session with `/reset` (or `/new`),
+    or switch to a larger-context model.
 
     Set a **fallback model** so OpenClaw keeps replying while a provider is rate-limited.
     See [Models](/cli/models), [OAuth](/concepts/oauth), and
