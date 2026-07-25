@@ -922,6 +922,17 @@ describe("models.authStatus", () => {
           billing: [{ type: "budget", used: 157.85, limit: 400, unit: "USD", period: "month" }],
         },
       ],
+      profiles: [
+        {
+          provider: "anthropic",
+          authProfileId: "claude-cli",
+          capturedAt: 0,
+          displayName: "Claude",
+          plan: "Max (20x)",
+          windows: [{ label: "5h", usedPercent: 22 }],
+          billing: [{ type: "budget", used: 157.85, limit: 400, unit: "USD", period: "month" }],
+        },
+      ],
     });
 
     const first = await readAuthStatus();
@@ -945,6 +956,12 @@ describe("models.authStatus", () => {
       plan: "Max (20x)",
       billing: [{ type: "budget", used: 157.85, limit: 400, unit: "USD", period: "month" }],
       accountEmail: "clawd@example.com",
+    });
+    expect(result.providers[0]?.profiles[0]?.usage).toEqual({
+      providerId: "anthropic",
+      windows: [{ label: "5h", usedPercent: 22 }],
+      plan: "Max (20x)",
+      billing: [{ type: "budget", used: 157.85, limit: 400, unit: "USD", period: "month" }],
     });
   });
 

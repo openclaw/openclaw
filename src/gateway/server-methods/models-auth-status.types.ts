@@ -24,6 +24,8 @@ export type ModelAuthStatusProfile = {
   expiry?: ModelAuthExpiry;
   /** True only for saved OAuth/token profiles this gateway can remove. */
   logoutSupported?: boolean;
+  /** Exact-profile quota snapshot, without identity-bearing account fields. */
+  usage?: Omit<NonNullable<ModelAuthStatusProvider["usage"]>, "accountEmail">;
 };
 
 export type ModelAuthStatusProvider = {

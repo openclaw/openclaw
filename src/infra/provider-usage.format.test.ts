@@ -20,6 +20,46 @@ function makeSnapshot(windows: ProviderUsageSnapshot["windows"]): ProviderUsageS
 }
 
 describe("provider-usage.format", () => {
+  it("groups exact auth-profile usage under its provider", () => {
+    const summary: UsageSummary = {
+      updatedAt: now,
+      providers: [
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          windows: [{ label: "Week", usedPercent: 80 }],
+        },
+      ],
+      profiles: [
+        {
+          provider: "openai",
+          authProfileId: "openai:personal",
+          capturedAt: now,
+          displayName: "OpenAI",
+          windows: [{ label: "Week", usedPercent: 80 }],
+          plan: "pro",
+        },
+        {
+          provider: "openai",
+          authProfileId: "openai:work",
+          capturedAt: now,
+          displayName: "OpenAI",
+          windows: [{ label: "Week", usedPercent: 25 }],
+          plan: "team",
+        },
+      ],
+    };
+
+    expect(formatUsageReportLines(summary, { now })).toEqual([
+      "Usage:",
+      "  OpenAI",
+      "    openai:personal (pro)",
+      "      Week: 20% left",
+      "    openai:work (team)",
+      "      Week: 75% left",
+    ]);
+  });
+
   it.each([
     { snapshot: { ...makeSnapshot([]), error: "HTTP 401" } as ProviderUsageSnapshot, now },
     { snapshot: makeSnapshot([]), now },

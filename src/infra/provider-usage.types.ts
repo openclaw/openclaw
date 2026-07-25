@@ -103,6 +103,8 @@ export type ProviderUsageProfileSnapshot = Omit<ProviderUsageSnapshot, "accountE
 export type UsageSummary = {
   updatedAt: number;
   providers: ProviderUsageSnapshot[];
+  /** Exact configured auth-profile snapshots, when profile reads are available. */
+  profiles?: ProviderUsageProfileSnapshot[];
 };
 
 /** Normalized provider id. Usage providers are discovered from plugin hooks at runtime. */
