@@ -1,6 +1,7 @@
 // Opencode Go plugin entrypoint registers its OpenClaw integration.
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
+import { prewarmOpencodeGoHybridCatalog } from "./hybrid-catalog.js";
 import { opencodeGoMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { OPENCODE_GO_DEFAULT_MODEL_REF } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
@@ -120,5 +121,8 @@ export default defineSingleProviderPluginEntry({
   },
   register(api) {
     api.registerMediaUnderstandingProvider(opencodeGoMediaUnderstandingProvider);
+    api.on("gateway_start", () => {
+      void prewarmOpencodeGoHybridCatalog();
+    });
   },
 });

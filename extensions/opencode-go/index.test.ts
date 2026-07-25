@@ -11,6 +11,7 @@ import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-trans
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
+import { clearOpencodeGoHybridCatalogStateForTests } from "./hybrid-catalog.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
   buildOpencodeGoLiveProviderConfig,
@@ -542,19 +543,29 @@ describe("opencode-go provider plugin", () => {
   });
 
   it("uses cached live OpenCode Go discovery and falls back to static rows on failure", async () => {
-    const fetchGuard = vi.fn(async () => ({
-      response: new Response(
-        JSON.stringify({
-          data: [
-            { id: "minimax-m3", object: "model" },
-            { id: "qwen3.7-max", object: "model" },
-            { id: "qwen3.7-plus", object: "model" },
-          ],
-        }),
-      ),
-      finalUrl: "https://opencode.ai/zen/go/v1/models",
-      release: vi.fn(async () => undefined),
-    }));
+    const liveIds = ["minimax-m3", "qwen3.7-max", "qwen3.7-plus"];
+    let failGateway = false;
+    const fetchGuard = vi.fn(async (req: { url: string }) => {
+      if (req.url.includes("models.dev")) {
+        return {
+          response: new Response(JSON.stringify({ "opencode-go": { models: {} } })),
+          finalUrl: req.url,
+          release: vi.fn(async () => undefined),
+        };
+      }
+      if (failGateway) {
+        throw new Error("network unavailable");
+      }
+      return {
+        response: new Response(
+          JSON.stringify({
+            data: liveIds.map((id) => ({ id, object: "model" })),
+          }),
+        ),
+        finalUrl: "https://opencode.ai/zen/go/v1/models",
+        release: vi.fn(async () => undefined),
+      };
+    });
 
     const first = await buildOpencodeGoLiveProviderConfig({
       apiKey: "OPENCODE_API_KEY",
@@ -567,14 +578,15 @@ describe("opencode-go provider plugin", () => {
       fetchGuard,
     });
 
-    expect(fetchGuard).toHaveBeenCalledTimes(1);
+    // Hybrid catalog fetches gateway IDs plus models.dev; both are process-cached.
+    expect(fetchGuard).toHaveBeenCalledTimes(2);
     expect(first.apiKey).toBe("OPENCODE_API_KEY");
-    const liveIds = ["minimax-m3", "qwen3.7-max", "qwen3.7-plus"];
     expect(first.models.map((model) => model.id).toSorted()).toEqual(liveIds);
     expect(second.models.map((model) => model.id).toSorted()).toEqual(liveIds);
 
     clearLiveCatalogCacheForTests();
-    fetchGuard.mockRejectedValueOnce(new Error("network unavailable"));
+    clearOpencodeGoHybridCatalogStateForTests();
+    failGateway = true;
     const fallback = await buildOpencodeGoLiveProviderConfig({
       apiKey: "OPENCODE_API_KEY",
       discoveryApiKey: "resolved-opencode-key",
