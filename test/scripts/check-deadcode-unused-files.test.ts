@@ -103,7 +103,7 @@ describe("check-deadcode-unused-files", () => {
     const script = readFileSync(path.resolve("scripts/check-deadcode-unused-files.mjs"), "utf8");
     expect(script).not.toContain("allowlist");
     expect(script).toContain("production and full-tree unused-file checks passed with 0 entries");
-    expect(script).toContain('"config/knip.all-exports.config.ts"');
+    expect(script).toContain('"config/knip.config.ts"');
     expect(script).toContain("result.status !== 0");
   });
 
@@ -220,7 +220,7 @@ Delete the files or model their real entrypoints in Knip.`,
           "--config.minimum-release-age=0",
           "dlx",
           "--package",
-          "knip@6.8.0",
+          "knip@6.29.0",
           "knip",
           "--config",
           "config/knip.config.ts",
@@ -275,7 +275,7 @@ Delete the files or model their real entrypoints in Knip.`,
         "--config.minimum-release-age=0",
         "dlx",
         "--package",
-        "knip@6.8.0",
+        "knip@6.29.0",
         "knip",
         "--config",
         "config/knip.config.ts",
