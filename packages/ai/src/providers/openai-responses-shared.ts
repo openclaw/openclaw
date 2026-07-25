@@ -505,6 +505,10 @@ function resolveResponsesReasoningEffortForPayload<TApi extends Api>(
   return reasoningEffortMap[effort] ?? model.thinkingLevelMap?.[effort] ?? effort;
 }
 
+function supportsResponsesEncryptedReasoningReplay<TApi extends Api>(model: Model<TApi>): boolean {
+  return model.api === "azure-openai-responses" || model.provider === "openai";
+}
+
 export function applyCommonResponsesParams<TApi extends Api>(
   params: ResponseCreateParamsStreaming,
   model: Model<TApi>,
@@ -535,7 +539,7 @@ export function applyCommonResponsesParams<TApi extends Api>(
     const effort = options?.reasoningEffort
       ? resolveResponsesReasoningEffortForPayload(model, options.reasoningEffort)
       : resolveResponsesReasoningEffortForPayload(model, "medium");
-    if (model.provider === "openai") {
+    if (supportsResponsesEncryptedReasoningReplay(model)) {
       params.reasoning = {
         effort: effort as NonNullable<typeof params.reasoning>["effort"],
         summary: options?.reasoningSummary || "auto",
