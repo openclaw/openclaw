@@ -15,7 +15,6 @@ import {
 } from "vitest";
 import type { ChannelMessagingAdapter } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions.js";
 import * as runtimeConfig from "../config/config.js";
 import {
   appendTranscriptMessage,
