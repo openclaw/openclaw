@@ -19,7 +19,7 @@ vi.mock("ws", () => ({
 
 type CreateQQWSClient = typeof import("./ws-client.js").createQQWSClient;
 let createQQWSClient: CreateQQWSClient;
-const qqbotGatewayPayloadLimitBytes = 1024 * 1024;
+const qqbotGatewayPayloadLimitBytes = 16 * 1024 * 1024;
 let priorProxyEnv: Partial<Record<ProxyEnvKey, string | undefined>> = {};
 
 beforeAll(async () => {
