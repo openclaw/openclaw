@@ -54,8 +54,8 @@ export function buildActiveSubagentSystemPromptAddition(params: {
   });
   // Prompt-only bound: keep the newest completed anchors so bursty sequential
   // spawn/finish cycles cannot unbounded-grow later parent turns.
-  const recentForPrompt = [...list.recent]
-    .sort((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0))
+  const recentForPrompt = list.recent
+    .toSorted((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0))
     .slice(0, recentMaxEntries);
   if (list.active.length === 0 && recentForPrompt.length === 0) {
     return undefined;
