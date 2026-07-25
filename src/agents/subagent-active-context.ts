@@ -16,7 +16,7 @@ function quotePromptData(value: string): string {
 }
 
 /** Newest completed children retained in the parent prompt (deterministic cap). */
-export const DEFAULT_RECENT_PROMPT_MAX_ENTRIES = 8;
+const DEFAULT_RECENT_PROMPT_MAX_ENTRIES = 8;
 
 /** Builds the runtime-owned active subagent section appended to the system prompt. */
 export function buildActiveSubagentSystemPromptAddition(params: {
