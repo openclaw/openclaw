@@ -14,6 +14,10 @@ vi.hoisted(() => {
   vi.resetModules();
 });
 
+const providerOAuthMocks = vi.hoisted(() => ({
+  resolveProviderOAuthCredentialWithPlugin: vi.fn(async () => ({ status: "unhandled" as const })),
+}));
+
 vi.mock("../cli-credentials.js", () => ({
   readClaudeCliCredentialsCached: () => null,
   readCodexCliCredentialsCached: () => null,
@@ -25,7 +29,8 @@ vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
   buildProviderAuthDoctorHintWithPlugin: async () => undefined,
   formatProviderAuthProfileApiKeyWithPlugin: async (params: { context?: { access?: string } }) =>
     params.context?.access,
-  resolveProviderOAuthCredentialWithPlugin: async () => ({ status: "unhandled" }),
+  resolveProviderOAuthCredentialWithPlugin:
+    providerOAuthMocks.resolveProviderOAuthCredentialWithPlugin,
 }));
 
 let resolveApiKeyForProfile: typeof import("./oauth.js").resolveApiKeyForProfile;
@@ -121,6 +126,7 @@ beforeAll(loadOAuthModuleForTest);
 
 beforeEach(() => {
   clearRuntimeAuthProfileStoreSnapshots();
+  providerOAuthMocks.resolveProviderOAuthCredentialWithPlugin.mockClear();
   setActiveDegradedSecretOwners([]);
   // SecretRef cases consume the materialized store published by runtime activation.
   setRuntimeAuthProfileStoreSnapshot({
@@ -255,6 +261,71 @@ describe("resolveApiKeyForProfile config compatibility", () => {
       provider: "anthropic",
       email: undefined,
     });
+  });
+});
+
+describe("resolveApiKeyForProfile no-refresh mode", () => {
+  it("returns a still-usable OAuth credential without refreshing", async () => {
+    const profileId = "openai:fresh";
+    await expect(
+      resolveApiKeyForProfile({
+        cfg: cfgFor(profileId, "openai", "oauth"),
+        store: {
+          version: 1,
+          profiles: {
+            [profileId]: {
+              type: "oauth",
+              provider: "openai",
+              access: "fresh-access",
+              refresh: "refresh-token",
+              expires: createUsableOAuthExpiry(),
+            },
+          },
+        },
+        profileId,
+        allowRefresh: false,
+      }),
+    ).resolves.toEqual({
+      apiKey: "fresh-access", // pragma: allowlist secret
+      provider: "openai",
+      email: undefined,
+    });
+    expect(providerOAuthMocks.resolveProviderOAuthCredentialWithPlugin).not.toHaveBeenCalled();
+  });
+
+  it("returns null for expired OAuth without refreshing or falling back", async () => {
+    const profileId = "openai:expired";
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        [profileId]: {
+          type: "oauth",
+          provider: "openai",
+          access: "expired-access",
+          refresh: "refresh-token",
+          expires: Date.now() - 60_000,
+        },
+        "openai:fallback": {
+          type: "oauth",
+          provider: "openai",
+          access: "fallback-access",
+          refresh: "fallback-refresh",
+          expires: createUsableOAuthExpiry(),
+        },
+      },
+      order: { openai: [profileId, "openai:fallback"] },
+    };
+
+    await expect(
+      resolveApiKeyForProfile({
+        cfg: cfgFor(profileId, "openai", "oauth"),
+        store,
+        profileId,
+        allowRefresh: false,
+      }),
+    ).resolves.toBeNull();
+    expect(providerOAuthMocks.resolveProviderOAuthCredentialWithPlugin).not.toHaveBeenCalled();
+    expect(store.profiles[profileId]).toMatchObject({ access: "expired-access" });
   });
 });
 

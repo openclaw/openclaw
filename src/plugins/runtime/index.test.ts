@@ -17,11 +17,15 @@ const runtimeModelAuthMocks = vi.hoisted(() => ({
   getRuntimeAuthForModel: vi.fn(),
   resolveApiKeyForProvider: vi.fn(),
 }));
+const runtimeProviderUsageMocks = vi.hoisted(() => ({
+  readProviderUsageProfileForRuntime: vi.fn(),
+}));
 const sandboxContextMocks = vi.hoisted(() => ({
   resolveSandboxContext: vi.fn(),
 }));
 
 vi.mock("./runtime-model-auth.runtime.js", () => runtimeModelAuthMocks);
+vi.mock("./runtime-provider-usage.runtime.js", () => runtimeProviderUsageMocks);
 vi.mock("../../agents/sandbox/context.js", () => sandboxContextMocks);
 
 import { createPluginRuntime } from "./index.js";
@@ -104,6 +108,7 @@ describe("plugin runtime command execution", () => {
     runtimeModelAuthMocks.getApiKeyForModel.mockReset();
     runtimeModelAuthMocks.getRuntimeAuthForModel.mockReset();
     runtimeModelAuthMocks.resolveApiKeyForProvider.mockReset();
+    runtimeProviderUsageMocks.readProviderUsageProfileForRuntime.mockReset();
     sandboxContextMocks.resolveSandboxContext.mockReset();
     resetConfigRuntimeState();
   });
@@ -397,6 +402,12 @@ describe("plugin runtime command execution", () => {
         ]);
       },
     },
+    {
+      name: "exposes runtime.providerUsage with an exact-profile read helper",
+      assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
+        expectFunctionKeys(runtime.providerUsage, ["read"]);
+      },
+    },
   ] as const)("$name", ({ assert }) => {
     expectRuntimeShape(assert);
   });
@@ -458,6 +469,41 @@ describe("plugin runtime command execution", () => {
       provider: "workspace-cloud",
       cfg,
       workspaceDir: "/tmp/workspace",
+    });
+  });
+
+  it("providerUsage wrapper forwards only the read-only exact-profile contract", async () => {
+    const runtime = createPluginRuntime();
+    runtimeProviderUsageMocks.readProviderUsageProfileForRuntime.mockResolvedValue({
+      provider: "openai",
+      authProfileId: "openai:work",
+      capturedAt: 123,
+      displayName: "OpenAI",
+      windows: [],
+    });
+
+    await expect(
+      runtime.providerUsage.read({
+        providerId: "openai",
+        authProfileId: "openai:work",
+        includeIdentity: false,
+        refreshCredentials: false,
+        timeoutMs: 5_000,
+        agentDir: "/tmp/other-agent",
+        token: "caller-token",
+        fetch: vi.fn(),
+      } as never),
+    ).resolves.toMatchObject({
+      provider: "openai",
+      authProfileId: "openai:work",
+    });
+
+    expect(runtimeProviderUsageMocks.readProviderUsageProfileForRuntime).toHaveBeenCalledWith({
+      providerId: "openai",
+      authProfileId: "openai:work",
+      includeIdentity: false,
+      refreshCredentials: false,
+      timeoutMs: 5_000,
     });
   });
 
