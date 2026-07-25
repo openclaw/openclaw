@@ -231,7 +231,9 @@ describe("readRecentUserAssistantTextForSession grounding", () => {
       const sessionsDir = path.join(tempDir, "agents", "main", "sessions");
       fs.mkdirSync(sessionsDir, { recursive: true });
       const storePath = path.join(sessionsDir, "sessions.json");
-      const sessionKey = "grounding";
+      // Canonical agent-scoped store key: the replay reader resolves lookups
+      // through scopeLegacySessionKeyToAgent, so a bare legacy key would miss.
+      const sessionKey = "agent:main:grounding";
       const sessionId = "grounding-session";
       await replaceSessionEntry(
         { sessionKey, storePath },
@@ -269,6 +271,7 @@ describe("readRecentUserAssistantTextForSession grounding", () => {
       );
 
       const entries = await readRecentUserAssistantTextForSession({
+        agentId: "main",
         sessionKey,
         storePath,
         limit: 10,
