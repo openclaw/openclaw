@@ -72,6 +72,13 @@ function createFixture(
             },
             options: {},
             runAbortController: { signal: { aborted: false, removeEventListener: vi.fn() } },
+            terminalState: {
+              turnSucceeded: false,
+              explicitCancellationObserved: false,
+              explicitCancellationReason: undefined,
+              terminalOutcomeFrozen: false,
+              sharedAbortAllowedAfterTerminalOutcome: false,
+            },
           },
         },
         attemptTools: {
