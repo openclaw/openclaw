@@ -7,6 +7,7 @@ import {
   deleteClawMcpServerRef,
   digestClawMcpServer,
   planClawMcpServerRemoval,
+  portableMcpServerToConfig,
   readClawMcpServerRefs,
   upsertClawMcpServerRef,
   type PersistedClawMcpServerRef,
@@ -145,10 +146,15 @@ export async function applyClawMcpUpdate(
         continue;
       }
 
-      const targetServer = targetManifest.mcpServers[name];
-      if (!targetServer) {
+      const declaredServer = targetManifest.mcpServers[name];
+      if (!declaredServer) {
         throw new ClawMcpUpdateError(`Target MCP declaration ${JSON.stringify(name)} is missing.`);
       }
+      // Convert once at the manifest boundary, same as the add path: the digest
+      // stored below and the config write both have to see canonical
+      // milliseconds, or an update drops the timeout and the stored digest can
+      // never match the config-shaped digest read back on release.
+      const targetServer = portableMcpServerToConfig(declaredServer);
       const targetRef: PersistedClawMcpServerRef = {
         schemaVersion: CLAW_MCP_REF_SCHEMA_VERSION,
         agentId: updatePlan.agentId,
