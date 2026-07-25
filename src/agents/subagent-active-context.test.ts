@@ -2,7 +2,10 @@
 // a parent session which child runs are still in flight.
 import { beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { buildActiveSubagentSystemPromptAddition } from "./subagent-active-context.js";
+import {
+  DEFAULT_RECENT_PROMPT_MAX_ENTRIES,
+  buildActiveSubagentSystemPromptAddition,
+} from "./subagent-active-context.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
@@ -206,5 +209,45 @@ describe("buildActiveSubagentSystemPromptAddition", () => {
 
     expect(prompt).not.toContain("call `sessions_yield`");
     expect(prompt).toContain("wait for runtime completion events");
+  });
+
+  it("caps recently completed prompt entries to the newest subset", () => {
+    const now = Date.now();
+    const total = DEFAULT_RECENT_PROMPT_MAX_ENTRIES + 4;
+    for (let i = 0; i < total; i += 1) {
+      const endedAt = now - (total - i) * 60_000;
+      addSubagentRunForTests({
+        runId: `run-recent-cap-${i}`,
+        childSessionKey: `agent:main:subagent:recent-cap-${i}`,
+        controllerSessionKey: "agent:main:main",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: `finished task ${i}`,
+        taskName: `cap_task_${i}`,
+        cleanup: "keep",
+        createdAt: endedAt - 30_000,
+        startedAt: endedAt - 30_000,
+        endedAt,
+        outcome: { status: "ok" },
+      } satisfies SubagentRunRecord);
+    }
+
+    const prompt = buildActiveSubagentSystemPromptAddition({
+      cfg: {} as OpenClawConfig,
+      controllerSessionKey: "agent:main:main",
+    });
+
+    expect(prompt).toBeDefined();
+    expect(prompt).toContain("## Recently Completed Subagents");
+    expect(prompt).toContain(
+      `Showing the newest ${DEFAULT_RECENT_PROMPT_MAX_ENTRIES} of ${total} completed in-window.`,
+    );
+    // Newest entries (highest i) retained; oldest dropped.
+    // Match with trailing ";" so cap_task_1 does not false-positive on cap_task_10/11.
+    expect(prompt).toContain(`taskName=cap_task_${total - 1};`);
+    expect(prompt).toContain(`taskName=cap_task_${total - DEFAULT_RECENT_PROMPT_MAX_ENTRIES};`);
+    for (const dropped of [0, 1, 2, 3]) {
+      expect(prompt).not.toContain(`taskName=cap_task_${dropped};`);
+    }
   });
 });

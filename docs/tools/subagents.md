@@ -302,6 +302,8 @@ the current child sessions, run ids, statuses, labels, tasks, and
 recent window (default 30 minutes), OpenClaw also injects a
 `Recently Completed Subagents` block with the same quoted fields so later
 turns keep a runtime completion anchor without re-spawning or polling.
+The prompt keeps only the newest 8 completed entries from that window so
+bursty sequential work cannot unbounded-grow later parent turns.
 Neither block replaces the completion announce Result; they are status
 anchors only. The task and label fields in those blocks are quoted as
 data, not instructions, because they can originate from user/model-
