@@ -45,6 +45,24 @@ describe("isPermanentOAuthRefreshFailure", () => {
         new Error("OpenAI Codex token refresh failed (400): refresh_token_reused"),
       ),
     ).toBe(false);
+    // Real OpenAI reused-rotation body (#111827): ends with "Please try
+    // signing in again", which must not win over the reuse classification.
+    expect(
+      isPermanentOAuthRefreshFailure(
+        new Error(
+          '[openai-codex] Token refresh failed: 401 {"error":{"message":"Your refresh token has already been used to generate a new access token. Please try signing in again.","type":"invalid_request_error","code":"refresh_token_reused"}}',
+        ),
+      ),
+    ).toBe(false);
+    // Same wording when only the human-readable message field (no raw code)
+    // reaches the surfaced error text.
+    expect(
+      isPermanentOAuthRefreshFailure(
+        new Error(
+          "OAuth token refresh failed for openai: Your refresh token has already been used to generate a new access token. Please try signing in again.",
+        ),
+      ),
+    ).toBe(false);
     expect(isPermanentOAuthRefreshFailure(new Error("fetch failed: ECONNRESET"))).toBe(false);
     expect(isPermanentOAuthRefreshFailure(undefined)).toBe(false);
     expect(isPermanentOAuthRefreshFailure("invalid_grant")).toBe(false);

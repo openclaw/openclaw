@@ -143,7 +143,15 @@ export function classifyOAuthRefreshFailureReason(
   message: string,
 ): OAuthRefreshFailureReason | null {
   const lower = message.toLowerCase();
-  if (lower.includes("refresh_token_reused")) {
+  // The rotation race also surfaces as prose when the raw code does not leak
+  // into the message, and OpenAI's real wording ends with "Please try signing
+  // in again" (#111827) — match reuse first so the race can never be
+  // tombstoned as a permanent sign_in_again failure.
+  if (
+    lower.includes("refresh_token_reused") ||
+    lower.includes("refresh token has already been used") ||
+    lower.includes("already been used to generate a new access token")
+  ) {
     return "refresh_token_reused";
   }
   if (lower.includes("invalid_grant")) {
