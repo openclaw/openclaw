@@ -12,7 +12,6 @@ import type {
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
-import { resolveOpenAIReasoningEffortMap } from "../transports/openai-reasoning-compat.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import { transportAbortError } from "../transports/transport-stream-shared.js";
 import type {
@@ -500,9 +499,25 @@ export function resolveResponsesReasoningEffort<TApi extends Api>(
 function resolveResponsesReasoningEffortForPayload<TApi extends Api>(
   model: Model<TApi>,
   effort: ModelThinkingLevel,
-): string {
-  const reasoningEffortMap = resolveOpenAIReasoningEffortMap(model);
-  return reasoningEffortMap[effort] ?? model.thinkingLevelMap?.[effort] ?? effort;
+): string | undefined {
+  const thinkingLevelMap = Object.fromEntries(
+    Object.entries(model.thinkingLevelMap ?? {}).filter(
+      (entry): entry is [string, string] => typeof entry[1] === "string",
+    ),
+  );
+  const compat = model.compat as
+    | {
+        reasoningEffortMap?: Record<string, string>;
+      }
+    | undefined;
+  return resolveOpenAIReasoningEffortForModel({
+    model,
+    effort,
+    fallbackMap: {
+      ...thinkingLevelMap,
+      ...compat?.reasoningEffortMap,
+    },
+  });
 }
 
 function supportsResponsesEncryptedReasoningReplay<TApi extends Api>(model: Model<TApi>): boolean {
@@ -539,6 +554,9 @@ export function applyCommonResponsesParams<TApi extends Api>(
     const effort = options?.reasoningEffort
       ? resolveResponsesReasoningEffortForPayload(model, options.reasoningEffort)
       : resolveResponsesReasoningEffortForPayload(model, "medium");
+    if (!effort) {
+      return;
+    }
     if (supportsResponsesEncryptedReasoningReplay(model)) {
       params.reasoning = {
         effort: effort as NonNullable<typeof params.reasoning>["effort"],
@@ -551,11 +569,12 @@ export function applyCommonResponsesParams<TApi extends Api>(
       };
     }
   } else if ((config?.setDefaultReasoningOff ?? true) && model.thinkingLevelMap?.off !== null) {
-    const reasoningEffortMap = resolveOpenAIReasoningEffortMap(model);
-    const offEffort = reasoningEffortMap.off ?? model.thinkingLevelMap?.off ?? "none";
-    params.reasoning = {
-      effort: offEffort as NonNullable<typeof params.reasoning>["effort"],
-    };
+    const effort = resolveResponsesReasoningEffortForPayload(model, "off");
+    if (effort) {
+      params.reasoning = {
+        effort: effort as NonNullable<typeof params.reasoning>["effort"],
+      };
+    }
   }
 }
 

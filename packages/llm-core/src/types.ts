@@ -489,6 +489,12 @@ export interface OpenAICompletionsCompat {
 export interface OpenAIResponsesCompat {
   /** Whether the provider supports the `developer` role (vs `system`). Default: true. */
   supportsDeveloperRole?: boolean;
+  /** Whether the provider accepts a reasoning effort field. Default: inferred from model metadata. */
+  supportsReasoningEffort?: boolean;
+  /** Provider-native reasoning effort values accepted by this model. */
+  supportedReasoningEfforts?: string[];
+  /** Maps canonical reasoning effort names to provider-native values. */
+  reasoningEffortMap?: Record<string, string>;
   /** Whether the model accepts the `temperature` parameter. Default: true. */
   supportsTemperature?: boolean;
   /** Whether to send the OpenAI `session_id` cache-affinity header from `options.sessionId` when caching is enabled. Default: true. */
