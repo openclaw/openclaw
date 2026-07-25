@@ -102,3 +102,37 @@ export function toRelayTabInfo(tab) {
     active: tab.active === true,
   };
 }
+
+const STATE_LABEL = {
+  on: "Connected to OpenClaw",
+  connecting: "Connecting…",
+  error: "Not connected", // real cause is composed by relayStatusLabel() from lastError
+  off: "Not connected",
+};
+
+// Turn the relay socket's close code/reason (from getStatus: { state, relayHost, lastError })
+// into an honest, specific status line instead of always claiming the gateway is down.
+// Kept here (no chrome.* usage) so the close-code → message contract is unit-testable.
+// Distinguishes never-opened (unreachable / rejected handshake) from opened-then-closed
+// (auth/policy or a dropped link), and names the host.
+export function relayStatusLabel(status) {
+  if (status.state !== "error") {
+    return STATE_LABEL[status.state] ?? STATE_LABEL.off;
+  }
+  const host = status.relayHost || "the gateway";
+  const err = status.lastError;
+  const reason = (err?.reason || "").trim();
+  if (err && err.wasOpen) {
+    // 1008 is the only closed close-code that means a policy/auth rejection; match it
+    // exactly rather than sniffing the freeform reason for keywords.
+    if (err.code === 1008) {
+      return `OpenClaw rejected the relay${reason ? ` — ${reason}` : " (not authorized)"}. Unpair, then pair again.`;
+    }
+    return `Relay dropped by ${host}${reason ? ` — ${reason}` : ""}${err.code ? ` (${err.code})` : ""}. Reconnecting…`;
+  }
+  // Never opened: gateway down, wrong URL, browser control off, or the token was rejected
+  // at the handshake — the browser can't tell these apart, so say so plainly.
+  return reason
+    ? `Can't reach the relay at ${host} — ${reason}.`
+    : `Can't reach the relay at ${host}. Check the gateway is up with browser control enabled, or re-pair.`;
+}

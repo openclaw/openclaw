@@ -6,6 +6,7 @@ import {
   nearestGroupColor,
   parsePairingString,
   reconnectDelayMs,
+  relayStatusLabel,
 } from "./relay-core.js";
 
 describe("parsePairingString", () => {
@@ -71,5 +72,71 @@ describe("nearestGroupColor", () => {
   it("falls back to orange for invalid input", () => {
     expect(nearestGroupColor("not-a-color")).toBe("orange");
     expect(nearestGroupColor(undefined)).toBe("orange");
+  });
+});
+
+describe("relayStatusLabel", () => {
+  it("maps non-error states to their fixed labels", () => {
+    expect(relayStatusLabel({ state: "on" })).toBe("Connected to OpenClaw");
+    expect(relayStatusLabel({ state: "connecting" })).toBe("Connecting…");
+    expect(relayStatusLabel({ state: "off" })).toBe("Not connected");
+  });
+
+  it("names the host and lists the real causes for a never-opened failure", () => {
+    expect(
+      relayStatusLabel({
+        state: "error",
+        relayHost: "127.0.0.1:18789",
+        lastError: { wasOpen: false },
+      }),
+    ).toBe(
+      "Can't reach the relay at 127.0.0.1:18789. Check the gateway is up with browser control enabled, or re-pair.",
+    );
+  });
+
+  it("includes a server reason for a never-opened failure when present", () => {
+    expect(
+      relayStatusLabel({
+        state: "error",
+        relayHost: "host:1",
+        lastError: { wasOpen: false, reason: "timed out connecting" },
+      }),
+    ).toBe("Can't reach the relay at host:1 — timed out connecting.");
+  });
+
+  it("treats an opened-then-1008 close as an auth rejection", () => {
+    expect(
+      relayStatusLabel({
+        state: "error",
+        relayHost: "host:1",
+        lastError: { wasOpen: true, code: 1008 },
+      }),
+    ).toContain("Unpair, then pair again.");
+  });
+
+  it("treats a non-1008 opened close as a drop, even with an auth-sounding reason", () => {
+    expect(
+      relayStatusLabel({
+        state: "error",
+        relayHost: "host:1",
+        lastError: { wasOpen: true, code: 4001, reason: "token invalid" },
+      }),
+    ).toBe("Relay dropped by host:1 — token invalid (4001). Reconnecting…");
+  });
+
+  it("reports an opened-then-dropped close as reconnecting, with the code", () => {
+    expect(
+      relayStatusLabel({
+        state: "error",
+        relayHost: "127.0.0.1:18789",
+        lastError: { wasOpen: true, code: 1001, reason: "relay stopped" },
+      }),
+    ).toBe("Relay dropped by 127.0.0.1:18789 — relay stopped (1001). Reconnecting…");
+  });
+
+  it("falls back to 'the gateway' when no relayHost is known", () => {
+    expect(relayStatusLabel({ state: "error", lastError: { wasOpen: false } })).toContain(
+      "Can't reach the relay at the gateway.",
+    );
   });
 });
