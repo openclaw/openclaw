@@ -51,6 +51,8 @@ export type CachedLiveProviderModelRowsParams = FetchLiveProviderModelRowsParams
   ttlMs?: number;
   cacheKeyParts?: readonly unknown[];
   shouldCacheRows?: (rows: readonly unknown[]) => boolean;
+  /** Test hook for deterministic cache expiry. */
+  now?: () => number;
 };
 
 // Live model catalogs are fetched at runtime from provider-controlled endpoints,
@@ -404,6 +406,7 @@ export async function getCachedLiveProviderModelRows(
     ttlMs: params.ttlMs,
     load: async () => await fetchLiveProviderModelRows(params),
     shouldCache: params.shouldCacheRows,
+    now: params.now,
   });
 }
 

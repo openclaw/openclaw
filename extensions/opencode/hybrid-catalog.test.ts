@@ -213,4 +213,158 @@ describe("opencode hybrid catalog", () => {
     expect(resolveHybridDynamicModel("claude-opus-4-8", staticModels)?.id).toBe("claude-opus-4-8");
     expect(resolveHybridDynamicModel("claude-opus-5", staticModels)).toBeUndefined();
   });
+
+  it("does not sticky-cache static seed when gateway IDs are empty and retries fetch", async () => {
+    let gatewayIds: string[] = [];
+    const fetchGuard = vi.fn(async (req: { url: string }) => {
+      if (req.url.includes("models.dev")) {
+        return {
+          response: new Response(JSON.stringify(modelsDevFixture())),
+          finalUrl: req.url,
+          release: vi.fn(async () => undefined),
+        };
+      }
+      return {
+        response: new Response(
+          JSON.stringify({ data: gatewayIds.map((id) => ({ id, object: "model" })) }),
+        ),
+        finalUrl: req.url,
+        release: vi.fn(async () => undefined),
+      };
+    });
+    const args = {
+      apiKey: "k",
+      discoveryApiKey: "d",
+      fetchGuard,
+      fetchModelsDev: async () => modelsDevFixture(),
+      staticModels: buildStaticOpencodeZenProviderConfig().models,
+      gatewayEndpoint: "https://opencode.ai/zen/v1/models",
+      gatewayTimeoutMs: 5_000,
+      openaiBaseUrl: "https://opencode.ai/zen/v1",
+      anthropicBaseUrl: "https://opencode.ai/zen",
+    } as const;
+
+    const empty = await buildOpencodeZenHybridProviderConfig(args);
+    expect(empty.models.map((model) => model.id)).toContain("claude-opus-4-8");
+    const gatewayCallsAfterEmpty = fetchGuard.mock.calls.filter(
+      (call) => !String(call[0]?.url ?? "").includes("models.dev"),
+    ).length;
+    expect(gatewayCallsAfterEmpty).toBe(1);
+
+    gatewayIds = ["claude-opus-5"];
+    const recovered = await buildOpencodeZenHybridProviderConfig(args);
+    const gatewayCallsAfterRecover = fetchGuard.mock.calls.filter(
+      (call) => !String(call[0]?.url ?? "").includes("models.dev"),
+    ).length;
+    expect(gatewayCallsAfterRecover).toBe(2);
+    expect(recovered.models.map((model) => model.id)).toEqual(["claude-opus-5"]);
+  });
+
+  it("refreshes hybrid merge after short hybrid success TTL while models.dev stays sticky", async () => {
+    let now = 1_000;
+    let gatewayIds = ["claude-opus-4-8"];
+    const fetchModelsDev = vi.fn(async () => modelsDevFixture());
+    const fetchGuard = vi.fn(async (req: { url: string }) => {
+      if (req.url.includes("models.dev")) {
+        return {
+          response: new Response(JSON.stringify(modelsDevFixture())),
+          finalUrl: req.url,
+          release: vi.fn(async () => undefined),
+        };
+      }
+      return {
+        response: new Response(
+          JSON.stringify({ data: gatewayIds.map((id) => ({ id, object: "model" })) }),
+        ),
+        finalUrl: req.url,
+        release: vi.fn(async () => undefined),
+      };
+    });
+    const args = {
+      apiKey: "k",
+      discoveryApiKey: "ttl-key",
+      fetchGuard,
+      fetchModelsDev,
+      staticModels: buildStaticOpencodeZenProviderConfig().models,
+      gatewayEndpoint: "https://opencode.ai/zen/v1/models",
+      gatewayTimeoutMs: 5_000,
+      openaiBaseUrl: "https://opencode.ai/zen/v1",
+      anthropicBaseUrl: "https://opencode.ai/zen",
+      now: () => now,
+      gatewayIdsTtlMs: 50,
+      hybridSuccessTtlMs: 50,
+    };
+
+    const first = await buildOpencodeZenHybridProviderConfig(args);
+    expect(first.models.map((model) => model.id)).toEqual(["claude-opus-4-8"]);
+    expect(fetchModelsDev).toHaveBeenCalledTimes(1);
+
+    gatewayIds = ["claude-opus-5"];
+    now = 1_020;
+    const stillCached = await buildOpencodeZenHybridProviderConfig(args);
+    expect(stillCached.models.map((model) => model.id)).toEqual(["claude-opus-4-8"]);
+
+    now = 1_060;
+    const refreshed = await buildOpencodeZenHybridProviderConfig(args);
+    expect(refreshed.models.map((model) => model.id)).toEqual(["claude-opus-5"]);
+    expect(fetchModelsDev).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps resolveHybridDynamicModel scoped to the last successful auth catalog", async () => {
+    const staticModels = buildStaticOpencodeZenProviderConfig().models;
+    const fetchGuardA = gatewayFetchGuard(["claude-opus-5"]);
+    await buildOpencodeZenHybridProviderConfig({
+      apiKey: "runtime-a",
+      discoveryApiKey: "discovery-a",
+      fetchGuard: fetchGuardA,
+      fetchModelsDev: async () => modelsDevFixture(),
+      staticModels,
+      gatewayEndpoint: "https://opencode.ai/zen/v1/models",
+      gatewayTimeoutMs: 5_000,
+      openaiBaseUrl: "https://opencode.ai/zen/v1",
+      anthropicBaseUrl: "https://opencode.ai/zen",
+    });
+    expect(resolveHybridDynamicModel("claude-opus-5", staticModels)?.id).toBe("claude-opus-5");
+
+    const fetchGuardB = gatewayFetchGuard(["gpt-5.6-sol"]);
+    await buildOpencodeZenHybridProviderConfig({
+      apiKey: "runtime-b",
+      discoveryApiKey: "discovery-b",
+      fetchGuard: fetchGuardB,
+      fetchModelsDev: async () => modelsDevFixture(),
+      staticModels,
+      gatewayEndpoint: "https://opencode.ai/zen/v1/models",
+      gatewayTimeoutMs: 5_000,
+      openaiBaseUrl: "https://opencode.ai/zen/v1",
+      anthropicBaseUrl: "https://opencode.ai/zen",
+    });
+    expect(resolveHybridDynamicModel("gpt-5.6-sol", staticModels)?.id).toBe("gpt-5.6-sol");
+    // Last successful catalog wins for unscoped resolve (catalog path sets last auth key).
+    expect(resolveHybridDynamicModel("claude-opus-5", staticModels)).toBeUndefined();
+  });
+
+  it("single-flights parallel hybrid loads for the same discovery key", async () => {
+    const fetchGuard = gatewayFetchGuard(["claude-opus-4-8"]);
+    const fetchModelsDev = vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return modelsDevFixture();
+    });
+    const args = {
+      apiKey: "k",
+      discoveryApiKey: "parallel",
+      fetchGuard,
+      fetchModelsDev,
+      staticModels: buildStaticOpencodeZenProviderConfig().models,
+      gatewayEndpoint: "https://opencode.ai/zen/v1/models",
+      gatewayTimeoutMs: 5_000,
+      openaiBaseUrl: "https://opencode.ai/zen/v1",
+      anthropicBaseUrl: "https://opencode.ai/zen",
+    } as const;
+    const [a, b] = await Promise.all([
+      buildOpencodeZenHybridProviderConfig(args),
+      buildOpencodeZenHybridProviderConfig(args),
+    ]);
+    expect(fetchModelsDev).toHaveBeenCalledTimes(1);
+    expect(a.models.map((model) => model.id)).toEqual(b.models.map((model) => model.id));
+  });
 });

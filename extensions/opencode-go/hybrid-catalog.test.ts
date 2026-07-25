@@ -4,8 +4,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyOpencodeGoPolicyOverlay,
   buildHybridModelDefinitions,
+  buildOpencodeGoHybridProviderConfig,
   clearOpencodeGoHybridCatalogStateForTests,
   parseModelsDevProviderSlice,
+  resolveHybridDynamicModel,
   resolveOpencodeGoFamilyTransport,
 } from "./hybrid-catalog.js";
 import {
@@ -135,12 +137,15 @@ describe("opencode-go hybrid catalog", () => {
       gatewayIds: ["mimo-v2-omni", "mimo-v2-pro", "kimi-k3", "minimax-m3"],
       modelsDev,
       staticModels,
+      providerId: "opencode-go",
       resolveTransport: (modelId) =>
         resolveOpencodeGoFamilyTransport(
           modelId,
           "https://opencode.ai/zen/go/v1",
           "https://opencode.ai/zen/go",
         ),
+      applyPolicyOverlay: applyOpencodeGoPolicyOverlay,
+      skipGatewayIds: new Set(["mimo-v2-omni", "mimo-v2-pro"]),
     });
     expect(hybrid.map((model) => model.id)).toEqual(["kimi-k3", "minimax-m3"]);
     expect(hybrid.find((model) => model.id === "kimi-k3")).toMatchObject({
@@ -194,5 +199,77 @@ describe("opencode-go hybrid catalog", () => {
     expect(offline.models.map((model) => model.id)).toContain("deepseek-v4-pro");
     expect(offline.models.map((model) => model.id)).toContain("minimax-m3");
     expect(offline.models.map((model) => model.id)).not.toContain("mimo-v2-omni");
+  });
+
+  it("does not sticky-cache static seed when gateway IDs are empty and retries fetch", async () => {
+    let gatewayIds: string[] = [];
+    const fetchGuard = vi.fn(async (req: { url: string }) => {
+      if (req.url.includes("models.dev")) {
+        return {
+          response: new Response(JSON.stringify(modelsDevFixture())),
+          finalUrl: req.url,
+          release: vi.fn(async () => undefined),
+        };
+      }
+      return {
+        response: new Response(
+          JSON.stringify({ data: gatewayIds.map((id) => ({ id, object: "model" })) }),
+        ),
+        finalUrl: req.url,
+        release: vi.fn(async () => undefined),
+      };
+    });
+    const args = {
+      apiKey: "k",
+      discoveryApiKey: "go-empty",
+      fetchGuard,
+      fetchModelsDev: async () => modelsDevFixture(),
+      staticModels: buildStaticOpencodeGoProviderConfig().models,
+      gatewayEndpoint: "https://opencode.ai/zen/go/v1/models",
+      gatewayTimeoutMs: 5_000,
+      openaiBaseUrl: "https://opencode.ai/zen/go/v1",
+      anthropicBaseUrl: "https://opencode.ai/zen/go",
+    } as const;
+
+    const empty = await buildOpencodeGoHybridProviderConfig(args);
+    expect(empty.models.map((model) => model.id)).toContain("deepseek-v4-pro");
+
+    gatewayIds = ["kimi-k3"];
+    const recovered = await buildOpencodeGoHybridProviderConfig(args);
+    expect(recovered.models.map((model) => model.id)).toEqual(["kimi-k3"]);
+    const gatewayCalls = fetchGuard.mock.calls.filter(
+      (call) => !String(call[0]?.url ?? "").includes("models.dev"),
+    ).length;
+    expect(gatewayCalls).toBe(2);
+  });
+
+  it("keeps resolveHybridDynamicModel on the last successful auth catalog", async () => {
+    const staticModels = buildStaticOpencodeGoProviderConfig().models;
+    await buildOpencodeGoHybridProviderConfig({
+      apiKey: "a",
+      discoveryApiKey: "go-a",
+      fetchGuard: gatewayFetchGuard(["kimi-k3"]),
+      fetchModelsDev: async () => modelsDevFixture(),
+      staticModels,
+      gatewayEndpoint: "https://opencode.ai/zen/go/v1/models",
+      gatewayTimeoutMs: 5_000,
+      openaiBaseUrl: "https://opencode.ai/zen/go/v1",
+      anthropicBaseUrl: "https://opencode.ai/zen/go",
+    });
+    expect(resolveHybridDynamicModel("kimi-k3", staticModels)?.id).toBe("kimi-k3");
+
+    await buildOpencodeGoHybridProviderConfig({
+      apiKey: "b",
+      discoveryApiKey: "go-b",
+      fetchGuard: gatewayFetchGuard(["minimax-m3"]),
+      fetchModelsDev: async () => modelsDevFixture(),
+      staticModels,
+      gatewayEndpoint: "https://opencode.ai/zen/go/v1/models",
+      gatewayTimeoutMs: 5_000,
+      openaiBaseUrl: "https://opencode.ai/zen/go/v1",
+      anthropicBaseUrl: "https://opencode.ai/zen/go",
+    });
+    expect(resolveHybridDynamicModel("minimax-m3", staticModels)?.id).toBe("minimax-m3");
+    expect(resolveHybridDynamicModel("kimi-k3", staticModels)).toBeUndefined();
   });
 });

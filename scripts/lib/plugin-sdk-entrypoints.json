@@ -265,6 +265,7 @@
   "provider-selection-runtime",
   "plugin-entry",
   "provider-catalog-live-runtime",
+  "provider-catalog-hybrid-runtime",
   "provider-catalog-runtime",
   "provider-catalog-shared",
   "provider-entry",
