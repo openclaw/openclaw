@@ -643,9 +643,10 @@ describe("memory tools", () => {
       await vi.advanceTimersByTimeAsync(15_000);
       const stalledAllResult = await stalledAllResultPromise;
       expectUnavailableMemorySearchDetails(stalledAllResult.details, {
-        error: "memory_search timed out after 15s",
-        warning: "Memory search is unavailable due to an embedding/provider error.",
-        action: "Check embedding provider configuration and retry memory_search.",
+        error: "memory_search timed out after 15s during supplement search",
+        warning: "Memory search hit its request deadline before results were ready.",
+        action:
+          "Retry memory_search shortly; if it keeps timing out, check memory status and run openclaw memory index --force outside the tool deadline.",
       });
 
       const memoryResult = await tool.execute("call_memory_after_stalled_wiki", {
@@ -691,9 +692,10 @@ describe("memory tools", () => {
       await vi.advanceTimersByTimeAsync(15_000);
       const stalledAllResult = await stalledAllResultPromise;
       expectUnavailableMemorySearchDetails(stalledAllResult.details, {
-        error: "memory_search timed out after 15s",
-        warning: "Memory search is unavailable due to an embedding/provider error.",
-        action: "Check embedding provider configuration and retry memory_search.",
+        error: "memory_search timed out after 15s during memory search",
+        warning: "Memory search hit its request deadline before results were ready.",
+        action:
+          "Retry memory_search shortly; if it keeps timing out, check memory status and run openclaw memory index --force outside the tool deadline.",
       });
 
       const wikiOnlyResult = await tool.execute("call_all_after_stalled_memory", {
