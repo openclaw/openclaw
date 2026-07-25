@@ -1324,6 +1324,10 @@
     "./plugin-sdk/provider-catalog-live-runtime": {
       "default": "./dist/plugin-sdk/provider-catalog-live-runtime.js"
     },
+    "./plugin-sdk/provider-catalog-hybrid-runtime": {
+      "types": "./dist/plugin-sdk/provider-catalog-hybrid-runtime.d.ts",
+      "default": "./dist/plugin-sdk/provider-catalog-hybrid-runtime.js"
+    },
     "./plugin-sdk/provider-catalog-runtime": {
       "types": "./dist/plugin-sdk/provider-catalog-runtime.d.ts",
       "default": "./dist/plugin-sdk/provider-catalog-runtime.js"

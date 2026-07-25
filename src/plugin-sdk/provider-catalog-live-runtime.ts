@@ -65,6 +65,8 @@ export type CachedLiveProviderModelRowsParams = FetchLiveProviderModelRowsParams
   ttlMs?: number;
   cacheKeyParts?: readonly unknown[];
   shouldCacheRows?: (rows: readonly unknown[]) => boolean;
+  /** Test hook for deterministic cache expiry. */
+  now?: () => number;
 };
 
 export type LiveModelRowProjection<T extends ModelDefinitionConfig = ModelDefinitionConfig> = (
@@ -430,6 +432,7 @@ export async function getCachedLiveProviderModelRows(
     ttlMs: params.ttlMs,
     load: async () => await fetchLiveProviderModelRows(params),
     shouldCache: params.shouldCacheRows,
+    now: params.now,
   });
 }
 
