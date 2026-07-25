@@ -358,6 +358,46 @@ describe("Responses reasoning effort", () => {
 describe("convertResponsesMessages", () => {
   const allowedToolCallProviders = testAllowedToolCallProviders;
 
+  it("drops transient reasoning items from persisted transcripts", () => {
+    const assistantMessage = createAssistantOutput();
+    assistantMessage.content = [
+      {
+        type: "thinking",
+        thinking: "Internal summary",
+        thinkingSignature: JSON.stringify({
+          type: "reasoning",
+          id: "rs_tmp_123",
+          encrypted_content: "transient-ciphertext",
+          summary: [],
+        }),
+      },
+      {
+        type: "text",
+        text: "Done.",
+        textSignature: JSON.stringify({ v: 1, id: "msg_done", phase: "final_answer" }),
+      },
+    ];
+
+    const input = convertResponsesMessages(
+      nativeOpenAIModel,
+      {
+        systemPrompt: "system",
+        messages: [assistantMessage],
+      },
+      allowedToolCallProviders,
+      { includeSystemPrompt: false },
+    );
+
+    expect(input.some((item) => item.type === "reasoning")).toBe(false);
+    expect(input).toMatchObject([
+      {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "Done." }],
+      },
+    ]);
+  });
+
   it("adds explicit message item types for system and user input items", () => {
     const input = convertResponsesMessages(
       nativeOpenAIModel,
@@ -1039,6 +1079,38 @@ describe("processResponsesStream", () => {
       ["thinking_end", 1],
       ["thinking_end", 0],
     ]);
+  });
+
+  it("does not persist transient reasoning items from stream output", async () => {
+    const output = createAssistantOutput();
+    const { stream } = createCapturedAssistantMessageEventStream();
+
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: { type: "reasoning", id: "rs_tmp_123", summary: [] },
+        },
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          item: {
+            type: "reasoning",
+            id: "rs_tmp_123",
+            summary: [{ type: "summary_text", text: "Still working." }],
+            encrypted_content: "transient-ciphertext",
+          },
+        },
+        { type: "response.completed", response: { id: "resp_reasoning", status: "completed" } },
+      ]),
+      output,
+      stream,
+      nativeOpenAIModel,
+    );
+
+    expect(output.content).toMatchObject([{ type: "thinking", thinking: "Still working." }]);
+    expect(output.content[0]).not.toHaveProperty("thinkingSignature");
   });
 
   it("preserves reasoning while a tool call streams on another output index", async () => {

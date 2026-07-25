@@ -12,6 +12,7 @@ import {
   stripSystemPromptCacheBoundary,
 } from "../internal/shared.js";
 import { shortHash } from "../utils/hash.js";
+import { isTransientOpenAIResponsesReasoningItem } from "../utils/openai-responses-reasoning.js";
 import { transformTransportMessages } from "./host-policy.js";
 import type { createOpenAIResponsesClient } from "./openai-responses-client.js";
 import {
@@ -436,6 +437,9 @@ export function convertResponsesMessages(
             const reasoningItem = JSON.parse(
               block.thinkingSignature,
             ) as ReplayableResponseReasoningItem;
+            if (isTransientOpenAIResponsesReasoningItem(reasoningItem)) {
+              continue;
+            }
             const replayableReasoningItem = prepareOpenAIResponsesReasoningItemForReplay(
               reasoningItem,
               replayContext,

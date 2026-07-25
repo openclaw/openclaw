@@ -31,6 +31,7 @@ import type { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { shortHash } from "../utils/hash.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
+import { isTransientOpenAIResponsesReasoningItem } from "../utils/openai-responses-reasoning.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import {
   createFirstStreamEventAbortController,
@@ -384,8 +385,14 @@ export function convertResponsesMessages<TApi extends Api>(
       for (const block of msg.content) {
         if (block.type === "thinking") {
           if (block.thinkingSignature) {
+            const storedReasoningItem = JSON.parse(
+              block.thinkingSignature,
+            ) as ReplayableResponseReasoningItem;
+            if (isTransientOpenAIResponsesReasoningItem(storedReasoningItem)) {
+              continue;
+            }
             const reasoningItem = normalizeResponsesReasoningReplayItem({
-              item: JSON.parse(block.thinkingSignature) as ReplayableResponseReasoningItem,
+              item: storedReasoningItem,
               replayResponsesItemIds: shouldReplayResponsesItemIds,
             });
             output.push(reasoningItem as ResponseInputItem);
@@ -1220,9 +1227,12 @@ export async function processResponsesStream<TApi extends Api>(
       if (item.type === "reasoning" && outputSlot?.type === "thinking") {
         const summaryText = item.summary?.map((s) => s.text).join("\n\n") || "";
         const contentText = item.content?.map((c) => c.text).join("\n\n") || "";
+        const isTransientReasoningItem = isTransientOpenAIResponsesReasoningItem(item);
         outputSlot.block.thinking = summaryText || contentText || outputSlot.block.thinking;
-        outputSlot.block.thinkingSignature = JSON.stringify(item);
-        if (typeof item.id === "string") {
+        if (!isTransientReasoningItem) {
+          outputSlot.block.thinkingSignature = JSON.stringify(item);
+        }
+        if (typeof item.id === "string" && !isTransientReasoningItem) {
           reasoningBlocksById.set(item.id, outputSlot.block);
         }
         stream.push({

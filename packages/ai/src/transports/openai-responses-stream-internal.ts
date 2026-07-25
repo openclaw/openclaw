@@ -11,6 +11,7 @@ import {
   type ResponsesToolCallState,
 } from "../internal/openai.js";
 import { withFirstStreamEventTimeout, parseStreamingJson } from "../internal/runtime.js";
+import { isTransientOpenAIResponsesReasoningItem } from "../utils/openai-responses-reasoning.js";
 import { emitModelTransportDebug, resolveModelSseDebugMode } from "./model-transport-debug.js";
 import { OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY } from "./openai-responses-contracts.js";
 import {
@@ -387,9 +388,12 @@ export async function processResponsesStream(
               })
               .join("\n\n")
           : "";
+        const isTransientReasoningItem = isTransientOpenAIResponsesReasoningItem(item);
         currentBlock.thinking = summary;
-        currentBlock.thinkingSignature = JSON.stringify(item);
-        if ("encrypted_content" in item) {
+        if (!isTransientReasoningItem) {
+          currentBlock.thinkingSignature = JSON.stringify(item);
+        }
+        if ("encrypted_content" in item && !isTransientReasoningItem) {
           currentBlock[OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY] =
             buildOpenAIResponsesReasoningReplayMetadata(model, {
               authProfileId: options?.authProfileId,
