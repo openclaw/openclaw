@@ -20,18 +20,18 @@ describe("parseModelCallbackData", () => {
       ["mdl_list_anthropic_2", { type: "list", provider: "anthropic", page: 2 }],
       ["mdl_list_open-ai_1", { type: "list", provider: "open-ai", page: 1 }],
       ["mdl_list_hf.co_1", { type: "list", provider: "hf.co", page: 1 }],
+      // Index-based select format (#98221)
       [
-        "mdl_sel_anthropic/claude-sonnet-4-5",
-        { type: "select", provider: "anthropic", model: "claude-sonnet-4-5" },
-      ],
-      ["mdl_sel_openai/gpt-4/turbo", { type: "select", provider: "openai", model: "gpt-4/turbo" }],
-      [
-        "mdl_sel/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
-        { type: "select", model: "us.anthropic.claude-3-5-sonnet-20240620-v1:0" },
+        "mdl_sel_anthropic_1_1_2",
+        { type: "select", provider: "anthropic", page: 1, modelIndex: 1, totalCount: 2 },
       ],
       [
-        "mdl_sel/anthropic/claude-3-7-sonnet",
-        { type: "select", model: "anthropic/claude-3-7-sonnet" },
+        "mdl_sel_openai_2_5_8",
+        { type: "select", provider: "openai", page: 2, modelIndex: 5, totalCount: 8 },
+      ],
+      [
+        "mdl_sel_hf.co_1_12_42",
+        { type: "select", provider: "hf.co", page: 1, modelIndex: 12, totalCount: 42 },
       ],
       ["  mdl_prov  ", { type: "providers" }],
     ] as const;
@@ -49,7 +49,7 @@ describe("parseModelCallbackData", () => {
       "mdl_list_",
       "mdl_list_openai_9007199254740993",
       "mdl_sel_noslash",
-      "mdl_sel/",
+      "mdl_sel_",
     ];
     for (const input of invalid) {
       expect(parseModelCallbackData(input), input).toBeNull();
@@ -58,9 +58,9 @@ describe("parseModelCallbackData", () => {
 });
 
 describe("resolveModelSelection", () => {
-  it("returns explicit provider selections unchanged", () => {
+  it("resolves by provider and modelIndex from sorted models", () => {
     const result = resolveModelSelection({
-      callback: { type: "select", provider: "openai", model: "gpt-4.1" },
+      callback: { type: "select", provider: "openai", page: 1, modelIndex: 1, totalCount: 1 },
       providers: ["openai", "anthropic"],
       byProvider: new Map([
         ["openai", new Set(["gpt-4.1"])],
@@ -70,63 +70,121 @@ describe("resolveModelSelection", () => {
     expect(result).toEqual({ kind: "resolved", provider: "openai", model: "gpt-4.1" });
   });
 
-  it("resolves compact callbacks when exactly one provider matches", () => {
+  it("resolves by index into correctly sorted models", () => {
+    // Models are sorted alphabetically: claude-opus-4, claude-sonnet-4
     const result = resolveModelSelection({
-      callback: { type: "select", model: "shared" },
-      providers: ["openai", "anthropic"],
-      byProvider: new Map([
-        ["openai", new Set(["shared"])],
-        ["anthropic", new Set(["other"])],
-      ]),
+      callback: { type: "select", provider: "anthropic", page: 1, modelIndex: 2, totalCount: 2 },
+      providers: ["anthropic"],
+      byProvider: new Map([["anthropic", new Set(["claude-sonnet-4", "claude-opus-4"])]]),
     });
-    expect(result).toEqual({ kind: "resolved", provider: "openai", model: "shared" });
+    expect(result).toEqual({ kind: "resolved", provider: "anthropic", model: "claude-sonnet-4" });
   });
 
-  it("returns ambiguous result when zero or multiple providers match", () => {
-    const sharedByBoth = resolveModelSelection({
-      callback: { type: "select", model: "shared" },
-      providers: ["openai", "anthropic"],
-      byProvider: new Map([
-        ["openai", new Set(["shared"])],
-        ["anthropic", new Set(["shared"])],
-      ]),
+  it("returns ambiguous when totalCount differs (stale button guard)", () => {
+    const result = resolveModelSelection({
+      callback: { type: "select", provider: "openai", page: 1, modelIndex: 1, totalCount: 5 },
+      providers: ["openai"],
+      byProvider: new Map([["openai", new Set(["gpt-4.1"])]]),
     });
-    expect(sharedByBoth).toEqual({
-      kind: "ambiguous",
-      model: "shared",
-      matchingProviders: ["openai", "anthropic"],
-    });
+    expect(result.kind).toBe("ambiguous");
+  });
 
-    const missingEverywhere = resolveModelSelection({
-      callback: { type: "select", model: "missing" },
+  it("rejects stale fingerprinted callback on same-count different-model list (#98221)", () => {
+    // ["a", "bc"] and ["ab", "c"] have the same concatenated character
+    // stream but different models. The delimiter in the fingerprint must
+    // distinguish them so a button from the first list is rejected when
+    // the provider's models change to the second list.
+    const modelsA = new Set(["a", "bc"]);
+    const result = resolveModelSelection({
+      callback: {
+        type: "select",
+        provider: "p",
+        page: 1,
+        modelIndex: 1,
+        totalCount: 2,
+        fingerprint: "dead",
+      },
+      providers: ["p"],
+      byProvider: new Map([["p", modelsA]]),
+    });
+    // Real fingerprint of modelsA ≠ "dead" → rejected as stale
+    expect(result.kind).toBe("ambiguous");
+  });
+
+  it("returns ambiguous result when provider has no models", () => {
+    const result = resolveModelSelection({
+      callback: { type: "select", provider: "missing", page: 1, modelIndex: 1, totalCount: 0 },
       providers: ["openai", "anthropic"],
-      byProvider: new Map([
-        ["openai", new Set(["gpt-4.1"])],
-        ["anthropic", new Set(["claude-sonnet-4-5"])],
-      ]),
+      byProvider: new Map([["openai", new Set(["gpt-4.1"])]]),
     });
-    expect(missingEverywhere).toEqual({
-      kind: "ambiguous",
-      model: "missing",
-      matchingProviders: [],
+    expect(result).toMatchObject({ kind: "ambiguous", matchingProviders: ["openai", "anthropic"] });
+  });
+
+  it("returns ambiguous result when modelIndex is out of range", () => {
+    const result = resolveModelSelection({
+      callback: { type: "select", provider: "openai", page: 1, modelIndex: 99, totalCount: 1 },
+      providers: ["openai", "anthropic"],
+      byProvider: new Map([["openai", new Set(["gpt-4.1"])]]),
     });
+    expect(result.kind).toBe("ambiguous");
   });
 });
 
 describe("buildModelSelectionCallbackData", () => {
-  it("uses standard callback when under limit and compact callback when needed", () => {
-    expect(buildModelSelectionCallbackData({ provider: "openai", model: "gpt-4.1" })).toBe(
-      "mdl_sel_openai/gpt-4.1",
-    );
-    const longModel = "us.anthropic.claude-3-5-sonnet-20240620-v1:0";
-    expect(buildModelSelectionCallbackData({ provider: "amazon-bedrock", model: longModel })).toBe(
-      `mdl_sel/${longModel}`,
-    );
+  it("builds fixed-length index-based callback with fingerprint (#98221)", () => {
+    const models5 = ["gpt-4", "gpt-4.1", "gpt-5", "claude-3", "gemini-2"];
+    const cb1 = buildModelSelectionCallbackData({
+      provider: "openai",
+      page: 1,
+      modelIndex: 1,
+      totalCount: 5,
+      models: models5,
+    });
+    expect(cb1).toMatch(/^mdl_sel_openai_1_1_5_[a-f0-9]{4}$/);
+    const models42 = Array.from({ length: 42 }, (_, i) => `model-${i}`);
+    const cb2 = buildModelSelectionCallbackData({
+      provider: "anthropic",
+      page: 3,
+      modelIndex: 12,
+      totalCount: 42,
+      models: models42,
+    });
+    expect(cb2).toMatch(/^mdl_sel_anthropic_3_12_42_[a-f0-9]{4}$/);
+    // Never embeds model name — always fits 64 bytes
+    const cb3 = buildModelSelectionCallbackData({
+      provider: "a",
+      page: 1,
+      modelIndex: 1,
+      totalCount: 1,
+      models: ["x"],
+    });
+    expect(cb3.length).toBeLessThan(64);
   });
+});
 
-  it("returns null when even compact callback exceeds Telegram limit", () => {
-    const tooLongModel = "x".repeat(80);
-    expect(buildModelSelectionCallbackData({ provider: "openai", model: tooLongModel })).toBeNull();
+describe("fingerprint delimiter disambiguation (#98221)", () => {
+  it("produces different callback_data for same-character-stream model lists", () => {
+    // ["a", "bc"] and ["ab", "c"] both concatenate to "abc" but represent
+    // different model sets. The delimiter in computeModelListFingerprint
+    // must produce different fingerprints for these two lists.
+    const cb1 = buildModelSelectionCallbackData({
+      provider: "p",
+      page: 1,
+      modelIndex: 1,
+      totalCount: 2,
+      models: ["a", "bc"],
+    });
+    const cb2 = buildModelSelectionCallbackData({
+      provider: "p",
+      page: 1,
+      modelIndex: 1,
+      totalCount: 2,
+      models: ["ab", "c"],
+    });
+    expect(cb1).not.toBe(cb2);
+    // Both still under 64 bytes
+    expect(Buffer.byteLength(cb1, "utf8")).toBeLessThanOrEqual(64);
+    expect(Buffer.byteLength(cb2, "utf8")).toBeLessThanOrEqual(64);
   });
 });
 
@@ -225,8 +283,9 @@ describe("buildModelsKeyboard", () => {
       // 2 model rows + back button
       expect(result, testCase.name).toHaveLength(3);
       expect(result[0]?.[0]?.text).toBe(testCase.firstText);
-      expect(result[0]?.[0]?.callback_data).toBe("mdl_sel_anthropic/claude-sonnet-4");
+      expect(result[0]?.[0]?.callback_data).toMatch(/^mdl_sel_anthropic_1_1_2_[a-f0-9]{4}$/);
       expect(result[1]?.[0]?.text).toBe("claude-opus-4");
+      expect(result[1]?.[0]?.callback_data).toMatch(/^mdl_sel_anthropic_1_2_2_[a-f0-9]{4}$/);
       expect(result[2]?.[0]?.text).toBe("<< Back");
     }
   });
@@ -247,10 +306,8 @@ describe("buildModelsKeyboard", () => {
     expect(result).toHaveLength(3);
     expect(result[0]?.[0]?.text).toBe("Claude Sonnet 4");
     expect(result[1]?.[0]?.text).toBe("Claude Opus 4");
-    // callback_data still uses the raw model ID, not the display name
-    expect(result[0]?.[0]?.callback_data).toBe(
-      "mdl_sel_nexos/a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-    );
+    // callback_data uses index format, not model ID (#98221)
+    expect(result[0]?.[0]?.callback_data).toMatch(/^mdl_sel_nexos_1_1_2_[a-f0-9]{4}$/);
   });
 
   it("falls back to model ID when modelNames does not contain an entry", () => {
@@ -423,18 +480,6 @@ describe("buildModelsKeyboard", () => {
       expect(result[0]?.[0]?.text, testCase.name).toBe(`…${"b".repeat(36)}`);
     }
   });
-
-  it("uses compact selection callback when provider/model callback exceeds 64 bytes", () => {
-    const model = "us.anthropic.claude-3-5-sonnet-20240620-v1:0";
-    const result = buildModelsKeyboard({
-      provider: "amazon-bedrock",
-      models: [model],
-      currentPage: 1,
-      totalPages: 1,
-    });
-
-    expect(result[0]?.[0]?.callback_data).toBe(`mdl_sel/${model}`);
-  });
 });
 
 describe("buildBrowseProvidersButton", () => {
@@ -473,9 +518,8 @@ describe("large model lists (OpenRouter-scale)", () => {
   it("handles 100+ models with pagination", () => {
     const models = Array.from({ length: 150 }, (_, i) => `model-${i}`);
     const totalPages = calculateTotalPages(models.length);
-    expect(totalPages).toBe(19); // 150 / 8 = 18.75 -> 19 pages
+    expect(totalPages).toBe(19);
 
-    // Test first page
     const firstPage = buildModelsKeyboard({
       provider: "openrouter",
       models,
@@ -486,20 +530,18 @@ describe("large model lists (OpenRouter-scale)", () => {
     expect(firstPage[0]?.[0]?.text).toBe("model-0");
     expect(firstPage[7]?.[0]?.text).toBe("model-7");
 
-    // Test last page
     const lastPage = buildModelsKeyboard({
       provider: "openrouter",
       models,
       currentPage: 19,
       totalPages,
     });
-    // Last page has 150 - (18 * 8) = 6 models
     expect(lastPage.length).toBe(8); // 6 models + pagination + back
     expect(lastPage[0]?.[0]?.text).toBe("model-144");
   });
 
-  it("all callback_data stays within 64-byte limit", () => {
-    // Realistic OpenRouter model IDs
+  it("all callback_data stays within 64-byte limit (#98221)", () => {
+    // Realistic model IDs — all should create valid callbacks now
     const models = [
       "anthropic/claude-3-5-sonnet-20241022",
       "google/gemini-2.0-flash-thinking-exp:free",
@@ -522,23 +564,29 @@ describe("large model lists (OpenRouter-scale)", () => {
     }
   });
 
-  it("skips models that would exceed callback_data limit", () => {
-    const models = [
-      "short-model",
-      "this-is-an-extremely-long-model-name-that-definitely-exceeds-the-sixty-four-byte-limit",
-      "another-short",
-    ];
+  it("never drops models due to callback_data limit (#98221)", () => {
+    // The exact scenario from the bug report
+    const longModel = "xentriom/gemma-4-12B-agentic-fable5-composer2.5-v2:latest";
+    const models = ["short-model-1", longModel, "short-model-2"];
     const result = buildModelsKeyboard({
-      provider: "openrouter",
+      provider: "ollama",
       models,
       currentPage: 1,
       totalPages: 1,
     });
 
-    // Should have 2 model buttons (skipping the long one) + back
+    // All 3 models should appear (no silent drops)
     const modelButtons = result.filter((row) => !row[0]?.callback_data.startsWith("mdl_back"));
-    expect(modelButtons.length).toBe(2);
-    expect(modelButtons[0]?.[0]?.text).toBe("short-model");
-    expect(modelButtons[1]?.[0]?.text).toBe("another-short");
+    expect(modelButtons.length).toBe(3);
+    expect(modelButtons[0]?.[0]?.text).toBe("short-model-1");
+    expect(modelButtons[1]?.[0]?.text).toBe("…-agentic-fable5-composer2.5-v2:latest");
+    expect(modelButtons[2]?.[0]?.text).toBe("short-model-2");
+
+    // All callback_data is under 64 bytes
+    for (const row of result) {
+      for (const button of row) {
+        expect(Buffer.byteLength(button.callback_data, "utf8")).toBeLessThanOrEqual(64);
+      }
+    }
   });
 });
