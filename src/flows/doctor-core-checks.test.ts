@@ -577,15 +577,16 @@ describe("CORE_HEALTH_CHECKS", () => {
   });
 
   it("converts security doctor warnings into health findings", async () => {
+    const collectSecurityWarnings = vi.fn(async (): Promise<readonly string[]> => {
+      return [
+        '- CRITICAL: Gateway bound to "lan" (0.0.0.0) without authentication.',
+        '- WARNING: Gateway bound to "lan" (0.0.0.0).',
+      ];
+    });
     const check = getCheck(
       createCoreHealthChecks(
         createDeps({
-          async collectSecurityWarnings(): Promise<readonly string[]> {
-            return [
-              '- CRITICAL: Gateway bound to "lan" (0.0.0.0) without authentication.',
-              '- WARNING: Gateway bound to "lan" (0.0.0.0).',
-            ];
-          },
+          collectSecurityWarnings,
         }),
       ),
       "core/doctor/security",
@@ -602,6 +603,11 @@ describe("CORE_HEALTH_CHECKS", () => {
           },
         },
       },
+      allowExecSecretRefs: true,
+    });
+
+    expect(collectSecurityWarnings).toHaveBeenCalledWith(expect.any(Object), {
+      allowExecSecretRefs: true,
     });
 
     expect(findings).toContainEqual(

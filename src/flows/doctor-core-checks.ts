@@ -71,7 +71,10 @@ const loadDoctorWorkspaceModule = async () => await import("../commands/doctor-w
 
 export type CoreHealthCheckDeps = {
   readonly detectUnavailableSkills: (cfg: OpenClawConfig) => Promise<readonly SkillStatusEntry[]>;
-  readonly collectSecurityWarnings: (cfg: OpenClawConfig) => Promise<readonly string[]>;
+  readonly collectSecurityWarnings: (
+    cfg: OpenClawConfig,
+    options?: { allowExecSecretRefs?: boolean },
+  ) => Promise<readonly string[]>;
   readonly collectWorkspaceSuggestionNotes: (workspaceDir: string) => Promise<readonly string[]>;
   readonly collectRuntimeToolSchemaFindings: (
     ctx: HealthCheckContext,
@@ -96,9 +99,12 @@ async function detectUnavailableSkillsWithRuntime(
   return runtime.detectUnavailableSkills(cfg);
 }
 
-async function collectSecurityWarningsWithRuntime(cfg: OpenClawConfig): Promise<readonly string[]> {
+async function collectSecurityWarningsWithRuntime(
+  cfg: OpenClawConfig,
+  options?: { allowExecSecretRefs?: boolean },
+): Promise<readonly string[]> {
   const { collectSecurityWarnings } = await import("../commands/doctor-security.js");
-  return collectSecurityWarnings(cfg);
+  return collectSecurityWarnings(cfg, process.env, options);
 }
 
 async function collectWorkspaceSuggestionNotesWithRuntime(
@@ -737,7 +743,9 @@ function createSecurityCheck(deps: CoreHealthCheckDeps): HealthCheck {
     description: "Security posture checks produce structured findings.",
     source: "doctor",
     async detect(ctx) {
-      const warnings = await deps.collectSecurityWarnings(ctx.cfg);
+      const warnings = await deps.collectSecurityWarnings(ctx.cfg, {
+        allowExecSecretRefs: ctx.allowExecSecretRefs,
+      });
       return warnings.map((warning) =>
         noteTextToFinding({
           checkId: "core/doctor/security",
