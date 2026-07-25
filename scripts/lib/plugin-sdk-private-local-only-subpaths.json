@@ -105,6 +105,7 @@
   "provider-auth-login-flow-runtime",
   "provider-auth-result",
   "provider-auth-runtime",
+  "provider-catalog-hybrid-runtime",
   "provider-catalog-live-runtime",
   "provider-catalog-shared",
   "provider-entry",

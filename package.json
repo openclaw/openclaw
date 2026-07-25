@@ -150,6 +150,7 @@
     "!dist/plugin-sdk/provider-auth-login-flow-runtime.d.ts",
     "!dist/plugin-sdk/provider-auth-result.d.ts",
     "!dist/plugin-sdk/provider-auth-runtime.d.ts",
+    "!dist/plugin-sdk/provider-catalog-hybrid-runtime.d.ts",
     "!dist/plugin-sdk/provider-catalog-live-runtime.d.ts",
     "!dist/plugin-sdk/provider-catalog-shared.d.ts",
     "!dist/plugin-sdk/provider-entry.d.ts",
@@ -1325,7 +1326,6 @@
       "default": "./dist/plugin-sdk/provider-catalog-live-runtime.js"
     },
     "./plugin-sdk/provider-catalog-hybrid-runtime": {
-      "types": "./dist/plugin-sdk/provider-catalog-hybrid-runtime.d.ts",
       "default": "./dist/plugin-sdk/provider-catalog-hybrid-runtime.js"
     },
     "./plugin-sdk/provider-catalog-runtime": {
