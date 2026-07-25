@@ -9,6 +9,7 @@ import { NON_ENV_SECRETREF_MARKER } from "openclaw/plugin-sdk/provider-auth-runt
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { expectPassthroughReplayPolicy } from "openclaw/plugin-sdk/provider-test-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { clearOpencodeGoHybridCatalogStateForTests } from "./hybrid-catalog.js";
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
@@ -76,6 +77,7 @@ function expectDeepSeekV4ThinkingLevels(model: ProviderRuntimeModel) {
 describe("opencode-go provider plugin", () => {
   beforeEach(() => {
     clearLiveCatalogCacheForTests();
+    clearOpencodeGoHybridCatalogStateForTests();
   });
 
   it("registers image media understanding through the OpenCode Go plugin", async () => {
@@ -349,15 +351,27 @@ describe("opencode-go provider plugin", () => {
     expect(staticModelIds).toEqual(expect.arrayContaining(activeModelIds));
     expect(staticModelIds).toEqual(expect.not.arrayContaining(deprecatedModelIds));
 
-    const fetchGuard = vi.fn(async () => ({
-      response: new Response(
-        JSON.stringify({
-          data: [...deprecatedModelIds, ...activeModelIds].map((id) => ({ id, object: "model" })),
-        }),
-      ),
-      finalUrl: "https://opencode.ai/zen/go/v1/models",
-      release: vi.fn(async () => undefined),
-    }));
+    const fetchGuard = vi.fn(async (req: { url: string }) => {
+      if (req.url.includes("models.dev")) {
+        return {
+          response: new Response(JSON.stringify({ "opencode-go": { models: {} } })),
+          finalUrl: req.url,
+          release: vi.fn(async () => undefined),
+        };
+      }
+      return {
+        response: new Response(
+          JSON.stringify({
+            data: [...deprecatedModelIds, ...activeModelIds].map((id) => ({
+              id,
+              object: "model",
+            })),
+          }),
+        ),
+        finalUrl: "https://opencode.ai/zen/go/v1/models",
+        release: vi.fn(async () => undefined),
+      };
+    });
     const live = await buildOpencodeGoLiveProviderConfig({
       discoveryApiKey: "resolved-opencode-key",
       fetchGuard,
@@ -399,19 +413,28 @@ describe("opencode-go provider plugin", () => {
   });
 
   it("uses cached live OpenCode Go discovery and falls back to static rows on failure", async () => {
-    const fetchGuard = vi.fn(async () => ({
-      response: new Response(
-        JSON.stringify({
-          data: [
-            { id: "minimax-m3", object: "model" },
-            { id: "qwen3.7-max", object: "model" },
-            { id: "qwen3.7-plus", object: "model" },
-          ],
-        }),
-      ),
-      finalUrl: "https://opencode.ai/zen/go/v1/models",
-      release: vi.fn(async () => undefined),
-    }));
+    const fetchGuard = vi.fn(async (req: { url: string }) => {
+      if (req.url.includes("models.dev")) {
+        return {
+          response: new Response(JSON.stringify({ "opencode-go": { models: {} } })),
+          finalUrl: req.url,
+          release: vi.fn(async () => undefined),
+        };
+      }
+      return {
+        response: new Response(
+          JSON.stringify({
+            data: [
+              { id: "minimax-m3", object: "model" },
+              { id: "qwen3.7-max", object: "model" },
+              { id: "qwen3.7-plus", object: "model" },
+            ],
+          }),
+        ),
+        finalUrl: "https://opencode.ai/zen/go/v1/models",
+        release: vi.fn(async () => undefined),
+      };
+    });
 
     const first = await buildOpencodeGoLiveProviderConfig({
       apiKey: "OPENCODE_API_KEY",
@@ -424,7 +447,8 @@ describe("opencode-go provider plugin", () => {
       fetchGuard,
     });
 
-    expect(fetchGuard).toHaveBeenCalledTimes(1);
+    // Hybrid catalog fetches gateway IDs + models.dev (process sticky after success).
+    expect(fetchGuard).toHaveBeenCalledTimes(2);
     expect(first.apiKey).toBe("OPENCODE_API_KEY");
     expect(first.models.map((model) => model.id)).toEqual([
       "minimax-m3",
@@ -438,6 +462,7 @@ describe("opencode-go provider plugin", () => {
     ]);
 
     clearLiveCatalogCacheForTests();
+    clearOpencodeGoHybridCatalogStateForTests();
     fetchGuard.mockRejectedValueOnce(new Error("network unavailable"));
     const fallback = await buildOpencodeGoLiveProviderConfig({
       apiKey: "OPENCODE_API_KEY",

@@ -1,15 +1,16 @@
 // Opencode Go provider module implements model/runtime integration.
 import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  buildLiveModelProviderConfig,
-  type LiveModelCatalogFetchGuard,
-} from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import type { LiveModelCatalogFetchGuard } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  buildOpencodeGoHybridProviderConfig,
+  resolveHybridDynamicModel,
+} from "./hybrid-catalog.js";
 
 const PROVIDER_ID = "opencode-go";
 
@@ -22,7 +23,6 @@ const OPENCODE_GO_KIMI_NO_REASONING_MODEL_IDS = new Set([
 ]);
 const OPENCODE_GO_MODELS_ENDPOINT = "https://opencode.ai/zen/go/v1/models";
 const OPENCODE_GO_MODELS_TIMEOUT_MS = 5_000;
-const OPENCODE_GO_MODELS_CACHE_TTL_MS = 60_000;
 // OpenCode Go exposes only high/max provider effort for DeepSeek V4. Lower
 // OpenClaw levels retain their existing high-effort behavior.
 const OPENCODE_GO_DEEPSEEK_V4_THINKING_LEVEL_MAP = {
@@ -373,6 +373,7 @@ type FetchOpencodeGoLiveModelIdsParams = {
   discoveryApiKey?: string;
   fetchGuard?: LiveModelCatalogFetchGuard;
   signal?: AbortSignal;
+  fetchModelsDev?: () => Promise<unknown>;
 };
 
 function buildOpencodeGoProviderConfig(
@@ -394,21 +395,17 @@ export function buildStaticOpencodeGoProviderConfig(apiKey?: string): ModelProvi
 export async function buildOpencodeGoLiveProviderConfig(
   params: FetchOpencodeGoLiveModelIdsParams = {},
 ): Promise<ModelProviderConfig> {
-  return await buildLiveModelProviderConfig({
-    providerId: PROVIDER_ID,
-    endpoint: OPENCODE_GO_MODELS_ENDPOINT,
-    providerConfig: {
-      api: "openai-completions",
-      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
-    },
-    models: OPENCODE_GO_MODELS,
+  return await buildOpencodeGoHybridProviderConfig({
     apiKey: params.apiKey,
     discoveryApiKey: params.discoveryApiKey,
     fetchGuard: params.fetchGuard,
     signal: params.signal,
-    timeoutMs: OPENCODE_GO_MODELS_TIMEOUT_MS,
-    ttlMs: OPENCODE_GO_MODELS_CACHE_TTL_MS,
-    auditContext: "opencode-go-model-discovery",
+    fetchModelsDev: params.fetchModelsDev,
+    staticModels: OPENCODE_GO_MODELS,
+    gatewayEndpoint: OPENCODE_GO_MODELS_ENDPOINT,
+    gatewayTimeoutMs: OPENCODE_GO_MODELS_TIMEOUT_MS,
+    openaiBaseUrl: OPENCODE_GO_OPENAI_BASE_URL,
+    anthropicBaseUrl: OPENCODE_GO_ANTHROPIC_BASE_URL,
   });
 }
 
@@ -424,8 +421,7 @@ export function listOpencodeGoModelCatalogEntries(): ModelCatalogEntry[] {
 }
 
 export function resolveOpencodeGoModel(modelId: string): ProviderRuntimeModel | undefined {
-  const normalizedModelId = modelId.trim().toLowerCase();
-  return OPENCODE_GO_MODELS.find((model) => model.id === normalizedModelId);
+  return resolveHybridDynamicModel(modelId, OPENCODE_GO_MODELS);
 }
 
 export function isOpencodeGoKimiNoReasoningModelId(modelId: unknown): boolean {

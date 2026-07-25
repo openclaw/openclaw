@@ -1,16 +1,19 @@
 // Opencode Zen provider module implements model/runtime integration.
 import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  getCachedLiveProviderModelRows,
-  type LiveModelCatalogFetchGuard,
-} from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import type { LiveModelCatalogFetchGuard } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
 import type {
   ModelApi,
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  buildOpencodeZenHybridProviderConfig,
+  resolveHybridDynamicModel,
+  resolveOpencodeZenFamilyTransport,
+  type HybridModelDefinition,
+} from "./hybrid-catalog.js";
 
 const PROVIDER_ID = "opencode";
 
@@ -18,7 +21,6 @@ const OPENCODE_ZEN_OPENAI_BASE_URL = "https://opencode.ai/zen/v1";
 const OPENCODE_ZEN_ANTHROPIC_BASE_URL = "https://opencode.ai/zen";
 const OPENCODE_ZEN_MODELS_ENDPOINT = "https://opencode.ai/zen/v1/models";
 const OPENCODE_ZEN_MODELS_TIMEOUT_MS = 5_000;
-const OPENCODE_ZEN_MODELS_CACHE_TTL_MS = 60_000;
 
 const FREE_COST: ModelDefinitionConfig["cost"] = {
   input: 0,
@@ -257,11 +259,8 @@ const MODEL_NAMES: Record<string, string> = {
 const GPT_56_MODEL_IDS = new Set(["gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra"]);
 const GPT_56_REASONING_EFFORTS = ["none", "low", "medium", "high", "xhigh", "max"];
 
-type OpencodeZenModelDefinition = ModelDefinitionConfig & {
+type OpencodeZenModelDefinition = HybridModelDefinition & {
   provider: typeof PROVIDER_ID;
-  api: NonNullable<ModelDefinitionConfig["api"]>;
-  baseUrl: string;
-  input: Array<"text" | "image">;
 };
 
 type FetchOpencodeZenLiveModelIdsParams = {
@@ -269,6 +268,7 @@ type FetchOpencodeZenLiveModelIdsParams = {
   discoveryApiKey?: string;
   fetchGuard?: LiveModelCatalogFetchGuard;
   signal?: AbortSignal;
+  fetchModelsDev?: () => Promise<unknown>;
 };
 
 function formatModelName(modelId: string): string {
@@ -349,23 +349,12 @@ function resolveMaxTokens(modelId: string): number {
   return 8_192;
 }
 
-type OpencodeZenTransport = {
-  api: ModelApi;
-  baseUrl: string;
-};
-
-function resolveOpencodeZenTransport(modelId: string): OpencodeZenTransport {
-  const lower = modelId.toLowerCase();
-  if (lower.startsWith("gpt-")) {
-    return { api: "openai-responses", baseUrl: OPENCODE_ZEN_OPENAI_BASE_URL };
-  }
-  if (lower.startsWith("claude-") || lower.startsWith("qwen")) {
-    return { api: "anthropic-messages", baseUrl: OPENCODE_ZEN_ANTHROPIC_BASE_URL };
-  }
-  if (lower.startsWith("gemini-")) {
-    return { api: "google-generative-ai", baseUrl: OPENCODE_ZEN_OPENAI_BASE_URL };
-  }
-  return { api: "openai-completions", baseUrl: OPENCODE_ZEN_OPENAI_BASE_URL };
+function resolveOpencodeZenTransport(modelId: string): { api: ModelApi; baseUrl: string } {
+  return resolveOpencodeZenFamilyTransport(
+    modelId,
+    OPENCODE_ZEN_OPENAI_BASE_URL,
+    OPENCODE_ZEN_ANTHROPIC_BASE_URL,
+  );
 }
 
 function resolveModelCost(modelId: string): ModelDefinitionConfig["cost"] {
@@ -479,71 +468,21 @@ export function buildStaticOpencodeZenProviderConfig(apiKey?: string): ModelProv
   return buildOpencodeZenProviderConfig(OPENCODE_ZEN_MODELS, apiKey);
 }
 
-function readLiveModelId(row: unknown): string | undefined {
-  if (!row || typeof row !== "object" || Array.isArray(row)) {
-    return undefined;
-  }
-  const candidate = row as { id?: unknown; object?: unknown };
-  if (candidate.object !== undefined && candidate.object !== "model") {
-    return undefined;
-  }
-  if (typeof candidate.id !== "string") {
-    return undefined;
-  }
-  const modelId = candidate.id.trim().toLowerCase();
-  return modelId || undefined;
-}
-
-async function fetchOpencodeZenLiveModelIds(
+export async function buildOpencodeZenLiveProviderConfig(
   params: FetchOpencodeZenLiveModelIdsParams = {},
-): Promise<string[]> {
-  const rows = await getCachedLiveProviderModelRows({
-    providerId: PROVIDER_ID,
-    endpoint: OPENCODE_ZEN_MODELS_ENDPOINT,
+): Promise<ModelProviderConfig> {
+  return await buildOpencodeZenHybridProviderConfig({
     apiKey: params.apiKey,
     discoveryApiKey: params.discoveryApiKey,
     fetchGuard: params.fetchGuard,
     signal: params.signal,
-    timeoutMs: OPENCODE_ZEN_MODELS_TIMEOUT_MS,
-    ttlMs: OPENCODE_ZEN_MODELS_CACHE_TTL_MS,
-    auditContext: "opencode-zen-model-discovery",
+    fetchModelsDev: params.fetchModelsDev,
+    staticModels: OPENCODE_ZEN_MODELS,
+    gatewayEndpoint: OPENCODE_ZEN_MODELS_ENDPOINT,
+    gatewayTimeoutMs: OPENCODE_ZEN_MODELS_TIMEOUT_MS,
+    openaiBaseUrl: OPENCODE_ZEN_OPENAI_BASE_URL,
+    anthropicBaseUrl: OPENCODE_ZEN_ANTHROPIC_BASE_URL,
   });
-  const seen = new Set<string>();
-  const modelIds: string[] = [];
-  for (const row of rows) {
-    const modelId = readLiveModelId(row);
-    if (!modelId || seen.has(modelId)) {
-      continue;
-    }
-    seen.add(modelId);
-    modelIds.push(modelId);
-  }
-  return modelIds;
-}
-
-function buildDiscoveredOpencodeZenModels(modelIds: string[]): OpencodeZenModelDefinition[] {
-  const staticModels = new Map(OPENCODE_ZEN_MODELS.map((model) => [model.id, model]));
-  return modelIds.flatMap((modelId) => {
-    const model = staticModels.get(modelId);
-    return model ? [model] : [];
-  });
-}
-
-export async function buildOpencodeZenLiveProviderConfig(
-  params: FetchOpencodeZenLiveModelIdsParams = {},
-): Promise<ModelProviderConfig> {
-  try {
-    const liveModelIds = await fetchOpencodeZenLiveModelIds(params);
-    if (liveModelIds.length > 0) {
-      const liveModels = buildDiscoveredOpencodeZenModels(liveModelIds);
-      if (liveModels.length > 0) {
-        return buildOpencodeZenProviderConfig(liveModels, params.apiKey);
-      }
-    }
-  } catch {
-    // Live discovery is advisory; keep the provider-owned static seed visible.
-  }
-  return buildStaticOpencodeZenProviderConfig(params.apiKey);
 }
 
 export function listOpencodeZenModelCatalogEntries(): ModelCatalogEntry[] {
@@ -558,8 +497,7 @@ export function listOpencodeZenModelCatalogEntries(): ModelCatalogEntry[] {
 }
 
 export function resolveOpencodeZenModel(modelId: string): ProviderRuntimeModel | undefined {
-  const normalizedModelId = modelId.trim().toLowerCase();
-  return OPENCODE_ZEN_MODELS.find((model) => model.id === normalizedModelId);
+  return resolveHybridDynamicModel(modelId, OPENCODE_ZEN_MODELS);
 }
 
 function normalizeBaseUrl(baseUrl: string | undefined): string {
