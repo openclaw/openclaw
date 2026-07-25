@@ -26,6 +26,10 @@ export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }>;
 
 export type UserTurnInput = {
   text?: string | null;
+  /** Trusted bare user body for decorated inbound turns; not parsed from content text. */
+  bareBody?: string | null;
+  /** True when the model-facing copy may include host-added inbound decoration. */
+  inboundDecorated?: boolean;
   media?: readonly PersistedUserTurnMediaInput[] | null;
   /** Restart-safe native image placement; model-visible prompt bytes remain separate. */
   mediaImageLayout?: {

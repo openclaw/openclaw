@@ -25,6 +25,7 @@ import {
   readTranscriptStatsSync,
   resolveTranscriptSessionKeyBySessionId,
   resolveSessionTranscriptsDirForAgent,
+  resolveTrustedInboundBareBody,
   stripInboundMetadata,
   stripInternalRuntimeContext,
 } from "./openclaw-runtime-session.js";
@@ -560,8 +561,12 @@ function renderSessionExportLines(label: string, text: string): string[] {
  *
  * See: https://github.com/openclaw/openclaw/issues/63921
  */
-function stripInboundMetadataForUserRole(text: string, role: "user" | "assistant"): string {
-  if (role !== "user") {
+function stripInboundMetadataForUserRole(
+  text: string,
+  role: "user" | "assistant",
+  options: { trustedBareUserBody?: boolean } = {},
+): string {
+  if (role !== "user" || options.trustedBareUserBody === true) {
     return text;
   }
   return stripInboundMetadata(text);
@@ -587,8 +592,12 @@ function isGeneratedHeartbeatPromptMessage(text: string, role: "user" | "assista
   return role === "user" && isHeartbeatUserMessage({ role, content: text }, HEARTBEAT_PROMPT);
 }
 
-function sanitizeSessionText(text: string, role: "user" | "assistant"): string | null {
-  const strippedInbound = stripInboundMetadataForUserRole(text, role);
+function sanitizeSessionText(
+  text: string,
+  role: "user" | "assistant",
+  options: { trustedBareUserBody?: boolean } = {},
+): string | null {
+  const strippedInbound = stripInboundMetadataForUserRole(text, role, options);
   const strippedInternal = stripInternalRuntimeContext(strippedInbound);
   const normalized = normalizeSessionText(strippedInternal);
   if (!normalized) {
@@ -841,7 +850,13 @@ export async function buildSessionEntry(
         continue;
       }
       const message = (record as { message?: unknown }).message as
-        | { role?: unknown; content?: unknown; provenance?: unknown }
+        | {
+            role?: unknown;
+            content?: unknown;
+            provenance?: unknown;
+            inboundDecorated?: unknown;
+            bareBody?: unknown;
+          }
         | undefined;
       if (!message || typeof message.role !== "string") {
         continue;
@@ -860,14 +875,18 @@ export async function buildSessionEntry(
       if (message.role === "user" && hasInterSessionUserProvenance(message)) {
         continue;
       }
-      const rawText = collectRawSessionText(message.content);
+      const trustedBareBody =
+        message.role === "user" ? resolveTrustedInboundBareBody(message) : undefined;
+      const rawText = trustedBareBody ?? collectRawSessionText(message.content);
       if (rawText === null) {
         continue;
       }
 
       // User text is not trusted archive-wide provenance. Per-message sanitization
       // drops cron prompts without clearing unrelated content from the archive.
-      const text = sanitizeSessionText(rawText, message.role);
+      const text = sanitizeSessionText(rawText, message.role, {
+        trustedBareUserBody: trustedBareBody !== undefined,
+      });
       if (!text) {
         continue;
       }
