@@ -68,13 +68,12 @@ export function synchronizeSessionCatalogAgent(
   owner.sessionCatalogGeneration += 1;
   owner.sessionCatalogRevision += 1;
   owner.sessionCatalogLive.clear();
+  // Catalog rows, page cursors, and revision tokens all belong to one agent.
+  // Carrying any of them across the switch can expose or replay stale sessions.
+  owner.sessionCatalogs = [];
   owner.loadingMoreSessionCatalogIds = new Set();
-  if (owner.sessionCatalogs.some((catalog) => catalog.capabilities.createSession)) {
-    owner.sessionCatalogs = owner.sessionCatalogs.map((catalog) => {
-      const { createSession: _createSession, ...capabilities } = catalog.capabilities;
-      return { ...catalog, capabilities };
-    });
-  }
+  owner.sessionCatalogPageDepths.clear();
+  owner.sessionCatalogRevisions.clear();
   owner.requestSessionDataUpdate();
 }
 

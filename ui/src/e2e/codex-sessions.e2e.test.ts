@@ -2,7 +2,10 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { SessionsCatalogHostEvent } from "../../../packages/gateway-protocol/src/index.ts";
+import type {
+  SessionsCatalogHostEvent,
+  SessionsCatalogListResult,
+} from "../../../packages/gateway-protocol/src/index.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -97,6 +100,193 @@ suite("Codex native session catalog", () => {
     expect(await page.locator('[data-session-section="catalog:codex"]').count()).toBe(0);
     expect(await page.locator('[data-session-section="catalog:claude"]').count()).toBe(0);
     await page.close();
+  });
+
+  it("clears the previous agent's native sessions before its replacement catalog resolves", async () => {
+    const page = await browser.newPage({ viewport: { height: 900, width: 1280 } });
+    const agentsList = {
+      agents: [
+        { id: "main", identity: { name: "Main" }, name: "Main" },
+        { id: "research", identity: { name: "Research" }, name: "Research" },
+      ],
+      defaultId: "main",
+      mainKey: "main",
+      scope: "agent",
+    };
+    const catalogPage = (
+      name: string,
+      threadId: string,
+      nextCursor?: string,
+    ): SessionsCatalogListResult => ({
+      catalogs: [
+        {
+          id: "codex",
+          label: "Codex",
+          capabilities: { continueSession: true, archive: true },
+          hosts: [
+            {
+              hostId: "gateway:local",
+              label: "Local Codex",
+              kind: "gateway",
+              connected: true,
+              sessions: [
+                {
+                  threadId,
+                  name,
+                  status: "idle",
+                  archived: false,
+                  canContinue: true,
+                  canArchive: true,
+                },
+              ],
+              ...(nextCursor ? { nextCursor } : {}),
+            },
+          ],
+        },
+      ],
+    });
+    const mainPage = catalogPage("Main agent session", "main-thread", "main-page-2");
+    const mainOlderPage = catalogPage("Older main agent session", "main-older-thread");
+    const researchPage = catalogPage(
+      "Research agent session",
+      "research-thread",
+      "research-page-2",
+    );
+    const researchOlderPage = catalogPage("Older research agent session", "research-older-thread");
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
+      methodResponses: {
+        "agents.list": agentsList,
+        "chat.startup": {
+          agentsList,
+          messages: [],
+          metadata: { models: [] },
+          sessionId: "control-ui-e2e-session",
+          thinkingLevel: null,
+        },
+        "sessions.catalog.list": {
+          cases: [
+            {
+              match: { agentId: "main", catalogId: "codex" },
+              response: mainOlderPage,
+            },
+            { match: { agentId: "main" }, response: mainPage },
+            {
+              match: { agentId: "research", catalogId: "codex" },
+              response: researchOlderPage,
+            },
+            { match: { agentId: "research" }, response: researchPage },
+          ],
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await expandCodingSection(page);
+      await page.getByText("Main agent session", { exact: true }).waitFor();
+      const mainRequest = (await gateway.getRequests("sessions.catalog.list")).find(
+        (request) =>
+          (request.params as { agentId?: string; catalogId?: string } | undefined)?.agentId ===
+            "main" && !(request.params as { catalogId?: string } | undefined)?.catalogId,
+      );
+      const mainProgressId = (mainRequest?.params as { progressId?: string } | undefined)
+        ?.progressId;
+      expect(mainProgressId).toEqual(expect.any(String));
+      const loadMore = page.locator('[data-session-catalog-load-more="codex"]');
+      await loadMore.waitFor({ state: "visible" });
+      await loadMore.click();
+      await page.getByText("Older main agent session", { exact: true }).waitFor();
+
+      await gateway.deferNext("sessions.catalog.list");
+      const sidebar = page.locator("openclaw-app-sidebar");
+      await sidebar.getByRole("button", { name: /Agent menu|Switch agent/ }).click();
+      await sidebar
+        .locator("wa-dropdown.sidebar-agent-menu")
+        .getByRole("menuitemradio", { name: "Research" })
+        .click();
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("sessions.catalog.list")).some(
+            (request) =>
+              (request.params as { agentId?: string } | undefined)?.agentId === "research",
+          ),
+        )
+        .toBe(true);
+      await expect
+        .poll(() => new URL(page.url()).searchParams.get("session"))
+        .toBe("agent:research:main");
+
+      if (captureUiProofEnabled) {
+        await mkdir(uiProofArtifactDir, { recursive: true });
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(uiProofArtifactDir, "06-agent-switch-pending-catalog.png"),
+        });
+      }
+      await expect
+        .poll(() => page.getByText("Main agent session", { exact: true }).count())
+        .toBe(0);
+      await expect
+        .poll(() => page.getByText("Older main agent session", { exact: true }).count())
+        .toBe(0);
+
+      const researchRequest = (await gateway.getRequests("sessions.catalog.list")).find(
+        (request) =>
+          (request.params as { agentId?: string; catalogId?: string } | undefined)?.agentId ===
+            "research" && !(request.params as { catalogId?: string } | undefined)?.catalogId,
+      );
+      const researchProgressId = (researchRequest?.params as { progressId?: string } | undefined)
+        ?.progressId;
+      const mainCatalog = mainPage.catalogs[0];
+      const researchCatalog = researchPage.catalogs[0];
+      if (!mainProgressId || !researchProgressId || !mainCatalog || !researchCatalog) {
+        throw new Error("Agent-switch catalog progress fixture is incomplete");
+      }
+      await gateway.emitGatewayEvent("sessions.catalog.host", {
+        progressId: mainProgressId,
+        agentId: "main",
+        catalog: mainCatalog,
+      } satisfies SessionsCatalogHostEvent);
+      expect(await page.getByText("Main agent session", { exact: true }).count()).toBe(0);
+      await gateway.emitGatewayEvent("sessions.catalog.host", {
+        progressId: researchProgressId,
+        agentId: "research",
+        catalog: researchCatalog,
+      } satisfies SessionsCatalogHostEvent);
+      await page.getByText("Research agent session", { exact: true }).waitFor();
+      await gateway.resolveDeferred("sessions.catalog.list", researchPage);
+      await page.getByText("Research agent session", { exact: true }).waitFor();
+      const researchRequests = (await gateway.getRequests("sessions.catalog.list")).filter(
+        (request) => (request.params as { agentId?: string } | undefined)?.agentId === "research",
+      );
+      expect(researchRequests).toHaveLength(1);
+      await loadMore.waitFor({ state: "visible" });
+      await loadMore.click();
+      await page.getByText("Older research agent session", { exact: true }).waitFor();
+      expect(
+        (await gateway.getRequests("sessions.catalog.list")).find(
+          (request) =>
+            (request.params as { agentId?: string; catalogId?: string } | undefined)?.agentId ===
+              "research" &&
+            (request.params as { catalogId?: string } | undefined)?.catalogId === "codex",
+        )?.params,
+      ).toMatchObject({
+        agentId: "research",
+        catalogId: "codex",
+        cursors: { "gateway:local": "research-page-2" },
+      });
+      if (captureUiProofEnabled) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(uiProofArtifactDir, "07-agent-switch-resolved-catalog.png"),
+        });
+      }
+    } finally {
+      await page.close();
+    }
   });
 
   it("shows a completed host while the aggregate catalog request is still pending", async () => {
@@ -282,8 +472,7 @@ suite("Codex native session catalog", () => {
       expect(await section.getByText("Worktree fix session", { exact: true }).count()).toBe(1);
       const toggle = section.locator(".sidebar-session-group-toggle");
       expect(await toggle.getAttribute("title")).toBeNull();
-      // Counts only render while a section is collapsed.
-      expect(await section.locator(".sidebar-session-group-count").count()).toBe(0);
+      expect(await toggle.locator(".sidebar-session-group-count").textContent()).toBe("4");
 
       const groupingToggle = section.locator('[data-session-catalog-grouping-toggle="codex"]');
       await groupingToggle.click();
@@ -475,6 +664,7 @@ suite("Codex native session catalog", () => {
       }
 
       await page.goto(`${server.baseUrl}settings/automation?section=plugins`);
+      await page.getByRole("button", { name: "Show advanced" }).last().click();
       const expandPluginSetting = async (pluginLabel: string) => {
         const pluginGroup = page
           .getByText(pluginLabel, { exact: true })
