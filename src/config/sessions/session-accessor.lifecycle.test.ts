@@ -28,12 +28,13 @@ vi.mock("./session-accessor.sqlite.js", () => ({
 
 const { preserveTemporarySessionMapping } = await import("./session-accessor.lifecycle.js");
 
-function makeSpanEntry() {
+function makeSpanEntry(overrides?: Record<string, unknown>) {
   return {
     sessionId: "stale-session-id",
     updatedAt: 1700000000000,
     systemSent: false,
     label: "Boot",
+    ...overrides,
   };
 }
 
@@ -42,9 +43,12 @@ describe("preserveTemporarySessionMapping", () => {
     vi.clearAllMocks();
   });
 
-  it("forces hadEntry false for boot session keys even when an entry exists", async () => {
+  it("forces hadEntry false for legacy boot entries missing lifecycleRevision", async () => {
+    // Legacy pre-7.1 boot entries lack lifecycleRevision and carry stale
+    // sessionIds that fail admission. They must be deleted during restore.
     loadExactSessionEntryMock.mockReturnValue({
       entry: makeSpanEntry(),
+      // No lifecycleRevision → legacy
     });
 
     const operation = vi.fn(async () => "done");
@@ -55,7 +59,7 @@ describe("preserveTemporarySessionMapping", () => {
     );
 
     expect(result.result).toBe("done");
-    // When hadEntry is false, restore deletes the entry instead of restoring it
+    // hadEntry false → restore deletes instead of replacing
     expect(replaceSessionEntryMock).not.toHaveBeenCalled();
     expect(applySessionEntryLifecycleMutationMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -63,8 +67,44 @@ describe("preserveTemporarySessionMapping", () => {
         skipMaintenance: true,
       }),
     );
-    // The entry was NOT loaded (skipped for boot keys)
-    expect(loadExactSessionEntryMock).not.toHaveBeenCalled();
+    // Entry was loaded to inspect lifecycleRevision
+    expect(loadExactSessionEntryMock).toHaveBeenCalled();
+  });
+
+  it("preserves current boot entries that have lifecycleRevision", async () => {
+    // Current boot entries carry lifecycleRevision and must be snapshot
+    // and restored normally — not deleted.
+    loadExactSessionEntryMock.mockReturnValue({
+      entry: makeSpanEntry({ lifecycleRevision: "abc-123" }),
+    });
+    replaceSessionEntryMock.mockResolvedValue(makeSpanEntry({ lifecycleRevision: "abc-123" }));
+
+    const operation = vi.fn(async () => "done");
+
+    await preserveTemporarySessionMapping({ sessionKey: "agent:main:boot" }, operation);
+
+    // hadEntry true → restore replaces (preserves) the entry
+    expect(replaceSessionEntryMock).toHaveBeenCalled();
+    expect(applySessionEntryLifecycleMutationMock).not.toHaveBeenCalled();
+    expect(loadExactSessionEntryMock).toHaveBeenCalled();
+  });
+
+  it("forces hadEntry false for boot keys when no entry exists at all", async () => {
+    loadExactSessionEntryMock.mockReturnValue(null);
+
+    const operation = vi.fn(async () => "done");
+
+    await preserveTemporarySessionMapping({ sessionKey: "agent:main:boot" }, operation);
+
+    // No entry → hadEntry false → delete path (no-op since nothing exists)
+    expect(replaceSessionEntryMock).not.toHaveBeenCalled();
+    expect(applySessionEntryLifecycleMutationMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        removals: [{ sessionKey: "agent:main:boot" }],
+        skipMaintenance: true,
+      }),
+    );
+    expect(loadExactSessionEntryMock).toHaveBeenCalled();
   });
 
   it("preserves normal behavior for non-boot session keys with an existing entry", async () => {
