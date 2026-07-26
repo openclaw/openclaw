@@ -359,6 +359,33 @@ describe("voice-call CLI status fallback", () => {
     expect(JSON.parse(lines.at(-1) ?? "")).toEqual({ seq: 2001 });
   });
 
+  it("clears a pending follow record when the JSONL file is replaced", async () => {
+    const tempRoot = makeTempDir("openclaw-voice-call-cli-rotation-");
+    const file = path.join(tempRoot, "diagnostics.jsonl");
+    writeFileSync(file, `${JSON.stringify({ seq: 0 })}\n{"old":"unfinished`, "utf8");
+
+    sleepMock
+      .mockImplementationOnce(async () => {
+        writeFileSync(file, `${JSON.stringify({ seq: 1 })}\n`, "utf8");
+      })
+      .mockRejectedValueOnce(new Error("stop tail after replacement output"));
+
+    const program = buildProgram({});
+    const output = captureStdout();
+    try {
+      await expect(
+        program.parseAsync(["voicecall", "tail", "--file", file, "--since", "1"], {
+          from: "user",
+        }),
+      ).rejects.toThrow("stop tail after replacement output");
+    } finally {
+      output.restore();
+    }
+
+    const lines = output.output().trim().split("\n");
+    expect(lines.map((line) => JSON.parse(line))).toEqual([{ seq: 0 }, { seq: 1 }]);
+  });
+
   it("caps oversized operation timeouts through the start command", async () => {
     callGatewayFromCliMock.mockResolvedValue({ callId: "call-1" });
     const program = buildProgram({}, { ringTimeoutMs: Number.MAX_SAFE_INTEGER });
