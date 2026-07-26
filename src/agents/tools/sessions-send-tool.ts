@@ -154,7 +154,7 @@ function resolveRequesterIdentityName(params: {
   requesterSessionKey?: string;
 }): string | undefined {
   const requesterAgentId = params.requesterSessionKey
-    ? resolveAgentIdFromSessionKey(params.requesterSessionKey)
+    ? resolveAgentIdFromSessionKey(params.requesterSessionKey, resolveDefaultAgentId(params.cfg))
     : undefined;
   const name = requesterAgentId
     ? resolveAgentConfig(params.cfg, requesterAgentId)?.identity?.name?.trim()
