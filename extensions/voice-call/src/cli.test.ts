@@ -359,6 +359,37 @@ describe("voice-call CLI status fallback", () => {
     expect(JSON.parse(lines.at(-1) ?? "")).toEqual({ seq: 2001 });
   });
 
+  it("preserves a UTF-8 code point split across follow read chunks", async () => {
+    const tempRoot = makeTempDir("openclaw-voice-call-cli-utf8-");
+    const file = path.join(tempRoot, "diagnostics.jsonl");
+    writeFileSync(file, `${JSON.stringify({ seq: 0 })}\n`, "utf8");
+    const recordPrefix = '{"seq":1,"text":"';
+    const text = `${"x".repeat(64 * 1024 - 1 - Buffer.byteLength(recordPrefix))}中`;
+    const record = `${recordPrefix}${text}"}`;
+
+    sleepMock
+      .mockImplementationOnce(async () => {
+        appendFileSync(file, `${record}\n`, "utf8");
+      })
+      .mockRejectedValueOnce(new Error("stop tail after UTF-8 boundary output"));
+
+    const program = buildProgram({});
+    const output = captureStdout();
+    try {
+      await expect(
+        program.parseAsync(["voicecall", "tail", "--file", file, "--since", "1"], {
+          from: "user",
+        }),
+      ).rejects.toThrow("stop tail after UTF-8 boundary output");
+    } finally {
+      output.restore();
+    }
+
+    const lines = output.output().trim().split("\n");
+    expect(lines).toHaveLength(2);
+    expect(JSON.parse(lines[1] ?? "")).toEqual({ seq: 1, text });
+  });
+
   it("clears pending follow state when a larger replacement changes file identity", async () => {
     const tempRoot = makeTempDir("openclaw-voice-call-cli-rotation-");
     const file = path.join(tempRoot, "diagnostics.jsonl");

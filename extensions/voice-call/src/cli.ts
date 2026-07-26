@@ -152,6 +152,7 @@ function readJsonlFollowRangeSync(params: {
       params.state.discardUntilNewline = true;
       return;
     }
+    // Retain raw bytes so UTF-8 code points split across read chunks decode only after completion.
     params.state.pending =
       params.state.pending.length === 0
         ? Buffer.from(fragment)
