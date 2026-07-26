@@ -705,7 +705,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
               return null;
             }
             if (ownerAgentDir) {
-              const mainPath = resolveAuthStorePath(undefined);
+              const mainPath = resolveAuthProfileDatabasePath(undefined);
               if (mainPath !== authPath) {
                 await mirrorRefreshedCredentialIntoMainStore({
                   profileId: params.profileId,
