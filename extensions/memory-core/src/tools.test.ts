@@ -722,6 +722,74 @@ describe("memory_search unavailable payloads", () => {
     }
   });
 
+  it("retries a zero-hit builtin search without forcing a full reindex", async () => {
+    const manager = createTestSearchManager({ backend: "builtin", search: async () => [] });
+    manager.sync.mockImplementation(async () => {});
+    setMemorySearchManagerImpl(async () => ({ manager }));
+    const tool = createMemorySearchToolOrThrow();
+
+    await tool.execute("builtin-zero-hit-sync", { query: "hello" });
+
+    // `force` makes runSync set needsFullReindex whenever no target archive files
+    // are supplied, which rebuilds every memory file and session transcript into a
+    // temp DB. That cannot finish inside the tool's 15s deadline once the session
+    // corpus is non-trivial, so a query that merely has no hits must not pay for it.
+    expect(manager.sync).toHaveBeenCalledTimes(1);
+    expect(manager.sync).toHaveBeenCalledWith({ reason: "search" });
+    expect(manager.sync.mock.calls[0]?.[0]).not.toHaveProperty("force");
+  });
+
+  it("still re-searches builtin memory after the unforced zero-hit sync", async () => {
+    const hit = {
+      path: "MEMORY.md",
+      startLine: 1,
+      endLine: 1,
+      score: 0.9,
+      snippet: "indexed only after the retry sync",
+      source: "memory" as const,
+    };
+    let searchCalls = 0;
+    const manager = createTestSearchManager({
+      backend: "builtin",
+      search: async () => {
+        searchCalls += 1;
+        return searchCalls === 1 ? [] : [hit];
+      },
+    });
+    manager.sync.mockImplementation(async () => {});
+    setMemorySearchManagerImpl(async () => ({ manager }));
+    const tool = createMemorySearchToolOrThrow({
+      config: asOpenClawConfig({
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { citations: "off" },
+      }),
+    });
+
+    const result = await tool.execute("builtin-zero-hit-retry", { query: "hello" });
+
+    // Dropping `force` must not drop the self-healing retry: an incremental sync
+    // still flushes dirty files, so the second search has to run and surface them.
+    expect(manager.search).toHaveBeenCalledTimes(2);
+    expect((result.details as { results?: Array<{ path: string }> }).results).toEqual([
+      { ...hit, corpus: "memory" },
+    ]);
+  });
+
+  it("keeps forcing the zero-hit bootstrap sync for one-shot qmd runs", async () => {
+    const manager = createTestSearchManager({ backend: "qmd", search: async () => [] });
+    manager.sync.mockImplementation(async () => {});
+    setMemorySearchManagerImpl(async () => ({ manager }));
+    const tool = createQmdTimeoutSearchTool({ oneShotCliRun: true });
+
+    await tool.execute("qmd-zero-hit-sync-force", { query: "hello" });
+
+    // One-shot CLI qmd managers have no background lifecycle, so their forced
+    // bootstrap retry (issue #90023) must survive the builtin-side change.
+    expect(manager.sync).toHaveBeenCalledTimes(1);
+    expect(manager.sync).toHaveBeenCalledWith({ reason: "search", force: true });
+    expect(manager.search).toHaveBeenCalledTimes(2);
+  });
+
   it("re-resolves the manager once when a cached sqlite handle was closed", async () => {
     let searchCalls = 0;
     setMemorySearchImpl(async () => {

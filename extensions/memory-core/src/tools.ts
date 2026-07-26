@@ -706,7 +706,15 @@ export function createMemorySearchTool(options: {
                   await runWithDefaultDeadline(async () => {
                     // Sync may join shared/background manager maintenance and has
                     // no request-cancellation contract. Bound only this tool's wait.
-                    await activeMemory.manager.sync?.({ reason: "search", force: true });
+                    // Only the one-shot qmd bootstrap forces here: `force` without target
+                    // archive files sets needsFullReindex, rebuilding every memory file and
+                    // session transcript, which cannot finish inside this deadline once the
+                    // corpus is real. Builtin stays incremental — it still flushes dirty
+                    // files, and its own search() already force-bootstraps an empty index.
+                    await activeMemory.manager.sync?.({
+                      reason: "search",
+                      ...(statusBeforeRetry.backend === "qmd" ? { force: true } : {}),
+                    });
                   });
                   rawResults = await searchActiveMemory();
                   pausedIndexIdentityReason = resolvePausedMemoryIndexIdentityReason(
