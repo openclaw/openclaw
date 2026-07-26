@@ -76,16 +76,33 @@ function writeStdoutJson(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
 }
 
+type JsonlFileIdentity = {
+  dev: number;
+  ino: number;
+};
+
+function getJsonlFileIdentity(stat: fs.Stats): JsonlFileIdentity {
+  return { dev: stat.dev, ino: stat.ino };
+}
+
+function isSameJsonlFileIdentity(left: JsonlFileIdentity, right: JsonlFileIdentity): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
 /** Read complete JSONL records from at most `maxBytes` at the end of `filePath`. */
-function readJsonlTailSync(filePath: string, maxBytes: number): { text: string; end: number } {
-  const stat = fs.statSync(filePath);
-  const start = Math.max(0, stat.size - maxBytes);
-  const length = stat.size - start;
-  if (length === 0) {
-    return { text: "", end: stat.size };
-  }
+function readJsonlTailSync(
+  filePath: string,
+  maxBytes: number,
+): { text: string; end: number; identity: JsonlFileIdentity } {
   const fd = fs.openSync(filePath, "r");
   try {
+    const stat = fs.fstatSync(fd);
+    const identity = getJsonlFileIdentity(stat);
+    const start = Math.max(0, stat.size - maxBytes);
+    const length = stat.size - start;
+    if (length === 0) {
+      return { text: "", end: stat.size, identity };
+    }
     let startsAtRecordBoundary = start === 0;
     if (start > 0) {
       const prefix = Buffer.alloc(1);
@@ -105,7 +122,7 @@ function readJsonlTailSync(filePath: string, maxBytes: number): { text: string; 
       const firstNewline = text.indexOf("\n");
       text = firstNewline === -1 ? "" : text.slice(firstNewline + 1);
     }
-    return { text, end: start + bytesRead };
+    return { text, end: start + bytesRead, identity };
   } finally {
     fs.closeSync(fd);
   }
@@ -114,12 +131,12 @@ function readJsonlTailSync(filePath: string, maxBytes: number): { text: string; 
 type JsonlFollowState = {
   pending: Buffer;
   discardUntilNewline: boolean;
+  identity: JsonlFileIdentity;
 };
 
 function readJsonlFollowRangeSync(params: {
   filePath: string;
   start: number;
-  end: number;
   state: JsonlFollowState;
   onLine: (line: string) => void;
 }): number {
@@ -141,8 +158,17 @@ function readJsonlFollowRangeSync(params: {
         : Buffer.concat([params.state.pending, fragment]);
   };
   try {
-    while (position < params.end) {
-      const requested = Math.min(chunk.length, params.end - position);
+    const stat = fs.fstatSync(fd);
+    const identity = getJsonlFileIdentity(stat);
+    if (!isSameJsonlFileIdentity(params.state.identity, identity) || stat.size < position) {
+      position = 0;
+      params.state.pending = Buffer.alloc(0);
+      params.state.discardUntilNewline = false;
+    }
+    params.state.identity = identity;
+
+    while (position < stat.size) {
+      const requested = Math.min(chunk.length, stat.size - position);
       const bytesRead = fs.readSync(fd, chunk, 0, requested, position);
       if (bytesRead === 0) {
         break;
@@ -863,10 +889,11 @@ export function registerVoiceCallCli(params: {
       };
 
       if (fs.existsSync(file) && path.basename(file) !== "calls.jsonl") {
-        const { text: initial, end } = readJsonlTailSync(
-          file,
-          VOICE_CALL_CLI_MAX_JSONL_TAIL_BYTES,
-        );
+        const {
+          text: initial,
+          end,
+          identity,
+        } = readJsonlTailSync(file, VOICE_CALL_CLI_MAX_JSONL_TAIL_BYTES);
         const initialParts = initial.split("\n");
         const pending = initial.endsWith("\n") ? "" : (initialParts.pop() ?? "");
         const lines = initialParts.filter(Boolean);
@@ -879,6 +906,7 @@ export function registerVoiceCallCli(params: {
         const followState: JsonlFollowState = {
           pending: Buffer.from(pending),
           discardUntilNewline: false,
+          identity,
         };
         for (;;) {
           try {
@@ -891,19 +919,16 @@ export function registerVoiceCallCli(params: {
               followState.discardUntilNewline = false;
             }
             lastObservedSize = stat.size;
-            if (stat.size > offset) {
-              offset = readJsonlFollowRangeSync({
-                filePath: file,
-                start: offset,
-                end: stat.size,
-                state: followState,
-                onLine: (line) => {
-                  if (line) {
-                    writeStdoutLine(line);
-                  }
-                },
-              });
-            }
+            offset = readJsonlFollowRangeSync({
+              filePath: file,
+              start: offset,
+              state: followState,
+              onLine: (line) => {
+                if (line) {
+                  writeStdoutLine(line);
+                }
+              },
+            });
           } catch {
             // ignore and retry
           }

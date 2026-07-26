@@ -359,14 +359,19 @@ describe("voice-call CLI status fallback", () => {
     expect(JSON.parse(lines.at(-1) ?? "")).toEqual({ seq: 2001 });
   });
 
-  it("clears a pending follow record when the JSONL file is replaced", async () => {
+  it("clears pending follow state when a larger replacement changes file identity", async () => {
     const tempRoot = makeTempDir("openclaw-voice-call-cli-rotation-");
     const file = path.join(tempRoot, "diagnostics.jsonl");
-    writeFileSync(file, `${JSON.stringify({ seq: 0 })}\n{"old":"unfinished`, "utf8");
+    const replacement = path.join(tempRoot, "replacement.jsonl");
+    const initial = `${JSON.stringify({ seq: 0 })}\n{"old":"unfinished`;
+    const replacementRecord = JSON.stringify({ seq: 1, padding: "x".repeat(256) });
+    fs.writeFileSync(file, initial, "utf8");
+    expect(Buffer.byteLength(replacementRecord)).toBeGreaterThan(Buffer.byteLength(initial));
 
     sleepMock
       .mockImplementationOnce(async () => {
-        writeFileSync(file, `${JSON.stringify({ seq: 1 })}\n`, "utf8");
+        fs.writeFileSync(replacement, `${replacementRecord}\n`, "utf8");
+        fs.renameSync(replacement, file);
       })
       .mockRejectedValueOnce(new Error("stop tail after replacement output"));
 
@@ -383,7 +388,7 @@ describe("voice-call CLI status fallback", () => {
     }
 
     const lines = output.output().trim().split("\n");
-    expect(lines.map((line) => JSON.parse(line))).toEqual([{ seq: 0 }, { seq: 1 }]);
+    expect(lines.map((line) => JSON.parse(line).seq)).toEqual([0, 1]);
   });
 
   it("caps oversized operation timeouts through the start command", async () => {
