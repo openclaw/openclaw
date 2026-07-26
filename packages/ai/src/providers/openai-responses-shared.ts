@@ -505,18 +505,10 @@ function resolveResponsesReasoningEffortForPayload<TApi extends Api>(
       (entry): entry is [string, string] => typeof entry[1] === "string",
     ),
   );
-  const compat = model.compat as
-    | {
-        reasoningEffortMap?: Record<string, string>;
-      }
-    | undefined;
   return resolveOpenAIReasoningEffortForModel({
     model,
     effort,
-    fallbackMap: {
-      ...thinkingLevelMap,
-      ...compat?.reasoningEffortMap,
-    },
+    fallbackMap: thinkingLevelMap,
   });
 }
 

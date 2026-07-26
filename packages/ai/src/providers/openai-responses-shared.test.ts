@@ -345,24 +345,20 @@ describe("Responses reasoning effort", () => {
     expect(resolveResponsesReasoningEffort(gpt56SolModel, "minimal")).toBe("low");
   });
 
-  it("uses provider-native reasoning effort values declared by model compat", () => {
+  it("uses provider-native reasoning effort values declared by the model map", () => {
     const providerNativeModel = {
       ...nativeOpenAIModel,
       id: "qwen/qwen3-32b",
       name: "Qwen 3 32B",
       provider: "groq",
       baseUrl: "https://api.groq.com/openai/v1",
-      compat: {
-        supportsReasoningEffort: true,
-        supportedReasoningEfforts: ["none", "default"],
-        reasoningEffortMap: {
-          off: "none",
-          low: "default",
-          medium: "default",
-          high: "default",
-        },
+      thinkingLevelMap: {
+        off: "none",
+        low: "default",
+        medium: "default",
+        high: "default",
       },
-    } as unknown as Model<"openai-responses">;
+    } satisfies Model<"openai-responses">;
 
     const enabled = {} as never;
     applyCommonResponsesParams(

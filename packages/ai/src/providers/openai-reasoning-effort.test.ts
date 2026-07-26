@@ -184,6 +184,21 @@ describe("OpenAI reasoning effort support", () => {
     ).toBe("NONE");
   });
 
+  it("treats explicit model mappings as provider-native values", () => {
+    const model = {
+      provider: "groq",
+      id: "qwen/qwen3-32b",
+    };
+
+    expect(
+      resolveOpenAIReasoningEffortForModel({
+        model,
+        effort: "medium",
+        fallbackMap: { medium: "default" },
+      }),
+    ).toBe("default");
+  });
+
   it("does not fold provider-native compat values", () => {
     const model = {
       provider: "example",

@@ -184,8 +184,11 @@ export function resolveOpenAIReasoningEffortForModel(params: {
           ([effort]) => normalizeOpenAIReasoningEffort(effort) === requested,
         )?.[1]
       : undefined);
-  // Fallback maps emit provider-native payload labels; keep their case for exact compat lists.
+  // Explicit maps are the canonical provider-native contract; preserve their exact casing.
   const normalized = mapped === undefined ? requested : mapped.trim();
+  if (mapped !== undefined) {
+    return normalized ? (normalized as OpenAIApiReasoningEffort) : undefined;
+  }
   const supported = resolveOpenAISupportedReasoningEfforts(params.model);
   if (supported.includes(normalized as OpenAIApiReasoningEffort)) {
     return normalized as OpenAIApiReasoningEffort;
