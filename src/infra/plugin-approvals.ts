@@ -176,18 +176,6 @@ export function buildPluginApprovalRequestMessage(
   lines.push(`ID: ${request.id}`);
   const expiresIn = Math.max(0, Math.round((request.expiresAtMs - nowMsValue) / 1000));
   lines.push(`Expires in: ${expiresIn}s`);
-  const externalResolution = normalizePluginExternalResolution(request.request.externalResolution);
-  if (externalResolution) {
-    lines.push(externalResolution.label);
-    if (externalResolution.decisions?.includes("allow-once")) {
-      lines.push(`Verify once: /approve ${request.id} external allow-once`);
-    }
-    if (externalResolution.decisions?.includes("allow-always")) {
-      lines.push(`Verify and trust for session: /approve ${request.id} external allow-always`);
-    }
-    lines.push(`Deny: /approve ${request.id} deny`);
-    return lines.join("\n");
-  }
   lines.push(
     `Reply with: /approve ${request.id} ${resolvePluginApprovalRequestAllowedDecisions(
       request.request,
