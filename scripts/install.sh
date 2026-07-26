@@ -2908,11 +2908,21 @@ install_openclaw_from_git() {
     fi
 
     local git_ref
-    git_ref="$(resolve_git_openclaw_ref)"
     if [[ "$GIT_UPDATE" == "0" && -d "$repo_dir/.git" ]]; then
         # Honor --no-git-update: install the prepared checkout as-is.
-        # Do not rewrite it to npm latest (or any other resolved tag).
+        # Do not resolve npm latest / rewrite the tree, and do not validate
+        # package.json against an unrelated resolved release tag.
         ui_info "Skipping git checkout/update (--no-git-update); using existing checkout"
+        git_ref="$(git -C "$repo_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+        if [[ -z "$git_ref" || "$git_ref" == "HEAD" ]]; then
+            git_ref="$(git -C "$repo_dir" rev-parse --short HEAD 2>/dev/null || echo "HEAD")"
+        fi
+        ui_info "Prepared checkout ref: ${git_ref}"
+    else
+        git_ref="$(resolve_git_openclaw_ref)"
+    fi
+    if [[ "$GIT_UPDATE" == "0" && -d "$repo_dir/.git" ]]; then
+        :
     elif [[ -z "$(git -C "$repo_dir" status --porcelain 2>/dev/null || true)" ]]; then
         ui_info "Using git ref: ${git_ref}"
         checkout_git_openclaw_ref "$repo_dir" "$git_ref"
