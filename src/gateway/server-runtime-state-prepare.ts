@@ -15,6 +15,7 @@ import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.j
 import { resolveGatewayAuth } from "./auth.js";
 import { isLoopbackHost } from "./net.js";
 import { createNodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
+import type { RestoredAdmissionStartup } from "./restored-admission.js";
 import { resolveGatewayPluginConfig } from "./runtime-plugin-config.js";
 import { createGatewayControlUiRootLifecycle } from "./server-control-ui-root.js";
 import type { GatewayInstanceRuntime } from "./server-instance-runtime.types.js";
@@ -76,6 +77,7 @@ export async function prepareGatewayRuntimeState(params: {
   loadWorkerPlacementStartupModule: () => Promise<
     typeof import("./server-worker-placement-startup.js")
   >;
+  restoredStartup: RestoredAdmissionStartup | null;
 }) {
   const {
     bootstrap,
@@ -89,6 +91,7 @@ export async function prepareGatewayRuntimeState(params: {
     resolveChannelRuntime: getChannelRuntime,
     loadWorkerEnvironmentStartupModule,
     loadWorkerPlacementStartupModule,
+    restoredStartup,
   } = params;
   const {
     pluginBootstrap,
@@ -296,6 +299,7 @@ export async function prepareGatewayRuntimeState(params: {
     sidecarsReady: minimalTestGateway,
     pendingReason: "startup-sidecars",
     dispatchReady: false,
+    restoredAdmissionReady: restoredStartup === null,
   };
   let releaseStartupAccountStarts = () => {};
   const startupAccountStartsReady = new Promise<void>((resolve) => {
@@ -328,13 +332,25 @@ export async function prepareGatewayRuntimeState(params: {
       : {}),
   });
   channelManager.setAutostartSuppression(opts.channelAutostartSuppression ?? null);
-  const sidecarStartup = opts.sidecarStartup ?? "start";
-  const isGatewayStartupPending = () => !startupState.sidecarsReady && sidecarStartup === "start";
+  const sidecarStartup = restoredStartup ? "start" : (opts.sidecarStartup ?? "start");
+  const isGatewayStartupPending = () =>
+    !startupState.restoredAdmissionReady ||
+    (!startupState.sidecarsReady && sidecarStartup === "start");
   const getReadiness = createReadinessChecker({
     channelManager,
     startedAt: serverStartedAt,
     getStartupPending: isGatewayStartupPending,
-    getStartupPendingReason: () => startupState.pendingReason,
+    getStartupPendingReason: () =>
+      startupState.restoredAdmissionReady ? startupState.pendingReason : "restored-admission",
+    getGatewayDraining: isGatewayDraining,
+    getEventLoopHealth: readinessEventLoopHealth.snapshot,
+    shouldSkipChannelReadiness: () =>
+      isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
+      isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS),
+  });
+  const getRestoredOwnerReadiness = createReadinessChecker({
+    channelManager,
+    startedAt: serverStartedAt,
     getGatewayDraining: isGatewayDraining,
     getEventLoopHealth: readinessEventLoopHealth.snapshot,
     shouldSkipChannelReadiness: () =>
@@ -464,6 +480,8 @@ export async function prepareGatewayRuntimeState(params: {
     channelManager,
     sidecarStartup,
     isGatewayStartupPending,
+    restoredStartup,
+    getRestoredOwnerReadiness,
     pluginGatewayContext,
     watchNodeRequestHandler,
     httpServer,

@@ -2,6 +2,7 @@ import { isNixMode } from "../config/paths.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import type { RestoredAdmissionStartup } from "./restored-admission.js";
 import { startGatewayCoreRuntime } from "./server-core-runtime.js";
 import { prepareGatewayLifecycle } from "./server-lifecycle.js";
 import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
@@ -11,8 +12,6 @@ import { finishGatewayStartup } from "./server-startup-finish.js";
 type LoadGatewayModelCatalog = typeof import("./server-model-catalog.js").loadGatewayModelCatalog;
 type LoadGatewayModelCatalogSnapshot =
   typeof import("./server-model-catalog.js").loadGatewayModelCatalogSnapshot;
-type ReadPreparedGatewayModelCatalog =
-  typeof import("./server-model-catalog.js").readPreparedGatewayModelCatalog;
 
 const loadGatewayModelCatalogModule = createLazyRuntimeModule(
   () => import("./server-model-catalog.js"),
@@ -66,10 +65,6 @@ const loadGatewayModelCatalogSnapshot: LoadGatewayModelCatalogSnapshot = async (
   const mod = await loadGatewayModelCatalogModule();
   return mod.loadGatewayModelCatalogSnapshot(...args);
 };
-const readPreparedGatewayModelCatalog: ReadPreparedGatewayModelCatalog = async (...args) => {
-  const mod = await loadGatewayModelCatalogModule();
-  return mod.readPreparedGatewayModelCatalog(...args);
-};
 
 const loadGatewayPluginBootstrapModule = createLazyRuntimeModule(
   () => import("./server-plugin-bootstrap.js"),
@@ -85,6 +80,8 @@ const logWsControl = log.child("ws");
 const logSecrets = log.child("secrets");
 const gatewayRuntime = runtimeForLogger(log);
 const POST_READY_WORK_START_DELAY_MS = 500;
+
+const RESTORED_ADMISSION_FILE_ENV = "OPENCLAW_RFC0013_RESTORED_ADMISSION_FILE";
 
 function formatRuntimeGatewayAuthTokenWarning(): string {
   const base =
@@ -107,6 +104,20 @@ async function stopTaskRegistryMaintenanceOnDemand(): Promise<void> {
 export async function startGatewayServer(
   port = 18789,
   opts: GatewayServerOptions = {},
+): Promise<GatewayServer> {
+  const restoredStartup = await prepareRestoredAdmissionStartup();
+  try {
+    return await startGatewayServerRuntime(port, opts, restoredStartup);
+  } catch (error) {
+    restoredStartup?.release();
+    throw error;
+  }
+}
+
+async function startGatewayServerRuntime(
+  port: number,
+  opts: GatewayServerOptions,
+  restoredStartup: RestoredAdmissionStartup | null,
 ): Promise<GatewayServer> {
   let releasePostReadyWork: () => void = () => {};
   const postReadyWorkBarrier = new Promise<void>((resolve) => {
@@ -132,6 +143,7 @@ export async function startGatewayServer(
     resolveChannelRuntime: getChannelRuntime,
     loadWorkerEnvironmentStartupModule,
     loadWorkerPlacementStartupModule,
+    restoredStartup,
   });
   const lifecycleRuntime = await prepareGatewayLifecycle({
     runtime,
@@ -165,7 +177,6 @@ export async function startGatewayServer(
       loadGatewayPluginBootstrapModule,
       loadGatewayModelCatalog,
       loadGatewayModelCatalogSnapshot,
-      readPreparedGatewayModelCatalog,
     });
     await finishGatewayStartup({
       coreRuntime,
@@ -186,6 +197,7 @@ export async function startGatewayServer(
     await closeOnStartupFailure();
     throw err;
   }
+
   // The public server is fully initialized now. Leave a short I/O window before
   // background prewarms and cleanup imports compete for the startup CPU.
   const postReadyWorkTimer = setTimeout(releasePostReadyWork, POST_READY_WORK_START_DELAY_MS);
@@ -215,4 +227,41 @@ export async function startGatewayServer(
       }
     },
   };
+}
+
+async function prepareRestoredAdmissionStartup(): Promise<RestoredAdmissionStartup | null> {
+  const descriptorPath = process.env[RESTORED_ADMISSION_FILE_ENV];
+  if (descriptorPath === undefined) {
+    return null;
+  }
+  delete process.env[RESTORED_ADMISSION_FILE_ENV];
+  const { tryBeginGatewaySuspendAdmission } = await import("../process/gateway-work-admission.js");
+  const admission = tryBeginGatewaySuspendAdmission(() => {});
+  if (!admission || !admission.commit()) {
+    admission?.rollback();
+    throw new Error("restored Gateway startup could not close work admission");
+  }
+  let released = false;
+  const release = () => {
+    if (released) {
+      return true;
+    }
+    released = admission.release();
+    return released;
+  };
+  try {
+    const restoredAdmissionModule = await import("./restored-admission.js");
+    const descriptor = await restoredAdmissionModule.prepareRestoredAdmission(
+      descriptorPath,
+      process.env,
+    );
+    return {
+      descriptor,
+      release,
+      complete: restoredAdmissionModule.completeRestoredAdmission,
+    };
+  } catch (error) {
+    release();
+    throw error;
+  }
 }
