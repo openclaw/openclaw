@@ -7,6 +7,7 @@
  */
 
 import { promises as fs } from "node:fs";
+import fsSync from "node:fs";
 import { resolve as resolvePath } from "node:path";
 import type { Command } from "commander";
 import {
@@ -160,13 +161,64 @@ function catchSentinel<T>(
   }
 }
 
+// Cap bound file reads at 16 MiB to preserve the existing JSONC
+// oversized-input boundary: MAX_JSONC_INPUT_BYTES is 16 MiB in the
+// jsonc parser, so rejecting earlier than that would regress for
+// operators with 10–16 MiB config files that parse correctly today.
+const MAX_OC_PATH_FILE_BYTES = 16 * 1024 * 1024;
+
+async function loadOcPathFileSafely(filePath: string): Promise<string> {
+  const fd = fsSync.openSync(filePath, "r");
+  try {
+    const stat = fsSync.fstatSync(fd);
+    if (!stat.isFile()) {
+      throw new Error(`not a regular file: ${filePath}`);
+    }
+    const CHUNK_SIZE = 64 * 1024;
+    const chunks: Buffer[] = [];
+    let total = 0;
+    const scratch = Buffer.allocUnsafe(CHUNK_SIZE);
+    while (true) {
+      const bytesRead = fsSync.readSync(fd, scratch, 0, CHUNK_SIZE, null);
+      if (bytesRead === 0) {
+        return Buffer.concat(chunks, total).toString("utf-8");
+      }
+      total += bytesRead;
+      if (total > MAX_OC_PATH_FILE_BYTES) {
+        throw new RangeError(
+          `file too large: exceeds ${MAX_OC_PATH_FILE_BYTES} bytes: ${filePath}`,
+        );
+      }
+      chunks.push(Buffer.from(scratch.subarray(0, bytesRead)));
+    }
+  } finally {
+    fsSync.closeSync(fd);
+  }
+}
+
 async function loadAst(
   absPath: string,
   fileName: string,
   runtime: OutputRuntimeEnv,
   mode: OutputMode,
 ): Promise<OcAst | null> {
-  const raw = await fs.readFile(absPath, "utf-8");
+  let raw: string;
+  try {
+    raw = await loadOcPathFileSafely(absPath);
+  } catch (err) {
+    // Preserve the typed JSONC oversized-input diagnostic contract instead
+    // of letting the generic file-level cap bubble up as an exception.
+    if (
+      err instanceof RangeError &&
+      err.message.includes("file too large") &&
+      inferKind(fileName) === "jsonc"
+    ) {
+      emitError(runtime, mode, err.message, "OC_JSONC_INPUT_TOO_LARGE");
+      runtime.exit(2);
+      return null;
+    }
+    throw err;
+  }
   const kind = inferKind(fileName);
   if (kind === "jsonc") {
     const result = parseJsonc(raw);
@@ -349,7 +401,7 @@ async function pathSetCommand(
     return;
   }
   const fsPath = resolveFsPath(ocPath, options);
-  const oldBytes = await fs.readFile(fsPath, "utf-8");
+  const oldBytes = await loadOcPathFileSafely(fsPath);
   const ast = await loadAst(fsPath, ocPath.file, runtime, mode);
   if (ast === null) {
     return;

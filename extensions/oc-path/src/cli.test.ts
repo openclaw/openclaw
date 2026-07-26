@@ -11,8 +11,6 @@ import { Command, CommanderError } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerPathCli } from "./cli.js";
 
-const JSONC_INPUT_LIMIT_BYTES = 16 * 1024 * 1024;
-
 type PathCommandOptions = {
   readonly json?: boolean;
   readonly human?: boolean;
@@ -259,9 +257,11 @@ describe("openclaw path CLI", () => {
       expect(stderrText(rt)).toContain("missing required argument");
     });
 
-    it("rejects oversized multibyte JSONC with the typed diagnostic", async () => {
+    it("rejects oversized files with the JSONC typed diagnostic", async () => {
       const filePath = join(workspaceDir, "oversized.json");
-      const content = `"${"界".repeat(Math.floor(JSONC_INPUT_LIMIT_BYTES / 3) + 1)}"`;
+      // File exceeds the 16 MB read cap — should be surfaced as the JSONC
+      // oversized-input diagnostic instead of a generic exception.
+      const content = `"${"x".repeat(17 * 1024 * 1024)}"`;
       writeFileSync(filePath, content, "utf-8");
       const rt = createTestRuntime();
 
