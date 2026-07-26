@@ -9,6 +9,7 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { runtimeForLogger } from "../logging/subsystem.js";
 import { isGatewayDraining } from "../process/command-queue.js";
+import { isGatewayRestartDraining } from "../process/gateway-work-admission.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
@@ -351,7 +352,9 @@ export async function prepareGatewayRuntimeState(params: {
   const getRestoredOwnerReadiness = createReadinessChecker({
     channelManager,
     startedAt: serverStartedAt,
-    getGatewayDraining: isGatewayDraining,
+    // The restored-start fence intentionally closes public work admission.
+    // Only a one-way restart drain blocks internal owner reconciliation.
+    getGatewayDraining: isGatewayRestartDraining,
     getEventLoopHealth: readinessEventLoopHealth.snapshot,
     shouldSkipChannelReadiness: () =>
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
