@@ -162,6 +162,10 @@ let hasSyntheticLocalProviderAuthConfig: typeof import("./model-auth.js").hasSyn
 let requireApiKey: typeof import("./model-auth.js").requireApiKey;
 let getApiKeyForModel: typeof import("./model-auth.js").getApiKeyForModel;
 let resolveApiKeyForProvider: typeof import("./model-auth.js").resolveApiKeyForProvider;
+// The barrel facade intentionally exposes only the stable Plugin SDK surface.
+// Internal-only options (allowPluginSyntheticAuth, runtimeLookup) are exercised
+// against the implementation module directly.
+let resolveApiKeyForProviderInternal: typeof import("./model-auth-provider.js").resolveApiKeyForProvider;
 let resolveAwsSdkEnvVarName: typeof import("./model-auth.js").resolveAwsSdkEnvVarName;
 let resolveModelAuthMode: typeof import("./model-auth.js").resolveModelAuthMode;
 let resolveUsableCustomProviderApiKey: typeof import("./model-auth.js").resolveUsableCustomProviderApiKey;
@@ -199,6 +203,8 @@ beforeAll(async () => {
     resolveModelAuthMode,
     resolveUsableCustomProviderApiKey,
   } = await import("./model-auth.js"));
+  ({ resolveApiKeyForProvider: resolveApiKeyForProviderInternal } =
+    await import("./model-auth-provider.js"));
 });
 
 beforeEach(() => {
@@ -1479,7 +1485,7 @@ describe("resolveApiKeyForProvider", () => {
   // permissions were coupled, so allowAuthProfileFallback: false also silenced
   // the plugin hook and the gateway path failed with "No API key found".
   it("resolves plugin synthetic auth on a gateway-isolated attempt without profile fallback", async () => {
-    const resolved = await resolveApiKeyForProvider({
+    const resolved = await resolveApiKeyForProviderInternal({
       provider: "native-cli",
       cfg: {
         agents: {
@@ -1521,7 +1527,7 @@ describe("resolveApiKeyForProvider", () => {
     };
 
     await expect(
-      resolveApiKeyForProvider({
+      resolveApiKeyForProviderInternal({
         provider: "isolated-store",
         store,
         allowAuthProfileFallback: false,
@@ -1554,7 +1560,7 @@ describe("resolveApiKeyForProvider", () => {
       },
     };
 
-    const resolved = await resolveApiKeyForProvider({
+    const resolved = await resolveApiKeyForProviderInternal({
       provider: "native-cli",
       cfg,
       store: { version: 1, profiles: {} },
@@ -1573,7 +1579,7 @@ describe("resolveApiKeyForProvider", () => {
     });
 
     await expect(
-      resolveApiKeyForProvider({
+      resolveApiKeyForProviderInternal({
         provider: "native-cli",
         cfg,
         store: { version: 1, profiles: {} },
@@ -1588,7 +1594,7 @@ describe("resolveApiKeyForProvider", () => {
     ).rejects.toThrow('No API key found for provider "native-cli"');
 
     await expect(
-      resolveApiKeyForProvider({
+      resolveApiKeyForProviderInternal({
         provider: "native-cli",
         cfg,
         store: { version: 1, profiles: {} },
