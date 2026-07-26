@@ -12,9 +12,7 @@ const LIST_ITEM_LINK_RE = /^\s*(?:[-*]|\d+\.)\s+\[([^\]]+)\]\((\/[^)]+)\)/;
 const MAX_TITLE_WORDS = 8;
 const MAX_LABEL_WORDS = 6;
 const MAX_TERM_LENGTH = 80;
-const DEFAULT_GIT_TIMEOUT_MS = 60_000;
-const MAX_GIT_TIMEOUT_MS = 10 * 60_000;
-const GIT_TIMEOUT_ENV = "OPENCLAW_DOCS_I18N_GLOSSARY_GIT_TIMEOUT_MS";
+const GIT_TIMEOUT_MS = 60_000;
 
 /**
  * @typedef {{
@@ -50,50 +48,50 @@ export function parseArgs(argv) {
   return args;
 }
 
-function resolveGitTimeoutMs(env = process.env) {
-  const raw = env[GIT_TIMEOUT_ENV]?.trim();
-  if (!raw) {
-    return DEFAULT_GIT_TIMEOUT_MS;
-  }
-  const parsed = Number(raw);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
-    return DEFAULT_GIT_TIMEOUT_MS;
-  }
-  return Math.min(parsed, MAX_GIT_TIMEOUT_MS);
-}
-
-const gitTimeoutMs = resolveGitTimeoutMs();
-
 function formatGitArgs(args) {
   return args.join(" ");
 }
 
-function createGitError(args, error) {
+function createGitError(args, error, timeoutMs) {
   const timedOut =
     error?.code === "ETIMEDOUT" ||
     error?.signal === "SIGTERM" ||
     /timed out|timeout/i.test(String(error?.message ?? ""));
   const stderr = typeof error?.stderr === "string" ? error.stderr.trim() : "";
   const message = timedOut
-    ? `docs:check-i18n-glossary: git ${formatGitArgs(args)} timed out after ${gitTimeoutMs}ms.`
+    ? `docs:check-i18n-glossary: git ${formatGitArgs(args)} timed out after ${timeoutMs}ms.`
     : `docs:check-i18n-glossary: git ${formatGitArgs(args)} failed${stderr ? `: ${stderr}` : "."}`;
   const wrapped = new Error(message, { cause: error });
   wrapped.timedOut = timedOut;
   return wrapped;
 }
 
-function runGit(args) {
-  try {
-    return execFileSync("git", args, {
-      cwd: ROOT,
-      stdio: ["ignore", "pipe", "pipe"],
-      encoding: "utf8",
-      timeout: gitTimeoutMs,
-    }).trim();
-  } catch (error) {
-    throw createGitError(args, error);
-  }
+/**
+ * Test code can inject a short timeout and isolated PATH without adding a
+ * production environment/config surface.
+ *
+ * @param {{ timeoutMs?: number; cwd?: string; env?: NodeJS.ProcessEnv }} [options]
+ */
+export function createGitRunner(options = {}) {
+  const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
+  const cwd = options.cwd ?? ROOT;
+  const env = options.env ?? process.env;
+  return (args) => {
+    try {
+      return execFileSync("git", args, {
+        cwd,
+        env,
+        stdio: ["ignore", "pipe", "pipe"],
+        encoding: "utf8",
+        timeout: timeoutMs,
+      }).trim();
+    } catch (error) {
+      throw createGitError(args, error, timeoutMs);
+    }
+  };
 }
+
+const runGit = createGitRunner();
 
 function resolveBase(explicitBase) {
   if (explicitBase) {
