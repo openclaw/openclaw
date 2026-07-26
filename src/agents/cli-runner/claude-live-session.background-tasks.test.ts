@@ -51,6 +51,7 @@ function buildPreparedCliRunContext(params: {
   timeoutMs?: number;
   sessionId?: string;
   sessionKey?: string;
+  credentialFingerprint?: string;
 }): PreparedCliRunContext {
   const backend = {
     command: "claude",
@@ -58,7 +59,7 @@ function buildPreparedCliRunContext(params: {
     output: "jsonl" as const,
     input: "stdin" as const,
     modelArg: "--model",
-    sessionArg: "--session-id",
+    sessionArgs: ["--session-id", "{sessionId}"],
     sessionMode: "always" as const,
     systemPromptFileArg: "--append-system-prompt-file",
     systemPromptWhen: "first" as const,
@@ -88,6 +89,15 @@ function buildPreparedCliRunContext(params: {
     preparedBackend: {
       backend,
       env: {},
+      ...(params.credentialFingerprint
+        ? {
+            secretInput: {
+              fd: 3,
+              fingerprint: params.credentialFingerprint,
+              createData: () => Buffer.from("secret"),
+            },
+          }
+        : {}),
     },
     reusableCliSession: { mode: "none" },
     hadSessionFile: false,
@@ -166,10 +176,12 @@ function startLiveTurn(params: {
   noOutputTimeoutMs?: number;
   useResume?: boolean;
   onPhase?: (phase: "send" | "resolve") => void;
+  credentialFingerprint?: string;
 }) {
   const context = buildPreparedCliRunContext({
     runId: params.runId,
     timeoutMs: params.timeoutMs,
+    credentialFingerprint: params.credentialFingerprint,
   });
   return runClaudeLiveSessionTurn({
     context,
@@ -186,6 +198,41 @@ function startLiveTurn(params: {
 }
 
 describe("claude live session provisional results", () => {
+  it("reuses the same credential generation and restarts when it rotates", async () => {
+    const driver = installLiveStdoutDriver({
+      onWrite: (stdout) => {
+        stdout(
+          jsonl([
+            { type: "system", subtype: "init", session_id: "live-credential-rotation" },
+            {
+              type: "result",
+              subtype: "success",
+              session_id: "live-credential-rotation",
+              result: "done",
+            },
+          ]),
+        );
+      },
+    });
+
+    await startLiveTurn({
+      runId: "run-credential-a-first",
+      credentialFingerprint: "credential-a",
+    });
+    await startLiveTurn({
+      runId: "run-credential-a-second",
+      credentialFingerprint: "credential-a",
+    });
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+
+    await startLiveTurn({
+      runId: "run-credential-b",
+      credentialFingerprint: "credential-b",
+    });
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
+    expect(driver.cancel).toHaveBeenCalledOnce();
+  });
+
   it.each([
     { taskType: "local_agent", label: "subagent" },
     { taskType: "local_workflow", label: "workflow" },
@@ -679,6 +726,14 @@ describe("claude live session provisional results", () => {
     const rejection = expect(resultPromise).rejects.toMatchObject({
       name: "FailoverError",
       message: expect.stringMatching(/exceeded timeout/i),
+      code: "cli_overall_timeout",
+      cliTimeout: {
+        mode: "overall",
+        timeoutSeconds: 5,
+        observedActivity: true,
+        activeToolCount: 0,
+        backgroundTaskCount: 0,
+      },
     });
     await vi.advanceTimersByTimeAsync(5_000);
     await rejection;
@@ -852,6 +907,14 @@ describe("claude live session provisional results", () => {
     const rejection = expect(resultPromise).rejects.toMatchObject({
       name: "FailoverError",
       message: expect.stringMatching(/exceeded timeout/i),
+      code: "cli_overall_timeout",
+      cliTimeout: {
+        mode: "overall",
+        timeoutSeconds: 5,
+        observedActivity: true,
+        activeToolCount: 0,
+        backgroundTaskCount: 1,
+      },
     });
     await vi.advanceTimersByTimeAsync(5_000);
     await rejection;

@@ -47,6 +47,7 @@ async function activateAskUserPrompt(toolCallId: string, args: unknown) {
   let resolveAnswer: ((value: { status: "cancelled" }) => void) | undefined;
   const tool = createAskUserTool({
     sessionKey: "agent:unit-session",
+    runId: "run-test",
     gatewayCall: async (method, _opts, params) => {
       if (method === "question.request") {
         if (!params || typeof params !== "object" || !("id" in params)) {
@@ -346,11 +347,10 @@ describe("handleToolExecutionStart read path checks", () => {
       presentationTextMode: "fallback",
       presentation: {
         blocks: [
+          { type: "text", text: "Where should this deploy?" },
           {
             type: "text",
             text: [
-              "Where should this deploy?",
-              "",
               "- Staging (Recommended): Safer default",
               "- Production",
               "",
@@ -430,7 +430,11 @@ describe("handleToolExecutionStart read path checks", () => {
     await vi.waitFor(() => expect(onToolResult).toHaveBeenCalledOnce());
 
     const payload = onToolResult.mock.calls[0]?.[0];
-    expect(payload?.text).toContain("Reply with the number, the option text, or your own answer.");
+    expect(payload?.text).toContain(
+      questions.length > 1
+        ? "Reply by number or question id. Use a declared option where choices are fixed."
+        : "Reply with the number, the option text, or your own answer.",
+    );
     expect(payload).not.toHaveProperty("presentation");
     expect(payload).not.toHaveProperty("presentationTextMode");
     await activation.finish();
@@ -1412,6 +1416,66 @@ describe("handleToolExecutionEnd private result observer", () => {
       result,
       isError: false,
     });
+  });
+});
+
+describe("handleToolExecutionEnd MCP App channel view tracking", () => {
+  const result = (viewId: string, title: string) => ({
+    details: {
+      mcpAppPreview: {
+        view: { id: viewId, title },
+        mcpApp: { viewId },
+      },
+    },
+  });
+
+  it("retains only the latest successful bounded view identity", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "mcp_first",
+      toolCallId: "mcp-first",
+      isError: false,
+      result: result("view-first", "First app"),
+    } as never);
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "mcp_failed",
+      toolCallId: "mcp-failed",
+      isError: true,
+      result: result("view-failed", "Failed app"),
+    } as never);
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "mcp_latest",
+      toolCallId: "mcp-latest",
+      isError: false,
+      result: result("view-latest", "Latest app"),
+    } as never);
+
+    expect(ctx.state.latestMcpAppChannelView).toEqual({ viewId: "view-latest" });
+  });
+
+  it("ignores mismatched or unbounded preview data", async () => {
+    const { ctx } = createTestContext();
+    const leaked = {
+      ...result("view-safe", "Safe app"),
+      html: "private html",
+      sessionKey: "agent:secret",
+      bearerToken: "secret",
+    };
+    leaked.details.mcpAppPreview.view.id = "different-view";
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "mcp_invalid",
+      toolCallId: "mcp-invalid",
+      isError: false,
+      result: leaked,
+    } as never);
+
+    expect(ctx.state.latestMcpAppChannelView).toBeUndefined();
   });
 });
 

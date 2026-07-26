@@ -6,7 +6,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { applyMergePatch } from "../../config/merge-patch.js";
-import type { CliBackendConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { tryReadJson } from "../../infra/json-files.js";
@@ -16,18 +15,19 @@ import {
   OPENCLAW_TOOLS_MCP_TOOLS_ENV,
 } from "../../mcp/openclaw-tools-serve-config.js";
 import { extractMcpServerMap, type BundleMcpConfig } from "../../plugins/bundle-mcp.js";
+import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import type { CliBundleMcpMode } from "../../plugins/types.js";
+import { isRecord } from "../bundle-mcp-adapter.js";
 import { loadMergedBundleMcpConfig, toCliBundleMcpServerConfig } from "../bundle-mcp-config.js";
 import { resolveMcpBearerBundleConfig } from "../mcp-auth-profile.js";
-import { isRecord } from "./bundle-mcp-adapter-shared.js";
 import {
-  findClaudeMcpConfigPath,
   findClaudeMcpConfigPaths,
   injectClaudeMcpConfigArgs,
   writeClaudeMcpCaptureConfig,
 } from "./bundle-mcp-claude.js";
 import { injectCodexMcpConfigArgs } from "./bundle-mcp-codex.js";
 import { writeGeminiMcpCaptureSettings, writeGeminiSystemSettings } from "./bundle-mcp-gemini.js";
+import { injectBundleMcpBackendArgs } from "./bundle-mcp-runtime.js";
 import { bundleMcpOwnedMkdtempPrefix } from "./bundle-mcp-sweep.js";
 
 type PreparedCliBundleMcpConfig = {
@@ -38,10 +38,6 @@ type PreparedCliBundleMcpConfig = {
   mcpResumeHash?: string;
   env?: Record<string, string>;
 };
-
-function resolveBundleMcpMode(mode: CliBundleMcpMode | undefined): CliBundleMcpMode {
-  return mode ?? "claude-config-file";
-}
 
 async function readExternalMcpConfig(configPath: string): Promise<BundleMcpConfig> {
   return { mcpServers: extractMcpServerMap(await tryReadJson<unknown>(configPath)) };
@@ -151,14 +147,9 @@ async function prepareModeSpecificBundleMcpConfig(params: {
 
   if (params.mode === "codex-config-overrides") {
     return {
-      backend: {
-        ...params.backend,
-        args: injectCodexMcpConfigArgs(params.backend.args, params.mergedConfig),
-        resumeArgs: injectCodexMcpConfigArgs(
-          params.backend.resumeArgs ?? params.backend.args ?? [],
-          params.mergedConfig,
-        ),
-      },
+      backend: injectBundleMcpBackendArgs(params.backend, (args) =>
+        injectCodexMcpConfigArgs(args, params.mergedConfig),
+      ),
       mcpConfigHash,
       mcpResumeHash,
       env: params.env,
@@ -239,7 +230,7 @@ export async function prepareCliBundleMcpConfig(params: {
     return { backend: params.backend, env: params.env };
   }
 
-  const mode = resolveBundleMcpMode(params.mode);
+  const mode = params.mode ?? "claude-config-file";
   if (params.exclusiveConfig) {
     return await prepareModeSpecificBundleMcpConfig({
       mode,
@@ -312,16 +303,16 @@ export async function prepareCliBundleMcpCaptureAttempt(params: {
   if (!params.captureKey) {
     return { env: params.env };
   }
-  if (resolveBundleMcpMode(params.mode) === "gemini-system-settings") {
+  if ((params.mode ?? "claude-config-file") === "gemini-system-settings") {
     return await writeGeminiMcpCaptureSettings({
       inheritedEnv: params.env,
       captureKey: params.captureKey,
     });
   }
-  if (resolveBundleMcpMode(params.mode) === "claude-config-file") {
+  if ((params.mode ?? "claude-config-file") === "claude-config-file") {
     const mcpConfigPath =
-      findClaudeMcpConfigPath(params.backend?.args) ??
-      findClaudeMcpConfigPath(params.backend?.resumeArgs);
+      findClaudeMcpConfigPaths(params.backend?.args)[0] ??
+      findClaudeMcpConfigPaths(params.backend?.resumeArgs)[0];
     if (mcpConfigPath) {
       await writeClaudeMcpCaptureConfig({
         mcpConfigPath,

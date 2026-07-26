@@ -78,12 +78,6 @@ function createTaskFlowSessionMock() {
   };
 }
 
-function createDeprecatedRuntimeConfigError(name: "loadConfig" | "writeConfigFile"): Error {
-  return new Error(
-    `Plugin runtime config.${name}() is deprecated in tests; pass cfg/current() or use mutateConfigFile()/replaceConfigFile().`,
-  );
-}
-
 function normalizeUntrustedGroupPrompt(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -158,6 +152,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     ) as unknown as PluginRuntime["tasks"]["managedFlows"]["fromToolContext"],
   };
   const dispatchAssembledChannelTurnMock = vi.fn(async (params: Record<string, unknown>) => {
+    const admission = (params.admission ?? { kind: "dispatch" }) as { kind: string };
     const ctxPayload = params.ctxPayload as Record<string, unknown>;
     const record = params.record as
       | Parameters<PluginRuntime["channel"]["inbound"]["runPreparedReply"]>[0]["record"]
@@ -167,11 +162,21 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     >[0]["recordInboundSession"];
     const routeSessionKey = params.routeSessionKey as string;
     const storePath = params.storePath as string;
-    const delivery = params.delivery as {
-      deliver: (payload: unknown, info: unknown) => Promise<unknown>;
+    const sourceDelivery = params.delivery as {
+      deliver?: (payload: unknown, info: unknown) => Promise<unknown>;
+      deliverWithProviderMessageSending?: (payload: unknown, info: unknown) => Promise<unknown>;
       onDelivered?: (payload: unknown, info: unknown, result: unknown) => Promise<void> | void;
       onError?: (err: unknown, info: unknown) => void;
     };
+    const sourceDeliver =
+      sourceDelivery.deliverWithProviderMessageSending ?? sourceDelivery.deliver;
+    if (admission.kind !== "observeOnly" && !sourceDeliver) {
+      throw new Error("channel delivery mock requires a delivery callback");
+    }
+    const delivery =
+      admission.kind === "observeOnly"
+        ? { deliver: async () => ({ visibleReplySent: false }) }
+        : { ...sourceDelivery, deliver: sourceDeliver! };
     const ctxSessionKey = ctxPayload.SessionKey;
     const sessionKey = typeof ctxSessionKey === "string" ? ctxSessionKey : routeSessionKey;
     const dispatchReplyWithBufferedBlockDispatcher =
@@ -209,7 +214,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       trackSessionMetaTask: record?.trackSessionMetaTask,
     });
     await (params.afterRecord as (() => void | Promise<void>) | undefined)?.();
-    const dispatchResult = await dispatchReplyWithBufferedBlockDispatcher({
+    const rawDispatchResult = await dispatchReplyWithBufferedBlockDispatcher({
       ctx: ctxPayload,
       cfg: params.cfg,
       dispatcherOptions: {
@@ -225,11 +230,18 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       replyOptions: {
         ...(onModelSelected ? { onModelSelected } : {}),
         ...(params.replyOptions as Record<string, unknown> | undefined),
+        ...(params.turnAdoptionLifecycle
+          ? { turnAdoptionLifecycle: params.turnAdoptionLifecycle }
+          : {}),
       },
       replyResolver: params.replyResolver,
     });
+    const dispatchResult =
+      admission.kind === "observeOnly"
+        ? { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } }
+        : rawDispatchResult;
     return {
-      admission: params.admission ?? { kind: "dispatch" },
+      admission,
       dispatched: true,
       ctxPayload,
       routeSessionKey,
@@ -259,13 +271,16 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         throw err;
       }
       const admission = params.admission ?? { kind: "dispatch" as const };
-      const dispatchResult =
-        admission.kind === "observeOnly"
-          ? (params.observeOnlyDispatchResult ?? {
-              queuedFinal: false,
-              counts: { tool: 0, block: 0, final: 0 },
-            })
-          : await params.runDispatch();
+      let dispatchResult;
+      if (admission.kind === "observeOnly") {
+        await params.runDispatchLifecycle?.onDispatchSkipped("observeOnly");
+        dispatchResult = params.observeOnlyDispatchResult ?? {
+          queuedFinal: false,
+          counts: { tool: 0, block: 0, final: 0 },
+        };
+      } else {
+        dispatchResult = await params.runDispatch();
+      }
       return {
         admission,
         dispatched: true,
@@ -332,6 +347,20 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         resolved.admission ?? preflight.admission ?? ({ kind: "dispatch" } as const);
       let dispatchResult;
       if ("runDispatch" in resolved) {
+        const lifecycle = resolved.runDispatchLifecycle;
+        if (!lifecycle) {
+          throw new Error(
+            "runChannelInboundEvent prepared turns must declare runDispatchLifecycle when creating runDispatch",
+          );
+        }
+        if (
+          params.turnAdoptionLifecycle &&
+          lifecycle.turnAdoptionLifecycle !== params.turnAdoptionLifecycle
+        ) {
+          throw new Error(
+            "runChannelInboundEvent prepared turn runDispatchLifecycle must own the top-level turnAdoptionLifecycle",
+          );
+        }
         const prepared =
           "route" in resolved
             ? (() => {
@@ -353,24 +382,22 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
           ...prepared,
           admission,
         } as unknown as Parameters<PluginRuntime["channel"]["inbound"]["runPreparedReply"]>[0]);
+      } else if ("route" in resolved) {
+        dispatchResult = await dispatchChannelTurnPlanMock({
+          ...resolved,
+          admission,
+          ...(params.turnAdoptionLifecycle
+            ? { turnAdoptionLifecycle: params.turnAdoptionLifecycle }
+            : {}),
+        });
       } else {
-        const delivery =
-          admission.kind === "observeOnly"
-            ? { deliver: async () => ({ visibleReplySent: false }) }
-            : resolved.delivery;
-        if ("route" in resolved) {
-          dispatchResult = await dispatchChannelTurnPlanMock({
-            ...resolved,
-            admission,
-            delivery,
-          });
-        } else {
-          dispatchResult = await dispatchAssembledChannelTurnMock({
-            ...resolved,
-            admission,
-            delivery,
-          });
-        }
+        dispatchResult = await dispatchAssembledChannelTurnMock({
+          ...resolved,
+          admission,
+          ...(params.turnAdoptionLifecycle
+            ? { turnAdoptionLifecycle: params.turnAdoptionLifecycle }
+            : {}),
+        });
       }
       const result = {
         ...dispatchResult,
@@ -396,9 +423,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       MessageSidFull: params.messageIdFull,
       ReplyToId: params.reply.replyToId ?? params.supplemental?.quote?.id,
       ReplyToIdFull: params.reply.replyToIdFull ?? params.supplemental?.quote?.fullId,
-      MediaPath: params.media?.[0]?.path,
-      MediaUrl: params.media?.[0]?.url ?? params.media?.[0]?.path,
-      MediaType: params.media?.[0]?.contentType ?? params.media?.[0]?.kind,
+      media: params.media,
       ChatType: params.conversation.kind,
       ConversationLabel: params.conversation.label,
       SenderName: params.sender.name ?? params.sender.displayLabel,
@@ -457,12 +482,6 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         afterWrite: { mode: "auto" },
         followUp: { mode: "auto", requiresRestart: false },
       })) as unknown as PluginRuntime["config"]["replaceConfigFile"],
-      loadConfig: vi.fn(() => {
-        throw createDeprecatedRuntimeConfigError("loadConfig");
-      }) as unknown as PluginRuntime["config"]["loadConfig"],
-      writeConfigFile: vi.fn(async () => {
-        throw createDeprecatedRuntimeConfigError("writeConfigFile");
-      }) as unknown as PluginRuntime["config"]["writeConfigFile"],
     },
     agent: {
       defaults: {
@@ -514,12 +533,30 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
           ) => {
             const sessionId = "plugin-runtime-mock-session";
             const key = params.key;
+            const sessionInitialEntry =
+              "acpSessionBinding" in params.initialEntry
+                ? {
+                    acpSessionBinding: {
+                      acpBackendId: params.initialEntry.acpBackendId,
+                      ...params.initialEntry.acpSessionBinding,
+                    },
+                    ...(params.initialEntry.modelSelectionLocked
+                      ? { modelSelectionLocked: true as const }
+                      : {}),
+                    ...(params.initialEntry.pluginExtensions
+                      ? { pluginExtensions: structuredClone(params.initialEntry.pluginExtensions) }
+                      : {}),
+                    ...(params.initialEntry.pluginOwnerId
+                      ? { pluginOwnerId: params.initialEntry.pluginOwnerId }
+                      : {}),
+                  }
+                : structuredClone(params.initialEntry);
             const initialEntry = {
               sessionId,
               updatedAt: Date.now(),
               ...(params.label !== undefined ? { label: params.label } : {}),
               ...(params.spawnedCwd !== undefined ? { spawnedCwd: params.spawnedCwd } : {}),
-              ...structuredClone(params.initialEntry),
+              ...sessionInitialEntry,
               ...(params.afterCreate ? { initializationPending: true as const } : {}),
             };
             const initialized = {
@@ -636,9 +673,6 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       listProviders: vi.fn() as unknown as PluginRuntime["webSearch"]["listProviders"],
       search: vi.fn() as unknown as PluginRuntime["webSearch"]["search"],
     },
-    stt: {
-      transcribeAudioFile: vi.fn() as unknown as PluginRuntime["stt"]["transcribeAudioFile"],
-    },
     channel: {
       text: {
         chunkByNewline: vi.fn((text: string) => (text ? [text] : [])),
@@ -694,9 +728,6 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         formatAgentEnvelope: vi.fn(
           (opts: { body: string }) => opts.body,
         ) as unknown as PluginRuntime["channel"]["reply"]["formatAgentEnvelope"],
-        formatInboundEnvelope: vi.fn(
-          (opts: { body: string }) => opts.body,
-        ) as unknown as PluginRuntime["channel"]["reply"]["formatInboundEnvelope"],
         resolveEnvelopeFormatOptions: vi.fn(() => ({
           template: "channel+name+time",
         })) as unknown as PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"],
@@ -909,9 +940,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         fromToolContext: vi.fn(),
       } as PluginRuntime["tasks"]["flows"],
       managedFlows: taskFlow,
-      flow: taskFlow,
     },
-    taskFlow,
     modelAuth: {
       getApiKeyForModel: vi.fn() as unknown as PluginRuntime["modelAuth"]["getApiKeyForModel"],
       getRuntimeAuthForModel:
@@ -923,7 +952,6 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       run: vi.fn(),
       waitForRun: vi.fn(),
       getSessionMessages: vi.fn(),
-      getSession: vi.fn(),
       deleteSession: vi.fn(),
     },
     sandbox: {

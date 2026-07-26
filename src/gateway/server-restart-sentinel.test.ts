@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { RestartSentinelPayload } from "../infra/restart-sentinel.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 
 type RestartSentinel = NonNullable<
   Awaited<ReturnType<typeof import("../infra/restart-sentinel.js").readRestartSentinel>>
@@ -291,7 +292,8 @@ vi.mock("./session-utils.js", () => ({
   loadSessionEntry: mocks.loadSessionEntry,
 }));
 
-vi.mock("../utils/delivery-context.shared.js", () => ({
+vi.mock("../utils/delivery-context.shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../utils/delivery-context.shared.js")>()),
   deliveryContextFromSession: mocks.deliveryContextFromSession,
   mergeDeliveryContext: mocks.mergeDeliveryContext,
   normalizeSessionDeliveryFields: mocks.normalizeSessionDeliveryFields,
@@ -1555,6 +1557,42 @@ describe("scheduleRestartSentinelWake", () => {
     );
   });
 
+  it("accepts normalized generated-media evidence without a bare retry", async () => {
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
+      status: "ok",
+      result: {
+        payloads: [{ text: "ready", mediaUrls: ["/tmp/generated image.png"] }],
+        deliveryStatus: { status: "sent" },
+      },
+    });
+
+    await deliverQueuedSessionDelivery({
+      deps: {} as never,
+      entry: {
+        id: "session-delivery-media-normalized",
+        kind: "agentTurn",
+        sessionKey: "agent:main:main",
+        message: "generated image ready",
+        messageId: "image:task-normalized:agent-loop",
+        idempotencyKey: "image:task-normalized:agent-loop",
+        enqueuedAt: 1,
+        retryCount: 0,
+        route: { channel: "discord", to: "channel:123", chatType: "channel" },
+        inputProvenance: {
+          kind: "inter_session",
+          sourceChannel: "webchat",
+          sourceTool: "image_generate",
+        },
+        sourceReplyDeliveryMode: "automatic",
+        expectedMediaUrls: ["file:///tmp/generated%20image.png"],
+      },
+    });
+
+    expect(mocks.advanceSessionDeliveryAgentRun).not.toHaveBeenCalled();
+    expect(mocks.failSessionDelivery).not.toHaveBeenCalled();
+    expect(mocks.deferSessionDelivery).not.toHaveBeenCalled();
+  });
+
   it("accepts a generated-media reply committed only to the owning transcript", async () => {
     mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
       status: "ok",
@@ -2578,7 +2616,10 @@ describe("scheduleRestartSentinelWake", () => {
       entry: {
         sessionId: "agent:main:group",
         updatedAt: 0,
-        origin: { provider: "telegram", chatType: "group" },
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "telegram" },
+          origin: { provider: "telegram", chatType: "group" },
+        }),
       },
       store: {},
       storePath: "/tmp/sessions.json",
@@ -2623,7 +2664,10 @@ describe("scheduleRestartSentinelWake", () => {
       entry: {
         sessionId: "agent:main:telegram:group:-1003826723328:topic:13757",
         updatedAt: 0,
-        origin: { provider: "telegram", chatType: "group" },
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "telegram" },
+          origin: { provider: "telegram", chatType: "group" },
+        }),
       },
       store: {},
       storePath: "/tmp/sessions.json",
@@ -3258,7 +3302,10 @@ describe("scheduleRestartSentinelWake", () => {
         entry: {
           sessionId: "agent:main:matrix:channel:!lowercased:example.org:thread:$thread-event",
           updatedAt: 0,
-          origin: { provider: "matrix", accountId: "acct-thread", threadId: "$thread-event" },
+          delivery: normalizeSessionDeliveryState({
+            context: { channel: "matrix", accountId: "acct-thread", threadId: "$thread-event" },
+            origin: { provider: "matrix", accountId: "acct-thread", threadId: "$thread-event" },
+          }),
         },
         store: {},
         storePath: "/tmp/sessions.json",
@@ -3271,8 +3318,9 @@ describe("scheduleRestartSentinelWake", () => {
         entry: {
           sessionId: "agent:main:matrix:channel:!lowercased:example.org",
           updatedAt: 0,
-          lastChannel: "matrix",
-          lastTo: "room:!MixedCase:example.org",
+          delivery: normalizeSessionDeliveryState({
+            context: { channel: "matrix", to: "room:!MixedCase:example.org" },
+          }),
         },
         store: {},
         storePath: "/tmp/sessions.json",

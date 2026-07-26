@@ -114,6 +114,7 @@ import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbo
 import {
   beginTerminalSourceReplyDelivery,
   cancelTerminalSourceReplyDelivery,
+  isDeliveredCurrentSourceReply,
   reconcileTerminalSourceReplyDelivery,
 } from "./source-reply-mirror.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
@@ -255,6 +256,63 @@ export function getToolResult(
   result: MessageActionRunResult,
 ): AgentToolResult<unknown> | undefined {
   return "toolResult" in result ? result.toolResult : undefined;
+}
+
+function asResultRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function markDeliveredCurrentSourceReply<T extends MessageActionRunResult>(
+  result: T,
+  params: {
+    cfg: OpenClawConfig;
+    actionParams: Record<string, unknown>;
+    channel: ChannelId;
+    accountId?: string | null;
+    input: RunMessageActionParams;
+    agentId?: string;
+    replyToIsExplicit: boolean;
+  },
+): T {
+  if (result.kind !== "send" || params.input.sourceReplyDeliveryMode !== "message_tool_only") {
+    return result;
+  }
+  const authorization = params.input.messageActionAuthorization;
+  if (
+    !authorization?.toolContext ||
+    !isDeliveredCurrentSourceReply({
+      action: "send",
+      channel: params.channel,
+      actionParams: params.actionParams,
+      cfg: params.cfg,
+      accountId: params.accountId,
+      currentAccountId: authorization.requesterAccountId ?? params.input.defaultAccountId,
+      sessionKey: params.input.sessionKey,
+      sessionId: params.input.sessionId,
+      agentId: params.agentId,
+      toolContext: authorization.toolContext,
+      deliveredPayload: result.payload,
+      replyToIsExplicit: params.replyToIsExplicit,
+    })
+  ) {
+    return result;
+  }
+  const payload = asResultRecord(result.payload);
+  const details = asResultRecord(result.toolResult?.details);
+  return {
+    ...result,
+    payload: payload ? { ...payload, sourceReplyRoute: "current-source" } : result.payload,
+    ...(result.toolResult
+      ? {
+          toolResult: {
+            ...result.toolResult,
+            details: { ...details, sourceReplyRoute: "current-source" },
+          },
+        }
+      : {}),
+  } as T;
 }
 
 function resolveGatewayActionOptions(gateway?: MessageActionRunnerGateway) {
@@ -628,6 +686,17 @@ function updateSendPayloadPartsFromReplyPayload(
   };
 }
 
+function applySendLocationToActionParams(
+  actionParams: Record<string, unknown>,
+  location: ReplyPayload["location"],
+) {
+  if (location) {
+    actionParams.location = location;
+  } else {
+    delete actionParams.location;
+  }
+}
+
 function applySendPayloadPartsToActionParams(
   actionParams: Record<string, unknown>,
   parts: SendPayloadParts,
@@ -645,7 +714,7 @@ function applySendPayloadPartsToActionParams(
   actionParams.asVoice = parts.asVoice || undefined;
   actionParams.audioAsVoice = parts.asVoice || undefined;
   actionParams.asVideoNote = parts.payload.videoAsNote || undefined;
-  actionParams.location = parts.payload.location;
+  applySendLocationToActionParams(actionParams, parts.payload.location);
 }
 
 function collectMessageAttachmentMediaHints(value: unknown): string[] {
@@ -825,6 +894,9 @@ async function runGatewayPluginMessageActionOrNull(params: {
     channel: params.channel,
     actionParams: params.params,
     cfg: params.cfg,
+    accountId: params.accountId,
+    currentAccountId:
+      params.input.messageActionAuthorization?.requesterAccountId ?? params.input.defaultAccountId,
     sessionKey: params.input.sessionKey,
     sessionId: params.input.sessionId,
     agentId: params.agentId,
@@ -1127,7 +1199,14 @@ async function buildSendPayloadParts(params: {
     Boolean(mediaHint) || mediaUrlHints.length > 0 || attachmentMediaHints.length > 0;
   const hasPresentation = hasMessagePresentationBlocks(actionParams.presentation);
   const hasInteractive = hasLegacyInteractiveReplyBlocks(actionParams.interactive);
-  const location = normalizeOutboundLocation(actionParams.location);
+  const rawLocation = actionParams.location;
+  // The flat tool schema also carries scheduled-event `location` as a string,
+  // and some models pad unused optional slots with blanks. Keep real send locations strict.
+  const location =
+    typeof rawLocation === "string" && normalizeOptionalString(rawLocation) === undefined
+      ? undefined
+      : normalizeOutboundLocation(rawLocation);
+  applySendLocationToActionParams(actionParams, location);
   const caption = readStringParam(actionParams, "caption", { allowEmpty: true }) ?? "";
   let message =
     readStringParam(actionParams, "message", {
@@ -1421,7 +1500,15 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
         }),
       });
   if (gatewayPluginAction) {
-    return gatewayPluginAction;
+    return markDeliveredCurrentSourceReply(gatewayPluginAction, {
+      cfg,
+      actionParams: params,
+      channel,
+      accountId,
+      input,
+      agentId,
+      replyToIsExplicit,
+    });
   }
 
   const useCorePresentationDelivery = Boolean(
@@ -1510,7 +1597,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     threadId: resolvedThreadId ?? undefined,
   });
 
-  return {
+  const result: MessageActionRunResult = {
     kind: "send",
     channel,
     action,
@@ -1522,6 +1609,15 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     sendResult: send.sendResult,
     dryRun,
   };
+  return markDeliveredCurrentSourceReply(result, {
+    cfg,
+    actionParams: params,
+    channel,
+    accountId,
+    input,
+    agentId,
+    replyToIsExplicit,
+  });
 }
 
 async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActionRunResult> {

@@ -610,6 +610,7 @@ function cloneCheckpointSessionEntry(params: {
     parentSessionKey: params.parentSessionKey ?? params.currentEntry.parentSessionKey,
     archivedAt: params.preserveManagementState ? params.currentEntry.archivedAt : undefined,
     pinnedAt: params.preserveManagementState ? params.currentEntry.pinnedAt : undefined,
+    icon: params.preserveManagementState ? params.currentEntry.icon : undefined,
     compactionCheckpoints: params.preserveCompactionCheckpoints
       ? params.currentEntry.compactionCheckpoints
       : undefined,
@@ -738,7 +739,7 @@ function shouldRouteCheckpointSessionMutationToSqlite(params: {
  *
  * The branch/restore operations own the transcript fork plus session entry
  * update so a SQLite implementation can copy transcript rows and update
- * `session_entries.entry_json` inside one write transaction.
+ * `session_nodes.entry_json` inside one write transaction.
  */
 export function createFileBackedCompactionCheckpointStore(): CompactionCheckpointStore {
   return {

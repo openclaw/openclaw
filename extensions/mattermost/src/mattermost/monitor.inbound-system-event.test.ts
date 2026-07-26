@@ -1,6 +1,8 @@
 // Mattermost tests cover monitor.inbound system event plugin behavior.
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { MattermostPost } from "./client.js";
+import type { MattermostEventPayload } from "./monitor-websocket.js";
 import { monitorMattermostProvider } from "./monitor.js";
 import type { OpenClawConfig, ReplyPayload, RuntimeEnv } from "./runtime-api.js";
 
@@ -144,6 +146,36 @@ vi.mock("./monitor-resources.js", async (importOriginal) => ({
   }),
 }));
 
+vi.mock("./monitor-ingress.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./monitor-ingress.js")>();
+  return {
+    ...actual,
+    createMattermostIngressMonitor: (
+      options: Parameters<typeof actual.createMattermostIngressMonitor>[0],
+    ) => ({
+      receive: async (rawEvent: string) => {
+        const payload = JSON.parse(rawEvent) as MattermostEventPayload;
+        const post =
+          typeof payload.data?.post === "string"
+            ? (JSON.parse(payload.data.post) as MattermostPost)
+            : (payload.data?.post as MattermostPost | undefined);
+        if (payload.event !== "posted" || !post) {
+          return;
+        }
+        await options.dispatch(post, payload, {
+          abortSignal: new AbortController().signal,
+          onAdopted: async () => {},
+          onDeferred: () => {},
+          onAdoptionFinalizing: () => {},
+          onAbandoned: async () => {},
+        });
+      },
+      stop: async () => {},
+      waitForIdle: async () => {},
+    }),
+  };
+});
+
 vi.mock("./monitor-slash.js", () => ({
   registerMattermostMonitorSlashCommands: mockState.registerMattermostMonitorSlashCommands,
 }));
@@ -165,7 +197,7 @@ vi.mock("./runtime-api.js", async () => {
     createChannelMessageReplyPipeline: vi.fn((params: { cfg: OpenClawConfig }) => ({
       onModelSelected: vi.fn(),
       typingCallbacks: {},
-      resolveResponsePrefix: () => params.cfg.messages?.responsePrefix,
+      resolveResponsePrefix: () => params.cfg.channels?.mattermost?.responsePrefix,
     })),
     registerPluginHttpRoute: mockState.registerPluginHttpRoute,
     resolveChannelMediaMaxBytes: vi.fn(() => 8 * 1024 * 1024),
@@ -748,7 +780,6 @@ describe("mattermost inbound user posts", () => {
     const abortController = new AbortController();
     mockState.abortController = abortController;
     const inlineCommandConfig: OpenClawConfig = {
-      commands: { useAccessGroups: true },
       channels: {
         mattermost: {
           enabled: true,
@@ -1010,7 +1041,6 @@ describe("mattermost inbound user posts", () => {
     const abortController = new AbortController();
     mockState.abortController = abortController;
     const mentionConfig: OpenClawConfig = {
-      commands: { useAccessGroups: false },
       messages: { inbound: { debounceMs: 60_000 } },
       channels: {
         mattermost: {
@@ -1020,6 +1050,7 @@ describe("mattermost inbound user posts", () => {
           chatmode: "oncall",
           dmPolicy: "open",
           groupPolicy: "open",
+          groupAllowFrom: ["user-1"],
         },
       },
     };
@@ -1262,8 +1293,7 @@ describe("mattermost inbound user posts", () => {
           chatmode: "onmessage",
           dmPolicy: "open",
           groupPolicy: "open",
-          streaming: "off",
-          blockStreaming: true,
+          streaming: { mode: "off", block: { enabled: true } },
         },
       },
     };
@@ -1524,7 +1554,6 @@ describe("mattermost inbound user posts", () => {
 
   it("finalizes only the current block when the terminal reply is cumulative", async () => {
     const blockConfig: OpenClawConfig = {
-      messages: { responsePrefix: "[bot]" },
       channels: {
         mattermost: {
           enabled: true,
@@ -1534,6 +1563,7 @@ describe("mattermost inbound user posts", () => {
           dmPolicy: "open",
           groupPolicy: "open",
           streaming: { mode: "block" },
+          responsePrefix: "[bot]",
         },
       },
     };
