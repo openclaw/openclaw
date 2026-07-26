@@ -1,5 +1,8 @@
 // Root help live config tests cover root help output derived from live config state.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadRootHelpRenderOptionsForConfigSensitivePlugins } from "./root-help-live-config.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
@@ -48,5 +51,110 @@ describe("root help live config", () => {
       config: runtimeConfig,
       env,
     });
+  });
+});
+
+describe("root help live config fast path", () => {
+  let home: string;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    home = fs.mkdtempSync(path.join(os.tmpdir(), "root-help-home-"));
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("OPENCLAW_STATE_DIR", undefined);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", undefined);
+    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", undefined);
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", undefined);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  function writeConfig(contents: string): void {
+    fs.mkdirSync(path.join(home, ".openclaw"), { recursive: true });
+    fs.writeFileSync(path.join(home, ".openclaw", "openclaw.json"), contents);
+  }
+
+  it("skips the config load when no config file exists", async () => {
+    await expect(loadRootHelpRenderOptionsForConfigSensitivePlugins()).resolves.toBeNull();
+    expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it("skips the config load for a config whose plugins cannot affect help", async () => {
+    writeConfig(JSON.stringify({ plugins: {} }));
+
+    await expect(loadRootHelpRenderOptionsForConfigSensitivePlugins()).resolves.toBeNull();
+    expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it("loads the config when plugins.enabled is false", async () => {
+    writeConfig(JSON.stringify({ plugins: { enabled: false } }));
+    const runtimeConfig = { plugins: { enabled: false } };
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      valid: true,
+      sourceConfig: runtimeConfig,
+      runtimeConfig,
+    });
+
+    await expect(loadRootHelpRenderOptionsForConfigSensitivePlugins()).resolves.not.toBeNull();
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads the config when the legacy gateway.env sets a plugin env var (#85396)", async () => {
+    fs.mkdirSync(path.join(home, ".config", "openclaw"), { recursive: true });
+    fs.writeFileSync(
+      path.join(home, ".config", "openclaw", "gateway.env"),
+      "OPENCLAW_DISABLE_BUNDLED_PLUGINS=1\n",
+    );
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      valid: true,
+      sourceConfig: {},
+      runtimeConfig: {},
+    });
+
+    await loadRootHelpRenderOptionsForConfigSensitivePlugins();
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads the config when a .env beside OPENCLAW_CONFIG_PATH sets a plugin env var (#85396)", async () => {
+    const configDir = path.join(home, "custom");
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(path.join(configDir, "openclaw.json"), "{}");
+    fs.writeFileSync(path.join(configDir, ".env"), "OPENCLAW_DISABLE_BUNDLED_PLUGINS=1\n");
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(configDir, "openclaw.json"));
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      valid: true,
+      sourceConfig: {},
+      runtimeConfig: {},
+    });
+
+    await loadRootHelpRenderOptionsForConfigSensitivePlugins();
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads the config when the raw config uses an include directive", async () => {
+    writeConfig('{"$include":"./other.json"}');
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      valid: true,
+      sourceConfig: {},
+      runtimeConfig: {},
+    });
+
+    await loadRootHelpRenderOptionsForConfigSensitivePlugins();
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads the config when the raw config is not plain JSON", async () => {
+    writeConfig("{ plugins: { /* JSON5 */ } }");
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      valid: true,
+      sourceConfig: {},
+      runtimeConfig: {},
+    });
+
+    await loadRootHelpRenderOptionsForConfigSensitivePlugins();
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(1);
   });
 });
