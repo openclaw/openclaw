@@ -355,7 +355,7 @@ describe("voice-call CLI status fallback", () => {
 
     const lines = output.output().trim().split("\n");
     expect(lines).toHaveLength(2_002);
-    expect(JSON.parse(lines[0])).toEqual({ seq: 0 });
+    expect(JSON.parse(lines[0] ?? "")).toEqual({ seq: 0 });
     expect(JSON.parse(lines.at(-1) ?? "")).toEqual({ seq: 2001 });
   });
 
