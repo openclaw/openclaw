@@ -22,6 +22,7 @@ import {
 } from "./server-lifetime-sidecars.js";
 import { GATEWAY_EVENTS } from "./server-methods-list.js";
 import { setFallbackGatewayContextResolver } from "./server-plugins.js";
+import { createRestoredAdmissionBeforeReady } from "./server-restored-admission-startup.js";
 import {
   enforceSharedGatewaySessionGenerationForConfigWrite,
   getRequiredSharedGatewaySessionGeneration,
@@ -170,8 +171,6 @@ export async function finishGatewayStartup(params: {
     controlUiBasePath,
     controlUiRootLifecycle,
     sidecarStartup,
-    restoredStartup,
-    getRestoredOwnerReadiness,
     workerLiveEvents,
     earlyRuntime,
     cfgAtStart,
@@ -498,34 +497,7 @@ export async function finishGatewayStartup(params: {
               stopAfterCloseStarted: stopPostReadySidecarsAfterCloseStarted,
             });
           },
-          ...(restoredStartup
-            ? {
-                beforeReady: async () => {
-                  const completed = await restoredStartup.complete({
-                    descriptor: restoredStartup.descriptor,
-                    startScheduler: async () => {
-                      const reconciliation = cronReconciliation.arm({
-                        reason: "startup",
-                        config: cfgAtStart,
-                        cronState: runtimeState.cronState,
-                      });
-                      await runtimeState.cronState.cron.start();
-                      cronStartState.handled = true;
-                      await reconciliation.complete();
-                    },
-                    getOwnerReadiness: getRestoredOwnerReadiness,
-                  });
-                  if (!restoredStartup.release()) {
-                    throw new Error("restored Gateway startup lost work admission");
-                  }
-                  startupState.restoredAdmissionReady = true;
-                  log.info("restored admission opened", {
-                    readinessIdentity: completed.record.readinessIdentity,
-                    replayed: completed.replayed,
-                  });
-                },
-              }
-            : {}),
+          ...createRestoredAdmissionBeforeReady({ runtime, log }),
           ...(workerPlacementRuntime
             ? {
                 startWorkerEnvironmentRuntime: async () => {
