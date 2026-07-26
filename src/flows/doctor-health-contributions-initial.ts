@@ -271,6 +271,12 @@ export function resolveInitialDoctorHealthContributions(params: {
       run: runSessionLocksHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:legacy-boot-session-state",
+      label: "Legacy boot session state",
+      healthCheckIds: ["core/doctor/legacy-boot-session-state"],
+      run: params.runStructuredHealthRepairs,
+    }),
+    createDoctorHealthContribution({
       id: "doctor:session-transcripts",
       label: "Session transcripts",
       healthChecks: {
