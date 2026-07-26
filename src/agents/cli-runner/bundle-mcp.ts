@@ -2,8 +2,6 @@
  * Prepares bundled MCP configuration for CLI runner backends.
  */
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -27,8 +25,8 @@ import {
 } from "./bundle-mcp-claude.js";
 import { injectCodexMcpConfigArgs } from "./bundle-mcp-codex.js";
 import { writeGeminiMcpCaptureSettings, writeGeminiSystemSettings } from "./bundle-mcp-gemini.js";
-import { injectBundleMcpBackendArgs } from "./bundle-mcp-runtime.js";
-import { bundleMcpOwnedMkdtempPrefix } from "./bundle-mcp-sweep.js";
+import { injectBundleMcpBackendArgs, writeTemporaryBundleMcpJson } from "./bundle-mcp-runtime.js";
+import { bundleMcpOwnedMkdtempPrefixName } from "./bundle-mcp-sweep.js";
 
 type PreparedCliBundleMcpConfig = {
   backend: CliBackendConfig;
@@ -168,44 +166,27 @@ async function prepareModeSpecificBundleMcpConfig(params: {
   }
 
   // The temp dir name encodes the owning gateway (pid + boot-id prefix + process
-  // start time), so the prepared run carries durable ownership atomically, with
-  // no extra write that could fail — a concurrent gateway's startup sweep will
-  // not reclaim this dir while the run still waits in the serialization queue
-  // (its CLI child, which would put the path in argv, has not spawned yet).
-  const tempDir = await fs.mkdtemp(await bundleMcpOwnedMkdtempPrefix(os.tmpdir()));
-  try {
-    const mcpConfigPath = path.join(tempDir, "mcp.json");
-    const runtimeConfig = resolveOpenClawMcpEnvTemplates(
-      params.mergedConfig,
-      params.env,
-    ) as BundleMcpConfig;
-    // Roll the temp dir back if the config write fails, so a failed prepare never
-    // leaks a dir (the cleanup callback below is not registered until we return).
-    await fs.writeFile(mcpConfigPath, `${JSON.stringify(runtimeConfig, null, 2)}\n`, "utf-8");
-    return {
-      backend: {
-        ...params.backend,
-        args: injectClaudeMcpConfigArgs(params.backend.args, mcpConfigPath),
-        resumeArgs: injectClaudeMcpConfigArgs(
-          params.backend.resumeArgs ?? params.backend.args ?? [],
-          mcpConfigPath,
-        ),
-      },
-      mcpConfigHash,
-      mcpResumeHash,
-      env: params.env,
-      cleanup: async () => {
-        // Claude config files are generated per run and should not survive cleanup.
-        await fs.rm(tempDir, { recursive: true, force: true });
-      },
-    };
-  } catch (err) {
-    // Roll back so a partial config never leaks (the cleanup callback above is
-    // not registered until this function returns). Swallow a rollback failure so
-    // it cannot mask the original error.
-    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
-    throw err;
-  }
+  // start time), so the prepared run carries durable ownership atomically — a
+  // concurrent gateway's startup sweep will not reclaim this dir while the run
+  // still waits in the serialization queue (its CLI child, which would put the
+  // path in argv, has not spawned yet). Reuse the shared temporary-config writer
+  // (which rolls the dir back on a failed write) so Claude cleanup stays in lock
+  // step with the Codex and Gemini backends.
+  const temporary = await writeTemporaryBundleMcpJson(
+    await bundleMcpOwnedMkdtempPrefixName(),
+    resolveOpenClawMcpEnvTemplates(params.mergedConfig, params.env) as BundleMcpConfig,
+    "mcp.json",
+    false,
+  );
+  return {
+    backend: injectBundleMcpBackendArgs(params.backend, (args) =>
+      injectClaudeMcpConfigArgs(args, temporary.filePath),
+    ),
+    mcpConfigHash,
+    mcpResumeHash,
+    env: params.env,
+    cleanup: temporary.cleanup,
+  };
 }
 
 /** Prepare backend args/env/cleanup for bundle MCP injection into a CLI run. */

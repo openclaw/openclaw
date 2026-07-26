@@ -2,7 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { bundleMcpOwnedMkdtempPrefix, sweepOrphanedBundleMcpTempDirs } from "./bundle-mcp-sweep.js";
+import {
+  bundleMcpOwnedMkdtempPrefix,
+  bundleMcpOwnedMkdtempPrefixName,
+  sweepOrphanedBundleMcpTempDirs,
+} from "./bundle-mcp-sweep.js";
 
 // Kept in sync with the module-private prefix in bundle-mcp-sweep.ts.
 const BUNDLE_MCP_TEMP_PREFIX = "openclaw-cli-mcp-";
@@ -176,6 +180,22 @@ describe("sweepOrphanedBundleMcpTempDirs", () => {
     expect(result.removed).toEqual([]);
     expect(result.kept).toEqual([dir]);
     await expect(fs.stat(dir)).resolves.toBeDefined();
+  });
+
+  it("recognizes a name produced by bundleMcpOwnedMkdtempPrefixName as owned by the live gateway", async () => {
+    // The shared writer feeds this name (joined onto tmpdir) to mkdtemp; same
+    // producer -> consumer round-trip as bundleMcpOwnedMkdtempPrefix.
+    const prefixName = await bundleMcpOwnedMkdtempPrefixName();
+    expect(prefixName.startsWith(BUNDLE_MCP_TEMP_PREFIX)).toBe(true);
+    const dir = await fs.mkdtemp(path.join(root, prefixName));
+    await fs.writeFile(path.join(dir, "mcp.json"), `{"mcpServers":{}}\n`, "utf-8");
+    await fs.utimes(dir, OLD_MTIME, OLD_MTIME);
+    const result = await sweepOrphanedBundleMcpTempDirs({
+      tmpRoot: root,
+      listCommandLines: () => ["node /usr/bin/unrelated"],
+    });
+    expect(result.removed).toEqual([]);
+    expect(result.kept).toEqual([dir]);
   });
 
   it("reclaims a FRESH dead-owner dir regardless of age (owner death, not age, decides)", async () => {

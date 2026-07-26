@@ -114,14 +114,21 @@ async function defaultReadStartTicks(pid: number): Promise<string | undefined> {
 }
 
 /**
- * The `mkdtemp` prefix that encodes the creating gateway's identity into the
- * temp dir name. Passed straight to `fs.mkdtemp`, which appends the random
- * suffix atomically — so ownership exists from the instant the dir does.
+ * The `mkdtemp` prefix *name* that encodes the creating gateway's identity into
+ * the temp dir name (pid + boot tag + process start ticks). The random
+ * `mkdtemp` suffix is appended atomically — so ownership exists from the instant
+ * the dir does — whether the caller passes it to `fs.mkdtemp` (via
+ * `bundleMcpOwnedMkdtempPrefix`) or to the shared `writeTemporaryBundleMcpJson`.
  */
-export async function bundleMcpOwnedMkdtempPrefix(root: string): Promise<string> {
+export async function bundleMcpOwnedMkdtempPrefixName(): Promise<string> {
   const boot = await readBootTag();
   const start = (await defaultReadStartTicks(process.pid)) ?? UNKNOWN_START;
-  return path.join(root, `${BUNDLE_MCP_TEMP_PREFIX}${process.pid}-${boot}-${start}-`);
+  return `${BUNDLE_MCP_TEMP_PREFIX}${process.pid}-${boot}-${start}-`;
+}
+
+/** `bundleMcpOwnedMkdtempPrefixName` joined onto `root` for direct `fs.mkdtemp`. */
+export async function bundleMcpOwnedMkdtempPrefix(root: string): Promise<string> {
+  return path.join(root, await bundleMcpOwnedMkdtempPrefixName());
 }
 
 type BundleMcpOwner = { pid: number; boot: string; start: string };
