@@ -1,5 +1,6 @@
 // Early JSON-output detection and console-log routing for parseable CLI stdout.
 import { loggingState } from "../logging/state.js";
+import { getCommandPathWithRootOptions } from "./argv.js";
 
 /** Detects CLI JSON mode before Commander parses options, stopping at the argv sentinel. */
 export function hasJsonOutputFlag(argv: readonly string[]): boolean {
@@ -9,6 +10,13 @@ export function hasJsonOutputFlag(argv: readonly string[]): boolean {
     }
     if (arg === "--json" || arg.startsWith("--json=")) {
       return true;
+    }
+    if (arg === "--status-json") {
+      // Parent flags can precede child actions; only root status owns this JSON alias.
+      const [primary, child] = getCommandPathWithRootOptions([...argv], 2);
+      if (primary === "models" && child === undefined) {
+        return true;
+      }
     }
   }
   return false;

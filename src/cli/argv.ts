@@ -27,6 +27,11 @@ const ROOT_COMMANDS_WITH_SUBCOMMANDS: ReadonlySet<string> = new Set(
     (descriptor) => descriptor.name,
   ),
 );
+const MODELS_PARENT_BOOLEAN_FLAGS: ReadonlySet<string> = new Set([
+  "--status-json",
+  "--status-plain",
+]);
+const MODELS_PARENT_VALUE_FLAGS: ReadonlySet<string> = new Set(["--agent"]);
 
 export function isHelpOrVersionInvocation(argv: string[]): boolean {
   if (hasRootVersionAlias(argv)) {
@@ -487,6 +492,19 @@ function getCommandPathInternal(
       if (consumed > 0) {
         i += consumed - 1;
         continue;
+      }
+      if (path.length === 1 && path[0] === "models") {
+        // Parent model options must not turn their values into a fake subcommand.
+        const modelsOptionConsumed = consumeKnownOptionToken(
+          args,
+          i,
+          MODELS_PARENT_BOOLEAN_FLAGS,
+          MODELS_PARENT_VALUE_FLAGS,
+        );
+        if (modelsOptionConsumed > 0) {
+          i += modelsOptionConsumed - 1;
+          continue;
+        }
       }
     }
     if (arg.startsWith("-")) {

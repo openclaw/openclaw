@@ -133,6 +133,61 @@ describe("program routes", () => {
     );
   });
 
+  it.each([
+    {
+      name: "bare parent status",
+      argv: ["node", "openclaw", "models"],
+      expected: { json: false, plain: false, agent: undefined },
+    },
+    {
+      name: "JSON status alias",
+      argv: ["node", "openclaw", "models", "--status-json"],
+      expected: { json: true, plain: false, agent: undefined },
+    },
+    {
+      name: "plain status alias",
+      argv: ["node", "openclaw", "models", "--status-plain"],
+      expected: { json: false, plain: true, agent: undefined },
+    },
+    {
+      name: "agent before JSON status alias",
+      argv: ["node", "openclaw", "models", "--agent", "main", "--status-json"],
+      expected: { json: true, plain: false, agent: "main" },
+    },
+    {
+      name: "agent after JSON status alias",
+      argv: ["node", "openclaw", "models", "--status-json", "--agent", "main"],
+      expected: { json: true, plain: false, agent: "main" },
+    },
+    {
+      name: "inline agent before JSON status alias",
+      argv: ["node", "openclaw", "models", "--agent=main", "--status-json"],
+      expected: { json: true, plain: false, agent: "main" },
+    },
+  ])("routes $name through the canonical model status command", async ({ argv, expected }) => {
+    const route = expectRoute(["models"], argv);
+
+    expect(route.loadPlugins).toBeUndefined();
+    await expect(route.run(argv)).resolves.toBe(true);
+    expect(modelsStatusCommandMock).toHaveBeenCalledWith(expected, defaultRuntime);
+  });
+
+  it("keeps model child commands out of the parent status route", () => {
+    expect(findRoutedCommand(["models", "list"])?.run).toBeTypeOf("function");
+    expect(findRoutedCommand(["models", "status"])?.run).toBeTypeOf("function");
+    expect(findRoutedCommand(["models", "auth"])).toBeNull();
+  });
+
+  it.each([
+    ["unknown parent option", ["node", "openclaw", "models", "--unknown"]],
+    ["missing agent", ["node", "openclaw", "models", "--agent"]],
+    ["empty inline agent", ["node", "openclaw", "models", "--agent=", "--status-json"]],
+    ["argument terminator", ["node", "openclaw", "models", "--", "--status-json"]],
+  ])("leaves %s to Commander", async (_name, argv) => {
+    await expectRunFalse(["models"], argv);
+    expect(modelsStatusCommandMock).not.toHaveBeenCalled();
+  });
+
   it("passes parsed channel read-only route flags through", async () => {
     const listRoute = expectRoute(["channels", "list"]);
     await expect(listRoute.run(["node", "openclaw", "channels", "list", "--json"])).resolves.toBe(

@@ -1,5 +1,5 @@
 // Declarative CLI command catalog for startup policy and fast-path routing.
-import { hasFlag } from "./argv.js";
+import { getCommandPathWithRootOptions, hasFlag } from "./argv.js";
 
 export type CliCommandPluginLoadPolicy =
   | "never"
@@ -23,6 +23,7 @@ type CliRoutedCommandId =
   | "agents-list"
   | "config-get"
   | "config-unset"
+  | "models-root-status"
   | "models-list"
   | "models-status"
   | "tasks-list"
@@ -227,6 +228,18 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     exact: true,
     policy: { ensureCliPath: false, networkProxy: "bypass" },
     route: { id: "config-unset" },
+  },
+  {
+    commandPath: ["models"],
+    exact: true,
+    policy: {
+      ensureCliPath: false,
+      routeConfigGuard: "always",
+      // Catalog fallback must not bypass the proxy for network-owning child commands.
+      networkProxy: ({ argv }) =>
+        getCommandPathWithRootOptions(argv, argv.length).length === 1 ? "bypass" : "default",
+    },
+    route: { id: "models-root-status" },
   },
   {
     commandPath: ["models", "list"],

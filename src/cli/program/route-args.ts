@@ -269,6 +269,27 @@ export function parseConfigUnsetRouteArgs(argv: string[]) {
   };
 }
 
+/** Parse the parent `openclaw models` status command and its documented aliases. */
+export function parseModelsRootStatusRouteArgs(argv: string[]) {
+  const positionals = getRoutedCommandPositionals(argv, {
+    commandPath: ["models"],
+    booleanFlags: ["--status-json", "--status-plain"],
+    valueFlags: ["--agent"],
+  });
+  if (!positionals || positionals.length !== 0) {
+    return null;
+  }
+  const agent = parseOptionalFlagValue(argv, "--agent");
+  if (!agent.ok) {
+    return null;
+  }
+  return {
+    json: hasFlag(argv, "--status-json"),
+    plain: hasFlag(argv, "--status-plain"),
+    agent: agent.value,
+  };
+}
+
 /** Parse `openclaw models list` filters for the lightweight model catalog route. */
 export function parseModelsListRouteArgs(argv: string[]) {
   const positionals = getRoutedCommandPositionals(argv, {

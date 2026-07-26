@@ -24,4 +24,41 @@ describe("argv-invocation", () => {
       isRootHelpInvocation: false,
     });
   });
+
+  it.each([
+    {
+      args: ["models", "--status-json"],
+      commandPath: ["models"],
+    },
+    {
+      args: ["models", "--agent", "main", "--status-json"],
+      commandPath: ["models"],
+    },
+    {
+      args: ["models", "--status-json", "--agent", "main"],
+      commandPath: ["models"],
+    },
+    {
+      args: ["models", "--agent=main", "--status-json"],
+      commandPath: ["models"],
+    },
+    {
+      args: ["models", "--agent", "main", "status", "--json"],
+      commandPath: ["models", "status"],
+    },
+    {
+      args: ["models", "--agent=main", "status", "--json"],
+      commandPath: ["models", "status"],
+    },
+  ])("resolves parent model options for $args", ({ args, commandPath }) => {
+    const argv = ["node", "openclaw", ...args];
+
+    expect(resolveCliArgvInvocation(argv)).toEqual({
+      argv,
+      commandPath,
+      primary: "models",
+      hasHelpOrVersion: false,
+      isRootHelpInvocation: false,
+    });
+  });
 });

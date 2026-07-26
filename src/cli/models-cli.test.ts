@@ -88,6 +88,7 @@ describe("models cli", () => {
     modelsSetCommand.mockClear();
     modelsSetImageCommand.mockClear();
     modelsStatusCommand.mockClear();
+    mocks.noopAsync.mockClear();
   });
 
   function createProgram() {
@@ -152,6 +153,45 @@ describe("models cli", () => {
   ])("passes --agent to models status ($label)", async ({ args }) => {
     await runModelsCommand(args);
     expectCommandOptions(modelsStatusCommand, { agent: "poe" });
+  });
+
+  it.each([
+    {
+      label: "JSON alias",
+      args: ["models", "--status-json"],
+      expected: { json: true, plain: false },
+    },
+    {
+      label: "plain alias",
+      args: ["models", "--status-plain"],
+      expected: { json: false, plain: true },
+    },
+    {
+      label: "agent before JSON alias",
+      args: ["models", "--agent", "poe", "--status-json"],
+      expected: { json: true, plain: false, agent: "poe" },
+    },
+    {
+      label: "agent after JSON alias",
+      args: ["models", "--status-json", "--agent", "poe"],
+      expected: { json: true, plain: false, agent: "poe" },
+    },
+    {
+      label: "inline agent before JSON alias",
+      args: ["models", "--agent=poe", "--status-json"],
+      expected: { json: true, plain: false, agent: "poe" },
+    },
+  ])("preserves the parent model status $label", async ({ args, expected }) => {
+    await runModelsCommand(args);
+
+    expectCommandOptions(modelsStatusCommand, expected);
+  });
+
+  it("keeps inherited status aliases out of model child actions", async () => {
+    await runModelsCommand(["models", "--status-json", "list"]);
+
+    expectCommandOptions(mocks.noopAsync, { json: false });
+    expect(modelsStatusCommand).not.toHaveBeenCalled();
   });
 
   it.each([

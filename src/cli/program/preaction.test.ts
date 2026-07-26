@@ -153,6 +153,20 @@ describe("registerPreActionHooks", () => {
       .command("status")
       .option("--json")
       .action(() => {});
+    const models = programLocal
+      .command("models")
+      .option("--status-json")
+      .option("--agent <id>")
+      .action(() => {});
+    models
+      .command("status")
+      .option("--json")
+      .option("--agent <id>")
+      .action(() => {});
+    models
+      .command("list")
+      .option("--json")
+      .action(() => {});
     const acp = programLocal
       .command("acp")
       .option("--token <token>")
@@ -267,7 +281,9 @@ describe("registerPreActionHooks", () => {
       processArgv: ["node", "openclaw", "status", "--debug"],
     });
 
-    expect(emitCliBannerMock).toHaveBeenCalledWith("9.9.9-test");
+    expect(emitCliBannerMock).toHaveBeenCalledWith("9.9.9-test", {
+      argv: ["node", "openclaw", "status", "--debug"],
+    });
     expect(setVerboseMock).toHaveBeenCalledWith(true);
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
@@ -663,6 +679,37 @@ describe("registerPreActionHooks", () => {
     });
   });
 
+  it("recognizes the parent model status alias in full-Commander JSON mode", async () => {
+    await runPreAction({
+      parseArgv: ["models"],
+      processArgv: ["node", "openclaw", "models", "--agent", "main", "--status-json"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["models"],
+      suppressDoctorStdout: true,
+    });
+    expect(routeLogsToStderrMock).toHaveBeenCalledOnce();
+    expect(emitCliBannerMock).not.toHaveBeenCalled();
+  });
+
+  it("does not apply the parent status JSON alias to a model child action", async () => {
+    const argv = ["node", "openclaw", "models", "--status-json", "list"];
+
+    await runPreAction({
+      parseArgv: ["models", "list"],
+      processArgv: argv,
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["models", "list"],
+    });
+    expect(routeLogsToStderrMock).not.toHaveBeenCalled();
+    expect(emitCliBannerMock).toHaveBeenCalledWith("9.9.9-test", { argv });
+  });
+
   it("routes logs to stderr in --json mode so stdout stays clean", async () => {
     await runPreAction({
       parseArgv: ["channels", "send"],
@@ -680,6 +727,9 @@ describe("registerPreActionHooks", () => {
     });
 
     expect(routeLogsToStderrMock).not.toHaveBeenCalled();
+    expect(emitCliBannerMock).toHaveBeenCalledWith("9.9.9-test", {
+      argv: ["node", "openclaw", "config", "set", "gateway.auth.mode", "local", "--json"],
+    });
 
     vi.clearAllMocks();
 

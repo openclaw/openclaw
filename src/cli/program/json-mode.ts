@@ -1,6 +1,6 @@
 // JSON-mode metadata for Commander commands; distinguishes JSON output from parse-only flags.
 import type { Command } from "commander";
-import { hasFlag } from "../argv.js";
+import { hasJsonOutputFlag } from "../json-output-mode.js";
 
 const jsonModeSymbol = Symbol("openclaw.cli.jsonMode");
 
@@ -10,7 +10,9 @@ type JsonModeCommand = Command & {
 };
 
 function commandDefinesJsonOption(command: Command): boolean {
-  return command.options.some((option) => option.long === "--json");
+  return command.options.some(
+    (option) => option.long === "--json" || option.long === "--status-json",
+  );
 }
 
 function getDeclaredCommandJsonMode(command: Command): JsonMode | null {
@@ -33,7 +35,8 @@ export function setCommandJsonMode(command: Command, mode: JsonMode): Command {
 }
 
 function getCommandJsonMode(command: Command, argv: string[] = process.argv): JsonMode | null {
-  if (command.optsWithGlobals<{ json?: unknown }>().json !== true && !hasFlag(argv, "--json")) {
+  const options = command.optsWithGlobals<{ json?: unknown }>();
+  if (options.json !== true && !hasJsonOutputFlag(argv)) {
     return null;
   }
   return getDeclaredCommandJsonMode(command);

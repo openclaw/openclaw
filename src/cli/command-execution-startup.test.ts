@@ -192,6 +192,43 @@ describe("command-execution-startup", () => {
     expect(emitCliBannerMock).not.toHaveBeenCalled();
   });
 
+  it("does not import the banner module for the model status JSON alias", async () => {
+    await mod.applyCliExecutionStartupPresentation({
+      startupPolicy: {
+        suppressDoctorStdout: true,
+        hideBanner: false,
+        skipConfigGuard: true,
+        loadPlugins: false,
+        pluginRegistry: { scope: "all" },
+      },
+      version: "1.2.3",
+      argv: ["node", "openclaw", "models", "--agent", "main", "--status-json"],
+    });
+
+    expect(routeLogsToStderrMock).toHaveBeenCalledTimes(1);
+    expect(emitCliBannerMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves the banner for Commander parse-only JSON input", async () => {
+    const argv = ["node", "openclaw", "config", "set", "gateway.auth.mode", "local", "--json"];
+
+    await mod.applyCliExecutionStartupPresentation({
+      argv,
+      jsonOutputMode: false,
+      startupPolicy: {
+        suppressDoctorStdout: false,
+        hideBanner: false,
+        skipConfigGuard: false,
+        loadPlugins: false,
+        pluginRegistry: { scope: "all" },
+      },
+      version: "1.2.3",
+    });
+
+    expect(routeLogsToStderrMock).not.toHaveBeenCalled();
+    expect(emitCliBannerMock).toHaveBeenCalledWith("1.2.3", { argv });
+  });
+
   it("forwards startup policy into bootstrap defaults and overrides", async () => {
     const statusRuntime = {} as never;
     await mod.ensureCliExecutionBootstrap({

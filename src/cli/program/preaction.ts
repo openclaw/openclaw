@@ -123,6 +123,8 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       env: process.env,
     });
     await applyCliExecutionStartupPresentation({
+      argv,
+      jsonOutputMode,
       startupPolicy,
       version: programVersion,
     });

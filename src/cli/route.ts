@@ -4,12 +4,12 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { type LogLevel, tryParseLogLevel } from "../logging/levels.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
-import { hasFlag } from "./argv.js";
 import {
   applyCliExecutionStartupPresentation,
   ensureCliExecutionBootstrap,
   resolveCliExecutionStartupContext,
 } from "./command-execution-startup.js";
+import { hasJsonOutputFlag } from "./json-output-mode.js";
 import { findRoutedCommand } from "./program/routes.js";
 
 const LOG_LEVEL_FLAG = "--log-level";
@@ -54,15 +54,17 @@ async function prepareRoutedCommand(params: {
   commandPath: string[];
   loadPlugins?: boolean | ((argv: string[]) => boolean);
 }) {
+  const jsonOutputMode = hasJsonOutputFlag(params.argv);
   const { startupPolicy } = resolveCliExecutionStartupContext({
     argv: params.argv,
-    jsonOutputMode: hasFlag(params.argv, "--json"),
+    jsonOutputMode,
     env: process.env,
     routeMode: true,
   });
   const { VERSION } = await import("../version.js");
   await applyCliExecutionStartupPresentation({
     argv: params.argv,
+    jsonOutputMode,
     startupPolicy,
     showBanner: process.stdout.isTTY && !startupPolicy.suppressDoctorStdout,
     version: VERSION,

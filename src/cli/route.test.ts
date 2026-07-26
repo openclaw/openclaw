@@ -155,6 +155,54 @@ describe("tryRouteCli", () => {
     expect(captured).toEqual([true]);
   });
 
+  it.each([
+    ["parent JSON alias", ["node", "openclaw", "models", "--status-json"], ["models"]],
+    [
+      "parent JSON alias with an agent",
+      ["node", "openclaw", "models", "--agent", "main", "--status-json"],
+      ["models"],
+    ],
+    [
+      "parent JSON alias with an inline agent",
+      ["node", "openclaw", "models", "--agent=main", "--status-json"],
+      ["models"],
+    ],
+    [
+      "status with its agent before the subcommand",
+      ["node", "openclaw", "models", "--agent", "main", "status", "--json"],
+      ["models", "status"],
+    ],
+  ])("keeps %s read-only and machine-readable", async (_name, argv, commandPath) => {
+    const captured: boolean[] = [];
+    findRoutedCommandMock.mockReturnValue({ run: runRouteMock });
+    runRouteMock.mockImplementationOnce(async () => {
+      captured.push(loggingState.forceConsoleToStderr);
+      return true;
+    });
+
+    await expect(tryRouteCli(argv)).resolves.toBe(true);
+
+    expect(findRoutedCommandMock).toHaveBeenCalledWith(commandPath, argv);
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+    expect(captured).toEqual([true]);
+  });
+
+  it("keeps inherited model status aliases out of child JSON startup", async () => {
+    const argv = ["node", "openclaw", "models", "--status-json", "list"];
+    const captured: boolean[] = [];
+    findRoutedCommandMock.mockReturnValue({ run: runRouteMock });
+    runRouteMock.mockImplementationOnce(async () => {
+      captured.push(loggingState.forceConsoleToStderr);
+      return true;
+    });
+
+    await expect(tryRouteCli(argv)).resolves.toBe(true);
+
+    expect(findRoutedCommandMock).toHaveBeenCalledWith(["models", "list"], argv);
+    expect(captured).toEqual([false]);
+  });
+
   it("does not route logs to stderr during plugin loading without --json", async () => {
     findRoutedCommandMock.mockReturnValue({
       loadPlugins: true,

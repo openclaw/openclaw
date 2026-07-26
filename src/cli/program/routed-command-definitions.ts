@@ -10,6 +10,7 @@ import {
   parseGatewayStatusRouteArgs,
   parseHealthRouteArgs,
   parseModelsListRouteArgs,
+  parseModelsRootStatusRouteArgs,
   parseModelsStatusRouteArgs,
   parsePluginsListRouteArgs,
   parseSessionsRouteArgs,
@@ -73,6 +74,13 @@ function loadModelsListCommand(): Promise<ModelsListCommandModule> {
 
 function loadModelsStatusCommand(): Promise<ModelsStatusCommandModule> {
   return modelsStatusCommandLoader.load();
+}
+
+async function runModelsStatusRoute(
+  args: Parameters<ModelsStatusCommandModule["modelsStatusCommand"]>[0],
+): Promise<void> {
+  const { modelsStatusCommand } = await loadModelsStatusCommand();
+  await modelsStatusCommand(args, defaultRuntime);
 }
 
 function loadTasksJsonCommand(): Promise<TasksJsonCommandModule> {
@@ -150,12 +158,13 @@ export const routedCommandDefinitions = {
       await modelsListCommand(args, defaultRuntime);
     },
   }),
+  "models-root-status": defineRoutedCommand({
+    parseArgs: parseModelsRootStatusRouteArgs,
+    runParsedArgs: runModelsStatusRoute,
+  }),
   "models-status": defineRoutedCommand({
     parseArgs: parseModelsStatusRouteArgs,
-    runParsedArgs: async (args) => {
-      const { modelsStatusCommand } = await loadModelsStatusCommand();
-      await modelsStatusCommand(args, defaultRuntime);
-    },
+    runParsedArgs: runModelsStatusRoute,
   }),
   "tasks-list": defineRoutedCommand({
     parseArgs: parseTasksListRouteArgs,

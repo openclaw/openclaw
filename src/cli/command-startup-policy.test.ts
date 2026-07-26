@@ -51,6 +51,33 @@ describe("command-startup-policy", () => {
     ).toBe(false);
   });
 
+  it("limits model status config-guard skipping to the exact parent command", () => {
+    expect(
+      resolvePolicy({
+        argv: ["node", "openclaw", "models", "--status-json"],
+        commandPath: ["models"],
+        env: {},
+        jsonOutputMode: true,
+        routeMode: true,
+      }).skipConfigGuard,
+    ).toBe(true);
+
+    expect(
+      resolvePolicy({
+        argv: ["node", "openclaw", "models", "auth", "login", "openai"],
+        commandPath: ["models", "auth", "login"],
+        env: {},
+        routeMode: true,
+      }),
+    ).toEqual({
+      suppressDoctorStdout: false,
+      hideBanner: false,
+      skipConfigGuard: false,
+      loadPlugins: false,
+      pluginRegistry: { scope: "all" },
+    });
+  });
+
   it("matches plugin preload policy", () => {
     expect(
       resolvePolicy({

@@ -65,6 +65,25 @@ describe("command-path-policy", () => {
     });
   });
 
+  it("keeps root model status startup policy out of model authentication children", () => {
+    const rootPolicy = resolveCliCommandPathPolicy(["models"]);
+    expectNetworkProxyResolver(rootPolicy);
+    expect(rootPolicy).toEqual({
+      ...DEFAULT_EXPECTED_POLICY,
+      ensureCliPath: false,
+      routeConfigGuard: "always",
+      networkProxy: rootPolicy.networkProxy,
+    });
+
+    for (const commandPath of [
+      ["models", "auth"],
+      ["models", "auth", "login"],
+      ["models", "auth", "login", "openai"],
+    ]) {
+      expectResolvedPolicy(commandPath, {});
+    }
+  });
+
   it("applies exact overrides after broader channel plugin rules", () => {
     expectResolvedPolicy(["channels", "send"], {
       loadPlugins: "always",
@@ -309,9 +328,50 @@ describe("command-path-policy", () => {
       resolveCliNetworkProxyPolicy(["node", "openclaw", "channels", "status", "--probe"]),
     ).toBe("default");
     expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "models", "status"])).toBe("bypass");
+    expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "models", "--status-json"])).toBe(
+      "bypass",
+    );
+    expect(
+      resolveCliNetworkProxyPolicy([
+        "node",
+        "openclaw",
+        "models",
+        "--agent",
+        "main",
+        "--status-json",
+      ]),
+    ).toBe("bypass");
+    expect(
+      resolveCliNetworkProxyPolicy([
+        "node",
+        "openclaw",
+        "models",
+        "--status-json",
+        "--agent",
+        "main",
+      ]),
+    ).toBe("bypass");
+    expect(
+      resolveCliNetworkProxyPolicy(["node", "openclaw", "models", "--agent=main", "--status-json"]),
+    ).toBe("bypass");
+    expect(
+      resolveCliNetworkProxyPolicy([
+        "node",
+        "openclaw",
+        "models",
+        "--agent",
+        "main",
+        "status",
+        "--json",
+      ]),
+    ).toBe("bypass");
     expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "models", "status", "--probe"])).toBe(
       "default",
     );
+    expect(
+      resolveCliNetworkProxyPolicy(["node", "openclaw", "models", "auth", "login", "openai"]),
+    ).toBe("default");
+    expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "models", "list"])).toBe("bypass");
     expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "skills", "info", "browser"])).toBe(
       "bypass",
     );

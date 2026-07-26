@@ -20,6 +20,25 @@ describe("json output mode", () => {
     expect(hasJsonOutputFlag(["node", "openclaw", "nodes", "--", "--json"])).toBe(false);
   });
 
+  it("recognizes the model status JSON alias without crossing command boundaries", () => {
+    expect(hasJsonOutputFlag(["node", "openclaw", "models", "--status-json"])).toBe(true);
+    expect(
+      hasJsonOutputFlag(["node", "openclaw", "models", "--agent", "main", "--status-json"]),
+    ).toBe(true);
+    expect(hasJsonOutputFlag(["node", "openclaw", "models", "--agent=main", "--status-json"])).toBe(
+      true,
+    );
+    expect(hasJsonOutputFlag(["node", "openclaw", "models", "--status-json", "list"])).toBe(false);
+    expect(
+      hasJsonOutputFlag(["node", "openclaw", "models", "--status-json", "auth", "login"]),
+    ).toBe(false);
+    expect(
+      hasJsonOutputFlag(["node", "openclaw", "models", "--status-json", "list", "--json"]),
+    ).toBe(true);
+    expect(hasJsonOutputFlag(["node", "openclaw", "models", "--", "--status-json"])).toBe(false);
+    expect(hasJsonOutputFlag(["node", "openclaw", "status", "--status-json"])).toBe(false);
+  });
+
   it("temporarily routes console logs to stderr while json output is being prepared", async () => {
     const snapshots: boolean[] = [];
 
@@ -45,5 +64,16 @@ describe("json output mode", () => {
     );
 
     expect(loggingState.forceConsoleToStderr).toBe(true);
+  });
+
+  it("routes model status alias diagnostics away from machine-readable stdout", async () => {
+    await withConsoleLogsRoutedToStderrForJson(
+      ["node", "openclaw", "models", "--status-json"],
+      async () => {
+        expect(loggingState.forceConsoleToStderr).toBe(true);
+      },
+    );
+
+    expect(loggingState.forceConsoleToStderr).toBe(false);
   });
 });

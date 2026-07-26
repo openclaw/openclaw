@@ -384,6 +384,36 @@ describe("argv helpers", () => {
       expected: ["agents", "list"],
     },
     {
+      name: "parent model status JSON alias",
+      argv: ["node", "openclaw", "models", "--status-json"],
+      expected: ["models"],
+    },
+    {
+      name: "model status agent before the subcommand",
+      argv: ["node", "openclaw", "models", "--agent", "main", "status", "--json"],
+      expected: ["models", "status"],
+    },
+    {
+      name: "parent model status alias after agent value",
+      argv: ["node", "openclaw", "models", "--agent", "main", "--status-json"],
+      expected: ["models"],
+    },
+    {
+      name: "parent model status alias before agent value",
+      argv: ["node", "openclaw", "models", "--status-json", "--agent", "main"],
+      expected: ["models"],
+    },
+    {
+      name: "parent model status alias with inline agent value",
+      argv: ["node", "openclaw", "models", "--agent=main", "--status-json"],
+      expected: ["models"],
+    },
+    {
+      name: "model status with inline parent agent value",
+      argv: ["node", "openclaw", "models", "--agent=main", "status", "--json"],
+      expected: ["models", "status"],
+    },
+    {
       name: "terminator cuts parsing",
       argv: ["node", "openclaw", "status", "--", "ignored"],
       expected: ["status"],

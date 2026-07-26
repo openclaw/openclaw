@@ -5,11 +5,9 @@ import type { RuntimeEnv } from "../runtime.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { ensureCliCommandBootstrap } from "./command-bootstrap.js";
 import { resolveCliStartupPolicy } from "./command-startup-policy.js";
+import { hasJsonOutputFlag } from "./json-output-mode.js";
 
 type CliStartupPolicy = ReturnType<typeof resolveCliStartupPolicy>;
-
-const hasJsonFlag = (argv: readonly string[]) =>
-  argv.some((arg) => arg === "--json" || arg.startsWith("--json="));
 
 const hasVersionFlag = (argv: readonly string[]) =>
   argv.some((arg) => arg === "--version" || arg === "-V");
@@ -40,6 +38,7 @@ export function resolveCliExecutionStartupContext(params: {
 
 export async function applyCliExecutionStartupPresentation(params: {
   argv?: string[];
+  jsonOutputMode?: boolean;
   routeLogsToStderrOnSuppress?: boolean;
   startupPolicy: CliStartupPolicy;
   showBanner?: boolean;
@@ -52,7 +51,10 @@ export async function applyCliExecutionStartupPresentation(params: {
   if (params.startupPolicy.hideBanner || params.showBanner === false || !params.version) {
     return;
   }
-  if (params.argv && (hasJsonFlag(params.argv) || hasVersionFlag(params.argv))) {
+  // Commander metadata distinguishes output JSON from parse-only JSON input flags.
+  const jsonOutputMode =
+    params.jsonOutputMode ?? (params.argv ? hasJsonOutputFlag(params.argv) : false);
+  if (jsonOutputMode || (params.argv && hasVersionFlag(params.argv))) {
     return;
   }
   const { emitCliBanner } = await import("./banner.js");
