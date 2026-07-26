@@ -1,4 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const readProviderUsageProfileMock = vi.fn();
 
 const store = {
   profiles: {
@@ -20,28 +22,71 @@ vi.mock("../agents/auth-profiles.js", () => ({
         : [],
 }));
 
-import { __test } from "./provider-usage.load.js";
+vi.mock("./provider-usage.auth.js", () => ({
+  resolveProviderAuths: async () => [],
+}));
+
+vi.mock("./provider-usage.profile.js", () => ({
+  readProviderUsageProfile: (...args: unknown[]) => readProviderUsageProfileMock(...args),
+}));
+
+import { loadProviderUsageSummary } from "./provider-usage.load.js";
 
 describe("provider usage profile discovery", () => {
-  it("returns every eligible ordered profile and normalizes usage-owner aliases", () => {
-    expect(
-      __test.resolveUsageProfileRefs({
-        providers: ["openai", "anthropic"],
-        config: {},
+  beforeEach(() => {
+    readProviderUsageProfileMock.mockReset();
+    readProviderUsageProfileMock.mockImplementation(
+      async ({ providerId, authProfileId }: { providerId: string; authProfileId: string }) => ({
+        provider: providerId,
+        authProfileId,
+        capturedAt: 1,
+        displayName: providerId,
+        windows: [],
       }),
-    ).toEqual([
-      { provider: "openai", authProfileId: "openai:personal" },
-      { provider: "openai", authProfileId: "openai:work" },
-      { provider: "anthropic", authProfileId: "claude-cli:default" },
-    ]);
+    );
   });
 
-  it("does not include profiles outside the requested usage providers", () => {
-    expect(
-      __test.resolveUsageProfileRefs({
-        providers: ["anthropic"],
-        config: {},
+  it("returns every eligible ordered profile and normalizes usage-owner aliases", async () => {
+    const result = await loadProviderUsageSummary({
+      providers: ["openai", "anthropic"],
+      config: {},
+      fetch: vi.fn(),
+    });
+
+    expect(readProviderUsageProfileMock.mock.calls.map(([request]) => request)).toEqual([
+      expect.objectContaining({ providerId: "openai", authProfileId: "openai:personal" }),
+      expect.objectContaining({ providerId: "openai", authProfileId: "openai:work" }),
+      expect.objectContaining({ providerId: "anthropic", authProfileId: "claude-cli:default" }),
+    ]);
+    expect(result.profiles).toEqual(
+      [
+        { provider: "openai", authProfileId: "openai:personal" },
+        { provider: "openai", authProfileId: "openai:work" },
+        { provider: "anthropic", authProfileId: "claude-cli:default" },
+      ].map((profile) => expect.objectContaining(profile)),
+    );
+  });
+
+  it("does not include profiles outside the requested usage providers", async () => {
+    const result = await loadProviderUsageSummary({
+      providers: ["anthropic"],
+      config: {},
+      fetch: vi.fn(),
+    });
+
+    expect(readProviderUsageProfileMock).toHaveBeenCalledOnce();
+    expect(readProviderUsageProfileMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: "anthropic",
+        authProfileId: "claude-cli:default",
       }),
-    ).toEqual([{ provider: "anthropic", authProfileId: "claude-cli:default" }]);
+      expect.any(Object),
+    );
+    expect(result.profiles).toEqual([
+      expect.objectContaining({
+        provider: "anthropic",
+        authProfileId: "claude-cli:default",
+      }),
+    ]);
   });
 });

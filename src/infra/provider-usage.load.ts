@@ -151,9 +151,6 @@ async function loadProfileUsageSnapshots(params: {
   );
 }
 
-const testApi = { resolveUsageProfileRefs };
-export { testApi as __test };
-
 async function fetchProviderUsageSnapshot(params: {
   auth: ProviderAuth;
   config: OpenClawConfig;
