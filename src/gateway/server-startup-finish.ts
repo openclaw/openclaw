@@ -730,4 +730,3 @@ export async function finishGatewayStartup(params: {
     startupTrace.detail("memory.post-ready", collectGatewayProcessMemoryUsageMb());
   }
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized startup orchestrator. */
