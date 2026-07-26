@@ -23,7 +23,7 @@ function buildPluginPresentation(request: {
   agentId?: string;
   externalResolution?: {
     label: string;
-    decisions?: Array<"allow-once" | "allow-always">;
+    decisions?: readonly ("allow-once" | "allow-always")[];
   };
 }) {
   return buildApprovalPresentation({ kind: "plugin", request, allowedDecisions });
@@ -179,6 +179,37 @@ describe("buildApprovalPresentation", () => {
         allowedDecisions: ["deny"],
       }),
     ).toBeNull();
+  });
+
+  it.each([
+    { label: " ", decisions: undefined },
+    { label: "Verify", decisions: [] },
+    { label: "Verify", decisions: ["allow-once", "allow-once"] as const },
+  ])("rejects malformed external verification metadata", (externalResolution) => {
+    expect(
+      buildPluginPresentation({
+        title: "World verification",
+        description: "Verify personhood before continuing.",
+        pluginId: "agentkit",
+        externalResolution,
+      }),
+    ).toBeNull();
+  });
+
+  it("defaults external verification to allow once", () => {
+    expect(
+      buildPluginPresentation({
+        title: "World verification",
+        description: "Verify personhood before continuing.",
+        pluginId: "agentkit",
+        externalResolution: { label: " Verify\nwith World " },
+      }),
+    ).toMatchObject({
+      externalResolution: {
+        label: "Verify\\u{A}with World",
+        decisions: ["allow-once"],
+      },
+    });
   });
 });
 

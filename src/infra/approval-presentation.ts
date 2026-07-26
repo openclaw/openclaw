@@ -14,13 +14,14 @@ import {
 } from "./exec-approval-command-display.js";
 import type { ExecApprovalRequestPayload } from "./exec-approvals.js";
 import {
-  normalizePluginExternalResolution,
   PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH,
   PLUGIN_APPROVAL_TITLE_MAX_LENGTH,
   truncatePluginApprovalDetail,
   type PluginApprovalRequestPayload,
 } from "./plugin-approvals.js";
 import type { SystemAgentApprovalRequestPayload } from "./system-agent-approvals.js";
+
+const PLUGIN_EXTERNAL_RESOLUTION_LABEL_MAX_LENGTH = 80;
 
 function normalizeDecisionList(decisions: readonly ApprovalDecision[]): ApprovalDecision[] {
   const result: ApprovalDecision[] = [];
@@ -42,6 +43,29 @@ function isWithinCodePointLimit(value: string, maxLength: number): boolean {
 function sanitizeOptionalSingleLine(value: unknown): string | null {
   const normalized = normalizeOptionalString(value);
   return normalized ? sanitizeExecApprovalDisplayText(normalized) : null;
+}
+
+function normalizePluginExternalResolution(
+  value: PluginApprovalRequestPayload["externalResolution"],
+): NonNullable<PluginApprovalRequestPayload["externalResolution"]> | null {
+  if (!value) {
+    return null;
+  }
+  const rawLabel = value.label?.trim();
+  const label = rawLabel ? sanitizeExecApprovalDisplayText(rawLabel) : "";
+  if (!label || !isWithinCodePointLimit(label, PLUGIN_EXTERNAL_RESOLUTION_LABEL_MAX_LENGTH)) {
+    throw new Error("invalid external approval label");
+  }
+  const decisions = value.decisions ?? ["allow-once"];
+  if (
+    decisions.length < 1 ||
+    decisions.length > 2 ||
+    decisions.some((decision) => decision !== "allow-once" && decision !== "allow-always") ||
+    new Set(decisions).size !== decisions.length
+  ) {
+    throw new Error("invalid external approval decisions");
+  }
+  return { label, decisions: [...decisions] };
 }
 
 function buildExecApprovalPresentation(params: {
