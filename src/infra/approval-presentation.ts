@@ -14,6 +14,7 @@ import {
 } from "./exec-approval-command-display.js";
 import type { ExecApprovalRequestPayload } from "./exec-approvals.js";
 import {
+  normalizePluginExternalResolution,
   PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH,
   PLUGIN_APPROVAL_TITLE_MAX_LENGTH,
   truncatePluginApprovalDetail,
@@ -102,6 +103,12 @@ function buildPluginApprovalPresentation(params: {
   const detail = rawDetail
     ? truncatePluginApprovalDetail(sanitizeExecApprovalWarningText(rawDetail))
     : null;
+  let externalResolution: ReturnType<typeof normalizePluginExternalResolution>;
+  try {
+    externalResolution = normalizePluginExternalResolution(request.externalResolution);
+  } catch {
+    return null;
+  }
   return {
     kind: "plugin",
     title,
@@ -112,6 +119,14 @@ function buildPluginApprovalPresentation(params: {
     toolName: sanitizeOptionalSingleLine(request.toolName),
     agentId: sanitizeOptionalSingleLine(request.agentId),
     allowedDecisions: normalizeDecisionList(params.allowedDecisions),
+    ...(externalResolution
+      ? {
+          externalResolution: {
+            label: externalResolution.label,
+            decisions: [...(externalResolution.decisions ?? ["allow-once"])],
+          },
+        }
+      : {}),
   };
 }
 

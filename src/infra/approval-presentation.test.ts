@@ -21,6 +21,10 @@ function buildPluginPresentation(request: {
   pluginId?: string;
   toolName?: string;
   agentId?: string;
+  externalResolution?: {
+    label: string;
+    decisions?: Array<"allow-once" | "allow-always">;
+  };
 }) {
   return buildApprovalPresentation({ kind: "plugin", request, allowedDecisions });
 }
@@ -131,6 +135,50 @@ describe("buildApprovalPresentation", () => {
       throw new Error("expected plugin detail");
     }
     expect(Array.from(presentation.detail)).toHaveLength(PLUGIN_APPROVAL_DETAIL_MAX_LENGTH);
+  });
+
+  it("projects only bounded reviewer-safe external verification metadata", () => {
+    expect(
+      buildApprovalPresentation({
+        kind: "plugin",
+        request: {
+          title: "World verification",
+          description: "Verify personhood before continuing.",
+          pluginId: "agentkit",
+          externalResolution: {
+            label: "Verify with World\u202E",
+            decisions: ["allow-once", "allow-always"],
+          },
+        },
+        allowedDecisions: ["deny"],
+      }),
+    ).toMatchObject({
+      kind: "plugin",
+      pluginId: "agentkit",
+      allowedDecisions: ["deny"],
+      externalResolution: {
+        label: "Verify with World\\u{202E}",
+        decisions: ["allow-once", "allow-always"],
+      },
+    });
+  });
+
+  it("rejects an external label that exceeds its limit after spoof-resistant escaping", () => {
+    expect(
+      buildApprovalPresentation({
+        kind: "plugin",
+        request: {
+          title: "World verification",
+          description: "Verify personhood before continuing.",
+          pluginId: "agentkit",
+          externalResolution: {
+            label: "\u202E".repeat(11),
+            decisions: ["allow-once"],
+          },
+        },
+        allowedDecisions: ["deny"],
+      }),
+    ).toBeNull();
   });
 });
 
