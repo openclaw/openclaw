@@ -293,6 +293,55 @@ describe("openai transport stream", () => {
     expect(thinkingBlock.openclawReasoningReplay).toEqual(expectedReplayMetadata);
   });
 
+  it("does not persist transient Responses reasoning items", async () => {
+    const model = makeResponsesModel({
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://proxy.example.com/v1",
+    });
+    const output: OpenAIResponsesOutput = {
+      role: "assistant",
+      content: [],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+
+    await testing.processResponsesStream(
+      streamChunks([
+        { type: "response.output_item.added", item: { type: "reasoning" } },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "reasoning",
+            id: "rs_tmp_123",
+            encrypted_content: "transient-ciphertext",
+            summary: [{ type: "summary_text", text: "Still working." }],
+          },
+        },
+      ]),
+      output,
+      { push: vi.fn() },
+      model,
+      { authProfileId: "openai:oauth", sessionId: "session-123" },
+    );
+
+    expect(output.content).toMatchObject([{ type: "thinking", thinking: "Still working." }]);
+    expect(output.content[0]).not.toHaveProperty("thinkingSignature");
+    expect(output.content[0]).not.toHaveProperty("openclawReasoningReplay");
+  });
+
   it("clamps Responses cached prompt usage at zero", async () => {
     const model = createAzureResponsesModel();
     const output = createResponsesAssistantOutput(model);

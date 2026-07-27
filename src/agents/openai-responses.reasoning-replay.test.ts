@@ -136,6 +136,35 @@ async function runAbortedOpenAIResponsesStream(params: {
 }
 
 describe("openai-responses reasoning replay", () => {
+  it("drops transient reasoning items from persisted transcripts", async () => {
+    const assistantMessage = buildAssistantMessage({
+      stopReason: "stop",
+      content: [
+        buildReasoningPart("rs_tmp_123"),
+        {
+          type: "text",
+          text: "Done.",
+          textSignature: JSON.stringify({ v: 1, id: "msg_done", phase: "final_answer" }),
+        },
+      ],
+    });
+
+    const { input, types } = await runAbortedOpenAIResponsesStream({
+      messages: [
+        { role: "user", content: "Continue.", timestamp: Date.now() },
+        assistantMessage,
+        { role: "user", content: "Next.", timestamp: Date.now() },
+      ],
+    });
+
+    expect(types).not.toContain("reasoning");
+    expect(extractInputMessages(input)).toMatchObject([
+      {
+        content: [{ type: "output_text", text: "Done." }],
+      },
+    ]);
+  });
+
   it("omits Responses item ids for storeless custom providers while preserving tool call ids", async () => {
     const assistantToolOnly = buildAssistantMessage({
       stopReason: "toolUse",
