@@ -293,7 +293,7 @@ function buildSkillsSection(params: { skillsPrompt?: string; readToolName: strin
   return [
     "## Skills",
     `Scan <available_skills>. Clear match: read exact <location> with \`${params.readToolName}\`; obey.`,
-    "Changed <version>: re-read. Several: most specific. None: read none.",
+    "Several: most specific. None: read none.",
     "Up-front max one. Never invent paths.",
     "External writes: batch safely; no tight loops; honor 429/Retry-After.",
     trimmed,
