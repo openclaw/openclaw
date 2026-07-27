@@ -30,13 +30,6 @@ import { AcpRuntimeError, type AcpRuntime, type AcpRuntimeErrorCode } from "../r
 import { CODEX_ACP_PACKAGE, OPENCLAW_CODEX_CONFIG_ARG } from "./codex-adapter.js";
 import { splitCommandParts } from "./command-line.js";
 import {
-  ensureDelegateSessionWithModelFallback,
-  prepareResumeSafeSessionInput,
-  withAcpxSessionOptions,
-  withResumeEnsureErrorNormalization,
-  withSessionResumeCapability,
-} from "./runtime-session-ensure.js";
-import {
   createAcpxProcessLeaseId,
   hashAcpxProcessCommand,
   readAcpxProcessLeaseIdentity,
@@ -50,6 +43,13 @@ import {
   isOpenClawLeaseAwareAcpxProcessCommand,
   type AcpxProcessCleanupDeps,
 } from "./process-reaper.js";
+import {
+  ensureDelegateSessionWithModelFallback,
+  prepareResumeSafeSessionInput,
+  withAcpxSessionOptions,
+  withResumeEnsureErrorNormalization,
+  withSessionResumeCapability,
+} from "./runtime-session-ensure.js";
 
 type AcpSessionStore = AcpRuntimeOptions["sessionStore"];
 type AcpSessionRecord = Parameters<AcpSessionStore["save"]>[0];
