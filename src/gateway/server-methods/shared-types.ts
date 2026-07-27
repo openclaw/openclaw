@@ -172,6 +172,7 @@ type GatewaySystemAgentSession = {
 /** Runtime services and mutable gateway state available to request handlers. */
 export type GatewayRequestContext = {
   deps: CliDeps;
+  getRestoredAdmissionStatus: () => import("../../../packages/gateway-protocol/src/index.js").GatewayRestoreStatusResult;
   cron: GatewayCronServiceContract;
   cronStorePath: string;
   getRuntimeConfig: () => OpenClawConfig;

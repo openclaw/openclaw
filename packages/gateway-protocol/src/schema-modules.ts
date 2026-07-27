@@ -24,6 +24,7 @@ export * from "./schema/exec-approvals.js";
 export * from "./schema/devices.js";
 export * from "./schema/frames.js";
 export * from "./schema/fs.js";
+export * from "./schema/gateway-restore.js";
 export * from "./schema/gateway-suspend.js";
 export * from "./schema/hooks.js";
 export * from "./schema/logs-chat.js";

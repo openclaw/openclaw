@@ -69,6 +69,7 @@ export async function finishGatewayStartup(params: {
   } = params;
   const {
     minimalTestGateway,
+    restoredStartup,
     deps,
     runtimeState,
     sessionCompanion,
@@ -205,6 +206,8 @@ export async function finishGatewayStartup(params: {
     const { createGatewayRequestContext } = await import("./server-request-context.js");
     return createGatewayRequestContext({
       deps,
+      getRestoredAdmissionStatus:
+        restoredStartup?.status.get ?? (() => ({ status: "not-restored" as const })),
       runtimeState,
       sessionCompanion,
       getRuntimeConfig,

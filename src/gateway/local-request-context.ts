@@ -113,6 +113,7 @@ function createLocalGatewayRequestContext(
     });
   return {
     deps: params.deps,
+    getRestoredAdmissionStatus: () => ({ status: "not-restored" }),
     cron,
     cronStorePath: "",
     getRuntimeConfig: params.getRuntimeConfig,
