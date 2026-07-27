@@ -51,8 +51,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **CLI-harness source replies:** count an explicit-route `message` send that reaches the current source conversation as a delivered source reply in Claude Code/Codex-style CLI harness runs, so `message_tool_only` channel sessions no longer fire stranded-reply recovery (and duplicate the message into the channel) after a successful send.
-- **Embedded-agent source replies:** extend the same explicit-route current-source check to in-process embedded-agent runs (the tool-handler subscription path and the native agent-loop terminal hook), closing the same stranded-reply recovery gap for non-CLI-harness sessions.
 - **Control UI initial prompts:** keep accepted first messages visible across Gateway transport reconnects by binding the process-local handoff to the logical browser client instead of the per-handshake hello snapshot.
 - **Gateway exec deny fallback:** fail closed immediately when shell-expanded arguments prevent an allowlisted command from producing an enforceable execution plan and effective policy is `ask=off` with `askFallback=deny`, instead of registering an approval that can only time out. Fixes #113191. Thanks @shakkernerd.
 - **Cron local-provider preflight:** report the guarded-fetch deadline as a bounded preflight timeout, preserve concrete nested non-timeout errors, and carry the failure reason into fallback warnings. Thanks @shakkernerd.
