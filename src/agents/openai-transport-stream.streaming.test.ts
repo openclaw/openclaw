@@ -992,6 +992,10 @@ describe("openai transport stream", () => {
         { type: "response.output_item.added", item: { type: "message" } },
         { type: "response.output_text.delta", delta: "a" },
         { type: "response.output_text.delta", delta: "b" },
+        {
+          type: "response.completed",
+          response: { id: "resp_text_deltas", status: "completed" },
+        },
       ]),
       output,
       { push: (event) => events.push(event as CapturedStreamEvent) },
@@ -1081,6 +1085,10 @@ describe("openai transport stream", () => {
           {
             type: "response.output_item.done",
             item: { type: "function_call", name: "computer", arguments: "{}" },
+          },
+          {
+            type: "response.completed",
+            response: { id: "resp_idless_tool_call", status: "completed" },
           },
         ]),
         output,
@@ -1337,6 +1345,10 @@ describe("openai transport stream", () => {
             arguments: '{"action":"type","text":"hello"}',
             status: "completed",
           },
+        },
+        {
+          type: "response.completed",
+          response: { id: "resp_interleaved_tool_calls", status: "completed" },
         },
       ]),
       output,
@@ -1869,6 +1881,10 @@ describe("openai transport stream", () => {
             arguments: '{"slot":1}',
           },
         },
+        {
+          type: "response.completed",
+          response: { id: "resp_omitted_index_suffix", status: "completed" },
+        },
       ]),
       output,
       { push: (event) => events.push(event as (typeof events)[number]) },
@@ -1939,6 +1955,10 @@ describe("openai transport stream", () => {
             arguments: '{"slot":0}',
           },
         },
+        {
+          type: "response.completed",
+          response: { id: "resp_omitted_index_completions", status: "completed" },
+        },
       ]),
       output,
       { push: (event) => events.push(event as (typeof events)[number]) },
@@ -1995,6 +2015,10 @@ describe("openai transport stream", () => {
             name: "computer",
             arguments: '{"slot":0}',
           },
+        },
+        {
+          type: "response.completed",
+          response: { id: "resp_mismatched_omitted_index", status: "completed" },
         },
       ]),
       output,
@@ -2060,6 +2084,10 @@ describe("openai transport stream", () => {
             name: "computer",
             arguments: '{"slot":1}',
           },
+        },
+        {
+          type: "response.completed",
+          response: { id: "resp_sequential_omitted_indices", status: "completed" },
         },
       ]),
       output,

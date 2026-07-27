@@ -90,6 +90,26 @@ describe("openai transport stream", () => {
     }
   });
 
+  it("preserves intentional cancellation when the Responses SDK silently ends its stream", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+    const abort = new AbortController();
+
+    async function* silentlyAbortedResponses() {
+      yield { type: "response.created", response: { id: "resp_intentionally_aborted" } };
+      // openai@6.48.0 consumes AbortError and ends iteration without a terminal event.
+      abort.abort();
+    }
+
+    await expect(
+      testing.processResponsesStream(silentlyAbortedResponses(), output, { push: vi.fn() }, model, {
+        signal: abort.signal,
+      }),
+    ).rejects.toThrow("Request was aborted");
+    expect(abort.signal.aborted).toBe(true);
+    expect(output.responseId).toBe("resp_intentionally_aborted");
+  });
+
   it("observes detail-less Responses failures without leaking request ids", async () => {
     // Observation should preserve hashes/metadata shape while dropping raw request ids.
     const model = createAzureResponsesModel();
@@ -264,6 +284,10 @@ describe("openai transport stream", () => {
             encrypted_content: "ciphertext",
             summary: [{ type: "summary_text", text: "Need a tool." }],
           },
+        },
+        {
+          type: "response.completed",
+          response: { id: "resp_reasoning_replay", status: "completed" },
         },
       ]),
       output,
