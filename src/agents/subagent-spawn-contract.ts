@@ -65,6 +65,8 @@ export type SpawnSubagentContext = {
 export type SpawnSubagentResult = {
   status: "accepted" | "forbidden" | "error";
   childSessionKey?: string;
+  /** Durable child session identity (UUID). Prefer this over parsing childSessionKey. */
+  sessionId?: string;
   sessionKey?: string;
   runId?: string;
   mode?: SpawnSubagentMode;

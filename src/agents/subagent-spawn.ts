@@ -368,6 +368,15 @@ export async function spawnSubagentDirect(
       requesterSessionKey: requesterInternalKey,
       agentId: targetAgentId,
     });
+
+    const resolveAcceptedChildSessionId = (): string | undefined => {
+      const forkedSessionId =
+        preparedSpawnContext.status === "ok" && preparedSpawnContext.mode === "fork"
+          ? preparedSpawnContext.forked.sessionId
+          : undefined;
+      return forkedSessionId ?? initialSession.entry?.sessionId;
+    };
+
     const launchChildRun = async () =>
       await callSubagentGateway(
         {
@@ -621,7 +630,8 @@ export async function spawnSubagentDirect(
     return {
       status: "accepted",
       childSessionKey,
-      ...(collectorSessionKey ? { sessionKey: collectorSessionKey } : {}),
+      sessionId: resolveAcceptedChildSessionId(),
+      sessionKey: collectorSessionKey ?? childSessionKey,
       runId: childRunId,
       mode: spawnMode,
       taskName,
