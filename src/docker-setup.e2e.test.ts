@@ -104,6 +104,32 @@ describe("scripts/docker/setup.sh", () => {
     sandbox = null;
   });
 
+  it("loads Docker resource diagnostics from the isolated setup sandbox", () => {
+    const activeSandbox = requireSandbox(sandbox);
+    const containerHelper = join(
+      activeSandbox.rootDir,
+      "scripts",
+      "lib",
+      "docker-e2e-container.sh",
+    );
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        'set -euo pipefail; source "$1"; declare -F docker_e2e_docker_run_with_resource_diagnostics >/dev/null',
+        "openclaw-docker-setup-resource-diagnostics",
+        containerHelper,
+      ],
+      {
+        cwd: activeSandbox.rootDir,
+        env: createEnv(activeSandbox),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+  });
+
   it("handles env defaults, home-volume mounts, and Docker build args", async () => {
     const activeSandbox = requireSandbox(sandbox);
     const buildCommit = "0123456789abcdef0123456789abcdef01234567";

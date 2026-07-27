@@ -503,7 +503,7 @@ describe("bundled plugin metadata", () => {
 
   it("keeps bundled configured-state env metadata on channel package manifests", () => {
     const configuredChannels = listRepoBundledPluginMetadata()
-      .filter((entry) => ["discord", "irc", "slack", "telegram"].includes(entry.dirName))
+      .filter((entry) => ["discord", "irc", "telegram"].includes(entry.dirName))
       .map((entry) => ({
         dir: entry.dirName,
         configuredState: entry.packageManifest?.channel?.configuredState,
@@ -526,14 +526,6 @@ describe("bundled plugin metadata", () => {
         },
       },
       {
-        dir: "slack",
-        configuredState: {
-          env: {
-            anyOf: ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_USER_TOKEN"],
-          },
-        },
-      },
-      {
         dir: "telegram",
         configuredState: {
           env: {
@@ -542,6 +534,65 @@ describe("bundled plugin metadata", () => {
         },
       },
     ]);
+  });
+
+  it("keeps bundled channel env activation aligned with required credentials", () => {
+    const configuredChannels = Object.fromEntries(
+      listRepoBundledPluginMetadata()
+        .filter((entry) => ["line", "qqbot", "synology-chat", "zalo"].includes(entry.dirName))
+        .map((entry) => [entry.dirName, entry.packageManifest?.channel?.configuredState?.env]),
+    );
+
+    expect(configuredChannels).toEqual({
+      line: {
+        allOf: ["LINE_CHANNEL_ACCESS_TOKEN", "LINE_CHANNEL_SECRET"],
+      },
+      qqbot: {
+        allOf: ["QQBOT_APP_ID", "QQBOT_CLIENT_SECRET"],
+      },
+      "synology-chat": {
+        allOf: ["SYNOLOGY_CHAT_TOKEN", "SYNOLOGY_CHAT_INCOMING_URL"],
+      },
+      zalo: {
+        anyOf: ["ZALO_BOT_TOKEN"],
+      },
+    });
+  });
+
+  it("keeps config-dependent channel activation on lightweight bundled owner surfaces", () => {
+    for (const { channelId, exportName } of [
+      { channelId: "feishu", exportName: "hasConfiguredFeishuChannelState" },
+      {
+        channelId: "nextcloud-talk",
+        exportName: "hasConfiguredNextcloudTalkChannelState",
+      },
+      { channelId: "slack", exportName: "hasConfiguredSlackChannelState" },
+      { channelId: "sms", exportName: "hasConfiguredSmsChannelState" },
+    ]) {
+      const entry = listRepoBundledPluginMetadata().find(
+        (candidate) => candidate.dirName === channelId,
+      );
+
+      expect(entry?.packageManifest?.channel?.configuredState).toEqual({
+        specifier: "./configured-state",
+        exportName,
+      });
+      expectArtifactPresence(entry?.publicSurfaceArtifacts, {
+        contains: ["configured-state.js"],
+      });
+    }
+  });
+
+  it("keeps Teams auth-mode detection on its lightweight bundled owner surface", () => {
+    const msteams = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "msteams");
+
+    expect(msteams?.packageManifest?.channel?.configuredState).toEqual({
+      specifier: "./configured-state",
+      exportName: "hasConfiguredMSTeamsChannelState",
+    });
+    expectArtifactPresence(msteams?.publicSurfaceArtifacts, {
+      contains: ["configured-state.js"],
+    });
   });
 
   it("excludes test-only public surface artifacts", () => {

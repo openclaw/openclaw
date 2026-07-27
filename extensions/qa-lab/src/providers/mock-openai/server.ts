@@ -6,7 +6,11 @@ import { parseQaDebugRequestCursor } from "../shared/debug-request-cursor.js";
 import { writeJson } from "../shared/http-json.js";
 import { listMockOpenAiServerModelIds } from "../shared/mock-model-config.js";
 import { buildMessagesPayload } from "./mock-anthropic-messages.js";
-import { buildAssistantText } from "./mock-openai-assistant-text.js";
+import {
+  buildAssistantText,
+  isSubagentFanoutCompletionRequest,
+  readCompletedSubagentHandoffResult,
+} from "./mock-openai-assistant-text.js";
 import {
   type ResponsesInputItem,
   type StreamEvent,
@@ -157,6 +161,11 @@ async function buildResponsesPayload(
   const prompt = extractLastUserText(input);
   const toolOutput = extractToolOutput(input);
   const allInputText = extractAllRequestTexts(input, body);
+  if (readCompletedSubagentHandoffResult(allInputText)) {
+    // An authenticated child completion owns this parent turn; old prompt
+    // markers must not preempt its actual final handoff.
+    return buildAssistantEvents(buildAssistantText(input, body, scenarioState));
+  }
   const scenarioToolOutput =
     toolOutput ||
     (/thread memory check|session memory ranking check|memory tools check|repo contract followthrough check/i.test(
@@ -1130,7 +1139,11 @@ async function buildResponsesPayload(
       });
     }
   }
-  if (QA_IMAGE_GENERATION_PROMPT_RE.test(allInputText) && !toolOutput) {
+  if (
+    QA_IMAGE_GENERATION_PROMPT_RE.test(allInputText) &&
+    !toolOutput &&
+    hasToolDefinition(body, "image_generate")
+  ) {
     return buildToolCallEventsWithArgs("image_generate", {
       prompt: "A QA lighthouse on a dark sea with a tiny protocol droid silhouette.",
       filename: "qa-lighthouse.png",
@@ -1155,7 +1168,10 @@ async function buildResponsesPayload(
       });
     }
   }
-  if (scenarioState.subagentFanoutPhase === 2 && prompt) {
+  if (
+    scenarioState.subagentFanoutPhase === 2 &&
+    isSubagentFanoutCompletionRequest({ allInputText, prompt, toolOutput })
+  ) {
     scenarioState.subagentFanoutPhase = 3;
     return buildAssistantEvents("subagent-1: ok\nsubagent-2: ok");
   }
@@ -1262,7 +1278,8 @@ async function buildResponsesPayload(
     (/delegate (?:one |a )bounded qa task/i.test(allInputText) ||
       /subagent handoff/i.test(allInputText)) &&
     !toolOutput &&
-    !scenarioState.subagentHandoffSpawned
+    !scenarioState.subagentHandoffSpawned &&
+    !readCompletedSubagentHandoffResult(allInputText)
   ) {
     scenarioState.subagentHandoffSpawned = true;
     return buildToolCallEventsWithArgs("sessions_spawn", {
@@ -1313,8 +1330,48 @@ export async function startQaMockOpenAiServer(params?: {
   let lastRequest: MockOpenAiRequestSnapshot | null = null;
   const requests: MockOpenAiRequestSnapshot[] = [];
   let nextRequestCursor = 1;
-  const recordRequest = (snapshot: MockOpenAiRequestSnapshotInput) => {
-    const recorded = { ...snapshot, cursor: nextRequestCursor++ };
+  const recordRequest = (snapshot: MockOpenAiRequestSnapshotInput, events: StreamEvent[]) => {
+    const completedHandoffResult = readCompletedSubagentHandoffResult(snapshot.allInputText);
+    const emittedAssistantTexts = events.flatMap((event) => {
+      if (event.type !== "response.output_item.done" || event.item.type !== "message") {
+        return [];
+      }
+      const content = event.item.content;
+      if (!Array.isArray(content)) {
+        return [];
+      }
+      return content.flatMap((block) => {
+        if (!block || typeof block !== "object" || Array.isArray(block)) {
+          return [];
+        }
+        const text = (block as { text?: unknown }).text;
+        return typeof text === "string" && text.trim() ? [text] : [];
+      });
+    });
+    const recorded = {
+      ...snapshot,
+      cursor: nextRequestCursor++,
+      hasReadableCompletedHandoffResult: Boolean(completedHandoffResult),
+      emittedAssistantHasDelegatedSection: emittedAssistantTexts.some((text) =>
+        /(?:^|\n)\s*delegated task\s*:/i.test(text),
+      ),
+      emittedAssistantHasResultSection: emittedAssistantTexts.some((text) =>
+        /(?:^|\n)\s*result\s*:/i.test(text),
+      ),
+      emittedAssistantHasEvidenceSection: emittedAssistantTexts.some((text) =>
+        /(?:^|\n)\s*evidence\s*:/i.test(text),
+      ),
+      emittedAssistantContainsParsedChild: Boolean(
+        completedHandoffResult &&
+        emittedAssistantTexts.some((text) =>
+          text.replace(/\s+/g, " ").includes(completedHandoffResult),
+        ),
+      ),
+      emittedAssistantIsFunctionCall: events.some(
+        (event) =>
+          event.type === "response.output_item.done" && event.item.type === "function_call",
+      ),
+    };
     lastRequest = recorded;
     requests.push(recorded);
     if (requests.length > MOCK_OPENAI_DEBUG_REQUEST_LIMIT) {
@@ -1476,22 +1533,25 @@ export async function startQaMockOpenAiServer(params?: {
           inflightRequests.delete(inflightRequestId);
         }
         const resolvedModel = typeof body.model === "string" ? body.model : "";
-        recordRequest({
-          raw,
-          body,
-          prompt,
-          allInputText,
-          instructions: extractInstructionsText(body) || undefined,
-          toolOutput: extractToolOutput(input),
-          model: resolvedModel,
-          providerVariant: resolveProviderVariant(resolvedModel),
-          imageInputCount: countImageInputs(input),
-          plannedToolCallId: extractPlannedToolCallId(events),
-          plannedToolName: extractPlannedToolName(events),
-          plannedToolArgs: extractPlannedToolArgs(events),
-          toolOutputCallId: extractToolOutputCallId(input) || undefined,
-          ...(extractToolOutputStructuredError(input) ? { toolOutputStructuredError: true } : {}),
-        });
+        recordRequest(
+          {
+            raw,
+            body,
+            prompt,
+            allInputText,
+            instructions: extractInstructionsText(body) || undefined,
+            toolOutput: extractToolOutput(input),
+            model: resolvedModel,
+            providerVariant: resolveProviderVariant(resolvedModel),
+            imageInputCount: countImageInputs(input),
+            plannedToolCallId: extractPlannedToolCallId(events),
+            plannedToolName: extractPlannedToolName(events),
+            plannedToolArgs: extractPlannedToolArgs(events),
+            toolOutputCallId: extractToolOutputCallId(input) || undefined,
+            ...(extractToolOutputStructuredError(input) ? { toolOutputStructuredError: true } : {}),
+          },
+          events,
+        );
         if (
           QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE.test(allInputText) &&
           extractToolOutput(input)
@@ -1546,21 +1606,24 @@ export async function startQaMockOpenAiServer(params?: {
         // is what lets a single parity run diff assertions across both lanes.
         // Reuse the normalized model so an empty-string body.model no longer
         // leaks through to `lastRequest.model`.
-        recordRequest({
-          raw,
-          body: body as Record<string, unknown>,
-          prompt: extractLastUserText(input),
-          allInputText: extractAllInputTexts(input),
-          toolOutput: extractToolOutput(input),
-          model: normalizedModel,
-          providerVariant: resolveProviderVariant(normalizedModel),
-          imageInputCount: countImageInputs(input),
-          plannedToolCallId: extractPlannedToolCallId(events),
-          plannedToolName: extractPlannedToolName(events),
-          plannedToolArgs: extractPlannedToolArgs(events),
-          toolOutputCallId: extractToolOutputCallId(input) || undefined,
-          ...(extractToolOutputStructuredError(input) ? { toolOutputStructuredError: true } : {}),
-        });
+        recordRequest(
+          {
+            raw,
+            body: body as Record<string, unknown>,
+            prompt: extractLastUserText(input),
+            allInputText: extractAllInputTexts(input),
+            toolOutput: extractToolOutput(input),
+            model: normalizedModel,
+            providerVariant: resolveProviderVariant(normalizedModel),
+            imageInputCount: countImageInputs(input),
+            plannedToolCallId: extractPlannedToolCallId(events),
+            plannedToolName: extractPlannedToolName(events),
+            plannedToolArgs: extractPlannedToolArgs(events),
+            toolOutputCallId: extractToolOutputCallId(input) || undefined,
+            ...(extractToolOutputStructuredError(input) ? { toolOutputStructuredError: true } : {}),
+          },
+          events,
+        );
         if (body.stream === true) {
           writeAnthropicSse(res, streamEvents);
           return;

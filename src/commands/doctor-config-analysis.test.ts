@@ -170,6 +170,49 @@ describe("collectImplicitFallbackClobberWarnings", () => {
     } as unknown as OpenClawConfig;
   }
 
+  it("warns at the canonical config path when a keyed agent clobbers default model fallbacks", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.5",
+            fallbacks: ["openai/gpt-5.4"],
+          },
+        },
+        entries: {
+          main: { default: true },
+          ops: { model: "openai/gpt-5.3" },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(collectImplicitFallbackClobberWarnings(cfg)).toStrictEqual([
+      [
+        '- agents.entries.ops.model (id=ops) is "openai/gpt-5.3", a bare string with no fallbacks. At runtime this clobbers agents.defaults.model.fallbacks (openai/gpt-5.4), leaving the agent with no fallbacks.',
+        '  Fix: add "fallbacks": [...] to inherit or override, or "fallbacks": [] to explicitly disable.',
+      ].join("\n"),
+    ]);
+  });
+
+  it("does not warn when a keyed agent explicitly disables model fallbacks", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.5",
+            fallbacks: ["openai/gpt-5.4"],
+          },
+        },
+        entries: {
+          main: { default: true },
+          ops: { model: { primary: "openai/gpt-5.3", fallbacks: [] } },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(collectImplicitFallbackClobberWarnings(cfg)).toEqual([]);
+  });
+
   it("returns empty when defaults has no fallbacks", () => {
     const cfg = buildConfig({
       defaults: { primary: "openai/gpt-5.5" },

@@ -184,16 +184,26 @@ function runNpmCommand(
   });
 }
 
-function normalizeWorkspaceDependencies(
+async function normalizeWorkspaceDependencies(
   dependencies: Record<string, string> | undefined,
-): Record<string, string> | undefined {
+  repoRoot: string,
+): Promise<Record<string, string> | undefined> {
   if (!dependencies) {
     return undefined;
   }
   const normalized: Record<string, string> = {};
   for (const [name, spec] of Object.entries(dependencies)) {
-    normalized[name] =
-      name.startsWith("@openclaw/") && spec.startsWith("workspace:") ? "0.0.0-private" : spec;
+    if (!name.startsWith("@openclaw/") || !spec.startsWith("workspace:")) {
+      normalized[name] = spec;
+      continue;
+    }
+    const workspaceManifest = await readRawPackageManifest(
+      resolveWorkspacePackageRoot(repoRoot, name),
+    );
+    if (workspaceManifest.name !== name) {
+      throw new Error(`workspace dependency ${name} resolved to ${workspaceManifest.name}`);
+    }
+    normalized[name] = workspaceManifest.version;
   }
   return normalized;
 }
@@ -207,7 +217,10 @@ async function readPackageManifest(packageRoot: string): Promise<PackageManifest
   const manifest = await readRawPackageManifest(packageRoot);
   return {
     ...manifest,
-    dependencies: normalizeWorkspaceDependencies(manifest.dependencies),
+    dependencies: await normalizeWorkspaceDependencies(
+      manifest.dependencies,
+      path.resolve(packageRoot, "../.."),
+    ),
   };
 }
 
@@ -411,8 +424,20 @@ describe("OpenClaw SDK package e2e", () => {
       await fs.stat(tarball);
       packedPackages.push({ manifest, tarball });
     }
-    const sdkTarball =
-      packedPackages.find((pkg) => pkg.manifest.name === "@openclaw/sdk")?.tarball ?? "";
+    const sdkPackage = packedPackages.find((pkg) => pkg.manifest.name === "@openclaw/sdk");
+    const gatewayClientPackage = packedPackages.find(
+      (pkg) => pkg.manifest.name === "@openclaw/gateway-client",
+    );
+    const protocolPackage = packedPackages.find(
+      (pkg) => pkg.manifest.name === "@openclaw/gateway-protocol",
+    );
+    expect(sdkPackage?.manifest.dependencies?.["@openclaw/gateway-client"]).toBe(
+      gatewayClientPackage?.manifest.version,
+    );
+    expect(gatewayClientPackage?.manifest.dependencies?.["@openclaw/gateway-protocol"]).toBe(
+      protocolPackage?.manifest.version,
+    );
+    const sdkTarball = sdkPackage?.tarball ?? "";
     expect(sdkTarball).not.toBe("");
     const registry = await startOpenClawRegistry(packedPackages);
 
@@ -428,6 +453,21 @@ describe("OpenClaw SDK package e2e", () => {
     } finally {
       await registry.close();
     }
+
+    const protocolSchema: unknown = JSON.parse(
+      await fs.readFile(
+        path.join(tempDir, "node_modules", "@openclaw", "gateway-protocol", "protocol.schema.json"),
+        "utf8",
+      ),
+    );
+    expect(protocolSchema).toMatchObject({
+      $id: "https://openclaw.ai/protocol.schema.json",
+      definitions: {
+        EventFrame: expect.any(Object),
+        RequestFrame: expect.any(Object),
+        ResponseFrame: expect.any(Object),
+      },
+    });
 
     const importScript = `
       import { GatewayClientTransport, OpenClaw, normalizeGatewayEvent } from "@openclaw/sdk";

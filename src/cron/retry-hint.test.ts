@@ -20,6 +20,25 @@ describe("resolveCronExecutionRetryHint", () => {
     ).toEqual({ retryable: true, category: "rate_limit" });
   });
 
+  it("does not retry a billing-classified provider failure containing HTTP 429", () => {
+    const error =
+      '429 {"code":"Some resource has been exhausted","error":"Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}';
+
+    expect(
+      resolveCronExecutionRetryHint({
+        error,
+        classifiedReason: "billing",
+      }),
+    ).toEqual({ retryable: false });
+
+    expect(
+      resolveCronExecutionRetryHint({
+        error: "429 rate limit exceeded",
+        classifiedReason: "rate_limit",
+      }),
+    ).toEqual({ retryable: true, category: "rate_limit" });
+  });
+
   it("treats common network error codes as network when retryOn only includes network", () => {
     for (const code of [
       "EAI_AGAIN",

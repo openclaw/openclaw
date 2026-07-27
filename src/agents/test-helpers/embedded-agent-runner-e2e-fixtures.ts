@@ -39,6 +39,13 @@ export async function cleanupEmbeddedAgentRunnerTestWorkspace(
 
 export function createEmbeddedAgentRunnerOpenAiConfig(modelIds: string[]): OpenClawConfig {
   return {
+    agents: {
+      entries: {
+        main: { default: true },
+        test: {},
+        "embedded-agent": {},
+      },
+    },
     models: {
       providers: {
         openai: {

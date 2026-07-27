@@ -69,8 +69,19 @@ function isReleasedVersion(version: string): boolean {
  */
 let cachedLocalNodeId: Promise<string | null> | undefined;
 async function resolveLocalNodeId(): Promise<string | null> {
-  cachedLocalNodeId ??= loadNodeHostConfig().then((config) => config?.nodeId ?? null);
-  return await cachedLocalNodeId;
+  const pending = (cachedLocalNodeId ??= loadNodeHostConfig().then(
+    (config) => config?.nodeId ?? null,
+  ));
+  try {
+    return await pending;
+  } catch (error) {
+    // A transient SQLite failure must not poison every subsequent reconnect;
+    // only the failed owner may release its shared single-flight cache.
+    if (cachedLocalNodeId === pending) {
+      cachedLocalNodeId = undefined;
+    }
+    throw error;
+  }
 }
 
 function setSocketMaxPayload(socket: WebSocket, maxPayload: number): void {
@@ -292,7 +303,6 @@ export async function attachAuthenticatedGatewayConnect(
       `legacy node protocol accepted conn=${connId} client=${formatForLog(clientLabel)} v${formatForLog(connectParams.client.version)} min=${minProtocol} max=${maxProtocol} current=${PROTOCOL_VERSION}; upgrade recommended`,
     );
   }
-  clearHandshakeTimer();
   const nextClient: GatewayWsClient = {
     socket,
     connect: state.controlUiDeviceAuthMigrationPending
@@ -329,8 +339,6 @@ export async function attachAuthenticatedGatewayConnect(
       expiresAtMs: entry.expiresAtMs,
     });
   }
-  setSocketMaxPayload(socket, MAX_PAYLOAD_BYTES);
-
   // Version mismatch: kick the local node host so the OS supervisor restarts it.
   // Only applies when the connecting node is the same-install local node (verified by
   // matching instanceId against the local node-host config row). SSH-tunneled remote
@@ -420,6 +428,10 @@ export async function attachAuthenticatedGatewayConnect(
     });
     return;
   }
+  // Node identity and pairing checks can yield before registration. Keep the
+  // preauth watchdog live until this socket actually owns its admitted client.
+  clearHandshakeTimer();
+  setSocketMaxPayload(socket, MAX_PAYLOAD_BYTES);
   setHandshakeState("connected");
   advanceHandshakePhase("session_attached");
   logWs("in", "connect", {

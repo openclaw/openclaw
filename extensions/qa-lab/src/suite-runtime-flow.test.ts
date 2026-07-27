@@ -164,6 +164,7 @@ vi.mock("./gateway-log-sentinel.js", () => ({
 }));
 
 import { QaSuiteScenarioSkipError } from "./errors.js";
+import { startQaOtlpTraceReceiver } from "./otel-trace-receiver.js";
 import { runQaSuiteScenarioDefinition, runQaSuiteScenarioSteps } from "./suite-runtime-flow.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
@@ -334,4 +335,104 @@ describe("qa suite runtime flow", () => {
     expect(webOpenPage).toHaveBeenCalledWith({ url: "https://openclaw.ai", repoRoot: "/repo" });
     expect(env.webSessionIds.has("page-1")).toBe(true);
   });
+
+  it.each(["gateway restart failed", "trace assertion failed"])(
+    "closes the actual bound OTLP receiver when the scenario fails: %s",
+    async (failureMessage) => {
+      const env = {
+        lab: { baseUrl: "http://127.0.0.1:4444" },
+        webSessionIds: new Set<string>(),
+        gateway: {} as QaSuiteRuntimeEnv["gateway"],
+        transport: {
+          id: "qa-channel",
+          label: "QA Channel",
+          accountId: "qa-channel",
+          waitReady: vi.fn(),
+          createGatewayConfig: vi.fn(),
+          buildAgentDelivery: vi.fn(),
+          requiredPluginIds: [],
+          supportedActions: [],
+          handleAction: vi.fn(),
+          createReportNotes: vi.fn(),
+          reset: vi.fn(),
+          sendInbound: vi.fn(),
+          sendNativeCommand: vi.fn(),
+          waitForNoOutbound: vi.fn(),
+          waitForOutbound: vi.fn(),
+          waitForOutboundSequence: vi.fn(),
+          state: {
+            reset: vi.fn(),
+            getSnapshot: vi.fn(),
+            addInboundMessage: vi.fn(),
+            addOutboundMessage: vi.fn(),
+            readMessage: vi.fn(),
+            searchMessages: vi.fn(),
+            waitFor: vi.fn(),
+          },
+          waitForCondition: vi.fn(),
+        },
+        outputDir: "/artifacts",
+        repoRoot: "/repo",
+        providerMode: "mock-openai",
+        primaryModel: "openai/gpt-5.6-luna",
+        alternateModel: "openai/gpt-5.6-luna-mini",
+        mock: null,
+        cfg: {} as QaSuiteRuntimeEnv["cfg"],
+      } satisfies Parameters<typeof runQaSuiteScenarioDefinition>[0]["env"];
+      const scenario = {
+        id: "otel-trace-smoke",
+        title: "OTEL trace smoke",
+        sourcePath: "qa/scenarios/runtime/otel-trace-smoke.yaml",
+        surface: "telemetry",
+        objective: "verify authentic trace receiver cleanup",
+        successCriteria: ["receiver socket closes after scenario failure"],
+        execution: {
+          kind: "flow" as const,
+          flow: { steps: [] },
+        },
+      };
+      let receiver: Awaited<ReturnType<typeof startQaOtlpTraceReceiver>> | undefined;
+      let closeSpy: ReturnType<typeof vi.spyOn> | undefined;
+
+      createQaScenarioRuntimeApi.mockImplementationOnce(
+        (params: { deps: { startQaOtlpTraceReceiver: typeof startQaOtlpTraceReceiver } }) => ({
+          startQaOtlpTraceReceiver: params.deps.startQaOtlpTraceReceiver,
+        }),
+      );
+      runScenarioFlow.mockImplementationOnce(async (params: { api: unknown }) => {
+        const api = params.api as {
+          startQaOtlpTraceReceiver: typeof startQaOtlpTraceReceiver;
+        };
+        receiver = await api.startQaOtlpTraceReceiver();
+        closeSpy = vi.spyOn(receiver, "close");
+        throw new Error(failureMessage);
+      });
+
+      await expect(
+        runQaSuiteScenarioDefinition({
+          env,
+          scenario,
+          runScenario: vi.fn(),
+          splitModelRef: vi.fn(),
+          formatErrorMessage: vi.fn(),
+          liveTurnTimeoutMs: vi.fn(),
+          resolveQaLiveTurnTimeoutMs: vi.fn(),
+          constants: {
+            imageUnderstandingPngBase64: "small",
+            imageUnderstandingLargePngBase64: "large",
+            imageUnderstandingValidPngBase64: "valid",
+          },
+        }),
+      ).rejects.toThrow(failureMessage);
+
+      expect(receiver).toBeDefined();
+      expect(closeSpy).toHaveBeenCalledTimes(1);
+      await expect(
+        fetch(`${receiver?.endpoint}/v1/traces`, {
+          method: "POST",
+          signal: AbortSignal.timeout(2_000),
+        }),
+      ).rejects.toThrow();
+    },
+  );
 });

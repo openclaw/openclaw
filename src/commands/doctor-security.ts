@@ -1,6 +1,7 @@
 /** Security warnings for gateway exposure, exec policy drift, channel DMs, and plaintext secrets. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
+import { listAgentEntriesWithSource } from "../agents/agent-scope-config.js";
 import { resolveDmAllowAuditState } from "../channels/message-access/dm-allow-state.js";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
@@ -52,12 +53,14 @@ function collectImplicitHeartbeatDirectPolicyWarnings(cfg: OpenClawConfig): stri
     pathHint: "agents.defaults.heartbeat.directPolicy",
   });
 
-  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
-  for (const agent of agents) {
+  for (const { entry: agent, source } of listAgentEntriesWithSource(cfg)) {
     maybeWarn({
       label: `Heartbeat agent "${agent.id}"`,
       heartbeat: agent.heartbeat,
-      pathHint: `heartbeat.directPolicy for agent "${agent.id}"`,
+      pathHint:
+        source.kind === "entries"
+          ? `agents.entries.${source.key}.heartbeat.directPolicy`
+          : `heartbeat.directPolicy for agent "${agent.id}"`,
     });
   }
 

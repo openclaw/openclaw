@@ -6,6 +6,8 @@ import {
   extractText,
   extractTextCached,
   extractThinkingCached,
+  isEmptyUserTextOnlyMessage,
+  readTranscriptMediaEntries,
 } from "./message-extract.ts";
 
 describe("extractTextCached", () => {
@@ -153,5 +155,68 @@ describe("nullish messages", () => {
       expect(extractRawText(message)).toBeNull();
       expect(extractThinkingCached(message)).toBeNull();
     }
+  });
+});
+
+describe("browser-safe persisted transcript media", () => {
+  it("hydrates real attachments after null and malformed persisted slots", () => {
+    expect(
+      readTranscriptMediaEntries({
+        role: "user",
+        __openclaw: {
+          media: [
+            null,
+            false,
+            42,
+            "invalid",
+            [],
+            {},
+            { path: " /media/image.png ", contentType: " IMAGE/PNG; charset=binary " },
+            { url: " media://inbound/voice.ogg ", kind: "audio" },
+          ],
+        },
+      }),
+    ).toEqual([
+      { path: "/media/image.png", mediaType: "IMAGE/PNG; charset=binary" },
+      { path: "media://inbound/voice.ogg", mediaType: "audio" },
+    ]);
+  });
+
+  it("does not turn malformed sparse media slots into visible empty user messages", () => {
+    expect(
+      isEmptyUserTextOnlyMessage({
+        role: "user",
+        content: "",
+        __openclaw: { media: [null, false, 42, "invalid", [], {}] },
+      }),
+    ).toBe(true);
+  });
+
+  it("preserves canonical sparse positions and normalized MIME metadata", () => {
+    expect(
+      readTranscriptMediaEntries({
+        role: "user",
+        __openclaw: {
+          media: [
+            {},
+            { path: " /media/image.png ", contentType: " IMAGE/PNG; charset=binary " },
+            { url: " media://inbound/voice.ogg ", kind: "audio" },
+          ],
+        },
+      }),
+    ).toEqual([
+      { path: "/media/image.png", mediaType: "IMAGE/PNG; charset=binary" },
+      { path: "media://inbound/voice.ogg", mediaType: "audio" },
+    ]);
+  });
+
+  it("does not resurrect retired top-level attachment carriers", () => {
+    expect(
+      readTranscriptMediaEntries({
+        role: "user",
+        media: [{ path: "/media/legacy.png", contentType: "image/png" }],
+        MediaPath: "/media/other-legacy.png",
+      }),
+    ).toEqual([]);
   });
 });

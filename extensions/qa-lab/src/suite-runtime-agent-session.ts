@@ -124,6 +124,7 @@ function summarizeSessionTranscriptEvents(
   const completedToolCallIds = new Set<string>();
   const successfulToolCallIds = new Set<string>();
   let finalText = "";
+  let hasCurrentTurnProviderFinalText = false;
   let lastAssistantContentTypes: string[] = [];
   let lastAssistantErrorMessage: string | undefined;
   let lastAssistantStopReason: string | undefined;
@@ -137,6 +138,7 @@ function summarizeSessionTranscriptEvents(
     }
     lastMessageRole = readNonEmptyString(message.role);
     if (message.role === "toolResult") {
+      hasCurrentTurnProviderFinalText = false;
       const toolCallId = readNonEmptyString(message.toolCallId);
       const toolName = readNonEmptyString(message.toolName);
       if (
@@ -160,12 +162,25 @@ function summarizeSessionTranscriptEvents(
       }
       continue;
     }
+    if (message.role === "user") {
+      hasCurrentTurnProviderFinalText = false;
+      continue;
+    }
     if (message.role !== "assistant") {
       continue;
     }
     const text = extractGatewayMessageText(message);
     if (text) {
-      finalText = text;
+      // Same-turn delivery bookkeeping cannot replace the real provider reply.
+      // A later user or tool turn may genuinely have only a delivery mirror.
+      if (message.provider === "openclaw" && message.model === "delivery-mirror") {
+        if (!hasCurrentTurnProviderFinalText) {
+          finalText = text;
+        }
+      } else {
+        finalText = text;
+        hasCurrentTurnProviderFinalText = true;
+      }
     }
     const openClawMeta = isRecord(message["__openclaw"]) ? message["__openclaw"] : undefined;
     const mirrorIdentity = readNonEmptyString(openClawMeta?.mirrorIdentity);

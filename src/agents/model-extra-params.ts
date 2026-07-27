@@ -60,10 +60,17 @@ export function resolveModelExtraParamSources(params: {
     ? (configuredModels?.[canonicalKey]?.params ??
       (legacyKey ? configuredModels?.[legacyKey]?.params : undefined))
     : undefined;
-  const agentParams =
-    params.agentId && params.config
-      ? resolveAgentConfig(params.config, params.agentId)?.params
-      : undefined;
+  const agentConfig =
+    params.agentId && params.config ? resolveAgentConfig(params.config, params.agentId) : undefined;
+  const agentModelParams = canonicalKey
+    ? (agentConfig?.models?.[canonicalKey]?.params ??
+      (legacyKey ? agentConfig?.models?.[legacyKey]?.params : undefined))
+    : undefined;
+  // Model-specific agent settings are narrower than agent-wide settings and
+  // must stay in the same precedence source for transport alias normalization.
+  const agentParams = agentModelParams
+    ? { ...agentConfig?.params, ...agentModelParams }
+    : agentConfig?.params;
   return { defaultParams, modelParams, agentParams };
 }
 
@@ -72,14 +79,7 @@ export function hasAuthoredProviderRequestParams(
   params: Parameters<typeof resolveModelExtraParamSources>[0],
 ): boolean {
   const sources = resolveModelExtraParamSources(params);
-  if (
-    [sources.defaultParams, sources.agentParams].some(
-      (source) => source !== undefined && Object.keys(source).length > 0,
-    )
-  ) {
-    return true;
-  }
-  return Object.entries(sources.modelParams ?? {}).some(
-    ([key, value]) => !isAgentRuntimeModelParam(key, value),
+  return [sources.defaultParams, sources.modelParams, sources.agentParams].some((source) =>
+    Object.entries(source ?? {}).some(([key, value]) => !isAgentRuntimeModelParam(key, value)),
   );
 }

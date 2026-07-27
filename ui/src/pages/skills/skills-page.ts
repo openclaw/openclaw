@@ -34,7 +34,13 @@ import {
 } from "../../lib/skills/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { renderSkills, type SkillDetailTab, type SkillsStatusFilter } from "./view.ts";
+import { fetchCatalogIconBlobUrl } from "../plugins/icon-loader.ts";
+import {
+  normalizeClawHubSkillIconUrl,
+  renderSkills,
+  type SkillDetailTab,
+  type SkillsStatusFilter,
+} from "./view.ts";
 
 export type SkillsRouteData = {
   gateway: ApplicationContext["gateway"];
@@ -71,6 +77,7 @@ class SkillsPage extends OpenClawLightDomElement {
   @state() skillsDetailTab: SkillDetailTab = "overview";
   @state() clawhubSearchQuery = "";
   @state() clawhubSearchResults: ClawHubSearchResult[] | null = null;
+  @state() clawhubIconUrls: Record<string, string> = {};
   @state() clawhubSearchLoading = false;
   @state() clawhubSearchError: string | null = null;
   @state() clawhubDetail: ClawHubSkillDetail | null = null;
@@ -97,6 +104,11 @@ class SkillsPage extends OpenClawLightDomElement {
   private routeDataEnabled = true;
   private hasBoundGatewaySource = false;
   private sourceGeneration = 0;
+  private readonly clawhubIconMisses = new Set<string>();
+  private readonly clawhubIconRequests = new Map<
+    string,
+    { controller: AbortController; timeout: ReturnType<typeof setTimeout> }
+  >();
   private readonly subscriptions = new SubscriptionsController(this)
     .effect(
       () => this.context?.gateway,
@@ -125,6 +137,9 @@ class SkillsPage extends OpenClawLightDomElement {
     if (changed.has("routeData")) {
       this.applyRouteData();
       this.ensureInitialData();
+    }
+    if (changed.has("clawhubSearchResults") || changed.has("clawhubDetail")) {
+      this.syncClawHubIcons();
     }
   }
 
@@ -166,6 +181,7 @@ class SkillsPage extends OpenClawLightDomElement {
 
   private resetLoadedSkillState() {
     this.sourceGeneration++;
+    this.resetClawHubIcons();
     if (this.clawhubSearchTimer) {
       clearTimeout(this.clawhubSearchTimer);
       this.clawhubSearchTimer = null;
@@ -201,6 +217,118 @@ class SkillsPage extends OpenClawLightDomElement {
     this.skillCardContentKeys = {};
     this.skillCardLoadingKey = null;
     this.skillCardErrors = {};
+  }
+
+  private resetClawHubIcons() {
+    for (const request of this.clawhubIconRequests.values()) {
+      clearTimeout(request.timeout);
+      request.controller.abort();
+    }
+    for (const url of Object.values(this.clawhubIconUrls)) {
+      URL.revokeObjectURL(url);
+    }
+    this.clawhubIconRequests.clear();
+    this.clawhubIconMisses.clear();
+    this.clawhubIconUrls = {};
+  }
+
+  // Blob URLs and pending requests belong only to visible registry results;
+  // revoke or abort removed entries so stale searches cannot publish artwork.
+  private syncClawHubIcons() {
+    const sourceUrls = new Set<string>();
+    for (const result of this.clawhubSearchResults ?? []) {
+      const sourceUrl = normalizeClawHubSkillIconUrl(result.icon);
+      if (sourceUrl) {
+        sourceUrls.add(sourceUrl);
+      }
+    }
+    const detailIconUrl = normalizeClawHubSkillIconUrl(this.clawhubDetail?.skill?.icon);
+    if (detailIconUrl) {
+      sourceUrls.add(detailIconUrl);
+    }
+
+    const nextUrls = { ...this.clawhubIconUrls };
+    let urlsChanged = false;
+    for (const [sourceUrl, blobUrl] of Object.entries(nextUrls)) {
+      if (!sourceUrls.has(sourceUrl)) {
+        URL.revokeObjectURL(blobUrl);
+        delete nextUrls[sourceUrl];
+        urlsChanged = true;
+      }
+    }
+    if (urlsChanged) {
+      this.clawhubIconUrls = nextUrls;
+    }
+    for (const [sourceUrl, request] of this.clawhubIconRequests) {
+      if (!sourceUrls.has(sourceUrl)) {
+        clearTimeout(request.timeout);
+        request.controller.abort();
+        this.clawhubIconRequests.delete(sourceUrl);
+      }
+    }
+    for (const sourceUrl of this.clawhubIconMisses) {
+      if (!sourceUrls.has(sourceUrl)) {
+        this.clawhubIconMisses.delete(sourceUrl);
+      }
+    }
+    if (!this.connected) {
+      return;
+    }
+    for (const sourceUrl of sourceUrls) {
+      if (
+        !this.clawhubIconUrls[sourceUrl] &&
+        !this.clawhubIconMisses.has(sourceUrl) &&
+        !this.clawhubIconRequests.has(sourceUrl)
+      ) {
+        this.fetchClawHubIcon(sourceUrl);
+      }
+    }
+  }
+
+  private fetchClawHubIcon(iconUrl: string) {
+    const controller = new AbortController();
+    const timeout = setTimeout(
+      () =>
+        controller.abort(new DOMException("ClawHub skill icon fetch timed out", "TimeoutError")),
+      10_000,
+    );
+    const request = { controller, timeout };
+    this.clawhubIconRequests.set(iconUrl, request);
+    void fetchCatalogIconBlobUrl({
+      iconUrl,
+      basePath: this.context.basePath,
+      gatewayUrl: this.context.gateway.connection.gatewayUrl,
+      auth: {
+        hello: this.context.gateway.snapshot.hello,
+        settings: { token: this.context.gateway.connection.token },
+        password: this.context.gateway.connection.password,
+      },
+      signal: controller.signal,
+    })
+      .then((blobUrl) => {
+        if (this.clawhubIconRequests.get(iconUrl) !== request || !this.isConnected) {
+          if (blobUrl) {
+            URL.revokeObjectURL(blobUrl);
+          }
+          return;
+        }
+        if (blobUrl) {
+          this.clawhubIconUrls = { ...this.clawhubIconUrls, [iconUrl]: blobUrl };
+        } else {
+          this.clawhubIconMisses.add(iconUrl);
+        }
+      })
+      .catch(() => {
+        if (this.clawhubIconRequests.get(iconUrl) === request) {
+          this.clawhubIconMisses.add(iconUrl);
+        }
+      })
+      .finally(() => {
+        clearTimeout(timeout);
+        if (this.clawhubIconRequests.get(iconUrl) === request) {
+          this.clawhubIconRequests.delete(iconUrl);
+        }
+      });
   }
 
   private applyRouteData() {
@@ -387,6 +515,7 @@ class SkillsPage extends OpenClawLightDomElement {
             skillCardErrors: this.skillCardErrors,
             clawhubQuery: this.clawhubSearchQuery,
             clawhubResults: this.clawhubSearchResults,
+            clawhubIconUrls: this.clawhubIconUrls,
             clawhubSearchLoading: this.clawhubSearchLoading,
             clawhubSearchError: this.clawhubSearchError,
             clawhubDetail: this.clawhubDetail,

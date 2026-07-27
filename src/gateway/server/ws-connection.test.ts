@@ -230,6 +230,39 @@ describe("attachGatewayWsConnectionHandler", () => {
     expect(clients.size).toBe(0);
   });
 
+  it("rejects a second client registration on the same socket and owns one heartbeat", async () => {
+    vi.useFakeTimers();
+    const clients = new Set<unknown>();
+    const socket = createGatewayWsTestSocket({ ping: true });
+    const { passed } = await connectTestWs({ clients, socket });
+    const handlerParams = passed as {
+      setClient: (client: unknown) => boolean;
+    };
+    const firstClient = {
+      socket,
+      connect: { client: { id: "openclaw-control-ui", mode: "webchat" } },
+      connId: "first-client",
+      usesSharedGatewayAuth: false,
+    };
+
+    expect(handlerParams.setClient(firstClient)).toBe(true);
+    const ownedTimerCount = vi.getTimerCount();
+
+    expect(
+      handlerParams.setClient({
+        ...firstClient,
+        connId: "duplicate-client",
+      }),
+    ).toBe(false);
+    expect(clients).toEqual(new Set([firstClient]));
+    expect(vi.getTimerCount()).toBe(ownedTimerCount);
+
+    socket.emit("close", 1000, Buffer.from("done"));
+
+    expect(clients.size).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("continues protocol pings after pong and stops when the connection closes", async () => {
     vi.useFakeTimers();
     const socket = Object.assign(createGatewayWsTestSocket({ ping: true }), {

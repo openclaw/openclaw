@@ -23,12 +23,26 @@ const mocks = vi.hoisted(() => {
     createImageGenerateToolOptions: vi.fn(),
     createMusicGenerateToolOptions: vi.fn(),
     createVideoGenerateToolOptions: vi.fn(),
+    mediaGenerationYieldWarn: vi.fn(),
     textToSpeech: vi.fn(async () => ({
       success: true,
       audioPath: "/tmp/openclaw/tts-config-test.opus",
       provider: "microsoft",
       voiceCompatible: true,
     })),
+  };
+});
+
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      return subsystem === "agents/tools/media-generation-yield"
+        ? { ...logger, warn: mocks.mediaGenerationYieldWarn }
+        : logger;
+    },
   };
 });
 
@@ -271,6 +285,7 @@ describe("createOpenClawTools media generation session wiring", () => {
     mocks.createImageGenerateToolOptions.mockClear();
     mocks.createMusicGenerateToolOptions.mockClear();
     mocks.createVideoGenerateToolOptions.mockClear();
+    mocks.mediaGenerationYieldWarn.mockClear();
   });
 
   it("uses the isolated cron run key for background media completions", () => {
@@ -334,6 +349,108 @@ describe("createOpenClawTools media generation session wiring", () => {
       expect.objectContaining({
         agentSessionKey: "agent:main:slack:channel:C123",
       }),
+    );
+  });
+
+  it("settles a successful media task start before yielding its foreground tool turn", async () => {
+    const lifecycle: string[] = [];
+    const onYield = vi.fn((message: string) => {
+      lifecycle.push(`yield:${message}`);
+    });
+    const config = {
+      agents: {
+        defaults: {
+          mediaModels: {
+            image: { primary: "image-owner/model" },
+            video: { primary: "video-owner/model" },
+            music: { primary: "music-owner/model" },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    createOpenClawTools({
+      config,
+      agentSessionKey: "agent:main:slack:channel:C123",
+      disableMessageTool: true,
+      disablePluginTools: true,
+      onYield,
+    });
+
+    const imageOptions = mocks.createImageGenerateToolOptions.mock.calls.at(-1)?.[0] as
+      | { onAsyncTaskStarted?: (message: string) => Promise<void> | void }
+      | undefined;
+    const videoOptions = mocks.createVideoGenerateToolOptions.mock.calls.at(-1)?.[0] as
+      | { onAsyncTaskStarted?: (message: string) => Promise<void> | void }
+      | undefined;
+    const musicOptions = mocks.createMusicGenerateToolOptions.mock.calls.at(-1)?.[0] as
+      | { onAsyncTaskStarted?: (message: string) => Promise<void> | void }
+      | undefined;
+    expect(imageOptions?.onAsyncTaskStarted).toBeTypeOf("function");
+    expect(videoOptions?.onAsyncTaskStarted).toBe(imageOptions?.onAsyncTaskStarted);
+    expect(musicOptions?.onAsyncTaskStarted).toBe(imageOptions?.onAsyncTaskStarted);
+
+    await imageOptions?.onAsyncTaskStarted?.("Generated media task started");
+    lifecycle.push("async-start-tool-result-committed");
+    expect(onYield).not.toHaveBeenCalled();
+
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(onYield).toHaveBeenCalledExactlyOnceWith("Generated media task started");
+    expect(lifecycle).toEqual([
+      "async-start-tool-result-committed",
+      "yield:Generated media task started",
+    ]);
+  });
+
+  it.each([
+    {
+      label: "a synchronous yield failure",
+      onYield: () => {
+        throw new Error("foreground yield teardown failed");
+      },
+    },
+    {
+      label: "an asynchronous yield rejection",
+      onYield: async () => {
+        throw new Error("foreground yield teardown failed");
+      },
+    },
+  ])("logs $label without crashing after the media task starts", async ({ onYield }) => {
+    const yieldTurn = vi.fn(onYield);
+    const config = {
+      agents: {
+        defaults: {
+          mediaModels: { image: { primary: "image-owner/model" } },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    createOpenClawTools({
+      config,
+      agentSessionKey: "agent:main:slack:channel:C123",
+      disableMessageTool: true,
+      disablePluginTools: true,
+      onYield: yieldTurn,
+    });
+
+    const imageOptions = mocks.createImageGenerateToolOptions.mock.calls.at(-1)?.[0] as
+      | { onAsyncTaskStarted?: (message: string) => Promise<void> | void }
+      | undefined;
+
+    await imageOptions?.onAsyncTaskStarted?.("Generated media task started");
+    expect(yieldTurn).not.toHaveBeenCalled();
+
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(yieldTurn).toHaveBeenCalledExactlyOnceWith("Generated media task started");
+    expect(mocks.mediaGenerationYieldWarn).toHaveBeenCalledExactlyOnceWith(
+      "Failed to yield foreground media generation turn",
+      { error: "foreground yield teardown failed" },
     );
   });
 });

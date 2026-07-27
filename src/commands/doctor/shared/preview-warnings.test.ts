@@ -956,6 +956,28 @@ describe("doctor preview warnings", () => {
     expect(warning).not.toContain("agents.list[0].tools.alsoAllow");
   });
 
+  it("uses canonical keyed-agent paths for restrictive tool profile advice", async () => {
+    const warnings = await collectProfileConfiguredToolSectionWarningsThroughDoctor({
+      tools: { profile: "messaging" },
+      agents: {
+        entries: {
+          main: { default: true },
+          sage: {
+            tools: {
+              allow: ["message"],
+              exec: { mode: "allowlist" },
+            },
+          },
+        },
+      },
+    });
+
+    const warning = expectSingleWarningContaining(warnings, "agents.entries.sage.tools.profile");
+    expect(warning).toContain("Add these grants to agents.entries.sage.tools.allow");
+    expect(warning).toContain('set agents.entries.sage.tools.profile to "full"');
+    expect(warning).not.toContain("agents.list");
+  });
+
   it("warns when an agent tool section inherits a restrictive provider profile", async () => {
     const warnings = await collectProfileConfiguredToolSectionWarningsThroughDoctor({
       tools: {
@@ -987,6 +1009,59 @@ describe("doctor preview warnings", () => {
     expect(warning).toContain(
       'agents.list[0].tools.byProvider.openai.alsoAllow: ["exec", "process"]',
     );
+  });
+
+  it("uses canonical keyed-agent paths for inherited provider profile advice", async () => {
+    const warnings = await collectProfileConfiguredToolSectionWarningsThroughDoctor({
+      tools: {
+        byProvider: {
+          openai: { profile: "messaging" },
+        },
+      },
+      agents: {
+        entries: {
+          main: { default: true },
+          sage: {
+            tools: { exec: { mode: "allowlist" } },
+          },
+        },
+      },
+    });
+
+    const warning = expectSingleWarningContaining(
+      warnings,
+      'tools.byProvider.openai.profile is "messaging"',
+    );
+    expect(warning).toContain("agents.entries.sage.tools.exec is configured");
+    expect(warning).toContain(
+      'agents.entries.sage.tools.byProvider.openai.alsoAllow: ["exec", "process"]',
+    );
+    expect(warning).not.toContain("agents.list");
+  });
+
+  it("does not warn when a keyed agent already inherits the required provider grants", async () => {
+    const warnings = await collectProfileConfiguredToolSectionWarningsThroughDoctor({
+      tools: {
+        byProvider: {
+          openai: { alsoAllow: ["exec", "process"] },
+        },
+      },
+      agents: {
+        entries: {
+          main: { default: true },
+          sage: {
+            tools: {
+              exec: { mode: "allowlist" },
+              byProvider: {
+                "openai/gpt-5": { profile: "messaging" },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(warnings).toStrictEqual([]);
   });
 
   it("uses inherited provider alsoAllow for agent provider profile warnings", async () => {

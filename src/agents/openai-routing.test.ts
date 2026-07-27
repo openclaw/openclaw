@@ -10,6 +10,60 @@ import {
   resolveSelectedOpenAIRuntimeProvider,
 } from "./openai-routing.js";
 
+const CODEX_RUNTIME_CONTROL_SCOPES = ["model", "global", "agent", "agent-model"] as const;
+const CODEX_RUNTIME_CONTROL_CASES: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
+  ["thinking off", { thinking: "off" }],
+  ["thinking minimal", { thinking: "minimal" }],
+  ["thinking low", { thinking: "low" }],
+  ["thinking medium", { thinking: "medium" }],
+  ["thinking high", { thinking: "high" }],
+  ["thinking xhigh", { thinking: "xhigh" }],
+  ["thinking adaptive", { thinking: "adaptive" }],
+  ["thinking max", { thinking: "max" }],
+  ["thinking ultra", { thinking: "ultra" }],
+  ["thinking false", { thinking: false }],
+  ["thinking disabled", { thinking: "disabled" }],
+  ["thinking none", { thinking: "none" }],
+  ["fastMode on", { fastMode: true }],
+  ["fastMode off", { fastMode: false }],
+  ["fastMode auto", { fastMode: "auto" }],
+  ["fast_mode", { fast_mode: true }],
+  ["fastAutoOnSeconds", { fastMode: "auto", fastAutoOnSeconds: 30 }],
+  ["fast_auto_on_seconds", { fastMode: "auto", fast_auto_on_seconds: 30 }],
+  ["fastSeconds", { fastMode: "auto", fastSeconds: 30 }],
+  ["fast_seconds", { fastMode: "auto", fast_seconds: 30 }],
+];
+const OPENAI_PROVIDER_REQUEST_PARAM_CASES: ReadonlyArray<
+  readonly [string, Record<string, unknown>]
+> = [
+  ["provider-native thinking", { thinking: { type: "enabled", budget_tokens: 2_048 } }],
+  ["invalid fast mode", { fastMode: { enabled: true } }],
+  ["invalid fast cutoff", { fastAutoOnSeconds: "30" }],
+  ["provider temperature", { temperature: 0.4 }],
+  ["provider service tier", { serviceTier: "priority" }],
+  ["provider transport", { transport: "sse" }],
+];
+
+function createScopedOpenAIRoutingConfig(
+  scope: (typeof CODEX_RUNTIME_CONTROL_SCOPES)[number],
+  params: Record<string, unknown>,
+): { config: OpenClawConfig; agentId?: string } {
+  const modelKey = "openai/gpt-5.6-sol";
+  if (scope === "model") {
+    return { config: { agents: { defaults: { models: { [modelKey]: { params } } } } } };
+  }
+  if (scope === "global") {
+    return { config: { agents: { defaults: { params } } } };
+  }
+  if (scope === "agent") {
+    return { config: { agents: { entries: { audit: { params } } } }, agentId: "audit" };
+  }
+  return {
+    config: { agents: { entries: { audit: { models: { [modelKey]: { params } } } } } },
+    agentId: "audit",
+  };
+}
+
 describe("OpenAI runtime routing policy", () => {
   beforeEach(() => {
     vi.stubEnv("OPENAI_BASE_URL", "");
@@ -36,60 +90,62 @@ describe("OpenAI runtime routing policy", () => {
     ).toBe(true);
   });
 
-  it.each([
-    ["thinking", { thinking: "xhigh" }],
-    ["fastMode", { fastMode: true }],
-    ["fast_mode", { fast_mode: true }],
-    ["fastAutoOnSeconds", { fastMode: "auto", fastAutoOnSeconds: 30 }],
-    ["fast_auto_on_seconds", { fastMode: "auto", fast_auto_on_seconds: 30 }],
-    ["fastSeconds", { fastMode: "auto", fastSeconds: 30 }],
-    ["fast_seconds", { fastMode: "auto", fast_seconds: 30 }],
-  ])("keeps Codex for model-scoped %s controls", (_label, params) => {
-    const config = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.6-sol": {
-              params,
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
+  it.each(
+    CODEX_RUNTIME_CONTROL_CASES.flatMap(([label, params]) =>
+      CODEX_RUNTIME_CONTROL_SCOPES.map((scope) => ({
+        label,
+        params,
+        scope,
+      })),
+    ),
+  )("keeps Codex for $label controls at $scope scope", ({ params, scope }) => {
+    const { config, agentId } = createScopedOpenAIRoutingConfig(scope, params);
 
     expect(
       resolveOpenAIImplicitAgentRuntime({
         provider: "openai",
         modelId: "gpt-5.6-sol",
         config,
+        agentId,
         env: {},
       }),
     ).toBe("codex");
+    expect(
+      modelSelectionShouldEnsureCodexPlugin({
+        model: "openai/gpt-5.6-sol",
+        config,
+        agentId,
+      }),
+    ).toBe(true);
   });
 
-  it.each([
-    ["provider-native thinking", { thinking: { type: "enabled", budget_tokens: 2_048 } }],
-    ["invalid fast mode", { fastMode: { enabled: true } }],
-    ["invalid fast cutoff", { fastAutoOnSeconds: "30" }],
-  ])("keeps %s values on the OpenClaw runtime", (_label, params) => {
-    const config = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.6-sol": { params },
-          },
-        },
-      },
-    } as OpenClawConfig;
+  it.each(
+    OPENAI_PROVIDER_REQUEST_PARAM_CASES.flatMap(([label, params]) =>
+      CODEX_RUNTIME_CONTROL_SCOPES.map((scope) => ({
+        label,
+        params,
+        scope,
+      })),
+    ),
+  )("keeps $label values at $scope scope on the OpenClaw runtime", ({ params, scope }) => {
+    const { config, agentId } = createScopedOpenAIRoutingConfig(scope, params);
 
     expect(
       resolveOpenAIImplicitAgentRuntime({
         provider: "openai",
         modelId: "gpt-5.6-sol",
         config,
+        agentId,
         env: {},
       }),
     ).toBe("openclaw");
+    expect(
+      modelSelectionShouldEnsureCodexPlugin({
+        model: "openai/gpt-5.6-sol",
+        config,
+        agentId,
+      }),
+    ).toBe(false);
   });
 
   it("maps provider route facts onto a closed implicit runtime", () => {

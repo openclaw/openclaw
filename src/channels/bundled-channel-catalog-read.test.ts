@@ -136,6 +136,136 @@ describe("listBundledChannelCatalogEntries", () => {
     expect(telegram?.channel.approvalFlags).toEqual(["native"]);
   });
 
+  it.each(["dist", "dist-runtime"])(
+    "prefers source channel capabilities over a stale %s plugin runtime in a source checkout",
+    (runtimeDirName) => {
+      const root = seedRoot(`bcr-source-over-${runtimeDirName}-`);
+      const sourceExtensionsRoot = path.join(root, "extensions");
+      const runtimeExtensionsRoot = path.join(root, runtimeDirName, "extensions");
+      fs.mkdirSync(path.join(root, "src"), { recursive: true });
+      fs.writeFileSync(path.join(root, "pnpm-workspace.yaml"), "packages: []\n", "utf8");
+
+      for (const id of ["slack", "signal", "whatsapp", "qqbot", "telegram", "discord"]) {
+        seedChannelPkg(path.join(sourceExtensionsRoot, id, "package.json"), {
+          id,
+          docsPath: `/channels/${id}`,
+          label: `source ${id}`,
+          approvalFlags: ["native"],
+        });
+        seedChannelPkg(path.join(runtimeExtensionsRoot, id, "package.json"), {
+          id,
+          docsPath: `/channels/${id}`,
+          label: `stale ${id}`,
+          approvalFlags: id === "telegram" || id === "discord" ? ["native"] : undefined,
+        });
+      }
+      seedChannelPkg(path.join(sourceExtensionsRoot, "line", "package.json"), {
+        id: "line",
+        docsPath: "/channels/line",
+        label: "source line",
+      });
+      seedChannelPkg(path.join(runtimeExtensionsRoot, "line", "package.json"), {
+        id: "line",
+        docsPath: "/channels/line",
+        label: "stale line",
+        approvalFlags: ["native"],
+      });
+      useBundledPluginsDir(runtimeExtensionsRoot);
+
+      const entries = listBundledChannelCatalogEntries();
+      for (const id of ["slack", "signal", "whatsapp", "qqbot", "telegram", "discord"]) {
+        const channel = entries.find((entry) => entry.id === id)?.channel;
+        expect(channel?.approvalFlags, id).toEqual(["native"]);
+        expect(channel?.label, id).toBe(`source ${id}`);
+      }
+      const line = entries.find((entry) => entry.id === "line")?.channel;
+      expect(line?.label).toBe("source line");
+      expect(line?.approvalFlags).toBeUndefined();
+    },
+  );
+
+  it.each(["dist", "dist-runtime"])(
+    "only exposes plugins present in a partially built %s runtime",
+    (runtimeDirName) => {
+      const root = seedRoot(`bcr-partial-${runtimeDirName}-`);
+      const sourceExtensionsRoot = path.join(root, "extensions");
+      const runtimeExtensionsRoot = path.join(root, runtimeDirName, "extensions");
+      fs.mkdirSync(path.join(root, "src"), { recursive: true });
+      fs.writeFileSync(path.join(root, "pnpm-workspace.yaml"), "packages: []\n", "utf8");
+
+      seedChannelPkg(path.join(sourceExtensionsRoot, "slack", "package.json"), {
+        id: "slack",
+        docsPath: "/channels/slack",
+        label: "source slack",
+        approvalFlags: ["native"],
+      });
+      seedChannelPkg(path.join(runtimeExtensionsRoot, "slack", "package.json"), {
+        id: "slack",
+        docsPath: "/channels/slack",
+        label: "stale runtime slack",
+      });
+      seedChannelPkg(path.join(sourceExtensionsRoot, "source-only", "package.json"), {
+        id: "source-only",
+        docsPath: "/channels/source-only",
+      });
+      seedChannelPkg(path.join(runtimeExtensionsRoot, "runtime-only", "package.json"), {
+        id: "runtime-only",
+        docsPath: "/channels/runtime-only",
+        label: "runtime-only channel",
+      });
+      useBundledPluginsDir(runtimeExtensionsRoot);
+
+      const entries = listBundledChannelCatalogEntries();
+
+      expect(entries.map((entry) => entry.id).toSorted()).toEqual(["runtime-only", "slack"]);
+      expect(entries.find((entry) => entry.id === "slack")?.channel).toMatchObject({
+        label: "source slack",
+        approvalFlags: ["native"],
+      });
+      expect(entries.find((entry) => entry.id === "runtime-only")?.channel.label).toBe(
+        "runtime-only channel",
+      );
+    },
+  );
+
+  it("reads standalone source plugin manifests from the resolved source extensions directory", () => {
+    const root = seedRoot("bcr-source-extensions-");
+    const sourceExtensionsRoot = path.join(root, "extensions");
+    seedChannelPkg(path.join(sourceExtensionsRoot, "slack", "package.json"), {
+      id: "slack",
+      docsPath: "/channels/slack",
+      label: "standalone source slack",
+      approvalFlags: ["native"],
+    });
+    useBundledPluginsDir(sourceExtensionsRoot);
+
+    const slack = listBundledChannelCatalogEntries().find((entry) => entry.id === "slack");
+
+    expect(slack?.channel.label).toBe("standalone source slack");
+    expect(slack?.channel.approvalFlags).toEqual(["native"]);
+  });
+
+  it("preserves installed-runtime metadata when an extensions directory is not a source checkout", () => {
+    const root = seedRoot("bcr-installed-runtime-wins-");
+    const runtimeExtensionsRoot = path.join(root, "dist", "extensions");
+    seedChannelPkg(path.join(root, "extensions", "slack", "package.json"), {
+      id: "slack",
+      docsPath: "/channels/slack",
+      label: "untrusted source-shaped slack",
+      approvalFlags: ["native"],
+    });
+    seedChannelPkg(path.join(runtimeExtensionsRoot, "slack", "package.json"), {
+      id: "slack",
+      docsPath: "/channels/slack",
+      label: "installed runtime slack",
+    });
+    useBundledPluginsDir(runtimeExtensionsRoot);
+
+    const slack = listBundledChannelCatalogEntries().find((entry) => entry.id === "slack");
+    expect(slack?.channel.label).toBe("installed runtime slack");
+    expect(slack?.channel.approvalFlags).toBeUndefined();
+  });
+
   it("merges the generated official catalog with bundled package metadata", () => {
     const root = seedRoot("bcr-generated-official-");
     const extensionsRoot = path.join(root, "dist", "extensions");

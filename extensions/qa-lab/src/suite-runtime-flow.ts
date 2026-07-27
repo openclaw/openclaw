@@ -27,6 +27,7 @@ import { extractQaToolPayload } from "./extract-tool-payload.js";
 import { assertNoGatewayLogSentinels, scanGatewayLogSentinels } from "./gateway-log-sentinel.js";
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
 import { hasModelSwitchContinuitySignal } from "./model-switch-eval.js";
+import { startQaOtlpTraceReceiver } from "./otel-trace-receiver.js";
 import { runRuntimeToolFixture } from "./runtime-tool-fixture.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
@@ -178,6 +179,7 @@ export async function runQaSuiteScenarioSteps(
 
 type QaSuiteScenarioDepsParams = {
   env: QaSuiteScenarioFlowEnv;
+  otelTraceReceivers?: Set<Awaited<ReturnType<typeof startQaOtlpTraceReceiver>>>;
   runScenario: (name: string, steps: QaSuiteStep[]) => Promise<QaSuiteScenarioResult>;
   splitModelRef: (ref: string) => { provider: string; model: string } | null;
   formatErrorMessage: (error: unknown) => string;
@@ -220,6 +222,12 @@ function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
     waitForGatewayHealthy,
     waitForTransportReady,
     waitForQaChannelReady,
+    startQaOtlpTraceReceiver: async (options?: Parameters<typeof startQaOtlpTraceReceiver>[0]) => {
+      const receiver = await startQaOtlpTraceReceiver(options);
+      // Own the bound socket before any later scenario action can fail or time out.
+      params.otelTraceReceivers?.add(receiver);
+      return receiver;
+    },
     browserRequest: callQaBrowserRequest,
     waitForBrowserReady: waitForQaBrowserReady,
     browserOpenTab: qaBrowserOpenTab,
@@ -303,6 +311,7 @@ function createQaSuiteScenarioFlowApi(params: QaSuiteScenarioFlowApiParams) {
     scenario: params.scenario,
     deps: createQaSuiteScenarioDeps({
       env: params.env,
+      otelTraceReceivers: params.otelTraceReceivers,
       runScenario: params.runScenario,
       splitModelRef: params.splitModelRef,
       formatErrorMessage: params.formatErrorMessage,
@@ -361,17 +370,24 @@ export async function runQaSuiteScenarioDefinition(params: QaSuiteScenarioFlowAp
     throw new Error(`scenario missing flow: ${params.scenario.id}`);
   }
   const vars: Record<string, unknown> = {};
+  const otelTraceReceivers = new Set<Awaited<ReturnType<typeof startQaOtlpTraceReceiver>>>();
   const api = createQaSuiteScenarioFlowApi({
     ...params,
+    otelTraceReceivers,
     runScenario: createQaSuiteScenarioStepRunner(params.env, params.scenario, vars, {
       liveTurnTimeoutMs: params.liveTurnTimeoutMs,
       runScenario: params.runScenario,
     }),
   });
-  return await runScenarioFlow({
-    api,
-    flow: params.scenario.execution.flow,
-    scenarioTitle: params.scenario.title,
-    vars,
-  });
+  try {
+    return await runScenarioFlow({
+      api,
+      flow: params.scenario.execution.flow,
+      scenarioTitle: params.scenario.title,
+      vars,
+    });
+  } finally {
+    // A failed restart, assertion, or timeout must not retain a collector socket.
+    await Promise.all([...otelTraceReceivers].map((receiver) => receiver.close()));
+  }
 }

@@ -29,6 +29,63 @@ function cacheChatMessages(
 }
 
 describe("session message cache", () => {
+  it("keeps case-distinct Matrix room transcripts isolated", () => {
+    const host = createHost();
+    const cache: ChatMessageCache = new Map();
+    const mixedCaseRoom = "agent:ops:matrix:channel:!MixedRoomAbCdEf:example.org";
+    const lowercaseRoom = "agent:ops:matrix:channel:!mixedroomabcdef:example.org";
+
+    cacheChatMessages(cache, host, { sessionKey: mixedCaseRoom }, ["private mixed room"]);
+
+    expect(readChatMessagesFromCache(cache, host, { sessionKey: mixedCaseRoom })).toEqual([
+      "private mixed room",
+    ]);
+    expect(readChatMessagesFromCache(cache, host, { sessionKey: lowercaseRoom })).toEqual([]);
+
+    cacheChatMessages(cache, host, { sessionKey: lowercaseRoom }, ["private lowercase room"]);
+
+    expect(cache.size).toBe(2);
+    expect(readChatMessagesFromCache(cache, host, { sessionKey: mixedCaseRoom })).toEqual([
+      "private mixed room",
+    ]);
+    expect(readChatMessagesFromCache(cache, host, { sessionKey: lowercaseRoom })).toEqual([
+      "private lowercase room",
+    ]);
+  });
+
+  it("keeps canonical Matrix room aliases on the same cache subject", () => {
+    const host = createHost();
+    const cache: ChatMessageCache = new Map();
+
+    cacheChatMessages(
+      cache,
+      host,
+      { sessionKey: "agent:ops:matrix:channel:!MixedRoomAbCdEf:example.org" },
+      ["private mixed room"],
+    );
+
+    expect(
+      readChatMessagesFromCache(cache, host, {
+        sessionKey: "AGENT:OPS:MATRIX:CHANNEL:!MixedRoomAbCdEf:example.org",
+      }),
+    ).toEqual(["private mixed room"]);
+    expect(cache.size).toBe(1);
+  });
+
+  it("keeps case-distinct opaque Signal group transcripts isolated", () => {
+    const host = createHost();
+    const cache: ChatMessageCache = new Map();
+    const mixedCaseGroup = "agent:ops:signal:group:AbCdEf123";
+    const lowercaseGroup = "agent:ops:signal:group:abcdef123";
+
+    cacheChatMessages(cache, host, { sessionKey: mixedCaseGroup }, ["private mixed group"]);
+
+    expect(readChatMessagesFromCache(cache, host, { sessionKey: mixedCaseGroup })).toEqual([
+      "private mixed group",
+    ]);
+    expect(readChatMessagesFromCache(cache, host, { sessionKey: lowercaseGroup })).toEqual([]);
+  });
+
   it("canonicalizes main aliases without crossing agent scopes", () => {
     const host = createHost();
     const cache: ChatMessageCache = new Map();

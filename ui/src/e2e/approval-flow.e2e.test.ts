@@ -79,17 +79,133 @@ describeControlUiE2e("Control UI approval flow", () => {
       "exec.approval.requested",
       approval("approval-newer", "echo newer", 2_000),
     );
-    await currentPage.getByText("echo newer", { exact: true }).waitFor();
+    // New requests appear in the pending list, but the security modal pins
+    // its presented card until the user explicitly reviews another prompt.
+    await currentPage
+      .locator(".exec-approval-list__item")
+      .filter({ hasText: "echo newer" })
+      .click();
+    const activeCard = currentPage.locator(
+      '.exec-approval-card[data-approval-id="approval-newer"]',
+    );
+    await activeCard.waitFor();
     await gateway.rejectDeferred("exec.approval.resolve", {
       code: "UNAVAILABLE",
       message: "gateway unavailable",
     });
 
-    await expect.poll(() => currentPage.locator(".exec-approval-error").count()).toBe(0);
+    await expect.poll(() => activeCard.locator(".exec-approval-error").count()).toBe(0);
     await expect
       .poll(() => currentPage.getByRole("button", { name: "Deny" }).isEnabled())
       .toBe(true);
+
+    await currentPage
+      .locator(".exec-approval-list__item")
+      .filter({ hasText: "echo active" })
+      .click();
+    const failedCard = currentPage.locator(
+      '.exec-approval-card[data-approval-id="approval-active"]',
+    );
+    await failedCard.locator(".exec-approval-error").waitFor();
+    expect(await failedCard.locator(".exec-approval-error").textContent()).toContain(
+      "gateway unavailable",
+    );
   });
+
+  for (const outcome of ["success", "failure"] as const) {
+    it(`reconciles a refreshed same-generation approval after decision ${outcome}`, async () => {
+      const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
+      const currentPage = await context.newPage();
+      page = currentPage;
+      const gateway = await installMockGateway(currentPage);
+
+      await currentPage.goto(`${server?.baseUrl ?? ""}chat`);
+      await gateway.waitForRequest("sessions.list");
+      await gateway.deferNext("exec.approval.resolve");
+      await gateway.emitGatewayEvent(
+        "exec.approval.requested",
+        approval("approval-refreshed", "echo original approval", 1_000),
+      );
+      await currentPage.getByText("echo original approval", { exact: true }).waitFor();
+      await currentPage.getByRole("button", { name: "Allow once" }).click();
+
+      await gateway.emitGatewayEvent(
+        "exec.approval.requested",
+        approval("approval-refreshed", "echo refreshed approval", 1_000),
+      );
+      const refreshed = currentPage.getByText("echo refreshed approval", { exact: true });
+      await refreshed.waitFor();
+
+      if (outcome === "success") {
+        await gateway.resolveDeferred("exec.approval.resolve", { ok: true });
+        await expect.poll(() => refreshed.count()).toBe(0);
+        return;
+      }
+
+      await gateway.rejectDeferred("exec.approval.resolve", {
+        code: "UNAVAILABLE",
+        message: "gateway unavailable",
+      });
+      const refreshedCard = currentPage.locator(
+        '.exec-approval-card[data-approval-id="approval-refreshed"]',
+      );
+      await expect
+        .poll(async () => (await refreshedCard.locator(".exec-approval-error").textContent()) ?? "")
+        .toContain("gateway unavailable");
+      const denyButton = refreshedCard.getByRole("button", { name: "Deny" });
+      await expect.poll(() => denyButton.isEnabled()).toBe(true);
+      await denyButton.click();
+      await expect
+        .poll(async () => (await gateway.getRequests("exec.approval.resolve")).length)
+        .toBe(2);
+      await expect.poll(() => refreshed.count()).toBe(0);
+    });
+  }
+
+  for (const outcome of ["success", "failure"] as const) {
+    it(`keeps a reused-id replacement actionable after an older decision ${outcome}`, async () => {
+      const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
+      const currentPage = await context.newPage();
+      page = currentPage;
+      const gateway = await installMockGateway(currentPage);
+
+      await currentPage.goto(`${server?.baseUrl ?? ""}chat`);
+      await gateway.waitForRequest("sessions.list");
+      await gateway.deferNext("exec.approval.resolve");
+      await gateway.emitGatewayEvent(
+        "exec.approval.requested",
+        approval("approval-reused", "echo original approval", 1_000),
+      );
+      await currentPage.getByText("echo original approval", { exact: true }).waitFor();
+      await currentPage.getByRole("button", { name: "Allow once" }).click();
+
+      await gateway.emitGatewayEvent(
+        "exec.approval.requested",
+        approval("approval-reused", "echo replacement approval", 2_000),
+      );
+      const replacement = currentPage.getByText("echo replacement approval", { exact: true });
+      await replacement.waitFor();
+
+      if (outcome === "success") {
+        await gateway.resolveDeferred("exec.approval.resolve", { ok: true });
+      } else {
+        await gateway.rejectDeferred("exec.approval.resolve", {
+          code: "UNAVAILABLE",
+          message: "gateway unavailable",
+        });
+      }
+
+      await expect.poll(() => replacement.isVisible()).toBe(true);
+      await expect.poll(() => currentPage.locator(".exec-approval-error").count()).toBe(0);
+      const denyButton = currentPage.getByRole("button", { name: "Deny" });
+      await expect.poll(() => denyButton.isEnabled()).toBe(true);
+      await denyButton.click();
+      await expect
+        .poll(async () => (await gateway.getRequests("exec.approval.resolve")).length)
+        .toBe(2);
+      await expect.poll(() => replacement.count()).toBe(0);
+    });
+  }
 
   it("sends a typed approval command immediately while the active run waits", async () => {
     const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });

@@ -70,7 +70,10 @@ describe("ClawRouter managed gateway contract", () => {
             },
           },
           logging: { file: logFile },
-          agents: { defaults: { model: { primary: MODEL_REF } } },
+          agents: {
+            defaults: { model: { primary: MODEL_REF } },
+            entries: { main: { default: true } },
+          },
         },
         null,
         2,
@@ -90,7 +93,10 @@ describe("ClawRouter managed gateway contract", () => {
 
     const configText = await fs.readFile(instance.configPath, "utf8");
     const config = JSON.parse(configText) as {
-      agents?: { defaults?: { model?: { primary?: string } } };
+      agents?: {
+        defaults?: { model?: { primary?: string } };
+        entries?: Record<string, { default?: boolean }>;
+      };
       models?: {
         providers?: Record<
           string,
@@ -109,6 +115,7 @@ describe("ClawRouter managed gateway contract", () => {
       headers: { "X-ClawRouter-Project-Id": "fakeco-e2e" },
     });
     expect(config.agents?.defaults?.model?.primary).toBe(MODEL_REF);
+    expect(config.agents?.entries?.main?.default).toBe(true);
     expect(config.plugins?.allow).toContain("clawrouter");
     expect(config.plugins?.entries?.clawrouter?.enabled).toBe(true);
     expect(configText).not.toContain(API_KEY);

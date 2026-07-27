@@ -109,6 +109,36 @@ function parseSseDataLines(text: string): string[] {
     .map((line) => line.slice("data: ".length));
 }
 
+const PRESERVED_STREAM_FAILURE_CASES = [
+  {
+    name: "an exhausted fallback result",
+    text: "Terminal tool summary",
+    lifecycle: { fallbackExhaustedFailure: true },
+    error: {
+      kind: "incomplete_turn",
+      message: "raw exhausted provider detail should stay private",
+      fallbackSafe: true,
+      terminalPresentation: true,
+    },
+  },
+  {
+    name: "a non-replayable error result",
+    text: "Command may have changed state",
+    lifecycle: { replayInvalid: true },
+    error: {
+      kind: "incomplete_turn",
+      message: "raw non-replayable provider detail should stay private",
+      fallbackSafe: false,
+    },
+  },
+] as const;
+
+const PRESERVED_STREAM_LIFECYCLE_CASES = [
+  { label: "after an error lifecycle", emitError: true, emitEnd: false },
+  { label: "without an error lifecycle", emitError: false, emitEnd: false },
+  { label: "after a superseded error lifecycle", emitError: true, emitEnd: true },
+] as const;
+
 type FirstAgentCommandOptions = {
   clientTools?: Array<{
     function?: {
@@ -1762,6 +1792,268 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     expect(agentCommand).toHaveBeenCalledTimes(1);
   });
 
+  it("completes a successful non-replayable tool turn", async () => {
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({
+      payloads: [{ text: "FAKE_PLUGIN_OK fake_plugin_tool_17" }],
+      meta: {
+        agentMeta: { usage: { input: 128, output: 40, total: 168 } },
+        livenessState: "working",
+        replayInvalid: true,
+        stopReason: "stop",
+      },
+    } as never);
+
+    const res = await postChatCompletions(enabledPort, {
+      model: "openclaw",
+      messages: [{ role: "user", content: "tool search qa check target=fake_plugin_tool_17" }],
+    });
+    const body = await res.text();
+    expect(res.status, body).toBe(200);
+    const response = JSON.parse(body) as {
+      choices?: Array<{ finish_reason?: string; message?: { content?: string } }>;
+      usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+    };
+    expect(response.choices?.[0]?.message?.content).toBe("FAKE_PLUGIN_OK fake_plugin_tool_17");
+    expect(response.choices?.[0]?.finish_reason).toBe("stop");
+    expect(response.usage).toEqual({
+      prompt_tokens: 128,
+      completion_tokens: 40,
+      total_tokens: 168,
+    });
+    expect(agentCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])(
+    "completes a recovered chat after an earlier error payload with stream=%s",
+    async (stream) => {
+      agentCommand.mockClear();
+      agentCommand.mockResolvedValueOnce({
+        payloads: [
+          { text: "Historical failed provider attempt", isError: true },
+          { text: "fallback recovered" },
+          {},
+        ],
+      } as never);
+
+      const res = await postChatCompletions(enabledPort, {
+        stream,
+        model: "openclaw",
+        messages: [{ role: "user", content: "hi" }],
+      });
+      const body = await res.text();
+      expect(res.status, body).toBe(200);
+
+      if (stream) {
+        const data = parseSseDataLines(body);
+        const chunks = data
+          .filter((line) => line !== "[DONE]")
+          .map((line) => JSON.parse(line) as Record<string, unknown>);
+        expect(chunks.filter((chunk) => "error" in chunk)).toHaveLength(0);
+        expect(
+          chunks
+            .flatMap(
+              (chunk) =>
+                (chunk.choices as Array<{ finish_reason?: string | null }> | undefined) ?? [],
+            )
+            .filter((choice) => choice.finish_reason === "stop"),
+        ).toHaveLength(1);
+        expect(data.at(-1)).toBe("[DONE]");
+        expect(body).toContain("fallback recovered");
+      } else {
+        const response = JSON.parse(body) as {
+          choices?: Array<{ finish_reason?: string; message?: { content?: string } }>;
+        };
+        expect(response.choices?.[0]?.message?.content).toContain("fallback recovered");
+        expect(response.choices?.[0]?.finish_reason).toBe("stop");
+      }
+
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([false, true])(
+    "completes a recovered media-only chat after an earlier error payload with stream=%s",
+    async (stream) => {
+      const privateFailure = "Historical private provider failure";
+      agentCommand.mockClear();
+      agentCommand.mockResolvedValueOnce({
+        payloads: [
+          { text: privateFailure, isError: true },
+          {
+            mediaUrl: "https://example.invalid/recovered-image.png",
+            mediaUrls: ["https://example.invalid/recovered-document.pdf"],
+          },
+        ],
+      } as never);
+
+      const res = await postChatCompletions(enabledPort, {
+        stream,
+        model: "openclaw",
+        messages: [{ role: "user", content: "recover the generated attachment" }],
+      });
+      const body = await res.text();
+      expect(res.status, body).toBe(200);
+
+      if (stream) {
+        const data = parseSseDataLines(body);
+        const chunks = data
+          .filter((line) => line !== "[DONE]")
+          .map((line) => JSON.parse(line) as Record<string, unknown>);
+        expect(chunks.filter((chunk) => "error" in chunk)).toHaveLength(0);
+        expect(
+          chunks
+            .flatMap(
+              (chunk) =>
+                (chunk.choices as Array<{ finish_reason?: string | null }> | undefined) ?? [],
+            )
+            .filter((choice) => choice.finish_reason === "stop"),
+        ).toHaveLength(1);
+        expect(data.filter((line) => line === "[DONE]")).toHaveLength(1);
+        expect(data.at(-1)).toBe("[DONE]");
+      } else {
+        const response = JSON.parse(body) as {
+          choices?: Array<{ finish_reason?: string; message?: { content?: string } }>;
+        };
+        expect(response.choices?.[0]?.finish_reason).toBe("stop");
+      }
+
+      expect(body).not.toContain("api_error");
+      expect(body).not.toContain(privateFailure);
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([false, true])(
+    "preserves a failed chat when only transient notices follow with stream=%s",
+    async (stream) => {
+      const privateFailure = "Historical private provider failure";
+      const notices = [
+        { text: "Private commentary notice", isCommentary: true },
+        { text: "Private compaction notice", isCompactionNotice: true },
+        { text: "Private fallback notice", isFallbackNotice: true },
+        { text: "Private reasoning snapshot", isReasoningSnapshot: true },
+        { text: "Private status notice", isStatusNotice: true },
+        { text: "Private hidden notice", visible: false },
+      ];
+      agentCommand.mockClear();
+      agentCommand.mockResolvedValueOnce({
+        payloads: [{ text: privateFailure, isError: true }, ...notices],
+      } as never);
+
+      const res = await postChatCompletions(enabledPort, {
+        stream,
+        model: "openclaw",
+        messages: [{ role: "user", content: "finish the failed request" }],
+      });
+      const body = await res.text();
+
+      if (stream) {
+        expect(res.status, body).toBe(200);
+        const data = parseSseDataLines(body);
+        const chunks = data
+          .filter((line) => line !== "[DONE]")
+          .map((line) => JSON.parse(line) as Record<string, unknown>);
+        expect(chunks.filter((chunk) => "error" in chunk)).toEqual([
+          { error: { message: "internal error", type: "api_error" } },
+        ]);
+        expect(
+          chunks
+            .flatMap(
+              (chunk) =>
+                (chunk.choices as Array<{ finish_reason?: string | null }> | undefined) ?? [],
+            )
+            .filter((choice) => choice.finish_reason === "stop"),
+        ).toHaveLength(0);
+        expect(data.filter((line) => line === "[DONE]")).toHaveLength(1);
+        expect(data.at(-1)).toBe("[DONE]");
+      } else {
+        expect(res.status, body).toBe(502);
+        expect(JSON.parse(body)).toEqual({
+          error: { message: "internal error", type: "api_error" },
+        });
+      }
+
+      expect(body).not.toContain(privateFailure);
+      for (const notice of notices) {
+        expect(body).not.toContain(notice.text);
+      }
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([false, true])(
+    "preserves a failed chat when its final payload is whitespace with stream=%s",
+    async (stream) => {
+      const privateFailure = "Historical private provider failure";
+      agentCommand.mockClear();
+      agentCommand.mockResolvedValueOnce({
+        payloads: [{ text: privateFailure, isError: true }, { text: " \t\n " }],
+      } as never);
+
+      const res = await postChatCompletions(enabledPort, {
+        stream,
+        model: "openclaw",
+        messages: [{ role: "user", content: "hi" }],
+      });
+      const body = await res.text();
+
+      if (stream) {
+        expect(res.status, body).toBe(200);
+        const data = parseSseDataLines(body);
+        const chunks = data
+          .filter((line) => line !== "[DONE]")
+          .map((line) => JSON.parse(line) as Record<string, unknown>);
+        expect(chunks.filter((chunk) => "error" in chunk)).toEqual([
+          { error: { message: "internal error", type: "api_error" } },
+        ]);
+        expect(
+          chunks
+            .flatMap(
+              (chunk) =>
+                (chunk.choices as Array<{ finish_reason?: string | null }> | undefined) ?? [],
+            )
+            .filter((choice) => choice.finish_reason === "stop"),
+        ).toHaveLength(0);
+        expect(data.filter((line) => line === "[DONE]")).toHaveLength(1);
+        expect(data.at(-1)).toBe("[DONE]");
+      } else {
+        expect(res.status, body).toBe(502);
+        expect(JSON.parse(body)).toEqual({
+          error: { message: "internal error", type: "api_error" },
+        });
+      }
+
+      expect(body).not.toContain(privateFailure);
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(PRESERVED_STREAM_FAILURE_CASES)(
+    "fails non-stream chat completions for $name without exposing provider details",
+    async ({ text, lifecycle, error }) => {
+      agentCommand.mockClear();
+      agentCommand.mockResolvedValueOnce({
+        payloads: [{ text, isError: true }],
+        meta: { ...lifecycle, error },
+      } as never);
+
+      const res = await postChatCompletions(enabledPort, {
+        model: "openclaw",
+        messages: [{ role: "user", content: "hi" }],
+      });
+
+      expect(res.status).toBe(502);
+      const body = await res.text();
+      expect(JSON.parse(body)).toEqual({
+        error: { message: "internal error", type: "api_error" },
+      });
+      expect(body).not.toContain(text);
+      expect(body).not.toContain(error.message);
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("forwards response_format into streamParams", async () => {
     const port = enabledPort;
     const mockAgentOnce = (payloads: Array<{ text: string }>) => {
@@ -2252,17 +2544,253 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         const errorChunks = errorData
           .filter((d) => d !== "[DONE]")
           .map((d) => JSON.parse(d) as Record<string, unknown>);
+        expect(errorChunks.filter((chunk) => "error" in chunk)).toEqual([
+          { error: { message: "internal error", type: "api_error" } },
+        ]);
         const stopChoice = errorChunks
           .flatMap((c) => (c.choices as Array<Record<string, unknown>> | undefined) ?? [])
           .find((choice) => choice.finish_reason === "stop");
-        expect((stopChoice?.delta as Record<string, unknown> | undefined)?.content).toBe(
-          "Error: internal error",
-        );
+        expect(stopChoice).toBeUndefined();
+        expect(errorText).not.toContain("boom");
       }
     } finally {
       // shared server
     }
   });
+
+  it("preserves requested zero usage when an unmapped streaming run rejects", async () => {
+    const idleRootCount = getActiveGatewayRootWorkCount();
+    agentCommand.mockClear();
+    agentCommand.mockRejectedValueOnce(new Error("raw private provider failure") as never);
+
+    const res = await postChatCompletions(enabledPort, {
+      stream: true,
+      stream_options: { include_usage: true },
+      model: "openclaw",
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(res.status).toBe(200);
+
+    const body = await res.text();
+    const data = parseSseDataLines(body);
+    expect(data.filter((line) => line === "[DONE]")).toHaveLength(1);
+    expect(data.at(-1)).toBe("[DONE]");
+
+    const chunks = data
+      .filter((line) => line !== "[DONE]")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(chunks.filter((chunk) => "error" in chunk)).toEqual([
+      { error: { message: "internal error", type: "api_error" } },
+    ]);
+    const usageChunks = chunks.filter((chunk) => "usage" in chunk);
+    expect(usageChunks).toHaveLength(1);
+    expect(usageChunks[0]?.choices).toEqual([]);
+    expect(usageChunks[0]?.usage).toEqual({
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      total_tokens: 0,
+    });
+    expect(
+      chunks
+        .flatMap(
+          (chunk) => (chunk.choices as Array<{ finish_reason?: string | null }> | undefined) ?? [],
+        )
+        .some((choice) => choice.finish_reason === "stop"),
+    ).toBe(false);
+    expect(body).not.toContain("raw private provider failure");
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount));
+  });
+
+  it.each(
+    PRESERVED_STREAM_FAILURE_CASES.flatMap((failure) =>
+      PRESERVED_STREAM_LIFECYCLE_CASES.flatMap((lifecycleCase) =>
+        [false, true].map((includeUsage) => ({
+          name: failure.name,
+          text: failure.text,
+          lifecycle: failure.lifecycle,
+          error: failure.error,
+          includeUsage,
+          label: `${failure.name} ${includeUsage ? "with" : "without"} streamed usage`,
+          lifecycleLabel: lifecycleCase.label,
+          emitError: lifecycleCase.emitError,
+          emitEnd: lifecycleCase.emitEnd,
+        })),
+      ),
+    ),
+  )(
+    "fails the chat stream when $label resolves $lifecycleLabel",
+    async ({ text, lifecycle, error, includeUsage, emitError, emitEnd }) => {
+      const idleRootCount = getActiveGatewayRootWorkCount();
+      agentCommand.mockClear();
+      agentCommand.mockImplementationOnce((async (opts: unknown) => {
+        const runId = (opts as { runId?: string }).runId;
+        if (!runId) {
+          throw new Error("expected a streaming chat completion run ID");
+        }
+        if (emitError) {
+          emitAgentEvent({
+            runId,
+            stream: "lifecycle",
+            data: { phase: "error", error: text, ...lifecycle },
+          });
+        }
+        if (emitEnd) {
+          emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+        }
+        return {
+          payloads: [{ text, isError: true }],
+          meta: {
+            stopReason: "end_turn",
+            ...lifecycle,
+            error,
+            agentMeta: { usage: { input: 7, output: 3, total: 10 } },
+          },
+        };
+      }) as never);
+
+      const res = await postChatCompletions(enabledPort, {
+        stream: true,
+        ...(includeUsage ? { stream_options: { include_usage: true } } : {}),
+        model: "openclaw",
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(res.status).toBe(200);
+
+      const body = await res.text();
+      const data = parseSseDataLines(body);
+      expect(data.filter((line) => line === "[DONE]")).toHaveLength(1);
+      expect(data.at(-1)).toBe("[DONE]");
+
+      const chunks = data
+        .filter((line) => line !== "[DONE]")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(chunks.filter((chunk) => "error" in chunk)).toEqual([
+        { error: { message: "internal error", type: "api_error" } },
+      ]);
+      const finishReasons = chunks.flatMap(
+        (chunk) => (chunk.choices as Array<{ finish_reason?: string | null }> | undefined) ?? [],
+      );
+      expect(finishReasons.some((choice) => choice.finish_reason === "stop")).toBe(false);
+
+      const usageChunks = chunks.filter((chunk) => "usage" in chunk);
+      if (includeUsage) {
+        expect(usageChunks).toHaveLength(1);
+        expect(usageChunks[0]?.choices).toEqual([]);
+        expect(usageChunks[0]?.usage).toEqual({
+          prompt_tokens: 7,
+          completion_tokens: 3,
+          total_tokens: 10,
+        });
+      } else {
+        expect(usageChunks).toHaveLength(0);
+      }
+      expect(body).not.toContain(error.message);
+      expect(body).not.toContain(text);
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount));
+    },
+  );
+
+  it("completes a chat stream when a failed attempt recovers through model fallback", async () => {
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId?: string }).runId;
+      if (!runId) {
+        throw new Error("expected a streaming chat completion run ID");
+      }
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "error", error: "raw primary provider failure" },
+      });
+      emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+      return { payloads: [{ text: "fallback recovered" }] };
+    }) as never);
+
+    const res = await postChatCompletions(enabledPort, {
+      stream: true,
+      model: "openclaw",
+      messages: [{ role: "user", content: "hi" }],
+    });
+    const body = await res.text();
+    const data = parseSseDataLines(body);
+    const chunks = data
+      .filter((line) => line !== "[DONE]")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(chunks.filter((chunk) => "error" in chunk)).toHaveLength(0);
+    expect(
+      chunks
+        .flatMap(
+          (chunk) => (chunk.choices as Array<{ finish_reason?: string | null }> | undefined) ?? [],
+        )
+        .filter((choice) => choice.finish_reason === "stop"),
+    ).toHaveLength(1);
+    expect(data.at(-1)).toBe("[DONE]");
+    expect(body).toContain("fallback recovered");
+    expect(body).not.toContain("raw primary provider failure");
+  });
+
+  it.each([false, true])(
+    "preserves mapped provider stream failures after lifecycle error=%s",
+    async (emitErrorLifecycle) => {
+      const idleRootCount = getActiveGatewayRootWorkCount();
+      agentCommand.mockClear();
+      agentCommand.mockImplementationOnce((async (opts: unknown) => {
+        const runId = (opts as { runId?: string }).runId;
+        if (emitErrorLifecycle) {
+          if (!runId) {
+            throw new Error("expected a streaming chat completion run ID");
+          }
+          emitAgentEvent({
+            runId,
+            stream: "lifecycle",
+            data: { phase: "error", error: "raw transient lifecycle provider detail" },
+          });
+        }
+        throw new FailoverError("The provider rejected the request.", {
+          reason: "format",
+          status: 400,
+          code: "decimal_above_max_value",
+          rawError: "Invalid top_p: expected a value less than or equal to 1.",
+        });
+      }) as never);
+
+      const res = await postChatCompletions(enabledPort, {
+        stream: true,
+        model: "openclaw",
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(res.status).toBe(200);
+
+      const body = await res.text();
+      const data = parseSseDataLines(body);
+      expect(data.filter((line) => line === "[DONE]")).toHaveLength(1);
+      expect(data.at(-1)).toBe("[DONE]");
+
+      const chunks = data
+        .filter((line) => line !== "[DONE]")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(chunks.filter((chunk) => "error" in chunk)).toEqual([
+        {
+          error: {
+            message: "Invalid top_p: expected a value less than or equal to 1.",
+            type: "invalid_request_error",
+            code: "decimal_above_max_value",
+          },
+        },
+      ]);
+      expect(
+        chunks
+          .flatMap(
+            (chunk) =>
+              (chunk.choices as Array<{ finish_reason?: string | null }> | undefined) ?? [],
+          )
+          .some((choice) => choice.finish_reason === "stop"),
+      ).toBe(false);
+      expect(body).not.toContain("raw transient lifecycle provider detail");
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount));
+    },
+  );
 
   it(
     "sends an initial SSE chunk before a streaming agent run settles",

@@ -447,6 +447,33 @@ describe("clawhub helpers", () => {
     ]);
   });
 
+  it.each([
+    {
+      label: "icons within the configured registry mount",
+      icon: `https://registry.example/clawhub/api/v1/skill-icons/${"a".repeat(64)}`,
+      expected: `https://registry.example/clawhub/api/v1/skill-icons/${"a".repeat(64)}`,
+    },
+    {
+      label: "icons outside the configured registry mount",
+      icon: `https://registry.example/api/v1/skill-icons/${"a".repeat(64)}`,
+      expected: undefined,
+    },
+  ])("pins hosted skill search $label", async ({ icon, expected }) => {
+    await expect(
+      searchClawHubSkills({
+        query: "mounted-icons",
+        baseUrl: "https://registry.example/clawhub/",
+        fetchImpl: async () =>
+          new Response(
+            JSON.stringify({
+              results: [{ score: 1, slug: "mounted", displayName: "Mounted", icon }],
+            }),
+            { headers: { "content-type": "application/json" } },
+          ),
+      }),
+    ).resolves.toMatchObject([{ icon: expected }]);
+  });
+
   it("rejects skill icons outside the configured hosted-icon route", async () => {
     const fetchImpl: typeof fetch = async () =>
       new Response(
@@ -634,6 +661,39 @@ describe("clawhub helpers", () => {
     const url = new URL(requestedUrl);
     expect(url.pathname).toBe("/api/v1/skills/weather");
     expect(url.searchParams.get("ownerHandle")).toBe("demo-owner");
+  });
+
+  it.each([
+    {
+      label: "icons within the configured registry mount",
+      icon: `https://registry.example/clawhub/api/v1/skill-icons/${"a".repeat(64)}`,
+      expected: `https://registry.example/clawhub/api/v1/skill-icons/${"a".repeat(64)}`,
+    },
+    {
+      label: "icons outside the configured registry mount",
+      icon: `https://registry.example/api/v1/skill-icons/${"a".repeat(64)}`,
+      expected: undefined,
+    },
+  ])("pins hosted skill detail $label", async ({ icon, expected }) => {
+    await expect(
+      fetchClawHubSkillDetail({
+        slug: "mounted",
+        baseUrl: "https://registry.example/clawhub/",
+        fetchImpl: async () =>
+          new Response(
+            JSON.stringify({
+              skill: {
+                slug: "mounted",
+                displayName: "Mounted",
+                icon,
+                createdAt: 1,
+                updatedAt: 2,
+              },
+            }),
+            { headers: { "content-type": "application/json" } },
+          ),
+      }),
+    ).resolves.toMatchObject({ skill: { icon: expected } });
   });
 
   it("sends owner-qualified skill install resolution lookups as slug plus ownerHandle", async () => {

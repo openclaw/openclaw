@@ -1,9 +1,18 @@
 // Qa Channel tests cover inbound plugin behavior.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setQaChannelRuntime } from "../api.js";
 import { deleteQaBusMessage, editQaBusMessage, sendQaBusMessage } from "./bus-client.js";
 import { handleQaInbound } from "./inbound.js";
+
+const QA_GENERATED_IMAGE_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0nQAAAAASUVORK5CYII=";
+const QA_SECOND_GENERATED_IMAGE_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4H8DwHwAF8AJPyBbvuwAAAABJRU5ErkJggg==";
 
 vi.mock("./bus-client.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./bus-client.js")>();
@@ -12,6 +21,24 @@ vi.mock("./bus-client.js", async (importOriginal) => {
     deleteQaBusMessage: vi.fn(async () => ({ message: {} })),
     editQaBusMessage: vi.fn(async () => ({ message: {} })),
     sendQaBusMessage: vi.fn(async () => ({ message: { id: "preview-1" } })),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/outbound-media", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/outbound-media")>();
+  return {
+    ...actual,
+    loadOutboundMediaFromUrl: vi.fn(async (mediaUrl: string) => ({
+      buffer: Buffer.from(
+        mediaUrl.endsWith("qa-channel-inbound-second-image.png")
+          ? QA_SECOND_GENERATED_IMAGE_BASE64
+          : QA_GENERATED_IMAGE_BASE64,
+        "base64",
+      ),
+      kind: "image" as const,
+      contentType: "image/png",
+      fileName: path.basename(mediaUrl),
+    })),
   };
 });
 
@@ -69,6 +96,220 @@ function firstRunAssembledParams(runtime: ReturnType<typeof createPluginRuntimeM
 describe("handleQaInbound", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("delivers a generated image and caption as exactly one inbound-turn bus message", async () => {
+    const runtime = createPluginRuntimeMock();
+    setQaChannelRuntime(runtime);
+    const mediaPath = path.join(process.cwd(), "qa-channel-inbound-generated.png");
+
+    await handleQaInbound(
+      createQaInboundParams({
+        message: {
+          conversation: { id: "qa-room", kind: "group" },
+          threadId: "thread-1",
+        },
+      }),
+    );
+
+    const assembled = firstRunAssembledParams(runtime);
+    await assembled.delivery.deliver(
+      { text: "Here is your generated image.", mediaUrls: [mediaPath] },
+      { kind: "final" },
+    );
+
+    expect(loadOutboundMediaFromUrl).toHaveBeenCalledOnce();
+    expect(loadOutboundMediaFromUrl).toHaveBeenCalledWith(
+      mediaPath,
+      expect.objectContaining({ optimizeImages: false }),
+    );
+    expect(sendQaBusMessage).toHaveBeenCalledOnce();
+    expect(sendQaBusMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "default",
+        to: "thread:qa-room/thread-1",
+        text: "Here is your generated image.",
+        senderId: "openclaw",
+        senderName: "OpenClaw QA",
+        threadId: "thread-1",
+        replyToId: "msg-1",
+        attachments: [
+          expect.objectContaining({
+            id: expect.any(String),
+            kind: "image",
+            mimeType: "image/png",
+            fileName: "qa-channel-inbound-generated.png",
+            contentBase64: QA_GENERATED_IMAGE_BASE64,
+          }),
+        ],
+      }),
+    );
+    expect(deleteQaBusMessage).not.toHaveBeenCalled();
+    expect(editQaBusMessage).not.toHaveBeenCalled();
+  });
+
+  it("deduplicates matching generated-image media URL payload fields", async () => {
+    const runtime = createPluginRuntimeMock();
+    setQaChannelRuntime(runtime);
+    const mediaPath = path.join(process.cwd(), "qa-channel-inbound-generated.png");
+
+    await handleQaInbound(createQaInboundParams());
+
+    const assembled = firstRunAssembledParams(runtime);
+    await assembled.delivery.deliver(
+      { text: "Here is your generated image.", mediaUrl: mediaPath, mediaUrls: [mediaPath] },
+      { kind: "final" },
+    );
+
+    expect(loadOutboundMediaFromUrl).toHaveBeenCalledOnce();
+    expect(sendQaBusMessage).toHaveBeenCalledOnce();
+    expect(sendQaBusMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attachments: [expect.objectContaining({ contentBase64: QA_GENERATED_IMAGE_BASE64 })],
+      }),
+    );
+  });
+
+  it("delivers two distinct inbound images and their caption in exactly one bus message", async () => {
+    const runtime = createPluginRuntimeMock();
+    setQaChannelRuntime(runtime);
+    const mediaPath = path.join(process.cwd(), "qa-channel-inbound-generated.png");
+    const secondMediaPath = path.join(process.cwd(), "qa-channel-inbound-second-image.png");
+
+    await handleQaInbound(createQaInboundParams());
+
+    const assembled = firstRunAssembledParams(runtime);
+    await assembled.delivery.deliver(
+      {
+        text: "Here are your generated lighthouse images.",
+        mediaUrl: mediaPath,
+        mediaUrls: [mediaPath, secondMediaPath],
+      },
+      { kind: "final" },
+    );
+
+    expect(loadOutboundMediaFromUrl).toHaveBeenCalledTimes(2);
+    expect(sendQaBusMessage).toHaveBeenCalledOnce();
+    expect(sendQaBusMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Here are your generated lighthouse images.",
+        replyToId: "msg-1",
+        attachments: [
+          expect.objectContaining({
+            kind: "image",
+            mimeType: "image/png",
+            fileName: "qa-channel-inbound-generated.png",
+            contentBase64: QA_GENERATED_IMAGE_BASE64,
+          }),
+          expect.objectContaining({
+            kind: "image",
+            mimeType: "image/png",
+            fileName: "qa-channel-inbound-second-image.png",
+            contentBase64: QA_SECOND_GENERATED_IMAGE_BASE64,
+          }),
+        ],
+      }),
+    );
+    expect(deleteQaBusMessage).not.toHaveBeenCalled();
+    expect(editQaBusMessage).not.toHaveBeenCalled();
+  });
+
+  it("keeps partial media in a preview and sends its attachment only with the final reply", async () => {
+    const runtime = createPluginRuntimeMock();
+    setQaChannelRuntime(runtime);
+    const mediaPath = path.join(process.cwd(), "qa-channel-inbound-generated.png");
+
+    await handleQaInbound(createQaInboundParams());
+    const assembled = firstRunAssembledParams(runtime);
+    await assembled.delivery.deliver(
+      { text: "Generating your lighthouse…", mediaUrls: [mediaPath] },
+      { kind: "block" },
+    );
+
+    expect(loadOutboundMediaFromUrl).not.toHaveBeenCalled();
+    expect(sendQaBusMessage).toHaveBeenCalledOnce();
+    expect(sendQaBusMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Generating your lighthouse…" }),
+    );
+
+    await assembled.delivery.deliver(
+      { text: "Here is your generated lighthouse.", mediaUrls: [mediaPath] },
+      { kind: "final" },
+    );
+
+    expect(loadOutboundMediaFromUrl).toHaveBeenCalledOnce();
+    expect(deleteQaBusMessage).toHaveBeenCalledOnce();
+    expect(sendQaBusMessage).toHaveBeenCalledTimes(2);
+    expect(sendQaBusMessage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        text: "Here is your generated lighthouse.",
+        attachments: [
+          expect.objectContaining({
+            kind: "image",
+            mimeType: "image/png",
+            contentBase64: QA_GENERATED_IMAGE_BASE64,
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("loads real generated workspace media but rejects trusted-marked paths outside agent roots", async () => {
+    const runtime = createPluginRuntimeMock();
+    setQaChannelRuntime(runtime);
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-qa-inbound-roots-"));
+    const workspaceDir = path.join(tempRoot, "workspace");
+    const generatedPath = path.join(workspaceDir, "generated.png");
+    const externalPath = path.join(tempRoot, "external.png");
+    const image = Buffer.from(QA_GENERATED_IMAGE_BASE64, "base64");
+
+    try {
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await Promise.all([fs.writeFile(generatedPath, image), fs.writeFile(externalPath, image)]);
+      const params = createQaInboundParams();
+      Object.assign(params.config, { agents: { defaults: { workspace: workspaceDir } } });
+      await handleQaInbound(params);
+      const assembled = firstRunAssembledParams(runtime);
+      const realMedia = await vi.importActual<typeof import("openclaw/plugin-sdk/outbound-media")>(
+        "openclaw/plugin-sdk/outbound-media",
+      );
+
+      vi.mocked(loadOutboundMediaFromUrl).mockImplementationOnce(
+        realMedia.loadOutboundMediaFromUrl,
+      );
+      await assembled.delivery.deliver(
+        { text: "Your generated lighthouse.", mediaUrls: [generatedPath], trustedLocalMedia: true },
+        { kind: "final" },
+      );
+      expect(sendQaBusMessage).toHaveBeenCalledOnce();
+      expect(sendQaBusMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: "Your generated lighthouse.",
+          attachments: [
+            expect.objectContaining({
+              kind: "image",
+              mimeType: "image/png",
+              contentBase64: QA_GENERATED_IMAGE_BASE64,
+            }),
+          ],
+        }),
+      );
+
+      vi.mocked(sendQaBusMessage).mockClear();
+      vi.mocked(loadOutboundMediaFromUrl).mockImplementationOnce(
+        realMedia.loadOutboundMediaFromUrl,
+      );
+      await expect(
+        assembled.delivery.deliver(
+          { text: "must not escape", mediaUrls: [externalPath], trustedLocalMedia: true },
+          { kind: "final" },
+        ),
+      ).rejects.toMatchObject({ code: "path-not-allowed" });
+      expect(sendQaBusMessage).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it("publishes partial replies as one edited preview before final delivery", async () => {

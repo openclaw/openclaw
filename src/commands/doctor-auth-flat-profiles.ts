@@ -6,6 +6,7 @@ import { isDeepStrictEqual } from "node:util";
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { resolveAgentDir, resolveDefaultAgentDir, listAgentIds } from "../agents/agent-scope.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
 import {
@@ -203,11 +204,8 @@ function collectLegacyConfigAuthProfileProviderHints(
   const agents = isRecord(root.agents) ? root.agents : null;
   const defaults = agents && isRecord(agents.defaults) ? agents.defaults : null;
   addModelHints(defaults?.models);
-  const agentList = agents && Array.isArray(agents.list) ? agents.list : [];
-  for (const agent of agentList) {
-    if (isRecord(agent)) {
-      addModelHints(agent.models);
-    }
+  for (const agent of listAgentEntries(cfg)) {
+    addModelHints(agent.models);
   }
   return hints;
 }

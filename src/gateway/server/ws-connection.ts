@@ -596,7 +596,8 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     });
 
     const setClient = (next: GatewayWsClient) => {
-      if (closed) {
+      // One transport owns exactly one client and heartbeat; replacements use a new socket.
+      if (closed || client) {
         return false;
       }
       if (next.worker) {

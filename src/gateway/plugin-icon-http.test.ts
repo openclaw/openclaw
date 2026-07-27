@@ -180,6 +180,74 @@ describe("GET /__openclaw__/plugin-icon/:pluginId", () => {
     );
   });
 
+  it.each([
+    `https://clawhub.ai/api/v1/skill-icons/${"a".repeat(64)}`,
+    `https://registry.example.test/clawhub/api/v1/skill-icons/${"b".repeat(64)}`,
+  ])(
+    "proxies an owner-approved ClawHub skill icon through the authenticated catalog route: %s",
+    async (iconUrl) => {
+      mocks.resolveCatalogIconUrl.mockReturnValueOnce(iconUrl);
+
+      const response = await request(`/__openclaw__/catalog-icon/${encodeURIComponent(iconUrl)}`);
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toBe("image/png");
+      expect(response.headers.get("cross-origin-resource-policy")).toBe("same-origin");
+      expect(response.headers.get("content-security-policy")).toContain("sandbox");
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(NORMALIZED_PNG_BYTES);
+      expect(mocks.resolveCatalogIconUrl).toHaveBeenCalledWith({
+        config: testConfig,
+        iconUrl,
+      });
+      expect(mocks.readRemoteMediaBuffer).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: iconUrl,
+          maxBytes: PLUGIN_ICON_MAX_BYTES,
+          maxRedirects: PLUGIN_ICON_MAX_REDIRECTS,
+          timeoutMs: PLUGIN_ICON_REQUEST_TIMEOUT_MS,
+        }),
+      );
+    },
+  );
+
+  it("authenticates ClawHub skill icon requests before resolving or fetching", async () => {
+    const iconUrl = `https://clawhub.ai/api/v1/skill-icons/${"a".repeat(64)}`;
+    mocks.authorize.mockImplementationOnce(async ({ res }) => {
+      res.statusCode = 401;
+      res.end();
+      return null;
+    });
+
+    const response = await request(`/__openclaw__/catalog-icon/${encodeURIComponent(iconUrl)}`, {
+      token: "",
+    });
+
+    expect(response.status).toBe(401);
+    expect(mocks.resolveCatalogIconUrl).not.toHaveBeenCalled();
+    expect(mocks.readRemoteMediaBuffer).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    `https://untrusted.example/api/v1/skill-icons/${"a".repeat(64)}`,
+    `https://user@clawhub.ai/api/v1/skill-icons/${"a".repeat(64)}`,
+    `https://clawhub.ai/api/v1/skill-icons/${"a".repeat(63)}`,
+    `https://clawhub.ai/api/v1/skill-icons/${"A".repeat(64)}`,
+    `https://clawhub.ai/api/v1/skill-icons/${"a".repeat(64)}?next=private`,
+    `https://clawhub.ai/api/v1/skill-icons/${"a".repeat(64)}#private`,
+    `http://clawhub.ai/api/v1/skill-icons/${"a".repeat(64)}`,
+  ])("does not fetch a ClawHub icon rejected by the registry owner: %s", async (iconUrl) => {
+    mocks.resolveCatalogIconUrl.mockReturnValueOnce(undefined);
+
+    const response = await request(`/__openclaw__/catalog-icon/${encodeURIComponent(iconUrl)}`);
+
+    expect(response.status).toBe(404);
+    expect(mocks.resolveCatalogIconUrl).toHaveBeenCalledWith({
+      config: testConfig,
+      iconUrl,
+    });
+    expect(mocks.readRemoteMediaBuffer).not.toHaveBeenCalled();
+  });
+
   it("does not fetch catalog URLs rejected by the server-owned allowlist", async () => {
     mocks.resolveCatalogIconUrl.mockReturnValueOnce(undefined);
     const response = await request(

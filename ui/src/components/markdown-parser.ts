@@ -1,4 +1,5 @@
 import MarkdownIt from "markdown-it";
+import markdownItCjkFriendly from "markdown-it-cjk-friendly";
 import markdownItTaskLists from "markdown-it-task-lists";
 import { t } from "../i18n/index.ts";
 import {
@@ -45,6 +46,7 @@ export function createMarkdownParser(): MarkdownIt {
     breaks: true,
     linkify: true,
   });
+  markdownParser.use(markdownItCjkFriendly);
   const defaultCodeInlineRenderer = markdownParser.renderer.rules.code_inline!;
 
   // Enable GFM strikethrough (~~text~~) to match original marked.js behavior.
@@ -371,8 +373,13 @@ export function createMarkdownParser(): MarkdownIt {
   };
   markdownParser.renderer.rules.html_inline = (tokens, index) => {
     const token = tokens[index];
-    return token?.meta?.taskListPlugin === true
-      ? token.content
+    if (token?.meta?.taskListPlugin === true) {
+      return token.content;
+    }
+    // Only an attribute-free line break may pass through: user-authored
+    // handlers, styling, other tags, and plugin trust remain isolated.
+    return token && /^<br\s*\/?>$/i.test(token.content)
+      ? "<br>"
       : escapeMarkdownHtml(token?.content ?? "");
   };
   markdownParser.renderer.rules.code_inline = (tokens, index, options, env, self) => {

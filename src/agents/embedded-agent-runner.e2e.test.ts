@@ -366,26 +366,45 @@ function firstRunEmbeddedAttemptParams(): { sessionKey?: string } {
 }
 
 describe("runEmbeddedAgent", () => {
-  it("reuses one standalone snapshot across configless runs", async () => {
-    mockSuccessfulEmbeddedAttempt();
-    mockSuccessfulEmbeddedAttempt();
-
+  it("rejects configless runs while allowing an explicitly configured agent snapshot", async () => {
     for (const suffix of ["first", "second"]) {
-      await runEmbeddedAgent({
-        sessionId: `configless-${suffix}`,
-        sessionFile: nextSessionFile(),
-        workspaceDir,
-        prompt: "hello",
-        provider: "openrouter",
-        model: "openrouter/auto",
-        timeoutMs: 5_000,
-        agentDir,
-        runId: nextRunId(`configless-${suffix}`),
-        enqueue: immediateEnqueue,
-      });
+      await expect(
+        runEmbeddedAgent({
+          sessionId: `configless-${suffix}`,
+          sessionFile: nextSessionFile(),
+          workspaceDir,
+          prompt: "hello",
+          provider: "openrouter",
+          model: "openrouter/auto",
+          timeoutMs: 5_000,
+          agentDir,
+          runId: nextRunId(`configless-${suffix}`),
+          enqueue: immediateEnqueue,
+        }),
+      ).rejects.toMatchObject({ name: "RunWorkspaceRosterRequiredError" });
     }
 
+    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+    expect(runEmbeddedAttemptMock).not.toHaveBeenCalled();
+
+    mockSuccessfulEmbeddedAttempt();
+    await runEmbeddedAgent({
+      sessionId: "configured-standalone",
+      sessionKey: "agent:test:embedded:configured-standalone",
+      sessionFile: nextSessionFile(),
+      workspaceDir,
+      config: createEmbeddedAgentRunnerOpenAiConfig([]),
+      prompt: "hello",
+      provider: "openrouter",
+      model: "openrouter/auto",
+      timeoutMs: 5_000,
+      agentDir,
+      runId: nextRunId("configured-standalone"),
+      enqueue: immediateEnqueue,
+    });
+
     expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAttemptMock).toHaveBeenCalledOnce();
   });
 
   it("uses the configured default model when the caller omits provider and model", async () => {
@@ -398,7 +417,10 @@ describe("runEmbeddedAgent", () => {
             primary: "openrouter/global-default",
           },
         },
-        list: [{ id: "research", model: "openrouter/research-default" }],
+        entries: {
+          main: { default: true },
+          research: { model: "openrouter/research-default" },
+        },
       },
     };
     mockSuccessfulEmbeddedAttempt();
@@ -428,9 +450,11 @@ describe("runEmbeddedAgent", () => {
 
   it("uses runtime config for blank public runtime model overrides", async () => {
     const sessionFile = nextSessionFile();
+    const baseConfig = createEmbeddedAgentRunnerOpenAiConfig([]);
     const cfg = {
-      ...createEmbeddedAgentRunnerOpenAiConfig([]),
+      ...baseConfig,
       agents: {
+        ...baseConfig.agents,
         defaults: {
           model: {
             primary: "openrouter/runtime-default",
@@ -474,12 +498,12 @@ describe("runEmbeddedAgent", () => {
         defaults: {
           model: { primary: "openai/mock-1" },
         },
-        list: [
-          {
-            id: "research",
+        entries: {
+          main: { default: true },
+          research: {
             model: { primary: "anthropic/claude-opus-4-7" },
           },
-        ],
+        },
       },
     };
     mockSuccessfulEmbeddedAttempt();
@@ -598,6 +622,7 @@ describe("runEmbeddedAgent", () => {
         },
       },
       agents: {
+        ...baseConfig.agents,
         defaults: {
           models: {
             "openai/mock-1": {
@@ -668,6 +693,7 @@ describe("runEmbeddedAgent", () => {
         },
       },
       agents: {
+        ...baseConfig.agents,
         defaults: {
           models: {
             "openai/gpt-5.5": {
@@ -747,6 +773,7 @@ describe("runEmbeddedAgent", () => {
         },
       },
       agents: {
+        ...baseConfig.agents,
         defaults: {
           models: {
             "openai/gpt-5.3-codex": {

@@ -8,12 +8,13 @@ scenario:
       - observability.otlp-http-traces-otel
     secondary:
       - observability.otlp-http-traces-qa-lab
-  objective: Verify a QA-lab gateway run emits bounded OpenTelemetry traces, metrics, and logs through the diagnostics-otel plugin.
+  objective: Verify a real QA-channel agent turn exports privacy-safe, protobuf-decoded traces to a bounded local OTLP receiver.
   successCriteria:
     - The diagnostics-otel plugin starts with trace, metric, and log export enabled.
     - A minimal QA-channel agent turn completes.
-    - The trace includes the selected agent harness lifecycle span.
-    - The run emits low-cardinality OpenTelemetry signals without content or raw diagnostic identifiers.
+    - A local receiver accepts and decodes a real OTLP protobuf trace from that agent turn.
+    - The received trace contains the canonical OpenClaw run span.
+    - Raw prompt content capture remains disabled and the secret marker is absent from exported trace bytes.
   plugins:
     - diagnostics-otel
   gatewayConfigPatch:
@@ -30,26 +31,40 @@ scenario:
         logs: true
         sampleRate: 1
         flushIntervalMs: 1000
-        captureContent:
-          enabled: false
+        captureContent: false
   docsRefs:
     - docs/gateway/opentelemetry.md
     - docs/concepts/qa-e2e-automation.md
   codeRefs:
     - extensions/diagnostics-otel/src/service.ts
-    - src/agents/harness/lifecycle.ts
+    - test/e2e/qa-lab/runtime/qa-otel-smoke-runtime.ts
+    - extensions/qa-lab/src/otel-trace-receiver.ts
     - extensions/qa-lab/src/suite.ts
   execution:
     kind: flow
-    summary: Emit minimal QA-lab telemetry with diagnostics-otel enabled.
+    summary: Receive and decode privacy-safe real OTLP traces from a QA-channel agent turn.
     config:
       prompt: "OTEL QA marker: reply exactly `OTEL-QA-OK`. Do not repeat OTEL-QA-SECRET."
       expectedReply: OTEL-QA-OK
 
 flow:
   steps:
-    - name: emits a traced qa-channel turn
+    - name: receives real OTLP traces from a privacy-safe qa-channel turn
       actions:
+        - call: startQaOtlpTraceReceiver
+          saveAs: otelReceiver
+          args:
+            - disallowedNeedles:
+                - OTEL-QA-SECRET
+        - call: restartGatewayWithConfigPatch
+          args:
+            - env:
+                ref: env
+              patch:
+                diagnostics:
+                  otel:
+                    endpoint:
+                      expr: otelReceiver.endpoint
         - call: waitForGatewayHealthy
           args:
             - ref: env
@@ -83,3 +98,19 @@ flow:
         - assert:
             expr: "String(outbound.text ?? '').includes(config.expectedReply)"
             message: "expected qa output to include the response sentinel"
+        - call: waitForCondition
+          saveAs: exportedSpans
+          args:
+            - lambda:
+                expr: "otelReceiver.spans.some((span) => span.name === 'openclaw.run') ? [...otelReceiver.spans] : undefined"
+            - expr: liveTurnTimeoutMs(env, 30000)
+            - 100
+        - assert:
+            expr: "exportedSpans.some((span) => span.name === 'openclaw.run')"
+            message: expected the real QA agent turn to export a decoded openclaw.run trace span
+        - assert:
+            expr: "otelReceiver.requests.some((request) => request.path === '/v1/traces' && request.status === 200 && request.spanCount > 0)"
+            message: expected a successful OTLP protobuf trace request containing real spans
+        - assert:
+            expr: "otelReceiver.leakedNeedles.size === 0"
+            message: privacy-disabled trace export leaked the secret QA prompt marker

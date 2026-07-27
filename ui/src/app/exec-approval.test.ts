@@ -371,6 +371,41 @@ describe("approval queue ordering and countdown timer", () => {
     }
   });
 
+  it("does not let an old same-id expiry dismiss a replacement approval", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-25T00:00:00.000Z"));
+    try {
+      const state = createPromptState(
+        vi.fn<RequestFn>(async () => ({})),
+        [],
+      );
+      state.execApprovalExpiryTimers = new Map();
+      enqueueExecApprovalPrompt(
+        state,
+        createExecApproval({
+          createdAtMs: Date.now(),
+          expiresAtMs: Date.now() + 1_000,
+          id: "approval-reused",
+        }),
+      );
+      const replacement = createExecApproval({
+        createdAtMs: Date.now() + 1,
+        expiresAtMs: Date.now() + 60_000,
+        id: "approval-reused",
+      });
+      enqueueExecApprovalPrompt(state, replacement);
+
+      vi.advanceTimersByTime(1_500);
+
+      expect(state.execApprovalQueue).toEqual([replacement]);
+      expect(state.execApprovalExpiryTimers.size).toBe(1);
+      clearExecApprovalTimers(state);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("publishes one shared countdown tick and cleans every timer", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-25T00:00:00.000Z"));

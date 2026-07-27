@@ -94,6 +94,11 @@ flow:
       detailsExpr: outbound.text
     - name: recalls the same fact later
       actions:
+        # Only replies emitted by the recall turn can prove recall; the
+        # earlier acknowledgement contains the same canary and is not evidence.
+        - set: recallMessageStartIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
         - call: runAgentPrompt
           args:
             - ref: env
@@ -105,10 +110,14 @@ flow:
         - set: recallExpectedAny
           value:
             expr: config.recallExpectedAny.map(normalizeLowercaseStringOrEmpty)
-        - call: waitForCondition
+        - call: waitForOutboundMessage
           saveAs: outbound
           args:
+            - ref: state
             - lambda:
-                expr: "state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator' && recallExpectedAny.some((needle) => normalizeLowercaseStringOrEmpty(candidate.text).includes(needle))).at(-1)"
+                params: [candidate]
+                expr: "candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator' && recallExpectedAny.some((needle) => normalizeLowercaseStringOrEmpty(candidate.text).includes(needle))"
             - 20000
+            - sinceIndex:
+                ref: recallMessageStartIndex
       detailsExpr: outbound.text

@@ -14,6 +14,7 @@ import {
   subtractMentionCounts,
   type QaFixtureFetchJsonOptions,
 } from "./fixture-utils.js";
+import { formatQaGatewayLogsForError } from "./gateway-log-redaction.js";
 import {
   qaMockRequestCursorUrl,
   qaMockRequestsAfterUrl,
@@ -366,37 +367,81 @@ export async function runToolSearchGatewayLane(params: {
   const requestCursorBefore = readQaMockRequestCursor(
     await fetchJson(qaMockRequestCursorUrl(providerBaseUrl)),
   );
-  const response = await fetchJson(
-    `${params.env.gateway.baseUrl}/v1/responses`,
-    {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${gatewayToken}`,
-        "content-type": "application/json",
-        "x-openclaw-scopes": "operator.write",
-        "x-openclaw-agent": "qa",
-        "x-openclaw-session-key": `tool-search-gateway-${params.lane}`,
+  let response: unknown;
+  try {
+    response = await fetchJson(
+      `${params.env.gateway.baseUrl}/v1/responses`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${gatewayToken}`,
+          "content-type": "application/json",
+          "x-openclaw-scopes": "operator.write",
+          "x-openclaw-agent": "qa",
+          "x-openclaw-session-key": `tool-search-gateway-${params.lane}`,
+        },
+        body: JSON.stringify({
+          model: "openclaw/qa",
+          input: [
+            {
+              type: "message",
+              role: "user",
+              content: [
+                {
+                  type: "input_text",
+                  text: `tool search qa check target=${params.fixture.targetTool}`,
+                },
+              ],
+            },
+          ],
+          max_output_tokens: 256,
+          stream: false,
+        }),
       },
-      body: JSON.stringify({
-        model: "openclaw/qa",
-        input: [
-          {
-            type: "message",
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: `tool search qa check target=${params.fixture.targetTool}`,
-              },
-            ],
-          },
-        ],
-        max_output_tokens: 256,
-        stream: false,
-      }),
-    },
-    { timeoutMs: liveTurnTimeoutMs(params.env, 30_000) },
-  );
+      { timeoutMs: liveTurnTimeoutMs(params.env, 30_000) },
+    );
+  } catch (error) {
+    // Gateway Responses intentionally redacts provider failures. Preserve the
+    // failure and expose only bounded fixture-owned discovery evidence.
+    const requests = await fetchJson(
+      qaMockRequestsAfterUrl(providerBaseUrl, requestCursorBefore),
+    ).catch(() => []);
+    const safeRequests = Array.isArray(requests)
+      ? requests.map((request) => {
+          const record = request as {
+            plannedToolName?: unknown;
+            toolOutput?: unknown;
+            body?: { tools?: Array<{ name?: unknown; function?: { name?: unknown } }> };
+          };
+          const tools = Array.isArray(record.body?.tools) ? record.body.tools : [];
+          const declaredNames = tools.map((tool) => tool.function?.name ?? tool.name);
+          return {
+            plannedToolName:
+              typeof record.plannedToolName === "string" ? record.plannedToolName : null,
+            declaredToolCount: tools.length,
+            targetDeclared: declaredNames.includes(params.fixture.targetTool),
+            bridgeDeclared: declaredNames.includes("tool_search_code"),
+            targetResultObserved:
+              typeof record.toolOutput === "string" &&
+              record.toolOutput.includes("FAKE_PLUGIN_OK") &&
+              record.toolOutput.includes(params.fixture.targetTool),
+          };
+        })
+      : [];
+    const mentions = await countToolSearchSessionLogMentions({
+      stateDir,
+      targetTool: params.fixture.targetTool,
+    }).catch(() => null);
+    const details = error instanceof Error ? error.message : String(error);
+    const safeLogs = formatQaGatewayLogsForError(
+      truncateUtf16Safe(params.env.gateway.logs?.() ?? "", 4_000),
+    );
+    throw new Error(
+      `Tool Search ${params.lane} lane gateway request failed: ${details}; ` +
+        `providerRequests=${JSON.stringify(safeRequests)}; sessionMentions=${JSON.stringify(mentions)}${safeLogs}`,
+      { cause: error },
+    );
+  }
   const laneRequests = (await fetchJson(
     qaMockRequestsAfterUrl(providerBaseUrl, requestCursorBefore),
   )) as Array<{

@@ -10,8 +10,8 @@ scenario:
   objective: Verify the agent can delegate a bounded task to a subagent and fold the result back into the main thread.
   successCriteria:
     - Agent launches a bounded subagent task.
-    - Subagent result is acknowledged in the main flow.
-    - Final answer attributes delegated work clearly.
+    - The current parent owns one successfully completed subagent task.
+    - Final answer attributes the successful child's actual result and evidence.
   docsRefs:
     - docs/tools/subagents.md
     - docs/help/testing.md
@@ -23,19 +23,24 @@ scenario:
     summary: Verify the agent can delegate a bounded task to a subagent and fold the result back into the main thread.
     channel: qa-channel
     config:
-      prompt: "Delegate one bounded QA task to a subagent. Wait for the subagent to finish. Then reply with three labeled sections exactly once: Delegated task, Result, Evidence. Include the child result itself, not 'waiting'."
+      expectedChildLabel: qa-sidecar
+      prompt: "Delegate one bounded QA task to a subagent with label qa-sidecar. Wait for that exact subagent to finish successfully. Then reply with three labeled sections exactly once: Delegated task, Result, Evidence. Put that child's actual completed result in Result and describe its delegated-child evidence in Evidence. Do not say 'waiting'."
 
 flow:
   steps:
     - name: delegates a bounded task and reports the result
       actions:
         - call: reset
+        - set: sessionKey
+          value:
+            expr: "`agent:qa:subagent-handoff:${randomUUID().slice(0, 8)}`"
         - try:
             actions:
               - call: runAgentPrompt
                 args:
                   - ref: env
-                  - sessionKey: agent:qa:subagent
+                  - sessionKey:
+                      ref: sessionKey
                     message:
                       expr: config.prompt
                     timeoutMs:
@@ -44,7 +49,7 @@ flow:
                 saveAs: outbound
                 args:
                   - ref: env
-                  - agent:qa:subagent
+                  - ref: sessionKey
                   - lambda:
                       params: [text]
                       expr: "(() => { const lower = normalizeLowercaseStringOrEmpty(text); return lower.includes('delegated task') && lower.includes('result') && lower.includes('evidence') && !lower.includes('waiting'); })()"
@@ -61,6 +66,206 @@ flow:
             expr: "!['failed to delegate','could not delegate','subagent unavailable'].some((needle) => normalizeLowercaseStringOrEmpty(outbound.text).includes(needle))"
             message:
               expr: "`subagent handoff reported failure: ${outbound.text}`"
+        - try:
+            actions:
+              - call: waitForCondition
+                saveAs: completedSubagent
+                args:
+                  - lambda:
+                      async: true
+                      expr: >-
+                        (async () => {
+                          const store = await readRawQaSessionStore(env);
+                          const child = Object.entries(store)
+                            .map(([key, entry]) => ({ ...entry, key }))
+                            .find((entry) => entry.spawnedBy === sessionKey && entry.label === config.expectedChildLabel);
+                          if (!child) return undefined;
+                          const [transcript, parentTranscript, payload] = await Promise.all([
+                            readSessionTranscriptSummary(env, child.key),
+                            readSessionTranscriptSummary(env, sessionKey),
+                            runQaCli(env, ['tasks', 'list', '--json', '--runtime', 'subagent'], {
+                              timeoutMs: liveTurnTimeoutMs(env, 60000),
+                              json: true,
+                            }),
+                          ]);
+                          const task = (payload.tasks ?? []).find((entry) =>
+                            entry.requesterSessionKey === sessionKey &&
+                            entry.childSessionKey === child.key &&
+                            entry.label === config.expectedChildLabel &&
+                            entry.status === 'succeeded' &&
+                            entry.deliveryStatus === 'delivered'
+                          );
+                          const childResult = String(transcript?.finalText ?? '').trim();
+                          const parentFinalText = String(parentTranscript?.finalText ?? '');
+                          const delegatedSection = parentFinalText
+                            .match(/(?:^|\n)\s*delegated task\s*:\s*([\s\S]*?)(?=\n\s*result\s*:|$)/i)?.[1];
+                          const resultSection = parentFinalText
+                            .match(/(?:^|\n)\s*result\s*:\s*([\s\S]*?)(?=\n\s*evidence\s*:|$)/i)?.[1];
+                          const evidenceSection = parentFinalText
+                            .match(/(?:^|\n)\s*evidence\s*:\s*([\s\S]+)/i)?.[1];
+                          const normalize = (value) => {
+                            const text = String(value ?? '').trim();
+                            const promptData = text.match(/<prompt-data>\s*([\s\S]*?)\s*<\/prompt-data>/i)?.[1];
+                            return normalizeLowercaseStringOrEmpty(promptData ?? text)
+                              .replace(/^child result\s*(?:\([^\n]*\))?\s*:\s*/i, '')
+                              .replace(/^\s*(?:[-*]\s+|\d+[.)]\s+)/gm, '')
+                              .replace(/^\s*```[^\n]*\n|\n\s*```\s*$/g, '')
+                              .replace(/\s+/g, ' ')
+                              .trim();
+                          };
+                          const normalizedChildResult = normalize(childResult);
+                          if (!task || !normalizedChildResult || !delegatedSection || !resultSection || !evidenceSection) return undefined;
+                          if (!normalize(resultSection).includes(normalizedChildResult)) return undefined;
+                          if (!/\b(?:child|subagent|delegat(?:e|ed|ion))\b/i.test(evidenceSection)) return undefined;
+                          return { child, transcript, parentTranscript, task, delegatedSection, resultSection, evidenceSection };
+                        })().catch(() => undefined)
+                  - expr: liveTurnTimeoutMs(env, 30000)
+                  - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
+            catchAs: handoffEvidenceError
+            catch:
+              - set: handoffEvidenceTasks
+                value:
+                  expr: >-
+                    runQaCli(env, ['tasks', 'list', '--json', '--runtime', 'subagent'], {
+                      timeoutMs: liveTurnTimeoutMs(env, 60000),
+                      json: true,
+                    }).then((payload) => (payload.tasks ?? [])
+                      .filter((task) => task.requesterSessionKey === sessionKey || task.label === config.expectedChildLabel)
+                      .slice(-12)
+                      .map((task) => ({
+                        taskId: task.taskId,
+                        label: task.label,
+                        status: task.status,
+                        deliveryStatus: task.deliveryStatus,
+                        requesterSessionKey: task.requesterSessionKey,
+                        childSessionKey: task.childSessionKey,
+                      })))
+                      .catch((error) => ({ error: formatErrorMessage(error) }))
+              - set: handoffEvidenceChildren
+                value:
+                  expr: >-
+                    readRawQaSessionStore(env)
+                      .then((store) => Promise.all(Object.entries(store)
+                        .filter(([, entry]) => entry.spawnedBy === sessionKey)
+                        .slice(-12)
+                        .map(async ([key, entry]) => {
+                          const summary = await readSessionTranscriptSummary(env, key).catch(() => undefined);
+                          return {
+                            sessionKey: key,
+                            spawnedBy: entry.spawnedBy,
+                            label: entry.label,
+                            hasFinalText: Boolean(String(summary?.finalText ?? '').trim()),
+                          };
+                        })))
+                      .catch((error) => ({ error: formatErrorMessage(error) }))
+              - set: handoffEvidencePlans
+                value:
+                  expr: >-
+                    env.mock
+                      ? fetchJson(`${env.mock.baseUrl}/debug/requests`)
+                        .then((requests) => requests
+                          .filter((request) => /delegate one bounded qa task/i.test(String(request.allInputText ?? '')))
+                          .slice(-12)
+                          .map((request) => {
+                            const input = String(request.allInputText ?? '');
+                            const eventStart = Math.max(
+                              input.lastIndexOf('[Internal task completion event]'),
+                              input.lastIndexOf('A background task completed. Use this result to reply to the user in your normal assistant voice.'),
+                            );
+                            const completion = eventStart < 0 ? '' : input.slice(eventStart);
+                            const parsed = /^Child result(?:\s*\([^\r\n]*\))?\s*:\s*\r?\n<prompt-data>\s*([\s\S]*?)\s*<\/prompt-data>/im.exec(completion)?.[1]?.trim();
+                            let accepted = false;
+                            if (parsed?.startsWith('{')) {
+                              try { accepted = JSON.parse(parsed)?.status === 'accepted'; } catch {}
+                            }
+                            return {
+                              plannedToolName: request.plannedToolName ?? null,
+                              plannedChildLabel: request.plannedToolArgs?.label ?? null,
+                              hasToolOutput: Boolean(request.toolOutput),
+                              hasInternalCompletionMarker: /\[Internal task completion event\]/i.test(completion),
+                              hasPlainCompletionHeader: /A background task completed\. Use this result to reply to the user in your normal assistant voice\./i.test(completion),
+                              hasSourceSubagent: /^source:\s*subagent\s*$/im.test(completion),
+                              hasSidecarTask: /^task:\s*qa-sidecar\s*$/im.test(completion),
+                              hasSuccessfulStatus: /^status:\s*(?:completed successfully|completed;\s*ready for parent review)\s*$/im.test(completion),
+                              hasPromptData: /<prompt-data>[\s\S]*?<\/prompt-data>/i.test(completion),
+                              hasChildResultHeader: /^Child result(?:\s*\([^\r\n]*\))?\s*:/im.test(completion),
+                              hasInternalRuntimeContext: /<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>/.test(input),
+                              hasReadableCompletedHandoffResult: request.hasReadableCompletedHandoffResult === true,
+                              emittedAssistantHasResultSection: request.emittedAssistantHasResultSection === true,
+                              emittedAssistantHasDelegatedSection: request.emittedAssistantHasDelegatedSection === true,
+                              emittedAssistantHasEvidenceSection: request.emittedAssistantHasEvidenceSection === true,
+                              emittedAssistantContainsParsedChild: request.emittedAssistantContainsParsedChild === true,
+                              emittedAssistantIsFunctionCall: request.emittedAssistantIsFunctionCall === true,
+                              hasExactParsedChildResult: parsed !== undefined,
+                              hasNonemptyParsedChildResult: Boolean(parsed),
+                              hasNoOutputParsedChildResult: parsed === '(no output)',
+                              hasAcceptedParsedChildResult: accepted,
+                              hasEscapedPromptDataLiteral: /&lt;prompt-data&gt;/i.test(completion),
+                            };
+                          }))
+                        .catch((error) => ({ error: formatErrorMessage(error) }))
+                      : []
+              - set: handoffEvidenceResultShape
+                value:
+                  expr: >-
+                    readRawQaSessionStore(env).then(async (store) => {
+                      const child = Object.entries(store)
+                        .map(([key, entry]) => ({ ...entry, key }))
+                        .find((entry) => entry.spawnedBy === sessionKey && entry.label === config.expectedChildLabel);
+                      const [parent, transcript] = await Promise.all([
+                        readSessionTranscriptSummary(env, sessionKey),
+                        child ? readSessionTranscriptSummary(env, child.key) : Promise.resolve(undefined),
+                      ]);
+                      const finalText = String(parent?.finalText ?? '');
+                      const childText = String(transcript?.finalText ?? '');
+                      const section = finalText.match(/(?:^|\n)\s*result\s*:\s*([\s\S]*?)(?=\n\s*evidence\s*:|$)/i)?.[1] ?? '';
+                      const canonical = (value) => {
+                        const text = String(value ?? '').trim();
+                        const data = text.match(/<prompt-data>\s*([\s\S]*?)\s*<\/prompt-data>/i)?.[1];
+                        return normalizeLowercaseStringOrEmpty(data ?? text)
+                          .replace(/^child result\s*(?:\([^\n]*\))?\s*:\s*/i, '')
+                          .replace(/^\s*(?:[-*]\s+|\d+[.)]\s+)/gm, '')
+                          .replace(/^\s*```[^\n]*\n|\n\s*```\s*$/g, '')
+                          .replace(/\s+/g, ' ')
+                          .trim();
+                      };
+                      return {
+                        parentHasFinalText: Boolean(finalText.trim()),
+                        parentFinalEqualsInitialReply: finalText.trim() === String(outbound.text ?? '').trim(),
+                        parentHasResultSection: Boolean(section.trim()),
+                        parentResultContainsChildResult: Boolean(canonical(childText)) && canonical(section).includes(canonical(childText)),
+                        parentFinalContainsChildResult: Boolean(canonical(childText)) && canonical(finalText).includes(canonical(childText)),
+                        parentResultHasAcceptedStatus: /["']?status["']?\s*:\s*["']?accepted\b/i.test(section),
+                        parentResultReferencesCurrentChild: Boolean(child?.key) && section.includes(child.key),
+                        parentResultHasProtectedData: /<prompt-data>/i.test(section),
+                        childHasProtectedData: /<prompt-data>/i.test(childText),
+                        childHasProtocolNotePrefix: /^\s*protocol note\s*:/i.test(childText),
+                      };
+                    }).catch((error) => ({ error: formatErrorMessage(error) }))
+              - set: handoffEvidenceSections
+                value:
+                  expr: >-
+                    ({
+                      delegated: /(?:^|\n)\s*delegated task\s*:/i.test(String(outbound.text ?? '')),
+                      result: /(?:^|\n)\s*result\s*:/i.test(String(outbound.text ?? '')),
+                      evidence: /(?:^|\n)\s*evidence\s*:/i.test(String(outbound.text ?? '')),
+                      attributesChild: /\b(?:child|subagent|delegat(?:e|ed|ion))\b/i.test(
+                        String(outbound.text ?? '').match(/(?:^|\n)\s*evidence\s*:\s*([\s\S]+)/i)?.[1] ?? ''
+                      ),
+                    })
+              - throw:
+                  expr: >-
+                    `subagent handoff causal completion missing: ${formatErrorMessage(handoffEvidenceError)};
+                    requester=${sessionKey}; expectedChildLabel=${config.expectedChildLabel};
+                    children=${JSON.stringify(handoffEvidenceChildren)};
+                    tasks=${JSON.stringify(handoffEvidenceTasks)};
+                    plans=${JSON.stringify(handoffEvidencePlans)};
+                    resultShape=${JSON.stringify(handoffEvidenceResultShape)};
+                    sections=${JSON.stringify(handoffEvidenceSections)}`
+        - assert:
+            expr: "completedSubagent.child.spawnedBy === sessionKey && completedSubagent.child.label === config.expectedChildLabel && completedSubagent.task.requesterSessionKey === sessionKey && completedSubagent.task.childSessionKey === completedSubagent.child.key && completedSubagent.task.status === 'succeeded' && completedSubagent.task.deliveryStatus === 'delivered'"
+            message:
+              expr: "`expected the current handoff parent ${sessionKey} to own a successfully completed ${config.expectedChildLabel} task with matching child transcript, Result, and Evidence`"
         # Parity gate criterion 2 (no fake progress / fake tool completion):
         # require an actual sessions_spawn tool call. Without this, a model
         # could produce the three labeled sections ("Delegated task", "Result",
@@ -78,7 +283,7 @@ flow:
           value:
             expr: "env.mock ? [...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))] : []"
         - assert:
-            expr: "!env.mock || subagentDebugRequests.some((request) => !request.toolOutput && /delegate one bounded qa task/i.test(String(request.allInputText ?? '')) && request.plannedToolName === 'sessions_spawn')"
+            expr: "!env.mock || subagentDebugRequests.some((request) => !request.toolOutput && /delegate one bounded qa task/i.test(String(request.allInputText ?? '')) && request.plannedToolName === 'sessions_spawn' && request.plannedToolArgs?.label === config.expectedChildLabel)"
             message:
               expr: "`expected sessions_spawn tool call during subagent handoff scenario, saw plannedToolNames=${JSON.stringify(subagentDebugRequests.map((request) => request.plannedToolName ?? null))}`"
-      detailsExpr: outbound.text
+      detailsExpr: completedSubagent.parentTranscript.finalText

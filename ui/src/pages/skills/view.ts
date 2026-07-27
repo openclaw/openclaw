@@ -50,6 +50,30 @@ function safeExternalHref(raw?: string): string | null {
   return resolveSafeExternalUrl(raw, window.location.href);
 }
 
+// The authenticated catalog proxy owns registry-origin validation; the UI must
+// still reject noncanonical paths before requesting or rendering registry art.
+export function normalizeClawHubSkillIconUrl(raw?: string | null): string | null {
+  if (!raw) {
+    return null;
+  }
+  try {
+    const url = new URL(raw);
+    if (
+      url.protocol !== "https:" ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash ||
+      !/^(?:\/[A-Za-z\d._~-]+)*\/api\/v1\/skill-icons\/[a-f\d]{64}$/u.test(url.pathname)
+    ) {
+      return null;
+    }
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
 export type SkillsStatusFilter = "all" | "ready" | "needs-setup" | "disabled";
 export type SkillDetailTab = "overview" | "card";
 
@@ -75,6 +99,7 @@ type SkillsProps = {
   skillCardErrors: Record<string, string>;
   clawhubQuery: string;
   clawhubResults: ClawHubSearchResult[] | null;
+  clawhubIconUrls: Record<string, string>;
   clawhubSearchLoading: boolean;
   clawhubSearchError: string | null;
   clawhubDetail: ClawHubSkillDetail | null;
@@ -442,7 +467,8 @@ function renderClawHubResults(props: SkillsProps) {
   }
   return html`
     ${results.map((r) => {
-      const iconUrl = safeExternalHref(r.icon ?? undefined);
+      const sourceIconUrl = normalizeClawHubSkillIconUrl(r.icon);
+      const iconUrl = sourceIconUrl ? props.clawhubIconUrls[sourceIconUrl] : undefined;
       return html`
         <div class="settings-row plugins-item plugins-item--clickable">
           <button
@@ -481,9 +507,8 @@ function renderClawHubResults(props: SkillsProps) {
 
 function renderClawHubDetailDialog(props: SkillsProps) {
   const detail = props.clawhubDetail;
-  const skillIconUrl = safeExternalHref(detail?.skill?.icon ?? undefined);
-  const profileImageUrl = skillIconUrl ? null : safeExternalHref(detail?.owner?.image ?? undefined);
-  const detailImageUrl = skillIconUrl ?? profileImageUrl;
+  const sourceIconUrl = normalizeClawHubSkillIconUrl(detail?.skill?.icon);
+  const detailImageUrl = sourceIconUrl ? props.clawhubIconUrls[sourceIconUrl] : undefined;
 
   return html`
     <openclaw-modal-dialog
@@ -496,9 +521,7 @@ function renderClawHubDetailDialog(props: SkillsProps) {
           <div class="clawhub-skill-detail__identity">
             ${detailImageUrl
               ? html`<img
-                  class="clawhub-skill-icon clawhub-skill-icon--detail ${profileImageUrl
-                    ? "clawhub-skill-icon--profile"
-                    : ""}"
+                  class="clawhub-skill-icon clawhub-skill-icon--detail"
                   src=${detailImageUrl}
                   alt=""
                 />`

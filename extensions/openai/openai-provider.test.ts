@@ -443,6 +443,81 @@ describe("buildOpenAIProvider", () => {
     }
   });
 
+  it.each([
+    {
+      name: "the official OpenAI API",
+      baseUrl: OPENAI_API_BASE_URL,
+      expectedFetches: 1,
+    },
+    {
+      name: "a custom OpenAI-compatible endpoint",
+      baseUrl: "https://example-proxy.invalid/v1",
+      expectedFetches: 0,
+    },
+  ])(
+    "keeps a selected $name API key when an OAuth profile is also available",
+    async ({ baseUrl, expectedFetches }) => {
+      mocks.resolveApiKeyForProvider.mockResolvedValue({
+        mode: "oauth",
+        apiKey: "synthetic-oauth-token",
+        source: "profile:openai:chatgpt",
+        profileId: "openai:chatgpt",
+      });
+      mocks.resolveProviderAuthProfileMetadata.mockReturnValue({
+        profileId: "openai:chatgpt",
+        accountId: "synthetic-oauth-account",
+      });
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        Response.json({
+          data: [{ id: "gpt-5.5", object: "model" }],
+        }),
+      );
+
+      try {
+        const result = await buildOpenAIProvider().catalog?.run({
+          resolveProviderAuth: () => ({
+            mode: "api_key",
+            apiKey: "synthetic-platform-key",
+            discoveryApiKey: "synthetic-platform-discovery-key",
+            source: "env",
+          }),
+          config: {
+            auth: {
+              profiles: {
+                "openai:chatgpt": { provider: "openai", mode: "oauth" },
+              },
+            },
+            models: { providers: { openai: { baseUrl, models: [] } } },
+          },
+          agentDir: "/tmp/openai-agent",
+          workspaceDir: "/tmp/openai-workspace",
+        } as never);
+
+        if (!result || "provider" in result) {
+          throw new Error("expected OpenAI API-key provider catalog");
+        }
+        expect(result.providers.openai).toMatchObject({
+          api: "openai-responses",
+          apiKey: "synthetic-platform-key",
+          baseUrl,
+        });
+        expect(mocks.resolveApiKeyForProvider).not.toHaveBeenCalled();
+        expect(mocks.resolveProviderAuthProfileMetadata).not.toHaveBeenCalled();
+        expect(fetchSpy).toHaveBeenCalledTimes(expectedFetches);
+        if (expectedFetches > 0) {
+          const headers = fetchSpy.mock.calls[0]?.[1]?.headers;
+          expect(headers).toBeInstanceOf(Headers);
+          if (!(headers instanceof Headers)) {
+            throw new Error("expected OpenAI discovery request headers");
+          }
+          expect(headers.get("Authorization")).toBe("Bearer synthetic-platform-discovery-key");
+        }
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    },
+  );
+
   it("falls back to direct API-key catalog discovery when OAuth resolution fails", async () => {
     mocks.resolveApiKeyForProvider.mockRejectedValue(new Error("expired oauth profile"));
     const provider = buildOpenAIProvider();
@@ -2437,6 +2512,89 @@ describe("buildOpenAIProvider", () => {
       } as never),
     ).toBe(explicit);
   });
+
+  it.each([
+    {
+      name: "canonical OAuth provider",
+      provider: "openai",
+      providerKey: "openai",
+      auth: "oauth",
+      baseUrl: OPENAI_API_BASE_URL,
+      transport: "auto",
+    },
+    {
+      name: "mixed-case OAuth provider",
+      provider: "openai",
+      providerKey: "OpenAI",
+      auth: "oauth",
+      baseUrl: OPENAI_API_BASE_URL,
+      transport: "auto",
+    },
+    {
+      name: "whitespace-padded OAuth provider",
+      provider: "openai",
+      providerKey: " openai ",
+      auth: "oauth",
+      baseUrl: OPENAI_API_BASE_URL,
+      transport: "auto",
+    },
+    {
+      name: "mixed-case token provider",
+      provider: "openai",
+      providerKey: "OpenAI",
+      auth: "token",
+      baseUrl: OPENAI_API_BASE_URL,
+      transport: "auto",
+    },
+    {
+      name: "mixed-case API-key provider",
+      provider: "openai",
+      providerKey: "OpenAI",
+      auth: "api-key",
+      baseUrl: OPENAI_API_BASE_URL,
+      transport: "sse",
+    },
+    {
+      name: "mixed-case custom OAuth endpoint",
+      provider: "openai",
+      providerKey: "OpenAI",
+      auth: "oauth",
+      baseUrl: "https://example-proxy.invalid/v1",
+      transport: "sse",
+    },
+    {
+      name: "non-OpenAI provider",
+      provider: "azure-openai",
+      providerKey: "OpenAI",
+      auth: "oauth",
+      baseUrl: OPENAI_API_BASE_URL,
+      transport: "sse",
+    },
+  ])(
+    "normalizes configured transport for the $name",
+    ({ provider, providerKey, auth, baseUrl, transport }) => {
+      const openai = buildOpenAIProvider();
+
+      expect(
+        openai.prepareExtraParams?.({
+          provider,
+          modelId: "gpt-5.4",
+          extraParams: { effort: "high" },
+          config: {
+            models: {
+              providers: {
+                [providerKey]: {
+                  auth,
+                  baseUrl,
+                  models: [],
+                },
+              },
+            },
+          },
+        } as never),
+      ).toEqual({ effort: "high", transport });
+    },
+  );
 
   it("does not infer Codex transport from an unselected OAuth profile", () => {
     const provider = buildOpenAIProvider();

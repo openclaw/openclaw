@@ -1,4 +1,5 @@
 /** Tests channel plugin id resolution from config, manifests, and installed state. */
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
@@ -3317,6 +3318,320 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
         includePersistedAuthState: false,
       }),
     ).toContain("external-env-channel");
+  });
+
+  it("does not let namespace env discovery bypass required package credentials", () => {
+    listPotentialConfiguredChannelPresenceSignals.mockReturnValue([
+      { channelId: "external-env-channel", source: "env" },
+    ]);
+
+    const config = {
+      plugins: {
+        allow: ["external-env-channel-plugin"],
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveConfiguredChannelPresencePolicy({
+        config,
+        workspaceDir: "/tmp",
+        env: {
+          EXTERNAL_ENV_CHANNEL_HOST: "irc.example.com",
+        } as NodeJS.ProcessEnv,
+        includePersistedAuthState: false,
+      }),
+    ).toStrictEqual([]);
+
+    expect(
+      resolveConfiguredChannelPresencePolicy({
+        config,
+        workspaceDir: "/tmp",
+        env: {
+          EXTERNAL_ENV_CHANNEL_HOST: "irc.example.com",
+          EXTERNAL_ENV_CHANNEL_NICK: "openclaw",
+        } as NodeJS.ProcessEnv,
+        includePersistedAuthState: false,
+      }),
+    ).toStrictEqual([
+      {
+        channelId: "external-env-channel",
+        sources: ["env", "manifest-env"],
+        effective: true,
+        pluginIds: ["external-env-channel-plugin"],
+        blockedReasons: [],
+      },
+    ]);
+  });
+
+  it.each([
+    {
+      label: "the first alternative",
+      env: {
+        EXTERNAL_ALTERNATIVE_ENV_CHANNEL_HOST: "chat.example.com",
+        EXTERNAL_ALTERNATIVE_ENV_CHANNEL_BOT_TOKEN: "bot-token",
+      },
+      configured: true,
+    },
+    {
+      label: "the second alternative",
+      env: {
+        EXTERNAL_ALTERNATIVE_ENV_CHANNEL_HOST: "chat.example.com",
+        EXTERNAL_ALTERNATIVE_ENV_CHANNEL_APP_TOKEN: "app-token",
+      },
+      configured: true,
+    },
+    {
+      label: "a required credential without an alternative",
+      env: {
+        EXTERNAL_ALTERNATIVE_ENV_CHANNEL_HOST: "chat.example.com",
+      },
+      configured: false,
+    },
+    {
+      label: "an alternative without the required credential",
+      env: {
+        EXTERNAL_ALTERNATIVE_ENV_CHANNEL_BOT_TOKEN: "bot-token",
+      },
+      configured: false,
+    },
+  ])("honors package env contracts with $label", ({ env, configured }) => {
+    const channelId = "external-alternative-env-channel";
+    const pluginId = "external-alternative-env-channel-plugin";
+    const manifestRecords: PluginManifestRecord[] = [
+      withManifestLoadPaths({
+        id: pluginId,
+        channels: [channelId],
+        packageChannel: {
+          id: channelId,
+          configuredState: {
+            env: {
+              allOf: ["EXTERNAL_ALTERNATIVE_ENV_CHANNEL_HOST"],
+              anyOf: [
+                "EXTERNAL_ALTERNATIVE_ENV_CHANNEL_BOT_TOKEN",
+                "EXTERNAL_ALTERNATIVE_ENV_CHANNEL_APP_TOKEN",
+              ],
+            },
+          },
+        },
+        origin: "config" as const,
+        providers: [],
+        cliBackends: [],
+      }),
+    ];
+    listPotentialConfiguredChannelPresenceSignals.mockReturnValue([{ channelId, source: "env" }]);
+
+    expect(
+      resolveConfiguredChannelPresencePolicy({
+        config: {
+          plugins: { allow: [pluginId] },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env,
+        includePersistedAuthState: false,
+        manifestRecords,
+      }),
+    ).toStrictEqual(
+      configured
+        ? [
+            {
+              channelId,
+              sources: ["env", "manifest-env"],
+              effective: true,
+              pluginIds: [pluginId],
+              blockedReasons: [],
+            },
+          ]
+        : [],
+    );
+  });
+
+  it.each([
+    {
+      label: "default client-secret credentials",
+      env: {
+        MSTEAMS_APP_ID: "teams-app",
+        MSTEAMS_TENANT_ID: "teams-tenant",
+        MSTEAMS_APP_PASSWORD: "teams-secret",
+      },
+      configured: true,
+    },
+    {
+      label: "a federated certificate",
+      env: {
+        MSTEAMS_APP_ID: "teams-app",
+        MSTEAMS_TENANT_ID: "teams-tenant",
+        MSTEAMS_AUTH_TYPE: "federated",
+        MSTEAMS_CERTIFICATE_PATH: "/teams.pem",
+      },
+      configured: true,
+    },
+    {
+      label: "a whitespace-only federated certificate",
+      env: {
+        MSTEAMS_APP_ID: "teams-app",
+        MSTEAMS_TENANT_ID: "teams-tenant",
+        MSTEAMS_AUTH_TYPE: "federated",
+        MSTEAMS_CERTIFICATE_PATH: "   ",
+      },
+      configured: false,
+    },
+    {
+      label: "an enabled federated managed identity",
+      env: {
+        MSTEAMS_APP_ID: "teams-app",
+        MSTEAMS_TENANT_ID: "teams-tenant",
+        MSTEAMS_AUTH_TYPE: "federated",
+        MSTEAMS_USE_MANAGED_IDENTITY: "true",
+      },
+      configured: true,
+    },
+    {
+      label: "a certificate without federated mode",
+      env: {
+        MSTEAMS_APP_ID: "teams-app",
+        MSTEAMS_TENANT_ID: "teams-tenant",
+        MSTEAMS_CERTIFICATE_PATH: "/teams.pem",
+      },
+      configured: false,
+    },
+    {
+      label: "a managed identity without federated mode",
+      env: {
+        MSTEAMS_APP_ID: "teams-app",
+        MSTEAMS_TENANT_ID: "teams-tenant",
+        MSTEAMS_USE_MANAGED_IDENTITY: "true",
+      },
+      configured: false,
+    },
+    {
+      label: "a disabled federated managed identity",
+      env: {
+        MSTEAMS_APP_ID: "teams-app",
+        MSTEAMS_TENANT_ID: "teams-tenant",
+        MSTEAMS_AUTH_TYPE: "federated",
+        MSTEAMS_USE_MANAGED_IDENTITY: "false",
+      },
+      configured: false,
+    },
+    {
+      label: "federated mode without an authentication mechanism",
+      env: {
+        MSTEAMS_APP_ID: "teams-app",
+        MSTEAMS_TENANT_ID: "teams-tenant",
+        MSTEAMS_AUTH_TYPE: "federated",
+      },
+      configured: false,
+    },
+  ])("routes Teams $label through its actual owner state probe", ({ env, configured }) => {
+    const channelId = "msteams";
+    const rootDir = path.resolve("extensions/msteams");
+    const manifestRecords: PluginManifestRecord[] = [
+      withManifestLoadPaths({
+        id: channelId,
+        channels: [channelId],
+        packageChannel: {
+          id: channelId,
+          configuredState: {
+            specifier: "./configured-state",
+            exportName: "hasConfiguredMSTeamsChannelState",
+          },
+        },
+        rootDir,
+        source: path.join(rootDir, "index.ts"),
+        origin: "bundled" as const,
+        enabledByDefault: true,
+        providers: [],
+        cliBackends: [],
+      }),
+    ];
+    listPotentialConfiguredChannelPresenceSignals.mockReturnValue([{ channelId, source: "env" }]);
+
+    expect(
+      resolveConfiguredChannelPresencePolicy({
+        config: {
+          plugins: { allow: [channelId] },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env,
+        includePersistedAuthState: false,
+        manifestRecords,
+      }),
+    ).toStrictEqual(
+      configured
+        ? [
+            {
+              channelId,
+              sources: ["env", "manifest-env"],
+              effective: true,
+              pluginIds: [channelId],
+              blockedReasons: [],
+            },
+          ]
+        : [],
+    );
+  });
+
+  it("retains explicit channel config when ambient credentials are incomplete", () => {
+    listPotentialConfiguredChannelPresenceSignals.mockReturnValue([
+      { channelId: "external-env-channel", source: "env" },
+    ]);
+
+    expect(
+      resolveConfiguredChannelPresencePolicy({
+        config: {
+          channels: {
+            "external-env-channel": {
+              token: "configured",
+            },
+          },
+          plugins: {
+            allow: ["external-env-channel-plugin"],
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {
+          EXTERNAL_ENV_CHANNEL_HOST: "irc.example.com",
+        } as NodeJS.ProcessEnv,
+        includePersistedAuthState: false,
+      }),
+    ).toStrictEqual([
+      {
+        channelId: "external-env-channel",
+        sources: ["explicit-config"],
+        effective: true,
+        pluginIds: ["external-env-channel-plugin"],
+        blockedReasons: [],
+      },
+    ]);
+  });
+
+  it("retains persisted channel auth when ambient credentials are incomplete", () => {
+    listPotentialConfiguredChannelPresenceSignals.mockReturnValue([
+      { channelId: "external-env-channel", source: "env" },
+      { channelId: "external-env-channel", source: "persisted-auth" },
+    ]);
+
+    expect(
+      resolveConfiguredChannelPresencePolicy({
+        config: {
+          plugins: {
+            allow: ["external-env-channel-plugin"],
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {
+          EXTERNAL_ENV_CHANNEL_HOST: "irc.example.com",
+        } as NodeJS.ProcessEnv,
+      }),
+    ).toStrictEqual([
+      {
+        channelId: "external-env-channel",
+        sources: ["persisted-auth"],
+        effective: true,
+        pluginIds: ["external-env-channel-plugin"],
+        blockedReasons: [],
+      },
+    ]);
   });
 
   it("lets explicit bundled channel config bypass restrictive allowlists", () => {

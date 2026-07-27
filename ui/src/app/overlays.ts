@@ -557,16 +557,25 @@ export function createApplicationOverlays(
         approvalDecision === operation &&
         operation.epoch === connectedEpoch &&
         isCurrentClient(operation.client);
+      // A refresh can reconstruct the same approval, while a reused id
+      // with a different creation time denotes a new protected request.
+      const isCurrentApproval = () =>
+        promptState.execApprovalQueue.some(
+          (entry) =>
+            entry.id === active.id &&
+            entry.kind === active.kind &&
+            entry.createdAtMs === active.createdAtMs,
+        );
       publish();
       try {
         await resolveApprovalRequest(client, active, decision);
-        if (!isCurrentOperation()) {
+        if (!isCurrentOperation() || !isCurrentApproval()) {
           return;
         }
         clearResolvedExecApprovalPrompt(promptState, active.id);
       } catch (error) {
         if (isStaleApprovalResolutionError(error)) {
-          if (!isCurrentOperation()) {
+          if (!isCurrentOperation() || !isCurrentApproval()) {
             return;
           }
           clearResolvedExecApprovalPrompt(promptState, active.id);
@@ -577,10 +586,7 @@ export function createApplicationOverlays(
           }
           return;
         }
-        if (
-          isCurrentOperation() &&
-          promptState.execApprovalQueue.some((entry) => entry.id === active.id)
-        ) {
+        if (isCurrentOperation() && isCurrentApproval()) {
           promptState.execApprovalErrors.set(
             active.id,
             `Approval failed: ${error instanceof Error ? error.message : String(error)}`,

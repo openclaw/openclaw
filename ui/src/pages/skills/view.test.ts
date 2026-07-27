@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentsListResult, SkillStatusEntry, SkillStatusReport } from "../../api/types.ts";
 import { i18n } from "../../i18n/index.ts";
 import { getRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
-import { renderSkills } from "./view.ts";
+import { normalizeClawHubSkillIconUrl, renderSkills } from "./view.ts";
 
 type SkillsProps = Parameters<typeof renderSkills>[0];
 
@@ -91,6 +91,7 @@ function createProps(overrides: Partial<SkillsProps> = {}): SkillsProps {
     skillCardErrors: {},
     clawhubQuery: "",
     clawhubResults: null,
+    clawhubIconUrls: {},
     clawhubSearchLoading: false,
     clawhubSearchError: null,
     clawhubDetail: null,
@@ -626,6 +627,9 @@ describe("renderSkills", () => {
               version: "1.2.3",
             },
           ],
+          clawhubIconUrls: {
+            [`https://clawhub.ai/api/v1/skill-icons/${"a".repeat(64)}`]: "blob:clawhub-search-icon",
+          },
           onClawHubDetailOpen,
           onClawHubInstall,
         }),
@@ -648,7 +652,7 @@ describe("renderSkills", () => {
     );
     expect(resultItem?.querySelector(".settings-row__value")?.textContent?.trim()).toBe("v1.2.3");
     expect(resultItem?.querySelector<HTMLImageElement>(".clawhub-skill-icon")?.src).toBe(
-      `https://clawhub.ai/api/v1/skill-icons/${"a".repeat(64)}`,
+      "blob:clawhub-search-icon",
     );
     expect(installButton?.textContent?.trim()).toBe("Install");
     detailButton!.click();
@@ -668,6 +672,9 @@ describe("renderSkills", () => {
           clawhubSearchError: "rate limited",
           clawhubInstallMessage: { kind: "success", text: "Installed github" },
           clawhubDetailSlug: "github",
+          clawhubIconUrls: {
+            [`https://clawhub.ai/api/v1/skill-icons/${"b".repeat(64)}`]: "blob:clawhub-detail-icon",
+          },
           clawhubDetail: {
             skill: {
               slug: "github",
@@ -705,7 +712,7 @@ describe("renderSkills", () => {
       "GitHub integration for OpenClaw By OpenClaw (@openclaw) Latest: v1.2.3 Added search support Platforms: macos, linux Install GitHub",
     );
     expect(container.querySelector<HTMLImageElement>(".clawhub-skill-icon--detail")?.src).toBe(
-      `https://clawhub.ai/api/v1/skill-icons/${"b".repeat(64)}`,
+      "blob:clawhub-detail-icon",
     );
     expect(container.querySelector(".clawhub-skill-icon--profile")).toBeNull();
 
@@ -717,6 +724,78 @@ describe("renderSkills", () => {
 
     expect(onClawHubInstall).toHaveBeenCalledTimes(1);
     expect(onClawHubInstall).toHaveBeenCalledWith("github");
+  });
+
+  it("never renders unproxied ClawHub skill or owner images", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+    installDialogMethod("showModal", function (this: HTMLDialogElement) {
+      this.setAttribute("open", "");
+    });
+
+    const icon = `https://clawhub.ai/api/v1/skill-icons/${"c".repeat(64)}`;
+    render(
+      renderSkills(
+        createProps({
+          clawhubResults: [{ score: 1, slug: "github", displayName: "GitHub", icon }],
+          clawhubDetailSlug: "github",
+          clawhubDetail: {
+            skill: {
+              slug: "github",
+              displayName: "GitHub",
+              icon,
+              createdAt: 1,
+              updatedAt: 1,
+            },
+            owner: { image: "https://attacker.example/profile.png" },
+          },
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.querySelector(".clawhub-skill-icon")).toBeNull();
+    expect(container.querySelector('img[src^="https:"]')).toBeNull();
+    expect(container.querySelector(".clawhub-skill-icon--profile")).toBeNull();
+  });
+
+  it.each([
+    {
+      label: "the default registry root",
+      iconUrl: `https://clawhub.ai/api/v1/skill-icons/${"a".repeat(64)}`,
+    },
+    {
+      label: "a configured registry root",
+      iconUrl: `https://registry.example.test/api/v1/skill-icons/${"a".repeat(64)}`,
+    },
+    {
+      label: "a path-mounted registry",
+      iconUrl: `https://registry.example.test/clawhub/api/v1/skill-icons/${"a".repeat(64)}`,
+    },
+    {
+      label: "a nested path-mounted registry",
+      iconUrl: `https://registry.example.test/tenant/clawhub/api/v1/skill-icons/${"a".repeat(64)}`,
+    },
+  ])("accepts canonical skill artwork from $label", ({ iconUrl }) => {
+    expect(normalizeClawHubSkillIconUrl(iconUrl)).toBe(iconUrl);
+  });
+
+  it.each([
+    `http://clawhub.ai/api/v1/skill-icons/${"a".repeat(64)}`,
+    `https://clawhub.ai/api/v1/skill-icons/${"A".repeat(64)}`,
+    `https://clawhub.ai/api/v1/skill-icons/${"a".repeat(64)}?download=1`,
+    `https://clawhub.ai/api/v1/skill-icons/${"a".repeat(64)}#image`,
+    `https://user@clawhub.ai/api/v1/skill-icons/${"a".repeat(64)}`,
+    `https://clawhub.ai/clawhub//api/v1/skill-icons/${"a".repeat(64)}`,
+    `https://clawhub.ai/clawhub%2Fprivate/api/v1/skill-icons/${"a".repeat(64)}`,
+    `https://clawhub.ai/clawhub/api/v1/skill-icons/${"a".repeat(64)}/extra`,
+    "https://clawhub.ai/profile.png",
+    "/api/v1/skill-icons/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "not a url",
+  ])("rejects noncanonical ClawHub icon source %s", (iconUrl) => {
+    expect(normalizeClawHubSkillIconUrl(iconUrl)).toBeNull();
   });
 
   it("renders ClawHub acknowledgement retry actions", async () => {

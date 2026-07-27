@@ -1036,6 +1036,35 @@ describe("route composer fallback", () => {
     expect(state.sidebarContent).toBeNull();
   });
 
+  it("never restores a private transcript from a case-distinct Matrix room", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const { state } = createRouteState("");
+    const mixedCaseRoom = "agent:ops:matrix:channel:!MixedRoomAbCdEf:example.org";
+    const lowercaseRoom = "agent:ops:matrix:channel:!mixedroomabcdef:example.org";
+    const mixedCaseMessages = [{ role: "assistant", content: "private mixed room" }];
+    const lowercaseMessages = [{ role: "assistant", content: "private lowercase room" }];
+    state.assistantAgentId = "ops";
+    state.agentsList = { defaultId: "ops", mainKey: "main" };
+    state.sessionKey = mixedCaseRoom;
+    state.chatMessages = mixedCaseMessages;
+
+    resetChatStateForRouteSession(state, lowercaseRoom);
+
+    expect(state.sessionKey).toBe(lowercaseRoom);
+    expect(state.chatMessages).toEqual([]);
+
+    state.chatMessages = lowercaseMessages;
+    resetChatStateForRouteSession(state, mixedCaseRoom);
+
+    expect(state.sessionKey).toBe(mixedCaseRoom);
+    expect(state.chatMessages).toEqual(mixedCaseMessages);
+
+    resetChatStateForRouteSession(state, lowercaseRoom);
+
+    expect(state.sessionKey).toBe(lowercaseRoom);
+    expect(state.chatMessages).toEqual(lowercaseMessages);
+  });
+
   it("restores one atomic history snapshot when returning to a session", () => {
     vi.stubGlobal("sessionStorage", createStorageMock());
     const { state } = createRouteState("");

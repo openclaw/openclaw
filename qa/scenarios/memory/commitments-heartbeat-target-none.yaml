@@ -1,4 +1,4 @@
-title: Commitments heartbeat target none
+title: Retired commitments heartbeat target none
 
 scenario:
   id: commitments-heartbeat-target-none
@@ -9,13 +9,13 @@ scenario:
     secondary:
       - automation.commitment-check-ins-scope
       - automation.commitment-check-ins-delivery
-  objective: Verify due inferred commitments stay internal when heartbeat delivery target is none.
+  objective: Verify a retired legacy commitment remains pending and produces no check-in when heartbeat delivery target is none.
   successCriteria:
     - Scenario runs through qa-channel and a real gateway child.
-    - A due commitment exists for the qa agent and qa-channel conversation.
-    - A heartbeat wake runs after the commitment is due.
-    - No commitment/check-in qa-channel outbound message is sent while heartbeat target is none.
-    - The commitment remains pending and unattempted after the heartbeat.
+    - A due legacy commitment exists in the shared state database for the qa agent and qa-channel conversation.
+    - A heartbeat wake runs without enabling the retired commitments feature.
+    - No legacy commitment/check-in qa-channel outbound message is sent while heartbeat target is none.
+    - The legacy commitment remains pending and unattempted after the heartbeat.
   docsRefs:
     - docs/concepts/commitments.md
     - docs/gateway/heartbeat.md
@@ -25,9 +25,6 @@ scenario:
     - src/commitments/store.ts
     - extensions/qa-lab/src/qa-channel-transport.ts
   gatewayConfigPatch:
-    commitments:
-      enabled: true
-      maxPerDay: 3
     agents:
       defaults:
         heartbeat:
@@ -35,14 +32,14 @@ scenario:
           target: none
   execution:
     kind: flow
-    summary: Seed a due commitment, wake heartbeat, and assert target none sends no commitment message.
+    summary: Seed a legacy commitment, wake heartbeat, and assert the retired feature sends no commitment message.
     config:
       conversationId: commitments-target-none-room
       commitmentId: cm_qa_target_none
 
 flow:
   steps:
-    - name: target none keeps due commitments internal
+    - name: target none keeps retired legacy commitments internal
       actions:
         - call: waitForGatewayHealthy
           args:

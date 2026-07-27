@@ -50,12 +50,40 @@ function readBundledExtensionCatalogEntriesSync(): ChannelCatalogEntryLike[] {
     return cached ?? [];
   }
   try {
+    let sourceMetadataDir: string | undefined;
+    for (const packageRoot of listPackageRoots()) {
+      const sourceExtensionsDir = path.join(packageRoot, "extensions");
+      if (
+        pluginsDir !== path.join(packageRoot, "dist", "extensions") &&
+        pluginsDir !== path.join(packageRoot, "dist-runtime", "extensions")
+      ) {
+        continue;
+      }
+      if (
+        fs.existsSync(path.join(packageRoot, "pnpm-workspace.yaml")) &&
+        fs.existsSync(path.join(packageRoot, "src")) &&
+        fs.existsSync(sourceExtensionsDir)
+      ) {
+        // Only plugins present in the runtime tree are loadable. Their source
+        // manifests still own capabilities when the runtime build is stale.
+        sourceMetadataDir = sourceExtensionsDir;
+      }
+      break;
+    }
     const entries = fs
       .readdirSync(pluginsDir, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .flatMap((entry): ChannelCatalogEntryLike[] => {
-        const packageJsonPath = path.join(pluginsDir, entry.name, "package.json");
-        const parsed = tryReadJsonSync<ChannelCatalogEntryLike>(packageJsonPath);
+        const sourcePackageJsonPath = sourceMetadataDir
+          ? path.join(sourceMetadataDir, entry.name, "package.json")
+          : undefined;
+        const parsed =
+          (sourcePackageJsonPath
+            ? tryReadJsonSync<ChannelCatalogEntryLike>(sourcePackageJsonPath)
+            : undefined) ??
+          tryReadJsonSync<ChannelCatalogEntryLike>(
+            path.join(pluginsDir, entry.name, "package.json"),
+          );
         return parsed ? [parsed] : [];
       });
     bundledPackageCatalogCache.set(pluginsDir, entries);

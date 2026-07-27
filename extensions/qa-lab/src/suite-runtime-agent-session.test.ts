@@ -491,7 +491,143 @@ describe("qa suite runtime agent session helpers", () => {
           text: "Codex plan:\n- inspect\n- build",
         },
       ],
+      finalText: "Codex plan:\n- inspect\n- build",
     });
+  });
+
+  it("keeps the provider handoff final when a delivery mirror follows", async () => {
+    const tempRoot = await makeTempDir("qa-session-transcript-handoff-mirror-");
+    const sessionKey = "agent:qa:handoff-mirror";
+    const sessionId = "session-handoff-mirror";
+    const childResult = "The sidecar verified the requested evidence.";
+    const providerFinalText = `Delegated task: qa-sidecar\nResult: ${childResult}\nEvidence: child completed and was delivered.`;
+    await seedQaSession({ tempRoot, sessionKey, sessionId });
+    for (const message of [
+      {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        content: providerFinalText,
+        __openclaw: { mirrorIdentity: "handoff-run:assistant" },
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: childResult,
+        openclawDeliveryMirror: { kind: "channel-final", sourceMessageId: "handoff-child" },
+      },
+    ]) {
+      await appendQaTranscriptMessage({ tempRoot, sessionKey, sessionId, message });
+    }
+
+    await expect(
+      readSessionTranscriptSummary({ gateway: { tempRoot } } as never, sessionKey),
+    ).resolves.toMatchObject({
+      assistantMirrors: [{ identity: "handoff-run:assistant", text: providerFinalText }],
+      finalText: providerFinalText,
+    });
+  });
+
+  it("uses a delivery mirror as the final text when no provider reply exists", async () => {
+    const tempRoot = await makeTempDir("qa-session-transcript-delivery-only-");
+    const sessionKey = "agent:qa:delivery-only";
+    const sessionId = "session-delivery-only";
+    const deliveredText = "A standalone delivered assistant reply.";
+    await seedQaSession({ tempRoot, sessionKey, sessionId });
+    await appendQaTranscriptMessage({
+      tempRoot,
+      sessionKey,
+      sessionId,
+      message: {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: deliveredText,
+        openclawDeliveryMirror: { kind: "channel-final", sourceMessageId: "standalone-delivery" },
+      },
+    });
+
+    await expect(
+      readSessionTranscriptSummary({ gateway: { tempRoot } } as never, sessionKey),
+    ).resolves.toMatchObject({ finalText: deliveredText });
+  });
+
+  it.each([
+    ["user", { role: "user", content: "Start the next conversation turn." }],
+    [
+      "tool result",
+      {
+        role: "toolResult",
+        toolCallId: "next-turn-tool",
+        toolName: "message",
+        content: [{ type: "text", text: "The next tool turn completed." }],
+        isError: false,
+      },
+    ],
+  ])("uses a later delivery-only reply after a %s turn boundary", async (_name, boundary) => {
+    const tempRoot = await makeTempDir("qa-session-transcript-next-turn-mirror-");
+    const sessionKey = "agent:qa:next-turn-mirror";
+    const sessionId = "session-next-turn-mirror";
+    const latestDeliveredText = "The later conversation turn was delivered.";
+    await seedQaSession({ tempRoot, sessionKey, sessionId });
+    for (const message of [
+      {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        content: "An earlier provider reply must not win forever.",
+        __openclaw: { mirrorIdentity: "earlier-run:assistant" },
+      },
+      boundary,
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: latestDeliveredText,
+        openclawDeliveryMirror: { kind: "channel-final", sourceMessageId: "later-turn" },
+      },
+    ]) {
+      await appendQaTranscriptMessage({ tempRoot, sessionKey, sessionId, message });
+    }
+
+    await expect(
+      readSessionTranscriptSummary({ gateway: { tempRoot } } as never, sessionKey),
+    ).resolves.toMatchObject({
+      assistantMirrors: [
+        {
+          identity: "earlier-run:assistant",
+          text: "An earlier provider reply must not win forever.",
+        },
+      ],
+      finalText: latestDeliveredText,
+    });
+  });
+
+  it("keeps the latest genuine provider reply after a new-turn delivery mirror", async () => {
+    const tempRoot = await makeTempDir("qa-session-transcript-latest-provider-");
+    const sessionKey = "agent:qa:latest-provider";
+    const sessionId = "session-latest-provider";
+    const latestProviderText = "The current provider supplied the final reply.";
+    await seedQaSession({ tempRoot, sessionKey, sessionId });
+    for (const message of [
+      { role: "assistant", content: "An earlier provider turn." },
+      { role: "user", content: "Start a new turn." },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: "An interim delivery in the new turn.",
+        openclawDeliveryMirror: { kind: "channel-final", sourceMessageId: "interim-delivery" },
+      },
+      { role: "assistant", content: latestProviderText },
+    ]) {
+      await appendQaTranscriptMessage({ tempRoot, sessionKey, sessionId, message });
+    }
+
+    await expect(
+      readSessionTranscriptSummary({ gateway: { tempRoot } } as never, sessionKey),
+    ).resolves.toMatchObject({ finalText: latestProviderText });
   });
 
   it("counts only correlated non-error tool results as successful", async () => {

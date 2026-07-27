@@ -79,7 +79,16 @@ const callGatewayMock = vi.fn(async (request: GatewayRequest) => {
     if (next === "throw") {
       throw new Error("announce delivery failed");
     }
-    return {};
+    const announcedText = request.params?.internalEvents?.[0]?.result || "announced";
+    return {
+      runId: "qa-lifecycle-announce",
+      status: "ok",
+      result: {
+        payloads: [{ text: announcedText }],
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: [announcedText],
+      },
+    };
   }
   return {};
 });
@@ -575,12 +584,16 @@ describe("subagent registry lifecycle error grace", () => {
     await waitForAgentCallCount(1);
     expect(readFirstAnnounceOutcome()?.status).toBe("ok");
 
-    // Advance past the original grace window; no timeout completion should
-    // re-announce. The exhausted completion announce suspends its delivery,
-    // which fires the one-shot requester settle wake for the undelivered
-    // required completion — that wake is not a completion event.
+    // A successfully delivered single completion already woke its requester.
+    // Advancing the cancelled timeout must neither repeat that completion nor
+    // manufacture the settle wake reserved for undelivered or fan-out batches.
     await vi.advanceTimersByTimeAsync(30_000);
     await flushAsync();
+    const recoveredRun = mod
+      .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
+      .find((candidate) => candidate.runId === "run-timeout-cancel");
+    expect(recoveredRun?.outcome?.status).toBe("ok");
+    expect(recoveredRun?.delivery?.status).toBe("delivered");
     const readIdempotencyKey = (request: GatewayRequest) => {
       const key = (request.params as Record<string, unknown> | undefined)?.idempotencyKey;
       return typeof key === "string" ? key : "";
@@ -592,7 +605,7 @@ describe("subagent registry lifecycle error grace", () => {
       getAgentCalls()
         .map(readIdempotencyKey)
         .filter((key) => key.startsWith("announce:requester-settle:")),
-    ).toEqual(["announce:requester-settle:agent:main:main:run-timeout-cancel"]);
+    ).toEqual([]);
   });
 
   it("keeps parallel child completion results frozen even when late traffic arrives", async () => {

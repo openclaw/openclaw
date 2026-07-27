@@ -32,6 +32,25 @@ describe("QA scenario lane matching", () => {
     ).toBe(false);
   });
 
+  it("keeps explicit cron execution authority on the live provider lane", () => {
+    const scenario = readQaScenarioById("cron-explicit-authority-execution");
+
+    expect(
+      scenarioMatchesQaProviderLane({
+        scenario,
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+      }),
+    ).toBe(false);
+    expect(
+      scenarioMatchesQaProviderLane({
+        scenario,
+        providerMode: "live-frontier",
+        primaryModel: "openai/gpt-5.6-luna",
+      }),
+    ).toBe(true);
+  });
+
   it("reports every declared mismatch in one decision", () => {
     const scenario = makeQaSuiteTestScenario("strict-live-lane", {
       channel: "matrix",

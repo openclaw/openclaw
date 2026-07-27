@@ -236,7 +236,20 @@ describe("tool search gateway e2e lane result", () => {
     const configPath = path.join(tempRoot, "openclaw.json");
     const inputPrefix = "i".repeat(499);
     const toolOutputPrefix = "o".repeat(3_999);
-    await fs.writeFile(configPath, "{}\n", "utf8");
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify({
+        memory: {
+          backend: "builtin",
+          search: {
+            provider: "openai",
+            model: "text-embedding-3-small",
+            remote: { baseUrl: "http://mock-openai.test", apiKey: "test" },
+          },
+        },
+      })}\n`,
+      "utf8",
+    );
     const jsonResponse = (body: unknown) =>
       new Response(JSON.stringify(body), {
         headers: { "content-type": "application/json" },
@@ -294,11 +307,106 @@ describe("tool search gateway e2e lane result", () => {
       expect(result.providerToolOutputSnippet).toBe(toolOutputPrefix);
       expect(result.providerDirectoryContainsTarget).toBe(true);
       expect(fetchMock).toHaveBeenCalledTimes(3);
-      const laneConfig = JSON.parse(await fs.readFile(configPath, "utf8")) as {
-        memory?: { search?: Record<string, unknown> };
-      };
-      expect(laneConfig.memory?.search).toMatchObject({ enabled: false });
-      expect(laneConfig.memory?.search).not.toHaveProperty("sync");
+
+      const persistedConfig: unknown = JSON.parse(await fs.readFile(configPath, "utf8"));
+      expect(persistedConfig).toMatchObject({
+        memory: {
+          backend: "builtin",
+          search: {
+            enabled: false,
+            provider: "openai",
+            model: "text-embedding-3-small",
+            remote: { baseUrl: "http://mock-openai.test", apiKey: "test" },
+          },
+        },
+      });
+      expect(persistedConfig).not.toHaveProperty("memory.search.sync");
+    } finally {
+      await fs.rm(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("preserves gateway failures with safe direct-lane tool discovery diagnostics", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tool-search-failure-"));
+    const configPath = path.join(tempRoot, "openclaw.json");
+    const targetTool = "fake_plugin_tool_17";
+    const privateToken = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef";
+    await fs.writeFile(configPath, "{}\n", "utf8");
+    const jsonResponse = (body: unknown, status = 200) =>
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { "content-type": "application/json" },
+      });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ cursor: 0 }))
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            status: "failed",
+            error: { code: "api_error", message: "internal error" },
+          },
+          502,
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse([
+          {
+            plannedToolName: targetTool,
+            body: { tools: [{ name: targetTool }] },
+            toolOutput: `FAKE_PLUGIN_OK ${targetTool}`,
+          },
+        ]),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const env: QaSuiteRuntimeEnv = {
+      alternateModel: "openai/gpt-5.6-luna",
+      cfg: {},
+      gateway: {
+        baseUrl: "http://gateway.test",
+        call: async () => undefined,
+        logs: () => `provider failed with ${privateToken}`,
+        restartAfterStateMutation: async (mutateState) => {
+          await mutateState({
+            configPath,
+            runtimeEnv: {},
+            stateDir: path.join(tempRoot, "state"),
+            tempRoot,
+          });
+        },
+        runtimeEnv: { OPENCLAW_GATEWAY_TOKEN: "test-token" },
+        tempRoot,
+        workspaceDir: tempRoot,
+      },
+      mock: { baseUrl: "http://mock-openai.test" },
+      outputDir: path.join(tempRoot, "output"),
+      primaryModel: "openai/gpt-5.6-luna",
+      providerMode: "mock-openai",
+      repoRoot: tempRoot,
+      transport: {} as QaSuiteRuntimeEnv["transport"],
+    };
+
+    try {
+      let failure: unknown;
+      try {
+        await runToolSearchGatewayLane({
+          env,
+          fixture: { fakePluginDir: tempRoot, targetTool },
+          lane: "normal",
+        });
+      } catch (error) {
+        failure = error;
+      }
+
+      expect(failure).toBeInstanceOf(Error);
+      const message = (failure as Error).message;
+      expect(message).toContain("Tool Search normal lane gateway request failed");
+      expect(message).toContain("HTTP 502");
+      expect(message).toContain('"plannedToolName":"fake_plugin_tool_17"');
+      expect(message).toContain('"targetDeclared":true');
+      expect(message).toContain('"targetResultObserved":true');
+      expect(message).not.toContain(privateToken);
+      expect(fetchMock).toHaveBeenCalledTimes(3);
     } finally {
       await fs.rm(tempRoot, { force: true, recursive: true });
     }

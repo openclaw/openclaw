@@ -31,10 +31,14 @@ flow:
     - name: forks current transcript context for the child
       actions:
         - call: reset
+        - set: sessionKey
+          value:
+            expr: "`agent:qa:forked-context:${randomUUID().slice(0, 8)}`"
         - call: runAgentPrompt
           args:
             - ref: env
-            - sessionKey: agent:qa:forked-context
+            - sessionKey:
+                ref: sessionKey
               message:
                 expr: config.prompt
               timeoutMs:
@@ -50,6 +54,18 @@ flow:
             expr: "env.mock || String(outbound.text ?? '').includes(config.contextNeedle)"
             message:
               expr: "`expected live final answer to include fork-only context code ${config.contextNeedle}, got: ${outbound.text}`"
+        - call: waitForCondition
+          saveAs: forkedChildEvidence
+          args:
+            - lambda:
+                async: true
+                expr: "(async () => { const store = await readRawQaSessionStore(env); const children = Object.entries(store).map(([key, entry]) => ({ ...entry, key })).filter((entry) => entry.spawnedBy === sessionKey); for (const child of children) { const transcript = await readSessionTranscriptSummary(env, child.key).catch(() => undefined); if (String(transcript?.finalText ?? '').includes(config.contextNeedle)) return { child, transcript }; } return undefined; })().catch(() => undefined)"
+            - expr: liveTurnTimeoutMs(env, 30000)
+            - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
+        - assert:
+            expr: "forkedChildEvidence.child.spawnedBy === sessionKey && String(forkedChildEvidence.transcript.finalText ?? '').includes(config.contextNeedle)"
+            message:
+              expr: "`expected an owned child transcript containing forked code ${config.contextNeedle}`"
         - set: forkDebugRequests
           value:
             expr: "env.mock ? [...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))] : []"

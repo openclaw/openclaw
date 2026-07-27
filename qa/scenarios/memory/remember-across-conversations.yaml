@@ -362,7 +362,7 @@ flow:
                           expr: "`group destination received private recall context: ${JSON.stringify(groupDestinationRequests)}`"
                     - set: pauseCommandStartIndex
                       value:
-                        expr: state.getSnapshot().messages.length
+                        expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
                     - sendInbound:
                         conversation:
                           id:
@@ -371,19 +371,16 @@ flow:
                         senderId: qa-operator
                         senderName: QA Operator
                         text: /active-memory off
-                    - call: sleep
+                    - call: waitForOutboundMessage
+                      saveAs: pauseCommandOutbound
                       args:
-                        - 2000
-                    - set: pauseCommandMessages
-                      value:
-                        expr: state.getSnapshot().messages.slice(pauseCommandStartIndex)
-                    - set: pauseCommandOutbound
-                      value:
-                        expr: "pauseCommandMessages.find((candidate) => candidate.direction === 'outbound')"
-                    - assert:
-                        expr: Boolean(pauseCommandOutbound)
-                        message:
-                          expr: "`Active Memory command produced no outbound message: ${JSON.stringify(pauseCommandMessages)}`"
+                        - ref: state
+                        - lambda:
+                            params: [candidate]
+                            expr: "candidate.direction === 'outbound' && candidate.conversation.id === config.pausedConversationId && candidate.conversation.kind === 'direct'"
+                        - expr: liveTurnTimeoutMs(env, 60000)
+                        - sinceIndex:
+                            ref: pauseCommandStartIndex
                     - assert:
                         expr: "pauseCommandOutbound.text.includes('Active Memory: off for this session.')"
                         message:

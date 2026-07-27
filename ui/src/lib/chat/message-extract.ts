@@ -4,7 +4,7 @@ import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inb
 import {
   isMeaningfulMediaFact,
   readPersistedMediaFacts,
-} from "../../../../src/media/media-facts.js";
+} from "../../../../src/media/persisted-media-facts.js";
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
 import { extractAssistantVisibleText as extractSharedAssistantVisibleText } from "../../../../src/shared/chat-message-content.js";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";

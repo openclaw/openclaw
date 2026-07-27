@@ -439,6 +439,85 @@ describe("config plugin validation", () => {
       expectNoMissingCodexPluginWarning(res.warnings);
     });
 
+    it.each([
+      {
+        name: "agent-wide provider request parameters",
+        agent: { params: { temperature: 0.4 } },
+        warns: false,
+      },
+      {
+        name: "agent-specific model provider request parameters",
+        agent: {
+          models: { "openai/gpt-5.6": { params: { temperature: 0.4 } } },
+        },
+        warns: false,
+      },
+      {
+        name: "agent-wide native Codex runtime controls",
+        agent: { params: { fastMode: true } },
+        warns: true,
+      },
+      {
+        name: "agent-specific model native Codex runtime controls",
+        agent: {
+          models: { "openai/gpt-5.6": { params: { thinking: "high" } } },
+        },
+        warns: true,
+      },
+    ])("keeps missing Codex diagnostics scoped to $name", ({ agent, warns }) => {
+      const res = validateWithMissingCodexPlugin({
+        agents: {
+          entries: {
+            openclaw: {
+              default: true,
+              model: { primary: "anthropic/claude-sonnet-4-6", fallbacks: [] },
+              subagents: { model: "anthropic/claude-sonnet-4-6" },
+            },
+            work: {
+              model: { primary: "openai/gpt-5.6", fallbacks: [] },
+              subagents: { model: "openai/gpt-5.6" },
+              ...agent,
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      if (warns) {
+        expectMissingCodexPluginWarning(res.warnings);
+      } else {
+        expectNoMissingCodexPluginWarning(res.warnings);
+      }
+    });
+
+    it("still warns when another agent genuinely needs the missing Codex plugin", () => {
+      const res = validateWithMissingCodexPlugin({
+        agents: {
+          entries: {
+            openclaw: {
+              default: true,
+              model: { primary: "anthropic/claude-sonnet-4-6", fallbacks: [] },
+              subagents: { model: "anthropic/claude-sonnet-4-6" },
+            },
+            work: {
+              model: { primary: "openai/gpt-5.6", fallbacks: [] },
+              subagents: { model: "openai/gpt-5.6" },
+              params: { temperature: 0.4 },
+            },
+            codex: {
+              model: { primary: "openai/gpt-5.6", fallbacks: [] },
+              subagents: { model: "openai/gpt-5.6" },
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectMissingCodexPluginWarning(res.warnings);
+    });
+
     it("still warns when only one provider model route is pinned to OpenClaw", () => {
       const res = validateWithMissingCodexPlugin({
         models: {

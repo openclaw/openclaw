@@ -216,7 +216,9 @@ describe("Gateway queued session rotation", () => {
             skills: [],
             skipBootstrap: true,
           },
-          list: [{ id: "main", default: true, model: { primary: modelRef }, skills: [] }],
+          entries: {
+            main: { default: true, model: { primary: modelRef }, skills: [] },
+          },
         },
         tools: { profile: "minimal" },
         models: {
@@ -251,6 +253,17 @@ describe("Gateway queued session rotation", () => {
         env: { OPENCLAW_SKIP_PROVIDERS: undefined },
       });
       instances.push(instance);
+      const persistedConfig = JSON.parse(await readFile(instance.configPath, "utf8")) as {
+        agents?: {
+          entries?: Record<string, { default?: boolean; model?: { primary?: string } }>;
+          list?: unknown;
+        };
+      };
+      expect(persistedConfig.agents?.entries?.main).toMatchObject({
+        default: true,
+        model: { primary: modelRef },
+      });
+      expect(persistedConfig.agents).not.toHaveProperty("list");
       await instance.startGateway();
 
       const client = new GatewayChatClient({

@@ -44,6 +44,7 @@ type QaScenarioRuntimeDeps = {
   waitForGatewayHealthy: QaScenarioRuntimeFunction;
   waitForTransportReady: QaScenarioRuntimeFunction;
   waitForQaChannelReady: QaScenarioRuntimeFunction;
+  startQaOtlpTraceReceiver: QaScenarioRuntimeFunction;
   browserRequest: QaScenarioRuntimeFunction;
   waitForBrowserReady: QaScenarioRuntimeFunction;
   browserOpenTab: QaScenarioRuntimeFunction;
@@ -140,6 +141,7 @@ type QaScenarioRuntimeApi<
   waitForTransportReady: TDeps["waitForTransportReady"];
   waitForChannelReady: TDeps["waitForTransportReady"];
   waitForQaChannelReady: TDeps["waitForQaChannelReady"];
+  startQaOtlpTraceReceiver: TDeps["startQaOtlpTraceReceiver"];
   browserRequest: TDeps["browserRequest"];
   waitForBrowserReady: TDeps["waitForBrowserReady"];
   browserOpenTab: TDeps["browserOpenTab"];
@@ -253,6 +255,7 @@ export function createQaScenarioRuntimeApi<
     waitForTransportReady: params.deps.waitForTransportReady,
     waitForChannelReady: params.deps.waitForTransportReady,
     waitForQaChannelReady: params.deps.waitForQaChannelReady,
+    startQaOtlpTraceReceiver: params.deps.startQaOtlpTraceReceiver,
     browserRequest: params.deps.browserRequest,
     waitForBrowserReady: params.deps.waitForBrowserReady,
     browserOpenTab: params.deps.browserOpenTab,

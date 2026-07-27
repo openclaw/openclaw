@@ -7,6 +7,11 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import {
+  buildAgentRunTerminalOutcome,
+  mergeAgentRunTerminalOutcome,
+  type AgentRunTerminalOutcome,
+} from "../agents/agent-run-terminal-outcome.js";
 import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../agents/command/shared-types.js";
 import type { ImageContent } from "../agents/command/types.js";
@@ -66,6 +71,7 @@ import {
 } from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 import { resolveOpenAiCompatError, validateOpenAiSamplingParams } from "./openai-compat-errors.js";
+import { resolveOpenAiHttpAgentRunTerminalOutcome } from "./openai-http-terminal-outcome.js";
 import {
   isToolChoiceConstraintSatisfied,
   resolveUnsatisfiedToolChoiceMessage,
@@ -720,11 +726,13 @@ function coerceRequest(val: unknown): OpenAiChatCompletionRequest {
 }
 
 function resolveAgentResponseText(result: unknown): string {
-  const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
+  const payloads = (result as { payloads?: Array<{ isError?: boolean; text?: string }> } | null)
+    ?.payloads;
   if (!Array.isArray(payloads) || payloads.length === 0) {
     return "No response from OpenClaw.";
   }
   const content = payloads
+    .filter((payload) => payload.isError !== true)
     .map((p) => (typeof p.text === "string" ? p.text : ""))
     .filter(Boolean)
     .join("\n\n");
@@ -732,11 +740,13 @@ function resolveAgentResponseText(result: unknown): string {
 }
 
 function resolveAgentResponseCommentary(result: unknown): string {
-  const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
+  const payloads = (result as { payloads?: Array<{ isError?: boolean; text?: string }> } | null)
+    ?.payloads;
   if (!Array.isArray(payloads) || payloads.length === 0) {
     return "";
   }
   return payloads
+    .filter((payload) => payload.isError !== true)
     .map((p) => (typeof p.text === "string" ? p.text : ""))
     .filter(Boolean)
     .join("\n\n");
@@ -1087,6 +1097,13 @@ export async function handleOpenAiHttpRequest(
         return true;
       }
 
+      if (resolveOpenAiHttpAgentRunTerminalOutcome(result).reason !== "completed") {
+        sendJson(res, 502, {
+          error: { message: "internal error", type: "api_error" },
+        });
+        return true;
+      }
+
       const usage = resolveChatCompletionUsage(result);
       const meta = (result as { meta?: unknown } | null)?.meta;
       const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
@@ -1185,17 +1202,42 @@ export async function handleOpenAiHttpRequest(
   let bufferedAssistantContent = "";
   let bufferedReplaceableAssistantContent = "";
   let finalUsage: OpenAiChatCompletionsUsage | undefined;
-  let finalizeRequested = false;
-  let finalizeFinishReason: "stop" | "tool_calls" = "stop";
+  type StreamFinalization =
+    | {
+        status: "completed";
+        finishReason: "stop" | "tool_calls";
+        outcome?: AgentRunTerminalOutcome;
+      }
+    | { status: "failed"; outcome: AgentRunTerminalOutcome };
+  let finalizeRequested: StreamFinalization | null = null;
+  const readFinalization = (): StreamFinalization | null => finalizeRequested;
   let resultResolved = false;
   let closed = false;
+  let unsubscribe = () => {};
   let stopWatchingDisconnect = () => {};
 
-  const maybeFinalize = () => {
-    if (closed || !finalizeRequested) {
+  const finalizeFailedStream = (error: { message: string; type: string; code?: string }) => {
+    if (closed) {
       return;
     }
-    if (!resultResolved) {
+    closed = true;
+    stopWatchingDisconnect();
+    unsubscribe();
+    if (streamIncludeUsage && finalUsage) {
+      writeUsageChunk(res, { runId, model, usage: finalUsage });
+    }
+    writeSse(res, { error });
+    writeDone(res);
+    res.end();
+  };
+
+  const maybeFinalize = () => {
+    if (closed || !finalizeRequested || !resultResolved) {
+      return;
+    }
+    // Resolved preserved errors are failures, not successful assistant stops.
+    if (finalizeRequested.status === "failed") {
+      finalizeFailedStream({ message: "internal error", type: "api_error" });
       return;
     }
     if (streamIncludeUsage && !finalUsage) {
@@ -1205,7 +1247,11 @@ export async function handleOpenAiHttpRequest(
     stopWatchingDisconnect();
     unsubscribe();
     if (!wroteStopChunk) {
-      writeAssistantFinishChunk(res, { runId, model, finishReason: finalizeFinishReason });
+      writeAssistantFinishChunk(res, {
+        runId,
+        model,
+        finishReason: finalizeRequested.finishReason,
+      });
       wroteStopChunk = true;
     }
     if (streamIncludeUsage && finalUsage) {
@@ -1215,13 +1261,21 @@ export async function handleOpenAiHttpRequest(
     res.end();
   };
 
-  const requestFinalize = (finishReason: "stop" | "tool_calls" = "stop") => {
-    finalizeFinishReason = finishReason;
-    finalizeRequested = true;
+  const requestFinalize = (
+    finishReason: "stop" | "tool_calls" = "stop",
+    outcome?: AgentRunTerminalOutcome,
+  ) => {
+    // Failed attempts remain provisional until a recovered fallback settles.
+    finalizeRequested = { status: "completed", finishReason, ...(outcome ? { outcome } : {}) };
     maybeFinalize();
   };
 
-  const unsubscribe = onAgentEvent((evt) => {
+  const requestFailedStream = (outcome: AgentRunTerminalOutcome) => {
+    finalizeRequested = { status: "failed", outcome };
+    maybeFinalize();
+  };
+
+  unsubscribe = onAgentEvent((evt) => {
     if (evt.runId !== runId) {
       return;
     }
@@ -1274,8 +1328,23 @@ export async function handleOpenAiHttpRequest(
 
     if (evt.stream === "lifecycle") {
       const phase = evt.data?.phase;
-      if (phase === "end" || phase === "error") {
-        requestFinalize();
+      if (phase === "error" || phase === "end") {
+        const incomingOutcome = buildAgentRunTerminalOutcome({
+          status: phase === "error" ? "error" : evt.data?.aborted === true ? "timeout" : "ok",
+          error: evt.data?.error,
+          stopReason: evt.data?.stopReason,
+          livenessState: evt.data?.livenessState,
+          timeoutPhase: evt.data?.timeoutPhase,
+          providerStarted: evt.data?.providerStarted,
+          startedAt: evt.data?.startedAt,
+          endedAt: evt.data?.endedAt,
+        });
+        const outcome = mergeAgentRunTerminalOutcome(finalizeRequested?.outcome, incomingOutcome);
+        if (outcome.reason === "completed") {
+          requestFinalize("stop", outcome);
+        } else {
+          requestFailedStream(outcome);
+        }
       }
     }
   });
@@ -1302,6 +1371,12 @@ export async function handleOpenAiHttpRequest(
       }
 
       finalUsage = resolveChatCompletionUsage(result);
+      const outcome = resolveOpenAiHttpAgentRunTerminalOutcome(result, readFinalization()?.outcome);
+      if (outcome.reason !== "completed") {
+        requestFailedStream(outcome);
+        return;
+      }
+
       const meta = (result as { meta?: unknown } | null)?.meta;
       const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
 
@@ -1315,17 +1390,10 @@ export async function handleOpenAiHttpRequest(
           pendingToolCalls,
         })
       ) {
-        closed = true;
-        stopWatchingDisconnect();
-        unsubscribe();
-        writeSse(res, {
-          error: {
-            message: resolveUnsatisfiedToolChoiceMessage(toolChoiceConstraint),
-            type: "api_error",
-          },
+        finalizeFailedStream({
+          message: resolveUnsatisfiedToolChoiceMessage(toolChoiceConstraint),
+          type: "api_error",
         });
-        writeDone(res);
-        res.end();
         return;
       }
 
@@ -1386,45 +1454,27 @@ export async function handleOpenAiHttpRequest(
       }
       logWarn(`openai-compat: streaming chat completion failed: ${String(err)}`);
       if (isClientToolNameConflictError(err)) {
-        closed = true;
-        stopWatchingDisconnect();
-        unsubscribe();
-        writeSse(res, {
-          error: { message: "invalid tool configuration", type: "invalid_request_error" },
+        finalizeFailedStream({
+          message: "invalid tool configuration",
+          type: "invalid_request_error",
         });
-        writeDone(res);
-        res.end();
         return;
       }
       const mapped = resolveOpenAiCompatError(err);
       if (mapped) {
-        closed = true;
-        stopWatchingDisconnect();
-        unsubscribe();
-        writeSse(res, { error: mapped.error });
-        writeDone(res);
-        res.end();
+        finalizeFailedStream(mapped.error);
         return;
       }
-      const content = "Error: internal error";
-      writeAssistantContentChunk(res, {
-        runId,
-        model,
-        content,
-        finishReason: "stop",
-      });
-      wroteStopChunk = true;
-      finalUsage = {
-        prompt_tokens: 0,
-        completion_tokens: 0,
-        total_tokens: 0,
-      };
+      if (streamIncludeUsage && !finalUsage) {
+        // A rejected run has no provider usage; still honor the opted-in chunk.
+        finalUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+      }
       emitAgentEvent({
         runId,
         stream: "lifecycle",
         data: { phase: "error" },
       });
-      requestFinalize();
+      finalizeFailedStream({ message: "internal error", type: "api_error" });
     } finally {
       releaseRootWork?.();
       if (!closed) {

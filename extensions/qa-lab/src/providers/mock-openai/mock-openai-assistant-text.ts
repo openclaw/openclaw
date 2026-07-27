@@ -46,6 +46,88 @@ import {
   extractSnackPreference,
   isSnackRecallPrompt,
 } from "./mock-openai-tooling.js";
+
+function readCompletedImageGenerationMediaPath(allInputText: string): string | undefined {
+  const eventStart = allInputText.lastIndexOf("[Internal task completion event]");
+  if (eventStart < 0) {
+    return undefined;
+  }
+  const completionEvent = allInputText.slice(eventStart);
+  if (
+    !/^source:\s*image_generation\s*$/im.test(completionEvent) ||
+    !/^status:\s*completed successfully\s*$/im.test(completionEvent)
+  ) {
+    return undefined;
+  }
+  const mediaPath = /^MEDIA:\s*([^\r\n]+)$/im.exec(completionEvent)?.[1]?.trim();
+  return mediaPath || undefined;
+}
+
+export function readCompletedSubagentHandoffResult(allInputText: string): string | undefined {
+  const eventStart = Math.max(
+    allInputText.lastIndexOf("[Internal task completion event]"),
+    allInputText.lastIndexOf(
+      "A background task completed. Use this result to reply to the user in your normal assistant voice.",
+    ),
+  );
+  if (eventStart < 0) {
+    return undefined;
+  }
+  const completionEvent = allInputText.slice(eventStart);
+  if (
+    !/^source:\s*subagent\s*$/im.test(completionEvent) ||
+    !/^task:\s*qa-sidecar\s*$/im.test(completionEvent) ||
+    !/^status:\s*(?:completed successfully|completed; ready for parent review)\s*$/im.test(
+      completionEvent,
+    )
+  ) {
+    return undefined;
+  }
+  const childResult =
+    /^Child result(?:\s*\([^\r\n]*\))?\s*:\s*\r?\n<prompt-data>\s*([\s\S]*?)\s*<\/prompt-data>/im
+      .exec(completionEvent)?.[1]
+      ?.trim();
+  if (!childResult || childResult === "(no output)") {
+    return undefined;
+  }
+  if (childResult.startsWith("{")) {
+    try {
+      const payload: unknown = JSON.parse(childResult);
+      if (
+        payload &&
+        typeof payload === "object" &&
+        "status" in payload &&
+        payload.status === "accepted"
+      ) {
+        return undefined;
+      }
+    } catch {
+      // The protected child result is ordinary user-facing text, not required JSON.
+    }
+  }
+  return childResult.replace(/\s+/g, " ");
+}
+
+export function isSubagentFanoutCompletionRequest(params: {
+  allInputText: string;
+  prompt: string;
+  toolOutput: string;
+}): boolean {
+  if (/subagent fanout synthesis check/i.test(params.prompt)) {
+    return true;
+  }
+  if (/^\s*continue[.!?]?\s*$/iu.test(params.prompt)) {
+    return true;
+  }
+  const toolResult = parseToolOutputJson(params.toolOutput);
+  const childSessionKey =
+    typeof toolResult?.childSessionKey === "string" ? toolResult.childSessionKey : "";
+  return (
+    toolResult?.status === "accepted" &&
+    /(?:^|[:/])(?:qa-fanout-)?beta(?:[:/]|$)/iu.test(childSessionKey)
+  );
+}
+
 export function buildAssistantText(
   input: ResponsesInputItem[],
   body: Record<string, unknown>,
@@ -73,6 +155,21 @@ export function buildAssistantText(
     : "";
   const userTexts = extractAllUserTexts(input);
   const allInputText = extractAllRequestTexts(input, body);
+  const completedImageMediaPath = readCompletedImageGenerationMediaPath(allInputText);
+  if (completedImageMediaPath) {
+    return `Protocol note: generated the QA lighthouse image successfully.\nMEDIA:${completedImageMediaPath}`;
+  }
+  const completedSubagentResult = readCompletedSubagentHandoffResult(allInputText);
+  if (completedSubagentResult) {
+    return [
+      "Delegated task:",
+      "- Inspect the QA workspace via a bounded subagent.",
+      "Result:",
+      `- ${completedSubagentResult}`,
+      "Evidence:",
+      "- The successful qa-sidecar child completed and its actual result was delivered.",
+    ].join("\n");
+  }
   const rememberedFact = extractRememberedFact(userTexts);
   const model = typeof body.model === "string" ? body.model : "";
   const memorySnippet =
@@ -285,7 +382,10 @@ export function buildAssistantText(
     return "FORKED-CONTEXT-ALPHA";
   }
   const fanoutCompleteReply = "subagent-1: ok\nsubagent-2: ok";
-  if (scenarioState.subagentFanoutPhase === 2 && prompt) {
+  if (
+    scenarioState.subagentFanoutPhase === 2 &&
+    isSubagentFanoutCompletionRequest({ allInputText, prompt, toolOutput })
+  ) {
     scenarioState.subagentFanoutPhase = 3;
     return fanoutCompleteReply;
   }

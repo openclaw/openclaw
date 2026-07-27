@@ -156,6 +156,10 @@ const makeConfig = (opts?: { fallbacks?: string[]; apiKey?: string }): OpenClawC
           fallbacks: opts?.fallbacks ?? [],
         },
       },
+      entries: {
+        main: { default: true },
+        test: {},
+      },
     },
     models: {
       providers: {
@@ -187,14 +191,14 @@ const makeAgentOverrideOnlyFallbackConfig = (agentId: string): OpenClawConfig =>
           fallbacks: [],
         },
       },
-      list: [
-        {
-          id: agentId,
+      entries: {
+        main: { default: true },
+        [agentId]: {
           model: {
             fallbacks: ["openai/mock-2"],
           },
         },
-      ],
+      },
     },
     models: {
       providers: {
@@ -222,6 +226,12 @@ const copilotModelId = "gpt-4o";
 
 const makeCopilotConfig = (): OpenClawConfig =>
   ({
+    agents: {
+      entries: {
+        main: { default: true },
+        test: {},
+      },
+    },
     models: {
       providers: {
         "github-copilot": {

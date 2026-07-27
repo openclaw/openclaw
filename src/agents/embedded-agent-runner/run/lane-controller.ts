@@ -40,6 +40,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
   const laneTaskAbortController = new AbortController();
   const laneTaskReleaseController = new AbortController();
   let laneTaskProgressAtMs = Date.now();
+  let pendingGlobalLaneAdmissions = 0;
 
   const noteLaneTaskProgress = () => {
     laneTaskProgressAtMs = Date.now();
@@ -60,11 +61,19 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     abortError.name = "AbortError";
     throw abortError;
   };
-  const withLaneTimeout = (opts?: CommandQueueEnqueueOptions) =>
+  const withLaneTimeout = (
+    opts?: CommandQueueEnqueueOptions,
+    allowPendingGlobalAdmissionHeartbeat = false,
+  ) =>
     withEmbeddedRunLaneTimeout(
       {
         ...opts,
-        taskTimeoutProgressAtMs: () => laneTaskProgressAtMs,
+        // Only the outer session lease may count queued global admission as
+        // progress; an admitted global task must still time out when it stalls.
+        taskTimeoutProgressAtMs: () =>
+          allowPendingGlobalAdmissionHeartbeat && pendingGlobalLaneAdmissions > 0
+            ? Date.now()
+            : laneTaskProgressAtMs,
         taskTimeoutAbortSignal: laneTaskAbortController.signal,
         taskTimeoutAbortGraceMs: EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
         taskTimeoutReleaseSignal: laneTaskReleaseController.signal,
@@ -105,11 +114,22 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     // Global-lane admission is healthy waiting, not run execution. Keep reply
     // staleness and stuck recovery fenced until this queue grants capacity.
     options.getParams().replyOperation?.markWaitingForGlobalLane();
+    pendingGlobalLaneAdmissions += 1;
+    let waitingForGlobalLaneAdmission = true;
+    const finishGlobalLaneAdmission = () => {
+      if (!waitingForGlobalLaneAdmission) {
+        return;
+      }
+      waitingForGlobalLaneAdmission = false;
+      pendingGlobalLaneAdmissions -= 1;
+    };
     const globalOpts: CommandQueueEnqueueOptions = {
       ...opts,
       priority: sessionQueuePriority,
     };
     const taskWithCurrentLifecycle = async () => {
+      finishGlobalLaneAdmission();
+      noteLaneTaskProgress();
       let params = options.getParams();
       params.onLaneWait?.({ waitMs: 0, queuedAhead: 0, waiting: false });
       params.replyOperation?.markGlobalLaneWaitEnded();
@@ -160,15 +180,22 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
       );
     };
     const params = options.getParams();
-    if (params.enqueue) {
-      return params.enqueue(taskWithCurrentLifecycle, withLaneTimeout(withRunLaneWait(globalOpts)));
+    try {
+      if (params.enqueue) {
+        return params
+          .enqueue(taskWithCurrentLifecycle, withLaneTimeout(withRunLaneWait(globalOpts)))
+          .finally(finishGlobalLaneAdmission);
+      }
+      noteLaneWaitIfBusy(options.globalLane);
+      return enqueueCommandInLane(
+        options.globalLane,
+        taskWithCurrentLifecycle,
+        withLaneTimeout(withRunLaneWait(globalOpts)),
+      ).finally(finishGlobalLaneAdmission);
+    } catch (error) {
+      finishGlobalLaneAdmission();
+      throw error;
     }
-    noteLaneWaitIfBusy(options.globalLane);
-    return enqueueCommandInLane(
-      options.globalLane,
-      taskWithCurrentLifecycle,
-      withLaneTimeout(withRunLaneWait(globalOpts)),
-    );
   };
   const enqueueSession = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
     const sessionOpts: CommandQueueEnqueueOptions = { ...opts, priority: sessionQueuePriority };
@@ -178,13 +205,16 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     };
     const params = options.getParams();
     if (params.enqueue) {
-      return params.enqueue(taskWithLaneAdmission, withRunLaneWait(sessionOpts));
+      return params.enqueue(
+        taskWithLaneAdmission,
+        withLaneTimeout(withRunLaneWait(sessionOpts), true),
+      );
     }
     noteLaneWaitIfBusy(options.sessionLane);
     return enqueueCommandInLane(
       options.sessionLane,
       taskWithLaneAdmission,
-      withRunLaneWait(sessionOpts),
+      withLaneTimeout(withRunLaneWait(sessionOpts), true),
     );
   };
 

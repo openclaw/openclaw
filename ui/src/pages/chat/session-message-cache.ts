@@ -3,13 +3,13 @@ import {
   DEFAULT_MAIN_KEY,
   isUiGlobalSessionKey,
   normalizeAgentId,
+  normalizeSessionKeyForUiComparison,
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
   resolveUiSelectedGlobalAgentId,
   type UiSessionDefaultsHost,
 } from "../../lib/sessions/session-key.ts";
-import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import { readTranscriptSequence } from "./history-merge.ts";
 import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
@@ -64,8 +64,13 @@ function resolveCacheAgentId(host: ChatMessageCacheHost, target: ChatMessageCach
 }
 
 function resolveCanonicalSessionKey(host: ChatMessageCacheHost, sessionKey: string): string {
-  const parsed = parseAgentSessionKey(sessionKey);
-  const normalized = normalizeLowercaseStringOrEmpty(parsed?.rest ?? sessionKey);
+  const canonicalSessionKey = normalizeSessionKeyForUiComparison(sessionKey);
+  const parsed = parseAgentSessionKey(canonicalSessionKey);
+  // Matrix room IDs and Signal group IDs are case-sensitive. Strip only
+  // the canonical agent prefix after the shared comparator preserves them.
+  const normalized = parsed
+    ? canonicalSessionKey.split(":").slice(2).join(":")
+    : canonicalSessionKey;
   const configuredMainKey = resolveUiConfiguredMainKey(host);
   return isUiGlobalSessionKey(sessionKey) ||
     normalized === DEFAULT_MAIN_KEY ||

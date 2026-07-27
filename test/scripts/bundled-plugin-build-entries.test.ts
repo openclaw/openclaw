@@ -224,6 +224,9 @@ describe("bundled plugin build entries", () => {
     expect(entries["extensions/slack/index"]).toBe("extensions/slack/index.ts");
     expect(entries["extensions/slack/setup-entry"]).toBe("extensions/slack/setup-entry.ts");
     expect(entries["extensions/msteams/index"]).toBe("extensions/msteams/index.ts");
+    expect(entries["extensions/msteams/configured-state"]).toBe(
+      "extensions/msteams/configured-state.ts",
+    );
     expect(entries["extensions/clawrouter/index"]).toBe("extensions/clawrouter/index.ts");
     expect(entryKeys.findIndex((entry) => entry.startsWith("extensions/clickclack/"))).toBeLessThan(
       entryKeys.findIndex((entry) => entry.startsWith("extensions/slack/")),

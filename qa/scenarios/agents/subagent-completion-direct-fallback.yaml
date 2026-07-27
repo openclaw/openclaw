@@ -80,6 +80,26 @@ flow:
                   expr: "(await runQaCli(env, ['tasks', 'list', '--json', '--runtime', 'subagent'], { timeoutMs: liveTurnTimeoutMs(env, 60000), json: true }).catch((error) => ({ error: String(error?.message ?? error) })))"
               - throw:
                   expr: "`subagent fallback marker missing: ${fallbackError?.message ?? fallbackError}; outbound=${recentOutboundSummary(state, 8)} tasks=${JSON.stringify(fallbackTasks)} requests=${JSON.stringify(fallbackDebugRequests)}`"
+        - call: waitForCondition
+          saveAs: fallbackChild
+          args:
+            - lambda:
+                async: true
+                expr: "(async () => { const store = await readRawQaSessionStore(env); return Object.entries(store).map(([key, entry]) => ({ ...entry, key })).find((entry) => entry.spawnedBy === sessionKey && entry.label === config.expectedLabel); })().catch(() => undefined)"
+            - expr: liveTurnTimeoutMs(env, 30000)
+            - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
+        - call: waitForCondition
+          saveAs: deliveredTask
+          args:
+            - lambda:
+                async: true
+                expr: "(async () => { const payload = await runQaCli(env, ['tasks', 'list', '--json', '--runtime', 'subagent'], { timeoutMs: liveTurnTimeoutMs(env, 60000), json: true }); return (payload.tasks ?? []).find((task) => task.requesterSessionKey === sessionKey && task.childSessionKey === fallbackChild.key && task.label === config.expectedLabel && task.deliveryStatus === 'delivered' && task.status === 'succeeded') ?? undefined; })().catch(() => undefined)"
+            - expr: liveTurnTimeoutMs(env, 60000)
+            - 250
+        - assert:
+            expr: "fallbackChild.spawnedBy === sessionKey && fallbackChild.label === config.expectedLabel && deliveredTask.requesterSessionKey === sessionKey && deliveredTask.childSessionKey === fallbackChild.key && deliveredTask.label === config.expectedLabel && deliveredTask.deliveryStatus === 'delivered' && deliveredTask.status === 'succeeded'"
+            message:
+              expr: "`expected a delivered successful task owned by ${sessionKey}, got child=${JSON.stringify(fallbackChild)} task=${JSON.stringify(deliveredTask)}`"
         - if:
             expr: "Boolean(env.mock)"
             then:
@@ -94,15 +114,4 @@ flow:
                   expr: "fallbackDebugRequests.some((request) => /subagent direct fallback qa check/i.test(String(request.allInputText ?? '')) && request.plannedToolName === 'sessions_yield')"
                   message:
                     expr: "`expected sessions_yield for yielded fallback scenario, saw ${JSON.stringify(fallbackDebugRequests.map((request) => request.plannedToolName ?? null))}`"
-              - call: waitForCondition
-                saveAs: deliveredTask
-                args:
-                  - lambda:
-                      expr: "(async () => { const payload = await runQaCli(env, ['tasks', 'list', '--json', '--runtime', 'subagent'], { timeoutMs: liveTurnTimeoutMs(env, 60000), json: true }); return (payload.tasks ?? []).find((task) => task.label === config.expectedLabel && task.deliveryStatus === 'delivered' && task.status === 'succeeded') ?? null; })()"
-                  - expr: liveTurnTimeoutMs(env, 60000)
-                  - 250
-              - assert:
-                  expr: "deliveredTask.deliveryStatus === 'delivered'"
-                  message:
-                    expr: "`expected delivered task status for ${config.expectedLabel}, got ${JSON.stringify(deliveredTask)}`"
       detailsExpr: "outbound.text"

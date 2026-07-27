@@ -690,6 +690,24 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain("direct/DM targets by default");
   });
 
+  it("warns at the canonical config path for a keyed agent's implicit heartbeat directPolicy", async () => {
+    const cfg = {
+      agents: {
+        entries: {
+          main: { default: true },
+          ops: { heartbeat: { target: "last" } },
+        },
+      },
+    } as OpenClawConfig;
+
+    await noteSecurityWarnings(cfg);
+
+    const message = lastMessage();
+    expect(message).toContain('Heartbeat agent "ops"');
+    expect(message).toContain("agents.entries.ops.heartbeat.directPolicy");
+    expect(message).toContain("direct/DM targets by default");
+  });
+
   it("degrades safely when channel account resolution fails in read-only security checks", async () => {
     pluginRegistry.list = [
       {
@@ -731,15 +749,15 @@ describe("noteSecurityWarnings gateway exposure", () => {
             target: "none",
           },
         },
-        list: [
-          {
-            id: "ops",
+        entries: {
+          main: { default: true },
+          ops: {
             heartbeat: {
               target: "last",
               directPolicy: "block",
             },
           },
-        ],
+        },
       },
     } as OpenClawConfig;
     await noteSecurityWarnings(cfg);

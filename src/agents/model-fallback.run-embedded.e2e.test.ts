@@ -101,6 +101,10 @@ function makeConfig(primaryProvider = "openai"): OpenClawConfig {
           fallbacks: ["groq/mock-2"],
         },
       },
+      entries: {
+        main: { default: true },
+        test: {},
+      },
     },
     models: {
       providers: {

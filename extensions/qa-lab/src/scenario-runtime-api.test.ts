@@ -32,6 +32,7 @@ function createDeps(overrides?: Partial<QaScenarioRuntimeDeps>): QaScenarioRunti
     waitForGatewayHealthy: fn,
     waitForTransportReady: fn,
     waitForQaChannelReady: fn,
+    startQaOtlpTraceReceiver: fn,
     browserRequest: fn,
     waitForBrowserReady: fn,
     browserOpenTab: fn,
