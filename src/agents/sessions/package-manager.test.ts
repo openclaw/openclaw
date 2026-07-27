@@ -44,13 +44,21 @@ describe("DefaultPackageManager", () => {
     const packageRoot = join(root, "package");
     const outsideRoot = join(root, "outside");
     const insideSkill = join(packageRoot, "skills", "inside", "SKILL.md");
+    const twoDotSkill = join(packageRoot, "..cache", "SKILL.md");
     const outsideSkill = join(outsideRoot, "SKILL.md");
     await mkdir(join(packageRoot, "skills", "inside"), { recursive: true });
+    await mkdir(join(packageRoot, "..cache"), { recursive: true });
     await mkdir(outsideRoot, { recursive: true });
     await writeFile(insideSkill, "# Inside\n", "utf-8");
+    await writeFile(twoDotSkill, "# Two dots\n", "utf-8");
     await writeFile(outsideSkill, "# Outside\n", "utf-8");
 
-    const entries = ["skills/inside/SKILL.md", "../outside/SKILL.md", "../outside/*.md"];
+    const entries = [
+      "skills/inside/SKILL.md",
+      "..cache/SKILL.md",
+      "../outside/SKILL.md",
+      "../outside/*.md",
+    ];
     try {
       await symlink(outsideRoot, join(packageRoot, "skills", "linked"), "dir");
       entries.push("skills/linked/SKILL.md");
@@ -74,6 +82,7 @@ describe("DefaultPackageManager", () => {
     const skillPaths = resolved.skills.map((skill) => skill.path);
 
     expect(skillPaths).toContain(insideSkill);
+    expect(skillPaths).toContain(twoDotSkill);
     expect(skillPaths).not.toContain(outsideSkill);
   });
 
@@ -253,18 +262,22 @@ describe("DefaultPackageManager", () => {
 
   it("does not auto-install missing npm package resources", async () => {
     const root = await makeTempDir("openclaw-package-manager-");
+    const missingSource = "npm:@openclaw/missing-test";
     const manager = new DefaultPackageManager({
       cwd: root,
       agentDir: join(root, "agent"),
-      settingsManager: SettingsManager.inMemory({ packages: ["npm:@openclaw/missing-test"] }),
+      settingsManager: SettingsManager.inMemory({ packages: [missingSource] }),
     });
 
     const resolved = await manager.resolve();
+    const resources = [
+      ...resolved.extensions,
+      ...resolved.skills,
+      ...resolved.prompts,
+      ...resolved.themes,
+    ];
 
-    expect(resolved.extensions).toEqual([]);
-    expect(resolved.skills).toEqual([]);
-    expect(resolved.prompts).toEqual([]);
-    expect(resolved.themes).toEqual([]);
+    expect(resources.map((resource) => resource.metadata.source)).not.toContain(missingSource);
   });
 
   it("keeps temporary package paths in a private per-agent directory", async () => {

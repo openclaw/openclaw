@@ -10,6 +10,7 @@ import path from "node:path";
 import { extractFrontmatterBlock } from "../../packages/markdown-core/src/frontmatter.js";
 import { openRootFile } from "../infra/boundary-file-read.js";
 import { pathExists } from "../infra/fs-safe.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { retryAsync } from "../infra/retry.js";
 import {
   CANONICAL_ROOT_MEMORY_FILENAME,
@@ -1047,8 +1048,7 @@ async function* walkWorkspaceFiles(
   while (stack.length > 0) {
     const currentRelativeDir = stack.pop() ?? "";
     const currentDir = path.resolve(workspaceDir, currentRelativeDir);
-    const relativeToWorkspace = path.relative(workspaceDir, currentDir);
-    if (relativeToWorkspace.startsWith("..") || path.isAbsolute(relativeToWorkspace)) {
+    if (!isPathInside(workspaceDir, currentDir)) {
       continue;
     }
 
