@@ -3,7 +3,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { loadExtraBootstrapFilesWithDiagnostics } from "./workspace.js";
 
 describe("loadExtraBootstrapFilesWithDiagnostics", () => {
@@ -66,6 +66,31 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
         missing: false,
       },
     ]);
+  });
+
+  it("loads fallback glob matches from a child directory starting with two dots", async () => {
+    const workspaceDir = await createWorkspaceDir("glob-two-dots");
+    const packageDir = path.join(workspaceDir, "..cache");
+    await fs.mkdir(packageDir, { recursive: true });
+    await fs.writeFile(path.join(packageDir, "AGENTS.md"), "agents", "utf-8");
+    const globSpy = vi.spyOn(fs, "glob").mockImplementation(() => {
+      throw new Error("force local glob fallback");
+    });
+
+    try {
+      const files = await loadExtraBootstrapFileList(workspaceDir, ["..cache/*.md"]);
+
+      expect(files).toStrictEqual([
+        {
+          name: "AGENTS.md",
+          path: path.join(packageDir, "AGENTS.md"),
+          content: "agents",
+          missing: false,
+        },
+      ]);
+    } finally {
+      globSpy.mockRestore();
+    }
   });
 
   it("loads literal bootstrap paths with square brackets", async () => {

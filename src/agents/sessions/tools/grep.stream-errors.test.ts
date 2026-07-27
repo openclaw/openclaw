@@ -2,6 +2,7 @@
 // promise instead of crashing the agent runtime.
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
+import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { spawnCommand } from "../../../process/exec.js";
@@ -188,6 +189,34 @@ describe("grep tool stream errors", () => {
 
     resolveReadFile?.("foo\n");
     await Promise.resolve();
+  });
+
+  it("preserves relative paths for child directories whose names start with two dots", async () => {
+    const child = createChild();
+    vi.mocked(spawnCommand).mockReturnValue(child as never);
+    vi.mocked(ensureTool).mockResolvedValue("rg");
+
+    const cwd = path.join(process.cwd(), "search-root");
+    const tool = createGrepToolDefinition(cwd, {
+      operations: { isDirectory: () => true, readFile: () => "" },
+    });
+    const result = tool.execute("call-1", { pattern: "foo" }, undefined, undefined, {} as never);
+    await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
+    child.stdout.write(
+      `${JSON.stringify({
+        type: "match",
+        data: {
+          path: { text: path.join(cwd, "..cache", "match.txt") },
+          line_number: 1,
+          lines: { text: "foo\n" },
+        },
+      })}\n`,
+    );
+    child.emit("close", 0);
+
+    await expect(result).resolves.toMatchObject({
+      content: [{ type: "text", text: "..cache/match.txt:1: foo" }],
+    });
   });
 
   it.each(["stdout", "stderr"] as const)(

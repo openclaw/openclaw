@@ -8,6 +8,7 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { isPathInside } from "../../../infra/path-guards.js";
 import { releaseChildProcessOutputAfterExit } from "../../../process/child-process.js";
 import { spawnCommand } from "../../../process/exec.js";
 import type { AgentTool } from "../../runtime/index.js";
@@ -229,7 +230,7 @@ export function createGrepToolDefinition(
             const formatPath = (filePath: string): string => {
               if (isDirectory) {
                 const relative = path.relative(searchPath, filePath);
-                if (relative && !relative.startsWith("..")) {
+                if (relative && isPathInside(searchPath, filePath)) {
                   return relative.replace(/\\/g, "/");
                 }
               }

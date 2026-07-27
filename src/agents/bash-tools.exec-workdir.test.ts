@@ -19,6 +19,10 @@ async function withTempDir(run: (dir: string) => Promise<void>) {
   }
 }
 
+async function symlinkDirectory(target: string, linkPath: string): Promise<void> {
+  await symlink(target, linkPath, process.platform === "win32" ? "junction" : "dir");
+}
+
 function sandboxConfig(workspaceDir: string): BashSandboxConfig {
   return {
     containerName: "sandbox-workdir-test",
@@ -235,7 +239,7 @@ describe("resolveExecWorkdir", () => {
   it("rejects sandbox workdir symlinks that escape the workspace", async () => {
     await withTempDir(async (workspaceDir) => {
       await withTempDir(async (outsideDir) => {
-        await symlink(outsideDir, path.join(workspaceDir, "escape"), "dir");
+        await symlinkDirectory(outsideDir, path.join(workspaceDir, "escape"));
 
         await expect(
           resolveExecWorkdir({
@@ -450,29 +454,52 @@ describe("resolveExecWorkdir", () => {
     });
   });
 
-  it("defers missing absolute backend workdirs to remote validation when roots overlap", async () => {
+  it("maps host workspace paths whose child directory starts with two dots", async () => {
     await withTempDir(async (workspaceDir) => {
-      const missingRemoteDir = path.join(workspaceDir, "generated");
-      const validateWorkdir = vi.fn(async (workdir: string) => workdir);
+      const localDir = path.join(workspaceDir, "..cache");
+      await mkdir(localDir);
 
       await expect(
         resolveExecWorkdir({
           host: "sandbox",
-          workdir: missingRemoteDir,
-          sandbox: backendSandboxConfig(workspaceDir, {
-            containerWorkdir: workspaceDir,
-            validateWorkdir,
-          }),
+          workdir: localDir,
+          sandbox: backendSandboxConfig(workspaceDir),
         }),
       ).resolves.toEqual({
         kind: "sandbox",
-        hostCwd: workspaceDir,
-        containerCwd: missingRemoteDir,
-        scriptPreflightCwd: null,
+        hostCwd: localDir,
+        containerCwd: "/remote/workspace/..cache",
+        scriptPreflightCwd: localDir,
       });
-      expect(validateWorkdir).toHaveBeenCalledWith(missingRemoteDir);
     });
   });
+
+  it.runIf(process.platform !== "win32")(
+    "defers missing absolute backend workdirs to remote validation when roots overlap",
+    async () => {
+      await withTempDir(async (workspaceDir) => {
+        const missingRemoteDir = path.join(workspaceDir, "generated");
+        const validateWorkdir = vi.fn(async (workdir: string) => workdir);
+
+        await expect(
+          resolveExecWorkdir({
+            host: "sandbox",
+            workdir: missingRemoteDir,
+            sandbox: backendSandboxConfig(workspaceDir, {
+              containerWorkdir: workspaceDir,
+              validateWorkdir,
+            }),
+          }),
+        ).resolves.toEqual({
+          kind: "sandbox",
+          hostCwd: workspaceDir,
+          containerCwd: missingRemoteDir,
+          scriptPreflightCwd: null,
+        });
+        expect(validateWorkdir).toHaveBeenCalledWith(missingRemoteDir);
+      });
+    },
+  );
 
   it("maps missing absolute host workspace paths before backend validation", async () => {
     await withTempDir(async (workspaceDir) => {
@@ -501,7 +528,7 @@ describe("resolveExecWorkdir", () => {
     await withTempDir(async (workspaceDir) => {
       await withTempDir(async (outsideDir) => {
         const escape = path.join(workspaceDir, "escape");
-        await symlink(outsideDir, escape, "dir");
+        await symlinkDirectory(outsideDir, escape);
 
         await expect(
           resolveExecWorkdir({

@@ -37,6 +37,7 @@ export type SandboxResolvedFsPath = {
 type ParsedBindMount = {
   hostRoot: string;
   containerRoot: string;
+  containerPathAliased: boolean;
   writable: boolean;
 };
 
@@ -59,9 +60,11 @@ function parseSandboxBindMount(spec: string): ParsedBindMount | null {
   const optionsToken = normalizeOptionalLowercaseString(parsed.options) ?? "";
   const optionParts = optionsToken ? normalizeStringEntries(optionsToken.split(",")) : [];
   const writable = !optionParts.includes("ro");
+  const containerRoot = normalizeContainerPath(containerToken);
   return {
     hostRoot: path.resolve(hostToken),
-    containerRoot: normalizeContainerPath(containerToken),
+    containerRoot,
+    containerPathAliased: normalizeContainerPath(hostToken) !== containerRoot,
     writable,
   };
 }
@@ -130,7 +133,7 @@ export function resolveWritableSandboxBindHostRoots(
     if (
       !parsed.writable ||
       seen.has(parsed.hostRoot) ||
-      readonlyRoots.some((root) => isHostPathWithinOrEqual(parsed.hostRoot, root))
+      readonlyRoots.some((root) => isPathInside(parsed.hostRoot, root))
     ) {
       continue;
     }
@@ -142,7 +145,7 @@ export function resolveWritableSandboxBindHostRoots(
 
 export function hasSandboxBindContainerPathAliases(binds: readonly string[] | undefined): boolean {
   for (const parsed of parseSandboxBindMounts(binds)) {
-    if (parsed.hostRoot !== parsed.containerRoot) {
+    if (parsed.containerPathAliased) {
       return true;
     }
   }
@@ -154,7 +157,7 @@ export function hasSandboxBindReadonlyHostShadows(binds: readonly string[] | und
   const writableRoots = parsedBinds.filter((bind) => bind.writable).map((bind) => bind.hostRoot);
   const readonlyRoots = parsedBinds.filter((bind) => !bind.writable).map((bind) => bind.hostRoot);
   return writableRoots.some((writableRoot) =>
-    readonlyRoots.some((readonlyRoot) => isHostPathWithinOrEqual(writableRoot, readonlyRoot)),
+    readonlyRoots.some((readonlyRoot) => isPathInside(writableRoot, readonlyRoot)),
   );
 }
 
@@ -306,7 +309,7 @@ function formatSandboxRootEscapeMessage(params: {
 function shortenHomePath(value: string): string {
   const home = os.homedir();
   if (value === home || value.startsWith(`${home}${path.sep}`)) {
-    return `~${value.slice(home.length)}`;
+    return `~${value.slice(home.length).split(path.sep).join(path.posix.sep)}`;
   }
   return value;
 }
@@ -385,11 +388,6 @@ function isPathInsideHost(root: string, target: string): boolean {
   );
   const canonicalTarget = path.resolve(canonicalTargetParent, path.basename(resolvedTarget));
   return isPathInside(canonicalRoot, canonicalTarget);
-}
-
-function isHostPathWithinOrEqual(root: string, target: string): boolean {
-  const relative = path.relative(path.resolve(root), path.resolve(target));
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 function toHostSegments(relativePosix: string): string[] {

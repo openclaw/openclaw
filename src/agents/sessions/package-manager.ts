@@ -15,8 +15,9 @@ import {
   statSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { minimatch } from "minimatch";
+import { isPathInside } from "../../infra/path-guards.js";
 import { addIgnoreRules, toPosixPath, type IgnoreMatcher } from "../../shared/ignore-rules.js";
 import { CONFIG_DIR_NAME } from "../config.js";
 import { type GitSource, parseGitUrl } from "../utils/git.js";
@@ -546,8 +547,7 @@ function resolveRealPathIfPossible(path: string): string {
 }
 
 function isPathWithinRoot(root: string, candidate: string): boolean {
-  const rel = relative(root, candidate);
-  return rel === "" || (rel !== "" && !rel.startsWith("..") && !isAbsolute(rel));
+  return isPathInside(root, candidate);
 }
 
 function isRealPathWithinRoot(root: string, candidate: string): boolean {

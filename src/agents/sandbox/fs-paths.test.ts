@@ -51,6 +51,15 @@ describe("sandbox bind mounts", () => {
     ).toEqual([path.resolve("/tmp/readonly-parent/work")]);
   });
 
+  it("omits writable bind roots shadowed by a two-dot-prefixed child", () => {
+    expect(
+      resolveWritableSandboxBindHostRoots([
+        "/tmp/data:/tmp/data:rw",
+        "/tmp/data/..protected:/tmp/data/..protected:ro",
+      ]),
+    ).toEqual([]);
+  });
+
   it("detects bind mounts whose container path differs from the host path", () => {
     expect(hasSandboxBindContainerPathAliases(["/tmp/data:/tmp/data:rw"])).toBe(false);
     expect(hasSandboxBindContainerPathAliases(["/tmp/data:/data:rw"])).toBe(true);
@@ -70,6 +79,15 @@ describe("sandbox bind mounts", () => {
         "/tmp/data/work:/tmp/data/work:rw",
       ]),
     ).toBe(false);
+  });
+
+  it("detects a read-only bind shadow whose child name starts with two dots", () => {
+    expect(
+      hasSandboxBindReadonlyHostShadows([
+        "/tmp/data:/tmp/data:rw",
+        "/tmp/data/..protected:/tmp/data/..protected:ro",
+      ]),
+    ).toBe(true);
   });
 });
 
