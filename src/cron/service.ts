@@ -178,6 +178,16 @@ export class CronService implements CronServiceContract {
     await ops.recordExternalFailure(this.state, id, error, statePatch, source);
   }
 
+  async recordDetachedMediaFailure(params: {
+    requesterSessionKey: string;
+    taskId: string;
+    runId: string;
+    toolName: string;
+    error: string;
+  }): Promise<void> {
+    await ops.recordDetachedMediaFailure(this.state, params);
+  }
+
   async updateExternalState(
     id: string,
     streamScheduleKey: string,

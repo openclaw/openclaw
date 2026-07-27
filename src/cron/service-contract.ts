@@ -52,6 +52,13 @@ export interface CronServiceContract {
   remove(id: string, opts?: { systemOwned?: boolean }): Promise<CronRemoveResult>;
   run(id: string, mode?: CronRunMode, opts?: CronServiceRunOptions): Promise<CronServiceRunResult>;
   enqueueRun(id: string, mode?: CronRunMode): Promise<CronServiceRunResult>;
+  recordDetachedMediaFailure(params: {
+    requesterSessionKey: string;
+    taskId: string;
+    runId: string;
+    toolName: string;
+    error: string;
+  }): Promise<void>;
   getJob(id: string): CronJob | undefined;
   readJob(id: string): Promise<CronJob | undefined>;
   getDefaultAgentId(): string | undefined;

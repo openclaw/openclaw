@@ -32,6 +32,9 @@ const cronContinuationCleanupMocks = vi.hoisted(() => ({
 const sessionMocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn<() => SessionEntry | undefined>(() => undefined),
 }));
+const cronFailureRecorderMocks = vi.hoisted(() => ({
+  getDetachedMediaCronFailureRecorder: vi.fn(),
+}));
 
 vi.mock("../subagent-announce-delivery.js", () => subagentAnnounceDeliveryMocks);
 vi.mock("../../config/sessions/session-accessor.js", async () => ({
@@ -44,6 +47,7 @@ vi.mock("../../config/sessions/session-accessor.js", async () => ({
 vi.mock("../../tasks/detached-task-runtime.js", () => detachedTaskRuntimeMocks);
 vi.mock("../../tasks/task-registry-delivery-runtime.js", () => taskRegistryDeliveryRuntimeMocks);
 vi.mock("../../tasks/cron-run-continuation-cleanup.js", () => cronContinuationCleanupMocks);
+vi.mock("../../cron/detached-media-failure-recorder.js", () => cronFailureRecorderMocks);
 
 import {
   createMediaGenerationTaskLifecycle,
@@ -63,6 +67,8 @@ beforeEach(() => {
   taskRegistryDeliveryRuntimeMocks.sendMessage.mockReset();
   cronContinuationCleanupMocks.removeCronRunContinuationSessionIfIdle.mockClear();
   sessionMocks.loadSessionEntry.mockReset().mockReturnValue(undefined);
+  cronFailureRecorderMocks.getDetachedMediaCronFailureRecorder.mockReset();
+  cronFailureRecorderMocks.getDetachedMediaCronFailureRecorder.mockReturnValue(undefined);
 });
 
 function createImageMediaLifecycle() {
@@ -797,6 +803,55 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
       }),
     );
     expect(lifecycle.completeTaskRun).not.toHaveBeenCalled();
+  });
+
+  it("marks the originating cron job failed when detached generation fails", async () => {
+    const scheduled: Array<() => Promise<void>> = [];
+    const generationError = new Error("provider high-demand 503");
+    const recordCronFailure = vi.fn(async () => {});
+    cronFailureRecorderMocks.getDetachedMediaCronFailureRecorder.mockReturnValue(recordCronFailure);
+    const lifecycle = {
+      createTaskRun: vi.fn(),
+      recordTaskProgress: vi.fn(),
+      completeTaskRun: vi.fn(),
+      failTaskRun: vi.fn(),
+      wakeTaskCompletion: vi.fn(async () => ({ status: "delivered" as const })),
+    };
+
+    scheduleMediaGenerationTaskCompletion({
+      lifecycle,
+      handle: {
+        taskId: "task-music-generation-error",
+        runId: "tool:music_generate:generation-error",
+        requesterSessionKey: "agent:main:cron:hourly-music-track:run:1784982758437",
+        taskLabel: "proof music",
+      },
+      scheduleBackgroundWork: (work) => {
+        scheduled.push(work);
+      },
+      progressSummary: "Generating music",
+      toolName: "Music generation",
+      onWakeFailure: vi.fn(),
+      run: async () => {
+        throw generationError;
+      },
+    });
+
+    await scheduled[0]?.();
+
+    expect(recordCronFailure).toHaveBeenCalledWith({
+      requesterSessionKey: "agent:main:cron:hourly-music-track:run:1784982758437",
+      taskId: "task-music-generation-error",
+      runId: "tool:music_generate:generation-error",
+      toolName: "Music generation",
+      error: "Detached Music generation failed: provider high-demand 503",
+    });
+    expect(lifecycle.wakeTaskCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "error",
+        result: "provider high-demand 503",
+      }),
+    );
   });
 });
 
