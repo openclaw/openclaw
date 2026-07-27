@@ -82,7 +82,6 @@ import {
   filterToolResultMediaUrls,
   isToolResultError,
   isToolResultTimedOut,
-  messagingToolSendResolvesToCurrentSource,
   sanitizeToolArgs,
   sanitizeToolResult,
   truncateLiveExecOutput,
@@ -1513,18 +1512,17 @@ export async function handleToolExecutionEnd(
   const messageText = isMessagingSend ? readMessagingText(startArgs) : undefined;
   const argumentMediaUrls = isMessagingSend ? collectMessagingMediaUrlsFromRecord(startArgs) : [];
   const hasRichContent = isMessagingSend && hasMessagingRichContent(startArgs);
-  const messagingRouteOptions = {
-    config: ctx.params.config,
-    currentChannelId: ctx.params.currentChannelId,
-    currentMessagingTarget: ctx.params.currentMessagingTarget,
-    currentThreadId:
-      ctx.params.currentThreadId ?? parseSessionThreadInfoFast(ctx.params.sessionKey).threadId,
-    currentMessageId: ctx.params.currentMessageId,
-    replyToMode: ctx.params.replyToMode,
-    hasRepliedRef: startData?.hasRepliedRef,
-  };
   const messageTarget = hasMessagingTargetEvidence
-    ? extractMessagingToolSend(toolName, messagingArgs, messagingRouteOptions)
+    ? extractMessagingToolSend(toolName, messagingArgs, {
+        config: ctx.params.config,
+        currentChannelId: ctx.params.currentChannelId,
+        currentMessagingTarget: ctx.params.currentMessagingTarget,
+        currentThreadId:
+          ctx.params.currentThreadId ?? parseSessionThreadInfoFast(ctx.params.sessionKey).threadId,
+        currentMessageId: ctx.params.currentMessageId,
+        replyToMode: ctx.params.replyToMode,
+        hasRepliedRef: startData?.hasRepliedRef,
+      })
     : undefined;
   const committedMediaUrls =
     didDeliverMessagingResult && isMessagingSend
@@ -1562,18 +1560,6 @@ export async function handleToolExecutionEnd(
         args: startArgs,
         result,
         isError: isToolError,
-        // Loopback/in-process embedded sends don't always carry the
-        // gateway's trusted current-source route tag (the turn capability
-        // that mints it isn't threaded into every embedded call site). Verify
-        // the route directly so an explicit-route reply to the current
-        // source still counts as delivered and does not trip stranded-reply
-        // recovery (openclaw-kg9, openclaw-p3j).
-        allowExplicitSourceRoute: messagingToolSendResolvesToCurrentSource(
-          toolName,
-          messagingArgs,
-          ctx.params.messageChannel,
-          messagingRouteOptions,
-        ),
       })
     ) {
       ctx.state.messageToolOnlySourceReplyDelivered = true;
