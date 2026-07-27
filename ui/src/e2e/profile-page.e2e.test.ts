@@ -220,6 +220,112 @@ describeControlUiE2e("Control UI profile page mocked Gateway E2E", () => {
     }
   });
 
+  it.each([
+    { mode: "resolved" as const, description: "authenticates the resolved assistant avatar" },
+    { mode: "missing" as const, description: "falls back when the assistant image is missing" },
+  ])("$description in the current Personal settings", async ({ mode }) => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { width: 1280, height: 800 },
+    });
+    const page = await context.newPage();
+    const gatewayUrl = server.baseUrl.replace(/^http/u, "ws").replace(/\/$/u, "");
+    await page.addInitScript((sameOriginGatewayUrl) => {
+      (
+        window as Window & {
+          ["__OPENCLAW_NATIVE_CONTROL_AUTH__"]?: { gatewayUrl: string; token: string };
+        }
+      )["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = {
+        gatewayUrl: sameOriginGatewayUrl,
+        token: "test",
+      };
+    }, gatewayUrl);
+
+    const requests: Array<{ authorization?: string; metadata: boolean }> = [];
+    await page.route(/\/avatar\/main(?:\?meta=1)?$/u, async (route) => {
+      const request = route.request();
+      const metadata = new URL(request.url()).searchParams.get("meta") === "1";
+      requests.push({ authorization: request.headers().authorization, metadata });
+      if (metadata) {
+        await route.fulfill({
+          body: JSON.stringify({ avatarUrl: "/avatar/main", avatarStatus: "local" }),
+          contentType: "application/json",
+          status: request.headers().authorization === "Bearer e2e-device-token" ? 200 : 401,
+        });
+        return;
+      }
+      if (mode === "missing" || request.headers().authorization !== "Bearer e2e-device-token") {
+        await route.fulfill({ status: mode === "missing" ? 404 : 401 });
+        return;
+      }
+      await route.fulfill({
+        body: Buffer.from(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/a6kAAAAASUVORK5CYII=",
+          "base64",
+        ),
+        contentType: "image/png",
+        status: 200,
+      });
+    });
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "usage.cost": usageCostResponse,
+        "sessions.usage": sessionsUsageResponse,
+        "agents.list": {
+          agents: [
+            {
+              id: "main",
+              identity: {
+                avatar: "rei-avatar.png",
+                avatarUrl: "/avatar/main",
+                name: "Rei",
+              },
+              name: "Rei",
+            },
+          ],
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+        },
+        "agent.identity.get": {
+          agentId: "main",
+          avatar: "rei-avatar.png",
+          avatarSource: "IDENTITY.md",
+          avatarStatus: "local",
+          name: "Rei",
+        },
+      },
+    });
+
+    try {
+      const response = await page.goto(`${server.baseUrl}settings/profile`);
+      expect(response?.status()).toBe(200);
+      await gateway.waitForRequest("agent.identity.get");
+      await expect.poll(() => page.locator(".profile-hero__name").textContent()).toBe("Rei");
+      await expect.poll(() => requests.length).toBeGreaterThan(0);
+
+      if (mode === "missing") {
+        await page.locator(".profile-hero__avatar-mascot svg").waitFor({ timeout: 5_000 });
+        expect(requests.some((request) => !request.metadata)).toBe(true);
+        return;
+      }
+
+      await expect
+        .poll(() => requests.filter((request) => request.metadata).length, { timeout: 5_000 })
+        .toBeGreaterThan(0);
+      expect(requests.every((request) => request.authorization === "Bearer e2e-device-token")).toBe(
+        true,
+      );
+      const avatar = page.locator(".profile-hero__avatar-image");
+      await expect
+        .poll(() => avatar.evaluate((image) => (image as HTMLImageElement).naturalWidth))
+        .toBe(1);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("shares one authenticated avatar between the sidebar and profile preview", async () => {
     if (captureUiProof) {
       await mkdir(proofDir, { recursive: true });

@@ -7,7 +7,7 @@ import type {
   UsersSetAvatarResult,
   UsersSetDisplayNameResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { CostUsageSummary, SessionsUsageResult } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import {
@@ -15,6 +15,7 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { resolveCurrentSelfUser, userProfileAvatarUrl } from "../../app/user-profile.ts";
 import { icons } from "../../components/icons.ts";
@@ -33,6 +34,7 @@ import {
 } from "../../lib/gateway-errors.ts";
 import { buildSessionUsageDateParams, requestSessionsUsage } from "../../lib/sessions/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { refreshChatAvatar } from "../chat/chat-avatar.ts";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 import {
   decideUsageRefresh,
@@ -90,6 +92,7 @@ export class ProfilePage extends OpenClawLightDomElement {
   @state() private identityLoading = false;
   @state() private identityBusy: "display-name" | "avatar" | null = null;
   @state() private identityError: string | null = null;
+  @state() private featuredAvatarUrl: string | null = null;
 
   private client: GatewayBrowserClient | null = null;
   private connected = false;
@@ -98,6 +101,16 @@ export class ProfilePage extends OpenClawLightDomElement {
   private refreshTimer: number | null = null;
   private lastProfileLoadedAtMs: number | null = null;
   private pendingAutomaticProfileRefresh = false;
+  private featuredAvatarRequestKey: string | null = null;
+  private readonly featuredAvatarHost = {
+    basePath: "",
+    chatAvatarUrl: null as string | null,
+    connected: false,
+    hello: null as GatewayHelloOk | null,
+    password: "",
+    sessionKey: "",
+    settings: { token: "" },
+  };
   // Set only when a disconnect invalidates active work. The shared refresh
   // policy decides when the retry is allowed to run.
   private profileReloadPending = false;
@@ -111,8 +124,14 @@ export class ProfilePage extends OpenClawLightDomElement {
     super.connectedCallback();
     this.subscriptions = [
       this.context.gateway.subscribe((snapshot) => this.applyGatewaySnapshot(snapshot)),
-      this.context.agents.subscribe(() => this.requestUpdate()),
-      this.context.agentIdentity.subscribe(() => this.requestUpdate()),
+      this.context.agents.subscribe(() => {
+        this.refreshFeaturedAvatar();
+        this.requestUpdate();
+      }),
+      this.context.agentIdentity.subscribe(() => {
+        this.refreshFeaturedAvatar();
+        this.requestUpdate();
+      }),
     ];
     document.addEventListener("visibilitychange", this.handlePageActivation);
     globalThis.addEventListener("focus", this.handlePageActivation);
@@ -133,6 +152,7 @@ export class ProfilePage extends OpenClawLightDomElement {
     this.profileReloadPending = false;
     this.client = null;
     this.connected = false;
+    this.resetFeaturedAvatar();
     super.disconnectedCallback();
   }
 
@@ -159,6 +179,7 @@ export class ProfilePage extends OpenClawLightDomElement {
       this.costSummary = null;
       this.sessionsResult = null;
       this.error = null;
+      this.resetFeaturedAvatar();
     }
     if (clientChanged || selfProfileChanged) {
       this.identityRequestId += 1;
@@ -173,6 +194,7 @@ export class ProfilePage extends OpenClawLightDomElement {
       this.requestId += 1;
       this.clearRefreshTimer();
       this.loading = false;
+      this.resetFeaturedAvatar();
       return;
     }
     if (nextSelfUser && (clientChanged || selfProfileChanged)) {
@@ -181,6 +203,7 @@ export class ProfilePage extends OpenClawLightDomElement {
     void this.context.agents.ensureList().then((list) => {
       if (list) {
         void this.context.agentIdentity.ensure([list.defaultId]);
+        this.refreshFeaturedAvatar();
       }
     });
     if (clientChanged || becameConnected || (!this.costSummary && !this.loading && !this.error)) {
@@ -486,12 +509,80 @@ export class ProfilePage extends OpenClawLightDomElement {
     }
   }
 
+  private resetFeaturedAvatar() {
+    this.featuredAvatarRequestKey = null;
+    this.featuredAvatarUrl = null;
+    this.featuredAvatarHost.connected = false;
+    // The shared metadata owner revokes its old blob when a gateway or page
+    // disconnects, so private assistant images never cross identity boundaries.
+    void refreshChatAvatar(this.featuredAvatarHost);
+  }
+
+  private refreshFeaturedAvatar() {
+    const list = this.context.agents.state.agentsList;
+    if (!this.connected || !list) {
+      this.resetFeaturedAvatar();
+      return;
+    }
+    const agentId = list.defaultId ?? "main";
+    const row = list.agents.find((agent) => agent.id === agentId) ?? { id: agentId };
+    const identity = this.context.agentIdentity.get(agentId);
+    const configuredAvatarUrl = resolveAgentAvatarUrl(row, identity);
+    if (!configuredAvatarUrl?.startsWith("/") && identity?.avatarStatus !== "local") {
+      if (this.featuredAvatarRequestKey !== null) {
+        this.resetFeaturedAvatar();
+      }
+      return;
+    }
+
+    const snapshot = this.context.gateway.snapshot;
+    const connection = this.context.gateway.connection;
+    const authSource = {
+      hello: snapshot.hello,
+      password: connection.password,
+      settings: { token: connection.token },
+    };
+    const requestKey = JSON.stringify([
+      agentId,
+      configuredAvatarUrl,
+      identity?.avatar,
+      resolveControlUiAuthToken(authSource),
+    ]);
+    if (requestKey === this.featuredAvatarRequestKey) {
+      return;
+    }
+
+    this.featuredAvatarRequestKey = requestKey;
+    this.featuredAvatarUrl = null;
+    Object.assign(this.featuredAvatarHost, authSource, {
+      basePath: this.context.basePath,
+      connected: true,
+      sessionKey: `agent:${agentId}:main`,
+    });
+    // Chat already owns gateway-authenticated metadata, image validation,
+    // blob cleanup, and stale-request handling; Profile consumes that path.
+    void refreshChatAvatar(this.featuredAvatarHost).then(() => {
+      if (this.featuredAvatarRequestKey === requestKey && this.isConnected) {
+        this.featuredAvatarUrl = this.featuredAvatarHost.chatAvatarUrl;
+        // Stable avatar routes must retry after a missing image or transient
+        // failure when the next agent or identity snapshot arrives.
+        if (!this.featuredAvatarUrl) {
+          this.featuredAvatarRequestKey = null;
+        }
+      }
+    });
+  }
+
   private featuredAgent() {
     const list = this.context.agents.state.agentsList;
     const agentId = list?.defaultId ?? "main";
     const row = list?.agents.find((agent) => agent.id === agentId) ?? { id: agentId };
     const identity = this.context.agentIdentity.get(agentId);
-    const avatarUrl = resolveAgentAvatarUrl(row, identity);
+    const configuredAvatarUrl = resolveAgentAvatarUrl(row, identity);
+    const avatarUrl =
+      configuredAvatarUrl?.startsWith("/") || identity?.avatarStatus === "local"
+        ? this.featuredAvatarUrl
+        : configuredAvatarUrl;
     const textAvatar =
       resolveAssistantTextAvatar(identity?.avatar) ??
       resolveAssistantTextAvatar(row.identity?.emoji) ??
