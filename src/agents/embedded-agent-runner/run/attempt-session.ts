@@ -184,6 +184,14 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     agent: activeSession.agent,
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
     onDeliveredSourceReply: markSourceReplyDelivered,
+    config: attempt.config,
+    messageChannel: attempt.messageChannel,
+    currentChannelId: attempt.currentChannelId,
+    currentMessagingTarget: attempt.currentMessagingTarget,
+    sessionKey: attempt.sessionKey,
+    currentMessageId: attempt.currentMessageId,
+    replyToMode: attempt.replyToMode,
+    hasRepliedRef: attempt.hasRepliedRef,
   });
   input.markStage("agent-session");
 

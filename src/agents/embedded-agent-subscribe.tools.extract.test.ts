@@ -3,7 +3,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { extractMessagingToolSend } from "./embedded-agent-subscribe.tools.js";
+import {
+  extractMessagingToolSend,
+  messagingToolSendResolvesToCurrentSource,
+} from "./embedded-agent-subscribe.tools.js";
 
 function normalizeTelegramMessagingTargetForTest(raw: string): string | undefined {
   // Test normalizer mirrors channel plugins that canonicalize human targets
@@ -854,5 +857,86 @@ describe("extractMessagingToolSend", () => {
     expect(topLevel?.threadImplicit).toBeUndefined();
     expect(nullThread?.threadSuppressed).toBe(true);
     expect(nullThread?.threadImplicit).toBeUndefined();
+  });
+});
+
+describe("messagingToolSendResolvesToCurrentSource", () => {
+  const CURRENT_CHANNEL_ID = "C0B2EDDPW95";
+
+  beforeEach(() => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "slack" }),
+            messaging: { normalizeTarget: (raw: string) => raw.trim() || undefined },
+            actions: {
+              extractToolSend: ({ args }: { args: Record<string, unknown> }) =>
+                typeof args.to === "string" ? { to: args.to } : null,
+            },
+          },
+          source: "test",
+        },
+      ]),
+    );
+  });
+
+  it("treats an explicit route to the current source as a current-source reply", () => {
+    expect(
+      messagingToolSendResolvesToCurrentSource(
+        "message",
+        { action: "send", channel: "slack", to: CURRENT_CHANNEL_ID, message: "reply" },
+        "slack",
+        { currentChannelId: CURRENT_CHANNEL_ID },
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects an explicit route to a different conversation", () => {
+    expect(
+      messagingToolSendResolvesToCurrentSource(
+        "message",
+        { action: "send", channel: "slack", to: "C-SOMEWHERE-ELSE", message: "reply" },
+        "slack",
+        { currentChannelId: CURRENT_CHANNEL_ID },
+      ),
+    ).toBe(false);
+  });
+
+  it("treats an implicit routeless send as the current source", () => {
+    expect(
+      messagingToolSendResolvesToCurrentSource(
+        "message",
+        { action: "send", message: "reply" },
+        "slack",
+        { currentChannelId: CURRENT_CHANNEL_ID },
+      ),
+    ).toBe(true);
+  });
+
+  it("returns false when there is no current source channel", () => {
+    expect(
+      messagingToolSendResolvesToCurrentSource(
+        "message",
+        { action: "send", channel: "slack", to: CURRENT_CHANNEL_ID, message: "reply" },
+        "slack",
+        { currentChannelId: undefined },
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects a same-destination match against a different current provider", () => {
+    // Same raw `to`, but the current conversation's provider is not the one
+    // the explicit route names — verified route resolution must not ignore
+    // provider identity just because the destination string matches.
+    expect(
+      messagingToolSendResolvesToCurrentSource(
+        "message",
+        { action: "send", channel: "slack", to: CURRENT_CHANNEL_ID, message: "reply" },
+        undefined,
+        { currentChannelId: CURRENT_CHANNEL_ID },
+      ),
+    ).toBe(false);
   });
 });
