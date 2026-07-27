@@ -8,6 +8,7 @@ import {
   runConfigAuditScrubHealth,
   runDatabaseBloatHealth,
   runDiskSpaceHealth,
+  runLegacyBootSessionHealth,
   runLegacyCronHealth,
   runLegacyPluginManifestHealth,
   runPluginRegistryHealth,
@@ -274,7 +275,7 @@ export function resolveInitialDoctorHealthContributions(params: {
       id: "doctor:legacy-boot-session-state",
       label: "Legacy boot session state",
       healthCheckIds: ["core/doctor/legacy-boot-session-state"],
-      run: params.runStructuredHealthRepairs,
+      run: runLegacyBootSessionHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:session-transcripts",
