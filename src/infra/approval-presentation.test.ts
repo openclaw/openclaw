@@ -181,6 +181,26 @@ describe("buildApprovalPresentation", () => {
     ).toBeNull();
   });
 
+  it("applies the external label limit by Unicode code point", () => {
+    const label = String.fromCodePoint(0x1f680).repeat(80);
+    const buildWithLabel = (value: string) =>
+      buildApprovalPresentation({
+        kind: "plugin",
+        request: {
+          title: "World verification",
+          description: "Verify personhood before continuing.",
+          externalResolution: { label: value, decisions: ["allow-once"] },
+        },
+        allowedDecisions: ["deny"],
+      });
+
+    expect(buildWithLabel(label)).toMatchObject({
+      kind: "plugin",
+      externalResolution: { label },
+    });
+    expect(buildWithLabel(`${label}${String.fromCodePoint(0x1f680)}`)).toBeNull();
+  });
+
   it.each([
     { label: " ", decisions: undefined },
     { label: "Verify", decisions: [] },

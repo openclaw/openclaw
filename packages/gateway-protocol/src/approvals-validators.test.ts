@@ -84,6 +84,22 @@ describe("unified approval protocol validators", () => {
         externalResolution: { label: "", decisions: ["allow-once"] },
       }),
     ).toBe(false);
+    const astralLabel = String.fromCodePoint(0x1f680).repeat(80);
+    expect(
+      validateApprovalPresentation({
+        ...pluginPresentation,
+        externalResolution: { label: astralLabel, decisions: ["allow-once"] },
+      }),
+    ).toBe(true);
+    expect(
+      validateApprovalPresentation({
+        ...pluginPresentation,
+        externalResolution: {
+          label: `${astralLabel}${String.fromCodePoint(0x1f680)}`,
+          decisions: ["allow-once"],
+        },
+      }),
+    ).toBe(false);
     expect(
       validateApprovalPresentation({
         ...pluginPresentation,
