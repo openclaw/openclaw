@@ -138,7 +138,7 @@ function cronPayloadObjectSchema(params: {
       fallbacks: params.fallbacks,
       toolsAllow: params.toolsAllow,
     },
-    { additionalProperties: true },
+    { additionalProperties: false },
   );
 }
 
@@ -177,7 +177,7 @@ function createCronScheduleSchema(): TSchema {
         batchMs: optionalNonNegativeIntegerSchema(),
         maxBatchBytes: optionalNonNegativeIntegerSchema(),
       },
-      { additionalProperties: true },
+      { additionalProperties: false },
     ),
   );
 }
@@ -244,7 +244,7 @@ function cronDeliverySchema(params: { nullableClears: boolean }) {
       }),
       mode: failureDestinationModeSchema({ nullableClears: params.nullableClears }),
     },
-    { additionalProperties: true },
+    { additionalProperties: false },
   );
 
   return Type.Optional(
@@ -273,7 +273,7 @@ function cronDeliverySchema(params: { nullableClears: boolean }) {
             )
           : Type.Optional(failureDestinationObject),
       },
-      { additionalProperties: true },
+      { additionalProperties: false },
     ),
   );
 }
@@ -304,7 +304,7 @@ function createCronFailureAlertSchema(): TSchema {
         mode: optionalStringEnum(["announce", "webhook"] as const),
         accountId: Type.Optional(Type.String()),
       },
-      additionalProperties: true,
+      additionalProperties: false,
       description: "Failure alert; false disables.",
     }),
   );
@@ -352,7 +352,7 @@ function createCronJobObjectSchema(): TSchema {
         sessionKey: nullableStringSchema("Explicit session key, or null to clear it"),
         failureAlert: createCronFailureAlertSchema(),
       },
-      { additionalProperties: true },
+      { additionalProperties: false },
     ),
   );
 }
@@ -387,7 +387,7 @@ function createCronPatchObjectSchema(): TSchema {
         sessionKey: nullableStringSchema("Explicit session key, or null to clear it"),
         failureAlert: createCronFailureAlertSchema(),
       },
-      { additionalProperties: true },
+      { additionalProperties: false },
     ),
   );
 }
@@ -430,7 +430,7 @@ function createCronToolSchema(): TSchema {
         }),
       ),
     },
-    { additionalProperties: true },
+    { additionalProperties: false },
   );
 }
 
