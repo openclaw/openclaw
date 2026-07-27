@@ -22,6 +22,7 @@ import {
 } from "./embedded-agent-helpers.js";
 import {
   DEFAULT_BOOTSTRAP_FILENAME,
+  type BootstrapTier,
   filterBootstrapFilesForSession,
   isWorkspaceSetupCompleted,
   loadWorkspaceBootstrapFiles,
@@ -257,6 +258,7 @@ export async function resolveBootstrapFilesForRun(params: {
 }): Promise<WorkspaceBootstrapFile[]> {
   const sessionKey = params.sessionKey ?? params.sessionId;
   const workspaceSetupCompleted = await isWorkspaceSetupCompletedForContext(params.workspaceDir);
+  const tierOverride = params.config?.agents?.defaults?.bootstrapTier as BootstrapTier | undefined;
   const rawFiles = params.sessionKey
     ? await getOrLoadBootstrapFiles({
         workspaceDir: params.workspaceDir,
@@ -265,7 +267,7 @@ export async function resolveBootstrapFilesForRun(params: {
     : await loadWorkspaceBootstrapFiles(params.workspaceDir);
   const bootstrapFiles = applyContextModeFilter({
     files: filterCompletedWorkspaceBootstrapFile(
-      filterBootstrapFilesForSession(rawFiles, sessionKey),
+      filterBootstrapFilesForSession(rawFiles, sessionKey, tierOverride),
       workspaceSetupCompleted,
       params.workspaceDir,
     ),
