@@ -58,7 +58,9 @@ describe("buildActiveSubagentSystemPromptAddition", () => {
     expect(prompt).toContain("taskName=read_email");
     expect(prompt).toContain("session=agent:main:subagent:recent-context");
     expect(prompt).toContain("status=done");
-    expect(prompt).toContain("do not re-spawn the same task");
+    expect(prompt).toContain("status=done");
+    expect(prompt).toContain("do not re-spawn that same task");
+    expect(prompt).not.toContain("non-success terminal entries");
     expect(prompt).not.toContain("sessions_yield");
   });
 
@@ -209,6 +211,67 @@ describe("buildActiveSubagentSystemPromptAddition", () => {
 
     expect(prompt).not.toContain("call `sessions_yield`");
     expect(prompt).toContain("wait for runtime completion events");
+  });
+
+  it("keeps retry/recovery guidance for non-success terminal recent children", () => {
+    const now = Date.now();
+    addSubagentRunForTests({
+      runId: "run-recent-failed",
+      childSessionKey: "agent:main:subagent:recent-failed",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "failed fetch",
+      taskName: "failed_task",
+      cleanup: "keep",
+      createdAt: now - 180_000,
+      startedAt: now - 180_000,
+      endedAt: now - 90_000,
+      outcome: { status: "error", error: "boom" },
+    } satisfies SubagentRunRecord);
+    addSubagentRunForTests({
+      runId: "run-recent-timeout",
+      childSessionKey: "agent:main:subagent:recent-timeout",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "timed out fetch",
+      taskName: "timeout_task",
+      cleanup: "keep",
+      createdAt: now - 170_000,
+      startedAt: now - 170_000,
+      endedAt: now - 80_000,
+      outcome: { status: "timeout" },
+    } satisfies SubagentRunRecord);
+    addSubagentRunForTests({
+      runId: "run-recent-ok-mixed",
+      childSessionKey: "agent:main:subagent:recent-ok-mixed",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "already finished",
+      taskName: "ok_task",
+      cleanup: "keep",
+      createdAt: now - 160_000,
+      startedAt: now - 160_000,
+      endedAt: now - 70_000,
+      outcome: { status: "ok" },
+    } satisfies SubagentRunRecord);
+
+    const prompt = buildActiveSubagentSystemPromptAddition({
+      cfg: {} as OpenClawConfig,
+      controllerSessionKey: "agent:main:main",
+    });
+
+    expect(prompt).toContain("## Recently Completed Subagents");
+    expect(prompt).toContain("status=failed");
+    expect(prompt).toContain("status=timeout");
+    expect(prompt).toContain("status=done");
+    expect(prompt).toContain("non-success terminal entries");
+    expect(prompt).toContain("you may retry or recover that work");
+    expect(prompt).toContain("do not re-spawn that same task");
+    // Blanket all-terminal suppression must not remain.
+    expect(prompt).not.toContain("work already finished — do not re-spawn the same task");
   });
 
   it("caps recently completed prompt entries to the newest subset", () => {
