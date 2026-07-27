@@ -125,11 +125,15 @@ export function normalizeCronPayload(payload: UnknownRecord): UnknownRecord {
     }
   }
   if ("timeoutSeconds" in next) {
-    const timeoutSeconds = parseOptionalField(TimeoutSecondsFieldSchema, next.timeoutSeconds);
-    if (timeoutSeconds !== undefined) {
-      next.timeoutSeconds = timeoutSeconds;
+    if (next.timeoutSeconds === null) {
+      next.timeoutSeconds = null;
     } else {
-      delete next.timeoutSeconds;
+      const timeoutSeconds = parseOptionalField(TimeoutSecondsFieldSchema, next.timeoutSeconds);
+      if (timeoutSeconds !== undefined) {
+        next.timeoutSeconds = timeoutSeconds;
+      } else {
+        delete next.timeoutSeconds;
+      }
     }
   }
   if ("fallbacks" in next) {
