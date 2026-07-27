@@ -514,9 +514,11 @@ function wouldCapActiveSession(params: {
       shouldPreserveMaintenanceEntry({ key, entry: params.store[key] }),
   ).length;
   const maxRemovableEntries = Math.max(0, params.maxEntries - protectedCount);
-  // If protected entries fill the cap, the active unprotected session would be the one removed.
+  // If protected entries fill the cap, capEntryCount cannot reach it by removing
+  // anything, so it leaves the surplus alone rather than deleting the active
+  // session for a cap it would still exceed. Warning here would be a false alarm.
   if (maxRemovableEntries <= 0) {
-    return true;
+    return false;
   }
 
   const activeUpdatedAt = getEntryUpdatedAt(params.activeEntry);
@@ -560,6 +562,16 @@ export function capEntryCount(
     shouldPreserveMaintenanceEntry({ key, entry, preserveKeys: opts.preserveKeys }),
   ).length;
   const maxRemovableEntries = Math.max(0, maxEntries - preservedCount);
+  // Protected entries alone already fill the cap, so no removal can bring the
+  // store under it. Falling through would `slice(0)` the sorted list — deleting
+  // every removable entry, including one written moments ago — and the store
+  // would still exceed maxEntries afterwards, so the next write repeats the
+  // pass. Leaving the surplus in place matches the behavior already accepted
+  // when every candidate is protected; age-based retention is unaffected,
+  // because pruneStaleEntries applies pruneAfter before this runs.
+  if (maxEntries > 0 && maxRemovableEntries === 0) {
+    return 0;
+  }
   // Protected entries reduce the removable budget instead of being counted as deletion targets.
   const keys = Object.keys(store).filter(
     (key) =>
