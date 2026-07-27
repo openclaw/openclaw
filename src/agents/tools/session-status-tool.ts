@@ -12,7 +12,6 @@ import type {
   ThinkLevel,
   VerboseLevel,
 } from "../../auto-reply/thinking.js";
-import { getRuntimeConfig } from "../../config/config.js";
 import {
   patchSessionEntryWithKey,
   resolveStorePath,
@@ -84,8 +83,8 @@ import {
   createSessionVisibilityGuard,
   resolveCurrentSessionClientAlias,
   resolveEffectiveSessionToolsVisibility,
-  resolveSandboxedSessionToolContext,
   resolveSessionReference,
+  resolveSessionToolContext,
   resolveVisibleSessionReference,
   shouldResolveSessionIdInput,
 } from "./sessions-helpers.js";
@@ -548,6 +547,7 @@ export function createSessionStatusTool(opts?: {
    */
   runSessionKey?: string;
   config?: OpenClawConfig;
+  getConfig?: () => OpenClawConfig;
   sandboxed?: boolean;
   activeModelProvider?: string;
   activeModelId?: string;
@@ -565,12 +565,7 @@ export function createSessionStatusTool(opts?: {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const changesSince = readNonNegativeIntegerParam(params, "changesSince");
-      const cfg = opts?.config ?? getRuntimeConfig();
-      const { mainKey, alias, effectiveRequesterKey } = resolveSandboxedSessionToolContext({
-        cfg,
-        agentSessionKey: opts?.agentSessionKey,
-        sandboxed: opts?.sandboxed,
-      });
+      const { cfg, mainKey, alias, effectiveRequesterKey } = resolveSessionToolContext(opts);
       const a2aPolicy = createAgentToAgentPolicy(cfg);
       const configuredDefaultAgentId = resolveDefaultAgentId(cfg);
       const requesterAgentId = resolveAgentIdFromSessionKey(

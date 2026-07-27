@@ -9,7 +9,6 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import pMap from "p-map";
 import { Type } from "typebox";
-import { getRuntimeConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
@@ -43,7 +42,7 @@ import {
   resolveDisplaySessionKey,
   resolveEffectiveSessionToolsVisibility,
   resolveInternalSessionKey,
-  resolveSandboxedSessionToolContext,
+  resolveSessionToolContext,
   type GatewaySessionListRow,
   type SessionListRow,
   type SessionRunStatus,
@@ -140,6 +139,7 @@ export function createSessionsListTool(opts?: {
   agentSessionKey?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
+  getConfig?: () => OpenClawConfig;
   callGateway?: GatewayCaller;
 }): AnyAgentTool {
   return {
@@ -151,13 +151,8 @@ export function createSessionsListTool(opts?: {
     outputSchema: SessionsListOutputSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const cfg = opts?.config ?? getRuntimeConfig();
-      const { mainKey, alias, requesterInternalKey, restrictToSpawned } =
-        resolveSandboxedSessionToolContext({
-          cfg,
-          agentSessionKey: opts?.agentSessionKey,
-          sandboxed: opts?.sandboxed,
-        });
+      const { cfg, mainKey, alias, requesterInternalKey, restrictToSpawned } =
+        resolveSessionToolContext(opts);
       const effectiveRequesterKey = requesterInternalKey ?? alias;
       const visibility = resolveEffectiveSessionToolsVisibility({
         cfg,

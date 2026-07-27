@@ -2,7 +2,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { SESSION_AGENT_ATTENTION_ICON_IDS } from "../../../packages/gateway-protocol/src/session-icon.js";
-import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withAgentSessionModelPatchOrigin } from "../../gateway/session-model-patch-origin.js";
 import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
@@ -77,6 +76,7 @@ type SessionsToolOptions = {
   agentSessionKey?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
+  getConfig?: () => OpenClawConfig;
   callGateway?: InProcessGatewayCaller;
   hasInProcessGatewayContext?: () => boolean;
 };
@@ -218,7 +218,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
       }
 
       const { key } = await resolvePatchTarget(
-        { ...opts, config: opts.config ?? getRuntimeConfig() },
+        opts,
         normalizeOptionalString(readStringParam(params, "sessionKey")),
       );
       const patch = {

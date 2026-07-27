@@ -1,6 +1,5 @@
 /** Full-text search over visible session transcripts. */
 import { Type } from "typebox";
-import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
@@ -26,8 +25,8 @@ import {
   createSessionVisibilityRowChecker,
   resolveDisplaySessionKey,
   resolveEffectiveSessionToolsVisibility,
-  resolveSandboxedSessionToolContext,
   resolveSessionReference,
+  resolveSessionToolContext,
   resolveVisibleSessionReference,
 } from "./sessions-helpers.js";
 
@@ -323,6 +322,7 @@ export function createSessionsSearchTool(opts?: {
   agentSessionKey?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
+  getConfig?: () => OpenClawConfig;
   callGateway?: GatewayCaller;
 }): AnyAgentTool {
   const gatewayCall = opts?.callGateway ?? callGateway;
@@ -349,13 +349,8 @@ export function createSessionsSearchTool(opts?: {
           max: SESSIONS_SEARCH_MAX_LIMIT,
         }) ?? SESSIONS_SEARCH_DEFAULT_LIMIT;
       const requestedSessionKey = readStringParam(params, "sessionKey");
-      const cfg = opts?.config ?? getRuntimeConfig();
-      const { mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
-        resolveSandboxedSessionToolContext({
-          cfg,
-          agentSessionKey: opts?.agentSessionKey,
-          sandboxed: opts?.sandboxed,
-        });
+      const { cfg, mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
+        resolveSessionToolContext(opts);
 
       let sessionKey: string | undefined;
       if (requestedSessionKey) {

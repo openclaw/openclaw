@@ -122,8 +122,11 @@ export function resolveSessionToolContext(opts?: {
   agentSessionKey?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
+  getConfig?: () => OpenClawConfig;
 }) {
-  const cfg = opts?.config ?? getRuntimeConfig();
+  // Existing Gateway tool instances survive hot reloads, so their injected
+  // getter must win over the config captured when the tool was constructed.
+  const cfg = opts?.getConfig?.() ?? opts?.config ?? getRuntimeConfig();
   return {
     cfg,
     ...resolveSandboxedSessionToolContext({

@@ -8,7 +8,7 @@ import { createShowWidgetTool } from "../canvas/widget-tool.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
-import { selectApplicableRuntimeConfig } from "../config/config.js";
+import { getRuntimeConfig, selectApplicableRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { isEmbeddedMode } from "../infra/embedded-mode.js";
@@ -222,6 +222,14 @@ export function createOpenClawTools(
     runtimeConfig: runtimeSnapshot?.config,
     runtimeSourceConfig: runtimeSnapshot?.sourceConfig,
   });
+  // Only Gateway-owned configs follow later runtime snapshots. Explicit run
+  // configs stay pinned to the context that constructed the tool set.
+  const sessionToolConfigOptions = {
+    config: resolvedConfig,
+    ...(runtimeSnapshot && availabilityConfig === runtimeSnapshot.config
+      ? { getConfig: getRuntimeConfig }
+      : {}),
+  };
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: options?.agentSessionKey,
     config: resolvedConfig,
@@ -498,7 +506,7 @@ export function createOpenClawTools(
           createSessionsTool({
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             sandboxed: options?.sandboxed,
-            config: resolvedConfig,
+            ...sessionToolConfigOptions,
           }),
           createScreenTool({
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
@@ -596,20 +604,20 @@ export function createOpenClawTools(
     createSessionsListTool({
       agentSessionKey: options?.agentSessionKey,
       sandboxed: options?.sandboxed,
-      config: resolvedConfig,
+      ...sessionToolConfigOptions,
       callGateway: effectiveCallGateway,
     }),
     createSessionsHistoryTool({
       agentSessionKey: options?.agentSessionKey,
       sandboxed: options?.sandboxed,
-      config: resolvedConfig,
+      ...sessionToolConfigOptions,
       callGateway: effectiveCallGateway,
     }),
     createSessionsSearchTool({
       agentId: sessionAgentId,
       agentSessionKey: options?.agentSessionKey,
       sandboxed: options?.sandboxed,
-      config: resolvedConfig,
+      ...sessionToolConfigOptions,
       callGateway: effectiveCallGateway,
     }),
     ...(embedded
@@ -644,7 +652,7 @@ export function createOpenClawTools(
             agentSessionKey: options?.agentSessionKey,
             agentChannel: options?.agentChannel,
             sandboxed: options?.sandboxed,
-            config: resolvedConfig,
+            ...sessionToolConfigOptions,
           }),
         ]),
     ...(includeSubagentSpawnTool
@@ -695,7 +703,7 @@ export function createOpenClawTools(
     createSessionStatusTool({
       agentSessionKey: options?.agentSessionKey,
       runSessionKey: options?.runSessionKey,
-      config: resolvedConfig,
+      ...sessionToolConfigOptions,
       sandboxed: options?.sandboxed,
       activeModelProvider: options?.modelProvider,
       activeModelId: options?.modelId,

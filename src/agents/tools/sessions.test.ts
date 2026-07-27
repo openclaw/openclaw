@@ -4,7 +4,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
-import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/io.js";
 import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { extractAssistantText, sanitizeTextContent } from "./chat-history-text.js";
@@ -577,6 +581,37 @@ describe("sessions_list gating", () => {
     const details = requireDetails(result);
     expect(details.count).toBe(1);
     expect(requireSessions(details)[0]?.key).toBe(MAIN_AGENT_SESSION_KEY);
+  });
+
+  it("uses hot-reloaded session visibility in an existing tool", async () => {
+    const initialConfig = {
+      session: { scope: "per-sender" as const, mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: false },
+        sessions: { visibility: "tree" as const },
+      },
+    };
+    const tool = createSessionsListTool({
+      agentSessionKey: MAIN_AGENT_SESSION_KEY,
+      config: initialConfig,
+      getConfig: () => getRuntimeConfigSnapshot() ?? initialConfig,
+    });
+    setRuntimeConfigSnapshot({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: true },
+        sessions: { visibility: "all" },
+      },
+    });
+
+    const result = await tool.execute("call1", {});
+
+    const details = requireDetails(result);
+    expect(details.count).toBe(2);
+    expect(requireSessions(details).map((session) => session.key)).toEqual([
+      MAIN_AGENT_SESSION_KEY,
+      "agent:other:main",
+    ]);
   });
 
   it("keeps requester-owned cross-agent rows with tree visibility without a spawned lookup", async () => {
