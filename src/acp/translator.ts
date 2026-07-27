@@ -532,7 +532,11 @@ export class AcpGatewayAgent implements Agent {
     }
 
     const meta = parseSessionMeta(params["_meta"]);
-    const fallbackKey = existingSession?.sessionKey ?? params.sessionId;
+    const ledgerReplay =
+      !existingSession && !hasExplicitSessionRouting(meta, this.opts)
+        ? await this.sessionUpdates.readLedgerReplayBySessionId(params.sessionId)
+        : { complete: false, events: [] };
+    const fallbackKey = existingSession?.sessionKey ?? ledgerReplay.sessionKey ?? params.sessionId;
     const sessionKey = await this.resolveSessionKeyFromMeta({
       meta,
       fallbackKey,
