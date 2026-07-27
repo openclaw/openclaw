@@ -571,26 +571,16 @@ export function createSessionsSendTool(opts?: {
           error: "Either sessionKey or label is required",
         });
       }
-      // Reject malformed keys and unknown agents before any session/run is created.
-      // The agentId path already validates via resolveConfiguredAgentMainSessionKey;
-      // this applies the same check to sessionKey and label-resolved keys.
-      const sessionKeyShape = classifySessionKeyShape(sessionKey);
-      if (sessionKeyShape === "malformed_agent") {
+      // Reject malformed raw keys early; configured-agent validation happens on the
+      // canonical key after resolveSessionReference so opaque session IDs/aliases
+      // that resolve to an unknown agent are also blocked before dispatch.
+      const rawSessionKeyShape = classifySessionKeyShape(sessionKey);
+      if (rawSessionKeyShape === "malformed_agent") {
         return jsonResult({
           runId: crypto.randomUUID(),
           status: "error",
           error: `agent not found: ${sessionKey}`,
         });
-      }
-      if (sessionKeyShape === "agent") {
-        const targetAgentId = resolveAgentIdFromSessionKey(sessionKey);
-        if (!listAgentIds(cfg).includes(targetAgentId)) {
-          return jsonResult({
-            runId: crypto.randomUUID(),
-            status: "error",
-            error: `agent not found: ${targetAgentId}`,
-          });
-        }
       }
       const resolvedSession = await resolveSessionReference({
         sessionKey,
@@ -625,6 +615,28 @@ export function createSessionsSendTool(opts?: {
       // Normalize sessionKey/sessionId input into a canonical session key.
       const resolvedKey = visibleSession.key;
       const displayKey = visibleSession.displayKey;
+      // Reject unknown agents on the canonical resolved key so opaque session IDs
+      // or aliases that resolve to an unconfigured agent cannot reach dispatch.
+      const resolvedKeyShape = classifySessionKeyShape(resolvedKey);
+      if (resolvedKeyShape === "malformed_agent") {
+        return jsonResult({
+          runId: crypto.randomUUID(),
+          status: "error",
+          error: `agent not found: ${resolvedKey}`,
+          sessionKey: unresolvedDisplayKey,
+        });
+      }
+      if (resolvedKeyShape === "agent") {
+        const targetAgentId = resolveAgentIdFromSessionKey(resolvedKey);
+        if (!listAgentIds(cfg).includes(targetAgentId)) {
+          return jsonResult({
+            runId: crypto.randomUUID(),
+            status: "error",
+            error: `agent not found: ${targetAgentId}`,
+            sessionKey: unresolvedDisplayKey,
+          });
+        }
+      }
       const rawRequesterSessionKey = opts?.agentSessionKey ? effectiveRequesterKey : undefined;
       const parsedRequesterSessionKey = parseAgentSessionKey(rawRequesterSessionKey);
       const requesterRouteBindings = cfg.bindings?.filter(

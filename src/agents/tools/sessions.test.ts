@@ -874,6 +874,7 @@ describe("sessions_send gating", () => {
       callGateway: callGatewayMock,
       config: {
         session: { scope: "per-sender", mainKey: "main" },
+        agents: { list: [{ id: "main" }, { id: "other" }] },
         tools: {
           agentToAgent: { enabled: false },
           sessions: { visibility: "tree" },
@@ -1024,6 +1025,7 @@ describe("sessions_send gating", () => {
   it("does not disclose a resolved thread session key from a sessionId target", async () => {
     loadConfigMock.mockReturnValue({
       session: { scope: "per-sender", mainKey: "main" },
+      agents: { list: [{ id: "main" }, { id: "other" }] },
       tools: {
         agentToAgent: { enabled: false },
         sessions: { visibility: "all" },
@@ -1592,6 +1594,28 @@ describe("sessions_send gating", () => {
 
     const result = await tool.execute("call-phantom-label", {
       label: "ghost-label",
+      message: "ping",
+      timeoutSeconds: 0,
+    });
+
+    const details = requireDetails(result);
+    expect(details.status).toBe("error");
+    expect(details.error).toBe("agent not found: ghost");
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(requireGatewayRequest().method).toBe("sessions.resolve");
+  });
+
+  it("rejects opaque session reference that resolves to a non-existent agent", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      agents: { list: [{ id: "main" }] },
+      tools: { agentToAgent: { enabled: false } },
+    });
+    callGatewayMock.mockResolvedValueOnce({ key: "agent:ghost:main" });
+    const tool = createMainSessionsSendTool();
+
+    const result = await tool.execute("call-phantom-session-id", {
+      sessionKey: "opaque-session-id",
       message: "ping",
       timeoutSeconds: 0,
     });
