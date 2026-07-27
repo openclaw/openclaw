@@ -340,6 +340,97 @@ describe("WorkboardStore", () => {
     }
   });
 
+  it("adds the proof verification column without advancing the schema version", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-proof-migration-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const initialized = createWorkboardSqliteStores({ dbPath });
+    const initialStore = new WorkboardStore(initialized.cards, {
+      boards: initialized.boards,
+      subscriptions: initialized.subscriptions,
+      attachments: initialized.attachments,
+    });
+    const card = await initialStore.create({ title: "Legacy proof" });
+    await initialStore.addProof(card.id, {
+      status: "passed",
+      command: "legacy proof command",
+    });
+    initialized.close();
+
+    const legacy = new DatabaseSync(dbPath);
+    try {
+      legacy.exec(`
+        ALTER TABLE workboard_card_proof RENAME TO workboard_card_proof_legacy;
+        CREATE TABLE workboard_card_proof (
+          id TEXT PRIMARY KEY,
+          card_id TEXT NOT NULL REFERENCES workboard_cards(id) ON DELETE CASCADE,
+          ordinal INTEGER NOT NULL,
+          status TEXT NOT NULL,
+          label TEXT,
+          command TEXT,
+          url TEXT,
+          note TEXT,
+          created_at INTEGER NOT NULL
+        ) STRICT;
+        INSERT INTO workboard_card_proof
+          (id, card_id, ordinal, status, label, command, url, note, created_at)
+        SELECT id, card_id, ordinal, status, label, command, url, note, created_at
+        FROM workboard_card_proof_legacy;
+        DROP TABLE workboard_card_proof_legacy;
+      `);
+    } finally {
+      legacy.close();
+    }
+
+    try {
+      const migratedStores = createWorkboardSqliteStores({ dbPath });
+      const migratedStore = new WorkboardStore(migratedStores.cards, {
+        boards: migratedStores.boards,
+        subscriptions: migratedStores.subscriptions,
+        attachments: migratedStores.attachments,
+      });
+      try {
+        await expect(migratedStore.get(card.id)).resolves.toMatchObject({
+          metadata: {
+            proof: [
+              expect.objectContaining({
+                status: "passed",
+                verification: "worker_reported",
+                command: "legacy proof command",
+              }),
+            ],
+          },
+        });
+      } finally {
+        migratedStores.close();
+      }
+
+      const migrated = new DatabaseSync(dbPath, { readOnly: true });
+      try {
+        expect(
+          migrated
+            .prepare(
+              "SELECT name, \"notnull\" AS notnull_value, dflt_value FROM pragma_table_info('workboard_card_proof') WHERE name = 'verification'",
+            )
+            .get(),
+        ).toEqual({ name: "verification", notnull_value: 1, dflt_value: "'worker_reported'" });
+        expect(
+          migrated
+            .prepare("SELECT 1 AS found FROM workboard_schema_migrations WHERE id = 'schema-3'")
+            .get(),
+        ).toEqual({ found: 1 });
+        expect(
+          migrated
+            .prepare("SELECT 1 AS found FROM workboard_schema_migrations WHERE id = 'schema-4'")
+            .get(),
+        ).toBeUndefined();
+      } finally {
+        migrated.close();
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("uses rollback journaling on network-backed volumes", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-sqlite-network-"));
     const dbPath = path.join(dir, "workboard.sqlite");
@@ -1144,6 +1235,7 @@ describe("WorkboardStore", () => {
     const proof = {
       id: "proof-passed",
       status: "passed" as const,
+      verification: "worker_reported" as const,
       createdAt: 1_000,
       command: "pnpm test extensions/workboard",
     };
@@ -1438,12 +1530,19 @@ describe("WorkboardStore", () => {
     const store = new WorkboardStore(createMemoryStore());
     const card = await store.create({ title: "Coordinate worker", status: "todo" });
 
-    const claimed = await store.claim(card.id, { ownerId: "main", ttlSeconds: 60 });
+    const claimed = await store.claim(card.id, {
+      ownerId: "main",
+      sessionKey: "agent:main:session:coordinate-worker",
+      ttlSeconds: 60,
+    });
 
     expect(claimed.token).toBeTruthy();
     expect(claimed.card.status).toBe("running");
     expect(claimed.card.agentId).toBe("main");
-    expect(claimed.card.metadata?.claim).toMatchObject({ ownerId: "main" });
+    expect(claimed.card.metadata?.claim).toMatchObject({
+      ownerId: "main",
+      sessionKey: "agent:main:session:coordinate-worker",
+    });
 
     await expect(store.claim(card.id, { ownerId: "other" })).rejects.toThrow(/already claimed/);
 
@@ -2415,6 +2514,84 @@ describe("WorkboardStore", () => {
     expect(updated.metadata?.diagnostics).toBeUndefined();
   });
 
+  it("does not clear a missing-proof diagnostic when completion adds no evidence", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Complete without evidence",
+      status: "running",
+      metadata: {
+        diagnostics: [
+          {
+            kind: "missing_proof",
+            severity: "warning",
+            title: "Done card has no proof",
+            detail: "The card is marked done without proof or an attached artifact.",
+            firstSeenAt: 1,
+            lastSeenAt: 1,
+            count: 1,
+            actions: [{ kind: "add_proof", label: "Add proof" }],
+          },
+        ],
+      },
+    });
+
+    const completed = await store.complete(card.id, { summary: "No test evidence supplied." });
+
+    expect(completed.status).toBe("done");
+    expect(completed.metadata?.diagnostics).toEqual(
+      expect.arrayContaining([expect.objectContaining({ kind: "missing_proof" })]),
+    );
+  });
+
+  it("can complete work into review while acceptance is pending", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Awaiting acceptance", status: "running" });
+
+    const reviewed = await store.complete(card.id, {
+      status: "review",
+      summary: "Implementation is ready for acceptance.",
+    });
+
+    expect(reviewed.status).toBe("review");
+    expect(reviewed.metadata?.claim).toBeUndefined();
+  });
+
+  it("surfaces stale and contradictory proof without blocking manual acceptance", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const stale = await store.create({
+      title: "Stale proof",
+      status: "done",
+      startedAt: 2_000,
+      metadata: {
+        proof: [{ id: "stale-proof", status: "passed", createdAt: 1_000 }],
+      },
+    });
+    const contradictory = await store.create({
+      title: "Failed proof accepted",
+      status: "done",
+      metadata: {
+        proof: [{ id: "failed-proof", status: "failed", createdAt: 2_000 }],
+      },
+    });
+
+    await store.refreshDiagnostics(3_000);
+
+    await expect(store.get(stale.id)).resolves.toMatchObject({
+      status: "done",
+      metadata: {
+        diagnostics: expect.arrayContaining([expect.objectContaining({ kind: "stale_proof" })]),
+      },
+    });
+    await expect(store.get(contradictory.id)).resolves.toMatchObject({
+      status: "done",
+      metadata: {
+        diagnostics: expect.arrayContaining([
+          expect.objectContaining({ kind: "contradictory_proof" }),
+        ]),
+      },
+    });
+  });
+
   it("clears resolved proof diagnostics when adding an artifact", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const card = await store.create({
@@ -2497,7 +2674,10 @@ describe("WorkboardStore", () => {
     await expect(store.get(running.id)).resolves.toMatchObject({
       metadata: {
         diagnostics: expect.arrayContaining([
-          expect.objectContaining({ kind: "running_without_heartbeat" }),
+          expect.objectContaining({
+            kind: "running_without_heartbeat",
+            actions: expect.arrayContaining([expect.objectContaining({ kind: "reclaim" })]),
+          }),
           expect.objectContaining({ kind: "orphaned_session" }),
         ]),
       },
@@ -2513,6 +2693,43 @@ describe("WorkboardStore", () => {
     await expect(store.get(doneWithAttachment.id)).resolves.not.toMatchObject({
       metadata: {
         diagnostics: expect.arrayContaining([expect.objectContaining({ kind: "missing_proof" })]),
+      },
+    });
+  });
+
+  it("preserves promote and reclaim diagnostic actions through store normalization", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Diagnostic actions",
+      metadata: {
+        diagnostics: [
+          {
+            kind: "running_without_heartbeat",
+            severity: "error",
+            title: "Stale worker",
+            detail: "The worker needs recovery.",
+            firstSeenAt: 1,
+            lastSeenAt: 2,
+            count: 1,
+            actions: [
+              { kind: "promote", label: "Promote card" },
+              { kind: "reclaim", label: "Reclaim stale work" },
+            ],
+          },
+        ],
+      },
+    });
+
+    await expect(store.get(card.id)).resolves.toMatchObject({
+      metadata: {
+        diagnostics: [
+          {
+            actions: [
+              { kind: "promote", label: "Promote card" },
+              { kind: "reclaim", label: "Reclaim stale work" },
+            ],
+          },
+        ],
       },
     });
   });
@@ -2715,6 +2932,30 @@ describe("WorkboardStore", () => {
     expect(stopped.execution).toBeUndefined();
     expect(stopped.metadata?.attempts).toEqual([expect.objectContaining({ status: "stopped" })]);
     expect(stopped.metadata?.failureCount).toBeUndefined();
+
+    const stale = await store.create({
+      title: "Stale diagnostic recovery",
+      status: "running",
+      sessionKey: "agent:main:stale-session",
+    });
+    await store.refreshDiagnostics(Date.now() + 2 * 24 * 60 * 60 * 1000);
+    await expect(store.get(stale.id)).resolves.toMatchObject({
+      metadata: {
+        diagnostics: expect.arrayContaining([
+          expect.objectContaining({ kind: "running_without_heartbeat" }),
+          expect.objectContaining({ kind: "orphaned_session" }),
+        ]),
+      },
+    });
+
+    const reclaimedStale = await store.reclaim(stale.id, { reason: "replace stale worker" }, null);
+    expect(reclaimedStale.status).toBe("ready");
+    expect(reclaimedStale.metadata?.diagnostics ?? []).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ kind: "running_without_heartbeat" })]),
+    );
+    expect(reclaimedStale.metadata?.diagnostics ?? []).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ kind: "orphaned_session" })]),
+    );
   });
 
   it("includes parent results and recent assignee work in worker context", async () => {
