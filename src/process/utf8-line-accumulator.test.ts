@@ -47,6 +47,45 @@ describe("UTF-8 line accumulator", () => {
     ]);
   });
 
+  it("can emit UTF-8-complete progress fragments without retaining them", () => {
+    const accumulator = createUtf8LineAccumulator();
+    const split = Buffer.from("loading 你", "utf8");
+
+    expect(
+      appendUtf8Lines({
+        accumulator,
+        chunk: split.subarray(0, -1),
+        maxPendingLineBytes: 8192,
+        splitOnCarriageReturn: true,
+        emitPending: true,
+      }),
+    ).toEqual([{ line: "loading ", truncated: false }]);
+    expect(
+      appendUtf8Lines({
+        accumulator,
+        chunk: split.subarray(-1),
+        maxPendingLineBytes: 8192,
+        splitOnCarriageReturn: true,
+        emitPending: true,
+      }),
+    ).toEqual([{ line: "你", truncated: false }]);
+    expect(flushUtf8Line(accumulator, 8192)).toBeUndefined();
+  });
+
+  it("applies completed-line bounds to emitted progress fragments", () => {
+    const accumulator = createUtf8LineAccumulator();
+
+    expect(
+      appendUtf8Lines({
+        accumulator,
+        chunk: "12345",
+        maxPendingLineBytes: 8192,
+        maxLineBytes: 4,
+        emitPending: true,
+      }),
+    ).toEqual([{ line: "2345", truncated: true }]);
+  });
+
   it("bounds completed and trailing lines with UTF-8-safe truncation metadata", () => {
     const accumulator = createUtf8LineAccumulator();
 

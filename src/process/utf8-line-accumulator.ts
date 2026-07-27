@@ -7,6 +7,7 @@ export type Utf8LineAccumulator = {
   decoder: StringDecoder;
   pendingLine: string;
   pendingLineTruncated: boolean;
+  skipLeadingLf: boolean;
 };
 
 type AccumulatedUtf8Line = {
@@ -19,6 +20,7 @@ export function createUtf8LineAccumulator(): Utf8LineAccumulator {
     decoder: new StringDecoder("utf8"),
     pendingLine: "",
     pendingLineTruncated: false,
+    skipLeadingLf: false,
   };
 }
 
@@ -30,22 +32,55 @@ function boundLine(value: string, maxBytes: number | undefined): AccumulatedUtf8
   return { line, truncated: line !== value };
 }
 
+function emitPendingLine(
+  accumulator: Utf8LineAccumulator,
+  maxLineBytes: number | undefined,
+): AccumulatedUtf8Line | undefined {
+  if (!accumulator.pendingLine) {
+    return undefined;
+  }
+  const emitted = boundLine(accumulator.pendingLine, maxLineBytes);
+  const line = {
+    line: emitted.line,
+    truncated: emitted.truncated || accumulator.pendingLineTruncated,
+  };
+  accumulator.pendingLine = "";
+  accumulator.pendingLineTruncated = false;
+  return line;
+}
+
 export function appendUtf8Lines(params: {
   accumulator: Utf8LineAccumulator;
   chunk: Buffer | string;
   maxPendingLineBytes: number;
   maxLineBytes?: number;
+  splitOnCarriageReturn?: boolean;
+  emitPending?: boolean;
 }): AccumulatedUtf8Line[] {
-  const text = params.accumulator.decoder.write(
+  let text = params.accumulator.decoder.write(
     Buffer.isBuffer(params.chunk) ? params.chunk : Buffer.from(params.chunk, "utf8"),
   );
+  if (!text) {
+    const pending = params.emitPending
+      ? emitPendingLine(params.accumulator, params.maxLineBytes)
+      : undefined;
+    return pending ? [pending] : [];
+  }
+  if (params.accumulator.skipLeadingLf && text.startsWith("\n")) {
+    text = text.slice(1);
+  }
+  params.accumulator.skipLeadingLf = false;
   if (!text) {
     return [];
   }
 
   const hadTruncatedCarry = params.accumulator.pendingLineTruncated;
   const combined = params.accumulator.pendingLine + text;
-  const lines = combined.split(/\r?\n/u);
+  params.accumulator.skipLeadingLf =
+    params.splitOnCarriageReturn === true && combined.endsWith("\r");
+  const lines = params.splitOnCarriageReturn
+    ? combined.split(/\r\n|[\r\n]/u)
+    : combined.split(/\r?\n/u);
   params.accumulator.pendingLine = lines.pop() ?? "";
   params.accumulator.pendingLineTruncated = lines.length === 0 && hadTruncatedCarry;
 
@@ -59,6 +94,12 @@ export function appendUtf8Lines(params: {
   const pending = boundLine(params.accumulator.pendingLine, params.maxPendingLineBytes);
   params.accumulator.pendingLine = pending.line;
   params.accumulator.pendingLineTruncated ||= pending.truncated;
+  if (params.emitPending) {
+    const emitted = emitPendingLine(params.accumulator, params.maxLineBytes);
+    if (emitted) {
+      completed.push(emitted);
+    }
+  }
   return completed;
 }
 
@@ -71,5 +112,6 @@ export function flushUtf8Line(
   const truncated = accumulator.pendingLineTruncated || bounded.truncated;
   accumulator.pendingLine = "";
   accumulator.pendingLineTruncated = false;
+  accumulator.skipLeadingLf = false;
   return bounded.line ? { line: bounded.line, truncated } : undefined;
 }

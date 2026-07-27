@@ -41,6 +41,7 @@ type ResolvedMcpTransport = {
 // MCP servers may emit progress output without newlines. Keep the diagnostic tail
 // bounded so one noisy server cannot grow the gateway heap indefinitely.
 const MCP_STDERR_TRUNCATED_PREFIX = "[stderr line truncated] ";
+const MCP_STDERR_PROGRESS_FLUSH_MS = 250;
 
 function attachStderrLogging(serverName: string, transport: OpenClawStdioClientTransport) {
   const stderr = transport.stderr;
@@ -50,20 +51,47 @@ function attachStderrLogging(serverName: string, transport: OpenClawStdioClientT
   const lineAccumulator = createUtf8LineAccumulator();
   let detached = false;
   let finalized = false;
+  let progressTimer: ReturnType<typeof setTimeout> | undefined;
   const logLine = (line: string, truncated = false) => {
     const trimmed = `${truncated ? MCP_STDERR_TRUNCATED_PREFIX : ""}${line}`.trim();
     if (trimmed) {
       logDebug(`bundle-mcp:${serverName}: ${trimmed}`);
     }
   };
+  const clearProgressTimer = () => {
+    if (progressTimer) {
+      clearTimeout(progressTimer);
+      progressTimer = undefined;
+    }
+  };
+  const flushProgress = () => {
+    progressTimer = undefined;
+    for (const { line, truncated } of appendUtf8Lines({
+      accumulator: lineAccumulator,
+      chunk: "",
+      maxLineBytes: DEFAULT_MAX_PENDING_UTF8_LINE_BYTES,
+      maxPendingLineBytes: DEFAULT_MAX_PENDING_UTF8_LINE_BYTES,
+      splitOnCarriageReturn: true,
+      emitPending: true,
+    })) {
+      logLine(line, truncated);
+    }
+  };
   const onData = (chunk: Buffer | string) => {
+    // MCP stderr is live diagnostics: servers often use CR/no-newline progress frames.
+    // Coalesce ordinary chunks briefly, then expose a UTF-8-complete bounded fragment.
     for (const { line, truncated } of appendUtf8Lines({
       accumulator: lineAccumulator,
       chunk,
       maxLineBytes: DEFAULT_MAX_PENDING_UTF8_LINE_BYTES,
       maxPendingLineBytes: DEFAULT_MAX_PENDING_UTF8_LINE_BYTES,
+      splitOnCarriageReturn: true,
     })) {
       logLine(line, truncated);
+    }
+    clearProgressTimer();
+    if (lineAccumulator.pendingLine) {
+      progressTimer = setTimeout(flushProgress, MCP_STDERR_PROGRESS_FLUSH_MS);
     }
   };
   // Natural end covers MCP crashes; close is a fallback for abrupt stream teardown.
@@ -73,6 +101,7 @@ function attachStderrLogging(serverName: string, transport: OpenClawStdioClientT
       return;
     }
     finalized = true;
+    clearProgressTimer();
     const trailing = flushUtf8Line(lineAccumulator, DEFAULT_MAX_PENDING_UTF8_LINE_BYTES);
     if (trailing) {
       logLine(trailing.line, trailing.truncated);
@@ -86,6 +115,7 @@ function attachStderrLogging(serverName: string, transport: OpenClawStdioClientT
       return;
     }
     detached = true;
+    clearProgressTimer();
     if (typeof stderr.off === "function") {
       stderr.off("data", onData);
       stderr.off("end", finalize);

@@ -161,18 +161,46 @@ describe("resolveMcpTransport", () => {
     stderr.write(output.subarray(0, utf8Split));
     stderr.write(output.subarray(utf8Split, carriageReturn + 1));
 
-    expect(logDebugMock).not.toHaveBeenCalled();
+    expect(logDebugMock).toHaveBeenCalledTimes(1);
+    expect(logDebugMock).toHaveBeenCalledWith("bundle-mcp:unicode: alpha 你好 omega");
 
     stderr.write(output.subarray(carriageReturn + 1, carriageReturn + 8));
     stderr.write(output.subarray(carriageReturn + 8));
 
     expect(logDebugMock).toHaveBeenCalledTimes(1);
-    expect(logDebugMock).toHaveBeenCalledWith("bundle-mcp:unicode: alpha 你好 omega");
 
     resolved?.detachStderr?.();
 
     expect(logDebugMock).toHaveBeenCalledTimes(2);
     expect(logDebugMock).toHaveBeenLastCalledWith("bundle-mcp:unicode: final tail");
+  });
+
+  it("logs unterminated MCP stderr progress before the stream ends", () => {
+    vi.useFakeTimers();
+    const resolved = resolveMcpTransport("progress", {
+      command: process.execPath,
+    });
+    expect(resolved?.transportType).toBe("stdio");
+    if (!resolved) {
+      throw new Error("expected resolved stdio transport");
+    }
+
+    const stderr = (
+      resolved.transport as { stderr?: { write: (chunk: Buffer | string) => boolean } }
+    ).stderr;
+    expect(stderr).toBeDefined();
+    if (!stderr) {
+      throw new Error("expected stdio stderr stream");
+    }
+
+    stderr.write("loading 50%");
+
+    expect(logDebugMock).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(250);
+    expect(logDebugMock).toHaveBeenCalledWith("bundle-mcp:progress: loading 50%");
+    resolved.detachStderr?.();
+    expect(logDebugMock).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
   });
 
   it("flushes the final MCP stderr line when the stream ends", async () => {
