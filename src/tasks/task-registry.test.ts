@@ -3012,7 +3012,7 @@ describe("task-registry", () => {
         lastEventAt: now - 60_000,
       });
       finalizeTaskRunByRunId({
-        runId: task.runId,
+        runId: "run-terminal-acp-resumable-oneshot",
         runtime: "acp",
         status: "succeeded",
         endedAt: now - 60_000,
@@ -3111,7 +3111,7 @@ describe("task-registry", () => {
         lastEventAt: now - 60_000,
       });
       finalizeTaskRunByRunId({
-        runId: task.runId,
+        runId: "run-terminal-acp-non-resumable-oneshot",
         runtime: "acp",
         status: "succeeded",
         endedAt: now - 60_000,
