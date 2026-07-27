@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCanvasTool } from "./tool.js";
 
-const FILE_BYTE_LIMIT = 25 * 1024 * 1024;
+const FILE_BYTE_LIMIT = 16 * 1024 * 1024;
 
 const VALID_A2UI_V08_JSONL = [
   JSON.stringify({
@@ -163,7 +163,7 @@ describe("Canvas tool", () => {
         action: "a2ui_push",
         jsonlPath: "oversized.jsonl",
       }),
-    ).rejects.toThrow(`A2UI JSONL file exceeds ${FILE_BYTE_LIMIT} bytes`);
+    ).rejects.toThrow(`File exceeds ${FILE_BYTE_LIMIT} bytes`);
     expect(mocks.listNodes).not.toHaveBeenCalled();
     expect(mocks.callGatewayTool).not.toHaveBeenCalled();
   });

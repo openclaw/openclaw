@@ -917,7 +917,7 @@ describe("GatewayClient", () => {
     expect(getPendingCount(client)).toBe(0);
   });
 
-  test("rejects request frames above the negotiated payload before sending", async () => {
+  test("enforces the latest negotiated request payload before sending", async () => {
     const { client, send } = createOpenGatewayClient(25);
     const payloadHarness = client as unknown as {
       handleConnectHello: (hello: Pick<HelloOk, "auth" | "policy">, assembled: unknown) => void;
@@ -937,6 +937,28 @@ describe("GatewayClient", () => {
     expect(payloadHarness.maxPayloadBytes).toBe(128);
     expect(send).not.toHaveBeenCalled();
     expect(getPendingCount(client)).toBe(0);
+
+    payloadHarness.handleConnectHello(
+      {
+        auth: { role: "operator", scopes: [] },
+        policy: { maxPayload: 512, maxBufferedBytes: 1_024, tickIntervalMs: 30_000 },
+      },
+      {},
+    );
+    const request = client.request<{ status: string }>("node.invoke", {
+      jsonl: "x".repeat(128),
+    });
+    const frame = JSON.parse(String(send.mock.calls[0]?.[0])) as { id: string };
+    handleGatewayMessage(client, {
+      type: "res",
+      id: frame.id,
+      ok: true,
+      payload: { status: "ok" },
+    });
+
+    await expect(request).resolves.toEqual({ status: "ok" });
+    expect(payloadHarness.maxPayloadBytes).toBe(512);
+    expect(send).toHaveBeenCalledTimes(1);
     client.stop();
   });
 
