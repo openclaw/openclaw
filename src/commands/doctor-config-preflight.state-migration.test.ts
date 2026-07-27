@@ -752,11 +752,13 @@ describe("runDoctorConfigPreflight state migration", () => {
 
   it("blocks gateway readiness when startup migrations leave warnings", async () => {
     needsStartupMigrationCheckpoint.mockReturnValue(true);
+    // The uninitialized-target state-dir skip stays in `warnings` (#112395), so this
+    // also proves non-equivalent legacy contents cannot checkpoint readiness.
     autoMigrateLegacyStateDir.mockResolvedValueOnce({
       migrated: false,
       skipped: false,
       changes: [],
-      warnings: ["Left legacy config health state in place."],
+      warnings: ["State dir migration skipped: target already exists. Remove or merge manually."],
     });
 
     await expect(
