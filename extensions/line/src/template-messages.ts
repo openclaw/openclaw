@@ -10,6 +10,7 @@ import {
 import type { LineTemplateMessagePayload } from "./types.js";
 
 type TemplateMessage = messagingApi.TemplateMessage;
+type TextMessage = messagingApi.TextMessage;
 type ConfirmTemplate = messagingApi.ConfirmTemplate;
 type ButtonsTemplate = messagingApi.ButtonsTemplate;
 type CarouselTemplate = messagingApi.CarouselTemplate;
@@ -88,6 +89,49 @@ function normalizeCarouselColumnActions(column: CarouselColumn): CarouselColumn 
   };
 }
 
+// Template buttons render their label; LINE rejects the whole message when a
+// template action's label is empty.
+function hasRenderableLabel(action: Action): boolean {
+  return Boolean(action.label);
+}
+
+// LINE rejects the whole carousel unless every column keeps at least one
+// labeled action and title, thumbnail, and action count usage match across
+// columns.
+function normalizeCarouselColumns(columns: CarouselColumn[]): CarouselColumn[] {
+  const deliverable = columns
+    .map((column) => {
+      const normalized = normalizeCarouselColumnActions(column);
+      normalized.actions = normalized.actions.filter(hasRenderableLabel);
+      return normalized;
+    })
+    .filter((column) => column.actions.length > 0);
+  if (deliverable.length === 0) {
+    return [];
+  }
+  const actionCount = Math.min(...deliverable.map((column) => column.actions.length));
+  const foldTitles = deliverable.some((column) => column.title === undefined);
+  const dropThumbnails = deliverable.some((column) => column.thumbnailImageUrl === undefined);
+  return deliverable.map((column) => {
+    const title = foldTitles ? undefined : column.title;
+    const thumbnailImageUrl = dropThumbnails ? undefined : column.thumbnailImageUrl;
+    // A title dropped for cross-column consistency is folded into the text so
+    // its content still reaches the user; the text limit is re-resolved because
+    // it depends on title and thumbnail presence.
+    const text =
+      foldTitles && column.title !== undefined ? `${column.title}: ${column.text}` : column.text;
+    return Object.assign(column, {
+      title,
+      text: truncateTemplateText(
+        text,
+        resolveTemplateTextLimit({ title, thumbnailImageUrl, textOnlyLimit: 120 }),
+      ),
+      thumbnailImageUrl,
+      actions: column.actions.slice(0, actionCount),
+    });
+  });
+}
+
 /**
  * Create a confirm template (yes/no style dialog)
  */
@@ -136,7 +180,10 @@ export function createButtonTemplate(
     type: "buttons",
     ...(normalizedTitle ? { title: truncateTemplateText(normalizedTitle, 40) } : {}), // LINE limit
     text: truncateTemplateText(text, textLimit),
-    actions: actions.slice(0, 4).map((action) => normalizeLineAction(action)), // LINE limit: max 4 actions
+    actions: actions
+      .map((action) => normalizeLineAction(action))
+      .filter(hasRenderableLabel)
+      .slice(0, 4), // LINE limit: max 4 actions
     thumbnailImageUrl: options?.thumbnailImageUrl,
     imageAspectRatio: options?.imageAspectRatio ?? "rectangle",
     imageSize: options?.imageSize ?? "cover",
@@ -168,7 +215,7 @@ export function createTemplateCarousel(
 ): TemplateMessage {
   const template: CarouselTemplate = {
     type: "carousel",
-    columns: columns.slice(0, 10).map(normalizeCarouselColumnActions), // LINE limit: max 10 columns
+    columns: normalizeCarouselColumns(columns.slice(0, 10)), // LINE limit: max 10 columns
     imageAspectRatio: options?.imageAspectRatio ?? "rectangle",
     imageSize: options?.imageSize ?? "cover",
   };
@@ -191,30 +238,50 @@ export function createCarouselColumn(params: {
   imageBackgroundColor?: string;
   defaultAction?: Action;
 }): CarouselColumn {
+  const normalizedTitle = params.title || undefined;
+  const thumbnailImageUrl = params.thumbnailImageUrl || undefined;
   // LINE caps a carousel column's text at 60 chars when the column carries a
   // title or thumbnail image, and 120 chars otherwise. Sending an over-length
   // text makes LINE reject the whole carousel, so mirror the conditional limit
   // the buttons template already applies above.
-  const textLimit = resolveTemplateTextLimit({ ...params, textOnlyLimit: 120 });
+  const textLimit = resolveTemplateTextLimit({
+    title: normalizedTitle,
+    thumbnailImageUrl,
+    textOnlyLimit: 120,
+  });
   return {
-    title: truncateOptionalTemplateText(params.title, 40),
+    title: truncateOptionalTemplateText(normalizedTitle, 40),
     text: truncateTemplateText(params.text, textLimit),
     actions: params.actions.slice(0, 3).map((action) => normalizeLineAction(action)), // LINE limit: max 3 actions per column
-    thumbnailImageUrl: params.thumbnailImageUrl,
+    thumbnailImageUrl,
     imageBackgroundColor: params.imageBackgroundColor,
     defaultAction:
       params.defaultAction === undefined ? undefined : normalizeLineAction(params.defaultAction),
   };
 }
 
+// A template that lost every button still carries user-visible content; LINE
+// defines altText as exactly that textual representation, so deliver it as a
+// plain text message instead of dropping the reply.
+function templateTextFallback(text: string): TextMessage | null {
+  return text ? { type: "text", text } : null;
+}
+
 /**
- * Convert a TemplateMessagePayload from ReplyPayload to a LINE TemplateMessage
+ * Convert a TemplateMessagePayload from ReplyPayload to a LINE TemplateMessage,
+ * or to its textual fallback when LINE cannot render the template at all.
  */
 export function buildTemplateMessageFromPayload(
   payload: LineTemplateMessagePayload,
-): TemplateMessage | null {
+): TemplateMessage | TextMessage | null {
   switch (payload.type) {
     case "confirm": {
+      // Confirm templates require exactly two labeled actions; a blank label
+      // makes LINE reject the whole message.
+      if (!payload.confirmLabel || !payload.cancelLabel) {
+        return templateTextFallback(truncateTemplateText(payload.altText || payload.text, 400));
+      }
+
       const confirmAction = payload.confirmData.startsWith("http")
         ? uriAction(payload.confirmLabel, payload.confirmData)
         : payload.confirmData.includes("=")
@@ -231,14 +298,21 @@ export function buildTemplateMessageFromPayload(
     }
 
     case "buttons": {
-      const actions: Action[] = payload.actions
-        .slice(0, 4)
-        .map((action) => buildTemplatePayloadAction(action));
+      const actions: Action[] = payload.actions.map((action) => buildTemplatePayloadAction(action));
 
-      return createButtonTemplate(payload.title, payload.text, actions, {
+      const message = createButtonTemplate(payload.title, payload.text, actions, {
         thumbnailImageUrl: payload.thumbnailImageUrl,
         altText: payload.altText,
       });
+      if (message.template.type === "buttons" && message.template.actions.length === 0) {
+        return templateTextFallback(
+          truncateTemplateText(
+            payload.altText || (payload.title ? `${payload.title}: ${payload.text}` : payload.text),
+            400,
+          ),
+        );
+      }
+      return message;
     }
 
     case "carousel": {
@@ -255,7 +329,18 @@ export function buildTemplateMessageFromPayload(
         });
       });
 
-      return createTemplateCarousel(columns, { altText: payload.altText });
+      const message = createTemplateCarousel(columns, { altText: payload.altText });
+      if (message.template.type === "carousel" && message.template.columns.length === 0) {
+        return templateTextFallback(
+          payload.altText
+            ? truncateTemplateText(payload.altText, 400)
+            : columns
+                .map((col) => (col.title ? `${col.title}: ${col.text}` : col.text))
+                .filter(Boolean)
+                .join("\n"),
+        );
+      }
+      return message;
     }
 
     default:

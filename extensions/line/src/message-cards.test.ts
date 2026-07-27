@@ -338,6 +338,211 @@ describe("carousel column limits", () => {
   });
 });
 
+describe("carousel column consistency", () => {
+  const column = (overrides?: { title?: string; thumbnailImageUrl?: string; actions?: number }) =>
+    createCarouselColumn({
+      title: overrides?.title,
+      text: "Text",
+      thumbnailImageUrl: overrides?.thumbnailImageUrl,
+      actions: Array.from({ length: overrides?.actions ?? 1 }, (_, i) => messageAction(`A${i}`)),
+    });
+  const getColumns = (template: ReturnType<typeof createTemplateCarousel>) =>
+    (
+      template.template as {
+        columns: Array<{
+          title?: string;
+          text: string;
+          thumbnailImageUrl?: string;
+          actions: Array<{ label?: string }>;
+        }>;
+      }
+    ).columns;
+
+  it("drops columns without actions and keeps the rest", () => {
+    const template = createTemplateCarousel([
+      column({ actions: 0 }),
+      column({ actions: 1 }),
+      column({ actions: 0 }),
+    ]);
+
+    const columns = getColumns(template);
+    expect(columns).toHaveLength(1);
+    expect(columns[0]?.actions).toHaveLength(1);
+  });
+
+  it("drops blank-label actions and then any column left without actions", () => {
+    // LINE rejects a carousel action whose label is empty ("must be non-empty
+    // text"), which would take the whole message down with it.
+    const template = createTemplateCarousel([
+      createCarouselColumn({ text: "A", actions: [messageAction("", "x"), messageAction("OK")] }),
+      createCarouselColumn({ text: "B", actions: [messageAction("", "x")] }),
+    ]);
+
+    const columns = getColumns(template);
+    expect(columns).toHaveLength(1);
+    expect(columns[0]?.actions).toEqual([{ type: "message", label: "OK", text: "OK" }]);
+  });
+
+  it("keeps an unavailable-action fallback as a labeled action", () => {
+    const template = createTemplateCarousel([
+      createCarouselColumn({
+        text: "Text",
+        actions: [postbackAction("Buy", `data=${"x".repeat(400)}`)],
+      }),
+    ]);
+
+    const columns = getColumns(template);
+    expect(columns).toHaveLength(1);
+    expect(columns[0]?.actions).toEqual([
+      {
+        type: "message",
+        label: "Unavailable",
+        text: "Action unavailable: callback data exceeds LINE's limit.",
+      },
+    ]);
+  });
+
+  it("equalizes action counts to the smallest column", () => {
+    const template = createTemplateCarousel([column({ actions: 3 }), column({ actions: 1 })]);
+
+    expect(getColumns(template).map((col) => col.actions.length)).toEqual([1, 1]);
+  });
+
+  it("folds a title into the text when any column lacks one", () => {
+    const template = createTemplateCarousel([column({ title: "Titled" }), column()]);
+
+    const columns = getColumns(template);
+    for (const col of columns) {
+      expect(col.title).toBeUndefined();
+    }
+    expect(columns.map((col) => col.text)).toEqual(["Titled: Text", "Text"]);
+  });
+
+  it("re-resolves the text limit after folding a title", () => {
+    // With the title dropped the column becomes titleless, so the folded text
+    // may use the 120-character limit instead of the titled 60.
+    const template = createTemplateCarousel([
+      createCarouselColumn({
+        title: "T".repeat(40),
+        text: "x".repeat(60),
+        actions: [messageAction("OK")],
+      }),
+      column(),
+    ]);
+
+    const first = getColumns(template)[0];
+    expect(first?.text).toBe(`${"T".repeat(40)}: ${"x".repeat(60)}`);
+    expect(first?.text.length).toBe(102);
+  });
+
+  it("omits every thumbnail when any column lacks one", () => {
+    const template = createTemplateCarousel([
+      column({ thumbnailImageUrl: "https://example.com/a.jpg" }),
+      column(),
+    ]);
+
+    for (const col of getColumns(template)) {
+      expect(col.thumbnailImageUrl).toBeUndefined();
+    }
+  });
+
+  it("keeps titles, thumbnails, and actions when all columns are consistent", () => {
+    const template = createTemplateCarousel([
+      column({ title: "One", thumbnailImageUrl: "https://example.com/a.jpg", actions: 2 }),
+      column({ title: "Two", thumbnailImageUrl: "https://example.com/b.jpg", actions: 2 }),
+    ]);
+
+    const columns = getColumns(template);
+    expect(columns.map((col) => col.title)).toEqual(["One", "Two"]);
+    expect(columns.map((col) => col.thumbnailImageUrl)).toEqual([
+      "https://example.com/a.jpg",
+      "https://example.com/b.jpg",
+    ]);
+    expect(columns.map((col) => col.actions.length)).toEqual([2, 2]);
+  });
+
+  it("treats a blank title and thumbnail as absent", () => {
+    const template = createTemplateCarousel([
+      createCarouselColumn({
+        title: "",
+        thumbnailImageUrl: "",
+        text: "x".repeat(120),
+        actions: [messageAction("OK")],
+      }),
+    ]);
+
+    const first = getColumns(template)[0];
+    expect(first?.title).toBeUndefined();
+    expect(first?.thumbnailImageUrl).toBeUndefined();
+    expect(first?.text).toBe("x".repeat(120));
+  });
+});
+
+describe("template payload textual fallback", () => {
+  it("delivers carousel column content as text when no column is deliverable", () => {
+    const message = buildTemplateMessageFromPayload({
+      type: "carousel",
+      columns: [
+        { title: "First", text: "A", actions: [] },
+        { text: "B", actions: [] },
+      ],
+    });
+
+    expect(message).toEqual({ type: "text", text: "First: A\nB" });
+  });
+
+  it("prefers the carousel altText for the fallback when provided", () => {
+    const message = buildTemplateMessageFromPayload({
+      type: "carousel",
+      columns: [{ text: "A", actions: [] }],
+      altText: "Two options",
+    });
+
+    expect(message).toEqual({ type: "text", text: "Two options" });
+  });
+
+  it("drops blank-label buttons actions and keeps the labeled rest", () => {
+    const message = buildTemplateMessageFromPayload({
+      type: "buttons",
+      text: "Pick",
+      actions: [
+        { type: "message", label: "" },
+        { type: "message", label: "One" },
+      ],
+    });
+
+    const template = expectDefined(message, "buttons template message");
+    if (template.type !== "template" || template.template.type !== "buttons") {
+      throw new Error("expected a buttons template");
+    }
+    expect(template.template.actions).toEqual([{ type: "message", label: "One", text: "One" }]);
+  });
+
+  it("delivers buttons title and text as text when every action label is blank", () => {
+    const message = buildTemplateMessageFromPayload({
+      type: "buttons",
+      title: "Menu",
+      text: "Pick",
+      actions: [{ type: "message", label: "" }],
+    });
+
+    expect(message).toEqual({ type: "text", text: "Menu: Pick" });
+  });
+
+  it("delivers the confirm question as text when a label is blank", () => {
+    const message = buildTemplateMessageFromPayload({
+      type: "confirm",
+      text: "Continue?",
+      confirmLabel: "",
+      confirmData: "yes",
+      cancelLabel: "No",
+      cancelData: "no",
+    });
+
+    expect(message).toEqual({ type: "text", text: "Continue?" });
+  });
+});
+
 describe("flex cards", () => {
   it("includes footer when provided", () => {
     const card = createInfoCard("Title", "Body", "Footer text");
@@ -669,11 +874,12 @@ describe("action label/data surrogate-safe truncation", () => {
       actions: [{ type: "uri", label: "Open", uri: `https://e.example/?q=${"u".repeat(1200)}` }],
     });
 
-    const buttonsTemplate = expectDefined(template, "buttons template message").template as {
-      actions: Array<{ type: string; label?: string; text?: string }>;
-    };
+    const message = expectDefined(template, "buttons template message");
+    if (message.type !== "template" || message.template.type !== "buttons") {
+      throw new Error("expected a buttons template");
+    }
     const uriTemplateAction = expectDefined(
-      buttonsTemplate.actions[0],
+      message.template.actions[0],
       "buttons template uri action",
     );
     expect(uriTemplateAction).toEqual({
@@ -689,11 +895,12 @@ describe("action label/data surrogate-safe truncation", () => {
       text: "Pick",
       actions: [{ type: "postback", label: "Open", data: `action=open&token=${"x".repeat(300)}` }],
     });
-    const buttonsTemplate = expectDefined(template, "buttons template message").template as {
-      actions: Array<{ type: string; label?: string; text?: string }>;
-    };
+    const message = expectDefined(template, "buttons template message");
+    if (message.type !== "template" || message.template.type !== "buttons") {
+      throw new Error("expected a buttons template");
+    }
 
-    expect(buttonsTemplate.actions[0]).toEqual({
+    expect(message.template.actions[0]).toEqual({
       type: "message",
       label: "Unavailable",
       text: "Action unavailable: callback data exceeds LINE's limit.",

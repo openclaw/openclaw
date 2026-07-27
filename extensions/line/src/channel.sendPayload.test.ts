@@ -81,7 +81,11 @@ function createRuntime(): { runtime: PluginRuntime; mocks: LineRuntimeMocks } {
   const pushLocationMessage = vi.fn(async () => lineResult("m-loc"));
   const pushTextMessageWithQuickReplies = vi.fn(async () => lineResult("m-quick"));
   const createQuickReplyItems = vi.fn((labels: string[]) => ({ items: labels }));
-  const buildTemplateMessageFromPayload = vi.fn(() => ({ type: "buttons" }));
+  const buildTemplateMessageFromPayload = vi.fn(() => ({
+    type: "template",
+    altText: "alt",
+    template: { type: "buttons", text: "Continue?", actions: [] },
+  }));
   const sendMessageLine = vi.fn(async () => lineResult("m-media"));
   const chunkMarkdownText = vi.fn((text: string) => [text]);
   const resolveTextChunkLimit = vi.fn(() => 123);
@@ -534,6 +538,44 @@ describe("line outbound sendPayload", () => {
     expect(mocks.buildTemplateMessageFromPayload).toHaveBeenCalledTimes(1);
     expect(mocks.pushTemplateMessage).toHaveBeenCalledTimes(1);
     expect(mocks.pushMessageLine).toHaveBeenCalledWith("line:user:1", "Choose one:", {
+      verbose: false,
+      accountId: "default",
+      cfg,
+    });
+  });
+
+  it("sends the textual fallback when the template payload is undeliverable", async () => {
+    const { runtime, mocks } = createRuntime();
+    mocks.buildTemplateMessageFromPayload.mockReturnValueOnce({
+      type: "text",
+      text: "Continue?",
+    });
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+
+    await lineOutboundAdapter.sendPayload!({
+      to: "line:user:1",
+      text: "",
+      payload: {
+        channelData: {
+          line: {
+            templateMessage: {
+              type: "confirm",
+              text: "Continue?",
+              confirmLabel: "",
+              confirmData: "yes",
+              cancelLabel: "No",
+              cancelData: "no",
+            },
+          },
+        },
+      },
+      accountId: "default",
+      cfg,
+    });
+
+    expect(mocks.pushTemplateMessage).not.toHaveBeenCalled();
+    expect(mocks.pushMessageLine).toHaveBeenCalledWith("line:user:1", "Continue?", {
       verbose: false,
       accountId: "default",
       cfg,
