@@ -92,6 +92,25 @@ function backfillLegacyManagedImageRoots(db: DatabaseSync): void {
 }
 
 export function ensureAdditiveStateColumns(db: DatabaseSync): void {
+  // Receipt history is additive: older builds ignore the table and task rows
+  // remain readable, while upgraded builds can supervise detached workers.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS task_execution_receipts (
+      task_id TEXT NOT NULL,
+      sequence INTEGER NOT NULL CHECK (sequence > 0),
+      kind TEXT NOT NULL,
+      status TEXT NOT NULL,
+      recorded_at INTEGER NOT NULL,
+      summary TEXT,
+      detail_json TEXT,
+      PRIMARY KEY (task_id, sequence),
+      FOREIGN KEY (task_id) REFERENCES task_runs(task_id) ON DELETE CASCADE
+    ) STRICT;
+  `);
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_task_execution_receipts_kind\n" +
+      "  ON task_execution_receipts(task_id, kind, sequence DESC);",
+  );
   if (ensureColumn(db, "claw_package_refs", "updated_at_ms INTEGER NOT NULL DEFAULT 0")) {
     db.exec("UPDATE claw_package_refs SET updated_at_ms = installed_at_ms;");
   }

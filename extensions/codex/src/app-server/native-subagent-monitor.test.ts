@@ -1,3 +1,4 @@
+import { registerNativeHookRelay } from "openclaw/plugin-sdk/agent-harness-runtime";
 // Codex tests cover native subagent monitor plugin behavior.
 import type {
   AgentHarnessScopedSetDeliveryStatusParams,
@@ -121,6 +122,7 @@ function createRuntime() {
       startedAt: params.startedAt,
       lastEventAt: params.lastEventAt,
       progressSummary: params.progressSummary,
+      detail: params.detail,
     }),
   );
   const taskRuntime = {
@@ -128,6 +130,14 @@ function createRuntime() {
     tryCreateRunningTaskRun: vi.fn((params) => createRunningTaskRun(params)),
     recordTaskRunProgressByRunId: vi.fn(() => []),
     finalizeTaskRunByRunId: vi.fn(() => []),
+    recordExecutionReceipt: vi.fn((params) => ({
+      taskId: "task-native-subagent",
+      sequence: 1,
+      ...params,
+      recordedAt: params.recordedAt ?? Date.now(),
+    })),
+    listExecutionReceipts: vi.fn(() => []),
+    evaluateExecutionGate: vi.fn(() => ({ ok: true, missing: [] })),
     listTaskRecords: vi.fn((): AgentHarnessTaskRecord[] => []),
     setDetachedTaskDeliveryStatusByRunId: vi.fn(
       (_params: AgentHarnessScopedSetDeliveryStatusParams): AgentHarnessTaskRecord[] => [],
@@ -350,6 +360,132 @@ function taskRecord(params: {
 }
 
 describe("CodexNativeSubagentMonitor", () => {
+  it("keeps a detached child alive after the parent turn releases its registration", async () => {
+    const client = createClient();
+    const runtime = createRuntime();
+    const releaseClient = vi.fn();
+    const registration = registerCodexNativeSubagentMonitor({
+      client: client as never,
+      parentThreadId: "parent-thread",
+      requesterSessionKey: "agent:main:main",
+      taskRuntimeScope: createTaskScope("agent:main:main"),
+      runtime,
+      retainClient: () => releaseClient,
+    });
+    await notifyChildStarted(client);
+
+    registration.unregister();
+    await client.notify(nativeCompletionNotification());
+
+    expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(1);
+    expect(releaseClient).toHaveBeenCalledTimes(1);
+    client.close();
+  });
+
+  it("rebinds relay health when a later parent turn resumes a detached child", async () => {
+    const client = createClient();
+    const runtime = createRuntime();
+    const firstRelay = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "detached-child-relay-rebind",
+      sessionId: "session-1",
+      runId: "parent-run-1",
+      allowedEvents: ["post_tool_use"],
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    const firstRegistration = registerCodexNativeSubagentMonitor({
+      client: client as never,
+      parentThreadId: "parent-thread",
+      requesterSessionKey: "agent:main:main",
+      taskRuntimeScope: createTaskScope("agent:main:main"),
+      runtime,
+      isRelayHealthy: firstRelay.isRegistered,
+    });
+    await notifyChildStarted(client);
+
+    firstRegistration.unregister();
+    firstRelay.unregister();
+    expect(firstRelay.isRegistered()).toBe(false);
+    await client.notify({
+      method: "thread/status/changed",
+      params: {
+        threadId: "child-thread",
+        status: { type: "active" },
+      },
+    });
+    expect(runtime.recordExecutionReceipt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "codex-thread:child-thread",
+        kind: "relay_health",
+        status: "error",
+      }),
+    );
+    expect(runtime.recordTaskRunProgressByRunId).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "codex-thread:child-thread",
+        progressSummary: "Stalled: native hook relay registration is unavailable.",
+      }),
+    );
+
+    const secondRelay = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "detached-child-relay-rebind",
+      sessionId: "session-1",
+      runId: "parent-run-2",
+      allowedEvents: ["post_tool_use"],
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    const secondRegistration = registerCodexNativeSubagentMonitor({
+      client: client as never,
+      parentThreadId: "parent-thread",
+      requesterSessionKey: "agent:main:main",
+      taskRuntimeScope: createTaskScope("agent:main:main"),
+      runtime,
+      isRelayHealthy: secondRelay.isRegistered,
+    });
+    await client.notify({
+      method: "thread/status/changed",
+      params: {
+        threadId: "child-thread",
+        status: { type: "active" },
+      },
+    });
+
+    expect(runtime.tryCreateRunningTaskRun).toHaveBeenCalledTimes(1);
+    expect(runtime.recordExecutionReceipt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "codex-thread:child-thread",
+        kind: "heartbeat",
+        status: "ok",
+      }),
+    );
+    expect(runtime.recordExecutionReceipt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "codex-thread:child-thread",
+        kind: "connector_health",
+        status: "ok",
+      }),
+    );
+    expect(runtime.recordExecutionReceipt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "codex-thread:child-thread",
+        kind: "relay_health",
+        status: "ok",
+      }),
+    );
+
+    await client.notify(nativeCompletionNotification());
+    expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(1);
+
+    secondRegistration.unregister();
+    secondRelay.unregister();
+    client.close();
+  });
+
   it("keeps native subagent task mirroring on the shared client", async () => {
     const client = createClient();
     const runtime = createRuntime();

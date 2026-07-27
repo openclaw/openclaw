@@ -169,6 +169,8 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       taskRuntimeScope: params.agentHarnessTaskRuntimeScope,
       agentId: sessionAgentId,
       retainClient: () => retainSharedCodexAppServerClientIfCurrent(state.client),
+      isRelayHealthy: () =>
+        state.nativeHookRelay?.isRegistered() === true && !runAbortController.signal.aborted,
     });
   };
   const releaseCurrentRoute = () => {
