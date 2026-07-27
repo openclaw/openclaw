@@ -423,39 +423,25 @@ describe("resolveSlackMedia", () => {
     expectFetchCalledWithUrl(mockFetch, "https://files.slack.com/fresh.jpg");
   });
 
-  it("skips id-only files when files.info returns no private URL", async () => {
+  it.each([
+    { name: "skips id-only files when files.info returns no private URL", fails: false },
+    { name: "skips id-only files when files.info fails", fails: true },
+  ])("$name", async ({ fails }) => {
+    const info = vi.fn();
+    if (fails) {
+      info.mockRejectedValue(new Error("files.info failed"));
+    } else {
+      info.mockResolvedValue({ file: { id: "F123" } });
+    }
     const mockClient = {
-      files: {
-        info: vi.fn().mockResolvedValue({ file: { id: "F123" } }),
-      },
+      files: { info },
     } as unknown as WebClient & { files: { info: ReturnType<typeof vi.fn> } };
-
     const result = await resolveSlackMedia({
       files: [{ id: "F123", name: "test.jpg" }],
       client: mockClient,
       token: "xoxb-test-token",
       maxBytes: 1024 * 1024,
     });
-
-    expect(result).toBeNull();
-    expect(mockClient.files.info).toHaveBeenCalledWith({ file: "F123" });
-    expect(mockFetch).not.toHaveBeenCalled();
-  });
-
-  it("skips id-only files when files.info fails", async () => {
-    const mockClient = {
-      files: {
-        info: vi.fn().mockRejectedValue(new Error("files.info failed")),
-      },
-    } as unknown as WebClient & { files: { info: ReturnType<typeof vi.fn> } };
-
-    const result = await resolveSlackMedia({
-      files: [{ id: "F123", name: "test.jpg" }],
-      client: mockClient,
-      token: "xoxb-test-token",
-      maxBytes: 1024 * 1024,
-    });
-
     expect(result).toBeNull();
     expect(mockClient.files.info).toHaveBeenCalledWith({ file: "F123" });
     expect(mockFetch).not.toHaveBeenCalled();
@@ -1207,111 +1193,76 @@ describe("resolveSlackThreadStarter", () => {
     vi.mocked(logVerbose).mockClear();
   });
 
-  it("returns the starter message when the Slack API succeeds", async () => {
-    const replies = vi.fn().mockResolvedValueOnce({
-      messages: [{ text: "hello thread", user: "U1", ts: "1.000" }],
-    });
+  it.each([
+    {
+      name: "returns the starter message when the Slack API succeeds",
+      message: { text: "hello thread", user: "U1", ts: "1.000" },
+      expected: {
+        text: "hello thread",
+        userId: "U1",
+        botId: undefined,
+        ts: "1.000",
+        files: undefined,
+      },
+    },
+    {
+      name: "returns null when the starter message has no text or files",
+      message: { text: "   ", user: "U1" },
+      expected: null,
+    },
+    {
+      name: "returns the starter text from Slack attachments when bot message text is empty",
+      message: {
+        text: "   ",
+        bot_id: "BMONITOR",
+        ts: "1.000",
+        attachments: [
+          {
+            pretext: "[FIRING:1] HostFilesystemSpaceLow",
+            title: "Filesystem on /dev/sda1 has only 14.93% available space left.",
+            fallback: "dc2.ipa.mgt /dev/sda1 low free space",
+          },
+        ],
+      },
+      expected: {
+        text: "[FIRING:1] HostFilesystemSpaceLow\nFilesystem on /dev/sda1 has only 14.93% available space left.\ndc2.ipa.mgt /dev/sda1 low free space",
+        userId: undefined,
+        botId: "BMONITOR",
+        ts: "1.000",
+        files: undefined,
+      },
+    },
+    {
+      name: "returns a placeholder starter when the root message only has files",
+      message: {
+        text: "   ",
+        user: "U1",
+        ts: "1.000",
+        files: [{ id: "FROOT", name: "root.png", mimetype: "image/png" }],
+      },
+      expected: {
+        text: "[attached: root.png (fileId: FROOT)]",
+        userId: "U1",
+        botId: undefined,
+        ts: "1.000",
+        files: [{ id: "FROOT", name: "root.png", mimetype: "image/png" }],
+      },
+    },
+  ])("$name", async ({ message, expected }) => {
+    const replies = vi.fn().mockResolvedValueOnce({ messages: [message] });
     const client = {
       conversations: { replies },
     } as unknown as Parameters<typeof resolveSlackThreadStarter>[0]["client"];
-
     const result = await resolveSlackThreadStarter({
       channelId: "C1",
       threadTs: "1.000",
       client,
     });
-
-    expect(result).toEqual({
-      text: "hello thread",
-      userId: "U1",
-      botId: undefined,
-      ts: "1.000",
-      files: undefined,
-    });
-    expect(vi.mocked(logVerbose)).not.toHaveBeenCalled();
-  });
-
-  it("returns null when the starter message has no text or files", async () => {
-    const replies = vi.fn().mockResolvedValueOnce({ messages: [{ text: "   ", user: "U1" }] });
-    const client = {
-      conversations: { replies },
-    } as unknown as Parameters<typeof resolveSlackThreadStarter>[0]["client"];
-
-    const result = await resolveSlackThreadStarter({
-      channelId: "C1",
-      threadTs: "1.000",
-      client,
-    });
-
-    expect(result).toBeNull();
-    expect(vi.mocked(logVerbose)).not.toHaveBeenCalled();
-  });
-
-  it("returns the starter text from Slack attachments when bot message text is empty", async () => {
-    const replies = vi.fn().mockResolvedValueOnce({
-      messages: [
-        {
-          text: "   ",
-          bot_id: "BMONITOR",
-          ts: "1.000",
-          attachments: [
-            {
-              pretext: "[FIRING:1] HostFilesystemSpaceLow",
-              title: "Filesystem on /dev/sda1 has only 14.93% available space left.",
-              fallback: "dc2.ipa.mgt /dev/sda1 low free space",
-            },
-          ],
-        },
-      ],
-    });
-    const client = {
-      conversations: { replies },
-    } as unknown as Parameters<typeof resolveSlackThreadStarter>[0]["client"];
-
-    const result = await resolveSlackThreadStarter({
-      channelId: "C1",
-      threadTs: "1.000",
-      client,
-    });
-
-    expect(result).toEqual({
-      text: "[FIRING:1] HostFilesystemSpaceLow\nFilesystem on /dev/sda1 has only 14.93% available space left.\ndc2.ipa.mgt /dev/sda1 low free space",
-      userId: undefined,
-      botId: "BMONITOR",
-      ts: "1.000",
-      files: undefined,
-    });
-    expect(vi.mocked(logVerbose)).not.toHaveBeenCalled();
-  });
-
-  it("returns a placeholder starter when the root message only has files", async () => {
-    const replies = vi.fn().mockResolvedValueOnce({
-      messages: [
-        {
-          text: "   ",
-          user: "U1",
-          ts: "1.000",
-          files: [{ id: "FROOT", name: "root.png", mimetype: "image/png" }],
-        },
-      ],
-    });
-    const client = {
-      conversations: { replies },
-    } as unknown as Parameters<typeof resolveSlackThreadStarter>[0]["client"];
-
-    const result = await resolveSlackThreadStarter({
-      channelId: "C1",
-      threadTs: "1.000",
-      client,
-    });
-
-    expect(result).toEqual({
-      text: "[attached: root.png (fileId: FROOT)]",
-      userId: "U1",
-      botId: undefined,
-      ts: "1.000",
-      files: [{ id: "FROOT", name: "root.png", mimetype: "image/png" }],
-    });
+    if (expected === null) {
+      expect(result).toBeNull();
+    } else {
+      expect(result).toEqual(expected);
+    }
     expect(vi.mocked(logVerbose)).not.toHaveBeenCalled();
   });
 
