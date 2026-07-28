@@ -876,6 +876,51 @@ describe("capEntryCount", () => {
     expect(store["agent:main:cron:older"]).toBeUndefined();
   });
 
+  it("still trims older removable entries under an unsatisfiable cap", () => {
+    const now = Date.now();
+    const store = makeStore([
+      ["agent:main:slack:thread:t-a", makeEntry(now - 10 * DAY_MS)],
+      ["agent:main:slack:thread:t-b", makeEntry(now - 9 * DAY_MS)],
+      ...Array.from({ length: 6 }, (_, index): [string, SessionEntry] => [
+        `agent:main:cron:job-${index}`,
+        makeEntry(now - index),
+      ]),
+    ]);
+
+    // Two protected entries against a cap of two leaves no arithmetic budget, so
+    // the over-cap floor applies: the newest removable entries survive and the
+    // rest are still evicted. Count-based retention stays active rather than
+    // becoming all-or-nothing.
+    const evicted = capEntryCount(store, 2);
+
+    expect(evicted).toBe(4);
+    expect(store).toHaveProperty("agent:main:cron:job-0");
+    expect(store).toHaveProperty("agent:main:cron:job-1");
+    expect(store["agent:main:cron:job-2"]).toBeUndefined();
+    expect(store["agent:main:cron:job-5"]).toBeUndefined();
+  });
+
+  it("never lets the over-cap floor exceed the configured cap", () => {
+    const now = Date.now();
+    const store = makeStore([
+      ["agent:main:slack:thread:t-a", makeEntry(now - 10 * DAY_MS)],
+      ["agent:main:slack:thread:t-b", makeEntry(now - 9 * DAY_MS)],
+      ["agent:main:slack:thread:t-c", makeEntry(now - 8 * DAY_MS)],
+      ...Array.from({ length: 5 }, (_, index): [string, SessionEntry] => [
+        `agent:main:cron:tight-${index}`,
+        makeEntry(now - index),
+      ]),
+    ]);
+
+    const evicted = capEntryCount(store, 1);
+
+    // A cap of one may keep at most one removable entry even in the over-cap
+    // state, so the floor is clamped rather than widening the operator's limit.
+    expect(evicted).toBe(4);
+    expect(store).toHaveProperty("agent:main:cron:tight-0");
+    expect(store["agent:main:cron:tight-1"]).toBeUndefined();
+  });
+
   it("still honors an explicit zero cap", () => {
     const store = makeStore([["agent:main:cron:job-3", makeEntry(Date.now())]]);
 
