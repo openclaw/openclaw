@@ -458,7 +458,7 @@ async function forEachJsonlRecord(
             );
           }
           if (line.length > 0) {
-            visit(JSON.parse(line.toString("utf8")) as T);
+            visit(JSON.parse(line.toString("utf8")) as ReplayLogRecord);
           }
           lineStart = newlineIndex + 1;
         }
@@ -475,9 +475,9 @@ async function forEachJsonlRecord(
     if (pending.length === 0) {
       return;
     }
-    let finalRecord: T;
+    let finalRecord: ReplayLogRecord;
     try {
-      finalRecord = JSON.parse(pending.toString("utf8")) as T;
+      finalRecord = JSON.parse(pending.toString("utf8")) as ReplayLogRecord;
     } catch {
       await truncateDurably(path, position - pending.length);
       return;
