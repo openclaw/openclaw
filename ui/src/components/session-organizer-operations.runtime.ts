@@ -358,7 +358,7 @@ async function rememberSessionGroup(
     return "stale";
   }
   try {
-    await scope.sessions.groupsPut([...groups, name]);
+    await scope.sessions.groupsAdd(name);
     return host.sessionData.isSessionMutationScopeCurrent(scope) ? "completed" : "stale";
   } catch (error) {
     if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
@@ -456,7 +456,7 @@ export async function reorderSidebarSection(
     );
     // No capability gate: the gateway serves this UI from its own dist, so a
     // newer UI never talks to an older gateway's closed put schema outside dev.
-    await scope.sessions.groupsPut(nextGroups, next);
+    await scope.sessions.groupsReorder(nextGroups);
     if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
       return;
     }

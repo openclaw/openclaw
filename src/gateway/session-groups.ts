@@ -129,7 +129,11 @@ export function listSidebarSectionOrder(env: NodeJS.ProcessEnv = process.env): s
   ).rows.map((row) => row.section_id);
 }
 
-/** Replaces the ordered catalog. Sessions keep their category even when a name is dropped. */
+/**
+ * Replaces the ordered catalog. Sessions keep their category even when a name is
+ * dropped. New mutations should use addSessionGroup/reorderSessionGroups to
+ * avoid clobbering concurrent changes.
+ */
 export function putSessionGroups(
   names: readonly string[],
   sectionOrder?: readonly string[],
@@ -177,6 +181,73 @@ export function putSessionGroups(
     { env },
   );
   return normalized.map((name, position) => ({ name, position }));
+}
+
+/** Adds one group to the catalog, appended at the end. Idempotent for existing names. */
+export function addSessionGroup(
+  name: string,
+  env: NodeJS.ProcessEnv = process.env,
+): SessionGroupRecord {
+  const normalized = normalizeOptionalString(name);
+  if (!normalized) {
+    throw new Error("group add requires a non-empty name");
+  }
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const kysely = kyselyFor(db);
+      const existing = executeSqliteQuerySync(
+        db,
+        kysely
+          .selectFrom("session_groups")
+          .select(["name", "position"])
+          .where("name", "=", normalized)
+          .limit(1),
+      ).rows[0];
+      if (existing) {
+        return { name: existing.name, position: existing.position };
+      }
+      const maxRow = executeSqliteQuerySync(
+        db,
+        kysely.selectFrom("session_groups").select("position").orderBy("position", "desc").limit(1),
+      ).rows[0];
+      const position = (maxRow?.position ?? -1) + 1;
+      const created_at = Date.now();
+      executeSqliteQuerySync(
+        db,
+        kysely.insertInto("session_groups").values({
+          name: normalized,
+          position,
+          created_at,
+        }),
+      );
+      return { name: normalized, position };
+    },
+    { env },
+  );
+}
+
+/**
+ * Reorders the listed groups by their input position. Groups not in the input
+ * keep their current position and are not inserted or deleted.
+ */
+export function reorderSessionGroups(
+  names: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+): SessionGroupRecord[] {
+  const normalized = normalizeGroupNames(names);
+  runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const kysely = kyselyFor(db);
+      normalized.forEach((name, position) => {
+        executeSqliteQuerySync(
+          db,
+          kysely.updateTable("session_groups").set({ position }).where("name", "=", name),
+        );
+      });
+    },
+    { env },
+  );
+  return listSessionGroups(env);
 }
 
 /**

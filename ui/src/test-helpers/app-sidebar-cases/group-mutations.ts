@@ -244,12 +244,7 @@ describe("AppSidebar group section ordering", () => {
 
     await dropGroupBeforeCoding(sidebar, "Beta");
 
-    await waitForFast(() =>
-      expect(harness.groupsPut).toHaveBeenCalledWith(
-        ["Alpha", "Beta"],
-        ["category:Alpha", "ungrouped", "groups", "category:Beta", "work"],
-      ),
-    );
+    await waitForFast(() => expect(harness.groupsReorder).toHaveBeenCalledWith(["Alpha", "Beta"]));
   });
 
   it("also updates catalog order when a group crosses another group on its way to Coding", async () => {
@@ -257,27 +252,17 @@ describe("AppSidebar group section ordering", () => {
 
     await dropGroupBeforeCoding(sidebar, "Alpha");
 
-    await waitForFast(() =>
-      expect(harness.groupsPut).toHaveBeenCalledWith(
-        ["Beta", "Alpha"],
-        ["category:Beta", "ungrouped", "groups", "category:Alpha", "work"],
-      ),
-    );
+    await waitForFast(() => expect(harness.groupsReorder).toHaveBeenCalledWith(["Beta", "Alpha"]));
   });
 
   it("does not persist cross-group ordering when the catalog update fails", async () => {
     const { sidebar, harness } = await mountWithGroups(["Alpha", "Beta"]);
     const before = renderedSectionIds(sidebar);
-    harness.groupsPut.mockRejectedValue(new Error("catalog update failed"));
+    harness.groupsReorder.mockRejectedValue(new Error("catalog update failed"));
 
     await dropGroupBeforeCoding(sidebar, "Alpha");
 
-    await waitForFast(() =>
-      expect(harness.groupsPut).toHaveBeenCalledWith(
-        ["Beta", "Alpha"],
-        ["category:Beta", "ungrouped", "groups", "category:Alpha", "work"],
-      ),
-    );
+    await waitForFast(() => expect(harness.groupsReorder).toHaveBeenCalledWith(["Beta", "Alpha"]));
     await Promise.resolve();
     await sidebar.updateComplete;
     expect(renderedSectionIds(sidebar)).toEqual(before);

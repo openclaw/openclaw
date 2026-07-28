@@ -158,10 +158,7 @@ describe("AppSidebar section reordering", () => {
     dispatchDragEvent(alphaSection, "drop", dataTransfer);
 
     await waitForFast(() =>
-      expect(harness.groupsPut).toHaveBeenCalledWith(
-        ["Gamma", "Alpha", "Beta"],
-        ["category:Gamma", "category:Alpha", "category:Beta", "ungrouped", "groups", "work"],
-      ),
+      expect(harness.groupsReorder).toHaveBeenCalledWith(["Gamma", "Alpha", "Beta"]),
     );
   });
 
@@ -176,9 +173,7 @@ describe("AppSidebar section reordering", () => {
     }
     dispatchDragEvent(threadsSection, "drop", dataTransfer);
 
-    await waitForFast(() =>
-      expect(harness.groupsPut).toHaveBeenCalledWith([], ["work", "ungrouped", "groups"]),
-    );
+    await waitForFast(() => expect(harness.groupsReorder).toHaveBeenCalledWith([]));
   });
 
   it("preserves saved catalog slots while the first catalog load is pending", async () => {
@@ -195,12 +190,7 @@ describe("AppSidebar section reordering", () => {
     }
     dispatchDragEvent(threadsSection, "drop", dataTransfer);
 
-    await waitForFast(() =>
-      expect(harness.groupsPut).toHaveBeenCalledWith(
-        [],
-        ["work", "ungrouped", "groups", "catalog:codex"],
-      ),
-    );
+    await waitForFast(() => expect(harness.groupsReorder).toHaveBeenCalledWith([]));
   });
 
   it("persists a catalog section move relative to Coding", async () => {
@@ -214,11 +204,6 @@ describe("AppSidebar section reordering", () => {
     }
     dispatchDragEvent(codingSection, "drop", dataTransfer);
 
-    await waitForFast(() =>
-      expect(harness.groupsPut).toHaveBeenCalledWith(
-        [],
-        ["ungrouped", "groups", "catalog:codex", "work"],
-      ),
-    );
+    await waitForFast(() => expect(harness.groupsReorder).toHaveBeenCalledWith([]));
   });
 });

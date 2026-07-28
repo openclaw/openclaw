@@ -12,12 +12,14 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import {
+  addSessionGroup,
   deleteSessionGroup,
   ensureSessionGroupRegistered,
   listSidebarSectionOrder,
   listSessionGroups,
   putSessionGroups,
   renameSessionGroup,
+  reorderSessionGroups,
 } from "./session-groups.js";
 
 describe("session groups catalog", () => {
@@ -192,12 +194,36 @@ describe("session groups catalog", () => {
     expect(result.updatedSessions).toBe(1);
   });
 
-  it("keeps the source sidebar slot when the merge target has no stored slot", async () => {
-    putSessionGroups(["A", "B"], ["category:A", "work"], env);
+  it("adds groups idempotently without touching existing rows", () => {
+    expect(addSessionGroup("Work", env)).toEqual({ name: "Work", position: 0 });
+    expect(addSessionGroup("Personal", env)).toEqual({ name: "Personal", position: 1 });
+    expect(addSessionGroup("Work", env)).toEqual({ name: "Work", position: 0 });
+    expect(listSessionGroups(env).map((group) => group.name)).toEqual(["Work", "Personal"]);
+  });
 
-    const result = await renameSessionGroup({ cfg, name: "A", to: "B", env });
+  it("replaces the catalog and removes omitted groups", () => {
+    putSessionGroups(["A", "B", "C"], undefined, env);
+    expect(listSessionGroups(env).map((group) => group.name)).toEqual(["A", "B", "C"]);
+    putSessionGroups(["B"], undefined, env);
+    expect(listSessionGroups(env).map((group) => group.name)).toEqual(["B"]);
+  });
 
-    expect(result.groups).toEqual([{ name: "B", position: 1 }]);
-    expect(result.sectionOrder).toEqual(["category:B", "work"]);
+  it("preserves concurrent adds through the atomic add path", () => {
+    // Tab 1 adds group A.
+    addSessionGroup("A", env);
+    // Tab 2 concurrently adds group B without reading A first.
+    addSessionGroup("B", env);
+    expect(listSessionGroups(env).map((group) => group.name)).toEqual(["A", "B"]);
+  });
+
+  it("reorders only the listed groups", () => {
+    putSessionGroups(["A", "B", "C"], undefined, env);
+    reorderSessionGroups(["C", "B"], env);
+    // Unlisted group A keeps its original position; ties are broken by name.
+    expect(listSessionGroups(env)).toEqual([
+      { name: "A", position: 0 },
+      { name: "C", position: 0 },
+      { name: "B", position: 1 },
+    ]);
   });
 });
