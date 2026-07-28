@@ -225,7 +225,7 @@ export class FileReplayStore implements ReplayStore {
     if (this.#loaded) {
       return;
     }
-    for (const record of await readJsonl<ReplayLogRecord>(this.path, { failClosed: true })) {
+    await forEachJsonlRecord<ReplayLogRecord>(this.path, (record) => {
       if (record.op === "claim") {
         const key = replayKey(record.peer, record.id);
         const existing = this.#bindings.get(key);
@@ -261,7 +261,7 @@ export class FileReplayStore implements ReplayStore {
         }
         existing.state = "available";
       }
-    }
+    });
     this.#loaded = true;
   }
 
@@ -338,25 +338,17 @@ function validateCompletion(receipt: SignedReceipt, body: MessageBody | undefine
   }
 }
 
-// Bound audit/replay JSONL reads to prevent buffering an unbounded file
-// into memory. Normal stores stay well below this limit; a file past it
-// signals a runaway store, corruption, or an accidental large-file path.
+// Bound audit JSONL reads to prevent buffering an unbounded file into memory.
+// Replay ledgers use forEachJsonlRecord below because replay protection must
+// recover every durable receipt even when the append-only ledger is large.
 //
 // The read is bounded through streaming chunks (not stat()+readFile())
 // so that growth after the handle is opened cannot bypass the cap.
-//
-// failClosed: when false (audit history), the reader stops at the cap and
-// returns complete records up to that point with a warning — existing
-// oversized stores remain partially readable.
-// When true (replay ledger), the reader throws if the file exceeds the cap.
-// Auto-compaction is intentionally avoided because a bounded-prefix read
-// cannot preserve records beyond the cap, which would break the receipt-reuse
-// security invariant. Operators must compact or rotate the ledger manually.
 const MAX_JSONL_FILE_BYTES = 32 * 1024 * 1024;
+const MAX_JSONL_RECORD_BYTES = 32 * 1024 * 1024;
 const JSONL_READ_CHUNK = 64 * 1024; // 64 KiB — balances syscall count and memory
 
-async function readJsonl<T>(path: string, opts?: { failClosed?: boolean }): Promise<T[]> {
-  const failClosed = opts?.failClosed ?? false;
+async function readJsonl<T>(path: string): Promise<T[]> {
   try {
     const handle = await openFile(path, "r");
     let contents: string;
@@ -421,12 +413,6 @@ async function readJsonl<T>(path: string, opts?: { failClosed?: boolean }): Prom
       }
     }
     if (overCap) {
-      if (failClosed) {
-        throw new Error(
-          `Replay ledger at ${path} exceeds ${MAX_JSONL_FILE_BYTES} bytes; ` +
-            `compact or rotate the ledger manually to restore operation.`,
-        );
-      }
       console.warn(
         `JSONL store file at ${path} exceeds ${MAX_JSONL_FILE_BYTES} bytes; ` +
           `reading truncated prefix. Rotate or compact the store to restore full visibility.`,
@@ -436,6 +422,67 @@ async function readJsonl<T>(path: string, opts?: { failClosed?: boolean }): Prom
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return [];
+    }
+    throw error;
+  }
+}
+
+async function forEachJsonlRecord<T>(path: string, visit: (record: T) => void): Promise<void> {
+  try {
+    const handle = await openFile(path, "r");
+    let pending = Buffer.alloc(0);
+    let position = 0;
+    try {
+      while (true) {
+        const buffer = Buffer.alloc(JSONL_READ_CHUNK);
+        const { bytesRead } = await handle.read(buffer, 0, JSONL_READ_CHUNK, position);
+        if (bytesRead === 0) {
+          break;
+        }
+        position += bytesRead;
+        const chunk = bytesRead < JSONL_READ_CHUNK ? buffer.subarray(0, bytesRead) : buffer;
+        const contents = pending.length === 0 ? chunk : Buffer.concat([pending, chunk]);
+        let lineStart = 0;
+        for (
+          let newlineIndex = contents.indexOf(0x0a, lineStart);
+          newlineIndex !== -1;
+          newlineIndex = contents.indexOf(0x0a, lineStart)
+        ) {
+          const line = contents.subarray(lineStart, newlineIndex);
+          if (line.length > MAX_JSONL_RECORD_BYTES) {
+            throw new Error(
+              `Replay ledger record at ${path} exceeds ${MAX_JSONL_RECORD_BYTES} bytes.`,
+            );
+          }
+          if (line.length > 0) {
+            visit(JSON.parse(line.toString("utf8")) as T);
+          }
+          lineStart = newlineIndex + 1;
+        }
+        pending = Buffer.from(contents.subarray(lineStart));
+        if (pending.length > MAX_JSONL_RECORD_BYTES) {
+          throw new Error(
+            `Replay ledger record at ${path} exceeds ${MAX_JSONL_RECORD_BYTES} bytes.`,
+          );
+        }
+      }
+    } finally {
+      await handle.close();
+    }
+    if (pending.length === 0) {
+      return;
+    }
+    let finalRecord: T;
+    try {
+      finalRecord = JSON.parse(pending.toString("utf8")) as T;
+    } catch {
+      await truncateDurably(path, position - pending.length);
+      return;
+    }
+    visit(finalRecord);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return;
     }
     throw error;
   }
