@@ -61,6 +61,7 @@ describe("root help live config fast path", () => {
     vi.clearAllMocks();
     home = fs.mkdtempSync(path.join(os.tmpdir(), "root-help-home-"));
     vi.stubEnv("HOME", home);
+    vi.stubEnv("OPENCLAW_HOME", undefined);
     vi.stubEnv("OPENCLAW_STATE_DIR", undefined);
     vi.stubEnv("OPENCLAW_CONFIG_PATH", undefined);
     vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", undefined);
@@ -100,6 +101,29 @@ describe("root help live config fast path", () => {
 
     await expect(loadRootHelpRenderOptionsForConfigSensitivePlugins()).resolves.not.toBeNull();
     expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads plugin-sensitive config from OPENCLAW_HOME", async () => {
+    const openclawHome = fs.mkdtempSync(path.join(os.tmpdir(), "root-help-openclaw-home-"));
+    try {
+      fs.mkdirSync(path.join(openclawHome, ".openclaw"), { recursive: true });
+      fs.writeFileSync(
+        path.join(openclawHome, ".openclaw", "openclaw.json"),
+        JSON.stringify({ plugins: { enabled: false } }),
+      );
+      vi.stubEnv("OPENCLAW_HOME", openclawHome);
+      const runtimeConfig = { plugins: { enabled: false } };
+      readConfigFileSnapshotMock.mockResolvedValueOnce({
+        valid: true,
+        sourceConfig: runtimeConfig,
+        runtimeConfig,
+      });
+
+      await expect(loadRootHelpRenderOptionsForConfigSensitivePlugins()).resolves.not.toBeNull();
+      expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(1);
+    } finally {
+      fs.rmSync(openclawHome, { recursive: true, force: true });
+    }
   });
 
   it("loads the config when the legacy gateway.env sets a plugin env var (#85396)", async () => {

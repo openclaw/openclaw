@@ -1,7 +1,7 @@
 // Root-help config probe for plugin-sensitive help rendering.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import type { RootHelpRenderOptions } from "./program/root-help.js";
 
 /** Env vars that can change which plugins root help renders. */
@@ -62,7 +62,7 @@ function configDirForProbe(env: NodeJS.ProcessEnv): string {
   if (configPath) {
     return path.dirname(configPath);
   }
-  return path.join(env.HOME || os.homedir(), ".openclaw");
+  return path.join(resolveRequiredHomeDir(env), ".openclaw");
 }
 
 function configPathsForProbe(env: NodeJS.ProcessEnv): string[] {
@@ -74,7 +74,7 @@ function configPathsForProbe(env: NodeJS.ProcessEnv): string[] {
   if (stateOverride) {
     return [path.join(stateOverride, "openclaw.json"), path.join(stateOverride, "clawdbot.json")];
   }
-  const home = env.HOME || os.homedir();
+  const home = resolveRequiredHomeDir(env);
   return [
     path.join(home, ".openclaw", "openclaw.json"),
     path.join(home, ".openclaw", "clawdbot.json"),
@@ -110,7 +110,7 @@ function dotEnvPathsForProbe(env: NodeJS.ProcessEnv): string[] {
   const configDir = configDirForProbe(env);
   const stateEnvPath = path.join(configDir, ".env");
   paths.push(stateEnvPath);
-  const home = env.HOME || os.homedir();
+  const home = resolveRequiredHomeDir(env);
   const defaultStateEnvPath = path.join(home, ".openclaw", ".env");
   const hasExplicitNonDefaultStateDir =
     env.OPENCLAW_STATE_DIR?.trim() !== undefined &&
