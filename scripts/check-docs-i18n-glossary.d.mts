@@ -5,9 +5,10 @@ export function parseArgs(argv: unknown): {
 };
 export function createGitRunner(options?: {
   timeoutMs?: number;
+  killGraceMs?: number;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
-}): (args: string[]) => string;
+}): (args: string[]) => Promise<string>;
 export type TermMatch = {
   file: string;
   line: number;
