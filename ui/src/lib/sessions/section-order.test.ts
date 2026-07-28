@@ -8,7 +8,7 @@ describe("gateway-owned sidebar section order", () => {
     const sectionOrder = ["catalog:codex", "work", "category:Beta", "ungrouped", "category:Alpha"];
     const request = vi.fn(async (method: string, params: unknown) => {
       expect(method).toBe("sessions.groups.reorder");
-      expect(params).toEqual({ names: sectionOrder });
+      expect(params).toEqual({ names: ["Beta", "Alpha"], sectionOrder });
       return {
         ok: true,
         groups: [
@@ -31,7 +31,9 @@ describe("gateway-owned sidebar section order", () => {
       subscribeEvents: () => () => undefined,
     });
 
-    await expect(sessions.groupsReorder(sectionOrder)).resolves.toBe("completed");
+    await expect(sessions.groupsReorder(["Beta", "Alpha"], sectionOrder)).resolves.toBe(
+      "completed",
+    );
     expect(sessions.state.sectionOrder).toEqual(sectionOrder);
     sessions.dispose();
   });

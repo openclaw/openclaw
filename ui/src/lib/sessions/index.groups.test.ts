@@ -61,6 +61,29 @@ describe("createSessionCapability group mutations", () => {
     sessions.dispose();
   });
 
+  it("forwards sectionOrder when reordering groups", async () => {
+    const sectionOrder = ["work", "category:Beta", "ungrouped", "category:Alpha"];
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.groups.reorder") {
+        return { groups: [{ name: "Beta" }, { name: "Alpha" }], sectionOrder };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client, ["sessions.groups.reorder"]);
+    const sessions = createSessionCapability(gateway);
+
+    await expect(sessions.groupsReorder(["Beta", "Alpha"], sectionOrder)).resolves.toBe(
+      "completed",
+    );
+    expect(request).toHaveBeenCalledWith("sessions.groups.reorder", {
+      names: ["Beta", "Alpha"],
+      sectionOrder,
+    });
+    expect(sessions.state.sectionOrder).toEqual(sectionOrder);
+    sessions.dispose();
+  });
+
   it("publishes state.error when group add is rejected", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.groups.add") {

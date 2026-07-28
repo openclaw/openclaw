@@ -81,7 +81,7 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
       true,
       {
         ok: true,
-        groups: reorderSessionGroups(params.names),
+        groups: reorderSessionGroups(params.names, params.sectionOrder),
         sectionOrder: listSidebarSectionOrder(),
       },
       undefined,

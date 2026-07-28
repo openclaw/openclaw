@@ -218,12 +218,19 @@ describe("session groups catalog", () => {
 
   it("reorders only the listed groups", () => {
     putSessionGroups(["A", "B", "C"], undefined, env);
-    reorderSessionGroups(["C", "B"], env);
+    reorderSessionGroups(["C", "B"], undefined, env);
     // Unlisted group A keeps its original position; ties are broken by name.
     expect(listSessionGroups(env)).toEqual([
       { name: "A", position: 0 },
       { name: "C", position: 0 },
       { name: "B", position: 1 },
     ]);
+  });
+
+  it("persists the full sidebar section order atomically during reorder", () => {
+    putSessionGroups(["A", "B"], ["ungrouped", "category:A", "work", "category:B"], env);
+    reorderSessionGroups(["B", "A"], ["work", "ungrouped", "category:B", "category:A"], env);
+    expect(listSessionGroups(env).map((group) => group.name)).toEqual(["B", "A"]);
+    expect(listSidebarSectionOrder(env)).toEqual(["work", "ungrouped", "category:B", "category:A"]);
   });
 });

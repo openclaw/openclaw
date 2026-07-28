@@ -389,7 +389,7 @@ describe("AppSidebar custom group reordering", () => {
     const { sidebar } = await mountWithGroups(["Alpha", "Beta"]);
 
     expect(groupHeader(sidebar, "category:Alpha").getAttribute("draggable")).toBe("true");
-    expect(groupHeader(sidebar, "ungrouped").getAttribute("draggable")).toBe("false");
+    expect(groupHeader(sidebar, "ungrouped").getAttribute("draggable")).toBe("true");
   });
 
   it("persists the new catalog order when a group header drops onto another group", async () => {
@@ -403,7 +403,12 @@ describe("AppSidebar custom group reordering", () => {
     }
     dispatchDragEvent(alphaSection, "drop", dataTransfer);
 
-    expect(harness.groupsReorder).toHaveBeenCalledWith(["Gamma", "Alpha", "Beta"]);
+    await waitForFast(() =>
+      expect(harness.groupsReorder).toHaveBeenCalledWith(
+        ["Gamma", "Alpha", "Beta"],
+        ["category:Gamma", "category:Alpha", "category:Beta", "ungrouped", "groups", "work"],
+      ),
+    );
   });
 });
 

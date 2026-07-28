@@ -619,9 +619,12 @@ export const SessionsGroupsAddParamsSchema = closedObject({
   name: SessionLabelString,
 });
 
-/** Reorders the listed groups by position; unlisted groups keep their current position. */
+/** Reorders the listed groups by position; unlisted groups keep their current position.
+ *  When sectionOrder is provided, the full sidebar section order is persisted atomically.
+ */
 export const SessionsGroupsReorderParamsSchema = closedObject({
   names: Type.Array(SessionLabelString, { maxItems: 200 }),
+  sectionOrder: Type.Optional(Type.Array(SidebarSectionIdString, { maxItems: 232 })),
 });
 
 /** Renames a group and repoints every member session's category. */

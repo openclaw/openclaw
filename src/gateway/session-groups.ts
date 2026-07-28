@@ -229,12 +229,21 @@ export function addSessionGroup(
 /**
  * Reorders the listed groups by their input position. Groups not in the input
  * keep their current position and are not inserted or deleted.
+ * When sectionOrder is provided, the full sidebar section order is persisted atomically.
  */
 export function reorderSessionGroups(
   names: readonly string[],
+  sectionOrder?: readonly string[],
   env: NodeJS.ProcessEnv = process.env,
 ): SessionGroupRecord[] {
   const normalized = normalizeGroupNames(names);
+  const shouldPersistSectionOrder = sectionOrder !== undefined;
+  const normalizedSectionOrder = shouldPersistSectionOrder
+    ? normalizeSidebarSectionOrder(sectionOrder, normalized)
+    : undefined;
+  if (normalizedSectionOrder) {
+    ensureSidebarSectionsSchema(env);
+  }
   runOpenClawStateWriteTransaction(
     ({ db }) => {
       const kysely = kyselyFor(db);
@@ -244,6 +253,15 @@ export function reorderSessionGroups(
           kysely.updateTable("session_groups").set({ position }).where("name", "=", name),
         );
       });
+      if (normalizedSectionOrder) {
+        executeSqliteQuerySync(db, kysely.deleteFrom("sidebar_sections"));
+        normalizedSectionOrder.forEach((sectionId, position) => {
+          executeSqliteQuerySync(
+            db,
+            kysely.insertInto("sidebar_sections").values({ section_id: sectionId, position }),
+          );
+        });
+      }
     },
     { env },
   );
