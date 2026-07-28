@@ -30,6 +30,7 @@ type ManagedMarkdownUpdateParams = {
   endMarker: string;
   body: string;
   tempPrefix: string;
+  allowSymlink?: boolean;
 };
 
 const dreamsFileLocks = resolveGlobalMap<string, DreamsFileLockEntry>(DREAMS_FILE_LOCKS_KEY);
@@ -92,7 +93,10 @@ export async function readDreamsFile(dreamsPath: string): Promise<string> {
   }
 }
 
-async function statSafeMarkdownPath(filePath: string): Promise<Stats | null> {
+async function resolveSafeMarkdownPath(
+  filePath: string,
+  allowSymlink: boolean,
+): Promise<{ filePath: string; stat: Stats } | null> {
   const stat = await fs.lstat(filePath).catch((err: unknown) => {
     if (extractErrorCode(err) === "ENOENT") {
       return null;
@@ -108,16 +112,24 @@ async function statSafeMarkdownPath(filePath: string): Promise<Stats | null> {
     ? "DREAMS.md"
     : `markdown file: ${filePath}`;
   if (stat.isSymbolicLink()) {
-    throw new Error(`Refusing to write symlinked ${pathDescription}`);
+    if (!allowSymlink) {
+      throw new Error(`Refusing to write symlinked ${pathDescription}`);
+    }
+    const resolvedPath = await fs.realpath(filePath);
+    const resolvedStat = await fs.stat(resolvedPath);
+    if (!resolvedStat.isFile()) {
+      throw new Error(`Refusing to write non-file ${pathDescription}`);
+    }
+    return { filePath: resolvedPath, stat: resolvedStat };
   }
   if (!stat.isFile()) {
     throw new Error(`Refusing to write non-file ${pathDescription}`);
   }
-  return stat;
+  return { filePath, stat };
 }
 
 async function assertSafeDreamsPath(dreamsPath: string): Promise<void> {
-  await statSafeMarkdownPath(dreamsPath);
+  await resolveSafeMarkdownPath(dreamsPath, false);
 }
 
 async function writeDreamsFileAtomic(dreamsPath: string, content: string): Promise<void> {
@@ -295,29 +307,36 @@ export async function updateManagedDreamingMarkdownFile(
   params: ManagedMarkdownUpdateParams,
 ): Promise<void> {
   await fs.mkdir(path.dirname(params.filePath), { recursive: true });
-  const stat = await statSafeMarkdownPath(params.filePath);
+  // Daily memory files historically followed user-managed symlinks. Resolve
+  // those links before atomic replacement so the link itself stays intact.
+  const resolved = await resolveSafeMarkdownPath(params.filePath, params.allowSymlink === true);
+  const resolvedParams = {
+    ...params,
+    filePath: resolved?.filePath ?? params.filePath,
+  };
+  const stat = resolved?.stat ?? null;
   if (!stat || stat.size <= MEMORY_DREAMING_MARKDOWN_MAX_BYTES) {
     let original = "";
     if (stat) {
       original = (
         await readRegularFile({
-          filePath: params.filePath,
+          filePath: resolvedParams.filePath,
           maxBytes: MEMORY_DREAMING_MARKDOWN_MAX_BYTES,
         })
       ).buffer.toString("utf-8");
     }
-    const updated = replaceManagedMarkdownBlock({ original, ...params });
+    const updated = replaceManagedMarkdownBlock({ original, ...resolvedParams });
     await replaceFileAtomic({
-      filePath: params.filePath,
+      filePath: resolvedParams.filePath,
       content: withTrailingNewline(updated),
       mode: 0o600,
       preserveExistingMode: true,
-      tempPrefix: params.tempPrefix,
+      tempPrefix: resolvedParams.tempPrefix,
       throwOnCleanupError: true,
     });
     return;
   }
-  await replaceManagedMarkdownBlockStreaming({ ...params, mode: stat.mode & 0o777 });
+  await replaceManagedMarkdownBlockStreaming({ ...resolvedParams, mode: stat.mode & 0o777 });
 }
 
 export async function updateDreamsFile<T>(params: {

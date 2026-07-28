@@ -77,6 +77,7 @@ export async function writeDailyDreamingPhaseBlock(params: {
       endMarker: markers.end,
       body,
       tempPrefix: `${path.basename(inlinePath)}.dreaming`,
+      allowSymlink: true,
     });
   }
 

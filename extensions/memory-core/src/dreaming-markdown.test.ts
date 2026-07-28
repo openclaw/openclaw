@@ -180,6 +180,33 @@ describe("dreaming markdown storage", () => {
     expect(content).not.toContain("- Old candidate");
   });
 
+  it("preserves an existing daily memory symlink while updating its target", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
+    const inlinePath = path.join(workspaceDir, "memory", "2026-04-05.md");
+    const targetPath = path.join(workspaceDir, "daily-memory-target.md");
+    await fs.mkdir(path.dirname(inlinePath), { recursive: true });
+    await fs.writeFile(targetPath, "# Existing daily memory\n\nUser note stays.\n", "utf-8");
+    await fs.symlink(targetPath, inlinePath);
+
+    await writeDailyDreamingPhaseBlock({
+      workspaceDir,
+      phase: "light",
+      bodyLines: ["- Candidate: symlink-compatible update"],
+      nowMs,
+      timezone,
+      storage: {
+        mode: "inline",
+        separateReports: false,
+      },
+    });
+
+    expect((await fs.lstat(inlinePath)).isSymbolicLink()).toBe(true);
+    const content = await fs.readFile(targetPath, "utf-8");
+    expect(content).toContain("# Existing daily memory");
+    expect(content).toContain("User note stays.");
+    expect(content).toContain("- Candidate: symlink-compatible update");
+  });
+
   it("still writes deep reports to the per-phase report directory", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
 
