@@ -1,7 +1,6 @@
 // Diffs plugin module implements plugin behavior.
 import fs from "node:fs";
 import path from "node:path";
-import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
   resolvePreferredOpenClawTmpDir,
   type OpenClawConfig,
@@ -36,19 +35,10 @@ export function registerDiffsPlugin(api: OpenClawPluginApi): void {
     }),
     logger: api.logger,
   });
-  const resolveCurrentPluginConfig = () =>
-    resolveLivePluginConfigObject(
-      api.runtime.config?.current
-        ? () => api.runtime.config.current() as OpenClawConfig
-        : undefined,
-      "diffs",
-      api.pluginConfig as Record<string, unknown>,
-    ) ?? {};
   const resolveCurrentAccessConfig = () => {
     const currentConfig = (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
-    const pluginConfig = resolveCurrentPluginConfig();
     return {
-      allowRemoteViewer: resolveDiffsPluginSecurity(pluginConfig).allowRemoteViewer,
+      allowRemoteViewer: resolveDiffsPluginSecurity(api.pluginConfig).allowRemoteViewer,
       trustedProxies: currentConfig.gateway?.trustedProxies,
       allowRealIpFallback: currentConfig.gateway?.allowRealIpFallback === true,
     };
@@ -57,12 +47,11 @@ export function registerDiffsPlugin(api: OpenClawPluginApi): void {
 
   api.registerTool(
     (ctx) => {
-      const pluginConfig = resolveCurrentPluginConfig();
       return createDiffsTool({
         api,
         store,
-        defaults: resolveDiffsPluginDefaults(pluginConfig),
-        viewerBaseUrl: resolveDiffsPluginViewerBaseUrl(pluginConfig),
+        defaults: resolveDiffsPluginDefaults(api.pluginConfig),
+        viewerBaseUrl: resolveDiffsPluginViewerBaseUrl(api.pluginConfig),
         languagePackAvailable: resolveDiffsLanguagePackAvailability(api),
         context: ctx,
       });

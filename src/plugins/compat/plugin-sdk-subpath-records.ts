@@ -165,11 +165,13 @@ export const BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS =
       introduced: "2026-07-15",
       deprecated: "2026-07-15",
       warningStarts: "2026-07-15",
-      removeAfter: "2026-07-30",
+      removeAfter: subpath === "plugin-config-runtime" ? "2026-10-30" : "2026-07-30",
       replacement:
         subpath === "tool-plugin"
           ? "retain the public subpath until plugin authoring has a nonexecuting static metadata replacement for `defineToolPlugin`"
-          : `${documented?.replacement ?? "define and document a public replacement"}; retain the public subpath until the 2026-07-30 window closes and official plugin consumers migrate`,
+          : subpath === "plugin-config-runtime"
+            ? "use `api.pluginConfig` for entry-scoped config; retain the public subpath because 15 external official plugins (amazon-bedrock, amazon-bedrock-mantle, codex, diffs, discord, irc, line, matrix, mattermost, memory-lancedb, nextcloud-talk, signal, slack, voice-call, and whatsapp) are excluded from the core dist and consume it from the installed core, while `src/plugins/contracts/config-boundary-guard.test.ts` still recommends `requireRuntimeConfig` from this subpath as the correct narrow import. `requireRuntimeConfig` and `mergeDeep` do not have named replacements yet"
+            : `${documented?.replacement ?? "define and document a public replacement"}; retain the public subpath until the 2026-07-30 window closes and official plugin consumers migrate`,
       docsPath:
         subpath === "tool-plugin"
           ? "/plugins/tool-plugins"

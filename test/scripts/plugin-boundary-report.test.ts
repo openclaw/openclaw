@@ -60,8 +60,10 @@ describe("plugin-boundary-report", () => {
       "agent-harness-sdk-alias",
       "plugin-sdk-media-understanding-public-demotion",
       "plugin-sdk-memory-host-core-public-demotion",
-      "plugin-sdk-plugin-config-runtime-public-demotion",
       "plugin-sdk-tool-plugin-public-demotion",
+      // Sorted by removeAfter first, so the 2026-10-30 plugin-config-runtime
+      // window lands after the 2026-07-30 group.
+      "plugin-sdk-plugin-config-runtime-public-demotion",
     ]);
     for (const record of summary.compat?.removalPending ?? []) {
       expect(record.removeAfter).toMatch(/^\d{4}-\d{2}-\d{2}$/u);

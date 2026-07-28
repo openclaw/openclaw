@@ -102,7 +102,6 @@ describe("plugin compatibility registry", () => {
     expect(records.map((record) => record.code)).toEqual([
       "plugin-sdk-media-understanding-public-demotion",
       "plugin-sdk-memory-host-core-public-demotion",
-      "plugin-sdk-plugin-config-runtime-public-demotion",
       "plugin-sdk-tool-plugin-public-demotion",
       "agent-harness-sdk-alias",
     ]);

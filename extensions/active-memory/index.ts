@@ -5,7 +5,7 @@ import { resolveAgentDir, resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/a
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   normalizePluginsConfig,
-  resolveLivePluginConfigObject,
+  resolvePluginConfigObject,
 } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -113,14 +113,14 @@ export default definePluginEntry({
     };
     warnDeprecatedModelFallbackPolicy(api.pluginConfig);
     const refreshLiveConfigFromRuntime = () => {
-      const livePluginConfig = resolveLivePluginConfigObject(
-        api.runtime.config?.current
-          ? () => api.runtime.config.current() as OpenClawConfig
-          : undefined,
-        "active-memory",
-        api.pluginConfig as Record<string, unknown>,
-      );
       const liveConfig = readCurrentConfig();
+      // `/active-memory --global` rereads this right after mutating its own
+      // `plugins.entries.active-memory.config` block. The reload that refreshes
+      // `api.pluginConfig` lands after the handler, so the post-write value has to
+      // come from the runtime snapshot or the command observes its own stale config.
+      const livePluginConfig = liveConfig
+        ? resolvePluginConfigObject(liveConfig, "active-memory")
+        : api.pluginConfig;
       const fallbackConfig = {};
       const effectivePluginConfig =
         liveConfig && !isActiveMemoryPluginEnabled(liveConfig)

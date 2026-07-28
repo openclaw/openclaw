@@ -53,11 +53,10 @@ const BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS = {
   readonly string[]
 >;
 const BUNDLED_LIVE_CONFIG_HOOK_GUARDS = {
-  "extensions/active-memory/index.ts": ["resolveLivePluginConfigObject(", '"active-memory"'],
-  "extensions/codex/index.ts": ["resolveLivePluginConfigObject(", '"codex"'],
+  "extensions/active-memory/index.ts": ['resolvePluginConfigObject(liveConfig, "active-memory")'],
+  "extensions/codex/index.ts": ["getPluginConfig: () => api.pluginConfig"],
   "extensions/diffs/src/plugin.ts": [
-    "resolveLivePluginConfigObject(",
-    '"diffs"',
+    "resolveDiffsPluginSecurity(api.pluginConfig)",
     "api.runtime.config?.current?.() ?? api.config",
   ],
   "extensions/memory-core/src/dreaming.ts": [
@@ -65,16 +64,10 @@ const BUNDLED_LIVE_CONFIG_HOOK_GUARDS = {
     "resolveMemoryDreamingPluginConfig(startupCfg)",
     "api.runtime.config?.current?.() ?? api.config",
   ],
-  "extensions/memory-lancedb/index.ts": ["resolveLivePluginConfigObject(", '"memory-lancedb"'],
-  "extensions/onepassword/index.ts": [
-    "resolveLivePluginConfigObject(",
-    "resolveEffectiveEnableState(",
-    '"onepassword"',
-    "api.runtime.config?.current",
-  ],
+  "extensions/memory-lancedb/index.ts": ["memoryConfigSchema.parse(api.pluginConfig)"],
+  "extensions/onepassword/index.ts": ["parseOnePasswordConfig(api.pluginConfig)"],
   "extensions/thread-ownership/index.ts": [
-    "resolveLivePluginConfigObject(",
-    '"thread-ownership"',
+    "isThreadOwnershipConfig(api.pluginConfig)",
     "api.runtime.config?.current?.() ?? api.config",
   ],
 } as const satisfies Record<string, readonly string[]>;

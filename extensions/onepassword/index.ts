@@ -1,10 +1,4 @@
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  normalizePluginsConfig,
-  resolveEffectiveEnableState,
-  resolveLivePluginConfigObject,
-} from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import type { AuditRow, PendingAuthorization, StandingGrant } from "./src/broker.js";
 import { OnePasswordBroker } from "./src/broker.js";
@@ -22,27 +16,6 @@ export default definePluginEntry({
     "1Password SecretRef resolver and curated agent broker with approval policy and SQLite audit history.",
   register(api) {
     const startupConfig = parseOnePasswordConfig(api.pluginConfig);
-    const resolveCurrentConfig = () => {
-      const liveConfig = api.runtime.config?.current
-        ? (api.runtime.config.current() as OpenClawConfig)
-        : undefined;
-      if (!liveConfig) {
-        return startupConfig;
-      }
-      const livePluginConfig = resolveLivePluginConfigObject(
-        () => liveConfig,
-        "onepassword",
-        api.pluginConfig as Record<string, unknown> | undefined,
-      );
-      const enabled = resolveEffectiveEnableState({
-        id: "onepassword",
-        origin: "bundled",
-        config: normalizePluginsConfig(liveConfig.plugins),
-        rootConfig: liveConfig,
-        enabledByDefault: livePluginConfig !== undefined,
-      }).enabled;
-      return enabled ? parseOnePasswordConfig(livePluginConfig) : undefined;
-    };
     const grants = api.runtime.state.openKeyedStore<StandingGrant>({
       namespace: "grants",
       // Evicting the oldest grant is fail-closed: that agent must approve again.
@@ -68,7 +41,7 @@ export default definePluginEntry({
     );
     let cachedOpClient: { key: string; client: OpClient } | undefined;
     const resolveCurrentOpClient = () => {
-      const config = resolveCurrentConfig();
+      const config = parseOnePasswordConfig(api.pluginConfig);
       const key = JSON.stringify([config?.opBin ?? null, config?.opTimeoutMs ?? 15_000]);
       if (cachedOpClient?.key === key) {
         return cachedOpClient.client;
@@ -84,7 +57,7 @@ export default definePluginEntry({
     };
     const broker = startupConfig
       ? new OnePasswordBroker({
-          resolveConfig: resolveCurrentConfig,
+          resolveConfig: () => parseOnePasswordConfig(api.pluginConfig),
           opClient: {
             getItem: (params) => resolveCurrentOpClient().getItem(params),
           },
@@ -98,7 +71,7 @@ export default definePluginEntry({
         const { registerOnePasswordSecretRefCommands } = await import("./src/secret-ref-cli.js");
         registerOnePasswordCommands({
           program,
-          resolveConfig: resolveCurrentConfig,
+          resolveConfig: () => parseOnePasswordConfig(api.pluginConfig),
           resolveOpClient: resolveCurrentOpClient,
           auditStore: audit,
           registerAdditionalCommands: (command) =>

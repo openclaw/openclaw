@@ -9,9 +9,7 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { readFiniteNumberParam, readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
-import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { isIncognitoSessionKey, normalizeAgentId } from "openclaw/plugin-sdk/routing";
-import { asOptionalRecord as asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { Type } from "typebox";
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
@@ -105,7 +103,6 @@ export default definePluginEntry({
     const dbPath = cfg.dbPath!;
     const resolvedDbPath = dbPath.includes("://") ? dbPath : api.resolvePath(dbPath);
     const { model, dimensions } = cfg.embedding;
-    const disabledHookCfg = { ...cfg, autoCapture: false, autoRecall: false };
 
     const vectorDim = dimensions ?? vectorDimsForModel(model);
     const db = new MemoryDB(resolvedDbPath, vectorDim, cfg.storageOptions);
@@ -132,38 +129,6 @@ export default definePluginEntry({
         return normalizeAgentId(rawAgentId);
       }
       return resolveConfiguredDefaultAgentId(resolveRuntimeConfig());
-    };
-    const resolveCurrentHookConfig = () => {
-      const runtimePluginConfig = resolveLivePluginConfigObject(
-        api.runtime.config?.current
-          ? () => api.runtime.config.current() as OpenClawConfig
-          : undefined,
-        "memory-lancedb",
-        api.pluginConfig as Record<string, unknown>,
-      );
-      if (!runtimePluginConfig) {
-        return disabledHookCfg;
-      }
-      return memoryConfigSchema.parse({
-        embedding: {
-          provider: cfg.embedding.provider,
-          apiKey: cfg.embedding.apiKey,
-          model: cfg.embedding.model,
-          ...(cfg.embedding.baseUrl ? { baseUrl: cfg.embedding.baseUrl } : {}),
-          ...(typeof cfg.embedding.dimensions === "number"
-            ? { dimensions: cfg.embedding.dimensions }
-            : {}),
-          ...asRecord(runtimePluginConfig.embedding),
-        },
-        ...(cfg.dreaming ? { dreaming: cfg.dreaming } : {}),
-        dbPath: cfg.dbPath,
-        autoCapture: cfg.autoCapture,
-        autoRecall: cfg.autoRecall,
-        captureMaxChars: cfg.captureMaxChars,
-        recallMaxChars: cfg.recallMaxChars,
-        ...(cfg.storageOptions ? { storageOptions: cfg.storageOptions } : {}),
-        ...asRecord(runtimePluginConfig),
-      });
     };
     const readMemoryRecallCooldown = (agentId: string): { error: string } | undefined => {
       const memoryRecallCooldown = memoryRecallCooldowns.get(agentId);
@@ -216,7 +181,6 @@ export default definePluginEntry({
             const query = rawParams.query as string;
             const limit = readPositiveIntegerParam(rawParams, "limit") ?? 5;
 
-            const currentCfg = resolveCurrentHookConfig();
             const cooldown = readMemoryRecallCooldown(agentId);
             if (cooldown) {
               return buildMemoryRecallUnavailableResult(cooldown.error);
@@ -229,7 +193,7 @@ export default definePluginEntry({
                   let vector: number[];
                   try {
                     vector = await embeddings.embed(
-                      normalizeRecallQuery(query, currentCfg.recallMaxChars),
+                      normalizeRecallQuery(query, cfg.recallMaxChars),
                       { timeoutMs: DEFAULT_TOOL_RECALL_TIMEOUT_MS },
                     );
                   } catch (error) {
@@ -433,9 +397,8 @@ export default definePluginEntry({
             }
 
             if (query) {
-              const currentCfg = resolveCurrentHookConfig();
               const vector = await embeddings.embed(
-                normalizeRecallQuery(query, currentCfg.recallMaxChars),
+                normalizeRecallQuery(query, cfg.recallMaxChars),
               );
               const results = await db.search(agentId, vector, 5, 0.7);
 
@@ -491,8 +454,7 @@ export default definePluginEntry({
     registerMemoryCli(api, db, embeddings, resolveCliAgentId, cfg.recallMaxChars);
 
     api.on("before_prompt_build", async (event, ctx) => {
-      const currentCfg = resolveCurrentHookConfig();
-      if (!currentCfg.autoRecall) {
+      if (!cfg.autoRecall) {
         return undefined;
       }
       const agentId = resolveEnabledAgentId(ctx.agentId);
@@ -509,7 +471,7 @@ export default definePluginEntry({
             extractLatestUserText(Array.isArray(event.messages) ? event.messages : []) ??
               event.prompt,
           ),
-          currentCfg.recallMaxChars,
+          cfg.recallMaxChars,
         );
         if (!recallQuery) {
           return undefined;
@@ -558,8 +520,7 @@ export default definePluginEntry({
     });
 
     api.on("agent_end", async (event, ctx) => {
-      const currentCfg = resolveCurrentHookConfig();
-      if (!currentCfg.autoCapture || isIncognitoSessionKey(ctx.sessionKey)) {
+      if (!cfg.autoCapture || isIncognitoSessionKey(ctx.sessionKey)) {
         return;
       }
       const agentId = resolveEnabledAgentId(ctx.agentId);
@@ -590,8 +551,8 @@ export default definePluginEntry({
               if (
                 !sanitized ||
                 !shouldCapture(sanitized, {
-                  customTriggers: currentCfg.customTriggers,
-                  maxChars: currentCfg.captureMaxChars,
+                  customTriggers: cfg.customTriggers,
+                  maxChars: cfg.captureMaxChars,
                 })
               ) {
                 continue;

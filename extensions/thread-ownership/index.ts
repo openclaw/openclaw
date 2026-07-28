@@ -1,5 +1,4 @@
 // Thread Ownership plugin entrypoint registers its OpenClaw integration.
-import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
@@ -85,16 +84,7 @@ export default definePluginEntry({
   register(api: OpenClawPluginApi) {
     const resolveCurrentState = () => {
       const currentConfig = (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
-      const livePluginCfg = resolveLivePluginConfigObject(
-        api.runtime.config?.current
-          ? () => api.runtime.config.current() as OpenClawConfig
-          : undefined,
-        "thread-ownership",
-        isThreadOwnershipConfig(api.pluginConfig)
-          ? (api.pluginConfig as Record<string, unknown>)
-          : undefined,
-      );
-      const pluginCfg = isThreadOwnershipConfig(livePluginCfg) ? livePluginCfg : {};
+      const pluginCfg = isThreadOwnershipConfig(api.pluginConfig) ? api.pluginConfig : {};
       return {
         currentConfig,
         forwarderUrl: (

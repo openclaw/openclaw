@@ -4,11 +4,6 @@
  */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
-import {
-  normalizePluginsConfig,
-  resolveEffectiveEnableState,
-  resolveLivePluginConfigObject,
-} from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { registerCodexCliMetadata } from "./cli-metadata.js";
@@ -64,40 +59,10 @@ export default definePluginEntry({
   register(api) {
     const resolveCurrentConfig = () =>
       api.runtime.config?.current ? (api.runtime.config.current() as OpenClawConfig) : undefined;
-    const resolvePluginConfig = (resolveConfig: () => OpenClawConfig | undefined) => {
-      const liveConfig = resolveConfig();
-      // Codex plugin config can change at runtime. A missing live entry is an
-      // explicit removal, while an unavailable runtime snapshot uses startup config.
-      if (!liveConfig) {
-        return api.pluginConfig;
-      }
-      const livePluginConfig = resolveLivePluginConfigObject(
-        () => liveConfig,
-        "codex",
-        api.pluginConfig as Record<string, unknown>,
-      );
-      const enabled = resolveEffectiveEnableState({
-        id: "codex",
-        origin: "bundled",
-        config: normalizePluginsConfig(liveConfig.plugins),
-        rootConfig: liveConfig,
-        // Core auto-enables this bundled plugin whenever the operator declares a
-        // codex config block, so a live block is the plugin-side default. Gating
-        // on a feature flag (supervision) here would silently drop unrelated
-        // harness settings such as appServer.homeScope; feature gates belong in
-        // the feature's own surface (see requireSupervisionEnabled).
-        enabledByDefault: livePluginConfig !== undefined,
-      }).enabled;
-      if (!enabled) {
-        return undefined;
-      }
-      return livePluginConfig;
-    };
-    const resolveCurrentPluginConfig = () => resolvePluginConfig(resolveCurrentConfig);
     if (api.registrationMode === "full") {
       const realtimeBrowserSession = configureCodexRealtimeBrowserSession({
         getConfig: resolveCurrentConfig,
-        getPluginConfig: resolveCurrentPluginConfig,
+        getPluginConfig: () => api.pluginConfig,
       });
       api.registerHttpRoute({
         path: CODEX_REALTIME_OFFER_PATH,
@@ -153,11 +118,11 @@ export default definePluginEntry({
     const bindingStore = createLazyCodexAppServerBindingStore(lazyBindingStateStore);
     registerCodexCliMetadata(api);
     const sessionCatalogControl = createCodexSessionCatalogControl({
-      getPluginConfig: resolveCurrentPluginConfig,
+      getPluginConfig: () => api.pluginConfig,
       getRuntimeConfig: resolveCurrentConfig,
     });
     const sessionCatalogEnabled =
-      readCodexPluginConfig(resolveCurrentPluginConfig()).sessionCatalog?.enabled !== false;
+      readCodexPluginConfig(api.pluginConfig).sessionCatalog?.enabled !== false;
     if (sessionCatalogEnabled) {
       codexSessionCatalogRuntime.register({
         api,
@@ -172,7 +137,7 @@ export default definePluginEntry({
     for (const policy of createCodexSessionCatalogNodeInvokePolicies()) {
       api.registerNodeInvokePolicy(policy);
     }
-    if (readCodexPluginConfig(resolveCurrentPluginConfig()).supervision?.enabled === true) {
+    if (readCodexPluginConfig(api.pluginConfig).supervision?.enabled === true) {
       api.registerTool(
         (context) => {
           if (context.senderIsOwner !== true) {
@@ -184,7 +149,7 @@ export default definePluginEntry({
             context.config ??
             resolveCurrentConfig();
           return createCodexSupervisionTools({
-            getPluginConfig: () => resolvePluginConfig(resolveToolRuntimeConfig),
+            getPluginConfig: () => api.pluginConfig,
             getRuntimeConfig: resolveToolRuntimeConfig,
             senderIsOwner: context.senderIsOwner,
           });
@@ -197,7 +162,7 @@ export default definePluginEntry({
         bindingStore,
         sessionCatalogControl,
         resolveConfig: resolveCurrentConfig,
-        resolvePluginConfig: resolveCurrentPluginConfig,
+        resolvePluginConfig: () => api.pluginConfig,
         runtime: api.runtime,
       }),
     );
@@ -205,7 +170,7 @@ export default definePluginEntry({
       buildCodexMediaUnderstandingProvider({ pluginConfig: api.pluginConfig }),
     );
     api.registerWebSearchProvider(
-      createCodexWebSearchProvider({ resolvePluginConfig: resolveCurrentPluginConfig }),
+      createCodexWebSearchProvider({ resolvePluginConfig: () => api.pluginConfig }),
     );
     api.registerMigrationProvider(buildCodexMigrationProvider({ runtime: api.runtime }));
     api.registerTool(
@@ -214,7 +179,7 @@ export default definePluginEntry({
           bindingStore,
           context,
           runtime: api.runtime,
-          getPluginConfig: resolveCurrentPluginConfig,
+          getPluginConfig: () => api.pluginConfig,
         }),
       { name: "codex_threads" },
     );
@@ -234,7 +199,7 @@ export default definePluginEntry({
     api.registerCommand(
       createCodexCommand({
         pluginConfig: api.pluginConfig,
-        resolvePluginConfig: resolveCurrentPluginConfig,
+        resolvePluginConfig: () => api.pluginConfig,
         deps: {
           bindingStore,
           listCodexCliSessionsOnNode: (params) =>
@@ -303,7 +268,7 @@ export default definePluginEntry({
     api.on("inbound_claim", (event, ctx) =>
       codexConversationBindingRuntime.handleInboundClaim(event, ctx, {
         bindingStore,
-        pluginConfig: resolveCurrentPluginConfig(),
+        pluginConfig: api.pluginConfig,
         config: resolveCurrentConfig(),
         resumeCodexCliSessionOnNode: (params) =>
           resumeCodexCliSessionOnNode({ runtime: api.runtime, ...params }),

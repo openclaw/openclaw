@@ -261,7 +261,7 @@ describe("codex plugin", () => {
     ["supervision is disabled", { enabled: false }],
     ["supervision is enabled", { enabled: true }],
   ] as const)(
-    "keeps live user-home appServer config for an auto-enabled Codex entry when %s",
+    "keeps user-home appServer config from api.pluginConfig when %s",
     (_label, supervision) => {
       const registerTool = vi.fn();
       plugin.register(
@@ -270,21 +270,11 @@ describe("codex plugin", () => {
           name: "Codex",
           source: "test",
           config: {},
-          pluginConfig: {},
-          // No explicit plugins.entries.codex.enabled: core auto-enables the
-          // plugin from this config block, so the harness must keep honoring it.
-          runtime: createCodexTestRuntime(() => ({
-            plugins: {
-              entries: {
-                codex: {
-                  config: {
-                    appServer: { homeScope: "user" },
-                    ...(supervision ? { supervision } : {}),
-                  },
-                },
-              },
-            },
-          })),
+          pluginConfig: {
+            appServer: { homeScope: "user" },
+            ...(supervision ? { supervision } : {}),
+          },
+          runtime: createCodexTestRuntime(),
           registerAgentHarness: vi.fn(),
           registerCommand: vi.fn(),
           registerMediaUnderstandingProvider: vi.fn(),
@@ -300,185 +290,9 @@ describe("codex plugin", () => {
       ) as
         | [(context: { senderIsOwner?: boolean }) => { name: string } | null, { name: string }]
         | undefined;
-      // codex_threads exists only while user-home scope or supervision is live,
-      // so it proves the plugin config survived the enable-state resolution.
       expect(registration?.[0]({ senderIsOwner: true })?.name).toBe("codex_threads");
     },
   );
-
-  it("drops live plugin config when the Codex entry is explicitly disabled", () => {
-    const registerTool = vi.fn();
-    plugin.register(
-      createTestPluginApi({
-        id: "codex",
-        name: "Codex",
-        source: "test",
-        config: {},
-        pluginConfig: {},
-        runtime: createCodexTestRuntime(() => ({
-          plugins: {
-            entries: {
-              codex: {
-                enabled: false,
-                config: { appServer: { homeScope: "user" } },
-              },
-            },
-          },
-        })),
-        registerAgentHarness: vi.fn(),
-        registerCommand: vi.fn(),
-        registerMediaUnderstandingProvider: vi.fn(),
-        registerMigrationProvider: vi.fn(),
-        registerProvider: vi.fn(),
-        registerTool,
-        on: vi.fn(),
-      }),
-    );
-
-    const registration = registerTool.mock.calls.find(
-      ([, options]) => options?.name === "codex_threads",
-    ) as
-      | [(context: { senderIsOwner?: boolean }) => { name: string } | null, { name: string }]
-      | undefined;
-    expect(registration?.[0]({ senderIsOwner: true })).toBeNull();
-  });
-
-  it("activates from live supervision config through a normalized Codex entry id", () => {
-    const registerTool = vi.fn();
-    plugin.register(
-      createTestPluginApi({
-        id: "codex",
-        name: "Codex",
-        source: "test",
-        config: {},
-        pluginConfig: {},
-        runtime: createCodexTestRuntime(() => ({
-          plugins: {
-            entries: {
-              " CODEX ": {
-                config: { supervision: { enabled: true } },
-              },
-            },
-          },
-        })),
-        registerAgentHarness: vi.fn(),
-        registerCommand: vi.fn(),
-        registerMediaUnderstandingProvider: vi.fn(),
-        registerMigrationProvider: vi.fn(),
-        registerProvider: vi.fn(),
-        registerTool,
-        on: vi.fn(),
-      }),
-    );
-
-    expect(registerTool.mock.calls.some(([, options]) => Array.isArray(options?.names))).toBe(true);
-  });
-
-  it.each([
-    ["plugin entry is removed", { plugins: { entries: {} } }],
-    [
-      "plugin entry is disabled",
-      {
-        plugins: {
-          entries: {
-            codex: { enabled: false, config: { supervision: { enabled: true } } },
-          },
-        },
-      },
-    ],
-    [
-      "global plugin loading is disabled",
-      {
-        plugins: {
-          enabled: false,
-          entries: {
-            codex: { enabled: true, config: { supervision: { enabled: true } } },
-          },
-        },
-      },
-    ],
-    [
-      "a restrictive allowlist omits Codex",
-      {
-        plugins: {
-          allow: ["other-plugin"],
-          entries: {
-            codex: { enabled: true, config: { supervision: { enabled: true } } },
-          },
-        },
-      },
-    ],
-    [
-      "the denylist blocks Codex",
-      {
-        plugins: {
-          deny: ["codex"],
-          entries: {
-            codex: { enabled: true, config: { supervision: { enabled: true } } },
-          },
-        },
-      },
-    ],
-    [
-      "supervision is explicitly disabled",
-      {
-        plugins: {
-          entries: {
-            codex: { enabled: true, config: { supervision: { enabled: false } } },
-          },
-        },
-      },
-    ],
-  ] as const)("revokes supervision live when %s", async (_label, revokedConfig) => {
-    const registerTool = vi.fn();
-    let liveConfig: unknown = {
-      plugins: {
-        entries: {
-          codex: { enabled: true, config: { supervision: { enabled: true } } },
-        },
-      },
-    };
-    plugin.register(
-      createTestPluginApi({
-        id: "codex",
-        name: "Codex",
-        source: "test",
-        config: {},
-        pluginConfig: { supervision: { enabled: true } },
-        runtime: createCodexTestRuntime(() => liveConfig),
-        registerAgentHarness: vi.fn(),
-        registerCommand: vi.fn(),
-        registerMediaUnderstandingProvider: vi.fn(),
-        registerMigrationProvider: vi.fn(),
-        registerProvider: vi.fn(),
-        registerTool,
-        on: vi.fn(),
-      }),
-    );
-    const registration = registerTool.mock.calls.find(([, options]) =>
-      Array.isArray(options?.names),
-    ) as
-      | [
-          (context: { senderIsOwner?: boolean }) => Array<{
-            name: string;
-            execute(callId: string, params: object): Promise<unknown>;
-          }>,
-          { names: string[] },
-        ]
-      | undefined;
-    const probe = registration?.[0]({ senderIsOwner: true }).find(
-      (tool) => tool.name === "codex_endpoint_probe",
-    );
-    if (!probe) {
-      throw new Error("missing Codex endpoint probe tool");
-    }
-
-    liveConfig = revokedConfig;
-
-    await expect(probe.execute("probe", {})).rejects.toThrow(
-      "Codex supervision is disabled in the codex plugin config.",
-    );
-  });
 
   it("registers with capture APIs that do not expose conversation binding hooks yet", () => {
     const registerProvider = vi.fn();
@@ -819,24 +633,15 @@ describe("codex plugin", () => {
     expect(typeof harness.authBinding?.fingerprint).toBe("function");
   });
 
-  it("passes live Codex plugin config into public Codex app-server attempts", async () => {
+  it("passes api.pluginConfig into public Codex app-server attempts", async () => {
     const registerAgentHarness = vi.fn();
-    const liveConfig = {
-      plugins: {
-        entries: {
-          codex: {
-            enabled: true,
-            config: {
-              codexPlugins: {
-                enabled: true,
-                plugins: {
-                  "google-calendar": {
-                    marketplaceName: "openai-curated",
-                    pluginName: "google-calendar",
-                  },
-                },
-              },
-            },
+    const pluginConfig = {
+      codexPlugins: {
+        enabled: true,
+        plugins: {
+          "google-calendar": {
+            marketplaceName: "openai-curated",
+            pluginName: "google-calendar",
           },
         },
       },
@@ -847,8 +652,8 @@ describe("codex plugin", () => {
         name: "Codex",
         source: "test",
         config: {},
-        pluginConfig: { codexPlugins: { enabled: false } },
-        runtime: createCodexTestRuntime(() => liveConfig),
+        pluginConfig,
+        runtime: createCodexTestRuntime(),
         registerAgentHarness,
         registerCommand: vi.fn(),
         registerMediaUnderstandingProvider: vi.fn(),
@@ -869,7 +674,7 @@ describe("codex plugin", () => {
       { prompt: "calendar" },
       {
         bindingStore: expect.any(Object),
-        pluginConfig: liveConfig.plugins.entries.codex.config,
+        pluginConfig,
         nativeHookRelay: { enabled: true },
       },
     );
