@@ -6,6 +6,7 @@ import { deriveCopilotApiBaseUrlFromToken } from "openclaw/plugin-sdk/provider-a
 import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CachedCopilotToken } from "./token-cache.js";
+import { CopilotTokenExchangeError } from "./token-exchange-error.js";
 import { resolveCopilotApiToken } from "./token.js";
 import { fetchCopilotUsage } from "./usage.js";
 
@@ -75,53 +76,35 @@ describe("resolveCopilotForwardCompatModel", () => {
     expect(resolveCopilotForwardCompatModel(ctx)).toBeUndefined();
   });
 
-  it("clones gpt-5.3-codex template for gpt-5.4", () => {
-    const template = {
-      id: "gpt-5.3-codex",
-      name: "gpt-5.3-codex",
-      provider: "github-copilot",
-      api: "openai-responses",
-      reasoning: true,
-      contextWindow: 200_000,
-    };
-    const ctx = createMockCtx("gpt-5.4", {
-      "github-copilot/gpt-5.3-codex": template,
-    });
-    const result = requireResolvedModel(ctx);
-    expect(result.id).toBe("gpt-5.4");
-    expect(result.name).toBe("gpt-5.4");
-    expect((result as unknown as Record<string, unknown>).reasoning).toBe(true);
-  });
-
   it("uses static metadata for gpt-5.3-codex when not in registry", () => {
-    const ctx = createMockCtx("gpt-5.3-codex");
-    const result = requireResolvedModel(ctx);
-    expect(result.id).toBe("gpt-5.3-codex");
-    expect(result.name).toBe("gpt-5.3-codex");
-    expect((result as unknown as Record<string, unknown>).reasoning).toBe(true);
-  });
-
-  it("uses gpt-5.3-codex as the template source for gpt-5.4", () => {
-    const template53 = {
+    const result = requireResolvedModel(createMockCtx("gpt-5.3-codex"));
+    expect(result).toEqual({
       id: "gpt-5.3-codex",
-      name: "gpt-5.3-codex",
+      name: "GPT-5.3-Codex",
       provider: "github-copilot",
       api: "openai-responses",
       reasoning: true,
-      contextWindow: 300_000,
-    };
-    const ctx = createMockCtx("gpt-5.4", {
-      "github-copilot/gpt-5.3-codex": template53,
+      input: ["text", "image"],
+      cost: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
+      contextWindow: 400_000,
+      contextTokens: 272_000,
+      maxTokens: 128_000,
     });
-    const result = requireResolvedModel(ctx);
-    expect(result.id).toBe("gpt-5.4");
-    expect((result as unknown as Record<string, unknown>).contextWindow).toBe(300_000);
   });
 
-  it("falls through to synthetic catch-all when codex template is missing", () => {
-    const ctx = createMockCtx("gpt-5.4");
-    const result = requireResolvedModel(ctx);
-    expect(result.id).toBe("gpt-5.4");
+  it("uses curated static metadata for gpt-5.4 when not in registry", () => {
+    const result = requireResolvedModel(createMockCtx("gpt-5.4"));
+    expect(result).toEqual({
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      provider: "github-copilot",
+      api: "openai-responses",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
+    });
   });
 
   it("uses static metadata for gpt-5.5 when live discovery rows are unavailable", () => {
@@ -133,14 +116,14 @@ describe("resolveCopilotForwardCompatModel", () => {
       api: "openai-responses",
       reasoning: true,
       input: ["text", "image"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 400_000,
+      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+      contextWindow: 1_050_000,
       contextTokens: 272_000,
       maxTokens: 128_000,
     });
   });
 
-  it("preserves static Anthropic thinking maps for Claude Opus 1M fallback rows", () => {
+  it("preserves static Anthropic thinking maps for legacy Claude Opus configured ids", () => {
     const opus46 = requireResolvedModel(createMockCtx("claude-opus-4.6-1m"));
     expect(opus46.thinkingLevelMap).toEqual({ xhigh: null, max: null });
 
@@ -318,6 +301,22 @@ describe("fetchCopilotUsage", () => {
     });
   });
 
+  it.each([
+    ["null", null],
+    ["an array", []],
+  ])("returns an empty window list for a non-object %s payload", async (_label, payload) => {
+    const mockFetch = createProviderUsageFetch(async () => makeResponse(200, payload));
+
+    const result = await fetchCopilotUsage("token", 5000, mockFetch);
+
+    expect(result).toEqual({
+      provider: "github-copilot",
+      displayName: "Copilot",
+      windows: [],
+      plan: undefined,
+    });
+  });
+
   it("bounds the usage read and cancels the stream when the body exceeds the JSON byte cap", async () => {
     // Larger than the shared 16 MiB readProviderJsonResponse cap so the bounded reader cancels the
     // stream mid-flight; if the cap were removed the unbounded res.json() would buffer the whole body.
@@ -435,6 +434,27 @@ describe("github-copilot token", () => {
       "identity",
     );
     expect(jsonStoreMocks.saveJsonFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("explains how to recover from a forbidden token exchange", async () => {
+    jsonStoreMocks.loadJsonFile.mockReturnValue(undefined);
+    const fetchImpl = vi.fn().mockResolvedValue(new Response(null, { status: 403 }));
+
+    const rejection = resolveCopilotApiToken({
+      githubToken: "gh",
+      cachePath,
+      loadJsonFileImpl: jsonStoreMocks.loadJsonFile,
+      saveJsonFileImpl: jsonStoreMocks.saveJsonFile,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    await expect(rejection).rejects.toBeInstanceOf(CopilotTokenExchangeError);
+    await expect(rejection).rejects.toMatchObject({
+      code: "github_copilot_token_exchange_failed",
+      reason: "http_error",
+      status: 403,
+      message: expect.stringContaining("login-github-copilot"),
+    });
   });
 
   it("keeps exchanges per source credential in plugin state", async () => {

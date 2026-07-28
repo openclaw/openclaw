@@ -463,35 +463,6 @@ class TalkModeManagerTest {
   }
 
   @Test
-  fun realtimeToolFinalDoesNotUseAllResponseTts() {
-    val manager = createManager()
-
-    manager.ttsOnAllResponses = true
-    setPrivateField(manager, "realtimeSessionId", "relay-1")
-    realtimeToolRuns(manager)["run-tool"] =
-      RealtimeToolRun(callId = "call-1", relaySessionId = "relay-1")
-
-    manager.handleGatewayEvent("chat", chatFinalPayload(runId = "run-tool", text = "tool result"))
-
-    assertEquals(0L, playbackGeneration(manager).get())
-    assertTrue(realtimeToolRuns(manager).isEmpty())
-  }
-
-  @Test
-  fun realtimeToolFinalBeforeRunMetadataIsHeldForToolCompletion() {
-    val manager = createManager()
-
-    manager.ttsOnAllResponses = true
-    setPrivateField(manager, "realtimeSessionId", "relay-1")
-    pendingRealtimeToolCalls(manager).add("call-1")
-
-    manager.handleGatewayEvent("chat", chatFinalPayload(runId = "run-tool", text = "tool result"))
-
-    assertEquals(0L, playbackGeneration(manager).get())
-    assertTrue(pendingRealtimeToolCompletions(manager).containsKey("run-tool"))
-  }
-
-  @Test
   fun realtimeCloseErrorDisablesTalkButKeepsFailureStatus() {
     var stoppedByRelay = false
     val manager = createManager(onStoppedByRelay = { stoppedByRelay = true })
@@ -867,21 +838,6 @@ class TalkModeManagerTest {
     }
 
   @Test
-  fun staleRealtimeToolFinalDoesNotUseAllResponseTts() {
-    val manager = createManager()
-
-    manager.ttsOnAllResponses = true
-    setPrivateField(manager, "realtimeSessionId", "relay-2")
-    realtimeToolRuns(manager)["run-tool"] =
-      RealtimeToolRun(callId = "call-1", relaySessionId = "relay-1")
-
-    manager.handleGatewayEvent("chat", chatFinalPayload(runId = "run-tool", text = "stale result"))
-
-    assertEquals(0L, playbackGeneration(manager).get())
-    assertTrue(realtimeToolRuns(manager).isEmpty())
-  }
-
-  @Test
   fun textReadyDoesNotEnterSpeakingUntilAudioPlaybackStarts() =
     runTest {
       val talkSpeakClient = FakeTalkSpeechSynthesizer()
@@ -1115,6 +1071,43 @@ class TalkModeManagerTest {
     }
 
   @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun cancelledQueuedFinalizerResumesOnlyItsRealtimeCaptureOnMain() =
+    runTest {
+      val finalizerDispatcher = StandardTestDispatcher()
+      val manager =
+        createManager(
+          scope = CoroutineScope(SupervisorJob() + finalizerDispatcher),
+        )
+      Dispatchers.setMain(Dispatchers.Unconfined)
+      try {
+        setMutableStateFlow(manager, "_isEnabled", true)
+        manager.pauseRealtimeCaptureForPushToTalk("capture-1")
+        setPrivateField(manager, "activePttCaptureId", "capture-1")
+        @Suppress("UNCHECKED_CAST")
+        (readPrivateField(manager, "pttFinalSegments") as MutableList<String>) += "finish this capture"
+
+        val payload = manager.endPushToTalk("capture-1")
+        val finalizer = readPrivateField(manager, "finishingPttJob") as Job
+
+        assertEquals("queued", payload.status)
+        assertEquals("capture-1", manager.finishingPushToTalkCaptureId)
+        assertTrue(readPrivateField(manager, "realtimeCapturePause") != null)
+
+        finalizer.cancel()
+        finalizerDispatcher.scheduler.runCurrent()
+
+        assertTrue(finalizer.isCancelled)
+        assertNull(manager.finishingPushToTalkCaptureId)
+        assertNull(readPrivateField(manager, "realtimeCapturePause"))
+        assertNull(readPrivateField(manager, "activePttCaptureId"))
+      } finally {
+        manager.stopAllCapture()
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
   fun relayClosePreservesFinishingPushToTalkOwnership() =
     runTest {
       val manager = createManager(scope = this)
@@ -1210,15 +1203,6 @@ class TalkModeManagerTest {
 
   @Suppress("UNCHECKED_CAST")
   private fun playbackGeneration(manager: TalkModeManager) = readPrivateField(manager, "playbackGeneration") as AtomicLong
-
-  @Suppress("UNCHECKED_CAST")
-  private fun realtimeToolRuns(manager: TalkModeManager) = readPrivateField(manager, "realtimeToolRuns") as MutableMap<String, RealtimeToolRun>
-
-  @Suppress("UNCHECKED_CAST")
-  private fun pendingRealtimeToolCalls(manager: TalkModeManager) = readPrivateField(manager, "pendingRealtimeToolCalls") as MutableSet<String>
-
-  @Suppress("UNCHECKED_CAST")
-  private fun pendingRealtimeToolCompletions(manager: TalkModeManager) = readPrivateField(manager, "pendingRealtimeToolCompletions") as MutableMap<String, Any>
 
   private fun setPrivateField(
     target: Any,

@@ -34,8 +34,9 @@ function loadRoute(search: string): CustodianRouteData {
 function createContext(): ApplicationContext {
   const snapshot: ApplicationGatewaySnapshot = {
     client: null,
-    connected: false,
-    reconnecting: false,
+    phase: "stopped",
+    offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: "main",
     sessionKey: "main",
@@ -78,7 +79,7 @@ describe("custodian route", () => {
       "openclaw-custodian-page",
     );
     await normalPage?.updateComplete;
-    expect(normalPage?.querySelector(".custodian__header > .btn")).toBeNull();
+    expect(normalPage?.querySelector(".custodian__header .btn")).toBeNull();
     expect(normalPage?.querySelector(".custodian__header p")?.textContent?.trim()).toBe(
       "System setup and care.",
     );
@@ -88,7 +89,7 @@ describe("custodian route", () => {
       HTMLElement & { updateComplete: Promise<boolean> }
     >("openclaw-custodian-page");
     await onboardingPage?.updateComplete;
-    expect(onboardingPage?.querySelector(".custodian__header > .btn")).not.toBeNull();
+    expect(onboardingPage?.querySelector(".custodian__header .btn")).not.toBeNull();
     expect(onboardingPage?.querySelector(".custodian__header p")?.textContent?.trim()).toBe(
       "Your system setup guide",
     );

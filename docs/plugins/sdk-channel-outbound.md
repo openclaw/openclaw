@@ -4,7 +4,7 @@ title: "Channel outbound API"
 read_when:
   - You are building or refactoring a messaging channel plugin send path
   - You need durable final reply delivery, receipts, live preview finalization, or receive acknowledgement policy
-  - You are migrating from channel-message, channel-message-runtime, or legacy reply dispatch helpers
+  - You are migrating from channel-message or legacy reply dispatch helpers
 ---
 
 Channel plugins expose outbound message behavior from
@@ -116,6 +116,10 @@ export const demoMessageAdapter = defineChannelMessageAdapter({
 Only declare capabilities the native transport actually preserves. Cover
 each declared send, receipt, live-preview, and receive-ack capability with
 the contract helpers exported from this subpath.
+
+## Outbound echo suppression
+
+When a platform may redeliver the plugin's own outbound message as inbound, call `recordOutboundMessageIdentity(...)` with the channel, account, conversation, and a stable platform message or source identity. The shared inbound turn path drops matching identities for a bounded 30-second window before session recording or agent dispatch; a source identity may be reserved before send or refreshed when a channel route is removed to close delivery races. `isRecentOutboundMessageIdentity(...)` exposes the same query for channel diagnostics and tests. Do not maintain a parallel channel-local TTL cache for the same stable identity.
 
 ## Plain-text sanitization
 

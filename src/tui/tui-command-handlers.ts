@@ -18,8 +18,13 @@ import {
 } from "../auto-reply/thinking.js";
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
 import { formatRelativeTimestamp } from "../infra/format-time/format-relative.ts";
-import { normalizeAgentId } from "../routing/session-key.js";
-import { helpText, isSharedTextCommand, parseCommand } from "./commands.js";
+import { agentSessionKeysMatchByRequestKey, normalizeAgentId } from "../routing/session-key.js";
+import {
+  formatTuiLevelCommandUsage,
+  helpText,
+  isSharedTextCommand,
+  parseCommand,
+} from "./commands.js";
 import type { ChatLog } from "./components/chat-log.js";
 import {
   createFilterableSelectList,
@@ -70,7 +75,10 @@ type CommandHandlerContext = {
   setActivityStatus: (text: string) => void;
   formatSessionKey: (key: string) => string;
   applySessionInfoFromPatch: (result: SessionsPatchResult) => void;
-  applySessionMutationResult: (result?: TuiSessionMutationResult | null) => boolean;
+  applySessionMutationResult: (
+    result?: TuiSessionMutationResult | null,
+    requestSelection?: { sessionKey: string; agentId: string },
+  ) => boolean;
   noteLocalRunId?: (runId: string) => void;
   noteLocalBtwRunId?: (runId: string) => void;
   forgetLocalRunId?: (runId: string) => void;
@@ -174,10 +182,44 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   const hasUnsafeSessionRollover = () =>
     hasTrackedAbortTarget() || state.activityStatus === "finishing context";
 
-  const currentSessionPatchTarget = () => ({
-    key: state.currentSessionKey,
-    ...(state.currentSessionKey === "global" ? { agentId: state.currentAgentId } : {}),
+  const rejectUnsafeSessionRollover = (command: "new" | "reset") => {
+    if (!hasUnsafeSessionRollover()) {
+      return false;
+    }
+    // Reset interrupts admitted Gateway work, so both rollover commands must
+    // reject active, queued, and finishing runs before mutating the session.
+    chatLog.addSystem(`abort the current run before /${command}`);
+    tui.requestRender();
+    return true;
+  };
+
+  const captureSessionSelection = () => ({
+    sessionKey: state.currentSessionKey,
+    agentId: state.currentAgentId,
   });
+
+  const isCurrentSessionSelection = (selection: { sessionKey: string; agentId: string }) =>
+    state.currentAgentId === selection.agentId &&
+    agentSessionKeysMatchByRequestKey(state.currentSessionKey, selection.sessionKey);
+
+  const patchCurrentSession = async (
+    patch: Omit<Parameters<TuiBackend["patchSession"]>[0], "key" | "agentId">,
+  ): Promise<SessionsPatchResult | null> => {
+    const selection = captureSessionSelection();
+    try {
+      const result = await client.patchSession({
+        key: selection.sessionKey,
+        ...(selection.sessionKey === "global" ? { agentId: selection.agentId } : {}),
+        ...patch,
+      });
+      return isCurrentSessionSelection(selection) ? result : null;
+    } catch (err) {
+      if (!isCurrentSessionSelection(selection)) {
+        return null;
+      }
+      throw err;
+    }
+  };
 
   const openSelector = (
     selector: {
@@ -198,10 +240,14 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   };
 
   const openModelSelector = async () => {
+    const selection = captureSessionSelection();
     try {
       chatLog.addSystem("loading models...");
       tui.requestRender();
       const models = await client.listModels();
+      if (!isCurrentSessionSelection(selection)) {
+        return;
+      }
       if (models.length === 0) {
         chatLog.addSystem("no models available");
         tui.requestRender();
@@ -218,10 +264,10 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       const selector = createSearchableSelectList(items, 9);
       openSelector(selector, async (value) => {
         try {
-          const result = await client.patchSession({
-            ...currentSessionPatchTarget(),
-            model: value,
-          });
+          const result = await patchCurrentSession({ model: value });
+          if (!result) {
+            return;
+          }
           chatLog.addSystem(`model set to ${value}`);
           applySessionInfoFromPatch(result);
           await refreshSessionInfo();
@@ -230,6 +276,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         }
       });
     } catch (err) {
+      if (!isCurrentSessionSelection(selection)) {
+        return;
+      }
       chatLog.addSystem(`model list failed: ${String(err)}`);
       tui.requestRender();
     }
@@ -237,12 +286,13 @@ export function createCommandHandlers(context: CommandHandlerContext) {
 
   const openAgentSelector = async () => {
     await refreshAgents();
-    if (state.agents.length === 0) {
+    const selectableAgents = state.agents.filter((agent) => agent.kind !== "system");
+    if (selectableAgents.length === 0) {
       chatLog.addSystem("no agents found");
       tui.requestRender();
       return;
     }
-    const items = state.agents.map((agent: AgentSummary) => ({
+    const items = selectableAgents.map((agent: AgentSummary) => ({
       value: agent.id,
       label: agent.name ? `${agent.id} (${agent.name})` : agent.id,
       description: agent.id === state.agentDefaultId ? "default" : "",
@@ -278,6 +328,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   };
 
   const openSessionSelector = async () => {
+    const selection = captureSessionSelection();
     try {
       const result = await client.listSessions({
         limit: TUI_SESSION_PICKER_LIMIT,
@@ -286,8 +337,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         includeUnknown: false,
         includeDerivedTitles: true,
         includeLastMessage: true,
-        agentId: state.currentAgentId,
+        agentId: selection.agentId,
       });
+      if (!isCurrentSessionSelection(selection)) {
+        return;
+      }
       const items = result.sessions.map((session) => {
         const title = session.derivedTitle ?? session.displayName;
         const formattedKey = formatSessionKey(session.key);
@@ -321,6 +375,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         await setSession(value);
       });
     } catch (err) {
+      if (!isCurrentSessionSelection(selection)) {
+        return;
+      }
       chatLog.addSystem(`sessions list failed: ${String(err)}`);
       tui.requestRender();
     }
@@ -519,10 +576,10 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           await openModelSelector();
         } else {
           try {
-            const result = await client.patchSession({
-              ...currentSessionPatchTarget(),
-              model: args,
-            });
+            const result = await patchCurrentSession({ model: args });
+            if (!result) {
+              return;
+            }
             const resolvedModel = result.resolved?.model;
             const resolvedProvider = result.resolved?.modelProvider;
             const resolvedModelRef = resolvedModel
@@ -556,10 +613,10 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           break;
         }
         try {
-          const result = await client.patchSession({
-            ...currentSessionPatchTarget(),
-            thinkingLevel: args,
-          });
+          const result = await patchCurrentSession({ thinkingLevel: args });
+          if (!result) {
+            return;
+          }
           chatLog.addSystem(`thinking set to ${args}`);
           applySessionInfoFromPatch(result);
           await refreshSessionInfo();
@@ -569,14 +626,14 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         break;
       case "verbose":
         if (!args) {
-          chatLog.addSystem("usage: /verbose <on|off>");
+          chatLog.addSystem(`usage: ${formatTuiLevelCommandUsage("verbose")}`);
           break;
         }
         try {
-          const result = await client.patchSession({
-            ...currentSessionPatchTarget(),
-            verboseLevel: args,
-          });
+          const result = await patchCurrentSession({ verboseLevel: args });
+          if (!result) {
+            return;
+          }
           chatLog.addSystem(`verbose set to ${args}`);
           applySessionInfoFromPatch(result);
           if (args === "off") {
@@ -595,10 +652,10 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           break;
         }
         try {
-          const result = await client.patchSession({
-            ...currentSessionPatchTarget(),
-            traceLevel: args,
-          });
+          const result = await patchCurrentSession({ traceLevel: args });
+          if (!result) {
+            return;
+          }
           chatLog.addSystem(`trace set to ${args}`);
           applySessionInfoFromPatch(result);
           await refreshSessionInfo();
@@ -616,10 +673,12 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           break;
         }
         try {
-          const result = await client.patchSession({
-            ...currentSessionPatchTarget(),
+          const result = await patchCurrentSession({
             fastMode: args === "auto" ? "auto" : args === "on",
           });
+          if (!result) {
+            return;
+          }
           chatLog.addSystem(`fast mode set to ${args}`);
           applySessionInfoFromPatch(result);
           await refreshSessionInfo();
@@ -629,14 +688,14 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         break;
       case "reasoning":
         if (!args) {
-          chatLog.addSystem("usage: /reasoning <on|off>");
+          chatLog.addSystem(`usage: ${formatTuiLevelCommandUsage("reasoning")}`);
           break;
         }
         try {
-          const result = await client.patchSession({
-            ...currentSessionPatchTarget(),
-            reasoningLevel: args,
-          });
+          const result = await patchCurrentSession({ reasoningLevel: args });
+          if (!result) {
+            return;
+          }
           chatLog.addSystem(`reasoning set to ${args}`);
           applySessionInfoFromPatch(result);
           await refreshSessionInfo();
@@ -653,10 +712,10 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         }
         if (isReset) {
           try {
-            const result = await client.patchSession({
-              ...currentSessionPatchTarget(),
-              responseUsage: null,
-            });
+            const result = await patchCurrentSession({ responseUsage: null });
+            if (!result) {
+              return;
+            }
             chatLog.addSystem("usage footer: reset to default");
             applySessionInfoFromPatch(result);
             delete state.sessionInfo.responseUsage;
@@ -673,10 +732,10 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         const next =
           normalized ?? (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
         try {
-          const result = await client.patchSession({
-            ...currentSessionPatchTarget(),
-            responseUsage: next,
-          });
+          const result = await patchCurrentSession({ responseUsage: next });
+          if (!result) {
+            return;
+          }
           chatLog.addSystem(`usage footer: ${next}`);
           applySessionInfoFromPatch(result);
           await refreshSessionInfo();
@@ -695,10 +754,10 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           break;
         }
         try {
-          const result = await client.patchSession({
-            ...currentSessionPatchTarget(),
-            elevatedLevel: args,
-          });
+          const result = await patchCurrentSession({ elevatedLevel: args });
+          if (!result) {
+            return;
+          }
           chatLog.addSystem(`elevated set to ${args}`);
           applySessionInfoFromPatch(result);
           await refreshSessionInfo();
@@ -717,10 +776,10 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           break;
         }
         try {
-          const result = await client.patchSession({
-            ...currentSessionPatchTarget(),
-            groupActivation: activation,
-          });
+          const result = await patchCurrentSession({ groupActivation: activation });
+          if (!result) {
+            return;
+          }
           chatLog.addSystem(`activation set to ${activation}`);
           applySessionInfoFromPatch(result);
           await refreshSessionInfo();
@@ -730,9 +789,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         break;
       }
       case "new":
-        if (hasUnsafeSessionRollover()) {
-          chatLog.addSystem("abort the current run before /new");
-          tui.requestRender();
+        if (rejectUnsafeSessionRollover("new")) {
           break;
         }
         sessionCreationInFlight = true;
@@ -762,7 +819,12 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           sessionCreationInFlight = false;
         }
         break;
-      case "reset":
+      case "reset": {
+        if (rejectUnsafeSessionRollover("reset")) {
+          break;
+        }
+        const resetSelection = captureSessionSelection();
+        let resetResultSelection = resetSelection;
         try {
           // Clear token counts immediately to avoid stale display (#1523)
           state.sessionInfo.inputTokens = null;
@@ -771,20 +833,33 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           tui.requestRender();
 
           const result = await client.resetSession(
-            state.currentSessionKey,
+            resetSelection.sessionKey,
             name,
-            state.currentSessionKey === "global" ? { agentId: state.currentAgentId } : undefined,
+            resetSelection.sessionKey === "global"
+              ? { agentId: resetSelection.agentId }
+              : undefined,
           );
-          if (applySessionMutationResult(result)) {
+          if (!isCurrentSessionSelection(resetSelection)) {
+            return;
+          }
+          if (applySessionMutationResult(result, resetSelection)) {
+            resetResultSelection = captureSessionSelection();
             await refreshSessionInfo();
           } else {
             await loadHistory();
           }
+          if (!isCurrentSessionSelection(resetResultSelection)) {
+            return;
+          }
           chatLog.addSystem(`session ${state.currentSessionKey} reset`);
         } catch (err) {
+          if (!isCurrentSessionSelection(resetResultSelection)) {
+            return;
+          }
           chatLog.addSystem(`reset failed: ${sanitizeRenderableText(String(err))}`);
         }
         break;
+      }
       case "abort":
         await abortActive();
         break;
