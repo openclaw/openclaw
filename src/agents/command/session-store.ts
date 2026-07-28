@@ -328,6 +328,7 @@ export async function clearCliSessionInStore(params: {
     return undefined;
   }
 
+  let didClear = false;
   const persisted = await patchSessionEntry(
     {
       storePath,
@@ -349,14 +350,16 @@ export async function clearCliSessionInStore(params: {
       const next = { ...currentEntry };
       clearCliSession(next, provider);
       next.updatedAt = Date.now();
+      didClear = true;
       return next;
     },
     { fallbackEntry: entry },
   );
-  if (persisted) {
+  if (persisted && didClear) {
     sessionStore[sessionKey] = persisted;
+    return persisted;
   }
-  return persisted ?? undefined;
+  return undefined;
 }
 
 /** Clears the one-shot fork marker before the resumed CLI process starts. */

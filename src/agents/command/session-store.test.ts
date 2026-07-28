@@ -3187,5 +3187,41 @@ describe("clearCliSessionInStore", () => {
       expect(loadPersistedSessionEntry(storePath, sessionKey)).toBeUndefined();
     });
   });
+
+  it("reports no clear and preserves a replacement CLI binding", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const sessionKey = "agent:main:explicit:test-clear-cli-replaced";
+      const sessionEntry: SessionEntry = {
+        sessionId: "openclaw-session-1",
+        updatedAt: 1,
+        cliSessionBindings: { "claude-cli": { sessionId: "stale-cli-session" } },
+      };
+      const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+      await seedSessionStore(storePath, {
+        [sessionKey]: {
+          ...sessionEntry,
+          updatedAt: 2,
+          cliSessionBindings: { "claude-cli": { sessionId: "replacement-cli-session" } },
+        },
+      });
+
+      await expect(
+        clearCliSessionInStore({
+          provider: "claude-cli",
+          sessionKey,
+          sessionStore,
+          storePath,
+          expectedCliSessionId: "stale-cli-session",
+        }),
+      ).resolves.toBeUndefined();
+      expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(
+        "stale-cli-session",
+      );
+      expect(
+        loadPersistedSessionEntry(storePath, sessionKey)?.cliSessionBindings?.["claude-cli"]
+          ?.sessionId,
+      ).toBe("replacement-cli-session");
+    });
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

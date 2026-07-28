@@ -230,6 +230,7 @@ describe("executeAgentTurn: CLI session routing", () => {
     followupRun.run.provider = "codex-cli";
     followupRun.run.model = "gpt-5.4";
     const sessionEntry = {
+      sessionId: "openclaw-session",
       cliSessionBindings: {
         "codex-cli": { sessionId: "existing-cli-session" },
       },
@@ -239,6 +240,7 @@ describe("executeAgentTurn: CLI session routing", () => {
     const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({ followupRun }),
       activeSessionStore,
+      storePath: "/tmp/openclaw-cli-session-routing.sqlite",
       getActiveSessionEntry: () => sessionEntry,
     });
 
@@ -250,6 +252,7 @@ describe("executeAgentTurn: CLI session routing", () => {
       cliSessionBinding: {
         sessionId: "existing-cli-session",
       },
+      onBeforeFreshCliSessionRetry: expect.any(Function),
     });
     if (result.kind !== "success") {
       throw new Error("expected success");
