@@ -1237,17 +1237,19 @@ install_openclaw_from_git() {
       git_ref="$(git -C "$repo_dir" rev-parse --short HEAD 2>/dev/null || echo "HEAD")"
     fi
     log "Prepared checkout ref: ${git_ref}"
+  elif [[ -d "$repo_dir/.git" && -n "$(git -C "$repo_dir" status --porcelain 2>/dev/null || true)" ]]; then
+    # Dirty tree: keep checkout; never resolve npm tag (fail-closed) when not updating.
+    log "Repo is dirty; skipping git checkout/update"
+    git_ref="$(git -C "$repo_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+    if [[ -z "$git_ref" || "$git_ref" == "HEAD" ]]; then
+      git_ref="$(git -C "$repo_dir" rev-parse --short HEAD 2>/dev/null || echo "HEAD")"
+    fi
+    log "Dirty checkout ref: ${git_ref}"
   else
     git_ref="$(resolve_git_openclaw_ref)"
-  fi
-  if [[ "$GIT_UPDATE" == "0" && -d "$repo_dir/.git" ]]; then
-    :
-  elif [[ -z "$(git -C "$repo_dir" status --porcelain 2>/dev/null || true)" ]]; then
     log "Using git ref: ${git_ref}"
     checkout_git_openclaw_ref "$repo_dir" "$git_ref"
     assert_git_checkout_matches_ref "$repo_dir" "$git_ref"
-  else
-    log "Repo is dirty; skipping git checkout/update"
   fi
 
   cleanup_legacy_submodules "$repo_dir"

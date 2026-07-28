@@ -286,6 +286,12 @@ describe("install-cli.sh", () => {
     expect(script).toContain("Skipping git checkout/update (--no-git-update)");
   });
 
+  it("does not resolve npm release tags when the existing git checkout is dirty", () => {
+    expect(script).toContain("Dirty checkout ref:");
+    expect(script).toContain("never resolve npm tag");
+    expect(script).toMatch(/Repo is dirty; skipping git checkout\/update[\s\S]*Dirty checkout ref/);
+  });
+
   it("asserts package.json version matches the checked-out version tag", () => {
     const result = runInstallCliShell(`
       set -euo pipefail

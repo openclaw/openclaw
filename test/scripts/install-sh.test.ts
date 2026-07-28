@@ -1981,6 +1981,14 @@ NODE
     expect(script).toContain("Skipping git checkout/update (--no-git-update)");
   });
 
+  it("does not resolve npm release tags when the existing git checkout is dirty", () => {
+    // Dirty trees skip checkout/update; resolving npm/latest first would fail-closed
+    // on missing tags even though the tree is intentionally left alone (#112754 P1).
+    expect(script).toContain("Dirty checkout ref:");
+    expect(script).toContain("Do not call resolve_git_openclaw_ref");
+    expect(script).toMatch(/local changes; skipping git checkout\/update[\s\S]*Dirty checkout ref/);
+  });
+
   it("asserts package.json version matches the checked-out version tag", () => {
     const home = (() => {
       const result = runInstallShell(`

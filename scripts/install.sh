@@ -2918,17 +2918,20 @@ install_openclaw_from_git() {
             git_ref="$(git -C "$repo_dir" rev-parse --short HEAD 2>/dev/null || echo "HEAD")"
         fi
         ui_info "Prepared checkout ref: ${git_ref}"
+    elif [[ -d "$repo_dir/.git" && -n "$(git -C "$repo_dir" status --porcelain 2>/dev/null || true)" ]]; then
+        # Dirty tree: keep the user's checkout. Do not call resolve_git_openclaw_ref
+        # (that fail-closes on missing release tags even when checkout is skipped).
+        ui_info "Repo has local changes; skipping git checkout/update"
+        git_ref="$(git -C "$repo_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+        if [[ -z "$git_ref" || "$git_ref" == "HEAD" ]]; then
+            git_ref="$(git -C "$repo_dir" rev-parse --short HEAD 2>/dev/null || echo "HEAD")"
+        fi
+        ui_info "Dirty checkout ref: ${git_ref}"
     else
         git_ref="$(resolve_git_openclaw_ref)"
-    fi
-    if [[ "$GIT_UPDATE" == "0" && -d "$repo_dir/.git" ]]; then
-        :
-    elif [[ -z "$(git -C "$repo_dir" status --porcelain 2>/dev/null || true)" ]]; then
         ui_info "Using git ref: ${git_ref}"
         checkout_git_openclaw_ref "$repo_dir" "$git_ref"
         assert_git_checkout_matches_ref "$repo_dir" "$git_ref"
-    else
-        ui_info "Repo has local changes; skipping git checkout/update"
     fi
 
     cleanup_legacy_submodules "$repo_dir"
