@@ -317,6 +317,7 @@
     "!dist/extensions/tavily/**",
     "!dist/extensions/teams-meetings/**",
     "!dist/extensions/tencent/**",
+    "!dist/extensions/telnyx/**",
     "!dist/extensions/tokenjuice/**",
     "!dist/extensions/tlon/**",
     "!dist/extensions/twitch/**",

@@ -475,6 +475,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/tencent/**"
+"extensions: telnyx":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/telnyx/**"
+          - "docs/providers/telnyx.md"
 "extensions: stepfun":
   - changed-files:
       - any-glob-to-any-file:

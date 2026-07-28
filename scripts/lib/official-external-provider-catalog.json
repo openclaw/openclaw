@@ -1778,6 +1778,56 @@
       }
     },
     {
+      "name": "@openclaw/telnyx-provider",
+      "description": "OpenClaw Telnyx provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "telnyx",
+          "label": "Telnyx"
+        },
+        "providers": [
+          {
+            "id": "telnyx",
+            "name": "Telnyx",
+            "docs": "/providers/telnyx",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "TELNYX_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "telnyx-api-key",
+                "choiceLabel": "Telnyx API key",
+                "choiceHint": "OpenAI-compatible Telnyx AI inference endpoint",
+                "groupId": "telnyx",
+                "groupLabel": "Telnyx",
+                "groupHint": "OpenAI-compatible Telnyx AI inference endpoint",
+                "optionKey": "telnyxApiKey",
+                "cliFlag": "--telnyx-api-key",
+                "cliOption": "--telnyx-api-key <key>",
+                "cliDescription": "Telnyx API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/telnyx-provider",
+          "npmSpec": "@openclaw/telnyx-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
+        }
+      }
+    },
+    {
       "name": "@openclaw/venice-provider",
       "description": "OpenClaw Venice provider plugin",
       "source": "official",
