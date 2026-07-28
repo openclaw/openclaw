@@ -1998,7 +1998,9 @@ describe("gateway hot reload superseded tail recovery", () => {
       manual: false,
       restartPending: false,
     });
-    expect(startChannel).toHaveBeenCalledWith("discord");
+    expect(startChannel).toHaveBeenCalledWith("discord", undefined, {
+      preserveManualStop: true,
+    });
     expect(requestRecoveryRestart).not.toHaveBeenCalled();
   });
 
@@ -2815,7 +2817,9 @@ describe("gateway restart deferral preflight", () => {
       manual: false,
       restartPending: false,
     });
-    expect(startChannel).toHaveBeenCalledWith("discord");
+    expect(startChannel).toHaveBeenCalledWith("discord", undefined, {
+      preserveManualStop: true,
+    });
     expect(runtimePublished).toBe(true);
     expect(setState).toHaveBeenCalledTimes(1);
   });
@@ -2874,7 +2878,9 @@ describe("gateway restart deferral preflight", () => {
       manual: false,
       restartPending: false,
     });
-    expect(startChannel).toHaveBeenCalledWith("telegram");
+    expect(startChannel).toHaveBeenCalledWith("telegram", undefined, {
+      preserveManualStop: true,
+    });
     expect(logReload.warn).toHaveBeenCalledWith(
       expect.stringContaining("channel reload timeout after"),
     );
@@ -3089,6 +3095,9 @@ describe("gateway channel hot reload handlers", () => {
     expect(startRootCounts).toEqual([1]);
     expect(channels.stop).toHaveBeenCalledOnce();
     expect(channels.start).toHaveBeenCalledOnce();
+    expect(channels.start).toHaveBeenCalledWith("discord", "alpha", {
+      preserveManualStop: true,
+    });
   });
 
   it("continues targeted restarts after an account failure", async () => {
@@ -3120,6 +3129,9 @@ describe("gateway channel hot reload handlers", () => {
     });
 
     expect(events).toEqual(["stop:discord:alpha", "stop:discord:beta", "start:discord:beta"]);
+    expect(channels.start).toHaveBeenCalledWith("discord", "beta", {
+      preserveManualStop: true,
+    });
     expect(requestRecoveryRestart).toHaveBeenCalledOnce();
   });
 
@@ -5015,7 +5027,9 @@ describe("gateway plugin hot reload handlers", () => {
       manual: false,
       restartPending: false,
     });
-    expect(startChannel).toHaveBeenCalledWith("discord");
+    expect(startChannel).toHaveBeenCalledWith("discord", undefined, {
+      preserveManualStop: true,
+    });
   });
 
   it("skips channel work when the candidate env adds a skip flag", async () => {
@@ -5812,10 +5826,14 @@ describe("gateway plugin hot reload handlers", () => {
       manual: false,
       restartPending: false,
     });
-    expect(startChannel).toHaveBeenCalledWith("openclaw-weixin");
-    expect(startChannel).not.toHaveBeenCalledWith("openclaw-weixin", undefined, {
-      includeKnownAccounts: true,
+    expect(startChannel).toHaveBeenCalledWith("openclaw-weixin", undefined, {
+      preserveManualStop: true,
     });
+    expect(startChannel).not.toHaveBeenCalledWith(
+      "openclaw-weixin",
+      undefined,
+      expect.objectContaining({ includeKnownAccounts: true }),
+    );
   });
 
   it("keeps plugin reload handoffs manager-owned before restarting active channels", async () => {
@@ -5995,10 +6013,14 @@ describe("gateway plugin hot reload handlers", () => {
       restartPending: false,
       preserveKnownAccount: true,
     });
-    expect(startChannel).toHaveBeenCalledWith("openclaw-weixin");
-    expect(startChannel).not.toHaveBeenCalledWith("openclaw-weixin", undefined, {
-      includeKnownAccounts: true,
+    expect(startChannel).toHaveBeenCalledWith("openclaw-weixin", undefined, {
+      preserveManualStop: true,
     });
+    expect(startChannel).not.toHaveBeenCalledWith(
+      "openclaw-weixin",
+      undefined,
+      expect.objectContaining({ includeKnownAccounts: true }),
+    );
   });
 
   it("uses the known-account safety net for channel account-index reload markers", async () => {
@@ -6171,10 +6193,14 @@ describe("gateway plugin hot reload handlers", () => {
       manual: false,
       restartPending: false,
     });
-    expect(startChannel).toHaveBeenCalledWith("openclaw-weixin");
-    expect(startChannel).not.toHaveBeenCalledWith("openclaw-weixin", undefined, {
-      includeKnownAccounts: true,
+    expect(startChannel).toHaveBeenCalledWith("openclaw-weixin", undefined, {
+      preserveManualStop: true,
     });
+    expect(startChannel).not.toHaveBeenCalledWith(
+      "openclaw-weixin",
+      undefined,
+      expect.objectContaining({ includeKnownAccounts: true }),
+    );
   });
 
   it("does not union known accounts when account-index reload coalesces with root channel changes", async () => {
@@ -6258,10 +6284,14 @@ describe("gateway plugin hot reload handlers", () => {
       manual: false,
       restartPending: false,
     });
-    expect(startChannel).toHaveBeenCalledWith("openclaw-weixin");
-    expect(startChannel).not.toHaveBeenCalledWith("openclaw-weixin", undefined, {
-      includeKnownAccounts: true,
+    expect(startChannel).toHaveBeenCalledWith("openclaw-weixin", undefined, {
+      preserveManualStop: true,
     });
+    expect(startChannel).not.toHaveBeenCalledWith(
+      "openclaw-weixin",
+      undefined,
+      expect.objectContaining({ includeKnownAccounts: true }),
+    );
   });
 
   it("restarts ordinary config hot-reloaded channels without the known-account safety net", async () => {
@@ -6339,10 +6369,14 @@ describe("gateway plugin hot reload handlers", () => {
       manual: false,
       restartPending: false,
     });
-    expect(startChannel).toHaveBeenCalledWith("openclaw-weixin");
-    expect(startChannel).not.toHaveBeenCalledWith("openclaw-weixin", undefined, {
-      includeKnownAccounts: true,
+    expect(startChannel).toHaveBeenCalledWith("openclaw-weixin", undefined, {
+      preserveManualStop: true,
     });
+    expect(startChannel).not.toHaveBeenCalledWith(
+      "openclaw-weixin",
+      undefined,
+      expect.objectContaining({ includeKnownAccounts: true }),
+    );
   });
 });
 
@@ -6740,7 +6774,9 @@ describe("deferred channel reload abort generation", () => {
         manual: false,
         restartPending: false,
       });
-      expect(channels.start).toHaveBeenCalledWith("whatsapp");
+      expect(channels.start).toHaveBeenCalledWith("whatsapp", undefined, {
+        preserveManualStop: true,
+      });
     } finally {
       vi.useRealTimers();
       hoisted.activeTaskBlockers.length = 0;
