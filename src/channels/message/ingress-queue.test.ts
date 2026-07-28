@@ -44,6 +44,10 @@ async function withTempState<T>(fn: (stateDir: string) => Promise<T>): Promise<T
   }
 }
 
+function openIngressStateDatabase(stateDir: string) {
+  return openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+}
+
 describe("channel ingress queue", () => {
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
@@ -446,9 +450,7 @@ describe("channel ingress queue", () => {
       await queue.release("retry", { lastError: "stale retry text", releasedAt: 26 });
       await queue.complete("retry", { completedAt: 27 });
 
-      const database = openOpenClawStateDatabase({
-        env: { OPENCLAW_STATE_DIR: stateDir },
-      });
+      const database = openIngressStateDatabase(stateDir);
       const kysely = getNodeSqliteKysely<ChannelIngressTestDatabase>(database.db);
       const rows = executeSqliteQuerySync(
         database.db,
@@ -504,9 +506,7 @@ describe("channel ingress queue", () => {
         completed_at: number;
       }>,
     ) {
-      const { db } = openOpenClawStateDatabase({
-        env: { OPENCLAW_STATE_DIR: stateDir },
-      });
+      const { db } = openIngressStateDatabase(stateDir);
       const kysely = getNodeSqliteKysely<ChannelIngressTestDatabase>(db);
       const claimValue = overrides.claim_token ?? null;
       executeSqliteQuerySync(
@@ -632,9 +632,7 @@ describe("channel ingress queue", () => {
         await queue.complete("comp-1", { metadata: { handler: "worker" }, completedAt: 150 });
 
         // Corrupt the completed_metadata_json
-        const { db } = openOpenClawStateDatabase({
-          env: { OPENCLAW_STATE_DIR: stateDir },
-        });
+        const { db } = openIngressStateDatabase(stateDir);
         db.prepare(
           `UPDATE channel_ingress_events
              SET completed_metadata_json = ?
@@ -661,9 +659,7 @@ describe("channel ingress queue", () => {
         });
         // Override the bad row's received_at to be earlier.
         {
-          const { db } = openOpenClawStateDatabase({
-            env: { OPENCLAW_STATE_DIR: stateDir },
-          });
+          const { db } = openIngressStateDatabase(stateDir);
           db.prepare(
             `UPDATE channel_ingress_events SET received_at = ? WHERE queue_name = ? AND event_id = ?`,
           ).run(earlyTime, '["test","account"]', "bad-claim");
@@ -674,7 +670,7 @@ describe("channel ingress queue", () => {
         expect(claimed).not.toBeNull();
         expect(claimed!.id).toBe("good-1");
 
-        const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+        const database = openIngressStateDatabase(stateDir);
         const failed = executeSqliteQueryTakeFirstSync(
           database.db,
           getNodeSqliteKysely<ChannelIngressTestDatabase>(database.db)
@@ -718,7 +714,7 @@ describe("channel ingress queue", () => {
 
         await expect(queue.claimNext({ scanLimit: 200 })).resolves.toBeNull();
 
-        const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+        const database = openIngressStateDatabase(stateDir);
         const counts = executeSqliteQuerySync(
           database.db,
           getNodeSqliteKysely<ChannelIngressTestDatabase>(database.db)
@@ -752,7 +748,7 @@ describe("channel ingress queue", () => {
         expect(goodClaim).not.toBeNull();
         expect(goodClaim!.payload.text).toBe("hello");
 
-        const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+        const database = openIngressStateDatabase(stateDir);
         const failed = executeSqliteQueryTakeFirstSync(
           database.db,
           getNodeSqliteKysely<ChannelIngressTestDatabase>(database.db)
@@ -793,9 +789,7 @@ describe("channel ingress queue", () => {
         }
 
         // Verify the corrupt row was actually tombstoned in the DB.
-        const { db } = openOpenClawStateDatabase({
-          env: { OPENCLAW_STATE_DIR: stateDir },
-        });
+        const { db } = openIngressStateDatabase(stateDir);
         const row = executeSqliteQuerySync(
           db,
           getNodeSqliteKysely<ChannelIngressTestDatabase>(db)
@@ -827,9 +821,7 @@ describe("channel ingress queue", () => {
           "Corrupt payload_json in claimed channel ingress event",
         );
 
-        const { db } = openOpenClawStateDatabase({
-          env: { OPENCLAW_STATE_DIR: stateDir },
-        });
+        const { db } = openIngressStateDatabase(stateDir);
         const row = executeSqliteQueryTakeFirstSync(
           db,
           getNodeSqliteKysely<ChannelIngressTestDatabase>(db)
@@ -867,9 +859,7 @@ describe("channel ingress queue", () => {
         expect(recovered).toBe(1);
 
         // The corrupt claimed row should now be tombstoned as failed.
-        const { db } = openOpenClawStateDatabase({
-          env: { OPENCLAW_STATE_DIR: stateDir },
-        });
+        const { db } = openIngressStateDatabase(stateDir);
         const row = executeSqliteQuerySync(
           db,
           getNodeSqliteKysely<ChannelIngressTestDatabase>(db)
@@ -922,9 +912,7 @@ describe("channel ingress queue", () => {
           },
         });
 
-        const { db } = openOpenClawStateDatabase({
-          env: { OPENCLAW_STATE_DIR: stateDir },
-        });
+        const { db } = openIngressStateDatabase(stateDir);
         const row = executeSqliteQueryTakeFirstSync(
           db,
           getNodeSqliteKysely<ChannelIngressTestDatabase>(db)

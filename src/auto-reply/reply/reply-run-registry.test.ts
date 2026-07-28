@@ -49,6 +49,16 @@ function createTestReplyOperation(
   });
 }
 
+async function withFakeReplyTimers<T>(run: () => Promise<T>): Promise<T> {
+  vi.useFakeTimers();
+  try {
+    return await run();
+  } finally {
+    await vi.runOnlyPendingTimersAsync();
+    vi.useRealTimers();
+  }
+}
+
 describe("reply run registry", () => {
   afterEach(() => {
     testing.resetReplyRunRegistry();
@@ -58,8 +68,7 @@ describe("reply run registry", () => {
   });
 
   it("keeps ownership stable by sessionKey while sessionId rotates", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeReplyTimers(async () => {
       const operation = createTestReplyOperation({
         sessionId: "session-old",
       });
@@ -83,10 +92,7 @@ describe("reply run registry", () => {
       operation.complete();
 
       await expect(oldWaitPromise).resolves.toBe(true);
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("treats queued reply operations as non-abortable for compaction", () => {
@@ -340,8 +346,7 @@ describe("reply run registry", () => {
   });
 
   it("keeps follow-up admission blocked until slow delivery settles", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeReplyTimers(async () => {
       const operation = createTestReplyOperation({
         sessionId: "hung-session",
       });
@@ -374,15 +379,11 @@ describe("reply run registry", () => {
         respectFollowupAdmissionBarrier: true,
       });
       next.complete();
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("extends a hung delivery barrier only while bounded owner work remains active", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeReplyTimers(async () => {
       const operation = createTestReplyOperation({
         sessionId: "active-owner-session",
       });
@@ -402,15 +403,11 @@ describe("reply run registry", () => {
       await vi.waitFor(() => {
         expect(afterClear).toHaveBeenCalledWith("active-owner-session");
       });
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("keeps follow-up admission blocked during an unsettled inter-block delay", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeReplyTimers(async () => {
       const operation = createTestReplyOperation({
         sessionKey: "agent:main:mattermost:direct:user-1",
         sessionId: "mattermost-delivery-session",
@@ -447,15 +444,11 @@ describe("reply run registry", () => {
         respectFollowupAdmissionBarrier: true,
       });
       followup.complete();
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("eventually releases a permanently hung delivery barrier at the default timeout", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeReplyTimers(async () => {
       const operation = createTestReplyOperation({
         sessionId: "hung-session",
       });
@@ -475,10 +468,7 @@ describe("reply run registry", () => {
         respectFollowupAdmissionBarrier: true,
       });
       next.complete();
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("retains failed operations until final delivery completes", () => {
@@ -618,8 +608,7 @@ describe("reply run registry", () => {
   });
 
   it("force-releases a running aborted operation when the owner never returns", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeReplyTimers(async () => {
       const cancel = vi.fn();
       const operation = createTestReplyOperation({
         sessionKey: "agent:main:hung-abort",
@@ -656,15 +645,11 @@ describe("reply run registry", () => {
       if (next.status === "owned") {
         next.operation.complete();
       }
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("keeps late owner complete harmless after forced terminal release", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeReplyTimers(async () => {
       const operation = createTestReplyOperation({
         sessionKey: "agent:main:late-complete",
         sessionId: "session-late-complete",
@@ -679,15 +664,11 @@ describe("reply run registry", () => {
 
       expect(replyRunRegistry.isActive("agent:main:late-complete")).toBe(false);
       expect(afterClear).toHaveBeenCalledTimes(1);
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("force-releases retained failures when the owner never completes", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeReplyTimers(async () => {
       const operation = createTestReplyOperation({
         sessionKey: "agent:main:retained-hung-failure",
         sessionId: "session-retained-hung-failure",
@@ -702,10 +683,7 @@ describe("reply run registry", () => {
       expect(replyRunRegistry.get("agent:main:retained-hung-failure")).toBeUndefined();
       expect(afterClear).toHaveBeenCalledTimes(1);
       expect(operation.result).toMatchObject({ kind: "failed", code: "run_failed" });
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("keeps run_stalled attribution when backend cancel re-enters abortByUser", () => {
@@ -730,8 +708,7 @@ describe("reply run registry", () => {
   });
 
   it("cancels terminal settle when the owner clears state first", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeReplyTimers(async () => {
       const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
       const operation = createTestReplyOperation({
         sessionKey: "agent:main:owner-clears",
@@ -747,10 +724,7 @@ describe("reply run registry", () => {
       expect(warnSpy).not.toHaveBeenCalledWith(
         expect.stringContaining("reply run terminal settle: forced release"),
       );
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("force-clears retained failed operations", () => {
@@ -775,8 +749,7 @@ describe("reply run registry", () => {
   });
 
   it("force-clears a running operation after abort without backend cleanup", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeReplyTimers(async () => {
       const cancel = vi.fn();
       const operation = createTestReplyOperation({
         sessionId: "session-running",
@@ -799,10 +772,7 @@ describe("reply run registry", () => {
 
       expect(isReplyRunActiveForSessionId("session-running")).toBe(false);
       await expect(waitPromise).resolves.toBe(true);
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("rejects aborts while the attached backend is finalizing", () => {
@@ -889,8 +859,7 @@ describe("reply run registry", () => {
   });
 
   it("expires finalization when its owner stops making progress", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeReplyTimers(async () => {
       const afterClear = vi.fn();
       const operation = createTestReplyOperation({
         sessionKey: "agent:main:hung-finalization",
@@ -913,15 +882,11 @@ describe("reply run registry", () => {
       expect(operation.phase).toBe("failed");
       expect(operation.abortSignal.aborted).toBe(true);
       expect(afterClear).toHaveBeenCalledTimes(1);
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("renews finalization from owner progress", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeReplyTimers(async () => {
       const operation = createTestReplyOperation({
         sessionKey: "agent:main:progressing-finalization",
         sessionId: "session-progressing-finalization",
@@ -940,15 +905,11 @@ describe("reply run registry", () => {
 
       expect(replyRunRegistry.get("agent:main:progressing-finalization")).toBeUndefined();
       expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("preserves bounded work that starts before finalization", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeReplyTimers(async () => {
       const operation = createTestReplyOperation({
         sessionKey: "agent:main:pre-finalization-work",
         sessionId: "session-pre-finalization-work",
@@ -965,15 +926,11 @@ describe("reply run registry", () => {
       await vi.advanceTimersByTimeAsync(30_000);
       expect(replyRunRegistry.get("agent:main:pre-finalization-work")).toBeUndefined();
       expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("does not shorten bounded work when ordinary activity renews", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeReplyTimers(async () => {
       const operation = createTestReplyOperation({
         sessionKey: "agent:main:overlapping-finalization-work",
         sessionId: "session-overlapping-finalization-work",
@@ -991,15 +948,11 @@ describe("reply run registry", () => {
       await vi.advanceTimersByTimeAsync(15_000);
       expect(replyRunRegistry.get("agent:main:overlapping-finalization-work")).toBeUndefined();
       expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("honors a bounded extended finalization lease", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeReplyTimers(async () => {
       const operation = createTestReplyOperation({
         sessionKey: "agent:main:extended-finalization",
         sessionId: "session-extended-finalization",
@@ -1014,15 +967,11 @@ describe("reply run registry", () => {
       await vi.advanceTimersByTimeAsync(REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS);
       expect(replyRunRegistry.get("agent:main:extended-finalization")).toBeUndefined();
       expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("keeps late finalization cleanup from clearing a successor", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeReplyTimers(async () => {
       const operation = createTestReplyOperation({
         sessionKey: "agent:main:late-finalization",
         sessionId: "session-late-finalization",
@@ -1039,15 +988,11 @@ describe("reply run registry", () => {
 
       expect(replyRunRegistry.get("agent:main:late-finalization")).toBe(successor);
       successor.complete();
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("clamps oversized wait timers instead of resolving idle waits immediately", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeReplyTimers(async () => {
       const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
       const operation = createTestReplyOperation({
         sessionId: "session-running",
@@ -1061,15 +1006,11 @@ describe("reply run registry", () => {
       expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
       operation.complete();
       await expect(waitPromise).resolves.toBe(true);
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("waits for reply-run completion without a timer when requested", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeReplyTimers(async () => {
       const operation = createTestReplyOperation({
         sessionKey: "agent:main:unbounded",
         sessionId: "session-unbounded",
@@ -1081,10 +1022,7 @@ describe("reply run registry", () => {
       expect(setTimeoutSpy).not.toHaveBeenCalled();
       operation.complete();
       await expect(waitPromise).resolves.toBe(true);
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("queues messages only through the active running backend", () => {

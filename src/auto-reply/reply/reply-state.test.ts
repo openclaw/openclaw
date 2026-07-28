@@ -94,6 +94,10 @@ async function rotateCompactionSessionFile(params: {
   return { stored, sessionKey, expectedDir };
 }
 
+function requireStoredSession(stored: Record<string, SessionEntry>, sessionKey: string) {
+  return expectDefined(stored[sessionKey], "stored[sessionKey] test invariant");
+}
+
 describe("history helpers", () => {
   function createHistoryMapWithTwoEntries() {
     const historyMap = new Map<string, { sender: string; body: string }[]>();
@@ -510,9 +514,7 @@ describe("incrementCompactionCount", () => {
     expect(count).toBe(3);
 
     const stored = { [sessionKey]: await loadStoredEntry(storePath, sessionKey) };
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").compactionCount,
-    ).toBe(3);
+    expect(requireStoredSession(stored, sessionKey).compactionCount).toBe(3);
   });
 
   it("updates totalTokens when tokensAfter is provided", async () => {
@@ -535,19 +537,11 @@ describe("incrementCompactionCount", () => {
     });
 
     const stored = { [sessionKey]: await loadStoredEntry(storePath, sessionKey) };
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").compactionCount,
-    ).toBe(1);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
-      12_000,
-    );
+    expect(requireStoredSession(stored, sessionKey).compactionCount).toBe(1);
+    expect(requireStoredSession(stored, sessionKey).totalTokens).toBe(12_000);
     // input/output cleared since we only have the total estimate
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").inputTokens,
-    ).toBeUndefined();
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").outputTokens,
-    ).toBeUndefined();
+    expect(requireStoredSession(stored, sessionKey).inputTokens).toBeUndefined();
+    expect(requireStoredSession(stored, sessionKey).outputTokens).toBeUndefined();
   });
 
   it("accepts zero tokensAfter as a fresh post-compaction total", async () => {
@@ -571,21 +565,11 @@ describe("incrementCompactionCount", () => {
     });
 
     const stored = { [sessionKey]: await loadStoredEntry(storePath, sessionKey) };
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").compactionCount,
-    ).toBe(1);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
-      0,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
-    ).toBe(true);
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").inputTokens,
-    ).toBeUndefined();
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").outputTokens,
-    ).toBeUndefined();
+    expect(requireStoredSession(stored, sessionKey).compactionCount).toBe(1);
+    expect(requireStoredSession(stored, sessionKey).totalTokens).toBe(0);
+    expect(requireStoredSession(stored, sessionKey).totalTokensFresh).toBe(true);
+    expect(requireStoredSession(stored, sessionKey).inputTokens).toBeUndefined();
+    expect(requireStoredSession(stored, sessionKey).outputTokens).toBeUndefined();
   });
 
   it("prefers explicit compactionTokensAfter over last-call usage for run accounting", async () => {
@@ -612,12 +596,8 @@ describe("incrementCompactionCount", () => {
     });
 
     const stored = { [sessionKey]: await loadStoredEntry(storePath, sessionKey) };
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
-      12_000,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
-    ).toBe(true);
+    expect(requireStoredSession(stored, sessionKey).totalTokens).toBe(12_000);
+    expect(requireStoredSession(stored, sessionKey).totalTokensFresh).toBe(true);
   });
 
   it("preserves zero compactionTokensAfter for run accounting", async () => {
@@ -644,12 +624,8 @@ describe("incrementCompactionCount", () => {
     });
 
     const stored = { [sessionKey]: await loadStoredEntry(storePath, sessionKey) };
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
-      0,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
-    ).toBe(true);
+    expect(requireStoredSession(stored, sessionKey).totalTokens).toBe(0);
+    expect(requireStoredSession(stored, sessionKey).totalTokensFresh).toBe(true);
   });
 
   it("falls back to last-call usage when run compactionTokensAfter is non-finite", async () => {
@@ -676,12 +652,8 @@ describe("incrementCompactionCount", () => {
     });
 
     const stored = { [sessionKey]: await loadStoredEntry(storePath, sessionKey) };
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
-      90_000,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
-    ).toBe(true);
+    expect(requireStoredSession(stored, sessionKey).totalTokens).toBe(90_000);
+    expect(requireStoredSession(stored, sessionKey).totalTokensFresh).toBe(true);
   });
 
   it("ignores non-finite tokensAfter values", async () => {
@@ -703,15 +675,9 @@ describe("incrementCompactionCount", () => {
     });
 
     const stored = { [sessionKey]: await loadStoredEntry(storePath, sessionKey) };
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").compactionCount,
-    ).toBe(1);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
-      180_000,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
-    ).toBe(false);
+    expect(requireStoredSession(stored, sessionKey).compactionCount).toBe(1);
+    expect(requireStoredSession(stored, sessionKey).totalTokens).toBe(180_000);
+    expect(requireStoredSession(stored, sessionKey).totalTokensFresh).toBe(false);
   });
 
   it("updates sessionId and sessionFile when compaction rotated transcripts", async () => {
@@ -720,10 +686,8 @@ describe("incrementCompactionCount", () => {
       sessionFile: (tmp) => path.join(tmp, "s1-topic-456.jsonl"),
       newSessionId: "s2",
     });
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").sessionId).toBe(
-      "s2",
-    );
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").sessionFile).toBe(
+    expect(requireStoredSession(stored, sessionKey).sessionId).toBe("s2");
+    expect(requireStoredSession(stored, sessionKey).sessionFile).toBe(
       path.join(expectedDir, "s2-topic-456.jsonl"),
     );
   });
@@ -734,10 +698,8 @@ describe("incrementCompactionCount", () => {
       sessionFile: (tmp) => path.join(tmp, "2026-03-23T12-34-56-789Z_s1.jsonl"),
       newSessionId: "s2",
     });
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").sessionId).toBe(
-      "s2",
-    );
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").sessionFile).toBe(
+    expect(requireStoredSession(stored, sessionKey).sessionId).toBe("s2");
+    expect(requireStoredSession(stored, sessionKey).sessionFile).toBe(
       path.join(expectedDir, "2026-03-23T12-34-56-789Z_s2.jsonl"),
     );
   });
@@ -748,10 +710,8 @@ describe("incrementCompactionCount", () => {
       sessionFile: (tmp) => path.join(tmp, "outside", "s1.jsonl"),
       newSessionId: "s2",
     });
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").sessionId).toBe(
-      "s2",
-    );
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").sessionFile).toBe(
+    expect(requireStoredSession(stored, sessionKey).sessionId).toBe("s2");
+    expect(requireStoredSession(stored, sessionKey).sessionFile).toBe(
       path.join(expectedDir, "outside", "s2.jsonl"),
     );
   });
@@ -770,9 +730,7 @@ describe("incrementCompactionCount", () => {
     expect(count).toBe(4);
 
     const stored = { [sessionKey]: await loadStoredEntry(storePath, sessionKey) };
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").compactionCount,
-    ).toBe(4);
+    expect(requireStoredSession(stored, sessionKey).compactionCount).toBe(4);
   });
 
   it("updates sessionId and sessionFile when newSessionId is provided", async () => {
@@ -794,15 +752,11 @@ describe("incrementCompactionCount", () => {
 
     const stored = { [sessionKey]: await loadStoredEntry(storePath, sessionKey) };
     const expectedSessionDir = await fs.realpath(path.dirname(storePath));
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").sessionId).toBe(
-      "new-session-id",
-    );
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").sessionFile).toBe(
+    expect(requireStoredSession(stored, sessionKey).sessionId).toBe("new-session-id");
+    expect(requireStoredSession(stored, sessionKey).sessionFile).toBe(
       path.join(expectedSessionDir, "new-session-id.jsonl"),
     );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").compactionCount,
-    ).toBe(2);
+    expect(requireStoredSession(stored, sessionKey).compactionCount).toBe(2);
   });
 
   it("does not update sessionFile when newSessionId matches current sessionId", async () => {
@@ -823,15 +777,9 @@ describe("incrementCompactionCount", () => {
     });
 
     const stored = { [sessionKey]: await loadStoredEntry(storePath, sessionKey) };
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").sessionId).toBe(
-      "same-id",
-    );
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").sessionFile).toBe(
-      "same-id.jsonl",
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").compactionCount,
-    ).toBe(1);
+    expect(requireStoredSession(stored, sessionKey).sessionId).toBe("same-id");
+    expect(requireStoredSession(stored, sessionKey).sessionFile).toBe("same-id.jsonl");
+    expect(requireStoredSession(stored, sessionKey).compactionCount).toBe(1);
   });
 
   it("updates sessionFile when rotation keeps the same sessionId", async () => {
@@ -854,15 +802,9 @@ describe("incrementCompactionCount", () => {
     });
 
     const stored = { [sessionKey]: await loadStoredEntry(storePath, sessionKey) };
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").sessionId).toBe(
-      "same-id",
-    );
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").sessionFile).toBe(
-      rotatedSessionFile,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").compactionCount,
-    ).toBe(1);
+    expect(requireStoredSession(stored, sessionKey).sessionId).toBe("same-id");
+    expect(requireStoredSession(stored, sessionKey).sessionFile).toBe(rotatedSessionFile);
+    expect(requireStoredSession(stored, sessionKey).compactionCount).toBe(1);
   });
 
   it("marks totalTokens stale when tokensAfter is not provided", async () => {
@@ -883,15 +825,9 @@ describe("incrementCompactionCount", () => {
     });
 
     const stored = { [sessionKey]: await loadStoredEntry(storePath, sessionKey) };
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").compactionCount,
-    ).toBe(1);
+    expect(requireStoredSession(stored, sessionKey).compactionCount).toBe(1);
     // totalTokens unchanged
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
-      180_000,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
-    ).toBe(false);
+    expect(requireStoredSession(stored, sessionKey).totalTokens).toBe(180_000);
+    expect(requireStoredSession(stored, sessionKey).totalTokensFresh).toBe(false);
   });
 });

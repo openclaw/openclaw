@@ -38,6 +38,32 @@ const createTypingController = (): TypingController => ({
   cleanup: vi.fn(),
 });
 
+function runTestNativeSlashFastReply(
+  overrides: Omit<
+    Parameters<typeof maybeResolveNativeSlashCommandFastReply>[0],
+    | "agentDir"
+    | "agentCfg"
+    | "defaultProvider"
+    | "defaultModel"
+    | "aliasIndex"
+    | "provider"
+    | "model"
+    | "workspaceDir"
+  >,
+) {
+  return maybeResolveNativeSlashCommandFastReply({
+    agentDir: "/tmp/agent",
+    agentCfg: undefined,
+    defaultProvider: "openai",
+    defaultModel: "gpt-5.5",
+    aliasIndex: { byKey: new Map(), byAlias: new Map() },
+    provider: "openai",
+    model: "gpt-5.5",
+    workspaceDir: "/tmp/workspace",
+    ...overrides,
+  });
+}
+
 describe("maybeResolveNativeSlashCommandFastReply", () => {
   beforeEach(() => {
     handleCommandsMock.mockReset();
@@ -66,7 +92,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       },
     });
 
-    const result = await maybeResolveNativeSlashCommandFastReply({
+    const result = await runTestNativeSlashFastReply({
       ctx,
       cfg: markCompleteReplyConfig({
         session: {
@@ -74,15 +100,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
         },
       } as OpenClawConfig),
       agentId: "main",
-      agentDir: "/tmp/agent",
-      agentCfg: undefined,
       commandAuthorized: true,
-      defaultProvider: "openai",
-      defaultModel: "gpt-5.5",
-      aliasIndex: { byKey: new Map(), byAlias: new Map() },
-      provider: "openai",
-      model: "gpt-5.5",
-      workspaceDir: "/tmp/workspace",
       typing,
     });
 
@@ -130,7 +148,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       },
     });
 
-    const result = await maybeResolveNativeSlashCommandFastReply({
+    const result = await runTestNativeSlashFastReply({
       ctx,
       cfg: markCompleteReplyConfig({
         session: {
@@ -138,15 +156,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
         },
       } as OpenClawConfig),
       agentId: "dev",
-      agentDir: "/tmp/agent",
-      agentCfg: undefined,
       commandAuthorized: true,
-      defaultProvider: "openai",
-      defaultModel: "gpt-5.5",
-      aliasIndex: { byKey: new Map(), byAlias: new Map() },
-      provider: "openai",
-      model: "gpt-5.5",
-      workspaceDir: "/tmp/workspace",
       typing,
     });
 
@@ -185,7 +195,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       },
     });
 
-    const result = await maybeResolveNativeSlashCommandFastReply({
+    const result = await runTestNativeSlashFastReply({
       ctx,
       cfg: markCompleteReplyConfig({
         session: {
@@ -193,15 +203,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
         },
       } as OpenClawConfig),
       agentId: "dev",
-      agentDir: "/tmp/agent",
-      agentCfg: undefined,
       commandAuthorized: true,
-      defaultProvider: "openai",
-      defaultModel: "gpt-5.5",
-      aliasIndex: { byKey: new Map(), byAlias: new Map() },
-      provider: "openai",
-      model: "gpt-5.5",
-      workspaceDir: "/tmp/workspace",
       typing,
     });
 
@@ -221,7 +223,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       reply: { text: "You are not authorized to use this command." },
     });
 
-    const result = await maybeResolveNativeSlashCommandFastReply({
+    const result = await runTestNativeSlashFastReply({
       ctx: buildTestCtx({
         Body: "/config show",
         CommandBody: "/config show",
@@ -239,15 +241,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       }),
       cfg: markCompleteReplyConfig({ session: { store: storePath } } as OpenClawConfig),
       agentId: "main",
-      agentDir: "/tmp/agent",
-      agentCfg: undefined,
       commandAuthorized: false,
-      defaultProvider: "openai",
-      defaultModel: "gpt-5.5",
-      aliasIndex: { byKey: new Map(), byAlias: new Map() },
-      provider: "openai",
-      model: "gpt-5.5",
-      workspaceDir: "/tmp/workspace",
       typing: createTypingController(),
     });
 
@@ -264,7 +258,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       status: "lifecycle-invalidated",
       error: 'Session "agent:main:main" was deleted while starting work. Retry.',
     });
-    const result = await maybeResolveNativeSlashCommandFastReply({
+    const result = await runTestNativeSlashFastReply({
       ctx: buildTestCtx({
         Body: "/compact",
         CommandBody: "/compact",
@@ -285,15 +279,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
         },
       } as OpenClawConfig),
       agentId: "main",
-      agentDir: "/tmp/agent",
-      agentCfg: undefined,
       commandAuthorized: true,
-      defaultProvider: "openai",
-      defaultModel: "gpt-5.5",
-      aliasIndex: { byKey: new Map(), byAlias: new Map() },
-      provider: "openai",
-      model: "gpt-5.5",
-      workspaceDir: "/tmp/workspace",
       typing: createTypingController(),
     });
 
@@ -311,7 +297,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       status: "lifecycle-invalidated",
       error: 'Session "agent:main:main" changed while starting work. Retry.',
     });
-    const result = await maybeResolveNativeSlashCommandFastReply({
+    const result = await runTestNativeSlashFastReply({
       ctx: buildTestCtx({
         Body: "/compact",
         CommandBody: "/compact",
@@ -332,15 +318,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
         },
       } as OpenClawConfig),
       agentId: "main",
-      agentDir: "/tmp/agent",
-      agentCfg: undefined,
       commandAuthorized: true,
-      defaultProvider: "openai",
-      defaultModel: "gpt-5.5",
-      aliasIndex: { byKey: new Map(), byAlias: new Map() },
-      provider: "openai",
-      model: "gpt-5.5",
-      workspaceDir: "/tmp/workspace",
       typing: createTypingController(),
     });
 
@@ -363,7 +341,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       return { shouldContinue: false, reply: { text: "ok" } };
     });
 
-    const result = await maybeResolveNativeSlashCommandFastReply({
+    const result = await runTestNativeSlashFastReply({
       ctx: buildTestCtx({
         Body: "/compact",
         CommandBody: "/compact",
@@ -380,15 +358,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       }),
       cfg: markCompleteReplyConfig({ session: { store: storePath } } as OpenClawConfig),
       agentId: "main",
-      agentDir: "/tmp/agent",
-      agentCfg: undefined,
       commandAuthorized: true,
-      defaultProvider: "openai",
-      defaultModel: "gpt-5.5",
-      aliasIndex: { byKey: new Map(), byAlias: new Map() },
-      provider: "openai",
-      model: "gpt-5.5",
-      workspaceDir: "/tmp/workspace",
       typing: createTypingController(),
     });
 
@@ -412,7 +382,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
     await replaceSessionEntry({ sessionKey, storePath }, archivedEntry as SessionEntry);
     const persistedArchivedEntry = loadExactSessionEntry({ sessionKey, storePath })?.entry;
 
-    const result = await maybeResolveNativeSlashCommandFastReply({
+    const result = await runTestNativeSlashFastReply({
       ctx: buildTestCtx({
         Body: "/compact",
         CommandBody: "/compact",
@@ -430,15 +400,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       }),
       cfg: markCompleteReplyConfig({ session: { store: storePath } } as OpenClawConfig),
       agentId: "main",
-      agentDir: "/tmp/agent",
-      agentCfg: undefined,
       commandAuthorized: true,
-      defaultProvider: "openai",
-      defaultModel: "gpt-5.5",
-      aliasIndex: { byKey: new Map(), byAlias: new Map() },
-      provider: "openai",
-      model: "gpt-5.5",
-      workspaceDir: "/tmp/workspace",
       typing: createTypingController(),
     });
 
@@ -473,7 +435,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(100);
 
     try {
-      await maybeResolveNativeSlashCommandFastReply({
+      await runTestNativeSlashFastReply({
         ctx: buildTestCtx({
           Body: "/compact",
           CommandBody: "/compact",
@@ -491,15 +453,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
         }),
         cfg: markCompleteReplyConfig({ session: { store: storePath } } as OpenClawConfig),
         agentId: "main",
-        agentDir: "/tmp/agent",
-        agentCfg: undefined,
         commandAuthorized: true,
-        defaultProvider: "openai",
-        defaultModel: "gpt-5.5",
-        aliasIndex: { byKey: new Map(), byAlias: new Map() },
-        provider: "openai",
-        model: "gpt-5.5",
-        workspaceDir: "/tmp/workspace",
         typing: createTypingController(),
       });
     } finally {
