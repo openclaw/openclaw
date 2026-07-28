@@ -34,6 +34,7 @@ async function runLiveTelnyxCatalog(provider: Parameters<typeof runSingleProvide
   delete process.env.VITEST;
   try {
     return await runSingleProviderCatalog(provider, {
+      resolveProviderApiKey: () => ({ apiKey: LIVE_VALUE, discoveryApiKey: LIVE_VALUE }),
       resolveProviderAuth: () => ({
         apiKey: LIVE_VALUE,
         discoveryApiKey: LIVE_VALUE,
@@ -72,6 +73,22 @@ function requireToolCall(message: AssistantMessage) {
   return toolCall;
 }
 
+function wrapLiveStream(provider: { wrapStreamFn?: unknown }, modelId: string) {
+  const wrapStreamFn = provider.wrapStreamFn as
+    | ((ctx: Record<string, unknown>) => typeof streamSimple | undefined)
+    | undefined;
+  const wrapped = wrapStreamFn?.({
+    provider: "telnyx",
+    modelId,
+    thinkingLevel: "off",
+    streamFn: streamSimple,
+  });
+  if (!wrapped) {
+    throw new Error("Telnyx provider did not register a stream wrapper");
+  }
+  return wrapped;
+}
+
 describeLive("Telnyx plugin live", () => {
   it(
     "discovers the live catalog and completes through the default model",
@@ -83,6 +100,9 @@ describeLive("Telnyx plugin live", () => {
       for (const staticModel of TELNYX_MODEL_CATALOG) {
         expect(ids.has(staticModel.id), `missing live model ${staticModel.id}`).toBe(true);
       }
+      // Live discovery must beat the bundled fallback; Telnyx serves proxied
+      // frontier models that are never in the static catalog.
+      expect(models.length).toBeGreaterThan(TELNYX_MODEL_CATALOG.length);
       console.info(`[telnyx:live] discovered ${models.length} models`);
 
       const defaultModel = models.find((model) => model.id === TELNYX_DEFAULT_MODEL_ID);
@@ -92,7 +112,8 @@ describeLive("Telnyx plugin live", () => {
       const context: Context = {
         messages: [{ role: "user", content: "Say hello in one word.", timestamp: Date.now() }],
       };
-      const stream = streamSimple(asLiveModel(defaultModel), context, {
+      const wrappedStream = wrapLiveStream(provider, defaultModel.id);
+      const stream = wrappedStream(asLiveModel(defaultModel), context, {
         apiKey: LIVE_VALUE,
         maxTokens: 512,
         reasoning: "off",
@@ -114,7 +135,8 @@ describeLive("Telnyx plugin live", () => {
       throw new Error("Telnyx live catalog did not include the default model");
     }
 
-    const stream = streamSimple(
+    const wrappedStream = wrapLiveStream(provider, defaultModel.id);
+    const stream = wrappedStream(
       asLiveModel(defaultModel),
       {
         systemPrompt: "Call the requested function exactly once.",

@@ -7,6 +7,7 @@ import { projectTelnyxLiveModels, resolveTelnyxDynamicModel } from "./models.js"
 import { applyTelnyxConfig } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildStaticTelnyxProvider } from "./provider-catalog.js";
+import { createTelnyxToolPayloadWrapper } from "./stream.js";
 
 const PROVIDER_ID = "telnyx";
 
@@ -42,6 +43,7 @@ export default defineSingleProviderPluginEntry({
         providerId: PROVIDER_ID,
       }),
     resolveDynamicModel: ({ modelId }) => resolveTelnyxDynamicModel(modelId),
+    wrapStreamFn: (ctx) => createTelnyxToolPayloadWrapper(ctx),
     ...buildProviderReplayFamilyHooks({
       family: "openai-compatible",
       dropReasoningFromHistory: false,
