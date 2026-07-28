@@ -46,6 +46,7 @@ import {
   withFirstStreamEventTimeout,
 } from "../utils/stream-first-event-timeout.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
+import { isAzureOpenAICompatibleHostname } from "./azure-openai-hostnames-internal.js";
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
 import {
   buildGuardedModelFetch,
@@ -55,10 +56,7 @@ import {
 import { resolveMaxTokensParam } from "./model-max-tokens-params.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
 import { hasOpenAICompatibleConversationTurn } from "./openai-compatible-conversation-turn.js";
-import {
-  detectOpenAICompletionsCompat,
-  isAzureOpenAICompatibleHostname,
-} from "./openai-completions-compat.js";
+import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import {
   flattenCompletionMessagesToStringContent,
   stripCompletionMessagesToRoleContent,
