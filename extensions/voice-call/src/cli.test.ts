@@ -17,6 +17,7 @@ const sleepMock = vi.hoisted(() =>
 const tempDirs = new Set<string>();
 
 function makeTempDir(prefix: string) {
+  // openclaw-temp-dir: allow extension tests cannot import repo-only test helpers
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   tempDirs.add(dir);
   return dir;
@@ -162,6 +163,14 @@ describe("voice-call CLI status fallback", () => {
     let shortened = false;
 
     readSyncSpy.mockImplementation(((fd, buffer, offset, length, position) => {
+      if (
+        shortened &&
+        copyTruncated !== undefined &&
+        typeof position === "number" &&
+        position === initialByteLength + (firstReadBytes ?? 0)
+      ) {
+        return 0;
+      }
       if (
         !shortened &&
         firstReadBytes !== undefined &&
@@ -362,14 +371,14 @@ describe("voice-call CLI status fallback", () => {
   it("preserves a UTF-8 code point split across follow read chunks", async () => {
     const tempRoot = makeTempDir("openclaw-voice-call-cli-utf8-");
     const file = path.join(tempRoot, "diagnostics.jsonl");
-    writeFileSync(file, `${JSON.stringify({ seq: 0 })}\n`, "utf8");
+    fs.writeFileSync(file, `${JSON.stringify({ seq: 0 })}\n`, "utf8");
     const recordPrefix = '{"seq":1,"text":"';
     const text = `${"x".repeat(64 * 1024 - 1 - Buffer.byteLength(recordPrefix))}中`;
     const record = `${recordPrefix}${text}"}`;
 
     sleepMock
       .mockImplementationOnce(async () => {
-        appendFileSync(file, `${record}\n`, "utf8");
+        fs.appendFileSync(file, `${record}\n`, "utf8");
       })
       .mockRejectedValueOnce(new Error("stop tail after UTF-8 boundary output"));
 

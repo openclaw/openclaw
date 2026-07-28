@@ -93,7 +93,7 @@ function isSameJsonlFileIdentity(left: JsonlFileIdentity, right: JsonlFileIdenti
 function readJsonlTailSync(
   filePath: string,
   maxBytes: number,
-): { text: string; end: number; identity: JsonlFileIdentity } {
+): { text: string; bytes: Buffer; end: number; identity: JsonlFileIdentity } {
   const fd = fs.openSync(filePath, "r");
   try {
     const stat = fs.fstatSync(fd);
@@ -101,7 +101,7 @@ function readJsonlTailSync(
     const start = Math.max(0, stat.size - maxBytes);
     const length = stat.size - start;
     if (length === 0) {
-      return { text: "", end: stat.size, identity };
+      return { text: "", bytes: Buffer.alloc(0), end: stat.size, identity };
     }
     let startsAtRecordBoundary = start === 0;
     if (start > 0) {
@@ -117,12 +117,12 @@ function readJsonlTailSync(
       }
       bytesRead += read;
     }
-    let text = buf.toString("utf8", 0, bytesRead);
+    let bytes = buf.subarray(0, bytesRead);
     if (!startsAtRecordBoundary) {
-      const firstNewline = text.indexOf("\n");
-      text = firstNewline === -1 ? "" : text.slice(firstNewline + 1);
+      const firstNewline = bytes.indexOf(0x0a);
+      bytes = firstNewline === -1 ? Buffer.alloc(0) : bytes.subarray(firstNewline + 1);
     }
-    return { text, end: start + bytesRead, identity };
+    return { text: bytes.toString("utf8"), bytes, end: start + bytesRead, identity };
   } finally {
     fs.closeSync(fd);
   }
@@ -891,13 +891,15 @@ export function registerVoiceCallCli(params: {
 
       if (fs.existsSync(file) && path.basename(file) !== "calls.jsonl") {
         const {
-          text: initial,
+          bytes: initial,
           end,
           identity,
         } = readJsonlTailSync(file, VOICE_CALL_CLI_MAX_JSONL_TAIL_BYTES);
-        const initialParts = initial.split("\n");
-        const pending = initial.endsWith("\n") ? "" : (initialParts.pop() ?? "");
-        const lines = initialParts.filter(Boolean);
+        const finalNewline = initial.lastIndexOf(0x0a);
+        const completeInitial =
+          finalNewline === -1 ? Buffer.alloc(0) : initial.subarray(0, finalNewline + 1);
+        const pending = finalNewline === -1 ? initial : initial.subarray(finalNewline + 1);
+        const lines = completeInitial.toString("utf8").split("\n").filter(Boolean);
         for (const line of lines.slice(Math.max(0, lines.length - since))) {
           writeStdoutLine(line);
         }
