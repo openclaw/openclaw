@@ -4673,9 +4673,9 @@ describe("legacy modelPolicy allowlist migrate (issue #114964)", () => {
     // Assert the model-policy surface specifically: full-config validation can
     // still flag unrelated legacy issues (that is doctor's documented contract).
     const validated = validateConfigObjectRaw(structuredClone(res.config));
-    const modelPolicyIssues = validated.issues.filter((issue) =>
-      issue.path.includes("modelPolicy"),
-    );
+    const modelPolicyIssues = validated.ok
+      ? []
+      : validated.issues.filter((issue) => issue.path.includes("modelPolicy"));
     expect(modelPolicyIssues).toEqual([]);
   });
 });
