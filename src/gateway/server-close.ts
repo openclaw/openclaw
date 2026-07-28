@@ -77,7 +77,15 @@ function resolvePostShutdownExitTimeoutMs(): number {
     return DEFAULT_POST_SHUTDOWN_EXIT_TIMEOUT_MS;
   }
   const parsed = parseStrictPositiveInteger(raw);
-  return parsed ?? DEFAULT_POST_SHUTDOWN_EXIT_TIMEOUT_MS;
+  if (parsed === undefined) {
+    // The override is a public operator contract; a typo silently reverting
+    // to 5s would make wedge diagnosis misleading, so surface the fallback.
+    shutdownLog.warn(
+      `${POST_SHUTDOWN_EXIT_TIMEOUT_ENV}="${raw}" is not a strict positive integer; using default ${DEFAULT_POST_SHUTDOWN_EXIT_TIMEOUT_MS}ms`,
+    );
+    return DEFAULT_POST_SHUTDOWN_EXIT_TIMEOUT_MS;
+  }
+  return parsed;
 }
 
 function summarizeActiveHandlesForZombieReport(): string {

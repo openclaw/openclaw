@@ -2037,6 +2037,51 @@ describe("armGatewayPostShutdownExitWatchdog", () => {
     vi.useRealTimers();
   });
 
+  it("honors the public timeout env override when no explicit timeout is passed", async () => {
+    vi.useFakeTimers();
+    vi.stubEnv("OPENCLAW_GATEWAY_POST_SHUTDOWN_EXIT_TIMEOUT_MS", "50");
+    const exitProcess = vi.fn();
+    const handle = armGatewayPostShutdownExitWatchdog({
+      exitProcess,
+      reason: "gateway stopping",
+      shutdownDurationMs: 5,
+    });
+    await vi.advanceTimersByTimeAsync(45);
+    expect(exitProcess).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(exitProcess).toHaveBeenCalledWith(0);
+    handle.cancel();
+    vi.unstubAllEnvs();
+    vi.useRealTimers();
+  });
+
+  it("warns and falls back to the 5s default when the timeout env override is invalid", async () => {
+    vi.useFakeTimers();
+    vi.stubEnv("OPENCLAW_GATEWAY_POST_SHUTDOWN_EXIT_TIMEOUT_MS", "0.5s");
+    mocks.logWarn.mockClear();
+    const exitProcess = vi.fn();
+    const handle = armGatewayPostShutdownExitWatchdog({
+      exitProcess,
+      reason: "gateway stopping",
+      shutdownDurationMs: 5,
+    });
+    const warnMessages = mocks.logWarn.mock.calls.map(([message]) => String(message));
+    expect(
+      warnMessages.some(
+        (message) =>
+          message.includes("OPENCLAW_GATEWAY_POST_SHUTDOWN_EXIT_TIMEOUT_MS") &&
+          message.includes("using default 5000ms"),
+      ),
+    ).toBe(true);
+    await vi.advanceTimersByTimeAsync(4995);
+    expect(exitProcess).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(exitProcess).toHaveBeenCalledWith(0);
+    handle.cancel();
+    vi.unstubAllEnvs();
+    vi.useRealTimers();
+  });
+
   it("emits a zombie_detected warn log with handle summary when fired", async () => {
     vi.useFakeTimers();
     const exitProcess = vi.fn();
