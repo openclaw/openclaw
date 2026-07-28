@@ -14,6 +14,12 @@ import { WizardStartResultSchema } from "./wizard.js";
 export const SystemAgentChatParamsSchema = closedObject({
   sessionId: NonEmptyString,
   message: Type.Optional(Type.String()),
+  /** Client-rendered setup media supported by this chat surface. */
+  capabilities: Type.Optional(
+    closedObject({
+      qrCodePng: Type.Optional(Type.Boolean()),
+    }),
+  ),
   /** Seeds a purpose-specific first greeting for a fresh conversation. */
   welcomeVariant: Type.Optional(
     Type.Union([Type.Literal("onboarding"), Type.Literal("new-agent")]),
@@ -50,10 +56,12 @@ export const SystemAgentChatQuestionSchema = closedObject({
       /** Message text a client sends when this option is chosen; defaults to label. */
       reply: Type.Optional(NonEmptyString),
     }),
-    { minItems: 2, maxItems: 4 },
+    { minItems: 1, maxItems: 4 },
   ),
   /** Free-text answers are also accepted for this question. */
   isOther: Type.Optional(Type.Boolean()),
+  /** False omits the visible skip/cancel action for acknowledgement-only prompts. */
+  allowSkip: Type.Optional(Type.Boolean()),
   /** Client-owned action for the visible skip control; omitted means send a reply. */
   skipAction: Type.Optional(Type.Literal("exit")),
 });
@@ -66,6 +74,8 @@ export const SystemAgentChatResultSchema = closedObject({
   sensitive: Type.Optional(Type.Boolean()),
   /** The hosted wizard will consume the next message as its current step answer. */
   wizardInputPending: Type.Optional(Type.Boolean()),
+  /** Raw PNG base64 for a hosted setup QR prompt. */
+  qrCodePngBase64: Type.Optional(NonEmptyString),
   action: Type.Union([
     Type.Literal("none"),
     // The user asked to talk to their agent; clients should move to their

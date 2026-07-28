@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 import OpenClawKit
@@ -62,11 +63,18 @@ final class SystemAgentOnboardingChatModel {
         let role: Role
         let text: String
         let question: SystemAgentChatQuestion?
+        let qrCodePngBase64: String?
 
-        init(role: Role, text: String, question: SystemAgentChatQuestion? = nil) {
+        init(
+            role: Role,
+            text: String,
+            question: SystemAgentChatQuestion? = nil,
+            qrCodePngBase64: String? = nil)
+        {
             self.role = role
             self.text = text
             self.question = question
+            self.qrCodePngBase64 = qrCodePngBase64
         }
     }
 
@@ -111,6 +119,7 @@ final class SystemAgentOnboardingChatModel {
         let sensitive: Bool?
         let agentDraft: SystemAgentDraft?
         let question: AnyCodable?
+        let qrCodePngBase64: String?
     }
 
     func startIfNeeded() async {
@@ -147,6 +156,7 @@ final class SystemAgentOnboardingChatModel {
     @discardableResult
     func skipQuestion(messageID: UUID) -> Task<Void, Never>? {
         guard let message = self.messages.first(where: { $0.id == messageID }),
+              message.question?.allowSkip == true,
               self.canAnswerQuestion(message),
               let task = self.send(message: "Skip for now", displayText: "Skip for now")
         else { return nil }
@@ -253,6 +263,9 @@ final class SystemAgentOnboardingChatModel {
         do {
             var params: [String: AnyCodable] = [
                 "sessionId": AnyCodable(self.sessionId),
+                "capabilities": AnyCodable([
+                    "qrCodePng": AnyCodable(true),
+                ]),
             ]
             if let welcomeVariant = self.welcomeVariant {
                 params["welcomeVariant"] = AnyCodable(welcomeVariant)
@@ -262,11 +275,7 @@ final class SystemAgentOnboardingChatModel {
             }
             let route = try await self.sessionRoute(for: generation)
             guard self.isCurrentRequest(generation) else { return }
-            let data = try await self.gateway.request(
-                method: "openclaw.chat",
-                params: params,
-                timeoutMs: 190_000,
-                ifCurrentRoute: route)
+            let data = try await self.requestChat(params: params, route: route)
             guard self.isCurrentRequest(generation) else { return }
             guard await self.gateway.isCurrentRoute(route) else { throw CancellationError() }
             let result = try JSONDecoder().decode(ChatResult.self, from: data)
@@ -275,7 +284,8 @@ final class SystemAgentOnboardingChatModel {
             self.messages.append(Message(
                 role: .assistant,
                 text: result.reply,
-                question: SystemAgentChatQuestion.parse(result.question?.dictionaryValue)))
+                question: SystemAgentChatQuestion.parse(result.question?.dictionaryValue),
+                qrCodePngBase64: result.qrCodePngBase64))
             self.onReplyReceived?()
             if result.action == "open-agent" {
                 self.onAgentHandoff?(result.agentDraft)
@@ -290,6 +300,31 @@ final class SystemAgentOnboardingChatModel {
                 return
             }
             self.errorMessage = error.localizedDescription
+        }
+    }
+
+    private func requestChat(
+        params: [String: AnyCodable],
+        route: GatewayConnection.Route) async throws -> Data
+    {
+        do {
+            return try await self.gateway.request(
+                method: "openclaw.chat",
+                params: params,
+                timeoutMs: 190_000,
+                ifCurrentRoute: route)
+        } catch let error as GatewayResponseError
+            where params["capabilities"] != nil &&
+            error.code == "INVALID_REQUEST" &&
+            error.message.lowercased().contains("invalid openclaw.chat params")
+        {
+            var legacyParams = params
+            legacyParams.removeValue(forKey: "capabilities")
+            return try await self.gateway.request(
+                method: "openclaw.chat",
+                params: legacyParams,
+                timeoutMs: 190_000,
+                ifCurrentRoute: route)
         }
     }
 }
@@ -406,11 +441,13 @@ private struct SystemAgentChatQuestionCard: View {
             ForEach(self.question.options, id: \.label) { option in
                 self.optionButton(option)
             }
-            Button("Skip for now", action: self.onSkip)
-                .buttonStyle(.plain)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .disabled(!self.isEnabled)
+            if self.question.allowSkip {
+                Button("Skip for now", action: self.onSkip)
+                    .buttonStyle(.plain)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .disabled(!self.isEnabled)
+            }
         }
         .padding(12)
         .frame(maxWidth: 460, alignment: .leading)
@@ -474,9 +511,19 @@ private struct SystemAgentChatBubble: View {
             if self.message.role == .user {
                 Spacer(minLength: 40)
             }
-            Text(self.attributedText)
-                .font(.callout)
-                .textSelection(.enabled)
+            VStack(alignment: .leading, spacing: 10) {
+                Text(self.attributedText)
+                    .font(.callout)
+                    .textSelection(.enabled)
+                if let qrImage = self.qrImage {
+                    Image(nsImage: qrImage)
+                        .resizable()
+                        .interpolation(.none)
+                        .scaledToFit()
+                        .frame(maxWidth: 280, maxHeight: 280)
+                        .accessibilityLabel("QR code")
+                }
+            }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 7)
                 .background(
@@ -488,6 +535,13 @@ private struct SystemAgentChatBubble: View {
                 Spacer(minLength: 40)
             }
         }
+    }
+
+    private var qrImage: NSImage? {
+        guard let pngBase64 = self.message.qrCodePngBase64,
+              let data = Data(base64Encoded: pngBase64)
+        else { return nil }
+        return NSImage(data: data)
     }
 
     private var attributedText: AttributedString {

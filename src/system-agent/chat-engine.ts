@@ -76,11 +76,14 @@ export type SystemAgentChatEngineOptions = {
   appendAuditEntry?: typeof import("./audit.js").appendSystemAgentAuditEntry;
   /** Where side effects run; the gateway surface never manages its own daemon. */
   surface?: "cli" | "gateway";
+  /** The current chat client can render raw PNG QR payloads. */
+  supportsQrCode?: boolean;
   /** Test seam for the channel-setup wizard hosted by the chat bridge. */
   runChannelSetupWizard?: (
     channel: string,
     prompter: WizardPrompterLike,
     beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
+    abortSignal: AbortSignal,
   ) => Promise<void>;
   /** Exact route/credential that passed the host's live inference gate. */
   readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
@@ -102,6 +105,8 @@ type SystemAgentChatReply = {
   handoff?: SystemAgentOperation;
   /** Structured choice mirroring the awaited wizard step for card-capable clients. */
   question?: SystemAgentChatQuestion;
+  /** Raw PNG base64 for a hosted wizard QR prompt. */
+  qrCodePngBase64?: string;
 };
 
 type WizardPrompterLike = import("../wizard/prompts.js").WizardPrompter;
@@ -119,6 +124,7 @@ type CaptureRuntime = RuntimeEnv & {
 };
 
 const log = createSubsystemLogger("system-agent/chat-engine");
+const HOSTED_CHANNEL_SETUP_TIMEOUT_MS = 25 * 60 * 1000;
 
 function createHostedWizardRuntime(runtime: RuntimeEnv): RuntimeEnv {
   return {
@@ -144,6 +150,7 @@ function createCaptureRuntime(): CaptureRuntime {
 function defaultChannelSetupWizardRunner(
   channel: string,
   beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
+  abortSignal: AbortSignal,
 ): (prompter: WizardPrompterLike) => Promise<void> {
   return async (prompter) => {
     const [
@@ -168,6 +175,7 @@ function defaultChannelSetupWizardRunner(
     const { defaultRuntime } = await import("../runtime.js");
     const runtime = createHostedWizardRuntime(defaultRuntime);
     const postWriteHooks = createChannelOnboardingPostWriteHookCollector();
+    let channelPersistentEffectStarted = false;
     const nextConfig = await setupChannels(baseConfig, runtime, prompter, {
       initialSelection: [channel],
       forceAllowFromChannels: [channel],
@@ -177,10 +185,17 @@ function defaultChannelSetupWizardRunner(
       quickstartDefaults: true,
       skipDmPolicyPrompt: true,
       skipConfirm: true,
-      beforePersistentEffect: async () => await beforePersistentApply(runtime),
+      remoteWizard: true,
+      abortSignal,
+      beforePersistentEffect: async () => {
+        await beforePersistentApply(runtime);
+        channelPersistentEffectStarted = true;
+      },
       onPostWriteHook: (hook) => postWriteHooks.collect(hook),
     });
-    await beforePersistentApply(runtime);
+    if (!channelPersistentEffectStarted) {
+      await beforePersistentApply(runtime);
+    }
     const committedConfig = await writeWizardConfigFile(nextConfig, {
       allowConfigSizeDrop: false,
       baseHash,
@@ -227,13 +242,14 @@ function wizardStepChatQuestion(step: WizardStep | null): SystemAgentChatQuestio
     return undefined;
   }
   const options = step.options ?? [];
-  if (options.length < 2 || options.length > 4) {
+  if (options.length < 1 || options.length > 4) {
     return undefined;
   }
   return {
     id: step.id,
     header: step.title ?? "Choose one",
     question: step.message ?? "Choose one.",
+    ...(step.qrCodePngBase64 ? { allowSkip: false } : {}),
     options: options.map((option) => {
       const mapped: SystemAgentChatQuestion["options"][number] = { label: option.label };
       if (option.hint) {
@@ -274,7 +290,9 @@ function renderWizardStep(step: WizardStep): string {
     default:
       break;
   }
-  lines.push("Say `cancel` to stop this setup.");
+  if (!step.qrCodePngBase64) {
+    lines.push("Say `cancel` to stop this setup.");
+  }
   return lines.filter(Boolean).join("\n");
 }
 
@@ -459,12 +477,41 @@ export class SystemAgentChatEngine {
     return this.history.slice(index).map((turn) => ({ role: turn.role, text: turn.text }));
   }
 
-  async dispose(): Promise<void> {
-    this.wizardBridge?.session.cancel();
+  async dispose(): Promise<boolean> {
+    const bridge = this.wizardBridge;
+    const wizardSession = bridge?.session;
+    if (wizardSession && !wizardSession.cancel() && wizardSession.isRunning()) {
+      // A linked device can already exist after a QR is displayed. Keep the
+      // engine alive until its locked wizard reaches config commit or recovery.
+      if (bridge.step?.qrCodePngBase64) {
+        bridge.step = null;
+      }
+      return false;
+    }
     this.wizardBridge = null;
     this.lastSensitiveChannel = undefined;
     this.awaitingSetupChannel = false;
     await cleanupSystemAgentSession(this.agentSession);
+    return true;
+  }
+
+  hasLockedHostedWizard(): boolean {
+    return this.wizardBridge?.session.isCancellationLocked() === true;
+  }
+
+  async resumeLockedHostedWizard(): Promise<SystemAgentChatReply | null> {
+    const turn = this.turnQueue.then(async () => {
+      if (!this.hasLockedHostedWizard()) {
+        return null;
+      }
+      const reply: SystemAgentChatReply = {
+        text: await this.pumpWizardBridge(),
+        action: "none",
+      };
+      return this.projectWizardReply(reply);
+    });
+    this.turnQueue = turn.catch(() => undefined);
+    return await turn;
   }
 
   async handle(text: string): Promise<SystemAgentChatReply> {
@@ -475,7 +522,11 @@ export class SystemAgentChatEngine {
   }
 
   private async handleSerialized(text: string): Promise<SystemAgentChatReply> {
-    await this.requireVerifiedInference();
+    // Hosted wizard replies are deterministic and may be the only way to finish
+    // an irreversible setup after its inference route disappears.
+    if (!this.wizardBridge) {
+      await this.requireVerifiedInference();
+    }
     // Snapshot before resolving: wizard answers to sensitive steps (tokens,
     // passwords) must never enter the AI-visible history.
     const sensitiveTurn = this.wizardBridge?.step?.sensitive === true;
@@ -489,12 +540,19 @@ export class SystemAgentChatEngine {
     }
     // While a hosted wizard awaits a step, every turn routes to it, so the
     // awaited step is always the question this reply asks.
+    return this.projectWizardReply(reply);
+  }
+
+  private projectWizardReply(reply: SystemAgentChatReply): SystemAgentChatReply {
     const question = wizardStepChatQuestion(this.wizardBridge?.step ?? null);
     return {
       ...reply,
       ...(this.wizardBridge?.step?.sensitive === true ? { sensitive: true } : {}),
       ...(this.wizardBridge ? { wizardInputPending: true } : {}),
       ...(question ? { question } : {}),
+      ...(this.wizardBridge?.step?.qrCodePngBase64
+        ? { qrCodePngBase64: this.wizardBridge.step.qrCodePngBase64 }
+        : {}),
     };
   }
 
@@ -1083,10 +1141,18 @@ export class SystemAgentChatEngine {
     this.agentSession.proposalRef.current = undefined;
     this.agentSession.proposalRef.operation = undefined;
     delete this.agentSession.cliSession;
-    if (cancelWizard) {
-      this.wizardBridge?.session.cancel();
+    let retainWizard = false;
+    if (cancelWizard && this.wizardBridge) {
+      const bridge = this.wizardBridge;
+      const wizardSession = bridge.session;
+      retainWizard = !wizardSession.cancel() && wizardSession.isRunning();
+      if (retainWizard && bridge.step?.qrCodePngBase64) {
+        bridge.step = null;
+      }
     }
-    this.wizardBridge = null;
+    if (!retainWizard) {
+      this.wizardBridge = null;
+    }
     this.lastSensitiveChannel = undefined;
     this.awaitingSetupChannel = false;
     this.history.splice(0);
@@ -1139,10 +1205,30 @@ export class SystemAgentChatEngine {
     };
     const runWizard =
       this.opts.runChannelSetupWizard ??
-      ((ch: string, prompter: WizardPrompterLike, guard: (runtime: RuntimeEnv) => Promise<void>) =>
-        defaultChannelSetupWizardRunner(ch, guard)(prompter));
-    const session = new WizardSession((prompter) =>
-      runWizard(channel, prompter, beforePersistentApply),
+      ((
+        ch: string,
+        prompter: WizardPrompterLike,
+        guard: (runtime: RuntimeEnv) => Promise<void>,
+        signal: AbortSignal,
+      ) => defaultChannelSetupWizardRunner(ch, guard, signal)(prompter));
+    const session = new WizardSession(
+      (prompter, signal, wizardSession) =>
+        runWizard(
+          channel,
+          prompter,
+          async (runtime) => {
+            await beforePersistentApply(runtime);
+            signal.throwIfAborted();
+            if (!wizardSession.lockCancellation()) {
+              throw new Error("Channel setup was cancelled before its persistent change started.");
+            }
+          },
+          signal,
+        ),
+      {
+        supportsQrCode: this.opts.supportsQrCode === true,
+        ...(this.opts.surface === "gateway" ? { timeoutMs: HOSTED_CHANNEL_SETUP_TIMEOUT_MS } : {}),
+      },
     );
     this.wizardBridge = {
       session,
@@ -1265,8 +1351,19 @@ export class SystemAgentChatEngine {
     if (!bridge) {
       return "";
     }
+    if (!bridge.session.isRunning()) {
+      // Expiry clears the session-owned answer but cannot reach this cached
+      // projection. Surface the terminal result before handling a stale step.
+      bridge.step = null;
+      return await this.pumpWizardBridge();
+    }
     if (/^(cancel|abort|stop|quit|exit)$/i.test(text.trim())) {
-      bridge.session.cancel();
+      if (!bridge.session.cancel()) {
+        if (bridge.step?.qrCodePngBase64) {
+          bridge.step = null;
+        }
+        return "Channel setup is already applying and can no longer be cancelled.";
+      }
       return await this.pumpWizardBridge();
     }
     const step = bridge.step;

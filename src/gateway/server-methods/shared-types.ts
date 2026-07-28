@@ -122,14 +122,20 @@ type SystemAgentHistoryTurn = {
   text: string;
 };
 
-type GatewaySystemAgentSession = {
+type GatewaySystemAgentChatReply = {
+  text: string;
+  action: "none" | "exit" | "open-tui" | "open-setup";
+  sensitive?: boolean;
+  wizardInputPending?: boolean;
+  qrCodePngBase64?: string;
+  question?: SystemAgentChatQuestion;
+};
+
+export type GatewaySystemAgentSession = {
   engine: {
-    handle: (message: string) => Promise<{
-      text: string;
-      action: "none" | "exit" | "open-tui" | "open-setup";
-      sensitive?: boolean;
-      question?: SystemAgentChatQuestion;
-    }>;
+    handle: (message: string) => Promise<GatewaySystemAgentChatReply>;
+    hasLockedHostedWizard: () => boolean;
+    resumeLockedHostedWizard: () => Promise<GatewaySystemAgentChatReply | null>;
     seedHistory: (turns: readonly SystemAgentHistoryTurn[]) => void;
     historyLength: () => number;
     historySince: (index: number) => SystemAgentHistoryTurn[];
@@ -138,7 +144,8 @@ type GatewaySystemAgentSession = {
       decision: "allow-once" | "allow-always" | "deny" | null,
       proposalHash: string,
     ) => Promise<unknown>;
-    dispose: () => Promise<void>;
+    /** False while an irreversible hosted wizard still owns unfinished work. */
+    dispose: () => Promise<boolean>;
   };
   welcome: string;
   welcomeQuestion?: SystemAgentChatQuestion;
@@ -146,6 +153,8 @@ type GatewaySystemAgentSession = {
   welcomeAuditSequence?: number;
   lastUsedAt: number;
   ownerKey: string;
+  /** QR rendering is negotiated per session; a resume must use the same capability. */
+  supportsQrCode: boolean;
   pendingApproval?: { id: string; proposalHash: string };
 };
 

@@ -69,6 +69,8 @@ type WizardNextResult = {
   accounts?: Array<{ channel: string; accountId: string }>;
 };
 
+type WizardStatusResult = Pick<WizardNextResult, "status" | "error">;
+
 function cancelRunningWizardResult(client: WizardGatewayClient, result: WizardNextResult): void {
   if (!result.sessionId || result.done) {
     return;
@@ -198,17 +200,22 @@ export class ChannelWizardController {
   async cancel(): Promise<void> {
     const client = this.getClient();
     const sessionId = this.sessionId;
-    this.generation += 1;
-    this.sessionId = null;
-    this.channel = null;
-    this.setState({ phase: "idle" });
     if (client && sessionId) {
       try {
-        await client.request("wizard.cancel", { sessionId });
+        const result = await client.request<WizardStatusResult>("wizard.cancel", { sessionId });
+        if (result.status === "running") {
+          // A durable operation owns this session now. Keep the modal and its
+          // in-flight answer attached until the gateway reaches a safe prompt.
+          return;
+        }
       } catch {
         // Session may already be finished/purged; closing the modal wins.
       }
     }
+    this.generation += 1;
+    this.sessionId = null;
+    this.channel = null;
+    this.setState({ phase: "idle" });
   }
 
   private applyResult(result: WizardNextResult): void {

@@ -1,10 +1,11 @@
 // Signal tests cover daemon plugin behavior.
 import { EventEmitter, once } from "node:events";
+import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { spawnSignalDaemon } from "./daemon.js";
+import { assertSignalDaemonBindAvailable, spawnSignalDaemon } from "./daemon.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 
@@ -42,6 +43,30 @@ afterEach(() => {
 });
 
 describe("spawnSignalDaemon", () => {
+  it("rejects a bind already owned by another process", async () => {
+    const owner = createServer();
+    await new Promise<void>((resolve, reject) => {
+      owner.once("error", reject);
+      owner.listen({ host: "127.0.0.1", port: 0, exclusive: true }, resolve);
+    });
+    const address = owner.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected TCP test address");
+    }
+    try {
+      await expect(
+        assertSignalDaemonBindAvailable({
+          httpHost: "127.0.0.1",
+          httpPort: address.port,
+        }),
+      ).rejects.toThrow("address is already in use");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        owner.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
   it("expands home-relative configPath before passing it to signal-cli", () => {
     spawnSignalDaemon({
       cliPath: "signal-cli",

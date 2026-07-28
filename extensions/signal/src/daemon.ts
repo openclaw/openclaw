@@ -1,9 +1,9 @@
 // Signal plugin module implements daemon behavior.
 import { spawn } from "node:child_process";
-import os from "node:os";
-import path from "node:path";
+import { createServer } from "node:net";
 import { createInterface } from "node:readline";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { resolveSignalCliConfigPath } from "./signal-cli-config-path.js";
 
 type SignalDaemonOpts = {
   cliPath: string;
@@ -32,6 +32,30 @@ type SignalDaemonExitEvent = {
   code: number | null;
   signal: NodeJS.Signals | null;
 };
+
+export async function assertSignalDaemonBindAvailable(params: {
+  httpHost: string;
+  httpPort: number;
+}): Promise<void> {
+  const server = createServer();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen({ host: params.httpHost, port: params.httpPort, exclusive: true }, resolve);
+    });
+  } catch (error) {
+    throw new Error(
+      `Signal cannot start a managed daemon on ${params.httpHost}:${String(params.httpPort)} because that address is already in use. Stop the existing server or choose “Connect to an existing Signal server”, then retry.`,
+      { cause: error },
+    );
+  } finally {
+    if (server.listening) {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  }
+}
 
 export function formatSignalDaemonExit(exit: SignalDaemonExitEvent): string {
   return `signal daemon exited (source=${exit.source} code=${exit.code ?? "null"} signal=${exit.signal ?? "null"})`;
@@ -80,17 +104,6 @@ function bindSignalCliOutput(params: {
       params.error(`signal-cli: ${line.trim()}`);
     }
   });
-}
-
-function resolveSignalCliConfigPath(raw: string): string {
-  const value = raw.trim();
-  if (value === "~") {
-    return os.homedir();
-  }
-  if (value.startsWith("~/") || value.startsWith("~\\")) {
-    return path.join(os.homedir(), value.slice(2));
-  }
-  return value;
 }
 
 function buildDaemonArgs(opts: SignalDaemonOpts): string[] {

@@ -18,9 +18,14 @@ struct IOSSystemAgentChatTests {
     private actor RequestRecorder {
         private var requests: [RecordedRequest] = []
         private var responses: [Result<Data, HarnessError>]
+        private var legacyParamsRejections: Int
 
-        init(responses: [Result<Data, HarnessError>]) {
+        init(
+            responses: [Result<Data, HarnessError>],
+            legacyParamsRejections: Int = 0)
+        {
             self.responses = responses
+            self.legacyParamsRejections = legacyParamsRejections
         }
 
         func perform(
@@ -29,6 +34,14 @@ struct IOSSystemAgentChatTests {
             timeoutMs: Double) throws -> Data
         {
             self.requests.append(RecordedRequest(method: method, params: params, timeoutMs: timeoutMs))
+            if self.legacyParamsRejections > 0 {
+                self.legacyParamsRejections -= 1
+                throw GatewayResponseError(
+                    method: method,
+                    code: "INVALID_REQUEST",
+                    message: "invalid openclaw.chat params",
+                    details: nil)
+            }
             guard !self.responses.isEmpty else { throw HarnessError.failed }
             return try self.responses.removeFirst().get()
         }
@@ -95,6 +108,23 @@ struct IOSSystemAgentChatTests {
         #expect(request.params["message"] == nil)
         #expect(request.params["welcomeVariant"] == nil)
         #expect(request.params["delegation"] == nil)
+        let capabilities = try #require(request.params["capabilities"]?.value as? [String: AnyCodable])
+        #expect(capabilities["qrCodePng"]?.value as? Bool == true)
+    }
+
+    @Test func `older gateway retries greeting without QR capability`() async throws {
+        let recorder = RequestRecorder(
+            responses: [.success(Self.reply("Legacy gateway welcome"))],
+            legacyParamsRejections: 1)
+        let model = self.makeModel(recorder: recorder)
+
+        await Self.start(model)
+
+        let requests = await recorder.allRequests()
+        #expect(requests.count == 2)
+        #expect(requests[0].params["capabilities"] != nil)
+        #expect(requests[1].params["capabilities"] == nil)
+        #expect(try #require(model.messages.first).text == "Legacy gateway welcome")
     }
 
     @Test func `missing advertised system-agent method blocks the chat`() {
@@ -201,6 +231,36 @@ struct IOSSystemAgentChatTests {
         #expect(!model.messages.contains { $0.text.contains("super-secret-value") })
     }
 
+    @Test func `PNG QR image is retained on the assistant message`() async throws {
+        let recorder = RequestRecorder(responses: [
+            .success(Self.reply(
+                "Scan this code",
+                qrCodePngBase64: "cG5n",
+                question: [
+                    "id": "signal-link",
+                    "header": "Signal account linking",
+                    "question": "Scan the QR code, then continue.",
+                    "options": [["label": "Continue"]],
+                    "allowSkip": false,
+                ])),
+            .success(Self.reply("Signal linked")),
+        ])
+        let model = self.makeModel(recorder: recorder)
+
+        await Self.start(model)
+
+        let message = try #require(model.messages.first)
+        #expect(message.qrCodePngBase64 == "cG5n")
+        #expect(message.question?.allowSkip == false)
+        #expect(model.skipQuestion(messageID: message.id) == nil)
+
+        let answer = try #require(
+            model.answerQuestion(messageID: message.id, optionLabel: "Continue"))
+        await answer.value
+        let requests = await recorder.allRequests()
+        #expect(requests[1].params["message"]?.value as? String == "Continue")
+    }
+
     @Test func `option reply uses canonical value while transcript keeps label`() async throws {
         let recorder = RequestRecorder(responses: [
             .success(Self.questionReply()),
@@ -215,6 +275,9 @@ struct IOSSystemAgentChatTests {
 
         let requests = await recorder.allRequests()
         #expect(requests[1].params["message"]?.value as? String == "tailscale")
+        let capabilities = try #require(
+            requests[1].params["capabilities"]?.value as? [String: AnyCodable])
+        #expect(capabilities["qrCodePng"]?.value as? Bool == true)
         #expect(model.messages.contains { $0.role == .user && $0.text == "Use Tailscale" })
         #expect(model.retiredQuestionMessageIDs.contains(questionMessage.id))
     }
@@ -483,7 +546,9 @@ struct IOSSystemAgentChatTests {
         _ reply: String,
         action: String = "reply",
         sensitive: Bool? = nil,
-        agentID: String? = nil) -> Data
+        agentID: String? = nil,
+        qrCodePngBase64: String? = nil,
+        question: [String: Any]? = nil) -> Data
     {
         var result: [String: Any] = [
             "sessionId": "system-session",
@@ -495,6 +560,12 @@ struct IOSSystemAgentChatTests {
         }
         if let agentID {
             result["agentId"] = agentID
+        }
+        if let qrCodePngBase64 {
+            result["qrCodePngBase64"] = qrCodePngBase64
+        }
+        if let question {
+            result["question"] = question
         }
         guard let data = try? JSONSerialization.data(withJSONObject: result) else {
             preconditionFailure("System-agent reply fixture must encode")

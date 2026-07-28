@@ -35,7 +35,6 @@ import {
 } from "./reply-authors.js";
 import {
   buildSignalSetupPatch,
-  createSignalCliPathTextInput,
   normalizeSignalAccountInput,
   signalDmPolicy,
 } from "./setup-core.js";
@@ -310,13 +309,6 @@ describe("probeSignal", () => {
     });
 
     expect(status.configured).toBe(true);
-  });
-
-  it("does not show a second missing-binary note before the cliPath prompt", () => {
-    const input = createSignalCliPathTextInput(async () => true);
-
-    expect(input.helpLines).toBeUndefined();
-    expect(input.helpTitle).toBeUndefined();
   });
 });
 

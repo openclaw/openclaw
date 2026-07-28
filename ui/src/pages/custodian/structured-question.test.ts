@@ -25,6 +25,7 @@ describe("custodian typed question", () => {
         { label: "Connect WhatsApp", reply: "connect whatsapp", description: "Chat there." },
       ],
       isOther: true,
+      allowSkip: true,
       skipAction: "exit",
     });
   });
@@ -40,16 +41,20 @@ describe("custodian typed question", () => {
     expect(parsed?.isOther).toBe(false);
   });
 
+  it("accepts a single acknowledgement action", () => {
+    const parsed = parseCustodianQuestion({
+      id: "signal-link",
+      header: "Signal account linking",
+      question: "Scan the QR code, then continue.",
+      options: [{ label: "Continue" }],
+      allowSkip: false,
+    });
+    expect(parsed?.options).toEqual([{ label: "Continue" }]);
+    expect(parsed?.allowSkip).toBe(false);
+  });
+
   it("rejects malformed questions instead of rendering broken cards", () => {
     expect(parseCustodianQuestion(undefined)).toBeNull();
-    expect(
-      parseCustodianQuestion({
-        id: "one-option",
-        header: "H",
-        question: "Q",
-        options: [{ label: "Only" }],
-      }),
-    ).toBeNull();
     expect(
       parseCustodianQuestion({
         id: "dupes",

@@ -12,6 +12,9 @@ import ai.openclaw.app.ui.design.ClawPrimaryButton
 import ai.openclaw.app.ui.design.ClawScaffold
 import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawTheme
+import android.graphics.BitmapFactory
+import android.util.Base64
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -23,6 +26,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -40,8 +44,11 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -220,18 +227,37 @@ private fun SystemAgentConversation(
 @Composable
 private fun SystemAgentMessage(message: SystemAgentChatMessage) {
   val user = message.role == SystemAgentChatMessage.Role.User
+  val qrImage =
+    remember(message.qrCodePngBase64) {
+      message.qrCodePngBase64
+        ?.let { runCatching { Base64.decode(it, Base64.DEFAULT) }.getOrNull() }
+        ?.let { bytes -> BitmapFactory.decodeByteArray(bytes, 0, bytes.size) }
+        ?.asImageBitmap()
+    }
   Row(modifier = Modifier.fillMaxWidth()) {
     if (user) Spacer(modifier = Modifier.weight(1f))
-    Text(
-      text = message.text,
-      style = ClawTheme.type.body,
-      color = ClawTheme.colors.text,
+    Column(
       modifier =
         Modifier
           .weight(if (user) 0.8f else 0.9f, fill = false)
           .background(if (user) ClawTheme.colors.primary.copy(alpha = 0.14f) else ClawTheme.colors.surfaceRaised, RoundedCornerShape(14.dp))
           .padding(horizontal = 12.dp, vertical = 9.dp),
-    )
+      verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      Text(
+        text = message.text,
+        style = ClawTheme.type.body,
+        color = ClawTheme.colors.text,
+      )
+      if (qrImage != null) {
+        Image(
+          bitmap = qrImage,
+          contentDescription = nativeString("QR code"),
+          modifier = Modifier.sizeIn(maxWidth = 280.dp, maxHeight = 280.dp),
+          filterQuality = FilterQuality.None,
+        )
+      }
+    }
     if (!user) Spacer(modifier = Modifier.weight(1f))
   }
 }
@@ -264,7 +290,9 @@ private fun SystemAgentQuestionCard(
         )
         option.description?.let { Text(it, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted) }
       }
-      ClawSecondaryButton(text = nativeString("Skip for now"), onClick = onSkip, enabled = enabled)
+      if (question.allowSkip) {
+        ClawSecondaryButton(text = nativeString("Skip for now"), onClick = onSkip, enabled = enabled)
+      }
     }
   }
 }

@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
+import { SystemAgentInferenceUnavailableError } from "../../system-agent/inference-error.js";
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -45,6 +46,8 @@ type FakeEngine = {
   getPendingOperatorProposal: ReturnType<typeof vi.fn>;
   resolveOperatorApproval: ReturnType<typeof vi.fn>;
   dispose: ReturnType<typeof vi.fn>;
+  hasLockedHostedWizard: ReturnType<typeof vi.fn>;
+  resumeLockedHostedWizard: ReturnType<typeof vi.fn>;
   loadOverview: ReturnType<typeof vi.fn>;
   noteAssistantMessage: ReturnType<typeof vi.fn>;
 };
@@ -57,17 +60,32 @@ function makeEngine(): FakeEngine {
     historySince: vi.fn(() => []),
     getPendingOperatorProposal: vi.fn(() => null),
     resolveOperatorApproval: vi.fn(async () => null),
-    dispose: vi.fn(async () => undefined),
+    dispose: vi.fn(async () => true),
+    hasLockedHostedWizard: vi.fn(() => false),
+    resumeLockedHostedWizard: vi.fn(async () => null),
     loadOverview: vi.fn(async () => ({})),
     noteAssistantMessage: vi.fn(),
   };
 }
 
 const createdEngines = vi.hoisted(() => [] as FakeEngine[]);
+const createdEngineOptions = vi.hoisted(() => [] as Array<{ supportsQrCode?: boolean }>);
 
 vi.mock("../../system-agent/chat-engine.js", () => ({
-  SystemAgentChatEngine: function FakeSystemAgentChatEngine(this: FakeEngine) {
+  SystemAgentChatEngine: function FakeSystemAgentChatEngine(
+    this: FakeEngine,
+    options: { supportsQrCode?: boolean },
+  ) {
     const engine = makeEngine();
+    createdEngineOptions.push(options);
+    if (options.supportsQrCode === true) {
+      engine.handle.mockResolvedValue({
+        text: "Scan this code.",
+        action: "none",
+        qrCodePngBase64: "cG5n",
+        wizardInputPending: true,
+      });
+    }
     createdEngines.push(engine);
     Object.assign(this, engine);
   },
@@ -102,12 +120,14 @@ function makeContext(sessions: Map<string, SystemAgentChatSession>): GatewayRequ
 function seededSession(params?: {
   engine?: FakeEngine;
   ownerKey?: string;
+  supportsQrCode?: boolean;
 }): SystemAgentChatSession {
   return {
     engine: params?.engine ?? makeEngine(),
     welcome: "welcome text",
     lastUsedAt: 1,
     ownerKey: params?.ownerKey ?? "device:device-test",
+    supportsQrCode: params?.supportsQrCode ?? false,
   } as unknown as SystemAgentChatSession;
 }
 
@@ -132,6 +152,7 @@ async function callChat(
 
 beforeEach(() => {
   createdEngines.length = 0;
+  createdEngineOptions.length = 0;
   setupInferenceMocks.verifySetupInference.mockResolvedValue({ ok: true, binding: {} });
   delegatedInferenceMocks.verifySystemAgentInferenceWithFallback.mockResolvedValue({
     ok: true,
@@ -145,6 +166,67 @@ afterEach(() => {
 });
 
 describe("openclaw.chat session ownership", () => {
+  it("negotiates QR projection for fresh and reset sessions", async () => {
+    const sessions = new Map<string, SystemAgentChatSession>();
+    const context = makeContext(sessions);
+    const params = {
+      sessionId: "fresh-qr",
+      message: "connect signal",
+      capabilities: { qrCodePng: true },
+    };
+
+    const prompt = await callChat(context, params);
+    const resetPrompt = await callChat(context, { ...params, reset: true });
+
+    expect(prompt).toMatchObject({
+      ok: true,
+      payload: {
+        qrCodePngBase64: "cG5n",
+        wizardInputPending: true,
+      },
+    });
+    expect(resetPrompt).toMatchObject({
+      ok: true,
+      payload: {
+        qrCodePngBase64: "cG5n",
+        wizardInputPending: true,
+      },
+    });
+    expect(createdEngineOptions).toEqual([
+      expect.objectContaining({ supportsQrCode: true }),
+      expect.objectContaining({ supportsQrCode: true }),
+    ]);
+  });
+
+  it.each([
+    { initialQr: true, resumedQr: false },
+    { initialQr: false, resumedQr: true },
+  ])("rejects a session resumed with QR support changed", async ({ initialQr, resumedQr }) => {
+    const sessions = new Map<string, SystemAgentChatSession>();
+    const context = makeContext(sessions);
+    const capabilities = (supported: boolean) =>
+      supported ? { capabilities: { qrCodePng: true } } : {};
+
+    const first = await callChat(context, {
+      sessionId: "qr-capability-change",
+      ...capabilities(initialQr),
+    });
+    const resumed = await callChat(context, {
+      sessionId: "qr-capability-change",
+      message: "continue",
+      ...capabilities(resumedQr),
+    });
+
+    expect(first.ok).toBe(true);
+    expect(resumed).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "OpenClaw chat capabilities changed; retry with reset=true.",
+      },
+    });
+  });
+
   it("binds a new non-delegated session and rejects another principal", async () => {
     const sessions = new Map<string, SystemAgentChatSession>();
     const context = makeContext(sessions);
@@ -244,6 +326,196 @@ describe("openclaw.chat session ownership", () => {
 
     expect(resumed.ok).toBe(true);
     expect(handle).toHaveBeenCalledWith("continue");
+  });
+
+  it("adopts a locked wizard when the same owner reconnects with a fresh session id", async () => {
+    const engine = makeEngine();
+    engine.hasLockedHostedWizard.mockReturnValue(true);
+    engine.resumeLockedHostedWizard.mockResolvedValue({
+      text: "Scan and continue.",
+      action: "none",
+      wizardInputPending: true,
+      qrCodePngBase64: "cG5n",
+    });
+    const sessions = new Map<string, SystemAgentChatSession>([
+      [
+        "old-session",
+        seededSession({
+          engine,
+          ownerKey: "user:owner@example.com",
+          supportsQrCode: true,
+        }),
+      ],
+    ]);
+
+    const resumed = await callChat(
+      makeContext(sessions),
+      {
+        sessionId: "fresh-session",
+        capabilities: { qrCodePng: true },
+      },
+      makeClient({
+        connId: "conn-new",
+        deviceId: "device-new",
+        authenticatedUserId: "owner@example.com",
+      }),
+    );
+
+    expect(resumed).toMatchObject({
+      ok: true,
+      payload: {
+        sessionId: "fresh-session",
+        reply: "Scan and continue.",
+        action: "none",
+        wizardInputPending: true,
+        qrCodePngBase64: "cG5n",
+      },
+    });
+    expect(sessions.has("old-session")).toBe(false);
+    expect(sessions.get("fresh-session")?.engine).toBe(engine);
+    expect(engine.resumeLockedHostedWizard).toHaveBeenCalledOnce();
+    expect(setupInferenceMocks.verifySetupInference).not.toHaveBeenCalled();
+  });
+
+  it("rejects ambiguous locked wizards instead of adopting one by map order", async () => {
+    const firstEngine = makeEngine();
+    const secondEngine = makeEngine();
+    firstEngine.hasLockedHostedWizard.mockReturnValue(true);
+    secondEngine.hasLockedHostedWizard.mockReturnValue(true);
+    const sessions = new Map<string, SystemAgentChatSession>([
+      [
+        "old-session-a",
+        seededSession({
+          engine: firstEngine,
+          ownerKey: "user:owner@example.com",
+        }),
+      ],
+      [
+        "old-session-b",
+        seededSession({
+          engine: secondEngine,
+          ownerKey: "user:owner@example.com",
+        }),
+      ],
+    ]);
+
+    const resumed = await callChat(
+      makeContext(sessions),
+      { sessionId: "fresh-session" },
+      makeClient({
+        connId: "conn-new",
+        deviceId: "device-new",
+        authenticatedUserId: "owner@example.com",
+      }),
+    );
+
+    expect(resumed).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "Multiple locked OpenClaw setup sessions need manual recovery.",
+      },
+    });
+    expect(sessions.has("old-session-a")).toBe(true);
+    expect(sessions.has("old-session-b")).toBe(true);
+    expect(sessions.has("fresh-session")).toBe(false);
+    expect(firstEngine.resumeLockedHostedWizard).not.toHaveBeenCalled();
+    expect(secondEngine.resumeLockedHostedWizard).not.toHaveBeenCalled();
+  });
+
+  it("retains a cancellation-locked wizard when inference becomes unavailable", async () => {
+    const engine = makeEngine();
+    engine.handle.mockRejectedValue(new SystemAgentInferenceUnavailableError("conversation"));
+    engine.dispose.mockResolvedValue(false);
+    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
+
+    const failed = await callChat(makeContext(sessions), {
+      sessionId: "s1",
+      message: "continue",
+    });
+
+    expect(failed).toMatchObject({
+      ok: false,
+      error: {
+        code: "UNAVAILABLE",
+        message: expect.stringContaining("working inference"),
+      },
+    });
+    expect(engine.dispose).toHaveBeenCalledOnce();
+    expect(sessions.get("s1")?.engine).toBe(engine);
+  });
+
+  it("skips a cancellation-locked wizard when evicting an old chat session", async () => {
+    const lockedEngine = makeEngine();
+    lockedEngine.dispose.mockResolvedValue(false);
+    const evictableEngine = makeEngine();
+    evictableEngine.dispose.mockResolvedValue(true);
+    const sessions = new Map<string, SystemAgentChatSession>([
+      ["locked", seededSession({ engine: lockedEngine })],
+      ["evictable", seededSession({ engine: evictableEngine })],
+    ]);
+    for (let index = 2; index < 8; index += 1) {
+      const session = seededSession();
+      session.lastUsedAt = index;
+      sessions.set(`existing-${index}`, session);
+    }
+
+    const created = await callChat(makeContext(sessions), { sessionId: "new" });
+
+    expect(created.ok).toBe(true);
+    expect(lockedEngine.dispose).toHaveBeenCalledOnce();
+    expect(evictableEngine.dispose).toHaveBeenCalledOnce();
+    expect(sessions.has("locked")).toBe(true);
+    expect(sessions.has("evictable")).toBe(false);
+    expect(sessions.has("new")).toBe(true);
+    expect(sessions.size).toBe(8);
+  });
+
+  it("does not persist a new session when every existing setup is locked", async () => {
+    const sessions = new Map<string, SystemAgentChatSession>();
+    for (let index = 0; index < 8; index += 1) {
+      const engine = makeEngine();
+      engine.dispose.mockResolvedValue(false);
+      const session = seededSession({ engine });
+      session.lastUsedAt = index;
+      sessions.set(`locked-${index}`, session);
+    }
+
+    const created = await callChat(makeContext(sessions), {
+      sessionId: "new",
+      reset: true,
+    });
+
+    expect(created).toMatchObject({
+      ok: false,
+      error: {
+        code: "UNAVAILABLE",
+        message: "OpenClaw is finishing channel setup. Try again shortly.",
+      },
+    });
+    expect(sessions.size).toBe(8);
+    expect(sessions.has("new")).toBe(false);
+  });
+
+  it("refuses to reset a cancellation-locked channel setup", async () => {
+    const engine = makeEngine();
+    engine.dispose.mockResolvedValue(false);
+    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
+
+    const reset = await callChat(makeContext(sessions), {
+      sessionId: "s1",
+      reset: true,
+    });
+
+    expect(reset).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "Channel setup is already applying and cannot be reset yet.",
+      },
+    });
+    expect(engine.dispose).toHaveBeenCalledOnce();
+    expect(sessions.has("s1")).toBe(true);
   });
 
   it("rejects non-delegated chat without a server-authenticated identity", async () => {

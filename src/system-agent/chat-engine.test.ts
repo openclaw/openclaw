@@ -846,6 +846,7 @@ describe("SystemAgentChatEngine", () => {
     };
     let currentConfig = structuredClone(baseConfig);
     let currentHash = "base-hash";
+    let setupOptions: { remoteWizard?: boolean } | undefined;
     mocks.readSetupConfigFileSnapshot.mockImplementation(async () => ({
       exists: true,
       valid: true,
@@ -856,7 +857,13 @@ describe("SystemAgentChatEngine", () => {
       issues: [],
     }));
     mocks.setupChannels.mockImplementation(
-      async (config: OpenClawConfig, _runtime: unknown, prompter: WizardPrompter) => {
+      async (
+        config: OpenClawConfig,
+        _runtime: unknown,
+        prompter: WizardPrompter,
+        options: { remoteWizard?: boolean },
+      ) => {
+        setupOptions = options;
         const token = await prompter.text({ message: "Bot token" });
         return {
           ...config,
@@ -886,6 +893,7 @@ describe("SystemAgentChatEngine", () => {
 
     const tokenStep = await engine.handle("connect telegram");
     expect(tokenStep.text).toContain("Bot token");
+    expect(setupOptions).toMatchObject({ remoteWizard: true });
 
     const concurrentConfig: OpenClawConfig = {
       agents: { defaults: { model: { primary: "anthropic/claude-opus-4-8" } } },
@@ -910,6 +918,54 @@ describe("SystemAgentChatEngine", () => {
       }),
     );
     expect(currentConfig).toEqual(concurrentConfig);
+  });
+
+  it("forwards hosted wizard cancellation to setupChannels before config writes", async () => {
+    useTempStateDir();
+    const baseConfig: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+      auth: {
+        profiles: { "openai:main": { provider: "openai", mode: "api_key" } },
+      },
+    };
+    let setupAbortSignal: AbortSignal | undefined;
+    mocks.readSetupConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      path: "/tmp/openclaw.json",
+      hash: "base-hash",
+      config: baseConfig,
+      sourceConfig: baseConfig,
+      issues: [],
+    });
+    mocks.setupChannels.mockImplementation(
+      async (
+        config: OpenClawConfig,
+        _runtime: unknown,
+        prompter: WizardPrompter,
+        options: { abortSignal?: AbortSignal },
+      ) => {
+        setupAbortSignal = options.abortSignal;
+        await prompter.text({ message: "Bot token" });
+        return config;
+      },
+    );
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    const prompt = await engine.handle("connect telegram");
+    expect(prompt.text).toContain("Bot token");
+    expect(setupAbortSignal?.aborted).toBe(false);
+
+    const cancelled = await engine.handle("cancel");
+
+    expect(cancelled.text).toContain("cancelled");
+    expect(setupAbortSignal?.aborted).toBe(true);
+    expect(mocks.writeWizardConfigFile).not.toHaveBeenCalled();
   });
 
   it("rechecks inference authority immediately before a hosted channel write", async () => {
@@ -1049,6 +1105,160 @@ describe("SystemAgentChatEngine", () => {
     expect(hook.run).not.toHaveBeenCalled();
   });
 
+  it("finishes the config commit after a channel crosses its durable effect boundary", async () => {
+    useTempStateDir();
+    const baseConfig: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+      auth: { profiles: { "openai:main": { provider: "openai", mode: "api_key" } } },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: "test-key",
+            auth: "api-key",
+            models: [],
+          },
+        },
+      },
+    };
+    const changedConfig: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "anthropic/claude-opus-4-8" } } },
+    };
+    const verifiedInference = await createAmbientVerifiedBinding(baseConfig);
+    let currentConfig = structuredClone(baseConfig);
+    mocks.readSetupConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      path: "/tmp/openclaw.json",
+      hash: "base-hash",
+      config: structuredClone(baseConfig),
+      sourceConfig: structuredClone(baseConfig),
+      issues: [],
+    });
+    mocks.setupChannels.mockImplementation(
+      async (
+        config: OpenClawConfig,
+        _runtime: unknown,
+        prompter: WizardPrompter,
+        options: { beforePersistentEffect?: () => Promise<void> },
+      ) => {
+        await options.beforePersistentEffect?.();
+        await prompter.confirm({ message: "Confirm linked account" });
+        currentConfig = changedConfig;
+        return {
+          ...config,
+          channels: { signal: { account: "+15555550123" } },
+        };
+      },
+    );
+    mocks.writeWizardConfigFile.mockImplementation(async (config: OpenClawConfig) => config);
+    mocks.runCollectedChannelOnboardingPostWriteHooks.mockResolvedValue(undefined);
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      verifiedInference,
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: {
+        loadOverview: fakeOverviewLoader(),
+        readConfigFileSnapshot: vi.fn(async () => configSnapshot(currentConfig)) as never,
+      },
+    });
+
+    const confirmation = await engine.handle("connect signal");
+    const completed = await engine.handle("yes");
+
+    expect(confirmation.text).toContain("Confirm linked account");
+    expect(completed.text).toContain("Done — signal is configured");
+    expect(mocks.writeWizardConfigFile).toHaveBeenCalledOnce();
+  });
+
+  it("does not cross the durable setup boundary after cancellation wins during inference", async () => {
+    useTempStateDir();
+    const verifiedInference = await createAmbientVerifiedBinding(sharedVerifiedInferenceConfig);
+    let pausePersistentRead = false;
+    let releasePersistentRead: (() => void) | undefined;
+    let markPersistentReadStarted: (() => void) | undefined;
+    const persistentReadStarted = new Promise<void>((resolve) => {
+      markPersistentReadStarted = resolve;
+    });
+    const persistentReadReleased = new Promise<void>((resolve) => {
+      releasePersistentRead = resolve;
+    });
+    const durableEffect = vi.fn();
+    const readConfigFileSnapshot = vi.fn(async () => {
+      if (pausePersistentRead) {
+        markPersistentReadStarted?.();
+        await persistentReadReleased;
+      }
+      return configSnapshot(sharedVerifiedInferenceConfig);
+    });
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      verifiedInference,
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: {
+        loadOverview: fakeOverviewLoader(),
+        readConfigFileSnapshot: readConfigFileSnapshot as never,
+      },
+      runChannelSetupWizard: async (_channel, _prompter, beforePersistentApply) => {
+        pausePersistentRead = true;
+        await beforePersistentApply({
+          log: () => {},
+          error: () => {},
+          exit: () => {},
+        });
+        durableEffect();
+      },
+    });
+
+    const setup = engine.handle("connect signal");
+    await persistentReadStarted;
+    await expect(engine.dispose()).resolves.toBe(true);
+    releasePersistentRead?.();
+
+    await expect(setup).resolves.toMatchObject({
+      text: expect.stringContaining("Channel setup cancelled"),
+    });
+    expect(durableEffect).not.toHaveBeenCalled();
+  });
+
+  it("accepts a locked wizard answer after its inference route disappears", async () => {
+    useTempStateDir();
+    let inferenceConfig: OpenClawConfig = structuredClone(sharedVerifiedInferenceConfig);
+    const readConfigFileSnapshot = vi.fn(async () => configSnapshot(inferenceConfig));
+    const completed = vi.fn();
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: {
+        loadOverview: fakeOverviewLoader(),
+        readConfigFileSnapshot: readConfigFileSnapshot as never,
+      },
+      runChannelSetupWizard: async (_channel, prompter, beforePersistentApply) => {
+        await beforePersistentApply({
+          log: () => {},
+          error: () => {},
+          exit: () => {},
+        });
+        await prompter.confirm({ message: "Retry Signal validation?" });
+        completed();
+      },
+    });
+
+    const recovery = await engine.handle("connect signal");
+    expect(recovery.text).toContain("Retry Signal validation?");
+    const checksBeforeLoss = readConfigFileSnapshot.mock.calls.length;
+    inferenceConfig = {};
+
+    const result = await engine.handle("yes");
+
+    expect(result.text).toContain("Done — signal is configured.");
+    expect(completed).toHaveBeenCalledOnce();
+    expect(readConfigFileSnapshot).toHaveBeenCalledTimes(checksBeforeLoss);
+  });
+
   it("marks sensitive hosted-wizard replies and auto-advances notes", async () => {
     useTempStateDir();
     const engine = new SystemAgentChatEngine({
@@ -1088,6 +1298,266 @@ describe("SystemAgentChatEngine", () => {
     expect(textStep.question).toBeUndefined();
     expect(textStep.sensitive).toBeUndefined();
     expect(textStep.wizardInputPending).toBe(true);
+  });
+
+  it("returns hosted wizard QR images to Gateway chat clients", async () => {
+    useTempStateDir();
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      supportsQrCode: true,
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        await prompter.qrCode?.({
+          title: "Signal account linking",
+          message: "Scan this code, then confirm.",
+          pngBase64: "cG5n",
+        });
+      },
+    });
+
+    const qrStep = await engine.handle("connect signal");
+
+    expect(qrStep.text).toContain("Scan this code");
+    expect(qrStep.text).not.toContain("cancel");
+    expect(qrStep.qrCodePngBase64).toBe("cG5n");
+    expect(qrStep.question?.options.map((option) => option.label)).toEqual(["Continue"]);
+    expect(qrStep.question?.allowSkip).toBe(false);
+    expect(qrStep.wizardInputPending).toBe(true);
+  });
+
+  it("accepts the cached QR acknowledgement after external completion advances the wizard", async () => {
+    useTempStateDir();
+    let complete!: () => void;
+    const externalCompletion = new Promise<void>((resolve) => {
+      complete = resolve;
+    });
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      supportsQrCode: true,
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        await prompter.qrCode?.({
+          title: "Signal account linking",
+          message: "Scan this code, then confirm.",
+          pngBase64: "cG5n",
+          dismissWhen: externalCompletion,
+        });
+        await prompter.note("Signal linked.", "Signal");
+      },
+    });
+
+    const qrStep = await engine.handle("connect signal");
+    complete();
+    await externalCompletion;
+    await Promise.resolve();
+    const finished = await engine.handle("continue");
+
+    expect(qrStep.qrCodePngBase64).toBe("cG5n");
+    expect(finished.text).toContain("Signal linked.");
+    expect(finished.text).toContain("Done — signal is configured.");
+  });
+
+  it("does not offer image QR prompts to the CLI chat surface", async () => {
+    useTempStateDir();
+    let qrCodeCapability: unknown;
+    const engine = new SystemAgentChatEngine({
+      surface: "cli",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        qrCodeCapability = prompter.qrCode;
+      },
+    });
+
+    await engine.handle("connect signal");
+
+    expect(qrCodeCapability).toBeUndefined();
+  });
+
+  it("does not infer image QR support from the Gateway surface", async () => {
+    useTempStateDir();
+    let qrCodeCapability: unknown;
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        qrCodeCapability = prompter.qrCode;
+      },
+    });
+
+    await engine.handle("connect signal");
+
+    expect(qrCodeCapability).toBeUndefined();
+  });
+
+  it("locks cancellation before a hosted wizard persistent effect", async () => {
+    useTempStateDir();
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      supportsQrCode: true,
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel, prompter, beforePersistentApply) => {
+        await beforePersistentApply({
+          log: () => {},
+          error: () => {},
+          exit: () => {},
+        });
+        await prompter.qrCode?.({
+          title: "Signal account linking",
+          message: "Confirm the linked device",
+          pngBase64: "cG5n",
+        });
+      },
+    });
+
+    const prompt = await engine.handle("connect signal");
+    const cancelAttempt = await engine.handle("cancel");
+
+    expect(prompt.text).toContain("Confirm the linked device");
+    expect(cancelAttempt.text).toContain("already applying");
+    expect(cancelAttempt.text).not.toContain("Channel setup cancelled.");
+  });
+
+  it("retains a locked QR wizard until its config path reaches completion", async () => {
+    useTempStateDir();
+    const completed = vi.fn();
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      supportsQrCode: true,
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel, prompter, beforePersistentApply) => {
+        await beforePersistentApply({
+          log: () => {},
+          error: () => {},
+          exit: () => {},
+        });
+        await prompter.qrCode?.({
+          title: "Signal account linking",
+          message: "Confirm the linked device",
+          pngBase64: "cG5n",
+        });
+        await prompter.note("Signal setup is ready to save.", "Signal");
+        completed();
+      },
+    });
+
+    const prompt = await engine.handle("connect signal");
+    const disposedWhileLocked = await engine.dispose();
+    const resumed = await engine.resumeLockedHostedWizard();
+    const completion = await engine.handle("continue");
+
+    expect(prompt.qrCodePngBase64).toBe("cG5n");
+    expect(disposedWhileLocked).toBe(false);
+    expect(resumed?.qrCodePngBase64).toBe("cG5n");
+    expect(completed).toHaveBeenCalledOnce();
+    expect(completion.text).toContain("Done — signal is configured.");
+    await expect(engine.dispose()).resolves.toBe(true);
+  });
+
+  it("re-projects a locked QR wizard for a same-owner reconnect", async () => {
+    useTempStateDir();
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      supportsQrCode: true,
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel, prompter, beforePersistentApply) => {
+        await beforePersistentApply({
+          log: () => {},
+          error: () => {},
+          exit: () => {},
+        });
+        await prompter.qrCode?.({
+          title: "Signal account linking",
+          message: "Confirm the linked device",
+          pngBase64: "cG5n",
+        });
+      },
+    });
+
+    await engine.handle("connect signal");
+    await expect(engine.dispose()).resolves.toBe(false);
+
+    expect(engine.hasLockedHostedWizard()).toBe(true);
+    await expect(engine.resumeLockedHostedWizard()).resolves.toMatchObject({
+      text: expect.stringContaining("Confirm the linked device"),
+      action: "none",
+      wizardInputPending: true,
+      qrCodePngBase64: "cG5n",
+    });
+    await engine.handle("continue");
+    await expect(engine.dispose()).resolves.toBe(true);
+  });
+
+  it("eventually releases an abandoned locked hosted wizard", async () => {
+    vi.useFakeTimers();
+    try {
+      useTempStateDir();
+      const engine = new SystemAgentChatEngine({
+        surface: "gateway",
+        runAgentTurn: async () => null,
+        planWithAssistant: async () => null,
+        deps: { loadOverview: fakeOverviewLoader() },
+        runChannelSetupWizard: async (_channel, prompter, beforePersistentApply) => {
+          await beforePersistentApply({
+            log: () => {},
+            error: () => {},
+            exit: () => {},
+          });
+          await prompter.text({ message: "Recovery path" });
+        },
+      });
+
+      const recovery = await engine.handle("connect signal");
+      expect(recovery.text).toContain("Recovery path");
+      await expect(engine.dispose()).resolves.toBe(false);
+
+      await vi.advanceTimersByTimeAsync(25 * 60 * 1000);
+
+      await expect(engine.dispose()).resolves.toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports hosted wizard cancellation when a cached prompt expires", async () => {
+    vi.useFakeTimers();
+    try {
+      useTempStateDir();
+      const engine = new SystemAgentChatEngine({
+        surface: "gateway",
+        runAgentTurn: async () => null,
+        planWithAssistant: async () => null,
+        deps: { loadOverview: fakeOverviewLoader() },
+        runChannelSetupWizard: async (_channel, prompter) => {
+          await prompter.text({ message: "Signal account" });
+        },
+      });
+
+      const prompt = await engine.handle("connect signal");
+      expect(prompt.text).toContain("Signal account");
+
+      await vi.advanceTimersByTimeAsync(25 * 60 * 1000);
+
+      await expect(engine.handle("+15555550123")).resolves.toMatchObject({
+        text: expect.stringContaining("Channel setup cancelled"),
+      });
+      await expect(engine.dispose()).resolves.toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("routes sensitive CLI wizard prompts to the masked channel setup flow", async () => {
@@ -1210,20 +1680,29 @@ describe("SystemAgentChatEngine", () => {
 
   it("cancels a hosted wizard mid-flight", async () => {
     useTempStateDir();
+    let wizardAbortSignal: AbortSignal | undefined;
     const engine = new SystemAgentChatEngine({
       runAgentTurn: async () => null,
       planWithAssistant: async () => null,
       deps: { loadOverview: fakeOverviewLoader() },
-      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+      runChannelSetupWizard: async (
+        _channel: string,
+        prompter: WizardPrompter,
+        _beforePersistentApply,
+        abortSignal,
+      ) => {
+        wizardAbortSignal = abortSignal;
         await prompter.text({ message: "Bot token" });
       },
     });
 
     const tokenStep = await engine.handle("connect discord");
     expect(tokenStep.text).toContain("Bot token");
+    expect(wizardAbortSignal?.aborted).toBe(false);
 
     const cancelled = await engine.handle("cancel");
     expect(cancelled.text).toContain("cancelled");
+    expect(wizardAbortSignal?.aborted).toBe(true);
   });
 
   it("voids a stale host proposal before an exact wizard, including cancellation", async () => {

@@ -114,6 +114,21 @@ private func systemAgentChatMessage(from message: URLSessionWebSocketTask.Messag
     return params["message"] as? String
 }
 
+private func systemAgentSupportsQrCode(from message: URLSessionWebSocketTask.Message) -> Bool {
+    let data: Data? = switch message {
+    case let .data(data): data
+    case let .string(string): string.data(using: .utf8)
+    @unknown default: nil
+    }
+    guard let data,
+          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          object["method"] as? String == "openclaw.chat",
+          let params = object["params"] as? [String: Any],
+          let capabilities = params["capabilities"] as? [String: Any]
+    else { return false }
+    return capabilities["qrCodePng"] as? Bool == true
+}
+
 private func respondToSystemAgentHealth(
     task: GatewayTestWebSocketTask,
     id: String,
@@ -128,10 +143,12 @@ private func systemAgentResponse(
     id: String,
     action: String = "none",
     agentDraft: String? = nil,
-    questionJSON: String? = nil) -> Data
+    questionJSON: String? = nil,
+    qrCodePngBase64: String? = nil) -> Data
 {
     let agentDraftField = agentDraft.map { ",\n            \"agentDraft\": \"\($0)\"" } ?? ""
     let questionField = questionJSON.map { ",\n            \"question\": \($0)" } ?? ""
+    let qrCodeField = qrCodePngBase64.map { ",\n            \"qrCodePngBase64\": \"\($0)\"" } ?? ""
     return Data(
         """
         {
@@ -142,8 +159,20 @@ private func systemAgentResponse(
             "sessionId": "test-session",
             "reply": "ready",
             "action": "\(action)",
-            "sensitive": false\(agentDraftField)\(questionField)
+            "sensitive": false\(agentDraftField)\(questionField)\(qrCodeField)
           }
+        }
+        """.utf8)
+}
+
+private func systemAgentErrorResponse(id: String, code: String, message: String) -> Data {
+    Data(
+        """
+        {
+          "type": "res",
+          "id": "\(id)",
+          "ok": false,
+          "error": { "code": "\(code)", "message": "\(message)" }
         }
         """.utf8)
 }
@@ -524,8 +553,9 @@ struct OnboardingSystemAgentChatTests {
                 guard sendIndex > 0,
                       let id = GatewayWebSocketTestSupport.requestID(from: message)
                 else { return }
-                if let message = systemAgentChatMessage(from: message) {
-                    await recordedMessages.record(message)
+                #expect(systemAgentSupportsQrCode(from: message))
+                if let chatMessage = systemAgentChatMessage(from: message) {
+                    await recordedMessages.record(chatMessage)
                     task.emitReceiveSuccess(.data(systemAgentResponse(id: id)))
                 } else {
                     task.emitReceiveSuccess(.data(systemAgentResponse(
@@ -553,6 +583,89 @@ struct OnboardingSystemAgentChatTests {
         #expect(await recordedMessages.snapshot() == ["connect whatsapp"])
         #expect(chat.messages.map(\.text) == ["ready", "Connect WhatsApp", "ready"])
         #expect(!chat.canAnswerQuestion(assistant))
+    }
+
+    @Test func `PNG QR image is retained on the assistant message`() async throws {
+        let recordedMessages = SystemAgentMessageRecorder()
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
+                guard sendIndex > 0,
+                      let id = GatewayWebSocketTestSupport.requestID(from: message)
+                else { return }
+                #expect(systemAgentSupportsQrCode(from: message))
+                if let chatMessage = systemAgentChatMessage(from: message) {
+                    await recordedMessages.record(chatMessage)
+                    task.emitReceiveSuccess(.data(systemAgentResponse(id: id)))
+                    return
+                }
+                task.emitReceiveSuccess(.data(systemAgentResponse(
+                    id: id,
+                    questionJSON:
+                        """
+                        {
+                          "id":"signal-link",
+                          "header":"Signal account linking",
+                          "question":"Scan the QR code, then continue.",
+                          "options":[{"label":"Continue"}],
+                          "allowSkip":false
+                        }
+                        """,
+                    qrCodePngBase64: "cG5n")))
+            })
+        })
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let gateway = GatewayConnection(
+            configProvider: { (url: url, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+        let chat = SystemAgentOnboardingChatModel(gateway: gateway)
+
+        await chat.startIfNeeded()
+
+        let message = try #require(chat.messages.first)
+        #expect(message.qrCodePngBase64 == "cG5n")
+        #expect(message.question?.allowSkip == false)
+        #expect(chat.skipQuestion(messageID: message.id) == nil)
+
+        let answer = try #require(chat.answerQuestion(
+            messageID: message.id,
+            optionLabel: "Continue"))
+        await answer.value
+        #expect(await recordedMessages.snapshot() == ["Continue"])
+    }
+
+    @Test func `older gateway retries greeting without QR capability`() async throws {
+        let requests = SystemAgentMethodRecorder()
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
+                guard sendIndex > 0,
+                      let id = GatewayWebSocketTestSupport.requestID(from: message)
+                else { return }
+                let method = systemAgentRequestMethod(from: message)
+                if respondToSystemAgentHealth(task: task, id: id, method: method) {
+                    return
+                }
+                if systemAgentSupportsQrCode(from: message) {
+                    await requests.record("qr-capability")
+                    task.emitReceiveSuccess(.data(systemAgentErrorResponse(
+                        id: id,
+                        code: "INVALID_REQUEST",
+                        message: "invalid openclaw.chat params")))
+                } else {
+                    await requests.record("legacy")
+                    task.emitReceiveSuccess(.data(systemAgentResponse(id: id)))
+                }
+            })
+        })
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let gateway = GatewayConnection(
+            configProvider: { (url: url, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+        let chat = SystemAgentOnboardingChatModel(gateway: gateway)
+
+        await chat.startIfNeeded()
+
+        #expect(await requests.snapshot() == ["qr-capability", "legacy"])
+        #expect(chat.messages.map(\.text) == ["ready"])
     }
 
     @Test func `typed question skip sends fixed reply and dismisses cards`() async throws {

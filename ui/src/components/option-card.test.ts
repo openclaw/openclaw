@@ -56,7 +56,7 @@ describe("option card", () => {
     expect(selectEvent.detail).toEqual({ value: "full" });
   });
 
-  it("always renders a skip affordance and emits dismissal", async () => {
+  it("renders a skip affordance when a handler is provided", async () => {
     const onSkip = vi.fn();
     const skipped = vi.fn();
     container.addEventListener("option-skip", skipped);
@@ -78,5 +78,20 @@ describe("option card", () => {
 
     expect(onSkip).toHaveBeenCalledOnce();
     expect(skipped).toHaveBeenCalledOnce();
+  });
+
+  it("omits the skip affordance without a handler", async () => {
+    render(
+      html`<openclaw-option-card
+        .props=${{
+          question: "Acknowledge",
+          options: [{ value: "continue", label: "Continue" }],
+        }}
+      ></openclaw-option-card>`,
+      container,
+    );
+    await container.querySelector("openclaw-option-card")!.updateComplete;
+
+    expect(container.querySelector(".option-card__skip")).toBeNull();
   });
 });

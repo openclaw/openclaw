@@ -183,6 +183,7 @@ function seededSession(overrides?: Partial<SystemAgentChatSession>): SystemAgent
     welcome: "welcome text",
     lastUsedAt: 1,
     ownerKey: "device:device-test",
+    supportsQrCode: false,
     ...overrides,
   };
 }
@@ -831,7 +832,7 @@ describe("openclaw.chat", () => {
     vi.spyOn(engine, "handle").mockRejectedValue(
       new SystemAgentInferenceUnavailableError("conversation"),
     );
-    const dispose = vi.spyOn(engine, "dispose").mockResolvedValue();
+    const dispose = vi.spyOn(engine, "dispose").mockResolvedValue(true);
     const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
     const context = makeContext(sessions);
 
@@ -940,6 +941,7 @@ describe("openclaw.chat", () => {
     const disposeOldest = vi.spyOn(oldest.engine, "dispose").mockImplementation(async () => {
       evictionStarted.resolve();
       await releaseEviction.promise;
+      return true;
     });
     const sessions = new Map<string, SystemAgentChatSession>([["oldest", oldest]]);
     for (let index = 1; index < 8; index += 1) {
@@ -968,7 +970,7 @@ describe("openclaw.chat", () => {
     transcriptStoreMocks.readTranscriptTail.mockReturnValue([]);
     const engine = makeVerifiedEngine();
     const handle = vi.spyOn(engine, "handle");
-    const dispose = vi.spyOn(engine, "dispose").mockResolvedValue();
+    const dispose = vi.spyOn(engine, "dispose").mockResolvedValue(true);
     const seedHistory = vi.spyOn(SystemAgentChatEngine.prototype, "seedHistory");
     const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
     // Reset drops the stored session; loading a fresh welcome would hit real

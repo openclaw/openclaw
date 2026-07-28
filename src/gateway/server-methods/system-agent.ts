@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 // OpenClaw gateway methods host the setup/repair conversation for clients.
 import {
   buildSystemAgentSessionInvalidatedErrorDetails,
@@ -12,11 +11,6 @@ import {
   validateSystemAgentSetupVerifyParams,
   type SystemAgentChatQuestion,
 } from "../../../packages/gateway-protocol/src/index.js";
-import {
-  SYSTEM_AGENT_APPROVAL_DECISIONS,
-  SYSTEM_AGENT_APPROVAL_TIMEOUT_MS,
-  type SystemAgentApprovalRequestPayload,
-} from "../../infra/system-agent-approvals.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { enqueueCommandInLane, setCommandLaneConcurrency } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
@@ -32,7 +26,6 @@ import {
 import { isSystemAgentInferenceUnavailableError } from "../../system-agent/inference-error.js";
 import { buildNewAgentWelcome } from "../../system-agent/new-agent-welcome.js";
 import { buildOnboardingWelcome } from "../../system-agent/onboarding-welcome.js";
-import { describeSystemAgentPersistentOperation } from "../../system-agent/operations.js";
 import {
   appendTranscriptReset,
   appendTranscriptTurn,
@@ -40,11 +33,8 @@ import {
 } from "../../system-agent/transcript-store.js";
 import { resolveUserPath } from "../../utils.js";
 import { WizardSession } from "../../wizard/session.js";
-import {
-  buildRequestedApprovalEvent,
-  handlePendingApprovalRequest,
-  listVisiblePendingApprovalRequests,
-} from "./approval-shared.js";
+import { listVisiblePendingApprovalRequests } from "./approval-shared.js";
+import { queueDelegatedSystemAgentApproval } from "./system-agent-approval.js";
 import type { GatewayClient, GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -67,6 +57,8 @@ const DEFAULT_SYSTEM_AGENT_HISTORY_LIMIT = 100;
 const PROVIDER_AUTH_SESSION_TIMEOUT_MS = 25 * 60 * 1000;
 const PROVIDER_PREPARE_SESSION_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 const SYSTEM_AGENT_GATEWAY_EXECUTION_KEY = "gateway";
+const LOCKED_SETUP_RESET_ERROR = "Channel setup is already applying and cannot be reset yet.";
+const LOCKED_SETUP_BUSY_ERROR = "OpenClaw is finishing channel setup. Try again shortly.";
 const systemAgentGatewayExecutionQueue = new KeyedAsyncQueue();
 const systemAgentSessionQueues = new WeakMap<
   Map<string, SystemAgentChatSession>,
@@ -153,26 +145,24 @@ export async function runExclusiveSystemAgentSetupActivation<T>(
 async function evictOldestSession(
   sessions: Map<string, SystemAgentChatSession>,
   context: GatewayRequestContext,
-): Promise<void> {
+): Promise<boolean> {
   if (sessions.size < MAX_SYSTEM_AGENT_SESSIONS) {
-    return;
+    return true;
   }
-  let oldestKey: string | undefined;
-  let oldestAt = Number.POSITIVE_INFINITY;
-  for (const [key, session] of sessions) {
-    if (session.lastUsedAt < oldestAt) {
-      oldestAt = session.lastUsedAt;
-      oldestKey = key;
+  const oldestFirst = [...sessions.entries()].toSorted(([, left], [, right]) => {
+    return left.lastUsedAt - right.lastUsedAt;
+  });
+  for (const [key, session] of oldestFirst) {
+    if (!(await session.engine.dispose())) {
+      continue;
     }
-  }
-  if (oldestKey !== undefined) {
-    const oldest = sessions.get(oldestKey);
-    if (oldest?.pendingApproval) {
-      context.systemAgentApprovalManager?.expire(oldest.pendingApproval.id, "session-evicted");
+    if (session.pendingApproval) {
+      context.systemAgentApprovalManager?.expire(session.pendingApproval.id, "session-evicted");
     }
-    await oldest?.engine.dispose();
-    sessions.delete(oldestKey);
+    sessions.delete(key);
+    return true;
   }
+  return false;
 }
 
 function persistEngineHistory(engine: SystemAgentChatSession["engine"], startIndex: number): void {
@@ -182,71 +172,6 @@ function persistEngineHistory(engine: SystemAgentChatSession["engine"], startInd
     // been replaced by the mask marker before it crosses this boundary.
     appendTranscriptTurn({ ...turn, at });
   }
-}
-
-function queueDelegatedApproval(params: {
-  context: GatewayRequestContext;
-  sessions: Map<string, SystemAgentChatSession>;
-  session: SystemAgentChatSession;
-  sessionId: string;
-  delegation: {
-    agentId?: string;
-    sessionKey?: string;
-  };
-  proposal: NonNullable<ReturnType<SystemAgentChatSession["engine"]["getPendingOperatorProposal"]>>;
-}): string {
-  if (params.session.pendingApproval?.proposalHash === params.proposal.hash) {
-    return params.session.pendingApproval.id;
-  }
-  const manager = params.context.systemAgentApprovalManager;
-  if (!manager) {
-    throw new Error("OpenClaw approval registry unavailable");
-  }
-  const description = describeSystemAgentPersistentOperation(params.proposal.operation);
-  const request: SystemAgentApprovalRequestPayload = {
-    title: "OpenClaw change",
-    description,
-    command: description,
-    proposalHash: params.proposal.hash,
-    allowedDecisions: SYSTEM_AGENT_APPROVAL_DECISIONS,
-    agentId: params.delegation?.agentId ?? null,
-    sessionKey: params.delegation?.sessionKey ?? null,
-    sessionId: params.sessionId,
-    turnSourceChannel: null,
-    turnSourceAccountId: null,
-  };
-  const record = manager.create(
-    request,
-    SYSTEM_AGENT_APPROVAL_TIMEOUT_MS,
-    `system-agent:${randomUUID()}`,
-  );
-  const decisionPromise = manager.register(record, SYSTEM_AGENT_APPROVAL_TIMEOUT_MS);
-  params.session.pendingApproval = { id: record.id, proposalHash: params.proposal.hash };
-  const requestEvent = buildRequestedApprovalEvent(record);
-  void handlePendingApprovalRequest({
-    manager,
-    record,
-    decisionPromise,
-    respond: () => undefined,
-    context: params.context,
-    requestEventName: "openclaw.approval.requested",
-    requestEvent,
-    twoPhase: true,
-    deliverRequest: () => false,
-    keepPendingWithoutRoute: true,
-    requireDeliveryRoute: false,
-    afterDecision: async (decision) => {
-      if (params.sessions.get(params.sessionId) !== params.session) {
-        return;
-      }
-      if (params.session.pendingApproval?.id === record.id) {
-        params.session.pendingApproval = undefined;
-      }
-      await params.session.engine.resolveOperatorApproval(decision, params.proposal.hash);
-    },
-    afterDecisionErrorLabel: "OpenClaw approval apply failed",
-  });
-  return record.id;
 }
 
 export const systemAgentHandlers: GatewayRequestHandlers = {
@@ -514,7 +439,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           );
           return;
         }
-        const boundSession = sessions.get(sessionId);
+        let boundSession = sessions.get(sessionId);
         if (boundSession && boundSession.ownerKey !== ownerKey) {
           respond(
             false,
@@ -523,8 +448,82 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           );
           return;
         }
+        const supportsQrCode = params.capabilities?.qrCodePng === true;
+        let adoptedLockedWizard = false;
+        if (!boundSession) {
+          const retainedEntries = [...sessions.entries()].filter(
+            ([candidateId, candidate]) =>
+              candidateId !== sessionId &&
+              candidate.ownerKey === ownerKey &&
+              candidate.engine.hasLockedHostedWizard(),
+          );
+          if (retainedEntries.length > 1) {
+            // Session ids are caller-selected and carry no resume token. Never
+            // choose between multiple durable wizards by map insertion order.
+            respond(
+              false,
+              undefined,
+              errorShape(
+                ErrorCodes.INVALID_REQUEST,
+                "Multiple locked OpenClaw setup sessions need manual recovery.",
+              ),
+            );
+            return;
+          }
+          const retainedEntry = retainedEntries[0];
+          if (retainedEntry) {
+            const [retainedSessionId, retainedSession] = retainedEntry;
+            if (params.reset) {
+              respond(
+                false,
+                undefined,
+                errorShape(ErrorCodes.INVALID_REQUEST, LOCKED_SETUP_RESET_ERROR),
+              );
+              return;
+            }
+            if (retainedSession.supportsQrCode !== supportsQrCode) {
+              respond(
+                false,
+                undefined,
+                errorShape(
+                  ErrorCodes.INVALID_REQUEST,
+                  "OpenClaw chat capabilities changed; reconnect with the same QR support to resume setup.",
+                ),
+              );
+              return;
+            }
+            // GUI clients rotate volatile ids after reconnecting. Transfer only
+            // the authenticated owner's locked wizard so its durable operation
+            // and pending recovery step keep one execution owner.
+            sessions.delete(retainedSessionId);
+            sessions.set(sessionId, retainedSession);
+            boundSession = retainedSession;
+            adoptedLockedWizard = true;
+          }
+        }
+        if (boundSession && !params.reset && boundSession.supportsQrCode !== supportsQrCode) {
+          // A retained wizard may already be waiting on a QR-only acknowledgement.
+          // Do not resume it on a client that negotiated a different rendering contract.
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "OpenClaw chat capabilities changed; retry with reset=true.",
+            ),
+          );
+          return;
+        }
         if (params.reset) {
           const existing = sessions.get(sessionId);
+          if (existing && !(await existing.engine.dispose())) {
+            respond(
+              false,
+              undefined,
+              errorShape(ErrorCodes.INVALID_REQUEST, LOCKED_SETUP_RESET_ERROR),
+            );
+            return;
+          }
           sessions.delete(sessionId);
           if (existing?.pendingApproval) {
             context.systemAgentApprovalManager?.expire(
@@ -532,7 +531,6 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
               "session-reset",
             );
           }
-          await existing?.engine.dispose();
         }
         let session = sessions.get(sessionId);
         let greetingAuditSequence: number | undefined;
@@ -565,6 +563,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           // engine's setup path honors this via surface: "gateway".
           const engine = new SystemAgentChatEngine({
             surface: "gateway",
+            supportsQrCode,
             verifiedInference: inference.binding,
             operatorApprovalOnly: params.delegation !== undefined,
           });
@@ -610,11 +609,15 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, error.message));
             return;
           }
+          if (!(await evictOldestSession(sessions, context))) {
+            await engine.dispose().catch(() => undefined);
+            respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, LOCKED_SETUP_BUSY_ERROR));
+            return;
+          }
           if (params.reset) {
             appendTranscriptReset();
           }
           persistEngineHistory(engine, welcomeHistoryStart);
-          await evictOldestSession(sessions, context);
           session = {
             engine,
             welcome,
@@ -624,6 +627,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
               : {}),
             lastUsedAt: Date.now(),
             ownerKey,
+            supportsQrCode,
           };
           sessions.set(sessionId, session);
           if (welcomeOnly) {
@@ -642,6 +646,25 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           }
         }
         session.lastUsedAt = Date.now();
+        if (adoptedLockedWizard && welcomeOnly) {
+          const resumed = await session.engine.resumeLockedHostedWizard();
+          if (resumed) {
+            respond(
+              true,
+              {
+                sessionId,
+                reply: resumed.text || "Channel setup is still applying.",
+                action: "none",
+                ...(resumed.sensitive === true ? { sensitive: true } : {}),
+                ...(resumed.wizardInputPending === true ? { wizardInputPending: true } : {}),
+                ...(resumed.qrCodePngBase64 ? { qrCodePngBase64: resumed.qrCodePngBase64 } : {}),
+                ...(resumed.question ? { question: resumed.question } : {}),
+              },
+              undefined,
+            );
+            return;
+          }
+        }
         // Inline check (not `welcomeOnly`) so TS narrows params.message below.
         if (params.message === undefined || !params.message.trim()) {
           respond(
@@ -666,24 +689,23 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           if (!isSystemAgentInferenceUnavailableError(error)) {
             throw error;
           }
-          // A failed inference turn invalidates this conversation. Remove the
-          // exact engine before cleanup so a retry must pass the live gate and
-          // cannot resume partial proposal or CLI-session state.
-          // Initialization failures stay unmarked because no live session existed.
-          if (sessions.get(sessionId)?.engine === session.engine) {
-            sessions.delete(sessionId);
-          }
+          // Keep a cancellation-locked wizard owned through config commit or recovery.
+          let retainedForWizard = false;
           try {
-            await session.engine.dispose();
+            retainedForWizard = !(await session.engine.dispose());
           } catch {
             // The inference error is authoritative; cleanup stays best-effort.
           }
+          if (!retainedForWizard && sessions.get(sessionId)?.engine === session.engine) {
+            sessions.delete(sessionId);
+          }
+          const errorDetails = retainedForWizard
+            ? undefined
+            : { details: buildSystemAgentSessionInvalidatedErrorDetails() };
           respond(
             false,
             undefined,
-            errorShape(ErrorCodes.UNAVAILABLE, error.message, {
-              details: buildSystemAgentSessionInvalidatedErrorDetails(),
-            }),
+            errorShape(ErrorCodes.UNAVAILABLE, error.message, errorDetails),
           );
           return;
         }
@@ -701,7 +723,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         if (delegation) {
           const proposal = session.engine.getPendingOperatorProposal();
           if (proposal) {
-            proposalId = queueDelegatedApproval({
+            proposalId = queueDelegatedSystemAgentApproval({
               context,
               sessions,
               session,
@@ -731,6 +753,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
               : {}),
             ...(reply.sensitive === true ? { sensitive: true } : {}),
             ...(reply.wizardInputPending === true ? { wizardInputPending: true } : {}),
+            ...(reply.qrCodePngBase64 ? { qrCodePngBase64: reply.qrCodePngBase64 } : {}),
             ...(reply.question ? { question: reply.question } : {}),
             ...(proposalId ? { needsApproval: true, proposalId } : {}),
           },

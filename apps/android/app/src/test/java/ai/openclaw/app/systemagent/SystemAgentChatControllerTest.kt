@@ -10,6 +10,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -55,6 +56,14 @@ class SystemAgentChatControllerTest {
       assertFalse("message" in params)
       assertFalse("welcomeVariant" in params)
       assertFalse("delegation" in params)
+      assertTrue(
+        params
+          .getValue("capabilities")
+          .jsonObject
+          .getValue("qrCodePng")
+          .jsonPrimitive
+          .booleanOrNull == true,
+      )
     }
 
   @Test
@@ -91,6 +100,14 @@ class SystemAgentChatControllerTest {
       val params = json.parseToJsonElement(harness.requests[1].paramsJson).jsonObject
       assertEquals(" nonpublic test text ", params.getValue("message").jsonPrimitive.content)
       assertTrue(
+        params
+          .getValue("capabilities")
+          .jsonObject
+          .getValue("qrCodePng")
+          .jsonPrimitive
+          .booleanOrNull == true,
+      )
+      assertTrue(
         harness.controller.state.value.messages.any {
           it.role == SystemAgentChatMessage.Role.User && it.text == "<redacted secret>"
         },
@@ -98,6 +115,90 @@ class SystemAgentChatControllerTest {
       assertFalse(
         harness.controller.state.value.messages
           .any { "nonpublic test text" in it.text },
+      )
+    }
+
+  @Test
+  fun qrImageIsRetainedOnTheAssistantMessage() =
+    runTest {
+      val harness = readyHarness(this)
+      harness.responses +=
+        """
+        {
+          "sessionId": "system-session",
+          "reply": "Scan this code",
+          "action": "none",
+          "qrCodePngBase64": "cG5n",
+          "question": {
+            "id": "signal-link",
+            "header": "Signal account linking",
+            "question": "Scan the QR code, then continue.",
+            "options": [{"label": "Continue"}],
+            "allowSkip": false
+          }
+        }
+        """.trimIndent()
+      harness.responses += reply("Signal linked")
+
+      harness.controller.refresh()
+      advanceUntilIdle()
+
+      assertEquals(
+        "cG5n",
+        harness.controller.state.value.messages
+          .single()
+          .qrCodePngBase64,
+      )
+      assertEquals(
+        listOf("Continue"),
+        harness.controller.state.value.messages
+          .single()
+          .question
+          ?.options
+          ?.map { it.label },
+      )
+      val message =
+        harness.controller.state.value.messages
+          .single()
+      assertFalse(message.question?.allowSkip ?: true)
+      harness.controller.skipQuestion(message.id)
+      advanceUntilIdle()
+      assertEquals(1, harness.requests.size)
+
+      harness.controller.answerQuestion(message.id, "Continue")
+      advanceUntilIdle()
+      val params = json.parseToJsonElement(harness.requests[1].paramsJson).jsonObject
+      assertEquals("Continue", params.getValue("message").jsonPrimitive.content)
+    }
+
+  @Test
+  fun olderGatewayRetriesGreetingWithoutQrCapability() =
+    runTest {
+      val harness = readyHarness(this)
+      var attempt = 0
+      harness.handler = {
+        attempt += 1
+        if (attempt == 1) {
+          throw GatewayRequestRejected(
+            GatewaySession.ErrorShape("INVALID_REQUEST", "invalid openclaw.chat params"),
+          )
+        }
+        reply("Legacy gateway welcome")
+      }
+
+      harness.controller.refresh()
+      advanceUntilIdle()
+
+      assertEquals(2, harness.requests.size)
+      val firstParams = json.parseToJsonElement(harness.requests[0].paramsJson).jsonObject
+      val secondParams = json.parseToJsonElement(harness.requests[1].paramsJson).jsonObject
+      assertTrue("capabilities" in firstParams)
+      assertFalse("capabilities" in secondParams)
+      assertEquals(
+        "Legacy gateway welcome",
+        harness.controller.state.value.messages
+          .single()
+          .text,
       )
     }
 
@@ -386,6 +487,39 @@ class SystemAgentChatControllerTest {
     }
 
   @Test
+  fun olderGatewayRetryPreservesUserMessage() =
+    runTest {
+      val harness = readyHarness(this)
+      harness.handler = { request ->
+        val params = json.parseToJsonElement(request.paramsJson).jsonObject
+        when {
+          "message" !in params -> reply("Ready")
+          "capabilities" in params ->
+            throw GatewayRequestRejected(
+              GatewaySession.ErrorShape("INVALID_REQUEST", "invalid openclaw.chat params"),
+            )
+          else -> {
+            assertEquals("keep this answer", params.getValue("message").jsonPrimitive.content)
+            reply("Saved")
+          }
+        }
+      }
+
+      harness.controller.refresh()
+      advanceUntilIdle()
+      harness.controller.setInput("keep this answer")
+      harness.controller.sendInput()
+      advanceUntilIdle()
+
+      assertEquals(3, harness.requests.size)
+      assertEquals(
+        listOf("Ready", "keep this answer", "Saved"),
+        harness.controller.state.value.messages
+          .map { it.text },
+      )
+    }
+
+  @Test
   fun handoffWaitsForExplicitActionAndBlocksFurtherMessages() =
     runTest {
       val harness = readyHarness(this)
@@ -423,6 +557,7 @@ class SystemAgentChatControllerTest {
     action: String = "none",
     sensitive: Boolean? = null,
     agentId: String? = null,
+    qrCodePngBase64: String? = null,
   ): String =
     buildJsonObject {
       put("sessionId", JsonPrimitive("system-session"))
@@ -430,6 +565,7 @@ class SystemAgentChatControllerTest {
       put("action", JsonPrimitive(action))
       sensitive?.let { put("sensitive", JsonPrimitive(it)) }
       agentId?.let { put("agentId", JsonPrimitive(it)) }
+      qrCodePngBase64?.let { put("qrCodePngBase64", JsonPrimitive(it)) }
     }.toString()
 
   private fun questionReply(): String =

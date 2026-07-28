@@ -65,9 +65,26 @@ struct SystemAgentChatQuestionTests {
     }
 
     @Test
+    func `single acknowledgement action is valid`() throws {
+        let decoded = try Self.parse(
+            """
+            {
+              "id": "signal-link",
+              "header": "Signal account linking",
+              "question": "Scan the QR code, then continue.",
+              "options": [{"label": "Continue"}],
+              "allowSkip": false
+            }
+            """)
+        let parsed = try #require(decoded)
+
+        #expect(parsed.options.map(\.label) == ["Continue"])
+        #expect(!parsed.allowSkip)
+    }
+
+    @Test
     func `malformed gateway questions degrade to nil`() throws {
         let malformedQuestions = [
-            #"{"id":"one","header":"H","question":"Q","options":[{"label":"Only"}]}"#,
             """
             {"id":"five","header":"H","question":"Q","options":\
             [{"label":"A"},{"label":"B"},{"label":"C"},{"label":"D"},{"label":"E"}]}

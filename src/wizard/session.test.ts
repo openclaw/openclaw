@@ -107,6 +107,43 @@ describe("WizardSession", () => {
     });
   });
 
+  test("exposes QR image prompts only to sessions whose client supports them", async () => {
+    let unsupportedQrCode: unknown;
+    const unsupported = new WizardSession(async (prompter) => {
+      unsupportedQrCode = prompter.qrCode;
+    });
+
+    expect((await unsupported.next()).status).toBe("done");
+    expect(unsupportedQrCode).toBeUndefined();
+
+    const supported = new WizardSession(
+      async (prompter) => {
+        const confirmed = await prompter.qrCode?.({
+          title: "Link Signal",
+          message: "Scan this code, then confirm.",
+          pngBase64: "cG5n",
+        });
+        expect(confirmed).toBe(true);
+      },
+      { supportsQrCode: true },
+    );
+
+    const qrStep = await supported.next();
+    expect(qrStep.step).toMatchObject({
+      type: "select",
+      title: "Link Signal",
+      message: "Scan this code, then confirm.",
+      options: [{ value: true, label: "Continue" }],
+      initialValue: true,
+      qrCodePngBase64: "cG5n",
+    });
+    if (!qrStep.step) {
+      throw new Error("expected QR step");
+    }
+    await supported.answer(qrStep.step.id, true);
+    expect((await supported.next()).status).toBe("done");
+  });
+
   test("invalid answers throw", async () => {
     const session = noteRunner();
     const first = await session.next();
@@ -192,6 +229,156 @@ describe("WizardSession", () => {
 
     finish();
     expect((await session.next()).status).toBe("done");
+  });
+
+  test("keeps a locked QR prompt pending when its owner disconnects", async () => {
+    const session = new WizardSession(
+      async (prompter, _signal, wizardSession) => {
+        wizardSession.lockCancellation();
+        await prompter.qrCode?.({
+          title: "Link account",
+          message: "Scan this code",
+          pngBase64: "cG5n",
+        });
+      },
+      { supportsQrCode: true },
+    );
+
+    expect((await session.next()).step?.qrCodePngBase64).toBe("cG5n");
+    expect(session.cancel()).toBe(false);
+    expect(session.getStatus()).toBe("running");
+    expect(session.signal.aborted).toBe(false);
+  });
+
+  test("advances an externally completed QR only from the next owned answer", async () => {
+    let complete!: () => void;
+    const completion = new Promise<void>((resolve) => {
+      complete = resolve;
+    });
+    const advanced = vi.fn();
+    const session = new WizardSession(
+      async (prompter, _signal, wizardSession) => {
+        wizardSession.lockCancellation();
+        await prompter.qrCode?.({
+          title: "Link account",
+          message: "Scan this code",
+          pngBase64: "cG5n",
+          dismissWhen: completion,
+        });
+        advanced();
+        await prompter.text({ message: "Recovery path" });
+      },
+      { supportsQrCode: true },
+    );
+
+    const qr = await session.next();
+    expect(qr.step?.qrCodePngBase64).toBe("cG5n");
+    if (!qr.step) {
+      throw new Error("expected QR step");
+    }
+    await expect(session.answer(qr.step.id, true)).resolves.toContain(
+      "still waiting for the external operation",
+    );
+    expect(advanced).not.toHaveBeenCalled();
+    complete();
+    await completion;
+    await Promise.resolve();
+    expect(advanced).not.toHaveBeenCalled();
+    await expect(session.answer(qr.step.id, true)).resolves.toBeUndefined();
+    const recovery = await session.next();
+    expect(advanced).toHaveBeenCalledOnce();
+    expect(recovery.step?.message).toBe("Recovery path");
+    if (!recovery.step) {
+      throw new Error("expected recovery step");
+    }
+    await session.answer(recovery.step.id, "retry");
+    expect((await session.next()).status).toBe("done");
+  });
+
+  test("advances after external QR completion rejects so the runner can surface the error", async () => {
+    let rejectCompletion!: (error: Error) => void;
+    const completion = new Promise<void>((_resolve, reject) => {
+      rejectCompletion = reject;
+    });
+    const session = new WizardSession(
+      async (prompter, _signal, wizardSession) => {
+        wizardSession.lockCancellation();
+        await prompter.qrCode?.({
+          title: "Link account",
+          message: "Scan this code",
+          pngBase64: "cG5n",
+          dismissWhen: completion,
+        });
+        await completion;
+      },
+      { supportsQrCode: true },
+    );
+
+    const qr = await session.next();
+    if (!qr.step) {
+      throw new Error("expected QR step");
+    }
+    rejectCompletion(new Error("external link failed"));
+    await Promise.resolve();
+    await expect(session.answer(qr.step.id, true)).resolves.toBeUndefined();
+    await expect(session.next()).resolves.toMatchObject({
+      done: true,
+      status: "error",
+      error: "Error: external link failed",
+    });
+  });
+
+  test("retains a locked session that has moved on to a recovery prompt", async () => {
+    const session = new WizardSession(async (prompter, _signal, wizardSession) => {
+      wizardSession.lockCancellation();
+      await prompter.text({ message: "Recovery path" });
+    });
+
+    const recovery = await session.next();
+    expect(recovery.step?.type).toBe("text");
+    expect(session.cancel()).toBe(false);
+    expect(session.getStatus()).toBe("running");
+    expect(session.signal.aborted).toBe(false);
+    if (!recovery.step) {
+      throw new Error("expected recovery step");
+    }
+    await session.answer(recovery.step.id, "retry");
+    expect((await session.next()).status).toBe("done");
+  });
+
+  test("gives a newly locked operation a full idle window before expiry", async () => {
+    vi.useFakeTimers();
+    try {
+      let beginLockedOperation!: () => void;
+      const ready = new Promise<void>((resolve) => {
+        beginLockedOperation = resolve;
+      });
+      const session = new WizardSession(
+        async (prompter, _signal, wizardSession) => {
+          await ready;
+          wizardSession.lockCancellation();
+          await prompter.text({ message: "Recovery path" });
+        },
+        { timeoutMs: 1_000 },
+      );
+
+      await vi.advanceTimersByTimeAsync(900);
+      beginLockedOperation();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(session.cancel()).toBe(false);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(session.getStatus()).toBe("running");
+      expect(session.signal.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      const done = await session.next();
+      expect(done.status).toBe("cancelled");
+      expect(session.signal.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("expires an abandoned interactive session", async () => {

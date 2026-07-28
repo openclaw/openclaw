@@ -305,6 +305,8 @@ export type SetupChannelsOptions = {
   allowSignalInstall?: boolean;
   /** Revalidate host authority immediately before an installer or other durable effect. */
   beforePersistentEffect?: () => Promise<void>;
+  /** Cancels reversible setup work when the controlling wizard session stops. */
+  abortSignal?: AbortSignal;
   onSelection?: (selection: ChannelId[]) => void;
   onPostWriteHook?: (hook: ChannelOnboardingPostWriteHook) => void;
   accountIds?: Partial<Record<ChannelId, string>>;
@@ -319,6 +321,11 @@ export type SetupChannelsOptions = {
    * setup surfaces must skip terminal-interactive login/link prompts.
    */
   deferDeviceLinkToClient?: boolean;
+  /**
+   * Prompts cross a remote wizard boundary. Long-running setup must not wait
+   * on a prompt that the client cannot receive until the operation finishes.
+   */
+  remoteWizard?: boolean;
   skipStatusNote?: boolean;
   skipDmPolicyPrompt?: boolean;
   skipConfirm?: boolean;

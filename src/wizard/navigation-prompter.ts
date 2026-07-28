@@ -123,6 +123,15 @@ class WizardPromptNavigator {
           },
         }
       : {}),
+    ...(this.base.qrCode
+      ? {
+          qrCode: async (params) => {
+            // Navigation replay has already passed this acknowledgement; avoid
+            // showing or blocking on the same QR twice.
+            return this.shouldSuppressOutput() ? true : (await this.base.qrCode?.(params)) === true;
+          },
+        }
+      : {}),
     plain: async (message) => {
       if (!this.shouldSuppressOutput()) {
         await this.base.plain?.(message);

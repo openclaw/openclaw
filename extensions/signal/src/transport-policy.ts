@@ -1,4 +1,5 @@
 // Signal transport policy centralizes local endpoint collision handling.
+import { isIP } from "node:net";
 import type { SignalTransportConfig } from "./account-types.js";
 import { normalizeSignalTransportUrl } from "./transport-url.js";
 
@@ -9,8 +10,26 @@ export const DEFAULT_SIGNAL_MANAGED_NATIVE_HOST = "127.0.0.1";
 const SIGNAL_LOOPBACK_HOST_ALIASES = new Set(["localhost", "127.0.0.1", "::1"]);
 
 function normalizeSignalEndpointHost(hostname: string): string {
-  const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  const normalized = hostname
+    .toLowerCase()
+    .replace(/^\[|\]$/g, "")
+    .replace(/%.+$/, "");
   return normalized.endsWith(".") ? normalized.slice(0, -1) : normalized;
+}
+
+export function normalizeSignalEndpointAddress(hostname: string): string {
+  const normalized = normalizeSignalEndpointHost(hostname);
+  const dottedMapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/.exec(normalized)?.[1];
+  if (dottedMapped && isIP(dottedMapped) === 4) {
+    return dottedMapped;
+  }
+  const hexMapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(normalized);
+  if (hexMapped?.[1] && hexMapped[2]) {
+    const high = Number.parseInt(hexMapped[1], 16);
+    const low = Number.parseInt(hexMapped[2], 16);
+    return `${high >>> 8}.${high & 0xff}.${low >>> 8}.${low & 0xff}`;
+  }
+  return normalized;
 }
 
 function isSignalLocalEndpointHost(hostname: string): boolean {
@@ -54,7 +73,7 @@ export function allocateSignalManagedNativePort(params: {
 export function resolveLocalSignalTransportPort(baseUrl: string): number | undefined {
   try {
     const parsed = new URL(baseUrl);
-    const hostname = normalizeSignalEndpointHost(parsed.hostname);
+    const hostname = normalizeSignalEndpointAddress(parsed.hostname);
     if (!isSignalLocalEndpointHost(hostname)) {
       return undefined;
     }
@@ -84,8 +103,8 @@ export function isSignalManagedNativeConnectionUrlForBind(
   if (connectionPort !== bindPort) {
     return false;
   }
-  const connectionHost = normalizeSignalEndpointHost(connectionUrl.hostname);
-  const bindHost = normalizeSignalEndpointHost(
+  const connectionHost = normalizeSignalEndpointAddress(connectionUrl.hostname);
+  const bindHost = normalizeSignalEndpointAddress(
     transport.httpHost ?? DEFAULT_SIGNAL_MANAGED_NATIVE_HOST,
   );
   if (connectionHost === bindHost) {

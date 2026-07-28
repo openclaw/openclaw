@@ -1,7 +1,11 @@
 // Signal tests cover setup adapter integration with account-owned transport policy.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createSignalCliPathTextInput, signalSetupAdapter } from "./setup-core.js";
+import {
+  createSignalSetupWizardProxy,
+  signalNumberTextInputs,
+  signalSetupAdapter,
+} from "./setup-core.js";
 import { signalSetupWizard } from "./setup-surface.js";
 
 const detectSignalTransportMock = vi.hoisted(() => vi.fn());
@@ -113,7 +117,10 @@ describe("signalSetupAdapter", () => {
           signal: {
             transport: { kind: "managed-native", httpPort: 8080 },
             accounts: {
-              default: { account: "+15555550123" },
+              default: {
+                account: "+15555550123",
+                accountUuid: "123e4567-e89b-12d3-a456-426614174000",
+              },
             },
           },
         },
@@ -127,7 +134,11 @@ describe("signalSetupAdapter", () => {
       kind: "managed-native",
       httpPort: 8080,
     });
-    expect(next?.channels?.signal?.accounts?.default).toBeUndefined();
+    expect(next?.channels?.signal?.accountUuid).toBeUndefined();
+    expect(next?.channels?.signal?.accounts?.default).toEqual({
+      accountUuid: "123e4567-e89b-12d3-a456-426614174000",
+    });
+    expect(next?.channels?.signal?.accounts?.work?.accountUuid).toBeUndefined();
     expect(next?.channels?.signal?.accounts?.work?.transport).toEqual({
       kind: "managed-native",
       httpHost: "127.0.0.1",
@@ -460,7 +471,7 @@ describe("signalSetupAdapter", () => {
     ).toBe("Signal --signal-transport requires --http-url.");
   });
 
-  it("rejects a fresh container transport without a Signal account", () => {
+  it("requires an account for containers but preserves accountless native servers", () => {
     expect(
       signalSetupAdapter.validateInput?.({
         cfg: {},
@@ -470,7 +481,17 @@ describe("signalSetupAdapter", () => {
           signalTransport: "container",
         },
       }),
-    ).toBe("Signal container transport requires --signal-number or an existing account.");
+    ).toBe("Signal server transport requires --signal-number or an existing account.");
+    expect(
+      signalSetupAdapter.validateInput?.({
+        cfg: {},
+        accountId: "work",
+        input: {
+          httpUrl: "http://signal-native:8080",
+          signalTransport: "external-native",
+        },
+      }),
+    ).toBeNull();
   });
 
   it("allows a container transport to reuse the configured Signal account", () => {
@@ -509,30 +530,6 @@ describe("signalSetupAdapter", () => {
     ).toBeNull();
   });
 
-  it("does not materialize a CLI path for an external transport", async () => {
-    const input = createSignalCliPathTextInput(async () => false);
-    const cfg: OpenClawConfig = {
-      channels: {
-        signal: {
-          account: "+15555550124",
-          transport: { kind: "container", url: "http://signal:8080" },
-        },
-      },
-    };
-
-    expect(
-      await input.currentValue?.({ cfg, accountId: "default", credentialValues: {} }),
-    ).toBeUndefined();
-    const wizardInput = signalSetupWizard.textInputs?.find((entry) => entry.inputKey === "cliPath");
-    expect(
-      await wizardInput?.shouldPrompt?.({
-        cfg,
-        accountId: "default",
-        credentialValues: {},
-      }),
-    ).toBe(false);
-  });
-
   it("reports an external transport as configured without checking signal-cli", async () => {
     const cfg: OpenClawConfig = {
       channels: {
@@ -555,5 +552,34 @@ describe("signalSetupAdapter", () => {
       "configured",
     );
     await expect(signalSetupWizard.status.resolveQuickstartScore?.(params)).resolves.toBe(1);
+  });
+
+  it("collects account numbers only where the selected transport requires them", async () => {
+    const requiredAccountInput = signalNumberTextInputs.find((input) => input.required !== false);
+    const proxy = createSignalSetupWizardProxy(async () => signalSetupWizard);
+
+    expect(
+      requiredAccountInput?.shouldPrompt?.({
+        cfg: {},
+        accountId: "default",
+        credentialValues: { signalTransportKind: "managed-native" },
+      }),
+    ).toBe(false);
+    expect(
+      requiredAccountInput?.shouldPrompt?.({
+        cfg: {},
+        accountId: "default",
+        credentialValues: { signalTransportKind: "container" },
+      }),
+    ).toBe(true);
+    expect(
+      requiredAccountInput?.shouldPrompt?.({
+        cfg: {},
+        accountId: "default",
+        credentialValues: { signalTransportKind: "external-native" },
+      }),
+    ).toBe(true);
+    expect(proxy.introNote).toEqual(signalSetupWizard.introNote);
+    expect(proxy.finalize).toBeTypeOf("function");
   });
 });

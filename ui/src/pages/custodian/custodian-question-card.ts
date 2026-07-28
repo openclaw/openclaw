@@ -21,7 +21,7 @@ export function renderCustodianQuestionCard(params: {
         })),
         disabled: params.disabled,
         onSelect: params.onSelect,
-        onSkip: params.onSkip,
+        onSkip: params.question.allowSkip ? params.onSkip : undefined,
       }}
     ></openclaw-option-card>
   </div>`;

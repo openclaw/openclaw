@@ -16,8 +16,29 @@ import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { WizardSession } from "../../wizard/session.js";
 import { formatForLog } from "../ws-log.js";
-import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
+import type {
+  GatewayClient,
+  GatewayRequestContext,
+  GatewayRequestHandlers,
+  RespondFn,
+} from "./types.js";
 import { assertValidParams } from "./validation.js";
+
+const CHANNEL_WIZARD_RESUME_KEY = "gateway-channel-setup";
+const CHANNEL_WIZARD_TIMEOUT_MS = 25 * 60 * 1000;
+
+function resolveChannelWizardResumeKey(params: {
+  client: GatewayClient | null;
+  channel: string | undefined;
+}): string | undefined {
+  const connId = params.client?.connId?.trim();
+  if (!connId) {
+    return undefined;
+  }
+  // Reattachment is deliberately connection- and channel-exact. A broader
+  // admin identity could expose another tab's pending setup prompt.
+  return JSON.stringify([CHANNEL_WIZARD_RESUME_KEY, connId, params.channel ?? null]);
+}
 
 export type SetupWizardRunner = (
   opts: OnboardOptions,
@@ -30,6 +51,7 @@ export type ChannelSetupWizardRunner = (
     channel?: string;
     onConfigured?: (accounts: Array<{ channel: string; accountId: string }>) => void;
     beforePersistentEffect?: () => Promise<void>;
+    abortSignal?: AbortSignal;
   },
   runtime: RuntimeEnv,
   prompter: WizardPrompter,
@@ -74,31 +96,60 @@ function findWizardSessionOrRespond(params: {
 
 /** Gateway handlers for the interactive setup wizard session lifecycle. */
 export const wizardHandlers: GatewayRequestHandlers = {
-  "wizard.start": async ({ params, respond, context }) => {
+  "wizard.start": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateWizardStartParams, "wizard.start", respond)) {
       return;
     }
+    const flow = params.flow ?? "setup";
+    const channel = readStringValue(params.channel);
+    const resumeKey =
+      flow === "channels" ? resolveChannelWizardResumeKey({ client, channel }) : undefined;
     const running = context.findRunningWizard();
     if (running) {
+      const existing = context.wizardSessions.get(running);
+      if (
+        flow === "channels" &&
+        resumeKey !== undefined &&
+        existing?.isCancellationLocked() &&
+        existing.canResume(resumeKey)
+      ) {
+        const result = await existing.next();
+        if (result.done) {
+          context.purgeWizardSession(running);
+        }
+        respond(true, { sessionId: running, ...result }, undefined);
+        return;
+      }
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "wizard already running"));
       return;
     }
     const sessionId = randomUUID();
-    const flow = params.flow ?? "setup";
     const session =
       flow === "channels"
-        ? new WizardSession((prompter, _signal, wizardSession) =>
-            context.channelWizardRunner(
-              {
-                channel: readStringValue(params.channel),
-                onConfigured: (accounts) => wizardSession.setConfiguredAccounts(accounts),
-                // Durable effects (plugin installs, config commit) must finish
-                // even if the client cancels mid-write.
-                beforePersistentEffect: async () => wizardSession.lockCancellation(),
-              },
-              defaultRuntime,
-              prompter,
-            ),
+        ? new WizardSession(
+            (prompter, signal, wizardSession) =>
+              context.channelWizardRunner(
+                {
+                  channel,
+                  onConfigured: (accounts) => wizardSession.setConfiguredAccounts(accounts),
+                  abortSignal: signal,
+                  // Durable effects (plugin installs, config commit) must finish
+                  // even if the client cancels mid-write.
+                  beforePersistentEffect: async () => {
+                    if (!wizardSession.lockCancellation()) {
+                      throw new Error(
+                        "Channel setup was cancelled before its persistent change started.",
+                      );
+                    }
+                  },
+                },
+                defaultRuntime,
+                prompter,
+              ),
+            {
+              ...(resumeKey ? { resumeKey } : {}),
+              timeoutMs: CHANNEL_WIZARD_TIMEOUT_MS,
+            },
           )
         : new WizardSession((prompter) =>
             context.wizardRunner(

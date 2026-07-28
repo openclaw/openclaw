@@ -5,11 +5,30 @@ import {
   validateSystemAgentSetupVerifyParams,
 } from "../index.js";
 import {
+  SystemAgentChatParamsSchema,
+  SystemAgentChatResultSchema,
   SystemAgentChatQuestionSchema,
   SystemAgentChatHistoryResultSchema,
   SystemAgentSetupDetectResultSchema,
   SystemAgentSetupVerifyResultSchema,
 } from "./openclaw.js";
+
+describe("OpenClaw chat params protocol", () => {
+  it("accepts an additive QR rendering capability", () => {
+    expect(
+      Value.Check(SystemAgentChatParamsSchema, {
+        sessionId: "setup-session",
+        capabilities: { qrCodePng: true },
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(SystemAgentChatParamsSchema, {
+        sessionId: "setup-session",
+        capabilities: { qrCodePng: "yes" },
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("OpenClaw chat question protocol", () => {
   const question = {
@@ -27,6 +46,29 @@ describe("OpenClaw chat question protocol", () => {
     expect(Value.Check(SystemAgentChatQuestionSchema, { ...question, skipAction: "dismiss" })).toBe(
       false,
     );
+  });
+
+  it("accepts a single acknowledgement action", () => {
+    expect(
+      Value.Check(SystemAgentChatQuestionSchema, {
+        ...question,
+        options: [{ label: "Continue" }],
+        allowSkip: false,
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("OpenClaw chat result protocol", () => {
+  it("accepts an additive PNG QR image for hosted setup", () => {
+    expect(
+      Value.Check(SystemAgentChatResultSchema, {
+        sessionId: "setup-session",
+        reply: "Scan this QR code, then confirm.",
+        action: "none",
+        qrCodePngBase64: "cG5n",
+      }),
+    ).toBe(true);
   });
 });
 

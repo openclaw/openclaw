@@ -123,14 +123,16 @@ class OptionCard extends LitElement {
             `;
           })}
         </div>
-        <button
-          class="option-card__skip"
-          type="button"
-          ?disabled=${props.disabled}
-          @click=${() => this.skip()}
-        >
-          ${t("optionCard.skip")}
-        </button>
+        ${props.onSkip
+          ? html`<button
+              class="option-card__skip"
+              type="button"
+              ?disabled=${props.disabled}
+              @click=${() => this.skip()}
+            >
+              ${t("optionCard.skip")}
+            </button>`
+          : nothing}
       </section>
     `;
   }

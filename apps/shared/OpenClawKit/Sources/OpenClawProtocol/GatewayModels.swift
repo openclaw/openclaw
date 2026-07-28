@@ -9131,6 +9131,7 @@ public struct ConfigSchemaLookupResult: Codable, Sendable {
 public struct SystemAgentChatParams: Codable, Sendable {
     public let sessionid: String
     public let message: String?
+    public let capabilities: [String: AnyCodable]?
     public let welcomevariant: AnyCodable?
     public let reset: Bool?
     public let delegation: [String: AnyCodable]?
@@ -9138,12 +9139,14 @@ public struct SystemAgentChatParams: Codable, Sendable {
     public init(
         sessionid: String,
         message: String? = nil,
+        capabilities: [String: AnyCodable]? = nil,
         welcomevariant: AnyCodable? = nil,
         reset: Bool? = nil,
         delegation: [String: AnyCodable]? = nil)
     {
         self.sessionid = sessionid
         self.message = message
+        self.capabilities = capabilities
         self.welcomevariant = welcomevariant
         self.reset = reset
         self.delegation = delegation
@@ -9152,6 +9155,7 @@ public struct SystemAgentChatParams: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case sessionid = "sessionId"
         case message
+        case capabilities
         case welcomevariant = "welcomeVariant"
         case reset
         case delegation
@@ -9163,6 +9167,7 @@ public struct SystemAgentChatResult: Codable, Sendable {
     public let reply: String
     public let sensitive: Bool?
     public let wizardinputpending: Bool?
+    public let qrcodepngbase64: String?
     public let action: AnyCodable
     public let agentdraft: String?
     public let agentid: String?
@@ -9175,6 +9180,7 @@ public struct SystemAgentChatResult: Codable, Sendable {
         reply: String,
         sensitive: Bool? = nil,
         wizardinputpending: Bool? = nil,
+        qrcodepngbase64: String? = nil,
         action: AnyCodable,
         agentdraft: String? = nil,
         agentid: String? = nil,
@@ -9186,6 +9192,7 @@ public struct SystemAgentChatResult: Codable, Sendable {
         self.reply = reply
         self.sensitive = sensitive
         self.wizardinputpending = wizardinputpending
+        self.qrcodepngbase64 = qrcodepngbase64
         self.action = action
         self.agentdraft = agentdraft
         self.agentid = agentid
@@ -9199,6 +9206,7 @@ public struct SystemAgentChatResult: Codable, Sendable {
         case reply
         case sensitive
         case wizardinputpending = "wizardInputPending"
+        case qrcodepngbase64 = "qrCodePngBase64"
         case action
         case agentdraft = "agentDraft"
         case agentid = "agentId"

@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import OpenClawKit
 import SwiftUI
+import UIKit
 
 struct IOSSystemAgentChatRouteLease: Sendable {
     let route: GatewayNodeSessionRoute?
@@ -47,17 +48,20 @@ final class IOSSystemAgentChatModel {
         let role: Role
         let text: String
         let question: SystemAgentChatQuestion?
+        let qrCodePngBase64: String?
 
         init(
             id: UUID = UUID(),
             role: Role,
             text: String,
-            question: SystemAgentChatQuestion? = nil)
+            question: SystemAgentChatQuestion? = nil,
+            qrCodePngBase64: String? = nil)
         {
             self.id = id
             self.role = role
             self.text = text
             self.question = question
+            self.qrCodePngBase64 = qrCodePngBase64
         }
     }
 
@@ -73,6 +77,7 @@ final class IOSSystemAgentChatModel {
         let sensitive: Bool?
         let agentId: String?
         let question: AnyCodable?
+        let qrCodePngBase64: String?
     }
 
     private(set) var messages: [Message] = []
@@ -296,6 +301,7 @@ final class IOSSystemAgentChatModel {
     @discardableResult
     func skipQuestion(messageID: UUID) -> Task<Void, Never>? {
         guard let message = self.messages.first(where: { $0.id == messageID }),
+              message.question?.allowSkip == true,
               self.canAnswerQuestion(message),
               let task = self.send(
                   message: "Skip for now",
@@ -423,13 +429,16 @@ final class IOSSystemAgentChatModel {
         do {
             var params: [String: AnyCodable] = [
                 "sessionId": AnyCodable(self.sessionID),
+                "capabilities": AnyCodable([
+                    "qrCodePng": AnyCodable(true),
+                ]),
             ]
             if let message {
                 params["message"] = AnyCodable(message)
             }
             let routeLease = try await self.sessionRoute(for: generation)
             guard self.isCurrentRequest(generation) else { return }
-            let data = try await routeLease.request("openclaw.chat", params, 190_000)
+            let data = try await self.requestChat(params: params, routeLease: routeLease)
             guard self.isCurrentRequest(generation) else { return }
             guard await routeLease.isCurrent() else { throw CancellationError() }
             let result = try JSONDecoder().decode(ChatResult.self, from: data)
@@ -438,7 +447,8 @@ final class IOSSystemAgentChatModel {
             self.messages.append(Message(
                 role: .assistant,
                 text: result.reply,
-                question: SystemAgentChatQuestion.parse(result.question?.dictionaryValue)))
+                question: SystemAgentChatQuestion.parse(result.question?.dictionaryValue),
+                qrCodePngBase64: result.qrCodePngBase64))
             if result.action == "open-agent" {
                 self.pendingHandoff = Handoff(agentID: result.agentId)
             }
@@ -458,6 +468,23 @@ final class IOSSystemAgentChatModel {
                 return
             }
             self.errorMessage = error.localizedDescription
+        }
+    }
+
+    private func requestChat(
+        params: [String: AnyCodable],
+        routeLease: IOSSystemAgentChatRouteLease) async throws -> Data
+    {
+        do {
+            return try await routeLease.request("openclaw.chat", params, 190_000)
+        } catch let error as GatewayResponseError
+            where params["capabilities"] != nil &&
+            error.code == "INVALID_REQUEST" &&
+            error.message.lowercased().contains("invalid openclaw.chat params")
+        {
+            var legacyParams = params
+            legacyParams.removeValue(forKey: "capabilities")
+            return try await routeLease.request("openclaw.chat", legacyParams, 190_000)
         }
     }
 }
@@ -858,13 +885,15 @@ private struct IOSSystemAgentQuestionCard: View {
             ForEach(self.question.options, id: \.label) { option in
                 self.optionButton(option)
             }
-            Button(action: self.onSkip) {
-                Text("Skip for now")
-                    .font(OpenClawType.captionSemiBold)
+            if self.question.allowSkip {
+                Button(action: self.onSkip) {
+                    Text("Skip for now")
+                        .font(OpenClawType.captionSemiBold)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .disabled(!self.isEnabled)
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .disabled(!self.isEnabled)
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -928,9 +957,19 @@ private struct IOSSystemAgentChatBubble: View {
             if self.message.role == .user {
                 Spacer(minLength: 44)
             }
-            Text(self.message.text)
-                .font(OpenClawType.body)
-                .textSelection(.enabled)
+            VStack(alignment: .leading, spacing: 10) {
+                Text(self.message.text)
+                    .font(OpenClawType.body)
+                    .textSelection(.enabled)
+                if let qrImage = self.qrImage {
+                    Image(uiImage: qrImage)
+                        .resizable()
+                        .interpolation(.none)
+                        .scaledToFit()
+                        .frame(maxWidth: 280, maxHeight: 280)
+                        .accessibilityLabel(Text("QR code"))
+                }
+            }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 9)
                 .background(
@@ -942,5 +981,12 @@ private struct IOSSystemAgentChatBubble: View {
                 Spacer(minLength: 44)
             }
         }
+    }
+
+    private var qrImage: UIImage? {
+        guard let pngBase64 = self.message.qrCodePngBase64,
+              let data = Data(base64Encoded: pngBase64)
+        else { return nil }
+        return UIImage(data: data)
     }
 }

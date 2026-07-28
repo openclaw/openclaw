@@ -352,6 +352,28 @@ describe("ChannelWizardController", () => {
     expect(calls).toContain("wizard.cancel");
   });
 
+  it("keeps ownership when the gateway refuses cancellation during a durable step", async () => {
+    const { controller, request } = createController(async (method) => {
+      if (method === "wizard.start") {
+        return { sessionId: "s1", done: false, status: "running", step: selectStep };
+      }
+      if (method === "wizard.cancel") {
+        return { status: "running" };
+      }
+      throw new Error(`unexpected ${method}`);
+    });
+
+    await controller.start("signal");
+    await controller.cancel();
+
+    expect(controller.state).toMatchObject({
+      phase: "step",
+      channel: "signal",
+      step: { id: "step-select" },
+    });
+    expect(request).toHaveBeenCalledWith("wizard.cancel", { sessionId: "s1" });
+  });
+
   it("ignores answers while a previous answer is in flight", async () => {
     let resolveNext: (value: unknown) => void = () => {};
     const { controller, request } = createController(async (method) => {

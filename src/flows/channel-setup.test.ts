@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
 import { WizardCancelledError, WizardNavigationError } from "../wizard/prompts.js";
 import {
   makeCatalogEntry,
@@ -462,6 +463,69 @@ describe("setupChannels workspace shadow exclusion", () => {
       channels: {
         "custom-chat": { token: "secret" },
       },
+    });
+  });
+
+  it("preserves QR prompts through the channel setup navigation scope", async () => {
+    const qrCode = vi.fn(async () => true);
+    let qrConfirmed: boolean | undefined;
+    const setupWizard = {
+      channel: "custom-chat",
+      getStatus: vi.fn(async () => ({
+        channel: "custom-chat",
+        configured: false,
+        statusLines: [],
+      })),
+      configure: vi.fn(
+        async ({ cfg, prompter }: { cfg: Record<string, unknown>; prompter: WizardPrompter }) => {
+          qrConfirmed = await prompter.qrCode?.({
+            title: "Link Signal",
+            message: "Scan this code",
+            pngBase64: "cG5n",
+          });
+          return { cfg };
+        },
+      ),
+    };
+    const activePlugin = makeSetupPlugin({
+      id: "custom-chat",
+      label: "Custom Chat",
+      setupWizard,
+    });
+    listActiveChannelSetupPlugins.mockReturnValue([activePlugin]);
+    resolveChannelSetupEntries.mockReturnValue(
+      makeChannelSetupEntries({
+        entries: [
+          {
+            id: "custom-chat",
+            meta: makeMeta("custom-chat", "Custom Chat"),
+          },
+        ],
+      }),
+    );
+    const select = vi.fn().mockResolvedValueOnce("custom-chat").mockResolvedValueOnce("__done__");
+
+    await setupChannels(
+      {} as never,
+      {} as never,
+      {
+        confirm: vi.fn(async () => true),
+        note: vi.fn(async () => undefined),
+        qrCode,
+        select,
+      } as never,
+      {
+        deferStatusUntilSelection: true,
+        skipConfirm: true,
+        skipDmPolicyPrompt: true,
+      },
+    );
+
+    expect(qrConfirmed).toBe(true);
+    expect(qrCode).toHaveBeenCalledWith({
+      title: "Link Signal",
+      message: "Scan this code",
+      pngBase64: "cG5n",
     });
   });
 

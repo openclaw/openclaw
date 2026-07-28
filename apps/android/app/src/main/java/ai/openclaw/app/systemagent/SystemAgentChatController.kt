@@ -53,6 +53,7 @@ data class SystemAgentChatQuestion(
   val header: String,
   val question: String,
   val options: List<SystemAgentChatQuestionOption>,
+  val allowSkip: Boolean,
 )
 
 data class SystemAgentChatMessage(
@@ -60,6 +61,7 @@ data class SystemAgentChatMessage(
   val role: Role,
   val text: String,
   val question: SystemAgentChatQuestion? = null,
+  val qrCodePngBase64: String? = null,
 ) {
   enum class Role {
     Assistant,
@@ -85,6 +87,30 @@ data class SystemAgentChatState(
 )
 
 private fun newSystemAgentSessionId(): String = "android-settings-openclaw-${UUID.randomUUID()}"
+
+private fun buildSystemAgentChatPayload(
+  sessionId: String,
+  message: String?,
+  includeCapabilities: Boolean,
+): JsonObject =
+  buildJsonObject {
+    put("sessionId", JsonPrimitive(sessionId))
+    if (includeCapabilities) {
+      put(
+        "capabilities",
+        buildJsonObject {
+          put("qrCodePng", JsonPrimitive(true))
+        },
+      )
+    }
+    message?.let { put("message", JsonPrimitive(it)) }
+  }
+
+private fun isLegacySystemAgentChatParamsRejection(error: GatewayRequestRejected): Boolean =
+  error.gatewayError.code == "INVALID_REQUEST" &&
+    error.gatewayError.message
+      .lowercase()
+      .contains("invalid openclaw.chat params")
 
 /**
  * Keeps the settings-only OpenClaw conversation outside ordinary chat/session state.
@@ -197,7 +223,7 @@ internal class SystemAgentChatController(
   fun skipQuestion(messageId: String) {
     val current = state.value
     val message = current.messages.firstOrNull { it.id == messageId } ?: return
-    if (!current.canAnswer(message)) return
+    if (!current.canAnswer(message) || message.question?.allowSkip != true) return
     request(
       message = "Skip for now",
       displayText = nativeString("Skip for now"),
@@ -274,11 +300,24 @@ internal class SystemAgentChatController(
         try {
           if (!isCurrent(requestGeneration) || !lease.isCurrent()) return@launch
           val payload =
-            buildJsonObject {
-              put("sessionId", JsonPrimitive(current.sessionId))
-              message?.let { put("message", JsonPrimitive(it)) }
+            buildSystemAgentChatPayload(
+              sessionId = current.sessionId,
+              message = message,
+              includeCapabilities = true,
+            )
+          val response =
+            try {
+              lease.request(GatewayMethod.OpenclawChat.rawValue, payload.toString(), 190_000)
+            } catch (err: GatewayRequestRejected) {
+              if (!isLegacySystemAgentChatParamsRejection(err)) throw err
+              val legacyPayload =
+                buildSystemAgentChatPayload(
+                  sessionId = current.sessionId,
+                  message = message,
+                  includeCapabilities = false,
+                )
+              lease.request(GatewayMethod.OpenclawChat.rawValue, legacyPayload.toString(), 190_000)
             }
-          val response = lease.request(GatewayMethod.OpenclawChat.rawValue, payload.toString(), 190_000)
           if (!isCurrent(requestGeneration)) return@launch
           if (!lease.isCurrent()) {
             markRouteChanged(requestGeneration)
@@ -301,6 +340,7 @@ internal class SystemAgentChatController(
                         role = SystemAgentChatMessage.Role.Assistant,
                         text = result.reply,
                         question = parseQuestion(result.question),
+                        qrCodePngBase64 = result.qrCodePngBase64,
                       ),
                   sending = false,
                   expectsSensitiveReply = result.sensitive == true,
@@ -372,6 +412,7 @@ internal class SystemAgentChatController(
     val sensitive: Boolean?,
     val agentId: String?,
     val question: JsonElement?,
+    val qrCodePngBase64: String?,
   )
 
   private fun parseResult(root: JsonObject): Result =
@@ -381,6 +422,7 @@ internal class SystemAgentChatController(
       sensitive = root["sensitive"]?.jsonPrimitive?.booleanOrNull,
       agentId = root["agentId"]?.jsonPrimitive?.contentOrNull,
       question = root["question"],
+      qrCodePngBase64 = root["qrCodePngBase64"]?.jsonPrimitive?.contentOrNull,
     )
 
   private fun parseQuestion(value: JsonElement?): SystemAgentChatQuestion? {
@@ -398,7 +440,7 @@ internal class SystemAgentChatController(
         ?.trim()
         .orEmpty()
     val options = root["options"] as? JsonArray ?: return null
-    if (header.isEmpty() || question.isEmpty() || options.size !in 2..4) return null
+    if (header.isEmpty() || question.isEmpty() || options.size !in 1..4) return null
     val parsed =
       options.mapNotNull { element ->
         val option = element as? JsonObject ?: return null
@@ -428,7 +470,12 @@ internal class SystemAgentChatController(
       }
     if (parsed.size != options.size || parsed.map { it.label.lowercase() }.toSet().size != parsed.size) return null
     if (parsed.count { it.recommended } > 1) return null
-    return SystemAgentChatQuestion(header = header, question = question, options = parsed)
+    return SystemAgentChatQuestion(
+      header = header,
+      question = question,
+      options = parsed,
+      allowSkip = root["allowSkip"]?.jsonPrimitive?.booleanOrNull != false,
+    )
   }
 }
 

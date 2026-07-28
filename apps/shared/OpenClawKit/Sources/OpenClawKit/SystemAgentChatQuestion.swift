@@ -13,6 +13,7 @@ public struct SystemAgentChatQuestion: Equatable, Sendable {
     public let question: String
     public let options: [Option]
     public let isOther: Bool
+    public let allowSkip: Bool
 
     /// Card-capable clients validate the open payload before turning values into actions.
     /// Invalid questions stay prose-only instead of exposing partial or ambiguous choices.
@@ -22,7 +23,7 @@ public struct SystemAgentChatQuestion: Equatable, Sendable {
               let header = nonEmptyString(value["header"]),
               let question = nonEmptyString(value["question"]),
               let rawOptions = value["options"]?.arrayValue,
-              (2...4).contains(rawOptions.count)
+              (1...4).contains(rawOptions.count)
         else { return nil }
 
         var labels = Set<String>()
@@ -51,7 +52,8 @@ public struct SystemAgentChatQuestion: Equatable, Sendable {
             header: header,
             question: question,
             options: options,
-            isOther: value["isOther"]?.boolValue == true)
+            isOther: value["isOther"]?.boolValue == true,
+            allowSkip: value["allowSkip"]?.boolValue != false)
     }
 
     private static func nonEmptyString(_ value: AnyCodable?) -> String? {
