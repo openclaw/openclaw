@@ -290,12 +290,13 @@ export function createQaBusState() {
     searchMessages(input: QaBusSearchMessagesInput) {
       return searchQaBusMessages({ messages, input });
     },
-    resolvePollCursor(input: QaBusPollInput = {}) {
+    resolvePollCursor(input: QaBusPollInput & { acknowledgedCursor?: number } = {}) {
       const accountId = normalizeAccountId(input.accountId);
       const requestedCursor = input.cursor ?? 0;
       const acknowledgedCursor = acknowledgedPollCursors.get(accountId) ?? 0;
-      if (requestedCursor > acknowledgedCursor && requestedCursor <= cursor) {
-        acknowledgedPollCursors.set(accountId, requestedCursor);
+      const completedCursor = input.acknowledgedCursor ?? requestedCursor;
+      if (completedCursor > acknowledgedCursor && completedCursor <= cursor) {
+        acknowledgedPollCursors.set(accountId, completedCursor);
       }
       // A restarted channel consumer begins at zero. Resume its account cursor
       // so retained events are not replayed, while still returning unacked work.

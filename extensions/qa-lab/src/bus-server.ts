@@ -104,11 +104,20 @@ function readOptionalIntegerField(
   return opts.max === undefined ? value : Math.min(value, opts.max);
 }
 
-function normalizeQaBusPollInput(input: Record<string, unknown>): QaBusPollInput {
+function normalizeQaBusPollInput(
+  input: Record<string, unknown>,
+): QaBusPollInput & { acknowledgedCursor?: number } {
   const cursor = readOptionalIntegerField(input, "cursor", {
     label: "poll cursor",
     min: 0,
   });
+  const acknowledgedCursor = readOptionalIntegerField(input, "acknowledgedCursor", {
+    label: "acknowledged poll cursor",
+    min: 0,
+  });
+  if (acknowledgedCursor !== undefined && acknowledgedCursor > (cursor ?? 0)) {
+    throw new Error("acknowledged poll cursor must not exceed the requested poll cursor.");
+  }
   const limit = readOptionalIntegerField(input, "limit", {
     label: "poll limit",
     max: QA_BUS_POLL_LIMIT_MAX,
@@ -122,6 +131,7 @@ function normalizeQaBusPollInput(input: Record<string, unknown>): QaBusPollInput
   return {
     ...input,
     ...(cursor !== undefined ? { cursor } : {}),
+    ...(acknowledgedCursor !== undefined ? { acknowledgedCursor } : {}),
     ...(limit !== undefined ? { limit } : {}),
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
   } as QaBusPollInput;
@@ -245,7 +255,7 @@ export async function handleQaBusRequest(params: {
           requestedCursor: pollInput.cursor,
         });
         if (initial.events.length > 0 || timeoutMs === 0) {
-          writeJson(params.res, 200, initial);
+          writeJson(params.res, 200, { ...initial, supportsAcknowledgedCursor: true });
           return true;
         }
         try {
@@ -257,7 +267,10 @@ export async function handleQaBusRequest(params: {
         } catch {
           // timeout ok for long-poll
         }
-        writeJson(params.res, 200, params.state.poll(pollInput));
+        writeJson(params.res, 200, {
+          ...params.state.poll(pollInput),
+          supportsAcknowledgedCursor: true,
+        });
         return true;
       }
       case "/v1/wait":

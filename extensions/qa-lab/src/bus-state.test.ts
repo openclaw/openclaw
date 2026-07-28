@@ -46,6 +46,30 @@ describe("qa-bus state", () => {
     expect(snapshot.messages.map((message) => message.id)).toEqual([inbound.id, outbound.id]);
   });
 
+  it("acknowledges only the successfully processed account cursor", () => {
+    const state = createQaBusState();
+    for (const text of ["first", "second"]) {
+      state.addInboundMessage({
+        accountId: "acct-a",
+        conversation: { id: "alice", kind: "direct" },
+        senderId: "alice",
+        text,
+      });
+    }
+
+    expect(state.resolvePollCursor({ accountId: "acct-a", cursor: 2, acknowledgedCursor: 0 })).toBe(
+      2,
+    );
+    expect(state.getAcknowledgedPollCursor("acct-a")).toBe(0);
+    expect(state.resolvePollCursor({ accountId: "acct-a", cursor: 0 })).toBe(0);
+
+    expect(state.resolvePollCursor({ accountId: "acct-a", cursor: 2, acknowledgedCursor: 1 })).toBe(
+      2,
+    );
+    expect(state.getAcknowledgedPollCursor("acct-a")).toBe(1);
+    expect(state.resolvePollCursor({ accountId: "acct-a", cursor: 0 })).toBe(1);
+  });
+
   it("creates threads and mutates message state", () => {
     const state = createQaBusState();
 

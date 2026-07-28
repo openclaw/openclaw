@@ -41,6 +41,7 @@ async function pollQaBus(params: {
   baseUrl: string;
   accountId: string;
   cursor: number;
+  acknowledgedCursor?: number;
   timeoutMs: number;
 }): Promise<QaBusPollResult> {
   const response = await fetch(`${params.baseUrl}/v1/poll`, {
@@ -51,6 +52,9 @@ async function pollQaBus(params: {
     body: JSON.stringify({
       accountId: params.accountId,
       cursor: params.cursor,
+      ...(params.acknowledgedCursor === undefined
+        ? {}
+        : { acknowledgedCursor: params.acknowledgedCursor }),
       timeoutMs: params.timeoutMs,
     }),
   });
@@ -198,6 +202,83 @@ describe("qa-bus server", () => {
     expect(
       resetPoll.events.flatMap((event) => ("message" in event ? [event.message.id] : [])),
     ).toEqual([queuedAfterReset.id]);
+  });
+
+  it("replays fetched messages after restart until their dispatch cursor is acknowledged", async () => {
+    const state = createQaBusState();
+    const bus = await startQaBusServer({ state });
+    stops.push(bus["stop"]);
+
+    const messages = ["first", "second"].map((text) =>
+      state.addInboundMessage({
+        accountId: "acct-a",
+        conversation: { id: "alice", kind: "direct" },
+        senderId: "alice",
+        text,
+      }),
+    );
+    const firstPage = await pollQaBus({
+      baseUrl: bus.baseUrl,
+      accountId: "acct-a",
+      cursor: 0,
+      timeoutMs: 0,
+    });
+    expect(firstPage.events.map((event) => event.cursor)).toEqual([1, 2]);
+    expect(firstPage).toMatchObject({ supportsAcknowledgedCursor: true });
+
+    await pollQaBus({
+      baseUrl: bus.baseUrl,
+      accountId: "acct-a",
+      cursor: firstPage.cursor,
+      acknowledgedCursor: 0,
+      timeoutMs: 0,
+    });
+    expect(state.getAcknowledgedPollCursor("acct-a")).toBe(0);
+
+    const restarted = await pollQaBus({
+      baseUrl: bus.baseUrl,
+      accountId: "acct-a",
+      cursor: 0,
+      timeoutMs: 0,
+    });
+    expect(
+      restarted.events.flatMap((event) => ("message" in event ? [event.message.id] : [])),
+    ).toEqual(messages.map((message) => message.id));
+
+    await pollQaBus({
+      baseUrl: bus.baseUrl,
+      accountId: "acct-a",
+      cursor: firstPage.cursor,
+      acknowledgedCursor: 1,
+      timeoutMs: 0,
+    });
+    const resumed = await pollQaBus({
+      baseUrl: bus.baseUrl,
+      accountId: "acct-a",
+      cursor: 0,
+      timeoutMs: 0,
+    });
+    expect(
+      resumed.events.flatMap((event) => ("message" in event ? [event.message.id] : [])),
+    ).toEqual([messages[1]?.id]);
+  });
+
+  it("rejects acknowledged poll cursors beyond the fetched cursor", async () => {
+    const state = createQaBusState();
+    const bus = await startQaBusServer({ state });
+    stops.push(bus["stop"]);
+
+    const response = await postQaBusJson(bus.baseUrl, "/v1/poll", {
+      accountId: "acct-a",
+      cursor: 1,
+      acknowledgedCursor: 2,
+      timeoutMs: 0,
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "acknowledged poll cursor must not exceed the requested poll cursor.",
+    });
   });
 
   it("paginates a burst without advancing past events omitted by the poll limit", async () => {

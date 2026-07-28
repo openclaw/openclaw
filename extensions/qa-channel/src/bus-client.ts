@@ -160,15 +160,19 @@ export async function pollQaBus(params: {
   baseUrl: string;
   accountId: string;
   cursor: number;
+  acknowledgedCursor?: number;
   timeoutMs: number;
   signal?: AbortSignal;
-}): Promise<QaBusPollResult> {
-  return await postJson<QaBusPollResult>(
+}): Promise<QaBusPollResult & { supportsAcknowledgedCursor?: true }> {
+  return await postJson<QaBusPollResult & { supportsAcknowledgedCursor?: true }>(
     params.baseUrl,
     "/v1/poll",
     {
       accountId: params.accountId,
       cursor: params.cursor,
+      ...(params.acknowledgedCursor === undefined
+        ? {}
+        : { acknowledgedCursor: params.acknowledgedCursor }),
       timeoutMs: params.timeoutMs,
     },
     {
