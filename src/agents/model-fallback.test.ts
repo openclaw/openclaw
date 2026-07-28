@@ -41,6 +41,7 @@ import {
   createAgentRunRestartAbortError,
   resolveAgentRunErrorLifecycleFields,
 } from "./run-termination.js";
+import { markSandboxProvisioningError } from "./sandbox/errors.js";
 import { resolveSessionSuspensionReason } from "./session-suspension.js";
 import { SessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
@@ -1114,6 +1115,26 @@ describe("runWithModelFallback", () => {
     expect(expectDefined(result.attempts[0], "result.attempts[0] test invariant").reason).toBe(
       "unknown",
     );
+  });
+
+  it("does not retry sandbox provisioning failures on fallback models", async () => {
+    const cfg = makeCfg();
+    const error = markSandboxProvisioningError(
+      Object.assign(new Error("Sandbox image not found: missing-image. Build or pull it first."), {
+        code: "backend_image_missing",
+      }),
+    );
+    const run = vi.fn().mockRejectedValue(error);
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        run,
+      }),
+    ).rejects.toBe(error);
+    expect(run).toHaveBeenCalledTimes(1);
   });
 
   it("does not treat Codex missing tool-result failures as model fallback candidates", async () => {

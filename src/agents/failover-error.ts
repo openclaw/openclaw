@@ -17,6 +17,7 @@ import {
 import { isTimeoutErrorMessage } from "./embedded-agent-helpers/errors.js";
 import type { FailoverReason } from "./embedded-agent-helpers/types.js";
 import { AgentHarnessSessionSupersededError } from "./harness/errors.js";
+import { isSandboxProvisioningError } from "./sandbox/errors.js";
 import { isSessionWriteLockAcquireError } from "./session-write-lock-error.js";
 
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
@@ -896,6 +897,9 @@ export function resolveModelFallbackError(
   err: unknown,
   context?: FailoverErrorContext,
 ): ModelFallbackErrorResolution {
+  if (isSandboxProvisioningError(err)) {
+    return { kind: "coordination", error: err };
+  }
   if (err instanceof AgentHarnessSessionSupersededError) {
     return { kind: "coordination", error: err };
   }

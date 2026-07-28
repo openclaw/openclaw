@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { SkillUsagePath } from "../skills/types.js";
 import { registerSandboxBackend } from "./sandbox/backend.js";
 import { ensureSandboxWorkspaceForSession, resolveSandboxContext } from "./sandbox/context.js";
+import { isSandboxProvisioningError } from "./sandbox/errors.js";
 
 const updateRegistryMock = vi.hoisted(() => vi.fn());
 const readRegisteredSandboxRuntimeIdsMock = vi.hoisted(() => vi.fn(async () => [] as string[]));
@@ -274,6 +275,39 @@ describe("resolveSandboxContext", () => {
       expect(workspace?.containerWorkdir).toBe("/runtime/workspace");
     } finally {
       readRegisteredSandboxRuntimeIdsMock.mockResolvedValue([]);
+      restore();
+    }
+  }, 15_000);
+
+  it("marks backend startup failures without replacing their domain error", async () => {
+    const cause = new Error("Sandbox image not found: missing-image");
+    const restore = registerSandboxBackend("test-failing-backend", async () => {
+      throw cause;
+    });
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              backend: "test-failing-backend",
+              scope: "session",
+              workspaceAccess: "rw",
+              prune: { idleHours: 0, maxAgeDays: 0 },
+            },
+          },
+        },
+      };
+
+      const error = await resolveSandboxContext({
+        config: cfg,
+        sessionKey: "agent:worker:task",
+        workspaceDir: "/tmp/openclaw-test",
+      }).catch((caught: unknown) => caught);
+
+      expect(error).toBe(cause);
+      expect(isSandboxProvisioningError(error)).toBe(true);
+    } finally {
       restore();
     }
   }, 15_000);

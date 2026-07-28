@@ -20,6 +20,7 @@ import { getSandboxBackendWorkdirResolver, requireSandboxBackendFactory } from "
 import { ensureSandboxBrowser } from "./browser.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { resolveSandboxDockerUser } from "./docker-user.js";
+import { markSandboxProvisioningError } from "./errors.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
 import { readRegisteredSandboxRuntimeIds, updateRegistry } from "./registry.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
@@ -186,14 +187,18 @@ function resolveSandboxWorkspaceInfoWorkdir(params: {
   });
 }
 
-export async function resolveSandboxContext(params: {
+type ResolveSandboxContextParams = {
   config?: OpenClawConfig;
   agentId?: string;
   execOverrides?: ExecPolicyOverrides;
   requireCurrentConfig?: boolean;
   sessionKey?: string;
   workspaceDir?: string;
-}): Promise<SandboxContext | null> {
+};
+
+async function resolveSandboxContextInner(
+  params: ResolveSandboxContextParams,
+): Promise<SandboxContext | null> {
   const resolved = resolveSandboxSession(params);
   if (!resolved) {
     return null;
@@ -322,6 +327,23 @@ export async function resolveSandboxContext(params: {
     createSandboxFsBridge({ sandbox: sandboxContext });
 
   return sandboxContext;
+}
+
+export async function resolveSandboxContext(params: {
+  config?: OpenClawConfig;
+  agentId?: string;
+  execOverrides?: ExecPolicyOverrides;
+  requireCurrentConfig?: boolean;
+  sessionKey?: string;
+  workspaceDir?: string;
+}): Promise<SandboxContext | null> {
+  try {
+    return await resolveSandboxContextInner(params);
+  } catch (error) {
+    // Sandbox setup happens before a provider attempt. Preserve that ownership so
+    // model fallback cannot retry the same infrastructure failure on every model.
+    throw markSandboxProvisioningError(error);
+  }
 }
 
 export async function ensureSandboxWorkspaceForSession(params: {
