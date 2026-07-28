@@ -550,6 +550,36 @@ describe("shouldCreateBundleMcpRuntimeForAttempt", () => {
       }),
     ).toBe(true);
   });
+
+  it("creates bundle MCP for configured server-name globs without __", () => {
+    expect(
+      shouldCreateBundleMcpRuntimeForAttempt({
+        toolsEnabled: true,
+        toolsAllow: ["hzr-oa*"],
+      }),
+    ).toBe(false);
+    expect(
+      shouldCreateBundleMcpRuntimeForAttempt({
+        toolsEnabled: true,
+        toolsAllow: ["hzr-oa*"],
+        mcpServerNames: ["hzr-oa"],
+      }),
+    ).toBe(true);
+    expect(
+      shouldCreateBundleMcpRuntimeForAttempt({
+        toolsEnabled: true,
+        toolsAllow: ["hzr-oa__*"],
+        mcpServerNames: ["hzr-oa"],
+      }),
+    ).toBe(true);
+    expect(
+      shouldCreateBundleMcpRuntimeForAttempt({
+        toolsEnabled: true,
+        toolsAllow: ["other*"],
+        mcpServerNames: ["hzr-oa"],
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("shouldCreateBundleLspRuntimeForAttempt", () => {

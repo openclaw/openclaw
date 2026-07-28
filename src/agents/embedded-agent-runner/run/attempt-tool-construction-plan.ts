@@ -1,7 +1,7 @@
 /**
  * Plans which core, bundle MCP, and bundle LSP tools an attempt should build.
  */
-import { TOOL_NAME_SEPARATOR } from "../../agent-bundle-mcp-names.js";
+import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "../../agent-bundle-mcp-names.js";
 import {
   type CoreToolFactoryFamily,
   type OpenClawCodingToolConstructionPlan,
@@ -240,13 +240,52 @@ function shouldCreateBundleRuntimeForAttempt(
  * runtime creation follows explicit bundle/plugin allowlist names rather than
  * generic local tool names.
  */
+/**
+ * True when an allowlist entry names a configured MCP server (or a server-name
+ * glob like `hzr-oa*`) even without the `server__tool` separator. Without this,
+ * narrow cron `toolsAllow: ["hzr-oa*"]` skips MCP materialization and fails with
+ * an empty callable tool set.
+ */
+function matchesConfiguredMcpServerAllowlist(
+  normalized: string,
+  mcpServerNames?: Iterable<string>,
+): boolean {
+  if (!mcpServerNames) {
+    return false;
+  }
+  const usedNames = new Set<string>();
+  for (const serverName of mcpServerNames) {
+    const safeName = normalizeToolName(sanitizeServerName(serverName, usedNames));
+    if (!safeName) {
+      continue;
+    }
+    if (
+      normalized === safeName ||
+      normalized === `${safeName}*` ||
+      normalized.startsWith(`${safeName}${TOOL_NAME_SEPARATOR}`) ||
+      (normalized.endsWith("*") &&
+        normalized.length > 1 &&
+        safeName.startsWith(normalized.slice(0, -1)))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function shouldCreateBundleMcpRuntimeForAttempt(params: {
   toolsEnabled: boolean;
   disableTools?: boolean;
   toolsAllow?: string[];
+  /** Enabled `mcp.servers` keys from OpenClaw config (owner-managed MCP). */
+  mcpServerNames?: Iterable<string>;
 }): boolean {
   return shouldCreateBundleRuntimeForAttempt(params, (normalized) => {
-    return isBundleMcpAllowlistName(normalized) || isPluginGroupAllowlistName(normalized);
+    return (
+      isBundleMcpAllowlistName(normalized) ||
+      isPluginGroupAllowlistName(normalized) ||
+      matchesConfiguredMcpServerAllowlist(normalized, params.mcpServerNames)
+    );
   });
 }
 

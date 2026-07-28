@@ -212,10 +212,14 @@ function fingerprintCodexMcpServersConfig(config: CodexMcpServersConfig): string
 export function loadCodexBundleMcpThreadConfig(
   params: LoadCodexBundleMcpThreadConfigParams,
 ): CodexBundleMcpThreadConfig {
+  const configuredMcpServerNames = Object.entries(params.cfg?.mcp?.servers ?? {})
+    .filter(([, server]) => server && server.enabled !== false)
+    .map(([name]) => name);
   const shouldCreateRuntime = shouldCreateBundleMcpRuntimeForAttempt({
     toolsEnabled: params.toolsEnabled ?? true,
     disableTools: params.disableTools,
     toolsAllow: params.toolsAllow,
+    mcpServerNames: configuredMcpServerNames,
   });
   if (!shouldCreateRuntime) {
     return {
