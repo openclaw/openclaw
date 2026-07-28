@@ -19,6 +19,106 @@ async function createDirectorySymlink(target: string, linkPath: string): Promise
 }
 
 describe("readMemoryFile", () => {
+  it.each([
+    {
+      name: "an empty file",
+      content: "",
+      from: 1,
+      lines: 2,
+      expected: { text: "", from: 1, lines: 0 },
+    },
+    {
+      name: "an exact LF-terminated page",
+      content: "one\ntwo\n",
+      from: 1,
+      lines: 2,
+      expected: { text: "one\ntwo", from: 1, lines: 2 },
+    },
+    {
+      name: "an exact CRLF-terminated page",
+      content: "one\r\ntwo\r\n",
+      from: 1,
+      lines: 2,
+      expected: { text: "one\r\ntwo\r", from: 1, lines: 2 },
+    },
+    {
+      name: "an intentional trailing blank line",
+      content: "one\n\n",
+      from: 1,
+      lines: 2,
+      expected: { text: "one\n", from: 1, lines: 2 },
+    },
+    {
+      name: "multiple intentional trailing blank lines",
+      content: "one\n\n\n",
+      from: 1,
+      lines: 3,
+      expected: { text: "one\n\n", from: 1, lines: 3 },
+    },
+    {
+      name: "an intentional interior blank line",
+      content: "one\n\ntwo\n",
+      from: 1,
+      lines: 3,
+      expected: { text: "one\n\ntwo", from: 1, lines: 3 },
+    },
+    {
+      name: "an offset ending at the final LF-terminated line",
+      content: "one\ntwo\n",
+      from: 2,
+      lines: 1,
+      expected: { text: "two", from: 2, lines: 1 },
+    },
+    {
+      name: "an offset beyond the final LF-terminated line",
+      content: "one\ntwo\n",
+      from: 3,
+      lines: 1,
+      expected: { text: "", from: 3, lines: 0 },
+    },
+    {
+      name: "a genuine continuation before the final LF-terminated line",
+      content: "one\ntwo\n",
+      from: 1,
+      lines: 1,
+      expected: {
+        text: "one\n\n[More content available. Use from=2 to continue.]",
+        from: 1,
+        lines: 1,
+        truncated: true,
+        nextFrom: 2,
+      },
+    },
+    {
+      name: "a page without a final newline",
+      content: "one\ntwo",
+      from: 1,
+      lines: 2,
+      expected: { text: "one\ntwo", from: 1, lines: 2 },
+    },
+  ])("reads $name without a phantom continuation page", async (testCase) => {
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-read-pagination-"));
+    try {
+      const workspaceDir = path.join(tmpRoot, "workspace");
+      const relPath = "memory/pagination.md";
+      const absPath = path.join(workspaceDir, relPath);
+      await fs.mkdir(path.dirname(absPath), { recursive: true });
+      await fs.writeFile(absPath, testCase.content, "utf-8");
+
+      await expect(
+        readMemoryFile({
+          workspaceDir,
+          extraPaths: [],
+          relPath,
+          from: testCase.from,
+          lines: testCase.lines,
+        }),
+      ).resolves.toEqual({ ...testCase.expected, path: relPath });
+    } finally {
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
   it("returns empty text for missing files under extra path directories", async () => {
     const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-read-file-"));
     try {

@@ -113,6 +113,10 @@ export function buildMemoryReadResult(params: {
   suggestReadFallback?: boolean;
 }): MemoryReadResult {
   const fileLines = params.content.split("\n");
+  // A terminal newline is a delimiter, not an additional readable source line.
+  if (fileLines.at(-1) === "") {
+    fileLines.pop();
+  }
   const start = normalizePositiveInteger(params.from, 1);
   const requestedCount = normalizePositiveInteger(
     params.lines ?? params.defaultLines,
