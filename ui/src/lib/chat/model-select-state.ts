@@ -7,6 +7,7 @@ import type {
   SessionsListResult,
 } from "../../api/types.ts";
 import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
+import { areUiSessionKeysEquivalent, findUiSessionRow } from "../sessions/session-key.ts";
 import {
   buildCatalogDisplayLookup,
   buildChatModelOptionFromLookup,
@@ -74,15 +75,18 @@ type ChatFastModeSelectStateInput = {
 const FAST_MODE_PROVIDER_IDS = new Set(["anthropic", "minimax", "minimax-portal", "openai", "xai"]);
 
 function resolveActiveSessionRow(state: ChatModelSelectStateInput) {
-  return state.sessionsResult?.sessions?.find((row) => row.key === state.sessionKey);
+  return findUiSessionRow(state.sessionsResult?.sessions, state.sessionKey);
 }
 
 export function resolveChatModelOverrideValue(state: ChatModelSelectStateInput): string {
   const catalog = state.chatModelCatalog ?? [];
 
   const sharedOverrides = state.modelOverrides;
-  if (Object.hasOwn(sharedOverrides, state.sessionKey)) {
-    const shared = sharedOverrides[state.sessionKey];
+  const overrideKey = Object.hasOwn(sharedOverrides, state.sessionKey)
+    ? state.sessionKey
+    : Object.keys(sharedOverrides).find((key) => areUiSessionKeysEquivalent(key, state.sessionKey));
+  if (overrideKey !== undefined) {
+    const shared = sharedOverrides[overrideKey];
     return shared == null
       ? ""
       : normalizeChatModelOverrideValue(createChatModelOverride(shared), catalog);
@@ -322,7 +326,7 @@ function hasCatalogProviderMetadata(value: string, catalog: ModelCatalogEntry[])
 export function resolveChatFastModeSelectState(
   input: ChatFastModeSelectStateInput,
 ): ChatFastModeSelectState {
-  const activeRow = input.sessionsResult?.sessions?.find((row) => row.key === input.sessionKey);
+  const activeRow = findUiSessionRow(input.sessionsResult?.sessions, input.sessionKey);
   const activeProvider = normalizeChatModelProviderId(activeRow?.modelProvider ?? "") || null;
   const defaultProvider =
     normalizeChatModelProviderId(input.sessionsResult?.defaults?.modelProvider ?? "") || null;

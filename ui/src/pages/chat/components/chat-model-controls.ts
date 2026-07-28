@@ -26,7 +26,7 @@ import {
   formatThinkingOverrideLabel,
   resolveChatThinkingSelectState,
 } from "../../../lib/chat/thinking.ts";
-import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
+import { findUiSessionRow } from "../../../lib/sessions/session-key.ts";
 import { selectChatModelProvider } from "./chat-model-provider-menu.ts";
 
 export type ChatModelControlsProps = {
@@ -176,9 +176,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   // the previous model while a switch is pending; keep both locked until the
   // refreshed session list lands so stale levels cannot be committed.
   const fastMode = props.modelSwitching ? { ...fastModeSelect, disabled: true } : fastModeSelect;
-  const activeSession = props.sessionsResult?.sessions.find((row) =>
-    areUiSessionKeysEquivalent(row.key, props.sessionKey),
-  );
+  const activeSession = findUiSessionRow(props.sessionsResult?.sessions, props.sessionKey);
   const currentProviderHint = activeSession?.modelProvider ?? "";
   const defaultProviderHint = props.sessionsResult?.defaults?.modelProvider ?? "";
   const canonicalDefaultLabel = resolveChatModelPickerLabel(

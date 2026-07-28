@@ -8,6 +8,77 @@ import {
 } from "./thinking.ts";
 
 describe("chat thinking helpers", () => {
+  it.each([
+    { selected: "main", row: "agent:main:main" },
+    { selected: "agent:main:main", row: "main" },
+  ])("resolves persisted reasoning for equivalent session keys %#", ({ selected, row }) => {
+    const state = resolveChatThinkingSelectState({
+      catalog: [{ id: "gpt-5.6-luna", provider: "openai", reasoning: true }],
+      sessionKey: selected,
+      sessionsResult: {
+        ts: 1,
+        path: "",
+        count: 1,
+        defaults: {
+          modelProvider: "openai",
+          model: "gpt-5.6-luna",
+          contextTokens: null,
+          thinkingDefault: "high",
+        },
+        sessions: [
+          {
+            key: row,
+            kind: "direct",
+            updatedAt: 1,
+            modelProvider: "openai",
+            model: "gpt-5.6-luna",
+            thinkingLevel: "low",
+          },
+        ],
+      },
+    });
+
+    expect(state.currentOverride).toBe("low");
+  });
+
+  it("prefers exact persisted reasoning over an earlier equivalent main alias", () => {
+    const state = resolveChatThinkingSelectState({
+      catalog: [{ id: "gpt-5.6-luna", provider: "openai", reasoning: true }],
+      sessionKey: "main",
+      sessionsResult: {
+        ts: 1,
+        path: "",
+        count: 2,
+        defaults: {
+          modelProvider: "openai",
+          model: "gpt-5.6-luna",
+          contextTokens: null,
+          thinkingDefault: "high",
+        },
+        sessions: [
+          {
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: 1,
+            modelProvider: "openai",
+            model: "gpt-5.6-luna",
+            thinkingLevel: "high",
+          },
+          {
+            key: "main",
+            kind: "direct",
+            updatedAt: 1,
+            modelProvider: "openai",
+            model: "gpt-5.6-luna",
+            thinkingLevel: "low",
+          },
+        ],
+      },
+    });
+
+    expect(state.currentOverride).toBe("low");
+  });
+
   it("keeps literal Ultra distinct from the legacy ultrathink alias", () => {
     expect(normalizeThinkLevel("ultra")).toBe("ultra");
     expect(normalizeThinkLevel("Ultra")).toBe("ultra");

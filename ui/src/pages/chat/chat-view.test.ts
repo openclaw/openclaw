@@ -5183,6 +5183,132 @@ describe("chat model controls", () => {
     expect(host.chatThinkingLevel).toBe("high");
   });
 
+  it.each([
+    { selected: "main", row: "agent:main:main", other: "agent:work:main" },
+    { selected: "agent:main:main", row: "main", other: "agent:work:main" },
+    { selected: "main", row: "main", other: "agent:main:main" },
+  ])(
+    "optimistically updates reasoning and speed for equivalent session keys %#",
+    async ({ selected, row, other }) => {
+      const sessions = {
+        patch: vi.fn(
+          async (
+            _key: string,
+            _patch: Record<string, unknown>,
+            _options?: SessionPatchOptions,
+          ) => ({
+            ok: true,
+            path: "",
+            key: row,
+            entry: { sessionId: row },
+          }),
+        ),
+        refresh: async () => {},
+      };
+      const host = {
+        client: {},
+        connected: true,
+        sessionKey: selected,
+        chatModelCatalog: [],
+        chatThinkingLevel: "low",
+        sessionsResult: createSessionsResultFromRows([
+          {
+            key: row,
+            kind: "direct",
+            updatedAt: 1,
+            thinkingLevel: "low",
+            fastMode: false,
+            effectiveFastMode: false,
+          },
+          {
+            key: other,
+            kind: "direct",
+            updatedAt: 1,
+            thinkingLevel: "high",
+            fastMode: false,
+            effectiveFastMode: false,
+          },
+        ]),
+        sessions,
+      } as unknown as Parameters<typeof switchChatThinkingLevel>[0];
+
+      const thinkingPatch = switchChatThinkingLevel(host, "medium");
+      expect(host.sessionsResult?.sessions[0]?.thinkingLevel).toBe("medium");
+      expect(host.sessionsResult?.sessions[1]?.thinkingLevel).toBe("high");
+      await expect(thinkingPatch).resolves.toBe(true);
+
+      const speedPatch = switchChatFastMode(host, "on");
+      expect(host.sessionsResult?.sessions[0]?.fastMode).toBe(true);
+      expect(host.sessionsResult?.sessions[0]?.effectiveFastMode).toBe(true);
+      expect(host.sessionsResult?.sessions[1]?.fastMode).toBe(false);
+      await expect(speedPatch).resolves.toBe(true);
+
+      expect(sessions.patch).toHaveBeenCalledTimes(2);
+      expect(sessions.patch.mock.calls.map(([key, patch]) => ({ key, patch }))).toEqual([
+        { key: selected, patch: { thinkingLevel: "medium" } },
+        { key: selected, patch: { fastMode: true } },
+      ]);
+    },
+  );
+
+  it.each([
+    { selected: "main", row: "agent:main:main", other: "agent:work:main" },
+    { selected: "agent:main:main", row: "main", other: "agent:work:main" },
+    { selected: "main", row: "main", other: "agent:main:main" },
+  ])(
+    "rolls back rejected settings for equivalent session keys %#",
+    async ({ selected, row, other }) => {
+      const sessions = {
+        patch: vi.fn(
+          async (_key: string, _patch: Record<string, unknown>, _options?: SessionPatchOptions) =>
+            null,
+        ),
+        refresh: async () => {},
+      };
+      const host = {
+        client: {},
+        connected: true,
+        sessionKey: selected,
+        chatModelCatalog: [],
+        chatThinkingLevel: "low",
+        sessionsResult: createSessionsResultFromRows([
+          {
+            key: row,
+            kind: "direct",
+            updatedAt: 1,
+            thinkingLevel: "low",
+            fastMode: false,
+            effectiveFastMode: false,
+          },
+          {
+            key: other,
+            kind: "direct",
+            updatedAt: 1,
+            thinkingLevel: "high",
+            fastMode: false,
+            effectiveFastMode: false,
+          },
+        ]),
+        sessions,
+      } as unknown as Parameters<typeof switchChatThinkingLevel>[0];
+
+      const thinkingPatch = switchChatThinkingLevel(host, "medium");
+      expect(host.sessionsResult?.sessions[0]?.thinkingLevel).toBe("medium");
+      await expect(thinkingPatch).resolves.toBe(false);
+      expect(host.sessionsResult?.sessions[0]?.thinkingLevel).toBe("low");
+      expect(host.sessionsResult?.sessions[1]?.thinkingLevel).toBe("high");
+      expect(host.chatThinkingLevel).toBe("low");
+
+      const speedPatch = switchChatFastMode(host, "on");
+      expect(host.sessionsResult?.sessions[0]?.fastMode).toBe(true);
+      expect(host.sessionsResult?.sessions[0]?.effectiveFastMode).toBe(true);
+      await expect(speedPatch).resolves.toBe(false);
+      expect(host.sessionsResult?.sessions[0]?.fastMode).toBe(false);
+      expect(host.sessionsResult?.sessions[0]?.effectiveFastMode).toBe(false);
+      expect(host.sessionsResult?.sessions[1]?.fastMode).toBe(false);
+    },
+  );
+
   it("keeps the newest speed selection when an older patch fails late", async () => {
     const pendingPatches: Array<{ resolve: () => void; reject: (error: Error) => void }> = [];
     // Minimal host: the factory's mock gateway rebuilds session rows on every

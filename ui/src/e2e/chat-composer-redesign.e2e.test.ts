@@ -543,6 +543,123 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
     }
   });
 
+  it.each([
+    {
+      title: "short main resolves the canonical main session",
+      selected: "main",
+      active: "agent:main:main",
+      other: "agent:work:main",
+      conflictingAliasFirst: false,
+    },
+    {
+      title: "canonical main resolves the short main session",
+      selected: "agent:main:main",
+      active: "main",
+      other: "agent:work:main",
+      conflictingAliasFirst: false,
+    },
+    {
+      title: "a second agent never inherits the main session",
+      selected: "agent:work:main",
+      active: "agent:work:main",
+      other: "agent:main:main",
+      conflictingAliasFirst: false,
+    },
+    {
+      title: "the exact main session precedes an earlier conflicting alias",
+      selected: "main",
+      active: "main",
+      other: "agent:main:main",
+      conflictingAliasFirst: true,
+    },
+  ])(
+    "restores persisted model, reasoning, speed, and context when $title",
+    async ({ selected, active, other, conflictingAliasFirst }) => {
+      const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+      const page = await context.newPage();
+      const now = Date.now();
+      const activeSession = {
+        contextTokens: 200_000,
+        effectiveFastMode: true,
+        fastMode: true,
+        key: active,
+        kind: "direct",
+        model: "gpt-5.4-pro",
+        modelProvider: "openai",
+        status: "done",
+        thinkingLevel: "low",
+        totalTokens: 42_000,
+        totalTokensFresh: true,
+        updatedAt: now,
+      };
+      const otherSession = {
+        contextTokens: 200_000,
+        effectiveFastMode: false,
+        fastMode: false,
+        key: other,
+        kind: "direct",
+        model: "gpt-5.5",
+        modelProvider: "openai",
+        status: "done",
+        thinkingLevel: "high",
+        totalTokens: 8_000,
+        totalTokensFresh: true,
+        updatedAt: now,
+      };
+      const gateway = await installMockGateway(page, {
+        sessionKey: selected,
+        models: [
+          { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+          { id: "gpt-5.4-pro", name: "GPT-5.4 Pro", provider: "openai" },
+        ],
+        methodResponses: {
+          "sessions.list": {
+            count: 2,
+            defaults: {
+              contextTokens: 200_000,
+              model: "gpt-5.5",
+              modelProvider: "openai",
+              thinkingDefault: "high",
+              thinkingLevels: [
+                { id: "off", label: "off" },
+                { id: "low", label: "low" },
+                { id: "medium", label: "medium" },
+                { id: "high", label: "high" },
+              ],
+            },
+            path: "",
+            sessions: conflictingAliasFirst
+              ? [otherSession, activeSession]
+              : [activeSession, otherSession],
+            ts: now,
+          },
+        },
+      });
+
+      try {
+        await page.goto(`${server.baseUrl}chat?session=${encodeURIComponent(selected)}`);
+        await gateway.waitForRequest("chat.metadata");
+        const composer = page.locator(".agent-chat__input");
+        const model = composer.locator('[data-chat-model-select="true"]');
+        await expect.poll(() => model.isVisible()).toBe(true);
+        await expect
+          .poll(() => model.locator(".chat-controls__inline-select-label").textContent())
+          .toBe("GPT-5.4 Pro · Low");
+        await expect.poll(() => model.getAttribute("data-chat-thinking-value")).toBe("low");
+        await expect
+          .poll(() => composer.locator(".context-ring").getAttribute("aria-label"))
+          .toBe("Thread context usage: 42k of 200k (21%)");
+
+        await model.click();
+        const speed = composer.locator("[data-chat-speed-toggle]");
+        await expect.poll(() => speed.getAttribute("aria-checked")).toBe("true");
+        await expect.poll(async () => (await speed.textContent())?.trim()).toBe("Fast");
+      } finally {
+        await context.close();
+      }
+    },
+  );
+
   it("refreshes the configured usable catalog after advertised chat metadata", async () => {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();

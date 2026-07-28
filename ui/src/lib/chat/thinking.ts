@@ -7,6 +7,7 @@ import type {
 } from "../../api/types.ts";
 import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
 import { sessionModelMatchesDefaults } from "../session-model-defaults.ts";
+import { findUiSessionRow } from "../sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 
 type ThinkingCatalogEntry = {
@@ -262,7 +263,7 @@ export function resolveChatThinkingSelectState(params: {
   sessionsResult: SessionsListResult | null;
 }): ChatThinkingSelectState {
   const session =
-    params.session ?? params.sessionsResult?.sessions?.find((row) => row.key === params.sessionKey);
+    params.session ?? findUiSessionRow(params.sessionsResult?.sessions, params.sessionKey);
   const persisted = session?.thinkingLevel;
   const currentOverride =
     typeof persisted === "string" && persisted.trim()

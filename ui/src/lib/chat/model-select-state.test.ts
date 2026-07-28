@@ -144,6 +144,114 @@ describe("chat-model-select-state", () => {
     expect(resolveChatModelOverrideValue(state)).toBe("openai/gpt-5-mini");
   });
 
+  it.each([
+    { selected: "main", row: "agent:main:main" },
+    { selected: "agent:main:main", row: "main" },
+  ])("resolves the persisted model for equivalent session keys %#", ({ selected, row }) => {
+    const sessionsResult = createSessionsListResult({
+      model: "gpt-5-mini",
+      modelProvider: "openai",
+    });
+    const session = expectDefined(sessionsResult.sessions[0], "aliased session fixture");
+    sessionsResult.sessions[0] = { ...session, key: row };
+
+    expect(
+      resolveChatModelOverrideValue({
+        ...createChatModelState({ sessionsResult }),
+        sessionKey: selected,
+      }),
+    ).toBe("openai/gpt-5-mini");
+  });
+
+  it("prefers the exact session row over an earlier equivalent main alias", () => {
+    const sessionsResult = createSessionsListResult({
+      model: "gpt-5-mini",
+      modelProvider: "openai",
+    });
+    const session = expectDefined(sessionsResult.sessions[0], "exact session fixture");
+    sessionsResult.sessions = [
+      { ...session, key: "agent:main:main", model: "gpt-5" },
+      { ...session, key: "main", model: "gpt-5-mini" },
+    ];
+    sessionsResult.count = sessionsResult.sessions.length;
+
+    expect(resolveChatModelOverrideValue(createChatModelState({ sessionsResult }))).toBe(
+      "openai/gpt-5-mini",
+    );
+  });
+
+  it("resolves cached model overrides through canonical main-session aliases", () => {
+    const state = {
+      ...createChatModelState({
+        chatModelCatalog: createModelCatalog(...DEFAULT_CHAT_MODEL_CATALOG),
+        modelOverrides: { "agent:main:main": "gpt-5-mini" },
+      }),
+      sessionKey: "main",
+    };
+
+    expect(resolveChatModelSelectState(state).currentOverride).toBe("openai/gpt-5-mini");
+  });
+
+  it("prefers an exact cached model override over an equivalent main alias", () => {
+    const state = createChatModelState({
+      chatModelCatalog: createModelCatalog(...DEFAULT_CHAT_MODEL_CATALOG),
+      modelOverrides: {
+        "agent:main:main": "gpt-5",
+        main: "gpt-5-mini",
+      },
+    });
+
+    expect(resolveChatModelSelectState(state).currentOverride).toBe("openai/gpt-5-mini");
+  });
+
+  it("never resolves another agent's model as a main-session alias", () => {
+    const sessionsResult = createSessionsListResult({
+      model: "gpt-5-mini",
+      modelProvider: "openai",
+    });
+    const session = expectDefined(sessionsResult.sessions[0], "other-agent session fixture");
+    sessionsResult.sessions[0] = { ...session, key: "agent:work:main" };
+
+    expect(
+      resolveChatModelOverrideValue({
+        ...createChatModelState({
+          modelOverrides: { "agent:work:main": "openai/gpt-5-mini" },
+          sessionsResult,
+        }),
+        sessionKey: "main",
+      }),
+    ).toBe("");
+  });
+
+  it("resolves fast-mode overrides from an equivalent main-session row", () => {
+    const sessionsResult = createSessionsListResult({
+      model: "gpt-5-mini",
+      modelProvider: "openai",
+    });
+    const session = expectDefined(sessionsResult.sessions[0], "fast-mode alias fixture");
+    sessionsResult.sessions[0] = {
+      ...session,
+      key: "agent:main:main",
+      effectiveFastMode: true,
+      fastMode: true,
+    };
+
+    expect(
+      resolveChatFastModeSelectState({
+        activeRunId: null,
+        catalog: createModelCatalog(...DEFAULT_CHAT_MODEL_CATALOG),
+        connected: true,
+        currentModelOverride: "openai/gpt-5-mini",
+        gatewayAvailable: true,
+        loading: false,
+        sending: false,
+        sessionKey: "main",
+        sessionsResult,
+        stream: null,
+      }),
+    ).toMatchObject({ active: true, currentOverride: "on", label: "Fast" });
+  });
+
   it("normalizes cached bare overrides to the matching catalog option", () => {
     const state = createChatModelState({
       modelOverrides: { main: "gpt-5-mini" },

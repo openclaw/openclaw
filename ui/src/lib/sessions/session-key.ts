@@ -351,6 +351,17 @@ export function areUiSessionKeysEquivalent(
   return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
 }
 
+/** Resolve a selected session through the same canonical aliases as the chat pane. */
+export function findUiSessionRow<Row extends { key: string }>(
+  rows: readonly Row[] | null | undefined,
+  sessionKey: string | undefined | null,
+): Row | undefined {
+  return (
+    rows?.find((row) => row.key === sessionKey) ??
+    rows?.find((row) => areUiSessionKeysEquivalent(row.key, sessionKey))
+  );
+}
+
 export function resolveAgentIdFromSessionKey(sessionKey: string | undefined | null): string {
   const parsed = parseAgentSessionKey(sessionKey);
   return normalizeAgentId(parsed?.agentId ?? DEFAULT_AGENT_ID);
