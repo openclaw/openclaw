@@ -150,8 +150,7 @@ export default definePluginEntry({
   session, and normalized transcript projections without registering RPCs. A
   list provider should call the optional `onHost(host)` callback as each host
   settles; the returned host array remains required as the final compatibility
-  snapshot. Providers scanning append-only transcript files can use
-  `readFileRangeAsync` to complete bounded positional windows across short reads.
+  snapshot.
 - `kind` is deprecated: declare an exclusive slot (`"memory"` or
   `"context-engine"`) in the `openclaw.plugin.json` manifest `kind` field
   instead. Runtime-entry `kind` remains only as a compatibility fallback for
