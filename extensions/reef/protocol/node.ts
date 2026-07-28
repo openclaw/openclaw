@@ -225,7 +225,7 @@ export class FileReplayStore implements ReplayStore {
     if (this.#loaded) {
       return;
     }
-    await forEachJsonlRecord<ReplayLogRecord>(this.path, (record) => {
+    await forEachJsonlRecord(this.path, (record) => {
       if (record.op === "claim") {
         const key = replayKey(record.peer, record.id);
         const existing = this.#bindings.get(key);
@@ -427,7 +427,10 @@ async function readJsonl<T>(path: string): Promise<T[]> {
   }
 }
 
-async function forEachJsonlRecord<T>(path: string, visit: (record: T) => void): Promise<void> {
+async function forEachJsonlRecord(
+  path: string,
+  visit: (record: ReplayLogRecord) => void,
+): Promise<void> {
   try {
     const handle = await openFile(path, "r");
     let pending = Buffer.alloc(0);
