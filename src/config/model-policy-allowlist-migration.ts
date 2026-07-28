@@ -81,5 +81,5 @@ function collectLegacyDefaultModelAllowRefs(defaults: unknown): string[] | null 
       parseModelPolicyWildcardRef(trimmed) !== null
     );
   });
-  return refs.length > 0 ? refs : [];
+  return refs.length > 0 ? refs : null;
 }

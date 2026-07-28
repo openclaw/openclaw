@@ -4594,4 +4594,60 @@ describe("legacy flat memory search field migrate", () => {
     );
   });
 });
+
+describe("legacy modelPolicy allowlist migrate (issue #114964)", () => {
+  it("drops bare slashless provider keys when copying the legacy default model map", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          models: {
+            openai: {},
+            "kimi/k3": {},
+          },
+        },
+      },
+    });
+
+    expect(res.config?.agents?.defaults?.modelPolicy).toEqual({
+      allow: ["kimi/k3"],
+    });
+    expect(res.changes).toContain(
+      "Copied the legacy default model map to agents.defaults.modelPolicy.allow.",
+    );
+  });
+
+  it("records the map as unrestricted when every legacy key is a bare slashless provider key", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          models: {
+            openai: {},
+          },
+        },
+      },
+    });
+
+    expect(res.config?.agents?.defaults?.modelPolicy).toBeUndefined();
+    expect(res.changes).toContain(
+      "Recorded the legacy default model map as unrestricted without creating modelPolicy.allow.",
+    );
+  });
+
+  it("keeps legacy keys that carry an explicit alias alongside wildcard refs", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          models: {
+            opus: { alias: "opus" },
+            "anthropic/*": {},
+          },
+        },
+      },
+    });
+
+    expect(res.config?.agents?.defaults?.modelPolicy).toEqual({
+      allow: ["opus", "anthropic/*"],
+    });
+  });
+});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
