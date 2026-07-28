@@ -2564,6 +2564,41 @@ describe("workboard controller", () => {
     expect(state.editingCardId).toBeNull();
   });
 
+  it("keeps the existing binding when the atomic card update fails", async () => {
+    const bound = createWorkboardCard({ sessionKey: sampleSession.key });
+    state.cards = [bound];
+    state.draftOpen = true;
+    state.editingCardId = bound.id;
+    state.draftTitle = "Updated title";
+    state.draftStatus = bound.status;
+    state.draftPriority = bound.priority;
+    state.draftLabels = bound.labels.join(", ");
+    state.draftSessionKey = "agent:main:dashboard:replacement";
+    const client = createClient((method) => {
+      if (method === "workboard.cards.update") {
+        throw new Error("update rejected");
+      }
+      return {};
+    });
+
+    await saveWorkboardCardDraft({ host, client: client as never });
+
+    expect(client.request).toHaveBeenCalledTimes(1);
+    expect(client.request).toHaveBeenCalledWith("workboard.cards.update", {
+      id: bound.id,
+      patch: expect.objectContaining({
+        title: "Updated title",
+        sessionKey: "agent:main:dashboard:replacement",
+      }),
+    });
+    expect(state.cards[0]).toMatchObject({
+      title: bound.title,
+      sessionKey: bound.sessionKey,
+    });
+    expect(state.draftOpen).toBe(true);
+    expect(state.editingCardId).toBe(bound.id);
+  });
+
   it("creates cards from draft state through the save action", async () => {
     state.draftTitle = "Write tests";
     state.draftNotes = "Cover the happy path";
