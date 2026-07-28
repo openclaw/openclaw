@@ -97,6 +97,22 @@ describe("detectLegacyBootSessionEntries", () => {
 
     expect(detectLegacyBootSessionEntries({ cfg })).toEqual([]);
   });
+
+  it("preserves unrelated session keys that end with :boot", () => {
+    resolveAllAgentSessionStoreTargetsSyncMock.mockReturnValue([
+      { agentId: "main", storePath: "/state/agents/main/sessions" },
+    ]);
+    listSqliteSessionEntriesReadOnlyMock.mockReturnValue([
+      { sessionKey: "agent:main:boot", entry: makeEntry() },
+      { sessionKey: "custom:boot", entry: makeEntry() },
+      { sessionKey: "workspace:main:boot", entry: makeEntry() },
+    ]);
+
+    const findings = detectLegacyBootSessionEntries({ cfg });
+
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.target).toBe("agent:main:boot");
+  });
 });
 
 describe("repairLegacyBootSessionEntries", () => {
@@ -203,5 +219,31 @@ describe("repairLegacyBootSessionEntries", () => {
     expect(result.changes).toEqual([]);
     expect(result.warnings).toHaveLength(1);
     expect(result.warnings?.[0]).toContain("transaction conflict");
+  });
+
+  it("does not remove unrelated session keys that end with :boot", async () => {
+    resolveAllAgentSessionStoreTargetsSyncMock.mockReturnValue([
+      { agentId: "main", storePath: "/state/agents/main/sessions" },
+    ]);
+    listSqliteSessionEntriesReadOnlyMock.mockReturnValue([
+      { sessionKey: "agent:main:boot", entry: makeEntry() },
+      { sessionKey: "custom:boot", entry: makeEntry() },
+      { sessionKey: "workspace:main:boot", entry: makeEntry() },
+    ]);
+    applySessionEntryLifecycleMutationMock.mockResolvedValue({ archivedTranscriptDirectories: [] });
+
+    const result = await repairLegacyBootSessionEntries({ cfg });
+
+    expect(result.status).toBe("repaired");
+    expect(result.changes).toHaveLength(1);
+    expect(result.changes?.[0]).toContain("agent:main:boot");
+    expect(applySessionEntryLifecycleMutationMock).toHaveBeenCalledTimes(1);
+    expect(applySessionEntryLifecycleMutationMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storePath: "/state/agents/main/sessions",
+        removals: [{ sessionKey: "agent:main:boot", expectedEntry: expect.any(Object) }],
+        skipMaintenance: true,
+      }),
+    );
   });
 });

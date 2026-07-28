@@ -26,8 +26,9 @@ type LegacyBootSessionEntry = {
 function isLegacyBootSessionEntry(
   sessionKey: string,
   entry: { lifecycleRevision?: string },
+  agentId: string,
 ): boolean {
-  return sessionKey.endsWith(":boot") && !entry.lifecycleRevision;
+  return sessionKey === `agent:${agentId}:boot` && !entry.lifecycleRevision;
 }
 
 function collectLegacyBootSessionEntriesForTarget(
@@ -41,7 +42,9 @@ function collectLegacyBootSessionEntriesForTarget(
       env,
     });
     return entries
-      .filter(({ sessionKey, entry }) => isLegacyBootSessionEntry(sessionKey, entry))
+      .filter(({ sessionKey, entry }) =>
+        isLegacyBootSessionEntry(sessionKey, entry, target.agentId),
+      )
       .map(({ sessionKey, entry }) => ({
         sessionKey,
         agentId: target.agentId,
