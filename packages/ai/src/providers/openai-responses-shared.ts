@@ -11,7 +11,7 @@ import type {
   ResponseReasoningItem,
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
-import { calculateCost, clampThinkingLevel } from "../model-utils.js";
+import { clampThinkingLevel } from "../model-utils.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import { transportAbortError } from "../transports/transport-stream-shared.js";
 import type {
