@@ -484,8 +484,7 @@ function scheduleDeferredTurnMaintenance(
     });
   };
   const schedulerAbort = createDeferredTurnMaintenanceAbortSignal();
-  // Register before enqueue so authoritative maintenance cannot reclaim queued
-  // work; process exit drops this ownership while the durable task remains.
+  // Register before enqueue; process exit drops ownership while the durable task remains.
   const releaseProcessOwner = registerProcessOwnedTaskId(task.taskId);
   let runPromise: Promise<void>;
   try {
