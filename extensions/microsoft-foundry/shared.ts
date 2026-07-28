@@ -225,12 +225,64 @@ function supportsFoundryManualClaudeThinking(value?: string | null): boolean {
     : false;
 }
 
+type FoundryModelTokenLimits = {
+  contextWindow: number;
+  maxTokens: number;
+};
+
+const FOUNDRY_GPT_CHAT_TOKEN_LIMITS = {
+  contextWindow: 128_000,
+  maxTokens: 16_384,
+} as const satisfies FoundryModelTokenLimits;
+const FOUNDRY_GPT5_TOKEN_LIMITS = {
+  contextWindow: 400_000,
+  maxTokens: 128_000,
+} as const satisfies FoundryModelTokenLimits;
+const FOUNDRY_GPT5_MILLION_CONTEXT_TOKEN_LIMITS = {
+  contextWindow: 1_050_000,
+  maxTokens: 128_000,
+} as const satisfies FoundryModelTokenLimits;
+
+const FOUNDRY_GPT5_MILLION_CONTEXT_MODELS = new Set([
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
+  "gpt-5.5",
+  "gpt-5.4",
+  "gpt-5.4-pro",
+]);
+const FOUNDRY_GPT_CHAT_MODEL_RE = /^gpt-5(?:\.\d+)?-chat(?:-|$)/u;
+const FOUNDRY_GPT5_MODEL_RE = /^gpt-5(?:\.\d+)?(?:-|$)/u;
+
+function resolveFoundryGptTokenLimits(
+  normalized: string | undefined,
+): FoundryModelTokenLimits | undefined {
+  if (!normalized) {
+    return undefined;
+  }
+  // Azure's catalog separates Instant/chat, standard GPT-5, and the 1.05M
+  // full-model tier. Keep deployment aliases on the canonical model family.
+  if (normalized === "gpt-chat-latest" || FOUNDRY_GPT_CHAT_MODEL_RE.test(normalized)) {
+    return FOUNDRY_GPT_CHAT_TOKEN_LIMITS;
+  }
+  if (!FOUNDRY_GPT5_MODEL_RE.test(normalized)) {
+    return undefined;
+  }
+  return FOUNDRY_GPT5_MILLION_CONTEXT_MODELS.has(normalized)
+    ? FOUNDRY_GPT5_MILLION_CONTEXT_TOKEN_LIMITS
+    : FOUNDRY_GPT5_TOKEN_LIMITS;
+}
+
 function resolveFoundryModelTokenLimits(value?: string | null): {
   contextWindow: number;
   maxTokens: number;
 } {
   const normalized = normalizeFoundryModelName(value);
   const normalizedVersion = normalized?.replace(/\./g, "-");
+  const gptTokenLimits = resolveFoundryGptTokenLimits(normalized);
+  if (gptTokenLimits) {
+    return gptTokenLimits;
+  }
   if (
     normalized &&
     (supportsClaudeAdaptiveThinking({ id: normalized }) ||
