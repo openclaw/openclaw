@@ -991,6 +991,32 @@ describe("memory_search unavailable payloads", () => {
     expect(getMemorySyncMockCalls()).toBe(1);
   });
 
+  it("skips forced sync for corpus=sessions zero-hit searches", async () => {
+    let searchCalls = 0;
+    setMemorySearchImpl(async () => {
+      searchCalls += 1;
+      return [];
+    });
+
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { citations: "off" },
+      },
+    });
+    const result = await tool.execute("sessions-zero-hit", {
+      query: "nonexistent topic",
+      corpus: "sessions",
+    });
+
+    // A session-only search can legitimately have zero hits, so the tool
+    // must not force a full memory sync as recovery.
+    const details = result.details as { results?: unknown[]; error?: string };
+    expect(details.results).toEqual([]);
+    expect(searchCalls).toBe(1);
+    expect(getMemorySyncMockCalls()).toBe(0);
+  });
+
   it("returns qmd runtime debug without forcing a zero-hit retry", async () => {
     setMemoryBackend("qmd");
     let searchCalls = 0;
@@ -1093,6 +1119,85 @@ describe("memory_search unavailable payloads", () => {
     });
     expect(searchCalls).toBe(1);
     expect(getMemorySyncMockCalls()).toBe(0);
+  });
+
+  it("closes and reacquires the manager once when the index identity is stale, then recovers", async () => {
+    let searchCalls = 0;
+    setMemorySearchImpl(async () => {
+      searchCalls += 1;
+      if (searchCalls <= 1) {
+        return [];
+      }
+      return [
+        {
+          path: "MEMORY.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.9,
+          snippet: "Recovered result after manager refresh.",
+          source: "memory" as const,
+        },
+      ];
+    });
+    const reason = "index was built for provider openai, expected ollama";
+    setMemoryCustomStatus({
+      indexIdentity: {
+        status: "mismatched",
+        reason,
+      },
+    });
+
+    const beforeRefreshCalls = getMemorySearchManagerMockCalls();
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { citations: "off" },
+      },
+    });
+    const result = await tool.execute("stale-identity-refresh", {
+      query: "hidden thread codename",
+    });
+
+    // After closing the stale manager and reacquiring, the search should
+    // succeed against the fresh manager.
+    expect((result.details as { results?: Array<{ path: string }> }).results?.[0]?.path).toBe(
+      "MEMORY.md",
+    );
+    expect(searchCalls).toBe(2);
+    // Manager was reacquired once after the stale one was closed.
+    expect(getMemorySearchManagerMockCalls()).toBe(beforeRefreshCalls + 2);
+    expect(getMemorySyncMockCalls()).toBe(0);
+  });
+
+  it("returns unavailable when the index identity stays paused after manager refresh", async () => {
+    setMemorySearchImpl(async () => []);
+    const reason = "index was built for provider openai, expected ollama";
+    setMemoryCustomStatus({
+      indexIdentity: {
+        status: "mismatched",
+        reason,
+      },
+    });
+
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { citations: "off" },
+      },
+    });
+    const result = await tool.execute("stale-identity-persists", {
+      query: "hidden thread codename",
+    });
+
+    // The reacquired manager still reports a paused identity, so the tool
+    // must return the unavailable result rather than looping.
+    expectUnavailableMemorySearchDetails(result.details, {
+      error: reason,
+      warning:
+        "Tell the user: memory search is paused because the memory index was built with a different embedding provider/model/settings.",
+      action:
+        "Tell the user to run: openclaw memory status --index or openclaw memory index --force.",
+    });
   });
 
   it("returns structured search debug metadata for qmd results", async () => {

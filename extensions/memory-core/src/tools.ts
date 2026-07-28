@@ -27,6 +27,7 @@ import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry
 import type { PluginStateLeaseRunner } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { asRecord } from "./dreaming-shared.js";
 import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
+import { closeMemorySearchManager } from "./memory/index.js";
 import {
   DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
   MEMORY_SEARCH_DEADLINE_CONTROL,
@@ -694,12 +695,42 @@ export function createMemorySearchTool(options: {
                 pausedIndexIdentityReason =
                   resolvePausedMemoryIndexIdentityReason(statusBeforeRetry);
                 if (pausedIndexIdentityReason) {
+                  // The cached manager is serving a stale index identity
+                  // (e.g. session memory was enabled after the manager was
+                  // created). Close it so the next acquisition builds a fresh
+                  // manager against the current identity, then retry once.
+                  await closeMemorySearchManager({ cfg, agentId });
+                  const refreshed = await runWithDefaultDeadline(async () =>
+                    trackMemoryManager(
+                      await getMemoryManagerContextWithPurpose({
+                        cfg,
+                        agentId,
+                        purpose: memoryManagerPurpose,
+                        acquireLocalService: options.acquireLocalService,
+                        withLease: options.withLease,
+                      }),
+                    ),
+                  );
+                  if (!("error" in refreshed)) {
+                    managerMs = refreshed.debug?.managerMs;
+                    managerCacheState = refreshed.debug?.managerCacheState;
+                    activeMemory = refreshed;
+                    rawResults = await searchActiveMemory();
+                    const statusAfterRefresh = activeMemory.manager.status();
+                    pausedIndexIdentityReason =
+                      resolvePausedMemoryIndexIdentityReason(statusAfterRefresh);
+                  }
+                }
+                if (pausedIndexIdentityReason) {
                   return;
                 }
                 // One-shot CLI managers have no background lifecycle, so keep their bootstrap
                 // retry. Long-lived QMD managers must not run update work in the tool hot path.
+                // A corpus=sessions zero-hit search is a legitimate result (the session corpus
+                // may genuinely have no hits for the query); do not force a full sync.
                 if (
                   rawResults.length === 0 &&
+                  requestedCorpus !== "sessions" &&
                   activeMemory.manager.sync &&
                   (statusBeforeRetry.backend !== "qmd" || options.oneShotCliRun === true)
                 ) {
