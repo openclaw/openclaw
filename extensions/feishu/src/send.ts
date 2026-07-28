@@ -1,15 +1,13 @@
 // Feishu plugin module implements send behavior.
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
-import {
-  isRecord,
-  normalizeLowercaseStringOrEmpty,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
+import { parseFeishuInteractiveCardContent } from "./interactive-card-content.js";
 import {
   assertFeishuPostWithinEnvelope,
   buildFeishuPostMessageContent,
@@ -30,8 +28,6 @@ import type { FeishuChatType, FeishuMessageInfo, FeishuSendResult } from "./type
 export { resolveFeishuCardTemplate };
 
 const WITHDRAWN_REPLY_ERROR_CODES = new Set([230011, 231003]);
-const INTERACTIVE_CARD_FALLBACK_TEXT = "[Interactive Card]";
-const POST_FALLBACK_TEXT = "[Rich text message]";
 function shouldFallbackFromReplyTarget(response: { code?: number; msg?: string }): boolean {
   if (response.code !== undefined && WITHDRAWN_REPLY_ERROR_CODES.has(response.code)) {
     return true;
@@ -201,123 +197,6 @@ export async function sendReplyOrFallbackDirect(
   );
 }
 
-function normalizeCardTemplateVariable(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-    return String(value);
-  }
-  return undefined;
-}
-
-function readCardTemplateVariables(parsed: Record<string, unknown>): Map<string, string> {
-  const variables = new Map<string, string>();
-  for (const source of [parsed.template_variable, parsed.template_variables]) {
-    if (!isRecord(source)) {
-      continue;
-    }
-    for (const [key, value] of Object.entries(source)) {
-      const normalized = normalizeCardTemplateVariable(value);
-      if (normalized !== undefined) {
-        variables.set(key, normalized);
-      }
-    }
-  }
-  return variables;
-}
-
-function applyCardTemplateVariables(text: string, variables: Map<string, string>): string {
-  if (variables.size === 0) {
-    return text;
-  }
-  return text.replace(/\$\{([A-Za-z0-9_.-]+)\}|\{\{\s*([A-Za-z0-9_.-]+)\s*\}\}/g, (match, a, b) => {
-    const variableName = typeof a === "string" ? a : b;
-    return variables.get(variableName) ?? match;
-  });
-}
-
-function extractInteractiveElementText(
-  element: unknown,
-  variables: Map<string, string>,
-): string | undefined {
-  if (!isRecord(element)) {
-    return undefined;
-  }
-  const tag = typeof element.tag === "string" ? element.tag : "";
-  const text = isRecord(element.text) ? element.text : undefined;
-
-  if (tag === "div" && typeof text?.content === "string") {
-    return applyCardTemplateVariables(text.content, variables);
-  }
-  if ((tag === "markdown" || tag === "lark_md") && typeof element.content === "string") {
-    return applyCardTemplateVariables(element.content, variables);
-  }
-  if (tag === "plain_text" && typeof element.content === "string") {
-    return applyCardTemplateVariables(element.content, variables);
-  }
-  return undefined;
-}
-
-function extractInteractiveElementsText(
-  elements: unknown[],
-  variables: Map<string, string>,
-): string {
-  const texts: string[] = [];
-  for (const element of elements) {
-    const text = extractInteractiveElementText(element, variables);
-    if (text !== undefined) {
-      texts.push(text);
-    }
-  }
-  return texts.join("\n").trim();
-}
-
-function readInteractiveElementArrays(parsed: Record<string, unknown>): unknown[][] {
-  const body = isRecord(parsed.body) ? parsed.body : undefined;
-  const elementArrays: unknown[][] = [];
-
-  for (const candidate of [parsed.elements, body?.elements]) {
-    if (Array.isArray(candidate)) {
-      elementArrays.push(candidate);
-    }
-  }
-
-  for (const candidate of [parsed.i18n_elements, body?.i18n_elements]) {
-    if (!isRecord(candidate)) {
-      continue;
-    }
-    for (const localeElements of Object.values(candidate)) {
-      if (Array.isArray(localeElements)) {
-        elementArrays.push(localeElements);
-      }
-    }
-  }
-
-  return elementArrays;
-}
-
-function parseInteractivePostFallback(parsed: unknown): string | undefined {
-  const textContent = parsePostContent(JSON.stringify(parsed)).textContent.trim();
-  return textContent && textContent !== POST_FALLBACK_TEXT ? textContent : undefined;
-}
-
-function parseInteractiveCardContent(parsed: unknown): string {
-  if (!isRecord(parsed)) {
-    return INTERACTIVE_CARD_FALLBACK_TEXT;
-  }
-
-  const variables = readCardTemplateVariables(parsed);
-  for (const elements of readInteractiveElementArrays(parsed)) {
-    const text = extractInteractiveElementsText(elements, variables);
-    if (text) {
-      return text;
-    }
-  }
-
-  return parseInteractivePostFallback(parsed) ?? INTERACTIVE_CARD_FALLBACK_TEXT;
-}
-
 function parseFeishuMessageContent(rawContent: string, msgType: string): string {
   if (!rawContent) {
     return "";
@@ -340,7 +219,7 @@ function parseFeishuMessageContent(rawContent: string, msgType: string): string 
   }
 
   if (msgType === "interactive") {
-    return parseInteractiveCardContent(parsed);
+    return parseFeishuInteractiveCardContent(parsed);
   }
 
   if (typeof parsed === "string") {

@@ -1,4 +1,6 @@
 // Feishu plugin module implements monitor mocks behavior.
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { vi } from "vitest";
 
 export function createFeishuClientMockModule(): {
@@ -13,6 +15,7 @@ export function createFeishuClientMockModule(): {
 
 export function createFeishuRuntimeMockModule(): {
   getFeishuRuntime: () => {
+    state: Pick<PluginRuntime["state"], "openChannelIngressQueue">;
     channel: {
       debounce: {
         resolveInboundDebounceMs: () => number;
@@ -29,6 +32,17 @@ export function createFeishuRuntimeMockModule(): {
 } {
   return {
     getFeishuRuntime: () => ({
+      state: {
+        // Real SDK dispatchers start the canonical SQLite-backed ingress monitor.
+        // Keep webhook tests on that production queue instead of bypassing persistence.
+        openChannelIngressQueue: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
+          options?: Parameters<PluginRuntime["state"]["openChannelIngressQueue"]>[0],
+        ) =>
+          createChannelIngressQueueForTests<TPayload, TMetadata, TCompletedMetadata>({
+            ...options,
+            channelId: "feishu",
+          }),
+      },
       channel: {
         debounce: {
           resolveInboundDebounceMs: () => 0,

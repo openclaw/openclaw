@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import type { Server } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
+import { closeOpenClawStateDatabaseForTest } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createFeishuRuntimeMockModule } from "./monitor.test-mocks.js";
 import {
@@ -79,6 +80,7 @@ afterEach(() => {
 });
 
 afterAll(() => {
+  closeOpenClawStateDatabaseForTest();
   vi.doUnmock("./probe.js");
   vi.doUnmock("./client.js");
   vi.doUnmock("./runtime.js");
@@ -86,6 +88,28 @@ afterAll(() => {
 });
 
 describe("Feishu webhook signed-request e2e", () => {
+  it("persists webhook ingress in the canonical shared-state SQLite queue", async () => {
+    const runtime = createFeishuRuntimeMockModule().getFeishuRuntime();
+    const accountId = "webhook-sqlite-persistence";
+    const queue = runtime.state.openChannelIngressQueue<{ text: string }>({ accountId });
+
+    await expect(
+      queue.enqueue("webhook-persistence-event", { text: "durable" }),
+    ).resolves.toMatchObject({
+      kind: "accepted",
+    });
+
+    const reopenedQueue = runtime.state.openChannelIngressQueue<{ text: string }>({ accountId });
+    await expect(reopenedQueue.listPending()).resolves.toEqual([
+      expect.objectContaining({
+        id: "webhook-persistence-event",
+        channelId: "feishu",
+        accountId,
+        payload: { text: "durable" },
+      }),
+    ]);
+  });
+
   it("waits for HTTP close before resolving webhook abort cleanup", async () => {
     probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
 

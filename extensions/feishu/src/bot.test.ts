@@ -1,4 +1,6 @@
 // Feishu tests cover bot plugin behavior.
+import { createServer } from "node:http";
+import * as Lark from "@larksuiteoapi/node-sdk";
 import type {
   ensureConfiguredBindingRouteReady,
   getSessionBindingService,
@@ -2367,6 +2369,26 @@ describe("handleFeishuMessage command authorization", () => {
             create_time: "2000",
           },
           {
+            message_id: "sub-card",
+            upper_message_id: "container",
+            msg_type: "interactive",
+            body: {
+              content: JSON.stringify({
+                schema: "2.0",
+                header: {
+                  title: { tag: "plain_text", content: "Forwarded subject" },
+                },
+                body: {
+                  elements: [
+                    { tag: "markdown", content: "**Forwarded card**" },
+                    { tag: "div", text: { tag: "plain_text", content: "Card detail" } },
+                  ],
+                },
+              }),
+            },
+            create_time: "1500",
+          },
+          {
             message_id: "sub-1",
             upper_message_id: "container",
             msg_type: "text",
@@ -2400,11 +2422,659 @@ describe("handleFeishuMessage command authorization", () => {
     await dispatchMessage({ cfg, event });
 
     expect(mockGetMerged).toHaveBeenCalledWith({
+      params: { card_msg_content_type: "user_card_content" },
       path: { message_id: "msg-merge-forward" },
     });
+    expect(mockGetMerged).toHaveBeenCalledTimes(1);
     const context = mockCallArg<{ BodyForAgent?: string }>(mockFinalizeInboundContext, 0, 0);
     expect(context.BodyForAgent).toContain(
-      "[Merged and Forwarded Messages]\n- alpha\n- [File: report.pdf]",
+      "[Merged and Forwarded Messages]\n" +
+        "- alpha\n" +
+        "- Forwarded subject\n" +
+        "**Forwarded card**\n" +
+        "Card detail\n" +
+        "- [File: report.pdf]",
+    );
+    expect(context.BodyForAgent).not.toContain("[interactive]");
+  });
+
+  it("fetches and dispatches forwarded cards through the real Feishu SDK and loopback HTTP", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    const requests: Array<{ method?: string; url: URL; authorization?: string }> = [];
+    const items = [
+      {
+        message_id: "loopback-container",
+        msg_type: "merge_forward",
+        body: { content: JSON.stringify({ text: "Merged and Forwarded Message" }) },
+      },
+      {
+        message_id: "loopback-card-v1",
+        upper_message_id: "loopback-container",
+        msg_type: "interactive",
+        body: {
+          content: JSON.stringify({
+            header: {
+              title: {
+                tag: "plain_text",
+                content: "Inactive legacy heading",
+                i18n: { zh_cn: "旧版标题", en_us: "Legacy heading" },
+              },
+            },
+            elements: [
+              {
+                tag: "div",
+                text: { tag: "lark_md", content: "Legacy forwarded card" },
+                fields: [
+                  { is_short: true, text: { tag: "plain_text", content: "Owner: Alice" } },
+                  { is_short: true, text: { tag: "lark_md", content: "Priority: P2" } },
+                ],
+              },
+              {
+                tag: "action",
+                actions: [
+                  { tag: "button", text: { tag: "plain_text", content: "Acknowledge" } },
+                  { tag: "button", text: { tag: "plain_text", content: "Escalate" } },
+                ],
+              },
+            ],
+          }),
+        },
+        create_time: "1000",
+      },
+      {
+        message_id: "loopback-text",
+        upper_message_id: "loopback-container",
+        msg_type: "text",
+        body: { content: JSON.stringify({ text: "Ordinary forwarded text" }) },
+        create_time: "2000",
+      },
+      {
+        message_id: "loopback-card-v2",
+        upper_message_id: "loopback-container",
+        msg_type: "interactive",
+        body: {
+          content: JSON.stringify({
+            schema: "2.0",
+            header: {
+              title: {
+                tag: "plain_text",
+                content: "Inactive summary",
+                i18n_content: { zh_cn: "中文标题", en_us: "Modern summary ${count}" },
+              },
+            },
+            body: {
+              i18n_elements: {
+                zh_cn: [{ tag: "markdown", content: "中文任务" }],
+                en_us: [
+                  { tag: "markdown", content: "Modern ${count} tasks" },
+                  { tag: "button", text: { tag: "plain_text", content: "Confirm" } },
+                  {
+                    tag: "table",
+                    columns: [
+                      { name: "task", display_name: "Task" },
+                      { name: "owner", display_name: "Owner" },
+                      { name: "status", display_name: "Status" },
+                      { name: "reviewers", display_name: "Reviewers" },
+                    ],
+                    rows: [
+                      {
+                        task: "Investigate",
+                        owner: "Alice",
+                        status: [
+                          { text: "Open" },
+                          { text: { tag: "plain_text", content: "Needs review" } },
+                        ],
+                        reviewers: [
+                          { name: "Alice", id: "ou_loopback_alice" },
+                          { user_name: "Bob", user_id: "ou_loopback_bob" },
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              },
+            },
+            template_variable: { count: 2 },
+          }),
+        },
+        create_time: "3000",
+      },
+      {
+        message_id: "loopback-file",
+        upper_message_id: "loopback-container",
+        msg_type: "file",
+        body: { content: JSON.stringify({ file_name: "loopback.pdf" }) },
+        create_time: "4000",
+      },
+      {
+        message_id: "loopback-template-card",
+        upper_message_id: "loopback-container",
+        msg_type: "interactive",
+        body: {
+          content: JSON.stringify({
+            type: "template",
+            data: { template_id: "loopback-template", template_variable: { count: 3 } },
+          }),
+        },
+        create_time: "5000",
+      },
+      {
+        message_id: "loopback-card-reference",
+        upper_message_id: "loopback-container",
+        msg_type: "interactive",
+        body: {
+          content: JSON.stringify({ type: "card", data: { card_id: "loopback-card" } }),
+        },
+        create_time: "6000",
+      },
+    ];
+    const server = createServer((request, response) => {
+      const url = new URL(request.url ?? "/", "http://127.0.0.1");
+      requests.push({
+        method: request.method,
+        url,
+        authorization: request.headers.authorization,
+      });
+      response.setHeader("content-type", "application/json; charset=utf-8");
+      if (url.pathname === "/open-apis/auth/v3/tenant_access_token/internal") {
+        response.end(
+          JSON.stringify({
+            code: 0,
+            msg: "ok",
+            tenant_access_token: "loopback-tenant-token",
+            expire: 3600,
+          }),
+        );
+        return;
+      }
+      if (url.pathname === "/open-apis/im/v1/messages/msg-merge-loopback") {
+        const renderedItems = items.map((item) => {
+          if (item.message_id === "loopback-template-card") {
+            return {
+              ...item,
+              body: {
+                content: JSON.stringify({
+                  title: "Template heading",
+                  elements: [
+                    [
+                      { tag: "text", text: "Rendered template " },
+                      { tag: "button", text: "Approve" },
+                      { tag: "button", text: "Reject" },
+                    ],
+                    [
+                      { tag: "text", text: "Assigned to " },
+                      { tag: "at", user_name: "Alice", user_id: "ou_loopback_alice" },
+                    ],
+                  ],
+                }),
+              },
+            };
+          }
+          if (item.message_id === "loopback-card-reference") {
+            return {
+              ...item,
+              body: {
+                content: JSON.stringify({
+                  title: "CardKit heading",
+                  elements: [
+                    [{ tag: "text", text: "Rendered CardKit card" }],
+                    [{ tag: "button", text: "Open report" }],
+                    [
+                      {
+                        tag: "note",
+                        elements: [{ tag: "plain_text", content: "Status: ready" }],
+                      },
+                    ],
+                    [
+                      {
+                        tag: "column_set",
+                        columns: [
+                          {
+                            tag: "column",
+                            elements: [{ tag: "markdown", content: "Nested column detail" }],
+                          },
+                        ],
+                      },
+                    ],
+                  ],
+                }),
+              },
+            };
+          }
+          return item;
+        });
+        response.end(
+          JSON.stringify({
+            code: 0,
+            msg: "ok",
+            data: {
+              items:
+                url.searchParams.get("card_msg_content_type") === "user_card_content"
+                  ? items
+                  : renderedItems,
+            },
+          }),
+        );
+        return;
+      }
+      response.statusCode = 404;
+      response.end(JSON.stringify({ code: 404, msg: "unexpected loopback request" }));
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Feishu SDK loopback server did not expose a TCP port");
+      }
+      const loopbackBase = `http://127.0.0.1:${address.port}`;
+      const redirectToLoopback = (url: string) => {
+        const upstream = new URL(url);
+        return new URL(`${upstream.pathname}${upstream.search}`, loopbackBase).toString();
+      };
+      const upstreamHttp = Lark.defaultHttpInstance;
+      // SDK path-template expansion treats a domain's :port as a path argument.
+      // Redirect the unchanged production domain at the real HTTP transport instead.
+      const loopbackHttp: Lark.HttpInstance = {
+        request: (options) =>
+          upstreamHttp.request({
+            ...options,
+            ...(options.url ? { url: redirectToLoopback(options.url) } : {}),
+          }),
+        get: (url, options) => upstreamHttp.get(redirectToLoopback(url), options),
+        post: (url, data, options) => upstreamHttp.post(redirectToLoopback(url), data, options),
+        put: (url, data, options) => upstreamHttp.put(redirectToLoopback(url), data, options),
+        patch: (url, data, options) => upstreamHttp.patch(redirectToLoopback(url), data, options),
+        delete: (url, options) => upstreamHttp.delete(redirectToLoopback(url), options),
+        head: (url, options) => upstreamHttp.head(redirectToLoopback(url), options),
+        options: (url, options) => upstreamHttp.options(redirectToLoopback(url), options),
+      };
+      const client = new Lark.Client({
+        appId: "cli_feishu_loopback",
+        appSecret: "test-loopback-app-secret", // pragma: allowlist secret
+        appType: Lark.AppType.SelfBuild,
+        domain: Lark.Domain.Feishu,
+        httpInstance: loopbackHttp,
+      });
+      mockCreateFeishuClient.mockReturnValue(client);
+
+      const runtime = await dispatchMessage({
+        cfg: createFeishuTestConfig({ dmPolicy: "open", resolveSenderNames: false }),
+        event: createFeishuTestEvent({
+          messageId: "msg-merge-loopback",
+          senderOpenId: "ou-merge-loopback",
+          messageType: "merge_forward",
+          text: "Merged and Forwarded Message",
+        }),
+      });
+
+      expect(
+        vi
+          .mocked(runtime.log)
+          .mock.calls.map(([message]) => String(message))
+          .find((message) => message.includes("merge_forward fetch failed")),
+      ).toBeUndefined();
+      expect(requests.map((request) => `${request.method} ${request.url.pathname}`)).toEqual([
+        "POST /open-apis/auth/v3/tenant_access_token/internal",
+        "GET /open-apis/im/v1/messages/msg-merge-loopback",
+        "GET /open-apis/im/v1/messages/msg-merge-loopback",
+      ]);
+      const messageRequests = requests.filter(
+        (request) => request.url.pathname === "/open-apis/im/v1/messages/msg-merge-loopback",
+      );
+      expect(messageRequests[0]?.url.searchParams.get("card_msg_content_type")).toBe(
+        "user_card_content",
+      );
+      expect(messageRequests[1]?.url.searchParams.has("card_msg_content_type")).toBe(false);
+      expect(messageRequests.map((request) => request.authorization)).toEqual([
+        "Bearer loopback-tenant-token",
+        "Bearer loopback-tenant-token",
+      ]);
+
+      const context = mockCallArg<{ BodyForAgent?: string }>(mockFinalizeInboundContext, 0, 0);
+      expect(context.BodyForAgent).toContain(
+        "[Merged and Forwarded Messages]\n" +
+          "- [en_us] Legacy heading\n" +
+          "[zh_cn] 旧版标题\n" +
+          "Legacy forwarded card\n" +
+          "Owner: Alice\n" +
+          "Priority: P2\n" +
+          "Acknowledge\n" +
+          "Escalate\n" +
+          "- Ordinary forwarded text\n" +
+          "- [en_us] Modern summary 2\n" +
+          "Modern 2 tasks\n" +
+          "Confirm\n" +
+          "Task | Owner | Status | Reviewers\n" +
+          "Investigate | Alice | Open, Needs review | Alice, Bob\n" +
+          "\n" +
+          "[zh_cn] 中文标题\n" +
+          "中文任务\n" +
+          "- [File: loopback.pdf]\n" +
+          "- Template heading\n" +
+          "Rendered template Approve Reject\n" +
+          "Assigned to @Alice\n" +
+          "- CardKit heading\n" +
+          "Rendered CardKit card\n" +
+          "Open report\n" +
+          "Status: ready\n" +
+          "Nested column detail",
+      );
+      expect(context.BodyForAgent).not.toContain("[interactive]");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+        server.closeAllConnections();
+      });
+    }
+  });
+
+  it.each([
+    {
+      name: "original card header and template variables",
+      card: {
+        schema: "2.0",
+        header: { title: { tag: "plain_text", content: "Incident ${count}" } },
+        body: { elements: [{ tag: "markdown", content: "Resolve {{count}} alerts" }] },
+        template_variable: { count: 2 },
+      },
+      expected: "Incident 2\nResolve 2 alerts",
+    },
+    {
+      name: "original card approval button",
+      card: {
+        schema: "2.0",
+        header: { title: { tag: "plain_text", content: "Approval required" } },
+        body: {
+          elements: [{ tag: "button", text: { tag: "plain_text", content: "Approve" } }],
+        },
+      },
+      expected: "Approval required\nApprove",
+    },
+    {
+      name: "legacy div fields and action buttons",
+      card: {
+        header: { title: { tag: "plain_text", content: "Legacy approval" } },
+        elements: [
+          {
+            tag: "div",
+            text: { tag: "lark_md", content: "Request details" },
+            fields: [
+              { is_short: true, text: { tag: "plain_text", content: "Owner: Alice" } },
+              { is_short: true, text: { tag: "lark_md", content: "Priority: P2" } },
+            ],
+          },
+          {
+            tag: "action",
+            actions: [
+              { tag: "button", text: { tag: "plain_text", content: "Approve" } },
+              { tag: "button", text: { tag: "plain_text", content: "Reject" } },
+            ],
+          },
+        ],
+      },
+      expected: "Legacy approval\nRequest details\nOwner: Alice\nPriority: P2\nApprove\nReject",
+    },
+    {
+      name: "original card table rows",
+      card: {
+        schema: "2.0",
+        header: { title: { tag: "plain_text", content: "Task summary" } },
+        body: {
+          elements: [
+            {
+              tag: "table",
+              columns: [
+                { name: "task", display_name: "Task" },
+                { name: "owner", display_name: "Owner" },
+              ],
+              rows: [{ task: "Investigate", owner: "Alice" }],
+            },
+          ],
+        },
+      },
+      expected: "Task summary\nTask | Owner\nInvestigate | Alice",
+    },
+    {
+      name: "original card table option and person arrays",
+      card: {
+        schema: "2.0",
+        header: { title: { tag: "plain_text", content: "Review summary" } },
+        body: {
+          elements: [
+            {
+              tag: "table",
+              columns: [
+                { name: "status", display_name: "Status" },
+                { name: "reviewers", display_name: "Reviewers" },
+              ],
+              rows: [
+                {
+                  status: [
+                    { text: "Open" },
+                    { text: { tag: "plain_text", content: "Priority ${level}" } },
+                  ],
+                  reviewers: [
+                    { name: "Alice", id: "ou_alice" },
+                    { user_name: "Bob", user_id: "ou_bob" },
+                    "ou_charlie",
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+        template_variable: { level: 2 },
+      },
+      expected: "Review summary\nStatus | Reviewers\nOpen, Priority 2 | Alice, Bob, ou_charlie",
+    },
+    {
+      name: "nested notes and column layouts",
+      card: {
+        title: "Nested card",
+        elements: [
+          [
+            {
+              tag: "note",
+              elements: [{ tag: "plain_text", content: "Status: ready" }],
+            },
+          ],
+          [
+            {
+              tag: "column_set",
+              columns: [
+                {
+                  tag: "column",
+                  elements: [{ tag: "markdown", content: "Nested column detail" }],
+                },
+              ],
+            },
+          ],
+        ],
+      },
+      expected: "Nested card\nStatus: ready\nNested column detail",
+    },
+    {
+      name: "legacy card elements",
+      card: {
+        elements: [
+          { tag: "markdown", content: "Legacy card" },
+          { tag: "div", text: { tag: "plain_text", content: "Legacy detail" } },
+        ],
+      },
+      expected: "Legacy card\nLegacy detail",
+    },
+    {
+      name: "localized card template variables",
+      card: {
+        elements: [],
+        body: { elements: [] },
+        i18n_elements: {
+          zh_cn: [],
+          en_us: [{ tag: "markdown", content: "Forwarded ${count} {{label}}" }],
+        },
+        template_variable: { count: 2, label: "tasks" },
+      },
+      expected: "Forwarded 2 tasks",
+    },
+    {
+      name: "localized original header matching the rendered body",
+      card: {
+        schema: "2.0",
+        header: {
+          title: {
+            tag: "plain_text",
+            content: "Inactive fallback",
+            i18n_content: { zh_cn: "中文标题", en_us: "Incident ${count}" },
+          },
+        },
+        body: {
+          i18n_elements: {
+            zh_cn: [],
+            en_us: [{ tag: "markdown", content: "Resolve {{count}} alerts" }],
+          },
+        },
+        template_variable: { count: 2 },
+      },
+      expected: "Incident 2\nResolve 2 alerts",
+    },
+    {
+      name: "localized legacy title matching nonlocalized card elements",
+      card: {
+        schema: "2.0",
+        header: {
+          title: {
+            tag: "plain_text",
+            content: "Inactive fallback",
+            i18n: { zh_cn: "中文事故", en_us: "English incident" },
+          },
+        },
+        body: { elements: [{ tag: "markdown", content: "Shared incident details" }] },
+      },
+      expected: "[en_us] English incident\n[zh_cn] 中文事故\nShared incident details",
+    },
+    {
+      name: "localized schema 2 title matching nonlocalized card elements",
+      card: {
+        schema: "2.0",
+        header: {
+          title: {
+            tag: "plain_text",
+            content: "Inactive fallback",
+            i18n_content: { zh_cn: "中文事故", en_us: "Incident ${count}" },
+          },
+        },
+        body: { elements: [{ tag: "markdown", content: "Resolve {{count}} shared alerts" }] },
+        template_variable: { count: 2 },
+      },
+      expected: "[en_us] Incident 2\n[zh_cn] 中文事故\nResolve 2 shared alerts",
+    },
+    {
+      name: "single localized title matching nonlocalized card elements",
+      card: {
+        schema: "2.0",
+        header: {
+          title: {
+            tag: "plain_text",
+            content: "Inactive fallback",
+            i18n_content: { en_us: "Incident ${count}" },
+          },
+        },
+        body: { elements: [{ tag: "markdown", content: "Resolve {{count}} shared alerts" }] },
+        template_variable: { count: 2 },
+      },
+      expected: "Incident 2\nResolve 2 shared alerts",
+    },
+    {
+      name: "all localized card variants in stable locale order",
+      card: {
+        schema: "2.0",
+        header: {
+          title: {
+            tag: "plain_text",
+            content: "Inactive fallback",
+            i18n_content: { zh_cn: "中文事故", en_us: "English incident" },
+          },
+        },
+        body: {
+          i18n_elements: {
+            zh_cn: [{ tag: "markdown", content: "中文详情" }],
+            en_us: [{ tag: "markdown", content: "English details" }],
+          },
+        },
+      },
+      expected: "[en_us] English incident\nEnglish details\n\n[zh_cn] 中文事故\n中文详情",
+    },
+    {
+      name: "rendered reference-backed card rows",
+      card: {
+        title: "Rendered heading",
+        elements: [
+          [
+            { tag: "text", text: "Rendered " },
+            { tag: "a", text: "card" },
+          ],
+          [{ tag: "text", text: "Second row" }],
+        ],
+      },
+      expected: "Rendered heading\nRendered card\nSecond row",
+    },
+    {
+      name: "rendered title and approval button",
+      card: {
+        title: "Approval required",
+        elements: [
+          [
+            { tag: "button", text: "Approve" },
+            { tag: "button", text: "Reject" },
+          ],
+        ],
+      },
+      expected: "Approval required\nApprove Reject",
+    },
+    {
+      name: "rendered user and broadcast mentions",
+      card: {
+        title: "Assignments",
+        elements: [
+          [
+            { tag: "text", text: "Assigned to " },
+            { tag: "at", user_name: "Alice", user_id: "ou_alice" },
+          ],
+          [
+            { tag: "text", text: "Notify " },
+            { tag: "at", user_id: "all" },
+          ],
+        ],
+      },
+      expected: "Assignments\nAssigned to @Alice\nNotify @all",
+    },
+    {
+      name: "unsupported card elements",
+      card: { body: { elements: [{ tag: "button" }] } },
+      expected: "[Interactive Card]",
+    },
+  ])("expands merge_forward $name using canonical card parsing", ({ card, expected }) => {
+    const content = JSON.stringify([
+      {
+        message_id: "container",
+        msg_type: "merge_forward",
+        body: { content: JSON.stringify({ text: "Merged and Forwarded Message" }) },
+      },
+      {
+        message_id: "sub-card",
+        upper_message_id: "container",
+        msg_type: "interactive",
+        body: { content: JSON.stringify(card) },
+      },
+    ]);
+
+    expect(parseMergeForwardContent({ content })).toBe(
+      `[Merged and Forwarded Messages]\n- ${expected}`,
     );
   });
 

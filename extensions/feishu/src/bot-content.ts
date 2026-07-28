@@ -3,6 +3,7 @@ import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtim
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { buildFeishuConversationId } from "./conversation-id.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
+import { parseFeishuInteractiveCardContent } from "./interactive-card-content.js";
 import { saveMessageResourceFeishu } from "./media.js";
 import { isFeishuBroadcastMention } from "./mention.js";
 import { parsePostContent } from "./post.js";
@@ -192,6 +193,8 @@ function formatSubMessageContent(content: string, contentType: string): string {
         return parsed.text || content;
       case "post":
         return parsePostContent(content).textContent;
+      case "interactive":
+        return parseFeishuInteractiveCardContent(parsed);
       case "image":
         return "[Image]";
       case "file":

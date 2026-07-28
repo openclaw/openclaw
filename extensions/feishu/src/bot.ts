@@ -30,7 +30,11 @@ import {
 } from "openclaw/plugin-sdk/runtime-group-policy";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
-import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeOptionalString,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { buildFeishuAgentBody } from "./bot-agent-body.js";
@@ -99,6 +103,28 @@ import {
 // Key: appId or "default", Value: timestamp of last notification
 const permissionErrorNotifiedAt = new Map<string, number>();
 const PERMISSION_ERROR_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+
+function isReferenceBackedFeishuForwardedCard(item: unknown): boolean {
+  if (!isRecord(item) || item.msg_type !== "interactive" || !isRecord(item.body)) {
+    return false;
+  }
+  if (typeof item.body.content !== "string") {
+    return false;
+  }
+
+  try {
+    const content: unknown = JSON.parse(item.body.content);
+    if (!isRecord(content) || !isRecord(content.data)) {
+      return false;
+    }
+    return (
+      (content.type === "template" && typeof content.data.template_id === "string") ||
+      (content.type === "card" && typeof content.data.card_id === "string")
+    );
+  } catch {
+    return false;
+  }
+}
 
 function shouldSendNoVisibleReplyFallback(dispatchResult: {
   counts: { final?: number };
@@ -431,15 +457,61 @@ export async function handleFeishuMessage(params: {
       // The API returns all sub-messages in the items array
       const client = createFeishuClient(account);
       const response = (await client.im.message.get({
+        // Original card JSON keeps forwarded cards on the canonical direct-message parser.
+        params: { card_msg_content_type: "user_card_content" },
         path: { message_id: event.message.message_id },
       })) as { code?: number; data?: { items?: unknown[] } };
 
       if (response.code === 0 && response.data?.items && response.data.items.length > 0) {
-        log(
-          `feishu[${account.accountId}]: merge_forward API returned ${response.data.items.length} items`,
+        let items = response.data.items;
+        const referenceBackedIds = new Set(
+          items
+            .filter(isReferenceBackedFeishuForwardedCard)
+            .map((item) => (isRecord(item) ? item.message_id : undefined))
+            .filter(
+              (referencedMessageId): referencedMessageId is string =>
+                typeof referencedMessageId === "string",
+            ),
         );
+
+        if (referenceBackedIds.size > 0) {
+          // Template/card-ID sends store references; Feishu's default response renders them.
+          // Keep original JSON for inline cards and replace only reference-backed bodies.
+          try {
+            const renderedResponse = (await client.im.message.get({
+              path: { message_id: event.message.message_id },
+            })) as { code?: number; data?: { items?: unknown[] } };
+            if (renderedResponse.code === 0 && renderedResponse.data?.items) {
+              const renderedById = new Map<string, Record<string, unknown>>();
+              for (const item of renderedResponse.data.items) {
+                if (isRecord(item) && typeof item.message_id === "string") {
+                  renderedById.set(item.message_id, item);
+                }
+              }
+              items = items.map((item) => {
+                if (
+                  !isRecord(item) ||
+                  typeof item.message_id !== "string" ||
+                  !referenceBackedIds.has(item.message_id)
+                ) {
+                  return item;
+                }
+                const rendered = renderedById.get(item.message_id);
+                return rendered && isRecord(rendered.body)
+                  ? { ...item, body: rendered.body }
+                  : item;
+              });
+            }
+          } catch (err) {
+            log(
+              `feishu[${account.accountId}]: rendered merge_forward card fetch failed: ${String(err)}`,
+            );
+          }
+        }
+
+        log(`feishu[${account.accountId}]: merge_forward API returned ${items.length} items`);
         const expandedContent = parseMergeForwardContent({
-          content: JSON.stringify(response.data.items),
+          content: JSON.stringify(items),
           log,
         });
         ctx = { ...ctx, content: expandedContent };
