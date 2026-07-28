@@ -3,6 +3,7 @@ import {
   classifyClaudeCliHistoryMessage,
   classifyClaudeCliHistoryLine,
   isExternalUserText,
+  readFileRangeAsync,
   type SessionCatalogContinueProviderResult,
   type SessionUpstreamActivity,
   type SessionUpstreamProbe,
@@ -133,9 +134,7 @@ async function checkClaudeSessionUpstreamActivity(
       return undefined;
     }
     const readLength = Math.min(stat.size - markerOffset, MAX_CLAUDE_UPSTREAM_SCAN_BYTES);
-    const buffer = Buffer.allocUnsafe(readLength);
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, markerOffset);
-    const tail = buffer.subarray(0, bytesRead);
+    const tail = await readFileRangeAsync(handle, markerOffset, readLength);
     const lastNewline = tail.lastIndexOf(0x0a);
     if (lastNewline < 0) {
       // Cursor movement requires a complete classified row. A row beyond the

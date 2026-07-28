@@ -32,6 +32,22 @@ function row(params: {
   });
 }
 
+function injectFileShortReads(filePath: string, maxBytes: number): void {
+  const realOpen = fs.open.bind(fs);
+  vi.spyOn(fs, "open").mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+    const handle = await realOpen(...args);
+    if (args[0] === filePath) {
+      const realRead = handle.read.bind(handle);
+      Object.defineProperty(handle, "read", {
+        configurable: true,
+        value: (buffer: Buffer, offset: number, length: number, position: number) =>
+          realRead(buffer, offset, Math.min(length, maxBytes), position),
+      });
+    }
+    return handle;
+  });
+}
+
 afterAll(async () => {
   await Promise.all(tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
@@ -121,6 +137,39 @@ describe("Claude upstream activity", () => {
         ownRecentUserTexts: [],
       }),
     ).resolves.toBeUndefined();
+  });
+
+  it("completes bounded scan windows across positional short reads", async () => {
+    const dir = await makeTempDir("openclaw-claude-upstream-short-read-");
+    const filePath = path.join(dir, "thread-short-read.jsonl");
+    await fs.writeFile(
+      filePath,
+      `${row({
+        type: "user",
+        content: "short-read prompt",
+        timestamp: "2026-07-13T10:05:00.000Z",
+      })}\n`,
+    );
+    injectFileShortReads(filePath, 17);
+
+    await expect(
+      checkActivity({
+        sessionKey: "agent:main:adopted:claude-short-read",
+        agentId: "main",
+        threadId: "thread-short-read",
+        hostId: "gateway:local",
+        upstreamKind: "claude-cli",
+        upstreamRef: { filePath },
+        marker: { offset: 0 },
+        ownRecentUserTexts: [],
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        kind: "activity",
+        humanTurns: 1,
+        nextMarker: { offset: (await fs.stat(filePath)).size },
+      }),
+    );
   });
 
   it("filters OpenClaw-authored rows by normalized transcript text", async () => {

@@ -23,6 +23,7 @@ export {
   sessionCatalogAdoptedSourceKey,
 } from "../plugins/session-catalog.js";
 export { importSessionCatalogHistory } from "../plugins/session-catalog-history-import.js";
+export { readFileRangeAsync } from "../config/sessions/file-range.js";
 export type {
   SessionCatalog,
   SessionCatalogCapabilities,

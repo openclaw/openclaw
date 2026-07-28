@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import process from "node:process";
 import {
   isExternalUserText,
+  readFileRangeAsync,
   type SessionCatalogContinueProviderResult,
   type SessionUpstreamActivity,
   type SessionUpstreamProbe,
@@ -132,9 +133,7 @@ async function checkPiSessionUpstreamActivity(
       return undefined;
     }
     const readLength = Math.min(stat.size - markerOffset, MAX_PI_UPSTREAM_SCAN_BYTES);
-    const buffer = Buffer.allocUnsafe(readLength);
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, markerOffset);
-    const tail = buffer.subarray(0, bytesRead);
+    const tail = await readFileRangeAsync(handle, markerOffset, readLength);
     const { entries, classifiedBytes } = parseCompletePiRows(tail);
     if (classifiedBytes === 0) {
       // Never advance past an invalid, partial, or over-cap JSONL row.
