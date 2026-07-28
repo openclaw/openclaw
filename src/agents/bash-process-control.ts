@@ -1,10 +1,10 @@
 // Shared control seam for task-ledger and process-tool cancellation.
 import { getProcessSupervisor } from "../process/supervisor/index.js";
-import { getSession } from "./bash-process-registry.js";
+import { getSession, hasActiveBackgroundExecSession } from "./bash-process-registry.js";
 
 export function isBackgroundExecSessionActive(sessionId: string): boolean {
-  const session = getSession(sessionId);
-  return Boolean(session?.backgrounded && !session.exited);
+  // Removal hides the session immediately; its owner keeps liveness until actual exit.
+  return hasActiveBackgroundExecSession(sessionId);
 }
 
 export function cancelBackgroundExecSession(sessionId: string): boolean {

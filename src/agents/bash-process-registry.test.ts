@@ -13,6 +13,7 @@ import {
   deleteSession,
   drainSession,
   getActiveBackgroundExecSessionCount,
+  hasActiveBackgroundExecSession,
   listFinishedSessions,
   listRunningSessions,
   markBackgrounded,
@@ -218,13 +219,18 @@ describe("bash process registry", () => {
 
     addSession(session);
     markBackgrounded(session);
+    expect(hasActiveBackgroundExecSession(session.id)).toBe(true);
+    expect(hasActiveBackgroundExecSession("another-background-session")).toBe(false);
+
     deleteSession(session.id);
 
     expect(listRunningSessions()).toHaveLength(0);
     expect(getActiveBackgroundExecSessionCount()).toBe(1);
+    expect(hasActiveBackgroundExecSession(session.id)).toBe(true);
 
     markExited(session, null, "SIGTERM", "killed");
     expect(getActiveBackgroundExecSessionCount()).toBe(0);
+    expect(hasActiveBackgroundExecSession(session.id)).toBe(false);
   });
 
   it("keeps a hidden active session id reserved until exit", () => {

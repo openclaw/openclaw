@@ -219,6 +219,11 @@ export function markBackgrounded(session: ProcessSession) {
   }
 }
 
+/** Tracks a hidden background session until its process owner confirms the exit. */
+export function hasActiveBackgroundExecSession(sessionId: string): boolean {
+  return activeBackgroundExecSessionIds.has(sessionId);
+}
+
 /** Returns the number of live background exec sessions without exposing process details. */
 export function getActiveBackgroundExecSessionCount(): number {
   return activeBackgroundExecSessionIds.size;

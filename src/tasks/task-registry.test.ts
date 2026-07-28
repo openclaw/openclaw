@@ -2,6 +2,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
 import { startAcpSpawnParentStreamRelay } from "../agents/acp-spawn-parent-stream.js";
+import { isBackgroundExecSessionActive } from "../agents/bash-process-control.js";
+import {
+  addSession,
+  deleteSession,
+  markBackgrounded,
+  markExited,
+} from "../agents/bash-process-registry.js";
+import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
+import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
 import { emitAcpLifecycleStart } from "../agents/command/attempt-execution.js";
 import { resetCronActiveJobs } from "../cron/active-jobs.js";
 import {
@@ -2701,6 +2710,61 @@ describe("task-registry", () => {
         status: "lost",
         error: "backing session missing",
       });
+    });
+  });
+
+  it("retains a hidden background exec task until its process actually exits", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+      const session = createProcessSessionFixture({
+        id: "hidden-background-exec",
+        command: "controlled background command",
+      });
+      addSession(session);
+      markBackgrounded(session);
+      deleteSession(session.id);
+
+      const task = createTaskFixture("cli", {
+        taskKind: "exec",
+        sourceId: session.id,
+        runId: `exec:${session.id}`,
+        task: "Background CLI command",
+        lastEventAt: Date.now() - 10 * 60_000,
+      });
+      const currentTasks = new Map([[task.taskId, task]]);
+      configureTaskRegistryMaintenanceRuntimeForTest({
+        currentTasks,
+        snapshotTasks: [task],
+        isBackgroundExecSessionActive,
+      });
+
+      try {
+        expect(await runTaskRegistryMaintenance()).toEqual({
+          reconciled: 0,
+          recovered: 0,
+          cleanupStamped: 0,
+          pruned: 0,
+        });
+        expectRecordFields(currentTasks.get(task.taskId), { status: "running" });
+
+        markExited(session, null, "SIGTERM", "killed");
+
+        expect(await runTaskRegistryMaintenance()).toEqual({
+          reconciled: 1,
+          recovered: 0,
+          cleanupStamped: 0,
+          pruned: 0,
+        });
+        expectRecordFields(currentTasks.get(task.taskId), {
+          status: "lost",
+          error: "backing session missing",
+        });
+      } finally {
+        if (!session.exited) {
+          markExited(session, null, "SIGTERM", "killed");
+        }
+        resetProcessRegistryForTests();
+      }
     });
   });
 
