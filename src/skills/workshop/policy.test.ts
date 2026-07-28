@@ -1,3 +1,4 @@
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
@@ -10,8 +11,9 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
+import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { resolveSkillWorkshopToolApproval } from "./policy.js";
-import { proposeCreateSkill } from "./service.js";
+import { proposeCreateSkill, proposeUpdateSkill } from "./service.js";
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
@@ -260,5 +262,56 @@ describe("resolveSkillWorkshopToolApproval", () => {
     });
 
     expect(result?.requireApproval?.title).toBe("Reject workspace skill proposal");
+  });
+
+  it("requires approval for low-continuity updates under auto policy", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-policy-low-cont-");
+    const skillDir = path.join(workspaceDir, "skills", "lowcont");
+    await writeSkill({
+      dir: skillDir,
+      name: "lowcont",
+      description: "Low continuity target",
+      body: "# LowCont\n\nStep one.\nStep two.\nStep three.\n",
+    });
+    const unrelated = await proposeUpdateSkill({
+      workspaceDir,
+      skillName: "lowcont",
+      description: "Unrelated rewrite",
+      content: "# Rewrite\n\nNew step A.\nNew step B.\nNew step C.\nNew step D.\n",
+    });
+
+    const autoPolicyResult = await resolveSkillWorkshopToolApproval({
+      toolName: "skill_workshop",
+      toolParams: { action: "apply", proposal_id: unrelated.record.id },
+      workspaceDir,
+      config: { skills: { workshop: { approvalPolicy: "auto" } } },
+    });
+    expect(autoPolicyResult?.requireApproval).toMatchObject({
+      title: "Apply workspace skill proposal",
+      severity: "warning",
+    });
+
+    const highContWorkspaceDir = await tempDirs.make("openclaw-skill-workshop-policy-high-cont-");
+    const highContDir = path.join(highContWorkspaceDir, "skills", "highcont");
+    await writeSkill({
+      dir: highContDir,
+      name: "highcont",
+      description: "High continuity target",
+      body: "# HighCont\n\nStep one.\nStep two.\nStep three.\nStep four.\nStep five.\nStep six.\n",
+    });
+    const related = await proposeUpdateSkill({
+      workspaceDir: highContWorkspaceDir,
+      skillName: "highcont",
+      description: "Related update",
+      content: "# HighCont\n\nStep one.\nStep two.\nStep three.\nStep four.\nUpdated step five.\n",
+    });
+
+    const relatedResult = await resolveSkillWorkshopToolApproval({
+      toolName: "skill_workshop",
+      toolParams: { action: "apply", proposal_id: related.record.id },
+      workspaceDir: highContWorkspaceDir,
+      config: { skills: { workshop: { approvalPolicy: "auto" } } },
+    });
+    expect(relatedResult).toBeUndefined();
   });
 });
