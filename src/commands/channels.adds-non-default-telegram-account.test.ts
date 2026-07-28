@@ -674,6 +674,29 @@ describe("channels command", () => {
     expect(telegramIndex).toBeLessThan(whatsappIndex);
   });
 
+  it("formats busy run count and stale activity in channel status lines", () => {
+    const lines = formatGatewayChannelsStatusLines({
+      channelLabels: {
+        discord: "Discord",
+      },
+      channelAccounts: {
+        discord: [
+          {
+            accountId: "default",
+            configured: true,
+            running: true,
+            busy: true,
+            activeRuns: 2,
+            lastRunActivityAt: Date.now() - 26 * 60_000,
+          },
+        ],
+      },
+    });
+
+    expect(lines.join("\n")).toMatch(/busy:runs=2/);
+    expect(lines.join("\n")).toMatch(/busy-stale:/);
+  });
+
   it("formats phone allowlists without interpreting arbitrary account names", () => {
     const lines = formatGatewayChannelsStatusLines({
       channelLabels: { signal: "Signal" },

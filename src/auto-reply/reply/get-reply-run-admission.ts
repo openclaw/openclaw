@@ -348,7 +348,8 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   const sessionLaneKey = embeddedAgentRuntime
     ? embeddedAgentRuntime.resolveEmbeddedSessionLane(sessionKey ?? sessionIdFinal)
     : undefined;
-  const laneSize = sessionLaneKey ? getQueueSize(sessionLaneKey) : 0;
+  const resolveLaneSize = () => (sessionLaneKey ? getQueueSize(sessionLaneKey) : 0);
+  const laneSize = resolveLaneSize();
   const activeRunQueueMode = effectiveResetTriggered ? "interrupt" : resolvedQueue.mode;
   const rawActiveSessionIdForInterrupt = resolveActiveEmbeddedSessionId();
   const activeSessionIdForInterrupt = isOwnPreDispatchOperationSession(
@@ -448,12 +449,17 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     resolveActiveReplyOperationSessionId() ??
     preparedSessionState.sessionId;
   const resolveQueueBusyState = () => {
+    const currentLaneSize = resolveLaneSize();
     const embeddedActiveSessionId = resolveActiveEmbeddedSessionId();
     const replyOperationActiveSessionId = resolveActiveReplyOperationSessionId();
     const activeSessionId =
       embeddedActiveSessionId ?? replyOperationActiveSessionId ?? preparedSessionState.sessionId;
     if (!activeSessionId || (!embeddedAgentRuntime && !replyOperationActiveSessionId)) {
-      return { activeSessionId: undefined, isActive: false, isStreaming: false };
+      return {
+        activeSessionId: currentLaneSize > 0 ? activeSessionId : undefined,
+        isActive: currentLaneSize > 0,
+        isStreaming: false,
+      };
     }
     if (isOwnPreDispatchOperationSession(activeSessionId)) {
       return { activeSessionId, isActive: false, isStreaming: false };
@@ -464,6 +470,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     return {
       activeSessionId,
       isActive:
+        currentLaneSize > 0 ||
         (embeddedActiveSessionId != null &&
           (embeddedAgentRuntime?.isEmbeddedAgentRunActive(embeddedActiveSessionId) ?? false)) ||
         replyOperationActive,

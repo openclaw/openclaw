@@ -461,7 +461,12 @@ describe("runReplyAgent active steering", () => {
       },
     });
 
-    await expect(run()).resolves.toBeUndefined();
+    const result = await run();
+
+    expect(result).toEqual({
+      text: "I'm still working on the current request and added this message to that run.",
+    });
+    expect(getReplyPayloadMetadata(result ?? {})?.deliverDespiteSourceReplySuppression).toBe(true);
 
     expect(state.beforeAgentReplyRunMock).toHaveBeenCalledOnce();
     expect(state.beforeAgentReplyRunMock).toHaveBeenCalledWith(
@@ -946,6 +951,25 @@ describe("runReplyAgent heartbeat followup guard", () => {
     const result = await run();
 
     expect(result).toBeUndefined();
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("returns a visible Discord acknowledgement when a followup is queued", async () => {
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: false },
+      isActive: true,
+      shouldFollowup: true,
+      resolvedQueueMode: "collect",
+      sessionCtx: { Provider: "discord" },
+    });
+
+    const result = await run();
+
+    expect(result).toEqual({
+      text: "I'm still working on the previous request, so I queued this follow-up.",
+    });
+    expect(getReplyPayloadMetadata(result ?? {})?.deliverDespiteSourceReplySuppression).toBe(true);
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
   });

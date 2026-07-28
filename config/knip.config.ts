@@ -357,6 +357,9 @@ const config = {
     // the full-tree companion config still audits their actual consumers.
     "src/commitments/runtime.ts": ["exports"],
     "src/gateway/board-view-ticket.ts": ["exports"],
+    // These Discord status helpers are exported for focused provider tests and
+    // called in-file by monitorDiscordProvider in production.
+    "extensions/discord/src/monitor/provider.ts": ["exports"],
     // GatewayBoardProvider and boardExists are constructed/asserted by the
     // focused Control UI provider tests, not by a separate production module.
     "ui/src/lib/board/provider.ts": ["exports"],

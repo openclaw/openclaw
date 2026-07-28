@@ -19,7 +19,7 @@ import {
   buildAgentHookContextIdentityFields,
 } from "../../plugins/hook-agent-context.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
-import type { OriginatingChannelType } from "../templating.js";
+import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import {
   BLOCK_REPLY_SEND_TIMEOUT_MS,
@@ -65,6 +65,29 @@ import {
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { buildChannelSourceTurnId, readChannelSourceTurnId } from "./source-turn-id.js";
 import { createTypingSignaler } from "./typing-mode.js";
+
+const ACTIVE_TURN_ACK_CHANNELS = new Set(["discord", "telegram"]);
+
+function buildActiveTurnAck(
+  sessionCtx: TemplateContext,
+  isHeartbeat: boolean,
+  mode: "queued" | "steered",
+): ReplyPayload | undefined {
+  if (isHeartbeat) {
+    return undefined;
+  }
+  const channel = (sessionCtx.Provider ?? sessionCtx.Surface ?? "").trim().toLowerCase();
+  if (!ACTIVE_TURN_ACK_CHANNELS.has(channel)) {
+    return undefined;
+  }
+  return markReplyPayloadForSourceSuppressionDelivery({
+    text:
+      mode === "steered"
+        ? "I'm still working on the current request and added this message to that run."
+        : "I'm still working on the previous request, so I queued this follow-up.",
+  });
+}
+
 export async function runReplyAgent(
   params: RunReplyAgentParams,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
@@ -324,7 +347,7 @@ export async function runReplyAgent(
       }
       await touchActiveSessionEntry();
       typing.cleanup();
-      return undefined;
+      return buildActiveTurnAck(sessionCtx, isHeartbeat, "steered");
     }
     // The active runtime still owns the turn but cannot prove transcript adoption.
     // Keep the inbound message queued so ingress can finalize after a later run.
@@ -406,7 +429,7 @@ export async function runReplyAgent(
     } else {
       typing.cleanup();
     }
-    return undefined;
+    return buildActiveTurnAck(sessionCtx, isHeartbeat, "queued");
   }
 
   followupRun.run.config = await resolveQueuedReplyExecutionConfig(followupRun.run.config, {
