@@ -1,7 +1,20 @@
 // OutputAccumulator tests cover bounded UTF-8 tails and private spill files.
 import { readFile, rm, stat } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
+import { createWindowsOutputDecoder } from "../../../infra/windows-encoding.js";
 import { OutputAccumulator } from "./output-accumulator.js";
+
+function createUtf8TextDecoder(): {
+  decode(chunk: Buffer | string): string;
+  flush(): string;
+} {
+  const decoder = new TextDecoder();
+  return {
+    decode: (chunk) =>
+      typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true }),
+    flush: () => decoder.decode(),
+  };
+}
 
 describe("OutputAccumulator", () => {
   it("stores spilled full output in an owner-only temp file", async () => {
@@ -46,7 +59,7 @@ describe("OutputAccumulator", () => {
   it("flushes pending bytes held by every stream lane", () => {
     // Each lane decodes independently, so a truncated character left on one
     // pipe must not stop the other pipe's tail from being flushed.
-    const accumulator = new OutputAccumulator();
+    const accumulator = new OutputAccumulator({ createTextDecoder: createUtf8TextDecoder });
 
     accumulator.append(Buffer.from([0xe6, 0x97]), "stdout"); // leading bytes of 日
     accumulator.append(Buffer.from([0xe6, 0x97]), "stderr");
@@ -54,6 +67,22 @@ describe("OutputAccumulator", () => {
     const flushed = accumulator.finish();
 
     expect(flushed).toBe("��");
+  });
+
+  it("decodes Windows console code page output for session bash streams", () => {
+    const accumulator = new OutputAccumulator({
+      createTextDecoder: () =>
+        createWindowsOutputDecoder({ platform: "win32", windowsEncoding: "gbk" }),
+    });
+    const cp936DirHeader = Buffer.from([
+      199, 253, 182, 175, 198, 247, 32, 67, 32, 214, 208, 181, 196, 190, 237, 202, 199, 32, 65, 99,
+      101, 114,
+    ]);
+
+    const text = accumulator.append(cp936DirHeader, "stdout") + accumulator.finish();
+
+    expect(text).toBe("驱动器 C 中的卷是 Acer");
+    expect(accumulator.snapshot().content).toBe("驱动器 C 中的卷是 Acer");
   });
 
   it("spills tagged streams in decoded delivery order", async () => {

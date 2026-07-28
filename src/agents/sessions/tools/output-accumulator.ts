@@ -4,6 +4,7 @@
  * Keeps bounded display tails in memory while spilling full output to private temp files when needed.
  */
 import type { WriteStream } from "node:fs";
+import { createWindowsOutputDecoder } from "../../../infra/windows-encoding.js";
 import { createPrivateTempWriteStream } from "./private-temp-file.js";
 import {
   DEFAULT_MAX_BYTES,
@@ -16,6 +17,7 @@ interface OutputAccumulatorOptions {
   maxLines?: number;
   maxBytes?: number;
   tempFilePrefix?: string;
+  createTextDecoder?: () => OutputTextDecoder;
   /**
    * Builds the decoded-text transform. Called once per stream lane so stateful
    * transforms (ANSI parsers) cannot consume another stream's pending sequence.
@@ -25,9 +27,14 @@ interface OutputAccumulatorOptions {
 
 type OutputStream = "stdout" | "stderr";
 
+interface OutputTextDecoder {
+  decode(chunk: Buffer | string): string;
+  flush(): string;
+}
+
 /** Per-stream decode state. Streams are independent pipes and must not share it. */
 interface DecodeLane {
-  decoder: TextDecoder;
+  decoder: OutputTextDecoder;
   transform?: (text: string) => string;
   spillDecoded: boolean;
 }
@@ -54,6 +61,7 @@ export class OutputAccumulator {
   private readonly maxBytes: number;
   private readonly maxRollingBytes: number;
   private readonly tempFilePrefix: string;
+  private readonly createTextDecoder: () => OutputTextDecoder;
   private readonly createTextTransform?: () => (text: string) => string;
   private readonly lanes = new Map<OutputStream | undefined, DecodeLane>();
 
@@ -77,6 +85,7 @@ export class OutputAccumulator {
     this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
     this.maxRollingBytes = Math.max(this.maxBytes * 2, 1);
     this.tempFilePrefix = options.tempFilePrefix ?? "openclaw-output";
+    this.createTextDecoder = options.createTextDecoder ?? createWindowsOutputDecoder;
     this.createTextTransform = options.createTextTransform;
   }
 
@@ -84,7 +93,7 @@ export class OutputAccumulator {
     let lane = this.lanes.get(stream);
     if (!lane) {
       lane = {
-        decoder: new TextDecoder(),
+        decoder: this.createTextDecoder(),
         transform: this.createTextTransform?.(),
         // Tagged streams must spill decoded text because raw pipe bytes can
         // interleave inside a UTF-8 character. Keep untagged raw spills stable.
@@ -102,7 +111,7 @@ export class OutputAccumulator {
 
     this.totalRawBytes += data.length;
     const lane = this.lane(stream);
-    const decodedText = lane.decoder.decode(data, { stream: true });
+    const decodedText = lane.decoder.decode(data);
     const text = lane.transform?.(decodedText) ?? decodedText;
     this.appendDecodedText(text);
 
@@ -123,7 +132,7 @@ export class OutputAccumulator {
     // Every lane holds its own pending bytes, so all of them must be flushed.
     let flushed = "";
     for (const lane of this.lanes.values()) {
-      const decodedText = lane.decoder.decode();
+      const decodedText = lane.decoder.flush();
       const text = lane.transform?.(decodedText) ?? decodedText;
       if (text.length === 0) {
         continue;
