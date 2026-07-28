@@ -1336,6 +1336,9 @@ function installControlUiMockGateway(
         // Preserve any names the client did not include, appended in their prior relative order.
         const remaining = groupsState.names.filter((name) => !ordered.includes(name));
         groupsState.names = [...ordered, ...remaining];
+        if (isRecord(params) && Array.isArray(params.sectionOrder)) {
+          groupsState.sectionOrder = normalizedGroupNames(params.sectionOrder);
+        }
         persistGroupsState();
         return { ok: true, ...groupsPayload() };
       }
