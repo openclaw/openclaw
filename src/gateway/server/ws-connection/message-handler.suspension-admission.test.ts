@@ -5,6 +5,7 @@ import type { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
 import {
   getActiveGatewayRootWorkCount,
+  markGatewayRestartDraining,
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../../../process/gateway-work-admission.js";
@@ -56,7 +57,9 @@ function createLogger() {
   };
 }
 
-function attachHarness(params: { deferSocketSend?: boolean } = {}) {
+function attachHarness(
+  params: { deferSocketSend?: boolean; restoredAdmissionHeld?: boolean } = {},
+) {
   let onMessage: ((data: string) => void) | undefined;
   let finishSocketSend: (() => void) | undefined;
   let client: unknown = null;
@@ -100,7 +103,13 @@ function attachHarness(params: { deferSocketSend?: boolean } = {}) {
     gatewayMethods: [],
     events: [],
     extraHandlers: {},
-    buildRequestContext: () => ({}) as GatewayRequestContext,
+    buildRequestContext: () =>
+      ({
+        getRestoredAdmissionStatus: () =>
+          params.restoredAdmissionHeld
+            ? { status: "held", restoreOperationId: "restore-8" }
+            : { status: "not-restored" },
+      }) as GatewayRequestContext,
     nodeLifecycleDispatch: new GatewayNodeLifecycleDispatchTracker(),
     refreshHealthSnapshot: vi.fn(async () => ({}) as never),
     send,
@@ -144,6 +153,27 @@ function attachHarness(params: { deferSocketSend?: boolean } = {}) {
               mode: "backend",
             },
             role: "operator",
+            scopes: [],
+            caps: [],
+          },
+        }),
+      ),
+    sendNodeConnect: () =>
+      onMessage?.(
+        JSON.stringify({
+          type: "req",
+          id: "node-connect-1",
+          method: "connect",
+          params: {
+            minProtocol: PROTOCOL_VERSION,
+            maxProtocol: PROTOCOL_VERSION,
+            client: {
+              id: "gateway-client",
+              version: "dev",
+              platform: "test",
+              mode: "node",
+            },
+            role: "node",
             scopes: [],
             caps: [],
           },
@@ -221,6 +251,105 @@ describe("WebSocket connect suspension admission", () => {
       }
     },
   );
+
+  it("admits an authenticated operator connection during a restored admission hold", async () => {
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.commit()).toBe(true);
+    const harness = attachHarness({ restoredAdmissionHeld: true });
+
+    harness.sendConnect();
+
+    await vi.waitFor(() => {
+      expect(harness.setClient).toHaveBeenCalledOnce();
+      expect(harness.socketSend).toHaveBeenCalledOnce();
+    });
+    const response = JSON.parse(harness.socketSend.mock.calls[0]?.[0] ?? "{}") as { ok?: boolean };
+    expect(response).toMatchObject({ ok: true });
+    expect(harness.close).not.toHaveBeenCalled();
+    expect(harness.client).not.toBeNull();
+    suspension?.release();
+  });
+
+  it("keeps node connections blocked during a restored admission hold", async () => {
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.commit()).toBe(true);
+    const harness = attachHarness({ restoredAdmissionHeld: true });
+
+    harness.sendNodeConnect();
+
+    await vi.waitFor(() => {
+      expect(harness.socketSend).toHaveBeenCalledOnce();
+    });
+    const response = JSON.parse(harness.socketSend.mock.calls[0]?.[0] ?? "{}") as {
+      error?: {
+        code?: string;
+        details?: Record<string, unknown>;
+      };
+    };
+    expect(response.error).toMatchObject({
+      code: "UNAVAILABLE",
+      details: {
+        method: "connect",
+        reason: "gateway-suspending",
+        phase: "prepared",
+      },
+    });
+    expect(harness.setClient).not.toHaveBeenCalled();
+    expect(harness.client).toBeNull();
+    suspension?.release();
+  });
+
+  it("keeps operator connections blocked when restart supersedes a restored hold", async () => {
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.commit()).toBe(true);
+    markGatewayRestartDraining();
+    const harness = attachHarness({ restoredAdmissionHeld: true });
+
+    harness.sendConnect();
+
+    await vi.waitFor(() => {
+      expect(harness.socketSend).toHaveBeenCalledOnce();
+    });
+    const response = JSON.parse(harness.socketSend.mock.calls[0]?.[0] ?? "{}") as {
+      error?: {
+        code?: string;
+        details?: Record<string, unknown>;
+      };
+    };
+    expect(response.error).toMatchObject({
+      code: "UNAVAILABLE",
+      details: {
+        method: "connect",
+        reason: "gateway-restarting",
+      },
+    });
+    expect(harness.setClient).not.toHaveBeenCalled();
+    expect(harness.client).toBeNull();
+    suspension?.release();
+  });
+
+  it("tracks a restored-hold operator handshake across a concurrent restart", async () => {
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.commit()).toBe(true);
+    const harness = attachHarness({ deferSocketSend: true, restoredAdmissionHeld: true });
+
+    harness.sendConnect();
+
+    await vi.waitFor(() => {
+      expect(harness.socketSend).toHaveBeenCalledOnce();
+    });
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
+    markGatewayRestartDraining();
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
+
+    harness.finishSocketSend();
+    await vi.waitFor(() => {
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    });
+    expect(harness.setClient).toHaveBeenCalledOnce();
+    expect(harness.client).not.toBeNull();
+    suspension?.release();
+  });
 
   it("keeps an accepted handshake visible as root work until hello is sent", async () => {
     const harness = attachHarness({ deferSocketSend: true });

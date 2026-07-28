@@ -277,10 +277,10 @@ function isGatewayMethodAllowedDuringSuspension(
   if (SUSPEND_CONTROL_METHODS.has(method)) {
     return true;
   }
-  return (
-    method === "gateway.restore.status" &&
-    context.getRestoredAdmissionStatus().status !== "not-restored"
-  );
+  if (method !== "gateway.restore.status") {
+    return false;
+  }
+  return context.getRestoredAdmissionStatus().status === "held";
 }
 
 const coreGatewayHandlerMethodNames = listCoreGatewayHandlerMethodNames();
