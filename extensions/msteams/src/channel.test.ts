@@ -75,6 +75,35 @@ describe("msteamsPlugin", () => {
     expect(msteamsPlugin.approvalCapability).toBe(msTeamsApprovalAuth);
   });
 
+  it("exposes the configured DM policy to security audits", () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          ...createConfiguredMSTeamsCfg().channels?.msteams,
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+    } as OpenClawConfig;
+    const resolveDmPolicy = msteamsPlugin.security?.resolveDmPolicy;
+    if (!resolveDmPolicy) {
+      throw new Error("msteams security.resolveDmPolicy unavailable");
+    }
+
+    const result = resolveDmPolicy({
+      cfg,
+      account: msteamsPlugin.config.resolveAccount(cfg, "default"),
+    });
+
+    expect(result).toMatchObject({
+      policy: "open",
+      allowFrom: ["*"],
+      policyPath: "channels.msteams.dmPolicy",
+      allowFromPath: "channels.msteams.",
+    });
+    expect(result?.normalizeEntry?.("msteams:user:OWNER")).toBe("owner");
+  });
+
   it("advertises legacy and group-management message-tool actions together", () => {
     const actions = msteamsPlugin.actions?.describeMessageTool?.({
       cfg: createConfiguredMSTeamsCfg(),

@@ -1,5 +1,6 @@
 // Msteams plugin module implements channel behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
+import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageToolDiscovery,
@@ -103,6 +104,18 @@ const collectMSTeamsSecurityWarnings = createAllowlistProviderGroupPolicyWarning
           '- MS Teams groups: groupPolicy="open" allows any member to trigger (mention-gated). Set channels.msteams.groupPolicy="allowlist" + channels.msteams.groupAllowFrom to restrict senders.',
         ]
       : [],
+});
+
+const resolveMSTeamsDmPolicy = createScopedDmSecurityResolver<ResolvedMSTeamsAccount>({
+  channelKey: "msteams",
+  resolvePolicy: () => undefined,
+  resolveAllowFrom: () => undefined,
+  resolveAccess: ({ cfg }) => ({
+    dmPolicy: cfg.channels?.msteams?.dmPolicy,
+    allowFrom: cfg.channels?.msteams?.allowFrom,
+  }),
+  policyPathSuffix: "dmPolicy",
+  normalizeEntry: (raw) => normalizeMSTeamsUserInput(raw).toLowerCase(),
 });
 
 const loadMSTeamsChannelRuntime = createLazyRuntimeNamedExport(
@@ -1137,6 +1150,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
       },
     },
     security: {
+      resolveDmPolicy: resolveMSTeamsDmPolicy,
       collectWarnings: projectConfigWarningCollector<{ cfg: OpenClawConfig }>(
         collectMSTeamsSecurityWarnings,
       ),
