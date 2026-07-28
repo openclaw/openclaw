@@ -603,6 +603,12 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     }
     if (ambientAutostartSuppressedChannelIds.has(channelId) && optsValue.manual !== true) {
       for (const id of accountIds) {
+        const rKey = restartKey(channelId, id);
+        restartDeferredToCaller.delete(rKey);
+        knownAccountDeferredToCaller.delete(rKey);
+        recoveryStopTimedOut.delete(rKey);
+        recoveryStartRequested.delete(rKey);
+        restarts.delete(rKey);
         setStoppedRuntime(channelId, id, {
           restartPending: false,
           lastError: "ambient channel credentials suppressed for dev gateway",
