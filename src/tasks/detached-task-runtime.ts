@@ -23,6 +23,11 @@ import {
 import type { TaskRecord } from "./task-registry.types.js";
 import { findTaskByRunIdForStatus, listTasksForSessionKeyForStatus } from "./task-status-access.js";
 
+export {
+  CONTEXT_ENGINE_TURN_MAINTENANCE_TASK_KIND,
+  registerProcessOwnedTaskId,
+} from "./process-owned-task-liveness.js";
+
 const log = createSubsystemLogger("tasks/detached-runtime");
 const DETACHED_TASK_RECOVERY_WARN_MS = 5_000;
 

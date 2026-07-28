@@ -8,11 +8,13 @@ import { enqueueCommandInLane, markGatewayDraining } from "../../process/command
 import * as commandQueueModule from "../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { isProcessOwnedTaskIdActive } from "../../tasks/process-owned-task-liveness.js";
 import { createQueuedTaskRun as createQueuedTaskRunOrNull } from "../../tasks/task-executor.js";
 import { getTaskFlowById } from "../../tasks/task-flow-registry.js";
 import { getTaskById, listTasksForOwnerKey } from "../../tasks/task-registry.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import {
+  resetProcessOwnedTaskLivenessForTests,
   resetTaskFlowRegistryForTests,
   resetTaskRegistryForTests,
   setTaskRegistryDeliveryRuntimeForTests,
@@ -127,6 +129,7 @@ async function loadFreshContextEngineMaintenanceModuleForTest() {
   ({ createDeferredTurnMaintenanceAbortSignal, resetDeferredTurnMaintenanceStateForTest } =
     await import("./context-engine-maintenance.test-support.js"));
   resetDeferredTurnMaintenanceStateForTest();
+  resetProcessOwnedTaskLivenessForTests();
 }
 
 describe("createDeferredTurnMaintenanceAbortSignal", () => {
@@ -617,6 +620,9 @@ describe("runContextEngineMaintenance", () => {
           (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
         );
         expect(queuedTasks).toHaveLength(1);
+        expect(
+          isProcessOwnedTaskIdActive(expectDefined(queuedTasks[0], "queued task").taskId),
+        ).toBe(true);
 
         if (!releaseMaintenance) {
           throw new Error("Expected maintenance release callback to be initialized");
@@ -630,6 +636,9 @@ describe("runContextEngineMaintenance", () => {
               .map((task) => task.status),
           ).toEqual(["succeeded", "succeeded"]),
         );
+        for (const task of listTasksForOwnerKey(sessionKey)) {
+          expect(isProcessOwnedTaskIdActive(task.taskId)).toBe(false);
+        }
       } finally {
         vi.useRealTimers();
       }
