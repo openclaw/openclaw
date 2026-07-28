@@ -1,4 +1,4 @@
-// Exact-profile, read-only provider usage service for trusted plugin runtimes.
+// Exact-profile, read-only provider usage service for core usage reporting.
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import {

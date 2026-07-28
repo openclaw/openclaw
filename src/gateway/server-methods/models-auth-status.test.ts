@@ -957,7 +957,7 @@ describe("models.authStatus", () => {
       billing: [{ type: "budget", used: 157.85, limit: 400, unit: "USD", period: "month" }],
       accountEmail: "clawd@example.com",
     });
-    expect(result.providers[0]?.profiles[0]?.usage).toEqual({
+    expect(refreshed.providers[0]?.profiles[0]?.usage).toEqual({
       providerId: "anthropic",
       windows: [{ label: "5h", usedPercent: 22 }],
       plan: "Max (20x)",

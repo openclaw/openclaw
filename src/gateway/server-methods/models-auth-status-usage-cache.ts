@@ -249,9 +249,7 @@ function resolveProviderUsageCacheRead(params: ProviderUsageCacheParams) {
   return { credentialKey, matching, needsRefresh, providerIds, providerKey };
 }
 
-export function readProviderUsageStaleWhileRevalidate(
-  params: ProviderUsageCacheParams,
-): {
+export function readProviderUsageStaleWhileRevalidate(params: ProviderUsageCacheParams): {
   usageByProvider: Map<string, ProviderUsageStatus>;
   usageByProfile: Map<string, ProfileUsageStatus>;
 } {

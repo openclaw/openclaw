@@ -114,27 +114,24 @@ export function copyPluginToolMeta(source: AnyAgentTool, target: AnyAgentTool): 
 function pluginToolScopeKey(
   entry: PluginToolRegistration,
   pluginRegistry: PluginRegistry | undefined,
-  agentId?: string,
 ): string {
   let registryScopeId = 0;
   if (pluginRegistry) {
     registryScopeId = pluginRegistryScopeIds.get(pluginRegistry) ?? nextPluginRegistryScopeId++;
     pluginRegistryScopeIds.set(pluginRegistry, registryScopeId);
   }
-  return JSON.stringify([entry.pluginId, entry.source, registryScopeId, agentId ?? null]);
+  return JSON.stringify([entry.pluginId, entry.source, registryScopeId]);
 }
 
 function runWithPluginToolScope<T>(
   entry: PluginToolRegistration,
   pluginRegistry: PluginRegistry | undefined,
-  agentId: string | undefined,
   run: () => T,
 ): T {
   return withPluginRuntimeRegistryScope(pluginRegistry, () =>
     withPluginRuntimePluginScope(
       {
         pluginId: entry.pluginId,
-        ...(agentId ? { agentId } : {}),
         ...(entry.source ? { pluginSource: entry.source } : {}),
       },
       run,
@@ -155,9 +152,8 @@ function wrapPluginToolCallbacks(
   entry: PluginToolRegistration,
   pluginRegistry: PluginRegistry | undefined,
   tool: AnyAgentTool,
-  agentId?: string,
 ): AnyAgentTool {
-  const key = pluginToolScopeKey(entry, pluginRegistry, agentId);
+  const key = pluginToolScopeKey(entry, pluginRegistry);
   const scopedByKey = scopedPluginTools.get(tool);
   const cached = scopedByKey?.get(key);
   if (cached) {
@@ -167,7 +163,7 @@ function wrapPluginToolCallbacks(
   const prepareArguments = tool.prepareArguments;
   const scopedPrepareArguments = prepareArguments
     ? (args: unknown) =>
-        runWithPluginToolScope(entry, pluginRegistry, agentId, () =>
+        runWithPluginToolScope(entry, pluginRegistry, () =>
           Reflect.apply(prepareArguments, tool, [args]),
         )
     : undefined;
@@ -180,7 +176,6 @@ function wrapPluginToolCallbacks(
     runWithPluginToolScope(
       entry,
       pluginRegistry,
-      agentId,
       () =>
         Reflect.apply(tool.execute, tool, [toolCallId, params, signal, onUpdate]) as ReturnType<
           AnyAgentTool["execute"]
@@ -228,16 +223,13 @@ function wrapPluginToolFactoryResult(
   entry: PluginToolRegistration,
   pluginRegistry: PluginRegistry | undefined,
   result: PluginToolFactoryResult,
-  agentId?: string,
 ): PluginToolFactoryResult {
   if (Array.isArray(result)) {
     return result.map((tool) =>
-      isAgentTool(tool) ? wrapPluginToolCallbacks(entry, pluginRegistry, tool, agentId) : tool,
+      isAgentTool(tool) ? wrapPluginToolCallbacks(entry, pluginRegistry, tool) : tool,
     );
   }
-  return isAgentTool(result)
-    ? wrapPluginToolCallbacks(entry, pluginRegistry, result, agentId)
-    : result;
+  return isAgentTool(result) ? wrapPluginToolCallbacks(entry, pluginRegistry, result) : result;
 }
 
 function resolvePluginToolFactory(
@@ -245,9 +237,8 @@ function resolvePluginToolFactory(
   pluginRegistry: PluginRegistry | undefined,
   ctx: OpenClawPluginToolContext,
 ) {
-  const agentId = typeof ctx.agentId === "string" ? ctx.agentId.trim() || undefined : undefined;
-  return runWithPluginToolScope(entry, pluginRegistry, agentId, () =>
-    wrapPluginToolFactoryResult(entry, pluginRegistry, entry.factory(ctx), agentId),
+  return runWithPluginToolScope(entry, pluginRegistry, () =>
+    wrapPluginToolFactoryResult(entry, pluginRegistry, entry.factory(ctx)),
   );
 }
 
