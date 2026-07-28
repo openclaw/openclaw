@@ -625,9 +625,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         const existingTask = store.tasks.get(id);
         const existingAbort = store.aborts.get(id);
         const abortedTask = existingAbort?.signal.aborted === true;
-        const shouldRetryAfterCallerDeferredTask =
-          includeKnownAccounts && abortedTask && restartDeferredToCaller.has(rKey);
-        if (currentStop?.status === "rejected" && !shouldRetryAfterCallerDeferredTask) {
+        const hasCallerDeferredStop = includeKnownAccounts && restartDeferredToCaller.has(rKey);
+        const shouldRetryAfterCallerDeferredTask = hasCallerDeferredStop && abortedTask;
+        if (currentStop?.status === "rejected" && !hasCallerDeferredStop) {
           return;
         }
         if (existingTask) {
@@ -693,6 +693,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               return;
             }
           }
+        }
+        if (currentStop?.status === "rejected" && hasCallerDeferredStop) {
+          store.stops.delete(id);
+          recoveryStopTimedOut.delete(rKey);
+          recoveryStartRequested.delete(rKey);
         }
         const existingStart = store.starting.get(id);
         if (existingStart) {
