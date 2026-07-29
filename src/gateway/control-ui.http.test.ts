@@ -42,8 +42,12 @@ import { makeMockHttpResponse } from "./test-http-response.js";
 // Keeps bootstrap payload tests deterministic: the real resolver reports the
 // git branch of this checkout, which varies across CI and dev machines.
 const devInstallBranchMock = vi.hoisted(() => ({ branch: null as string | null }));
+const probeMediaFileDescriptorMock = vi.hoisted(() => vi.fn(async () => ({})));
 vi.mock("../infra/dev-install-branch.js", () => ({
   resolveDevInstallGitBranch: async () => devInstallBranchMock.branch,
+}));
+vi.mock("../media/media-probe.js", () => ({
+  probeMediaFileDescriptor: probeMediaFileDescriptorMock,
 }));
 
 const REAL_PNG = Buffer.from(
@@ -54,6 +58,8 @@ const REAL_PNG_DATA_URL = `data:image/png;base64,${REAL_PNG.toString("base64")}`
 const testTempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   resetPluginRuntimeStateForTest();
+  probeMediaFileDescriptorMock.mockReset();
+  probeMediaFileDescriptorMock.mockResolvedValue({});
 });
 
 describe("handleControlUiHttpRequest", () => {
@@ -96,7 +102,7 @@ describe("handleControlUiHttpRequest", () => {
       assistantAvatarSource?: string | null;
       assistantAvatarStatus?: "none" | "local" | "remote" | "data" | null;
       assistantAvatarReason?: string | null;
-      assistantAgentId: string;
+      assistantAgentId?: string;
       devGitBranch?: string;
       localMediaPreviewRoots?: string[];
       seamColor?: string;
@@ -735,6 +741,33 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("reports assistant audio size, type, and probed duration metadata", async () => {
+    probeMediaFileDescriptorMock.mockResolvedValueOnce({ durationMs: 2345 });
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-audio-meta-",
+      fn: async (tmpRoot) => {
+        const filePath = path.join(tmpRoot, "voice.mp3");
+        const contents = Buffer.from("ID3audio-fixture");
+        await fs.writeFile(filePath, contents);
+        const { res, handled, end } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?meta=1&source=${encodeURIComponent(filePath)}&token=test-token`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(responseJson(end)).toMatchObject({
+          available: true,
+          mimeType: "audio/mpeg",
+          sizeBytes: contents.byteLength,
+          durationMs: 2345,
+        });
+        expect(probeMediaFileDescriptorMock).toHaveBeenCalledWith(expect.any(Number), "audio");
+      },
+    });
+  });
+
   it("reports assistant media metadata when the process clock is outside the Date range", async () => {
     const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
     try {
@@ -1150,7 +1183,10 @@ describe("handleControlUiHttpRequest", () => {
           {
             root: { kind: "resolved", path: tmp },
             config: {
-              agents: { defaults: { workspace: tmp } },
+              agents: {
+                defaults: { workspace: tmp },
+                list: [{ id: "roboclaw", default: true, workspace: tmp }],
+              },
               ui: {
                 seamColor: "#1A2b3C",
                 assistant: { name: "</script><script>alert(1)//", avatar: "</script>.png" },
@@ -1165,12 +1201,28 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.assistantAvatar).toBe("A");
         expect(parsed.assistantAvatarStatus).toBe("none");
         expect(parsed.assistantAvatarReason).toBe("missing");
-        expect(parsed.assistantAgentId).toBe("main");
+        expect(parsed.assistantAgentId).toBe("roboclaw");
         expect(parsed.seamColor).toBe("#1A2b3C");
         expect(parsed.timeFormat).toBe("auto");
         expect(parsed.terminalEnabled).toBe(true);
         expect(parsed.devGitBranch).toBeUndefined();
         expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);
+      },
+    });
+  });
+
+  it("omits the assistant agent id without a config snapshot", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { res, end } = makeMockHttpResponse();
+        const handled = await handleControlUiHttpRequest(
+          { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
+          res,
+          { root: { kind: "resolved", path: tmp } },
+        );
+
+        expect(handled).toBe(true);
+        expect(parseBootstrapPayload(end)).not.toHaveProperty("assistantAgentId");
       },
     });
   });
@@ -1669,7 +1721,7 @@ describe("handleControlUiHttpRequest", () => {
             expect(handled).toBe(true);
             expect(res.statusCode).toBe(200);
             const parsed = parseBootstrapPayload(end);
-            expect(parsed.assistantAgentId).toBe("main");
+            expect(parsed.assistantAgentId).toBeUndefined();
           },
         });
       },
@@ -1823,7 +1875,7 @@ describe("handleControlUiHttpRequest", () => {
         expect(res.statusCode).not.toBe(404);
         const parsed = parseBootstrapPayload(end);
         expect(parsed.basePath).toBe("");
-        expect(parsed.assistantAgentId).toBe("main");
+        expect(parsed.assistantAgentId).toBeUndefined();
       },
     });
   });

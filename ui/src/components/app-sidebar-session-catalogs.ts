@@ -2,6 +2,8 @@ import type {
   SessionCatalog,
   SessionCatalogSession,
 } from "../../../packages/gateway-protocol/src/index.ts";
+import type { ApplicationNavigationOptions } from "../app/context.ts";
+import { t } from "../i18n/index.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import type {
   CatalogSessionContinuedDetail,
@@ -9,11 +11,19 @@ import type {
 } from "../lib/sessions/catalog-key.ts";
 
 export function formatSidebarTimestamp(timestampMs: number | null | undefined): string {
-  const value = formatRelativeTimestamp(timestampMs, { fallback: "" });
-  if (value === "just now") {
-    return "now";
+  const now = Date.now();
+  if (
+    timestampMs != null &&
+    Number.isFinite(timestampMs) &&
+    timestampMs <= now &&
+    now - timestampMs < 60_000
+  ) {
+    return t("common.now");
   }
-  return value.endsWith(" ago") ? value.slice(0, -" ago".length) : value;
+  return formatRelativeTimestamp(timestampMs, {
+    fallback: "",
+    suffix: timestampMs != null && timestampMs > now,
+  });
 }
 
 /** Session keys already adopted into OpenClaw sessions; the regular list hides
@@ -42,7 +52,8 @@ export type CatalogBackingSessionDisplay = {
 
 export type CatalogSessionMenuRequest = {
   key: CatalogSessionKey;
-  search: string;
+  routeId: "chat" | "new-session";
+  navigation: ApplicationNavigationOptions;
   canOpenTerminal: boolean;
   meta: string;
 };

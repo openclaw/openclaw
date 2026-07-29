@@ -1,17 +1,23 @@
 import { nothing, type ReactiveController, type ReactiveControllerHost } from "lit";
+import type { AgentIdentityResult } from "../api/types.ts";
 import {
   cancelRoutePreload,
   scheduleRoutePreload,
   type NavigationRouteId,
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
-import { pathForRoute, type RouteId } from "../app-route-paths.ts";
+import { isSessionRouteId, pathForRoute, type RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
+import {
+  scopedSessionPullRequestKey,
+  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+  sessionPullRequestsForGateway,
+} from "../lib/session-pull-requests.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
-import { searchForSession } from "../lib/sessions/index.ts";
+import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import { SidebarCatalogMenuController } from "./app-sidebar-catalog-menu.ts";
 import { isSidebarRouteActive, renderSidebarNavRoute } from "./app-sidebar-nav-menus.ts";
@@ -102,7 +108,10 @@ export interface SidebarMenusControllerHost
     activeId: string;
     agent: SidebarMenuAgent | undefined;
     agents: readonly SidebarMenuAgent[];
+    identity: AgentIdentityResult | null;
+    identities: ReadonlyMap<string, AgentIdentityResult>;
   };
+  ensureAgentIdentities(agentIds: readonly string[]): void;
   agentUnreadCount(agentId: string): number;
   askAgentCapabilities(agentId: string): void;
   getRouteSessionKey(): string;
@@ -161,7 +170,7 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
       beforeOpen: () => void this.dismissTransientMenus(),
       requestUpdate: () => host.requestUpdate(),
       terminalAvailable: () => host.terminalAvailable,
-      navigate: (search) => host.onNavigate?.("chat", { search }),
+      navigate: ({ routeId, navigation }) => host.onNavigate?.(routeId, navigation),
     });
   }
 
@@ -317,6 +326,10 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
   }
 
   closeSessionMenu() {
+    const gateway = this.host.sessionDataContext?.gateway;
+    if (gateway) {
+      sessionPullRequestsForGateway(gateway).unwatch(this);
+    }
     this.sessionMenuTrigger = null;
     this.sessionMenuWorkVersion += 1;
     this.updateState("sessionMenu", null);
@@ -345,13 +358,21 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
       return;
     }
     const { selectedAgentId } = this.host.getSessionNavigationState();
+    const store = sessionPullRequestsForGateway(context.gateway);
+    const pullRequestKey = scopedSessionPullRequestKey(
+      session.key,
+      parseAgentSessionKey(session.key)?.agentId ?? selectedAgentId,
+    );
     void fetchSessionMenuWork({
       client,
       pullRequestsAvailable:
-        isGatewayMethodAdvertised(context.gateway.snapshot, "controlUi.sessionPullRequests") ===
-        true,
+        isGatewayMethodAdvertised(
+          context.gateway.snapshot,
+          SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+        ) === true,
       sessionKey: session.key,
       agentId: parseAgentSessionKey(session.key)?.agentId ?? selectedAgentId,
+      loadPullRequests: () => store.load(this, pullRequestKey),
       worktreeId: session.worktreeId,
     }).then((work) => {
       if (version === this.sessionMenuWorkVersion) {
@@ -531,19 +552,20 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     if (!this.isRouteEnabled(routeId)) {
       return nothing;
     }
-    const routeSessionKey = routeId === "chat" ? this.host.getRouteSessionKey() : "";
-    const chatSearch =
-      routeId === "chat" && routeSessionKey ? searchForSession(routeSessionKey) : "";
+    const routeSessionKey = isSessionRouteId(routeId) ? this.host.getRouteSessionKey() : "";
+    const context = this.host.sessionDataContext;
+    const sessionTarget =
+      isSessionRouteId(routeId) && routeSessionKey && context
+        ? sessionNavigationTarget({ context, face: routeId, sessionKey: routeSessionKey })
+        : null;
     return renderSidebarNavRoute({
       routeId,
-      href: chatSearch
-        ? `${pathForRoute("chat", this.host.basePath)}${chatSearch}`
-        : pathForRoute(routeId, this.host.basePath),
+      href: sessionTarget?.href ?? pathForRoute(routeId, this.host.basePath),
       active:
         isSidebarRouteActive(this.host.activeRouteId, routeId) &&
         !(routeId === "workboard" && this.activeWorkboardBoardIsPinned()),
       onNavigate: () => {
-        this.host.onNavigate?.(routeId, chatSearch ? { search: chatSearch } : undefined);
+        this.host.onNavigate?.(routeId, sessionTarget?.options);
       },
       onPreload: (event, immediate) => this.preloadRoute(routeId, event, immediate),
       onCancelPreload: this.cancelPreload,

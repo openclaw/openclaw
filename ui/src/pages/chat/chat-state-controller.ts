@@ -1,9 +1,12 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { disposeSelectedSessionMessageSubscription } from "./chat-history.ts";
 import { subscribeChatOutboxProjection } from "./chat-queue.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { invalidateImageLightbox } from "./chat-state-page.ts";
 import { cancelChatStreamRenderFrame } from "./chat-state-render.ts";
+import { ChatAttachmentReadLifecycle } from "./components/chat-attachments.ts";
+import { releaseChatMediaResourceSubscriber } from "./components/chat-message-media.ts";
 import { clearSessionWorkspaceTimers } from "./components/chat-session-workspace.ts";
 import {
   ChatComposerPersistence,
@@ -25,6 +28,7 @@ type ChatRenderLifecycleScope = {
 };
 
 export class ChatStateController<TState extends ChatPageHost> implements ReactiveController {
+  readonly attachmentReads: ChatAttachmentReadLifecycle;
   private readonly composerPersistence: ChatComposerPersistence;
   private stateValue: TState | undefined;
   private previousChatLoading = false;
@@ -44,6 +48,9 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   private renderLifecycleScope: ChatRenderLifecycleScope | undefined;
 
   constructor(private readonly host: ReactiveControllerHost) {
+    this.attachmentReads = new ChatAttachmentReadLifecycle(() =>
+      this.stateValue?.requestUpdate?.(),
+    );
     this.composerPersistence = new ChatComposerPersistence(() => this.stateValue);
     host.addController(this);
   }
@@ -69,6 +76,9 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
 
   attach(state: TState) {
     if (this.stateValue && this.stateValue !== state) {
+      disposeSelectedSessionMessageSubscription(this.stateValue);
+      releaseChatMediaResourceSubscriber(this.stateValue.requestUpdate);
+      this.attachmentReads.abortReads();
       this.composerPersistence.stop();
       cancelChatStreamRenderFrame(this.stateValue);
       cancelChatScroll(this.stateValue);
@@ -102,6 +112,9 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       const result = navigateInputHistory(input);
       if (result.handled) {
         this.composerPersistence.schedule();
+        // A history recall mutates chatMessage directly; without invalidating,
+        // the composer textarea stays empty until an unrelated event re-renders.
+        state.renderLifecycle.invalidate();
       }
       return result;
     };
@@ -308,6 +321,10 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   }
 
   adoptComposerRoute() {
+    // File reads belong to their original session; abort before a late load can
+    // attach its payload to the pane's newly adopted route.
+    releaseChatMediaResourceSubscriber(this.stateValue?.requestUpdate);
+    this.attachmentReads.abortReads();
     this.composerPersistence.adoptCurrentRoute();
   }
 
@@ -345,6 +362,8 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     }
     const state = this.stateValue;
     if (state) {
+      disposeSelectedSessionMessageSubscription(state);
+      releaseChatMediaResourceSubscriber(state.requestUpdate);
       cancelChatStreamRenderFrame(state);
       cancelChatScroll(state);
       invalidateImageLightbox(state);
@@ -365,6 +384,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   hostDisconnected() {
     this.renderLifecycleConnected = false;
     this.cancelRenderLifecycleScope();
+    this.attachmentReads.abortReads();
     // Flush while stateValue still points at the active session. Composer
     // persistence is owned here so controller registration order cannot lose it.
     this.composerPersistence.stop();
