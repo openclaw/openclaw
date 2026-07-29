@@ -1,3 +1,4 @@
+import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 /**
  * Telnyx model catalog, compat metadata, and live row projection.
  */
@@ -157,7 +158,7 @@ export function projectTelnyxLiveModels(rows: readonly unknown[]): ModelDefiniti
 }
 
 /** Resolves a forward-compatible Telnyx model id not yet in the bundled catalog. */
-export function resolveTelnyxDynamicModel(modelId: string) {
+export function resolveTelnyxDynamicModel(modelId: string): ProviderRuntimeModel | undefined {
   const id = modelId.trim();
   if (!id || TELNYX_MODEL_CATALOG.some((model) => model.id === id)) {
     return undefined;
