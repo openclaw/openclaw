@@ -62,7 +62,15 @@ node -e '
 command -v npm >/dev/null
 
 echo "==> Run installer (non-root user)"
-curl -fsSL --connect-timeout 30 --max-time 300 -- "$INSTALL_URL" | bash
+# Download the installer to a temp file first so a stalled connection or hung
+# response body cannot wedge the container run forever. Piping curl straight to
+# bash inherits curl's default of no total timeout, so bound both connection
+# setup and the total transfer while preserving the established 300-second
+# transfer budget used by the sibling e2e runner.
+installer="$(mktemp)"
+trap 'rm -f "$installer"' EXIT
+curl -fsSL --connect-timeout 30 --max-time 300 -o "$installer" -- "$INSTALL_URL"
+bash "$installer"
 
 # Ensure PATH picks up user npm prefix
 export PATH="$HOME/.npm-global/bin:$PATH"
