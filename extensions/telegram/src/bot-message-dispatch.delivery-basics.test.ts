@@ -368,6 +368,23 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-basics", () => {
     expectRecordFields((delivery.replies as Array<unknown>)[0], { replyToId: "1001" });
   });
 
+  it("passes the configured link-preview policy to the draft stream owner", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "See https://example.com" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext(),
+      telegramCfg: { linkPreview: false },
+    });
+
+    expectDraftStreamParams({ linkPreview: false });
+  });
+
   it("passes native quote candidates for explicit reply targets", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: "Hello", replyToId: "9001" }, { kind: "final" });

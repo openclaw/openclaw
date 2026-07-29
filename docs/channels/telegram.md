@@ -389,7 +389,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     Default: off, for client compatibility — some current Desktop, Web, Android, and third-party clients render accepted rich messages as unsupported. Keep this off unless every client used with the bot can render them. `/status` shows whether the current session has rich messages on or off.
 
-    Link previews are on by default. `channels.telegram.linkPreview: false` disables automatic entity detection for rich text.
+    Link previews are on by default. `channels.telegram.linkPreview: false` suppresses preview cards for standard and streamed text, and disables automatic entity detection for rich text.
 
   </Accordion>
 

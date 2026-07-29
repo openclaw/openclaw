@@ -1171,6 +1171,62 @@ describe("createTelegramDraftStream", () => {
     });
   });
 
+  it("preserves disabled link previews across plain draft sends and edits", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, { linkPreview: false });
+    const previewOptions = { link_preview_options: { is_disabled: true } };
+
+    stream.update("First https://example.com");
+    await stream.flush();
+    expectPreviewSend(api, "First https://example.com", previewOptions);
+
+    stream.update("Second https://example.com");
+    await stream.flush();
+    expectPreviewEdit(api, "Second https://example.com", previewOptions);
+  });
+
+  it("preserves disabled link previews across HTML and plain fallback draft requests", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage
+      .mockRejectedValueOnce(new Error("can't parse entities: unsupported tag"))
+      .mockResolvedValueOnce({ message_id: 17 });
+    const stream = createDraftStream(api, { linkPreview: false });
+    const previewOptions = { link_preview_options: { is_disabled: true } };
+
+    stream.updatePreview({ text: "<b>First https://example.com</b>", parseMode: "HTML" });
+    await stream.flush();
+    expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "<b>First https://example.com</b>", {
+      parse_mode: "HTML",
+      ...previewOptions,
+    });
+    expect(api.sendMessage).toHaveBeenNthCalledWith(
+      2,
+      123,
+      "First https://example.com",
+      previewOptions,
+    );
+
+    api.editMessageText
+      .mockRejectedValueOnce(new Error("can't parse entities: unsupported tag"))
+      .mockResolvedValueOnce(true);
+    stream.updatePreview({ text: "<b>Second https://example.com</b>", parseMode: "HTML" });
+    await stream.flush();
+    expect(api.editMessageText).toHaveBeenNthCalledWith(
+      1,
+      123,
+      17,
+      "<b>Second https://example.com</b>",
+      { parse_mode: "HTML", ...previewOptions },
+    );
+    expect(api.editMessageText).toHaveBeenNthCalledWith(
+      2,
+      123,
+      17,
+      "Second https://example.com",
+      previewOptions,
+    );
+  });
+
   it("uses rich send and edit for previews when explicitly enabled", async () => {
     const api = createMockDraftApi();
     const stream = createDraftStream(api, { richMessages: true });
@@ -1214,6 +1270,51 @@ describe("createTelegramDraftStream", () => {
     expect(plain).toContain("Claude Opus");
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining("rich-degrade=plain-fallback:rich-entity-invalid"),
+    );
+  });
+
+  it("owns disabled link detection across rich drafts and their plain fallbacks", async () => {
+    const api = createMockDraftApi();
+    api.raw.sendRichMessage.mockRejectedValueOnce(
+      new Error("400: Bad Request: RICH_MESSAGE_URL_INVALID"),
+    );
+    api.raw.editMessageText.mockRejectedValueOnce(
+      new Error("400: Bad Request: RICH_MESSAGE_URL_INVALID"),
+    );
+    const stream = createDraftStream(api, { linkPreview: false, richMessages: true });
+    const previewOptions = { link_preview_options: { is_disabled: true } };
+
+    stream.updatePreview({
+      text: "First https://example.com",
+      richMessage: { blocks: [{ type: "paragraph", text: "First https://example.com" }] },
+    });
+    await stream.flush();
+
+    const richSend = api.raw.sendRichMessage.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(richSend).not.toHaveProperty("link_preview_options");
+    expect(richSend.rich_message).toEqual({
+      blocks: [{ type: "paragraph", text: "First https://example.com" }],
+      skip_entity_detection: true,
+    });
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "First https://example.com", previewOptions);
+
+    stream.updatePreview({
+      text: "Second https://example.com",
+      richMessage: { blocks: [{ type: "paragraph", text: "Second https://example.com" }] },
+    });
+    await stream.flush();
+
+    const richEdit = api.raw.editMessageText.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(richEdit).not.toHaveProperty("link_preview_options");
+    expect(richEdit.rich_message).toEqual({
+      blocks: [{ type: "paragraph", text: "Second https://example.com" }],
+      skip_entity_detection: true,
+    });
+    expect(api.editMessageText).toHaveBeenCalledWith(
+      123,
+      17,
+      "Second https://example.com",
+      previewOptions,
     );
   });
 

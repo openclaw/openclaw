@@ -137,11 +137,12 @@ function planTelegramDraftPages(
   preview: TelegramDraftPreview,
   maxChars: number,
   richMessages: boolean,
+  disableLinkPreviews: boolean,
 ): PlannedTelegramDraftPage[] {
   if (richMessages) {
     const previewRich = preview.richMessage;
     if (previewRich) {
-      const skipEntityDetection = previewRich.skip_entity_detection === true;
+      const skipEntityDetection = disableLinkPreviews || previewRich.skip_entity_detection === true;
       return splitTelegramRichBlocks(previewRich.blocks, {
         textLimit: maxChars,
       }).map((blocks) => {
@@ -157,7 +158,9 @@ function planTelegramDraftPages(
         };
       });
     }
-    const plan = buildTelegramRichMarkdownPlan(preview.text);
+    const plan = buildTelegramRichMarkdownPlan(preview.text, {
+      skipEntityDetection: disableLinkPreviews,
+    });
     // Every page carries the plan's document-level skip flag: the render already
     // committed to that linkify decision, so per-page re-derivation would leave
     // unprotected file refs in pages without the skip trigger.
@@ -185,7 +188,10 @@ function planTelegramDraftPages(
           text: preview.text,
           sourceText: preview.text,
           sourceTextMode: "markdown",
-          richMessage: { blocks: [{ type: "paragraph", text: preview.text }] },
+          richMessage: {
+            blocks: [{ type: "paragraph", text: preview.text }],
+            ...(planSkip ? { skip_entity_detection: true } : {}),
+          },
         },
       ];
     }
@@ -234,6 +240,7 @@ export function createTelegramDraftStream(params: {
   replyToMessageId?: number;
   replyToMode?: ReplyToMode;
   richMessages?: boolean;
+  linkPreview?: boolean;
   throttleMs?: number;
   /** Minimum chars before sending first message (debounce for push notifications) */
   minInitialChars?: number;
@@ -252,6 +259,18 @@ export function createTelegramDraftStream(params: {
   const throttleMs = Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS);
   const minInitialChars = params.minInitialChars;
   const chatId = params.chatId;
+  const linkPreviewOptions =
+    params.linkPreview === false ? ({ is_disabled: true } as const) : undefined;
+  const withTextLinkPreviewOptions = <T extends Record<string, unknown>>(requestParams: T) =>
+    linkPreviewOptions
+      ? { ...requestParams, link_preview_options: linkPreviewOptions }
+      : requestParams;
+  const editPlainMessageText = (messageId: number, text: string) =>
+    linkPreviewOptions
+      ? params.api.editMessageText(chatId, messageId, text, {
+          link_preview_options: linkPreviewOptions,
+        })
+      : params.api.editMessageText(chatId, messageId, text);
   const threadParams = buildTelegramThreadParams(params.thread);
   const replyToMessageId = normalizeTelegramReplyToMessageId(params.replyToMessageId);
   const initialSendMessageParams =
@@ -377,14 +396,22 @@ export function createTelegramDraftStream(params: {
           throw err;
         }
         return {
-          message: await params.api.sendMessage(chatId, fallbackPlan.plainText, sendMessageParams),
+          message: await params.api.sendMessage(
+            chatId,
+            fallbackPlan.plainText,
+            withTextLinkPreviewOptions(sendMessageParams),
+          ),
           snapshot: fallbackSnapshot(fallbackPlan.plainText),
         };
       }
     }
     if (page.sourceTextMode !== "html") {
       return {
-        message: await params.api.sendMessage(chatId, page.text, sendMessageParams),
+        message: await params.api.sendMessage(
+          chatId,
+          page.text,
+          withTextLinkPreviewOptions(sendMessageParams),
+        ),
         snapshot: page,
       };
     }
@@ -392,7 +419,7 @@ export function createTelegramDraftStream(params: {
       return {
         message: await params.api.sendMessage(chatId, page.sourceText, {
           parse_mode: "HTML" as const,
-          ...sendMessageParams,
+          ...withTextLinkPreviewOptions(sendMessageParams),
         }),
         snapshot: page,
       };
@@ -401,7 +428,11 @@ export function createTelegramDraftStream(params: {
         throw err;
       }
       return {
-        message: await params.api.sendMessage(chatId, page.text, sendMessageParams),
+        message: await params.api.sendMessage(
+          chatId,
+          page.text,
+          withTextLinkPreviewOptions(sendMessageParams),
+        ),
         snapshot: fallbackSnapshot(page.text),
       };
     }
@@ -436,23 +467,24 @@ export function createTelegramDraftStream(params: {
           if (!fallbackPlan) {
             throw err;
           }
-          await params.api.editMessageText(chatId, targetMessageId, fallbackPlan.plainText);
+          await editPlainMessageText(targetMessageId, fallbackPlan.plainText);
           acceptedSnapshot = fallbackSnapshot(fallbackPlan.plainText);
         }
       } else if (page.sourceTextMode === "html") {
         try {
           await params.api.editMessageText(chatId, targetMessageId, page.sourceText, {
             parse_mode: "HTML" as const,
+            ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
           });
         } catch (err) {
           if (!isTelegramHtmlParseError(err)) {
             throw err;
           }
-          await params.api.editMessageText(chatId, targetMessageId, page.text);
+          await editPlainMessageText(targetMessageId, page.text);
           acceptedSnapshot = fallbackSnapshot(page.text);
         }
       } else {
-        await params.api.editMessageText(chatId, targetMessageId, page.sourceText);
+        await editPlainMessageText(targetMessageId, page.sourceText);
       }
       if (sendGeneration === generation && streamMessageId === targetMessageId) {
         streamMessageSnapshot = acceptedSnapshot;
@@ -634,10 +666,12 @@ export function createTelegramDraftStream(params: {
         : (params.renderText?.(trimmed) ?? { text: trimmed });
     // Render once, then split the transport HTML so page boundaries preserve
     // open fences, indentation, and nested tags.
+    // A retained finalPagePlan is created below only from policy-normalized pages.
+    // Reuse those exact pages on retry so rendering and linkify policy cannot drift.
     const pages =
       streamState.final && finalPagePlan
         ? finalPagePlan.pages
-        : planTelegramDraftPages(fullPreview, maxChars, richMessages);
+        : planTelegramDraftPages(fullPreview, maxChars, richMessages, params.linkPreview === false);
     const firstPage = pages[0];
     if (!firstPage) {
       return false;

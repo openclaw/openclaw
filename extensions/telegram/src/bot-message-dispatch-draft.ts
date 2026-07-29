@@ -116,7 +116,6 @@ export function createTelegramDraftController(params: {
           text,
           richMessage: buildTelegramRichMarkdown(text, {
             tableMode: params.tableMode,
-            skipEntityDetection: params.telegramCfg.linkPreview === false,
           }),
         }
       : {
@@ -135,6 +134,7 @@ export function createTelegramDraftController(params: {
           replyToMessageId: params.draftReplyToMessageId,
           replyToMode: params.replyToMode,
           richMessages: params.telegramCfg.richMessages,
+          linkPreview: params.telegramCfg.linkPreview,
           minInitialChars: params.streamMode === "progress" ? 0 : DRAFT_MIN_INITIAL_CHARS,
           renderText: renderStreamText,
           onRetainedPage: (page) => {
