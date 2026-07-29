@@ -36,7 +36,8 @@
               "output": 13.5,
               "cacheRead": 0.27,
               "cacheWrite": 0
-            }
+            },
+            "compat": { "codeMode": "capable" }
           },
           {
             "id": "moonshotai/Kimi-K2.6",
@@ -78,7 +79,8 @@
               "output": 4,
               "cacheRead": 0.2,
               "cacheWrite": 0
-            }
+            },
+            "compat": { "codeMode": "capable" }
           },
           {
             "id": "zai-org/GLM-5.1-FP8",
@@ -218,7 +220,8 @@
               "output": 5,
               "cacheRead": 0.1,
               "cacheWrite": 0
-            }
+            },
+            "compat": { "codeMode": "capable" }
           }
         ]
       }

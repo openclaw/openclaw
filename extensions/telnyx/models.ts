@@ -42,7 +42,9 @@ export function buildStaticTelnyxModels(): ModelDefinitionConfig[] {
       catalog: TELNYX_MANIFEST_CATALOG,
       decorate: (normalized) => ({
         ...normalized,
-        compat: { ...TELNYX_MODEL_COMPAT },
+        // Manifest rows carry per-model compat (e.g. codeMode tiers for shared
+        // upstream models); keep it layered over the provider-wide transport policy.
+        compat: { ...TELNYX_MODEL_COMPAT, ...normalized.compat },
       }),
     }),
   );
