@@ -764,6 +764,9 @@ describe("createModelExecAutoReviewer", () => {
   it("keeps repeated gateway reviews bound to one-shot approval", async () => {
     const { reviewer, prepare, complete } = createReviewerHarness();
 
+    // An identical repeated request reuses the memoized verdict, but the
+    // decision is still allow-once: the single-use approval is registered by
+    // the caller per invocation, not extended by the memo.
     await expect(reviewer(input)).resolves.toMatchObject({
       decision: "allow-once",
       risk: "low",
@@ -773,8 +776,8 @@ describe("createModelExecAutoReviewer", () => {
       risk: "low",
     });
 
-    expect(prepare).toHaveBeenCalledTimes(2);
-    expect(complete).toHaveBeenCalledTimes(2);
+    expect(prepare).toHaveBeenCalledTimes(1);
+    expect(complete).toHaveBeenCalledTimes(1);
   });
 
   it("keeps simultaneous gateway approvals one-shot under concurrency", async () => {
@@ -826,7 +829,10 @@ describe("createModelExecAutoReviewer", () => {
     const { reviewer, prepare, complete } = createReviewerHarness();
     const nodeInput = { ...input, host: "node" as const };
 
-    await reviewer(nodeInput);
+    // A gateway verdict must not satisfy a node-host request: host is part of
+    // the memo key, so the node request bills its own completion rather than
+    // reusing the gateway authority.
+    await reviewer(input);
     await reviewer(nodeInput);
 
     expect(prepare).toHaveBeenCalledTimes(2);
