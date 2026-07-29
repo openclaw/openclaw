@@ -11,6 +11,7 @@ export type SlackSystemEventTestOverrides = {
   allowFrom?: string[];
   channelType?: "im" | "channel";
   channelUsers?: string[];
+  canonicalRoomMentionEvent?: "auto" | "message";
   reactionMode?: "off" | "own" | "all" | "allowlist";
   reactionAllowlist?: Array<string | number>;
   userNames?: Record<string, string>;
@@ -34,6 +35,7 @@ export function createSlackSystemEventTestHarness(overrides?: SlackSystemEventTe
     dmEnabled: true,
     dmPolicy: overrides?.dmPolicy ?? "open",
     defaultRequireMention: true,
+    canonicalRoomMentionEvent: overrides?.canonicalRoomMentionEvent ?? "auto",
     channelsConfig: overrides?.channelUsers
       ? {
           C1: {

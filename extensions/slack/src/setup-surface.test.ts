@@ -121,7 +121,6 @@ describe("slackSetupWizard.prepare", () => {
       oauth_config: {
         scopes: {
           bot: [
-            "app_mentions:read",
             "assistant:write",
             "channels:history",
             "channels:read",
@@ -152,7 +151,6 @@ describe("slackSetupWizard.prepare", () => {
         event_subscriptions: {
           bot_events: [
             "app_home_opened",
-            "app_mention",
             "app_context_changed",
             "channel_rename",
             "member_joined_channel",

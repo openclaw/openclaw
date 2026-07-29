@@ -104,6 +104,7 @@ const SlackAccountSchema = z
     botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
     dangerouslyAllowNameMatching: ChannelDangerouslyAllowNameMatchingSchema,
     requireMention: z.boolean().optional(),
+    canonicalRoomMentionEvent: z.enum(["auto", "message"]).optional(),
     implicitMentions: ChannelImplicitMentionsSchema.optional(),
     unfurlLinks: z.boolean().optional(),
     unfurlMedia: z.boolean().optional(),

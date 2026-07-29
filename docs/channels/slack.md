@@ -72,8 +72,8 @@ The relay URL must use `wss://` unless it targets localhost. Treat the bearer to
 One Slack account can receive messages from every workspace covered by an
 Enterprise Grid org-wide installation. Choose direct Socket Mode or HTTP
 Request URLs; relay mode is not supported for enterprise accounts. Both
-least-privilege manifests below enable only the V1 `message` and `app_mention`
-event path, immediate replies, and listener-owned status reactions.
+least-privilege manifests below enable only the V1 `message` event path,
+immediate replies, and listener-owned status reactions.
 
 #### Socket Mode
 
@@ -89,7 +89,6 @@ event path, immediate replies, and listener-owned status reactions.
   "oauth_config": {
     "scopes": {
       "bot": [
-        "app_mentions:read",
         "channels:history",
         "channels:read",
         "chat:write",
@@ -110,13 +109,7 @@ event path, immediate replies, and listener-owned status reactions.
     "org_deploy_enabled": true,
     "socket_mode_enabled": true,
     "event_subscriptions": {
-      "bot_events": [
-        "app_mention",
-        "message.channels",
-        "message.groups",
-        "message.im",
-        "message.mpim"
-      ]
+      "bot_events": ["message.channels", "message.groups", "message.im", "message.mpim"]
     }
   }
 }
@@ -167,7 +160,6 @@ Socket Mode connection. Replace the example URL with the Gateway's public
   "oauth_config": {
     "scopes": {
       "bot": [
-        "app_mentions:read",
         "channels:history",
         "channels:read",
         "chat:write",
@@ -188,13 +180,7 @@ Socket Mode connection. Replace the example URL with the Gateway's public
     "org_deploy_enabled": true,
     "event_subscriptions": {
       "request_url": "https://gateway-host.example.com/slack/events",
-      "bot_events": [
-        "app_mention",
-        "message.channels",
-        "message.groups",
-        "message.im",
-        "message.mpim"
-      ]
+      "bot_events": ["message.channels", "message.groups", "message.im", "message.mpim"]
     }
   }
 }
@@ -235,16 +221,18 @@ At startup, OpenClaw verifies `enterpriseOrgInstall` with Slack `auth.test`.
 An org-installed token without the flag, or a workspace token with the flag,
 fails startup. Slack remains the source of truth for which workspaces have
 granted the installation; OpenClaw then applies the configured channel, user,
-DM, and mention policies to each delivered event. Enterprise V1 rejects all
-bot-authored `message` and `app_mention` events before dispatch, regardless of
-`allowBots`, because org installs do not provide a stable workspace-qualified
-bot identity for loop prevention.
+DM, and mention policies to each delivered event. Enterprise V1 rejects
+bot-authored `message` events before dispatch and applies the same gate to
+`app_mention` events received in `auto` compatibility mode, regardless of
+`allowBots`. Org installs do not provide a stable workspace-qualified bot
+identity for loop prevention.
 
 Enterprise support is intentionally limited to direct Socket Mode or HTTP
-`message` and `app_mention` events and their immediate replies. Relay mode,
-slash commands, interactions, App Home, reaction event listeners, pins, Slack
-action tools, Slack-native approvals, bindings, queued or scheduled delivery,
-and proactive sends are unavailable for an enterprise account. Outbound
+`message` events and their immediate replies. The default `auto` mode also
+accepts `app_mention` from existing app subscriptions. Relay mode, slash
+commands, interactions, App Home, reaction event listeners, pins, Slack action
+tools, Slack-native approvals, bindings, queued or scheduled delivery, and
+proactive sends are unavailable for an enterprise account. Outbound
 acknowledgment, typing, and status reactions are supported through the
 listener-owned Slack client and require `reactions:write`; inbound reaction
 notifications and reaction action tools remain unavailable.
@@ -254,6 +242,21 @@ media, metadata, identity fallback, unfurls, and receipts, but only while the
 validated listener-owned client remains in the active event turn. The
 in-memory send queue and thread-participation records are partitioned by that
 event's workspace; the client itself is never serialized or persisted.
+
+## Room mention event source
+
+The recommended manifests subscribe to `message.channels` and
+`message.groups`, which preserve the complete message payload for mentioned
+posts, including `file_share` metadata. They do not subscribe to
+`app_mention`.
+
+`channels.slack.canonicalRoomMentionEvent` defaults to `"auto"` for
+compatibility with existing Slack apps that subscribe only to `app_mention`.
+When an existing app subscribes to both room event paths, set the field to
+`"message"` so OpenClaw ignores the duplicate room `app_mention` envelope and
+always dispatches the richer `message` event, regardless of delivery order.
+Do not select `"message"` unless `message.channels` and `message.groups` are
+subscribed for the rooms the app serves.
 
 Channel policy keys and `dm.groupChannels` entries must use raw stable Slack channel IDs or the
 `channel:<id>` form. OpenClaw normalizes either form to the raw channel ID for
@@ -337,7 +340,6 @@ Enterprise Grid organization installation, use the dedicated
   "oauth_config": {
     "scopes": {
       "bot": [
-        "app_mentions:read",
         "assistant:write",
         "channels:history",
         "channels:read",
@@ -368,7 +370,6 @@ Enterprise Grid organization installation, use the dedicated
     "event_subscriptions": {
       "bot_events": [
         "app_home_opened",
-        "app_mention",
         "app_context_changed",
         "channel_rename",
         "member_joined_channel",
@@ -422,7 +423,6 @@ Enterprise Grid organization installation, use the dedicated
   "oauth_config": {
     "scopes": {
       "bot": [
-        "app_mentions:read",
         "assistant:write",
         "channels:history",
         "channels:read",
@@ -442,7 +442,6 @@ Enterprise Grid organization installation, use the dedicated
     "event_subscriptions": {
       "bot_events": [
         "app_home_opened",
-        "app_mention",
         "app_context_changed",
         "message.channels",
         "message.groups",
@@ -552,7 +551,6 @@ openclaw gateway
   "oauth_config": {
     "scopes": {
       "bot": [
-        "app_mentions:read",
         "assistant:write",
         "channels:history",
         "channels:read",
@@ -583,7 +581,6 @@ openclaw gateway
       "request_url": "https://gateway-host.example.com/slack/events",
       "bot_events": [
         "app_home_opened",
-        "app_mention",
         "app_context_changed",
         "channel_rename",
         "member_joined_channel",
@@ -643,7 +640,6 @@ openclaw gateway
   "oauth_config": {
     "scopes": {
       "bot": [
-        "app_mentions:read",
         "assistant:write",
         "channels:history",
         "channels:read",
@@ -663,7 +659,6 @@ openclaw gateway
       "request_url": "https://gateway-host.example.com/slack/events",
       "bot_events": [
         "app_home_opened",
-        "app_mention",
         "app_context_changed",
         "message.channels",
         "message.groups",
@@ -873,7 +868,6 @@ Base manifest (Socket Mode default):
   "oauth_config": {
     "scopes": {
       "bot": [
-        "app_mentions:read",
         "assistant:write",
         "channels:history",
         "channels:read",
@@ -904,7 +898,6 @@ Base manifest (Socket Mode default):
     "event_subscriptions": {
       "bot_events": [
         "app_home_opened",
-        "app_mention",
         "app_context_changed",
         "channel_rename",
         "member_joined_channel",
@@ -942,7 +935,6 @@ For **HTTP Request URLs mode**, replace `settings` with the HTTP variant and add
       "request_url": "https://gateway-host.example.com/slack/events",
       "bot_events": [
         "app_home_opened",
-        "app_mention",
         "app_context_changed",
         "channel_rename",
         "member_joined_channel",
@@ -1350,7 +1342,7 @@ To bring the app into a group DM, use one of these Slack-supported paths:
 - Channel sessions: `agent:<agentId>:slack:channel:<channelId>`.
 - Ordinary top-level channel messages stay on the per-channel session, even when `replyToMode` is non-`off`.
 - Slack channel, MPIM, Agent View, and Assistant View thread replies use the parent Slack `thread_ts` for session suffixes (`:thread:<threadTs>`). Ordinary DM reply threads remain a UI affordance on the base DM session.
-- OpenClaw seeds an eligible top-level channel root into `agent:<agentId>:slack:channel:<channelId>:thread:<rootTs>` when that root is expected to start a visible Slack thread, so the root and later thread replies share one OpenClaw session. This applies to `app_mention` events, explicit bot or configured mention-pattern matches, and `requireMention: false` channels with non-`off` `replyToMode`.
+- OpenClaw seeds an eligible top-level channel root into `agent:<agentId>:slack:channel:<channelId>:thread:<rootTs>` when that root is expected to start a visible Slack thread, so the root and later thread replies share one OpenClaw session. This applies to the configured canonical room mention event (`message`, or `app_mention` in `auto` compatibility mode), explicit bot or configured mention-pattern matches, and `requireMention: false` channels with non-`off` `replyToMode`.
 - `channels.slack.thread.historyScope` default is `thread`; `thread.inheritParent` default is `false`.
 - `channels.slack.thread.initialHistoryLimit` controls how many existing thread messages are fetched when a new thread session starts (default `20`; set `0` to disable).
 - `channels.slack.implicitMentions.replyToBot` controls whether a reply to the bot's own message bypasses mention gating (default `true`).
@@ -1859,6 +1851,7 @@ Primary reference: [Configuration reference - Slack](/gateway/config-channels#sl
 - mode/auth: `identity`, `mode`, `enterpriseOrgInstall`, `botToken`, `appToken`, `userToken`, `signingSecret`, `webhookPath`, `accounts.*`
 - DM access: `dm.enabled`, `dmPolicy`, `allowFrom` (legacy: `dm.policy`, `dm.allowFrom`), `dm.groupEnabled`, `dm.groupChannels`
 - compatibility toggle: `dangerouslyAllowNameMatching` (break-glass; keep off unless needed)
+- inbound events: `canonicalRoomMentionEvent` (`auto|message`; default `auto`). `auto` preserves existing `app_mention`-only apps. Use `message` when the Slack app subscribes to `message.channels` and `message.groups` so duplicate room `app_mention` envelopes are ignored and rich message fields are preserved.
 - channel access: `groupPolicy`, `channels.*`, `channels.*.users`, `channels.*.requireMention`, `implicitMentions.*`
 - threading/history: `replyToMode`, `replyToModeByChatType`, `thread.*`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
 - presence wakes: `presenceEvents.mode`, `channels.*.presenceEvents.mode` (`off|auto|on`; default `off`)

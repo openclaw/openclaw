@@ -804,7 +804,6 @@ reaction handling yet.
   "oauth_config": {
     "scopes": {
       "bot": [
-        "app_mentions:read",
         "assistant:write",
         "channels:history",
         "channels:read",
@@ -833,7 +832,6 @@ reaction handling yet.
     "event_subscriptions": {
       "bot_events": [
         "app_home_opened",
-        "app_mention",
         "channel_rename",
         "member_joined_channel",
         "member_left_channel",
@@ -848,6 +846,13 @@ reaction handling yet.
   }
 }
 ```
+
+This SUT manifest uses `message.channels` and `message.groups` as the canonical
+room mention path, preserving rich `file_share` payloads. Existing QA apps that
+subscribe only to `app_mention` remain compatible with the default
+`channels.slack.canonicalRoomMentionEvent: "auto"`. If an existing app
+subscribes to both event paths, set that field to `"message"` so OpenClaw
+ignores the duplicate room `app_mention` envelope.
 
 After Slack creates the app, do two things on its settings page:
 

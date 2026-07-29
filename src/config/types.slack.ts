@@ -170,6 +170,12 @@ export type SlackAccountConfig = Omit<
     userTokenReadOnly?: boolean;
     /** Default mention requirement for channel messages (default: true). */
     requireMention?: boolean;
+    /**
+     * Selects the canonical Slack Events API source for room mentions.
+     * "auto" accepts app_mention events; "message" ignores room app_mention events.
+     * Default: auto.
+     */
+    canonicalRoomMentionEvent?: "auto" | "message";
     /** Implicit mention policy for replies, quotes, and participated threads. */
     implicitMentions?: ChannelImplicitMentionsConfig;
     /** Pass through Slack chat.postMessage link unfurl control. Default: false. */

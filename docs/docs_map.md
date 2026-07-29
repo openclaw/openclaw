@@ -909,6 +909,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Enterprise Grid org-wide installs
   - H4: Socket Mode
   - H4: HTTP Request URLs
+  - H2: Room mention event source
   - H2: Install
   - H2: Quick setup
   - H2: User identity (post as a real person)

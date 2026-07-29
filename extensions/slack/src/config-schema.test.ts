@@ -36,6 +36,31 @@ describe("slack config schema", () => {
     });
   });
 
+  it("accepts canonical room mention event selection at root and account level", () => {
+    expectSlackConfigValid({ canonicalRoomMentionEvent: "auto" });
+    expectSlackConfigValid({
+      accounts: { workspace: { canonicalRoomMentionEvent: "message" } },
+    });
+    const cfg = {
+      channels: {
+        slack: {
+          canonicalRoomMentionEvent: "message" as const,
+          accounts: { inherited: {}, overridden: { canonicalRoomMentionEvent: "auto" as const } },
+        },
+      },
+    } satisfies OpenClawConfig;
+    expect(
+      resolveSlackAccount({ cfg, accountId: "inherited" }).config.canonicalRoomMentionEvent,
+    ).toBe("message");
+    expect(
+      resolveSlackAccount({ cfg, accountId: "overridden" }).config.canonicalRoomMentionEvent,
+    ).toBe("auto");
+    expectSlackConfigIssue(
+      { canonicalRoomMentionEvent: "app_mention" },
+      "canonicalRoomMentionEvent",
+    );
+  });
+
   it("defaults groupPolicy to allowlist", () => {
     const res = SlackConfigSchema.safeParse({});
 

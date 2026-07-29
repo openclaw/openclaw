@@ -139,6 +139,7 @@ export type SlackMonitorContext = {
   groupDmEnabled: boolean;
   groupDmChannels: string[];
   defaultRequireMention: boolean;
+  canonicalRoomMentionEvent: "auto" | "message";
   channelsConfig?: SlackChannelConfigEntries;
   channelsConfigKeys: string[];
   groupPolicy: GroupPolicy;
@@ -235,6 +236,7 @@ export function createSlackMonitorContext(params: {
   groupDmEnabled: boolean;
   groupDmChannels: Array<string | number> | undefined;
   defaultRequireMention?: boolean;
+  canonicalRoomMentionEvent?: "auto" | "message";
   channelsConfig?: SlackMonitorContext["channelsConfig"];
   groupPolicy: SlackMonitorContext["groupPolicy"];
   useAccessGroups: boolean;
@@ -701,6 +703,7 @@ export function createSlackMonitorContext(params: {
     groupDmEnabled: params.groupDmEnabled,
     groupDmChannels,
     defaultRequireMention,
+    canonicalRoomMentionEvent: params.canonicalRoomMentionEvent ?? "auto",
     channelsConfig: params.channelsConfig,
     channelsConfigKeys,
     groupPolicy: params.groupPolicy,

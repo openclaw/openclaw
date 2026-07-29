@@ -15,6 +15,10 @@ export const slackChannelConfigUiHints = {
     label: "Slack Identity",
     help: 'Select "bot" (default) for the classic Slack app/bot identity or "user" to post as the authorizing human through a user token while the app carries event transport.',
   },
+  canonicalRoomMentionEvent: {
+    label: "Slack Canonical Room Mention Event",
+    help: '"auto" keeps existing app_mention-only Slack apps compatible (default). Use "message" only when the app subscribes to message.channels and message.groups; it ignores duplicate room app_mention events so the richer message payload, including files, is dispatched.',
+  },
   ...createChannelConfigUiHints({
     channelLabel: "Slack",
     dmPolicy: { channelKey: "slack" },

@@ -319,6 +319,9 @@ export function registerSlackMessageEvents(params: {
         if (channelType === "im" || channelType === "mpim") {
           return;
         }
+        if (ctx.canonicalRoomMentionEvent === "message") {
+          return;
+        }
 
         // Emit a per-inbound receipt before dispatch so a silently-dropped mention
         // (e.g. router consumes it without a tool call) still leaves journal evidence,

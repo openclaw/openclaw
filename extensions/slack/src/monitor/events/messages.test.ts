@@ -92,6 +92,22 @@ function createHandlers(eventName: RegisteredEventName, overrides?: SlackSystemE
   };
 }
 
+function createMessageAndMentionHandlers(overrides?: SlackSystemEventTestOverrides) {
+  const harness = createSlackSystemEventTestHarness(overrides);
+  const handleSlackMessage = vi.fn(async () => {});
+  registerSlackMessageEvents({
+    ctx: harness.ctx,
+    handleSlackMessage,
+  });
+  return {
+    messageHandler: requireMessageHandler(harness.getHandler("message") as MessageHandler | null),
+    appMentionHandler: requireMessageHandler(
+      harness.getHandler("app_mention") as MessageHandler | null,
+    ),
+    handleSlackMessage,
+  };
+}
+
 function createEnterpriseHandlers(eventName: RegisteredEventName) {
   const harness = createSlackSystemEventTestHarness({ dmPolicy: "open" });
   harness.ctx.installationIdentity = {
@@ -718,17 +734,116 @@ describe("registerSlackMessageEvents", () => {
     expect(inboundLogLines()).toEqual([]);
   });
 
-  it("routes app_mention events from channels to the message handler", async () => {
+  it("keeps app_mention-only apps compatible in auto mode", async () => {
     const { handleSlackMessage } = await invokeRegisteredHandler({
       eventName: "app_mention",
-      overrides: { dmPolicy: "open" },
+      overrides: { dmPolicy: "open", canonicalRoomMentionEvent: "auto" },
       event: makeAppMentionEvent({ channel: "C123", channelType: "channel", ts: "123.789" }),
     });
 
-    expect(handleSlackMessage).toHaveBeenCalledTimes(1);
+    expect(handleSlackMessage).toHaveBeenCalledOnce();
+    const call = handleSlackMessage.mock.calls.at(0) as unknown as
+      | [unknown, { source?: string; wasMentioned?: boolean }]
+      | undefined;
+    expect(call?.[1]).toMatchObject({
+      source: "app_mention",
+      wasMentioned: true,
+    });
     expect(inboundLogLines()).toEqual([
       "Inbound app_mention slack:T_TEST:channel:C123:user:U1 -> bot:U_BOT (channel, 14 chars)",
     ]);
+  });
+
+  it.each([
+    {
+      roomLabel: "public channel with app_mention first",
+      channel: "C123",
+      channelType: "channel" as const,
+      order: ["app_mention", "message"] as const,
+    },
+    {
+      roomLabel: "public channel with message first",
+      channel: "C123",
+      channelType: "channel" as const,
+      order: ["message", "app_mention"] as const,
+    },
+    {
+      roomLabel: "private channel with app_mention first",
+      channel: "G123",
+      channelType: "group" as const,
+      order: ["app_mention", "message"] as const,
+    },
+    {
+      roomLabel: "private channel with message first",
+      channel: "G123",
+      channelType: "group" as const,
+      order: ["message", "app_mention"] as const,
+    },
+  ])(
+    "uses the rich message event as the only room mention source in a $roomLabel",
+    async ({ channel, channelType, order }) => {
+      const { messageHandler, appMentionHandler, handleSlackMessage } =
+        createMessageAndMentionHandlers({
+          dmPolicy: "open",
+          canonicalRoomMentionEvent: "message",
+        });
+      const files = [{ id: "F123", url_private: "https://files.slack.com/file" }];
+      const events = {
+        app_mention: makeAppMentionEvent({ channel, channelType }),
+        message: {
+          type: "message",
+          subtype: "file_share",
+          channel,
+          channel_type: channelType,
+          user: "U1",
+          text: "<@U_BOT> hello",
+          ts: "123.456",
+          files,
+        },
+      };
+
+      for (const eventName of order) {
+        const handler = eventName === "message" ? messageHandler : appMentionHandler;
+        await handler({ event: events[eventName], body: {} });
+      }
+
+      expect(handleSlackMessage).toHaveBeenCalledOnce();
+      const call = handleSlackMessage.mock.calls.at(0) as unknown as
+        | [
+            {
+              type?: string;
+              subtype?: string;
+              channel?: string;
+              channel_type?: string;
+              files?: unknown[];
+            },
+            { source?: string },
+          ]
+        | undefined;
+      expect(call?.[0]).toMatchObject({
+        type: "message",
+        subtype: "file_share",
+        channel,
+        channel_type: channelType,
+      });
+      expect(call?.[0].files).toBe(files);
+      expect(call?.[1]?.source).toBe("message");
+    },
+  );
+
+  it("does not log ignored room app_mention events in message mode", async () => {
+    const { appMentionHandler, handleSlackMessage } = createMessageAndMentionHandlers({
+      dmPolicy: "open",
+      canonicalRoomMentionEvent: "message",
+    });
+
+    await appMentionHandler({
+      event: makeAppMentionEvent({ channel: "C123", channelType: "channel" }),
+      body: {},
+    });
+
+    expect(handleSlackMessage).not.toHaveBeenCalled();
+    expect(inboundLogLines()).toEqual([]);
   });
 
   it("logs channel app_mention receipts with zero chars when text is absent", async () => {

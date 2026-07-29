@@ -494,6 +494,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     groupDmEnabled,
     groupDmChannels,
     defaultRequireMention: slackCfg.requireMention,
+    canonicalRoomMentionEvent: slackCfg.canonicalRoomMentionEvent,
     channelsConfig,
     groupPolicy,
     useAccessGroups,
