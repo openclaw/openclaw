@@ -4,6 +4,7 @@ import { CONFIG_DIR_NAME, getAgentDir } from "../../agents/config.js";
 import type { ResourceDiagnostic } from "../../agents/sessions/diagnostics.js";
 import { createSyntheticSourceInfo, type SourceInfo } from "../../agents/sessions/source-info.js";
 import { canonicalizePath } from "../../agents/utils/paths.js";
+import { buildBehaviorPolicyPrompt, resolveBehaviorRules } from "../../security/behavior-policy.js";
 import { addIgnoreRules, toPosixPath, type IgnoreMatcher } from "../../shared/ignore-rules.js";
 // Session skill helpers resolve skills attached to a session and its transcript state.
 import { expandTildePath } from "../../shared/tilde-path.js";
@@ -268,9 +269,13 @@ function loadSkillFromFile(
  * Skills with disableModelInvocation=true are excluded from the prompt
  * (they can only be invoked explicitly via /skill:name commands).
  */
-export function formatSkillsForPrompt(skills: Skill[]): string {
+export function formatSkillsForPrompt(
+  skills: Skill[],
+  config?: import("../../config/types.openclaw.js").OpenClawConfig,
+): string {
   const visibleSkills = skills.filter((s) => !s.disableModelInvocation);
-  return formatSkillContractForPrompt(visibleSkills);
+  const behaviorPrompt = buildBehaviorPolicyPrompt(resolveBehaviorRules(config));
+  return formatSkillContractForPrompt(visibleSkills, behaviorPrompt || undefined);
 }
 
 interface LoadSkillsOptions {
@@ -388,7 +393,10 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
       } else if (stats.isFile() && resolvedPath.endsWith(".md")) {
         const result = loadSkillFromFile(resolvedPath, source);
         if (result.skill) {
-          addSkills({ skills: [result.skill], diagnostics: result.diagnostics });
+          addSkills({
+            skills: [result.skill],
+            diagnostics: result.diagnostics,
+          });
         } else {
           allDiagnostics.push(...result.diagnostics);
         }

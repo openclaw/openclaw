@@ -2,6 +2,7 @@
  * System prompt construction and project context loading
  */
 
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatSkillsForPrompt, type Skill } from "../../skills/loading/session.js";
 import { getDocsPath, getExamplesPath, getReadmePath } from "../config.js";
 import { buildPromisedWorkPromptSection } from "../promised-work-prompt.js";
@@ -21,6 +22,8 @@ export interface BuildSystemPromptOptions {
   cwd: string;
   /** Pre-loaded context files. */
   contextFiles?: Array<{ path: string; content: string }>;
+  /** OpenClaw configuration for behavior policy resolution. */
+  config?: OpenClawConfig;
   /** Pre-loaded skills. */
   skills?: Skill[];
 }
@@ -36,6 +39,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
     cwd,
     contextFiles: providedContextFiles,
     skills: providedSkills,
+    config,
   } = options;
   const resolvedCwd = cwd;
   const promptCwd = resolvedCwd.replace(/\\/g, "/");
@@ -71,7 +75,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
     // Append skills section (only if read tool is available)
     const customPromptHasRead = !selectedTools || selectedTools.includes("read");
     if (customPromptHasRead && skills.length > 0) {
-      prompt += formatSkillsForPrompt(skills);
+      prompt += formatSkillsForPrompt(skills, config);
     }
 
     // Add date and working directory last
@@ -171,7 +175,7 @@ Embedded agent documentation (read only when the user asks about the embedded ag
 
   // Append skills section (only if read tool is available)
   if (hasRead && skills.length > 0) {
-    prompt += formatSkillsForPrompt(skills);
+    prompt += formatSkillsForPrompt(skills, config);
   }
 
   // Add date and working directory last

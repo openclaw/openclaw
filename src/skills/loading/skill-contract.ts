@@ -34,9 +34,13 @@ function escapeXml(str: string): string {
  * Agent Skills formatter so we can avoid importing the full session runtime
  * package root on the cold skills path. Visibility policy is applied upstream
  * before calling this helper.
+ *
+ * When `behaviorPrompt` is provided, it is appended below the skills block
+ * as a separate `<behavior_policy>` section. This is the injection point for
+ * the agent-behavior governance rules (Layer 2 enforcement).
  */
-export function formatSkillsForPrompt(skills: Skill[]): string {
-  if (skills.length === 0) {
+export function formatSkillsForPrompt(skills: Skill[], behaviorPrompt?: string): string {
+  if (skills.length === 0 && !behaviorPrompt) {
     return "";
   }
   const lines = [
@@ -60,6 +64,11 @@ export function formatSkillsForPrompt(skills: Skill[]): string {
     }
     lines.push("  </skill>");
   }
-  lines.push("</available_skills>");
+  if (skills.length > 0) {
+    lines.push("</available_skills>");
+  }
+  if (behaviorPrompt) {
+    lines.push(behaviorPrompt);
+  }
   return lines.join("\n");
 }

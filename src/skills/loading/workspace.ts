@@ -16,6 +16,7 @@ import { walkDirectorySync } from "../../infra/fs-safe.js";
 import { resolveOsHomeDir } from "../../infra/home-dir.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { buildBehaviorPolicyPrompt, resolveBehaviorRules } from "../../security/behavior-policy.js";
 import { CONFIG_DIR, resolveConfigDir, resolveUserPath } from "../../utils.js";
 import {
   resolveEffectiveAgentSkillFilter,
@@ -67,9 +68,9 @@ const MAX_SKILL_SOURCE_ORIGIN_BYTES = 16 * 1024;
  * reduce system prompt token usage while matching host file-tool expansion.
  *
  * Example: `/Users/alice/.bun/.../skills/github/SKILL.md`
- * → `~/.bun/.../skills/github/SKILL.md`
+ * â†’ `~/.bun/.../skills/github/SKILL.md`
  *
- * Saves ~5–6 tokens per skill path × N skills ≈ 400–600 tokens total.
+ * Saves ~5â€“6 tokens per skill path Ã— N skills â‰ˆ 400â€“600 tokens total.
  */
 function resolveUserHomeDir(): string | undefined {
   return resolveOsHomeDir(process.env, os.homedir);
@@ -404,7 +405,10 @@ function containsDiscoverableSkill(
       if (candidate.depth === 0 && childDir === opts.skipTopLevelDirName) {
         continue;
       }
-      queue.push({ dir: path.join(candidate.dir, childDir), depth: candidate.depth + 1 });
+      queue.push({
+        dir: path.join(candidate.dir, childDir),
+        depth: candidate.depth + 1,
+      });
     }
   }
   return false;
@@ -599,7 +603,10 @@ function resolveNestedSkillsRoot(
       continue;
     }
     if (hasLoadableSkillFrontmatter(nested, candidate.dir, opts?.maxSkillFileBytes)) {
-      return { baseDir: nested, note: `Detected nested skills root at ${nested}` };
+      return {
+        baseDir: nested,
+        note: `Detected nested skills root at ${nested}`,
+      };
     }
     if (candidate.depth >= MAX_GROUPED_SKILL_SCAN_DEPTH) {
       continue;
@@ -609,7 +616,10 @@ function resolveNestedSkillsRoot(
       maxCandidateDirs: scanLimit,
     }).dirs;
     for (const childDir of childDirs.toSorted().slice(0, scanLimit)) {
-      queue.push({ dir: path.join(candidate.dir, childDir), depth: candidate.depth + 1 });
+      queue.push({
+        dir: path.join(candidate.dir, childDir),
+        depth: candidate.depth + 1,
+      });
     }
   }
   return { baseDir: dir };
@@ -1291,7 +1301,10 @@ function loadSkillEntries(
       const entry: SkillEntry = {
         skill,
         frontmatter,
-        metadata: resolveSkillEntryMetadata({ frontmatter, skillDir: skill.baseDir }),
+        metadata: resolveSkillEntryMetadata({
+          frontmatter,
+          skillDir: skill.baseDir,
+        }),
         invocation,
         exposure: {
           includeInRuntimeRegistry: true,
@@ -1417,6 +1430,7 @@ function buildRenderedSkillsPrompt(params: {
   skills: Skill[];
   total: number;
   format: SkillsPromptFormat;
+  config?: OpenClawConfig;
 }): string {
   // resolveCodeModeSkills in src/agents/code-mode-skills.ts parses this exact format; update both together.
   // The production-renderer parity test in src/agents/code-mode.test.ts enforces this coupling.
@@ -1432,7 +1446,10 @@ function buildRenderedSkillsPrompt(params: {
       ? formatSkillsCompact(params.skills, {
           descriptionMaxChars: params.format.descriptionMaxChars,
         })
-      : formatSkillsForPrompt(params.skills);
+      : formatSkillsForPrompt(
+          params.skills,
+          buildBehaviorPolicyPrompt(resolveBehaviorRules(params.config)) || undefined,
+        );
   return [params.remoteNote, limitNote, catalog].filter(Boolean).join("\n");
 }
 
@@ -1499,7 +1516,10 @@ function applySkillsPromptLimits(params: {
       }
       descriptionMaxChars = lo;
     }
-    return { skillsForPrompt, format: { kind: "compact", descriptionMaxChars } };
+    return {
+      skillsForPrompt,
+      format: { kind: "compact", descriptionMaxChars },
+    };
   }
 
   return { skillsForPrompt, format: { kind: "full" } };
@@ -1608,6 +1628,7 @@ function resolveWorkspaceSkillPromptState(
     skills: skillsForPrompt,
     total: resolvedSkills.length,
     format,
+    config: opts?.config,
   });
   return { eligible, prompt, resolvedSkills };
 }
@@ -1804,7 +1825,10 @@ async function prepareSyncedSkillsDirectory(targetSkillsDir: string): Promise<vo
   }
 
   for (const entry of await fsp.readdir(targetSkillsDir)) {
-    await fsp.rm(path.join(targetSkillsDir, entry), { recursive: true, force: true });
+    await fsp.rm(path.join(targetSkillsDir, entry), {
+      recursive: true,
+      force: true,
+    });
   }
 }
 
