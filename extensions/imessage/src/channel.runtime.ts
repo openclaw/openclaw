@@ -8,6 +8,7 @@ import { IMESSAGE_LEGACY_OUTBOUND_SEND_DEP_KEYS } from "./outbound-send-deps.js"
 import { probeIMessage } from "./probe.js";
 import { sendMessageIMessage } from "./send.js";
 import { imessageSetupWizard } from "./setup-surface.js";
+import { reconcileIMessageUnknownSend } from "./unknown-send-reconciliation.js";
 
 type IMessageSendFn = typeof sendMessageIMessage;
 
@@ -58,6 +59,8 @@ export async function notifyIMessageApproval(params: {
 }): Promise<void> {
   await sendMessageIMessage(params.id, PAIRING_APPROVED_MESSAGE, { config: params.cfg });
 }
+
+export { reconcileIMessageUnknownSend };
 
 export async function probeIMessageAccount(params?: {
   timeoutMs?: number;

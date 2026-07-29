@@ -7,7 +7,6 @@ import {
   type ChannelMessageSendResult,
   type MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
-import { sanitizeForPlainText } from "openclaw/plugin-sdk/channel-outbound";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
@@ -31,6 +30,7 @@ import {
   normalizeIMessageMessagingTarget,
   type ChannelPlugin,
 } from "./channel-api.js";
+import { DEFAULT_IMESSAGE_TEXT_CHUNK_LIMIT } from "./constants.js";
 import { createIMessageConversationBindingManager } from "./conversation-bindings.js";
 import {
   matchIMessageAcpConversation,
@@ -42,7 +42,7 @@ import {
   resolveIMessageGroupRequireMention,
   resolveIMessageGroupToolPolicy,
 } from "./group-policy.js";
-import { sanitizeOutboundText } from "./monitor/sanitize-outbound.js";
+import { sanitizeIMessageOutboundText } from "./outbound-text.js";
 import type { IMessageProbe } from "./probe.js";
 import { imessageSetupAdapter, imessageSetupContract } from "./setup-core.js";
 import {
@@ -140,7 +140,11 @@ const imessageMessageAdapter = defineChannelMessageAdapter({
       media: true,
       replyTo: true,
       messageSendingHooks: true,
+      reconcileUnknownSend: true,
     },
+    reconcileUnknownSendKinds: { text: true },
+    reconcileUnknownSend: async (ctx) =>
+      await (await loadIMessageChannelRuntime()).reconcileIMessageUnknownSend(ctx),
   },
   send: {
     text: async (ctx) => {
@@ -407,10 +411,9 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
         deliveryMode: "direct",
         chunker: chunkTextForOutbound,
         chunkerMode: "text",
-        textChunkLimit: 4000,
+        textChunkLimit: DEFAULT_IMESSAGE_TEXT_CHUNK_LIMIT,
         // Native formatting consumes Markdown ranges, so preserve bold and strike semantics.
-        sanitizeText: ({ text }) =>
-          sanitizeForPlainText(sanitizeOutboundText(text), { style: "markdown" }),
+        sanitizeText: ({ text }) => sanitizeIMessageOutboundText(text),
         shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload, hint }) =>
           shouldSuppressLocalIMessageExecApprovalPrompt({ cfg, accountId, payload, hint }),
         beforeDeliverPayload: async ({ payload, hint }) => {
