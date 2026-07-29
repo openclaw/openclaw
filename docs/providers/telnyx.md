@@ -17,7 +17,7 @@ read_when:
 | Direct CLI flag | `--telnyx-api-key <key>`                                |
 | API             | OpenAI-compatible (`openai-completions`)                |
 | Base URL        | `https://api.telnyx.com/v2/ai/openai`                   |
-| Default model   | `telnyx/moonshotai/Kimi-K2.6`                           |
+| Default model   | `telnyx/moonshotai/Kimi-K3`                             |
 
 ## Install plugin
 
@@ -66,19 +66,19 @@ export TELNYX_API_KEY=...
 
 ## Default model
 
-`telnyx/moonshotai/Kimi-K2.6` is the default model. In OpenClaw it supports text and image input, tool calling, reasoning, and a 262k-token context window:
+`telnyx/moonshotai/Kimi-K3` is the default model. In OpenClaw it supports text and image input, tool calling, reasoning, a 1M-token context window, and up to 64k output tokens:
 
 ```json5
 {
   agents: {
     defaults: {
-      model: { primary: "telnyx/moonshotai/Kimi-K2.6" },
+      model: { primary: "telnyx/moonshotai/Kimi-K3" },
     },
   },
 }
 ```
 
-Use `/model telnyx/moonshotai/Kimi-K2.6` to switch an existing chat.
+Use `/model telnyx/moonshotai/Kimi-K3` to switch an existing chat.
 
 ## Live model discovery
 
@@ -88,19 +88,24 @@ The plugin fetches the authenticated `/models` endpoint and caches the result fo
 
 The authenticated live catalog is authoritative. These rows keep setup and model selection useful before discovery succeeds:
 
-| Model ref                                  | Input       | Context | Max output |
-| ------------------------------------------ | ----------- | ------: | ---------: |
-| `telnyx/moonshotai/Kimi-K2.6`              | text, image |    262k |         8k |
-| `telnyx/moonshotai/Kimi-K3`                | text, image |      1M |        64k |
-| `telnyx/moonshotai/Kimi-K2.5`              | text, image |    256k |         8k |
-| `telnyx/zai-org/GLM-5.2`                   | text        |      1M |       131k |
-| `telnyx/zai-org/GLM-5.1-FP8`               | text        |    202k |         8k |
-| `telnyx/MiniMaxAI/MiniMax-M3-MXFP8`        | text        |      1M |         8k |
-| `telnyx/MiniMaxAI/MiniMax-M2.7`            | text        |    200k |         8k |
-| `telnyx/Qwen/Qwen3-235B-A22B`              | text        |     32k |         8k |
-| `telnyx/meta-llama/Llama-3.3-70B-Instruct` | text        |     99k |         8k |
+| Model ref                           | Input       | Context | Max output |
+| ----------------------------------- | ----------- | ------: | ---------: |
+| `telnyx/moonshotai/Kimi-K3`         | text, image |      1M |        64k |
+| `telnyx/moonshotai/Kimi-K2.6`       | text, image |    262k |         8k |
+| `telnyx/moonshotai/Kimi-K2.5`       | text, image |    256k |         8k |
+| `telnyx/zai-org/GLM-5.2`            | text        |      1M |       131k |
+| `telnyx/zai-org/GLM-5.1-FP8`        | text        |    202k |         8k |
+| `telnyx/MiniMaxAI/MiniMax-M3-MXFP8` | text        |      1M |         8k |
+| `telnyx/MiniMaxAI/MiniMax-M2.7`     | text        |    200k |         8k |
+| `telnyx/Qwen/Qwen3-235B-A22B`       | text        |     32k |         8k |
+| `telnyx/openai/gpt-5.4`             | text        |    400k |         8k |
+| `telnyx/openai/gpt-5.4-mini`        | text        |    400k |         8k |
+| `telnyx/openai/gpt-5.2`             | text        |    400k |         8k |
+| `telnyx/openai/gpt-5.1`             | text        |    400k |         8k |
+| `telnyx/openai/gpt-5`               | text        |    400k |         8k |
+| `telnyx/anthropic/claude-haiku-4-5` | text        |    400k |         8k |
 
-All bundled models support tool calling, and all except `telnyx/meta-llama/Llama-3.3-70B-Instruct` support reasoning. Streaming usage is reported on the final chunk.
+All bundled models support tool calling and reasoning. The `openai/*` and `anthropic/*` ids are Telnyx-proxied frontier routes; the rest are Telnyx-hosted open-weight models. Streaming usage is reported on the final chunk.
 
 <Note>
 Telnyx can add, remove, or change hosted models independently of OpenClaw releases. The plugin refreshes model ids, context limits, output limits, and pricing from the authenticated API while retaining model-specific OpenClaw transport policy.
@@ -115,7 +120,7 @@ Most setups only need the API key. To pin the provider explicitly:
   env: { TELNYX_API_KEY: "..." },
   agents: {
     defaults: {
-      model: { primary: "telnyx/moonshotai/Kimi-K2.6" },
+      model: { primary: "telnyx/moonshotai/Kimi-K3" },
     },
   },
   models: {
@@ -127,12 +132,12 @@ Most setups only need the API key. To pin the provider explicitly:
         api: "openai-completions",
         models: [
           {
-            id: "moonshotai/Kimi-K2.6",
-            name: "Kimi K2.6",
+            id: "moonshotai/Kimi-K3",
+            name: "Kimi K3",
             reasoning: true,
             input: ["text", "image"],
-            contextWindow: 262144,
-            maxTokens: 8192,
+            contextWindow: 1000000,
+            maxTokens: 64000,
           },
         ],
       },

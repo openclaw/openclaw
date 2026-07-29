@@ -42,11 +42,11 @@ describe("Telnyx model catalog", () => {
     clearLiveCatalogCacheForTests();
   });
 
-  it("ships the curated Telnyx-hosted catalog with Kimi K2.6 as the default", () => {
+  it("ships the curated Telnyx catalog with Kimi K3 as the default", () => {
     const models = buildStaticTelnyxModels();
 
-    expect(TELNYX_DEFAULT_MODEL_REF).toBe("telnyx/moonshotai/Kimi-K2.6");
-    expect(models).toHaveLength(9);
+    expect(TELNYX_DEFAULT_MODEL_REF).toBe("telnyx/moonshotai/Kimi-K3");
+    expect(models).toHaveLength(14);
     expect(models.map((model) => model.id)).toEqual(TELNYX_MODEL_CATALOG.map((model) => model.id));
     expect(models.find((model) => model.id === "moonshotai/Kimi-K2.6")).toMatchObject({
       reasoning: true,
@@ -89,13 +89,13 @@ describe("Telnyx model catalog", () => {
         },
       },
       {
-        id: "openai/gpt-5.4",
+        id: "openai/gpt-4o-mini",
         object: "model",
         task: "text generation",
         context_length: 400_000,
         pricing: { input: "1.250000", output: "10.000000", cached_prompt: "0.125000" },
       },
-      { id: "openai/gpt-5.4", object: "model", task: "text-generation" },
+      { id: "openai/gpt-4o-mini", object: "model", task: "text-generation" },
       { id: "openai-embeddings/text-embedding-3", object: "model", task: "embeddings" },
       { id: "missing-task/model", object: "model" },
       { id: "ignored", object: "not-a-model", task: "text-generation" },
@@ -113,7 +113,7 @@ describe("Telnyx model catalog", () => {
       compat: { supportsUsageInStreaming: true, maxTokensField: "max_tokens" },
     });
     expect(models[1]).toMatchObject({
-      id: "openai/gpt-5.4",
+      id: "openai/gpt-4o-mini",
       reasoning: false,
       input: ["text"],
       contextWindow: 400_000,
@@ -165,7 +165,7 @@ describe("Telnyx model catalog", () => {
 
     await expect(
       buildLiveTelnyxModels({ discoveryApiKey: TEST_VALUE, fetchGuard }),
-    ).resolves.toHaveLength(9);
+    ).resolves.toHaveLength(14);
     await expect(
       buildLiveTelnyxModels({ discoveryApiKey: TEST_VALUE, fetchGuard }),
     ).resolves.toEqual([

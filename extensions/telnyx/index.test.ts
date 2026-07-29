@@ -82,14 +82,14 @@ describe("Telnyx provider registration", () => {
     expect(choice?.provider.id).toBe("telnyx");
     expect(choice?.method.id).toBe("api-key");
     expect(resolveAgentModelPrimaryValue(applyTelnyxConfig({}).agents?.defaults?.model)).toBe(
-      "telnyx/moonshotai/Kimi-K2.6",
+      "telnyx/moonshotai/Kimi-K3",
     );
     expect(catalog).toMatchObject({
       apiKey: TEST_VALUE,
       baseUrl: "https://api.telnyx.com/v2/ai/openai",
       api: "openai-completions",
     });
-    expect(catalog.models).toHaveLength(9);
+    expect(catalog.models).toHaveLength(14);
     expect(provider.staticCatalog).toBeDefined();
     expect(
       provider.buildReplayPolicy?.({
