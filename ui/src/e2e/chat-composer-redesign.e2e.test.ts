@@ -130,6 +130,7 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       const settings = composer.getByRole("button", { name: "View", exact: true });
       const splitView = page.getByRole("button", { name: "Open split view" });
       const voice = page.getByRole("button", { name: "Start voice input" });
+      const microphonePicker = page.getByRole("button", { name: "Microphone input" });
 
       await expect.poll(() => model.isVisible()).toBe(true);
       expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
@@ -538,6 +539,26 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       await expect.poll(() => viewMenu.isVisible()).toBe(true);
       await settings.click();
       await expect.poll(() => viewMenu.isVisible()).toBe(false);
+
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await gateway.setOnline(false);
+      await expect.poll(() => voice.isDisabled()).toBe(true);
+      await expect
+        .poll(async () => {
+          const [voiceBackground, pickerBackground] = await Promise.all([
+            voice.evaluate((node) => getComputedStyle(node).backgroundColor),
+            microphonePicker.evaluate((node) => getComputedStyle(node).backgroundColor),
+          ]);
+          return voiceBackground === pickerBackground;
+        })
+        .toBe(true);
+      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      if (artifactDir) {
+        await composerShell.screenshot({
+          animations: "disabled",
+          path: `${artifactDir}/voice-picker-disabled-background.png`,
+        });
+      }
     } finally {
       await context.close();
     }
@@ -761,8 +782,9 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
         .toContain("GPT-5.5");
       expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
 
-      // Startup metadata now owns the initial catalog, so there is no unconditional
-      // parallel refresh. Exercise the same-agent pane refresh path explicitly.
+      // Startup metadata now owns the same-agent cache. A config change invalidates
+      // that cache, so the next pane refresh still exercises the failure fallback.
+      await gateway.emitGatewayEvent("config.changed", {});
       await page.locator("openclaw-chat-pane").evaluate((pane) => {
         (pane as HTMLElement & { sessionKey: string }).sessionKey = "agent:main:refreshed";
       });
