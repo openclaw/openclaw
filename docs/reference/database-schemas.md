@@ -80,6 +80,14 @@ Downgrading the binary never downgrades the data. If you must run a release olde
 
 Since 2026.7.2, `openclaw update` refuses to install a release that cannot open your current databases, so the updater will not put you in this situation. Installing an older version manually through npm bypasses that guard; the databases still refuse the old binary, but only after it is installed.
 
+### Schema mismatch must never quarantine or empty the database
+
+OpenClaw **must not** rename, move aside, or replace `state/openclaw.sqlite` when the on-disk schema is newer than the running build. The only safe response is to refuse the open (and refuse `doctor --fix` repair) with a `newer schema version` error so cron jobs and other control-plane rows stay intact.
+
+If you find historical sidecars named like `openclaw.sqlite.bak-schemaN-*` or `openclaw.sqlite.moved-schemaN-*` next to an empty `openclaw.sqlite`, those came from an older recovery path. Prefer restoring the bak/moved file over the empty database (stop the Gateway first), then run a build that supports that schema version.
+
+See [#115421](https://github.com/openclaw/openclaw/issues/115421).
+
 ### The Gateway refuses to start with a newer schema version error
 
 A newer OpenClaw build wrote your databases, and the running build is older. The error names the refusing install — release version, commit, and install root — plus the schema it supports and the schema it found.
