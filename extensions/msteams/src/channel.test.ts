@@ -85,23 +85,28 @@ describe("msteamsPlugin", () => {
         },
       },
     } as OpenClawConfig;
-    const resolveDmPolicy = msteamsPlugin.security?.resolveDmPolicy;
-    if (!resolveDmPolicy) {
-      throw new Error("msteams security.resolveDmPolicy unavailable");
+    for (const plugin of [msteamsPlugin, msteamsSetupPlugin]) {
+      const resolveDmPolicy = plugin.security?.resolveDmPolicy;
+      if (!resolveDmPolicy) {
+        throw new Error("msteams security.resolveDmPolicy unavailable");
+      }
+
+      const result = resolveDmPolicy({
+        cfg,
+        account: plugin.config.resolveAccount(cfg, "default"),
+      });
+
+      expect(result).toMatchObject({
+        policy: "open",
+        allowFrom: ["*"],
+        policyPath: "channels.msteams.dmPolicy",
+        allowFromPath: "channels.msteams.",
+      });
+      expect(result?.normalizeEntry?.("msteams:user:OWNER")).toBe("owner");
     }
-
-    const result = resolveDmPolicy({
-      cfg,
-      account: msteamsPlugin.config.resolveAccount(cfg, "default"),
-    });
-
-    expect(result).toMatchObject({
-      policy: "open",
-      allowFrom: ["*"],
-      policyPath: "channels.msteams.dmPolicy",
-      allowFromPath: "channels.msteams.",
-    });
-    expect(result?.normalizeEntry?.("msteams:user:OWNER")).toBe("owner");
+    expect(msteamsSetupPlugin.security?.resolveDmPolicy).toBe(
+      msteamsPlugin.security?.resolveDmPolicy,
+    );
   });
 
   it("advertises legacy and group-management message-tool actions together", () => {
