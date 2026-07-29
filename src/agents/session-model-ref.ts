@@ -1,5 +1,6 @@
 // Resolves persisted session model metadata without loading Gateway projections.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { hasLegacyAutoFallbackWithoutOrigin } from "../config/sessions/model-override-provenance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
@@ -14,7 +15,16 @@ import {
 
 type SessionModelEntry =
   | SessionEntry
-  | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride">;
+  | Pick<
+      SessionEntry,
+      | "model"
+      | "modelProvider"
+      | "modelOverride"
+      | "providerOverride"
+      | "modelOverrideSource"
+      | "modelOverrideFallbackOriginProvider"
+      | "modelOverrideFallbackOriginModel"
+    >;
 
 export function resolveSessionModelRef(
   cfg: OpenClawConfig,
@@ -22,9 +32,12 @@ export function resolveSessionModelRef(
   agentId?: string,
   options?: { allowPluginNormalization?: boolean },
 ): { provider: string; model: string } {
+  // Originless automatic pins predate trustworthy fallback provenance.
+  // Ignore them here so admission cannot route a recovered session backward.
+  const ignoreStoredOverride = hasLegacyAutoFallbackWithoutOrigin(entry);
   const normalizedOverride = normalizeStoredOverrideModel({
-    providerOverride: entry?.providerOverride,
-    modelOverride: entry?.modelOverride,
+    providerOverride: ignoreStoredOverride ? undefined : entry?.providerOverride,
+    modelOverride: ignoreStoredOverride ? undefined : entry?.modelOverride,
   });
   if (normalizedOverride.providerOverride && normalizedOverride.modelOverride) {
     return resolvePersistedSelectedModelRef({

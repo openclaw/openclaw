@@ -37,6 +37,22 @@ describe("resolveSessionModelRef", () => {
     expect(resolved).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
   });
 
+  test("ignores legacy auto fallback overrides during agent admission", () => {
+    const resolved = resolveSessionModelRef(
+      modelConfig("openai/gpt-5.6-sol"),
+      {
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-6",
+        modelOverrideSource: "auto",
+        modelProvider: "openai",
+        model: "gpt-5.6-sol",
+      },
+      "main",
+    );
+
+    expect(resolved).toEqual({ provider: "openai", model: "gpt-5.6-sol" });
+  });
+
   test("preserves runtime identity for legacy callers without an agent id", () => {
     const resolved = resolveSessionModelRef(modelConfig("anthropic/claude-opus-4-6"), {
       modelProvider: "openai",

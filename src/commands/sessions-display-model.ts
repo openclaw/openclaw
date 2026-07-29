@@ -11,6 +11,7 @@ import {
   isCliProvider,
 } from "../agents/model-selection.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import { hasLegacyAutoFallbackWithoutOrigin } from "../config/sessions/model-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 type SessionDisplayModelRow = {
@@ -19,6 +20,9 @@ type SessionDisplayModelRow = {
   modelProvider?: string;
   modelOverride?: string;
   providerOverride?: string;
+  modelOverrideSource?: "user" | "auto";
+  modelOverrideFallbackOriginProvider?: string;
+  modelOverrideFallbackOriginModel?: string;
 };
 
 type SessionDisplayDefaults = {
@@ -141,9 +145,12 @@ export function resolveSessionDisplayModelRef(
 ): SessionDisplayModelRef {
   const agentId = row.key.startsWith("agent:") ? row.key.split(":")[1] : undefined;
   const defaultRef = resolveDefaultModelRef(cfg, agentId);
+  // Execution ignores originless automatic pins, so operator listings must
+  // not resurrect them ahead of the live runtime model.
+  const ignoreStoredOverride = hasLegacyAutoFallbackWithoutOrigin(row);
   const normalizedOverride = normalizeStoredOverrideModel({
-    providerOverride: row.providerOverride,
-    modelOverride: row.modelOverride,
+    providerOverride: ignoreStoredOverride ? undefined : row.providerOverride,
+    modelOverride: ignoreStoredOverride ? undefined : row.modelOverride,
   });
 
   if (normalizedOverride.modelOverride) {

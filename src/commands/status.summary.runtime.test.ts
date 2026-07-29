@@ -376,6 +376,30 @@ describe("statusSummaryRuntime.resolveSessionModelRef", () => {
     });
   });
 
+  it("ignores legacy auto fallback overrides after the runtime returns to primary", () => {
+    expect(
+      statusSummaryRuntime.resolveSessionModelRef(
+        {
+          agents: {
+            defaults: {
+              model: { primary: "openai/gpt-5.6-sol" },
+            },
+          },
+        } as never,
+        {
+          providerOverride: "anthropic",
+          modelOverride: "claude-sonnet-4-6",
+          modelOverrideSource: "auto",
+          modelProvider: "openai",
+          model: "gpt-5.6-sol",
+        },
+      ),
+    ).toEqual({
+      provider: "openai",
+      model: "gpt-5.6-sol",
+    });
+  });
+
   it("falls back to configured defaults when persisted session model fields are malformed", () => {
     expect(
       statusSummaryRuntime.resolveSessionModelRef(cfg, {

@@ -46,6 +46,9 @@ export type SessionDisplayRow = {
   modelProvider?: string;
   providerOverride?: string;
   modelOverride?: string;
+  modelOverrideSource?: SessionEntry["modelOverrideSource"];
+  modelOverrideFallbackOriginProvider?: string;
+  modelOverrideFallbackOriginModel?: string;
   contextTokens?: number;
   runtimePolicySessionKey?: string;
 };
@@ -91,6 +94,9 @@ export function toSessionDisplayRow(key: string, entry: SessionEntry): SessionDi
     modelProvider: entry?.modelProvider,
     providerOverride: entry?.providerOverride,
     modelOverride: entry?.modelOverride,
+    modelOverrideSource: entry?.modelOverrideSource,
+    modelOverrideFallbackOriginProvider: entry?.modelOverrideFallbackOriginProvider,
+    modelOverrideFallbackOriginModel: entry?.modelOverrideFallbackOriginModel,
     contextTokens: entry?.contextTokens,
   };
 }

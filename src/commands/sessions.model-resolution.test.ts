@@ -98,6 +98,20 @@ describe("sessionsCommand model resolution", () => {
     expect(model).toBe("gpt-5.4");
   });
 
+  it("ignores legacy auto fallback overrides after the runtime returns to primary", async () => {
+    const model = await resolveSubagentModel(
+      {
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-6",
+        modelOverrideSource: "auto",
+        modelProvider: "openai",
+        model: "gpt-5.6-sol",
+      },
+      "subagent-legacy-auto-fallback",
+    );
+    expect(model).toBe("gpt-5.6-sol");
+  });
+
   it("separates Claude CLI runtime from canonical model provider in JSON output", async () => {
     setMockSessionsConfig(() => ({
       agents: {
