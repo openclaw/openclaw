@@ -2756,15 +2756,17 @@ describe("state migrations", () => {
       },
     ];
 
-    const result = await autoMigrateLegacyPluginDoctorState({
-      config: cfg,
-      env,
-      homedir: () => root,
+    await expect(
+      autoMigrateLegacyPluginDoctorState({
+        config: cfg,
+        env,
+        homedir: () => root,
+      }),
+    ).rejects.toMatchObject({
+      name: "SqliteSchemaVersionError",
+      message: expect.stringMatching(/newer schema version/i),
     });
 
-    expect(result.changes).toStrictEqual([]);
-    expect(result.warnings).toHaveLength(1);
-    expect(result.warnings[0]).toContain("Failed migrating shared state database schema");
     expect(detectLegacyState).not.toHaveBeenCalled();
     expect(migrateLegacyState).not.toHaveBeenCalled();
   });
@@ -2786,13 +2788,11 @@ describe("state migrations", () => {
       db.close();
     }
 
-    const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+    await expect(autoMigrateLegacyState({ cfg, env, homedir: () => root })).rejects.toMatchObject({
+      name: "SqliteSchemaVersionError",
+      message: expect.stringMatching(/newer schema version/i),
+    });
 
-    expect(result.migrated).toBe(false);
-    expect(result.skipped).toBe(false);
-    expect(result.changes).toStrictEqual([]);
-    expect(result.warnings).toHaveLength(1);
-    expect(result.warnings[0]).toContain("Failed migrating shared state database schema");
     await expect(fs.readFile(voiceWakePath, "utf8")).resolves.toContain("leave-me");
     await expect(fs.stat(`${voiceWakePath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
   });
