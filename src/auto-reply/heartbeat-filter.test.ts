@@ -13,6 +13,12 @@ import {
 } from "./heartbeat.js";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "./reply/delivery-hints.js";
 
+const HEARTBEAT_THOUGHT_BLOCKS = [
+  { type: "thinking", thinking: "Checking for changes." },
+  { type: "reasoning", text: "Checking for changes." },
+  { type: "redacted_thinking", data: "opaque-provider-reasoning" },
+] as const;
+
 describe("isHeartbeatUserMessage", () => {
   it("matches heartbeat prompts", () => {
     expect(
@@ -93,6 +99,59 @@ describe("isHeartbeatOkResponse", () => {
     ).toBe(true);
   });
 
+  it.each(HEARTBEAT_THOUGHT_BLOCKS)(
+    "recognizes an acknowledgement with a $type block",
+    (thoughtBlock) => {
+      expect(
+        isHeartbeatOkResponse({
+          role: "assistant",
+          content: [thoughtBlock, { type: "text", text: "HEARTBEAT_OK" }],
+        }),
+      ).toBe(true);
+    },
+  );
+
+  it.each(HEARTBEAT_THOUGHT_BLOCKS)(
+    "preserves substantive text alongside a $type block",
+    (thoughtBlock) => {
+      expect(
+        isHeartbeatOkResponse({
+          role: "assistant",
+          content: [
+            thoughtBlock,
+            { type: "text", text: "Status HEARTBEAT_OK due to watchdog failure" },
+          ],
+        }),
+      ).toBe(false);
+    },
+  );
+
+  it("preserves tool calls alongside thinking and a heartbeat acknowledgement", () => {
+    expect(
+      isHeartbeatOkResponse({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "Checking for changes." },
+          { type: "tool_use", id: "tool-1", name: "search", input: {} },
+          { type: "text", text: "HEARTBEAT_OK" },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it("preserves image content alongside thinking and a heartbeat acknowledgement", () => {
+    expect(
+      isHeartbeatOkResponse({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "Checking for changes." },
+          { type: "image", data: "image-bytes", mimeType: "image/png" },
+          { type: "text", text: "HEARTBEAT_OK" },
+        ],
+      }),
+    ).toBe(false);
+  });
+
   it("preserves meaningful or non-text responses", () => {
     expect(
       isHeartbeatOkResponse({
@@ -157,6 +216,25 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
       { role: "assistant", content: "It is 3pm." },
     ]);
   });
+
+  it.each(HEARTBEAT_THOUGHT_BLOCKS)(
+    "removes a no-op heartbeat pair with a $type block",
+    (thoughtBlock) => {
+      const nextUserMessage = { role: "user", content: "What time is it?" };
+      const messages = [
+        { role: "user", content: HEARTBEAT_PROMPT },
+        {
+          role: "assistant",
+          content: [thoughtBlock, { type: "text", text: "HEARTBEAT_OK" }],
+        },
+        nextUserMessage,
+      ];
+
+      expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual([
+        nextUserMessage,
+      ]);
+    },
+  );
 
   it("removes OpenAI Responses input/output text heartbeat pairs", () => {
     for (const deliveryHint of MESSAGE_TOOL_DELIVERY_HINTS) {

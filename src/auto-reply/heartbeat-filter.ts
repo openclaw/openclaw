@@ -269,6 +269,15 @@ function resolveMessageText(content: unknown): { text: string; hasNonTextContent
       hasNonTextContent = true;
       continue;
     }
+    // Provider reasoning is not user-visible; actual media and tool blocks
+    // must remain substantive so heartbeat filtering cannot discard them.
+    if (
+      block.type === "thinking" ||
+      block.type === "reasoning" ||
+      block.type === "redacted_thinking"
+    ) {
+      continue;
+    }
     if (block.type !== "text" && block.type !== "input_text" && block.type !== "output_text") {
       hasNonTextContent = true;
       continue;
