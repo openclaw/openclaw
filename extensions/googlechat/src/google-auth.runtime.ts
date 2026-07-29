@@ -1,4 +1,6 @@
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
+import path from "node:path";
 import type { ConnectionOptions } from "node:tls";
 import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
@@ -515,6 +517,93 @@ export async function resolveValidatedGoogleChatCredentials(
   if (account.credentialsFile) {
     const fileCredentials = await readCredentialsFile(account.credentialsFile);
     return validateGoogleChatServiceAccountCredentials(fileCredentials);
+  }
+  return null;
+}
+
+// Mirrors google-auth-library's well-known Application Default Credentials file
+// location (_tryGetApplicationCredentialsFromWellKnownFile): %APPDATA%\gcloud on
+// Windows, otherwise $HOME/.config/gcloud.
+function wellKnownAdcCredentialPath(): string | null {
+  const base =
+    process.platform === "win32"
+      ? process.env.APPDATA?.trim()
+      : (() => {
+          const home = process.env.HOME?.trim();
+          return home ? path.join(home, ".config") : undefined;
+        })();
+  if (!base) {
+    return null;
+  }
+  return path.join(base, "gcloud", "application_default_credentials.json");
+}
+
+// Application Default Credentials shapes we accept for outbound Google Chat
+// auth. Deliberately excludes external_account (non-Google workload-identity
+// federation): google-auth-library resolves an external_account
+// `credential_source.executable` by SPAWNING the configured command when
+// GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES=1. That is process execution, not
+// an HTTP request, so it never passes through our SSRF/metadata transport guard
+// — the guard can only mediate network calls. Also excludes
+// impersonated_service_account, gdch_hardware_key, and any future/unknown type.
+// Both accepted types mint tokens exclusively against googleapis.com /
+// accounts.google.com, which the guard does cover.
+const SUPPORTED_ADC_CREDENTIAL_TYPES = new Set(["service_account", "authorized_user"]);
+
+/**
+ * Enforce the supported ADC credential allowlist before the parsed JSON is
+ * handed to GoogleAuth. This is the security boundary for the file/env leg:
+ * without it, an operator-supplied external_account ADC file could direct
+ * google-auth to an executable credential source outside the transport guard.
+ */
+function assertSupportedAdcCredentialType(
+  credentials: Record<string, unknown>,
+): Record<string, unknown> {
+  const type = readOptionalTrimmedString(credentials, "type");
+  if (!type) {
+    // Every real ADC file (service_account, authorized_user, external_account,
+    // impersonated_service_account, gdch_hardware_key) declares a `type`. A
+    // missing/blank type is an unrecognized shape; refuse rather than hand an
+    // ambiguous object to GoogleAuth.
+    throw new Error(
+      'Application Default Credentials file must declare a "type"; ' +
+        "only service_account and authorized_user are supported for Google Chat.",
+    );
+  }
+  if (!SUPPORTED_ADC_CREDENTIAL_TYPES.has(type)) {
+    throw new Error(
+      `Application Default Credentials type "${type}" is not supported for Google Chat; ` +
+        "only service_account and authorized_user are accepted. " +
+        "external_account / workload-identity federation is intentionally rejected " +
+        "because its executable credential source runs outside the SSRF guard.",
+    );
+  }
+  return credentials;
+}
+
+/**
+ * Resolve file/env-based Application Default Credentials, mirroring google-auth's
+ * discovery order (GOOGLE_APPLICATION_CREDENTIALS, then the well-known gcloud
+ * file) WITHOUT falling through to google-auth's unguarded GCE metadata probe.
+ * Returns parsed credentials, or null when only the metadata server is available
+ * (handled separately by the guarded metadata mint).
+ *
+ * Credentials are constrained to the supported ADC shapes (service_account,
+ * authorized_user) via assertSupportedAdcCredentialType before return.
+ * external_account and other federation types are rejected here rather than
+ * relying on the transport guard, which cannot mediate an executable credential
+ * source (process execution, not an HTTP request).
+ */
+export async function resolveAdcFileCredentials(): Promise<Record<string, unknown> | null> {
+  const envPath = process.env.GOOGLE_APPLICATION_CREDENTIALS?.trim();
+  if (envPath) {
+    // Matches google-auth: an explicitly configured path that cannot be read is
+    // an error, not a silent fall-through to the metadata server.
+    return assertSupportedAdcCredentialType(await readCredentialsFile(envPath));
+  }
+  const wellKnownPath = wellKnownAdcCredentialPath();
+  if (wellKnownPath && existsSync(wellKnownPath)) {
+    return assertSupportedAdcCredentialType(await readCredentialsFile(wellKnownPath));
   }
   return null;
 }
