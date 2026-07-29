@@ -15,20 +15,30 @@ import { BrowserToolOutputSchema } from "./src/browser-tool.schema.js";
 
 type BrowserAutoEnableProbe = Parameters<OpenClawPluginApi["registerAutoEnableProbe"]>[0];
 
-const runtimeApiMocks = vi.hoisted(() => ({
-  createBrowserPluginService: vi.fn(() => ({ id: "browser-control", start: vi.fn() })),
-  createBrowserTool: vi.fn(() => ({
-    name: "browser",
-    description: "browser",
-    parameters: { type: "object", properties: {} },
-    execute: vi.fn(async () => ({ type: "json", value: { ok: true } })),
-  })),
-  collectBrowserSecurityAuditFindings: vi.fn(() => []),
-  handleBrowserGatewayRequest: vi.fn(),
-  registerBrowserCli: vi.fn(),
-  runBrowserProxyCommand: vi.fn(async () => "ok"),
-  stopBrowserControlService: vi.fn(async () => undefined),
-}));
+const runtimeApiMocks = vi.hoisted(() => {
+  const startBrowserPluginService = vi.fn(async () => undefined);
+  const stopBrowserPluginService = vi.fn(async () => undefined);
+  return {
+    createBrowserPluginService: vi.fn(() => ({
+      id: "browser-control",
+      start: startBrowserPluginService,
+      stop: stopBrowserPluginService,
+    })),
+    startBrowserPluginService,
+    stopBrowserPluginService,
+    createBrowserTool: vi.fn(() => ({
+      name: "browser",
+      description: "browser",
+      parameters: { type: "object", properties: {} },
+      execute: vi.fn(async () => ({ type: "json", value: { ok: true } })),
+    })),
+    collectBrowserSecurityAuditFindings: vi.fn(() => []),
+    handleBrowserGatewayRequest: vi.fn(),
+    registerBrowserCli: vi.fn(),
+    runBrowserProxyCommand: vi.fn(async () => "ok"),
+    stopBrowserControlService: vi.fn(async () => undefined),
+  };
+});
 
 vi.mock("./register.runtime.js", async () => {
   const actual =
@@ -49,6 +59,10 @@ vi.mock("./src/cli/browser-cli.js", () => ({
 
 vi.mock("./src/control-service.js", () => ({
   stopBrowserControlService: runtimeApiMocks.stopBrowserControlService,
+}));
+
+vi.mock("./src/plugin-service.js", () => ({
+  createBrowserPluginService: runtimeApiMocks.createBrowserPluginService,
 }));
 
 beforeAll(async () => {
@@ -383,7 +397,7 @@ describe("browser plugin", () => {
     expect(runtimeApiMocks.collectBrowserSecurityAuditFindings).toHaveBeenCalled();
   });
 
-  it("registers a lazy browser control service", async () => {
+  it("starts the registered page-share lifecycle without eagerly loading browser runtime", async () => {
     const { api, registerService } = createApi();
     registerBrowserPlugin(api);
 
@@ -397,14 +411,17 @@ describe("browser plugin", () => {
     expect(typeof service?.stop).toBe("function");
     expect(runtimeApiMocks.createBrowserPluginService).not.toHaveBeenCalled();
 
-    await service.start({ config: {}, stateDir: "/tmp/openclaw", logger: { warn: vi.fn() } });
-    expect(runtimeApiMocks.createBrowserPluginService).not.toHaveBeenCalled();
+    const context = { config: {}, stateDir: "/tmp/openclaw", logger: { warn: vi.fn() } };
+    await service.start(context);
+    expect(runtimeApiMocks.createBrowserPluginService).toHaveBeenCalledOnce();
+    expect(runtimeApiMocks.startBrowserPluginService).toHaveBeenCalledExactlyOnceWith(context);
 
-    await service.stop({ config: {}, stateDir: "/tmp/openclaw", logger: { warn: vi.fn() } });
-    expect(runtimeApiMocks.stopBrowserControlService).toHaveBeenCalledOnce();
+    await service.stop(context);
+    expect(runtimeApiMocks.stopBrowserPluginService).toHaveBeenCalledExactlyOnceWith(context);
+    expect(runtimeApiMocks.stopBrowserControlService).not.toHaveBeenCalled();
   });
 
-  it("eager-loads the browser control service when explicitly requested", async () => {
+  it("starts the registered service when eager browser control is explicitly requested", async () => {
     vi.stubEnv("OPENCLAW_EAGER_BROWSER_CONTROL_SERVER", "1");
     const { api, registerService } = createApi();
     registerBrowserPlugin(api);
@@ -414,12 +431,14 @@ describe("browser plugin", () => {
       start: (...args: unknown[]) => unknown;
     };
 
-    await service.start({ config: {}, stateDir: "/tmp/openclaw", logger: { warn: vi.fn() } });
+    const context = { config: {}, stateDir: "/tmp/openclaw", logger: { warn: vi.fn() } };
+    await service.start(context);
     expect(runtimeApiMocks.createBrowserPluginService).toHaveBeenCalledOnce();
+    expect(runtimeApiMocks.startBrowserPluginService).toHaveBeenCalledExactlyOnceWith(context);
   });
 
   for (const value of ["false", "", "disabled"]) {
-    it(`keeps browser control service env value ${JSON.stringify(value)} lazy`, async () => {
+    it(`starts page sharing when eager browser control is ${JSON.stringify(value)}`, async () => {
       vi.stubEnv("OPENCLAW_EAGER_BROWSER_CONTROL_SERVER", value);
       const { api, registerService } = createApi();
       registerBrowserPlugin(api);
@@ -429,10 +448,26 @@ describe("browser plugin", () => {
         start: (...args: unknown[]) => unknown;
       };
 
-      await service.start({ config: {}, stateDir: "/tmp/openclaw", logger: { warn: vi.fn() } });
-      expect(runtimeApiMocks.createBrowserPluginService).not.toHaveBeenCalled();
+      const context = { config: {}, stateDir: "/tmp/openclaw", logger: { warn: vi.fn() } };
+      await service.start(context);
+      expect(runtimeApiMocks.createBrowserPluginService).toHaveBeenCalledOnce();
+      expect(runtimeApiMocks.startBrowserPluginService).toHaveBeenCalledExactlyOnceWith(context);
     });
   }
+
+  it("stops on-demand browser control when the registered service never started", async () => {
+    const { api, registerService } = createApi();
+    registerBrowserPlugin(api);
+
+    const service = mockCallArg(registerService) as {
+      stop: (...args: unknown[]) => unknown;
+    };
+
+    await service.stop({ config: {}, stateDir: "/tmp/openclaw", logger: { warn: vi.fn() } });
+
+    expect(runtimeApiMocks.createBrowserPluginService).not.toHaveBeenCalled();
+    expect(runtimeApiMocks.stopBrowserControlService).toHaveBeenCalledOnce();
+  });
 
   it("declares setup auto-enable reasons for browser config surfaces", () => {
     const probe = registerBrowserAutoEnableProbe();

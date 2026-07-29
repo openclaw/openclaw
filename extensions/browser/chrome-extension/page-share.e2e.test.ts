@@ -184,6 +184,22 @@ describe.runIf(runE2E)("Chrome page sharing with a real Gateway extension relay"
     }, article.url());
 
     await article.bringToFront();
+    // The real popup resolves this active, focused tab; wait for Chrome to
+    // publish that state before exercising its actual toolbar consent flow.
+    await expect
+      .poll(
+        async () =>
+          await worker.evaluate(async () => {
+            const [tab] = await chrome.tabs.query({
+              active: true,
+              lastFocusedWindow: true,
+            });
+            return tab?.id;
+          }),
+        { timeout: 10_000 },
+      )
+      .toBe(articleTabId);
+
     const prior = (await browserCdp.send("Target.getTargets", {
       filter: [{}],
     })) as { targetInfos: ChromeTarget[] };
@@ -240,14 +256,29 @@ describe.runIf(runE2E)("Chrome page sharing with a real Gateway extension relay"
           await evaluateToolbarPopup<{
             disabled: boolean;
             tabId: string | undefined;
+            activeTabId: number | undefined;
+            status: {
+              paired: boolean;
+              state: string;
+              sharedTabCount: number;
+            };
           }>(
             browserCdp,
             attached.sessionId,
-            '({ disabled: document.querySelector("#sendPageButton")?.disabled, tabId: document.querySelector("#sendPageButton")?.dataset.tabId })',
+            '(async () => ({ disabled: document.querySelector("#sendPageButton")?.disabled, tabId: document.querySelector("#sendPageButton")?.dataset.tabId, activeTabId: (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0]?.id, status: await chrome.runtime.sendMessage({ type: "getStatus" }) }))()',
           ),
         { timeout: 10_000 },
       )
-      .toEqual({ disabled: false, tabId: String(articleTabId) });
+      .toEqual({
+        disabled: false,
+        tabId: String(articleTabId),
+        activeTabId: articleTabId,
+        status: {
+          paired: true,
+          state: "on",
+          sharedTabCount: 0,
+        },
+      });
 
     await evaluateToolbarPopup<void>(
       browserCdp,

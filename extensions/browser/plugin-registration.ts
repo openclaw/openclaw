@@ -28,15 +28,9 @@ import {
   type SystemProfileImportState,
 } from "./src/browser/system-profile-import-state.js";
 
-const EAGER_BROWSER_CONTROL_SERVICE_ENV = "OPENCLAW_EAGER_BROWSER_CONTROL_SERVER";
-
 const loadBrowserRegistrationRuntimeModule = createLazyRuntimeModule(
   () => import("./register.runtime.js"),
 );
-
-function isTruthyEnvValue(value: string | undefined): boolean {
-  return /^(?:1|true|yes|on)$/iu.test(value?.trim() ?? "");
-}
 
 function deriveChatTypeFromSessionKey(
   sessionKey: string | undefined,
@@ -189,7 +183,7 @@ function createLazyBrowserPluginService(): OpenClawPluginService {
   let service: OpenClawPluginService | null = null;
   const loadService = async () => {
     if (!service) {
-      const { createBrowserPluginService } = await loadBrowserRegistrationRuntimeModule();
+      const { createBrowserPluginService } = await import("./src/plugin-service.js");
       service = createBrowserPluginService();
     }
     return service;
@@ -197,9 +191,7 @@ function createLazyBrowserPluginService(): OpenClawPluginService {
   return {
     id: "browser-control",
     start: async (ctx) => {
-      if (!isTruthyEnvValue(process.env[EAGER_BROWSER_CONTROL_SERVICE_ENV])) {
-        return;
-      }
+      // Page sharing needs its Gateway sink even while browser control stays lazy.
       const loaded = await loadService();
       await loaded.start(ctx);
     },
