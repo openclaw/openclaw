@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreMedia
 import Foundation
 
 #if !os(watchOS)
@@ -18,6 +19,25 @@ public struct CameraMovieSessionOptions: Sendable {
         self.deviceId = deviceId
         self.includeAudio = includeAudio
         self.durationMs = durationMs
+    }
+}
+
+/// Device-independent capture dimensions used to pick a landscape format.
+public struct CameraCaptureFormatSize: Equatable, Sendable {
+    public let width: Int
+    public let height: Int
+
+    public init(width: Int, height: Int) {
+        self.width = width
+        self.height = height
+    }
+
+    public var isLandscape: Bool {
+        self.width >= self.height
+    }
+
+    public var pixelCount: Int {
+        max(0, self.width) * max(0, self.height)
     }
 }
 
@@ -166,6 +186,89 @@ public enum CameraCapturePipelineSupport {
         case .back: "back"
         default: "unspecified"
         }
+    }
+
+    /// Prefer landscape formats after `.photo` / `.high` renegotiation so external
+    /// cameras (for example AnkerWork C310) do not stay locked to a portrait mode.
+    /// Best-effort: if the device cannot be reconfigured, keep capturing with the
+    /// active format instead of failing the whole snap.
+    public static func applyPreferredCaptureFormat(
+        device: AVCaptureDevice,
+        preferredMaxWidth: Int?)
+    {
+        let sizes = device.formats.map { format in
+            let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+            return CameraCaptureFormatSize(width: Int(dimensions.width), height: Int(dimensions.height))
+        }
+        guard let index = Self.selectPreferredCaptureFormatIndex(
+            candidates: sizes,
+            preferredMaxWidth: preferredMaxWidth)
+        else {
+            return
+        }
+        let preferred = device.formats[index]
+        if device.activeFormat === preferred {
+            return
+        }
+        do {
+            try device.lockForConfiguration()
+            defer { device.unlockForConfiguration() }
+            device.activeFormat = preferred
+        } catch {
+            // Keep the session's current format when reconfiguration is unavailable.
+        }
+    }
+
+    /// Choose the best capture size for gateway snaps: landscape first, then closest
+    /// to `preferredMaxWidth`, then highest pixel count.
+    public static func selectPreferredCaptureFormatIndex(
+        candidates: [CameraCaptureFormatSize],
+        preferredMaxWidth: Int?) -> Int?
+    {
+        guard !candidates.isEmpty else {
+            return nil
+        }
+        let preferredWidth = preferredMaxWidth.flatMap { $0 > 0 ? $0 : nil }
+        var bestIndex = 0
+        for index in candidates.indices.dropFirst()
+            where Self.isPreferredCaptureFormat(
+                candidates[index],
+                over: candidates[bestIndex],
+                preferredMaxWidth: preferredWidth)
+        {
+            bestIndex = index
+        }
+        return bestIndex
+    }
+
+    static func isPreferredCaptureFormat(
+        _ candidate: CameraCaptureFormatSize,
+        over current: CameraCaptureFormatSize,
+        preferredMaxWidth: Int?) -> Bool
+    {
+        if candidate.isLandscape != current.isLandscape {
+            return candidate.isLandscape
+        }
+        if let preferredMaxWidth {
+            let candidateDistance = Self.widthDistance(candidate.width, preferredMaxWidth: preferredMaxWidth)
+            let currentDistance = Self.widthDistance(current.width, preferredMaxWidth: preferredMaxWidth)
+            if candidateDistance != currentDistance {
+                return candidateDistance < currentDistance
+            }
+        }
+        if candidate.pixelCount != current.pixelCount {
+            return candidate.pixelCount > current.pixelCount
+        }
+        return candidate.width > current.width
+    }
+
+    private static func widthDistance(_ width: Int, preferredMaxWidth: Int) -> Int {
+        // Prefer at-or-above the requested width so post-capture downscale keeps detail;
+        // undersized formats are a last resort.
+        if width >= preferredMaxWidth {
+            return width - preferredMaxWidth
+        }
+        return preferredMaxWidth - width + 1_000_000
     }
 }
 #endif
