@@ -2889,7 +2889,7 @@ install_openclaw_from_git() {
     local repo_dir="$1"
     local repo_url="https://github.com/openclaw/openclaw.git"
 
-    if [[ -d "$repo_dir/.git" ]]; then
+    if [[ -e "$repo_dir/.git" ]]; then
         ui_info "Installing OpenClaw from git checkout: ${repo_dir}"
     else
         ui_info "Installing OpenClaw from GitHub (${repo_url})"
@@ -2908,7 +2908,7 @@ install_openclaw_from_git() {
     fi
 
     local git_ref
-    if [[ "$GIT_UPDATE" == "0" && -d "$repo_dir/.git" ]]; then
+    if [[ "$GIT_UPDATE" == "0" && -e "$repo_dir/.git" ]]; then
         # Honor --no-git-update: install the prepared checkout as-is.
         # Do not resolve npm latest / rewrite the tree, and do not validate
         # package.json against an unrelated resolved release tag.
@@ -2918,7 +2918,7 @@ install_openclaw_from_git() {
             git_ref="$(git -C "$repo_dir" rev-parse --short HEAD 2>/dev/null || echo "HEAD")"
         fi
         ui_info "Prepared checkout ref: ${git_ref}"
-    elif [[ -d "$repo_dir/.git" && -n "$(git -C "$repo_dir" status --porcelain 2>/dev/null || true)" ]]; then
+    elif [[ -e "$repo_dir/.git" && -n "$(git -C "$repo_dir" status --porcelain 2>/dev/null || true)" ]]; then
         # Dirty tree: keep the user's checkout. Do not call resolve_git_openclaw_ref
         # (that fail-closes on missing release tags even when checkout is skipped).
         ui_info "Repo has local changes; skipping git checkout/update"

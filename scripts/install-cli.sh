@@ -1206,7 +1206,7 @@ install_openclaw_from_git() {
   repo_dir="$(cd "$(dirname "$repo_dir")" && pwd)/$(basename "$repo_dir")"
 
   emit_json "{\"event\":\"step\",\"name\":\"openclaw\",\"status\":\"start\",\"method\":\"git\",\"repo\":\"${repo_url//\"/\\\"}\"}"
-  if [[ -d "$repo_dir/.git" ]]; then
+  if [[ -e "$repo_dir/.git" ]]; then
     log "Installing Openclaw from git checkout: ${repo_dir}"
   else
     log "Installing Openclaw from GitHub (${repo_url})..."
@@ -1216,7 +1216,7 @@ install_openclaw_from_git() {
   ensure_pnpm
   ensure_pnpm_binary_for_scripts
 
-  if [[ -d "$repo_dir/.git" ]]; then
+  if [[ -e "$repo_dir/.git" ]]; then
     :
   elif [[ -d "$repo_dir" ]]; then
     if [[ -z "$(ls -A "$repo_dir" 2>/dev/null || true)" ]]; then
@@ -1229,7 +1229,7 @@ install_openclaw_from_git() {
   fi
 
   local git_ref
-  if [[ "$GIT_UPDATE" == "0" && -d "$repo_dir/.git" ]]; then
+  if [[ "$GIT_UPDATE" == "0" && -e "$repo_dir/.git" ]]; then
     # Honor --no-git-update: install prepared tree; do not validate against npm latest.
     log "Skipping git checkout/update (--no-git-update); using existing checkout"
     git_ref="$(git -C "$repo_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
@@ -1237,7 +1237,7 @@ install_openclaw_from_git() {
       git_ref="$(git -C "$repo_dir" rev-parse --short HEAD 2>/dev/null || echo "HEAD")"
     fi
     log "Prepared checkout ref: ${git_ref}"
-  elif [[ -d "$repo_dir/.git" && -n "$(git -C "$repo_dir" status --porcelain 2>/dev/null || true)" ]]; then
+  elif [[ -e "$repo_dir/.git" && -n "$(git -C "$repo_dir" status --porcelain 2>/dev/null || true)" ]]; then
     # Dirty tree: keep checkout; never resolve npm tag (fail-closed) when not updating.
     log "Repo is dirty; skipping git checkout/update"
     git_ref="$(git -C "$repo_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
