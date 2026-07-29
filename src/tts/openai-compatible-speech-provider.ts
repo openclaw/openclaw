@@ -394,12 +394,14 @@ export function createOpenAiCompatibleSpeechProvider<
           response,
           options.apiErrorLabel ?? `${options.label} TTS API error`,
         );
+        // fetchWithTimeout ends after headers; reuse the request budget for body idle.
         return {
           audioBuffer: Buffer.from(
             await readProviderBinaryResponse(
               response,
               options.apiErrorLabel ?? `${options.label} TTS API error`,
               "audio",
+              { chunkTimeoutMs: req.timeoutMs },
             ),
           ),
           outputFormat: responseFormat,

@@ -172,6 +172,12 @@ describe("createOpenAiCompatibleSpeechProvider", () => {
       speed: 1.1,
       provider: { order: ["openai"] },
     });
+    expect(readProviderBinaryResponseMock).toHaveBeenCalledWith(
+      expect.any(Response),
+      "Demo TTS API error",
+      "audio",
+      { chunkTimeoutMs: 1234 },
+    );
     expect(result.audioBuffer).toStrictEqual(Buffer.from([4, 5, 6]));
     expect(result.outputFormat).toBe("opus");
     expect(result.fileExtension).toBe(".opus");
