@@ -1,4 +1,7 @@
 // Browser tests cover shared plugin behavior.
+import fs from "node:fs/promises";
+import path from "node:path";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { readActionsPayload, readFields } from "./shared.js";
 
@@ -51,5 +54,22 @@ describe("readActionsPayload", () => {
     await expect(
       readActionsPayload({ actions: "[]", actionsFile: "/tmp/openclaw-browser-actions.json" }),
     ).rejects.toThrow("Specify only one of --actions or --actions-file");
+  });
+});
+
+describe("readActionsPayload", () => {
+  it("bounds action files with the same byte limit as stdin", async () => {
+    const maxBytes = 1_000_000;
+    await withTempDir("openclaw-browser-actions-", async (tempDir) => {
+      const actionsPath = path.join(tempDir, "actions.json");
+      await fs.writeFile(actionsPath, Buffer.alloc(maxBytes + 1, 0x20));
+      await expect(readActionsPayload({ actionsFile: actionsPath })).rejects.toMatchObject({
+        code: "too-large",
+      });
+
+      await fs.writeFile(actionsPath, Buffer.alloc(maxBytes, 0x20));
+      const payload = await readActionsPayload({ actionsFile: actionsPath });
+      expect(Buffer.byteLength(payload)).toBe(maxBytes);
+    });
   });
 });
