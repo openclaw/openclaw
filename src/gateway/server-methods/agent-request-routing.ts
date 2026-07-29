@@ -18,6 +18,7 @@ import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import type { GatewaySessionStoreDiscoveryCache } from "../session-utils-store-lookup.js";
 import { loadSessionEntry, resolveSessionStoreKey } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { setGatewayDedupeEntries } from "./agent-dedupe.js";
@@ -45,6 +46,7 @@ type AgentRequestRouting = {
   explicitRecipientSession?: ExplicitRecipientSession;
   preAcceptedReservedSessionKey?: string;
   preAttachmentSession?: { canonicalKey: string; sessionId: string };
+  sessionStoreDiscoveryCache: GatewaySessionStoreDiscoveryCache;
 };
 
 export async function prepareAgentRequestRouting(params: {
@@ -205,13 +207,20 @@ export async function prepareAgentRequestRouting(params: {
       return undefined;
     }
   }
+  const sessionStoreDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
+  const loaded = requestedSessionKey
+    ? loadSessionEntry(requestedSessionKey, {
+        ...(agentId ? { agentId } : {}),
+        clone: false,
+        targetDiscoveryCache: sessionStoreDiscoveryCache,
+      })
+    : undefined;
   if (
-    requestedSessionKey &&
+    loaded &&
     respondUnavailableAgentSessionForKey({
-      sessionKey: requestedSessionKey,
+      loadedSession: loaded,
       requestedSessionId,
       isRawModelRun: params.isRawModelRun,
-      agentId,
       respond: params.respond,
     })
   ) {
@@ -234,12 +243,6 @@ export async function prepareAgentRequestRouting(params: {
   if (preAcceptedReservedSessionKey) {
     params.reserveDedupe(preAcceptedReservedSessionKey, agentId);
   }
-  const loaded = requestedSessionKey
-    ? loadSessionEntry(requestedSessionKey, {
-        ...(agentId ? { agentId } : {}),
-        clone: false,
-      })
-    : undefined;
   return {
     normalizedAttachments,
     requestedBestEffortDeliver,
@@ -255,6 +258,7 @@ export async function prepareAgentRequestRouting(params: {
     preAttachmentSession: loaded?.entry
       ? { canonicalKey: loaded.canonicalKey, sessionId: loaded.entry.sessionId }
       : undefined,
+    sessionStoreDiscoveryCache,
   };
 }
 

@@ -112,6 +112,7 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
     explicitRecipientSession,
     preAcceptedReservedSessionKey,
     preAttachmentSession,
+    sessionStoreDiscoveryCache,
   } = routing;
   let agentId = routing.agentId;
   let requestedSessionKey = routing.requestedSessionKey;
@@ -250,6 +251,7 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
         lifecycleGeneration,
         effectiveBootstrapContextRunKind,
         preAttachmentSession,
+        sessionStoreDiscoveryCache,
         respond,
       });
       if (!preparedSession) {
