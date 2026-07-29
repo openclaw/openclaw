@@ -14,6 +14,44 @@ describe("parseQmdQueryJson", () => {
     ]);
   });
 
+  it("preserves valid result objects and their order while dropping malformed entries", () => {
+    expect(
+      parseQmdQueryJson(
+        JSON.stringify([
+          null,
+          "noise",
+          1,
+          [{ docid: "nested", score: 1 }],
+          { docid: "first", score: 0.8, start_line: 3, end_line: 4 },
+          false,
+          { docid: "second", score: 0.6, snippet: "second hit" },
+        ]),
+        "",
+      ),
+    ).toEqual([
+      { docid: "first", score: 0.8, startLine: 3, endLine: 4 },
+      { docid: "second", score: 0.6, snippet: "second hit" },
+    ]);
+  });
+
+  it.each([
+    { name: "null", entries: [null] },
+    { name: "a string", entries: ["noise"] },
+    { name: "a number", entries: [1] },
+    { name: "a boolean", entries: [false] },
+    { name: "a nested array", entries: [[{ docid: "nested", score: 1 }]] },
+    { name: "mixed malformed values", entries: [null, "noise", 1, false, ["nested"]] },
+  ])("rejects a nonempty result array containing only $name", ({ entries }) => {
+    expect(() => parseQmdQueryJson(JSON.stringify(entries), "")).toThrow(
+      /qmd query returned invalid JSON/i,
+    );
+  });
+
+  it("preserves empty result arrays and valid result objects without optional fields", () => {
+    expect(parseQmdQueryJson("[]", "")).toStrictEqual([]);
+    expect(parseQmdQueryJson("[{}]", "")).toEqual([{}]);
+  });
+
   it("extracts embedded result arrays from noisy stdout", () => {
     const results = parseQmdQueryJson(
       `initializing
@@ -23,6 +61,15 @@ complete`,
       "",
     );
     expect(results).toEqual([{ docid: "abc", score: 0.5 }]);
+  });
+
+  it("skips a malformed standalone array before a valid noisy result array", () => {
+    expect(
+      parseQmdQueryJson(
+        'initializing\n[null, "noise", 1, ["nested"]]\n[{"docid":"abc","score":0.5}]',
+        "",
+      ),
+    ).toEqual([{ docid: "abc", score: 0.5 }]);
   });
 
   it.each([

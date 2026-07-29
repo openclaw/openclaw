@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { runCliCommand } from "./qmd-process.js";
+import { parseQmdQueryJson } from "./qmd-query-parser.js";
 
 type ProcessTreePids = {
   parent: number;
@@ -109,6 +110,38 @@ describe("runCliCommand real process UTF-8 framing", () => {
       stdout: '{"value":"猫"}\n',
       stderr: "path: 猫 denied\n",
     });
+  }, 10_000);
+});
+
+describe("runCliCommand real QMD query result validation", () => {
+  it("preserves valid hits from real process output containing malformed entries", async () => {
+    const payload = JSON.stringify([
+      null,
+      "noise",
+      1,
+      [{ docid: "nested", score: 1 }],
+      { docid: "first", score: 0.8 },
+      false,
+      { docid: "second", score: 0.6 },
+    ]);
+    const { stdout, stderr } = await runCliCommand({
+      commandSummary: "real qmd query result validation fixture",
+      spawnInvocation: {
+        command: process.execPath,
+        argv: ["-e", `process.stdout.write(${JSON.stringify(payload)})`],
+      },
+      env: process.env,
+      cwd: process.cwd(),
+      timeoutMs: 5_000,
+      maxOutputChars: 10_000,
+    });
+
+    const results = parseQmdQueryJson(stdout, stderr);
+    expect(results).toEqual([
+      { docid: "first", score: 0.8 },
+      { docid: "second", score: 0.6 },
+    ]);
+    expect(results.map((result) => result.docid)).toEqual(["first", "second"]);
   }, 10_000);
 });
 

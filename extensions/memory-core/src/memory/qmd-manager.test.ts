@@ -5786,6 +5786,67 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("preserves valid qmd memory search hits when result arrays contain malformed entries", async () => {
+    configureQmd();
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "search") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify([
+            null,
+            "noise",
+            1,
+            [{ file: "qmd://workspace-main/notes/nested.md", score: 1 }],
+            {
+              file: "qmd://workspace-main/notes/welcome.md",
+              score: 0.8,
+              snippet: "@@ -4,1\nfirst valid hit",
+            },
+            false,
+            {
+              file: "qmd://workspace-main/memory/facts.md",
+              score: 0.6,
+              snippet: "@@ -2,1\nsecond valid hit",
+            },
+          ]),
+        );
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+    try {
+      await expect(
+        manager.search("valid hit", { sessionKey: "agent:main:slack:dm:u123" }),
+      ).resolves.toEqual([
+        {
+          path: "notes/welcome.md",
+          startLine: 4,
+          endLine: 4,
+          score: 0.8,
+          snippet: "@@ -4,1\nfirst valid hit",
+          source: "memory",
+          provenance: expectedQmdProvenance("untrusted"),
+        },
+        {
+          path: "memory/facts.md",
+          startLine: 2,
+          endLine: 2,
+          score: 0.6,
+          snippet: "@@ -2,1\nsecond valid hit",
+          source: "memory",
+          provenance: expectedQmdProvenance("untrusted"),
+        },
+      ]);
+    } finally {
+      await manager.close();
+    }
+  });
+
   it("returns collection-scoped qmd paths when session exports live under the workspace qmd directory", async () => {
     workspaceDir = path.join(stateDir, "agents", agentId);
     await fs.mkdir(workspaceDir, { recursive: true });

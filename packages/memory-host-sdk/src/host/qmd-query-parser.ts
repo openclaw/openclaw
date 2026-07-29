@@ -94,11 +94,14 @@ function parseQmdQueryResultArray(raw: string): QmdQueryResult[] | null {
     if (!Array.isArray(parsed)) {
       return null;
     }
-    return parsed.map((item) => {
-      if (typeof item !== "object" || item === null) {
-        return item as QmdQueryResult;
-      }
-      const record = item as Record<string, unknown>;
+    const records = parsed.filter(
+      (item): item is Record<string, unknown> =>
+        typeof item === "object" && item !== null && !Array.isArray(item),
+    );
+    if (parsed.length > 0 && records.length === 0) {
+      return null;
+    }
+    return records.map((record) => {
       const docid = typeof record.docid === "string" ? record.docid : undefined;
       const score =
         typeof record.score === "number" && Number.isFinite(record.score)
