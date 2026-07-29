@@ -600,7 +600,21 @@ describe("listThinkingLevels", () => {
       }),
     ).toBe(true);
   });
+  it("does not let catalog reasoning efforts bypass explicit reasoning=false", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
+      levels: [{ id: "off" }, { id: "low" }],
+    });
+    const catalog = [
+      {
+        provider: "openai",
+        id: "gpt-subscription-model",
+        reasoning: false,
+        compat: { supportedReasoningEfforts: ["low"] },
+      },
+    ];
 
+    expect(listThinkingLevels("openai", "gpt-subscription-model", catalog)).toEqual(["off"]);
+  });
   it("does not let catalog xhigh compat override binary thinking providers", () => {
     providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
       levels: [
