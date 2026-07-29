@@ -25,7 +25,7 @@ vi.mock("./channel.runtime.js", () => ({
   },
 }));
 
-import { msteamsPlugin } from "./channel.js";
+import { msteamsChannelOutbound, msteamsPlugin } from "./channel.js";
 
 type MSTeamsMessageAdapter = NonNullable<typeof msteamsPlugin.message>;
 type MSTeamsMessageSender = NonNullable<MSTeamsMessageAdapter["send"]>;
@@ -224,5 +224,23 @@ describe("msteams channel message adapter", () => {
         },
       },
     });
+  });
+});
+
+describe("msteams outbound sanitizeText", () => {
+  const sanitizeText = msteamsChannelOutbound.sanitizeText;
+
+  it("strips internal tool-trace failure banners from outbound text (#90684)", () => {
+    expect(sanitizeText).toBeDefined();
+    const text = "Listo, ya lo cargué.\n⚠️ 🛠️ `grep -E 'PV-123' /tmp/out.txt (agent)` failed";
+    const out = sanitizeText?.({ text, payload: { text } }) ?? text;
+    expect(out).toBe("Listo, ya lo cargué.");
+    expect(out).not.toContain("failed");
+    expect(out).not.toContain("🛠️");
+  });
+
+  it("preserves ordinary assistant prose untouched", () => {
+    const text = "La factura PV-123 quedó imputada en Bejerman.";
+    expect(sanitizeText?.({ text, payload: { text } }) ?? text).toBe(text);
   });
 });

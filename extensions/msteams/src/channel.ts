@@ -26,6 +26,7 @@ import {
   normalizeOptionalString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { Type } from "typebox";
 import type {
   ChannelMessageActionName,
@@ -441,11 +442,15 @@ function describeMSTeamsMessageTool({
   };
 }
 
-const msteamsChannelOutbound: ChannelOutboundAdapter = {
+export const msteamsChannelOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: chunkTextForOutbound,
   chunkerMode: "markdown",
   textChunkLimit: 4000,
+  // Strip internal assistant trace lines (e.g. `⚠️ 🛠️ ... (agent) failed`
+  // banners from benign non-zero shell exits) before delivery, so they don't
+  // leak to users — mirrors Discord/Google Chat/WhatsApp outbound. See #90684.
+  sanitizeText: ({ text }: { text: string }) => sanitizeAssistantVisibleText(text),
   pollMaxOptions: 12,
   deliveryCapabilities: {
     durableFinal: {
