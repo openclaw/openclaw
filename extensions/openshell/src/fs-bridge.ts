@@ -29,6 +29,8 @@ export function createOpenShellFsBridge(params: {
   return new OpenShellFsBridge(params.sandbox, params.backend);
 }
 
+const MAX_SANDBOX_READ_BYTES = 100 * 1024 * 1024;
+
 class OpenShellFsBridge implements SandboxFsBridge {
   private readonly resolveRenameTargets = createWritableRenameTargetResolver(
     (target) => this.resolveTarget(target),
@@ -56,7 +58,6 @@ class OpenShellFsBridge implements SandboxFsBridge {
   }): Promise<Buffer> {
     const target = this.resolveTarget(params);
     const hostPath = this.requireHostPath(target);
-    let opened: Awaited<ReturnType<Awaited<ReturnType<typeof fsRoot>>["open"]>>;
     try {
       await assertLocalPathSafety({
         target,
@@ -65,14 +66,10 @@ class OpenShellFsBridge implements SandboxFsBridge {
         allowFinalSymlinkForUnlink: false,
       });
       const root = await fsRoot(target.mountHostRoot);
-      opened = await root.open(path.relative(target.mountHostRoot, hostPath), {
+      return await root.readBytes(path.relative(target.mountHostRoot, hostPath), {
         hardlinks: "reject",
+        maxBytes: MAX_SANDBOX_READ_BYTES,
       });
-      try {
-        return (await opened.handle.readFile()) as Buffer;
-      } finally {
-        await opened.handle.close();
-      }
     } catch (err) {
       throw new Error(
         `Sandbox boundary checks failed; cannot read files: ${target.containerPath}`,
