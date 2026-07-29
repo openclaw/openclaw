@@ -197,6 +197,12 @@ const detectInterpreterInlineEvalArgvMock = vi.hoisted(() =>
     } | null => null,
   ),
 );
+const resolveApprovalCommandAuthorizationMock = vi.hoisted(() =>
+  vi.fn((): { authorized: boolean; reason?: string; explicit: boolean } => ({
+    authorized: true,
+    explicit: false,
+  })),
+);
 
 vi.mock("../infra/exec-approvals.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/exec-approvals.js")>()),
@@ -255,6 +261,14 @@ vi.mock("../infra/command-analysis/inline-eval.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/command-analysis/inline-eval.js")>()),
   describeInterpreterInlineEval: vi.fn(() => "python -c"),
   detectInterpreterInlineEvalArgv: detectInterpreterInlineEvalArgvMock,
+}));
+
+vi.mock("../infra/channel-approval-auth.js", () => ({
+  resolveApprovalCommandAuthorization: resolveApprovalCommandAuthorizationMock,
+}));
+
+vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: vi.fn(() => ({})),
 }));
 
 let processGatewayAllowlist: typeof import("./bash-tools.exec-host-gateway.js").processGatewayAllowlist;
@@ -376,6 +390,8 @@ describe("processGatewayAllowlist", () => {
     }));
     detectInterpreterInlineEvalArgvMock.mockReset();
     detectInterpreterInlineEvalArgvMock.mockReturnValue(null);
+    resolveApprovalCommandAuthorizationMock.mockReset();
+    resolveApprovalCommandAuthorizationMock.mockReturnValue({ authorized: true, explicit: false });
     resolveExecApprovalUnavailableDecisionsMock.mockClear();
     buildExecApprovalPendingToolResultMock.mockReturnValue({
       details: { status: "approval-pending" },
@@ -2274,6 +2290,61 @@ EOF`,
       );
       expect(runExecProcessMock).not.toHaveBeenCalled();
       expect(sendExecApprovalFollowupResultMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([["telegram"], ["discord"], ["whatsapp"], ["signal"], ["imessage"]])(
+    "falls back to the pending/follow-up path on native channel (%s) when the turn's own sender cannot approve",
+    async (turnSourceChannel) => {
+      // The channel/account can have approvers configured overall (e.g. the
+      // operator, reachable via DM) while the specific person this turn is
+      // replying to is not one of them -- a counterpart conversation being
+      // served by the agent, not the operator approving their own command.
+      resolveApprovalCommandAuthorizationMock.mockReturnValue({
+        authorized: false,
+        reason: "not an approver",
+        explicit: true,
+      });
+      resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
+      createExecApprovalDecisionStateMock.mockReturnValue({
+        baseDecision: { timedOut: false },
+        approvedByAsk: true,
+        deniedReason: null,
+      });
+      runExecProcessMock.mockResolvedValue({
+        session: { id: "sess-counterpart" },
+        promise: Promise.resolve({
+          status: "completed",
+          exitCode: 0,
+          timedOut: false,
+          aggregated: "done",
+        }),
+      });
+      buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
+
+      const result = await runGatewayAllowlist({
+        command: "find . -maxdepth 1",
+        turnSourceChannel,
+        turnSourceAccountId: "bot-account",
+        turnSourceTo: "counterpart-123",
+      });
+
+      // Must NOT block this turn waiting for a decision only a different,
+      // unwatched surface can resolve -- the async pending/follow-up path
+      // is the same one already used for channels with no native approval UI.
+      expect(result.pendingResult?.details.status).toBe("approval-pending");
+      await vi.waitFor(() => {
+        expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledTimes(1);
+      });
+      expect(runExecProcessMock).toHaveBeenCalledTimes(1);
+      expect(resolveApprovalCommandAuthorizationMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channel: turnSourceChannel,
+          accountId: "bot-account",
+          senderId: "counterpart-123",
+          kind: "exec",
+        }),
+      );
     },
   );
 
