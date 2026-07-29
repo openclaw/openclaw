@@ -19,3 +19,11 @@ export type {
   PluginBlobEntryInfo,
   PluginBlobStore,
 } from "../plugin-state/plugin-blob-store.js";
+export {
+  PluginStateLeaseError,
+  type PluginStateLeaseContext,
+  type PluginStateLeaseDatabase,
+  type PluginStateLeaseErrorCode,
+  type PluginStateLeaseOptions,
+  type PluginStateLeaseRunner,
+} from "../plugin-state/plugin-state-lease.types.js";

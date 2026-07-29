@@ -110,9 +110,9 @@ async function waitForChildClose(
 
 describe("run-additional-boundary-checks", () => {
   it("keeps prompt snapshot drift checks in their dedicated CI lane", () => {
-    // The snapshot check regenerates prompts with real embedded-agent turns
-    // (~2min); packing it into a boundary shard makes that shard the PR wall
-    // clock, so it owns the check-prompt-snapshots lane instead.
+    // The snapshot check regenerates prompt fixtures over the full agent
+    // tool/prompt import graph; packing it into a boundary shard makes that
+    // shard the PR wall clock, so it owns the check-prompt-snapshots lane.
     expect(BOUNDARY_CHECKS.some((check) => check.label === "prompt:snapshots:check")).toBe(false);
     const workflow = fs.readFileSync(".github/workflows/ci.yml", "utf8");
     expect(workflow).toContain("check_name: check-prompt-snapshots");
@@ -243,6 +243,14 @@ describe("run-additional-boundary-checks", () => {
       label: "lint:extensions:telegram-grammy-types",
       command: "pnpm",
       args: ["run", "lint:extensions:telegram-grammy-types"],
+    });
+  });
+
+  it("keeps native and Node state schema versions aligned in CI", () => {
+    expect(BOUNDARY_CHECKS).toContainEqual({
+      label: "native-state-schema-version",
+      command: "node",
+      args: ["scripts/check-native-state-schema-version.mjs"],
     });
   });
 

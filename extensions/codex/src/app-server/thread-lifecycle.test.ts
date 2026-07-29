@@ -36,6 +36,26 @@ type CodexThreadLifecycleTimingLogger = NonNullable<
   NonNullable<Parameters<typeof startOrResumeThreadImpl>[0]["timing"]>["log"]
 >;
 
+describe("Codex incognito thread persistence", () => {
+  it("marks only incognito-shaped harness sessions ephemeral", () => {
+    const appServer = createAppServerOptions() as never;
+    const persistent = createAttemptParams({ provider: "openai" });
+    persistent.sessionKey = "agent:main:dashboard:persistent-thread";
+    const incognito = createAttemptParams({ provider: "openai" });
+    incognito.sessionKey = "agent:main:internal-session-effects:incognito-private-thread";
+
+    const build = (params: EmbeddedRunAttemptParams) =>
+      buildThreadStartParams(params, {
+        appServer,
+        cwd: "/repo",
+        dynamicTools: [],
+      });
+
+    expect(build(persistent)).not.toHaveProperty("ephemeral");
+    expect(build(incognito)).toMatchObject({ ephemeral: true });
+  });
+});
+
 describe("Codex ring-zero thread config", () => {
   it("applies the restriction to both thread start and resume", () => {
     const params = createAttemptParams({ provider: "openai" });
@@ -79,8 +99,41 @@ describe("Codex ring-zero thread config", () => {
       cwd: "/repo",
       dynamicTools: [],
       hostSystemAgentActive: false,
+      config: { "features.goals": true },
     });
     expect(normal.baseInstructions).toBeUndefined();
+    expect(normal.config?.["features.goals"]).toBe(false);
+  });
+});
+
+describe("Codex delegation capability", () => {
+  it("disables native delegation and goal continuation on start and resume", () => {
+    const params = createAttemptParams({ provider: "openai" });
+    params.delegationCapability = "report_only";
+    const appServer = createAppServerOptions() as never;
+    const config = {
+      "features.multi_agent": true,
+      "features.multi_agent_v2": true,
+      "features.goals": true,
+    };
+    const start = buildThreadStartParams(params, {
+      appServer,
+      cwd: "/repo",
+      dynamicTools: [],
+      config,
+    });
+    const resume = buildThreadResumeParams(params, {
+      appServer,
+      dynamicTools: [],
+      threadId: "thread-1",
+      config,
+    });
+
+    for (const request of [start, resume]) {
+      expect(request.config?.["features.multi_agent"]).toBe(false);
+      expect(request.config?.["features.multi_agent_v2"]).toBe(false);
+      expect(request.config?.["features.goals"]).toBe(false);
+    }
   });
 });
 
@@ -398,6 +451,67 @@ describe("Codex app-server native code mode config", () => {
     );
   });
 
+  it("adds native completion handoff guidance only when sessions_yield is available", () => {
+    const withSessionsYield = buildDeveloperInstructions(
+      createAttemptParams({ provider: "openai" }),
+      {
+        dynamicTools: [
+          {
+            type: "namespace",
+            name: "openclaw_direct",
+            description: "",
+            tools: [
+              {
+                type: "function",
+                name: "sessions_yield",
+                description: "End the current turn",
+                inputSchema: { type: "object" },
+              },
+            ],
+          },
+        ],
+      },
+    );
+    const withoutSessionsYield = buildDeveloperInstructions(
+      createAttemptParams({ provider: "openai" }),
+      {
+        dynamicTools: [],
+      },
+    );
+    const withWrongNamespace = buildDeveloperInstructions(
+      createAttemptParams({ provider: "openai" }),
+      {
+        dynamicTools: [
+          {
+            type: "namespace",
+            name: "openclaw",
+            description: "",
+            tools: [
+              {
+                type: "function",
+                name: "sessions_yield",
+                description: "Different tool with the same leaf name",
+                inputSchema: { type: "object" },
+              },
+            ],
+          },
+        ],
+      },
+    );
+
+    expect(withSessionsYield).toContain(
+      "end the current turn with `openclaw_direct.sessions_yield`",
+    );
+    expect(withSessionsYield).toContain(
+      "Use native `wait_agent` only for an intentional same-turn wait",
+    );
+    expect(withSessionsYield).toContain("Never loop-poll for native child completion.");
+    expect(withoutSessionsYield).not.toContain("`openclaw_direct.sessions_yield`");
+    expect(withoutSessionsYield).not.toContain("native `wait_agent`");
+    expect(withWrongNamespace).not.toContain("`openclaw_direct.sessions_yield`");
+    expect(withWrongNamespace).not.toContain("native `wait_agent`");
+  });
+
   it("summarizes deferred dynamic tool names in developer instructions", () => {
     const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }), {
       dynamicTools: [
@@ -607,6 +721,7 @@ describe("Codex app-server native code mode config", () => {
       },
       "features.code_mode": true,
       "features.code_mode_only": false,
+      "features.goals": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -751,6 +866,7 @@ describe("Codex app-server native code mode config", () => {
     expect(request.config).toEqual({
       "features.code_mode": true,
       "features.code_mode_only": false,
+      "features.goals": false,
       "features.apply_patch_streaming_events": true,
       "features.multi_agent": false,
       "features.standalone_web_search": false,
@@ -862,6 +978,7 @@ describe("Codex app-server native code mode config", () => {
     expect(request.config).toEqual({
       "features.code_mode": true,
       "features.code_mode_only": true,
+      "features.goals": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -883,6 +1000,7 @@ describe("Codex app-server native code mode config", () => {
     expect(request.config).toEqual({
       "features.code_mode": true,
       "features.code_mode_only": true,
+      "features.goals": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -940,6 +1058,7 @@ describe("Codex app-server native code mode config", () => {
     expect(request.config).toEqual({
       "features.code_mode": true,
       "features.code_mode_only": false,
+      "features.goals": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -964,6 +1083,7 @@ describe("Codex app-server native code mode config", () => {
     expect(request.config).toEqual({
       "features.code_mode": false,
       "features.code_mode_only": false,
+      "features.goals": false,
       "features.standalone_web_search": false,
       web_search: "disabled",
     });
@@ -983,6 +1103,7 @@ describe("Codex app-server native code mode config", () => {
     expect(request.config).toEqual({
       "features.code_mode": false,
       "features.code_mode_only": false,
+      "features.goals": false,
       "features.standalone_web_search": false,
       web_search: "disabled",
     });
@@ -1012,6 +1133,7 @@ describe("Codex app-server native code mode config", () => {
       "features.hooks": true,
       "features.code_mode": true,
       "features.code_mode_only": false,
+      "features.goals": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -1035,6 +1157,7 @@ describe("Codex app-server native code mode config", () => {
       project_doc_max_bytes: 64_000,
       "features.code_mode": true,
       "features.code_mode_only": false,
+      "features.goals": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -1043,6 +1166,49 @@ describe("Codex app-server native code mode config", () => {
 });
 
 describe("Codex app-server turn input image sanitizing", () => {
+  it("carries native workspace temporary-root overrides into turn policy", () => {
+    const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-1",
+      cwd: "/tmp/qa/workspace",
+      appServer: {
+        ...createAppServerOptions(),
+        start: {
+          args: [
+            "app-server",
+            "-c",
+            "sandbox_workspace_write.exclude_tmpdir_env_var=true",
+            "-c",
+            "sandbox_workspace_write.exclude_slash_tmp=true",
+          ],
+        },
+      } as never,
+    });
+
+    expect(request.sandboxPolicy).toEqual({
+      type: "workspaceWrite",
+      writableRoots: ["/tmp/qa/workspace"],
+      networkAccess: false,
+      excludeTmpdirEnvVar: true,
+      excludeSlashTmp: true,
+    });
+  });
+
+  it("preserves implicit temporary writable roots for ordinary Codex turns", () => {
+    const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-1",
+      cwd: "/tmp/qa/workspace",
+      appServer: createAppServerOptions() as never,
+    });
+
+    expect(request.sandboxPolicy).toEqual({
+      type: "workspaceWrite",
+      writableRoots: ["/tmp/qa/workspace"],
+      networkAccess: false,
+      excludeTmpdirEnvVar: false,
+      excludeSlashTmp: false,
+    });
+  });
+
   it("uses an explicit turn sandbox policy override when provided", () => {
     const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
       threadId: "thread-1",
@@ -1181,12 +1347,19 @@ describe("Codex app-server turn params", () => {
     const resumeParams = buildThreadResumeParams(params, { threadId: "thread-1", appServer });
     expect(resumeParams).toEqual({
       threadId: "thread-1",
+      excludeTurns: true,
+      initialTurnsPage: {
+        limit: 1,
+        sortDirection: "desc",
+        itemsView: "notLoaded",
+      },
       model: "gpt-5.4-codex",
       approvalPolicy: "on-request",
       approvalsReviewer: "guardian_subagent",
       config: {
         "features.code_mode": true,
         "features.code_mode_only": false,
+        "features.goals": false,
         "features.apply_patch_streaming_events": true,
         "features.standalone_web_search": false,
         web_search: "cached",
@@ -1225,10 +1398,7 @@ describe("Codex app-server turn params", () => {
     params.thinkLevel = "medium";
     params.trigger = "heartbeat";
 
-    const heartbeatCollaborationMode = buildTurnCollaborationMode(params, {
-      heartbeatCollaborationInstructions:
-        "HEARTBEAT.md exists at /tmp/workspace/HEARTBEAT.md. Read it before proceeding.",
-    });
+    const heartbeatCollaborationMode = buildTurnCollaborationMode(params, {});
     expect(heartbeatCollaborationMode.mode).toBe("default");
     expect(heartbeatCollaborationMode.settings.model).toBe("gpt-5.4-codex");
     expect(heartbeatCollaborationMode.settings.reasoning_effort).toBe("medium");
@@ -1241,15 +1411,10 @@ describe("Codex app-server turn params", () => {
     expect(heartbeatCollaborationMode.settings.developer_instructions).toContain(
       "If `heartbeat_respond` is not already available and `tool_search` is available",
     );
-    expect(heartbeatCollaborationMode.settings.developer_instructions).toContain(
-      "HEARTBEAT.md exists at /tmp/workspace/HEARTBEAT.md.",
-    );
 
     params.bootstrapContextRunKind = "commitment-only";
     const commitmentCollaborationMode = buildTurnCollaborationMode(params, {
       turnScopedDeveloperInstructions: "Turn-only workspace instructions.",
-      heartbeatCollaborationInstructions:
-        "HEARTBEAT.md exists at /tmp/workspace/HEARTBEAT.md. Read it before proceeding.",
     });
     expect(commitmentCollaborationMode.settings.developer_instructions).toContain(
       "# Collaboration Mode: Default",
@@ -1260,16 +1425,11 @@ describe("Codex app-server turn params", () => {
     expect(commitmentCollaborationMode.settings.developer_instructions).not.toContain(
       "This is an OpenClaw heartbeat turn",
     );
-    expect(commitmentCollaborationMode.settings.developer_instructions).not.toContain(
-      "HEARTBEAT.md exists at /tmp/workspace/HEARTBEAT.md.",
-    );
 
     params.trigger = "user";
     expect(
       buildTurnCollaborationMode(params, {
         turnScopedDeveloperInstructions: "Turn-only workspace instructions.",
-        heartbeatCollaborationInstructions:
-          "HEARTBEAT.md exists at /tmp/workspace/HEARTBEAT.md. Read it before proceeding.",
       }).settings.developer_instructions,
     ).toContain("Turn-only workspace instructions.");
     expect(

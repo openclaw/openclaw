@@ -81,9 +81,6 @@ export function isMattermostSenderAllowed(params: {
   allowNameMatching?: boolean;
 }): boolean {
   const allowFrom = normalizeMattermostAllowList(params.allowFrom);
-  if (allowFrom.length === 0) {
-    return false;
-  }
   const match = resolveAllowlistMatchSimple({
     allowFrom,
     senderId: normalizeMattermostAllowEntry(params.senderId),
@@ -93,7 +90,7 @@ export function isMattermostSenderAllowed(params: {
   return match.allowed;
 }
 
-export function mapMattermostChannelTypeToChatType(channelType?: string | null): ChatType {
+function mapMattermostChannelTypeToChatType(channelType?: string | null): ChatType {
   const normalized = channelType?.trim().toUpperCase();
   if (!normalized) {
     return "direct";
