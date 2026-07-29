@@ -120,6 +120,7 @@ type ProcessGatewayAllowlistParams = {
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
+  turnSourceSenderId?: string;
   scopeKey?: string;
   approvalFollowupText?: string;
   approvalFollowup?: ExecApprovalFollowupFactory;
@@ -420,6 +421,7 @@ function shouldAwaitGatewayApprovalInline(params: {
   turnSourceChannel?: string;
   turnSourceAccountId?: string;
   turnSourceTo?: string;
+  turnSourceSenderId?: string;
   approvalFollowupMode?: "agent" | "direct";
 }): boolean {
   if (params.approvalFollowupMode !== undefined) {
@@ -438,16 +440,20 @@ function shouldAwaitGatewayApprovalInline(params: {
   // must be the one who can resolve it. A counterpart conversation (the agent
   // serving someone other than an approver) can still have approvers
   // configured for the channel/account as a whole -- delivery just routes the
-  // prompt to a different person's DM. Waiting inline there blocks this turn
-  // on a decision nobody watching it can make, past this turn's own liveness
-  // watchdog, long before the approval timeout elapses. Fall through to the
-  // async pending/follow-up path instead, exactly as already happens when the
-  // channel has no native approval UI at all.
+  // prompt to a different person's DM, or on a guild/group surface to the
+  // whole channel/group rather than one user. `turnSourceTo` is that delivery
+  // route (a channel/group id on guild/group surfaces, the peer id on 1:1
+  // DMs) and must not stand in for the sender: use `turnSourceSenderId`, the
+  // real per-message sender id, instead. Waiting inline on the wrong identity
+  // blocks this turn on a decision nobody watching it can make, past this
+  // turn's own liveness watchdog, long before the approval timeout elapses.
+  // Fall through to the async pending/follow-up path instead, exactly as
+  // already happens when the channel has no native approval UI at all.
   return resolveApprovalCommandAuthorization({
     cfg: getRuntimeConfig(),
     channel: params.turnSourceChannel,
     accountId: params.turnSourceAccountId,
-    senderId: params.turnSourceTo,
+    senderId: params.turnSourceSenderId,
     kind: "exec",
   }).authorized;
 }

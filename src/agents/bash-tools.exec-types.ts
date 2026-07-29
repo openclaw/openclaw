@@ -82,6 +82,11 @@ export type ExecToolDefaults = {
   /** Channel-owned sender/chat metadata. Exec subprocesses receive only sender/chat IDs. */
   channelContext?: PluginHookChannelContext;
   accountId?: string;
+  /** Real per-message sender id of the turn that triggered this exec call, distinct
+   *  from `currentChannelId` (a delivery route: a channel/group id on guild/group
+   *  surfaces, not the person who sent the message). Used to gate inline exec-approval
+   *  waits on whether this turn's own sender can actually resolve the approval. */
+  senderId?: string;
   approvalReviewerDeviceId?: string;
   /** Deny approval-requiring commands without creating operator approval events. */
   nonInteractiveApproval?: boolean;

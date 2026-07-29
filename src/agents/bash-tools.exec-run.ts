@@ -469,6 +469,7 @@ export function createExecTool(
             turnSourceTo: defaults?.currentChannelId,
             turnSourceAccountId: defaults?.accountId,
             turnSourceThreadId: defaults?.currentThreadTs,
+            turnSourceSenderId: defaults?.senderId,
             scopeKey: defaults?.scopeKey,
             approvalFollowupText: defaults?.approvalFollowupText,
             approvalFollowup: defaults?.approvalFollowup,
