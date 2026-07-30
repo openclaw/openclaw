@@ -206,6 +206,7 @@ vi.mock("../utils.js", async (importOriginal) => ({
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: (...args: unknown[]) => mocks.loadConfigMock(...args),
   loadConfig: () => mocks.loadConfigMock(),
+  readBestEffortConfig: async (...args: unknown[]) => mocks.loadConfigMock(...args),
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
