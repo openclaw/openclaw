@@ -247,18 +247,41 @@ export function reorderSessionGroups(
   runOpenClawStateWriteTransaction(
     ({ db }) => {
       const kysely = kyselyFor(db);
-      normalized.forEach((name, position) => {
+      // Read existing groups so unlisted groups can be assigned unique
+      // contiguous positions after the listed groups, preserving their
+      // prior relative order. Without this compaction a partial reorder
+      // can persist duplicate positions and make later catalog reads
+      // depend on a name tie-break instead of the caller's intent.
+      const existing = executeSqliteQuerySync(
+        db,
+        kysely.selectFrom("session_groups").select(["name", "position"]),
+      ).rows;
+      const listedSet = new Set(normalized);
+      const unlisted = existing
+        .filter((row) => !listedSet.has(row.name))
+        .toSorted((a, b) => a.position - b.position || a.name.localeCompare(b.name));
+      let pos = 0;
+      for (const name of normalized) {
         executeSqliteQuerySync(
           db,
-          kysely.updateTable("session_groups").set({ position }).where("name", "=", name),
+          kysely.updateTable("session_groups").set({ position: pos++ }).where("name", "=", name),
         );
-      });
+      }
+      for (const row of unlisted) {
+        executeSqliteQuerySync(
+          db,
+          kysely
+            .updateTable("session_groups")
+            .set({ position: pos++ })
+            .where("name", "=", row.name),
+        );
+      }
       if (normalizedSectionOrder) {
         executeSqliteQuerySync(db, kysely.deleteFrom("sidebar_sections"));
-        normalizedSectionOrder.forEach((sectionId, position) => {
+        normalizedSectionOrder.forEach((sectionId, idx) => {
           executeSqliteQuerySync(
             db,
-            kysely.insertInto("sidebar_sections").values({ section_id: sectionId, position }),
+            kysely.insertInto("sidebar_sections").values({ section_id: sectionId, position: idx }),
           );
         });
       }

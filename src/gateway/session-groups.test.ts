@@ -216,14 +216,34 @@ describe("session groups catalog", () => {
     expect(listSessionGroups(env).map((group) => group.name)).toEqual(["A", "B"]);
   });
 
-  it("reorders only the listed groups", () => {
+  it("reorders listed groups and compacts unlisted groups to unique positions", () => {
     putSessionGroups(["A", "B", "C"], undefined, env);
     reorderSessionGroups(["C", "B"], undefined, env);
-    // Unlisted group A keeps its original position; ties are broken by name.
+    // Listed groups get positions 0..N-1; unlisted groups keep their prior
+    // relative order and are appended at unique contiguous positions.
     expect(listSessionGroups(env)).toEqual([
-      { name: "A", position: 0 },
       { name: "C", position: 0 },
       { name: "B", position: 1 },
+      { name: "A", position: 2 },
+    ]);
+  });
+
+  it("preserves unique positions across consecutive partial reorders", () => {
+    putSessionGroups(["A", "B", "C"], undefined, env);
+    reorderSessionGroups(["C", "B"], undefined, env);
+    expect(listSessionGroups(env)).toEqual([
+      { name: "C", position: 0 },
+      { name: "B", position: 1 },
+      { name: "A", position: 2 },
+    ]);
+    // Second partial reorder from a different client session; unlisted
+    // groups C and B must retain their relative order after A moves to
+    // the front.
+    reorderSessionGroups(["A"], undefined, env);
+    expect(listSessionGroups(env)).toEqual([
+      { name: "A", position: 0 },
+      { name: "C", position: 1 },
+      { name: "B", position: 2 },
     ]);
   });
 
