@@ -20,6 +20,7 @@ import { openLocalFileSafely, FsSafeError } from "../infra/fs-safe.js";
 import { safeFileURLToPath } from "../infra/local-file-access.js";
 import { verifyPairingToken } from "../infra/pairing-token.js";
 import { isWithinDir } from "../infra/path-safety.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { assertLocalMediaAllowed, getDefaultLocalRoots } from "../media/local-media-access.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import { probePlaybackMediaFileDescriptor, type MediaProbeResult } from "../media/media-probe.js";
@@ -93,6 +94,8 @@ import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { resolveRequestClientIp } from "./net.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { isTerminalConfigEnabled } from "./terminal/enabled.js";
+
+const log = createSubsystemLogger("gateway/control-ui");
 
 const ROOT_PREFIX = "/";
 const CONTROL_UI_ASSISTANT_MEDIA_PREFIX = "/__openclaw__/assistant-media";
@@ -555,6 +558,28 @@ function classifyAssistantMediaError(err: unknown): AssistantMediaAvailability {
   return { available: false, code: "attachment-unavailable", reason: "Attachment unavailable" };
 }
 
+type OpenedAssistantMediaHandle = Awaited<ReturnType<typeof openLocalFileSafely>>["handle"];
+
+// Assistant media handles are opened with autoClose: false streams, so a rejected close leaks the
+// descriptor for the process lifetime. FileHandle.close() clears `fd` before the underlying close
+// settles, so capture the raw descriptor up front and retry it once (#116346).
+async function closeAssistantMediaHandle(handle: OpenedAssistantMediaHandle): Promise<void> {
+  const fd = handle.fd;
+  try {
+    await handle.close();
+  } catch (err) {
+    log.warn(`control-ui assistant media handle close failed: ${String(err)}`);
+    if (fd < 0) {
+      return;
+    }
+    fs.close(fd, (rawErr) => {
+      if (rawErr) {
+        log.warn(`control-ui assistant media descriptor close failed: ${String(rawErr)}`);
+      }
+    });
+  }
+}
+
 async function resolveAssistantMediaAvailability(
   source: string,
   localRoots: readonly string[],
@@ -611,7 +636,7 @@ async function resolveAssistantMediaAvailability(
         ...probe,
       };
     } finally {
-      await opened.handle.close().catch(() => {});
+      await closeAssistantMediaHandle(opened.handle);
     }
   } catch (err) {
     return classifyAssistantMediaError(err);
