@@ -123,10 +123,14 @@ const PluginDiagnosticSchema = z.object({
   message: z.string(),
   pluginId: z.string().optional(),
   source: z.string().optional(),
+  code: z.string().optional(),
 });
 
 const InstalledPluginIndexSchema = z.object({
-  version: z.literal(INSTALLED_PLUGIN_INDEX_VERSION),
+  version: z.union([
+    z.literal(INSTALLED_PLUGIN_INDEX_VERSION),
+    z.literal(INSTALLED_PLUGIN_INDEX_VERSION - 1),
+  ]),
   warning: z.string().optional(),
   hostContractVersion: z.string(),
   compatRegistryVersion: z.string(),
