@@ -588,7 +588,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       );
       const scope = {
         env: { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir },
-        sessionKey: "voice:123",
+        sessionKey: "agent:voice:voice:123",
         storePath: legacyStorePath,
       };
 
@@ -614,7 +614,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       ).toEqual([
         expect.objectContaining({
           entry: expect.objectContaining({ sessionId: "session-1" }),
-          sessionKey: "voice:123",
+          sessionKey: "agent:voice:voice:123",
         }),
       ]);
       expect(() =>
@@ -683,7 +683,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       });
     });
 
-    it("parses SQLite entry blobs once across keyed loads", async () => {
+    it("parses only the selected SQLite entry across keyed loads", async () => {
       const scope = sqliteAdapter.entryScope(paths);
       for (let index = 0; index < 20; index += 1) {
         await upsertSqliteSessionEntry(
@@ -704,19 +704,31 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
         updatedAt: 100,
       });
       const parseSpy = vi.spyOn(JSON, "parse");
+      const targetEntryParseCount = () =>
+        parseSpy.mock.calls.filter(
+          ([json]) =>
+            typeof json === "string" &&
+            json.includes('"sessionId":"target-session"') &&
+            json.includes('"model":"target"'),
+        ).length;
 
       try {
         expect(loadSqliteSessionEntry(scope)).toMatchObject({
           model: "target",
           sessionId: "target-session",
         });
-        const initialParseCount = parseSpy.mock.calls.length;
-        expect(initialParseCount).toBe(21);
+        expect(targetEntryParseCount()).toBe(1);
+        expect(
+          parseSpy.mock.calls.some(
+            ([json]) =>
+              typeof json === "string" && json.includes('"sessionId":"unrelated-session-'),
+          ),
+        ).toBe(false);
         expect(loadSqliteSessionEntry(scope)).toMatchObject({
           model: "target",
           sessionId: "target-session",
         });
-        expect(parseSpy).toHaveBeenCalledTimes(initialParseCount);
+        expect(targetEntryParseCount()).toBe(2);
       } finally {
         parseSpy.mockRestore();
       }
@@ -1613,8 +1625,8 @@ describe("sqlite session normalization", () => {
     };
 
     for (const [sessionKey, sessionId] of [
-      ["agent:main:slack:channel:C1", "channel-session-1"],
-      ["agent:main:slack:channel:C2", "channel-session-2"],
+      ["agent:main:slack:channel:c1", "channel-session-1"],
+      ["agent:main:slack:channel:c2", "channel-session-2"],
     ] as const) {
       await patchSqliteSessionEntry(
         scopeFor(sessionKey),
@@ -1776,29 +1788,27 @@ describe("sqlite session normalization", () => {
     ).toEqual([]);
   });
 
-  it("resolves confirmed lowercased legacy SQLite session aliases", async () => {
+  it("does not resolve lowercased legacy SQLite session aliases", () => {
     const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
     const canonicalKey = "agent:main:matrix:channel:!MixedCase:example.org";
     const legacyKey = canonicalKey.toLowerCase();
-    await upsertSqliteSessionEntry(
-      {
-        agentId: "main",
-        env,
-        sessionKey: legacyKey,
-        storePath: paths.sqlitePath,
-      },
-      {
-        delivery: normalizeSessionDeliveryState({
-          context: {
-            accountId: "acct-1",
-            channel: "matrix",
-            to: "!MixedCase:example.org",
-          },
-        }),
-        sessionId: "legacy-alias-session",
-        updatedAt: 10,
-      },
-    );
+    const entry = {
+      delivery: normalizeSessionDeliveryState({
+        context: {
+          accountId: "acct-1",
+          channel: "matrix",
+          to: "!MixedCase:example.org",
+        },
+      }),
+      sessionId: "legacy-alias-session",
+      updatedAt: 10,
+    };
+    const database = openOpenClawAgentDatabase({ agentId: "main", env, path: paths.sqlitePath });
+    database.db
+      .prepare(
+        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+      )
+      .run(legacyKey, entry.sessionId, JSON.stringify(entry), entry.updatedAt);
 
     expect(
       loadSqliteSessionEntry({
@@ -1807,7 +1817,7 @@ describe("sqlite session normalization", () => {
         sessionKey: canonicalKey,
         storePath: paths.sqlitePath,
       }),
-    ).toMatchObject({ sessionId: "legacy-alias-session" });
+    ).toBeUndefined();
     const legacyEntry = loadExactSqliteSessionEntry({
       agentId: "main",
       env,
@@ -1822,55 +1832,14 @@ describe("sqlite session normalization", () => {
         sessionKey: canonicalKey,
         storePath: paths.sqlitePath,
       }),
-    ).toBe(legacyEntry?.entry.updatedAt);
-
-    await patchSqliteSessionEntry(
-      {
-        agentId: "main",
-        env,
-        sessionKey: canonicalKey,
-        storePath: paths.sqlitePath,
-      },
-      () => ({ model: "gpt-5.5", updatedAt: 20 }),
-    );
-
-    expect(
-      loadExactSqliteSessionEntry({
-        agentId: "main",
-        env,
-        sessionKey: legacyKey,
-        storePath: paths.sqlitePath,
-      }),
     ).toBeUndefined();
-    const canonicalEntry = loadExactSqliteSessionEntry({
-      agentId: "main",
-      env,
-      sessionKey: canonicalKey,
-      storePath: paths.sqlitePath,
-    });
-    expect(canonicalEntry).toMatchObject({
-      entry: {
-        model: "gpt-5.5",
-        sessionId: "legacy-alias-session",
-        updatedAt: expect.any(Number),
-      },
-      sessionKey: canonicalKey,
-    });
-    expect(
-      readSqliteSessionUpdatedAt({
-        agentId: "main",
-        env,
-        sessionKey: canonicalKey,
-        storePath: paths.sqlitePath,
-      }),
-    ).toBe(canonicalEntry?.entry.updatedAt);
     expect(
       listSqliteSessionEntries({
         agentId: "main",
         env,
         storePath: paths.sqlitePath,
       }).map((summary) => summary.sessionKey),
-    ).toEqual([canonicalKey]);
+    ).toEqual([legacyKey]);
   });
 
   it("normalizes missing entry updatedAt before writing root and entry rows", async () => {

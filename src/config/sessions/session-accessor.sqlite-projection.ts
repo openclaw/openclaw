@@ -8,6 +8,7 @@ import {
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
+  type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import type { SessionArchivedTranscriptCleanupRule } from "./session-accessor.lifecycle-types.js";
 import {
@@ -27,6 +28,7 @@ import type {
 import {
   deleteLegacySessionEntryRows,
   deleteSqliteSessionEntryRows,
+  readExactSessionEntryJson,
   readExactSessionEntryRow,
   readSqliteSessionEntryCount,
   readSqliteSessionEntryStore,
@@ -50,6 +52,7 @@ import {
   shouldRemoveSqliteSessionEntry,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import type {
+  SqliteProjectedLifecycleMutation,
   SqliteSessionEntryMaintenancePlan,
   SqliteSessionEntryRemovalPlan,
 } from "./session-accessor.sqlite-lifecycle-types.js";
@@ -282,6 +285,22 @@ export async function applySqliteSessionStoreProjection<T>(params: {
   });
 }
 
+function readProjectedRemovalEntry(
+  database: OpenClawAgentDatabase,
+  projected: SqliteProjectedLifecycleMutation["removals"][number],
+): SessionEntry | undefined {
+  const expectedRawEntryJson = projected.removal.expectedRawEntryJson;
+  if (expectedRawEntryJson === undefined) {
+    return readExactSessionEntryRow(database, projected.sessionKey)?.entry;
+  }
+  if (readExactSessionEntryJson(database, projected.sessionKey) !== expectedRawEntryJson) {
+    throw new Error(
+      `SQLite session entry changed before raw lifecycle removal for ${projected.sessionKey}`,
+    );
+  }
+  return projected.expectedEntry;
+}
+
 /** Applies exact lifecycle removals/upserts using SQLite session rows. */
 export async function applySqliteSessionEntryLifecycleMutation(params: {
   agentId?: string;
@@ -296,6 +315,10 @@ export async function applySqliteSessionEntryLifecycleMutation(params: {
     nowMs?: number;
   };
   captureArtifactCleanupError?: boolean;
+  /** Doctor-only bypass while exact malformed rows are removed in the same transaction. */
+  allowCanonicalRepair?: boolean;
+  /** Doctor-only synchronous state transfer that commits with the destination entry. */
+  afterUpsertsInTransaction?: (database: OpenClawAgentDatabase) => void;
 }): Promise<SessionEntryLifecycleMutationResult> {
   const resolved = resolveSqliteScope({
     ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -330,7 +353,7 @@ export async function applySqliteSessionEntryLifecycleMutation(params: {
     }
     runOpenClawAgentWriteTransaction((transactionDb) => {
       const validatedRemovals = projected.removals.filter((removal) => {
-        const entry = readExactSessionEntryRow(transactionDb, removal.sessionKey)?.entry;
+        const entry = readProjectedRemovalEntry(transactionDb, removal);
         if (!sqliteSessionEntriesEqual(entry, removal.expectedEntry)) {
           const replacedInSameMutation = projected.upsertedEntries.some(
             (upsert) => upsert.sessionKey === removal.sessionKey,
@@ -368,10 +391,12 @@ export async function applySqliteSessionEntryLifecycleMutation(params: {
         expectedEntry,
         resetBoundaryPlan,
       } of projected.upsertedEntries) {
-        const currentEntry = readExactSessionEntryRow(transactionDb, sessionKey)?.entry;
         const sameKeyRemoval = validatedRemovals.find(
           (removal) => removal.sessionKey === sessionKey,
         );
+        const currentEntry = sameKeyRemoval
+          ? readProjectedRemovalEntry(transactionDb, sameKeyRemoval)
+          : readExactSessionEntryRow(transactionDb, sessionKey)?.entry;
         const expectedCurrentEntry = expectedEntry ?? sameKeyRemoval?.expectedEntry;
         if (!sqliteSessionEntriesEqual(currentEntry, expectedCurrentEntry)) {
           if (sameKeyRemoval) {
@@ -397,6 +422,8 @@ export async function applySqliteSessionEntryLifecycleMutation(params: {
           }
         }
         writeSessionEntry(transactionDb, sessionKey, entry, {
+          allowStoredAliases: params.allowCanonicalRepair === true,
+          preserveNodeSuggestions: params.allowCanonicalRepair === true,
           previousEntry: expectedCurrentEntry ?? null,
         });
         const relatedRemovalKeys = validatedRemovals.flatMap((removal) => {
@@ -417,12 +444,13 @@ export async function applySqliteSessionEntryLifecycleMutation(params: {
           });
         }
       }
+      params.afterUpsertsInTransaction?.(transactionDb);
       const upsertedKeys = new Set(projected.upsertedEntries.map((upsert) => upsert.sessionKey));
       for (const removal of validatedRemovals) {
         if (upsertedKeys.has(removal.sessionKey)) {
           continue;
         }
-        const entry = readExactSessionEntryRow(transactionDb, removal.sessionKey)?.entry;
+        const entry = readProjectedRemovalEntry(transactionDb, removal);
         if (!sqliteSessionEntriesEqual(entry, removal.expectedEntry)) {
           throw new Error(
             `SQLite session entry changed before lifecycle removal for ${removal.sessionKey}`,
@@ -440,7 +468,9 @@ export async function applySqliteSessionEntryLifecycleMutation(params: {
             { rehomeMembers: replacement.rehomeMembers },
           );
         } else {
-          deleteSqliteSessionEntryRows(transactionDb, removal.sessionKey);
+          deleteSqliteSessionEntryRows(transactionDb, removal.sessionKey, {
+            deleteOwnedWindows: removal.removal.deleteOwnedWindows === true,
+          });
         }
         removedSessionKeys.push(removal.sessionKey);
       }

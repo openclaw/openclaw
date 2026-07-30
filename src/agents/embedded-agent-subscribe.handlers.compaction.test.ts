@@ -135,7 +135,7 @@ describe("reconcileSessionStoreCompactionCountAfterSuccess", () => {
     // moves it forward without double-counting.
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-reconcile-"));
     const storePath = path.join(tmp, "sessions.json");
-    const sessionKey = "main";
+    const sessionKey = "agent:test-agent:main";
     await seedSessionStore({
       storePath,
       sessionKey,
@@ -157,7 +157,7 @@ describe("reconcileSessionStoreCompactionCountAfterSuccess", () => {
   it("does not double count when the store is already at or above the observed value", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-idempotent-"));
     const storePath = path.join(tmp, "sessions.json");
-    const sessionKey = "main";
+    const sessionKey = "agent:test-agent:main";
     await seedSessionStore({
       storePath,
       sessionKey,
@@ -181,7 +181,7 @@ describe("compaction lifecycle logging", () => {
   it("logs lifecycle events at info level for gateway watch visibility", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-log-"));
     const storePath = path.join(tmp, "sessions.json");
-    const sessionKey = "main";
+    const sessionKey = "agent:test-agent:main";
     await seedSessionStore({
       storePath,
       sessionKey,
@@ -231,7 +231,7 @@ describe("compaction lifecycle logging", () => {
   it("logs manual compaction as incomplete when no result is produced", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-incomplete-log-"));
     const storePath = path.join(tmp, "sessions.json");
-    const sessionKey = "main";
+    const sessionKey = "agent:test-agent:main";
     await seedSessionStore({
       storePath,
       sessionKey,
@@ -281,7 +281,7 @@ describe("compaction lifecycle logging", () => {
   it("defaults legacy synthetic compaction events to threshold logs", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-legacy-log-"));
     const storePath = path.join(tmp, "sessions.json");
-    const sessionKey = "main";
+    const sessionKey = "agent:test-agent:main";
     await seedSessionStore({
       storePath,
       sessionKey,
@@ -331,7 +331,7 @@ describe("handleCompactionEnd", () => {
   it("reconciles the session store after a successful compaction end event", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-handler-"));
     const storePath = path.join(tmp, "sessions.json");
-    const sessionKey = "main";
+    const sessionKey = "agent:test-agent:main";
     await seedSessionStore({
       storePath,
       sessionKey,
@@ -381,7 +381,7 @@ describe("handleCompactionEnd", () => {
     ] as AgentMessage[];
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-usage-"));
     const storePath = path.join(tmp, "sessions.json");
-    const sessionKey = "main";
+    const sessionKey = "agent:test-agent:main";
     const ctx = createCompactionContext({
       storePath,
       sessionKey,
@@ -416,7 +416,7 @@ describe("handleCompactionEnd", () => {
     ] as AgentMessage[];
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-summary-first-"));
     const storePath = path.join(tmp, "sessions.json");
-    const sessionKey = "main";
+    const sessionKey = "agent:test-agent:main";
     const ctx = createCompactionContext({
       storePath,
       sessionKey,
@@ -448,7 +448,7 @@ describe("handleCompactionEnd", () => {
     ] as AgentMessage[];
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-legacy-usage-"));
     const storePath = path.join(tmp, "sessions.json");
-    const sessionKey = "main";
+    const sessionKey = "agent:test-agent:main";
     const ctx = createCompactionContext({
       storePath,
       sessionKey,
@@ -480,7 +480,7 @@ describe("handleCompactionEnd", () => {
     ] as AgentMessage[];
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-no-summary-"));
     const storePath = path.join(tmp, "sessions.json");
-    const sessionKey = "main";
+    const sessionKey = "agent:test-agent:main";
     const ctx = createCompactionContext({
       storePath,
       sessionKey,
@@ -508,7 +508,7 @@ describe("handleCompactionEnd", () => {
     ] as AgentMessage[];
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-timestamp-fresh-"));
     const storePath = path.join(tmp, "sessions.json");
-    const sessionKey = "main";
+    const sessionKey = "agent:test-agent:main";
     const ctx = createCompactionContext({
       storePath,
       sessionKey,

@@ -11,6 +11,7 @@ import type {
   TranscriptEvent,
   TranscriptMessageAppendOptions,
 } from "./session-accessor.sqlite-contract.js";
+import { publishSqliteSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
 import {
   findSqliteTranscriptEventInDatabase,
   loadSqliteTranscriptEventsFromDatabase,
@@ -18,6 +19,7 @@ import {
   readTranscriptEventMessage,
 } from "./session-accessor.sqlite-read.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
+import { refreshSqliteSessionTitleProjection } from "./session-accessor.sqlite-session-row.js";
 import {
   advanceTranscriptMutationAtInTransaction,
   deleteSqliteTranscriptEventsInTransaction,
@@ -93,6 +95,12 @@ export function appendTranscriptEventInTransaction(
     eventId: identity?.eventId ?? null,
     createdAt,
   });
+  const message = readTranscriptEventMessage(persistedEvent) as { role?: unknown } | undefined;
+  if (!projectionNeedsRebuild && message?.role === "user") {
+    refreshSqliteSessionTitleProjection(database.db, scope.sessionId, () =>
+      publishSqliteSessionEntryCacheInvalidation(database),
+    );
+  }
   if (projectionNeedsRebuild) {
     options.onProjectionReconcileNeeded?.();
   }
@@ -373,7 +381,9 @@ export function replaceSqliteTranscriptEventsInTransaction(
   }
   if (deleted || seq > 0) {
     recordTranscriptReplacementMutation(database, resolved.sessionId, preservedTranscriptUpdatedAt);
-    reconcileSessionTranscriptIndexInTransaction(database.db, resolved.sessionId);
+    reconcileSessionTranscriptIndexInTransaction(database.db, resolved.sessionId, () =>
+      publishSqliteSessionEntryCacheInvalidation(database),
+    );
   }
 }
 
@@ -426,7 +436,9 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
   }
   rotateTranscriptGenerationInTransaction(database, resolved.sessionId);
   touchTranscriptMutationInTransaction(database, resolved.sessionId);
-  reconcileSessionTranscriptIndexInTransaction(database.db, resolved.sessionId);
+  reconcileSessionTranscriptIndexInTransaction(database.db, resolved.sessionId, () =>
+    publishSqliteSessionEntryCacheInvalidation(database),
+  );
 }
 
 // Text-only transcript repair: rewrites event_json for specific rows in place.
@@ -453,7 +465,9 @@ export function updateSqliteTranscriptEventJsonInTransaction(
   }
   rotateTranscriptGenerationInTransaction(database, sessionId);
   deleteSessionTranscriptIndexInTransaction(database.db, sessionId);
-  reconcileSessionTranscriptIndexInTransaction(database.db, sessionId);
+  reconcileSessionTranscriptIndexInTransaction(database.db, sessionId, () =>
+    publishSqliteSessionEntryCacheInvalidation(database),
+  );
   // Minimally advance transcript_updated_at (prev+1), NOT to now. This is a one-time maintenance
   // rewrite: bumping to now would reorder legacy sessions to the top of every recency view
   // (sqlite-history.ts orders by transcript_updated_at). But the watermark must still change,

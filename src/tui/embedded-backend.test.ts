@@ -32,6 +32,10 @@ const createGatewaySessionMock = vi.fn();
 const listSessionsFromStoreAsyncMock = vi.fn(
   async (_options?: unknown): Promise<{ sessions: unknown[] }> => ({ sessions: [] }),
 );
+const buildSessionListSqlQueryMock = vi.fn(() => ({
+  lineage: {},
+  query: { archived: false },
+}));
 const buildGatewaySessionInfoMock = vi.fn(
   (params: { key: string; entry?: { sessionId?: string; thinkingLevel?: string } }) => ({
     key: params.key,
@@ -202,6 +206,7 @@ vi.mock("../gateway/server-methods/chat.js", () => ({
 vi.mock("../gateway/session-utils.js", () => ({
   buildGatewaySessionInfo: (params: Parameters<typeof buildGatewaySessionInfoMock>[0]) =>
     buildGatewaySessionInfoMock(params),
+  buildSessionListSqlQuery: () => buildSessionListSqlQueryMock(),
   getSessionDefaults: () => getSessionDefaultsMock(),
   listAgentsForGateway: () => [],
   listSessionsFromStoreAsync: (...args: unknown[]) => listSessionsFromStoreAsyncMock(...args),
@@ -211,7 +216,7 @@ vi.mock("../gateway/session-utils.js", () => ({
     loadSessionEntryMock(sessionKey, opts),
   loadSessionEntryReadOnly: (sessionKey: string, opts?: { agentId?: string }) =>
     loadSessionEntryMock(sessionKey, opts),
-  migrateAndPruneGatewaySessionStoreKey: ({ key }: { key: string }) => ({
+  resolveCanonicalGatewaySessionStoreKey: ({ key }: { key: string }) => ({
     primaryKey: key,
     target: { storeKeys: [key] },
   }),
@@ -799,13 +804,19 @@ describe("EmbeddedTuiBackend", () => {
 
     expect(loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(
       {},
-      { agentId: "work", projection: "list" },
+      {
+        agentId: "work",
+        includeRowContext: true,
+        projection: "list",
+        query: { archived: false },
+      },
     );
     expect(listSessionsFromStoreAsyncMock).toHaveBeenCalledWith({
       cfg: {},
       storePath: "/tmp/openclaw-sessions.json",
       store: {},
       opts: { agentId: "work", includeGlobal: true, search: "global" },
+      sqlSelection: { creatorFilterApplied: false, lineage: {} },
     });
   });
 

@@ -32,7 +32,7 @@ const LIST_PARAMS = {
 async function countMaterializedEntriesForRows(rows: number): Promise<number> {
   await createSessionStoreDir();
   const entries: Record<string, ReturnType<typeof sessionStoreEntry>> = {
-    main: sessionStoreEntry("sess-main"),
+    "agent:main:main": sessionStoreEntry("sess-main"),
   };
   for (let index = 0; index < rows; index++) {
     entries[`agent:main:row-${index}`] = sessionStoreEntry(`sess-row-${index}`, {
@@ -95,7 +95,7 @@ test("sessions.list discovers store targets at most once per agent", async () =>
   }
 });
 
-test("startup prewarm fills session snapshot and title caches before the first list", async () => {
+test("startup prewarm fills the session snapshot without rereading projected titles", async () => {
   const { storePath } = await createSessionStoreDir();
   const sessionKey = "agent:main:warm-cache";
   const sessionId = "warm-cache";
@@ -144,7 +144,7 @@ test("startup prewarm fills session snapshot and title caches before the first l
     await vi.advanceTimersToNextTimerAsync();
     await sessionPrewarm;
     sidecar.stop();
-    expect(titlePageSpy).toHaveBeenCalled();
+    expect(titlePageSpy).not.toHaveBeenCalled();
     titlePageSpy.mockClear();
     vi.useRealTimers();
     const cachedEntries = sessionAccessor.listSessionEntriesReadOnly({
@@ -179,7 +179,7 @@ test("sessions.list projects out prompt snapshots without changing full entry re
   await createSessionStoreDir();
   await writeSessionStore({
     entries: {
-      main: sessionStoreEntry("sess-main"),
+      "agent:main:main": sessionStoreEntry("sess-main"),
     },
   });
   const storePath = testState.sessionStorePath!;
@@ -211,7 +211,7 @@ test("sessions.list projects out prompt snapshots without changing full entry re
     .prepare(
       "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
     )
-    .run("zz-malformed", "malformed", "{", Date.now());
+    .run("agent:main:zz-malformed", "malformed", "{", Date.now());
 
   const fullEntries = sessionAccessor.listSessionEntriesReadOnly({ agentId: "main", storePath });
   expect(fullEntries).toHaveLength(1);

@@ -478,7 +478,7 @@ describe("session sharing handlers", () => {
     });
   });
 
-  it("stores and lists membership against an alias-backed session row", async () => {
+  it("rejects membership mutations against an alias-backed session row", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const canonicalKey = "agent:ops:work";
       const aliasKey = "agent:ops:main";
@@ -511,22 +511,15 @@ describe("session sharing handlers", () => {
       clearSessionStoreCacheForTest();
       const requestContext = context(vi.fn(), cfg);
 
-      expect(
-        await call(
+      await expect(
+        call(
           "session.members.add",
           { sessionKey: aliasKey, identityId: profile.id },
           requestContext,
         ),
-      ).toEqual([
-        [true, { ok: true, sessionKey: canonicalKey, identityId: profile.id }, undefined],
-      ]);
-      expect(listSessionMembers({ agentId: "ops", sessionKey: aliasKey })).toEqual([
-        expect.objectContaining({ identityId: profile.id }),
-      ]);
-      const listed = await call("session.members.list", { sessionKey: aliasKey }, requestContext);
-      expect(listed[0]?.[1]).toMatchObject({
-        sessionKey: canonicalKey,
-        members: [expect.objectContaining({ identityId: profile.id })],
+      ).rejects.toMatchObject({
+        code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED",
+        message: expect.stringContaining("openclaw doctor --fix"),
       });
     });
   });

@@ -5,7 +5,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { resolveStorePath } from "./paths.js";
-import { createSessionEntryWithTranscript, loadSessionEntry } from "./session-accessor.js";
+import {
+  createSessionEntryWithTranscript,
+  loadSessionEntry,
+  openSessionEntryReadView,
+  resolveSessionEntryAccessTarget,
+} from "./session-accessor.js";
 
 const sessionKey = "agent:main:dashboard:incognito-round-trip";
 
@@ -43,6 +48,12 @@ describe("incognito transcript access", () => {
         })?.incognito,
       ).toBe(true);
       expect(fs.existsSync(durableStorePath)).toBe(false);
+      expect(resolveSessionEntryAccessTarget({ cfg: {}, sessionKey })?.entry?.sessionId).toBe(
+        "incognito-session",
+      );
+      expect(openSessionEntryReadView({ agentId: "main" }).get(sessionKey)?.sessionId).toBe(
+        "incognito-session",
+      );
 
       const target = {
         agentId: "main",

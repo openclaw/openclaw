@@ -3438,8 +3438,9 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
   it("recovers preflight compaction when stale tokens point at an empty transcript", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-empty-preflight-"));
     const storePath = path.join(dir, "sessions.json");
+    const sessionKey = "agent:main:test-key";
     await replaceSessionEntry(
-      { sessionKey: "test-key", storePath },
+      { sessionKey, storePath },
       {
         sessionId: "test-session",
         updatedAt: 1,
@@ -3509,6 +3510,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     try {
       const result = await runEmbeddedAgent({
         ...overflowBaseRunParams,
+        sessionKey,
         config: {
           session: {
             store: storePath,
@@ -3521,7 +3523,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       expect(result.meta.error).toBeUndefined();
       expect(result.meta.agentMeta?.compactionTokensAfter).toBeUndefined();
       expect(result.meta.agentMeta?.contextBudgetStatus).toBeUndefined();
-      const stored = loadSessionEntry({ sessionKey: "test-key", storePath });
+      const stored = loadSessionEntry({ sessionKey, storePath });
       expect(stored?.totalTokens).toBe(0);
       expect(stored?.totalTokensFresh).toBe(true);
       expect(stored?.inputTokens).toBeUndefined();

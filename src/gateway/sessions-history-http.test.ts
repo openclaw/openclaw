@@ -300,14 +300,6 @@ async function readSessionHistoryBody(
   return (await res.json()) as SessionHistoryBody;
 }
 
-async function expectSessionHistoryText(params: { sessionKey: string; expectedText: string }) {
-  await withGatewayHarness(async (harness) => {
-    const body = await readSessionHistoryBody(harness.port, params.sessionKey);
-    expect(body.sessionKey).toBe(params.sessionKey);
-    expect(body.messages?.[0]?.content?.[0]?.text).toBe(params.expectedText);
-  });
-}
-
 async function readSseEvent(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   state: { buffer: string },
@@ -603,7 +595,7 @@ describe("session history HTTP endpoints", () => {
     });
   });
 
-  test("prefers the freshest duplicate row for direct history reads", async () => {
+  test("rejects duplicate history rows with doctor repair guidance", async () => {
     testState.sessionConfig = { mainKey: "work" };
     const storePath = await createSessionStoreFile();
     await replaceTranscriptEvents(
@@ -650,10 +642,23 @@ describe("session history HTTP endpoints", () => {
       ],
     });
 
-    await expectSessionHistoryText({
-      sessionKey: "agent:main:work",
-      expectedText: "fresh history",
-    });
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await withGatewayHarness(async (harness) => {
+        const res = await fetchSessionHistory(harness.port, "agent:main:work");
+        expect(res.status).toBe(500);
+        expect(await res.text()).toBe("Internal Server Error");
+        expect(errorLog).toHaveBeenCalledWith(
+          "[gateway-http] unhandled error in request handler:",
+          expect.objectContaining({
+            code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED",
+            message: expect.stringContaining("openclaw doctor --fix"),
+          }),
+        );
+      });
+    } finally {
+      errorLog.mockRestore();
+    }
   });
 
   test("supports cursor pagination over direct REST while preserving the messages field", async () => {

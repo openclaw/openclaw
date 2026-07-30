@@ -21,6 +21,7 @@ import {
   resolveSessionGoalDisplayState,
   type SessionEntry,
 } from "../config/sessions.js";
+import { getSessionProjectedTitle } from "../config/sessions/session-accessor.sqlite-session-row.js";
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
@@ -40,7 +41,6 @@ import type {
 } from "./session-utils-contracts.js";
 import {
   buildCompactionCheckpointPreview,
-  deriveSessionTitle,
   deriveSessionUnread,
   resolveEstimatedSessionCostUsd,
   resolveLatestCompactionCheckpoint,
@@ -314,15 +314,13 @@ export function buildGatewaySessionRow(params: {
   );
   const selectedOrRuntimeModelProvider = selectedModel?.provider ?? modelProvider;
   const selectedOrRuntimeModel = selectedModel?.model ?? model;
-  const rowModelIdentity = lightweight
-    ? { provider: selectedOrRuntimeModelProvider, model: selectedOrRuntimeModel }
-    : resolveSessionDisplayModelIdentityRefCached({
-        cfg,
-        agentId: sessionAgentId,
-        provider: selectedOrRuntimeModelProvider,
-        model: selectedOrRuntimeModel,
-        rowContext: params.rowContext,
-      });
+  const rowModelIdentity = resolveSessionDisplayModelIdentityRefCached({
+    cfg,
+    agentId: sessionAgentId,
+    provider: selectedOrRuntimeModelProvider,
+    model: selectedOrRuntimeModel,
+    rowContext: params.rowContext,
+  });
   const rowModelProvider = rowModelIdentity.provider;
   const rowModel = rowModelIdentity.model;
   const acpSessionKey = resolveStoredSessionKeyForAgentStore({
@@ -331,7 +329,8 @@ export function buildGatewaySessionRow(params: {
     sessionKey: key,
   });
   const estimatedCostUsd = lightweight
-    ? resolveNonNegativeNumber(entry?.estimatedCostUsd)
+    ? (resolveNonNegativeNumber(entry?.estimatedCostUsd) ??
+      resolveNonNegativeNumber(transcriptUsage?.estimatedCostUsd))
     : (resolveEstimatedSessionCostUsd({
         cfg,
         provider: rowModelProvider,
@@ -360,9 +359,11 @@ export function buildGatewaySessionRow(params: {
         }),
       ));
 
-  let derivedTitle: string | undefined;
+  const derivedTitle = params.includeDerivedTitles
+    ? (normalizeOptionalString(entry?.label) ?? displayName ?? getSessionProjectedTitle(entry))
+    : undefined;
   let lastMessagePreview: string | undefined;
-  if (entry?.sessionId && (params.includeDerivedTitles || params.includeLastMessage)) {
+  if (entry?.sessionId && params.includeLastMessage) {
     const fields = readScopedSessionTitleFieldsFromTranscript({
       agentId: sessionAgentId,
       sessionEntry: entry,
@@ -370,9 +371,6 @@ export function buildGatewaySessionRow(params: {
       sessionKey: key,
       storePath,
     });
-    if (params.includeDerivedTitles) {
-      derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage, displayName);
-    }
     if (params.includeLastMessage && fields.lastMessagePreview) {
       lastMessagePreview = fields.lastMessagePreview;
     }

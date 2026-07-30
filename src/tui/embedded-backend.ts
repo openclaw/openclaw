@@ -72,13 +72,14 @@ import {
 } from "../gateway/session-transcript-readers.js";
 import {
   buildGatewaySessionInfo,
+  buildSessionListSqlQuery,
   getSessionDefaults,
   listAgentsForGateway,
   listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGateway,
   loadSessionEntry,
   loadSessionEntryReadOnly,
-  migrateAndPruneGatewaySessionStoreKey,
+  resolveCanonicalGatewaySessionStoreKey,
   resolveGatewaySessionStoreTarget,
   resolveSessionModelRef,
 } from "../gateway/session-utils.js";
@@ -697,15 +698,26 @@ export class EmbeddedTuiBackend implements TuiBackend {
   async listSessions(opts?: Parameters<TuiBackend["listSessions"]>[0]): Promise<TuiSessionList> {
     await this.ready;
     const cfg = getRuntimeConfig();
-    const { storePath, store } = loadCombinedSessionStoreForGateway(cfg, {
+    const listOpts = opts ?? {};
+    const { lineage, query } = buildSessionListSqlQuery(listOpts, {
+      bounded: false,
+      includeCreatorFilter: false,
+      mainKey: cfg.session?.mainKey,
+      now: Date.now(),
+    });
+    const { rowContextStore, storePath, store } = loadCombinedSessionStoreForGateway(cfg, {
       agentId: opts?.agentId,
+      includeRowContext: true,
       projection: "list",
+      query,
     });
     return (await listSessionsFromStoreAsync({
       cfg,
       storePath,
       store,
-      opts: opts ?? {},
+      opts: listOpts,
+      ...(rowContextStore ? { rowContextStore } : {}),
+      sqlSelection: { creatorFilterApplied: false, lineage },
     })) as TuiSessionList;
   }
 
@@ -729,13 +741,13 @@ export class EmbeddedTuiBackend implements TuiBackend {
         const store = Object.fromEntries(
           entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
         );
-        const { target: migratedTarget, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+        const { target: canonicalTarget, primaryKey } = resolveCanonicalGatewaySessionStoreKey({
           cfg,
           key: opts.key,
           store,
           agentId: opts.agentId,
         });
-        return { primaryKey, candidateKeys: migratedTarget.storeKeys };
+        return { primaryKey, candidateKeys: canonicalTarget.storeKeys };
       },
       project: async ({ primaryKey, existingEntry, entries }) =>
         await projectSessionsPatchEntry({

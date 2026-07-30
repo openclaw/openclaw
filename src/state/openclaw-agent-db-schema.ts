@@ -5,6 +5,8 @@ import {
   hasLegacyMemoryRecallMetadataColumns,
   migrateMemoryIndexSourcesIdentity,
 } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
+import { deriveSqliteSessionTitle } from "../config/sessions/session-accessor.sqlite-session-row.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import {
   repairCanonicalSqliteIndexes,
@@ -35,6 +37,7 @@ import {
 } from "./openclaw-agent-db-schema-helpers.js";
 import {
   backfillSessionConversations,
+  ensureSessionEntryValidityProjection,
   migrateConversationDeliveryTargetColumn,
   migrateSessionEntryStatusProjection,
   readSqliteTableColumns,
@@ -52,8 +55,20 @@ import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db.js";
 
 type OpenClawAgentMetadataDatabase = Pick<OpenClawAgentKyselyDatabase, "schema_meta">;
 type MigratedSessionEntry = Record<string, unknown>;
+const SESSION_TITLE_PROJECTION_META_KEY = "session-title-projection-v1";
+const SESSION_KEY_REVISION_SCHEMA_START = "CREATE TABLE IF NOT EXISTS session_key_revisions (";
+const SESSION_KEY_REVISION_SCHEMA_END = "CREATE TABLE IF NOT EXISTS session_windows (";
 
 const agentDbLog = createSubsystemLogger("state/agent-db");
+
+function ensureSessionKeyRevisionSchemaInTransaction(db: DatabaseSync): void {
+  const start = OPENCLAW_AGENT_SCHEMA_SQL.indexOf(SESSION_KEY_REVISION_SCHEMA_START);
+  const end = OPENCLAW_AGENT_SCHEMA_SQL.indexOf(SESSION_KEY_REVISION_SCHEMA_END, start);
+  if (start === -1 || end === -1) {
+    throw new Error("OpenClaw agent session-key revision schema markers are missing.");
+  }
+  db.exec(OPENCLAW_AGENT_SCHEMA_SQL.slice(start, end)); // sqlite-allow-raw -- Idempotent additive lazy ensure.
+}
 
 function migratedSessionColumn(
   columns: ReadonlySet<string>,
@@ -397,6 +412,46 @@ function migratedEntryDisplayName(entry: MigratedSessionEntry): string | null {
   );
 }
 
+function backfillSessionTitleProjection(db: DatabaseSync): void {
+  if (
+    db
+      .prepare("SELECT 1 FROM schema_meta WHERE meta_key = ?")
+      .get(SESSION_TITLE_PROJECTION_META_KEY)
+  ) {
+    return;
+  }
+  const rows = db
+    .prepare("SELECT current_session_id, entry_json, session_key, updated_at FROM session_nodes")
+    .iterate() as Iterable<{
+    current_session_id: string;
+    entry_json: string;
+    session_key: string;
+    updated_at: number;
+  }>;
+  const update = db.prepare("UPDATE session_nodes SET display_name = ? WHERE session_key = ?");
+  for (const row of rows) {
+    const parsed = parseMigratedSessionEntry(row.entry_json);
+    if (!parsed) {
+      continue;
+    }
+    const entry = {
+      ...parsed,
+      sessionId: migratedText(parsed.sessionId) ?? row.current_session_id,
+      updatedAt: migratedNumber(parsed.updatedAt) ?? row.updated_at,
+    } as SessionEntry;
+    update.run(deriveSqliteSessionTitle(db, entry), row.session_key);
+  }
+  db.exec(`
+    UPDATE session_nodes SET pinned_at = NULL WHERE pinned_at <= 0;
+    UPDATE session_nodes SET last_interaction_at = NULL WHERE last_interaction_at <= 0;
+  `);
+  db.prepare(
+    `INSERT INTO schema_meta
+     SELECT ?, role, schema_version, agent_id, app_version, created_at, updated_at
+       FROM schema_meta WHERE meta_key = 'primary'`,
+  ).run(SESSION_TITLE_PROJECTION_META_KEY);
+}
+
 function backfillOpenClawAgentSchema(db: DatabaseSync, previousVersion: number): void {
   if (previousVersion >= 2) {
     return;
@@ -555,15 +610,18 @@ function ensureAgentSchema(
         );
       }
       if (previousVersion === targetVersion) {
+        ensureSessionEntryValidityProjection(db);
         if (hasPendingMemoryChunkMetadataMigration(db)) {
           migrateMemoryChunkMetadataSchema(db);
           db.exec(OPENCLAW_AGENT_SCHEMA_SQL);
         }
-        // Repeat index repair before the transactional schema assertion so a
-        // concurrent opener cannot turn repairable drift into a hard refusal.
+        // Repair consumes the canonical DDL, including additive validity indexes; keep it
+        // unconditional so same-version databases converge without a schema-version bump.
         repairCanonicalSqliteIndexes(db, pathname, OPENCLAW_AGENT_SCHEMA_SQL, {
           verifyPhysicalIntegrity: false,
         });
+        ensureSessionKeyRevisionSchemaInTransaction(db);
+        backfillSessionTitleProjection(db);
         assertAgentSchemaVersion(db, { agentId, pathname, version: targetVersion });
         return;
       } else if (previousVersion === 14) {
@@ -586,6 +644,7 @@ function ensureAgentSchema(
       }
       backfillSessionEntryProvenance(db, previousVersion);
       migrateSessionNodesAndWindows(db, previousVersion);
+      ensureSessionEntryValidityProjection(db);
       db.exec(OPENCLAW_AGENT_SCHEMA_SQL);
       migrateMemoryChunkMetadataSchema(db);
       if (previousVersion < targetVersion) {
@@ -627,6 +686,7 @@ function ensureAgentSchema(
             }),
           ),
       );
+      backfillSessionTitleProjection(db);
       assertAgentSchemaVersion(db, { agentId, pathname, version: targetVersion });
     });
   } finally {

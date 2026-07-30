@@ -27,7 +27,7 @@ async function createSqliteTranscriptFixture(params: {
   sessionId: string;
 }): Promise<SqliteTranscriptFixture> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), params.prefix));
-  const sessionKey = "main";
+  const sessionKey = "agent:main:main";
   const agentId = "main";
   const storePath = path.join(dir, "sessions.json");
   await replaceSessionEntry(

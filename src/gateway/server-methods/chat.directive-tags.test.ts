@@ -186,7 +186,9 @@ vi.mock("../session-utils.js", async () => {
     const canonicalKey =
       typeof mockState.sessionEntry.canonicalKey === "string"
         ? mockState.sessionEntry.canonicalKey
-        : rawKey || "main";
+        : rawKey === "main"
+          ? `agent:main:${mockState.mainSessionKey}`
+          : rawKey || `agent:main:${mockState.mainSessionKey}`;
     const entry = mockState.sessionMissing
       ? undefined
       : {
@@ -375,7 +377,7 @@ dispatchInboundMessageMock.mockImplementation(
         await params.dispatcher.waitForIdle();
       };
       if (mockState.disposedTranscriptWriteContext) {
-        const sessionKey = mockState.mainSessionKey;
+        const sessionKey = `agent:main:${mockState.mainSessionKey}`;
         const storePath = path.join(path.dirname(mockState.transcriptPath), "sessions.json");
         await withOwnedSessionTranscriptWrites(
           {
@@ -577,7 +579,11 @@ async function createTranscriptFixture(prefix: string) {
   // The accessor resolves transcript targets from the persisted store, so the
   // fixture seeds a real entry instead of relying on the mocked gateway wrapper.
   await replaceSessionEntry(
-    { agentId: "main", sessionKey: "main", storePath: path.join(dir, "sessions.json") },
+    {
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      storePath: path.join(dir, "sessions.json"),
+    },
     { sessionId: mockState.sessionId, sessionFile: transcriptPath, updatedAt: Date.now() },
   );
   return dir;
@@ -617,7 +623,7 @@ function transcriptScope(): SessionTranscriptReadScope {
   return {
     agentId: "main",
     sessionId: mockState.sessionId,
-    sessionKey: "main",
+    sessionKey: "agent:main:main",
     storePath: path.join(path.dirname(mockState.transcriptPath), "sessions.json"),
   };
 }
@@ -625,7 +631,7 @@ function transcriptScope(): SessionTranscriptReadScope {
 function sessionEntryScope(): SessionAccessScope {
   return {
     agentId: "main",
-    sessionKey: "main",
+    sessionKey: "agent:main:main",
     storePath: path.join(path.dirname(mockState.transcriptPath), "sessions.json"),
   };
 }
@@ -804,10 +810,10 @@ function expectUserUpdateIdentity(update: ReturnType<typeof findUserUpdate>) {
   expect(update?.target).toEqual({
     agentId: "main",
     sessionId: mockState.sessionId,
-    sessionKey: "main",
+    sessionKey: "agent:main:main",
     storePath: path.join(path.dirname(mockState.transcriptPath), "sessions.json"),
   });
-  expect(update?.sessionKey).toBe("main");
+  expect(update?.sessionKey).toBe("agent:main:main");
   expect(update?.agentId).toBe("main");
 }
 
@@ -1381,7 +1387,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
   it("persists non-agent plugin-bound replies in the binding-owned session", async () => {
     await createTranscriptFixture("openclaw-chat-send-plugin-binding-history-");
-    const targetSessionKey = "plugin-binding:codex:history123";
+    const targetSessionKey = "agent:main:plugin-binding:codex:history123";
     mockState.finalPayload = setReplyPayloadMetadata(
       { text: "bound history reply" },
       {
@@ -1527,7 +1533,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
     expect(assistantUpdate?.target).toMatchObject({
       agentId: "main",
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
     });
     expect(context.logGateway.warn).not.toHaveBeenCalledWith(
       "webchat transcript append skipped: inconsistent binding-owned transcript metadata",
@@ -1542,7 +1548,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     context.chatAbortControllers.set("run-same-session", {
       controller: new AbortController(),
       sessionId: "sess-prev",
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       startedAtMs: Date.now(),
       expiresAtMs: Date.now() + 10_000,
     });
@@ -2218,12 +2224,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     expect(broadcast).toMatchObject({
       runId: "idem-agent-source-reply",
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       state: "final",
     });
     expect(extractFirstTextBlock(broadcast)).toBe("Codex source reply");
     const nodeSend = lastNodeSendCall(context);
-    expect(nodeSend?.[0]).toBe("main");
+    expect(nodeSend?.[0]).toBe("agent:main:main");
     expect(nodeSend?.[1]).toBe("chat");
     expect(extractFirstTextBlock(nodeSend?.[2])).toBe("Codex source reply");
     const assistantUpdates = findAssistantTranscriptUpdates();
@@ -2255,7 +2261,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     expect(broadcast).toMatchObject({
       runId: "idem-agent-status-notice",
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       state: "final",
     });
     expect(extractFirstTextBlock(broadcast)).toBe("⚙️ Codex compaction started • Context 2k/200k");
@@ -2316,7 +2322,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
           expect(broadcast).toMatchObject({
             runId: "idem-agent-source-reply-media",
-            sessionKey: "main",
+            sessionKey: "agent:main:main",
             state: "final",
           });
           expect(extractFirstTextBlock(broadcast)).toBe("Codex source reply with media");
@@ -2943,7 +2949,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     expect(broadcast).toMatchObject({
       runId: "idem-agent-source-reply-error",
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       state: "final",
     });
     expect(extractFirstTextBlock(broadcast)).toBe("Codex source reply");
@@ -3039,7 +3045,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     expect(broadcast).toMatchObject({
       runId: "idem-agent-status-notice-error",
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       state: "error",
       errorMessage,
     });
@@ -3072,7 +3078,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     expect(broadcast).toMatchObject({
       runId: "idem-agent-returned-error",
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       state: "error",
       errorMessage,
     });

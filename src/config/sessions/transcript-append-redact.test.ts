@@ -455,7 +455,7 @@ describe("appendExactAssistantMessageToSessionTranscript - redaction", () => {
     const sessionsDir = fixture.sessionsDir();
     const storePath = path.join(sessionsDir, "sessions.json");
     const sessionId = "test-session-redact-off";
-    const sessionKey = "test-channel:test-user";
+    const sessionKey = "agent:main:test-channel:test-user";
     await seedSessionEntry({ sessionId, sessionKey, storePath });
 
     const fakeApiKey = "sk-proj-FAKEKEYFORTESTINGONLY1234567890";
@@ -497,7 +497,7 @@ describe("appendExactAssistantMessageToSessionTranscript - redaction", () => {
     const sessionsDir = fixture.sessionsDir();
     const storePath = path.join(sessionsDir, "sessions.json");
     const sessionId = "test-session-redact-event";
-    const sessionKey = "test-channel:test-redact-event";
+    const sessionKey = "agent:main:test-channel:test-redact-event";
     await seedSessionEntry({ sessionId, sessionKey, storePath });
 
     const fakeApiKey = "sk-proj-FAKEKEYFORTESTINGONLY1234567890";
@@ -548,7 +548,7 @@ describe("appendExactAssistantMessageToSessionTranscript - redaction", () => {
     const sessionsDir = fixture.sessionsDir();
     const storePath = path.join(sessionsDir, "sessions.json");
     const sessionId = "test-session-redact-dedupe";
-    const sessionKey = "test-channel:test-redact-dedupe";
+    const sessionKey = "agent:main:test-channel:test-redact-dedupe";
     await seedSessionEntry({ sessionId, sessionKey, storePath });
 
     const fakeApiKey = "sk-proj-FAKEKEYFORTESTINGONLY1234567890";
@@ -585,7 +585,7 @@ describe("appendExactAssistantMessageToSessionTranscript - redaction", () => {
     const sessionsDir = fixture.sessionsDir();
     const storePath = path.join(sessionsDir, "sessions.json");
     const sessionId = "test-session-redact-upgrade-dedupe";
-    const sessionKey = "test-channel:test-redact-upgrade-dedupe";
+    const sessionKey = "agent:main:test-channel:test-redact-upgrade-dedupe";
     await seedSessionEntry({ sessionId, sessionKey, storePath });
 
     const fakeApiKey = "sk-proj-OLDERUNREDACTEDTRANSCRIPT1234567890";

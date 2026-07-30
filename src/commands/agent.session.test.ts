@@ -145,7 +145,7 @@ describe("agent session resolution", () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
       await writeSessionStoreSeed(store, {
-        main: {
+        "agent:main:main": {
           sessionId: "origin-provider-reset",
           updatedAt: Date.now() - 30 * 60_000,
           delivery: normalizeSessionDeliveryState({
@@ -175,20 +175,6 @@ describe("agent session resolution", () => {
       {
         label: "canonical done main",
         mainKey: "main",
-        sessionKey: "agent:main:main",
-        status: "done" as const,
-        expectNewSession: false,
-      },
-      {
-        label: "raw done main alias",
-        mainKey: "main",
-        sessionKey: "main",
-        status: "done" as const,
-        expectNewSession: false,
-      },
-      {
-        label: "custom done main alias",
-        mainKey: "work",
         sessionKey: "agent:main:main",
         status: "done" as const,
         expectNewSession: false,

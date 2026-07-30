@@ -235,29 +235,6 @@ describe("exec approval session target", () => {
         threadId: "55",
       },
     },
-    {
-      name: "falls back to request agent id for legacy session keys",
-      relativeStoreDir: "worker-1",
-      entries: {
-        "legacy-main": {
-          sessionId: "legacy-main",
-          updatedAt: 1,
-          lastChannel: "telegram",
-          lastTo: "-100123",
-          lastThreadId: 77,
-        },
-      } as Record<string, Partial<SessionEntry>>,
-      request: buildRequest({
-        agentId: "Worker 1",
-        sessionKey: "legacy-main",
-      }),
-      expected: {
-        channel: "telegram",
-        to: "-100123",
-        accountId: undefined,
-        threadId: 77,
-      },
-    },
   ] satisfies PlaceholderStoreCase[])(
     "$name",
     async ({ relativeStoreDir, entries, request, expected }) => {

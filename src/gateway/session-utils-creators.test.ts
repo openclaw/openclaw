@@ -16,11 +16,56 @@ const getUserProfileListItem = vi.hoisted(() =>
 
 vi.mock("../state/user-profiles.js", () => ({ getUserProfileListItem }));
 
-import { listSessionsFromStore, listSessionsFromStoreAsync } from "./session-utils.js";
+import { listSessionsFromStoreAsync } from "./session-utils-list.js";
+import { listSessionsFromStoreForTest as listSessionsFromStore } from "./session-utils-list.test-support.js";
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  getUserProfileListItem.mockClear();
+});
 
-it("returns the complete deterministic creator facet independently of pagination", () => {
+it("selects creator labels deterministically across actor types", async () => {
+  const result = await listSessionsFromStoreAsync({
+    cfg: {} as OpenClawConfig,
+    opts: { archived: "all" },
+    sqlSelection: {
+      creatorActors: [
+        { type: "human", id: "shared-id" },
+        { type: "agent", id: "shared-id" },
+      ],
+      ordered: true,
+      totalCount: 0,
+    },
+    store: {},
+    storePath: "/tmp/openclaw-session-creator-labels",
+  });
+
+  expect(result.creators).toEqual([{ id: "shared-id", label: "Bob" }]);
+});
+
+it("keeps complete creator facets independent of paginated row snapshots", async () => {
+  const result = await listSessionsFromStoreAsync({
+    cfg: {} as OpenClawConfig,
+    opts: { archived: "all" },
+    sqlSelection: {
+      creatorActors: [{ type: "agent", id: "profile-ada" }],
+      ordered: true,
+      totalCount: 1,
+    },
+    store: {
+      "agent:main:ada": {
+        createdActor: { type: "human", id: "profile-ada" },
+        sessionId: "session-ada",
+        updatedAt: 1,
+      },
+    },
+    storePath: "/tmp/openclaw-session-creator-pagination",
+  });
+
+  expect(result.creators).toEqual([{ id: "profile-ada" }]);
+});
+
+it("returns the complete deterministic creator facet independently of pagination", async () => {
   const store: Record<string, SessionEntry> = {
     "agent:main:ada": {
       archivedAt: 3,
@@ -36,7 +81,7 @@ it("returns the complete deterministic creator facet independently of pagination
     },
   };
 
-  const result = listSessionsFromStore({
+  const result = await listSessionsFromStore({
     cfg: {} as OpenClawConfig,
     storePath: "/tmp/openclaw-session-creators",
     store,
@@ -66,7 +111,7 @@ it("returns the complete deterministic creator facet independently of pagination
   });
   expect(getUserProfileListItem).toHaveBeenCalledTimes(2);
 
-  const filtered = listSessionsFromStore({
+  const filtered = await listSessionsFromStore({
     cfg: {} as OpenClawConfig,
     storePath: "/tmp/openclaw-session-creators",
     store,
@@ -170,7 +215,7 @@ it("preserves legacy list output across visibility, scope, creator, and search f
   const configuredStore = filterSessionStoreToConfiguredAgents(cfg, store);
 
   const project = async (opts: Parameters<typeof listSessionsFromStore>[0]["opts"]) => {
-    const result = await listSessionsFromStoreAsync({
+    const result = await listSessionsFromStore({
       cfg,
       ...(entryFilter ? { entryFilter } : {}),
       opts,
@@ -237,9 +282,9 @@ it("preserves legacy list output across visibility, scope, creator, and search f
   );
 });
 
-it("keeps the serialized list response byte-identical to the legacy filter path", () => {
+it("keeps the serialized list response byte-identical to the legacy filter path", async () => {
   vi.spyOn(Date, "now").mockReturnValue(1_000_000);
-  const result = listSessionsFromStore({
+  const result = await listSessionsFromStore({
     cfg: {
       agents: {
         defaults: { model: { primary: "openai/gpt-5.4" } },

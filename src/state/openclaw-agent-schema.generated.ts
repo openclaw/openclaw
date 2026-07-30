@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS session_nodes (
   session_key TEXT NOT NULL PRIMARY KEY,
   current_session_id TEXT NOT NULL,
   entry_json TEXT NOT NULL,
+  entry_valid INTEGER NOT NULL DEFAULT 0 CHECK (entry_valid IN (-1, 0, 1)),
   updated_at INTEGER NOT NULL,
   status TEXT CHECK (status IS NULL OR status IN ('running', 'done', 'failed', 'killed', 'timeout')),
   created_at INTEGER,
@@ -68,6 +69,34 @@ CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_updated_at
 CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_last_interaction_at
   ON session_nodes(last_interaction_at DESC, session_key);
 
+CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_valid_updated_at
+  ON session_nodes(updated_at DESC, session_key)
+  WHERE json_valid(entry_json) = 1;
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_valid_last_interaction_at
+  ON session_nodes(last_interaction_at DESC, session_key)
+  WHERE json_valid(entry_json) = 1;
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_valid_creator
+  ON session_nodes(created_actor_id, created_actor_type)
+  WHERE created_actor_id IS NOT NULL AND json_valid(entry_json) = 1;
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_canonical_updated_at
+  ON session_nodes(updated_at DESC, session_key)
+  WHERE entry_valid = 1;
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_canonical_last_interaction_at
+  ON session_nodes(last_interaction_at DESC, session_key)
+  WHERE entry_valid = 1;
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_canonical_creator
+  ON session_nodes(created_actor_id, created_actor_type)
+  WHERE created_actor_id IS NOT NULL AND entry_valid = 1;
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_entry_valid_pending
+  ON session_nodes(session_key)
+  WHERE entry_valid = 0;
+
 CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_parent_session_key
   ON session_nodes(parent_session_key, session_key);
 
@@ -84,6 +113,57 @@ CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_archived_at
 
 CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_current_session_id
   ON session_nodes(current_session_id);
+
+CREATE TABLE IF NOT EXISTS session_key_revisions (
+  id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
+  revision INTEGER NOT NULL
+) STRICT;
+
+INSERT OR IGNORE INTO session_key_revisions (id, revision) VALUES (1, 0);
+
+CREATE TABLE IF NOT EXISTS session_key_contract (
+  id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
+  main_key TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+) STRICT;
+
+INSERT OR IGNORE INTO session_key_contract (id, main_key, updated_at) VALUES (1, 'main', 0);
+
+CREATE TRIGGER IF NOT EXISTS session_nodes_entry_valid_after_insert
+AFTER INSERT ON session_nodes
+BEGIN
+  UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_nodes_entry_valid_after_entry_update
+AFTER UPDATE OF entry_json ON session_nodes
+BEGIN
+  UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_key_revisions_after_insert
+AFTER INSERT ON session_nodes
+BEGIN
+  UPDATE session_key_revisions SET revision = revision + 1 WHERE id = 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_key_revisions_after_delete
+AFTER DELETE ON session_nodes
+BEGIN
+  UPDATE session_key_revisions SET revision = revision + 1 WHERE id = 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_key_revisions_after_key_update
+AFTER UPDATE OF session_key ON session_nodes
+BEGIN
+  UPDATE session_key_revisions SET revision = revision + 1 WHERE id = 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_key_revisions_after_contract_update
+AFTER UPDATE OF main_key ON session_key_contract
+BEGIN
+  UPDATE session_key_revisions SET revision = revision + 1 WHERE id = 1;
+END;
 
 CREATE TABLE IF NOT EXISTS session_windows (
   session_id TEXT NOT NULL PRIMARY KEY,

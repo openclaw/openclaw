@@ -24,6 +24,7 @@ type OpenClawAgentReadOnlyDatabase = {
   agentId: string;
   db: DatabaseSync;
   path: string;
+  writable: boolean;
 };
 
 type OpenClawAgentDatabaseReadOnlyResult<T> =
@@ -67,7 +68,7 @@ export function withOpenClawAgentDatabaseReadOnly<T>(
     // write paths may materialize the process-held incognito database.
     const database = getOpenClawAgentDatabaseIfOpen({ ...options, agentId });
     return database
-      ? { found: true, value: operation(database) }
+      ? { found: true, value: operation({ ...database, writable: true }) }
       : { found: false, reason: "database-missing" };
   }
   // Reusing a handle this process already holds is what keeps row loops cheap:
@@ -80,7 +81,7 @@ export function withOpenClawAgentDatabaseReadOnly<T>(
     // forward-compatibility gate still runs before any reused read.
     assertSupportedAgentSchemaVersion(opened.db, pathname);
     try {
-      return { found: true, value: operation(opened) };
+      return { found: true, value: operation({ ...opened, writable: true }) };
     } catch (error) {
       if (isMissingTableError(error)) {
         return { found: false, reason: "table-missing" };
@@ -102,7 +103,7 @@ export function withOpenClawAgentDatabaseReadOnly<T>(
     }
     assertExistingAgentSchemaOwner(schemaMeta, agentId, pathname);
     try {
-      return { found: true, value: operation({ agentId, db, path: pathname }) };
+      return { found: true, value: operation({ agentId, db, path: pathname, writable: false }) };
     } catch (error) {
       if (isMissingTableError(error)) {
         return { found: false, reason: "table-missing" };

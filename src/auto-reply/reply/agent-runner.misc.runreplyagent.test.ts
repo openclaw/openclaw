@@ -78,6 +78,7 @@ function registerMemoryFlushPlanResolverForTest(resolver: MemoryFlushPlanResolve
 
 const runEmbeddedAgentMock = vi.fn();
 const runCliAgentMock = vi.fn();
+const MAIN_SESSION_KEY = "agent:main:main";
 const runWithModelFallbackMock = vi.fn();
 const runtimeErrorMock = vi.fn();
 const abortEmbeddedAgentRunMock = vi.fn();
@@ -366,7 +367,7 @@ describe("runReplyAgent auto-compaction token update", () => {
         agentId: "main",
         agentDir: "/tmp/agent",
         sessionId: "session",
-        sessionKey: "main",
+        sessionKey: MAIN_SESSION_KEY,
         messageProvider: "whatsapp",
         sessionFile: params.sessionFile ?? "/tmp/session.jsonl",
         workspaceDir: params.workspaceDir ?? "/tmp",
@@ -393,7 +394,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       onBlockReply?: (payload: unknown) => Promise<void> | void;
     },
   ) {
-    const sessionKey = "main";
+    const sessionKey = MAIN_SESSION_KEY;
     const sessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
@@ -463,7 +464,7 @@ describe("runReplyAgent auto-compaction token update", () => {
   }) {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), params.tmpPrefix));
     const storePath = path.join(tmp, "sessions.json");
-    const sessionKey = "main";
+    const sessionKey = MAIN_SESSION_KEY;
     const sessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
@@ -496,7 +497,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       await runReplyAgent({
         commandBody: "hello",
         followupRun,
-        queueKey: "main",
+        queueKey: MAIN_SESSION_KEY,
         resolvedQueue,
         shouldSteer: false,
         shouldFollowup: false,
@@ -677,7 +678,7 @@ describe("runReplyAgent auto-compaction token update", () => {
   });
 
   it("starts queued followup drain only after clearing the active reply operation", async () => {
-    const sessionKey = "main";
+    const sessionKey = MAIN_SESSION_KEY;
     const sessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
@@ -727,7 +728,7 @@ describe("runReplyAgent auto-compaction token update", () => {
   });
 
   it("keeps a provided reply operation active until final delivery completes", async () => {
-    const sessionKey = "main";
+    const sessionKey = MAIN_SESSION_KEY;
     const sessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
@@ -1017,7 +1018,7 @@ describe("runReplyAgent block streaming", () => {
       enqueuedAt: Date.now(),
       run: {
         sessionId: "session",
-        sessionKey: "main",
+        sessionKey: MAIN_SESSION_KEY,
         messageProvider: "discord",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
@@ -1052,7 +1053,7 @@ describe("runReplyAgent block streaming", () => {
     const result = await runReplyAgent({
       commandBody: "hello",
       followupRun,
-      queueKey: "main",
+      queueKey: MAIN_SESSION_KEY,
       resolvedQueue,
       shouldSteer: false,
       shouldFollowup: false,
@@ -1123,7 +1124,7 @@ describe("runReplyAgent block streaming", () => {
       enqueuedAt: Date.now(),
       run: {
         sessionId: "session",
-        sessionKey: "main",
+        sessionKey: MAIN_SESSION_KEY,
         messageProvider: "discord",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
@@ -1158,7 +1159,7 @@ describe("runReplyAgent block streaming", () => {
     const resultPromise = runReplyAgent({
       commandBody: "hello",
       followupRun,
-      queueKey: "main",
+      queueKey: MAIN_SESSION_KEY,
       resolvedQueue,
       shouldSteer: false,
       shouldFollowup: false,
@@ -1216,7 +1217,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
   it("appends inline Active Memory status payload when verbose is enabled", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-active-memory-inline-"));
     const storePath = path.join(tmp, "sessions.json");
-    const sessionKey = "main";
+    const sessionKey = MAIN_SESSION_KEY;
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
@@ -1304,7 +1305,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
   it("appends inline Active Memory status and trace payloads when verbose and trace are enabled", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-active-memory-inline-"));
     const storePath = path.join(tmp, "sessions.json");
-    const sessionKey = "main";
+    const sessionKey = MAIN_SESSION_KEY;
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
@@ -1393,7 +1394,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
   it("appends inline Active Memory trace payload when only trace is enabled", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-active-memory-inline-"));
     const storePath = path.join(tmp, "sessions.json");
-    const sessionKey = "main";
+    const sessionKey = MAIN_SESSION_KEY;
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
@@ -1482,7 +1483,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trace-raw-usage-"));
     const storePath = path.join(tmp, "sessions.json");
     const sessionFile = path.join(tmp, "session.jsonl");
-    const sessionKey = "main";
+    const sessionKey = MAIN_SESSION_KEY;
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
@@ -1719,7 +1720,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trace-raw-unauthorized-"));
     const storePath = path.join(tmp, "sessions.json");
     const sessionFile = path.join(tmp, "session.jsonl");
-    const sessionKey = "main";
+    const sessionKey = MAIN_SESSION_KEY;
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
@@ -1815,7 +1816,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trace-raw-usage-"));
     const storePath = path.join(tmp, "sessions.json");
     const sessionFile = path.join(tmp, "session.jsonl");
-    const sessionKey = "main";
+    const sessionKey = MAIN_SESSION_KEY;
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
@@ -1925,7 +1926,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trace-raw-fence-"));
     const storePath = path.join(tmp, "sessions.json");
     const sessionFile = path.join(tmp, "session.jsonl");
-    const sessionKey = "main";
+    const sessionKey = MAIN_SESSION_KEY;
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
@@ -2035,7 +2036,7 @@ describe("runReplyAgent claude-cli routing", () => {
       enqueuedAt: Date.now(),
       run: {
         sessionId: "session",
-        sessionKey: "main",
+        sessionKey: MAIN_SESSION_KEY,
         messageProvider: "webchat",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
@@ -2059,7 +2060,7 @@ describe("runReplyAgent claude-cli routing", () => {
     return runReplyAgent({
       commandBody: "hello",
       followupRun,
-      queueKey: "main",
+      queueKey: MAIN_SESSION_KEY,
       resolvedQueue,
       shouldSteer: false,
       shouldFollowup: false,
@@ -2154,7 +2155,7 @@ describe("runReplyAgent claude-cli routing", () => {
       run: {
         agentId: "main",
         sessionId: "session",
-        sessionKey: "main",
+        sessionKey: MAIN_SESSION_KEY,
         messageProvider: "webchat",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
@@ -2179,7 +2180,7 @@ describe("runReplyAgent claude-cli routing", () => {
     const result = await runReplyAgent({
       commandBody: "secret hitl prompt",
       followupRun,
-      queueKey: "main",
+      queueKey: MAIN_SESSION_KEY,
       resolvedQueue,
       shouldSteer: false,
       shouldFollowup: false,
@@ -2237,7 +2238,7 @@ describe("runReplyAgent claude-cli routing", () => {
       enqueuedAt: Date.now(),
       run: {
         sessionId: "session",
-        sessionKey: "main",
+        sessionKey: MAIN_SESSION_KEY,
         messageProvider: "webchat",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
@@ -2269,7 +2270,7 @@ describe("runReplyAgent claude-cli routing", () => {
     const result = await runReplyAgent({
       commandBody: "hello",
       followupRun,
-      queueKey: "main",
+      queueKey: MAIN_SESSION_KEY,
       resolvedQueue,
       shouldSteer: false,
       shouldFollowup: false,
@@ -2303,7 +2304,7 @@ describe("runReplyAgent messaging tool dedupe", () => {
     opts: { storePath?: string; sessionKey?: string } = {},
   ) {
     const typing = createMockTypingController();
-    const sessionKey = opts.sessionKey ?? "main";
+    const sessionKey = opts.sessionKey ?? MAIN_SESSION_KEY;
     const sessionCtx = {
       Provider: messageProvider,
       OriginatingTo: "channel:C1",
@@ -2341,7 +2342,7 @@ describe("runReplyAgent messaging tool dedupe", () => {
     return runReplyAgent({
       commandBody: "hello",
       followupRun,
-      queueKey: "main",
+      queueKey: MAIN_SESSION_KEY,
       resolvedQueue,
       shouldSteer: false,
       shouldFollowup: false,
@@ -2451,7 +2452,7 @@ describe("runReplyAgent reminder commitment guard", () => {
       enqueuedAt: Date.now(),
       run: {
         sessionId: "session",
-        sessionKey: "main",
+        sessionKey: MAIN_SESSION_KEY,
         messageProvider: "telegram",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
@@ -2475,7 +2476,7 @@ describe("runReplyAgent reminder commitment guard", () => {
     return runReplyAgent({
       commandBody: "hello",
       followupRun,
-      queueKey: "main",
+      queueKey: MAIN_SESSION_KEY,
       resolvedQueue,
       shouldSteer: false,
       shouldFollowup: false,
@@ -2483,7 +2484,7 @@ describe("runReplyAgent reminder commitment guard", () => {
       isStreaming: false,
       typing,
       sessionCtx,
-      ...(params?.omitSessionKey ? {} : { sessionKey: params?.sessionKey ?? "main" }),
+      ...(params?.omitSessionKey ? {} : { sessionKey: params?.sessionKey ?? MAIN_SESSION_KEY }),
       defaultModel: "anthropic/claude-opus-4-6",
       resolvedVerboseLevel: "off",
       isNewSession: false,
@@ -2538,7 +2539,7 @@ describe("runReplyAgent reminder commitment guard", () => {
           id: "existing-job",
           name: "monitor-task",
           enabled: true,
-          sessionKey: "main",
+          sessionKey: MAIN_SESSION_KEY,
           createdAtMs: Date.now() - 60_000,
           updatedAtMs: Date.now() - 60_000,
         },
@@ -2591,7 +2592,7 @@ describe("runReplyAgent reminder commitment guard", () => {
           id: "disabled-job",
           name: "old-monitor",
           enabled: false,
-          sessionKey: "main",
+          sessionKey: MAIN_SESSION_KEY,
           createdAtMs: Date.now() - 60_000,
           updatedAtMs: Date.now() - 60_000,
         },
@@ -2619,7 +2620,7 @@ describe("runReplyAgent reminder commitment guard", () => {
           id: "existing-job",
           name: "monitor-task",
           enabled: true,
-          sessionKey: "main",
+          sessionKey: MAIN_SESSION_KEY,
           createdAtMs: Date.now() - 60_000,
           updatedAtMs: Date.now() - 60_000,
         },
@@ -2648,7 +2649,7 @@ describe("runReplyAgent reminder commitment guard", () => {
       successfulCronAdds: 0,
     });
 
-    const result = await createRun({ sessionKey: "main" });
+    const result = await createRun({ sessionKey: MAIN_SESSION_KEY });
     expectReplyText(
       result,
       "I'll remind you after lunch.\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically.",
@@ -2675,7 +2676,7 @@ describe("runReplyAgent fallback reasoning tags", () => {
       MessageSid: "msg",
     } as unknown as TemplateContext;
     const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
-    const sessionKey = params?.sessionKey ?? "main";
+    const sessionKey = params?.sessionKey ?? MAIN_SESSION_KEY;
     const followupRun = {
       prompt: "hello",
       summaryLine: "hello",
@@ -2707,7 +2708,7 @@ describe("runReplyAgent fallback reasoning tags", () => {
     return runReplyAgent({
       commandBody: "hello",
       followupRun,
-      queueKey: "main",
+      queueKey: MAIN_SESSION_KEY,
       resolvedQueue,
       shouldSteer: false,
       shouldFollowup: false,
@@ -2848,7 +2849,7 @@ describe("runReplyAgent response usage footer", () => {
     return runReplyAgent({
       commandBody: "hello",
       followupRun,
-      queueKey: "main",
+      queueKey: MAIN_SESSION_KEY,
       resolvedQueue,
       shouldSteer: false,
       shouldFollowup: false,
@@ -3068,7 +3069,7 @@ describe("runReplyAgent transient HTTP retry", () => {
       enqueuedAt: Date.now(),
       run: {
         sessionId: "session",
-        sessionKey: "main",
+        sessionKey: MAIN_SESSION_KEY,
         messageProvider: "telegram",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
@@ -3092,7 +3093,7 @@ describe("runReplyAgent transient HTTP retry", () => {
     const runPromise = runReplyAgent({
       commandBody: "hello",
       followupRun,
-      queueKey: "main",
+      queueKey: MAIN_SESSION_KEY,
       resolvedQueue,
       shouldSteer: false,
       shouldFollowup: false,
@@ -3144,7 +3145,7 @@ describe("runReplyAgent billing error classification", () => {
       enqueuedAt: Date.now(),
       run: {
         sessionId: "session",
-        sessionKey: "main",
+        sessionKey: MAIN_SESSION_KEY,
         messageProvider: "telegram",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
@@ -3168,7 +3169,7 @@ describe("runReplyAgent billing error classification", () => {
     const result = await runReplyAgent({
       commandBody: "hello",
       followupRun,
-      queueKey: "main",
+      queueKey: MAIN_SESSION_KEY,
       resolvedQueue,
       shouldSteer: false,
       shouldFollowup: false,
@@ -3205,7 +3206,7 @@ describe("runReplyAgent mid-turn rate-limit fallback", () => {
       enqueuedAt: Date.now(),
       run: {
         sessionId: "session",
-        sessionKey: "main",
+        sessionKey: MAIN_SESSION_KEY,
         messageProvider: "telegram",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
@@ -3229,7 +3230,7 @@ describe("runReplyAgent mid-turn rate-limit fallback", () => {
     return runReplyAgent({
       commandBody: "hello",
       followupRun,
-      queueKey: "main",
+      queueKey: MAIN_SESSION_KEY,
       resolvedQueue,
       shouldSteer: false,
       shouldFollowup: false,
@@ -3319,7 +3320,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
   }) {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-stranded-"));
     const storePath = path.join(tmp, "sessions.json");
-    const sessionKey = "stranded";
+    const sessionKey = "agent:main:stranded";
     const sessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
@@ -3446,7 +3447,9 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
   it("warns when a substantive private final reply never used the message tool", async () => {
     await runPrivateFinalCase({});
     expect(warnPrivateFinalSpy).toHaveBeenCalledTimes(1);
-    expect(warnPrivateFinalSpy.mock.calls[0]?.[0]).toMatchObject({ sessionKey: "stranded" });
+    expect(warnPrivateFinalSpy.mock.calls[0]?.[0]).toMatchObject({
+      sessionKey: "agent:main:stranded",
+    });
   });
 
   it("attests observed delivery for message-tool source replies outside message_tool_only", async () => {
@@ -3730,7 +3733,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
   });
 
   it("schedules the stranded-reply retry drain only after the active reply operation clears", async () => {
-    const sessionKey = "stranded";
+    const sessionKey = "agent:main:stranded";
     const replyOperation = createReplyOperation({
       sessionKey,
       sessionId: "session",

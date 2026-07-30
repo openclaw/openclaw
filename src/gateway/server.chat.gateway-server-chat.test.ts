@@ -37,6 +37,7 @@ import { installConnectedControlUiServerSuite } from "./test-with-server.js";
 
 installGatewayTestHooks({ scope: "suite" });
 const CHAT_RESPONSE_TIMEOUT_MS = 10_000;
+const MAIN_SESSION_KEY = "agent:main:main";
 
 function waitForFast<T>(
   callback: () => T | Promise<T>,
@@ -129,7 +130,7 @@ describe("gateway server chat", () => {
       type: "message",
     }));
     await replaceSqliteTranscriptEvents(
-      { agentId: "main", sessionId: "sess-main", sessionKey: "main", storePath },
+      { agentId: "main", sessionId: "sess-main", sessionKey: MAIN_SESSION_KEY, storePath },
       events,
     );
   };
@@ -144,7 +145,7 @@ describe("gateway server chat", () => {
       testState.sessionStorePath = path.join(dir, "sessions.json");
       await writeSessionStore({
         entries: {
-          main: {
+          [MAIN_SESSION_KEY]: {
             sessionId,
             sessionFile: path.join(dir, `${sessionId}.jsonl`),
             updatedAt: Date.now(),
@@ -621,7 +622,7 @@ describe("gateway server chat", () => {
 
       await writeSessionStore({
         entries: {
-          "discord:group:dev": {
+          "agent:main:discord:group:dev": {
             sessionId: "sess-discord",
             updatedAt: Date.now(),
             chatType: "group",
@@ -655,7 +656,7 @@ describe("gateway server chat", () => {
 
       await writeSessionStore({
         entries: {
-          "cron:job-1": {
+          "agent:main:cron:job-1": {
             sessionId: "sess-cron",
             updatedAt: Date.now(),
           },
@@ -745,7 +746,7 @@ describe("gateway server chat", () => {
       testState.sessionStorePath = path.join(historyDir, "sessions.json");
       await writeSessionStore({
         entries: {
-          main: {
+          [MAIN_SESSION_KEY]: {
             sessionId: "sess-main",
             updatedAt: Date.now(),
           },
@@ -814,7 +815,7 @@ describe("gateway server chat", () => {
         throw new Error("session store path was not initialized");
       }
       await replaceSqliteTranscriptEvents(
-        { agentId: "main", sessionId: "sess-main", sessionKey: "main", storePath },
+        { agentId: "main", sessionId: "sess-main", sessionKey: MAIN_SESSION_KEY, storePath },
         [
           { type: "message", id: "old", parentId: null, message: { role: "user", content: "old" } },
           {
@@ -869,7 +870,7 @@ describe("gateway server chat", () => {
     await withMainSessionStore(async (dir) => {
       await writeSessionStore({
         entries: {
-          main: {
+          [MAIN_SESSION_KEY]: {
             sessionId: "sess-main",
             sessionFile: path.join(dir, "sess-main.jsonl"),
             updatedAt: 1_000,
@@ -2315,7 +2316,8 @@ describe("gateway server chat", () => {
           ?.thinkingLevel,
       ).toBeUndefined();
       expect(
-        loadSessionEntry({ sessionKey: "main", storePath: sessionStorePath })?.thinkingLevel,
+        loadSessionEntry({ sessionKey: MAIN_SESSION_KEY, storePath: sessionStorePath })
+          ?.thinkingLevel,
       ).toBeUndefined();
     });
   });
@@ -2388,7 +2390,7 @@ describe("gateway server chat", () => {
       testState.sessionStorePath = path.join(dir, "sessions.json");
       await writeSessionStore({
         entries: {
-          main: {
+          [MAIN_SESSION_KEY]: {
             sessionId: "sess-main",
             updatedAt: Date.now(),
           },
@@ -2496,7 +2498,7 @@ describe("gateway server chat", () => {
     testState.sessionStorePath = path.join(dir, "sessions.json");
     await writeSessionStore({
       entries: {
-        main: {
+        [MAIN_SESSION_KEY]: {
           sessionId: "sess-main",
           updatedAt: Date.now(),
           verboseLevel: "off",

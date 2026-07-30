@@ -7,6 +7,7 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { publishSqliteSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
 import { normalizeSqliteNumber } from "./session-accessor.sqlite-normalize.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
+import { assertCanonicalSessionKeyWriteMatchesDatabase } from "./session-canonical-key.js";
 import { deleteSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 
 function createTranscriptGeneration(): string {
@@ -69,6 +70,7 @@ export function ensureTranscriptSessionRoot(
   scope: ResolvedTranscriptScope,
   updatedAt: number,
 ): void {
+  assertCanonicalSessionKeyWriteMatchesDatabase(database, scope.sessionKey);
   const db = getSessionKysely(database.db);
   const insertedNode = executeSqliteQuerySync(
     database.db,
@@ -78,11 +80,19 @@ export function ensureTranscriptSessionRoot(
         session_key: scope.sessionKey,
         current_session_id: scope.sessionId,
         entry_json: "{}",
+        entry_valid: -1,
         updated_at: updatedAt,
       })
       .onConflict((conflict) => conflict.column("session_key").doNothing()),
   );
   if ((insertedNode.numAffectedRows ?? 0n) > 0n) {
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .updateTable("session_nodes")
+        .set({ entry_valid: -1 })
+        .where("session_key", "=", scope.sessionKey),
+    );
     publishSqliteSessionEntryCacheInvalidation(database);
   }
   executeSqliteQuerySync(

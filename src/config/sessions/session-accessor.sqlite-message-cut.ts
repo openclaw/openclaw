@@ -9,6 +9,7 @@ import {
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
+import { publishSqliteSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
 import {
   collectSessionEntryLookupKeys,
   readSessionEntryRow,
@@ -299,7 +300,9 @@ function mutateSqliteSessionAtMessageInTransaction(
         ];
   appendTranscriptEventsInTransaction(database, targetScope, nextEvents);
   if (params.mode !== "fork") {
-    reconcileSessionTranscriptIndexInTransaction(database.db, nextSessionId);
+    reconcileSessionTranscriptIndexInTransaction(database.db, nextSessionId, () =>
+      publishSqliteSessionEntryCacheInvalidation(database),
+    );
   }
 
   // Rotating transcript identity fences stale live managers: later snapshot-replace writes

@@ -183,6 +183,50 @@ describe("sqlite hot query plans", () => {
     });
     expectPlanUsesIndex({
       db: database.db,
+      indexName: "idx_agent_session_nodes_entry_valid_pending",
+      sql: "SELECT session_key, entry_json FROM session_nodes WHERE entry_valid = 0",
+    });
+    expectPlanUsesIndex({
+      db: database.db,
+      indexName: "idx_agent_session_nodes_updated_at",
+      sql: `
+        SELECT session_key
+          FROM session_nodes
+         WHERE pinned_at IS NULL
+         ORDER BY updated_at DESC, session_key ASC
+         LIMIT 100
+      `,
+    });
+    expectPlanUsesIndex({
+      db: database.db,
+      indexName: "idx_agent_session_nodes_last_interaction_at",
+      sql: `
+        SELECT session_key
+          FROM session_nodes
+         WHERE last_interaction_at IS NOT NULL
+         ORDER BY last_interaction_at DESC, session_key ASC
+         LIMIT 100
+      `,
+    });
+    expectPlanUsesIndex({
+      db: database.db,
+      indexName: "idx_agent_session_nodes_parent_session_key",
+      params: ["agent:main:parent"],
+      sql: "SELECT session_key FROM session_nodes WHERE parent_session_key = ?",
+    });
+    expectPlanUsesIndex({
+      db: database.db,
+      indexName: "idx_agent_session_nodes_spawned_by",
+      params: ["agent:main:parent"],
+      sql: "SELECT session_key FROM session_nodes WHERE spawned_by = ?",
+    });
+    expectPlanUsesIndex({
+      db: database.db,
+      indexName: "idx_agent_session_nodes_archived_at",
+      sql: "SELECT session_key FROM session_nodes WHERE archived_at IS NOT NULL",
+    });
+    expectPlanUsesIndex({
+      db: database.db,
       indexName: "idx_agent_session_nodes_status",
       params: ["running"],
       sql: `

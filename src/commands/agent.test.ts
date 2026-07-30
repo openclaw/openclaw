@@ -1118,7 +1118,7 @@ describe("agentCommand", () => {
     await withTempHome(async (home) => {
       const resumeStore = path.join(home, "sessions-resume.json");
       await writeSessionStoreSeed(resumeStore, {
-        foo: {
+        "agent:main:foo": {
           sessionId: "session-123",
           updatedAt: Date.now(),
           systemSent: true,

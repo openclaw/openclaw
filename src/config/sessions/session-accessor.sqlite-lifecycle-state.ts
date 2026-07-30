@@ -15,6 +15,7 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import {
   deleteSqliteSessionEntryRows,
+  readExactSessionEntryJson,
   readExactSessionEntryRow,
   readSqliteSessionEntryStore,
   sqliteSessionEntriesEqual,
@@ -285,8 +286,11 @@ export function planSqliteSessionStateAfterEntryRemoval(params: {
 export function readSqliteSessionGenerationIdsForKeys(
   database: OpenClawAgentDatabase,
   keys: Iterable<string>,
+  options: { exactStoredKeys?: boolean } = {},
 ): string[] {
-  const sessionKeys = uniqueStrings([...keys].map((key) => key.trim()));
+  const sessionKeys = uniqueStrings(
+    [...keys].map((key) => (options.exactStoredKeys ? key : key.trim())),
+  );
   if (sessionKeys.length === 0) {
     return [];
   }
@@ -313,8 +317,17 @@ export async function projectSqliteSessionEntryLifecycleMutation(
   const changedSessionKeys = new Set<string>();
   const projectedRemovals: SqliteProjectedLifecycleMutation["removals"] = [];
   for (const removal of params.removals) {
-    const sessionKey = removal.sessionKey.trim();
-    const entry = sessionKey ? store[sessionKey] : undefined;
+    const sessionKey = removal.exactStoredKey ? removal.sessionKey : removal.sessionKey.trim();
+    let entry = sessionKey ? store[sessionKey] : undefined;
+    if (sessionKey && removal.expectedRawEntryJson !== undefined) {
+      const currentRawEntryJson = readExactSessionEntryJson(database, sessionKey);
+      if (currentRawEntryJson !== removal.expectedRawEntryJson) {
+        throw new Error(
+          `SQLite session entry changed before raw lifecycle removal for ${sessionKey}`,
+        );
+      }
+      entry = removal.expectedEntry ? cloneSessionEntry(removal.expectedEntry) : undefined;
+    }
     if (!shouldRemoveSqliteSessionEntry(entry, removal)) {
       continue;
     }

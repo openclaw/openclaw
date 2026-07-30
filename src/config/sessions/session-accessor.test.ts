@@ -4,12 +4,16 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../../test/helpers/promise.js";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import {
   onInternalSessionTranscriptUpdate,
   onSessionTranscriptUpdate,
 } from "../../sessions/transcript-events.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "../../trajectory/types.js";
 import {
@@ -50,7 +54,6 @@ import {
   resolveSessionTranscriptReadTarget,
   resolveSessionTranscriptRuntimeReadTarget,
   resolveSessionTranscriptRuntimeTarget,
-  rollbackPluginOwnedSessionEntryLifecycle,
   trimSessionTranscriptForManualCompact,
   updateSessionEntry,
   updateSessionLastRoute,
@@ -61,10 +64,19 @@ import {
   readSqliteSessionEntryKeys,
 } from "./session-accessor.sqlite-entry-store.js";
 import {
+  querySqliteSessionEntries,
+  querySqliteSessionEntriesReadOnly,
+} from "./session-accessor.sqlite-entry.js";
+import {
+  getSessionProjectedTitle,
+  refreshSqliteSessionTitleProjection,
+} from "./session-accessor.sqlite-session-row.js";
+import {
   applySqliteSessionEntryLifecycleMutation,
   appendSqliteTranscriptEventSync,
   deleteSqliteSessionEntryLifecycle,
   importSqliteSessionRows,
+  listSqliteSessionEntriesForCanonicalRepair,
   loadExactSqliteSessionEntry,
   replaceSqliteSessionEntrySync,
   replaceSqliteTranscriptEvents,
@@ -171,6 +183,646 @@ describe("session accessor seam", () => {
       sessionId: "session-1",
       updatedAt: expect.any(Number),
     });
+  });
+
+  it("pushes promoted list filters and ordering into SQLite", async () => {
+    replaceSqliteSessionEntrySync(
+      { agentId: "main", sessionKey: "agent:main:child", storePath },
+      {
+        createdActor: { type: "agent", id: "agent:main:parent", label: "Parent agent" },
+        sessionId: "child-session",
+        updatedAt: 30,
+        lastInteractionAt: 40,
+        spawnedBy: "agent:main:parent",
+      },
+    );
+    replaceSqliteSessionEntrySync(
+      { agentId: "main", sessionKey: "agent:main:older-child", storePath },
+      {
+        createdActor: { type: "system", id: "scheduler", label: "Scheduler" },
+        sessionId: "older-child-session",
+        updatedAt: 20,
+        lastInteractionAt: 25,
+        parentSessionKey: "agent:main:parent",
+      },
+    );
+    replaceSqliteSessionEntrySync(
+      { agentId: "main", sessionKey: "agent:main:archived-child", storePath },
+      {
+        archivedAt: 50,
+        sessionId: "archived-child-session",
+        updatedAt: 50,
+        spawnedBy: "agent:main:parent",
+      },
+    );
+
+    expect(listSessionEntries({ storePath })).toHaveLength(3);
+    expect(
+      querySqliteSessionEntriesReadOnly({
+        agentId: "main",
+        projection: "list",
+        query: { archived: "all", includeGlobal: true, includeUnknown: true },
+        storePath,
+      }).totalCount,
+    ).toBe(3);
+
+    const result = querySqliteSessionEntriesReadOnly({
+      agentId: "main",
+      projection: "list",
+      query: {
+        archived: false,
+        includeGlobal: true,
+        includeUnknown: true,
+        requireLastInteraction: true,
+        sortBy: "lastInteractionAt",
+        spawnedBy: "agent:main:parent",
+      },
+      storePath,
+    });
+
+    expect(result.totalCount).toBe(2);
+    expect(result.entries.map(({ sessionKey }) => sessionKey)).toEqual([
+      "agent:main:child",
+      "agent:main:older-child",
+    ]);
+    const bounded = querySqliteSessionEntriesReadOnly({
+      agentId: "main",
+      projection: "list",
+      query: {
+        archived: false,
+        includeGlobal: true,
+        includeUnknown: true,
+        limit: 1,
+        sortBy: "updatedAt",
+      },
+      storePath,
+    });
+    expect(bounded.entries).toHaveLength(1);
+    expect(bounded.creatorActors).toEqual(
+      expect.arrayContaining([
+        { type: "agent", id: "agent:main:parent", label: "Parent agent" },
+        { type: "system", id: "scheduler", label: "Scheduler" },
+      ]),
+    );
+    expect(
+      querySqliteSessionEntriesReadOnly({
+        agentId: "main",
+        projection: "list",
+        query: {
+          archived: false,
+          excludeLineageSessionKeys: [
+            ...Array.from({ length: 399 }, (_, index) => `agent:main:excluded-${index}`),
+            "agent:main:older-child",
+          ],
+          includeGlobal: true,
+          includeUnknown: true,
+          spawnedBy: "agent:main:parent",
+        },
+        storePath,
+      }).entries.map(({ sessionKey }) => sessionKey),
+    ).toEqual(["agent:main:child"]);
+  });
+
+  it("caches canonical-key validation across transactional list reads", () => {
+    replaceSqliteSessionEntrySync(
+      { agentId: "main", sessionKey: "agent:main:main", storePath },
+      { sessionId: "session-1", updatedAt: 10 },
+    );
+    const database = openOpenClawAgentDatabase({
+      agentId: "main",
+      path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
+    });
+    const { counts, restore } = trackSqliteStatementExecutions(
+      database.db,
+      ["validations"],
+      (sqlText) =>
+        sqlText.includes('"parent_session_key"') &&
+        sqlText.includes('"spawned_by"') &&
+        sqlText.includes('from "session_nodes"')
+          ? "validations"
+          : null,
+    );
+    const scope = {
+      agentId: "main",
+      projection: "list" as const,
+      query: { archived: "all" as const, includeGlobal: true, includeUnknown: true },
+      storePath,
+    };
+    try {
+      expect(querySqliteSessionEntries(scope).entries).toHaveLength(1);
+      expect(querySqliteSessionEntries(scope).entries).toHaveLength(1);
+      expect(counts.validations).toBe(1);
+    } finally {
+      restore();
+    }
+  });
+
+  it("orders zero-valued promoted timestamps like absent values", () => {
+    replaceSqliteSessionEntrySync(
+      { agentId: "main", sessionKey: "agent:main:z-zero", storePath },
+      {
+        lastInteractionAt: 0,
+        pinnedAt: 0,
+        sessionId: "zero-session",
+        updatedAt: 10,
+      },
+    );
+    replaceSqliteSessionEntrySync(
+      { agentId: "main", sessionKey: "agent:main:a-unpinned", storePath },
+      { sessionId: "unpinned-session", updatedAt: 20 },
+    );
+    const database = openOpenClawAgentDatabase({
+      agentId: "main",
+      path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
+    });
+    database.db
+      .prepare(
+        "UPDATE session_nodes SET last_interaction_at = 0, pinned_at = 0 WHERE session_key = ?",
+      )
+      .run("agent:main:z-zero");
+
+    const query = (sortBy: "lastInteractionAt" | "updatedAt") =>
+      querySqliteSessionEntriesReadOnly({
+        agentId: "main",
+        query: {
+          archived: false,
+          includeGlobal: true,
+          includeUnknown: true,
+          limit: 1,
+          sortBy,
+        },
+        storePath,
+      }).entries.map(({ sessionKey }) => sessionKey);
+    expect(query("updatedAt")).toEqual(["agent:main:a-unpinned"]);
+    expect(query("lastInteractionAt")).toEqual(["agent:main:a-unpinned"]);
+  });
+
+  it("matches owner agent segments exactly", () => {
+    const database = openOpenClawAgentDatabase({
+      agentId: "ops_team",
+      path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "ops_team" }).path,
+    });
+    const insert = database.db.prepare(
+      "INSERT INTO session_nodes (session_key, current_session_id, entry_json, entry_valid, updated_at, created_actor_id, created_actor_type) VALUES (?, ?, ?, 1, ?, ?, ?)",
+    );
+    insert.run(
+      "agent:ops_team:own",
+      "own-session",
+      JSON.stringify({
+        createdActor: { type: "agent", id: "agent:ops_team:owner", label: { private: "data" } },
+        sessionId: "own-session",
+        updatedAt: 20,
+      }),
+      20,
+      "agent:ops_team:owner",
+      "agent",
+    );
+    database.db
+      .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
+      .run("agent:ops_team:own");
+    const result = querySqliteSessionEntriesReadOnly({
+      agentId: "ops_team",
+      query: {
+        archived: false,
+        includeGlobal: false,
+        includeUnknown: false,
+        ownerAgentId: "ops_team",
+      },
+      storePath,
+    });
+    expect(result.entries.map(({ sessionKey }) => sessionKey)).toEqual(["agent:ops_team:own"]);
+    expect(result.creatorActors).toEqual([{ type: "agent", id: "agent:ops_team:owner" }]);
+    insert.run(
+      "main",
+      "late-legacy-session",
+      JSON.stringify({ sessionId: "late-legacy-session", updatedAt: 30 }),
+      30,
+      null,
+      null,
+    );
+    expect(() =>
+      querySqliteSessionEntriesReadOnly({
+        agentId: "ops_team",
+        query: {
+          archived: false,
+          includeGlobal: false,
+          includeUnknown: false,
+          ownerAgentId: "ops_team",
+        },
+        storePath,
+      }),
+    ).toThrow("openclaw doctor --fix");
+  });
+
+  it("does not let invalid blobs consume a bounded list page", () => {
+    replaceSqliteSessionEntrySync(
+      { agentId: "main", sessionKey: "agent:main:valid", storePath },
+      { sessionId: "valid-session", updatedAt: 10 },
+    );
+    const database = openOpenClawAgentDatabase({
+      agentId: "main",
+      path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
+    });
+    database.db
+      .prepare(
+        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at, created_actor_id, created_actor_type) VALUES (?, ?, ?, ?, ?, ?)",
+      )
+      .run("agent:main:invalid-object", "invalid-object", "null", 30, null, null);
+    database.db
+      .prepare(
+        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at, created_actor_id, created_actor_type) VALUES (?, ?, ?, ?, ?, ?)",
+      )
+      .run("agent:main:invalid-json", "invalid-json", "not-json", 20, null, null);
+    database.db
+      .prepare(
+        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at, created_actor_id, created_actor_type) VALUES (?, ?, ?, ?, ?, ?)",
+      )
+      .run("agent:main:placeholder", "placeholder", "{}", 15, null, null);
+
+    const result = querySqliteSessionEntriesReadOnly({
+      agentId: "main",
+      query: {
+        archived: false,
+        includeGlobal: true,
+        includeUnknown: true,
+        limit: 1,
+        sortBy: "updatedAt",
+      },
+      storePath,
+    });
+    expect(result.totalCount).toBe(1);
+    expect(result.entries.map(({ sessionKey }) => sessionKey)).toEqual(["agent:main:valid"]);
+  });
+
+  it("settles rows left pending by an older same-version writer", () => {
+    const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
+      agentId: "main",
+    }).path;
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+    database.db
+      .prepare(
+        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+      )
+      .run(
+        "agent:main:pending",
+        "pending-session",
+        JSON.stringify({ sessionId: "pending-session", updatedAt: 12 }),
+        12,
+      );
+    expect(
+      querySqliteSessionEntriesReadOnly({
+        agentId: "main",
+        query: { archived: false, includeGlobal: true, includeUnknown: true },
+        storePath,
+      }).entries.map(({ sessionKey }) => sessionKey),
+    ).toContain("agent:main:pending");
+    expect(
+      database.db
+        .prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?")
+        .get("agent:main:pending"),
+    ).toEqual({ entry_valid: 1 });
+
+    database.db
+      .prepare("UPDATE session_nodes SET entry_json = '{}' WHERE session_key = ?")
+      .run("agent:main:pending");
+    expect(
+      database.db
+        .prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?")
+        .get("agent:main:pending"),
+    ).toEqual({ entry_valid: 0 });
+    expect(
+      querySqliteSessionEntriesReadOnly({
+        agentId: "main",
+        query: { archived: false, includeGlobal: true, includeUnknown: true },
+        storePath,
+      }).entries.map(({ sessionKey }) => sessionKey),
+    ).not.toContain("agent:main:pending");
+    expect(
+      database.db
+        .prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?")
+        .get("agent:main:pending"),
+    ).toEqual({ entry_valid: -1 });
+
+    database.db
+      .prepare("UPDATE session_nodes SET entry_json = ?, updated_at = ? WHERE session_key = ?")
+      .run(
+        JSON.stringify({ sessionId: "pending-session", updatedAt: 13 }),
+        13,
+        "agent:main:pending",
+      );
+    expect(
+      querySqliteSessionEntriesReadOnly({
+        agentId: "main",
+        query: { archived: false, includeGlobal: true, includeUnknown: true },
+        storePath,
+      }).entries.map(({ sessionKey }) => sessionKey),
+    ).toContain("agent:main:pending");
+    expect(
+      database.db
+        .prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?")
+        .get("agent:main:pending"),
+    ).toEqual({ entry_valid: 1 });
+
+    database.db
+      .prepare("UPDATE session_nodes SET entry_json = ?, updated_at = ? WHERE session_key = ?")
+      .run(
+        JSON.stringify({ sessionId: "pending-session", updatedAt: 14 }),
+        14,
+        "agent:main:pending",
+      );
+    const insertPending = database.db.prepare(
+      "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+    );
+    for (const index of [1, 2]) {
+      insertPending.run(
+        `agent:main:pending-${index}`,
+        `pending-session-${index}`,
+        JSON.stringify({ sessionId: `pending-session-${index}`, updatedAt: 14 + index }),
+        14 + index,
+      );
+    }
+    closeOpenClawAgentDatabasesForTest();
+    let readOnlyError: unknown;
+    try {
+      querySqliteSessionEntriesReadOnly({
+        agentId: "main",
+        query: { archived: false, includeGlobal: true, includeUnknown: true },
+        storePath,
+      });
+    } catch (error) {
+      readOnlyError = error;
+    }
+    expect(readOnlyError).toMatchObject({
+      code: "SESSION_ENTRY_VALIDITY_MIGRATION_REQUIRED",
+      message: expect.stringContaining("openclaw doctor --fix"),
+    });
+    expect(
+      openOpenClawAgentDatabase({ agentId: "main", path: databasePath })
+        .db.prepare(
+          "SELECT session_key, entry_valid FROM session_nodes WHERE session_key LIKE 'agent:main:pending%' ORDER BY session_key",
+        )
+        .all(),
+    ).toEqual([
+      { entry_valid: 1, session_key: "agent:main:pending" },
+      { entry_valid: 1, session_key: "agent:main:pending-1" },
+      { entry_valid: 1, session_key: "agent:main:pending-2" },
+    ]);
+  });
+
+  it("reports a typed repair diagnostic for a read-only pre-projection database", () => {
+    const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
+      agentId: "main",
+    }).path;
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+    database.db.exec(`
+      DROP TRIGGER session_nodes_entry_valid_after_insert;
+      DROP TRIGGER session_nodes_entry_valid_after_entry_update;
+      DROP INDEX idx_agent_session_nodes_canonical_updated_at;
+      DROP INDEX idx_agent_session_nodes_canonical_last_interaction_at;
+      DROP INDEX idx_agent_session_nodes_canonical_creator;
+      DROP INDEX idx_agent_session_nodes_entry_valid_pending;
+      ALTER TABLE session_nodes DROP COLUMN entry_valid;
+    `);
+    closeOpenClawAgentDatabasesForTest();
+
+    let readOnlyError: unknown;
+    try {
+      querySqliteSessionEntriesReadOnly({
+        agentId: "main",
+        query: { archived: false, includeGlobal: true, includeUnknown: true },
+        storePath,
+      });
+    } catch (error) {
+      readOnlyError = error;
+    }
+    expect(readOnlyError).toMatchObject({
+      code: "SESSION_ENTRY_VALIDITY_MIGRATION_REQUIRED",
+      message: expect.stringContaining("openclaw doctor --fix"),
+    });
+  });
+
+  it("rejects corrupt canonical blobs on exact reads", () => {
+    const database = openOpenClawAgentDatabase({
+      agentId: "main",
+      path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
+    });
+    const insert = database.db.prepare(
+      "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+    );
+    const corrupt = [
+      ["legacy", "legacy-session", JSON.stringify({ updatedAt: 9 })],
+      ["placeholder", "placeholder", "{}"],
+      [
+        "blank-session-id",
+        "blank-session-id",
+        JSON.stringify({ sessionId: "\t\u00a0", updatedAt: 7 }),
+      ],
+      [
+        "missing-updated-at",
+        "missing-updated-at",
+        JSON.stringify({ sessionId: "missing-updated-at" }),
+      ],
+      [
+        "non-finite-updated-at",
+        "non-finite-updated-at",
+        '{"sessionId":"non-finite-updated-at","updatedAt":1e999}',
+      ],
+      ["nul-session-id", "nul-session-id", JSON.stringify({ sessionId: "\0x", updatedAt: 7 })],
+      [
+        "mismatched-session-id",
+        "promoted-session-id",
+        JSON.stringify({ sessionId: "blob-session-id", updatedAt: 7 }),
+      ],
+      [
+        "duplicate-session-id",
+        "duplicate-session-id",
+        '{"sessionId":"","sessionId":"duplicate-session-id","updatedAt":7}',
+      ],
+      [
+        "duplicate-updated-at",
+        "duplicate-updated-at",
+        '{"sessionId":"duplicate-updated-at","updatedAt":7,"updatedAt":8}',
+      ],
+    ] as const;
+    for (const [suffix, sessionId, entryJson] of corrupt) {
+      const sessionKey = `agent:main:${suffix}`;
+      insert.run(sessionKey, sessionId, entryJson, 7);
+      expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
+    }
+  });
+
+  it("keeps retained placeholders out of doctor repair inventory", () => {
+    const database = openOpenClawAgentDatabase({
+      agentId: "main",
+      path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
+    });
+    const insert = database.db.prepare(
+      "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+    );
+    insert.run("agent:main:placeholder", "retained-session", "{}", 8);
+    database.db
+      .prepare("UPDATE session_nodes SET entry_valid = -1 WHERE session_key = ?")
+      .run("agent:main:placeholder");
+    database.db
+      .prepare(
+        "INSERT INTO session_windows (session_id, session_key, reason, created_at, updated_at) VALUES (?, ?, 'recovery', ?, ?)",
+      )
+      .run("retained-session", "agent:main:placeholder", 8, 8);
+    insert.run("agent:main:empty-corrupt", "empty-promoted-session", "{}", 7);
+    const duplicateFields =
+      '{"sessionId":"first","sessionId":"ambiguous","updatedAt":1,"updatedAt":2}';
+    insert.run("agent:main:rejected", "promoted-session", duplicateFields, 9);
+
+    const inventory = listSqliteSessionEntriesForCanonicalRepair({ agentId: "main", storePath });
+    expect(inventory).toHaveLength(2);
+    expect(inventory).toEqual(
+      expect.arrayContaining([
+        {
+          entry: { sessionId: "empty-promoted-session", updatedAt: 7 },
+          rawEntryJson: "{}",
+          sessionKey: "agent:main:empty-corrupt",
+        },
+        {
+          entry: { sessionId: "promoted-session", updatedAt: 9 },
+          rawEntryJson: duplicateFields,
+          sessionKey: "agent:main:rejected",
+        },
+      ]),
+    );
+
+    const missingStorePath = path.join(tempDir, "missing", "sessions.json");
+    const missingDatabasePath = resolveSqliteTargetFromSessionStorePath(missingStorePath, {
+      agentId: "main",
+    }).path;
+    expect(
+      listSqliteSessionEntriesForCanonicalRepair({
+        agentId: "main",
+        storePath: missingStorePath,
+      }),
+    ).toEqual([]);
+    expect(fs.existsSync(missingDatabasePath)).toBe(false);
+  });
+
+  it("refreshes the projected title when the first visible user message is written", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "title-session",
+      sessionKey: "agent:main:title",
+      storePath,
+    };
+    await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    expect(
+      getSessionProjectedTitle(
+        listSessionEntries({ agentId: "main", storePath }).find(
+          ({ sessionKey }) => sessionKey === scope.sessionKey,
+        )?.entry,
+      ),
+    ).not.toBe("Investigate the session list query");
+    await appendTranscriptMessage(scope, {
+      message: { role: "user", content: "Investigate the session list query" },
+    });
+
+    const result = querySqliteSessionEntriesReadOnly({
+      agentId: "main",
+      projection: "list",
+      query: {
+        archived: "all",
+        includeGlobal: true,
+        includeUnknown: true,
+        sessionId: scope.sessionId,
+      },
+      storePath,
+    });
+    expect(result.entries.map(({ sessionKey }) => sessionKey)).toEqual([scope.sessionKey]);
+    expect(getSessionProjectedTitle(result.entries[0]?.entry)).toBe(
+      "Investigate the session list query",
+    );
+    expect(
+      getSessionProjectedTitle(
+        loadSessionEntry({ agentId: "main", sessionKey: scope.sessionKey, storePath }),
+      ),
+    ).toBe("Investigate the session list query");
+    expect(
+      getSessionProjectedTitle(
+        listSessionEntries({ agentId: "main", storePath }).find(
+          ({ sessionKey }) => sessionKey === scope.sessionKey,
+        )?.entry,
+      ),
+    ).toBe("Investigate the session list query");
+  });
+
+  it("backfills titles written before the projection existed", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "legacy-title-session",
+      sessionKey: "agent:main:legacy-title",
+      storePath,
+    };
+    replaceSqliteSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    await appendTranscriptMessage(scope, {
+      message: { role: "user", content: "Recover the existing session title" },
+    });
+    const database = openOpenClawAgentDatabase({
+      agentId: "main",
+      path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
+    });
+    database.db
+      .prepare("UPDATE session_nodes SET display_name = NULL WHERE session_key = ?")
+      .run(scope.sessionKey);
+    database.db
+      .prepare("DELETE FROM schema_meta WHERE meta_key = 'session-title-projection-v1'")
+      .run();
+
+    closeOpenClawAgentDatabasesForTest();
+    const reopened = openOpenClawAgentDatabase({
+      agentId: "main",
+      path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
+    });
+
+    expect(
+      reopened.db
+        .prepare("SELECT display_name FROM session_nodes WHERE session_key = ?")
+        .get(scope.sessionKey),
+    ).toEqual({ display_name: "Recover the existing session title" });
+    closeOpenClawAgentDatabasesForTest();
+  });
+
+  it("does not derive a title from inactive events when the active projection is empty", () => {
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:empty-active",
+      storePath,
+    };
+    replaceSqliteSessionEntrySync(scope, { sessionId: "empty-active-session", updatedAt: 10 });
+    const database = openOpenClawAgentDatabase({
+      agentId: "main",
+      path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
+    });
+    database.db
+      .prepare(
+        "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, 0, ?, 10)",
+      )
+      .run(
+        "empty-active-session",
+        JSON.stringify({
+          id: "inactive-message",
+          message: { content: "inactive title", role: "user" },
+          parentId: null,
+          type: "message",
+        }),
+      );
+    database.db
+      .prepare(
+        "INSERT INTO transcript_rewrite_watermarks (session_id, generation, updated_at) VALUES (?, 'generation-1', 10)",
+      )
+      .run("empty-active-session");
+
+    refreshSqliteSessionTitleProjection(database.db, "empty-active-session");
+    expect(
+      database.db
+        .prepare("SELECT display_name FROM session_nodes WHERE session_key = ?")
+        .get(scope.sessionKey),
+    ).toEqual({ display_name: "empty-ac (1970-01-01)" });
   });
 
   it("derives a scoped key owner before fixed-store read and write target resolution", async () => {
@@ -553,7 +1205,7 @@ describe("session accessor seam", () => {
 
   it("keeps case-distinct Matrix sessions separate under nested agent ownership", async () => {
     const mixedKey = "agent:voice:agent:other:matrix:channel:!RoomAbC:example.org";
-    const lowerKey = "agent:voice:agent:other:matrix:channel:!Roomabc:example.org";
+    const lowerKey = mixedKey.toLowerCase();
 
     await upsertSessionEntry(
       { sessionKey: mixedKey, storePath },
@@ -697,196 +1349,47 @@ describe("session accessor seam", () => {
     expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
   });
 
-  it("patches the freshest target alias and rewrites it to the canonical key", async () => {
-    const canonicalKey = "agent:main:work";
-    const aliasKey = "agent:main:main";
+  it("rejects alias targets and keeps canonical lifecycle mutations explicit", async () => {
     await replaceSessionEntry(
-      {
-        sessionKey: "agent:main:work",
-        storePath,
-      },
-      {
-        sessionId: "canonical-session",
-        updatedAt: 10,
-      },
+      { sessionKey: "agent:main:work", storePath },
+      { sessionId: "canonical-session", updatedAt: 10 },
     );
     await replaceSessionEntry(
-      {
-        sessionKey: "agent:main:main",
-        storePath,
-      },
-      {
-        sessionId: "legacy-session",
-        updatedAt: 20,
-        visibility: "read-only",
-      },
+      { sessionKey: "agent:main:main", storePath },
+      { sessionId: "legacy-session", updatedAt: 20 },
     );
-    await replaceSqliteTranscriptEvents(
-      { agentId: "main", sessionId: "legacy-history", sessionKey: aliasKey, storePath },
-      [{ id: "legacy-history-event", type: "message" }],
-    );
-    const aliasDatabasePath = expectDefined(
-      resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
-      "alias database path",
-    );
-    const aliasDatabase = openOpenClawAgentDatabase({ agentId: "main", path: aliasDatabasePath });
-    aliasDatabase.db
-      .prepare(
-        `INSERT INTO session_nodes (
-           session_key, current_session_id, entry_json, updated_at
-         ) VALUES (?, 'canonical-session', ?, 10)`,
-      )
-      .run(canonicalKey, JSON.stringify({ sessionId: "canonical-session", updatedAt: 10 }));
-    aliasDatabase.db
-      .prepare(
-        `INSERT INTO session_windows (
-           session_id, session_key, session_scope, created_at, updated_at
-         ) VALUES ('canonical-session', ?, 'conversation', 10, 10)`,
-      )
-      .run(canonicalKey);
-    aliasDatabase.db
-      .prepare(
-        `INSERT INTO board_tabs (
-           session_key, tab_id, title, position, chat_dock, created_by, revision
-         ) VALUES ('agent:main:main', 'main', 'Alias board', 0, 'right', 'user', 2)`,
-      )
-      .run();
-    aliasDatabase.db
-      .prepare(
-        `INSERT INTO board_widgets (
-           session_key, name, tab_id, content_kind, html, sha256, view_generation,
-           revision, size_w, size_h, position, created_by, created_at, updated_at
-         ) VALUES (
-           'agent:main:main', 'status', 'main', 'html', X'3C703E6F6B3C2F703E',
-           'alias-hash', 'view-1', 2, 4, 4, 0, 'user', 20, 20
-         )`,
-      )
-      .run();
-    aliasDatabase.db
-      .prepare(
-        `INSERT INTO board_tabs (
-           session_key, tab_id, title, position, chat_dock, created_by, revision
-         ) VALUES ('agent:main:work', 'main', 'Stale canonical board', 0, 'right', 'user', 1)`,
-      )
-      .run();
-    aliasDatabase.db
-      .prepare(
-        `INSERT INTO board_widgets (
-           session_key, name, tab_id, content_kind, html, sha256, view_generation,
-           revision, size_w, size_h, position, created_by, created_at, updated_at
-         ) VALUES (
-           'agent:main:work', 'status', 'main', 'html', X'3C703E7374616C653C2F703E',
-           'stale-canonical-hash', 'view-stale', 1, 4, 4, 0, 'user', 10, 10
-         )`,
-      )
-      .run();
-    aliasDatabase.db
-      .prepare(
-        `INSERT INTO heartbeat_outcomes (
-           session_key, run_session_key, outcome, summary, occurred_at, updated_at
-         ) VALUES (
-           'agent:main:work', 'agent:main:work', 'progress', 'stale canonical heartbeat', 10, 10
-         )`,
-      )
-      .run();
-    aliasDatabase.db
-      .prepare(
-        `INSERT INTO heartbeat_outcomes (
-           session_key, run_session_key, outcome, summary, occurred_at, updated_at
-         ) VALUES ('agent:main:main', 'agent:main:main', 'done', 'alias heartbeat', 20, 20)`,
-      )
-      .run();
-    aliasDatabase.db
-      .prepare(
-        `INSERT INTO session_members (session_key, identity_id, added_by, added_at)
-         VALUES (?, ?, ?, ?)`,
-      )
-      .run("agent:main:main", "member-1", "owner-1", 20);
-    expect(
-      aliasDatabase.db.prepare("SELECT session_key FROM session_nodes ORDER BY session_key").all(),
-    ).toEqual([{ session_key: "agent:main:main" }, { session_key: "agent:main:work" }]);
-    aliasDatabase.db
-      .prepare(
-        `INSERT INTO session_members (session_key, identity_id, added_by, added_at)
-         VALUES (?, ?, ?, ?)`,
-      )
-      .run("agent:main:work", "stale-canonical-member", "stale-owner", 10);
-
     const notify = vi.fn();
     const unsubscribe = onSessionIdentityMutation(notify);
-    const patched = await patchSessionEntryTarget(
+    await expect(
+      patchSessionEntryTarget(
+        {
+          storePath,
+          target: {
+            canonicalKey: "agent:main:work",
+            storeKeys: ["agent:main:work", "agent:main:main"],
+          },
+        },
+        () => ({ label: "patched" }),
+      ),
+    ).rejects.toThrow("openclaw doctor --fix");
+    await deleteSessionEntryLifecycle({
+      archiveTranscript: false,
+      storePath,
+      target: {
+        canonicalKey: "agent:main:main",
+        storeKeys: ["agent:main:main"],
+      },
+    });
+    await patchSessionEntryTarget(
       {
         storePath,
         target: {
           canonicalKey: "agent:main:work",
-          storeKeys: ["agent:main:work", "agent:main:main"],
+          storeKeys: ["agent:main:work"],
         },
       },
-      (entry, context) => {
-        expect(entry.sessionId).toBe("legacy-session");
-        expect(context.existingEntry?.sessionId).toBe("legacy-session");
-        return {
-          label: "patched",
-        };
-      },
+      () => ({ label: "patched" }),
     );
-    expect(patched).toMatchObject({
-      label: "patched",
-      sessionId: "legacy-session",
-      visibility: "read-only",
-    });
-    expect(listSessionEntries({ storePath })).toEqual([
-      {
-        sessionKey: "agent:main:work",
-        entry: expect.objectContaining({
-          label: "patched",
-          sessionId: "legacy-session",
-        }),
-      },
-    ]);
-    expect(
-      aliasDatabase.db
-        .prepare("SELECT session_key, title, revision FROM board_tabs ORDER BY session_key")
-        .all(),
-    ).toEqual([{ session_key: "agent:main:work", title: "Alias board", revision: 2 }]);
-    expect(
-      aliasDatabase.db
-        .prepare(
-          "SELECT session_key, name, sha256, revision, updated_at FROM board_widgets ORDER BY session_key",
-        )
-        .all(),
-    ).toEqual([
-      {
-        session_key: "agent:main:work",
-        name: "status",
-        sha256: "alias-hash",
-        revision: 2,
-        updated_at: 20,
-      },
-    ]);
-    expect(
-      aliasDatabase.db
-        .prepare("SELECT session_key, summary FROM heartbeat_outcomes ORDER BY session_key")
-        .all(),
-    ).toEqual([{ session_key: "agent:main:work", summary: "alias heartbeat" }]);
-    expect(
-      aliasDatabase.db
-        .prepare("SELECT session_key, identity_id FROM session_members ORDER BY session_key")
-        .all(),
-    ).toEqual([{ session_key: "agent:main:work", identity_id: "member-1" }]);
-    expect(
-      aliasDatabase.db
-        .prepare("SELECT session_key FROM session_windows WHERE session_id = 'legacy-history'")
-        .get(),
-    ).toEqual({ session_key: canonicalKey });
-    await expect(
-      loadTranscriptEvents({
-        agentId: "main",
-        sessionId: "legacy-history",
-        sessionKey: canonicalKey,
-        storePath,
-      }),
-    ).resolves.toEqual([{ id: "legacy-history-event", type: "message" }]);
     const sessionKey = "agent:main:other";
     const scope = { sessionKey, storePath };
     await replaceSessionEntry(scope, { sessionId: "created", updatedAt: 10 });
@@ -902,13 +1405,38 @@ describe("session accessor seam", () => {
     unsubscribe();
 
     expect(notify.mock.calls.map(([event]) => event.kind)).toEqual([
-      "move",
-      "replace",
+      "delete",
       "create",
       "replace",
       "reset",
       "delete",
     ]);
+  });
+
+  it("rejects non-canonical lineage without poisoning the store", async () => {
+    const sessionKey = "agent:main:child";
+    for (const entry of [{ parentSessionKey: "Agent:Main:Parent " }, { spawnedBy: " " }]) {
+      await expect(
+        replaceSessionEntry(
+          { agentId: "main", sessionKey, storePath },
+          { ...entry, sessionId: "child", updatedAt: 10 },
+        ),
+      ).rejects.toThrow("openclaw doctor --fix");
+    }
+    expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toBeUndefined();
+
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      {
+        parentSessionKey: "agent:main:parent",
+        sessionId: "child",
+        updatedAt: 10,
+      },
+    );
+    expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toMatchObject({
+      parentSessionKey: "agent:main:parent",
+      sessionId: "child",
+    });
   });
 
   it("does not persist abort target changes when the entry is absent", async () => {
@@ -951,7 +1479,7 @@ describe("session accessor seam", () => {
     expect(fs.existsSync(storePath)).toBe(false);
   });
 
-  it("parses the store once across canonical candidate and transcript reads", async () => {
+  it("does not parse unrelated blobs across canonical candidate and transcript reads", async () => {
     const sessionKey = "agent:main:focused-session";
     await upsertSessionEntry(
       { agentId: "main", sessionKey, storePath },
@@ -978,7 +1506,7 @@ describe("session accessor seam", () => {
         legacyKeys: [],
         normalizedKey: sessionKey,
       });
-      expect(parse.mock.calls.filter(([value]) => value === unrelatedEntryJson)).toHaveLength(1);
+      expect(parse.mock.calls.filter(([value]) => value === unrelatedEntryJson)).toHaveLength(0);
       expect(
         resolveSessionEntryCandidateTarget({
           agentId: "main",
@@ -994,7 +1522,7 @@ describe("session accessor seam", () => {
           storePath,
         }),
       ).toMatchObject({ agentId: "main", sessionId: "focused-session", sessionKey });
-      expect(parse.mock.calls.filter(([value]) => value === unrelatedEntryJson)).toHaveLength(1);
+      expect(parse.mock.calls.filter(([value]) => value === unrelatedEntryJson)).toHaveLength(0);
     } finally {
       parse.mockRestore();
     }
@@ -1456,41 +1984,24 @@ describe("session accessor seam", () => {
     expect(persisted?.pendingFinalDelivery).toBeUndefined();
   });
 
-  it("commits reply session initialization from a guarded legacy alias snapshot", async () => {
-    const sessionKey = "agent:main:main";
-    await applySessionEntryLifecycleMutation({
-      storePath,
-      upserts: [
-        {
-          sessionKey: "Agent:Main:Main",
-          entry: {
-            sessionId: "legacy-alias-session",
-            updatedAt: 10,
+  it("rejects reply session initialization writes to a legacy alias", async () => {
+    await expect(
+      applySessionEntryLifecycleMutation({
+        storePath,
+        upserts: [
+          {
+            sessionKey: "Agent:Main:Main",
+            entry: {
+              sessionId: "legacy-alias-session",
+              updatedAt: 10,
+            },
           },
-        },
-      ],
+        ],
+      }),
+    ).rejects.toMatchObject({
+      code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED",
+      message: expect.stringContaining("openclaw doctor --fix"),
     });
-
-    const snapshot = loadMainInitializationSnapshot(sessionKey);
-    const committed = await commitReplySessionInitialization({
-      activeSessionKey: sessionKey,
-      agentId: "main",
-      expectedRevision: snapshot.revision,
-      previousEntry: snapshot.currentEntry,
-      sessionEntry: {
-        sessionId: "next-session",
-        updatedAt: 20,
-      },
-      sessionKey,
-      storePath,
-    });
-
-    expect(committed.ok).toBe(true);
-    if (!committed.ok) {
-      throw new Error("expected reply session initialization to commit");
-    }
-    expect(committed.sessionEntry.sessionId).toBe("next-session");
-    expect(loadSessionEntry({ sessionKey, storePath })?.sessionId).toBe("next-session");
   });
 
   it("rejects a reply initialization key scoped to another explicit agent", () => {
@@ -1511,19 +2022,71 @@ describe("session accessor seam", () => {
     }
   });
 
-  it("allows an unscoped legacy alias with an explicit agent owner", async () => {
-    await upsertSessionEntry(
-      { agentId: "ops", sessionKey: "main", storePath },
-      { sessionId: "legacy-ops-session", updatedAt: 10 },
-    );
-
-    const snapshot = loadReplySessionInitializationSnapshot({
+  it("rejects unscoped alias writes even with an explicit agent owner", async () => {
+    for (const sessionKey of ["main", "", "agent:ops:main ", "agent:OPS:upper"]) {
+      await expect(
+        upsertSessionEntry(
+          { agentId: "ops", sessionKey, storePath },
+          { sessionId: "legacy-ops-session", updatedAt: 10 },
+        ),
+      ).rejects.toMatchObject({
+        code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED",
+        message: expect.stringContaining("openclaw doctor --fix"),
+      });
+    }
+    await expect(
+      upsertSessionEntry(
+        { agentId: "ops", sessionKey: "agent:main:wrong-owner", storePath },
+        { sessionId: "wrong-owner-session", updatedAt: 10 },
+      ),
+    ).rejects.toMatchObject({ code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED" });
+    const database = openOpenClawAgentDatabase({
       agentId: "ops",
-      sessionKey: "main",
-      storePath,
+      path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "ops" }).path,
     });
-
-    expect(snapshot.currentEntry?.sessionId).toBe("legacy-ops-session");
+    const insert = database.db.prepare(
+      "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+    );
+    insert.run(
+      "agent:main:wrong-database",
+      "wrong-database-session",
+      JSON.stringify({ sessionId: "wrong-database-session", updatedAt: 5 }),
+      5,
+    );
+    database.db
+      .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
+      .run("agent:main:wrong-database");
+    expect(() =>
+      querySqliteSessionEntries({
+        agentId: "ops",
+        query: { archived: false, includeGlobal: true, includeUnknown: true },
+        storePath,
+      }),
+    ).toThrow(expect.objectContaining({ code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED" }));
+    for (const [storedKey, canonicalKey] of [
+      ["agent:ops:padded ", "agent:ops:padded"],
+      [" agent:ops:leading", "agent:ops:leading"],
+      ["agent:ops:nbsp\u00a0", "agent:ops:nbsp"],
+    ] as const) {
+      const sessionId = `${canonicalKey}-session`;
+      insert.run(storedKey, sessionId, JSON.stringify({ sessionId, updatedAt: 5 }), 5);
+      await expect(
+        upsertSessionEntry(
+          { agentId: "ops", sessionKey: canonicalKey, storePath },
+          { sessionId: "new-session", updatedAt: 10 },
+        ),
+      ).rejects.toMatchObject({ code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED" });
+      const canonicalSessionId = `${canonicalKey}-canonical-session`;
+      insert.run(
+        canonicalKey,
+        canonicalSessionId,
+        JSON.stringify({ sessionId: canonicalSessionId, updatedAt: 6 }),
+        6,
+      );
+      expect(() =>
+        loadSessionEntry({ agentId: "ops", sessionKey: canonicalKey, storePath }),
+      ).toThrow("openclaw doctor --fix");
+    }
   });
 
   it("rejects reply session initialization when the entry is deleted during prepare", async () => {
@@ -2137,43 +2700,6 @@ describe("session accessor seam", () => {
       });
     },
   );
-
-  it("archives shared SQLite transcript state once when plugin rollback removes aliases", async () => {
-    const sessionId = "plugin-alias-session";
-    const canonicalKey = "agent:main:plugin-alias";
-    const aliasKey = "plugin-alias";
-    const entry = {
-      modelSelectionLocked: true,
-      pluginOwnerId: "anthropic",
-      sessionId,
-      updatedAt: 10,
-    } satisfies SessionEntry;
-    await upsertSessionEntry({ sessionKey: aliasKey, storePath }, entry);
-    await upsertSessionEntry({ sessionKey: canonicalKey, storePath }, entry);
-    await replaceSqliteTranscriptEvents(
-      { agentId: "main", sessionId, sessionKey: canonicalKey, storePath },
-      [{ id: "plugin-alias-event", type: "message" }],
-    );
-    const expectedEntry = expectDefined(
-      loadSessionEntry({ sessionKey: canonicalKey, storePath }),
-      "canonical plugin alias entry",
-    );
-
-    const result = await rollbackPluginOwnedSessionEntryLifecycle({
-      archiveTranscript: true,
-      expectedEntry,
-      expectedPluginOwnerId: "anthropic",
-      storePath,
-      target: { canonicalKey, storeKeys: [canonicalKey, aliasKey] },
-    });
-
-    expect(result).toMatchObject({ deleted: true });
-    expect(result.archivedTranscripts).toHaveLength(1);
-    expect(listSessionEntries({ storePath })).toEqual([]);
-    await expect(
-      loadTranscriptEvents({ agentId: "main", sessionId, sessionKey: canonicalKey, storePath }),
-    ).resolves.toEqual([]);
-  });
 
   it("trims a manual compact transcript and clears stale token metadata", async () => {
     const sessionId = "11111111-1111-4111-8111-111111111111";

@@ -2,13 +2,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 
 const mocks = vi.hoisted(() => ({
+  buildSessionListSqlQuery: vi.fn(() => ({
+    lineage: {},
+    query: { archived: false, includeGlobal: true, includeUnknown: false, limit: 60 },
+  })),
   events: [] as string[],
   loadCombinedSessionStoreForGateway: vi.fn((_cfg: unknown, options: { agentId: string }) => {
     mocks.events.push(`sessions.load.${options.agentId}`);
     return {
+      creatorActors: [],
       durableStorePath: `/state/${options.agentId}.sqlite`,
+      selectionExact: true,
       storePath: `/state/${options.agentId}.sqlite`,
       store: {},
+      totalCount: 0,
     };
   }),
   listSessionsFromStoreAsync: vi.fn(async (params: { opts: { agentId: string } }) => {
@@ -29,6 +36,7 @@ vi.mock("../config/sessions/combined-store-gateway.js", () => ({
 }));
 
 vi.mock("./session-utils-list.js", () => ({
+  buildSessionListSqlQuery: mocks.buildSessionListSqlQuery,
   listSessionsFromStoreAsync: mocks.listSessionsFromStoreAsync,
 }));
 
@@ -44,6 +52,7 @@ const { scheduleGatewayHandlerPrewarm } = await import("./server-startup-handler
 
 beforeEach(() => {
   mocks.events.length = 0;
+  mocks.buildSessionListSqlQuery.mockClear();
   mocks.loadCombinedSessionStoreForGateway.mockClear();
   mocks.listSessionsFromStoreAsync.mockClear();
   mocks.listManagedPlugins.mockClear();
@@ -81,11 +90,15 @@ describe("scheduleGatewayHandlerPrewarm", () => {
     ]);
     expect(mocks.loadCombinedSessionStoreForGateway).toHaveBeenNthCalledWith(1, cfg, {
       agentId: "main",
+      includeRowContext: true,
       projection: "list",
+      query: expect.objectContaining({ limit: 60 }),
     });
     expect(mocks.loadCombinedSessionStoreForGateway).toHaveBeenNthCalledWith(2, cfg, {
       agentId: "research",
+      includeRowContext: true,
       projection: "list",
+      query: expect.objectContaining({ limit: 60 }),
     });
     expect(mocks.listSessionsFromStoreAsync).toHaveBeenNthCalledWith(
       1,

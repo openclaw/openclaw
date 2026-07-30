@@ -32,7 +32,7 @@ import { ensureSessionGroupRegistered } from "../session-groups.js";
 import { triggerSessionPatchHook } from "../session-patch-hooks.js";
 import {
   loadSessionEntry,
-  migrateAndPruneGatewaySessionStoreKey,
+  resolveCanonicalGatewaySessionStoreKey,
   resolveGatewaySessionThinkingProjection,
   resolveSessionDisplayModelIdentityRef,
   resolveSessionModelRef,
@@ -130,13 +130,13 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     let wasArchivedBeforePatch = false;
     const resolvePatchTarget = ({ entries }: SessionPatchProjectionSnapshot) => {
       const store = Object.fromEntries(entries.map(({ sessionKey, entry }) => [sessionKey, entry]));
-      const { target: migratedTarget, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+      const { target: canonicalTarget, primaryKey } = resolveCanonicalGatewaySessionStoreKey({
         cfg,
         key,
         store,
         agentId: requestedAgentId,
       });
-      return { primaryKey, candidateKeys: migratedTarget.storeKeys };
+      return { primaryKey, candidateKeys: canonicalTarget.storeKeys };
     };
     const applyPatch = async () => {
       const currentLifecycleEntry = loadSessionEntry(key, { agentId: requestedAgentId }).entry;
