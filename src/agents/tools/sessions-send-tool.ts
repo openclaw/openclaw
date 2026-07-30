@@ -18,7 +18,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeRouteBindingChannelId } from "../../routing/binding-scope.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import {
-buildAgentMainSessionKey,
+  buildAgentMainSessionKey,
   classifySessionKeyShape,
   isSubagentSessionKey,
   normalizeAccountId,
@@ -615,28 +615,6 @@ export function createSessionsSendTool(opts?: {
       // Normalize sessionKey/sessionId input into a canonical session key.
       const resolvedKey = visibleSession.key;
       const displayKey = visibleSession.displayKey;
-      // Reject unknown agents on the canonical resolved key so opaque session IDs
-      // or aliases that resolve to an unconfigured agent cannot reach dispatch.
-      const resolvedKeyShape = classifySessionKeyShape(resolvedKey);
-      if (resolvedKeyShape === "malformed_agent") {
-        return jsonResult({
-          runId: crypto.randomUUID(),
-          status: "error",
-          error: `agent not found: ${resolvedKey}`,
-          sessionKey: unresolvedDisplayKey,
-        });
-      }
-      if (resolvedKeyShape === "agent") {
-        const targetAgentId = resolveAgentIdFromSessionKey(resolvedKey);
-        if (!listAgentIds(cfg).includes(targetAgentId)) {
-          return jsonResult({
-            runId: crypto.randomUUID(),
-            status: "error",
-            error: `agent not found: ${targetAgentId}`,
-            sessionKey: unresolvedDisplayKey,
-          });
-        }
-      }
       const rawRequesterSessionKey = opts?.agentSessionKey ? effectiveRequesterKey : undefined;
       const parsedRequesterSessionKey = parseAgentSessionKey(rawRequesterSessionKey);
       const requesterRouteBindings = cfg.bindings?.filter(
@@ -773,6 +751,31 @@ export function createSessionsSendTool(opts?: {
           error: access.error,
           sessionKey: unresolvedDisplayKey,
         });
+      }
+
+      // Reject unknown agents on the canonical resolved key so opaque session IDs
+      // or aliases that resolve to an unconfigured agent cannot reach dispatch.
+      // Must run after the standard visibility guard so restricted callers cannot
+      // distinguish hidden configured agents from absent ones.
+      const resolvedKeyShape = classifySessionKeyShape(resolvedKey);
+      if (resolvedKeyShape === "malformed_agent") {
+        return jsonResult({
+          runId: crypto.randomUUID(),
+          status: "error",
+          error: `agent not found: ${resolvedKey}`,
+          sessionKey: unresolvedDisplayKey,
+        });
+      }
+      if (resolvedKeyShape === "agent") {
+        const targetAgentId = resolveAgentIdFromSessionKey(resolvedKey);
+        if (!listAgentIds(cfg).includes(targetAgentId)) {
+          return jsonResult({
+            runId: crypto.randomUUID(),
+            status: "error",
+            error: `agent not found: ${targetAgentId}`,
+            sessionKey: unresolvedDisplayKey,
+          });
+        }
       }
 
       return await runWithScopedSessionAccess({

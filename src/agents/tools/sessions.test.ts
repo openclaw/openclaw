@@ -72,7 +72,7 @@ vi.mock("../../plugin-sdk/facade-runtime.js", async () => {
 });
 
 type SessionsToolTestConfig = {
-agents?: OpenClawConfig["agents"];
+  agents?: OpenClawConfig["agents"];
   bindings?: OpenClawConfig["bindings"];
   session: {
     scope: "per-sender";
@@ -284,18 +284,19 @@ async function executeFireAndForgetA2AFrom(
   vi.mocked(runSessionsSendA2AFlow).mockClear();
   const targetSessionKey = "agent:other:discord:group:ops";
   loadConfigMock.mockReturnValue({
-...(options?.bindingDmScope ||
+    ...(options?.bindingDmScope ||
     options?.defaultBindingDmScope ||
     options?.bindingAccountId ||
     options?.bindingAgentId
       ? {
-          ...(options.bindingAgentId
-            ? {
-                agents: {
-                  list: [{ id: "main", default: true }, { id: options.bindingAgentId }],
-                },
-              }
-            : {}),
+          agents: {
+            list: [
+              { id: "main", default: true },
+              ...(options.bindingAgentId
+                ? [{ id: options.bindingAgentId }, { id: "other" }]
+                : [{ id: "other" }]),
+            ],
+          },
           bindings: [
             ...(options.defaultBindingDmScope
               ? [
@@ -324,7 +325,7 @@ async function executeFireAndForgetA2AFrom(
             },
           ],
         }
-      : {}),
+      : { agents: { list: [{ id: "main" }, { id: "other" }] } }),
     session: {
       scope: "per-sender",
       mainKey: options?.mainKey ?? "main",
@@ -1547,7 +1548,7 @@ describe("sessions_send gating", () => {
     loadConfigMock.mockReturnValue({
       session: { scope: "per-sender", mainKey: "main" },
       agents: { list: [{ id: "main" }] },
-      tools: { agentToAgent: { enabled: false } },
+      tools: { agentToAgent: { enabled: true }, sessions: { visibility: "all" } },
     });
     const tool = createMainSessionsSendTool();
 
@@ -1560,7 +1561,9 @@ describe("sessions_send gating", () => {
     const details = requireDetails(result);
     expect(details.status).toBe("error");
     expect(details.error).toBe("agent not found: ghost");
-    expect(callGatewayMock).not.toHaveBeenCalled();
+    // Visibility check may call sessions.list; ensure no agent dispatch occurred.
+    const methods = callGatewayMock.mock.calls.map((c) => (c[0] as { method?: string })?.method);
+    expect(methods).not.toContain("agent");
   });
 
   it("rejects malformed agent-prefixed sessionKey before starting a run", async () => {
@@ -1587,7 +1590,7 @@ describe("sessions_send gating", () => {
     loadConfigMock.mockReturnValue({
       session: { scope: "per-sender", mainKey: "main" },
       agents: { list: [{ id: "main" }] },
-      tools: { agentToAgent: { enabled: false } },
+      tools: { agentToAgent: { enabled: true }, sessions: { visibility: "all" } },
     });
     callGatewayMock.mockResolvedValueOnce({ key: "agent:ghost:main" });
     const tool = createMainSessionsSendTool();
@@ -1601,7 +1604,7 @@ describe("sessions_send gating", () => {
     const details = requireDetails(result);
     expect(details.status).toBe("error");
     expect(details.error).toBe("agent not found: ghost");
-    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(callGatewayMock).toHaveBeenCalledTimes(2);
     expect(requireGatewayRequest().method).toBe("sessions.resolve");
   });
 
@@ -1609,7 +1612,7 @@ describe("sessions_send gating", () => {
     loadConfigMock.mockReturnValue({
       session: { scope: "per-sender", mainKey: "main" },
       agents: { list: [{ id: "main" }] },
-      tools: { agentToAgent: { enabled: false } },
+      tools: { agentToAgent: { enabled: true }, sessions: { visibility: "all" } },
     });
     callGatewayMock.mockResolvedValueOnce({ key: "agent:ghost:main" });
     const tool = createMainSessionsSendTool();
@@ -1623,8 +1626,45 @@ describe("sessions_send gating", () => {
     const details = requireDetails(result);
     expect(details.status).toBe("error");
     expect(details.error).toBe("agent not found: ghost");
-    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(callGatewayMock).toHaveBeenCalledTimes(2);
     expect(requireGatewayRequest().method).toBe("sessions.resolve");
+  });
+
+  it("returns forbidden (not agent-not-found) for hidden and unknown agents under restricted visibility", async () => {
+    // Regression: the configured-agent check must run after the visibility
+    // guard so restricted callers cannot distinguish a hidden configured
+    // agent from an absent one by comparing error responses.
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      agents: { list: [{ id: "main" }, { id: "other" }] },
+      tools: {
+        agentToAgent: { enabled: false },
+        sessions: { visibility: "tree" },
+      },
+    });
+    const tool = createMainSessionsSendTool();
+
+    // Hidden configured agent: should be forbidden, not "agent not found".
+    const hiddenResult = await tool.execute("call-hidden-agent", {
+      sessionKey: "agent:other:main",
+      message: "hi",
+      timeoutSeconds: 0,
+    });
+    expect(requireDetails(hiddenResult).status).toBe("forbidden");
+
+    // Unknown agent: should also be forbidden, indistinguishable from hidden.
+    const unknownResult = await tool.execute("call-unknown-agent", {
+      sessionKey: "agent:ghost:main",
+      message: "hi",
+      timeoutSeconds: 0,
+    });
+    expect(requireDetails(unknownResult).status).toBe("forbidden");
+
+    // Neither should have dispatched an agent run.
+    const gatewayMethods = callGatewayMock.mock.calls.map(
+      (c) => (c[0] as { method?: string })?.method,
+    );
+    expect(gatewayMethods).not.toContain("agent");
   });
 });
 
