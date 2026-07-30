@@ -550,10 +550,9 @@ function createChatModelControlsProps(state: ChatHeaderTestState): ChatModelCont
     gatewayAvailable: Boolean(state.client),
     loading: state.chatLoading,
     modelCatalog: state.chatModelCatalog,
+    catalogMode: state.chatModelCatalogMode,
     modelSettingsHref:
-      state.chatModelCatalogMode === "replace"
-        ? "/settings/ai-agents?section=models#config-section-models"
-        : undefined,
+      state.chatModelCatalogMode === "replace" ? "/settings/model-providers" : undefined,
     modelOverrides: state.sessions.state.modelOverrides,
     modelSwitching: false,
     modelsLoading: state.chatModelsLoading,
@@ -4862,9 +4861,7 @@ describe("chat model controls", () => {
 
     const hint = container.querySelector(".chat-controls__catalog-hint");
     expect(hint?.textContent).toContain(t("chat.selectors.replaceModeHint"));
-    expect(hint?.querySelector("a")?.getAttribute("href")).toBe(
-      "/settings/ai-agents?section=models#config-section-models",
-    );
+    expect(hint?.querySelector("a")?.getAttribute("href")).toBe("/settings/model-providers");
   });
 
   it("omits the replace-mode hint for the default catalog mode", () => {
