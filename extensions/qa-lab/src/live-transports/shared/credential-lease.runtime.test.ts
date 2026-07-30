@@ -4,6 +4,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   acquireQaCredentialLease,
+  resolveQaCredentialSource,
   startQaCredentialLeaseHeartbeat,
 } from "./credential-lease.runtime.js";
 
@@ -112,6 +113,16 @@ describe("credential lease runtime", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
+  });
+
+  it("resolves the shared credential source from the environment", () => {
+    expect(resolveQaCredentialSource(undefined, {})).toBe("env");
+    expect(resolveQaCredentialSource(undefined, { OPENCLAW_QA_CREDENTIAL_SOURCE: "convex" })).toBe(
+      "convex",
+    );
+    expect(resolveQaCredentialSource("env", { OPENCLAW_QA_CREDENTIAL_SOURCE: "convex" })).toBe(
+      "env",
+    );
   });
 
   it("uses env credentials by default", async () => {

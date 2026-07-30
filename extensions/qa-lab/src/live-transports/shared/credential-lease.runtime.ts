@@ -132,6 +132,13 @@ function normalizeQaCredentialSource(value: string | undefined): QaCredentialLea
   throw new Error(`Credential source must be one of env or convex, got "${value}".`);
 }
 
+export function resolveQaCredentialSource(
+  source?: string,
+  env: NodeJS.ProcessEnv = process.env,
+): QaCredentialLeaseSource {
+  return normalizeQaCredentialSource(source ?? env.OPENCLAW_QA_CREDENTIAL_SOURCE);
+}
+
 function normalizeQaCredentialRole(
   value: string | undefined,
   env: NodeJS.ProcessEnv = process.env,
@@ -424,7 +431,7 @@ export async function acquireQaCredentialLease<TPayload>(
   opts: AcquireQaCredentialLeaseOptions<TPayload>,
 ): Promise<QaCredentialLease<TPayload>> {
   const env = opts.env ?? process.env;
-  const source = normalizeQaCredentialSource(opts.source ?? env.OPENCLAW_QA_CREDENTIAL_SOURCE);
+  const source = resolveQaCredentialSource(opts.source, env);
   if (source === "env") {
     return {
       source: "env",
