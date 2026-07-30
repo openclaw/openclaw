@@ -56,7 +56,7 @@ const mocks = vi.hoisted(() => ({
   uninstallUserSystemdGatewayUnit: vi.fn().mockResolvedValue({
     unitName: "openclaw-gateway.service",
     unitPath: "",
-    removed: true,
+    archivedPath: "",
     disabled: true,
   }),
   note: vi.fn(),
@@ -2119,6 +2119,8 @@ describe("maybeScanExtraGatewayServices", () => {
 });
 
 describe("maybeResolveDuelingSystemdGatewayScopes", () => {
+  const ARCHIVED_USER_UNIT_PATH =
+    "/home/test/.openclaw/backups/systemd-units/2026-01-01/openclaw-gateway.service";
   const duelingInstallation = {
     kind: "dueling" as const,
     user: {
@@ -2145,14 +2147,14 @@ describe("maybeResolveDuelingSystemdGatewayScopes", () => {
     delete process.env.OPENCLAW_SERVICE_REPAIR_POLICY;
   });
 
-  it("removes the user-scope unit and keeps the system unit when confirmed", async () => {
+  it("archives the user-scope unit and keeps the system unit when confirmed", async () => {
     mockProcessPlatform("linux");
     mocks.findSystemdGatewayInstallation.mockResolvedValue(duelingInstallation);
     mocks.isSystemUnitActiveAndEnabled.mockResolvedValue(true);
     mocks.uninstallUserSystemdGatewayUnit.mockResolvedValue({
       unitName: "openclaw-gateway.service",
       unitPath: duelingInstallation.user.unitPath,
-      removed: true,
+      archivedPath: ARCHIVED_USER_UNIT_PATH,
       disabled: true,
     });
     const runtime = makeDoctorIo();
@@ -2162,7 +2164,7 @@ describe("maybeResolveDuelingSystemdGatewayScopes", () => {
 
     expect(mocks.uninstallUserSystemdGatewayUnit).toHaveBeenCalledTimes(1);
     expect(runtime.log).toHaveBeenCalledWith(
-      "Removed the redundant user-scope gateway unit. The system-scope unit is now the sole gateway manager.",
+      "Archived the redundant user-scope gateway unit. The system-scope unit is now the sole gateway manager.",
     );
   });
 
@@ -2223,7 +2225,7 @@ describe("maybeResolveDuelingSystemdGatewayScopes", () => {
     mocks.uninstallUserSystemdGatewayUnit.mockResolvedValue({
       unitName: "openclaw-gateway.service",
       unitPath: duelingInstallation.user.unitPath,
-      removed: true,
+      archivedPath: ARCHIVED_USER_UNIT_PATH,
       disabled: false,
     });
     const runtime = makeDoctorIo();

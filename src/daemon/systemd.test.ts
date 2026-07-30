@@ -2866,7 +2866,7 @@ describe("uninstallUserSystemdGatewayUnit", () => {
     execFileMock.mockReset();
   });
 
-  it("disables and removes the user-scope unit when systemctl is available", async () => {
+  it("disables and archives the user-scope unit when systemctl is available", async () => {
     await withUserUnitFixture(async ({ env, unitPath }) => {
       await fs.writeFile(unitPath, "[Unit]\nDescription=OpenClaw Gateway\n", "utf8");
       execFileMock
@@ -2887,15 +2887,22 @@ describe("uninstallUserSystemdGatewayUnit", () => {
       const { write, stdout } = createWritableStreamMock();
       const result = await uninstallUserSystemdGatewayUnit({ env, stdout });
 
-      expect(result.removed).toBe(true);
+      const { archivedPath } = result;
+      if (archivedPath === undefined) {
+        throw new Error("expected the unit to be archived");
+      }
       expect(result.disabled).toBe(true);
       expect(result.unitName).toBe(GATEWAY_SERVICE);
       await expect(fs.access(unitPath)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(requireFirstWrite(write)).toContain("Removed user-scope systemd service");
+      // Operator edits must survive the repair, so the archive keeps the bytes.
+      await expect(fs.readFile(archivedPath, "utf8")).resolves.toBe(
+        "[Unit]\nDescription=OpenClaw Gateway\n",
+      );
+      expect(requireFirstWrite(write)).toContain("Archived user-scope systemd service");
     });
   });
 
-  it("reports removed:false without throwing when the unit file is already absent", async () => {
+  it("reports no archive without throwing when the unit file is already absent", async () => {
     await withUserUnitFixture(async ({ env }) => {
       execFileMock
         .mockImplementationOnce((_cmd, args, _opts, cb) => {
@@ -2910,12 +2917,12 @@ describe("uninstallUserSystemdGatewayUnit", () => {
       const { write, stdout } = createWritableStreamMock();
       const result = await uninstallUserSystemdGatewayUnit({ env, stdout });
 
-      expect(result.removed).toBe(false);
+      expect(result.archivedPath).toBeUndefined();
       expect(requireFirstWrite(write)).toContain("User-scope systemd unit not found");
     });
   });
 
-  it("removes the unit file only when systemctl is unavailable", async () => {
+  it("archives the unit file only when systemctl is unavailable", async () => {
     await withUserUnitFixture(async ({ env, unitPath }) => {
       await fs.writeFile(unitPath, "[Unit]\nDescription=OpenClaw Gateway\n", "utf8");
       execFileMock.mockImplementation((_cmd, _args, _opts, cb) =>
@@ -2925,7 +2932,7 @@ describe("uninstallUserSystemdGatewayUnit", () => {
       const { write, stdout } = createWritableStreamMock();
       const result = await uninstallUserSystemdGatewayUnit({ env, stdout });
 
-      expect(result.removed).toBe(true);
+      expect(result.archivedPath).toBeTypeOf("string");
       // File-only removal cannot evict a loaded unit, so callers must not treat
       // this as a resolved conflict.
       expect(result.disabled).toBe(false);
