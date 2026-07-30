@@ -4617,7 +4617,7 @@ describe("legacy modelPolicy allowlist migrate (issue #114964)", () => {
     );
   });
 
-  it("records the map as unrestricted when every legacy key is a bare slashless provider key", () => {
+  it("records the map as an empty allowlist when every legacy key is a bare slashless provider key", () => {
     const res = migrateLegacyConfigForTest({
       agents: {
         defaults: {
@@ -4628,9 +4628,10 @@ describe("legacy modelPolicy allowlist migrate (issue #114964)", () => {
       },
     });
 
-    expect(res.config?.agents?.defaults?.modelPolicy).toBeUndefined();
+    // Fail-closed: an empty allowlist means no models are allowed, not allow-any.
+    expect(res.config?.agents?.defaults?.modelPolicy).toEqual({ allow: [] });
     expect(res.changes).toContain(
-      "Recorded the legacy default model map as unrestricted without creating modelPolicy.allow.",
+      "Copied the legacy default model map to agents.defaults.modelPolicy.allow.",
     );
   });
 
