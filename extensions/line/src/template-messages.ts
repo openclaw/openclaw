@@ -106,6 +106,12 @@ function normalizeCarouselColumns(columns: CarouselColumn[]): CarouselColumn[] {
     .map((column) => {
       const normalized = normalizeCarouselColumnActions(column);
       normalized.actions = normalized.actions.filter(hasRenderableLabel);
+      if (!normalized.text.trim() && normalized.title !== undefined) {
+        // A blank column text adopts its title, mirroring the buttons path,
+        // so the column's actions stay deliverable.
+        normalized.text = normalized.title;
+        normalized.title = undefined;
+      }
       return normalized;
     })
     .filter((column) => column.actions.length > 0 && column.text.trim() !== "");
@@ -315,11 +321,14 @@ export function buildTemplateMessageFromPayload(
       // LINE requires non-blank template text: a blank body folds the title
       // down into the text slot so the buttons stay deliverable.
       const title = payload.title?.trim() ? payload.title : undefined;
-      const text = payload.text.trim() ? payload.text : title;
+      const bodyText = payload.text.trim() ? payload.text : undefined;
+      const text = bodyText ?? title;
       if (!text) {
         return templateTextFallback(truncateTemplateText(payload.altText ?? "", 400));
       }
-      const foldedTitle = text === title ? undefined : title;
+      // Only an actual fold drops the title slot; an authored title that
+      // happens to match the text stays.
+      const foldedTitle = bodyText ? title : undefined;
 
       const message = createButtonTemplate(foldedTitle, text, actions, {
         thumbnailImageUrl: payload.thumbnailImageUrl,
@@ -356,7 +365,13 @@ export function buildTemplateMessageFromPayload(
           payload.altText
             ? truncateTemplateText(payload.altText, 400)
             : columns
-                .map((col) => (col.title ? `${col.title}: ${col.text}` : col.text))
+                .map((col) => {
+                  const text = col.text.trim();
+                  if (!col.title) {
+                    return text;
+                  }
+                  return text ? `${col.title}: ${text}` : col.title;
+                })
                 .filter(Boolean)
                 .join("\n"),
         );

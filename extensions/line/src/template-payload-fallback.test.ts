@@ -101,6 +101,57 @@ describe("template payload textual fallback", () => {
     ]);
   });
 
+  it("keeps an authored title that happens to match the text", () => {
+    const message = buildTemplateMessageFromPayload({
+      type: "buttons",
+      title: "Menu",
+      text: "Menu",
+      actions: [{ type: "message", label: "One", data: "one" }],
+    });
+
+    const template = expectDefined(message, "buttons template message");
+    if (template.type !== "template" || template.template.type !== "buttons") {
+      throw new Error("expected a buttons template");
+    }
+    expect(template.template.title).toBe("Menu");
+    expect(template.template.text).toBe("Menu");
+  });
+
+  it("folds a blank-text carousel column's title so its actions survive", () => {
+    const message = buildTemplateMessageFromPayload({
+      type: "carousel",
+      columns: [
+        { title: "First", text: " ", actions: [{ type: "message", label: "A", data: "a" }] },
+        { title: "Second", text: "Body", actions: [{ type: "message", label: "B", data: "b" }] },
+      ],
+    });
+
+    const template = expectDefined(message, "carousel template message");
+    if (template.type !== "template" || template.template.type !== "carousel") {
+      throw new Error("expected a carousel template");
+    }
+    // The folded column loses its title slot, which folds the sibling's title
+    // into its text for cross-column consistency.
+    expect(template.template.columns).toEqual([
+      expect.objectContaining({ text: "First" }),
+      expect.objectContaining({ text: "Second: Body" }),
+    ]);
+    expect(template.template.columns[0]?.title).toBeUndefined();
+    expect(template.template.columns[1]?.title).toBeUndefined();
+  });
+
+  it("uses the title alone in the fallback for a blank-text column", () => {
+    const message = buildTemplateMessageFromPayload({
+      type: "carousel",
+      columns: [
+        { title: "First", text: " ", actions: [] },
+        { text: "B", actions: [] },
+      ],
+    });
+
+    expect(message).toEqual({ type: "text", text: "First\nB" });
+  });
+
   it("folds the title into blank buttons text so the actions stay deliverable", () => {
     const message = buildTemplateMessageFromPayload({
       type: "buttons",
