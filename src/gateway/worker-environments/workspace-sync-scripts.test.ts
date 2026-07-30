@@ -36,6 +36,7 @@ async function fixture() {
   const stalledProcessProbePath = path.join(root, "stall-process-probe");
   const stalledProcessProbePidPath = path.join(root, "stall-process-probe.pid");
   const stalledProcessProbeTargetPath = path.join(root, "stall-process-probe.target");
+  const stalledProcessProbeOnceTargetPath = path.join(root, "stall-process-probe-once.target");
   const failedProcessProbeTargetPath = path.join(root, "fail-process-probe.target");
   const failedProcessScanPath = path.join(root, "fail-process-scan");
   const failedProcessScanStatePath = path.join(root, "fail-process-scan.state");
@@ -45,7 +46,7 @@ async function fixture() {
   await fs.mkdir(bin);
   await fs.writeFile(
     path.join(bin, "ps"),
-    '#!/bin/sh\nstall() { printf "%s\\n" "$$" >> "$OPENCLAW_TEST_PS_STALL_PID"; trap "" TERM; exec sleep 30; }\nif [ -f "$OPENCLAW_TEST_PS_STALL" ]; then rm -f "$OPENCLAW_TEST_PS_STALL"; stall; fi\nif [ -f "$OPENCLAW_TEST_PS_STALL_TARGET" ]; then target=""; for argument in "$@"; do target=$argument; done; case "$*" in *"stat=,lstart= -p"*) ;; *"lstart= -p"*) if grep -qx "$target" "$OPENCLAW_TEST_PS_STALL_TARGET"; then stall; fi ;; esac; fi\nif [ -f "$OPENCLAW_TEST_PS_FAIL_TARGET" ]; then target=""; for argument in "$@"; do target=$argument; done; case "$*" in *"stat=,lstart= -p"*) ;; *"lstart= -p"*) if grep -qx "$target" "$OPENCLAW_TEST_PS_FAIL_TARGET"; then exit 2; fi ;; esac; fi\ncase "$*" in *"pid=,ppid=,uid=,stat=,lstart="*) if [ -f "$OPENCLAW_TEST_PS_FAIL_SCAN.seen" ]; then extra_pid=$(cat "$OPENCLAW_TEST_PS_EXTRA"); /bin/ps -o stat= -p "$extra_pid" > "$OPENCLAW_TEST_PS_FAIL_SCAN_STATE"; exit 2; fi ;; esac\ncase "$*" in\n  *"stat=,lstart= -p"*|*"lstart= -p"*) exec /bin/ps "$@" ;;\n  *) printf "%s %s %s S Tue Jul 15 08:00:00 2026\\n" "$$" "$PPID" "$(id -u)"; if [ -f "$OPENCLAW_TEST_PS_EXTRA" ]; then extra_pid=$(cat "$OPENCLAW_TEST_PS_EXTRA"); /bin/ps -o pid=,ppid=,uid=,stat=,lstart= -p "$extra_pid"; fi; if [ -f "$OPENCLAW_TEST_PS_FAIL_SCAN" ]; then touch "$OPENCLAW_TEST_PS_FAIL_SCAN.seen"; fi ;;\nesac\n',
+    '#!/bin/sh\nstall() { printf "%s\\n" "$$" >> "$OPENCLAW_TEST_PS_STALL_PID"; trap "" TERM; exec sleep 30; }\nif [ -f "$OPENCLAW_TEST_PS_STALL" ]; then rm -f "$OPENCLAW_TEST_PS_STALL"; stall; fi\nif [ -f "$OPENCLAW_TEST_PS_STALL_ONCE_TARGET" ]; then target=""; for argument in "$@"; do target=$argument; done; case "$*" in *"stat=,lstart= -p"*) ;; *"lstart= -p"*) if grep -qx "$target" "$OPENCLAW_TEST_PS_STALL_ONCE_TARGET"; then rm -f "$OPENCLAW_TEST_PS_STALL_ONCE_TARGET"; stall; fi ;; esac; fi\nif [ -f "$OPENCLAW_TEST_PS_STALL_TARGET" ]; then target=""; for argument in "$@"; do target=$argument; done; case "$*" in *"stat=,lstart= -p"*) ;; *"lstart= -p"*) if grep -qx "$target" "$OPENCLAW_TEST_PS_STALL_TARGET"; then stall; fi ;; esac; fi\nif [ -f "$OPENCLAW_TEST_PS_FAIL_TARGET" ]; then target=""; for argument in "$@"; do target=$argument; done; case "$*" in *"stat=,lstart= -p"*) ;; *"lstart= -p"*) if grep -qx "$target" "$OPENCLAW_TEST_PS_FAIL_TARGET"; then exit 2; fi ;; esac; fi\ncase "$*" in *"pid=,ppid=,uid=,stat=,lstart="*) if [ -f "$OPENCLAW_TEST_PS_FAIL_SCAN.seen" ]; then extra_pid=$(cat "$OPENCLAW_TEST_PS_EXTRA"); /bin/ps -o stat= -p "$extra_pid" > "$OPENCLAW_TEST_PS_FAIL_SCAN_STATE"; exit 2; fi ;; esac\ncase "$*" in\n  *"stat=,lstart= -p"*|*"lstart= -p"*) exec /bin/ps "$@" ;;\n  *) printf "%s %s %s S Tue Jul 15 08:00:00 2026\\n" "$$" "$PPID" "$(id -u)"; if [ -f "$OPENCLAW_TEST_PS_EXTRA" ]; then extra_pid=$(cat "$OPENCLAW_TEST_PS_EXTRA"); /bin/ps -o pid=,ppid=,uid=,stat=,lstart= -p "$extra_pid"; fi; if [ -f "$OPENCLAW_TEST_PS_FAIL_SCAN" ]; then touch "$OPENCLAW_TEST_PS_FAIL_SCAN.seen"; fi ;;\nesac\n',
   );
   await fs.chmod(path.join(bin, "ps"), 0o755);
   return {
@@ -55,6 +56,7 @@ async function fixture() {
     stalledProcessProbePath,
     stalledProcessProbePidPath,
     stalledProcessProbeTargetPath,
+    stalledProcessProbeOnceTargetPath,
     failedProcessProbeTargetPath,
     failedProcessScanPath,
     failedProcessScanStatePath,
@@ -65,6 +67,7 @@ async function fixture() {
       OPENCLAW_TEST_PS_STALL: stalledProcessProbePath,
       OPENCLAW_TEST_PS_STALL_PID: stalledProcessProbePidPath,
       OPENCLAW_TEST_PS_STALL_TARGET: stalledProcessProbeTargetPath,
+      OPENCLAW_TEST_PS_STALL_ONCE_TARGET: stalledProcessProbeOnceTargetPath,
       OPENCLAW_TEST_PS_FAIL_TARGET: failedProcessProbeTargetPath,
       OPENCLAW_TEST_PS_FAIL_SCAN: failedProcessScanPath,
       OPENCLAW_TEST_PS_FAIL_SCAN_STATE: failedProcessScanStatePath,
@@ -215,6 +218,83 @@ describe("remote workspace quiescence scripts", () => {
     }
   }, 15_000);
 
+  it("retries a transient stalled process probe while initially quiescing", async () => {
+    const input = await fixture();
+    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      stdio: "ignore",
+    });
+    const childPid = child.pid!;
+
+    try {
+      await fs.writeFile(input.extraProcessPath, `${childPid}\n`);
+      await fs.writeFile(input.stalledProcessProbeOnceTargetPath, `${childPid}\n`);
+
+      const nonce = await quiesce(input);
+
+      await expectProcessState(childPid, true);
+      await expect(fs.access(input.stalledProcessProbeOnceTargetPath)).rejects.toThrow();
+      await resume(input, nonce);
+      await expectProcessState(childPid, false);
+    } finally {
+      await fs.rm(input.extraProcessPath, { force: true });
+      await fs.rm(input.stalledProcessProbeOnceTargetPath, { force: true });
+      await terminate(child);
+    }
+  }, 15_000);
+
+  it("reports when failed quiescence recovery retains a terminal lease", async () => {
+    const input = await fixture();
+    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      stdio: "ignore",
+    });
+    const childPid = child.pid!;
+    let nonce = "";
+
+    try {
+      await fs.writeFile(input.extraProcessPath, `${childPid}\n`);
+      await fs.writeFile(input.failedProcessScanPath, "fail after first scan\n");
+      await fs.writeFile(input.failedProcessProbeTargetPath, `${childPid}\n`);
+
+      const result = await runCommandWithTimeout(
+        [process.execPath, "-e", REMOTE_WORKSPACE_QUIESCE_JS, input.workspace, "10000"],
+        { timeoutMs: 10_000, baseEnv: input.env },
+      );
+
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain(
+        "workspace quiescence recovery failed; lease retained for operator recovery",
+      );
+      const leaseDirectory = path.join(input.home, ".openclaw-worker", "quiescence");
+      const leases = (await fs.readdir(leaseDirectory)).filter((name) => name.endsWith(".json"));
+      expect(leases).toHaveLength(1);
+      const terminal = JSON.parse(
+        await fs.readFile(path.join(leaseDirectory, leases[0]!), "utf8"),
+      ) as {
+        nonce: string;
+        processes: Array<{ pid: number }>;
+        recovery?: { state: string };
+      };
+      nonce = terminal.nonce;
+      expect(terminal.processes.map((entry) => entry.pid)).toEqual([childPid]);
+      expect(terminal.recovery?.state).toBe("recovery-failed");
+
+      await fs.rm(input.failedProcessProbeTargetPath, { force: true });
+      await resume(input, nonce);
+      await expectProcessState(childPid, false);
+    } finally {
+      await fs.rm(input.extraProcessPath, { force: true });
+      await fs.rm(input.failedProcessProbeTargetPath, { force: true });
+      await fs.rm(input.failedProcessScanPath, { force: true });
+      await fs.rm(`${input.failedProcessScanPath}.seen`, { force: true });
+      if (nonce) {
+        try {
+          await resume(input, nonce);
+        } catch {}
+      }
+      await terminate(child);
+    }
+  }, 15_000);
+
   it("proves the lease is active and renews its watchdog deadline", async () => {
     const input = await fixture();
     const nonce = await quiesce(input);
@@ -292,6 +372,37 @@ describe("remote workspace quiescence scripts", () => {
     );
     expect(result.code).not.toBe(0);
   });
+
+  it("retries a transient stalled process probe during explicit resume", async () => {
+    const input = await fixture();
+    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      stdio: "ignore",
+    });
+    const childPid = child.pid!;
+    let nonce = "";
+
+    try {
+      await fs.writeFile(input.extraProcessPath, `${childPid}\n`);
+      nonce = await quiesce(input);
+      await expectProcessState(childPid, true);
+      await fs.writeFile(input.stalledProcessProbeOnceTargetPath, `${childPid}\n`);
+
+      await resume(input, nonce);
+
+      await expectProcessState(childPid, false);
+      await expect(fs.access(input.stalledProcessProbeOnceTargetPath)).rejects.toThrow();
+      await expect(fs.access(leasePath(input.home, input.workspace, nonce))).rejects.toThrow();
+    } finally {
+      await fs.rm(input.extraProcessPath, { force: true });
+      await fs.rm(input.stalledProcessProbeOnceTargetPath, { force: true });
+      if (nonce) {
+        try {
+          await resume(input, nonce);
+        } catch {}
+      }
+      await terminate(child);
+    }
+  }, 15_000);
 
   it("retries a signal-resistant stalled watchdog process probe before releasing the lease", async () => {
     const input = await fixture();

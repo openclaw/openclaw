@@ -50,6 +50,20 @@ function probeProcessIdentity(pid, timeoutMs = ${REMOTE_WATCHDOG_PROCESS_PROBE_T
     }, timeoutMs);
   });
 }
+async function probeProcessIdentityUntilSettled(pid, deadlineMs) {
+  let observed = { kind: "timeout" };
+  while (Date.now() < deadlineMs) {
+    observed = await probeProcessIdentity(
+      pid,
+      Math.max(1, Math.min(${REMOTE_WATCHDOG_PROCESS_PROBE_TIMEOUT_MS}, deadlineMs - Date.now())),
+    );
+    if (observed.kind !== "timeout") return observed;
+    const remainingMs = deadlineMs - Date.now();
+    if (remainingMs <= 0) break;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(100, remainingMs)));
+  }
+  return observed;
+}
 async function signalProcessReferences(references, concurrency = ${REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY}, deadlineMs = Date.now() + ${REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS}) {
   // Keep identity confirmation adjacent to its signal so a slow sibling probe cannot stale it.
   const results = new Array(references.length);
@@ -334,11 +348,12 @@ try {
     if (candidates.length + frozen.size > 4096) {
       throw new Error("too many worker processes to quiesce safely");
     }
+    const probeDeadlineMs = Date.now() + ${REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS};
     for (const [pid, row] of candidates) {
       try {
         frozen.set(pid, row.start);
         writeLease();
-        const observed = await probeProcessIdentity(pid);
+        const observed = await probeProcessIdentityUntilSettled(pid, probeDeadlineMs);
         if (observed.kind === "timeout" || observed.kind === "failed") {
           throw new Error("workspace quiescence process identity probe failed");
         }
@@ -370,26 +385,30 @@ try {
   ]);
   if (recovery.remaining.length === 0) {
     try { fs.unlinkSync(leasePath); } catch (unlinkError) { if (!unlinkError || unlinkError.code !== "ENOENT") throw unlinkError; }
-  } else {
-    const remainingWatchdog = recovery.remaining.find((entry) => entry.signal === "SIGTERM");
-    const remainingProcesses = recovery.remaining
-      .filter((entry) => entry.signal === "SIGCONT")
-      .map(({ pid, start }) => ({ pid, start }));
-    persistLease(leasePath, {
-      version: 1,
-      nonce,
-      processes: remainingProcesses,
-      watchdog: remainingWatchdog
-        ? { pid: remainingWatchdog.pid, start: remainingWatchdog.start }
-        : null,
-      expiresAtMs: Date.now(),
-      recovery: {
-        state: recovery.failed ? "recovery-failed" : "probe-timeout",
-        failedAtMs: Date.now(),
-      },
-    });
+    throw error;
   }
-  throw error;
+  const remainingWatchdog = recovery.remaining.find((entry) => entry.signal === "SIGTERM");
+  const remainingProcesses = recovery.remaining
+    .filter((entry) => entry.signal === "SIGCONT")
+    .map(({ pid, start }) => ({ pid, start }));
+  persistLease(leasePath, {
+    version: 1,
+    nonce,
+    processes: remainingProcesses,
+    watchdog: remainingWatchdog
+      ? { pid: remainingWatchdog.pid, start: remainingWatchdog.start }
+      : null,
+    expiresAtMs: Date.now(),
+    recovery: {
+      state: recovery.failed ? "recovery-failed" : "probe-timeout",
+      failedAtMs: Date.now(),
+    },
+  });
+  const failure = recovery.failed ? "failed" : "timed out";
+  throw new Error(
+    "workspace quiescence recovery " + failure + "; lease retained for operator recovery",
+    { cause: error },
+  );
 }
 function watchdogMain(watchedLeasePath, watchedNonce) {
   const check = async () => {
@@ -469,6 +488,7 @@ if (validationMode !== "heartbeat" && validationMode !== "final") throw new Erro
 const leasePath = path.join(os.homedir(), ".openclaw-worker", "quiescence", crypto.createHash("sha256").update(root).digest("hex") + "." + nonce + ".json");
 ${REMOTE_QUIESCENCE_PS_JS}
 ${REMOTE_QUIESCENCE_LEASE_JS}
+async function renew() {
 const input = parseLease(fs.readFileSync(leasePath, "utf8"), nonce, {
   errorMessage: "workspace quiescence lease is no longer active",
 });
@@ -532,11 +552,15 @@ if (validationMode === "final") {
     for (const [pid, row] of candidates) frozen.set(pid, row.start);
     let frozenEntries = [...frozen].map(([pid, start]) => ({ pid, start }));
     refreshLease(frozenEntries);
+    const probeDeadlineMs = Date.now() + ${REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS};
     for (const [pid, row] of candidates) {
       try {
         if (input.expiresAtMs - Date.now() < 5000) refreshLease(frozenEntries);
-        const current = processStatus(pid);
-        if (!current || current.start !== row.start) {
+        const observed = await probeProcessIdentityUntilSettled(pid, probeDeadlineMs);
+        if (observed.kind === "timeout" || observed.kind === "failed") {
+          throw new Error("workspace quiescence process identity probe failed");
+        }
+        if (observed.kind !== "identity" || observed.start !== row.start) {
           frozen.delete(pid);
           continue;
         }
@@ -570,6 +594,11 @@ if (confirmed.nonce !== nonce || confirmed.expiresAtMs !== renewed.expiresAtMs) 
   throw new Error("workspace quiescence renewal was not durable");
 }
 process.stdout.write("renewed " + nonce + "\n");
+}
+void renew().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
 `;
 
 export const REMOTE_WORKSPACE_RESUME_JS = String.raw`const childProcess = require("node:child_process");
@@ -595,27 +624,22 @@ async function resume() {
   const input = parseLease(raw, nonce);
   const recoveryDeadlineMs = Date.now() + ${REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS};
   if (input.watchdog !== null) {
-    const [watchdogOutcome] = await signalProcessReferences(
+    const watchdogRecovery = await recoverProcessReferences(
       [{ ...input.watchdog, signal: "SIGTERM" }],
       1,
       recoveryDeadlineMs,
     );
-    if (
-      watchdogOutcome.kind === "timeout" ||
-      watchdogOutcome.kind === "deferred" ||
-      watchdogOutcome.kind === "failed"
-    ) {
-      const failure = watchdogOutcome.kind === "failed" ? "failed" : "timed out";
+    if (watchdogRecovery.remaining.length > 0) {
+      const failure = watchdogRecovery.failed ? "failed" : "timed out";
       throw new Error("workspace quiescence recovery " + failure + "; lease retained for operator recovery");
     }
   }
-  const outcomes = await signalProcessReferences(
+  const recovery = await recoverProcessReferences(
     input.processes.map((entry) => ({ ...entry, signal: "SIGCONT" })),
     ${REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY},
     recoveryDeadlineMs,
   );
-  const failed = outcomes.some((outcome) => outcome.kind === "failed");
-  const remainingReferences = remainingProcessReferences(input.processes, outcomes);
+  const remainingReferences = recovery.remaining.map(({ pid, start }) => ({ pid, start }));
   if (remainingReferences.length > 0) {
     persistLease(
       leasePath,
@@ -624,7 +648,7 @@ async function resume() {
         processes: remainingReferences,
         watchdog: null,
         recovery: {
-          state: failed ? "recovery-failed" : "probe-timeout",
+          state: recovery.failed ? "recovery-failed" : "probe-timeout",
           failedAtMs: Date.now(),
         },
       },
@@ -640,7 +664,7 @@ async function resume() {
         }
       },
     );
-    const failure = failed ? "failed" : "timed out";
+    const failure = recovery.failed ? "failed" : "timed out";
     throw new Error("workspace quiescence recovery " + failure + "; lease retained for operator recovery");
   }
   fs.unlinkSync(leasePath);
