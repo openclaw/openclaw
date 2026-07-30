@@ -347,12 +347,14 @@ describe("remote workspace quiescence scripts", () => {
     expect(heartbeat.code).toBe(0);
 
     try {
+      await fs.writeFile(input.stalledProcessProbeOnceTargetPath, `${child.pid}\n`);
       const result = await runCommandWithTimeout(
         [process.execPath, "-e", REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS, input.workspace, nonce],
         { timeoutMs: 10_000, baseEnv: input.env },
       );
 
       expect(result.code).toBe(0);
+      await expect(fs.access(input.stalledProcessProbeOnceTargetPath)).rejects.toThrow();
       const lease = JSON.parse(
         await fs.readFile(leasePath(input.home, input.workspace, nonce), "utf8"),
       ) as { processes: Array<{ pid: number }> };
@@ -365,6 +367,7 @@ describe("remote workspace quiescence scripts", () => {
         await once(child, "exit");
       }
       await fs.rm(input.extraProcessPath, { force: true });
+      await fs.rm(input.stalledProcessProbeOnceTargetPath, { force: true });
     }
   });
 

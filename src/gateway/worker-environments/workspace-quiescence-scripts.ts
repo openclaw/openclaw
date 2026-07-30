@@ -3,7 +3,6 @@ const REMOTE_WATCHDOG_PROCESS_PROBE_TIMEOUT_MS = 1_000;
 // Exhaustion is expected to be rare and leaves an operator-visible terminal lease.
 const REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS = 5_000;
 const REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY = 8;
-const REMOTE_QUIESCENCE_PROCESS_BATCH_BUDGET_MS = 25;
 
 const REMOTE_QUIESCENCE_PS_JS = String.raw`function processes() {
   const output = childProcess.execFileSync("ps", ["-axo", "pid=,ppid=,uid=,stat=,lstart="], {
@@ -52,10 +51,10 @@ function probeProcessIdentity(pid, timeoutMs = ${REMOTE_WATCHDOG_PROCESS_PROBE_T
   });
 }
 function processSignalDeadlineMs(referenceCount) {
-  // Enrollment can cover thousands of healthy processes, so retain the fixed
-  // recovery allowance and add a small bounded budget per concurrency batch.
+  // One full probe timeout per concurrency batch still fits the caller's
+  // ten-minute command ceiling at the supported 4,096-process maximum.
   const batches = Math.max(1, Math.ceil(referenceCount / ${REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY}));
-  return Date.now() + ${REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS} + batches * ${REMOTE_QUIESCENCE_PROCESS_BATCH_BUDGET_MS};
+  return Date.now() + ${REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS} + batches * ${REMOTE_WATCHDOG_PROCESS_PROBE_TIMEOUT_MS};
 }
 async function signalProcessReferences(references, concurrency = ${REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY}, deadlineMs = Date.now() + ${REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS}) {
   // Keep identity confirmation adjacent to its signal so a slow sibling probe cannot stale it.
@@ -530,6 +529,19 @@ function refreshLease(processes) {
   assertWatchdogActive();
   writeLease(processes, Date.now() + timeoutMs);
 }
+async function rollbackLateProcesses(references, priorProcesses, error) {
+  const rollback = await recoverProcessReferences(
+    references.map((entry) => ({ ...entry, signal: "SIGCONT" })),
+  );
+  const retained = rollback.remaining.map(({ pid, start }) => ({ pid, start }));
+  refreshLease([
+    ...priorProcesses,
+    ...retained.filter(
+      (entry) => !priorProcesses.some((prior) => prior.pid === entry.pid && prior.start === entry.start),
+    ),
+  ]);
+  throw error;
+}
 for (const entry of input.processes) {
   const status = processStatus(entry.pid);
   if (!status || status.start !== entry.start) continue;
@@ -550,22 +562,41 @@ if (validationMode === "final") {
     if (candidates.length + frozen.size > 4096) {
       throw new Error("too many worker processes to quiesce safely");
     }
+    const priorProcesses = input.processes.map((entry) => ({ ...entry }));
     for (const [pid, row] of candidates) frozen.set(pid, row.start);
     let frozenEntries = [...frozen].map(([pid, start]) => ({ pid, start }));
     refreshLease(frozenEntries);
-    for (const [pid, row] of candidates) {
-      try {
-        if (input.expiresAtMs - Date.now() < 5000) refreshLease(frozenEntries);
-        const current = processStatus(pid);
+    if (candidates.length > 0) {
+      const references = candidates.map(([pid, row]) => ({ pid, start: row.start }));
+      const stopped = await recoverProcessReferences(
+        references.map((entry) => ({ ...entry, signal: "SIGSTOP" })),
+        ${REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY},
+        processSignalDeadlineMs(references.length),
+      );
+      if (stopped.remaining.length > 0) {
+        await rollbackLateProcesses(
+          references,
+          priorProcesses,
+          new Error(
+            stopped.failed
+              ? "workspace quiescence process identity probe failed"
+              : "workspace quiescence process identity probe timed out",
+          ),
+        );
+      }
+      Atomics.wait(sleeper, 0, 0, 20);
+      const stoppedRows = processes();
+      for (const [pid, row] of candidates) {
+        const current = stoppedRows.get(pid);
         if (!current || current.start !== row.start) {
           frozen.delete(pid);
-          continue;
+        } else if (!current.state.startsWith("T")) {
+          await rollbackLateProcesses(
+            references,
+            priorProcesses,
+            new Error("workspace quiescence process did not stop"),
+          );
         }
-        if (input.expiresAtMs - Date.now() < 2500) refreshLease(frozenEntries);
-        process.kill(pid, "SIGSTOP");
-      } catch (error) {
-        if (!error || error.code !== "ESRCH") throw error;
-        frozen.delete(pid);
       }
     }
     frozenEntries = [...frozen].map(([pid, start]) => ({ pid, start }));
