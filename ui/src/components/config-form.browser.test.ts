@@ -577,6 +577,259 @@ describe("config form renderer", () => {
     expect(onPatch).toHaveBeenCalledWith(["models", "providers", "openai", "apiKey"], "new-key");
   });
 
+  it("preserves every value in generated boolean-and-literal settings", () => {
+    const fastModeSchema = {
+      anyOf: [{ type: "boolean" }, { const: "auto" }],
+    };
+    const analysis = analyzeConfigSchema({
+      type: "object",
+      properties: {
+        agents: {
+          type: "object",
+          properties: {
+            defaults: {
+              type: "object",
+              properties: { fastModeDefault: fastModeSchema },
+            },
+            entries: {
+              type: "object",
+              additionalProperties: {
+                type: "object",
+                properties: { fastModeDefault: fastModeSchema },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(analysis.unsupportedPaths).toEqual([]);
+    expect(
+      analysis.schema?.properties?.agents?.properties?.defaults?.properties?.fastModeDefault,
+    ).toMatchObject({ enum: [true, false, "auto"] });
+    expect(
+      analysis.schema?.properties?.agents?.properties?.entries?.additionalProperties,
+    ).toMatchObject({
+      properties: { fastModeDefault: { enum: [true, false, "auto"] } },
+    });
+  });
+
+  it("lets default and per-agent fast-mode settings select automatic mode", () => {
+    const onPatch = vi.fn();
+    const fastModeSchema = {
+      anyOf: [{ type: "boolean" }, { const: "auto" }],
+    };
+    const analysis = analyzeConfigSchema({
+      type: "object",
+      properties: {
+        agents: {
+          type: "object",
+          properties: {
+            defaults: {
+              type: "object",
+              properties: { fastModeDefault: fastModeSchema },
+            },
+            entries: {
+              type: "object",
+              additionalProperties: {
+                type: "object",
+                properties: { fastModeDefault: fastModeSchema },
+              },
+            },
+          },
+        },
+      },
+    });
+    const container = document.createElement("div");
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {},
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: {
+          agents: {
+            defaults: { fastModeDefault: "auto" },
+            entries: { work: { fastModeDefault: true } },
+          },
+        },
+        onPatch,
+      }),
+      container,
+    );
+
+    const automaticButtons = Array.from(
+      container.querySelectorAll<HTMLElement>(".settings-segmented__btn"),
+    ).filter((button) => button.textContent?.trim() === "auto");
+    expect(automaticButtons).toHaveLength(2);
+    expect(container.querySelector("wa-switch.settings-toggle")).toBeNull();
+
+    selectSegmented(expectElement(automaticButtons[1], "per-agent automatic fast mode"));
+    expect(onPatch).toHaveBeenCalledWith(["agents", "entries", "work", "fastModeDefault"], "auto");
+  });
+
+  it.each([
+    {
+      label: "rejects narrowed boolean branches it cannot prove",
+      schema: { anyOf: [{ type: "boolean", not: { const: true } }, { const: "auto" }] },
+      expected: null,
+    },
+    {
+      label: "preserves exclusive boolean-and-literal choices",
+      schema: {
+        oneOf: [{ type: "boolean" }, { const: true }, { const: "auto" }, { type: "null" }],
+      },
+      expected: { enum: [false, "auto"], nullable: true },
+    },
+    {
+      label: "excludes null accepted by multiple exclusive branches",
+      schema: {
+        oneOf: [{ type: "boolean" }, { const: "auto" }, { const: null }, { type: "null" }],
+      },
+      expected: { enum: [true, false, "auto"], nullable: false },
+    },
+    {
+      label: "intersects nullable branches with their enum",
+      schema: { anyOf: [{ type: "boolean", enum: [true], nullable: true }, { const: "auto" }] },
+      expected: { enum: [true, "auto"], nullable: false },
+    },
+    {
+      label: "intersects nullable branches with their const",
+      schema: { anyOf: [{ type: "boolean", const: true, nullable: true }, { const: "auto" }] },
+      expected: { enum: [true, "auto"], nullable: false },
+    },
+    {
+      label: "intersects parent nullability with its enum",
+      schema: {
+        nullable: true,
+        enum: [true, "auto"],
+        anyOf: [{ type: "boolean" }, { const: "auto" }],
+      },
+      expected: { enum: [true, "auto"], nullable: false },
+    },
+    {
+      label: "intersects parent nullability with its const",
+      schema: {
+        nullable: true,
+        const: false,
+        anyOf: [{ type: "boolean" }, { const: "auto" }],
+      },
+      expected: { enum: [false], nullable: false },
+    },
+    {
+      label: "rejects null not accepted by any union branch",
+      schema: { nullable: true, anyOf: [{ type: "boolean" }, { const: "auto" }] },
+      expected: { enum: [true, false, "auto"], nullable: false },
+    },
+    {
+      label: "intersects finite unions with the parent type",
+      schema: { type: "boolean", anyOf: [{ type: "boolean" }, { const: "auto" }] },
+      expected: { enum: [true, false], nullable: false },
+    },
+    {
+      label: "intersects finite unions with the parent enum",
+      schema: { enum: [false, "auto"], anyOf: [{ type: "boolean" }, { const: "auto" }] },
+      expected: { enum: [false, "auto"] },
+    },
+    {
+      label: "intersects finite unions with the parent const",
+      schema: { const: false, anyOf: [{ type: "boolean" }, { const: "auto" }] },
+      expected: { enum: [false] },
+    },
+    {
+      label: "rejects unhandled parent assertion keywords",
+      schema: { anyOf: [{ type: "boolean" }, { const: "auto" }], not: { const: true } },
+      expected: null,
+    },
+    {
+      label: "excludes overlapping exclusive structural literals",
+      schema: {
+        oneOf: [{ type: "boolean" }, { const: { mode: "auto" } }, { const: { mode: "auto" } }],
+      },
+      expected: { enum: [true, false] },
+    },
+    {
+      label: "preserves null-only unions",
+      schema: { anyOf: [{ const: null }] },
+      expected: { enum: [], nullable: true },
+    },
+    {
+      label: "intersects enum and const within the same branch",
+      schema: { anyOf: [{ enum: [true, false], const: false }, { const: "auto" }] },
+      expected: { enum: [false, "auto"] },
+    },
+    {
+      label: "preserves distinct non-exclusive structural literals",
+      schema: { anyOf: [{ const: { mode: "auto" } }, { const: { mode: "manual" } }] },
+      expected: { enum: [{ mode: "auto" }, { mode: "manual" }] },
+    },
+    {
+      label: "preserves distinct exclusive structural literals",
+      schema: { oneOf: [{ const: { mode: "auto" } }, { const: { mode: "manual" } }] },
+      expected: { enum: [{ mode: "auto" }, { mode: "manual" }] },
+    },
+    {
+      label: "intersects structural literals with the parent type",
+      schema: {
+        type: "object",
+        anyOf: [{ const: { mode: "auto" } }, { const: { mode: "manual" } }],
+      },
+      expected: { enum: [{ mode: "auto" }, { mode: "manual" }] },
+    },
+    {
+      label: "intersects structural literals with the parent enum",
+      schema: {
+        enum: [{ mode: "manual" }],
+        anyOf: [{ const: { mode: "auto" } }, { const: { mode: "manual" } }],
+      },
+      expected: { enum: [{ mode: "manual" }] },
+    },
+    {
+      label: "intersects structural literals with the parent const",
+      schema: {
+        const: { mode: "manual" },
+        anyOf: [{ const: { mode: "auto" } }, { const: { mode: "manual" } }],
+      },
+      expected: { enum: [{ mode: "manual" }] },
+    },
+    {
+      label: "keeps literals covered by a broad primitive branch editable",
+      schema: { anyOf: [{ type: "string" }, { const: "auto" }] },
+      expected: { type: "string" },
+    },
+    {
+      label: "keeps literals covered by a broad structural branch editable",
+      schema: { anyOf: [{ type: "object" }, { const: { mode: "auto" } }] },
+      expected: { type: "object" },
+    },
+    {
+      label: "ignores parent-excluded literals in a broad anyOf",
+      schema: { type: "string", anyOf: [{ type: "string" }, { const: 1 }] },
+      expected: { type: "string" },
+    },
+    {
+      label: "ignores parent-excluded literals in a broad oneOf",
+      schema: { type: "string", oneOf: [{ type: "string" }, { const: 1 }] },
+      expected: { type: "string" },
+    },
+    {
+      label: "rejects independent anyOf and oneOf constraints it cannot intersect",
+      schema: {
+        anyOf: [{ type: "boolean" }, { const: "auto" }],
+        oneOf: [{ const: true }, { const: 1 }],
+      },
+      expected: null,
+    },
+  ])("$label", ({ schema, expected }) => {
+    const analysis = analyzeConfigSchema({ type: "object", properties: { mode: schema } });
+    if (expected === null) {
+      expect(analysis.unsupportedPaths).toEqual(["mode"]);
+      expect(analysis.schema?.properties?.mode?.enum).toBeUndefined();
+      return;
+    }
+    expect(analysis.unsupportedPaths).toEqual([]);
+    expect(analysis.schema?.properties?.mode).toMatchObject(expected);
+  });
+
   it("accepts renderable unions", () => {
     const renderableUnionSchema = {
       type: "object",

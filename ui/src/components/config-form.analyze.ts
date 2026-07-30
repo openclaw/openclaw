@@ -37,6 +37,185 @@ function uniqueValues(values: unknown[]): unknown[] {
   return unique;
 }
 
+type FiniteUnionValues = {
+  values: unknown[];
+  nullable: boolean;
+};
+
+function isFiniteJsonScalar(value: unknown): boolean {
+  return (
+    value === null ||
+    typeof value === "boolean" ||
+    typeof value === "string" ||
+    (typeof value === "number" && Number.isFinite(value))
+  );
+}
+
+function equalFiniteJsonScalars(left: unknown, right: unknown): boolean {
+  return isFiniteJsonScalar(left) && isFiniteJsonScalar(right) && left === right;
+}
+
+function equalJsonSchemaValues(left: unknown, right: unknown): boolean {
+  if (isFiniteJsonScalar(left) || isFiniteJsonScalar(right)) {
+    return equalFiniteJsonScalars(left, right);
+  }
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((entry, index) => equalJsonSchemaValues(entry, right[index]))
+    );
+  }
+  if (typeof left !== "object" || left === null || typeof right !== "object" || right === null) {
+    return false;
+  }
+  const leftEntries = Object.entries(left);
+  const rightEntries = Object.entries(right);
+  return (
+    leftEntries.length === rightEntries.length &&
+    leftEntries.every(
+      ([key, value]) =>
+        Object.hasOwn(right, key) &&
+        equalJsonSchemaValues(value, (right as Record<string, unknown>)[key]),
+    )
+  );
+}
+
+function isJsonSchemaValue(value: unknown): boolean {
+  if (isFiniteJsonScalar(value)) {
+    return true;
+  }
+  if (Array.isArray(value)) {
+    return value.every(isJsonSchemaValue);
+  }
+  return (
+    typeof value === "object" && value !== null && Object.values(value).every(isJsonSchemaValue)
+  );
+}
+
+function uniqueJsonSchemaValues(values: unknown[]): unknown[] {
+  const unique: unknown[] = [];
+  for (const value of values) {
+    if (!unique.some((existing) => equalJsonSchemaValues(existing, value))) {
+      unique.push(value);
+    }
+  }
+  return unique;
+}
+
+function matchesFiniteSchemaType(value: unknown, type: JsonSchema["type"]): boolean {
+  if (type === undefined) {
+    return true;
+  }
+  const types = Array.isArray(type) ? type : [type];
+  return types.some((candidate) => {
+    switch (candidate) {
+      case "null":
+        return value === null;
+      case "boolean":
+        return typeof value === "boolean";
+      case "string":
+        return typeof value === "string";
+      case "number":
+        return typeof value === "number" && Number.isFinite(value);
+      case "integer":
+        return typeof value === "number" && Number.isInteger(value);
+      case "object":
+        return typeof value === "object" && value !== null && !Array.isArray(value);
+      case "array":
+        return Array.isArray(value);
+      default:
+        return false;
+    }
+  });
+}
+
+function matchesFiniteSchemaConstraints(value: unknown, schema: JsonSchema): boolean {
+  return (
+    (matchesFiniteSchemaType(value, schema.type) || (value === null && Boolean(schema.nullable))) &&
+    (!Array.isArray(schema.enum) ||
+      schema.enum.some((candidate) => equalJsonSchemaValues(candidate, value))) &&
+    (!("const" in schema) || equalJsonSchemaValues(schema.const, value))
+  );
+}
+
+function hasUnsupportedFiniteSchemaAssertions(
+  schema: JsonSchema,
+  options: { allowUnion: boolean },
+): boolean {
+  return Object.keys(schema).some(
+    (key) =>
+      key !== "type" &&
+      key !== "enum" &&
+      key !== "const" &&
+      !(options.allowUnion && (key === "anyOf" || key === "oneOf")) &&
+      !META_KEYS.has(key) &&
+      key !== "$comment" &&
+      key !== "deprecated" &&
+      key !== "examples" &&
+      key !== "readOnly" &&
+      key !== "writeOnly",
+  );
+}
+
+function finiteUnionValues(
+  schema: JsonSchema,
+  variants: JsonSchema[],
+  options: { exclusive: boolean },
+): FiniteUnionValues | null {
+  if (hasUnsupportedFiniteSchemaAssertions(schema, { allowUnion: true })) {
+    return null;
+  }
+  const branches: unknown[][] = [];
+  for (const variant of variants) {
+    // Assertion keywords such as `not` can narrow a boolean or enum branch.
+    // Decline those variants rather than offering values the Gateway rejects.
+    if (hasUnsupportedFiniteSchemaAssertions(variant, { allowUnion: false })) {
+      return null;
+    }
+    let branch: unknown[];
+    if (Array.isArray(variant.enum)) {
+      if (variant.enum.some((value) => !isJsonSchemaValue(value))) {
+        return null;
+      }
+      branch = variant.enum.filter((value) => matchesFiniteSchemaConstraints(value, variant));
+    } else if ("const" in variant) {
+      if (!isJsonSchemaValue(variant.const)) {
+        return null;
+      }
+      branch = matchesFiniteSchemaConstraints(variant.const, variant) ? [variant.const] : [];
+    } else if (variant.type === "null") {
+      branch = [null];
+    } else if (variant.type === "boolean") {
+      branch = [true, false];
+    } else {
+      return null;
+    }
+    if (
+      variant.nullable &&
+      !branch.some((value) => value === null) &&
+      matchesFiniteSchemaConstraints(null, variant)
+    ) {
+      branch.push(null);
+    }
+    branches.push(uniqueJsonSchemaValues(branch));
+  }
+
+  const values = uniqueJsonSchemaValues(branches.flat()).filter(
+    (value) =>
+      matchesFiniteSchemaConstraints(value, schema) &&
+      (!options.exclusive ||
+        branches.filter((branch) =>
+          branch.some((candidate) => equalJsonSchemaValues(candidate, value)),
+        ).length === 1),
+  );
+  return {
+    values: values.filter((value) => value !== null),
+    nullable: values.some((value) => value === null),
+  };
+}
+
 export function analyzeConfigSchema(raw: unknown): ConfigSchemaAnalysis {
   if (!raw || typeof raw !== "object") {
     return { schema: null, unsupportedPaths: ["<root>"] };
@@ -193,7 +372,7 @@ function normalizeUnion(
   schema: JsonSchema,
   path: Array<string | number>,
 ): ConfigSchemaAnalysis | null {
-  if (schema.allOf) {
+  if (schema.allOf || (schema.anyOf && schema.oneOf)) {
     return null;
   }
   const union = schema.anyOf ?? schema.oneOf;
@@ -239,12 +418,18 @@ function normalizeUnion(
     return secretInput;
   }
 
-  if (literals.length > 0 && remaining.length === 0) {
+  // Boolean branches are finite, too. Keep their two values alongside literal
+  // modes so generated settings such as true | false | "auto" remain editable.
+  const finiteValues =
+    literals.length > 0 || nullable
+      ? finiteUnionValues(schema, union, { exclusive: Boolean(schema.oneOf) })
+      : null;
+  if (finiteValues && (finiteValues.values.length > 0 || finiteValues.nullable)) {
     return {
       schema: {
         ...schema,
-        enum: uniqueValues(literals),
-        nullable,
+        enum: finiteValues.values,
+        nullable: finiteValues.nullable,
         anyOf: undefined,
         oneOf: undefined,
         allOf: undefined,
@@ -256,6 +441,24 @@ function normalizeUnion(
   if (remaining.length === 1) {
     const remainingSchema = remaining[0];
     if (!remainingSchema) {
+      return null;
+    }
+    // Parent assertions can eliminate literal branches entirely. Only live
+    // branches can overlap or prevent a broad primitive from being editable.
+    const compatibleLiterals = literals.filter(
+      (value) => isJsonSchemaValue(value) && matchesFiniteSchemaConstraints(value, schema),
+    );
+    if (
+      literals.length > 0 &&
+      (literals.some((value) => !isJsonSchemaValue(value)) ||
+        (Boolean(schema.oneOf) && compatibleLiterals.length > 0) ||
+        (compatibleLiterals.length > 0 && remainingSchema.type === undefined) ||
+        hasUnsupportedFiniteSchemaAssertions(schema, { allowUnion: true }) ||
+        hasUnsupportedFiniteSchemaAssertions(remainingSchema, { allowUnion: false }) ||
+        !compatibleLiterals.every((value) =>
+          matchesFiniteSchemaConstraints(value, remainingSchema),
+        ))
+    ) {
       return null;
     }
     return normalizeSchemaNode(
