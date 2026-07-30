@@ -63,7 +63,7 @@ const { buildRuntimeConfigHealthMock } = vi.hoisted(() => ({
   buildRuntimeConfigHealthMock: vi.fn<
     (opts?: {
       includeFingerprints?: boolean;
-    }) => Promise<import("../../commands/health.types.js").RuntimeConfigHealthSummary | undefined>
+    }) => Promise<import("../health/types.js").RuntimeConfigHealthSummary | undefined>
   >(async () => undefined),
 }));
 
