@@ -7,6 +7,12 @@ const WHATSAPP_OUTBOUND_MAX_ATTEMPTS = 3;
 const WHATSAPP_OUTBOUND_MIN_DELAY_MS = 500;
 const WHATSAPP_OUTBOUND_MAX_DELAY_MS = 1_000;
 const WHATSAPP_RETRYABLE_OUTBOUND_ERROR_PATTERN = /closed|reset|disconnect/i;
+// A transport-level timeout can occur after the message reached WhatsApp, so any
+// error whose text mentions a timeout is treated as ambiguous-delivery and not
+// retried — even if it also mentions a disconnect keyword (e.g. "request timed
+// out after socket closed"), because the timeout ambiguity takes precedence.
+// Covers the common spellings: "timed out", "timeout", "TimeoutError", ETIMEDOUT.
+const WHATSAPP_OUTBOUND_TIMEOUT_ERROR_PATTERN = /timed\s*out|timeout|ETIMEDOUT/i;
 
 class WhatsAppOutboundRetryError extends Error {
   constructor(readonly original: unknown) {
@@ -20,11 +26,16 @@ function isRetryableWhatsAppOutboundError(error: unknown): boolean {
   // and a transport-layer "timed out" (Baileys/axios) can occur after the
   // message reached WhatsApp, so neither is retried. Only errors that prove the
   // socket died (closed/reset/disconnect) are retried, matching
-  // shouldClearSocketRefAfterSendFailure.
+  // shouldClearSocketRefAfterSendFailure. A timeout in the text wins over a
+  // disconnect keyword to avoid replaying a possibly-delivered message.
   if (isWhatsAppSocketOperationTimeoutError(error)) {
     return false;
   }
-  return WHATSAPP_RETRYABLE_OUTBOUND_ERROR_PATTERN.test(formatError(error));
+  const text = formatError(error);
+  if (WHATSAPP_OUTBOUND_TIMEOUT_ERROR_PATTERN.test(text)) {
+    return false;
+  }
+  return WHATSAPP_RETRYABLE_OUTBOUND_ERROR_PATTERN.test(text);
 }
 
 type WhatsAppOutboundRetryInfo = {
