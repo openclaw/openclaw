@@ -19,6 +19,8 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import {
   fetchWithSsrFGuard,
+  fetchWithSsrFGuardAndRequestSendState,
+  type GuardedFetchRequestSendState,
   withTrustedEnvProxyGuardedFetchMode,
 } from "../infra/net/fetch-guard.js";
 import { wrapGuardedBodyStream } from "../infra/net/guarded-body-stream.js";
@@ -680,23 +682,38 @@ function isRetryableAnthropicTransportError(error: unknown): boolean {
   );
 }
 
-function shouldRetryAnthropicTransportFailure(params: {
+function isReplayableAnthropicTransportRequest(params: {
   model: Model;
   request: Request | undefined;
   init: RequestInit | undefined;
-  signal: AbortSignal | undefined;
-  error: unknown;
 }): boolean {
   if (
     params.model.provider !== "anthropic" ||
     params.model.api !== "anthropic-messages" ||
-    params.signal?.aborted ||
     params.request
   ) {
     return false;
   }
   const body = params.init?.body;
   if (body != null && typeof body !== "string") {
+    return false;
+  }
+  return true;
+}
+
+function shouldRetryAnthropicTransportFailure(params: {
+  model: Model;
+  request: Request | undefined;
+  init: RequestInit | undefined;
+  signal: AbortSignal | undefined;
+  requestSendState: GuardedFetchRequestSendState;
+  error: unknown;
+}): boolean {
+  if (
+    params.signal?.aborted ||
+    params.requestSendState !== "not-sent" ||
+    !isReplayableAnthropicTransportRequest(params)
+  ) {
     return false;
   }
   return isRetryableAnthropicTransportError(params.error);
@@ -956,12 +973,24 @@ export function buildGuardedModelFetch(
         rawHeaders,
         localServiceSignal,
       );
-      const runGuardedFetch = async () =>
-        await fetchWithSsrFGuard(
-          useEnvProxy
-            ? withTrustedEnvProxyGuardedFetchMode(guardedFetchOptions)
-            : guardedFetchOptions,
-        );
+      const guardedFetchParams = useEnvProxy
+        ? withTrustedEnvProxyGuardedFetchMode(guardedFetchOptions)
+        : guardedFetchOptions;
+      const shouldTrackRequestSend = isReplayableAnthropicTransportRequest({
+        model,
+        request,
+        init: baseInit,
+      });
+      let requestSendState: GuardedFetchRequestSendState = "unknown";
+      const runGuardedFetch = async () => {
+        requestSendState = "unknown";
+        return shouldTrackRequestSend
+          ? await fetchWithSsrFGuardAndRequestSendState(
+              guardedFetchParams,
+              (state) => (requestSendState = state),
+            )
+          : await fetchWithSsrFGuard(guardedFetchParams);
+      };
       try {
         result = await runGuardedFetch();
       } catch (error) {
@@ -971,13 +1000,14 @@ export function buildGuardedModelFetch(
             request,
             init: baseInit,
             signal: baseSignal,
+            requestSendState,
             error,
           })
         ) {
           throw error;
         }
-        // Anthropic clients prepare JSON text. Retry once through
-        // the guard so a dead socket gets a fresh dispatcher before model fallback.
+        // Anthropic clients prepare JSON text. Retry only when the guarded transport
+        // proves the first attempt did not finish sending the request body.
         log.warn(
           `[model-fetch] retry provider=${model.provider} api=${model.api} model=${model.id} ` +
             `attempt=2/2 elapsedMs=${Date.now() - fetchStartedAt} ${summarizeError(error)}`,

@@ -54,21 +54,16 @@ describe("guarded model fetch integration", () => {
     }
   });
 
-  it("retries an Anthropic socket close before response headers", async () => {
+  it("does not retry an Anthropic POST received before the socket closes", async () => {
     let requests = 0;
     const bodies: string[] = [];
-    const server = createServer((request, response) => {
+    const server = createServer((request) => {
       requests += 1;
       const chunks: Buffer[] = [];
       request.on("data", (chunk: Buffer) => chunks.push(chunk));
       request.on("end", () => {
         bodies.push(Buffer.concat(chunks).toString("utf8"));
-        if (requests === 1) {
-          request.socket.destroy();
-          return;
-        }
-        response.writeHead(200, { "content-type": "text/event-stream" });
-        response.end('event: message_stop\ndata: {"type":"message_stop"}\n\n');
+        request.socket.destroy();
       });
     });
     await new Promise<void>((resolve, reject) => {
@@ -87,15 +82,16 @@ describe("guarded model fetch integration", () => {
       } as unknown as Model<"anthropic-messages">;
       const body = JSON.stringify({ model: "claude-opus-4-7", stream: true });
 
-      const response = await buildGuardedModelFetch(model)(`${baseUrl}/messages`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body,
-      });
+      await expect(
+        buildGuardedModelFetch(model)(`${baseUrl}/messages`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body,
+        }),
+      ).rejects.toThrow();
 
-      await expect(response.text()).resolves.toContain('"type":"message_stop"');
-      expect(requests).toBe(2);
-      expect(bodies).toEqual([body, body]);
+      expect(requests).toBe(1);
+      expect(bodies).toEqual([body]);
     } finally {
       await new Promise<void>((resolve) => {
         server.close(() => resolve());
