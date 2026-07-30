@@ -12,6 +12,7 @@ import { VoiceCallConfigSchema } from "../config.js";
 import type { VoiceCallProvider } from "../providers/base.js";
 import { setVoiceCallStateRuntime } from "../runtime-state.js";
 import type { AnswerCallInput, HangupCallInput, NormalizedEvent } from "../types.js";
+import { CallerTurnState } from "./caller-turn.js";
 import type { CallManagerContext } from "./context.js";
 import { processEvent } from "./events.js";
 import { speakInitialMessage } from "./outbound.js";
@@ -89,8 +90,9 @@ afterEach(async () => {
 
 function createContext(overrides: Partial<CallManagerContext> = {}): CallManagerContext {
   const storePath = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-voice-call-events-test-"));
+  const activeCalls: CallManagerContext["activeCalls"] = new Map();
   const ctx: CallManagerContext = {
-    activeCalls: new Map(),
+    activeCalls,
     providerCallIdMap: new Map(),
     processedEventIds: new Set(),
     rejectedProviderCallIds: new Set(),
@@ -103,6 +105,7 @@ function createContext(overrides: Partial<CallManagerContext> = {}): CallManager
     storePath,
     webhookUrl: null,
     activeTurnCalls: new Set(),
+    callerTurns: new CallerTurnState((callId) => activeCalls.has(callId)),
     transcriptWaiters: new Map(),
     maxDurationTimers: new Map(),
     initialMessageInFlight: new Set(),
@@ -579,6 +582,38 @@ describe("processEvent (functional)", () => {
 
     processEvent(ctx, event);
     expect(ctx.activeCalls.size).toBe(0);
+  });
+
+  it("clears caller-turn state when a call ends", () => {
+    const now = Date.now();
+    const ctx = createContext();
+    ctx.activeCalls.set("call-ended", {
+      callId: "call-ended",
+      providerCallId: "provider-ended",
+      provider: "twilio",
+      direction: "inbound",
+      state: "active",
+      from: "+15550000002",
+      to: "+15550000000",
+      startedAt: now,
+      transcript: [],
+      processedEventIds: [],
+      metadata: {},
+    });
+    ctx.providerCallIdMap.set("provider-ended", "call-ended");
+    expect(ctx.callerTurns.beginSpeech("call-ended")).toBe(true);
+
+    processEvent(ctx, {
+      id: "evt-ended",
+      type: "call.ended",
+      callId: "call-ended",
+      providerCallId: "provider-ended",
+      timestamp: now + 1,
+      reason: "completed",
+    });
+
+    expect(ctx.callerTurns.isSpeaking("call-ended")).toBe(false);
+    expect(ctx.activeCalls.has("call-ended")).toBe(false);
   });
 
   it("auto-registers externally-initiated outbound-api calls with correct direction", () => {

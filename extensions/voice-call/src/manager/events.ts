@@ -30,6 +30,7 @@ type EventContext = Pick<
   | "provider"
   | "config"
   | "storePath"
+  | "callerTurns"
   | "transcriptWaiters"
   | "maxDurationTimers"
   | "onCallAnswered"

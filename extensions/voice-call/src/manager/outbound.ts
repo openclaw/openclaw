@@ -49,6 +49,7 @@ type SpeakContext = Pick<
   | "provider"
   | "config"
   | "storePath"
+  | "callerTurns"
   | "transcriptWaiters"
   | "maxDurationTimers"
 >;
@@ -61,6 +62,7 @@ type ConversationContext = Pick<
   | "config"
   | "storePath"
   | "activeTurnCalls"
+  | "callerTurns"
   | "transcriptWaiters"
   | "maxDurationTimers"
   | "initialMessageInFlight"
@@ -74,7 +76,8 @@ type EndCallContext = Pick<
   | "storePath"
   | "transcriptWaiters"
   | "maxDurationTimers"
->;
+> &
+  Partial<Pick<CallManagerContext, "callerTurns">>;
 
 type ConnectedCallContext = Pick<CallManagerContext, "activeCalls" | "provider">;
 
@@ -284,6 +287,9 @@ export async function speak(
   const connected = requireConnectedCall(ctx, callId);
   if (!connected.ok) {
     return { success: false, error: connected.error };
+  }
+  if (ctx.callerTurns.isSpeaking(callId)) {
+    return { success: false, error: "Caller is speaking" };
   }
   const { call, providerCallId, provider } = connected;
 

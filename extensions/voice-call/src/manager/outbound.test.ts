@@ -60,7 +60,10 @@ vi.mock("./twiml.js", () => ({
   generateNotifyTwiml: generateNotifyTwimlMock,
 }));
 
+import { CallerTurnState } from "./caller-turn.js";
 import { endCall, initiateCall, sendDtmf, speak, speakInitialMessage } from "./outbound.js";
+
+const createCallerTurns = () => new CallerTurnState((callId) => callId === "call-1");
 
 function createActiveCallContext(params: { hangupCall?: ReturnType<typeof vi.fn> } = {}) {
   const call = { callId: "call-1", providerCallId: "provider-1", state: "active" };
@@ -72,6 +75,7 @@ function createActiveCallContext(params: { hangupCall?: ReturnType<typeof vi.fn>
     storePath: "/tmp/voice-call.json",
     transcriptWaiters: new Map(),
     maxDurationTimers: new Map(),
+    callerTurns: createCallerTurns(),
   };
 
   return { call, ctx, hangupCall };
@@ -352,6 +356,7 @@ describe("voice-call outbound helpers", () => {
       provider: { name: "twilio", playTts },
       config: { tts: { provider: "openai", providers: { openai: { voice: "alloy" } } } },
       storePath: "/tmp/voice-call.json",
+      callerTurns: createCallerTurns(),
     };
 
     await expect(
@@ -377,6 +382,28 @@ describe("voice-call outbound helpers", () => {
     expect(transitionStateMock).toHaveBeenLastCalledWith(call, "listening");
   });
 
+  it("does not start background playback while the caller is speaking", async () => {
+    const playTts = vi.fn(async () => {});
+    const callerTurns = createCallerTurns();
+    const ctx = {
+      activeCalls: new Map([
+        ["call-1", { callId: "call-1", providerCallId: "provider-1", state: "active" }],
+      ]),
+      providerCallIdMap: new Map(),
+      provider: { name: "twilio", playTts },
+      config: {},
+      storePath: "/tmp/voice-call.json",
+      callerTurns,
+    };
+    expect(callerTurns.beginSpeech("call-1")).toBe(true);
+
+    await expect(speak(ctx as never, "call-1", "stale background reply")).resolves.toEqual({
+      success: false,
+      error: "Caller is speaking",
+    });
+    expect(playTts).not.toHaveBeenCalled();
+  });
+
   it("passes configured voice ids through to Telnyx speak", async () => {
     const call = { callId: "call-1", providerCallId: "provider-1", state: "active" };
     const playTts = vi.fn(async () => {});
@@ -395,6 +422,7 @@ describe("voice-call outbound helpers", () => {
         },
       },
       storePath: "/tmp/voice-call.json",
+      callerTurns: createCallerTurns(),
     };
 
     await expect(speak(ctx as never, "call-1", "hello")).resolves.toEqual({ success: true });
@@ -429,6 +457,7 @@ describe("voice-call outbound helpers", () => {
         tts: { provider: "openai", providers: { openai: { voice: "alloy" } } },
       },
       storePath: "/tmp/voice-call.json",
+      callerTurns: createCallerTurns(),
     };
 
     try {
@@ -466,6 +495,7 @@ describe("voice-call outbound helpers", () => {
         },
       },
       storePath: "/tmp/voice-call.json",
+      callerTurns: createCallerTurns(),
     };
 
     await expect(speak(ctx as never, "call-1", "hello")).resolves.toEqual({ success: true });
@@ -500,6 +530,7 @@ describe("voice-call outbound helpers", () => {
         },
       },
       storePath: "/tmp/voice-call.json",
+      callerTurns: createCallerTurns(),
     };
 
     await expect(speak(ctx as never, "call-1", "hello")).resolves.toEqual({ success: true });

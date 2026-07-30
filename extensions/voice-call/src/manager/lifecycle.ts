@@ -11,7 +11,7 @@ type CallLifecycleContext = Pick<
   CallManagerContext,
   "activeCalls" | "providerCallIdMap" | "storePath"
 > &
-  Partial<Pick<CallManagerContext, "transcriptWaiters" | "maxDurationTimers">>;
+  Partial<Pick<CallManagerContext, "callerTurns" | "transcriptWaiters" | "maxDurationTimers">>;
 
 /** Remove a provider-call mapping only when it still points at this call. */
 function removeProviderCallMapping(
@@ -53,6 +53,7 @@ export function finalizeCall(params: {
     );
   }
 
+  ctx.callerTurns?.clear(call.callId);
   ctx.activeCalls.delete(call.callId);
   removeProviderCallMapping(ctx.providerCallIdMap, call);
 }
