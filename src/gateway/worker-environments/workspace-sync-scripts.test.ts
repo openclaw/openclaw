@@ -33,31 +33,55 @@ async function fixture() {
   let workspace = path.join(root, "workspace");
   const bin = path.join(root, "bin");
   const extraProcessPath = path.join(root, "extra-process.txt");
+  const stalledProcessProbePath = path.join(root, "stall-process-probe");
+  const stalledProcessProbePidPath = path.join(root, "stall-process-probe.pid");
+  const stalledProcessProbeTargetPath = path.join(root, "stall-process-probe.target");
+  const failedProcessProbeTargetPath = path.join(root, "fail-process-probe.target");
+  const failedProcessScanPath = path.join(root, "fail-process-scan");
+  const failedProcessScanStatePath = path.join(root, "fail-process-scan.state");
   await fs.mkdir(home);
   await fs.mkdir(workspace);
   workspace = await fs.realpath(workspace);
   await fs.mkdir(bin);
   await fs.writeFile(
     path.join(bin, "ps"),
-    '#!/bin/sh\ncase "$*" in\n  *"stat=,lstart= -p"*|*"lstart= -p"*) exec /bin/ps "$@" ;;\n  *) printf "%s %s %s S Tue Jul 15 08:00:00 2026\\n" "$$" "$PPID" "$(id -u)"; if [ -f "$OPENCLAW_TEST_PS_EXTRA" ]; then extra_pid=$(cat "$OPENCLAW_TEST_PS_EXTRA"); /bin/ps -o pid=,ppid=,uid=,stat=,lstart= -p "$extra_pid"; fi ;;\nesac\n',
+    '#!/bin/sh\nstall() { printf "%s\\n" "$$" >> "$OPENCLAW_TEST_PS_STALL_PID"; trap "" TERM; exec sleep 30; }\nif [ -f "$OPENCLAW_TEST_PS_STALL" ]; then rm -f "$OPENCLAW_TEST_PS_STALL"; stall; fi\nif [ -f "$OPENCLAW_TEST_PS_STALL_TARGET" ]; then target=""; for argument in "$@"; do target=$argument; done; case "$*" in *"stat=,lstart= -p"*) ;; *"lstart= -p"*) if grep -qx "$target" "$OPENCLAW_TEST_PS_STALL_TARGET"; then stall; fi ;; esac; fi\nif [ -f "$OPENCLAW_TEST_PS_FAIL_TARGET" ]; then target=""; for argument in "$@"; do target=$argument; done; case "$*" in *"stat=,lstart= -p"*) ;; *"lstart= -p"*) if grep -qx "$target" "$OPENCLAW_TEST_PS_FAIL_TARGET"; then exit 2; fi ;; esac; fi\ncase "$*" in *"pid=,ppid=,uid=,stat=,lstart="*) if [ -f "$OPENCLAW_TEST_PS_FAIL_SCAN.seen" ]; then extra_pid=$(cat "$OPENCLAW_TEST_PS_EXTRA"); /bin/ps -o stat= -p "$extra_pid" > "$OPENCLAW_TEST_PS_FAIL_SCAN_STATE"; exit 2; fi ;; esac\ncase "$*" in\n  *"stat=,lstart= -p"*|*"lstart= -p"*) exec /bin/ps "$@" ;;\n  *) printf "%s %s %s S Tue Jul 15 08:00:00 2026\\n" "$$" "$PPID" "$(id -u)"; if [ -f "$OPENCLAW_TEST_PS_EXTRA" ]; then extra_pid=$(cat "$OPENCLAW_TEST_PS_EXTRA"); /bin/ps -o pid=,ppid=,uid=,stat=,lstart= -p "$extra_pid"; fi; if [ -f "$OPENCLAW_TEST_PS_FAIL_SCAN" ]; then touch "$OPENCLAW_TEST_PS_FAIL_SCAN.seen"; fi ;;\nesac\n',
   );
   await fs.chmod(path.join(bin, "ps"), 0o755);
   return {
     home,
     workspace,
     extraProcessPath,
+    stalledProcessProbePath,
+    stalledProcessProbePidPath,
+    stalledProcessProbeTargetPath,
+    failedProcessProbeTargetPath,
+    failedProcessScanPath,
+    failedProcessScanStatePath,
     env: {
       ...process.env,
       HOME: home,
       OPENCLAW_TEST_PS_EXTRA: extraProcessPath,
+      OPENCLAW_TEST_PS_STALL: stalledProcessProbePath,
+      OPENCLAW_TEST_PS_STALL_PID: stalledProcessProbePidPath,
+      OPENCLAW_TEST_PS_STALL_TARGET: stalledProcessProbeTargetPath,
+      OPENCLAW_TEST_PS_FAIL_TARGET: failedProcessProbeTargetPath,
+      OPENCLAW_TEST_PS_FAIL_SCAN: failedProcessScanPath,
+      OPENCLAW_TEST_PS_FAIL_SCAN_STATE: failedProcessScanStatePath,
       PATH: `${bin}:${process.env.PATH ?? ""}`,
     },
   };
 }
 
-async function quiesce(input: Awaited<ReturnType<typeof fixture>>) {
+async function quiesce(input: Awaited<ReturnType<typeof fixture>>, watchdogTimeoutMs = 10_000) {
   const result = await runCommandWithTimeout(
-    [process.execPath, "-e", REMOTE_WORKSPACE_QUIESCE_JS, input.workspace, "10000"],
+    [
+      process.execPath,
+      "-e",
+      REMOTE_WORKSPACE_QUIESCE_JS,
+      input.workspace,
+      String(watchdogTimeoutMs),
+    ],
     { timeoutMs: 10_000, baseEnv: input.env },
   );
   expect(result.code).toBe(0);
@@ -69,6 +93,39 @@ async function quiesce(input: Awaited<ReturnType<typeof fixture>>) {
 function leasePath(home: string, workspace: string, nonce: string) {
   const key = createHash("sha256").update(workspace).digest("hex");
   return path.join(home, ".openclaw-worker", "quiescence", `${key}.${nonce}.json`);
+}
+
+async function processStart(pid: number) {
+  const result = await runCommandWithTimeout(["ps", "-o", "lstart=", "-p", String(pid)], {
+    timeoutMs: 2_000,
+  });
+  expect(result.code).toBe(0);
+  return result.stdout.trim();
+}
+
+async function expectProcessState(pid: number, suspended: boolean, timeout = 5_000) {
+  await vi.waitFor(
+    async () => {
+      const result = await runCommandWithTimeout(["ps", "-o", "stat=", "-p", String(pid)], {
+        timeoutMs: 2_000,
+      });
+      expect(result.code).toBe(0);
+      expect(result.stdout.trim().startsWith("T")).toBe(suspended);
+    },
+    { interval: 50, timeout },
+  );
+}
+
+async function terminate(child: ReturnType<typeof spawn>) {
+  if (child.pid) {
+    try {
+      process.kill(child.pid, "SIGCONT");
+    } catch {}
+  }
+  child.kill("SIGTERM");
+  if (child.exitCode === null) {
+    await once(child, "exit");
+  }
 }
 
 async function resume(input: Awaited<ReturnType<typeof fixture>>, nonce: string) {
@@ -125,6 +182,38 @@ describe("remote workspace quiescence scripts", () => {
     });
     await resume(input, secondNonce);
   });
+
+  it("uses bounded recovery when quiescence fails after stopping a process", async () => {
+    const input = await fixture();
+    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      stdio: "ignore",
+    });
+    const childPid = child.pid!;
+
+    try {
+      await fs.writeFile(input.extraProcessPath, `${childPid}\n`);
+      await fs.writeFile(input.failedProcessScanPath, "fail after first scan\n");
+
+      const result = await runCommandWithTimeout(
+        [process.execPath, "-e", REMOTE_WORKSPACE_QUIESCE_JS, input.workspace, "10000"],
+        { timeoutMs: 10_000, baseEnv: input.env },
+      );
+
+      expect(result.code).not.toBe(0);
+      expect(
+        (await fs.readFile(input.failedProcessScanStatePath, "utf8")).trim().startsWith("T"),
+      ).toBe(true);
+      await expectProcessState(childPid, false);
+      const leaseDirectory = path.join(input.home, ".openclaw-worker", "quiescence");
+      const leases = (await fs.readdir(leaseDirectory)).filter((name) => name.endsWith(".json"));
+      expect(leases).toEqual([]);
+    } finally {
+      await fs.rm(input.extraProcessPath, { force: true });
+      await fs.rm(input.failedProcessScanPath, { force: true });
+      await fs.rm(`${input.failedProcessScanPath}.seen`, { force: true });
+      await terminate(child);
+    }
+  }, 15_000);
 
   it("proves the lease is active and renews its watchdog deadline", async () => {
     const input = await fixture();
@@ -203,6 +292,160 @@ describe("remote workspace quiescence scripts", () => {
     );
     expect(result.code).not.toBe(0);
   });
+
+  it("retries a signal-resistant stalled watchdog process probe before releasing the lease", async () => {
+    const input = await fixture();
+    const nonce = await quiesce(input, 1_000);
+    const leaseFile = leasePath(input.home, input.workspace, nonce);
+    const lease = JSON.parse(await fs.readFile(leaseFile, "utf8")) as {
+      watchdog: { pid: number; start: string };
+    };
+    await fs.writeFile(
+      leaseFile,
+      JSON.stringify({
+        ...lease,
+        expiresAtMs: Date.now() + 1_000,
+        processes: [{ pid: process.pid, start: await processStart(process.pid) }],
+      }),
+    );
+    await fs.writeFile(input.stalledProcessProbePath, "stall\n");
+
+    let stalledPid = 0;
+    try {
+      await vi.waitFor(
+        async () => {
+          stalledPid = Number((await fs.readFile(input.stalledProcessProbePidPath, "utf8")).trim());
+          expect(stalledPid).toBeGreaterThan(0);
+        },
+        { interval: 50, timeout: 2_500 },
+      );
+      await vi.waitFor(
+        async () => {
+          await expect(fs.access(leaseFile)).rejects.toThrow();
+        },
+        { interval: 50, timeout: 4_000 },
+      );
+    } finally {
+      try {
+        process.kill(lease.watchdog.pid, "SIGKILL");
+      } catch {}
+      if (stalledPid > 0) {
+        try {
+          process.kill(stalledPid, "SIGKILL");
+        } catch {}
+      }
+    }
+  }, 6_000);
+
+  it.each([
+    {
+      probePath: "stalledProcessProbeTargetPath" as const,
+      recoveryState: "probe-timeout",
+      message: "workspace quiescence recovery timed out",
+    },
+    {
+      probePath: "failedProcessProbeTargetPath" as const,
+      recoveryState: "recovery-failed",
+      message: "workspace quiescence recovery failed",
+    },
+  ])(
+    "records $recoveryState without blocking identity-matched processes",
+    async ({ probePath, recoveryState, message }) => {
+      const input = await fixture();
+      const nonce = await quiesce(input, 1_000);
+      const leaseFile = leasePath(input.home, input.workspace, nonce);
+      const lease = JSON.parse(await fs.readFile(leaseFile, "utf8")) as {
+        watchdog: { pid: number; start: string };
+      };
+      const stalled = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+        stdio: "ignore",
+      });
+      const healthy = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+        stdio: "ignore",
+      });
+      const stalledPid = stalled.pid!;
+      const healthyPid = healthy.pid!;
+      const targetPath = input[probePath];
+
+      try {
+        const entries = [
+          { pid: stalledPid, start: await processStart(stalledPid) },
+          { pid: healthyPid, start: await processStart(healthyPid) },
+        ];
+        process.kill(stalledPid, "SIGSTOP");
+        process.kill(healthyPid, "SIGSTOP");
+        await Promise.all([
+          expectProcessState(stalledPid, true),
+          expectProcessState(healthyPid, true),
+        ]);
+        await fs.writeFile(
+          leaseFile,
+          JSON.stringify({
+            ...lease,
+            expiresAtMs: Date.now() + 1_000,
+            processes: entries,
+          }),
+        );
+        await fs.writeFile(targetPath, `${stalledPid}\n`);
+
+        await expectProcessState(healthyPid, false, 8_000);
+        await vi.waitFor(
+          async () => {
+            const terminal = JSON.parse(await fs.readFile(leaseFile, "utf8")) as {
+              watchdog: unknown;
+              processes: Array<{ pid: number }>;
+              recovery?: { state: string; failedAtMs: number };
+            };
+            expect(terminal.watchdog).toBeNull();
+            expect(terminal.processes.map((entry) => entry.pid)).toEqual([stalledPid]);
+            expect(terminal.recovery).toMatchObject({
+              state: recoveryState,
+              failedAtMs: expect.any(Number),
+            });
+          },
+          { interval: 50, timeout: 8_000 },
+        );
+        await expectProcessState(stalledPid, true);
+
+        const renewResult = await runCommandWithTimeout(
+          [
+            process.execPath,
+            "-e",
+            REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
+            input.workspace,
+            nonce,
+            "20000",
+          ],
+          { timeoutMs: 10_000, baseEnv: input.env },
+        );
+        expect(renewResult.code).not.toBe(0);
+        expect(renewResult.stderr).toContain(message);
+
+        const failedResume = await runCommandWithTimeout(
+          [process.execPath, "-e", REMOTE_WORKSPACE_RESUME_JS, input.workspace, nonce],
+          { timeoutMs: 8_000, baseEnv: input.env },
+        );
+        expect(failedResume.code).not.toBe(0);
+        expect(failedResume.stderr).toContain(message);
+        await expect(fs.access(leaseFile)).resolves.toBeUndefined();
+
+        await fs.rm(targetPath, { force: true });
+        await resume(input, nonce);
+        await expectProcessState(stalledPid, false);
+        await expect(fs.access(leaseFile)).rejects.toThrow();
+      } finally {
+        await fs.rm(targetPath, { force: true });
+        try {
+          await resume(input, nonce);
+        } catch {}
+        try {
+          process.kill(lease.watchdog.pid, "SIGKILL");
+        } catch {}
+        await Promise.all([terminate(stalled), terminate(healthy)]);
+      }
+    },
+    20_000,
+  );
 });
 
 describe("remote workspace manifest script", () => {
