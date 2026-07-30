@@ -31,6 +31,8 @@ type NormalizeReplyOptions = {
   stripHeartbeat?: boolean;
   silentToken?: string;
   transformReplyPayload?: (payload: ReplyPayload) => ReplyPayload | null;
+  /** Exact finalized inbound prompt context, owned and bound by the active reply turn. */
+  conversationContext?: string;
   onSkip?: (reason: NormalizeReplySkipReason) => void;
 };
 
@@ -104,7 +106,10 @@ export function normalizeReplyPayload(
   }
 
   if (text) {
-    text = sanitizeUserFacingText(text, { errorContext: Boolean(payload.isError) });
+    text = sanitizeUserFacingText(text, {
+      errorContext: Boolean(payload.isError),
+      conversationContext: opts.conversationContext,
+    });
   }
   if (!hasContent(text)) {
     opts.onSkip?.("empty");

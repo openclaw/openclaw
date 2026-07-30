@@ -149,6 +149,79 @@ describe("normalizeReplyPayload", () => {
     expect(reply.channelData).toEqual(payload.channelData);
   });
 
+  it("skips a bare empty tool placeholder using the existing empty-reply contract", () => {
+    const reasons: string[] = [];
+
+    expect(
+      normalizeReplyPayload(
+        { text: "  (no output)\r\n" },
+        { onSkip: (reason) => reasons.push(reason) },
+      ),
+    ).toBeNull();
+    expect(reasons).toEqual(["empty"]);
+  });
+
+  it("preserves media and structured payloads when an empty tool placeholder is stripped", () => {
+    const media = expectNormalizedReply(
+      normalizeReplyPayload({
+        text: "(no output)",
+        mediaUrl: "https://example.com/photo.jpg",
+      }),
+    );
+    expect(media).toMatchObject({ text: "", mediaUrl: "https://example.com/photo.jpg" });
+
+    const channelData = {
+      line: { flexMessage: { type: "bubble" } },
+    };
+    expect(normalizeReplyPayload({ text: "(no output)", channelData })).toMatchObject({
+      text: "",
+      channelData,
+    });
+  });
+
+  it("preserves quoted and fenced empty-output examples as actual assistant replies", () => {
+    for (const text of [
+      "> (no output)\n\nThis is what the command printed.",
+      "```text\n(no output)\n```",
+    ]) {
+      expect(normalizeReplyPayload({ text })).toMatchObject({ text });
+    }
+  });
+
+  it("removes copied current-message context before final reply dispatch", () => {
+    const conversationContext = [
+      "Current message priority: high",
+      "[Current message - respond to this]",
+      "[Telegram 2026-05-05T20:20:00Z] Danny: ping",
+    ].join("\n");
+    const text = `${conversationContext}\n\nPong.`;
+
+    expect(normalizeReplyPayload({ text }, { conversationContext })).toMatchObject({
+      text: "Pong.",
+    });
+  });
+
+  it("removes exactly the verified multiline inbound context and keeps the full reply", () => {
+    const conversationContext = [
+      "[Current message - respond to this]",
+      "[Telegram] first inbound paragraph",
+      "",
+      "second inbound paragraph",
+      "",
+      "```text",
+      "private inbound snippet",
+      "```",
+    ].join("\n");
+    const visibleReply = "First reply paragraph.\n\nSecond reply paragraph.";
+
+    expect(
+      normalizeReplyPayload(
+        { text: `${conversationContext}\n\n${visibleReply}` },
+        { conversationContext },
+      ),
+    ).toMatchObject({ text: visibleReply });
+  });
+
   it("records skip reasons for silent, empty, and internal artifact payloads", () => {
     const cases = [
       { name: "silent", payload: { text: SILENT_REPLY_TOKEN }, reason: "silent" },

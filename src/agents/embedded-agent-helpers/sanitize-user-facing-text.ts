@@ -6,6 +6,10 @@ import {
   normalizeOptionalLowercaseString,
 } from "../../../packages/normalization-core/src/string-coerce.js";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
+import {
+  CURRENT_MESSAGE_MARKER,
+  HISTORY_CONTEXT_MARKER,
+} from "../../auto-reply/reply/conversation-context-markers.js";
 import { stripInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
 import {
   extractLeadingHttpStatus,
@@ -24,6 +28,7 @@ import {
   stripToolCallXmlTags,
 } from "../../shared/text/assistant-visible-text.js";
 import { stripFinalTags } from "../../shared/text/final-tags.js";
+import { EXEC_NO_OUTPUT_PLACEHOLDER } from "../bash-tools.exec-output.js";
 import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
 import { stripInternalRuntimeContext } from "../internal-runtime-context.js";
 import { stableStringify } from "../stable-stringify.js";
@@ -374,15 +379,153 @@ function stripFinalTagsFromText(text: unknown): string {
   return stripFinalTags(normalized);
 }
 
-function stripToolCallsOmittedPlaceholderLines(text: string): string {
-  let result = "";
+type MarkdownCodeFence = { marker: string };
+
+function advanceMarkdownCodeFence(
+  line: string,
+  fence: MarkdownCodeFence | undefined,
+): { fence: MarkdownCodeFence | undefined; isFenceLine: boolean } {
+  const match = /^[ ]{0,3}(`{3,}|~{3,})(.*)$/u.exec(line);
+  if (!match) {
+    return { fence, isFenceLine: false };
+  }
+  const marker = match[1];
+  if (!marker) {
+    return { fence, isFenceLine: false };
+  }
+  if (!fence) {
+    return { fence: { marker }, isFenceLine: true };
+  }
+  if (marker[0] === fence.marker[0] && marker.length >= fence.marker.length && !match[2]?.trim()) {
+    return { fence: undefined, isFenceLine: true };
+  }
+  return { fence, isFenceLine: false };
+}
+
+function hasUnfencedConversationContextMarker(text: string): boolean {
+  let fence: MarkdownCodeFence | undefined;
+  for (const line of text.split(/\r?\n/u)) {
+    const wasInsideFence = Boolean(fence);
+    const advanced = advanceMarkdownCodeFence(line, fence);
+    fence = advanced.fence;
+    if (wasInsideFence || advanced.isFenceLine || /^(?: {4}|\t)/u.test(line)) {
+      continue;
+    }
+    const trimmed = line.trim();
+    if (trimmed === CURRENT_MESSAGE_MARKER || trimmed === HISTORY_CONTEXT_MARKER) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isOffsetInsideMarkdownCodeFence(text: string, offset: number): boolean {
+  let fence: MarkdownCodeFence | undefined;
+  let start = 0;
+  while (start < offset) {
+    const newlineIndex = text.indexOf("\n", start);
+    if (newlineIndex === -1 || newlineIndex >= offset) {
+      break;
+    }
+    const line = text.slice(start, newlineIndex).replace(/\r$/, "");
+    fence = advanceMarkdownCodeFence(line, fence).fence;
+    start = newlineIndex + 1;
+  }
+  return Boolean(fence);
+}
+
+function stripVerifiedConversationContext(text: string, conversationContext?: string): string {
+  const source = conversationContext?.trim();
+  if (!source || !hasUnfencedConversationContextMarker(source)) {
+    return text;
+  }
+  const lfSource = source.replace(/\r\n?/gu, "\n");
+  const candidates = new Set([source, lfSource, lfSource.replace(/\n/gu, "\r\n")]);
+  let result = text;
+  for (const candidate of candidates) {
+    let fromIndex = 0;
+    while (fromIndex < result.length) {
+      const index = result.indexOf(candidate, fromIndex);
+      if (index === -1) {
+        break;
+      }
+      const startsAtLineBoundary = index === 0 || result[index - 1] === "\n";
+      const endsAtLineBoundary =
+        index + candidate.length === result.length ||
+        result[index + candidate.length] === "\n" ||
+        (result[index + candidate.length] === "\r" &&
+          result[index + candidate.length + 1] === "\n");
+      if (
+        startsAtLineBoundary &&
+        endsAtLineBoundary &&
+        !isOffsetInsideMarkdownCodeFence(result, index)
+      ) {
+        // Exact inbound provenance is the only safe end boundary for multiline
+        // context: blank lines may belong to either the message or the real reply.
+        result = result.slice(0, index) + result.slice(index + candidate.length);
+        fromIndex = index;
+        continue;
+      }
+      fromIndex = index + candidate.length;
+    }
+  }
+  return result;
+}
+
+function stripCopiedConversationContextMarkerLines(text: string): string {
+  if (!text.includes(CURRENT_MESSAGE_MARKER) && !text.includes(HISTORY_CONTEXT_MARKER)) {
+    return text;
+  }
+  const retained: string[] = [];
+  let fence: MarkdownCodeFence | undefined;
   let start = 0;
   while (start < text.length) {
     const newlineIndex = text.indexOf("\n", start);
     const end = newlineIndex === -1 ? text.length : newlineIndex + 1;
     const chunk = text.slice(start, end);
     const line = chunk.endsWith("\n") ? chunk.slice(0, -1).replace(/\r$/, "") : chunk;
-    if (!TOOL_CALLS_OMITTED_PLACEHOLDER_LINE_RE.test(line)) {
+    const wasInsideFence = Boolean(fence);
+    const advanced = advanceMarkdownCodeFence(line, fence);
+    fence = advanced.fence;
+    const isContextMarker =
+      !wasInsideFence &&
+      !advanced.isFenceLine &&
+      !/^(?: {4}|\t)/u.test(line) &&
+      (line.trim() === CURRENT_MESSAGE_MARKER || line.trim() === HISTORY_CONTEXT_MARKER);
+    if (isContextMarker) {
+      const previousChunk = retained.at(-1);
+      if (
+        previousChunk &&
+        /^Current message priority:[ \t]*[A-Za-z][A-Za-z0-9_-]*[ \t]*\r?\n?$/u.test(previousChunk)
+      ) {
+        retained.pop();
+      }
+    } else {
+      retained.push(chunk);
+    }
+    start = end;
+  }
+  // Without exact turn provenance, only owner-authenticated marker lines may
+  // be removed: a reply can begin in the same paragraph as copied scaffolding.
+  return retained.join("");
+}
+
+function stripInternalPlaceholderLines(text: string): string {
+  let result = "";
+  let start = 0;
+  let fence: MarkdownCodeFence | undefined;
+  while (start < text.length) {
+    const newlineIndex = text.indexOf("\n", start);
+    const end = newlineIndex === -1 ? text.length : newlineIndex + 1;
+    const chunk = text.slice(start, end);
+    const line = chunk.endsWith("\n") ? chunk.slice(0, -1).replace(/\r$/, "") : chunk;
+    const wasInsideFence = Boolean(fence);
+    const advanced = advanceMarkdownCodeFence(line, fence);
+    fence = advanced.fence;
+    const isInternalPlaceholder =
+      TOOL_CALLS_OMITTED_PLACEHOLDER_LINE_RE.test(line) ||
+      (!/^(?: {4}|\t)/u.test(line) && line.trim() === EXEC_NO_OUTPUT_PLACEHOLDER);
+    if (wasInsideFence || advanced.isFenceLine || !isInternalPlaceholder) {
       result += chunk;
     }
     start = end;
@@ -434,20 +577,27 @@ export function isLikelyHttpErrorText(raw: string): boolean {
   return HTTP_ERROR_HINTS.some((hint) => message.includes(hint));
 }
 
-export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: boolean }): string {
+export function sanitizeUserFacingText(
+  text: unknown,
+  opts?: { errorContext?: boolean; conversationContext?: string },
+): string {
   const raw = coerceChatContentText(text);
   if (!raw) {
     return raw;
   }
   const errorContext = opts?.errorContext ?? false;
-  const stripped = stripInboundMetadata(stripInternalRuntimeContext(stripFinalTagsFromText(raw)));
+  // Match the exact prompt before XML and metadata cleanup can mutate its bytes.
+  const withoutVerifiedContext = stripVerifiedConversationContext(raw, opts?.conversationContext);
+  const stripped = stripInboundMetadata(
+    stripInternalRuntimeContext(stripFinalTagsFromText(withoutVerifiedContext)),
+  );
   const withoutToolCallXml = stripToolCallXmlTags(stripMinimaxToolCallXml(stripped), {
     stripFunctionCallsXmlPayloads: true,
   });
-  // Replay repair may synthesize this placeholder to keep provider transcripts valid.
-  // It is internal scaffolding, so drop standalone placeholder lines before delivery
-  // while preserving ordinary inline mentions a user may be discussing.
-  const withoutPlaceholder = stripToolCallsOmittedPlaceholderLines(withoutToolCallXml);
+  const withoutConversationContext = stripCopiedConversationContextMarkerLines(withoutToolCallXml);
+  // Replay repair and empty exec results synthesize exact producer-owned lines.
+  // Never suppress quoted, inline, fenced, or indented user-visible examples.
+  const withoutPlaceholder = stripInternalPlaceholderLines(withoutConversationContext);
   const withoutInternalTraceLines = errorContext
     ? stripAssistantInternalTraceLines(withoutPlaceholder)
     : withoutPlaceholder;

@@ -15,6 +15,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { compileConfigRegexes, type ConfigRegexRejectReason } from "../../security/config-regex.js";
 import { escapeRegExp } from "../../utils.js";
 import type { MsgContext } from "../templating.js";
+import { CURRENT_MESSAGE_MARKER } from "./conversation-context-markers.js";
 import type { BuildMentionRegexesOptions, ExplicitMentionSignal } from "./mentions.types.js";
 export type { BuildMentionRegexesOptions } from "./mentions.types.js";
 
@@ -54,7 +55,7 @@ const mentionPatternWarningCache = new Set<string>();
 const MAX_MENTION_PATTERN_WARNING_KEYS = 512;
 const log = createSubsystemLogger("mentions");
 
-export const CURRENT_MESSAGE_MARKER = "[Current message - respond to this]";
+export { CURRENT_MESSAGE_MARKER };
 
 function normalizeMentionPattern(pattern: string): string {
   if (!pattern.includes(BACKSPACE_CHAR)) {
