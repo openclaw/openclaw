@@ -1289,6 +1289,7 @@ describe("sessions view", () => {
     expect(Array.from(verbose?.options ?? []).map((option) => option.value)).toEqual([
       "",
       "off",
+      "commentary",
       "on",
       "full",
     ]);
