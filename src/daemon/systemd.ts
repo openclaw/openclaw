@@ -1878,6 +1878,27 @@ function resolveSystemdUnitArchiveDir(env: GatewayServiceEnv): string {
 }
 
 /**
+ * Copies to `baseTarget`, or a numbered sibling if something is already there.
+ * The archive directory is keyed by day, not by run, so a second repair the
+ * same day (or any pre-existing file at that exact path) would otherwise let
+ * `copyFile` silently replace an earlier operator backup — the exact data
+ * loss this archive-instead-of-delete path exists to prevent (#116130).
+ */
+async function copyToUniqueArchiveTarget(sourcePath: string, baseTarget: string): Promise<string> {
+  for (let attempt = 0; ; attempt++) {
+    const target = attempt === 0 ? baseTarget : `${baseTarget}.${attempt}`;
+    try {
+      await fs.copyFile(sourcePath, target, fsSync.constants.COPYFILE_EXCL);
+      return target;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+        throw error;
+      }
+    }
+  }
+}
+
+/**
  * Archives the canonical *user-scope* gateway unit, leaving any system-scope
  * unit untouched. Used by doctor to resolve a `dueling` installation by
  * clearing the redundant user-scope leftover (issue #79375). The unit is moved,
@@ -1907,10 +1928,9 @@ export async function uninstallUserSystemdGatewayUnit({
     // means "no unit file here"; copy before unlink, so a cross-filesystem
     // state dir or a failed write leaves the operator's unit in place.
     await fs.mkdir(path.dirname(archiveTarget), { recursive: true, mode: 0o700 });
-    await fs.copyFile(unitPath, archiveTarget);
+    archivedPath = await copyToUniqueArchiveTarget(unitPath, archiveTarget);
     await fs.unlink(unitPath);
-    archivedPath = archiveTarget;
-    stdout.write(`${formatLine("Archived user-scope systemd service", archiveTarget)}\n`);
+    stdout.write(`${formatLine("Archived user-scope systemd service", archivedPath)}\n`);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
       throw error;
