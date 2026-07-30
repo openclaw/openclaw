@@ -189,4 +189,25 @@ describe("PDF document extractor", () => {
     expect(onImageExtractionError).toHaveBeenCalledWith(failure);
     expect(pdfDocument.destroy).toHaveBeenCalledTimes(1);
   });
+
+  it("stops PDF fallback work when the caller aborts", async () => {
+    const controller = new AbortController();
+    let releaseFirstImage: (() => void) | undefined;
+    pdfDocument.extract.mockResolvedValueOnce({ text: "", images: [] }).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseFirstImage = () => resolve({ text: "", images: [] });
+        }),
+    );
+    const extractor = createPdfDocumentExtractor();
+    const pending = extractor.extract(request({ signal: controller.signal }));
+
+    await vi.waitFor(() => expect(pdfDocument.extract).toHaveBeenCalledTimes(2));
+    controller.abort(new Error("client disconnected"));
+    releaseFirstImage?.();
+
+    await expect(pending).rejects.toThrow("client disconnected");
+    expect(pdfDocument.extract).toHaveBeenCalledTimes(2);
+    expect(pdfDocument.destroy).toHaveBeenCalledTimes(1);
+  });
 });
