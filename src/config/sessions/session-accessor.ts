@@ -223,6 +223,7 @@ export {
   appendTranscriptMessages,
   persistSessionTranscriptTurn,
 } from "./session-accessor.transcript-turn.js";
+export { readSessionTranscriptActivePathEntryState } from "./session-accessor.sqlite-active-path.js";
 export {
   readClosedTranscriptTurn,
   type ClosedTranscriptTurnReadResult,
