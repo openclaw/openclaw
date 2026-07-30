@@ -100,25 +100,35 @@ function hasRenderableLabel(action: Action): boolean {
 
 // LINE rejects the whole carousel unless every column carries non-blank text,
 // keeps at least one labeled action, and title, thumbnail, and action count
-// usage match across columns.
+// usage match across columns. Only lossless repairs are applied here: a repair
+// that would discard authored content — a textual column left without labeled
+// actions, or valid actions beyond a smaller column's count — instead signals
+// undeliverable (no columns) so callers send the textual fallback.
 function normalizeCarouselColumns(columns: CarouselColumn[]): CarouselColumn[] {
-  const deliverable = columns
-    .map((column) => {
-      const normalized = normalizeCarouselColumnActions(column);
-      normalized.actions = normalized.actions.filter(hasRenderableLabel);
-      if (!normalized.text.trim() && normalized.title !== undefined) {
-        // A blank column text adopts its title, mirroring the buttons path,
-        // so the column's actions stay deliverable.
-        normalized.text = normalized.title;
-        normalized.title = undefined;
-      }
-      return normalized;
-    })
-    .filter((column) => column.actions.length > 0 && column.text.trim() !== "");
-  if (deliverable.length === 0) {
+  const normalized = columns.map((column) => {
+    const result = normalizeCarouselColumnActions(column);
+    result.actions = result.actions.filter(hasRenderableLabel);
+    if (!result.text.trim() && result.title !== undefined) {
+      // A blank column text adopts its title, mirroring the buttons path,
+      // so the column's actions stay deliverable.
+      result.text = result.title;
+      result.title = undefined;
+    }
+    return result;
+  });
+  const deliverable = normalized.filter(
+    (column) => column.actions.length > 0 && column.text.trim() !== "",
+  );
+  // A blank-text column drops even when its actions are labeled: LINE cannot
+  // render a text-less column and the textual fallback could not carry its
+  // actions either, so omitting it keeps the sibling columns' working
+  // controls. A textual column, by contrast, survives in the fallback.
+  const dropsContent =
+    normalized.some((column) => column.actions.length === 0 && column.text.trim() !== "") ||
+    new Set(deliverable.map((column) => column.actions.length)).size > 1;
+  if (deliverable.length === 0 || dropsContent) {
     return [];
   }
-  const actionCount = Math.min(...deliverable.map((column) => column.actions.length));
   const foldTitles = deliverable.some((column) => column.title === undefined);
   const dropThumbnails = deliverable.some((column) => column.thumbnailImageUrl === undefined);
   return deliverable.map((column) => {
@@ -136,7 +146,6 @@ function normalizeCarouselColumns(columns: CarouselColumn[]): CarouselColumn[] {
         resolveTemplateTextLimit({ title, thumbnailImageUrl, textOnlyLimit: 120 }),
       ),
       thumbnailImageUrl,
-      actions: column.actions.slice(0, actionCount),
     });
   });
 }
@@ -283,7 +292,8 @@ function templateTextFallback(text: string): TextMessage {
 
 /**
  * Convert a TemplateMessagePayload from ReplyPayload to a LINE TemplateMessage,
- * or to its textual fallback when LINE cannot render the template at all.
+ * or to its textual fallback when LINE cannot render the template without
+ * losing authored content.
  */
 export function buildTemplateMessageFromPayload(
   payload: LineTemplateMessagePayload,

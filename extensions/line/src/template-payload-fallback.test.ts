@@ -183,6 +183,37 @@ describe("template payload textual fallback", () => {
     expect(message).toEqual({ type: "text", text: "Continue?" });
   });
 
+  it("delivers carousel content as text instead of trimming unequal action counts", () => {
+    const message = buildTemplateMessageFromPayload({
+      type: "carousel",
+      columns: [
+        {
+          title: "First",
+          text: "A",
+          actions: [
+            { type: "message", label: "One", data: "one" },
+            { type: "message", label: "Two", data: "two" },
+          ],
+        },
+        { text: "B", actions: [{ type: "message", label: "Three", data: "three" }] },
+      ],
+    });
+
+    expect(message).toEqual({ type: "text", text: "First: A\nB" });
+  });
+
+  it("delivers carousel content as text when a textual column loses its actions", () => {
+    const message = buildTemplateMessageFromPayload({
+      type: "carousel",
+      columns: [
+        { text: "A", actions: [{ type: "message", label: "" }] },
+        { text: "B", actions: [{ type: "message", label: "OK", data: "ok" }] },
+      ],
+    });
+
+    expect(message).toEqual({ type: "text", text: "A\nB" });
+  });
+
   it("drops a carousel column whose text is blank", () => {
     const message = buildTemplateMessageFromPayload({
       type: "carousel",

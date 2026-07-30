@@ -353,19 +353,19 @@ describe("carousel column consistency", () => {
     return template.template.columns;
   };
 
-  it("drops columns without actions and keeps the rest", () => {
+  it("returns no columns when a textual column has no actions", () => {
+    // The dropped column's text would vanish from the carousel while the
+    // textual fallback can still deliver it, so the whole carousel degrades.
     const template = createTemplateCarousel([
       column({ actions: 0 }),
       column({ actions: 1 }),
       column({ actions: 0 }),
     ]);
 
-    const columns = getColumns(template);
-    expect(columns).toHaveLength(1);
-    expect(columns[0]?.actions).toHaveLength(1);
+    expect(getColumns(template)).toHaveLength(0);
   });
 
-  it("drops blank-label actions and then any column left without actions", () => {
+  it("returns no columns when filtering blank labels empties a textual column", () => {
     // LINE rejects a carousel action whose label is empty ("must be non-empty
     // text"), which would take the whole message down with it.
     const template = createTemplateCarousel([
@@ -373,9 +373,32 @@ describe("carousel column consistency", () => {
       createCarouselColumn({ text: "B", actions: [messageAction("", "x")] }),
     ]);
 
+    expect(getColumns(template)).toHaveLength(0);
+  });
+
+  it("drops blank-label actions when every column keeps a labeled action", () => {
+    const template = createTemplateCarousel([
+      createCarouselColumn({ text: "A", actions: [messageAction("", "x"), messageAction("OK")] }),
+      createCarouselColumn({ text: "B", actions: [messageAction("", "x"), messageAction("Go")] }),
+    ]);
+
+    expect(getColumns(template).map((col) => col.actions)).toEqual([
+      [{ type: "message", label: "OK", text: "OK" }],
+      [{ type: "message", label: "Go", text: "Go" }],
+    ]);
+  });
+
+  it("drops a column with no text or labeled action and keeps the rest", () => {
+    // Neither a carousel column nor the textual fallback can render a column
+    // with nothing textual and no labeled action, so omitting it loses nothing.
+    const template = createTemplateCarousel([
+      createCarouselColumn({ text: " ", actions: [messageAction("", "x")] }),
+      column({ actions: 1 }),
+    ]);
+
     const columns = getColumns(template);
     expect(columns).toHaveLength(1);
-    expect(columns[0]?.actions).toEqual([{ type: "message", label: "OK", text: "OK" }]);
+    expect(columns[0]?.actions).toHaveLength(1);
   });
 
   it("keeps an unavailable-action fallback as a labeled action", () => {
@@ -397,10 +420,13 @@ describe("carousel column consistency", () => {
     ]);
   });
 
-  it("equalizes action counts to the smallest column", () => {
+  it("returns no columns instead of trimming unequal action counts", () => {
+    // LINE requires equal counts, but trimming to the smallest column would
+    // silently delete authored controls; degrading the whole carousel to the
+    // textual fallback is visible to the recipient instead.
     const template = createTemplateCarousel([column({ actions: 3 }), column({ actions: 1 })]);
 
-    expect(getColumns(template).map((col) => col.actions.length)).toEqual([1, 1]);
+    expect(getColumns(template)).toHaveLength(0);
   });
 
   it("folds a title into the text when any column lacks one", () => {
