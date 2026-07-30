@@ -95,7 +95,10 @@ function isRetryableSendDisconnectError(error: unknown): boolean {
   if (isWhatsAppSocketOperationTimeoutError(error)) {
     return false;
   }
-  return /closed|reset|timed\s*out|disconnect|no active socket/i.test(formatError(error));
+  // A "timed out" error does not prove the socket died and may have occurred
+  // after the message was delivered, so it is not retried; this matches
+  // shouldClearSocketRefAfterSendFailure, which also excludes it.
+  return /closed|reset|disconnect|no active socket/i.test(formatError(error));
 }
 
 function shouldClearSocketRefAfterSendFailure(error: unknown): boolean {

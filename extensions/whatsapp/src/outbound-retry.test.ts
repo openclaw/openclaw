@@ -76,6 +76,26 @@ describe("sendWhatsAppOutboundWithRetry", () => {
     expect(onRetry).not.toHaveBeenCalled();
   });
 
+  it.each([
+    new Error("request timed out"),
+    new Error("Baileys send timed out"),
+    { code: "ETIMEDOUT", message: "operation timed out" },
+  ])("does not retry a transport-level timed-out error (may have delivered)", async (error) => {
+    // A generic "timed out" (not the local WhatsAppSocketOperationTimeoutError
+    // wrapper) can occur after the message reached WhatsApp, so it must not be
+    // retried — that would replay a non-idempotent send and duplicate the message.
+    const send = vi.fn<() => Promise<string>>().mockRejectedValue(error);
+    const onRetry = vi.fn();
+
+    const failure = await runWithFakeTimers(() =>
+      sendWhatsAppOutboundWithRetry({ send, onRetry }).catch((caught: unknown) => caught),
+    );
+
+    expect(failure).toBe(error);
+    expect(send).toHaveBeenCalledOnce();
+    expect(onRetry).not.toHaveBeenCalled();
+  });
+
   it("preserves attempts, delays, callback fields, and terminal error identity", async () => {
     const firstError = {
       output: {
