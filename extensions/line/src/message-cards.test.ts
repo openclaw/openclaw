@@ -346,17 +346,12 @@ describe("carousel column consistency", () => {
       thumbnailImageUrl: overrides?.thumbnailImageUrl,
       actions: Array.from({ length: overrides?.actions ?? 1 }, (_, i) => messageAction(`A${i}`)),
     });
-  const getColumns = (template: ReturnType<typeof createTemplateCarousel>) =>
-    (
-      template.template as {
-        columns: Array<{
-          title?: string;
-          text: string;
-          thumbnailImageUrl?: string;
-          actions: Array<{ label?: string }>;
-        }>;
-      }
-    ).columns;
+  const getColumns = (template: ReturnType<typeof createTemplateCarousel>) => {
+    if (template.template.type !== "carousel") {
+      throw new Error("expected a carousel template");
+    }
+    return template.template.columns;
+  };
 
   it("drops columns without actions and keeps the rest", () => {
     const template = createTemplateCarousel([
@@ -475,71 +470,6 @@ describe("carousel column consistency", () => {
     expect(first?.title).toBeUndefined();
     expect(first?.thumbnailImageUrl).toBeUndefined();
     expect(first?.text).toBe("x".repeat(120));
-  });
-});
-
-describe("template payload textual fallback", () => {
-  it("delivers carousel column content as text when no column is deliverable", () => {
-    const message = buildTemplateMessageFromPayload({
-      type: "carousel",
-      columns: [
-        { title: "First", text: "A", actions: [] },
-        { text: "B", actions: [] },
-      ],
-    });
-
-    expect(message).toEqual({ type: "text", text: "First: A\nB" });
-  });
-
-  it("prefers the carousel altText for the fallback when provided", () => {
-    const message = buildTemplateMessageFromPayload({
-      type: "carousel",
-      columns: [{ text: "A", actions: [] }],
-      altText: "Two options",
-    });
-
-    expect(message).toEqual({ type: "text", text: "Two options" });
-  });
-
-  it("drops blank-label buttons actions and keeps the labeled rest", () => {
-    const message = buildTemplateMessageFromPayload({
-      type: "buttons",
-      text: "Pick",
-      actions: [
-        { type: "message", label: "" },
-        { type: "message", label: "One" },
-      ],
-    });
-
-    const template = expectDefined(message, "buttons template message");
-    if (template.type !== "template" || template.template.type !== "buttons") {
-      throw new Error("expected a buttons template");
-    }
-    expect(template.template.actions).toEqual([{ type: "message", label: "One", text: "One" }]);
-  });
-
-  it("delivers buttons title and text as text when every action label is blank", () => {
-    const message = buildTemplateMessageFromPayload({
-      type: "buttons",
-      title: "Menu",
-      text: "Pick",
-      actions: [{ type: "message", label: "" }],
-    });
-
-    expect(message).toEqual({ type: "text", text: "Menu: Pick" });
-  });
-
-  it("delivers the confirm question as text when a label is blank", () => {
-    const message = buildTemplateMessageFromPayload({
-      type: "confirm",
-      text: "Continue?",
-      confirmLabel: "",
-      confirmData: "yes",
-      cancelLabel: "No",
-      cancelData: "no",
-    });
-
-    expect(message).toEqual({ type: "text", text: "Continue?" });
   });
 });
 

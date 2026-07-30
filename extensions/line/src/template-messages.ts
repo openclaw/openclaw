@@ -34,7 +34,10 @@ function buildTemplatePayloadAction(action: TemplatePayloadAction): Action {
   if (action.type === "postback" && action.data) {
     return postbackAction(action.label, action.data, action.label);
   }
-  return messageAction(action.label, action.data ?? action.label);
+  // Blank data means "tap sends the label": a message action with empty text
+  // makes LINE reject the whole message.
+  const data = action.data?.trim() ? action.data : undefined;
+  return messageAction(action.label, data ?? action.label);
 }
 
 function resolveTemplateTextLimit(params: {
@@ -95,9 +98,9 @@ function hasRenderableLabel(action: Action): boolean {
   return Boolean(action.label);
 }
 
-// LINE rejects the whole carousel unless every column keeps at least one
-// labeled action and title, thumbnail, and action count usage match across
-// columns.
+// LINE rejects the whole carousel unless every column carries non-blank text,
+// keeps at least one labeled action, and title, thumbnail, and action count
+// usage match across columns.
 function normalizeCarouselColumns(columns: CarouselColumn[]): CarouselColumn[] {
   const deliverable = columns
     .map((column) => {
@@ -105,7 +108,7 @@ function normalizeCarouselColumns(columns: CarouselColumn[]): CarouselColumn[] {
       normalized.actions = normalized.actions.filter(hasRenderableLabel);
       return normalized;
     })
-    .filter((column) => column.actions.length > 0);
+    .filter((column) => column.actions.length > 0 && column.text.trim() !== "");
   if (deliverable.length === 0) {
     return [];
   }
@@ -262,9 +265,14 @@ export function createCarouselColumn(params: {
 
 // A template that lost every button still carries user-visible content; LINE
 // defines altText as exactly that textual representation, so deliver it as a
-// plain text message instead of dropping the reply.
-function templateTextFallback(text: string): TextMessage | null {
-  return text ? { type: "text", text } : null;
+// plain text message instead of dropping the reply. A payload with nothing
+// deliverable at all fails loudly — a silent skip would record a successful
+// empty reply.
+function templateTextFallback(text: string): TextMessage {
+  if (!text.trim()) {
+    throw new Error("LINE template payload has no deliverable text, actions, or altText.");
+  }
+  return { type: "text", text };
 }
 
 /**
@@ -276,23 +284,27 @@ export function buildTemplateMessageFromPayload(
 ): TemplateMessage | TextMessage | null {
   switch (payload.type) {
     case "confirm": {
-      // Confirm templates require exactly two labeled actions; a blank label
-      // makes LINE reject the whole message.
-      if (!payload.confirmLabel || !payload.cancelLabel) {
+      // Confirm templates require two labeled actions and body text; a blank
+      // value in any of them makes LINE reject the whole message.
+      if (!payload.confirmLabel || !payload.cancelLabel || !payload.text.trim()) {
         return templateTextFallback(truncateTemplateText(payload.altText || payload.text, 400));
       }
 
-      const confirmAction = payload.confirmData.startsWith("http")
-        ? uriAction(payload.confirmLabel, payload.confirmData)
-        : payload.confirmData.includes("=")
-          ? postbackAction(payload.confirmLabel, payload.confirmData, payload.confirmLabel)
-          : messageAction(payload.confirmLabel, payload.confirmData);
+      // Blank data means "tap sends the label", matching buildTemplatePayloadAction.
+      const confirmData = payload.confirmData.trim() ? payload.confirmData : payload.confirmLabel;
+      const cancelData = payload.cancelData.trim() ? payload.cancelData : payload.cancelLabel;
 
-      const cancelAction = payload.cancelData.startsWith("http")
-        ? uriAction(payload.cancelLabel, payload.cancelData)
-        : payload.cancelData.includes("=")
-          ? postbackAction(payload.cancelLabel, payload.cancelData, payload.cancelLabel)
-          : messageAction(payload.cancelLabel, payload.cancelData);
+      const confirmAction = confirmData.startsWith("http")
+        ? uriAction(payload.confirmLabel, confirmData)
+        : confirmData.includes("=")
+          ? postbackAction(payload.confirmLabel, confirmData, payload.confirmLabel)
+          : messageAction(payload.confirmLabel, confirmData);
+
+      const cancelAction = cancelData.startsWith("http")
+        ? uriAction(payload.cancelLabel, cancelData)
+        : cancelData.includes("=")
+          ? postbackAction(payload.cancelLabel, cancelData, payload.cancelLabel)
+          : messageAction(payload.cancelLabel, cancelData);
 
       return createConfirmTemplate(payload.text, confirmAction, cancelAction, payload.altText);
     }
@@ -300,14 +312,23 @@ export function buildTemplateMessageFromPayload(
     case "buttons": {
       const actions: Action[] = payload.actions.map((action) => buildTemplatePayloadAction(action));
 
-      const message = createButtonTemplate(payload.title, payload.text, actions, {
+      // LINE requires non-blank template text: a blank body folds the title
+      // down into the text slot so the buttons stay deliverable.
+      const title = payload.title?.trim() ? payload.title : undefined;
+      const text = payload.text.trim() ? payload.text : title;
+      if (!text) {
+        return templateTextFallback(truncateTemplateText(payload.altText ?? "", 400));
+      }
+      const foldedTitle = text === title ? undefined : title;
+
+      const message = createButtonTemplate(foldedTitle, text, actions, {
         thumbnailImageUrl: payload.thumbnailImageUrl,
         altText: payload.altText,
       });
       if (message.template.type === "buttons" && message.template.actions.length === 0) {
         return templateTextFallback(
           truncateTemplateText(
-            payload.altText || (payload.title ? `${payload.title}: ${payload.text}` : payload.text),
+            payload.altText || (foldedTitle ? `${foldedTitle}: ${text}` : text),
             400,
           ),
         );
