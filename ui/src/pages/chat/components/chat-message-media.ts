@@ -238,6 +238,28 @@ export function releaseChatMediaResourceSubscriber(subscriber: (() => void) | un
   }
 }
 
+export function isChatMediaResourceSubscriberActive(subscriber: () => void): boolean {
+  return chatMediaSubscribers.has(subscriber);
+}
+
+export function releaseManagedImageResourceSubscription(
+  subscriberScope: string,
+  subscriber: () => void,
+): void {
+  const state = chatMediaSubscribers.get(subscriber);
+  if (!state) {
+    return;
+  }
+  const subscriptionKey = chatMediaResourceKey("managed-image", subscriberScope);
+  const resource = state.resources.get(subscriptionKey);
+  if (!resource) {
+    return;
+  }
+  state.resources.delete(subscriptionKey);
+  detachChatMediaResourceSubscriber(resource, subscriber);
+  pruneChatMediaSubscriber(subscriber, state);
+}
+
 export function trimManagedImageMissResources() {
   const misses = [...chatMediaResources.entries()].filter(
     ([, resource]) =>

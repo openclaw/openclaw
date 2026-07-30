@@ -233,3 +233,113 @@ export async function sidebarSessionOrder(page: Page): Promise<string[]> {
         .filter((key) => key.startsWith("agent:main:session-")),
     );
 }
+
+type ManagedImageClipboardProof = { size: number; type: string };
+
+async function installManagedImageClipboardCapture(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    Object.defineProperty(navigator.clipboard, "write", {
+      configurable: true,
+      value: async (items: ClipboardItem[]) => {
+        const png = await items[0]?.getType("image/png");
+        if (png) {
+          (
+            globalThis as typeof globalThis & {
+              managedImageClipboardProof?: ManagedImageClipboardProof;
+            }
+          ).managedImageClipboardProof = { size: png.size, type: png.type };
+        }
+      },
+    });
+  });
+}
+
+async function readManagedImageClipboardCapture(
+  page: Page,
+): Promise<ManagedImageClipboardProof | null> {
+  return await page.evaluate(
+    () =>
+      (
+        globalThis as typeof globalThis & {
+          managedImageClipboardProof?: ManagedImageClipboardProof;
+        }
+      ).managedImageClipboardProof ?? null,
+  );
+}
+
+export async function addManagedImageActionProof(
+  page: Page,
+  proof: {
+    clipboardBytes: number;
+    clipboardType: string;
+    downloadedFileName: string;
+  },
+): Promise<void> {
+  await page.evaluate((value) => {
+    const panel = document.createElement("pre");
+    panel.dataset.managedImageActionProof = "true";
+    panel.style.cssText = [
+      "position:fixed",
+      "right:24px",
+      "bottom:24px",
+      "z-index:2147483647",
+      "margin:0",
+      "padding:14px 16px",
+      "border:1px solid rgba(255,255,255,.2)",
+      "border-radius:10px",
+      "background:#111827",
+      "box-shadow:0 12px 40px rgba(0,0,0,.45)",
+      "color:#e5e7eb",
+      "font:12px/1.45 ui-monospace,monospace",
+      "white-space:pre-wrap",
+    ].join(";");
+    panel.textContent = [
+      "Exact-head browser proof",
+      "✓ Open: full image displayed",
+      `✓ Download: ${value.downloadedFileName}`,
+      `✓ Copy: ${value.clipboardType} (${value.clipboardBytes} bytes)`,
+    ].join("\n");
+    document.body.appendChild(panel);
+  }, proof);
+}
+
+export async function exerciseManagedImageActions(
+  page: Page,
+  requestedVariants: string[],
+): Promise<{
+  clipboardBytes: number;
+  clipboardType: string;
+  downloadedFileName: string;
+}> {
+  const imageFrame = page.locator(".chat-image-frame");
+  await imageFrame.hover();
+  const actions = page.locator(".chat-image-action");
+  await actions.first().waitFor({ state: "visible", timeout: 10_000 });
+  expect(await actions.count()).toBe(3);
+
+  const [download] = await Promise.all([page.waitForEvent("download"), actions.nth(1).click()]);
+  expect(download.suggestedFilename()).toBe("Ticketed generated image.png");
+  await expect.poll(() => requestedVariants).toEqual(["thumbnail", "full"]);
+
+  await installManagedImageClipboardCapture(page);
+  await actions.nth(2).click();
+  const readClipboardProof = () => readManagedImageClipboardCapture(page);
+  await expect.poll(readClipboardProof).toMatchObject({ type: "image/png" });
+  const clipboardProof = await readClipboardProof();
+  expect(clipboardProof?.size).toBeGreaterThan(0);
+  await expect.poll(() => requestedVariants).toEqual(["thumbnail", "full", "full"]);
+
+  await actions.first().click();
+  await page
+    .locator("openclaw-image-lightbox .lightbox")
+    .waitFor({ state: "visible", timeout: 10_000 });
+  await expect.poll(() => requestedVariants).toEqual(["thumbnail", "full", "full", "full"]);
+  await page.locator("openclaw-image-lightbox .close").click();
+  await imageFrame.hover();
+
+  return {
+    clipboardBytes: clipboardProof?.size ?? 0,
+    clipboardType: clipboardProof?.type ?? "",
+    downloadedFileName: download.suggestedFilename(),
+  };
+}
