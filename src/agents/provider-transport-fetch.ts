@@ -5,6 +5,7 @@ import { emitModelTransportDebug, formatModelTransportDebugUrl } from "@openclaw
  * Applies request timeouts, proxy/TLS overrides, SSRF policy, local-service leases, retry hints, and SSE normalization.
  */
 import { parseRetryAfterHeadersSeconds as parseRetryAfterSeconds } from "@openclaw/ai/internal/retry-after";
+import { inspectTlsCertificateError } from "@openclaw/ai/internal/shared";
 import {
   isCloudMetadataIpAddress,
   isLinkLocalIpAddress,
@@ -16,12 +17,14 @@ import {
   clampTimerTimeoutMs,
   parseStrictFiniteNumber,
 } from "@openclaw/normalization-core/number-coercion";
+import { isAbortError } from "../infra/abort-signal.js";
 import {
   fetchWithSsrFGuard,
   withTrustedEnvProxyGuardedFetchMode,
 } from "../infra/net/fetch-guard.js";
 import { wrapGuardedBodyStream } from "../infra/net/guarded-body-stream.js";
 import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
+import type { GuardedFetchSendTracker } from "../infra/net/runtime-fetch.js";
 import {
   mergeSsrFPolicies,
   ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist,
@@ -29,7 +32,7 @@ import {
   SsrFBlockedError,
   type SsrFPolicy,
 } from "../infra/net/ssrf.js";
-import { hasRetryableConnectionErrorCode } from "../infra/retryable-network-errors.js";
+import { isTransientNetworkError } from "../infra/retryable-network-errors.js";
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
@@ -601,73 +604,17 @@ function buildModelRequestSignal(
   return AbortSignal.any([baseSignal, timeoutSignal]);
 }
 
-function buildErrorChain(error: unknown): Array<Record<string, unknown>> {
-  const chain: Array<Record<string, unknown>> = [];
-  const seen = new Set<object>();
-  let current = error;
-  while (current && typeof current === "object" && !seen.has(current)) {
-    seen.add(current);
-    const record = current as Record<string, unknown>;
-    chain.push(record);
-    current = record.cause;
-  }
-  return chain;
-}
-
-function isRetryableAnthropicTransportCode(code: string): boolean {
-  const normalized = code.trim().toUpperCase();
-  return (
-    normalized === "UND_ERR_SOCKET" ||
-    normalized === "ENOTFOUND" ||
-    (normalized !== "ETIMEDOUT" && hasRetryableConnectionErrorCode(normalized))
-  );
-}
-
-function isRetryableAnthropicTransportError(error: unknown): boolean {
-  const chain = buildErrorChain(error);
-  if (
-    chain.some(
-      (current) =>
-        current.name === "AbortError" ||
-        current.name === "TimeoutError" ||
-        current.code === "ABORT_ERR",
-    )
-  ) {
-    return false;
-  }
-
-  const structuredCode = chain.find((current) => typeof current.code === "string")?.code;
-  if (typeof structuredCode === "string") {
-    return isRetryableAnthropicTransportCode(structuredCode);
-  }
-
-  // Node fetch can occasionally omit the cause for a pre-response connection
-  // failure. Keep this exact shape narrow so policy/capture errors are not retried.
-  return (
-    chain.length === 1 && chain[0]?.name === "TypeError" && chain[0]?.message === "fetch failed"
-  );
-}
-
-function shouldRetryAnthropicTransportFailure(params: {
+function isReplayableAnthropicMessagesRequest(params: {
   model: Model;
   request: Request | undefined;
   init: RequestInit | undefined;
-  signal: AbortSignal | undefined;
-  error: unknown;
 }): boolean {
-  if (
-    params.model.provider !== "anthropic" ||
-    params.model.api !== "anthropic-messages" ||
-    params.signal?.aborted ||
-    params.request
-  ) {
-    return false;
-  }
   const body = params.init?.body;
-  if (body != null && typeof body !== "string") {
-    return false;
-  }
-  return isRetryableAnthropicTransportError(params.error);
+  return (
+    params.model.api === "anthropic-messages" &&
+    !params.request &&
+    (body == null || typeof body === "string")
+  );
 }
 
 function resolveHttpOrigin(value: unknown): string | undefined {
@@ -915,7 +862,7 @@ export function buildGuardedModelFetch(
       requestInit ??
       (swappedEgress.headers && init ? { ...init, headers: swappedEgress.headers } : init);
     const baseSignal = baseInit?.signal ?? undefined;
-    const localServiceSignal = buildModelRequestSignal(baseSignal, requestTimeoutMs);
+    const requestSignal = buildModelRequestSignal(baseSignal, requestTimeoutMs);
     const guardedFetchOptions = {
       url,
       init: baseInit,
@@ -929,7 +876,7 @@ export function buildGuardedModelFetch(
       dispatcherPolicy,
       dispatcherPool: getProviderTransportDispatcherPool(),
       timeoutMs: requestTimeoutMs,
-      ...(baseSignal ? { signal: baseSignal } : {}),
+      ...(requestSignal ? { signal: requestSignal } : {}),
       // Provider transport intentionally keeps the secure default and never
       // replays unsafe request bodies across cross-origin redirects.
       allowCrossOriginUnsafeRedirectReplay: false,
@@ -947,38 +894,42 @@ export function buildGuardedModelFetch(
         `policy=${policy ? "custom" : "default"}`,
     );
     try {
-      localServiceLease = await ensureModelProviderLocalService(
+      localServiceLease = await ensureModelProviderLocalService(model, rawHeaders, requestSignal);
+      const guardedFetchParams = useEnvProxy
+        ? withTrustedEnvProxyGuardedFetchMode(guardedFetchOptions)
+        : guardedFetchOptions;
+      const shouldTrackRequestSend = isReplayableAnthropicMessagesRequest({
         model,
-        rawHeaders,
-        localServiceSignal,
-      );
-      const runGuardedFetch = async () =>
-        await fetchWithSsrFGuard(
-          useEnvProxy
-            ? withTrustedEnvProxyGuardedFetchMode(guardedFetchOptions)
-            : guardedFetchOptions,
-        );
-      try {
-        result = await runGuardedFetch();
-      } catch (error) {
-        if (
-          !shouldRetryAnthropicTransportFailure({
-            model,
-            request,
-            init: baseInit,
-            signal: baseSignal,
-            error,
-          })
-        ) {
-          throw error;
+        request,
+        init: baseInit,
+      });
+      const sendTracker: GuardedFetchSendTracker = { state: "unknown" };
+      const maxAttempts = shouldTrackRequestSend ? 2 : 1;
+      for (let attempt = 1; ; attempt += 1) {
+        try {
+          result = await fetchWithSsrFGuard({
+            ...guardedFetchParams,
+            ...(shouldTrackRequestSend ? { sendTracker } : {}),
+          });
+          break;
+        } catch (error) {
+          if (
+            attempt === maxAttempts ||
+            requestSignal?.aborted ||
+            sendTracker.state !== "not-sent" ||
+            isAbortError(error) ||
+            inspectTlsCertificateError(error) ||
+            !isTransientNetworkError(error)
+          ) {
+            throw error;
+          }
+          // The Messages transport serializes one JSON string. Retry only before
+          // Undici reports that the complete body reached its local socket.
+          log.warn(
+            `[model-fetch] retry provider=${model.provider} api=${model.api} model=${model.id} ` +
+              `attempt=${attempt + 1}/${maxAttempts} elapsedMs=${Date.now() - fetchStartedAt} ${summarizeError(error)}`,
+          );
         }
-        // Anthropic clients prepare JSON text. Retry once through
-        // the guard so a dead socket gets a fresh dispatcher before model fallback.
-        log.warn(
-          `[model-fetch] retry provider=${model.provider} api=${model.api} model=${model.id} ` +
-            `attempt=2/2 elapsedMs=${Date.now() - fetchStartedAt} ${summarizeError(error)}`,
-        );
-        result = await runGuardedFetch();
       }
     } catch (error) {
       const remediatedError = withModelProviderNetworkRemediation(error, {
