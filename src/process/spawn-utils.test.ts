@@ -5,6 +5,8 @@ import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { spawnWithFallback } from "./spawn-utils.js";
 
+type Spawn = typeof import("node:child_process").spawn;
+
 function createStubChild() {
   const child = new EventEmitter() as ChildProcess;
   child.stdin = new PassThrough() as ChildProcess["stdin"];
@@ -15,6 +17,14 @@ function createStubChild() {
   child.kill = vi.fn(() => true) as ChildProcess["kill"];
   queueMicrotask(() => {
     child.emit("spawn");
+  });
+  return child;
+}
+
+function createFailedStubChild(error: Error) {
+  const child = new EventEmitter() as ChildProcess;
+  queueMicrotask(() => {
+    child.emit("error", error);
   });
   return child;
 }
@@ -74,6 +84,20 @@ describe("spawnWithFallback", () => {
         spawnImpl: spawnMock,
       }),
     ).rejects.toThrow(/ENOENT/);
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects asynchronous spawn errors", async () => {
+    const error = Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" });
+    const spawnMock = vi.fn(() => createFailedStubChild(error));
+
+    await expect(
+      spawnWithFallback({
+        argv: ["missing"],
+        options: { stdio: "ignore" },
+        spawnImpl: spawnMock as unknown as Spawn,
+      }),
+    ).rejects.toThrow("spawn ENOENT");
     expect(spawnMock).toHaveBeenCalledTimes(1);
   });
 });

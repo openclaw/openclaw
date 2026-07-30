@@ -1,4 +1,6 @@
 // Windows schtasks startup fallback tests cover fallback startup task behavior.
+import type { ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
@@ -38,7 +40,7 @@ const sleepMock = vi.hoisted(() =>
   }),
 );
 const childUnref = vi.hoisted(() => vi.fn());
-const spawn = vi.hoisted(() => vi.fn(() => ({ unref: childUnref })));
+const spawn = vi.hoisted(() => vi.fn());
 type SpawnSyncResult = {
   pid: number;
   output: (string | null)[];
@@ -92,6 +94,16 @@ const {
   stopScheduledTask,
   uninstallScheduledTask,
 } = await import("./schtasks.js");
+const { launchFallbackTaskScript } = await import("./schtasks-runtime.js");
+
+function createSpawnChild(error?: Error): ChildProcess {
+  const child = new EventEmitter() as ChildProcess;
+  child.unref = childUnref;
+  queueMicrotask(() => {
+    child.emit(error ? "error" : "spawn", error);
+  });
+  return child;
+}
 
 function resolveStartupEntryPath(env: Record<string, string>, extension = "cmd") {
   const taskName = env.OPENCLAW_WINDOWS_TASK_NAME ?? "OpenClaw Gateway";
@@ -350,7 +362,8 @@ beforeEach(() => {
     listeners: [],
     hints: [],
   });
-  spawn.mockClear();
+  spawn.mockReset();
+  spawn.mockImplementation(() => createSpawnChild());
   spawnSync.mockClear();
   childUnref.mockClear();
   timeState.now = 0;
@@ -370,6 +383,73 @@ describe("Windows startup fallback", () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       await expect(readWindowsStartupFallbackRuntimeForUpdate(env)).resolves.toBeNull();
       expect(spawnSync).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects an asynchronous direct executable spawn failure", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      await writeGatewayScript(env);
+      const error = Object.assign(new Error("spawn direct ENOENT"), { code: "ENOENT" });
+      spawn.mockImplementationOnce(() => createSpawnChild(error));
+
+      await expect(launchFallbackTaskScript(env)).rejects.toThrow("spawn direct ENOENT");
+
+      expect(childUnref).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects an asynchronous cmd fallback spawn failure", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      const scriptPath = resolveTaskScriptPath(env);
+      await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+      await fs.writeFile(scriptPath, "@echo off\r\nrem no parsed command\r\n", "utf8");
+      const error = Object.assign(new Error("spawn cmd ENOENT"), { code: "ENOENT" });
+      spawn.mockImplementationOnce(() => createSpawnChild(error));
+
+      await expect(launchFallbackTaskScript(env)).rejects.toThrow("spawn cmd ENOENT");
+
+      expect(childUnref).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects a missing cmd fallback script before spawning", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      await expect(launchFallbackTaskScript(env)).rejects.toThrow(/ENOENT|no such file/i);
+
+      expect(spawn).not.toHaveBeenCalled();
+      expect(childUnref).not.toHaveBeenCalled();
+    });
+  });
+
+  it("unrefs a direct executable only after it spawns", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      await writeGatewayScript(env);
+
+      await expect(launchFallbackTaskScript(env)).resolves.toBeUndefined();
+
+      expect(spawn).toHaveBeenCalledWith(
+        "C:\\Program Files\\nodejs\\node.exe",
+        expect.arrayContaining(["gateway", "--port", "18789"]),
+        expect.objectContaining({ detached: true, stdio: "ignore", windowsHide: true }),
+      );
+      expect(childUnref).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("unrefs the cmd fallback only after it spawns", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      const scriptPath = resolveTaskScriptPath(env);
+      await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+      await fs.writeFile(scriptPath, "@echo off\r\nrem no parsed command\r\n", "utf8");
+
+      await expect(launchFallbackTaskScript(env)).resolves.toBeUndefined();
+
+      expect(spawn).toHaveBeenCalledWith(
+        getWindowsCmdExePath(),
+        ["/d", "/c", scriptPath],
+        expect.objectContaining({ detached: true, stdio: "ignore", windowsHide: true }),
+      );
+      expect(childUnref).toHaveBeenCalledOnce();
     });
   });
 
@@ -1944,9 +2024,7 @@ describe("Windows startup fallback", () => {
         ],
         hints: [],
       });
-      spawn.mockImplementationOnce(() => {
-        throw new Error("spawn failed");
-      });
+      spawn.mockImplementationOnce(() => createSpawnChild(new Error("spawn failed")));
       const onMutation = vi.fn();
 
       await expect(
