@@ -225,6 +225,17 @@ function sanitizeCronHeartbeatOverride(
   return heartbeat?.target === "last" ? omitExplicitHeartbeatDestination(heartbeat) : heartbeat;
 }
 
+// Heartbeat wakes may only force an execution session the caller actually asked for.
+// The main-session fallback used by cron targeting would otherwise pin every monitor
+// tick to `main` and shadow `agents.*.heartbeat.session` (#116205).
+function resolveHeartbeatWakeSessionKey(
+  requestedSessionKey: string | null | undefined,
+  resolvedSessionKey: string | undefined,
+): string | undefined {
+  const requested = typeof requestedSessionKey === "string" ? requestedSessionKey.trim() : "";
+  return requested ? resolvedSessionKey : undefined;
+}
+
 /** Map internal CronJob to the public plugin SDK shape. */
 function toPluginCronJob(job: CronJob): PluginHookGatewayCronJob {
   return {
@@ -689,7 +700,7 @@ export function buildGatewayCronService(params: {
         intent: opts?.intent ?? "event",
         reason: opts?.reason,
         agentId,
-        sessionKey,
+        sessionKey: resolveHeartbeatWakeSessionKey(opts?.sessionKey, sessionKey),
         heartbeat: sanitizeCronHeartbeatOverride(opts?.heartbeat),
         ...(opts?.scheduledEveryMs !== undefined
           ? { scheduledEveryMs: opts.scheduledEveryMs }
@@ -711,7 +722,7 @@ export function buildGatewayCronService(params: {
         intent: opts?.intent ?? "event",
         reason: opts?.reason,
         agentId,
-        sessionKey,
+        sessionKey: resolveHeartbeatWakeSessionKey(opts?.sessionKey, sessionKey),
         // Preserve ownership across this adapter so the wake does not self-block on
         // the cron run that is awaiting it.
         owningCronJobMarker: opts?.owningCronJobMarker,
