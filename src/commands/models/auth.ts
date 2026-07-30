@@ -1,4 +1,5 @@
 /** Commands for adding, pasting, and logging into provider model auth profiles. */
+import path from "node:path";
 import {
   cancel,
   confirm as clackConfirm,
@@ -756,15 +757,31 @@ export async function modelsAuthPasteApiKeyCommand(
     },
   });
 
+  const credential = {
+    type: "api_key" as const,
+    provider,
+    key,
+  };
   await upsertAuthProfileWithLockOrThrow({
     profileId,
-    credential: {
-      type: "api_key",
-      provider,
-      key,
-    },
+    credential,
     agentDir,
   });
+
+  // paste-api-key also updates global auth.profiles metadata. Secondary agents
+  // inherit portable api_key material from the default agent store; seed that
+  // store too so the default agent (and inheriting peers) keep working after
+  // an operator pastes a key only into --agent <non-default>.
+  const config = await loadValidConfigOrThrow();
+  const defaultAgentId = resolveDefaultAgentId(config);
+  const defaultAgentDir = resolveAgentDir(config, defaultAgentId);
+  if (path.resolve(defaultAgentDir) !== path.resolve(agentDir)) {
+    await upsertAuthProfileWithLockOrThrow({
+      profileId,
+      credential,
+      agentDir: defaultAgentDir,
+    });
+  }
 
   await updateConfig((cfg) =>
     applyAuthProfileConfig(cfg, { profileId, provider, mode: "api_key" }),

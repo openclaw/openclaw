@@ -1500,14 +1500,14 @@ describe("modelsAuthLoginCommand", () => {
     expect(mocks.updateConfig).not.toHaveBeenCalled();
   });
 
-  it("writes pasted API keys to the requested agent store", async () => {
+  it("writes pasted API keys to the requested agent store and seeds the default agent", async () => {
     const runtime = createRuntime();
     useCoderAgentConfig();
     mocks.clackPassword.mockResolvedValue("sk-openai-chatgpt-api-key-value");
 
     await modelsAuthPasteApiKeyCommand({ provider: "openai", agent: "coder" }, runtime);
 
-    expect(mocks.resolveDefaultAgentId).not.toHaveBeenCalled();
+    expect(mocks.resolveDefaultAgentId).toHaveBeenCalled();
     expect(mocks.upsertAuthProfileWithLock).toHaveBeenCalledWith({
       profileId: "openai:manual",
       credential: {
@@ -1516,6 +1516,15 @@ describe("modelsAuthLoginCommand", () => {
         key: "sk-openai-chatgpt-api-key-value",
       },
       agentDir: "/tmp/openclaw/agents/coder",
+    });
+    expect(mocks.upsertAuthProfileWithLock).toHaveBeenCalledWith({
+      profileId: "openai:manual",
+      credential: {
+        type: "api_key",
+        provider: "openai",
+        key: "sk-openai-chatgpt-api-key-value",
+      },
+      agentDir: "/tmp/openclaw/agents/main",
     });
     expect(lastUpdatedConfig?.auth?.profiles?.["openai:manual"]).toEqual({
       provider: "openai",

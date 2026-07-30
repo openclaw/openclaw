@@ -70,7 +70,13 @@ Works for any provider; writes the per-agent SQLite auth store and updates confi
 
 ```bash
 openclaw models auth paste-token --provider openrouter
+openclaw models auth paste-api-key --provider openrouter
 ```
+
+`paste-api-key` stores a portable API-key profile. When you pass `--agent <id>` for a
+non-default agent, OpenClaw also seeds the same portable key into the default
+agent store so the gateway default agent and read-through inheritance keep
+working after `auth.profiles` metadata is updated.
 
 OpenClaw reads auth profiles from each agent's `openclaw-agent.sqlite`. Endpoint details (`baseUrl`, `api`, model ids, headers, timeouts) belong under `models.providers.<id>` in `openclaw.json` or `models.json`, not in auth profiles.
 
