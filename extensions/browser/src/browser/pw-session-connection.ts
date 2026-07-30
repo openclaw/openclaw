@@ -592,6 +592,11 @@ export function pageTargetInfo(page: Page): Promise<PageTargetInfo | null> {
   return pending;
 }
 
+/** Reads the CDP raw target id for a Playwright page (operation-owned identity). */
+export async function readPageTargetId(page: Page): Promise<string | null> {
+  return (await pageTargetInfo(page).catch(() => null))?.targetId ?? null;
+}
+
 async function getPageForTargetIdOnce(opts: {
   cdpUrl: string;
   targetId?: string;

@@ -289,24 +289,8 @@ describe("browser control server", () => {
     "returns the replacement targetId after an action-triggered target swap",
     async () => {
       const base = await startServerAndBase();
-      requirePwMock("clickViaPlaywright").mockImplementationOnce(async () => {
-        vi.stubGlobal(
-          "fetch",
-          vi.fn(async (url: string) => {
-            if (url.includes("/json/list")) {
-              return makeResponse([
-                {
-                  id: "fresh5678",
-                  title: "Submitted",
-                  url: "https://submitted.example",
-                  webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/fresh5678",
-                  type: "page",
-                },
-              ]);
-            }
-            throw new Error(`unexpected fetch: ${url}`);
-          }),
-        );
+      requirePwMock("executeActViaPlaywright").mockResolvedValueOnce({
+        targetId: "fresh5678",
       });
 
       const response = await postJson<{ ok: boolean; targetId?: string }>(`${base}/act`, {
@@ -317,6 +301,26 @@ describe("browser control server", () => {
 
       expect(response.ok).toBe(true);
       expect(response.targetId).toBe("fresh5678");
+    },
+    slowTimeoutMs,
+  );
+
+  it(
+    "returns stale acted-on targetId when backend reports no operation-owned id (#103785)",
+    async () => {
+      const base = await startServerAndBase();
+      requirePwMock("executeActViaPlaywright").mockResolvedValueOnce({
+        targetId: undefined,
+      });
+
+      const response = await postJson<{ ok: boolean; targetId?: string }>(`${base}/act`, {
+        kind: "click",
+        ref: "5",
+        targetId: "abcd1234",
+      });
+
+      expect(response.ok).toBe(true);
+      expect(response.targetId).toBe("abcd1234");
     },
     slowTimeoutMs,
   );
