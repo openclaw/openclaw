@@ -36,8 +36,10 @@ function probeProcessIdentity(pid, timeoutMs = ${REMOTE_WATCHDOG_PROCESS_PROBE_T
   return new Promise((resolve) => {
     let settled = false; let deadline;
     const finish = (value) => { if (settled) return; settled = true; clearTimeout(deadline); resolve(value); };
-    const child = childProcess.execFile("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", maxBuffer: 4096 }, (error, stdout) => {
-      if (!error) finish({ kind: "identity", start: stdout.trim() || null });
+    const child = childProcess.execFile("ps", ["-o", "stat=,lstart=", "-p", String(pid)], { encoding: "utf8", maxBuffer: 4096 }, (error, stdout) => {
+      const match = /^(\S+)\s+(.+)$/u.exec(stdout.trim());
+      if (!error && match) finish({ kind: "identity", state: match[1], start: match[2] });
+      else if (!error) finish({ kind: "missing" });
       else if (error.code === 1 || error.status === 1) finish({ kind: "missing" });
       else if (error.code === "EAGAIN" || error.code === "EMFILE") finish({ kind: "timeout" });
       else finish({ kind: "failed" });
@@ -89,7 +91,7 @@ async function signalProcessReferences(references, concurrency = ${REMOTE_QUIESC
       }
       try {
         process.kill(reference.pid, reference.signal);
-        results[index] = { kind: "signaled" };
+        results[index] = { kind: "signaled", state: observed.state };
       } catch (error) {
         if (error && error.code === "ESRCH") results[index] = { kind: "missing" };
         else {
@@ -113,9 +115,15 @@ function remainingProcessReferences(references, outcomes) {
 async function recoverProcessReferences(references, concurrency = ${REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY}, deadlineMs = Date.now() + ${REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS}) {
   let remaining = references;
   let failed = false;
+  const settled = new Map();
   while (remaining.length > 0 && Date.now() < deadlineMs) {
     const outcomes = await signalProcessReferences(remaining, concurrency, deadlineMs);
     failed = outcomes.some((outcome) => outcome.kind === "failed") || failed;
+    outcomes.forEach((outcome, index) => {
+      if (outcome.kind !== "deferred" && outcome.kind !== "timeout" && outcome.kind !== "failed") {
+        settled.set(remaining[index], outcome);
+      }
+    });
     remaining = remainingProcessReferences(remaining, outcomes);
     if (failed || remaining.length === 0 || Date.now() >= deadlineMs) break;
     await new Promise((resolve) => setTimeout(
@@ -123,17 +131,7 @@ async function recoverProcessReferences(references, concurrency = ${REMOTE_QUIES
       Math.min(${REMOTE_WATCHDOG_PROCESS_PROBE_TIMEOUT_MS}, deadlineMs - Date.now()),
     ));
   }
-  return { remaining, failed };
-}
-function processStatus(pid) {
-  try {
-    const output = childProcess.execFileSync("ps", ["-o", "stat=,lstart=", "-p", String(pid)], { encoding: "utf8", maxBuffer: 4096, timeout: 2000 }).trim();
-    const match = /^(\S+)\s+(.+)$/u.exec(output);
-    return match ? { state: match[1], start: match[2] } : null;
-  } catch (error) {
-    if (error && error.status === 1) return null;
-    throw error;
-  }
+  return { remaining, failed, settled };
 }
 function quiescenceCandidates(rows, expectedUid, excludedPids, frozen) {
   const preserved = ancestors(rows);
@@ -515,18 +513,15 @@ function writeLease(processes, expiresAtMs) {
   input.processes = processes;
   input.expiresAtMs = expiresAtMs;
 }
-function assertWatchdogActive() {
-  const status = processStatus(input.watchdog.pid);
-  if (!status || status.start !== input.watchdog.start) {
-    throw new Error("workspace quiescence watchdog identity changed unexpectedly");
-  }
-  try { process.kill(input.watchdog.pid, 0); } catch (error) {
-    if (error && error.code === "ESRCH") throw new Error("workspace quiescence watchdog exited unexpectedly");
-    throw error;
-  }
+async function assertWatchdogActive() {
+  const reference = { ...input.watchdog, signal: 0 };
+  const checked = await recoverProcessReferences([reference]);
+  if (checked.remaining.length > 0 && !checked.failed) throw new Error("workspace quiescence watchdog identity probe timed out");
+  if (checked.failed) throw new Error("workspace quiescence watchdog identity probe failed");
+  if (checked.settled.get(reference)?.kind !== "signaled") throw new Error("workspace quiescence watchdog identity changed unexpectedly");
 }
-function refreshLease(processes) {
-  assertWatchdogActive();
+async function refreshLease(processes) {
+  await assertWatchdogActive();
   writeLease(processes, Date.now() + timeoutMs);
 }
 async function rollbackLateProcesses(references, priorProcesses, error) {
@@ -534,7 +529,7 @@ async function rollbackLateProcesses(references, priorProcesses, error) {
     references.map((entry) => ({ ...entry, signal: "SIGCONT" })),
   );
   const retained = rollback.remaining.map(({ pid, start }) => ({ pid, start }));
-  refreshLease([
+  await refreshLease([
     ...priorProcesses,
     ...retained.filter(
       (entry) => !priorProcesses.some((prior) => prior.pid === entry.pid && prior.start === entry.start),
@@ -542,12 +537,20 @@ async function rollbackLateProcesses(references, priorProcesses, error) {
   ]);
   throw error;
 }
-for (const entry of input.processes) {
-  const status = processStatus(entry.pid);
-  if (!status || status.start !== entry.start) continue;
-  if (status.state && !status.state.startsWith("T")) throw new Error("workspace quiescence process resumed unexpectedly");
+const existingReferences = input.processes.map((entry) => ({ ...entry, signal: 0 }));
+const existing = await recoverProcessReferences(
+  existingReferences,
+  ${REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY},
+  processSignalDeadlineMs(existingReferences.length),
+);
+if (existing.remaining.length > 0) throw new Error(existing.failed ? "workspace quiescence process identity probe failed" : "workspace quiescence process identity probe timed out");
+for (const reference of existingReferences) {
+  const outcome = existing.settled.get(reference);
+  if (outcome?.kind === "signaled" && !outcome.state.startsWith("T")) {
+    throw new Error("workspace quiescence process resumed unexpectedly");
+  }
 }
-refreshLease(input.processes);
+await refreshLease(input.processes);
 if (validationMode === "final") {
   const frozen = new Map(input.processes.map((entry) => [entry.pid, entry.start]));
   let quietScans = 0;
@@ -565,7 +568,7 @@ if (validationMode === "final") {
     const priorProcesses = input.processes.map((entry) => ({ ...entry }));
     for (const [pid, row] of candidates) frozen.set(pid, row.start);
     let frozenEntries = [...frozen].map(([pid, start]) => ({ pid, start }));
-    refreshLease(frozenEntries);
+    await refreshLease(frozenEntries);
     if (candidates.length > 0) {
       const references = candidates.map(([pid, row]) => ({ pid, start: row.start }));
       const stopped = await recoverProcessReferences(
@@ -600,7 +603,7 @@ if (validationMode === "final") {
       }
     }
     frozenEntries = [...frozen].map(([pid, start]) => ({ pid, start }));
-    refreshLease(frozenEntries);
+    await refreshLease(frozenEntries);
     Atomics.wait(sleeper, 0, 0, 20);
     const unknownProcess = quiescenceCandidates(
       processes(),
@@ -615,7 +618,7 @@ if (validationMode === "final") {
   input.processes = [...frozen].map(([pid, start]) => ({ pid, start }));
 }
 const renewed = { ...input, expiresAtMs: Date.now() + timeoutMs };
-refreshLease(renewed.processes);
+await refreshLease(renewed.processes);
 renewed.expiresAtMs = input.expiresAtMs;
 const confirmed = JSON.parse(fs.readFileSync(leasePath, "utf8"));
 if (confirmed.nonce !== nonce || confirmed.expiresAtMs !== renewed.expiresAtMs) {
