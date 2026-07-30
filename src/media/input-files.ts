@@ -262,18 +262,28 @@ function decodeTextContent(buffer: Buffer, charset: string | undefined, maxChars
 }
 
 function withInputFileTimeout<T>(params: {
-  task: Promise<T>;
+  run: (signal?: AbortSignal) => Promise<T>;
   timeoutMs: number;
   label: string;
+  signal?: AbortSignal;
 }): Promise<T> {
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
+  const timeoutController = new AbortController();
+  // A timeout alone preserves the cached in-process extractor. Only caller
+  // cancellation opts PDF work into the terminable worker path.
+  const signal = params.signal
+    ? AbortSignal.any([params.signal, timeoutController.signal])
+    : undefined;
   let timeout: NodeJS.Timeout | undefined;
   const timedOut = new Promise<never>((_, reject) => {
     timeout = setTimeout(() => {
-      reject(new Error(`${params.label} timed out after ${timeoutMs}ms`));
+      const error = new Error(`${params.label} timed out after ${timeoutMs}ms`);
+      timeoutController.abort(error);
+      reject(error);
     }, timeoutMs);
   });
-  return Promise.race([params.task, timedOut]).finally(() => {
+  const task = params.run(signal);
+  return Promise.race([task, timedOut]).finally(() => {
     if (timeout) {
       clearTimeout(timeout);
     }
@@ -284,8 +294,13 @@ function withInputFileTimeout<T>(params: {
 export async function normalizeInputImageBuffer(params: {
   buffer: Buffer;
   mimeType?: string;
+export async function normalizeInputImageBuffer(params: {
+  buffer: Buffer;
+  mimeType?: string;
   limits: Pick<InputImageLimits, "allowedMimes" | "maxBytes">;
+  signal?: AbortSignal;
 }): Promise<{ buffer: Buffer; mimeType: string }> {
+  params.signal?.throwIfAborted();
   if (params.buffer.byteLength > params.limits.maxBytes) {
     throw new Error(
       `Image too large: ${params.buffer.byteLength} bytes (limit: ${params.limits.maxBytes} bytes)`,
@@ -302,6 +317,7 @@ export async function normalizeInputImageBuffer(params: {
     /^(image\/hei[cf])-sequence$/,
     "$1",
   );
+  params.signal?.throwIfAborted();
   if (!params.limits.allowedMimes.has(sourceMime)) {
     throw new Error(`Unsupported image MIME type: ${sourceMime}`);
   }
@@ -311,7 +327,10 @@ export async function normalizeInputImageBuffer(params: {
   }
 
   // Normalize HEIC/HEIF to JPEG because downstream model and channel surfaces expect common images.
-  const normalizedBuffer = await convertHeicToJpeg(params.buffer);
+  const normalizedBuffer = params.signal
+    ? await convertHeicToJpeg(params.buffer, params.signal)
+    : await convertHeicToJpeg(params.buffer);
+  params.signal?.throwIfAborted();
   if (normalizedBuffer.byteLength > params.limits.maxBytes) {
     throw new Error(
       `Image too large after HEIC conversion: ${normalizedBuffer.byteLength} bytes (limit: ${params.limits.maxBytes} bytes)`,
@@ -345,7 +364,7 @@ export async function extractImageContentFromSource(
   } else {
     throw new Error(`Unsupported input_image source type: ${(source as { type: string }).type}`);
   }
-  const image = await normalizeInputImageBuffer({ buffer, mimeType, limits });
+  const image = await normalizeInputImageBuffer({ buffer, mimeType, limits, signal });
   signal?.throwIfAborted();
   // Conversions replace the buffer; unchanged bytes already have validated base64.
   const data =
@@ -393,6 +412,7 @@ export async function extractFileContentFromSource(params: {
     charset,
     limits,
     config: params.config,
+    signal: params.signal,
   });
   signal?.throwIfAborted();
   return extracted;
@@ -407,6 +427,7 @@ export async function extractFileContentFromBuffer(params: {
   limits: InputFileLimits;
   config?: OpenClawConfig;
   classification?: AttachmentClassification;
+  signal?: AbortSignal;
 }): Promise<InputFileExtractResult> {
   const { buffer, limits } = params;
   const filename = params.filename || "file";
@@ -414,11 +435,13 @@ export async function extractFileContentFromBuffer(params: {
     throw new Error(`File too large: ${buffer.byteLength} bytes (limit: ${limits.maxBytes} bytes)`);
   }
 
+  params.signal?.throwIfAborted();
   // Direct input_file callers declare their content type; the filename is
   // display metadata and must not override an explicitly allowlisted MIME.
   const classification =
     params.classification ??
     (await classifyAttachmentBytes({ buffer, declaredMime: params.mimeType }));
+  params.signal?.throwIfAborted();
   const mimeType = classification.mime;
   const charset = classification.charset ?? params.charset;
 
@@ -433,16 +456,19 @@ export async function extractFileContentFromBuffer(params: {
     const extracted = await withInputFileTimeout({
       label: "PDF extraction",
       timeoutMs: limits.timeoutMs,
-      task: extractPdfContent({
-        buffer,
-        maxPages: limits.pdf.maxPages,
-        maxPixels: limits.pdf.maxPixels,
-        minTextChars: limits.pdf.minTextChars,
-        ...(params.config ? { config: params.config } : {}),
-        onImageExtractionError: (err) => {
-          logWarn(`media: PDF image extraction skipped, ${String(err)}`);
-        },
-      }),
+      ...(params.signal ? { signal: params.signal } : {}),
+      run: (signal) =>
+        extractPdfContent({
+          buffer,
+          maxPages: limits.pdf.maxPages,
+          maxPixels: limits.pdf.maxPixels,
+          minTextChars: limits.pdf.minTextChars,
+          ...(params.config ? { config: params.config } : {}),
+          ...(signal ? { signal } : {}),
+          onImageExtractionError: (err) => {
+            logWarn(`media: PDF image extraction skipped, ${String(err)}`);
+          },
+        }),
     });
     const text = extracted.text ? truncateUtf16Safe(extracted.text, limits.maxChars) : "";
     return {

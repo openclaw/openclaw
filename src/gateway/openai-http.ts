@@ -580,6 +580,7 @@ async function resolveImagesForRequest(
   const images: ImageContent[] = [];
   let totalBytes = 0;
   for (const url of urls) {
+    signal?.throwIfAborted();
     const source = parseImageUrlToSource(url);
     if (source.type === "base64") {
       const sourceBytes = estimateBase64DecodedBytes(source.data);
@@ -599,6 +600,7 @@ async function resolveImagesForRequest(
     }
     images.push(image);
   }
+  signal?.throwIfAborted();
   return images;
 }
 
@@ -985,6 +987,9 @@ export async function handleOpenAiHttpRequest(
     }
     logWarn(`openai-compat: invalid image_url content: ${String(err)}`);
     sendInvalidRequest(res, "Invalid image_url content in `messages`.");
+    return true;
+  }
+  if (abortController.signal.aborted) {
     return true;
   }
 

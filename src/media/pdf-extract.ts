@@ -20,6 +20,7 @@ export async function extractPdfContent(params: {
   password?: string;
   pageNumbers?: number[];
   config?: OpenClawConfig;
+  signal?: AbortSignal;
   onImageExtractionError?: (error: unknown) => void;
 }): Promise<PdfExtractedContent> {
   // The document owner strips config and loader-only fields before plugin dispatch.
