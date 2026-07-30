@@ -541,8 +541,16 @@ describe("input file MIME sniffing", () => {
   it("times out local PDF extraction with the input file timeout", async () => {
     vi.useFakeTimers();
     try {
+      let extractionSignal: AbortSignal | undefined;
       detectMimeMock.mockResolvedValueOnce("application/pdf");
-      extractPdfContentMock.mockReturnValueOnce(new Promise(() => {}));
+      extractPdfContentMock.mockImplementationOnce(
+        (params: { signal?: AbortSignal }) =>
+          new Promise((_resolve, reject) => {
+            extractionSignal = params.signal;
+            const rejectForAbort = () => reject(params.signal?.reason);
+            params.signal?.addEventListener("abort", rejectForAbort, { once: true });
+          }),
+      );
 
       const pending = expect(
         extractFileContentFromSource({
@@ -557,6 +565,8 @@ describe("input file MIME sniffing", () => {
       ).rejects.toThrow("PDF extraction timed out after 1ms");
 
       await vi.advanceTimersByTimeAsync(1);
+      expect(extractionSignal?.aborted).toBe(true);
+      expect(extractionSignal?.reason).toEqual(new Error("PDF extraction timed out after 1ms"));
       await pending;
     } finally {
       vi.useRealTimers();
@@ -565,7 +575,12 @@ describe("input file MIME sniffing", () => {
 
   it("passes the caller abort signal through PDF extraction", async () => {
     const controller = new AbortController();
+    let extractionSignal: AbortSignal | undefined;
     detectMimeMock.mockResolvedValueOnce("application/pdf");
+    extractPdfContentMock.mockImplementationOnce((params: { signal?: AbortSignal }) => {
+      extractionSignal = params.signal;
+      return Promise.resolve({ text: "", images: [] });
+    });
 
     await extractFileContentFromSource({
       source: {
@@ -578,9 +593,11 @@ describe("input file MIME sniffing", () => {
       signal: controller.signal,
     });
 
-    expect(extractPdfContentMock).toHaveBeenCalledWith(
-      expect.objectContaining({ signal: controller.signal }),
-    );
+    expect(extractionSignal).toBeInstanceOf(AbortSignal);
+    expect(extractionSignal?.aborted).toBe(false);
+    controller.abort(new Error("client disconnected"));
+    expect(extractionSignal?.aborted).toBe(true);
+    expect(extractionSignal?.reason).toEqual(new Error("client disconnected"));
   });
 });
 

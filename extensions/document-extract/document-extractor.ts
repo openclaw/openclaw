@@ -45,8 +45,23 @@ type PdfExtractionWorker = {
 
 type PdfDocumentExtractorOptions = {
   createWorker?: (url: URL, options: WorkerOptions) => PdfExtractionWorker;
+  workerAdmission?: PdfWorkerAdmission;
   workerUrl?: URL;
 };
+
+type PdfWorkerSlot = () => void;
+
+type PdfWorkerWaiter = {
+  resolve: (release: PdfWorkerSlot) => void;
+  reject: (error: Error) => void;
+  signal: AbortSignal;
+  onAbort: () => void;
+};
+
+// Each PDFium worker owns a WASM engine, a copied input buffer, and render buffers.
+// Match OpenClaw's default bounded media-processing concurrency instead of allowing
+// pre-dispatch HTTP requests to create an unbounded number of those workers.
+const MAX_CONCURRENT_PDF_WORKERS = 2;
 
 let pdfEnginePromise: Promise<PdfEngine> | null = null;
 
@@ -190,6 +205,83 @@ function toError(value: unknown, fallback: string): Error {
   return new Error(value === undefined ? fallback : String(value));
 }
 
+class PdfWorkerAdmission {
+  private active = 0;
+  private readonly waiters: PdfWorkerWaiter[] = [];
+
+  constructor(private readonly maxConcurrent: number) {}
+
+  async run<T>(signal: AbortSignal, task: () => Promise<T>): Promise<T> {
+    const release = await this.acquire(signal);
+    try {
+      signal.throwIfAborted();
+      return await task();
+    } finally {
+      release();
+    }
+  }
+
+  private async acquire(signal: AbortSignal): Promise<PdfWorkerSlot> {
+    signal.throwIfAborted();
+    if (this.active < this.maxConcurrent) {
+      this.active += 1;
+      return this.createRelease();
+    }
+    return await new Promise<PdfWorkerSlot>((resolve, reject) => {
+      const waiter: PdfWorkerWaiter = {
+        resolve,
+        reject,
+        signal,
+        onAbort: () => {
+          signal.removeEventListener("abort", waiter.onAbort);
+          const index = this.waiters.indexOf(waiter);
+          if (index >= 0) {
+            this.waiters.splice(index, 1);
+          }
+          reject(toError(signal.reason, "PDF extraction aborted while waiting for a worker"));
+        },
+      };
+      this.waiters.push(waiter);
+      signal.addEventListener("abort", waiter.onAbort, { once: true });
+      if (signal.aborted) {
+        waiter.onAbort();
+      }
+    });
+  }
+
+  private createRelease(): PdfWorkerSlot {
+    let released = false;
+    return () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      this.active = Math.max(0, this.active - 1);
+      this.drain();
+    };
+  }
+
+  private drain(): void {
+    while (this.active < this.maxConcurrent) {
+      const waiter = this.waiters.shift();
+      if (!waiter) {
+        return;
+      }
+      waiter.signal.removeEventListener("abort", waiter.onAbort);
+      if (waiter.signal.aborted) {
+        waiter.reject(
+          toError(waiter.signal.reason, "PDF extraction aborted while waiting for a worker"),
+        );
+        continue;
+      }
+      this.active += 1;
+      waiter.resolve(this.createRelease());
+    }
+  }
+}
+
+const sharedPdfWorkerAdmission = new PdfWorkerAdmission(MAX_CONCURRENT_PDF_WORKERS);
+
 function parseWorkerResult(message: unknown): PdfExtractionWorkerResult | undefined {
   if (!message || typeof message !== "object" || Array.isArray(message)) {
     return undefined;
@@ -282,7 +374,7 @@ async function extractPdfContentInWorker(
           request.onImageExtractionError?.(new Error(error));
         }
         resolve(result.result);
-      }, false);
+      }, true);
     });
     worker.once("error", (error) => {
       settle(() => reject(toError(error, "PDF extraction worker failed")), true);
@@ -304,6 +396,7 @@ async function extractPdfContentInWorker(
 export function createPdfDocumentExtractor(
   options: PdfDocumentExtractorOptions = {},
 ): DocumentExtractorPlugin {
+  const workerAdmission = options.workerAdmission ?? sharedPdfWorkerAdmission;
   return {
     id: "pdf",
     label: "PDF",
@@ -311,7 +404,12 @@ export function createPdfDocumentExtractor(
     autoDetectOrder: 10,
     extract: (request) =>
       request.signal
-        ? extractPdfContentInWorker(request, options)
+        ? workerAdmission.run(request.signal, () => extractPdfContentInWorker(request, options))
         : extractPdfContentInProcess(request),
   };
 }
+
+export const testOnlyDocumentExtractor = {
+  createPdfWorkerAdmission: (maxConcurrent: number) =>
+    new PdfWorkerAdmission(Math.max(1, Math.floor(maxConcurrent))),
+};

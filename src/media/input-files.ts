@@ -280,18 +280,26 @@ function clampText(text: string, maxChars: number): string {
 }
 
 function withInputFileTimeout<T>(params: {
-  task: Promise<T>;
+  run: (signal: AbortSignal) => Promise<T>;
   timeoutMs: number;
   label: string;
+  signal?: AbortSignal;
 }): Promise<T> {
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
+  const timeoutController = new AbortController();
+  const signal = params.signal
+    ? AbortSignal.any([params.signal, timeoutController.signal])
+    : timeoutController.signal;
   let timeout: NodeJS.Timeout | undefined;
   const timedOut = new Promise<never>((_, reject) => {
     timeout = setTimeout(() => {
-      reject(new Error(`${params.label} timed out after ${timeoutMs}ms`));
+      const error = new Error(`${params.label} timed out after ${timeoutMs}ms`);
+      timeoutController.abort(error);
+      reject(error);
     }, timeoutMs);
   });
-  return Promise.race([params.task, timedOut]).finally(() => {
+  const task = params.run(signal);
+  return Promise.race([task, timedOut]).finally(() => {
     if (timeout) {
       clearTimeout(timeout);
     }
@@ -475,17 +483,19 @@ export async function extractFileContentFromSource(params: {
     const extracted = await withInputFileTimeout({
       label: "PDF extraction",
       timeoutMs: limits.timeoutMs,
-      task: extractPdfContent({
-        buffer,
-        maxPages: limits.pdf.maxPages,
-        maxPixels: limits.pdf.maxPixels,
-        minTextChars: limits.pdf.minTextChars,
-        ...(params.config ? { config: params.config } : {}),
-        ...(params.signal ? { signal: params.signal } : {}),
-        onImageExtractionError: (err) => {
-          logWarn(`media: PDF image extraction skipped, ${String(err)}`);
-        },
-      }),
+      ...(params.signal ? { signal: params.signal } : {}),
+      run: (signal) =>
+        extractPdfContent({
+          buffer,
+          maxPages: limits.pdf.maxPages,
+          maxPixels: limits.pdf.maxPixels,
+          minTextChars: limits.pdf.minTextChars,
+          ...(params.config ? { config: params.config } : {}),
+          signal,
+          onImageExtractionError: (err) => {
+            logWarn(`media: PDF image extraction skipped, ${String(err)}`);
+          },
+        }),
     });
     const text = extracted.text ? clampText(extracted.text, limits.maxChars) : "";
     return {
