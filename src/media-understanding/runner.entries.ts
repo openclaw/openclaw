@@ -569,6 +569,9 @@ async function resolveProviderExecutionAuth(params: {
       cfg: params.cfg,
       profileId: params.entry.profile,
       preferredProfile: params.entry.preferredProfile,
+      // Explicit media-entry profile selections are operator-locked; missing
+      // secrets must fail closed instead of falling through to env/config.
+      ...(params.entry.profile ? { lockedProfile: true as const } : {}),
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
       modelApi,
