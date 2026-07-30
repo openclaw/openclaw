@@ -132,6 +132,53 @@ describe("backoff helpers", () => {
     }
   });
 
+  it("produces spread values when jitter is non-zero", () => {
+    // Validates that non-zero jitter breaks synchronization across identical
+    // backoff attempts — the property that prevents thundering herd on
+    // gateway restart when many workers share the same default backoff.
+    const workerPolicy: BackoffPolicy = {
+      initialMs: 250,
+      maxMs: 30_000,
+      factor: 2,
+      jitter: 0.1,
+    };
+    const randomSpy = vi.spyOn(Math, "random");
+    try {
+      randomSpy.mockReturnValue(0);
+      const min = computeBackoff(workerPolicy, 1);
+      randomSpy.mockReturnValue(1);
+      const max = computeBackoff(workerPolicy, 1);
+      expect(min).toBe(250);
+      expect(max).toBe(275);
+      expect(max).toBeGreaterThan(min);
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
+  it("positive jitter is clamped away at the cap, reconverging workers", () => {
+    // Documents the shared-helper limitation that motivates the per-connection
+    // phase offset in WorkerConnection: once base >= maxMs, positive-only
+    // jitter is fully clamped and all callers get the same capped value.
+    const workerPolicy: BackoffPolicy = {
+      initialMs: 250,
+      maxMs: 30_000,
+      factor: 2,
+      jitter: 0.1,
+    };
+    const randomSpy = vi.spyOn(Math, "random");
+    try {
+      randomSpy.mockReturnValue(0);
+      const atCapMin = computeBackoff(workerPolicy, 8);
+      randomSpy.mockReturnValue(1);
+      const atCapMax = computeBackoff(workerPolicy, 8);
+      expect(atCapMin).toBe(30_000);
+      expect(atCapMax).toBe(30_000);
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
   it("rejects if the signal aborts during listener registration", async () => {
     let aborted = false;
     const signal = {
