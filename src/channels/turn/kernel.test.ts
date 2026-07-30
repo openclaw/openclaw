@@ -1703,6 +1703,49 @@ describe("channel turn kernel", () => {
         reason: "zero-count-visible-dispatch",
       }),
     ]);
+    // A dispatch result without a processed outcome carries no cause detail.
+    expect(log.mock.calls).not.toContainEqual([
+      expect.objectContaining({
+        reason: "zero-count-visible-dispatch",
+        cause: expect.any(String),
+      }),
+    ]);
+  });
+
+  it("attributes the zero-count warning with the dispatch's processed outcome", async () => {
+    const events: string[] = [];
+    const log = vi.fn();
+    const recordInboundSession = createRecordInboundSession(events);
+    const runDispatch = vi.fn(async () => ({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+      processedOutcome: { outcome: "skipped", reason: "duplicate" },
+    }));
+
+    const result = await runPreparedInboundReply({
+      channel: "test",
+      routeSessionKey: "agent:main:test:peer",
+      storePath: "/tmp/sessions.json",
+      ctxPayload: createCtx(),
+      recordInboundSession,
+      runDispatch,
+      log,
+      messageId: "msg-zero-cause",
+      record: {
+        onRecordError: vi.fn(),
+      },
+    });
+
+    expectDispatched(result);
+    expect(log.mock.calls).toContainEqual([
+      expect.objectContaining({
+        stage: "dispatch",
+        event: "warning",
+        messageId: "msg-zero-cause",
+        reason: "zero-count-visible-dispatch",
+        cause: "skipped:duplicate",
+      }),
+    ]);
   });
 
   it("does not warn for observed-path deliveries with zero queued counts", async () => {

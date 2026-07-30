@@ -1,4 +1,5 @@
 // Dispatch-result helpers for counting visible channel turn deliveries.
+import type { DispatchProcessedNote } from "../../auto-reply/reply/dispatch-from-config.types.js";
 import type { ReplyDispatchKind } from "../../auto-reply/reply/reply-dispatcher.types.js";
 
 /** Minimal dispatch result shape needed to count visible channel deliveries. */
@@ -7,6 +8,7 @@ export type ChannelTurnDispatchResultLike =
       queuedFinal?: boolean;
       counts?: Partial<Record<ReplyDispatchKind, number>>;
       observedReplyDelivery?: boolean;
+      processedOutcome?: DispatchProcessedNote;
     }
   | null
   | undefined;

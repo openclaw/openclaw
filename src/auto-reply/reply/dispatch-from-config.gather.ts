@@ -26,11 +26,7 @@ import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-re
 import { normalizeTtsAutoMode } from "../../tts/tts-config.js";
 import type { FinalizedRuntimeMsgContext as FinalizedMsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
-import type {
-  DispatchProcessedOptions,
-  DispatchProcessedOutcome,
-  InboundMessageAuditTerminalRecorder,
-} from "./dispatch-from-config.audit.js";
+import type { InboundMessageAuditTerminalRecorder } from "./dispatch-from-config.audit.js";
 import {
   resolveBoundAcpDispatchSessionKey,
   resolveSessionStoreLookup,
@@ -41,7 +37,12 @@ import { createFinalizationAwareTtsPayloadApplier } from "./dispatch-from-config
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import { loadRuntimePlugins } from "./dispatch-from-config.runtime-loaders.js";
 import { createReplyHotPathTimingTracker } from "./dispatch-from-config.timing.js";
-import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
+import type {
+  DispatchFromConfigParams,
+  DispatchProcessedNote,
+  DispatchProcessedOptions,
+  DispatchProcessedOutcome,
+} from "./dispatch-from-config.types.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { ReplySessionBinding } from "./get-reply.types.js";
 import { finalizeInboundContext, isFinalizedInboundContext } from "./inbound-context.js";
@@ -58,6 +59,7 @@ import { stageRemoteInboundMediaIfNeeded } from "./stage-remote-inbound-media.js
 export async function gatherDispatchRequest(
   params: DispatchFromConfigParams,
   messageAuditTerminal: InboundMessageAuditTerminalRecorder | undefined,
+  processedNote: { current?: DispatchProcessedNote },
 ) {
   const ctx = isFinalizedInboundContext(params.ctx)
     ? params.ctx
@@ -72,6 +74,7 @@ export async function gatherDispatchRequest(
   const replyOperationRunState: ReplyOperationRunState =
     resolveReplyOperationRunState(normalizedParams.replyOptions) ?? {};
   if (params.replyOptions?.abortSignal?.aborted) {
+    processedNote.current = { outcome: "skipped", reason: "reply_operation_aborted" };
     messageAuditTerminal?.note("skipped", { reason: "reply_operation_aborted" });
     return {
       status: "complete" as const,
@@ -134,6 +137,10 @@ export async function gatherDispatchRequest(
   let agentDispatchStartedAt = 0;
 
   const recordProcessed = (outcome: DispatchProcessedOutcome, opts?: DispatchProcessedOptions) => {
+    processedNote.current = {
+      outcome,
+      ...(opts?.reason !== undefined ? { reason: opts.reason } : {}),
+    };
     messageAuditTerminal?.note(outcome, opts);
     if (diagnosticsEnabled) {
       replyHotPathTiming.logIfSlow({
@@ -224,6 +231,7 @@ export async function gatherDispatchRequest(
     dispatchOperationSessionKey &&
     initialDispatchReplyOperation
   ) {
+    processedNote.current = { outcome: "skipped", reason: "reply-operation-active" };
     messageAuditTerminal?.note("skipped", { reason: "reply-operation-active" });
     return {
       status: "complete" as const,

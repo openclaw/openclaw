@@ -46,6 +46,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
     sessionKey,
     sessionStoreEntry,
     suppressDelivery,
+    turnLedger,
   } = state;
   const abortRuntime = params.fastAbortResolver ? null : await loadAbortRuntime();
   const fastAbortResolver = params.fastAbortResolver ?? abortRuntime?.tryFastAbortFromMessage;
@@ -240,9 +241,14 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
           completeDispatchReplyOperation();
           return {
             status: "complete" as const,
+            // Routed binding deliveries bypass the dispatcher counters, so the
+            // ledger's settled visibility keeps a delivered reply from reading as
+            // a silent zero-count turn. A hook-suppressed or failed route never
+            // reached the recipient, so it must keep the warning eligible.
             result: attachSourceReplyDeliveryMode({
               queuedFinal: false,
               counts: dispatcher.getQueuedCounts(),
+              ...(turnLedger.hasVisibleDelivery() ? { observedReplyDelivery: true } : {}),
             }),
           };
         }
@@ -298,6 +304,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
             result: attachSourceReplyDeliveryMode({
               queuedFinal: false,
               counts: dispatcher.getQueuedCounts(),
+              ...(turnLedger.hasVisibleDelivery() ? { observedReplyDelivery: true } : {}),
             }),
           };
         }
@@ -320,6 +327,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
             result: attachSourceReplyDeliveryMode({
               queuedFinal: false,
               counts: dispatcher.getQueuedCounts(),
+              ...(turnLedger.hasVisibleDelivery() ? { observedReplyDelivery: true } : {}),
             }),
           };
         }

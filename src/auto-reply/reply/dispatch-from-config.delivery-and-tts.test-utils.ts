@@ -11,6 +11,7 @@ import {
   runWithDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
+import type { PluginTargetedInboundClaimOutcome } from "../../plugins/hooks.test-fixtures.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -109,6 +110,7 @@ describe("dispatchReplyFromConfig", () => {
       queuedFinal: false,
       counts: { tool: 0, block: 0, final: 0 },
       sourceReplyDeliveryMode: "message_tool_only",
+      processedOutcome: { outcome: "completed", reason: "plugin-bound-handled" },
     });
     expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-command-escape-denied");
     expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
@@ -174,7 +176,12 @@ describe("dispatchReplyFromConfig", () => {
 
     const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    expect(result).toEqual({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+      observedReplyDelivery: true,
+      processedOutcome: { outcome: "completed", reason: "plugin-bound-handled" },
+    });
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "Codex native reply" });
     expect(
       getReplyPayloadMetadata(
@@ -269,7 +276,12 @@ describe("dispatchReplyFromConfig", () => {
       replyResolver,
     });
 
-    expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    expect(result).toEqual({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+      observedReplyDelivery: true,
+      processedOutcome: { outcome: "completed", reason: "plugin-bound-handled" },
+    });
     expect(persistApproved).toHaveBeenCalledWith({
       target: expect.objectContaining({
         sessionId: "bound-session-id",
@@ -334,7 +346,12 @@ describe("dispatchReplyFromConfig", () => {
       replyResolver,
     });
 
-    expect(rotatedResult).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    expect(rotatedResult).toEqual({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+      observedReplyDelivery: true,
+      processedOutcome: { outcome: "completed", reason: "plugin-bound-handled" },
+    });
     const rotatedRoutedCall = firstMockArg(mocks.routeReply, "rotated plugin binding route") as {
       payload: ReplyPayload;
       sessionKey: string;
@@ -396,6 +413,155 @@ describe("dispatchReplyFromConfig", () => {
     expect(blockedDispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      name: "handled reply route delivers",
+      claimOutcome: {
+        status: "handled",
+        result: { handled: true, reply: { text: "Codex routed reply" } },
+      },
+      routeResult: { ok: true, delivered: true, messageId: "routed-binding-1" },
+      processedReason: "plugin-bound-handled",
+      expectObservedDelivery: true,
+    },
+    {
+      name: "handled reply route is hook-suppressed",
+      claimOutcome: {
+        status: "handled",
+        result: { handled: true, reply: { text: "Codex routed reply" } },
+      },
+      routeResult: { ok: true, delivered: false, suppressed: true },
+      processedReason: "plugin-bound-handled",
+      expectObservedDelivery: false,
+    },
+    {
+      name: "handled reply route fails",
+      claimOutcome: {
+        status: "handled",
+        result: { handled: true, reply: { text: "Codex routed reply" } },
+      },
+      routeResult: { ok: false, delivered: false, error: "transport down" },
+      processedReason: "plugin-bound-handled",
+      expectObservedDelivery: false,
+    },
+    {
+      name: "declined notice route delivers",
+      claimOutcome: { status: "declined" },
+      routeResult: { ok: true, delivered: true, messageId: "routed-declined-1" },
+      processedReason: "plugin-bound-declined",
+      expectObservedDelivery: true,
+    },
+    {
+      name: "declined notice route is hook-suppressed",
+      claimOutcome: { status: "declined" },
+      routeResult: { ok: true, delivered: false, suppressed: true },
+      processedReason: "plugin-bound-declined",
+      expectObservedDelivery: false,
+    },
+    {
+      name: "declined notice route fails",
+      claimOutcome: { status: "declined" },
+      routeResult: { ok: false, delivered: false, error: "transport down" },
+      processedReason: "plugin-bound-declined",
+      expectObservedDelivery: false,
+    },
+    {
+      name: "error notice route delivers",
+      claimOutcome: { status: "error", error: "boom" },
+      routeResult: { ok: true, delivered: true, messageId: "routed-error-1" },
+      processedReason: "plugin-bound-error",
+      expectObservedDelivery: true,
+    },
+    {
+      name: "error notice route is hook-suppressed",
+      claimOutcome: { status: "error", error: "boom" },
+      routeResult: { ok: true, delivered: false, suppressed: true },
+      processedReason: "plugin-bound-error",
+      expectObservedDelivery: false,
+    },
+    {
+      name: "error notice route fails",
+      claimOutcome: { status: "error", error: "boom" },
+      routeResult: { ok: false, delivered: false, error: "transport down" },
+      processedReason: "plugin-bound-error",
+      expectObservedDelivery: false,
+    },
+  ] satisfies Array<{
+    name: string;
+    claimOutcome: PluginTargetedInboundClaimOutcome;
+    routeResult: {
+      ok: boolean;
+      delivered: boolean;
+      messageId?: string;
+      suppressed?: boolean;
+      error?: string;
+    };
+    processedReason: string;
+    expectObservedDelivery: boolean;
+  }>)(
+    "attests observed delivery only when the routed binding turn delivered: $name",
+    async (params) => {
+      setNoAbort();
+      hookMocks.runner.hasHooks.mockImplementation(
+        ((hookName?: string) =>
+          hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
+      );
+      hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
+      hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue(params.claimOutcome);
+      mocks.routeReply.mockResolvedValue(params.routeResult);
+      sessionBindingMocks.resolveByConversation.mockReturnValue({
+        bindingId: "binding-routed-attest-1",
+        targetSessionKey: "plugin-binding:codex:routed-attest",
+        targetKind: "session",
+        conversation: {
+          channel: "slack",
+          accountId: "default",
+          conversationId: "user:U123",
+        },
+        status: "active",
+        boundAt: 1710000000000,
+        metadata: {
+          pluginBindingOwner: "plugin",
+          pluginId: "openclaw-codex-app-server",
+          pluginRoot: "/plugins/codex",
+        },
+      } satisfies SessionBindingRecord);
+      const dispatcher = createDispatcher();
+      const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
+
+      const result = await dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: "openclaw",
+          Surface: "openclaw",
+          OriginatingChannel: "slack",
+          OriginatingTo: "user:U123",
+          To: "user:U123",
+          AccountId: "default",
+          CommandAuthorized: true,
+          Body: "continue",
+          RawBody: "continue",
+          MessageSid: `msg-routed-attest-${params.name.replace(/\s+/g, "-")}`,
+          SessionKey: "agent:main:main",
+        }),
+        cfg: emptyConfig,
+        dispatcher,
+        replyResolver,
+      });
+
+      // A hook-suppressed or failed route reached no recipient, so the result
+      // must stay warning-eligible instead of reading as a visible delivery.
+      expect(result).toEqual({
+        queuedFinal: false,
+        counts: { tool: 0, block: 0, final: 0 },
+        ...(params.expectObservedDelivery ? { observedReplyDelivery: true } : {}),
+        processedOutcome: { outcome: "completed", reason: params.processedReason },
+      });
+      expect(mocks.routeReply).toHaveBeenCalledTimes(1);
+      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+      expect(replyResolver).not.toHaveBeenCalled();
+    },
+  );
+
   it("routes plugin-owned Discord DM bindings to the owning plugin before generic inbound claim broadcast", async () => {
     setNoAbort();
     hookMocks.runner.hasHooks.mockImplementation(
@@ -448,7 +614,11 @@ describe("dispatchReplyFromConfig", () => {
 
     const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    expect(result).toEqual({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+      processedOutcome: { outcome: "completed", reason: "plugin-bound-handled" },
+    });
     expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-dm-1");
     const inboundClaimCall = hookMocks.runner.runInboundClaimForPluginOutcome.mock
       .calls[0] as unknown as

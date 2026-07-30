@@ -7,6 +7,19 @@ import type { CommandSessionMetadataChange } from "./command-session-metadata.js
 import type { InternalGetReplyFromConfig, InternalGetReplyOptions } from "./get-reply.types.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 
+export type DispatchProcessedOutcome = "completed" | "skipped" | "error";
+
+export type DispatchProcessedOptions = {
+  reason?: string;
+  error?: string;
+};
+
+/** Terminal processed outcome recorded while dispatching, mirrored onto the result. */
+export type DispatchProcessedNote = {
+  outcome: DispatchProcessedOutcome;
+  reason?: string;
+};
+
 export type DispatchFromConfigResult = {
   queuedFinal: boolean;
   counts: Record<ReplyDispatchKind, number>;
@@ -19,6 +32,8 @@ export type DispatchFromConfigResult = {
   deliberateSilentTerminalReply?: true;
   beforeAgentRunBlocked?: boolean;
   sessionMetadataChanges?: CommandSessionMetadataChange[];
+  /** Terminal outcome the dispatch recorded; names the branch that ended the turn. */
+  processedOutcome?: DispatchProcessedNote;
 };
 
 export type DispatchFromConfigParams = {

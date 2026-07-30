@@ -98,11 +98,17 @@ function maybeWarnZeroCountVisibleDispatch<TDispatchResult>(
   if (hasVisibleChannelTurnDispatch(dispatchResult, NO_ADDITIONAL_DELIVERY_SIGNALS)) {
     return;
   }
+  // The processed outcome names the dispatch branch that produced the silence,
+  // so operators can tell a benign duplicate or busy skip from a lost message.
+  const processed = dispatchResult?.processedOutcome;
+  const cause = processed
+    ? `${processed.outcome}${processed.reason ? `:${processed.reason}` : ""}`
+    : undefined;
   log.warn(
     `visible channel turn dispatched with no queued reply payloads: channel=${params.channel} ` +
       `messageId=${params.messageId ?? "unknown"} sessionKey=${
         params.ctxPayload.SessionKey ?? params.routeSessionKey
-      }`,
+      } cause=${cause ?? "unknown"}`,
   );
   emit({
     ...params,
@@ -113,6 +119,7 @@ function maybeWarnZeroCountVisibleDispatch<TDispatchResult>(
       sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
       admission: params.admission?.kind ?? "dispatch",
       reason: "zero-count-visible-dispatch",
+      ...(cause ? { cause } : {}),
     },
   });
 }
