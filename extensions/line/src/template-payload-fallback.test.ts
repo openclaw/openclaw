@@ -81,14 +81,14 @@ describe("template payload textual fallback", () => {
     expect(template.template.actions).toEqual([{ type: "message", label: "Go", text: "Go" }]);
   });
 
-  it("sends the labels when confirm data values are blank", () => {
+  it("sends the labels when confirm data values are empty", () => {
     const message = buildTemplateMessageFromPayload({
       type: "confirm",
       text: "Continue?",
       confirmLabel: "Yes",
       confirmData: "",
       cancelLabel: "No",
-      cancelData: "  ",
+      cancelData: "",
     });
 
     const template = expectDefined(message, "confirm template message");
@@ -98,6 +98,42 @@ describe("template payload textual fallback", () => {
     expect(template.template.actions).toEqual([
       { type: "message", label: "Yes", text: "Yes" },
       { type: "message", label: "No", text: "No" },
+    ]);
+  });
+
+  // LINE accepts whitespace-only action text and echoes it verbatim on tap;
+  // only the exactly-empty value is rejected and may be repaired to the label.
+  it("preserves whitespace-only message action data", () => {
+    const message = buildTemplateMessageFromPayload({
+      type: "buttons",
+      text: "Pick",
+      actions: [{ type: "message", label: "Go", data: " " }],
+    });
+
+    const template = expectDefined(message, "buttons template message");
+    if (template.type !== "template" || template.template.type !== "buttons") {
+      throw new Error("expected a buttons template");
+    }
+    expect(template.template.actions).toEqual([{ type: "message", label: "Go", text: " " }]);
+  });
+
+  it("preserves whitespace-only confirm data values", () => {
+    const message = buildTemplateMessageFromPayload({
+      type: "confirm",
+      text: "Continue?",
+      confirmLabel: "Yes",
+      confirmData: " ",
+      cancelLabel: "No",
+      cancelData: "  ",
+    });
+
+    const template = expectDefined(message, "confirm template message");
+    if (template.type !== "template" || template.template.type !== "confirm") {
+      throw new Error("expected a confirm template");
+    }
+    expect(template.template.actions).toEqual([
+      { type: "message", label: "Yes", text: " " },
+      { type: "message", label: "No", text: "  " },
     ]);
   });
 

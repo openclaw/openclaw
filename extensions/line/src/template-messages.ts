@@ -34,9 +34,10 @@ function buildTemplatePayloadAction(action: TemplatePayloadAction): Action {
   if (action.type === "postback" && action.data) {
     return postbackAction(action.label, action.data, action.label);
   }
-  // Blank data means "tap sends the label": a message action with empty text
-  // makes LINE reject the whole message.
-  const data = action.data?.trim() ? action.data : undefined;
+  // Empty data means "tap sends the label": a message action with empty text
+  // makes LINE reject the whole message. Whitespace-only data is accepted by
+  // LINE and echoed verbatim on tap, so it must stay untouched.
+  const data = action.data === "" ? undefined : action.data;
   return messageAction(action.label, data ?? action.label);
 }
 
@@ -306,9 +307,9 @@ export function buildTemplateMessageFromPayload(
         return templateTextFallback(truncateTemplateText(payload.altText || payload.text, 400));
       }
 
-      // Blank data means "tap sends the label", matching buildTemplatePayloadAction.
-      const confirmData = payload.confirmData.trim() ? payload.confirmData : payload.confirmLabel;
-      const cancelData = payload.cancelData.trim() ? payload.cancelData : payload.cancelLabel;
+      // Empty data means "tap sends the label", matching buildTemplatePayloadAction.
+      const confirmData = payload.confirmData === "" ? payload.confirmLabel : payload.confirmData;
+      const cancelData = payload.cancelData === "" ? payload.cancelLabel : payload.cancelData;
 
       const confirmAction = confirmData.startsWith("http")
         ? uriAction(payload.confirmLabel, confirmData)
