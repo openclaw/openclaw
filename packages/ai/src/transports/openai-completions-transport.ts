@@ -46,7 +46,11 @@ import {
   withFirstStreamEventTimeout,
 } from "../utils/stream-first-event-timeout.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
-import { isAzureOpenAICompatibleHostname } from "./azure-openai-hostnames-internal.js";
+import {
+  isAzureFoundryMultiModelHostname,
+  isAzureOpenAICompatibleHostname,
+  isDedicatedAzureOpenAIHostname,
+} from "./azure-openai-hostnames-internal.js";
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
 import {
   buildGuardedModelFetch,
@@ -56,7 +60,10 @@ import {
 import { resolveMaxTokensParam } from "./model-max-tokens-params.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
 import { hasOpenAICompatibleConversationTurn } from "./openai-compatible-conversation-turn.js";
-import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
+import {
+  detectOpenAICompletionsCompat,
+  isOpenAIFamilyFoundryDeployment,
+} from "./openai-completions-compat.js";
 import {
   flattenCompletionMessagesToStringContent,
   stripCompletionMessagesToRoleContent,
@@ -189,7 +196,7 @@ function createOpenAICompletionsClient(
   });
 }
 
-function isKnownOpenAICompletionsEndpoint(model: Pick<Model, "baseUrl">): boolean {
+function isKnownOpenAICompletionsEndpoint(model: Pick<Model, "baseUrl" | "id" | "name">): boolean {
   if (!model.baseUrl.trim()) {
     return true;
   }
@@ -198,7 +205,17 @@ function isKnownOpenAICompletionsEndpoint(model: Pick<Model, "baseUrl">): boolea
     return true;
   }
   try {
-    return isAzureOpenAICompatibleHostname(new URL(model.baseUrl).hostname.toLowerCase());
+    const hostname = new URL(model.baseUrl).hostname.toLowerCase();
+    if (isDedicatedAzureOpenAIHostname(hostname)) {
+      return true;
+    }
+    // Multi-model Foundry hosts front arbitrary vendors and deployment ids
+    // are operator-chosen aliases, so OpenAI reasoning-control semantics only
+    // apply when the canonical model identity is an OpenAI family model.
+    if (isAzureFoundryMultiModelHostname(hostname)) {
+      return isOpenAIFamilyFoundryDeployment(model.id, model.name);
+    }
+    return false;
   } catch {
     return false;
   }
