@@ -327,7 +327,7 @@ async function normalizeInputImage(params: {
   }
 
   // Normalize HEIC/HEIF to JPEG because downstream model and channel surfaces expect common images.
-  const normalizedBuffer = await convertHeicToJpeg(params.buffer);
+  const normalizedBuffer = await convertHeicToJpeg(params.buffer, params.signal);
   params.signal?.throwIfAborted();
   if (normalizedBuffer.byteLength > params.limits.maxBytes) {
     throw new Error(
