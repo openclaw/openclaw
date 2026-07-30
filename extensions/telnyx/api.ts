@@ -10,3 +10,4 @@ export {
 } from "./models.js";
 export { applyTelnyxConfig } from "./onboard.js";
 export { buildStaticTelnyxProvider } from "./provider-catalog.js";
+export { createTelnyxToolPayloadWrapper, resetTelnyxCapRejectionCacheForTest } from "./stream.js";
