@@ -392,23 +392,26 @@ export class AcpGatewayAgent implements Agent {
     this.log(`newSession: ${session.sessionId} -> ${session.sessionKey}`);
     const sessionSnapshot = await this.getSessionSnapshot(session.sessionKey);
     const { configOptions, modes } = sessionSnapshot;
-    // Defer notifications past the response-write boundary so the client
-    // receives the session/new result before session_info_update. A zero-delay
-    // timer places the callback after the current synchronous handler return
-    // and response serialization on the event-loop timeline.
-    // Guard: if closeSession ran before the timer fires, the session is gone
-    // and sending stale notifications would be incorrect.
-    setTimeout(() => {
-      if (!this.sessionStore.hasSession(session.sessionId)) {
-        return;
-      }
-      this.sendSessionSnapshotUpdate(session, sessionSnapshot, {
-        includeControls: false,
-        record: true,
-      })
-        .then(() => this.sessionUpdates.sendAvailableCommands(session, { record: true }))
-        .catch((err: unknown) => this.log(`newSession notification failed: ${String(err)}`));
-    }, 0);
+    // Defer only notification delivery past the response-write boundary so
+    // the client receives the session/new result before session_info_update.
+    // The ledger write completes synchronously inside sendSessionSnapshotUpdate
+    // (awaited before return), so follow-up reads see the snapshot immediately.
+    // deliveryGuard: if closeSession ran before the deferred callback fires,
+    // the session is gone and sending stale notifications would be incorrect.
+    await this.sendSessionSnapshotUpdate(session, sessionSnapshot, {
+      includeControls: false,
+      record: true,
+      deferDelivery: true,
+      deliveryGuard: () => this.sessionStore.hasSession(session.sessionId),
+    })
+      .then(() =>
+        this.sessionUpdates.sendAvailableCommands(session, {
+          record: true,
+          deferDelivery: true,
+          deliveryGuard: () => this.sessionStore.hasSession(session.sessionId),
+        }),
+      )
+      .catch((err: unknown) => this.log(`newSession notification failed: ${String(err)}`));
     return {
       sessionId: session.sessionId,
       configOptions,
@@ -564,20 +567,25 @@ export class AcpGatewayAgent implements Agent {
     await this.sessionUpdates.startLedgerSession(session, { complete: false });
     this.log(`resumeSession: ${session.sessionId} -> ${session.sessionKey}`);
     const { configOptions, modes } = sessionSnapshot;
-    // Same deferred-ordering contract as newSession: the resume result must
-    // reach the client before session_info_update.
-    // Guard: if closeSession ran before the timer fires, skip stale notifications.
-    setTimeout(() => {
-      if (!this.sessionStore.hasSession(session.sessionId)) {
-        return;
-      }
-      this.sendSessionSnapshotUpdate(session, sessionSnapshot, {
-        includeControls: false,
-        record: false,
-      })
-        .then(() => this.sessionUpdates.sendAvailableCommands(session, { record: false }))
-        .catch((err: unknown) => this.log(`resumeSession notification failed: ${String(err)}`));
-    }, 0);
+    // Same deferred-delivery contract as newSession: the resume result must
+    // reach the client before session_info_update. Ledger writes complete
+    // before return; only notification delivery is deferred.
+    // deliveryGuard: if closeSession ran before the deferred callback fires,
+    // skip stale notifications.
+    await this.sendSessionSnapshotUpdate(session, sessionSnapshot, {
+      includeControls: false,
+      record: false,
+      deferDelivery: true,
+      deliveryGuard: () => this.sessionStore.hasSession(session.sessionId),
+    })
+      .then(() =>
+        this.sessionUpdates.sendAvailableCommands(session, {
+          record: false,
+          deferDelivery: true,
+          deliveryGuard: () => this.sessionStore.hasSession(session.sessionId),
+        }),
+      )
+      .catch((err: unknown) => this.log(`resumeSession notification failed: ${String(err)}`));
     return { configOptions, modes };
   }
 
@@ -1765,7 +1773,13 @@ export class AcpGatewayAgent implements Agent {
   private async sendSessionSnapshotUpdate(
     session: { sessionId: string; sessionKey: string; ledgerSessionId?: string },
     sessionSnapshot: SessionSnapshot,
-    options: { includeControls: boolean; record: boolean; runId?: string },
+    options: {
+      includeControls: boolean;
+      record: boolean;
+      runId?: string;
+      deferDelivery?: boolean;
+      deliveryGuard?: () => boolean;
+    },
   ): Promise<void> {
     if (options.includeControls) {
       await this.sessionUpdates.emit({
@@ -1774,6 +1788,8 @@ export class AcpGatewayAgent implements Agent {
         ...(session.ledgerSessionId ? { ledgerSessionId: session.ledgerSessionId } : {}),
         runId: options.runId,
         record: options.record,
+        deferDelivery: options.deferDelivery,
+        deliveryGuard: options.deliveryGuard,
         update: {
           sessionUpdate: "current_mode_update",
           currentModeId: sessionSnapshot.modes.currentModeId,
@@ -1785,6 +1801,8 @@ export class AcpGatewayAgent implements Agent {
         ...(session.ledgerSessionId ? { ledgerSessionId: session.ledgerSessionId } : {}),
         runId: options.runId,
         record: options.record,
+        deferDelivery: options.deferDelivery,
+        deliveryGuard: options.deliveryGuard,
         update: {
           sessionUpdate: "config_option_update",
           configOptions: sessionSnapshot.configOptions,
@@ -1798,6 +1816,8 @@ export class AcpGatewayAgent implements Agent {
         ...(session.ledgerSessionId ? { ledgerSessionId: session.ledgerSessionId } : {}),
         runId: options.runId,
         record: options.record,
+        deferDelivery: options.deferDelivery,
+        deliveryGuard: options.deliveryGuard,
         update: {
           sessionUpdate: "session_info_update",
           ...sessionSnapshot.metadata,
@@ -1811,6 +1831,8 @@ export class AcpGatewayAgent implements Agent {
         ...(session.ledgerSessionId ? { ledgerSessionId: session.ledgerSessionId } : {}),
         runId: options.runId,
         record: options.record,
+        deferDelivery: options.deferDelivery,
+        deliveryGuard: options.deliveryGuard,
         update: {
           sessionUpdate: "usage_update",
           used: sessionSnapshot.usage.used,

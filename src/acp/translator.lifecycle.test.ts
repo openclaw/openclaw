@@ -14,6 +14,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
 import type { GatewaySessionRow } from "../gateway/session-utils.js";
+import type { AcpEventLedger } from "./event-ledger.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
 
@@ -560,6 +561,57 @@ describe("acp translator stable lifecycle handlers", () => {
     expect(result.sessionId).toBeTruthy();
 
     // Flush deferred setTimeout notifications
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(sessionUpdateCalled).toBe(true);
+
+    sessionStore.clearAllSessionsForTest();
+  });
+
+  it("newSession records ledger update before returning result while deferring notification", async () => {
+    const connection = createAcpConnection();
+    const sessionUpdate = connection["__sessionUpdateMock"];
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return createGatewaySessions([]);
+      }
+      return { ok: true };
+    }) as GatewayClient["request"];
+    const sessionStore = createInMemorySessionStore();
+    const recordUpdate = vi.fn(async () => {});
+    const eventLedger = {
+      startSession: vi.fn(async () => {}),
+      recordUserPrompt: vi.fn(async () => {}),
+      recordUpdate,
+      markIncomplete: vi.fn(async () => {}),
+      readReplay: vi.fn(async () => ({ complete: false, events: [] })),
+      readReplayBySessionId: vi.fn(async () => ({ complete: false, events: [] })),
+      readReplayBySessionKey: vi.fn(async () => ({ complete: false, events: [] })),
+    } as unknown as AcpEventLedger;
+    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+      sessionStore,
+      eventLedger,
+    });
+
+    let sessionUpdateCalled = false;
+    sessionUpdate.mockImplementation(() => {
+      sessionUpdateCalled = true;
+    });
+
+    const result = await agent.newSession({
+      cwd: "/tmp",
+      mcpServers: [],
+      _meta: {},
+    } as NewSessionRequest);
+
+    // Ledger must be written before the result returns so follow-up reads
+    // see the session snapshot. Notification delivery stays deferred.
+    expect(result.sessionId).toBeTruthy();
+    expect(recordUpdate).toHaveBeenCalled();
+    expect(sessionUpdateCalled).toBe(false);
+
+    // Flush deferred notification delivery.
     await new Promise((resolve) => {
       setTimeout(resolve, 0);
     });
