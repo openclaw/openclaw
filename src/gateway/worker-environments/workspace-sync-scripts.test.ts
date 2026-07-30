@@ -46,7 +46,7 @@ async function fixture() {
   await fs.mkdir(bin);
   await fs.writeFile(
     path.join(bin, "ps"),
-    '#!/bin/sh\nstall() { printf "%s\\n" "$$" >> "$OPENCLAW_TEST_PS_STALL_PID"; trap "" TERM; exec sleep 30; }\nif [ -f "$OPENCLAW_TEST_PS_STALL" ]; then rm -f "$OPENCLAW_TEST_PS_STALL"; stall; fi\nif [ -f "$OPENCLAW_TEST_PS_STALL_ONCE_TARGET" ]; then target=""; for argument in "$@"; do target=$argument; done; case "$*" in *"stat=,lstart= -p"*) ;; *"lstart= -p"*) if grep -qx "$target" "$OPENCLAW_TEST_PS_STALL_ONCE_TARGET"; then rm -f "$OPENCLAW_TEST_PS_STALL_ONCE_TARGET"; stall; fi ;; esac; fi\nif [ -f "$OPENCLAW_TEST_PS_STALL_TARGET" ]; then target=""; for argument in "$@"; do target=$argument; done; case "$*" in *"stat=,lstart= -p"*) ;; *"lstart= -p"*) if grep -qx "$target" "$OPENCLAW_TEST_PS_STALL_TARGET"; then stall; fi ;; esac; fi\nif [ -f "$OPENCLAW_TEST_PS_FAIL_TARGET" ]; then target=""; for argument in "$@"; do target=$argument; done; case "$*" in *"stat=,lstart= -p"*) ;; *"lstart= -p"*) if grep -qx "$target" "$OPENCLAW_TEST_PS_FAIL_TARGET"; then exit 2; fi ;; esac; fi\ncase "$*" in *"pid=,ppid=,uid=,stat=,lstart="*) if [ -f "$OPENCLAW_TEST_PS_FAIL_SCAN.seen" ]; then extra_pid=$(cat "$OPENCLAW_TEST_PS_EXTRA"); /bin/ps -o stat= -p "$extra_pid" > "$OPENCLAW_TEST_PS_FAIL_SCAN_STATE"; exit 2; fi ;; esac\ncase "$*" in\n  *"stat=,lstart= -p"*|*"lstart= -p"*) exec /bin/ps "$@" ;;\n  *) printf "%s %s %s S Tue Jul 15 08:00:00 2026\\n" "$$" "$PPID" "$(id -u)"; if [ -f "$OPENCLAW_TEST_PS_EXTRA" ]; then extra_pid=$(cat "$OPENCLAW_TEST_PS_EXTRA"); /bin/ps -o pid=,ppid=,uid=,stat=,lstart= -p "$extra_pid"; fi; if [ -f "$OPENCLAW_TEST_PS_FAIL_SCAN" ]; then touch "$OPENCLAW_TEST_PS_FAIL_SCAN.seen"; fi ;;\nesac\n',
+    '#!/bin/sh\nstall() { printf "%s\\n" "$$" >> "$OPENCLAW_TEST_PS_STALL_PID"; trap "" TERM; exec sleep 30; }\nif [ -f "$OPENCLAW_TEST_PS_STALL" ]; then rm -f "$OPENCLAW_TEST_PS_STALL"; stall; fi\nif [ -f "$OPENCLAW_TEST_PS_STALL_ONCE_TARGET" ]; then target=""; for argument in "$@"; do target=$argument; done; case "$*" in *"stat=,lstart= -p"*) ;; *"lstart= -p"*) if grep -qx "$target" "$OPENCLAW_TEST_PS_STALL_ONCE_TARGET"; then rm -f "$OPENCLAW_TEST_PS_STALL_ONCE_TARGET"; stall; fi ;; esac; fi\nif [ -f "$OPENCLAW_TEST_PS_STALL_TARGET" ]; then target=""; for argument in "$@"; do target=$argument; done; case "$*" in *"stat=,lstart= -p"*) ;; *"lstart= -p"*) if grep -qx "$target" "$OPENCLAW_TEST_PS_STALL_TARGET"; then stall; fi ;; esac; fi\nif [ -f "$OPENCLAW_TEST_PS_FAIL_TARGET" ]; then target=""; for argument in "$@"; do target=$argument; done; case "$*" in *"stat=,lstart= -p"*) ;; *"lstart= -p"*) if grep -qx "$target" "$OPENCLAW_TEST_PS_FAIL_TARGET"; then exit 2; fi ;; esac; fi\ncase "$*" in *"pid=,ppid=,uid=,stat=,lstart="*) if [ -f "$OPENCLAW_TEST_PS_FAIL_SCAN.seen" ]; then extra_pid=$(head -n 1 "$OPENCLAW_TEST_PS_EXTRA"); /bin/ps -o stat= -p "$extra_pid" > "$OPENCLAW_TEST_PS_FAIL_SCAN_STATE"; exit 2; fi ;; esac\ncase "$*" in\n  *"stat=,lstart= -p"*|*"lstart= -p"*) exec /bin/ps "$@" ;;\n  *) printf "%s %s %s S Tue Jul 15 08:00:00 2026\\n" "$$" "$PPID" "$(id -u)"; if [ -f "$OPENCLAW_TEST_PS_EXTRA" ]; then while IFS= read -r extra_pid; do [ -n "$extra_pid" ] && /bin/ps -o pid=,ppid=,uid=,stat=,lstart= -p "$extra_pid"; done < "$OPENCLAW_TEST_PS_EXTRA"; fi; if [ -f "$OPENCLAW_TEST_PS_FAIL_SCAN" ]; then touch "$OPENCLAW_TEST_PS_FAIL_SCAN.seen"; fi ;;\nesac\n',
   );
   await fs.chmod(path.join(bin, "ps"), 0o755);
   return {
@@ -76,7 +76,11 @@ async function fixture() {
   };
 }
 
-async function quiesce(input: Awaited<ReturnType<typeof fixture>>, watchdogTimeoutMs = 10_000) {
+async function quiesce(
+  input: Awaited<ReturnType<typeof fixture>>,
+  watchdogTimeoutMs = 10_000,
+  commandTimeoutMs = 10_000,
+) {
   const result = await runCommandWithTimeout(
     [
       process.execPath,
@@ -85,7 +89,7 @@ async function quiesce(input: Awaited<ReturnType<typeof fixture>>, watchdogTimeo
       input.workspace,
       String(watchdogTimeoutMs),
     ],
-    { timeoutMs: 10_000, baseEnv: input.env },
+    { timeoutMs: commandTimeoutMs, baseEnv: input.env },
   );
   expect(result.code).toBe(0);
   const match = /^quiesced ([a-f0-9]{32})\n$/u.exec(result.stdout);
@@ -218,29 +222,32 @@ describe("remote workspace quiescence scripts", () => {
     }
   }, 15_000);
 
-  it("retries a transient stalled process probe while initially quiescing", async () => {
+  it("quiesces more processes than one identity-probe batch", async () => {
     const input = await fixture();
-    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
-      stdio: "ignore",
-    });
-    const childPid = child.pid!;
+    const children = Array.from({ length: 24 }, () => spawn("sleep", ["30"], { stdio: "ignore" }));
+    const childPids = children.map((child) => child.pid!);
+    let nonce = "";
 
     try {
-      await fs.writeFile(input.extraProcessPath, `${childPid}\n`);
-      await fs.writeFile(input.stalledProcessProbeOnceTargetPath, `${childPid}\n`);
+      await fs.writeFile(input.extraProcessPath, `${childPids.join("\n")}\n`);
+      await fs.writeFile(input.stalledProcessProbeOnceTargetPath, `${childPids[0]}\n`);
 
-      const nonce = await quiesce(input);
+      nonce = await quiesce(input, 30_000, 20_000);
 
-      await expectProcessState(childPid, true);
-      await expect(fs.access(input.stalledProcessProbeOnceTargetPath)).rejects.toThrow();
+      await Promise.all(childPids.map(async (pid) => await expectProcessState(pid, true)));
       await resume(input, nonce);
-      await expectProcessState(childPid, false);
+      await Promise.all(childPids.map(async (pid) => await expectProcessState(pid, false)));
     } finally {
       await fs.rm(input.extraProcessPath, { force: true });
       await fs.rm(input.stalledProcessProbeOnceTargetPath, { force: true });
-      await terminate(child);
+      if (nonce) {
+        try {
+          await resume(input, nonce);
+        } catch {}
+      }
+      await Promise.all(children.map(async (child) => await terminate(child)));
     }
-  }, 15_000);
+  }, 30_000);
 
   it("reports when failed quiescence recovery retains a terminal lease", async () => {
     const input = await fixture();

@@ -3,6 +3,7 @@ const REMOTE_WATCHDOG_PROCESS_PROBE_TIMEOUT_MS = 1_000;
 // Exhaustion is expected to be rare and leaves an operator-visible terminal lease.
 const REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS = 5_000;
 const REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY = 8;
+const REMOTE_QUIESCENCE_PROCESS_BATCH_BUDGET_MS = 25;
 
 const REMOTE_QUIESCENCE_PS_JS = String.raw`function processes() {
   const output = childProcess.execFileSync("ps", ["-axo", "pid=,ppid=,uid=,stat=,lstart="], {
@@ -50,19 +51,11 @@ function probeProcessIdentity(pid, timeoutMs = ${REMOTE_WATCHDOG_PROCESS_PROBE_T
     }, timeoutMs);
   });
 }
-async function probeProcessIdentityUntilSettled(pid, deadlineMs) {
-  let observed = { kind: "timeout" };
-  while (Date.now() < deadlineMs) {
-    observed = await probeProcessIdentity(
-      pid,
-      Math.max(1, Math.min(${REMOTE_WATCHDOG_PROCESS_PROBE_TIMEOUT_MS}, deadlineMs - Date.now())),
-    );
-    if (observed.kind !== "timeout") return observed;
-    const remainingMs = deadlineMs - Date.now();
-    if (remainingMs <= 0) break;
-    await new Promise((resolve) => setTimeout(resolve, Math.min(100, remainingMs)));
-  }
-  return observed;
+function processSignalDeadlineMs(referenceCount) {
+  // Enrollment can cover thousands of healthy processes, so retain the fixed
+  // recovery allowance and add a small bounded budget per concurrency batch.
+  const batches = Math.max(1, Math.ceil(referenceCount / ${REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY}));
+  return Date.now() + ${REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS} + batches * ${REMOTE_QUIESCENCE_PROCESS_BATCH_BUDGET_MS};
 }
 async function signalProcessReferences(references, concurrency = ${REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY}, deadlineMs = Date.now() + ${REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS}) {
   // Keep identity confirmation adjacent to its signal so a slow sibling probe cannot stale it.
@@ -348,24 +341,32 @@ try {
     if (candidates.length + frozen.size > 4096) {
       throw new Error("too many worker processes to quiesce safely");
     }
-    const probeDeadlineMs = Date.now() + ${REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS};
-    for (const [pid, row] of candidates) {
-      try {
-        frozen.set(pid, row.start);
-        writeLease();
-        const observed = await probeProcessIdentityUntilSettled(pid, probeDeadlineMs);
-        if (observed.kind === "timeout" || observed.kind === "failed") {
-          throw new Error("workspace quiescence process identity probe failed");
-        }
-        if (observed.kind !== "identity" || observed.start !== row.start) {
-          frozen.delete(pid);
-          writeLease();
-          continue;
-        }
-        process.kill(pid, "SIGSTOP");
-      } catch (error) {
-        if (!error || error.code !== "ESRCH") throw error;
+    if (candidates.length > 0) {
+      for (const [pid, row] of candidates) frozen.set(pid, row.start);
+      writeLease();
+      const stopped = await recoverProcessReferences(
+        candidates.map(([pid, row]) => ({ pid, start: row.start, signal: "SIGSTOP" })),
+        ${REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY},
+        processSignalDeadlineMs(candidates.length),
+      );
+      if (stopped.remaining.length > 0) {
+        throw new Error(
+          stopped.failed
+            ? "workspace quiescence process identity probe failed"
+            : "workspace quiescence process identity probe timed out",
+        );
       }
+      Atomics.wait(sleeper, 0, 0, 20);
+      const stoppedRows = processes();
+      for (const [pid, row] of candidates) {
+        const current = stoppedRows.get(pid);
+        if (!current || current.start !== row.start) {
+          frozen.delete(pid);
+        } else if (!current.state.startsWith("T")) {
+          throw new Error("workspace quiescence process did not stop");
+        }
+      }
+      writeLease();
     }
     Atomics.wait(sleeper, 0, 0, 20);
     const writable = quiescenceCandidates(
@@ -552,15 +553,11 @@ if (validationMode === "final") {
     for (const [pid, row] of candidates) frozen.set(pid, row.start);
     let frozenEntries = [...frozen].map(([pid, start]) => ({ pid, start }));
     refreshLease(frozenEntries);
-    const probeDeadlineMs = Date.now() + ${REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS};
     for (const [pid, row] of candidates) {
       try {
         if (input.expiresAtMs - Date.now() < 5000) refreshLease(frozenEntries);
-        const observed = await probeProcessIdentityUntilSettled(pid, probeDeadlineMs);
-        if (observed.kind === "timeout" || observed.kind === "failed") {
-          throw new Error("workspace quiescence process identity probe failed");
-        }
-        if (observed.kind !== "identity" || observed.start !== row.start) {
+        const current = processStatus(pid);
+        if (!current || current.start !== row.start) {
           frozen.delete(pid);
           continue;
         }
