@@ -103,13 +103,14 @@ describe("googlechat setup", () => {
   });
 
   it("exposes config-promotion declarations on the setup adapter", () => {
-    expect(googlechatSetupAdapter.singleAccountKeysToMove).toEqual(
-      expect.arrayContaining(["serviceAccount", "serviceAccountFile"]),
-    );
-    expect(googlechatSetupAdapter.singleAccountKeysToMove).toContain("audienceType");
-    expect(googlechatSetupAdapter.singleAccountKeysToMove).toContain("audience");
-    expect(googlechatSetupAdapter.singleAccountKeysToMove).toContain("webhookPath");
-    expect(googlechatSetupAdapter.singleAccountKeysToMove).toContain("webhookUrl");
+    expect(googlechatSetupAdapter.singleAccountKeysToMove).toEqual([
+      "serviceAccount",
+      "serviceAccountFile",
+      "audienceType",
+      "audience",
+      "webhookPath",
+      "webhookUrl",
+    ]);
   });
 
   it("requires inline or file credentials when env auth is not used", () => {
