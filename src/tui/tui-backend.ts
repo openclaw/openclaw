@@ -13,6 +13,12 @@ import type { ResponseUsageMode, SessionInfo, SessionScope } from "./tui-types.j
 
 // Transport-agnostic backend contract consumed by the TUI runtime.
 /** Options for sending one chat turn through a TUI backend. */
+/** Lightweight image attachment carried alongside a chat message. */
+export type ChatImageAttachment = {
+  mimeType: string;
+  base64: string;
+};
+
 export type ChatSendOptions = {
   sessionKey: string;
   agentId?: string;
@@ -22,6 +28,7 @@ export type ChatSendOptions = {
   deliver?: boolean;
   timeoutMs?: number;
   runId?: string;
+  attachments?: ChatImageAttachment[];
 };
 
 export type TuiChatSendResult = {

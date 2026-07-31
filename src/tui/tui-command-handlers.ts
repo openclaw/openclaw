@@ -32,7 +32,7 @@ import {
   createSearchableSelectList,
   createSettingsList,
 } from "./components/selectors.js";
-import type { TuiBackend, TuiSessionMutationResult } from "./tui-backend.js";
+import type { ChatImageAttachment, TuiBackend, TuiSessionMutationResult } from "./tui-backend.js";
 import { addBlockedChatSubmitNotice } from "./tui-busy-notice.js";
 import { formatTuiErrorMessage } from "./tui-formatters.js";
 import {
@@ -896,7 +896,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     tui.requestRender();
   };
 
-  const sendMessage = async (text: string) => {
+  const sendMessage = async (text: string, attachments?: ChatImageAttachment[]) => {
     if (!state.isConnected) {
       chatLog.addSystem(disconnectedTuiChatSubmitMessage(opts.local === true));
       setActivityStatus("disconnected");
@@ -965,6 +965,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         deliver: deliverDefault,
         timeoutMs: opts.timeoutMs,
         runId,
+        ...(attachments?.length ? { attachments } : {}),
       });
       const acceptedRunId = sendResult.runId || runId;
       const terminalAckFailure = isTerminalChatSendAckFailure(sendResult.status);
