@@ -87,6 +87,8 @@ export type ReadRequestBodyOptions = {
   maxBytes: number;
   timeoutMs?: number;
   encoding?: BufferEncoding;
+  /** Keep the request socket alive until this response flushes a limit error. */
+  responseOwner?: ServerResponse;
 };
 
 type RequestBodyLimitValues = {
@@ -112,6 +114,26 @@ function resolveRequestBodyLimitValues(options: {
       ? DEFAULT_WEBHOOK_BODY_TIMEOUT_MS
       : resolveTimerTimeoutMs(options.timeoutMs, DEFAULT_WEBHOOK_BODY_TIMEOUT_MS);
   return { maxBytes, timeoutMs };
+}
+
+function closeRequestAfterOwnedResponse(req: IncomingMessage, res: ServerResponse): void {
+  req.pause();
+  if (!res.headersSent) {
+    res.setHeader("Connection", "close");
+  }
+  const destroyRequest = () => {
+    if (!req.destroyed) {
+      req.destroy();
+    }
+  };
+  if (res.writableFinished) {
+    destroyRequest();
+    return;
+  }
+  // Size/time failures are expected HTTP responses. Destroying the request
+  // first resets real partial-upload sockets before the caller's JSON flushes.
+  res.once("finish", destroyRequest);
+  res.once("close", destroyRequest);
 }
 
 export const testApi = { resolveRequestBodyLimitValues };
@@ -335,15 +357,20 @@ export async function readRequestBodyWithLimit(
 ): Promise<string> {
   const { maxBytes, timeoutMs } = resolveRequestBodyLimitValues(options);
   const encoding = options.encoding ?? "utf-8";
+  const closeLimitedRequest = () => {
+    if (options.responseOwner) {
+      closeRequestAfterOwnedResponse(req, options.responseOwner);
+    } else if (!req.destroyed) {
+      req.destroy();
+    }
+  };
 
   const declaredLength = parseContentLengthHeader(req);
   if (declaredLength !== null && declaredLength > maxBytes) {
     const error = new RequestBodyLimitError({ code: "PAYLOAD_TOO_LARGE" });
-    if (!req.destroyed) {
-      // Limit violations are expected user input; destroying with an Error causes
-      // an async 'error' event which can crash the process if no listener remains.
-      req.destroy();
-    }
+    // Limit violations are expected user input; never destroy with an Error,
+    // which would emit asynchronously after the reader removes its listener.
+    closeLimitedRequest();
     throw error;
   }
 
@@ -376,9 +403,7 @@ export async function readRequestBodyWithLimit(
 
     const timer = setNodeTimeout(() => {
       const error = new RequestBodyLimitError({ code: "REQUEST_BODY_TIMEOUT" });
-      if (!req.destroyed) {
-        req.destroy();
-      }
+      closeLimitedRequest();
       fail(error);
     }, timeoutMs);
 
@@ -390,9 +415,7 @@ export async function readRequestBodyWithLimit(
       totalBytes = progress.totalBytes;
       if (progress.exceeded) {
         const error = new RequestBodyLimitError({ code: "PAYLOAD_TOO_LARGE" });
-        if (!req.destroyed) {
-          req.destroy();
-        }
+        closeLimitedRequest();
         fail(error);
         return;
       }

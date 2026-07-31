@@ -235,7 +235,7 @@ describe("readJsonBodyOrError", () => {
     const req = makeRequest();
     const result = await readJsonBodyOrError(req, res, 1024);
     expect(result).toEqual({ hello: "world" });
-    expect(readJsonBodyMock).toHaveBeenCalledWith(req, 1024);
+    expect(readJsonBodyMock).toHaveBeenCalledWith(req, 1024, { responseOwner: res });
   });
 
   it("responds with 413 when the body is too large", async () => {

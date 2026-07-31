@@ -188,11 +188,17 @@ function encodeEmbeddingBase64(embedding: number[]): string {
 // Keep request limits local to the HTTP bridge; provider adapters may support
 // more, but this endpoint must protect gateway memory and request latency.
 function validateInputTexts(texts: string[]): string | undefined {
+  if (texts.length === 0) {
+    return "`input` must not be empty.";
+  }
   if (texts.length > MAX_EMBEDDING_INPUTS) {
     return `Too many inputs (max ${MAX_EMBEDDING_INPUTS}).`;
   }
   let totalChars = 0;
   for (const text of texts) {
+    if (text.length === 0) {
+      return "`input` entries must not be empty.";
+    }
     if (text.length > MAX_EMBEDDING_INPUT_CHARS) {
       return `Input too long (max ${MAX_EMBEDDING_INPUT_CHARS} chars).`;
     }
@@ -200,6 +206,25 @@ function validateInputTexts(texts: string[]): string | undefined {
     if (totalChars > MAX_EMBEDDING_TOTAL_CHARS) {
       return `Total input too large (max ${MAX_EMBEDDING_TOTAL_CHARS} chars).`;
     }
+  }
+  return undefined;
+}
+
+function validateEmbeddingOptions(payload: EmbeddingsRequest): string | undefined {
+  if (
+    payload.encoding_format !== undefined &&
+    payload.encoding_format !== "float" &&
+    payload.encoding_format !== "base64"
+  ) {
+    return "`encoding_format` must be `float` or `base64`.";
+  }
+  if (
+    payload.dimensions !== undefined &&
+    (typeof payload.dimensions !== "number" ||
+      !Number.isSafeInteger(payload.dimensions) ||
+      payload.dimensions <= 0)
+  ) {
+    return "`dimensions` must be a positive integer.";
   }
   return undefined;
 }
@@ -411,6 +436,13 @@ export async function handleOpenAiEmbeddingsHttpRequest(
     });
     return true;
   }
+  const optionsError = validateEmbeddingOptions(payload);
+  if (optionsError) {
+    sendJson(res, 400, {
+      error: { message: optionsError, type: "invalid_request_error" },
+    });
+    return true;
+  }
 
   let agentId: string;
   try {
@@ -463,8 +495,8 @@ export async function handleOpenAiEmbeddingsHttpRequest(
             ? {
                 ...memorySearch,
                 outputDimensionality:
-                  typeof payload.dimensions === "number" && payload.dimensions > 0
-                    ? Math.floor(payload.dimensions)
+                  typeof payload.dimensions === "number"
+                    ? payload.dimensions
                     : memorySearch.outputDimensionality,
               }
             : undefined,

@@ -12,6 +12,12 @@ import { resolveIntegerOption } from "@openclaw/normalization-core/number-coerci
 import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import type { ImageContent } from "../agents/command/types.js";
 import type { ClientToolDefinition } from "../agents/embedded-agent-runner/run/params.js";
+import {
+  hasNonzeroUsage,
+  normalizeUsage,
+  type NormalizedUsage,
+  type UsageLike,
+} from "../agents/usage.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
@@ -342,20 +348,16 @@ function applyToolChoice(params: {
 export { buildAgentPrompt } from "./openresponses-prompt.js";
 
 function createEmptyUsage(): Usage {
-  return { input_tokens: 0, output_tokens: 0, total_tokens: 0 };
+  return {
+    input_tokens: 0,
+    input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 },
+    output_tokens: 0,
+    output_tokens_details: { reasoning_tokens: 0 },
+    total_tokens: 0,
+  };
 }
 
-function toUsage(
-  value:
-    | {
-        input?: number;
-        output?: number;
-        cacheRead?: number;
-        cacheWrite?: number;
-        total?: number;
-      }
-    | undefined,
-): Usage {
+function toUsage(value: NormalizedUsage | undefined): Usage {
   if (!value) {
     return createEmptyUsage();
   }
@@ -363,22 +365,35 @@ function toUsage(
   const output = value.output ?? 0;
   const cacheRead = value.cacheRead ?? 0;
   const cacheWrite = value.cacheWrite ?? 0;
-  const total = value.total ?? input + output + cacheRead + cacheWrite;
+  const reasoningTokens = value.reasoningTokens ?? 0;
+  const inputTokens = input + cacheRead + cacheWrite;
+  const outputTokens = Math.max(output, reasoningTokens);
+  const componentTotal = inputTokens + outputTokens;
+  const totalTokens = Math.max(componentTotal, value.total ?? 0);
   return {
-    input_tokens: Math.max(0, input),
-    output_tokens: Math.max(0, output),
-    total_tokens: Math.max(0, total),
+    input_tokens: inputTokens,
+    input_tokens_details: {
+      cached_tokens: cacheRead,
+      cache_write_tokens: cacheWrite,
+    },
+    output_tokens: outputTokens,
+    output_tokens_details: { reasoning_tokens: reasoningTokens },
+    total_tokens: totalTokens,
   };
 }
 
 function extractUsageFromResult(result: unknown): Usage {
-  const meta = (result as { meta?: { agentMeta?: { usage?: unknown } } } | null)?.meta;
-  const usage = meta && typeof meta === "object" ? meta.agentMeta?.usage : undefined;
-  return toUsage(
-    usage as
-      | { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; total?: number }
-      | undefined,
-  );
+  const agentMeta = (
+    result as {
+      meta?: { agentMeta?: { usage?: UsageLike; lastCallUsage?: UsageLike } };
+    } | null
+  )?.meta?.agentMeta;
+  const primary = normalizeUsage(agentMeta?.usage);
+  if (hasNonzeroUsage(primary)) {
+    return toUsage(primary);
+  }
+  const fallback = normalizeUsage(agentMeta?.lastCallUsage);
+  return toUsage(hasNonzeroUsage(fallback) ? fallback : (primary ?? fallback));
 }
 
 type PendingToolCall = { id: string; name: string; arguments: string };
@@ -396,6 +411,7 @@ function resolveStopReasonAndPendingToolCalls(meta: unknown): {
 
 function createResponseResource(params: {
   id: string;
+  createdAt: number;
   model: string;
   status: ResponseResource["status"];
   output: OutputItem[];
@@ -405,7 +421,7 @@ function createResponseResource(params: {
   return {
     id: params.id,
     object: "response",
-    created_at: Math.floor(Date.now() / 1000),
+    created_at: params.createdAt,
     status: params.status,
     model: params.model,
     output: params.output,
@@ -724,6 +740,9 @@ export async function handleOpenResponsesHttpRequest(
   }
 
   const responseId = `resp_${randomUUID()}`;
+  // A response resource is one logical object across every lifecycle event.
+  // Freeze its creation time once so later terminal siblings cannot drift.
+  const responseCreatedAt = Math.floor(Date.now() / 1000);
   const rememberResponseSession = () =>
     storeResponseSession(responseId, sessionKey, responseSessionScope);
   const outputItemId = `msg_${randomUUID()}`;
@@ -779,6 +798,7 @@ export async function handleOpenResponsesHttpRequest(
       ) {
         const failed = createResponseResource({
           id: responseId,
+          createdAt: responseCreatedAt,
           model,
           status: "failed",
           output: [],
@@ -831,6 +851,7 @@ export async function handleOpenResponsesHttpRequest(
 
         const response = createResponseResource({
           id: responseId,
+          createdAt: responseCreatedAt,
           model,
           status: "incomplete",
           output,
@@ -851,6 +872,7 @@ export async function handleOpenResponsesHttpRequest(
 
       const response = createResponseResource({
         id: responseId,
+        createdAt: responseCreatedAt,
         model,
         status: "completed",
         output: [
@@ -874,6 +896,7 @@ export async function handleOpenResponsesHttpRequest(
       if (isClientToolNameConflictError(err)) {
         const response = createResponseResource({
           id: responseId,
+          createdAt: responseCreatedAt,
           model,
           status: "failed",
           output: [],
@@ -884,6 +907,7 @@ export async function handleOpenResponsesHttpRequest(
       }
       const response = createResponseResource({
         id: responseId,
+        createdAt: responseCreatedAt,
         model,
         status: "failed",
         output: [],
@@ -893,6 +917,7 @@ export async function handleOpenResponsesHttpRequest(
       if (mapped) {
         const mappedResponse = createResponseResource({
           id: responseId,
+          createdAt: responseCreatedAt,
           model,
           status: "failed",
           output: [],
@@ -978,6 +1003,7 @@ export async function handleOpenResponsesHttpRequest(
 
     const finalResponse = createResponseResource({
       id: responseId,
+      createdAt: responseCreatedAt,
       model,
       status: finalizeRequested.status,
       output: [completedItem],
@@ -1015,6 +1041,7 @@ export async function handleOpenResponsesHttpRequest(
   // Send initial events
   const initialResponse = createResponseResource({
     id: responseId,
+    createdAt: responseCreatedAt,
     model,
     status: "in_progress",
     output: [],
@@ -1164,6 +1191,7 @@ export async function handleOpenResponsesHttpRequest(
         finalizeFailedResponse(
           createResponseResource({
             id: responseId,
+            createdAt: responseCreatedAt,
             model,
             status: "failed",
             output: [],
@@ -1199,6 +1227,7 @@ export async function handleOpenResponsesHttpRequest(
       ) {
         const failed = createResponseResource({
           id: responseId,
+          createdAt: responseCreatedAt,
           model,
           status: "failed",
           output: [],
@@ -1305,6 +1334,7 @@ export async function handleOpenResponsesHttpRequest(
 
         const incompleteResponse = createResponseResource({
           id: responseId,
+          createdAt: responseCreatedAt,
           model,
           status: "incomplete",
           output: [completedItem, ...functionCallItems],
@@ -1351,6 +1381,7 @@ export async function handleOpenResponsesHttpRequest(
       if (isClientToolNameConflictError(err)) {
         const errorResponse = createResponseResource({
           id: responseId,
+          createdAt: responseCreatedAt,
           model,
           status: "failed",
           output: [],
@@ -1368,6 +1399,7 @@ export async function handleOpenResponsesHttpRequest(
       }
       const errorResponse = createResponseResource({
         id: responseId,
+        createdAt: responseCreatedAt,
         model,
         status: "failed",
         output: [],
@@ -1379,6 +1411,7 @@ export async function handleOpenResponsesHttpRequest(
       if (mapped) {
         const mappedResponse = createResponseResource({
           id: responseId,
+          createdAt: responseCreatedAt,
           model,
           status: "failed",
           output: [],

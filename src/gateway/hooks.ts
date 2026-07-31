@@ -1,6 +1,6 @@
 // Gateway webhook helpers for external hook dispatch into agents and wake flows.
 import { randomUUID } from "node:crypto";
-import type { IncomingMessage } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -175,8 +175,13 @@ export function extractHookToken(req: IncomingMessage): string | undefined {
 export async function readJsonBody(
   req: IncomingMessage,
   maxBytes: number,
+  options?: { responseOwner?: ServerResponse },
 ): Promise<{ ok: true; value: unknown } | { ok: false; error: string }> {
-  const result = await readJsonBodyWithLimit(req, { maxBytes, emptyObjectOnEmpty: true });
+  const result = await readJsonBodyWithLimit(req, {
+    maxBytes,
+    emptyObjectOnEmpty: true,
+    ...(options?.responseOwner ? { responseOwner: options.responseOwner } : {}),
+  });
   if (result.ok) {
     return result;
   }

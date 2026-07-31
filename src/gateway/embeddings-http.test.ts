@@ -397,6 +397,54 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     await expectInvalidEmbeddingRequest(res);
   });
 
+  it.each([
+    {
+      name: "an empty string",
+      body: { model: "openclaw/default", input: "" },
+      message: "`input` entries must not be empty.",
+    },
+    {
+      name: "an empty array",
+      body: { model: "openclaw/default", input: [] },
+      message: "`input` must not be empty.",
+    },
+    {
+      name: "an empty string in a batch",
+      body: { model: "openclaw/default", input: ["valid", ""] },
+      message: "`input` entries must not be empty.",
+    },
+    {
+      name: "an unsupported encoding format",
+      body: { model: "openclaw/default", input: "hello", encoding_format: "hex" },
+      message: "`encoding_format` must be `float` or `base64`.",
+    },
+    {
+      name: "zero dimensions",
+      body: { model: "openclaw/default", input: "hello", dimensions: 0 },
+      message: "`dimensions` must be a positive integer.",
+    },
+    {
+      name: "negative dimensions",
+      body: { model: "openclaw/default", input: "hello", dimensions: -1 },
+      message: "`dimensions` must be a positive integer.",
+    },
+    {
+      name: "fractional dimensions",
+      body: { model: "openclaw/default", input: "hello", dimensions: 1.5 },
+      message: "`dimensions` must be a positive integer.",
+    },
+    {
+      name: "non-numeric dimensions",
+      body: { model: "openclaw/default", input: "hello", dimensions: "768" },
+      message: "`dimensions` must be a positive integer.",
+    },
+  ])("rejects $name before creating a provider", async ({ body, message }) => {
+    const createsBefore = createEmbeddingProviderMock.mock.calls.length;
+    const res = await postEmbeddings(body);
+    await expectInvalidEmbeddingRequest(res, message);
+    expect(createEmbeddingProviderMock).toHaveBeenCalledTimes(createsBefore);
+  });
+
   it("ignores narrower declared scopes for shared-secret bearer auth", async () => {
     const res = await postEmbeddings(
       {

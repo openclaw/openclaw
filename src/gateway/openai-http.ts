@@ -272,11 +272,14 @@ function applyChatToolChoice(params: { tools: ClientToolDefinition[]; toolChoice
   throw new Error(`tool_choice ${choiceType} is not supported`);
 }
 
-function writeAssistantRoleChunk(res: ServerResponse, params: { runId: string; model: string }) {
+function writeAssistantRoleChunk(
+  res: ServerResponse,
+  params: { runId: string; model: string; created: number },
+) {
   writeSse(res, {
     id: params.runId,
     object: "chat.completion.chunk",
-    created: Math.floor(Date.now() / 1000),
+    created: params.created,
     model: params.model,
     choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }],
   });
@@ -284,12 +287,12 @@ function writeAssistantRoleChunk(res: ServerResponse, params: { runId: string; m
 
 function writeAssistantContentChunk(
   res: ServerResponse,
-  params: { runId: string; model: string; content: string },
+  params: { runId: string; model: string; created: number; content: string },
 ) {
   writeSse(res, {
     id: params.runId,
     object: "chat.completion.chunk",
-    created: Math.floor(Date.now() / 1000),
+    created: params.created,
     model: params.model,
     choices: [
       {
@@ -303,12 +306,17 @@ function writeAssistantContentChunk(
 
 function writeAssistantFinishChunk(
   res: ServerResponse,
-  params: { runId: string; model: string; finishReason: "stop" | "tool_calls" },
+  params: {
+    runId: string;
+    model: string;
+    created: number;
+    finishReason: "stop" | "tool_calls";
+  },
 ) {
   writeSse(res, {
     id: params.runId,
     object: "chat.completion.chunk",
-    created: Math.floor(Date.now() / 1000),
+    created: params.created,
     model: params.model,
     choices: [
       {
@@ -343,6 +351,7 @@ function writeAssistantToolCallsIncrementalChunks(
   params: {
     runId: string;
     model: string;
+    created: number;
     toolCalls: Array<{ id: string; name: string; arguments: string }>;
   },
 ) {
@@ -350,7 +359,7 @@ function writeAssistantToolCallsIncrementalChunks(
     writeSse(res, {
       id: params.runId,
       object: "chat.completion.chunk",
-      created: Math.floor(Date.now() / 1000),
+      created: params.created,
       model: params.model,
       choices: [
         {
@@ -374,7 +383,7 @@ function writeAssistantToolCallsIncrementalChunks(
       writeSse(res, {
         id: params.runId,
         object: "chat.completion.chunk",
-        created: Math.floor(Date.now() / 1000),
+        created: params.created,
         model: params.model,
         choices: [
           {
@@ -400,13 +409,14 @@ function writeUsageChunk(
   params: {
     runId: string;
     model: string;
+    created: number;
     usage: OpenAiChatCompletionsUsage;
   },
 ) {
   writeSse(res, {
     id: params.runId,
     object: "chat.completion.chunk",
-    created: Math.floor(Date.now() / 1000),
+    created: params.created,
     model: params.model,
     choices: [],
     usage: params.usage,
@@ -1084,6 +1094,9 @@ export async function handleOpenAiHttpRequest(
   }
 
   const runId = `chatcmpl_${randomUUID()}`;
+  // OpenAI's stream contract requires every chunk for one completion to carry
+  // the same creation timestamp, including terminal tool and usage chunks.
+  const created = Math.floor(Date.now() / 1000);
   const deps = createDefaultDeps();
   const abortController = new AbortController();
   const mergedExtraSystemPrompt = [prompt.extraSystemPrompt, toolChoicePrompt]
@@ -1241,11 +1254,16 @@ export async function handleOpenAiHttpRequest(
       stopWatchingDisconnect();
       unsubscribe();
       if (!wroteStopChunk) {
-        writeAssistantFinishChunk(res, { runId, model, finishReason: finalizeFinishReason });
+        writeAssistantFinishChunk(res, {
+          runId,
+          model,
+          created,
+          finishReason: finalizeFinishReason,
+        });
         wroteStopChunk = true;
       }
       if (streamIncludeUsage && finalUsage) {
-        writeUsageChunk(res, { runId, model, usage: finalUsage });
+        writeUsageChunk(res, { runId, model, created, usage: finalUsage });
       }
       writeDone(res);
       res.end();
@@ -1304,13 +1322,14 @@ export async function handleOpenAiHttpRequest(
 
       if (!wroteRole) {
         wroteRole = true;
-        writeAssistantRoleChunk(res, { runId, model });
+        writeAssistantRoleChunk(res, { runId, model, created });
       }
 
       sawAssistantDelta = true;
       writeAssistantContentChunk(res, {
         runId,
         model,
+        created,
         content,
       });
       return;
@@ -1330,7 +1349,7 @@ export async function handleOpenAiHttpRequest(
   });
 
   wroteRole = true;
-  writeAssistantRoleChunk(res, { runId, model });
+  writeAssistantRoleChunk(res, { runId, model, created });
 
   // The streamed run outlives this handler, whose root-work admission is
   // released on return. Without retaining it, subordinate session/lane
@@ -1376,7 +1395,7 @@ export async function handleOpenAiHttpRequest(
       if (stopReason === "tool_calls" && pendingToolCalls && pendingToolCalls.length > 0) {
         if (!wroteRole) {
           wroteRole = true;
-          writeAssistantRoleChunk(res, { runId, model });
+          writeAssistantRoleChunk(res, { runId, model, created });
         }
         if (!sawAssistantDelta) {
           const commentary =
@@ -1388,6 +1407,7 @@ export async function handleOpenAiHttpRequest(
             writeAssistantContentChunk(res, {
               runId,
               model,
+              created,
               content: commentary,
             });
           }
@@ -1395,6 +1415,7 @@ export async function handleOpenAiHttpRequest(
         writeAssistantToolCallsIncrementalChunks(res, {
           runId,
           model,
+          created,
           toolCalls: pendingToolCalls,
         });
         requestFinalize("tool_calls");
@@ -1404,7 +1425,7 @@ export async function handleOpenAiHttpRequest(
       if (!sawAssistantDelta) {
         if (!wroteRole) {
           wroteRole = true;
-          writeAssistantRoleChunk(res, { runId, model });
+          writeAssistantRoleChunk(res, { runId, model, created });
         }
 
         const content =
@@ -1417,6 +1438,7 @@ export async function handleOpenAiHttpRequest(
         writeAssistantContentChunk(res, {
           runId,
           model,
+          created,
           content,
         });
       }
@@ -1452,6 +1474,7 @@ export async function handleOpenAiHttpRequest(
       writeAssistantContentChunk(res, {
         runId,
         model,
+        created,
         content,
       });
       finalUsage = {

@@ -111,7 +111,7 @@ export async function readJsonBodyOrError(
   res: ServerResponse,
   maxBytes: number,
 ): Promise<unknown> {
-  const body = await readJsonBody(req, maxBytes);
+  const body = await readJsonBody(req, maxBytes, { responseOwner: res });
   if (!body.ok) {
     if (body.error === "payload too large") {
       const contentLength = parseContentLengthHeader(req.headers?.["content-length"]);

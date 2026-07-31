@@ -313,7 +313,7 @@ describe("fuzz: readJsonBodyOrError", () => {
         expect(res.statusCode).toBe(expectedStatus);
         expect(end).toHaveBeenCalledWith(expectedBody);
       }
-      expect(readJsonBodyMock).toHaveBeenLastCalledWith(req, maxBytes);
+      expect(readJsonBodyMock).toHaveBeenLastCalledWith(req, maxBytes, { responseOwner: res });
     }
   });
 });

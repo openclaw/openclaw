@@ -2834,6 +2834,42 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     expect(usageChunk?.choices).toStrictEqual([]);
   });
 
+  it("keeps one created timestamp across every streamed completion chunk", async () => {
+    let now = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => {
+      now += 1_000;
+      return now;
+    });
+    try {
+      agentCommand.mockClear();
+      agentCommand.mockImplementationOnce((async (opts: unknown) => {
+        const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+        emitAgentEvent({ runId, stream: "assistant", data: { delta: "hello" } });
+        return {
+          payloads: [{ text: "hello" }],
+          meta: { agentMeta: { usage: { input: 4, output: 1, total: 5 } } },
+        };
+      }) as never);
+
+      const res = await postChatCompletions(enabledPort, {
+        stream: true,
+        stream_options: { include_usage: true },
+        model: "openclaw",
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(res.status).toBe(200);
+
+      const chunks = parseSseDataLines(await res.text())
+        .filter((data) => data !== "[DONE]")
+        .map((data) => JSON.parse(data) as { created?: number });
+      expect(chunks.length).toBeGreaterThanOrEqual(4);
+      expect(chunks.every((chunk) => typeof chunk.created === "number")).toBe(true);
+      expect(new Set(chunks.map((chunk) => chunk.created))).toEqual(new Set([chunks[0]?.created]));
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it("keeps aggregate-only usage total in final stream usage chunk", async () => {
     const port = enabledPort;
     agentCommand.mockClear();

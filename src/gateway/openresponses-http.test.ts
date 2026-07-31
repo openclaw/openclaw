@@ -1135,7 +1135,13 @@ describe("OpenResponses HTTP API (e2e)", () => {
 
       mockAgentOnce([{ text: "ok" }], {
         agentMeta: {
-          usage: { input: 3, output: 5, cacheRead: 1, cacheWrite: 1 },
+          usage: {
+            input: 3,
+            output: 5,
+            cacheRead: 1,
+            cacheWrite: 1,
+            reasoningTokens: 2,
+          },
         },
       });
       const resUsage = await postResponses(port, {
@@ -1145,8 +1151,36 @@ describe("OpenResponses HTTP API (e2e)", () => {
       });
       expect(resUsage.status).toBe(200);
       const usageJson = (await resUsage.json()) as Record<string, unknown>;
-      expect(usageJson.usage).toEqual({ input_tokens: 3, output_tokens: 5, total_tokens: 10 });
+      expect(usageJson.usage).toEqual({
+        input_tokens: 5,
+        input_tokens_details: { cached_tokens: 1, cache_write_tokens: 1 },
+        output_tokens: 5,
+        output_tokens_details: { reasoning_tokens: 2 },
+        total_tokens: 10,
+      });
       await ensureResponseConsumed(resUsage);
+
+      mockAgentOnce([{ text: "ok" }], {
+        agentMeta: {
+          usage: { input: 0, output: 0, total: 0 },
+          lastCallUsage: { input: 7, output: 2, cacheRead: 3, total: 12 },
+        },
+      });
+      const resLastCallUsage = await postResponses(port, {
+        stream: false,
+        model: "openclaw",
+        input: "hi",
+      });
+      expect(resLastCallUsage.status).toBe(200);
+      const lastCallUsageJson = (await resLastCallUsage.json()) as Record<string, unknown>;
+      expect(lastCallUsageJson.usage).toEqual({
+        input_tokens: 10,
+        input_tokens_details: { cached_tokens: 3, cache_write_tokens: 0 },
+        output_tokens: 2,
+        output_tokens_details: { reasoning_tokens: 0 },
+        total_tokens: 12,
+      });
+      await ensureResponseConsumed(resLastCallUsage);
 
       mockAgentOnce([{ text: "hello" }]);
       const resShape = await postResponses(port, {
@@ -1373,6 +1407,47 @@ describe("OpenResponses HTTP API (e2e)", () => {
       await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount));
     },
   );
+
+  it("keeps one created_at across all response lifecycle resources", async () => {
+    let now = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => {
+      now += 1_000;
+      return now;
+    });
+    try {
+      agentCommand.mockClear();
+      agentCommand.mockImplementationOnce((async (opts: unknown) =>
+        buildAssistantDeltaResult({
+          opts,
+          emit: emitAgentEvent,
+          deltas: ["hello"],
+          text: "hello",
+        })) as never);
+
+      const res = await postResponses(enabledPort, {
+        stream: true,
+        model: "openclaw",
+        input: "hi",
+      });
+      expect(res.status).toBe(200);
+
+      const lifecycleResources = parseSseEvents(await res.text())
+        .filter((event) =>
+          ["response.created", "response.in_progress", "response.completed"].includes(
+            event.event ?? "",
+          ),
+        )
+        .map(
+          (event) =>
+            (parseSseData(event) as { response?: { created_at?: number } }).response?.created_at,
+        );
+      expect(lifecycleResources).toHaveLength(3);
+      expect(lifecycleResources.every((createdAt) => typeof createdAt === "number")).toBe(true);
+      expect(new Set(lifecycleResources)).toEqual(new Set([lifecycleResources[0]]));
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
 
   it("preserves declared owner identity for streaming and non-streaming private callers", async () => {
     const port = enabledPort;

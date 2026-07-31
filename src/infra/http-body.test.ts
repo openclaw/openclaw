@@ -1,6 +1,7 @@
 // Tests HTTP body reading and size-limit handling.
 import { EventEmitter } from "node:events";
-import type { IncomingMessage } from "node:http";
+import { createServer, type IncomingMessage } from "node:http";
+import { connect, type AddressInfo } from "node:net";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockServerResponse } from "../test-utils/mock-http-response.js";
@@ -23,6 +24,75 @@ async function waitForMicrotaskTurn(): Promise<void> {
   await new Promise<void>((resolve) => {
     queueMicrotask(resolve);
   });
+}
+
+async function sendPartialBodyToResponseOwningReader(params: {
+  timeoutMs: number;
+  writes: string[];
+}): Promise<string> {
+  const server = createServer((req, res) => {
+    void (async () => {
+      const result = await readJsonBodyWithLimit(req, {
+        maxBytes: 8,
+        timeoutMs: params.timeoutMs,
+        responseOwner: res,
+      });
+      if (result.ok) {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(result.value));
+        return;
+      }
+      const status = result.code === "PAYLOAD_TOO_LARGE" ? 413 : 408;
+      res.writeHead(status, { "content-type": "application/json" });
+      res.end(JSON.stringify({ code: result.code }));
+    })().catch((error: unknown) => {
+      res.writeHead(500, { "content-type": "text/plain" });
+      res.end(error instanceof Error ? error.message : String(error));
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+
+  const port = (server.address() as AddressInfo).port;
+  try {
+    return await new Promise<string>((resolve, reject) => {
+      const socket = connect(port, "127.0.0.1");
+      let response = "";
+      const timeout = setTimeout(() => {
+        socket.destroy();
+        reject(new Error("timed out waiting for response-owning body reader"));
+      }, 2_000);
+      socket.setEncoding("utf8");
+      socket.once("connect", () => {
+        socket.write(
+          "POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nTransfer-Encoding: chunked\r\nConnection: keep-alive\r\n\r\n",
+        );
+        for (const write of params.writes) {
+          socket.write(write);
+        }
+      });
+      socket.on("data", (chunk: string) => {
+        response += chunk;
+      });
+      socket.once("error", (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      });
+      socket.once("close", () => {
+        clearTimeout(timeout);
+        resolve(response);
+      });
+    });
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
 }
 
 async function expectRequestBodyLimitError(
@@ -257,6 +327,28 @@ describe("http body limits", () => {
       statusCode: 408,
     });
     expect(req["__unhandledDestroyError"]).toBeUndefined();
+  });
+
+  it.each([
+    {
+      name: "flushes 413 before closing an oversized partial upload",
+      timeoutMs: 1_000,
+      writes: ["4\r\n1234\r\n", "8\r\nabcdefgh\r\n"],
+      status: 413,
+      code: "PAYLOAD_TOO_LARGE",
+    },
+    {
+      name: "flushes 408 before closing a stalled partial upload",
+      timeoutMs: 20,
+      writes: ["4\r\n1234\r\n"],
+      status: 408,
+      code: "REQUEST_BODY_TIMEOUT",
+    },
+  ])("$name", async ({ timeoutMs, writes, status, code }) => {
+    const response = await sendPartialBodyToResponseOwningReader({ timeoutMs, writes });
+    expect(response).toContain(`HTTP/1.1 ${status}`);
+    expect(response).toContain("Connection: close");
+    expect(response).toContain(JSON.stringify({ code }));
   });
 
   it("does not overflow oversized request body timeouts into immediate failures", async () => {
