@@ -20,6 +20,10 @@ import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { mergeTelegramAccountConfig, resolveDefaultTelegramAccountId } from "./accounts.js";
+import {
+  assertBusinessConnectionCanReply,
+  resolveBusinessChatRoute,
+} from "./business-connection-store.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
 import { splitTelegramHtmlChunks } from "./format.js";
@@ -124,7 +128,25 @@ async function resolveTelegramOutboundSendContext(
 ) {
   const outboundTo = normalizeTelegramOutboundTarget(params.to);
   const { send, baseOpts } = await resolveTelegramSendContext(params);
-  return { outboundTo, send, baseOpts };
+  const chatKey = parseTelegramTarget(outboundTo).chatId;
+  const businessRoute = chatKey ? await resolveBusinessChatRoute(chatKey) : undefined;
+  if (!businessRoute) {
+    return { outboundTo, send, baseOpts };
+  }
+  // Fail fast on a disabled/insufficiently-privileged connection instead of
+  // silently falling back to a plain bot DM send.
+  await assertBusinessConnectionCanReply(businessRoute.businessConnectionId);
+  return {
+    outboundTo,
+    send,
+    baseOpts: {
+      ...baseOpts,
+      businessConnectionId: businessRoute.businessConnectionId,
+      ...(businessRoute.latestUnreadMessageId !== undefined
+        ? { markReadMessageId: businessRoute.latestUnreadMessageId }
+        : {}),
+    },
+  };
 }
 
 type CreateTelegramOutboundAdapterOptions = {
@@ -314,6 +336,12 @@ export async function sendTelegramPayloadMessages(params: {
     ...(payload.videoAsNote === true ? { asVideoNote: true } : {}),
   };
   if (payload.location) {
+    if (params.baseOpts.businessConnectionId) {
+      // MVP: fail loudly instead of silently sending the location as the
+      // bot's own identity — sendLocationTelegram does not yet forward
+      // business_connection_id.
+      throw new Error("Telegram location sends are not supported in Business mode yet.");
+    }
     if (
       mediaUrls.length > 0 ||
       reactionEmoji ||
@@ -559,6 +587,16 @@ export function createTelegramOutboundAdapter(
       gatewayClientScopes,
     }) => {
       const outboundTo = normalizeTelegramOutboundTarget(to);
+      const pollChatKey = parseTelegramTarget(outboundTo).chatId;
+      const pollBusinessRoute = pollChatKey
+        ? await resolveBusinessChatRoute(pollChatKey)
+        : undefined;
+      if (pollBusinessRoute) {
+        // MVP: fail loudly instead of silently sending the poll as the bot's
+        // own identity — sendPollTelegram does not yet forward
+        // business_connection_id.
+        throw new Error("Telegram polls are not supported in Business mode yet.");
+      }
       const { sendPollTelegram } = await loadSendModule();
       return await sendPollTelegram(outboundTo, poll, {
         cfg,
