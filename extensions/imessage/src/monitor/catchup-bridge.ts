@@ -13,11 +13,11 @@ import {
 import { parseIMessageNotification } from "./parse-notification.js";
 import type { IMessagePayload } from "./types.js";
 
-// Per-chat history fetch budget. messages.history is per-chat; we cap each
-// chat's fetch to the global perRunLimit so a single noisy group cannot
-// dominate the cursor advance — the cross-chat sort + final slice still
-// caps the global pass at perRunLimit.
-const PER_CHAT_HISTORY_LIMIT_CAP = 500;
+// Per-chat history fetch budget. Upstream `messages.history` orders
+// `date DESC LIMIT ?`, so a smaller limit drops the OLDEST rows. Always ask
+// for the full budget: the cross-chat sort + perRunLimit slice below can only
+// pick the true oldest rows if the per-chat page reached them.
+const PER_CHAT_HISTORY_LIMIT = 500;
 
 // chats.list page size used during catchup. 200 covers far more than any
 // realistic offline window worth of distinct chats while staying well under
@@ -113,8 +113,8 @@ export async function runIMessageCatchup(
     }
     const chats = chatsResult?.chats ?? [];
     const collected: IMessageCatchupRow[] = [];
-    const perChatLimit = Math.min(limit, PER_CHAT_HISTORY_LIMIT_CAP);
     let historyFetchFailed = false;
+    let historyWindowTruncated = false;
     // Track the highest rowid / date the imsg bridge actually returned across
     // all chats, regardless of whether each row passed the parser. The catchup
     // loop uses this as a cursor-advance floor so an unparseable row (corrupt
@@ -143,7 +143,7 @@ export async function runIMessageCatchup(
           "messages.history",
           {
             chat_id: chatId,
-            limit: perChatLimit,
+            limit: PER_CHAT_HISTORY_LIMIT,
             start: sinceISO,
             attachments: includeAttachments,
           },
@@ -158,6 +158,7 @@ export async function runIMessageCatchup(
       }
 
       const messages = Array.isArray(historyResult?.messages) ? historyResult.messages : [];
+      let chatOldestRowid = Number.POSITIVE_INFINITY;
       for (const raw of messages) {
         // Best-effort raw-watermark probe BEFORE we run the parser, so even
         // rows we drop still let the cursor advance past them. We only trust
@@ -174,6 +175,7 @@ export async function runIMessageCatchup(
         const rawDateMs = rawCreatedAt ? Date.parse(rawCreatedAt) : Number.NaN;
         if (rawRowid !== null) {
           rawWatermarkRowid = Math.max(rawWatermarkRowid, rawRowid);
+          chatOldestRowid = Math.min(chatOldestRowid, rawRowid);
         }
         if (Number.isFinite(rawDateMs)) {
           rawWatermarkMs = Math.max(rawWatermarkMs, rawDateMs);
@@ -203,6 +205,15 @@ export async function runIMessageCatchup(
           isFromMe: payload.is_from_me === true,
         });
         payloadByGuid.set(guid, { message: payload, rawEnvelope: { message: raw } });
+      }
+
+      if (messages.length >= PER_CHAT_HISTORY_LIMIT && chatOldestRowid > sinceRowid) {
+        historyWindowTruncated = true;
+        warnLog(
+          `imessage catchup: chat_id=${chatId} returned a full ${PER_CHAT_HISTORY_LIMIT}-row page ` +
+            `whose oldest rowid is ${chatOldestRowid}; rows between cursor ${sinceRowid} and ` +
+            `${chatOldestRowid} are outside the per-chat history budget and were not recovered`,
+        );
       }
     }
 
@@ -250,7 +261,7 @@ export async function runIMessageCatchup(
     return {
       resolved: true,
       rows: capped,
-      fullyCaughtUp: !historyFetchFailed && !isCapTruncated,
+      fullyCaughtUp: !historyFetchFailed && !isCapTruncated && !historyWindowTruncated,
       ...(Number.isFinite(effectiveWatermarkRowid)
         ? { highWatermarkRowid: effectiveWatermarkRowid }
         : {}),

@@ -447,4 +447,108 @@ describe("runIMessageCatchup", () => {
     expect(summary.replayed).toBe(1);
     expect(dispatched).toEqual(["g-600"]);
   });
+
+  it("recovers the oldest rows when one chat's backlog exceeds perRunLimit", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-08T12:00:00Z"));
+    seedCatchupCursor("default", {
+      lastSeenMs: Date.parse("2026-05-08T11:30:00Z"),
+      lastSeenRowid: 0,
+    });
+    const backlogStartMs = Date.parse("2026-05-08T11:31:00Z");
+    const backlog = Array.from({ length: 100 }, (_, index) =>
+      makeRow({
+        id: index + 1,
+        guid: `g-${index + 1}`,
+        chat_id: 1,
+        created_at: new Date(backlogStartMs + (index + 1) * 1_000).toISOString(),
+      }),
+    );
+    const { client } = makeFakeClient(({ method, params }) => {
+      if (method === "chats.list") {
+        return { chats: [{ id: 1, last_message_at: "2026-05-08T11:59:00.000Z" }] };
+      }
+      if (method === "messages.history") {
+        const p = params as { limit: number; start?: string };
+        const startMs = p.start ? Date.parse(p.start) : Number.NEGATIVE_INFINITY;
+        return {
+          messages: backlog
+            .filter((row) => Date.parse(String(row.created_at)) >= startMs)
+            .toSorted((a, b) => Date.parse(String(b.created_at)) - Date.parse(String(a.created_at)))
+            .slice(0, p.limit),
+        };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const dispatched: number[] = [];
+    const runCatchup = async () =>
+      await runIMessageCatchup({
+        client: client as never,
+        accountId: "default",
+        config: resolveCatchupConfig({ enabled: true, perRunLimit: 50, maxAgeMinutes: 60 }),
+        includeAttachments: false,
+        dispatchPayload: async (msg) => {
+          if (typeof msg.id === "number") {
+            dispatched.push(msg.id);
+          }
+        },
+      });
+
+    const first = await runCatchup();
+    expect(first.fullyCaughtUp).toBe(false);
+    expect(first.cursorAfter.lastSeenRowid).toBe(50);
+    expect(dispatched).toEqual(Array.from({ length: 50 }, (_, index) => index + 1));
+
+    const second = await runCatchup();
+    expect(second.fullyCaughtUp).toBe(true);
+    expect(second.cursorAfter.lastSeenRowid).toBe(100);
+    expect(dispatched).toEqual(Array.from({ length: 100 }, (_, index) => index + 1));
+  });
+
+  it("reports not-fully-caught-up when a chat page fills the per-chat history budget", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-08T12:00:00Z"));
+    const warnings: string[] = [];
+    seedCatchupCursor("default", {
+      lastSeenMs: Date.parse("2026-05-08T11:30:00Z"),
+      lastSeenRowid: 0,
+    });
+    const backlogStartMs = Date.parse("2026-05-08T11:31:00Z");
+    const backlog = Array.from({ length: 520 }, (_, index) =>
+      makeRow({
+        id: index + 1,
+        guid: `g-${index + 1}`,
+        chat_id: 1,
+        created_at: new Date(backlogStartMs + (index + 1) * 1_000).toISOString(),
+      }),
+    );
+    const { client } = makeFakeClient(({ method, params }) => {
+      if (method === "chats.list") {
+        return { chats: [{ id: 1, last_message_at: "2026-05-08T11:59:00.000Z" }] };
+      }
+      if (method === "messages.history") {
+        const p = params as { limit: number };
+        return {
+          messages: backlog
+            .toSorted((a, b) => Date.parse(String(b.created_at)) - Date.parse(String(a.created_at)))
+            .slice(0, p.limit),
+        };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const summary = await runIMessageCatchup({
+      client: client as never,
+      accountId: "default",
+      config: resolveCatchupConfig({ enabled: true, perRunLimit: 500, maxAgeMinutes: 60 }),
+      includeAttachments: false,
+      dispatchPayload: async () => {},
+      runtime: { log: (msg) => warnings.push(msg) },
+    });
+
+    expect(summary.querySucceeded).toBe(true);
+    expect(summary.fullyCaughtUp).toBe(false);
+    expect(warnings.some((msg) => msg.includes("outside the per-chat history budget"))).toBe(true);
+  });
 });
