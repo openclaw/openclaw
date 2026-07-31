@@ -35,6 +35,7 @@ import {
   type WritableTransportStream,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
 import {
+  isRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -140,11 +141,7 @@ type GoogleSseChunk = {
         text?: string;
         thought?: boolean;
         thoughtSignature?: string;
-        functionCall?: {
-          id?: string;
-          name?: string;
-          args?: Record<string, unknown>;
-        };
+        functionCall?: GoogleFunctionCall;
       }>;
     };
     finishReason?: string;
@@ -160,8 +157,36 @@ type GoogleSseChunk = {
   };
 };
 
+type GooglePartialFunctionArgument = {
+  jsonPath?: string;
+  boolValue?: boolean;
+  nullValue?: "NULL_VALUE" | null;
+  numberValue?: number;
+  stringValue?: string;
+  willContinue?: boolean;
+};
+
+type GoogleFunctionCall = {
+  id?: string;
+  name?: string;
+  args?: Record<string, unknown>;
+  partialArgs?: GooglePartialFunctionArgument[];
+  willContinue?: boolean;
+};
+
+type GooglePendingToolCall = {
+  block: Extract<GoogleTransportContentBlock, { type: "toolCall" }>;
+  contentIndex: number;
+  fragmentsByPath: Map<string, unknown>;
+  pending: boolean;
+  providerId?: string;
+};
+
+type GoogleUsageMetadata = NonNullable<GoogleSseChunk["usageMetadata"]>;
+
 let toolCallCounter = 0;
 const GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP = "skip_thought_signature_validator";
+const MAX_GOOGLE_PARTIAL_ARGUMENT_ARRAY_INDEX = 1024;
 
 function requiresToolCallId(modelId: string): boolean {
   return modelId.startsWith("claude-") || modelId.startsWith("gpt-oss-");
@@ -184,6 +209,133 @@ function retainThoughtSignature(existing: string | undefined, incoming: string |
     return incoming;
   }
   return existing;
+}
+
+function googlePartialArgumentPath(jsonPath: string | undefined): Array<string | number> {
+  if (!jsonPath?.startsWith("$")) {
+    return [];
+  }
+  const segments: Array<string | number> = [];
+  const segmentPattern =
+    /\.([A-Za-z_$\u0080-\u{10ffff}][\w$\u0080-\u{10ffff}-]*)|\[\s*(\d+)\s*\]|\[\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')\s*\]/gu;
+  let offset = 1;
+  for (const match of jsonPath.matchAll(segmentPattern)) {
+    if (match.index !== offset) {
+      return [];
+    }
+    const bracketName = match[3];
+    let key = match[1] ?? match[2];
+    if (bracketName) {
+      try {
+        let jsonName = '"';
+        for (let index = 1; index < bracketName.length - 1; index += 1) {
+          const character = bracketName[index];
+          if (character === "\\") {
+            const escaped = bracketName[++index];
+            if (!escaped) {
+              return [];
+            }
+            jsonName += escaped === "'" ? "'" : escaped === '"' ? '\\"' : `\\${escaped}`;
+          } else {
+            jsonName += character === '"' ? '\\"' : character;
+          }
+        }
+        const decodedName: unknown = JSON.parse(`${jsonName}"`);
+        if (typeof decodedName !== "string") {
+          return [];
+        }
+        key = decodedName;
+      } catch {
+        return [];
+      }
+    }
+    if (key === undefined || key === "__proto__" || key === "constructor" || key === "prototype") {
+      return [];
+    }
+    if (match[2]) {
+      const index = Number(key);
+      // A model-controlled sparse index can expand into millions of JSON nulls
+      // when completed arguments are emitted to the agent/tool consumer.
+      if (!Number.isSafeInteger(index) || index > MAX_GOOGLE_PARTIAL_ARGUMENT_ARRAY_INDEX) {
+        throw invalidGoogleFunctionCall("an unsafe array index");
+      }
+      segments.push(index);
+    } else {
+      segments.push(key);
+    }
+    offset += match[0].length;
+  }
+  return offset === jsonPath.length ? segments : [];
+}
+
+function invalidGoogleFunctionCall(reason: string): Error {
+  return Object.assign(new Error(`Google function call contains ${reason}`), {
+    code: "INVALID_FUNCTION_CALL",
+    type: "google_invalid_tool_call",
+  });
+}
+
+function assignGooglePartialArgument(
+  argumentsObject: Record<string, unknown>,
+  path: Array<string | number>,
+  value: unknown,
+): void {
+  if (path.length === 0) {
+    return;
+  }
+  let current: Record<string, unknown> | unknown[] = argumentsObject;
+  for (let index = 0; index < path.length - 1; index += 1) {
+    const key = path[index];
+    if (key === undefined) {
+      return;
+    }
+    const existing = current[key as keyof typeof current];
+    if (!isRecord(existing) && !Array.isArray(existing)) {
+      current[key as keyof typeof current] = (
+        typeof path[index + 1] === "number" ? [] : {}
+      ) as never;
+    }
+    current = current[key as keyof typeof current] as Record<string, unknown> | unknown[];
+  }
+  const finalKey = path[path.length - 1];
+  if (finalKey !== undefined) {
+    current[finalKey as keyof typeof current] = value as never;
+  }
+}
+
+function mergeGoogleFunctionCallArguments(
+  pendingCall: GooglePendingToolCall,
+  functionCall: GoogleFunctionCall,
+): void {
+  if (functionCall.args) {
+    // Object spread defines own properties, including a literal __proto__ key;
+    // Object.assign would invoke its legacy setter on model-controlled JSON.
+    pendingCall.block.arguments = { ...pendingCall.block.arguments, ...functionCall.args };
+  }
+  for (const partialArg of functionCall.partialArgs ?? []) {
+    const path = googlePartialArgumentPath(partialArg.jsonPath);
+    if (path.length === 0 || !partialArg.jsonPath) {
+      throw invalidGoogleFunctionCall("an invalid or unsafe partial argument path");
+    }
+    let value: unknown;
+    if (typeof partialArg.stringValue === "string") {
+      const previous = pendingCall.fragmentsByPath.get(partialArg.jsonPath);
+      value =
+        typeof previous === "string"
+          ? `${previous}${partialArg.stringValue}`
+          : partialArg.stringValue;
+    } else if (typeof partialArg.boolValue === "boolean") {
+      value = partialArg.boolValue;
+    } else if (typeof partialArg.numberValue === "number") {
+      value = partialArg.numberValue;
+    } else if (partialArg.nullValue === null || partialArg.nullValue === "NULL_VALUE") {
+      value = null;
+    } else {
+      continue;
+    }
+    pendingCall.fragmentsByPath.set(partialArg.jsonPath, value);
+    assignGooglePartialArgument(pendingCall.block.arguments, path, value);
+  }
 }
 
 function stableStringifyGoogleToolCallValue(value: unknown): string {
@@ -530,6 +682,7 @@ function normalizeGoogleThinkingConfig(
 function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
   const contents: Array<Record<string, unknown>> = [];
   const replayToolCallThoughtSignatures = new Map<string, string>();
+  const forwardedToolCallIds = new Set<string>();
   const shouldReplayToolCallThoughtSignature = requiresToolCallThoughtSignature(model.id);
   const routeModel = normalizeGoogleTransportModelRoute(model);
   const transformedMessages = transformTransportMessages(
@@ -555,6 +708,7 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
       flushToolResultRun();
     }
     if (msg.role === "user") {
+      forwardedToolCallIds.clear();
       if (typeof msg.content === "string") {
         contents.push({
           role: "user",
@@ -582,6 +736,7 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
     }
 
     if (msg.role === "assistant") {
+      forwardedToolCallIds.clear();
       const isSameRoute = isSameGoogleTransportRoute(msg, model);
       const parts: Array<Record<string, unknown>> = [];
       const nextReplayToolCallThoughtSignatures = new Map<string, string>();
@@ -620,6 +775,10 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
           continue;
         }
         if (block.type === "toolCall") {
+          const shouldForwardToolCallId = requiresToolCallId(model.id) || isSameRoute;
+          if (shouldForwardToolCallId) {
+            forwardedToolCallIds.add(block.id);
+          }
           const replayKey = toolCallThoughtSignatureReplayKey(block);
           const replayedThoughtSignature =
             shouldReplayToolCallThoughtSignature && isSameRoute
@@ -645,7 +804,7 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
             functionCall: {
               name: block.name,
               args: coerceTransportToolCallArguments(block.arguments),
-              ...(requiresToolCallId(model.id) ? { id: block.id } : {}),
+              ...(shouldForwardToolCallId ? { id: block.id } : {}),
             },
             ...(thoughtSignature ? { thoughtSignature } : {}),
           });
@@ -686,7 +845,9 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
           ...(modelSupportsMultimodalFunctionResponse && imageParts.length > 0
             ? { parts: imageParts }
             : {}),
-          ...(requiresToolCallId(model.id) ? { id: msg.toolCallId } : {}),
+          ...(requiresToolCallId(model.id) || forwardedToolCallIds.has(msg.toolCallId)
+            ? { id: msg.toolCallId }
+            : {}),
         },
       };
       if (activeToolResultParts) {
@@ -1168,6 +1329,31 @@ async function buildGoogleTransportHeaders(params: {
     : buildGoogleHeaders(params.model, params.apiKey, params.optionHeaders);
 }
 
+function parseGoogleSseChunk(data: string): GoogleSseChunk {
+  let chunk: unknown;
+  try {
+    chunk = JSON.parse(data);
+  } catch {
+    throw new Error("Google SSE stream returned malformed JSON");
+  }
+  if (!isRecord(chunk)) {
+    throw new Error("Google SSE stream returned malformed JSON");
+  }
+  if (isRecord(chunk.error)) {
+    const errorCode =
+      normalizeOptionalString(chunk.error.status) ??
+      (typeof chunk.error.code === "number" ? String(chunk.error.code) : undefined) ??
+      "GOOGLE_STREAM_ERROR";
+    const errorMessage =
+      normalizeOptionalString(chunk.error.message) ?? "Provider returned a streamed error";
+    throw Object.assign(new Error(`Google stream error (${errorCode}): ${errorMessage}`), {
+      code: errorCode,
+      type: "google_stream_failed",
+    });
+  }
+  return chunk as GoogleSseChunk;
+}
+
 async function* parseGoogleSseChunks(
   response: Response,
   signal?: AbortSignal,
@@ -1190,6 +1376,26 @@ async function* parseGoogleSseChunks(
       }
       const { done, value } = await reader.read();
       if (done) {
+        buffer += decoder.decode().replace(/\r/g, "");
+        const trailing = buffer.trim();
+        if (trailing) {
+          const onlySseMetadata = trailing
+            .split("\n")
+            .every((line) => /^\s*(?::|(?:event|id|retry)(?::|$))/u.test(line));
+          if (onlySseMetadata) {
+            completed = true;
+            break;
+          }
+          // The SDK accepts only complete SSE frames; bare provider errors still
+          // carry the actionable status when a stream fails after a valid chunk.
+          if (trailing.startsWith("{")) {
+            parseGoogleSseChunk(trailing);
+          }
+          throw Object.assign(new Error("Google SSE stream ended with an incomplete event"), {
+            code: "STREAM_INCOMPLETE",
+            type: "google_incomplete_stream",
+          });
+        }
         completed = true;
         break;
       }
@@ -1207,11 +1413,7 @@ async function* parseGoogleSseChunks(
         if (!data || data === "[DONE]") {
           continue;
         }
-        try {
-          yield JSON.parse(data) as GoogleSseChunk;
-        } catch {
-          throw new Error("Google SSE stream returned malformed JSON");
-        }
+        yield parseGoogleSseChunk(data);
       }
     }
   } finally {
@@ -1227,21 +1429,29 @@ function updateUsage(
   output: MutableAssistantOutput,
   model: GoogleTransportModel,
   chunk: GoogleSseChunk,
+  knownUsage: GoogleUsageMetadata,
 ) {
-  const usage = chunk.usageMetadata;
-  if (!usage) {
+  if (!chunk.usageMetadata) {
     return;
   }
-  const promptTokens = usage.promptTokenCount || 0;
-  const cacheRead = usage.cachedContentTokenCount || 0;
-  const toolUsePromptTokens = usage.toolUsePromptTokenCount || 0;
-  const outputTokens = (usage.candidatesTokenCount || 0) + (usage.thoughtsTokenCount || 0);
+  Object.assign(knownUsage, chunk.usageMetadata);
+  const promptTokens = knownUsage.promptTokenCount ?? 0;
+  const cacheRead = knownUsage.cachedContentTokenCount ?? 0;
+  const toolUsePromptTokens = knownUsage.toolUsePromptTokenCount ?? 0;
+  const outputTokens =
+    (knownUsage.candidatesTokenCount ?? 0) + (knownUsage.thoughtsTokenCount ?? 0);
+  const totalTokens =
+    chunk.usageMetadata.totalTokenCount ??
+    (Object.keys(chunk.usageMetadata).some((field) => field !== "totalTokenCount")
+      ? promptTokens + outputTokens + toolUsePromptTokens
+      : (knownUsage.totalTokenCount ?? promptTokens + outputTokens + toolUsePromptTokens));
+  knownUsage.totalTokenCount = totalTokens;
   output.usage = {
     input: Math.max(0, promptTokens - cacheRead) + toolUsePromptTokens,
     output: outputTokens,
     cacheRead,
     cacheWrite: 0,
-    totalTokens: usage.totalTokenCount ?? promptTokens + outputTokens + toolUsePromptTokens,
+    totalTokens,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
   calculateCost(model, output.usage);
@@ -1293,7 +1503,9 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
       };
       try {
         const apiKey = options?.apiKey ?? getEnvApiKey(model.provider) ?? undefined;
-        const guardedFetch = buildGuardedModelFetch(model);
+        // Google owns SSE parsing; OpenAI-oriented sanitizing drops unframed
+        // provider errors before this transport can expose their real status.
+        const guardedFetch = buildGuardedModelFetch(model, undefined, { sanitizeSse: false });
         let params = buildGoogleGenerativeAiParams(model, context, options);
         const nextParams = await options?.onPayload?.(params, model);
         if (nextParams !== undefined) {
@@ -1338,10 +1550,10 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
         let currentBlockIndex = -1;
         let sawTerminalReason = false;
         let terminalGenerationError: Error | undefined;
-        const toolCallBlocksById = new Map<
-          string,
-          Extract<GoogleTransportContentBlock, { type: "toolCall" }>
-        >();
+        const knownUsage: GoogleUsageMetadata = {};
+        const toolCallsByProviderId = new Map<string, GooglePendingToolCall>();
+        const pendingToolCallsByPartIndex = new Map<number, GooglePendingToolCall>();
+        const pendingToolCalls = new Set<GooglePendingToolCall>();
         const chunks =
           sse.firstChunk === undefined
             ? sse.chunks
@@ -1351,7 +1563,7 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
               })(sse.firstChunk);
         for await (const chunk of chunks) {
           output.responseId ||= chunk.responseId;
-          updateUsage(output, model, chunk);
+          updateUsage(output, model, chunk, knownUsage);
           const candidate = chunk.candidates?.[0];
           const promptFeedback = chunk.promptFeedback;
           if (!candidate && promptFeedback) {
@@ -1365,7 +1577,8 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
             });
           }
           if (candidate?.content?.parts) {
-            for (const part of candidate.content.parts) {
+            const providerIdsInCandidate = new Set<string>();
+            for (const [partIndex, part] of candidate.content.parts.entries()) {
               const hasThoughtSignature =
                 typeof part.thoughtSignature === "string" && part.thoughtSignature.length > 0;
               const hasText = typeof part.text === "string";
@@ -1442,50 +1655,116 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
                   pushTextBlockEnd(stream, output, currentBlockIndex);
                   currentBlockIndex = -1;
                 }
-                const providedId = part.functionCall.id;
-                const existingToolCall =
-                  typeof providedId === "string" ? toolCallBlocksById.get(providedId) : undefined;
-                const isDuplicate = existingToolCall !== undefined;
-                const toolCallId =
-                  providedId && !isDuplicate
-                    ? providedId
-                    : `${part.functionCall.name || "tool"}_${Date.now()}_${++toolCallCounter}`;
-                const toolCall: GoogleTransportContentBlock = {
-                  type: "toolCall",
-                  id: toolCallId,
-                  name: part.functionCall.name || "",
-                  arguments: part.functionCall.args ?? {},
-                  thoughtSignature: retainThoughtSignature(
-                    existingToolCall?.thoughtSignature,
-                    part.thoughtSignature,
-                  ),
-                };
-                output.content.push(toolCall);
-                if (!toolCallBlocksById.has(toolCall.id)) {
-                  toolCallBlocksById.set(toolCall.id, toolCall);
+                const functionCall = part.functionCall;
+                const providedId = functionCall.id;
+                const repeatedProviderId =
+                  typeof providedId === "string" && providerIdsInCandidate.has(providedId);
+                if (typeof providedId === "string") {
+                  providerIdsInCandidate.add(providedId);
                 }
-                const blockIndex = output.content.length - 1;
-                stream.push({
-                  type: "toolcall_start",
-                  contentIndex: blockIndex,
-                  partial: output as never,
-                });
-                stream.push({
-                  type: "toolcall_delta",
-                  contentIndex: blockIndex,
-                  delta: JSON.stringify(toolCall.arguments),
-                  partial: output as never,
-                });
-                stream.push({
-                  type: "toolcall_end",
-                  contentIndex: blockIndex,
-                  toolCall,
-                  partial: output as never,
-                });
+                const identifiedToolCall =
+                  typeof providedId === "string"
+                    ? toolCallsByProviderId.get(providedId)
+                    : undefined;
+                // Vertex can omit id and name on all fragments, including
+                // final `{}` markers. Part position distinguishes parallel
+                // anonymous calls that invoke the same function.
+                const positionedToolCall = pendingToolCallsByPartIndex.get(partIndex);
+                const positionedCallMatches =
+                  positionedToolCall?.pending === true &&
+                  (!functionCall.name || positionedToolCall.block.name === functionCall.name) &&
+                  (!providedId ||
+                    !positionedToolCall.providerId ||
+                    positionedToolCall.providerId === providedId);
+                const existingToolCall = positionedCallMatches
+                  ? positionedToolCall
+                  : repeatedProviderId
+                    ? undefined
+                    : identifiedToolCall;
+                // Only an unfinished call with matching identity owns its continuation;
+                // duplicate provider ids must never inherit another call's signature.
+                const isContinuation =
+                  existingToolCall?.pending === true &&
+                  (!functionCall.name || existingToolCall.block.name === functionCall.name);
+                let pendingToolCall: GooglePendingToolCall;
+                if (isContinuation && existingToolCall) {
+                  pendingToolCall = existingToolCall;
+                  pendingToolCall.block.thoughtSignature = retainThoughtSignature(
+                    pendingToolCall.block.thoughtSignature,
+                    part.thoughtSignature,
+                  );
+                  if (
+                    providedId &&
+                    !pendingToolCall.providerId &&
+                    !repeatedProviderId &&
+                    !toolCallsByProviderId.has(providedId)
+                  ) {
+                    pendingToolCall.providerId = providedId;
+                    pendingToolCall.block.id = providedId;
+                    toolCallsByProviderId.set(providedId, pendingToolCall);
+                  }
+                } else {
+                  const toolCallId =
+                    providedId && !identifiedToolCall
+                      ? providedId
+                      : `${functionCall.name || "tool"}_${Date.now()}_${++toolCallCounter}`;
+                  const toolCall: Extract<GoogleTransportContentBlock, { type: "toolCall" }> = {
+                    type: "toolCall",
+                    id: toolCallId,
+                    name: functionCall.name || "",
+                    arguments: {},
+                    ...(part.thoughtSignature ? { thoughtSignature: part.thoughtSignature } : {}),
+                  };
+                  output.content.push(toolCall);
+                  pendingToolCall = {
+                    block: toolCall,
+                    contentIndex: output.content.length - 1,
+                    fragmentsByPath: new Map<string, unknown>(),
+                    pending: false,
+                    ...(providedId ? { providerId: providedId } : {}),
+                  };
+                  if (providedId && !identifiedToolCall) {
+                    toolCallsByProviderId.set(providedId, pendingToolCall);
+                  }
+                  stream.push({
+                    type: "toolcall_start",
+                    contentIndex: pendingToolCall.contentIndex,
+                    partial: output as never,
+                  });
+                }
+                mergeGoogleFunctionCallArguments(pendingToolCall, functionCall);
+                pendingToolCall.pending =
+                  functionCall.willContinue === true ||
+                  (functionCall.willContinue !== false &&
+                    (functionCall.partialArgs ?? []).some((argument) => argument.willContinue));
+                if (pendingToolCall.pending) {
+                  pendingToolCalls.add(pendingToolCall);
+                  pendingToolCallsByPartIndex.set(partIndex, pendingToolCall);
+                } else {
+                  pendingToolCalls.delete(pendingToolCall);
+                  if (pendingToolCallsByPartIndex.get(partIndex) === pendingToolCall) {
+                    pendingToolCallsByPartIndex.delete(partIndex);
+                  }
+                  stream.push({
+                    type: "toolcall_delta",
+                    contentIndex: pendingToolCall.contentIndex,
+                    delta: JSON.stringify(pendingToolCall.block.arguments),
+                    partial: output as never,
+                  });
+                  stream.push({
+                    type: "toolcall_end",
+                    contentIndex: pendingToolCall.contentIndex,
+                    toolCall: pendingToolCall.block,
+                    partial: output as never,
+                  });
+                }
               }
             }
           }
-          if (typeof candidate?.finishReason === "string") {
+          if (
+            typeof candidate?.finishReason === "string" &&
+            candidate.finishReason !== "FINISH_REASON_UNSPECIFIED"
+          ) {
             sawTerminalReason = true;
             output.stopReason = mapStopReasonString(candidate.finishReason);
             if (output.stopReason === "error") {
@@ -1512,6 +1791,12 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
         }
         if (terminalGenerationError && !options?.signal?.aborted) {
           throw terminalGenerationError;
+        }
+        if (sawTerminalReason && pendingToolCalls.size > 0 && !options?.signal?.aborted) {
+          throw Object.assign(new Error("Google stream ended with an incomplete function call"), {
+            code: "INCOMPLETE_FUNCTION_CALL",
+            type: "google_incomplete_tool_call",
+          });
         }
         if (!sawTerminalReason && !options?.signal?.aborted) {
           throw Object.assign(new Error("Google stream ended before a terminal finish reason"), {

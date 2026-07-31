@@ -495,7 +495,9 @@ describe("google transport stream", () => {
     );
     const result = await stream.result();
 
-    expect(buildGuardedModelFetchMock).toHaveBeenCalledWith(model);
+    expect(buildGuardedModelFetchMock).toHaveBeenCalledWith(model, undefined, {
+      sanitizeSse: false,
+    });
     const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
     expect(guardedCall[0]).toBe(
       "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:streamGenerateContent?alt=sse",
@@ -587,6 +589,92 @@ describe("google transport stream", () => {
     });
   });
 
+  it.each(["google", "google-vertex"] as const)(
+    "preserves previously reported %s usage categories across sparse stream updates",
+    async (provider) => {
+      guardedFetchMock.mockResolvedValueOnce(
+        buildSseResponse([
+          {
+            candidates: [{ content: { parts: [{ text: "draft" }] } }],
+            usageMetadata: {
+              promptTokenCount: 100,
+              cachedContentTokenCount: 40,
+              toolUsePromptTokenCount: 6,
+              candidatesTokenCount: 1,
+              totalTokenCount: 107,
+            },
+          },
+          {
+            candidates: [{ content: { parts: [{ text: " final" }] }, finishReason: "STOP" }],
+            usageMetadata: {
+              candidatesTokenCount: 12,
+              thoughtsTokenCount: 3,
+              totalTokenCount: 121,
+            },
+          },
+        ]),
+      );
+      if (provider === "google-vertex") {
+        vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
+        vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
+        googleAuthGetAccessTokenMock.mockResolvedValueOnce("ya29.vertex-token");
+      }
+
+      const result =
+        provider === "google-vertex"
+          ? await runGoogleVertexStreamResult({ fetch: guardedFetchMock })
+          : await runGeminiStreamResult({ options: { apiKey: "gemini-api-key" } });
+
+      expect(result.usage).toMatchObject({
+        input: 66,
+        output: 15,
+        cacheRead: 40,
+        totalTokens: 121,
+      });
+    },
+  );
+
+  it.each(["google", "google-vertex"] as const)(
+    "recomputes a stale %s usage aggregate when a sparse update omits the total",
+    async (provider) => {
+      guardedFetchMock.mockResolvedValueOnce(
+        buildSseResponse([
+          {
+            candidates: [{ content: { parts: [{ text: "draft" }] } }],
+            usageMetadata: {
+              promptTokenCount: 100,
+              cachedContentTokenCount: 40,
+              toolUsePromptTokenCount: 6,
+              candidatesTokenCount: 1,
+              totalTokenCount: 107,
+            },
+          },
+          {
+            candidates: [{ content: { parts: [{ text: " final" }] }, finishReason: "STOP" }],
+            usageMetadata: { candidatesTokenCount: 12, thoughtsTokenCount: 3 },
+          },
+        ]),
+      );
+      if (provider === "google-vertex") {
+        vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
+        vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
+        googleAuthGetAccessTokenMock.mockResolvedValueOnce("ya29.vertex-token");
+      }
+
+      const result =
+        provider === "google-vertex"
+          ? await runGoogleVertexStreamResult({ fetch: guardedFetchMock })
+          : await runGeminiStreamResult({ options: { apiKey: "gemini-api-key" } });
+
+      expect(result.usage).toMatchObject({
+        input: 66,
+        output: 15,
+        cacheRead: 40,
+        totalTokens: 121,
+      });
+    },
+  );
+
   it.each([
     {
       provider: "google",
@@ -668,6 +756,139 @@ describe("google transport stream", () => {
     },
   );
 
+  it.each(["google", "google-vertex"] as const)(
+    "ignores an unspecified %s finish reason before the authoritative terminal reason",
+    async (provider) => {
+      guardedFetchMock.mockResolvedValueOnce(
+        buildSseResponse([
+          {
+            candidates: [
+              {
+                content: { parts: [{ text: "partial" }] },
+                finishReason: "FINISH_REASON_UNSPECIFIED",
+              },
+            ],
+          },
+          {
+            candidates: [{ content: { parts: [{ text: " final" }] }, finishReason: "STOP" }],
+          },
+        ]),
+      );
+      if (provider === "google-vertex") {
+        vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
+        vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
+        googleAuthGetAccessTokenMock.mockResolvedValueOnce("ya29.vertex-token");
+      }
+
+      const result =
+        provider === "google-vertex"
+          ? await runGoogleVertexStreamResult({ fetch: guardedFetchMock })
+          : await runGeminiStreamResult({ options: { apiKey: "gemini-api-key" } });
+
+      expect(result).toMatchObject({
+        stopReason: "stop",
+        content: [{ type: "text", text: "partial final" }],
+      });
+    },
+  );
+
+  it.each(["google", "google-vertex"] as const)(
+    "rejects a truncated %s SSE tail after an otherwise successful terminal chunk",
+    async (provider) => {
+      const terminalChunk = {
+        candidates: [{ content: { parts: [{ text: "answer" }] }, finishReason: "STOP" }],
+      };
+      guardedFetchMock.mockResolvedValueOnce(
+        buildRawSseResponse(
+          `data: ${JSON.stringify(terminalChunk)}\n\ndata: {"candidates":[{"content":`,
+        ),
+      );
+      if (provider === "google-vertex") {
+        vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
+        vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
+        googleAuthGetAccessTokenMock.mockResolvedValueOnce("ya29.vertex-token");
+      }
+
+      const result =
+        provider === "google-vertex"
+          ? await runGoogleVertexStreamResult({ fetch: guardedFetchMock })
+          : await runGeminiStreamResult({ options: { apiKey: "gemini-api-key" } });
+
+      expect(result).toMatchObject({
+        stopReason: "error",
+        errorCode: "STREAM_INCOMPLETE",
+        errorType: "google_incomplete_stream",
+      });
+    },
+  );
+
+  it.each(["google", "google-vertex"] as const)(
+    "accepts trailing %s SSE heartbeat comments and metadata",
+    async (provider) => {
+      const terminalChunk = {
+        candidates: [{ content: { parts: [{ text: "answer" }] }, finishReason: "STOP" }],
+      };
+      guardedFetchMock.mockResolvedValueOnce(
+        buildRawSseResponse(
+          `data: ${JSON.stringify(terminalChunk)}\n\n: keep-alive\nevent: heartbeat\nid: last`,
+        ),
+      );
+      if (provider === "google-vertex") {
+        vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
+        vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
+        googleAuthGetAccessTokenMock.mockResolvedValueOnce("ya29.vertex-token");
+      }
+
+      const result =
+        provider === "google-vertex"
+          ? await runGoogleVertexStreamResult({ fetch: guardedFetchMock })
+          : await runGeminiStreamResult({ options: { apiKey: "gemini-api-key" } });
+
+      expect(result).toMatchObject({
+        stopReason: "stop",
+        content: [{ type: "text", text: "answer" }],
+      });
+    },
+  );
+
+  it.each(["google", "google-vertex"] as const)(
+    "surfaces a streamed %s provider error after a successful candidate chunk",
+    async (provider) => {
+      const terminalChunk = {
+        candidates: [{ content: { parts: [{ text: "answer" }] }, finishReason: "STOP" }],
+      };
+      const providerError = {
+        error: {
+          code: 429,
+          status: "RESOURCE_EXHAUSTED",
+          message: "Provider quota exhausted",
+        },
+      };
+      guardedFetchMock.mockResolvedValueOnce(
+        buildRawSseResponse(
+          `data: ${JSON.stringify(terminalChunk)}\n\n${JSON.stringify(providerError)}`,
+        ),
+      );
+      if (provider === "google-vertex") {
+        vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
+        vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
+        googleAuthGetAccessTokenMock.mockResolvedValueOnce("ya29.vertex-token");
+      }
+
+      const result =
+        provider === "google-vertex"
+          ? await runGoogleVertexStreamResult({ fetch: guardedFetchMock })
+          : await runGeminiStreamResult({ options: { apiKey: "gemini-api-key" } });
+
+      expect(result).toMatchObject({
+        stopReason: "error",
+        errorCode: "RESOURCE_EXHAUSTED",
+        errorType: "google_stream_failed",
+        errorMessage: "Google stream error (RESOURCE_EXHAUSTED): Provider quota exhausted",
+      });
+    },
+  );
+
   it.each(["SAFETY", "MALFORMED_FUNCTION_CALL"] as const)(
     "preserves the actionable %s candidate finish message",
     async (finishReason) => {
@@ -691,6 +912,30 @@ describe("google transport stream", () => {
         errorCode: finishReason,
         errorType: "google_generation_failed",
         errorMessage: `Google generation stopped (${finishReason}): Provider rejected the generated response`,
+      });
+    },
+  );
+
+  it.each(["SAFETY", "MALFORMED_FUNCTION_CALL"] as const)(
+    "keeps an actionable %s terminal failure after a later STOP",
+    async (finishReason) => {
+      guardedFetchMock.mockResolvedValueOnce(
+        buildSseResponse([
+          {
+            candidates: [
+              { finishReason, finishMessage: "Provider rejected the generated response" },
+            ],
+          },
+          { candidates: [{ finishReason: "STOP" }] },
+        ]),
+      );
+
+      const result = await runGeminiStreamResult({ options: { apiKey: "gemini-api-key" } });
+
+      expect(result).toMatchObject({
+        stopReason: "error",
+        errorCode: finishReason,
+        errorType: "google_generation_failed",
       });
     },
   );
@@ -931,7 +1176,7 @@ describe("google transport stream", () => {
     ]);
   });
 
-  it("keeps duplicate tool-call ids distinct while retaining the first signature", async () => {
+  it("keeps duplicate tool-call ids distinct without sharing their thought signatures", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       buildSseResponse([
         {
@@ -982,9 +1227,581 @@ describe("google transport stream", () => {
     expect(toolCalls[1]).toMatchObject({
       name: "second",
       arguments: { value: 2 },
-      thoughtSignature: "first_signature",
     });
+    expect(toolCalls[1]).not.toHaveProperty("thoughtSignature", "first_signature");
     expect(toolCalls[1]?.id).not.toBe("call_1");
+  });
+
+  it("finalizes a streamed Vertex function call once after its partial arguments are complete", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      buildSseResponse([
+        {
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    functionCall: {
+                      id: "vertex_call_1",
+                      name: "lookup",
+                      partialArgs: [
+                        { jsonPath: "$.query", stringValue: "Par", willContinue: true },
+                        { jsonPath: "$.filters[0].enabled", boolValue: true },
+                      ],
+                      willContinue: true,
+                    },
+                    thoughtSignature: "dmVydGV4X3NpZw==",
+                  },
+                ],
+              },
+            },
+          ],
+        },
+        {
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    functionCall: {
+                      id: "vertex_call_1",
+                      name: "lookup",
+                      partialArgs: [{ jsonPath: "$.query", stringValue: "is" }],
+                      willContinue: false,
+                    },
+                  },
+                ],
+              },
+              finishReason: "STOP",
+            },
+          ],
+        },
+      ]),
+    );
+    vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
+    vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
+    googleAuthGetAccessTokenMock.mockResolvedValueOnce("ya29.vertex-token");
+
+    const streamFn = createGoogleVertexTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        buildGoogleVertexModel(),
+        { messages: [{ role: "user", content: "hello", timestamp: 0 }] } as never,
+        { apiKey: "gcp-vertex-credentials", fetch: guardedFetchMock } as never,
+      ),
+    );
+    const events = [];
+    for await (const event of stream) {
+      events.push(event);
+    }
+
+    expect((await stream.result()).content).toEqual([
+      {
+        type: "toolCall",
+        id: "vertex_call_1",
+        name: "lookup",
+        arguments: { query: "Paris", filters: [{ enabled: true }] },
+        thoughtSignature: "dmVydGV4X3NpZw==",
+      },
+    ]);
+    expect(events.map((event) => event.type)).toEqual([
+      "start",
+      "toolcall_start",
+      "toolcall_delta",
+      "toolcall_end",
+      "done",
+    ]);
+  });
+
+  it("rejects a Vertex function call that is still continuing at the terminal chunk", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      buildSseResponse([
+        {
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    functionCall: {
+                      id: "vertex_call_1",
+                      name: "lookup",
+                      partialArgs: [
+                        { jsonPath: "$.query", stringValue: "Par", willContinue: true },
+                      ],
+                      willContinue: true,
+                    },
+                  },
+                ],
+              },
+              finishReason: "STOP",
+            },
+          ],
+        },
+      ]),
+    );
+    vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
+    vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
+    googleAuthGetAccessTokenMock.mockResolvedValueOnce("ya29.vertex-token");
+
+    const result = await runGoogleVertexStreamResult({ fetch: guardedFetchMock });
+
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorCode: "INCOMPLETE_FUNCTION_CALL",
+      errorType: "google_incomplete_tool_call",
+    });
+  });
+
+  it("assembles official id-less Vertex function-call fragments through an unnamed final marker", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      buildSseResponse([
+        {
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    functionCall: { name: "lookup", willContinue: true },
+                    thoughtSignature: "dmVydGV4X2Fub255bW91c19zaWc=",
+                  },
+                ],
+              },
+            },
+          ],
+        },
+        {
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    functionCall: {
+                      partialArgs: [
+                        { jsonPath: "$.query", stringValue: "Par", willContinue: true },
+                      ],
+                      willContinue: true,
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+        {
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    functionCall: {
+                      partialArgs: [{ jsonPath: "$.query", stringValue: "is" }],
+                      willContinue: true,
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+        {
+          candidates: [{ content: { parts: [{ functionCall: {} }] }, finishReason: "STOP" }],
+        },
+      ]),
+    );
+    vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
+    vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
+    googleAuthGetAccessTokenMock.mockResolvedValueOnce("ya29.vertex-token");
+
+    const streamFn = createGoogleVertexTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        buildGoogleVertexModel(),
+        { messages: [{ role: "user", content: "hello", timestamp: 0 }] } as never,
+        { apiKey: "gcp-vertex-credentials", fetch: guardedFetchMock } as never,
+      ),
+    );
+    const events = [];
+    for await (const event of stream) {
+      events.push(event);
+    }
+
+    const result = await stream.result();
+    expect(result.content).toHaveLength(1);
+    expect(result.content[0]).toMatchObject({
+      type: "toolCall",
+      name: "lookup",
+      arguments: { query: "Paris" },
+      thoughtSignature: "dmVydGV4X2Fub255bW91c19zaWc=",
+    });
+    expect(result.content[0]?.id).toMatch(/^lookup_/);
+    expect(events.map((event) => event.type)).toEqual([
+      "start",
+      "toolcall_start",
+      "toolcall_delta",
+      "toolcall_end",
+      "done",
+    ]);
+  });
+
+  it.each(["STOP", "MAX_TOKENS"] as const)(
+    "rejects an id-less Vertex function call that is still continuing at %s",
+    async (finishReason) => {
+      guardedFetchMock.mockResolvedValueOnce(
+        buildSseResponse([
+          {
+            candidates: [
+              {
+                content: {
+                  parts: [
+                    {
+                      functionCall: {
+                        name: "lookup",
+                        partialArgs: [
+                          { jsonPath: "$.query", stringValue: "Par", willContinue: true },
+                        ],
+                        willContinue: true,
+                      },
+                    },
+                  ],
+                },
+                finishReason,
+              },
+            ],
+          },
+        ]),
+      );
+      vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
+      vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
+      googleAuthGetAccessTokenMock.mockResolvedValueOnce("ya29.vertex-token");
+
+      const result = await runGoogleVertexStreamResult({ fetch: guardedFetchMock });
+
+      expect(result).toMatchObject({
+        stopReason: "error",
+        errorCode: "INCOMPLETE_FUNCTION_CALL",
+        errorType: "google_incomplete_tool_call",
+      });
+    },
+  );
+
+  it("keeps separately named id-less Vertex function calls distinct", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      buildSseResponse([
+        {
+          candidates: [
+            {
+              content: {
+                parts: [
+                  { functionCall: { name: "lookup", args: { city: "Paris" } } },
+                  { functionCall: { name: "weather", args: { city: "London" } } },
+                ],
+              },
+              finishReason: "STOP",
+            },
+          ],
+        },
+      ]),
+    );
+    vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
+    vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
+    googleAuthGetAccessTokenMock.mockResolvedValueOnce("ya29.vertex-token");
+
+    const result = await runGoogleVertexStreamResult({ fetch: guardedFetchMock });
+
+    expect(result.content).toMatchObject([
+      { type: "toolCall", name: "lookup", arguments: { city: "Paris" } },
+      { type: "toolCall", name: "weather", arguments: { city: "London" } },
+    ]);
+    expect(result.content[0]?.id).not.toBe(result.content[1]?.id);
+  });
+
+  it.each([
+    { names: ["lookup", "lookup"], label: "same-name" },
+    { names: ["lookup", "weather"], label: "different-name" },
+  ])(
+    "keeps parallel $label id-less Vertex partial calls on their own part positions",
+    async ({ names }) => {
+      guardedFetchMock.mockResolvedValueOnce(
+        buildSseResponse([
+          {
+            candidates: [
+              {
+                content: {
+                  parts: names.map((name, index) => ({
+                    functionCall: { name, willContinue: true },
+                    thoughtSignature: `signature_${index}`,
+                  })),
+                },
+              },
+            ],
+          },
+          {
+            candidates: [
+              {
+                content: {
+                  parts: ["Paris", "London"].map((city) => ({
+                    functionCall: {
+                      partialArgs: [{ jsonPath: "$.city", stringValue: city }],
+                      willContinue: false,
+                    },
+                  })),
+                },
+                finishReason: "STOP",
+              },
+            ],
+          },
+        ]),
+      );
+      vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
+      vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
+      googleAuthGetAccessTokenMock.mockResolvedValueOnce("ya29.vertex-token");
+
+      const result = await runGoogleVertexStreamResult({ fetch: guardedFetchMock });
+
+      expect(result.stopReason).toBe("toolUse");
+      expect(result.content).toMatchObject([
+        { type: "toolCall", name: names[0], arguments: { city: "Paris" } },
+        { type: "toolCall", name: names[1], arguments: { city: "London" } },
+      ]);
+      expect(result.content[0]?.thoughtSignature).toBe("signature_0");
+      expect(result.content[1]?.thoughtSignature).toBe("signature_1");
+      expect(result.content[0]?.id).not.toBe(result.content[1]?.id);
+    },
+  );
+
+  it("keeps parallel Vertex partial calls with duplicate provider ids and names distinct", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      buildSseResponse([
+        {
+          candidates: [
+            {
+              content: {
+                parts: [0, 1].map((index) => ({
+                  functionCall: { id: "call_shared", name: "lookup", willContinue: true },
+                  thoughtSignature: `signature_${index}`,
+                })),
+              },
+            },
+          ],
+        },
+        {
+          candidates: [
+            {
+              content: {
+                parts: ["Paris", "London"].map((city) => ({
+                  functionCall: {
+                    id: "call_shared",
+                    name: "lookup",
+                    partialArgs: [{ jsonPath: "$.city", stringValue: city }],
+                    willContinue: false,
+                  },
+                })),
+              },
+              finishReason: "STOP",
+            },
+          ],
+        },
+      ]),
+    );
+    vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
+    vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
+    googleAuthGetAccessTokenMock.mockResolvedValueOnce("ya29.vertex-token");
+
+    const result = await runGoogleVertexStreamResult({ fetch: guardedFetchMock });
+
+    expect(result.stopReason).toBe("toolUse");
+    expect(result.content).toMatchObject([
+      { id: "call_shared", name: "lookup", arguments: { city: "Paris" } },
+      { name: "lookup", arguments: { city: "London" } },
+    ]);
+    expect(result.content[0]?.thoughtSignature).toBe("signature_0");
+    expect(result.content[1]?.thoughtSignature).toBe("signature_1");
+    expect(result.content[1]?.id).not.toBe("call_shared");
+  });
+
+  it("lets only one parallel id-less Vertex call adopt a late provider id", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      buildSseResponse([
+        {
+          candidates: [
+            {
+              content: {
+                parts: [0, 1].map(() => ({
+                  functionCall: { name: "lookup", willContinue: true },
+                })),
+              },
+            },
+          ],
+        },
+        {
+          candidates: [
+            {
+              content: {
+                parts: ["Paris", "London"].map((city) => ({
+                  functionCall: {
+                    id: "late_shared",
+                    name: "lookup",
+                    partialArgs: [{ jsonPath: "$.city", stringValue: city }],
+                    willContinue: false,
+                  },
+                })),
+              },
+              finishReason: "STOP",
+            },
+          ],
+        },
+      ]),
+    );
+    vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
+    vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
+    googleAuthGetAccessTokenMock.mockResolvedValueOnce("ya29.vertex-token");
+
+    const result = await runGoogleVertexStreamResult({ fetch: guardedFetchMock });
+
+    expect(result.stopReason).toBe("toolUse");
+    expect(result.content).toMatchObject([
+      { id: "late_shared", arguments: { city: "Paris" } },
+      { arguments: { city: "London" } },
+    ]);
+    expect(result.content[1]?.id).not.toBe("late_shared");
+  });
+
+  it("preserves ProtoJSON nulls and RFC 9535 bracket-name partial argument paths", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      buildSseResponse([
+        {
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    functionCall: {
+                      id: "vertex_call_1",
+                      name: "lookup",
+                      partialArgs: [
+                        { jsonPath: "$['postal.code']", stringValue: "94107" },
+                        { jsonPath: '$["display name"]', stringValue: "Ada" },
+                        { jsonPath: "$['']", stringValue: "empty member" },
+                        { jsonPath: "$[ 'spaced name' ]", stringValue: "spaced" },
+                        { jsonPath: "$['say\\\"what']", stringValue: "escaped" },
+                        { jsonPath: "$['user\\'s.city']", stringValue: "Paris" },
+                        { jsonPath: "$.café", stringValue: "Marais" },
+                        { jsonPath: "$.🌡️", numberValue: 21 },
+                        { jsonPath: "$['nested.key'][0]['quoted value']", numberValue: 7 },
+                        { jsonPath: "$.optional", nullValue: null },
+                        { jsonPath: "$.sdkNull", nullValue: "NULL_VALUE" },
+                      ],
+                      willContinue: false,
+                    },
+                  },
+                ],
+              },
+              finishReason: "STOP",
+            },
+          ],
+        },
+      ]),
+    );
+    vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
+    vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
+    googleAuthGetAccessTokenMock.mockResolvedValueOnce("ya29.vertex-token");
+
+    const result = await runGoogleVertexStreamResult({ fetch: guardedFetchMock });
+
+    expect(result.content[0]).toMatchObject({
+      type: "toolCall",
+      arguments: {
+        "postal.code": "94107",
+        "display name": "Ada",
+        "": "empty member",
+        "spaced name": "spaced",
+        'say"what': "escaped",
+        "user's.city": "Paris",
+        café: "Marais",
+        "🌡️": 21,
+        "nested.key": [{ "quoted value": 7 }],
+        optional: null,
+        sdkNull: null,
+      },
+    });
+  });
+
+  it.each([
+    { label: "unsafe sparse indices", path: "$.items[100000000]" },
+    { label: "malformed selectors", path: "$.filters[" },
+    { label: "prototype selectors", path: "$['__proto__'].polluted" },
+  ])("rejects $label before materializing streamed tool arguments", async ({ path }) => {
+    guardedFetchMock.mockResolvedValueOnce(
+      buildSseResponse([
+        {
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    functionCall: {
+                      name: "lookup",
+                      partialArgs: [{ jsonPath: path, stringValue: "unsafe" }],
+                    },
+                  },
+                ],
+              },
+              finishReason: "STOP",
+            },
+          ],
+        },
+      ]),
+    );
+    vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
+    vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
+    googleAuthGetAccessTokenMock.mockResolvedValueOnce("ya29.vertex-token");
+
+    const result = await runGoogleVertexStreamResult({ fetch: guardedFetchMock });
+
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorCode: "INVALID_FUNCTION_CALL",
+      errorType: "google_invalid_tool_call",
+    });
+  });
+
+  it("keeps complete model-provided tool arguments from changing their object prototype", async () => {
+    const untrustedArguments = JSON.parse(
+      '{"__proto__":{"isAdmin":true},"city":"Paris"}',
+    ) as Record<string, unknown>;
+    guardedFetchMock.mockResolvedValueOnce(
+      buildSseResponse([
+        {
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    functionCall: {
+                      id: "vertex_call_1",
+                      name: "lookup",
+                      args: untrustedArguments,
+                    },
+                  },
+                ],
+              },
+              finishReason: "STOP",
+            },
+          ],
+        },
+      ]),
+    );
+    vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
+    vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
+    googleAuthGetAccessTokenMock.mockResolvedValueOnce("ya29.vertex-token");
+
+    const result = await runGoogleVertexStreamResult({ fetch: guardedFetchMock });
+    const toolCall = result.content[0];
+
+    expect(toolCall).toMatchObject({ type: "toolCall", arguments: { city: "Paris" } });
+    expect(Object.getPrototypeOf(toolCall?.arguments)).toBe(Object.prototype);
+    expect(toolCall?.arguments).not.toHaveProperty("isAdmin");
+    expect(Object.hasOwn(toolCall?.arguments ?? {}, "__proto__")).toBe(true);
   });
 
   it("keeps explicit thinking signatures after tool-call SSE parts", async () => {
@@ -1726,6 +2543,61 @@ describe("google transport stream", () => {
   });
 
   it.each([
+    { provider: "google", model: buildGeminiModel({ id: "gemini-3.1-pro-preview" }) },
+    { provider: "google-vertex", model: buildGoogleVertexModel() },
+  ])(
+    "preserves provider-issued $provider call and result identities for parallel tools",
+    ({ provider, model }) => {
+      const params = buildGoogleGenerativeAiParams(model, {
+        messages: [
+          { role: "user", content: "Look up both cities.", timestamp: 0 },
+          {
+            role: "assistant",
+            provider,
+            api: model.api,
+            model: model.id,
+            stopReason: "toolUse",
+            timestamp: 1,
+            content: [
+              { type: "toolCall", id: "call_alpha", name: "lookup", arguments: { city: "Paris" } },
+              { type: "toolCall", id: "call_beta", name: "lookup", arguments: { city: "London" } },
+            ],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_alpha",
+            toolName: "lookup",
+            content: [{ type: "text", text: "Paris is sunny" }],
+            isError: false,
+            timestamp: 2,
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_beta",
+            toolName: "lookup",
+            content: [{ type: "text", text: "London is rainy" }],
+            isError: false,
+            timestamp: 3,
+          },
+        ],
+      } as never);
+
+      expect(params.contents[1]).toMatchObject({
+        parts: [
+          { functionCall: { id: "call_alpha", name: "lookup", args: { city: "Paris" } } },
+          { functionCall: { id: "call_beta", name: "lookup", args: { city: "London" } } },
+        ],
+      });
+      expect(params.contents[2]).toMatchObject({
+        parts: [
+          { functionResponse: { id: "call_alpha", name: "lookup" } },
+          { functionResponse: { id: "call_beta", name: "lookup" } },
+        ],
+      });
+    },
+  );
+
+  it.each([
     {
       name: "replays Gemini tool call thought signatures for same-model history",
       modelId: "gemini-3-flash-preview",
@@ -1786,7 +2658,7 @@ describe("google transport stream", () => {
       parts: [
         {
           thoughtSignature: signature,
-          functionCall: { name: "lookup", args: { q: "hello" } },
+          functionCall: { id: "call_1", name: "lookup", args: { q: "hello" } },
         },
       ],
     });
@@ -2768,6 +3640,9 @@ describe("google transport stream", () => {
             name,
             response:
               name === "screenshot" ? { output: "(see attached image)" } : { output: "Sunny, 21C" },
+            ...(modelId === "gemini-2.5-flash"
+              ? { id: name === "screenshot" ? "call_1" : "call_2" }
+              : {}),
           },
         })),
       });
