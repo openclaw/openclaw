@@ -231,6 +231,20 @@ class FakeMatrixEvent extends EventEmitter {
   }
 }
 
+function createMatrixSdkEvent(
+  overrides: Partial<ConstructorParameters<typeof FakeMatrixEvent>[0]> = {},
+): FakeMatrixEvent {
+  return new FakeMatrixEvent({
+    roomId: "!room:example.org",
+    eventId: "$event",
+    sender: "@alice:example.org",
+    type: "m.room.encrypted",
+    ts: Date.now(),
+    content: {},
+    ...overrides,
+  });
+}
+
 type MatrixJsClientStub = {
   emit: (eventName: string | symbol, ...args: unknown[]) => boolean;
   on: (eventName: string | symbol, listener: (...args: unknown[]) => void) => MatrixJsClientStub;
@@ -824,24 +838,10 @@ describe("MatrixClient event bridge", () => {
 
     await client.start();
 
-    const encrypted = new FakeMatrixEvent({
-      roomId: "!room:example.org",
-      eventId: "$event",
-      sender: "@alice:example.org",
-      type: "m.room.encrypted",
-      ts: Date.now(),
-      content: {},
-    });
-    const decrypted = new FakeMatrixEvent({
-      roomId: "!room:example.org",
-      eventId: "$event",
-      sender: "@alice:example.org",
+    const encrypted = createMatrixSdkEvent();
+    const decrypted = createMatrixSdkEvent({
       type: "m.room.message",
-      ts: Date.now(),
-      content: {
-        msgtype: "m.text",
-        body: "hello",
-      },
+      content: { msgtype: "m.text", body: "hello" },
     });
 
     matrixJsClient.emit("event", encrypted);
@@ -872,24 +872,10 @@ describe("MatrixClient event bridge", () => {
 
     await client.start();
 
-    const encrypted = new FakeMatrixEvent({
-      roomId: "!room:example.org",
-      eventId: "$event",
-      sender: "@alice:example.org",
-      type: "m.room.encrypted",
-      ts: Date.now(),
-      content: {},
-    });
-    const decrypted = new FakeMatrixEvent({
-      roomId: "!room:example.org",
-      eventId: "$event",
-      sender: "@alice:example.org",
+    const encrypted = createMatrixSdkEvent();
+    const decrypted = createMatrixSdkEvent({
       type: "m.room.message",
-      ts: Date.now(),
-      content: {
-        msgtype: "m.text",
-        body: "hello",
-      },
+      content: { msgtype: "m.text", body: "hello" },
     });
 
     matrixJsClient.emit("event", encrypted);
@@ -912,25 +898,10 @@ describe("MatrixClient event bridge", () => {
       delivered.push(event.type);
     });
 
-    const encrypted = new FakeMatrixEvent({
-      roomId: "!room:example.org",
-      eventId: "$event",
-      sender: "@alice:example.org",
-      type: "m.room.encrypted",
-      ts: Date.now(),
-      content: {},
-      decryptionFailure: true,
-    });
-    const decrypted = new FakeMatrixEvent({
-      roomId: "!room:example.org",
-      eventId: "$event",
-      sender: "@alice:example.org",
+    const encrypted = createMatrixSdkEvent({ decryptionFailure: true });
+    const decrypted = createMatrixSdkEvent({
       type: "m.room.message",
-      ts: Date.now(),
-      content: {
-        msgtype: "m.text",
-        body: "hello",
-      },
+      content: { msgtype: "m.text", body: "hello" },
     });
 
     matrixJsClient.decryptEventIfNeeded = vi.fn(async () => {
@@ -960,25 +931,10 @@ describe("MatrixClient event bridge", () => {
       delivered.push(event.type);
     });
 
-    const encrypted = new FakeMatrixEvent({
-      roomId: "!room:example.org",
-      eventId: "$event",
-      sender: "@alice:example.org",
-      type: "m.room.encrypted",
-      ts: Date.now(),
-      content: {},
-      decryptionFailure: true,
-    });
-    const decrypted = new FakeMatrixEvent({
-      roomId: "!room:example.org",
-      eventId: "$event",
-      sender: "@alice:example.org",
+    const encrypted = createMatrixSdkEvent({ decryptionFailure: true });
+    const decrypted = createMatrixSdkEvent({
       type: "m.room.message",
-      ts: Date.now(),
-      content: {
-        msgtype: "m.text",
-        body: "hello",
-      },
+      content: { msgtype: "m.text", body: "hello" },
     });
 
     matrixJsClient.decryptEventIfNeeded = vi.fn(async () => {
@@ -1022,25 +978,10 @@ describe("MatrixClient event bridge", () => {
       delivered.push(event.type);
     });
 
-    const encrypted = new FakeMatrixEvent({
-      roomId: "!room:example.org",
-      eventId: "$event",
-      sender: "@alice:example.org",
-      type: "m.room.encrypted",
-      ts: Date.now(),
-      content: {},
-      decryptionFailure: true,
-    });
-    const decrypted = new FakeMatrixEvent({
-      roomId: "!room:example.org",
-      eventId: "$event",
-      sender: "@alice:example.org",
+    const encrypted = createMatrixSdkEvent({ decryptionFailure: true });
+    const decrypted = createMatrixSdkEvent({
       type: "m.room.message",
-      ts: Date.now(),
-      content: {
-        msgtype: "m.text",
-        body: "hello",
-      },
+      content: { msgtype: "m.text", body: "hello" },
     });
     encrypted.onAttemptDecryption(() => {
       encrypted.emit("decrypted", decrypted);
@@ -1106,15 +1047,7 @@ describe("MatrixClient event bridge", () => {
       delivered.push(event.type);
     });
 
-    const encrypted = new FakeMatrixEvent({
-      roomId: "!room:example.org",
-      eventId: "$event",
-      sender: "@alice:example.org",
-      type: "m.room.encrypted",
-      ts: Date.now(),
-      content: {},
-      decryptionFailure: true,
-    });
+    const encrypted = createMatrixSdkEvent({ decryptionFailure: true });
 
     matrixJsClient.decryptEventIfNeeded = vi.fn(async () => {
       encrypted.markDecrypted({
@@ -1153,15 +1086,7 @@ describe("MatrixClient event bridge", () => {
       delivered.push(event.type);
     });
 
-    const encrypted = new FakeMatrixEvent({
-      roomId: "!room:example.org",
-      eventId: "$event",
-      sender: "@alice:example.org",
-      type: "m.room.encrypted",
-      ts: Date.now(),
-      content: {},
-      decryptionFailure: true,
-    });
+    const encrypted = createMatrixSdkEvent({ decryptionFailure: true });
 
     matrixJsClient.decryptEventIfNeeded = vi.fn(async () => {
       encrypted.markDecrypted({
@@ -1194,15 +1119,7 @@ describe("MatrixClient event bridge", () => {
       failed.push(error.message);
     });
 
-    const encrypted = new FakeMatrixEvent({
-      roomId: "!room:example.org",
-      eventId: "$event",
-      sender: "@alice:example.org",
-      type: "m.room.encrypted",
-      ts: Date.now(),
-      content: {},
-      decryptionFailure: true,
-    });
+    const encrypted = createMatrixSdkEvent({ decryptionFailure: true });
 
     matrixJsClient.decryptEventIfNeeded = vi.fn(async () => {
       throw new Error("still missing key");
@@ -1248,15 +1165,7 @@ describe("MatrixClient event bridge", () => {
       delivered.push(event.type);
     });
 
-    const encrypted = new FakeMatrixEvent({
-      roomId: "!room:example.org",
-      eventId: "$event",
-      sender: "@alice:example.org",
-      type: "m.room.encrypted",
-      ts: Date.now(),
-      content: {},
-      decryptionFailure: true,
-    });
+    const encrypted = createMatrixSdkEvent({ decryptionFailure: true });
 
     matrixJsClient.decryptEventIfNeeded = vi.fn(
       async (event: FakeMatrixEvent, options?: { isRetry?: boolean }) => {
@@ -1320,15 +1229,7 @@ describe("MatrixClient event bridge", () => {
       requestOwnUserVerification: vi.fn(async () => null),
     }));
 
-    const encrypted = new FakeMatrixEvent({
-      roomId: "!room:example.org",
-      eventId: "$event",
-      sender: "@alice:example.org",
-      type: "m.room.encrypted",
-      ts: Date.now(),
-      content: {},
-      decryptionFailure: true,
-    });
+    const encrypted = createMatrixSdkEvent({ decryptionFailure: true });
 
     await client.start();
     matrixJsClient.emit("event", encrypted);
@@ -1380,25 +1281,10 @@ describe("MatrixClient event bridge", () => {
       delivered.push(event.type);
     });
 
-    const encrypted = new FakeMatrixEvent({
-      roomId: "!room:example.org",
-      eventId: "$event",
-      sender: "@alice:example.org",
-      type: "m.room.encrypted",
-      ts: Date.now(),
-      content: {},
-      decryptionFailure: true,
-    });
-    const decrypted = new FakeMatrixEvent({
-      roomId: "!room:example.org",
-      eventId: "$event",
-      sender: "@alice:example.org",
+    const encrypted = createMatrixSdkEvent({ decryptionFailure: true });
+    const decrypted = createMatrixSdkEvent({
       type: "m.room.message",
-      ts: Date.now(),
-      content: {
-        msgtype: "m.text",
-        body: "hello",
-      },
+      content: { msgtype: "m.text", body: "hello" },
     });
 
     const releaseRetryRef: { current?: () => void } = {};
@@ -3859,15 +3745,7 @@ describe("MatrixClient crypto bootstrapping", () => {
       emitFailedDecryption: vi.fn(),
       emitMessage: vi.fn(),
     });
-    const event = new FakeMatrixEvent({
-      roomId: "!room:example.org",
-      eventId: "$event",
-      sender: "@alice:example.org",
-      type: "m.room.encrypted",
-      ts: Date.now(),
-      content: {},
-      decryptionFailure: true,
-    });
+    const event = createMatrixSdkEvent({ decryptionFailure: true });
     event.onAttemptDecryption(() => {});
     (
       bridge as unknown as {
@@ -3920,15 +3798,7 @@ describe("MatrixClient crypto bootstrapping", () => {
       emitFailedDecryption,
       emitMessage,
     });
-    const event = new FakeMatrixEvent({
-      roomId: "!room:example.org",
-      eventId: "$event",
-      sender: "@alice:example.org",
-      type: "m.room.encrypted",
-      ts: Date.now(),
-      content: {},
-      decryptionFailure: true,
-    });
+    const event = createMatrixSdkEvent({ decryptionFailure: true });
     event.onAttemptDecryption(
       () =>
         new Promise<void>((resolve) => {

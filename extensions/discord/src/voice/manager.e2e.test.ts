@@ -688,42 +688,36 @@ describe("DiscordVoiceManager", () => {
     } as never);
   };
 
-  it("keeps the new session when an old disconnected handler fires", async () => {
+  it.each([
+    {
+      name: "keeps the new session when an old disconnected handler fires",
+      event: "disconnected",
+    },
+    {
+      name: "keeps the new session when an old destroyed handler fires",
+      event: "destroyed",
+    },
+  ])("$name", async ({ event }) => {
     const oldConnection = createConnectionMock();
     const newConnection = createConnectionMock();
     joinVoiceChannelMock.mockReturnValueOnce(oldConnection).mockReturnValueOnce(newConnection);
-    entersStateMock.mockImplementation(async (target: unknown, status?: string) => {
-      if (target === oldConnection && (status === "signalling" || status === "connecting")) {
-        throw new Error("old disconnected");
-      }
-      return undefined;
-    });
+    if (event === "disconnected") {
+      entersStateMock.mockImplementation(async (target: unknown, status?: string) => {
+        if (target === oldConnection && (status === "signalling" || status === "connecting")) {
+          throw new Error("old disconnected");
+        }
+        return undefined;
+      });
+    }
 
     const manager = createManager();
 
     await manager.join({ guildId: "g1", channelId: "1001" });
     await manager.join({ guildId: "g1", channelId: "1002" });
 
-    const oldDisconnected = oldConnection.handlers.get("disconnected");
-    expect(oldDisconnected).toBeTypeOf("function");
-    await oldDisconnected?.();
-
-    expectConnectedStatus(manager, "1002");
-  });
-
-  it("keeps the new session when an old destroyed handler fires", async () => {
-    const oldConnection = createConnectionMock();
-    const newConnection = createConnectionMock();
-    joinVoiceChannelMock.mockReturnValueOnce(oldConnection).mockReturnValueOnce(newConnection);
-
-    const manager = createManager();
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-    await manager.join({ guildId: "g1", channelId: "1002" });
-
-    const oldDestroyed = oldConnection.handlers.get("destroyed");
-    expect(oldDestroyed).toBeTypeOf("function");
-    oldDestroyed?.();
+    const oldHandler = oldConnection.handlers.get(event);
+    expect(oldHandler).toBeTypeOf("function");
+    await oldHandler?.();
 
     expectConnectedStatus(manager, "1002");
   });
@@ -1092,7 +1086,18 @@ describe("DiscordVoiceManager", () => {
     expect(manager.status()).toStrictEqual([]);
   });
 
-  it("rejects joins outside configured allowed voice channels", async () => {
+  it.each([
+    {
+      name: "rejects joins outside configured allowed voice channels",
+      channelId: "1002",
+      allowed: false,
+    },
+    {
+      name: "allows joins inside configured allowed voice channels",
+      channelId: "1001",
+      allowed: true,
+    },
+  ])("$name", async ({ channelId, allowed }) => {
     const manager = createManager({
       voice: {
         enabled: true,
@@ -1101,28 +1106,17 @@ describe("DiscordVoiceManager", () => {
       },
     });
 
-    const result = await manager.join({ guildId: "g1", channelId: "1002" });
+    const result = await manager.join({ guildId: "g1", channelId });
 
-    expect(result.ok).toBe(false);
-    expect(result.message).toBe(
-      "<#1002> is not allowed by channels.discord.voice.allowedChannels.",
-    );
-    expect(joinVoiceChannelMock).not.toHaveBeenCalled();
-  });
-
-  it("allows joins inside configured allowed voice channels", async () => {
-    const manager = createManager({
-      voice: {
-        enabled: true,
-        mode: "stt-tts",
-        allowedChannels: [{ guildId: "g1", channelId: "1001" }],
-      },
-    });
-
-    const result = await manager.join({ guildId: "g1", channelId: "1001" });
-
-    expect(result.ok).toBe(true);
-    expectConnectedStatus(manager, "1001");
+    expect(result.ok).toBe(allowed);
+    if (!allowed) {
+      expect(result.message).toBe(
+        "<#1002> is not allowed by channels.discord.voice.allowedChannels.",
+      );
+      expect(joinVoiceChannelMock).not.toHaveBeenCalled();
+      return;
+    }
+    expectConnectedStatus(manager, channelId);
   });
 
   it("enqueues the initial voice roster without speaking on its own", async () => {
@@ -1542,20 +1536,74 @@ describe("DiscordVoiceManager", () => {
     expect(texts.slice(2).some((text) => text.includes('user_id="u-slow"'))).toBe(false);
   });
 
-  it("follows configured users into voice channels", async () => {
-    const manager = createManager({
-      voice: {
-        enabled: true,
-        mode: "stt-tts",
-        followUsers: ["discord:u-owner"],
-      },
-    });
+  it.each<{
+    name: string;
+    followUsers: string[];
+    updates: Array<readonly [userId: string, channelId: string | null]>;
+    expectedChannel?: string;
+    expectedJoinCalls?: number;
+    setBotUserId?: boolean;
+  }>([
+    {
+      name: "follows configured users into voice channels",
+      followUsers: ["discord:u-owner"],
+      updates: [["u-owner", "1001"]],
+      expectedChannel: "1001",
+      expectedJoinCalls: 1,
+    },
+    {
+      name: "moves with configured followed users",
+      followUsers: ["u-owner"],
+      updates: [
+        ["u-owner", "1001"],
+        ["u-owner", "1002"],
+      ],
+      expectedChannel: "1002",
+      expectedJoinCalls: 2,
+    },
+    {
+      name: "preserves follow ownership when a bot voice move rebuilds the session",
+      followUsers: ["u-owner"],
+      updates: [
+        ["u-owner", "1001"],
+        ["bot-user", "1002"],
+        ["u-owner", null],
+      ],
+      expectedJoinCalls: 2,
+      setBotUserId: true,
+    },
+    {
+      name: "leaves when a followed user disconnects",
+      followUsers: ["u-owner"],
+      updates: [
+        ["u-owner", "1001"],
+        ["u-owner", null],
+      ],
+    },
+  ])(
+    "$name",
+    async ({ followUsers, updates, expectedChannel, expectedJoinCalls, setBotUserId }) => {
+      const manager = createManager({
+        voice: { enabled: true, mode: "stt-tts", followUsers },
+      });
+      if (setBotUserId) {
+        manager.setBotUserId("bot-user");
+      }
 
-    await updateVoiceState(manager, "u-owner", "1001");
+      for (const [userId, channelId] of updates) {
+        await updateVoiceState(manager, userId, channelId);
+      }
 
-    expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
-    expectConnectedStatus(manager, "1001");
-  });
+      if (expectedJoinCalls !== undefined) {
+        expect(joinVoiceChannelMock).toHaveBeenCalledTimes(expectedJoinCalls);
+      }
+      if (expectedChannel) {
+        expectConnectedStatus(manager, expectedChannel);
+        return;
+      }
+      expect(manager.status()).toEqual([]);
+    },
+  );
 
   it("does not follow configured users when followUsersEnabled is false", async () => {
     const manager = createManager({
@@ -1602,55 +1650,6 @@ describe("DiscordVoiceManager", () => {
       self_mute: false,
       self_deaf: false,
     });
-  });
-
-  it("moves with configured followed users", async () => {
-    const manager = createManager({
-      voice: {
-        enabled: true,
-        mode: "stt-tts",
-        followUsers: ["u-owner"],
-      },
-    });
-
-    await updateVoiceState(manager, "u-owner", "1001");
-    await updateVoiceState(manager, "u-owner", "1002");
-
-    expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2);
-    expectConnectedStatus(manager, "1002");
-  });
-
-  it("preserves follow ownership when a bot voice move rebuilds the session", async () => {
-    const manager = createManager({
-      voice: {
-        enabled: true,
-        mode: "stt-tts",
-        followUsers: ["u-owner"],
-      },
-    });
-    manager.setBotUserId("bot-user");
-
-    await updateVoiceState(manager, "u-owner", "1001");
-    await updateVoiceState(manager, "bot-user", "1002");
-    await updateVoiceState(manager, "u-owner", null);
-
-    expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2);
-    expect(manager.status()).toEqual([]);
-  });
-
-  it("leaves when a followed user disconnects", async () => {
-    const manager = createManager({
-      voice: {
-        enabled: true,
-        mode: "stt-tts",
-        followUsers: ["u-owner"],
-      },
-    });
-
-    await updateVoiceState(manager, "u-owner", "1001");
-    await updateVoiceState(manager, "u-owner", null);
-
-    expect(manager.status()).toEqual([]);
   });
 
   it("hands off to another followed user when the active followed user disconnects", async () => {

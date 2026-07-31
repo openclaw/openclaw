@@ -1928,18 +1928,68 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
   });
 
-  it("shows reasoning text in Slack progress draft previews", async () => {
+  it.each<{
+    name: string;
+    events: typeof mockedReplyOptionEvents;
+    expectedLines: string[];
+    excludedText?: string;
+    includedText?: string;
+  }>([
+    {
+      name: "shows reasoning text in Slack progress draft previews",
+      events: [
+        { kind: "tool_start", name: "exec" },
+        { kind: "item", itemKind: "analysis", title: "Reasoning" },
+        { kind: "reasoning", text: "Reading" },
+        { kind: "reasoning", text: " the Slack handler" },
+      ],
+      expectedLines: ["Shelling", "", "• exec", "🧠 \\_Reading the Slack handler\\_"],
+      excludedText: "Reasoning",
+    },
+    {
+      name: "replaces Slack reasoning snapshots instead of appending duplicates",
+      events: [
+        { kind: "tool_start", name: "exec" },
+        { kind: "reasoning", text: "<think>Checking </think>", isReasoningSnapshot: true },
+        {
+          kind: "reasoning",
+          text: "<think>Reading\n\nChecking </think>",
+          isReasoningSnapshot: true,
+        },
+      ],
+      expectedLines: ["Shelling", "", "• exec", "🧠 \\_Reading Checking\\_"],
+      excludedText: "Checking Reading",
+    },
+    {
+      name: "extracts mm:think reasoning snapshots for Slack progress draft previews",
+      events: [
+        {
+          kind: "reasoning",
+          text: "<mm:think>Reading\nChecking</mm:think>",
+          isReasoningSnapshot: true,
+        },
+      ],
+      expectedLines: ["Shelling", "", "🧠 \\_Reading Checking\\_"],
+      includedText: "Reading Checking",
+    },
+    {
+      name: "keeps plain Slack reasoning content that starts with Thinking",
+      events: [
+        {
+          kind: "reasoning",
+          text: "Thinking about Slack preview state",
+          isReasoningSnapshot: true,
+        },
+      ],
+      expectedLines: ["Shelling", "", "🧠 \\_Thinking about Slack preview state\\_"],
+    },
+  ])("$name", async ({ events, expectedLines, excludedText, includedText }) => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     mockedDispatchSequence = [];
     mockedSlackStreamingMode = "progress";
     mockedSlackDraftMode = "status_final";
-    mockedReplyOptionEvents = [
-      { kind: "tool_start", name: "exec" },
-      { kind: "item", itemKind: "analysis", title: "Reasoning" },
-      { kind: "reasoning", text: "Reading" },
-      { kind: "reasoning", text: " the Slack handler" },
-    ];
+    mockedReplyOptionEvents = events;
 
     await dispatchPreparedSlackMessage(
       createPreparedSlackMessage({
@@ -1947,92 +1997,14 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       }),
     );
 
-    expect(draftStream.update).toHaveBeenLastCalledWith(
-      ["Shelling", "", "• exec", "🧠 \\_Reading the Slack handler\\_"].join("\n"),
-    );
-    const updates = draftStream.update.mock.calls.map((call) => String(call[0]));
-    expect(updates.join("\n")).not.toContain("Reasoning");
-  });
-
-  it("replaces Slack reasoning snapshots instead of appending duplicates", async () => {
-    const draftStream = createDraftStreamStub();
-    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
-    mockedDispatchSequence = [];
-    mockedSlackStreamingMode = "progress";
-    mockedSlackDraftMode = "status_final";
-    mockedReplyOptionEvents = [
-      { kind: "tool_start", name: "exec" },
-      { kind: "reasoning", text: "<think>Checking </think>", isReasoningSnapshot: true },
-      {
-        kind: "reasoning",
-        text: "<think>Reading\n\nChecking </think>",
-        isReasoningSnapshot: true,
-      },
-    ];
-
-    await dispatchPreparedSlackMessage(
-      createPreparedSlackMessage({
-        accountConfig: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
-      }),
-    );
-
-    expect(draftStream.update).toHaveBeenLastCalledWith(
-      ["Shelling", "", "• exec", "🧠 \\_Reading Checking\\_"].join("\n"),
-    );
-    const updates = draftStream.update.mock.calls.map((call) => String(call[0]));
-    expect(updates.join("\n")).not.toContain("Checking Reading");
-  });
-
-  it("extracts mm:think reasoning snapshots for Slack progress draft previews", async () => {
-    const draftStream = createDraftStreamStub();
-    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
-    mockedDispatchSequence = [];
-    mockedSlackStreamingMode = "progress";
-    mockedSlackDraftMode = "status_final";
-    mockedReplyOptionEvents = [
-      {
-        kind: "reasoning",
-        text: "<mm:think>Reading\nChecking</mm:think>",
-        isReasoningSnapshot: true,
-      },
-    ];
-
-    await dispatchPreparedSlackMessage(
-      createPreparedSlackMessage({
-        accountConfig: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
-      }),
-    );
-
-    expect(draftStream.update).toHaveBeenLastCalledWith(
-      ["Shelling", "", "🧠 \\_Reading Checking\\_"].join("\n"),
-    );
-    const updates = draftStream.update.mock.calls.map((call) => String(call[0]));
-    expect(updates.join("\n")).toContain("Reading Checking");
-  });
-
-  it("keeps plain Slack reasoning content that starts with Thinking", async () => {
-    const draftStream = createDraftStreamStub();
-    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
-    mockedDispatchSequence = [];
-    mockedSlackStreamingMode = "progress";
-    mockedSlackDraftMode = "status_final";
-    mockedReplyOptionEvents = [
-      {
-        kind: "reasoning",
-        text: "Thinking about Slack preview state",
-        isReasoningSnapshot: true,
-      },
-    ];
-
-    await dispatchPreparedSlackMessage(
-      createPreparedSlackMessage({
-        accountConfig: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
-      }),
-    );
-
-    expect(draftStream.update).toHaveBeenLastCalledWith(
-      ["Shelling", "", "🧠 \\_Thinking about Slack preview state\\_"].join("\n"),
-    );
+    expect(draftStream.update).toHaveBeenLastCalledWith(expectedLines.join("\n"));
+    const updates = draftStream.update.mock.calls.map((call) => String(call[0])).join("\n");
+    if (excludedText) {
+      expect(updates).not.toContain(excludedText);
+    }
+    if (includedText) {
+      expect(updates).toContain(includedText);
+    }
   });
 
   it("honors Slack progress maxLines above the legacy eight-line cap", async () => {
@@ -2897,9 +2869,13 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
   });
 
-  it("starts native Slack progress from typed plan steps", async () => {
-    await dispatchNativeProgressScenario({
-      finalPayload: { text: FINAL_REPLY_TEXT },
+  it.each<{
+    name: string;
+    events: typeof mockedReplyOptionEvents;
+    updates: Parameters<typeof expectNativeProgressStart>[0];
+  }>([
+    {
+      name: "starts native Slack progress from typed plan steps",
       events: [
         {
           kind: "plan",
@@ -2912,19 +2888,15 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
           ],
         },
       ],
-    });
-
-    expectNativeProgressStart([
-      planUpdate("Executing the checklist."),
-      taskUpdate("plan_step_1", "Inspect", "complete"),
-      taskUpdate("plan_step_2", "Patch", "in_progress"),
-      taskUpdate("plan_step_3", "Test", "pending"),
-    ]);
-  });
-
-  it("keeps plan explanation in native chunks alongside a fresh preamble", async () => {
-    await dispatchNativeProgressScenario({
-      finalPayload: { text: FINAL_REPLY_TEXT },
+      updates: [
+        planUpdate("Executing the checklist."),
+        taskUpdate("plan_step_1", "Inspect", "complete"),
+        taskUpdate("plan_step_2", "Patch", "in_progress"),
+        taskUpdate("plan_step_3", "Test", "pending"),
+      ],
+    },
+    {
+      name: "keeps plan explanation in native chunks alongside a fresh preamble",
       events: [
         {
           kind: "item",
@@ -2939,17 +2911,13 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
           steps: [{ step: "Patch", status: "in_progress" }],
         },
       ],
-    });
-
-    expectNativeProgressStart([
-      planUpdate("Checking the workspace — Executing the checklist."),
-      taskUpdate("plan_step_1", "Patch", "in_progress"),
-    ]);
-  });
-
-  it("starts native Slack progress from an explanation-only plan", async () => {
-    await dispatchNativeProgressScenario({
-      finalPayload: { text: FINAL_REPLY_TEXT },
+      updates: [
+        planUpdate("Checking the workspace — Executing the checklist."),
+        taskUpdate("plan_step_1", "Patch", "in_progress"),
+      ],
+    },
+    {
+      name: "starts native Slack progress from an explanation-only plan",
       events: [
         {
           kind: "plan",
@@ -2958,12 +2926,21 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
           steps: [],
         },
       ],
+      updates: [
+        planUpdate("Reviewing the implementation."),
+        taskUpdate(
+          expect.any(String),
+          "Update Plan — Reviewing the implementation.",
+          "in_progress",
+        ),
+      ],
+    },
+  ])("$name", async ({ events, updates }) => {
+    await dispatchNativeProgressScenario({
+      finalPayload: { text: FINAL_REPLY_TEXT },
+      events,
     });
-
-    expectNativeProgressStart([
-      planUpdate("Reviewing the implementation."),
-      taskUpdate(expect.any(String), "Update Plan — Reviewing the implementation.", "in_progress"),
-    ]);
+    expectNativeProgressStart(updates);
   });
 
   it("starts native Slack progress from a retained headline when tool rows are hidden", async () => {
@@ -4565,7 +4542,16 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
   });
 
-  it("routes pending native stream text through chunked sender when finalize fails before the SDK buffer flushes", async () => {
+  it.each([
+    {
+      name: "routes pending native stream text through chunked sender when finalize fails before the SDK buffer flushes",
+      slackCode: "user_not_found",
+    },
+    {
+      name: "routes pending native stream text through chunked sender for unexpected finalize failures",
+      slackCode: "method_not_supported_for_channel_type",
+    },
+  ])("$name", async ({ slackCode }) => {
     mockedNativeStreaming = true;
     const session = {
       channel: "C123",
@@ -4576,7 +4562,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     };
     startSlackStreamMock.mockResolvedValueOnce(session);
     stopSlackStreamMock.mockRejectedValueOnce(
-      new TestSlackStreamNotDeliveredError(FINAL_REPLY_TEXT, "user_not_found"),
+      new TestSlackStreamNotDeliveredError(FINAL_REPLY_TEXT, slackCode),
     );
 
     await dispatchPreparedSlackMessage(createPreparedSlackMessage());
@@ -4584,36 +4570,13 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(postMessageMock).not.toHaveBeenCalled();
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
     expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
-    expect(session.stopped).toBe(true);
-  });
-
-  it("routes pending native stream text through chunked sender for unexpected finalize failures", async () => {
-    mockedNativeStreaming = true;
-    const session = {
-      channel: "C123",
-      threadTs: THREAD_TS,
-      stopped: false,
-      delivered: false,
-      pendingText: FINAL_REPLY_TEXT,
-    };
-    startSlackStreamMock.mockResolvedValueOnce(session);
-    stopSlackStreamMock.mockRejectedValueOnce(
-      new TestSlackStreamNotDeliveredError(
-        FINAL_REPLY_TEXT,
-        "method_not_supported_for_channel_type",
-      ),
-    );
-
-    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
-
-    expect(postMessageMock).not.toHaveBeenCalled();
-    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
     expect(deliverRepliesMock).toHaveBeenCalledWith(
       expect.objectContaining({
         replyThreadTs: THREAD_TS,
         replies: [expect.objectContaining({ text: FINAL_REPLY_TEXT })],
       }),
     );
+    // Failed native streams must stop before either fallback can deliver the buffered reply.
     expect(session.stopped).toBe(true);
   });
 
