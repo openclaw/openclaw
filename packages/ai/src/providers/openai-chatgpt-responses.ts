@@ -37,7 +37,10 @@ import { parseRetryAfterHttpDateMs } from "../internal/retry-after.js";
 import { sleepWithAbort } from "../internal/retry-sleep.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
-import { transportAbortError } from "../transports/transport-stream-shared.js";
+import {
+  finalizeTransportStream,
+  transportAbortError,
+} from "../transports/transport-stream-shared.js";
 import type {
   Api,
   AssistantMessage,
@@ -341,6 +344,9 @@ export const streamOpenAICodexResponses: StreamFunction<
             if (activeSignal?.aborted) {
               throw transportAbortError(activeSignal);
             }
+            if (output.stopReason === "aborted" || output.stopReason === "error") {
+              throw new CodexApiError(output.errorMessage ?? "An unknown error occurred");
+            }
             stream.push({
               type: "done",
               reason: output.stopReason as "stop" | "length" | "toolUse",
@@ -478,17 +484,7 @@ export const streamOpenAICodexResponses: StreamFunction<
 
       stream.push({ type: "start", partial: output });
       await processStream(response, output, stream, model, options, firstEventAbort.abort);
-
-      if (activeSignal?.aborted) {
-        throw transportAbortError(activeSignal);
-      }
-
-      stream.push({
-        type: "done",
-        reason: output.stopReason as "stop" | "length" | "toolUse",
-        message: output,
-      });
-      stream.end();
+      finalizeTransportStream({ stream, output, signal: activeSignal });
     } catch (error) {
       const normalizedError =
         isRequestTimeoutError(error, options?.signal, requestTimeoutSignal, requestTimeoutMs) &&
@@ -777,7 +773,7 @@ async function* mapCodexEvents(
         : response;
       yield {
         ...event,
-        type: "response.completed",
+        type: type === "response.done" ? "response.completed" : type,
         response: normalizedResponse,
       } as ResponseStreamEvent;
       return;
