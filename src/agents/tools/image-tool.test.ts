@@ -768,6 +768,7 @@ async function expectImageToolExecOk(
     image,
   });
   expectToolText(result, "ok");
+  return result;
 }
 
 type ToolTextResult = {
@@ -2324,7 +2325,8 @@ describe("image tool implicit imageModel config", () => {
       };
       const tool = createRequiredImageTool({ config: cfg, agentDir });
 
-      await expectImageToolExecOk(tool, "http://198.18.0.153/reference.png");
+      const result = await expectImageToolExecOk(tool, "http://198.18.0.153/reference.png");
+      expect((result as { resultContentSource?: unknown }).resultContentSource).toBe("network");
       const [input, init] = fetchCallAt(fetch, 0);
       expect(input).toBe("http://198.18.0.153/reference.png");
       expect(typeof init).toBe("object");
@@ -2675,6 +2677,7 @@ describe("image tool MiniMax VLM routing", () => {
 
     const text = res.content?.find((b) => b.type === "text")?.text ?? "";
     expect(text).toBe("ok");
+    expect(res.resultContentSource).toBeUndefined();
   });
 
   it("accepts images[] for multi-image requests", async () => {
