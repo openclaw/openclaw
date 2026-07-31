@@ -18,11 +18,16 @@ function buildSessionHookContext(params: {
   sessionId: string;
   sessionKey: string;
   cfg: OpenClawConfig;
+  agentId?: string;
 }): SessionHookContext {
   return {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
-    agentId: resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg }),
+    agentId: resolveSessionAgentId({
+      sessionKey: params.sessionKey,
+      config: params.cfg,
+      agentId: params.agentId,
+    }),
   };
 }
 
@@ -31,6 +36,7 @@ export function buildSessionStartHookPayload(params: {
   sessionId: string;
   sessionKey: string;
   cfg: OpenClawConfig;
+  agentId?: string;
   resumedFrom?: string;
 }): {
   event: PluginHookSessionStartEvent;
@@ -46,6 +52,7 @@ export function buildSessionStartHookPayload(params: {
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       cfg: params.cfg,
+      agentId: params.agentId,
     }),
   };
 }
@@ -55,6 +62,7 @@ export function buildSessionEndHookPayload(params: {
   sessionId: string;
   sessionKey: string;
   cfg: OpenClawConfig;
+  agentId?: string;
   messageCount?: number;
   durationMs?: number;
   reason?: PluginHookSessionEndReason;
@@ -82,6 +90,7 @@ export function buildSessionEndHookPayload(params: {
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       cfg: params.cfg,
+      agentId: params.agentId,
     }),
   };
 }

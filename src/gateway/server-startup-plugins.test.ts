@@ -111,7 +111,20 @@ const runStartupSessionMigration = vi.hoisted(() => vi.fn(async (_params: unknow
 vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: () => "/workspace",
   resolveDefaultAgentId: () => "default",
+  tryResolveDefaultAgentId: () => "default",
+  tryResolveConfiguredAgentWorkspaceDir: (cfg: OpenClawConfig) =>
+    cfg.agents?.defaults?.workspace ?? "/workspace",
 }));
+
+vi.mock("../agents/agent-scope-config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/agent-scope-config.js")>();
+  return {
+    ...actual,
+    tryResolveConfiguredAgentWorkspaceDir: (cfg: OpenClawConfig) =>
+      cfg.agents?.defaults?.workspace ??
+      (Object.keys(cfg.agents?.entries ?? {}).length > 1 ? undefined : "/workspace"),
+  };
+});
 
 vi.mock("../agents/subagent-registry.js", () => ({
   initSubagentRegistry: () => initSubagentRegistry(),
@@ -447,8 +460,64 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     expect(ambientInput.manifestRecords).toBe(emptyManifestRegistry.plugins);
   });
 
+  it("uses a multi-agent fleet workspace for startup plugin discovery", async () => {
+    await prepareBootstrapWithRuntimeConfig({
+      agents: {
+        defaults: { workspace: "/srv/fleet-workspace" },
+        entries: { ops: {}, research: {} },
+      },
+      plugins: {},
+    });
+
+    expect(firstCallArg<{ workspaceDir?: string }>(loadPluginLookUpTable).workspaceDir).toBe(
+      "/srv/fleet-workspace",
+    );
+  });
+
+  it("rejects ambiguous fleet workspace discovery without explicit plugin paths", async () => {
+    await expect(
+      prepareBootstrapWithRuntimeConfig({
+        agents: {
+          ownership: "explicit",
+          entries: {
+            ops: { workspace: "/srv/ops" },
+            research: { workspace: "/srv/research" },
+          },
+        },
+        plugins: {},
+      }),
+    ).rejects.toThrow(
+      "Multi-agent plugin discovery needs a shared agents.defaults.workspace or explicit plugins.load.paths.",
+    );
+    expect(loadPluginLookUpTable).not.toHaveBeenCalled();
+  });
+
+  it("allows ambiguous fleets when plugin discovery uses explicit load paths", async () => {
+    await prepareBootstrapWithRuntimeConfig({
+      agents: {
+        ownership: "explicit",
+        entries: {
+          ops: { workspace: "/srv/ops" },
+          research: { workspace: "/srv/research" },
+        },
+      },
+      plugins: { load: { paths: ["/srv/plugins"] } },
+    });
+
+    expect(
+      firstCallArg<{ workspaceDir?: string }>(loadPluginLookUpTable).workspaceDir,
+    ).toBeUndefined();
+  });
+
   it("bypasses plugin lookup when plugins are globally disabled", async () => {
     const cfg = {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          ops: { workspace: "/srv/ops" },
+          research: { workspace: "/srv/research" },
+        },
+      },
       channels: {
         telegram: {
           botToken: "token",

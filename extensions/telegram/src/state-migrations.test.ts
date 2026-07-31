@@ -113,10 +113,10 @@ describe("telegram state migrations", () => {
     }
   });
 
-  it("detects legacy message-cache import for the runtime sidecar path", async () => {
+  it("detects legacy message-cache import for Doctor's migration owner", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-state-migration-"));
     const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
-    const storePath = resolveStorePath(undefined, { env, agentId: "main" });
+    const storePath = resolveStorePath(undefined, { env, agentId: "ops" });
     const persistedPath = resolveTelegramMessageCachePath(storePath);
     try {
       await mkdir(path.dirname(persistedPath), { recursive: true });
@@ -151,10 +151,15 @@ describe("telegram state migrations", () => {
 
       const cfg = {
         agents: {
-          list: [{ id: "ops", default: true }],
+          ownership: "explicit",
+          entries: { ops: {}, research: {} },
         },
       } as OpenClawConfig;
-      const plans = await detectTelegramLegacyStateMigrations({ cfg, env });
+      const plans = await detectTelegramLegacyStateMigrations({
+        cfg,
+        env,
+        migrationAgentId: "ops",
+      });
       const messageCachePlan = plans.find(
         (plan) =>
           plan.kind === "plugin-state-import" &&
@@ -257,7 +262,7 @@ describe("telegram state migrations", () => {
     }
   });
 
-  it("detects legacy topic-name cache import for the global sidecar path", async () => {
+  it("detects the account-scoped legacy topic-name import for an ownerless fleet", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-state-migration-"));
     const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
     const legacyStorePath = path.join(dir, "sessions", "sessions.json");
@@ -280,6 +285,10 @@ describe("telegram state migrations", () => {
       );
 
       const cfg = {
+        agents: {
+          ownership: "explicit",
+          entries: { ops: {}, research: {} },
+        },
         channels: {
           telegram: {
             accounts: {
@@ -316,6 +325,68 @@ describe("telegram state migrations", () => {
             name: "Legacy Deployments",
             iconColor: 0x6fb9f1,
             updatedAt: 1736380001,
+          },
+        },
+      ]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("imports the physical-main topic cache for an explicit fleet", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-state-migration-"));
+    const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+    const mainStorePath = resolveStorePath(undefined, { env, agentId: "main" });
+    const persistedPath = resolveTopicNameCachePath(mainStorePath);
+    const namespace = resolveTopicNameCacheNamespace(resolveTopicNameCacheScope(mainStorePath));
+    try {
+      await mkdir(path.dirname(persistedPath), { recursive: true });
+      await writeFile(
+        persistedPath,
+        JSON.stringify({
+          "7:44": {
+            name: "Physical Main Deployments",
+            iconColor: 0x6fb9f2,
+            updatedAt: 1736380002,
+          },
+        }),
+      );
+      const cfg = {
+        agents: {
+          ownership: "explicit",
+          entries: { ops: {}, research: {} },
+        },
+        channels: {
+          telegram: {
+            accounts: { ops: { botToken: "123456:secret" } },
+          },
+        },
+      } as OpenClawConfig;
+
+      const plans = await detectTelegramLegacyStateMigrations({ cfg, env });
+      const topicNamePlan = plans.find(
+        (plan) =>
+          plan.kind === "plugin-state-import" &&
+          plan.label === "Telegram forum topic-name cache" &&
+          plan.sourcePath === persistedPath,
+      );
+
+      expect(topicNamePlan).toMatchObject({
+        kind: "plugin-state-import",
+        sourcePath: persistedPath,
+        targetPath: `plugin state:${namespace}`,
+        namespace,
+      });
+      if (!topicNamePlan || topicNamePlan.kind !== "plugin-state-import") {
+        throw new Error("expected physical-main topic-name import plan");
+      }
+      await expect(topicNamePlan.readEntries()).resolves.toStrictEqual([
+        {
+          key: "7:44",
+          value: {
+            name: "Physical Main Deployments",
+            iconColor: 0x6fb9f2,
+            updatedAt: 1736380002,
           },
         },
       ]);

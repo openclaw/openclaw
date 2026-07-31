@@ -5,11 +5,22 @@ import { parseAbsoluteTimeMs } from "./parse.js";
 /** Structural rejection code for persisted cron jobs that cannot be loaded safely. */
 type InvalidPersistedCronJobReason =
   | "missing-id"
+  | "invalid-agent-id"
   | "missing-schedule"
   | "invalid-schedule"
   | "invalid-trigger"
   | "missing-payload"
   | "invalid-payload";
+
+/** Rejects explicit owner fields that cannot represent a configured agent. */
+export function getInvalidPersistedCronJobOwnerReason(
+  candidate: Record<string, unknown>,
+): "invalid-agent-id" | null {
+  return Object.hasOwn(candidate, "agentId") &&
+    (typeof candidate.agentId !== "string" || !candidate.agentId.trim())
+    ? "invalid-agent-id"
+    : null;
+}
 
 /** Returns the first structural reason a persisted cron job cannot be loaded safely. */
 export function getInvalidPersistedCronJobReason(
@@ -18,6 +29,10 @@ export function getInvalidPersistedCronJobReason(
   const id = candidate.id;
   if (typeof id !== "string" || !id.trim()) {
     return "missing-id";
+  }
+  const invalidOwnerReason = getInvalidPersistedCronJobOwnerReason(candidate);
+  if (invalidOwnerReason) {
+    return invalidOwnerReason;
   }
   const schedule = candidate.schedule;
   if (!schedule || Array.isArray(schedule)) {

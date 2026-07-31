@@ -423,6 +423,7 @@ export function createSubagentRegistryLifecycleDelivery(
     return {
       requesterSessionKey:
         entry.delivery?.payload?.requesterSessionKey ?? entry.requesterSessionKey,
+      requesterAgentId: entry.delivery?.payload?.requesterAgentId ?? entry.requesterAgentId,
       requesterOrigin: entry.delivery?.payload?.requesterOrigin ?? entry.requesterOrigin,
       requesterDisplayKey:
         entry.delivery?.payload?.requesterDisplayKey ?? entry.requesterDisplayKey,

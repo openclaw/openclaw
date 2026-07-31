@@ -35,8 +35,11 @@ function hasLegacyCronMigrationReceiptInDatabase(
   return row?.status === "completed";
 }
 
-export function hasLegacyCronMigrationReceipt(source: LegacyCronMigrationSource): boolean {
-  return hasLegacyCronMigrationReceiptInDatabase(openOpenClawStateDatabase().db, source);
+export function hasLegacyCronMigrationReceipt(
+  source: LegacyCronMigrationSource,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return hasLegacyCronMigrationReceiptInDatabase(openOpenClawStateDatabase({ env }).db, source);
 }
 
 function tableExists(db: DatabaseSync, tableName: string): boolean {
@@ -47,8 +50,11 @@ function tableExists(db: DatabaseSync, tableName: string): boolean {
   );
 }
 
-export function hasLegacyCronMigrationReceiptReadOnly(source: LegacyCronMigrationSource): boolean {
-  const statePath = resolveOpenClawStateSqlitePath(process.env);
+export function hasLegacyCronMigrationReceiptReadOnly(
+  source: LegacyCronMigrationSource,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const statePath = resolveOpenClawStateSqlitePath(env);
   if (!fs.existsSync(statePath)) {
     return false;
   }
@@ -127,6 +133,49 @@ export function acquireLegacyCronMigrationReceipt(
       ),
   );
   return true;
+}
+
+/** Removes a receipt created by a config write whose cron import was rolled back. */
+export function rollbackLegacyCronMigrationReceiptInDatabase(
+  db: DatabaseSync,
+  source: LegacyCronMigrationSource,
+): void {
+  const kysely = getNodeSqliteKysely<CronMigrationDatabase>(db);
+  const current = executeSqliteQueryTakeFirstSync(
+    db,
+    kysely
+      .selectFrom("migration_sources")
+      .select(["migration_kind", "last_run_id", "removed_source", "source_sha256", "status"])
+      .where("source_key", "=", source.sourceKey),
+  );
+  if (
+    current?.migration_kind !== "legacy-cron-json" ||
+    current.last_run_id !== migrationRunId(source) ||
+    current.removed_source !== 0 ||
+    current.source_sha256 !== source.sourceSha256 ||
+    current.status !== "completed"
+  ) {
+    throw new Error("legacy cron migration receipt changed after import; refusing stale rollback");
+  }
+  executeSqliteQuerySync(
+    db,
+    kysely.deleteFrom("migration_sources").where("source_key", "=", source.sourceKey),
+  );
+  executeSqliteQuerySync(
+    db,
+    kysely.deleteFrom("migration_runs").where("id", "=", migrationRunId(source)),
+  );
+}
+
+/** Removes a receipt created by a config write whose cron import was rolled back. */
+export function rollbackLegacyCronMigrationReceipt(
+  source: LegacyCronMigrationSource,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  runOpenClawStateWriteTransaction(
+    ({ db }) => rollbackLegacyCronMigrationReceiptInDatabase(db, source),
+    { env },
+  );
 }
 
 export function markLegacyCronMigrationSourceRemoved(source: LegacyCronMigrationSource): void {

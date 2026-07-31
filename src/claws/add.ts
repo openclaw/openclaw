@@ -314,7 +314,7 @@ export async function applyClawAddPlan(
     await commit((config) => {
       const existingAgents = listAgentEntries(config);
       const agentsToPreserve: AgentConfig[] =
-        existingAgents.length > 0 ? existingAgents : [{ id: DEFAULT_AGENT_ID, default: true }];
+        existingAgents.length > 0 ? existingAgents : [{ id: DEFAULT_AGENT_ID }];
       const configWithPreservedAgents: OpenClawConfig = {
         ...config,
         agents: {

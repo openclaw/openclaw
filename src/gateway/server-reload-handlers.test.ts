@@ -529,7 +529,12 @@ function createReloadHandlersForTest(
     getChannelAutostartSuppression?: ReloadHandlerParams["getChannelAutostartSuppression"];
   },
 ) {
-  const cron = { start: vi.fn(async () => {}), stop: vi.fn() };
+  const cron = {
+    start: vi.fn(async () => {}),
+    stop: vi.fn(),
+    reloadForConfigAdoption: vi.fn(async () => {}),
+    completeConfigAdoption: vi.fn(),
+  };
   const stopExitWatchers = vi.fn();
   const heartbeatRunner = {
     stop: vi.fn(),
@@ -944,6 +949,77 @@ async function runManagedOwnershipScenario(params: {
 }
 
 describe("managed reload transaction ownership", () => {
+  it("adopts legacy cron owners before a whole-agents restart", async () => {
+    vi.useFakeTimers();
+    const initialConfig = {} satisfies OpenClawConfig;
+    const nextConfig = {
+      ...initialConfig,
+      agents: { ownership: "explicit" as const, entries: { ops: {}, research: {} } },
+    } satisfies OpenClawConfig;
+    const snapshot = (config: OpenClawConfig): PreparedSecretsRuntimeSnapshot => ({
+      sourceConfig: config,
+      config,
+      authStores: [],
+      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+      warnings: [],
+      webTools: createEmptyRuntimeWebToolsMetadata(),
+    });
+    activateSecretsRuntimeSnapshot(snapshot(initialConfig));
+    const events: string[] = [];
+    const cron = {
+      start: vi.fn(async () => {}),
+      stop: vi.fn(),
+      reloadForConfigAdoption: vi.fn(async () => {
+        events.push("cron-adoption");
+      }),
+      completeConfigAdoption: vi.fn(() => {
+        events.push("cron-adoption-complete");
+      }),
+    };
+    const state = { ...createDefaultGatewayReloadState(), cronState: { cron } as never };
+    const writeListenerRef = createConfigWriteListenerRef();
+    const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
+    let acceptRestart: (() => void) | undefined;
+    const accepted = new Promise<void>((resolve) => {
+      acceptRestart = resolve;
+    });
+    const reloader = startManagedGatewayConfigReloader({
+      initialConfig,
+      readSnapshot: vi.fn(async () =>
+        createValidConfigSnapshot(nextConfig, "agents-next"),
+      ) as never,
+      subscribeToWrites: captureConfigWriteListener(writeListenerRef),
+      getState: () => state,
+      activateRuntimeSecrets: vi.fn(async (config: OpenClawConfig) => {
+        events.push("restart-preflight");
+        return snapshot(config);
+      }) as never,
+      acceptTerminalConfig: vi.fn(() => acceptRestart?.()),
+      requestRecoveryRestart,
+    });
+
+    try {
+      writeListenerRef.current?.(
+        createConfigWriteNotification(
+          nextConfig,
+          "agents-next",
+          1,
+          "runtime-agents-next",
+          "source-agents-next",
+        ),
+      );
+      await vi.advanceTimersByTimeAsync(300);
+      await accepted;
+
+      expect(cron.reloadForConfigAdoption).toHaveBeenCalledOnce();
+      expect(cron.reloadForConfigAdoption).toHaveBeenCalledWith(nextConfig);
+      expect(cron.completeConfigAdoption).toHaveBeenCalledOnce();
+      expect(events).toEqual(["cron-adoption", "restart-preflight", "cron-adoption-complete"]);
+    } finally {
+      await reloader.stop();
+    }
+  });
+
   it("applies a current in-process hot config", async () => {
     const result = await runManagedOwnershipScenario({ kind: "hot", queueRevert: false });
 
@@ -972,6 +1048,29 @@ describe("managed reload transaction ownership", () => {
 });
 
 describe("gateway hot reload model state", () => {
+  it("reloads cron rows before publishing changed agent resolution", async () => {
+    const { applyHotReload, cron, setState } = createReloadHandlersForTest();
+    const plan = createHotTailPlan({
+      changedPaths: ["agents"],
+      hotReasons: ["agents"],
+    });
+    const nextConfig = {
+      agents: { ownership: "explicit" as const, entries: { ops: {}, research: {} } },
+    };
+
+    await applyHotReload(plan, nextConfig);
+
+    expect(cron.reloadForConfigAdoption).toHaveBeenCalledOnce();
+    expect(cron.reloadForConfigAdoption).toHaveBeenCalledWith(nextConfig);
+    expect(cron.completeConfigAdoption).toHaveBeenCalledOnce();
+    expect(cron.reloadForConfigAdoption.mock.invocationCallOrder[0]).toBeLessThan(
+      cron.completeConfigAdoption.mock.invocationCallOrder[0]!,
+    );
+    expect(cron.completeConfigAdoption.mock.invocationCallOrder[0]).toBeLessThan(
+      setState.mock.invocationCallOrder[0]!,
+    );
+  });
+
   it("stops old cron exit watchers and reconciles rebuilt ones after cron restart", async () => {
     const order: string[] = [];
     const newCron = {
@@ -1224,14 +1323,21 @@ describe("gateway hot reload model state", () => {
     });
   });
 
-  it("restarts instead of rolling back when cron teardown fails after runtime commit", async () => {
+  it("surfaces recovery pending and stops the apply tail when cron teardown fails", async () => {
     restartTesting.resetSigusr1State();
     resetGatewayWorkAdmission();
     const signalSpy = vi.fn();
     process.once("SIGUSR1", signalSpy);
     const logReload = { info: vi.fn(), warn: vi.fn() };
     const publish = vi.fn(async (commit: () => Promise<void>) => await commit());
-    const { applyHotReload, cron, setState } = createReloadHandlersForTest(logReload);
+    const startChannel = vi.fn(async () => {});
+    const stopPostReadySidecars = vi.fn();
+    const { applyHotReload, cron, setState } = createReloadHandlersForTest(
+      logReload,
+      { start: startChannel, stop: vi.fn(async () => {}) },
+      undefined,
+      stopPostReadySidecars,
+    );
     cron.stop.mockImplementation(() => {
       throw new Error("cron stop failed");
     });
@@ -1239,14 +1345,23 @@ describe("gateway hot reload model state", () => {
     try {
       await expect(
         applyHotReload(
-          createCronRestartPlan(),
+          createHotTailPlan({
+            changedPaths: ["cron", "channels.discord", "hooks.gmail"],
+            hotReasons: ["cron", "channels.discord", "hooks.gmail"],
+            restartCron: true,
+            restartChannels: new Set<ChannelKind>(["discord"]),
+            restartGmailWatcher: true,
+          }),
           { cron: { enabled: true } },
           {
             publish,
             isCurrent: () => true,
           },
         ),
-      ).resolves.toBeUndefined();
+      ).rejects.toMatchObject({
+        name: "GatewayHotReloadRecoveryError",
+        message: "config hot reload committed with recovery pending for runtime commit",
+      });
 
       expect(publish).toHaveBeenCalledOnce();
       expect(setState).toHaveBeenCalledOnce();
@@ -1255,6 +1370,10 @@ describe("gateway hot reload model state", () => {
       );
       expect(signalSpy).toHaveBeenCalledOnce();
       expect(isGatewayWorkAdmissionClosed()).toBe(true);
+      expect(hoisted.refreshPreparedModelRuntimeSnapshots).not.toHaveBeenCalled();
+      expect(stopPostReadySidecars).not.toHaveBeenCalled();
+      expect(startChannel).not.toHaveBeenCalled();
+      expect(logReload.info).not.toHaveBeenCalledWith(expect.stringContaining("applied"));
       markGatewaySigusr1RestartHandled();
     } finally {
       process.removeListener("SIGUSR1", signalSpy);

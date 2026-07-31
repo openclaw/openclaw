@@ -12,7 +12,7 @@ vi.mock("../../config/config.js", () => {
   return {
     getRuntimeConfig: vi.fn(() => ({
       agents: {
-        list: [{ id: "main" }, { id: "opus" }],
+        list: [{ id: "main", default: true }, { id: "opus" }],
       },
       session: {},
     })),
@@ -106,7 +106,7 @@ import { testApi, usageHandlers } from "./usage.js";
 
 const TEST_RUNTIME_CONFIG = {
   agents: {
-    list: [{ id: "main" }, { id: "opus" }],
+    list: [{ id: "main", default: true }, { id: "opus" }],
   },
   session: {},
 };
@@ -210,7 +210,7 @@ describe("sessions.usage", () => {
     vi.clearAllMocks();
   });
 
-  it("defaults list-style usage queries without agentId to the default agent", async () => {
+  it("uses the retained legacy owner for list-style usage without agentId", async () => {
     const respond = await runSessionsUsage(BASE_USAGE_RANGE);
 
     expect(vi.mocked(loadCombinedSessionStoreForGateway)).toHaveBeenCalledWith(

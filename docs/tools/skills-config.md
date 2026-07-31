@@ -298,6 +298,7 @@ different visible skill set per agent.
 ```json5
 {
   agents: {
+    ownership: "explicit",
     defaults: {
       skills: ["github", "weather"], // shared baseline
     },

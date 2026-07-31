@@ -20,6 +20,7 @@ type DoctorConfigResult = {
   shouldRepairCronCodexModelRefsAfterConfigWrite?: boolean;
   retiredPhoneControlStateCleanupPending?: boolean;
   blockedCodexModelIdentities?: readonly string[];
+  persistCanonicalAgentRoster?: boolean;
 };
 
 export type DoctorHealthFlowContext = {

@@ -895,7 +895,6 @@ export const AgentModelPolicySchema = z
 export const AgentEntrySchema = z
   .object({
     id: z.string(),
-    default: z.boolean().optional(),
     name: z.string().optional(),
     description: z.string().optional(),
     workspace: z.string().optional(),

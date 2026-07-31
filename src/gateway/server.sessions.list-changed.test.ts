@@ -1138,12 +1138,13 @@ test("sessions.compact scopes selected global truncation to the requested agent"
   await resetConfiguredGlobalAgentSessionStore(globalStores);
 });
 
-test("sessions.compact trims default global agent when no agentId is supplied", async () => {
+test("sessions.compact trims the explicitly selected main global agent", async () => {
   const globalStores = await createConfiguredGlobalAgentSessionStore({ withTranscripts: true });
   const { broadcastToConnIds, responsePayload } = await invokeSessionsCompact({
     getRuntimeConfig: globalStores.getRuntimeConfig,
     params: {
       key: "global",
+      agentId: "main",
       maxLines: 2,
     },
   });
@@ -1308,6 +1309,7 @@ test("sessions.changed mutation events include subagent ownership metadata", asy
 
   const { broadcastToConnIds, responsePayload } = await invokeSessionsPatch({
     key: "subagent:child",
+    agentId: "main",
     label: "Child",
   });
 

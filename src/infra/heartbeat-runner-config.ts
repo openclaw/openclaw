@@ -1,11 +1,6 @@
 import { createHash } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  listAgentIds,
-  listAgentEntries,
-  resolveAgentConfig,
-  resolveDefaultAgentId,
-} from "../agents/agent-scope.js";
+import { listAgentIds, listAgentEntries, resolveAgentConfig } from "../agents/agent-scope.js";
 import { resolveModelRefFromString, type ModelRef } from "../agents/model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import {
@@ -26,8 +21,11 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { readStoredDeviceIdentityReadOnly } from "./device-identity-store.js";
 import { loadOrCreateDeviceIdentity } from "./device-identity.js";
 import { resolveActiveHoursTimezone } from "./heartbeat-active-hours.js";
+import { resolveAmbientHeartbeatAgentId } from "./heartbeat-agent-resolution.js";
 import { resolveHeartbeatIntervalMs } from "./heartbeat-summary.js";
 import type { HeartbeatWakeSource } from "./heartbeat-wake.js";
+
+export { resolveAmbientHeartbeatAgentId } from "./heartbeat-agent-resolution.js";
 
 export const heartbeatLog = createSubsystemLogger("gateway/heartbeat");
 
@@ -149,11 +147,6 @@ function resolveHeartbeatConfig(
     return overrides;
   }
   return { ...defaults, ...overrides };
-}
-
-export function resolveAmbientHeartbeatAgentId(cfg: OpenClawConfig): string {
-  const configured = normalizeOptionalString(cfg.agents?.defaults?.heartbeat?.agentId);
-  return normalizeAgentId(configured ?? resolveDefaultAgentId(cfg));
 }
 
 function omitExplicitHeartbeatDestination(heartbeat: HeartbeatConfig | undefined) {

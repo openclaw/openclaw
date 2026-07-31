@@ -1,5 +1,9 @@
 // Voice Call plugin module implements runtime behavior.
-import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  AgentSelectionRequiredError,
+  listAgentIds,
+  resolveDefaultAgentId,
+} from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
@@ -243,6 +247,9 @@ async function resolveRealtimeProvider(params: {
 
 function listRealtimeAgentIds(config: VoiceCallConfig, coreConfig: OpenClawConfig): string[] {
   const agentIds = new Set<string>([normalizeAgentId(config.agentId)]);
+  for (const agentId of Object.keys(coreConfig.agents?.entries ?? {})) {
+    agentIds.add(normalizeAgentId(agentId));
+  }
   for (const agent of coreConfig.agents?.list ?? []) {
     agentIds.add(normalizeAgentId(agent.id));
   }
@@ -322,14 +329,33 @@ export async function createVoiceCallRuntime(params: {
 
   const cfg = fullConfig ?? (coreConfig as OpenClawConfig);
   const unresolvedConfig = resolveVoiceCallConfig(rawConfig);
-  const configuredAgentId = unresolvedConfig.agentId
-    ? normalizeAgentId(unresolvedConfig.agentId)
-    : resolveDefaultAgentId(cfg);
-  const config = { ...unresolvedConfig, agentId: configuredAgentId };
-
-  if (!config.enabled) {
+  if (!unresolvedConfig.enabled) {
     throw new Error("Voice call disabled. Enable the plugin entry in config.");
   }
+  const configuredAgentId = unresolvedConfig.agentId
+    ? normalizeAgentId(unresolvedConfig.agentId)
+    : resolveDefaultAgentId(cfg, {
+        surface: "voice-call relay ownership",
+        hint: "Set the voice-call plugin agentId target.",
+      });
+  const configuredAgentIds = listAgentIds(cfg).map((agentId) => normalizeAgentId(agentId));
+  if (configuredAgentIds.length === 0) {
+    configuredAgentIds.push(
+      normalizeAgentId(
+        resolveDefaultAgentId(cfg, {
+          surface: "voice-call relay ownership",
+          hint: "Set the voice-call plugin agentId target.",
+        }),
+      ),
+    );
+  }
+  if (!configuredAgentIds.includes(configuredAgentId)) {
+    throw new AgentSelectionRequiredError(configuredAgentIds, {
+      surface: "voice-call relay ownership",
+      hint: `Set the voice-call plugin agentId target to one of: ${configuredAgentIds.join(", ")}.`,
+    });
+  }
+  const config = { ...unresolvedConfig, agentId: configuredAgentId };
 
   if (config.skipSignatureVerification) {
     log.warn(

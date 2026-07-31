@@ -6,6 +6,7 @@ import {
   type AmbientEnvTriggerPolicy,
 } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { listGatewayActivatedChannelIds } from "./channel-presence-policy.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import {
@@ -24,7 +25,6 @@ import {
 } from "./gateway-startup-plugin-activation.js";
 import {
   hasConfiguredStartupChannel,
-  listPotentialEnabledChannelIds,
   resolveAuthorizedGatewayStartupDreamingPluginIds,
   resolveContextEngineSlotStartupPluginId,
   resolveMemorySlotStartupPluginId,
@@ -72,7 +72,12 @@ export function resolveConfiguredDeferredChannelPluginIdsFromRegistry(params: {
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }): string[] {
   const configuredChannelIds = new Set(
-    listPotentialEnabledChannelIds(params.config, params.env, params.ambientEnvTriggers),
+    listGatewayActivatedChannelIds({
+      config: params.config,
+      env: params.env,
+      ambientEnvTriggers: params.ambientEnvTriggers,
+      manifestRecords: params.manifestRegistry.plugins,
+    }),
   );
   if (configuredChannelIds.size === 0) {
     return [];
@@ -144,8 +149,15 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   const channelPluginIds = resolveChannelPluginIdsFromRegistry({
     manifestRegistry: params.manifestRegistry,
   });
+  const activationSourceConfig = params.activationSourceConfig ?? params.config;
   const configuredChannelIds = new Set(
-    listPotentialEnabledChannelIds(params.config, params.env, params.ambientEnvTriggers),
+    listGatewayActivatedChannelIds({
+      config: params.config,
+      activationSourceConfig,
+      env: params.env,
+      ambientEnvTriggers: params.ambientEnvTriggers,
+      manifestRecords: params.manifestRegistry.plugins,
+    }),
   );
   const pluginsConfig = normalizePluginsConfigWithRegistry(params.config.plugins, params.index, {
     manifestRegistry: params.manifestRegistry,
@@ -153,7 +165,6 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   // Startup must classify allowlist exceptions against the raw config snapshot,
   // not the auto-enabled effective snapshot, or configured-only channels can be
   // misclassified as explicit enablement.
-  const activationSourceConfig = params.activationSourceConfig ?? params.config;
   const activationSourcePlugins = normalizePluginsConfigWithRegistry(
     activationSourceConfig.plugins,
     params.index,

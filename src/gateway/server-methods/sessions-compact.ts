@@ -5,8 +5,8 @@ import {
   errorShape,
   validateSessionsCompactParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import {
   resolveSessionWorkStartError,
   SESSION_LIFECYCLE_CHANGED_ERROR_REASON,
@@ -63,6 +63,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
       return;
     }
     const requestedAgentId = requestedAgent.agentId;
+    const compatibilityDefaultAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
     const { target, storePath } = resolveGatewaySessionTargetFromKey(key, cfg, {
       agentId: requestedAgentId,
     });
@@ -217,7 +218,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
               canonicalKey: target.canonicalKey,
               sessionId,
               agentId: requestedAgentId,
-              defaultAgentId: resolveDefaultAgentId(cfg),
+              defaultAgentId: compatibilityDefaultAgentId,
             });
           if (blockedByActiveRun) {
             return;

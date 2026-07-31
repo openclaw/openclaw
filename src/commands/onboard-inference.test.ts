@@ -1,5 +1,6 @@
 // Inference backend detection tests cover the documented ladder and login-awareness.
 import { describe, expect, it } from "vitest";
+import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { LocalCommandProbe } from "../system-agent/probes.js";
 import {
   ANTHROPIC_API_DEFAULT_MODEL_REF,
@@ -192,14 +193,14 @@ describe("detectInferenceBackends", () => {
     ]);
   });
 
-  it("prefers the configured default agent model over the global default", async () => {
+  it("uses the global model when a multi-agent fleet has no sole owner", async () => {
     const candidates = await detectInferenceBackends({
       config: {
         agents: {
           defaults: { model: "openai/gpt-5.5" },
           list: [
             { id: "fallback", model: "google/gemini-3.1-pro-preview" },
-            { id: "ops", default: true, model: "anthropic/claude-opus-4-8" },
+            { id: "ops", model: "anthropic/claude-opus-4-8" },
           ],
         },
       },
@@ -212,8 +213,60 @@ describe("detectInferenceBackends", () => {
       },
     });
 
+    expect(candidates).toMatchObject([{ kind: "existing-model", modelRef: "openai/gpt-5.5" }]);
+  });
+
+  it("uses the explicitly selected agent model in a multi-agent fleet", async () => {
+    const candidates = await detectInferenceBackends({
+      config: {
+        agents: {
+          ownership: "explicit",
+          defaults: { model: "openai/gpt-5.5" },
+          entries: {
+            ops: { model: "anthropic/claude-opus-4-8" },
+            research: { model: "google/gemini-3.1-pro-preview" },
+          },
+        },
+      },
+      agentId: "ops",
+      env: {},
+      platform: "linux",
+      deps: {
+        probeLocalCommand: probeDeps({}),
+        readClaudeCliCredentials: () => null,
+        readCodexCliCredentials: () => null,
+      },
+    });
+
     expect(candidates).toMatchObject([
       { kind: "existing-model", modelRef: "anthropic/claude-opus-4-8" },
+    ]);
+  });
+
+  it("falls back from a departed retained owner to the sole live agent model", async () => {
+    const config = retainLegacyDefaultAgentId(
+      {
+        agents: {
+          defaults: { model: "openai/gpt-5.5" },
+          entries: { research: { model: "google/gemini-3.1-pro-preview" } },
+        },
+      },
+      "ops",
+    );
+
+    const candidates = await detectInferenceBackends({
+      config,
+      env: {},
+      platform: "linux",
+      deps: {
+        probeLocalCommand: probeDeps({}),
+        readClaudeCliCredentials: () => null,
+        readCodexCliCredentials: () => null,
+      },
+    });
+
+    expect(candidates).toMatchObject([
+      { kind: "existing-model", modelRef: "google/gemini-3.1-pro-preview" },
     ]);
   });
 

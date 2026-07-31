@@ -535,6 +535,8 @@ export type ChannelLifecycleAdapter = {
     env: NodeJS.ProcessEnv;
     stateDir: string;
     oauthDir: string;
+    /** Upgrade-only owner selected before Doctor retires legacy default metadata. */
+    migrationAgentId?: string;
   }) => ChannelLegacyStateMigrationPlan[] | Promise<ChannelLegacyStateMigrationPlan[]>;
 };
 

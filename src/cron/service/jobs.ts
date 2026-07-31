@@ -36,7 +36,6 @@ import {
   assertCronExpressionSatisfiable,
   assertDeliverySupport,
   assertFailureDestinationSupport,
-  assertMainSessionAgentId,
   assertPacingSupport,
   assertScriptPayloadSupport,
   assertStreamScheduleSupport,
@@ -234,7 +233,6 @@ export function createJob(
     cronConfig: state.deps.cronConfig,
     requireEnabled: true,
   });
-  assertMainSessionAgentId(job, state.deps.defaultAgentId);
   assertDeliverySupport(job);
   assertFailureDestinationSupport(job);
   assertCronExpressionSatisfiable(job, now, computeJobNextRunAtMs);
@@ -247,7 +245,6 @@ export function applyJobPatch(
   job: CronJob,
   patch: CronJobPatch,
   opts?: {
-    defaultAgentId?: string;
     scheduleValidationNowMs?: number;
     cronConfig?: CronConfig;
     scheduledToolPolicy?: CronScheduledToolPolicy;
@@ -423,7 +420,6 @@ export function applyJobPatch(
     cronConfig: opts?.cronConfig,
     requireEnabled: patch.enabled === true || patch.schedule?.kind === "stream",
   });
-  assertMainSessionAgentId(job, opts?.defaultAgentId);
   assertDeliverySupport(job);
   assertFailureDestinationSupport(job);
   if (
@@ -439,7 +435,6 @@ export function applyDeclarativeJobSpec(
   job: CronJob,
   input: CronJobCreate,
   opts: {
-    defaultAgentId?: string;
     enabledExplicit: boolean;
     nowMs: number;
     cronConfig?: CronConfig;
@@ -547,7 +542,6 @@ export function applyDeclarativeJobSpec(
 
   assertSupportedJobSpec(job);
   assertPacingSupport(job);
-  assertMainSessionAgentId(job, opts.defaultAgentId);
   assertDeliverySupport(job);
   assertFailureDestinationSupport(job);
   assertCronExpressionSatisfiable(job, opts.nowMs, computeJobNextRunAtMs);

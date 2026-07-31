@@ -46,7 +46,7 @@ type GatewayStartupTrace = {
 type GatewayPluginBootstrapParams = {
   cfg: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
-  workspaceDir: string;
+  workspaceDir?: string;
   log: GatewayPluginBootstrapLog;
   coreGatewayHandlers?: Record<string, GatewayRequestHandler>;
   coreGatewayMethodNames?: readonly string[];

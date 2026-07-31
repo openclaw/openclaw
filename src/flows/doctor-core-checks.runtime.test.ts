@@ -13,7 +13,9 @@ const mocks = vi.hoisted(() => ({
   probeGatewayStatus: vi.fn(),
   readGatewayServiceState: vi.fn(),
   resolveGatewayService: vi.fn(() => ({ label: "openclaw-gateway" })),
-  resolvePluginProviders: vi.fn((): Array<Record<string, unknown>> => []),
+  resolvePluginProviders: vi.fn(
+    (_options: { workspaceDir?: string }): Array<Record<string, unknown>> => [],
+  ),
   resolveDefaultModelForAgent: vi.fn(() => ({ provider: "openai", model: "gpt-5.5" })),
 }));
 
@@ -649,6 +651,24 @@ describe("doctor gateway runtime checks", () => {
 describe("doctor provider catalog projection checks", () => {
   beforeEach(() => {
     mocks.resolvePluginProviders.mockReset().mockReturnValue([]);
+  });
+
+  it("validates provider discovery for every agent in an explicit fleet", async () => {
+    await expect(
+      collectProviderCatalogProjectionFindings({
+        agents: {
+          ownership: "explicit",
+          entries: {
+            ops: { workspace: "/tmp/ops-workspace" },
+            research: { workspace: "/tmp/research-workspace" },
+          },
+        },
+      }),
+    ).resolves.toEqual([]);
+
+    expect(
+      mocks.resolvePluginProviders.mock.calls.map(([options]) => options.workspaceDir),
+    ).toEqual(["/tmp/ops-workspace", "/tmp/research-workspace"]);
   });
 
   it("reports provider catalog rows that fail unified text projection", async () => {

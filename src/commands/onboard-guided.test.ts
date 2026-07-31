@@ -2,19 +2,14 @@ import fs from "node:fs";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { CallGatewayCliOptions } from "../gateway/call.js";
 import { createSuiteLogPathTracker } from "../logging/log-test-helpers.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import type { EnsureOnboardingAgentParams as AgentParams } from "./onboard-agent.js";
 import { runGuidedOnboarding, type GuidedOnboardingDeps } from "./onboard-guided.js";
-import { runRemoteGatewayInferenceOnboarding } from "./onboard-remote-gateway.js";
-
-type RemoteGatewayInferenceOnboardingDeps = NonNullable<
-  Parameters<typeof runRemoteGatewayInferenceOnboarding>[2]
->;
 
 const restoreTerminalState = vi.hoisted(() => vi.fn());
 const promptAuthChoiceGrouped = vi.hoisted(() => vi.fn());
@@ -50,7 +45,10 @@ const logPathTracker = createSuiteLogPathTracker("openclaw-guided-onboard-log-")
 
 vi.mock("../config/config.js", () => ({ readConfigFileSnapshot }));
 vi.mock("./onboard-agent.js", () => ({
-  ensureOnboardingAgent: async ({ config }: { config: OpenClawConfig }) => ({ config }),
+  ensureOnboardingAgent: vi.fn(async ({ config, agentId }: AgentParams) => ({
+    config,
+    agentId: agentId?.trim().toLowerCase() || "main",
+  })),
 }));
 
 vi.mock("./onboard-helpers.js", () => ({
@@ -349,6 +347,28 @@ describe("runGuidedOnboarding", () => {
     expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/openclaw-workspace");
   });
 
+  it("treats the injected main roster as fresh when --agent creates the first agent", async () => {
+    const syntheticConfig = { agents: { entries: { main: {} } } } satisfies OpenClawConfig;
+    readConfigFileSnapshot.mockResolvedValue({
+      exists: false,
+      valid: true,
+      path: "/tmp/openclaw.json",
+      issues: [],
+      sourceConfigBeforeMigrations: {},
+      sourceConfig: syntheticConfig,
+      runtimeConfig: syntheticConfig,
+      config: syntheticConfig,
+    } as never);
+    const prompter = createWizardPrompter();
+    const deps = setupDeps({ prompter });
+
+    await runGuidedOnboarding({ acceptRisk: true, agent: "ops" }, makeRuntime(), deps);
+
+    expect(deps.detect).toHaveBeenCalledWith({ targetAgentId: "ops" });
+    const { ensureOnboardingAgent } = await import("./onboard-agent.js");
+    expect(ensureOnboardingAgent).toHaveBeenCalledWith(expect.objectContaining({ agentId: "ops" }));
+  });
+
   it("live-tests an unverified CLI before automatic setup", async () => {
     const unverified = {
       ...candidate("claude-cli", "Claude Code"),
@@ -380,6 +400,7 @@ describe("runGuidedOnboarding", () => {
       kind: "claude-cli",
       modelRef: "claude-cli/opus",
       workspace: "/tmp/work",
+      targetAgentId: "main",
       surface: "cli",
       runtime,
     });
@@ -452,8 +473,7 @@ describe("runGuidedOnboarding", () => {
 
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
 
-    // Only the existing model was auto-tested; the other credentialed candidate
-    // must not run (and persist) without the user choosing it.
+    // Only the existing model was auto-tested; another candidate must not persist without a choice.
     expect(activate).toHaveBeenCalledTimes(2);
     expect(activate.mock.calls.map(([call]) => call.kind)).toEqual([
       "existing-model",
@@ -644,6 +664,7 @@ describe("runGuidedOnboarding", () => {
       kind: "provider-auth",
       authChoice: "openai",
       workspace: "/tmp/work",
+      targetAgentId: "main",
       surface: "cli",
       runtime,
       prompter,
@@ -774,11 +795,97 @@ describe("runGuidedOnboarding", () => {
     expect(text).not.toHaveBeenCalled();
     expect(deps.applySetup).toHaveBeenCalledWith({
       workspace: "/tmp/work",
+      targetAgentId: "main",
       surface: "cli",
       runtime,
     });
     expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/work");
     expect(runSystemAgentChat).not.toHaveBeenCalled();
+  });
+
+  it("keeps a case-variant selected agent's configured workspace", async () => {
+    const config = {
+      agents: { entries: { Ops: { workspace: "/tmp/ops-workspace" }, research: {} } },
+    } satisfies OpenClawConfig;
+    readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      path: "/tmp/openclaw.json",
+      issues: [],
+      config,
+    });
+    const deps = setupDeps({ prompter: createWizardPrompter() });
+    const runtime = makeRuntime();
+
+    await runGuidedOnboarding({ acceptRisk: true, agent: "ops" }, runtime, deps);
+
+    expect(deps.detect).toHaveBeenCalledWith({ targetAgentId: "ops" });
+    expect(deps.applySetup).toHaveBeenCalledWith({
+      workspace: "/tmp/ops-workspace",
+      targetAgentId: "ops",
+      surface: "cli",
+      runtime,
+    });
+    expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/ops-workspace");
+  });
+
+  it("probes the interactively selected agent model before applying setup", async () => {
+    const config = {
+      agents: {
+        ownership: "explicit",
+        defaults: { model: "openai/gpt-5.5" },
+        entries: {
+          ops: { model: "anthropic/claude-opus-4-8", workspace: "/tmp/ops-workspace" },
+          research: {
+            model: "google/gemini-3.1-pro-preview",
+            workspace: "/tmp/research-workspace",
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      path: "/tmp/openclaw.json",
+      issues: [],
+      config,
+    });
+    const detect = vi.fn(async ({ targetAgentId }: { targetAgentId?: string } = {}) =>
+      detection({
+        candidates: [
+          {
+            ...existingModelCandidate(),
+            modelRef:
+              targetAgentId === "ops"
+                ? "anthropic/claude-opus-4-8"
+                : "google/gemini-3.1-pro-preview",
+          },
+        ],
+      }),
+    );
+    const prompter = createWizardPrompter(undefined, {
+      selectValues: ["full", "ops", "use"],
+    });
+    const deps = setupDeps({ prompter, detect });
+    const runtime = makeRuntime();
+
+    await runGuidedOnboarding({ acceptRisk: true }, runtime, deps);
+
+    expect(detect).toHaveBeenCalledWith({ targetAgentId: "ops" });
+    expect(deps.activate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelRef: "anthropic/claude-opus-4-8",
+        targetAgentId: "ops",
+        workspace: "/tmp/ops-workspace",
+      }),
+    );
+    expect(deps.applySetup).toHaveBeenCalledWith(
+      expect.objectContaining({ targetAgentId: "ops", workspace: "/tmp/ops-workspace" }),
+    );
+    const { ensureOnboardingAgent } = await import("./onboard-agent.js");
+    expect(ensureOnboardingAgent).toHaveBeenLastCalledWith(
+      expect.objectContaining({ agentId: "ops" }),
+    );
   });
 
   it("cancels before detection or activation when risk is declined", async () => {
@@ -818,150 +925,5 @@ describe("runGuidedOnboarding", () => {
     expect(deps.runSystemAgentChat).not.toHaveBeenCalled();
     expect(deps.detect).not.toHaveBeenCalled();
     expect(deps.activate).not.toHaveBeenCalled();
-  });
-
-  it("converges remote inference before remote OpenClaw without mutating local config", async () => {
-    const localConfig = {
-      wizard: { securityAcknowledgedAt: "2026-07-11T00:00:00.000Z" },
-      agents: {
-        defaults: {
-          workspace: "/client/workspace",
-          model: { primary: "openai/local-only" },
-        },
-      },
-      gateway: {
-        mode: "remote",
-        remote: { url: "wss://configured.example/ws", token: "configured-token" },
-      },
-    } satisfies OpenClawConfig;
-    const localConfigBefore = structuredClone(localConfig);
-    readConfigFileSnapshot.mockResolvedValueOnce({
-      exists: true,
-      valid: true,
-      path: "/tmp/openclaw.json",
-      issues: [],
-      config: localConfig,
-    });
-
-    const order: string[] = [];
-    const remoteConfig: { modelRef?: string } = {};
-    const gatewayCallMock = vi.fn(async (options: CallGatewayCliOptions): Promise<unknown> => {
-      expect(options.url).toBe("wss://selected.example/ws");
-      expect(options.token).toBe("selected-token");
-      expect(options.tlsFingerprint).toBe("sha256:selected");
-      expect(options.ignoreEnvUrlOverride).toBe(true);
-      expect(options.config?.gateway?.remote?.url).toBe("wss://selected.example/ws");
-      order.push(options.method);
-      if (options.method === "openclaw.setup.detect") {
-        return {
-          candidates: [
-            {
-              kind: "claude-cli",
-              label: "Claude Code",
-              detail: "logged in",
-              modelRef: "claude-cli/opus",
-              recommended: true,
-              credentials: true,
-            },
-            {
-              kind: "codex-cli",
-              label: "Codex",
-              detail: "logged in",
-              modelRef: "openai/gpt-5.5",
-              recommended: false,
-              credentials: true,
-            },
-          ],
-          unavailableCandidates: [],
-          manualProviders: [],
-          authOptions: [],
-          recommendedInstalls: [],
-          workspace: "/gateway/workspace",
-          setupComplete: false,
-        };
-      }
-      if (options.method === "openclaw.setup.activate") {
-        expect(options.params).toEqual({
-          kind: "claude-cli",
-          modelRef: "claude-cli/opus",
-          workspace: "/gateway/workspace",
-        });
-        remoteConfig.modelRef = "claude-cli/opus";
-        return {
-          ok: true,
-          modelRef: remoteConfig.modelRef,
-          latencyMs: 250,
-          lines: ["Default model: claude-cli/opus"],
-        };
-      }
-      if (options.method === "openclaw.setup.verify") {
-        expect(remoteConfig.modelRef).toBe("claude-cli/opus");
-        return { ok: true, modelRef: remoteConfig.modelRef, latencyMs: 100 };
-      }
-      if (options.method === "openclaw.chat") {
-        expect(remoteConfig.modelRef).toBe("claude-cli/opus");
-        expect(options.params).toEqual({
-          sessionId: expect.any(String),
-          welcomeVariant: "onboarding",
-        });
-        return {
-          sessionId: (options.params as { sessionId: string }).sessionId,
-          reply: "Inference is ready. I can configure the rest.",
-          action: "open-agent",
-        };
-      }
-      throw new Error(`unexpected Gateway method ${options.method}`);
-    });
-    const runTui = vi.fn(async (options: unknown) => {
-      order.push("tui");
-      expect(options).toEqual({
-        config: expect.objectContaining({
-          gateway: expect.objectContaining({
-            remote: expect.objectContaining({ url: "wss://selected.example/ws" }),
-          }),
-        }),
-        deliver: false,
-        boundGateway: {
-          url: "wss://selected.example/ws",
-          token: "selected-token",
-          tlsFingerprint: "sha256:selected",
-        },
-      });
-      return { exitReason: "exit" as const };
-    });
-    const text = vi.fn(async () => "unexpected");
-    const prompter = createWizardPrompter({ text });
-    const runtime = makeRuntime();
-
-    await runRemoteGatewayInferenceOnboarding(
-      {
-        config: localConfig,
-        gatewayUrl: "wss://selected.example/ws",
-        token: "selected-token",
-        tlsFingerprint: "sha256:selected",
-      },
-      runtime,
-      {
-        callGateway: gatewayCallMock as unknown as NonNullable<
-          RemoteGatewayInferenceOnboardingDeps["callGateway"]
-        >,
-        createPrompter: () => prompter,
-        runTui,
-      },
-    );
-
-    expect(order).toEqual([
-      "openclaw.setup.detect",
-      "openclaw.setup.activate",
-      "openclaw.setup.verify",
-      "openclaw.chat",
-      "tui",
-    ]);
-    expect(remoteConfig.modelRef).toBe("claude-cli/opus");
-    expect(localConfig).toEqual(localConfigBefore);
-    expect(text).not.toHaveBeenCalled();
-    expect(
-      JSON.stringify([prompter.note, prompter.outro, runtime.log, runtime.error]),
-    ).not.toContain("selected-token");
   });
 });

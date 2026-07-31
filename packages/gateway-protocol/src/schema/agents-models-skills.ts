@@ -94,9 +94,18 @@ export const AgentSummarySchema = closedObject({
 /** Empty request payload for listing configured agents. */
 export const AgentsListParamsSchema = closedObject({});
 
-/** Agent list result including the default agent and session scoping mode. */
+/** Honest owner-selection state carried alongside the legacy default projection. */
+export const AgentOwnershipSchema = Type.Union([
+  Type.Literal("sole"),
+  Type.Literal("legacy"),
+  Type.Literal("explicit"),
+]);
+
+/** Agent list result including compatibility and current owner-selection state. */
 export const AgentsListResultSchema = closedObject({
   defaultId: NonEmptyString,
+  ownership: Type.Optional(AgentOwnershipSchema),
+  selectionRequired: Type.Optional(Type.Boolean()),
   mainKey: NonEmptyString,
   scope: Type.Union([Type.Literal("per-sender"), Type.Literal("global")]),
   agents: Type.Array(AgentSummarySchema),

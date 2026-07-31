@@ -154,6 +154,68 @@ describe("getSubagentDepthFromSessionStore", () => {
     }
   });
 
+  it("loads an unscoped session depth through its explicit agent owner", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-depth-owner-"));
+    const storePath = path.join(tmpDir, "shared-sessions.json");
+    try {
+      await replaceSessionEntry(
+        { agentId: "work", storePath, sessionKey: "global" },
+        {
+          sessionId: "work-global",
+          updatedAt: Date.now(),
+          spawnDepth: 2,
+        },
+      );
+
+      expect(
+        getSubagentDepthFromSessionStore("global", {
+          cfg: {
+            agents: { ownership: "explicit", entries: { main: {}, work: {} } },
+            session: { store: storePath },
+          },
+          agentId: "work",
+        }),
+      ).toBe(2);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("caches separate agent views for one fixed shared store path", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-depth-shared-"));
+    const storePath = path.join(tmpDir, "shared-sessions.json");
+    try {
+      await replaceSessionEntry(
+        { agentId: "work", storePath, sessionKey: "global" },
+        {
+          sessionId: "work-global",
+          updatedAt: Date.now(),
+          spawnedBy: "agent:ops:main",
+        },
+      );
+      await replaceSessionEntry(
+        { agentId: "ops", storePath, sessionKey: "agent:ops:main" },
+        {
+          sessionId: "ops-main",
+          updatedAt: Date.now(),
+          spawnDepth: 2,
+        },
+      );
+
+      expect(
+        getSubagentDepthFromSessionStore("global", {
+          cfg: {
+            agents: { ownership: "explicit", entries: { ops: {}, work: {} } },
+            session: { store: storePath },
+          },
+          agentId: "work",
+        }),
+      ).toBe(3);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("falls back to session-key segment counting when metadata is missing", () => {
     const key = "agent:main:subagent:flat";
     const depth = getSubagentDepthFromSessionStore(key, {

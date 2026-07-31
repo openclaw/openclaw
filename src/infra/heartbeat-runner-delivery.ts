@@ -26,11 +26,11 @@ import type {
 } from "./heartbeat-runner-execution.js";
 import { truncateHeartbeatPreview } from "./heartbeat-runner-prompt.js";
 import { restoreHeartbeatUpdatedAt } from "./heartbeat-runner-session.js";
+import { consumeHeartbeatSystemEventEntriesBySource } from "./heartbeat-system-event-consumption.js";
 import { handleHeartbeatTerminalToolFailure } from "./heartbeat-terminal-tool-failure.js";
 import type { HeartbeatRunResult } from "./heartbeat-wake.js";
 import type { resolveAgentOutboundIdentity } from "./outbound/identity.js";
 import type { buildOutboundSessionContext } from "./outbound/session-context.js";
-import { consumeSelectedSystemEventEntries } from "./system-events.js";
 
 const log = heartbeatLog;
 
@@ -489,6 +489,9 @@ async function clearSatisfiedPendingFinalDelivery(
 
 function consumeInspectedSystemEvents(wake: ReadyHeartbeatWake, prepared: PreparedHeartbeatRun) {
   if (wake.preflight.shouldInspectPendingEvents && prepared.inspectedSystemEventsToConsume.length) {
-    consumeSelectedSystemEventEntries(prepared.sessionKey, prepared.inspectedSystemEventsToConsume);
+    consumeHeartbeatSystemEventEntriesBySource(
+      prepared.sessionKey,
+      prepared.inspectedSystemEventsToConsume,
+    );
   }
 }

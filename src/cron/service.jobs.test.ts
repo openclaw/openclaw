@@ -804,7 +804,7 @@ describe("script payload validation", () => {
   });
 });
 
-describe("createJob rejects sessionTarget main for non-default agents", () => {
+describe("createJob scopes sessionTarget main to the resolved job owner", () => {
   const now = Date.parse("2026-02-28T12:00:00.000Z");
 
   const mainJobInput = (agentId?: string) => ({
@@ -818,23 +818,19 @@ describe("createJob rejects sessionTarget main for non-default agents", () => {
   });
 
   it.each([
-    { name: "default agent", defaultAgentId: "main", agentId: undefined },
-    { name: "explicit default agent", defaultAgentId: "main", agentId: "main" },
-    { name: "case-insensitive defaultAgentId match", defaultAgentId: "Main", agentId: "MAIN" },
+    { name: "implicit sole owner", defaultAgentId: "main", agentId: undefined },
+    { name: "explicit matching owner", defaultAgentId: "main", agentId: "main" },
+    { name: "explicit non-default owner", defaultAgentId: "main", agentId: "custom-agent" },
+    {
+      name: "explicit owner without an ambient default",
+      defaultAgentId: undefined,
+      agentId: "ops",
+    },
   ] as const)("allows creating a main-session job for $name", ({ defaultAgentId, agentId }) => {
-    const state = createMockState(now, { defaultAgentId });
+    const state = createMockState(now, defaultAgentId ? { defaultAgentId } : undefined);
     const job = createJob(state, mainJobInput(agentId));
     expect(job.sessionTarget).toBe("main");
-  });
-
-  it.each([
-    { name: "non-default agentId", defaultAgentId: "main", agentId: "custom-agent" },
-    { name: "missing defaultAgentId", defaultAgentId: undefined, agentId: "custom-agent" },
-  ] as const)("rejects creating a main-session job for $name", ({ defaultAgentId, agentId }) => {
-    const state = createMockState(now, defaultAgentId ? { defaultAgentId } : undefined);
-    expect(() => createJob(state, mainJobInput(agentId))).toThrow(
-      'cron: sessionTarget "main" is only valid for the default agent',
-    );
+    expect(job.agentId).toBe(agentId);
   });
 
   it("allows isolated session job for non-default agents", () => {
@@ -926,7 +922,7 @@ describe("nextWakeAtMs", () => {
   });
 });
 
-describe("applyJobPatch rejects sessionTarget main for non-default agents", () => {
+describe("applyJobPatch scopes sessionTarget main to an explicit agent", () => {
   const now = Date.now();
 
   const createMainJob = (agentId?: string): CronJob => ({
@@ -943,47 +939,30 @@ describe("applyJobPatch rejects sessionTarget main for non-default agents", () =
     agentId,
   });
 
-  it.each([
-    { name: "rejects patching agentId to non-default", agentId: "custom-agent", shouldThrow: true },
-    { name: "allows patching agentId to the default agent", agentId: "main", shouldThrow: false },
-  ] as const)("$name on a main-session job", ({ agentId, shouldThrow }) => {
+  it.each(["custom-agent", "main"])("allows patching a main-session job to owner %s", (agentId) => {
     const job = createMainJob();
     const patch = { agentId } as CronJobPatch;
-    if (shouldThrow) {
-      expect(() => applyJobPatch(job, patch, { defaultAgentId: "main" })).toThrow(
-        'cron: sessionTarget "main" is only valid for the default agent',
-      );
-      return;
-    }
-    applyJobPatch(job, patch, { defaultAgentId: "main" });
-    expect(job.agentId).toBe("main");
+    applyJobPatch(job, patch);
+    expect(job.agentId).toBe(agentId);
   });
 
   it("accepts patching to a custom session target with channel-native separators", () => {
     const job = createMainJob();
     const sessionTarget = "session:agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==";
-    applyJobPatch(
-      job,
-      {
-        sessionTarget,
-        payload: { kind: "agentTurn", message: "hello" },
-      },
-      { defaultAgentId: "main" },
-    );
+    applyJobPatch(job, {
+      sessionTarget,
+      payload: { kind: "agentTurn", message: "hello" },
+    });
     expect(job.sessionTarget).toBe(sessionTarget);
   });
 
   it("rejects patching to a custom session target with null bytes", () => {
     const job = createMainJob();
     expect(() =>
-      applyJobPatch(
-        job,
-        {
-          sessionTarget: "session:bad\0id",
-          payload: { kind: "agentTurn", message: "hello" },
-        },
-        { defaultAgentId: "main" },
-      ),
+      applyJobPatch(job, {
+        sessionTarget: "session:bad\0id",
+        payload: { kind: "agentTurn", message: "hello" },
+      }),
     ).toThrow("invalid cron sessionTarget session id");
   });
 });

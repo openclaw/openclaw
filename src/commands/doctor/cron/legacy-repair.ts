@@ -11,6 +11,10 @@ import {
   saveCronJobsStoreWithMetadata,
   saveCronQuarantineFile,
 } from "../../../cron/store.js";
+import {
+  materializeCronJobsStoreOwners,
+  type PreparedCronOwnerRollback,
+} from "../../../cron/store/owner-migration.js";
 import type { CronJob } from "../../../cron/types.js";
 import { formatErrorMessage as errorMessage } from "../../../infra/errors.js";
 import { shortenHomePath } from "../../../utils.js";
@@ -57,6 +61,7 @@ export type LegacyCronRepairState = {
   legacyImportCount: number;
   sqliteProjectionBackfillCount: number;
   rawJobs: Array<Record<string, unknown>>;
+  legacyJobsToImport: Array<Record<string, unknown>>;
 };
 
 export type LegacyCronRepairResult = {
@@ -64,6 +69,84 @@ export type LegacyCronRepairResult = {
   warnings: string[];
   codexRuntimePolicyTargets?: CronCodexRuntimePolicyTarget[];
 };
+
+/** Persists the retired config default onto legacy cron rows that have no scoped owner. */
+export async function materializeLegacyDefaultCronJobOwners(params: {
+  cfg: OpenClawConfig;
+  legacyDefaultAgentId: string;
+  repairState?: LegacyCronRepairState | null;
+  storePath?: string;
+  env?: NodeJS.ProcessEnv;
+  expectedStoreEpoch?: number;
+  recordCommittedStoreEpoch?: (storeEpoch: number) => void;
+  recordLegacyReceiptCreated?: () => void;
+  recordPreparedRollback?: (rollback: PreparedCronOwnerRollback) => void;
+}): Promise<LegacyCronRepairResult> {
+  let state: LegacyCronRepairState | null;
+  if (params.repairState !== undefined) {
+    state = params.repairState;
+  } else {
+    try {
+      state = await loadLegacyCronRepairState({
+        cfg: params.cfg,
+        storePath: params.storePath,
+        env: params.env,
+      });
+    } catch (err) {
+      return { changes: [], warnings: [`Failed reading cron storage: ${errorMessage(err)}`] };
+    }
+  }
+  if (!state || state.rawJobs.length === 0) {
+    return { changes: [], warnings: [] };
+  }
+  const migrationSource = state.legacyMigrationSource;
+  try {
+    if (migrationSource && !state.legacyMigrationAlreadyImported) {
+      await assertLegacyCronMigrationSourceCurrent(migrationSource);
+    }
+    const importedJobIds = new Set(
+      migrationSource && !state.legacyMigrationAlreadyImported
+        ? state.legacyJobsToImport.flatMap((job) =>
+            typeof job.id === "string" && job.id.trim() ? [job.id.trim()] : [],
+          )
+        : [],
+    );
+    const result = await materializeCronJobsStoreOwners({
+      storePath: state.storePath,
+      legacyDefaultAgentId: params.legacyDefaultAgentId,
+      records: state.rawJobs as unknown as CronJob[],
+      legacyImportedJobIds: importedJobIds,
+      expectedStoreEpoch: params.expectedStoreEpoch,
+      ...(migrationSource && !state.legacyMigrationAlreadyImported
+        ? { acquireMetadata: (db) => acquireLegacyCronMigrationReceipt(db, migrationSource) }
+        : {}),
+      recordCommittedStoreEpoch: params.recordCommittedStoreEpoch,
+      recordMetadataAcquired: params.recordLegacyReceiptCreated,
+      recordPreparedRollback: params.recordPreparedRollback,
+      env: params.env,
+    });
+    if (!result.matched) {
+      throw new Error(
+        migrationSource && !state.legacyMigrationAlreadyImported
+          ? "legacy cron import was completed concurrently; retry the config write"
+          : "cron store changed during legacy owner migration; retry the config write",
+      );
+    }
+    return result.rewritten > 0
+      ? {
+          changes: [
+            `Assigned ${result.rewritten} legacy cron job${result.rewritten === 1 ? "" : "s"} to agent "${params.legacyDefaultAgentId}" before retiring the stored default.`,
+          ],
+          warnings: [],
+        }
+      : { changes: [], warnings: [] };
+  } catch (error) {
+    return {
+      changes: [],
+      warnings: [`Failed writing legacy cron owners at ${state.storePath}: ${errorMessage(error)}`],
+    };
+  }
+}
 
 function pluralize(count: number, noun: string) {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
@@ -82,10 +165,13 @@ function readLegacyCronStorePath(cfg: OpenClawConfig): string | undefined {
 
 export async function loadLegacyCronRepairState(params: {
   cfg: OpenClawConfig;
+  storePath?: string;
+  env?: NodeJS.ProcessEnv;
   onlyIfLegacyDetected?: boolean;
   readOnly?: boolean;
 }): Promise<LegacyCronRepairState | null> {
-  const storePath = resolveCronJobsStorePath(readLegacyCronStorePath(params.cfg));
+  const storePath =
+    params.storePath ?? resolveCronJobsStorePath(readLegacyCronStorePath(params.cfg), params.env);
   const quarantinePath = resolveCronQuarantinePath(storePath);
   const legacyStoreDetected = await legacyCronStoreFilesExist(storePath);
   const legacyRunLogDetected = await legacyCronRunLogFilesExist(storePath);
@@ -94,8 +180,8 @@ export async function loadLegacyCronRepairState(params: {
   }
 
   const loaded = params.readOnly
-    ? await loadCronJobsStoreWithConfigJobsReadOnly(storePath)
-    : await loadCronJobsStoreWithConfigJobs(storePath);
+    ? await loadCronJobsStoreWithConfigJobsReadOnly(storePath, params.env)
+    : await loadCronJobsStoreWithConfigJobs(storePath, params.env);
   const currentJobs =
     loaded.configJobs.length > 0
       ? loaded.configJobs.map((job, index) =>
@@ -118,18 +204,20 @@ export async function loadLegacyCronRepairState(params: {
   let legacyImportCount = 0;
   let legacyMigrationSource: LegacyCronMigrationSource | undefined;
   let legacyMigrationAlreadyImported = false;
+  let legacyJobsToImport: Array<Record<string, unknown>> = [];
   if (legacyStoreDetected) {
     const loadedLegacy = await loadLegacyCronStoreForMigration(storePath);
     legacyMigrationSource = loadedLegacy.migrationSource;
     legacyMigrationAlreadyImported = legacyMigrationSource
       ? params.readOnly
-        ? hasLegacyCronMigrationReceiptReadOnly(legacyMigrationSource)
-        : hasLegacyCronMigrationReceipt(legacyMigrationSource)
+        ? hasLegacyCronMigrationReceiptReadOnly(legacyMigrationSource, params.env)
+        : hasLegacyCronMigrationReceipt(legacyMigrationSource, params.env)
       : false;
     if (!legacyMigrationAlreadyImported) {
+      legacyJobsToImport = loadedLegacy.store.jobs as unknown as Array<Record<string, unknown>>;
       const merged = mergeLegacyCronJobs({
         currentJobs: rawJobs,
-        legacyJobs: loadedLegacy.store.jobs as unknown as Array<Record<string, unknown>>,
+        legacyJobs: legacyJobsToImport,
       });
       rawJobs = merged.jobs;
       legacyImportCount = merged.importedCount;
@@ -146,6 +234,7 @@ export async function loadLegacyCronRepairState(params: {
     legacyImportCount,
     sqliteProjectionBackfillCount,
     rawJobs,
+    legacyJobsToImport,
   };
 }
 

@@ -120,7 +120,7 @@ describe("resolveCronJobConfigRevision", () => {
     const { storePath } = await makeStorePath();
     const job: CronJob = {
       ...makeJob(),
-      agentId: undefined,
+      agentId: "main",
       description: undefined,
       payload: {
         kind: "agentTurn",

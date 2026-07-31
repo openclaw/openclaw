@@ -68,7 +68,6 @@ describe("ensureDevGatewayConfig", () => {
         defaults: { workspace: devWorkspace, skipBootstrap: true },
         entries: {
           dev: {
-            default: true,
             workspace: devWorkspace,
             identity: { name: "C3-PO", theme: "protocol droid", emoji: "🤖" },
           },

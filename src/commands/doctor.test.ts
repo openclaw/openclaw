@@ -224,17 +224,49 @@ describe("doctorCommand", () => {
     });
   });
 
-  it("rejects conflicting explicit-store selectors before taking maintenance ownership", async () => {
+  it("accepts an explicit owner for explicit-store maintenance", async () => {
+    mocks.runDoctorSessionSqlite.mockResolvedValueOnce({
+      mode: "compact",
+      targets: [],
+      totals: {
+        archivedTranscriptFiles: 0,
+        archivedUnreferencedJsonlFiles: 0,
+        importedEntries: 0,
+        importedTranscriptEvents: 0,
+        issues: 0,
+        legacyEntries: 0,
+        sqliteEntries: 0,
+        targets: 0,
+        unreferencedJsonlFiles: 0,
+        validatedEntries: 0,
+        validatedTranscriptEvents: 0,
+      },
+    });
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      writeStdout: vi.fn(),
+      writeJson: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
+    const store = path.resolve("stores", "{agentId}", "sessions.json");
+
     await expect(
-      doctorCommand(undefined, {
+      doctorCommand(runtime, {
         sessionSqlite: "compact",
         sessionSqliteAgent: "ops",
-        sessionSqliteStore: path.resolve("stores", "{agentId}", "sessions.json"),
+        sessionSqliteStore: store,
       }),
-    ).rejects.toThrow("--store cannot be combined with --agent or --all-agents");
+    ).rejects.toThrow("exit:0");
 
-    expect(mocks.withDoctorSqliteMaintenanceLock).not.toHaveBeenCalled();
-    expect(mocks.runDoctorSessionSqlite).not.toHaveBeenCalled();
+    expect(mocks.withDoctorSqliteMaintenanceLock).toHaveBeenCalledOnce();
+    expect(mocks.runDoctorSessionSqlite).toHaveBeenCalledWith({
+      mode: "compact",
+      store,
+      agent: "ops",
+    });
   });
 
   it("writes shared-state sqlite compaction JSON through the runtime", async () => {

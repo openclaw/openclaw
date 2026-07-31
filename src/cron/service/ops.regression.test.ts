@@ -25,6 +25,7 @@ import {
 import { CommandLane } from "../../process/lanes.js";
 import { isCronJobActive } from "../active-jobs.js";
 import { loadCronStore, saveCronStore } from "../store.js";
+import type { CronStoreFile } from "../types.js";
 import { start } from "./ops-lifecycle.js";
 import { remove, update } from "./ops-mutations.js";
 import { enqueueRun, run } from "./ops-run.js";
@@ -190,7 +191,7 @@ describe("cron service ops regressions", () => {
       requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(),
     });
-    state.store = {
+    const malformedStore = {
       version: 1,
       jobs: [
         {
@@ -204,10 +205,11 @@ describe("cron service ops regressions", () => {
           state: undefined as never,
         },
       ],
-    };
+    } satisfies CronStoreFile;
+    await saveCronStore(store.storePath, malformedStore);
 
     await expect(start(state)).resolves.toBeUndefined();
-    expect(state.store.jobs[0]?.state.nextRunAtMs).toBe(scheduledAt);
+    expect(state.store?.jobs[0]?.state.nextRunAtMs).toBe(scheduledAt);
     if (state.timer) {
       clearTimeout(state.timer);
       state.timer = null;

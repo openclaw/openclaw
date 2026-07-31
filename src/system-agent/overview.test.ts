@@ -43,11 +43,11 @@ describe("loadSystemAgentOverview", () => {
   it("summarizes config, agents, model, tools, and gateway", async () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {
-        defaults: { model: { primary: "openai/gpt-5.2" } },
-        list: [
-          { id: "main", default: true },
-          { id: "work", name: "Work" },
-        ],
+        defaults: {
+          model: { primary: "openai/gpt-5.2" },
+          systemAgent: { agentId: "main" },
+        },
+        list: [{ id: "main" }, { id: "work", name: "Work" }],
       },
       gateway: { port: 19001 },
     };

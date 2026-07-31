@@ -32,6 +32,7 @@ vi.mock("../gateway-rpc.js", async () => {
 vi.mock("../../runtime.js", () => ({ defaultRuntime: mocks.runtime }));
 
 const { registerCronCli } = await import("../cron-cli.js");
+let syntheticStoreId = 0;
 
 function createJob(index: number, overrides: Partial<CronJob> = {}): CronJob {
   return {
@@ -56,7 +57,10 @@ function installRealCronGateway(
     transformListPage?: (page: unknown, listCall: number) => unknown;
   } = {},
 ) {
-  const state = createMockCronStateForJobs({ jobs });
+  const state = createMockCronStateForJobs({ jobs, nowMs: 0 });
+  // Read maintenance may persist normalized schedules. Give each harness its
+  // own logical SQLite partition so prior cases cannot stale its epoch.
+  state.deps.storePath = `/mock/cron-pagination-${process.pid}-${syntheticStoreId++}.json`;
   let listCalls = 0;
   const cron = {
     listPage: async (params: Parameters<typeof listPage>[1]) => {

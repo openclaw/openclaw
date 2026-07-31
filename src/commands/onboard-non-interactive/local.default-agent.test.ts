@@ -202,7 +202,7 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
     expect(mocks.ensureWorkspaceAndSessions).not.toHaveBeenCalled();
   });
 
-  it("provisions and reports the keyed default agent while preserving the global workspace", async () => {
+  it("targets the selected keyed agent when --workspace matches the inherited default", async () => {
     const baseConfig = {
       agents: {
         defaults: { workspace: "/tmp/global-workspace" },
@@ -237,17 +237,208 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
         nextConfig: expect.objectContaining({
           agents: expect.objectContaining({
             defaults: expect.objectContaining({ workspace: "/tmp/global-workspace" }),
+            entries: expect.objectContaining({
+              ops: expect.objectContaining({ workspace: "/tmp/global-workspace" }),
+            }),
           }),
         }),
       }),
     );
     expect(mocks.ensureWorkspaceAndSessions).toHaveBeenCalledWith(
-      "/tmp/ops-workspace",
+      "/tmp/global-workspace",
       runtime,
       expect.objectContaining({ agentId: "ops" }),
     );
     expect(mocks.logJson).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceDir: "/tmp/ops-workspace" }),
+      expect.objectContaining({ workspaceDir: "/tmp/global-workspace" }),
+    );
+  });
+
+  it("authenticates a selected agent in its requested workspace", async () => {
+    await runNonInteractiveLocalSetup({
+      opts: {
+        nonInteractive: true,
+        mode: "local",
+        agent: "ops",
+        workspace: "/tmp/new-ops-workspace",
+        authChoice: "demo-api-key",
+        skipHooks: true,
+        skipSkills: true,
+        skipHealth: true,
+        installDaemon: false,
+      },
+      runtime,
+      baseConfig: {
+        agents: {
+          ownership: "explicit",
+          entries: {
+            ops: { workspace: "/tmp/old-ops-workspace" },
+            research: {},
+          },
+        },
+      },
+    });
+
+    expect(mocks.applyAuthChoice).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nextConfig: expect.objectContaining({
+          agents: expect.objectContaining({
+            entries: expect.objectContaining({
+              ops: expect.objectContaining({ workspace: "/tmp/new-ops-workspace" }),
+            }),
+          }),
+        }),
+        target: expect.objectContaining({
+          agentId: "ops",
+          workspaceDir: "/tmp/new-ops-workspace",
+        }),
+      }),
+    );
+  });
+
+  it("authenticates a newly selected first agent in its requested workspace", async () => {
+    await runNonInteractiveLocalSetup({
+      opts: {
+        nonInteractive: true,
+        mode: "local",
+        agent: "ops",
+        workspace: "/tmp/new-ops-workspace",
+        authChoice: "demo-api-key",
+        skipHooks: true,
+        skipSkills: true,
+        skipHealth: true,
+        installDaemon: false,
+      },
+      runtime,
+      baseConfig: {},
+    });
+
+    expect(mocks.applyAuthChoice).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nextConfig: expect.objectContaining({
+          agents: expect.objectContaining({
+            entries: expect.objectContaining({
+              ops: expect.objectContaining({ workspace: "/tmp/new-ops-workspace" }),
+            }),
+          }),
+        }),
+        target: expect.objectContaining({
+          agentId: "ops",
+          workspaceDir: "/tmp/new-ops-workspace",
+        }),
+      }),
+    );
+  });
+
+  it("keeps a sole agent workspace when an unselected rerun reports a conflict", async () => {
+    await runNonInteractiveLocalSetup({
+      opts: {
+        nonInteractive: true,
+        mode: "local",
+        workspace: "/tmp/requested-workspace",
+        authChoice: "demo-api-key",
+        skipHooks: true,
+        skipSkills: true,
+        skipHealth: true,
+        installDaemon: false,
+      },
+      runtime,
+      baseConfig: {
+        agents: {
+          defaults: { workspace: "/tmp/current-workspace" },
+          entries: { ops: { workspace: "/tmp/current-workspace" } },
+        },
+      },
+    });
+
+    expect(mocks.applyAuthChoice).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: expect.objectContaining({ workspaceDir: "/tmp/current-workspace" }),
+      }),
+    );
+    expect(mocks.commitConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nextConfig: expect.objectContaining({
+          agents: expect.objectContaining({
+            entries: expect.objectContaining({
+              ops: expect.objectContaining({ workspace: "/tmp/current-workspace" }),
+            }),
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("rejects changing an include-owned selected agent workspace", async () => {
+    await expect(
+      runNonInteractiveLocalSetup({
+        opts: {
+          nonInteractive: true,
+          mode: "local",
+          agent: "ops",
+          workspace: "/tmp/new-ops-workspace",
+          authChoice: "demo-api-key",
+          skipHooks: true,
+          skipSkills: true,
+          skipHealth: true,
+          installDaemon: false,
+        },
+        runtime,
+        agentRosterIncludeOwned: true,
+        baseConfig: {
+          agents: {
+            ownership: "explicit",
+            entries: {
+              ops: { workspace: "/tmp/ops-workspace" },
+              research: {},
+            },
+          },
+        },
+      }),
+    ).rejects.toThrow(
+      "Cannot set agents.entries.ops.workspace because the agent roster is $include-owned",
+    );
+    expect(mocks.applyAuthChoice).not.toHaveBeenCalled();
+    expect(mocks.commitConfig).not.toHaveBeenCalled();
+  });
+
+  it("keeps an include-owned sole workspace when an unselected override differs", async () => {
+    await expect(
+      runNonInteractiveLocalSetup({
+        opts: {
+          nonInteractive: true,
+          mode: "local",
+          workspace: "/tmp/requested-workspace",
+          authChoice: "demo-api-key",
+          skipHooks: true,
+          skipSkills: true,
+          skipHealth: true,
+          installDaemon: false,
+        },
+        runtime,
+        agentRosterIncludeOwned: true,
+        baseConfig: {
+          agents: { entries: { ops: { workspace: "/tmp/current-workspace" } } },
+        },
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(mocks.applyAuthChoice).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: expect.objectContaining({
+          agentId: "ops",
+          workspaceDir: "/tmp/current-workspace",
+        }),
+      }),
+    );
+    expect(mocks.commitConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nextConfig: expect.objectContaining({
+          agents: expect.objectContaining({
+            entries: { ops: expect.objectContaining({ workspace: "/tmp/current-workspace" }) },
+          }),
+        }),
+      }),
     );
   });
 });

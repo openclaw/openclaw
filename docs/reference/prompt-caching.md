@@ -153,6 +153,7 @@ Keep a long-lived baseline on your main agent, disable caching on bursty notifie
 
 ```yaml
 agents:
+  ownership: "explicit"
   defaults:
     model:
       primary: "anthropic/claude-opus-4-6"
@@ -160,12 +161,11 @@ agents:
       "anthropic/claude-opus-4-6":
         params:
           cacheRetention: "long"
-  list:
-    - id: "research"
-      default: true
+  entries:
+    research:
       heartbeat:
         every: "55m"
-    - id: "alerts"
+    alerts:
       params:
         cacheRetention: "none"
 ```

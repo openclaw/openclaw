@@ -37,7 +37,7 @@ describe("security audit rosterless configs", () => {
 
   it("distinguishes an authored empty roster from an absent pre-roster source", async () => {
     const { stateDir, workspaceDir } = makeAuditPaths("authored-empty-roster");
-    const config = { agents: { entries: { main: { default: true } } } } as never;
+    const config = { agents: { entries: { main: {} } } } as never;
     const baseOptions = {
       config,
       stateDir,
@@ -54,54 +54,35 @@ describe("security audit rosterless configs", () => {
     });
     expect(authoredEmpty.findings).toContainEqual(
       expect.objectContaining({
-        checkId: "config.agent_roster.invalid_default_count",
-        detail: expect.stringContaining("found 0"),
+        checkId: "config.agent_roster.empty",
+        detail: expect.stringContaining("at least one configured agent"),
       }),
     );
 
     const absent = await runSecurityAudit({ ...baseOptions, sourceConfig: {} });
     expect(absent.findings).not.toContainEqual(
-      expect.objectContaining({ checkId: "config.agent_roster.invalid_default_count" }),
+      expect.objectContaining({ checkId: "config.agent_roster.empty" }),
     );
   });
 
-  it.each([
-    {
-      label: "an explicitly empty roster",
-      entries: {},
-      expectedCount: 0,
-    },
-    {
-      label: "no default",
-      entries: { main: {}, ops: {} },
-      expectedCount: 0,
-    },
-    {
-      label: "multiple defaults",
-      entries: { main: { default: true }, ops: { default: true } },
-      expectedCount: 2,
-    },
-  ])(
-    "reports a malformed roster with $label without aborting",
-    async ({ entries, expectedCount }) => {
-      const { stateDir, workspaceDir } = makeAuditPaths("malformed-roster");
+  it("reports an explicitly empty roster without aborting", async () => {
+    const { stateDir, workspaceDir } = makeAuditPaths("malformed-roster");
 
-      const report = await runSecurityAudit({
-        config: { agents: { entries } } as never,
-        stateDir,
-        configPath: path.join(stateDir, "openclaw.json"),
-        workspaceDir,
-        env: {},
-        includeFilesystem: true,
-        includeChannelSecurity: false,
-      });
+    const report = await runSecurityAudit({
+      config: { agents: { entries: {} } } as never,
+      stateDir,
+      configPath: path.join(stateDir, "openclaw.json"),
+      workspaceDir,
+      env: {},
+      includeFilesystem: true,
+      includeChannelSecurity: false,
+    });
 
-      expect(report.findings).toContainEqual(
-        expect.objectContaining({
-          checkId: "config.agent_roster.invalid_default_count",
-          detail: expect.stringContaining(`found ${expectedCount}`),
-        }),
-      );
-    },
-  );
+    expect(report.findings).toContainEqual(
+      expect.objectContaining({
+        checkId: "config.agent_roster.empty",
+        detail: expect.stringContaining("at least one configured agent"),
+      }),
+    );
+  });
 });

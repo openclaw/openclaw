@@ -43,6 +43,13 @@ function requireConfigObject(value: unknown, label: string): Record<string, unkn
   return value as Record<string, unknown>;
 }
 
+function configAgentEntries(config: Record<string, unknown>): Record<string, unknown> {
+  return requireConfigObject(
+    requireConfigObject(config.agents, "agents").entries,
+    "agents.entries",
+  );
+}
+
 beforeAll(async () => {
   sharedTempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-config-"));
   startedServer = await startServerWithClient(undefined, { controlUiEnabled: true });
@@ -1036,6 +1043,7 @@ describe("gateway config methods", () => {
 
     try {
       const before = await getCurrentConfigObject();
+      const beforeEntries = structuredClone(configAgentEntries(before.config));
       const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
         raw: JSON.stringify({ agents: { entries: { main: { skills: ["alpha"] } } } }),
         baseHash: before.hash,
@@ -1047,9 +1055,7 @@ describe("gateway config methods", () => {
       );
       const after = await getCurrentConfigObject();
       expect(after.hash).toBe(before.hash);
-      expect((after.config.agents as { entries?: Record<string, unknown> }).entries).toEqual(
-        agents.entries,
-      );
+      expect(configAgentEntries(after.config)).toEqual(beforeEntries);
     } finally {
       await restoreConfigFileForTest(original);
     }
@@ -1071,6 +1077,7 @@ describe("gateway config methods", () => {
 
     try {
       const before = await getCurrentConfigObject();
+      const beforeEntries = structuredClone(configAgentEntries(before.config));
       const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
         raw: JSON.stringify({ agents: { entries: { main: { skills: ["alpha"] } } } }),
         baseHash: before.hash,
@@ -1083,9 +1090,7 @@ describe("gateway config methods", () => {
       );
       const after = await getCurrentConfigObject();
       expect(after.hash).toBe(before.hash);
-      expect((after.config.agents as { entries?: Record<string, unknown> }).entries).toEqual(
-        agents.entries,
-      );
+      expect(configAgentEntries(after.config)).toEqual(beforeEntries);
     } finally {
       await restoreConfigFileForTest(original);
     }
@@ -1171,6 +1176,8 @@ describe("gateway config methods", () => {
 
     try {
       const before = await getCurrentConfigObject();
+      const beforeEntries = structuredClone(configAgentEntries(before.config));
+      const beforeMain = requireConfigObject(beforeEntries.main, "agents.entries.main");
       const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
         raw: JSON.stringify({ agents: { entries: { main: { skills: ["alpha"] } } } }),
         baseHash: before.hash,
@@ -1179,8 +1186,9 @@ describe("gateway config methods", () => {
 
       expect(res.ok).toBe(true);
       const after = await getCurrentConfigObject();
-      expect((after.config.agents as { entries?: Record<string, unknown> }).entries).toEqual({
-        main: { default: true, skills: ["alpha"] },
+      expect(configAgentEntries(after.config)).toEqual({
+        ...beforeEntries,
+        main: { ...beforeMain, skills: ["alpha"] },
         worker: { skills: ["gamma"] },
       });
     } finally {

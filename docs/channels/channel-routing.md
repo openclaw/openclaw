@@ -90,11 +90,16 @@ Routing picks **one agent** for each inbound message:
 6. **Team match** (Slack) via `teamId`.
 7. **Account match** (`accountId` on the channel).
 8. **Channel match** (any account on that channel, `accountId: "*"`).
-9. **Default agent** (`agents.entries.*.default`, else first list entry, fallback to `main`).
+9. **Sole configured agent**. When more than one agent is configured, add a
+   matching binding; OpenClaw fails closed instead of choosing an agent.
 
 When a binding includes multiple match fields (`peer`, `guildId`, `teamId`, `roles`), **all provided fields must match** for that binding to apply.
 
 The matched agent determines which workspace and session store are used.
+
+For a multi-agent fleet, give every configured inbound channel a channel-wide
+owner with `openclaw agents bind --agent <id> --bind <channel>:*`, then add more
+specific peer, guild, team, or account bindings where needed.
 
 ## Broadcast groups (run multiple agents)
 

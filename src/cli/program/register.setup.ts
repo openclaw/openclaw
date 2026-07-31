@@ -117,7 +117,11 @@ async function runOnboardingEntry(
     }
     const { setupCommand } = await import("../../commands/setup.js");
     await setupCommand(
-      { workspace: optionalString(options.workspace), json: Boolean(options.json) },
+      {
+        workspace: optionalString(options.workspace),
+        agent: optionalString(options.agent),
+        json: Boolean(options.json),
+      },
       runtime,
     );
     return;
@@ -225,6 +229,7 @@ export function registerSetupCommand(program: Command): void {
 
   command
     .option("--gateway-port <port>", "Gateway port")
+    .option("--agent <id>", "Agent id for baseline workspace setup")
     .option("--gateway-bind <mode>", "Gateway bind: loopback|tailnet|lan|auto|custom")
     .option("--gateway-auth <mode>", "Gateway auth: token|password")
     .option("--gateway-token <token>", "Gateway token (token auth)")

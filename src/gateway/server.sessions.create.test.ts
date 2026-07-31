@@ -20,6 +20,7 @@ import { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-
 import {
   loadSessionEntry,
   loadTranscriptEvents,
+  persistSessionTranscriptTurn,
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
@@ -2643,11 +2644,70 @@ test("sessions.get reads selected global messages from the requested agent store
 test("sessions.create sends selected global initial tasks to the requested agent", async () => {
   const { mainStorePath, workStorePath } = await createSelectedGlobalSessionStore();
   const { ws } = await openClient();
+  let dispatchedSessionId: string | undefined;
+  const observedDispatchContexts: unknown[] = [];
+  dispatchInboundMessageMock.mockImplementation(async (paramsValue: unknown) => {
+    const params = paramsValue as {
+      ctx: {
+        AgentId?: string;
+        Body?: string;
+        RawBody?: string;
+        SessionId?: string;
+        SessionKey?: string;
+      };
+      replyOptions?: {
+        expectedExistingSessionId?: string;
+        onAgentRunStart?: (runId: string) => void;
+        requestedSessionId?: string;
+        runId?: string;
+      };
+    };
+    observedDispatchContexts.push(params.ctx);
+    if (
+      params.ctx.AgentId !== "work" ||
+      params.ctx.RawBody !== "hello selected global" ||
+      params.ctx.SessionKey !== "global"
+    ) {
+      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+    }
+    dispatchedSessionId = requireNonEmptyString(
+      params.replyOptions?.requestedSessionId ?? params.replyOptions?.expectedExistingSessionId,
+      "selected global ingress session id",
+    );
+    const persisted = await persistSessionTranscriptTurn(
+      {
+        agentId: "work",
+        sessionId: dispatchedSessionId,
+        sessionKey: "global",
+        storePath: workStorePath,
+      },
+      {
+        cwd: process.cwd(),
+        updateMode: "none",
+        messages: [
+          {
+            message: {
+              role: "user",
+              content: params.ctx.RawBody ?? "",
+              timestamp: Date.now(),
+            },
+            now: Date.now(),
+          },
+        ],
+      },
+    );
+    expect(persisted.appendedCount).toBe(1);
+    params.replyOptions?.onAgentRunStart?.(
+      requireNonEmptyString(params.replyOptions.runId, "selected global run id"),
+    );
+    return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+  });
 
   const created = await rpcReq<{
     key?: string;
     runStarted?: boolean;
     runId?: string;
+    runError?: unknown;
   }>(ws, "sessions.create", {
     key: "global",
     agentId: "work",
@@ -2657,15 +2717,28 @@ test("sessions.create sends selected global initial tasks to the requested agent
   expect(created.ok).toBe(true);
   expect(created.payload?.key).toBe("global");
   expect(created.payload?.runStarted).toBe(true);
+  expect(created.payload?.runError).toBeUndefined();
   const runId = requireNonEmptyString(created.payload?.runId, "selected global run id");
   const wait = await rpcReq(ws, "agent.wait", { runId, timeoutMs: 1_000 });
   expect(wait.ok).toBe(true);
+  await expect
+    .poll(() => observedDispatchContexts)
+    .toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          AgentId: "work",
+          Body: expect.stringContaining("hello selected global"),
+          SessionKey: "global",
+        }),
+      ]),
+    );
   const workEntry = loadSessionEntry({
     agentId: "work",
     sessionKey: "global",
     storePath: workStorePath,
   });
   const workSessionId = requireNonEmptyString(workEntry?.sessionId, "selected global session id");
+  await expect.poll(() => dispatchedSessionId).toBe(workSessionId);
   await expect(
     loadTranscriptEvents({
       agentId: "work",
@@ -3109,7 +3182,6 @@ test("sessions.create rejects fork while the parent session is active", async ()
 test("sessions.create resolves an agent-qualified fork from the parent store", async () => {
   const { dir } = await createSessionStoreDir();
   const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
-  const mainStorePath = storeTemplate.replace("{agentId}", "main");
   const workStorePath = storeTemplate.replace("{agentId}", "work");
   const workDir = path.dirname(workStorePath);
   testState.sessionStorePath = storeTemplate;
@@ -3151,7 +3223,7 @@ test("sessions.create resolves an agent-qualified fork from the parent store", a
     });
 
     expect(created.ok, JSON.stringify(created.error)).toBe(true);
-    expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
+    expect(created.payload?.key).toMatch(/^agent:work:dashboard:/);
     expect(created.payload?.entry?.parentSessionKey).toBe("agent:work:main");
     expect(created.payload?.entry?.forkSource).toEqual({
       sessionKey: "agent:work:main",
@@ -3166,7 +3238,7 @@ test("sessions.create resolves an agent-qualified fork from the parent store", a
           "agent-qualified forked session id",
         ),
         sessionKey: created.payload?.key ?? "",
-        storePath: mainStorePath,
+        storePath: workStorePath,
       }),
     ).resolves.toEqual(
       expect.arrayContaining([

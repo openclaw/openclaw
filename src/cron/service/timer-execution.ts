@@ -17,7 +17,7 @@ import type {
 } from "../types.js";
 import { abortErrorMessage, timeoutErrorMessage } from "./execution-errors.js";
 import { resolveJobPayloadTextForMain } from "./jobs.js";
-import type { CronServiceState } from "./state.js";
+import { type CronServiceState, resolveCronServiceDefaultAgentId } from "./state.js";
 import { resolveMainSessionCronRunSessionKey } from "./task-runs.js";
 import {
   type CronTriggerEvalOutcome,
@@ -247,7 +247,7 @@ async function executeMainSessionCronJob(
   const cronRunSessionKey = resolveMainSessionCronRunSessionKey(
     job,
     cronStartedAt,
-    state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
+    resolveCronServiceDefaultAgentId(state.deps),
   );
   const deliveryContext = resolveMainSessionCronDeliveryContext(state, job);
   // Main-session jobs enqueue text into a per-run child session so each cron

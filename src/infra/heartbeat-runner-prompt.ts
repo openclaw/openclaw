@@ -3,6 +3,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isHeartbeatContentEffectivelyEmpty } from "../auto-reply/heartbeat.js";
 import { listDueCommitmentsForSession } from "../commitments/store.js";
 import type { CommitmentRecord } from "../commitments/types.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readHeartbeatMonitorScratch } from "../cron/scratch-store.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
@@ -31,6 +32,7 @@ import {
   type HeartbeatWakePayloadFlags,
 } from "./heartbeat-wake-policy.js";
 import type { HeartbeatScheduledTask, HeartbeatWakeSource } from "./heartbeat-wake.js";
+import { resolveSystemEventQueueKey } from "./system-event-queue-key.js";
 import {
   peekSystemEventEntries,
   resolveSystemEventDeliveryContext,
@@ -137,8 +139,27 @@ export async function resolveHeartbeatPreflight(params: {
     params.heartbeat,
     params.forcedSessionKey,
   );
+  const physicalEventQueueKey = resolveSystemEventQueueKey({
+    sessionKey: session.sessionKey,
+    agentId: params.agentId,
+  });
+  const eventQueueKeys = new Set([physicalEventQueueKey]);
+  const legacyQueueOwnerId = tryResolveLegacyCompatibilityAgentId(params.cfg);
+  // The raw global queue predates per-agent physical queues. Only its compatibility
+  // owner may drain it, or one fleet heartbeat could consume another agent's event.
+  if (physicalEventQueueKey === session.sessionKey || legacyQueueOwnerId === params.agentId) {
+    eventQueueKeys.add(session.sessionKey);
+  }
   const pendingEventEntries =
-    params.runScope === "commitment-only" ? [] : peekSystemEventEntries(session.sessionKey);
+    params.runScope === "commitment-only"
+      ? []
+      : [...eventQueueKeys]
+          .flatMap((sessionKey) =>
+            peekSystemEventEntries(sessionKey).map((event) =>
+              Object.assign({}, event, { sourceQueueKey: sessionKey }),
+            ),
+          )
+          .toSorted((left, right) => left.ts - right.ts);
   const dueCommitments = canHeartbeatDeliverCommitments(params.heartbeat)
     ? selectCommitmentDeliveryBatch(
         await listDueCommitmentsForSession({
@@ -174,8 +195,8 @@ export async function resolveHeartbeatPreflight(params: {
   const shouldInspectPendingEvents =
     wakeFlags.isExecEventWake ||
     wakeFlags.isCronWake ||
-    shouldInspectWakePendingEvents ||
-    hasTaggedCronEvents;
+    hasTaggedCronEvents ||
+    (wakeFlags.isWakePayload ? shouldInspectWakePendingEvents : pendingEventEntries.length > 0);
   const shouldBypassFileGates =
     params.runScope === "commitment-only" ||
     wakeFlags.isExecEventWake ||
@@ -285,6 +306,21 @@ export function resolveHeartbeatRunPrompt(params: {
   const hasRelayableExecCompletion =
     params.canRelayToUser && execEvents.some((event) => isRelayableExecCompletionEvent(event));
   const hasCronEvents = cronEvents.length > 0;
+  // Specialized prompts consume only their matching entries; generic events
+  // stay queued for a later turn instead of competing with exec/cron delivery.
+  const genericEvents =
+    !hasExecCompletion && !hasCronEvents && params.preflight.shouldInspectPendingEvents
+      ? pendingEventEntries
+          .filter(
+            (event) =>
+              !isExecCompletionEvent(event.text) &&
+              !(
+                (params.preflight.isCronWake || event.contextKey?.startsWith("cron:")) &&
+                isCronSystemEvent(event.text)
+              ),
+          )
+          .map((event) => event.text)
+      : [];
   const commitmentPrompt = buildCommitmentHeartbeatPrompt({
     commitments: params.preflight.dueCommitments,
     useHeartbeatResponseTool: false,
@@ -352,9 +388,11 @@ ${completionInstruction}`;
     basePrompt,
     params.heartbeatScratchContent,
   );
-  const prompt = commitmentPrompt
-    ? `${basePromptWithDirectives}\n\n${commitmentPrompt}`
-    : basePromptWithDirectives;
+  const promptWithEvents =
+    genericEvents.length > 0
+      ? `${basePromptWithDirectives}\n\nPending system events:\n${genericEvents.join("\n")}`
+      : basePromptWithDirectives;
+  const prompt = commitmentPrompt ? `${promptWithEvents}\n\n${commitmentPrompt}` : promptWithEvents;
 
   return {
     prompt,

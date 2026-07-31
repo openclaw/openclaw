@@ -423,7 +423,7 @@ describe("maybeRepairLegacyOAuthSidecarProfiles", () => {
     }
   });
 
-  it("migrates every store before removing a shared legacy sidecar", async () => {
+  it("migrates main inheritance for an explicit fleet without a main entry", async () => {
     const seed = "shared-sidecar-seed";
     const state = await makeTestState(seed);
     const profileId = "openai-codex:default";
@@ -464,9 +464,12 @@ describe("maybeRepairLegacyOAuthSidecarProfiles", () => {
     );
 
     const result = await maybeRepairLegacyOAuthSidecarProfiles({
-      cfg: {},
+      cfg: {
+        agents: { ownership: "explicit", entries: { worker: {}, research: {} } },
+      },
       prompter: makePrompter(true),
       now: () => 456,
+      env: state.env,
     });
 
     expect(result.detected).toEqual([mainAuthPath, workerAuthPath]);

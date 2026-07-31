@@ -1,19 +1,33 @@
 // Cron service store tests cover persisted service state loading and writes.
 import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { materializeLegacyDefaultCronJobOwners } from "../legacy-default-agent-owner-migration.js";
+import * as legacyOwnerMigrationModule from "../legacy-default-agent-owner-migration.js";
 import { setupCronServiceSuite } from "../service.test-harness.js";
 import * as cronStoreModule from "../store.js";
-import { loadCronStore, saveCronStore } from "../store.js";
+import { CronStoreEpochMismatchError, loadCronStore, saveCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
 import { findJobOrThrow } from "./jobs.js";
+import { completeConfigAdoption, reloadForConfigAdoption } from "./ops-lifecycle.js";
 import { createCronServiceState } from "./state.js";
-import { ensureLoaded, persist } from "./store.js";
+import { ensureLoaded, persist, persistOrRestore, snapshotStoreForRollback } from "./store.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-service-store-seam",
 });
 
 const STORE_TEST_NOW = Date.parse("2026-03-23T12:00:00.000Z");
+
+function incomingRoster(...agentIds: string[]): OpenClawConfig {
+  return {
+    agents: {
+      ownership: "explicit",
+      entries: Object.fromEntries(agentIds.map((agentId) => [agentId, {}])),
+    },
+  };
+}
 
 async function writeSingleJobStore(storePath: string, job: Record<string, unknown>) {
   await writeJobStore(storePath, [job]);
@@ -166,6 +180,308 @@ describe("cron service store seam coverage", () => {
     expect(state.durableNextRunAtMsByJobId.get(job.id)).toBeUndefined();
   });
 
+  it("refuses a stale cross-process full-store write and reloads the newer epoch", async () => {
+    const { storePath } = await makeStorePath();
+    await writeSingleJobStore(storePath, createReloadCronJob({ id: "legacy-ownerless" }));
+    const state = createStoreTestState(storePath);
+    await ensureLoaded(state, { skipRecompute: true });
+    state.store?.jobs.push(createReloadCronJob({ id: "stale-only" }));
+
+    await expect(
+      materializeLegacyDefaultCronJobOwners({
+        storePath,
+        legacyDefaultAgentId: "ops",
+      }),
+    ).resolves.toMatchObject({ warnings: [] });
+
+    await expect(persist(state)).rejects.toBeInstanceOf(CronStoreEpochMismatchError);
+    expect(state.store?.jobs).toHaveLength(1);
+    expect(state.store?.jobs[0]).toMatchObject({ id: "legacy-ownerless", agentId: "ops" });
+    expect((await loadCronStore(storePath)).jobs).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "legacy-ownerless", agentId: "ops" })]),
+    );
+    expect((await loadCronStore(storePath)).jobs).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "stale-only" })]),
+    );
+  });
+
+  it("re-arms the scheduler for a due job discovered by an epoch-mismatch reload", async () => {
+    const { storePath } = await makeStorePath();
+    await writeSingleJobStore(storePath, createReloadCronJob({ id: "stale-snapshot" }));
+    const state = createStoreTestState(storePath);
+    await ensureLoaded(state, { skipRecompute: true });
+
+    await saveCronStore(
+      storePath,
+      {
+        version: 1,
+        jobs: [
+          createReloadCronJob({
+            id: "newly-visible-due",
+            state: { nextRunAtMs: STORE_TEST_NOW - 1_000 },
+          }),
+        ],
+      },
+      { expectedStoreEpoch: state.storeEpoch },
+    );
+
+    expect(state.timer).toBeNull();
+    await expect(persist(state)).rejects.toBeInstanceOf(CronStoreEpochMismatchError);
+
+    expect(state.store?.jobs).toEqual([
+      expect.objectContaining({
+        id: "newly-visible-due",
+        state: expect.objectContaining({ nextRunAtMs: STORE_TEST_NOW - 1_000 }),
+      }),
+    ]);
+    expect(state.timer).not.toBeNull();
+  });
+
+  it("reloads externally migrated rows before config adoption", async () => {
+    const { storePath } = await makeStorePath();
+    await writeSingleJobStore(storePath, createReloadCronJob({ id: "external-owner" }));
+    const state = createStoreTestState(storePath);
+    state.deps.defaultAgentId = "ops";
+    await ensureLoaded(state, { skipRecompute: true });
+    expect(state.store?.jobs[0]?.agentId).toBeUndefined();
+
+    await materializeLegacyDefaultCronJobOwners({
+      storePath,
+      legacyDefaultAgentId: "ops",
+    });
+    const migrated = await loadCronStore(storePath);
+    await saveCronStore(storePath, {
+      version: 1,
+      jobs: [...migrated.jobs, createReloadCronJob({ id: "late-ownerless" })],
+    });
+    await reloadForConfigAdoption(state, incomingRoster("ops", "research"));
+
+    expect(state.store?.jobs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "external-owner", agentId: "ops" }),
+        expect.objectContaining({ id: "late-ownerless", agentId: "ops" }),
+      ]),
+    );
+  });
+
+  it("loads and migrates a lazy service before adopting ownerless rows", async () => {
+    const { storePath } = await makeStorePath();
+    await writeSingleJobStore(storePath, createReloadCronJob({ id: "lazy-ownerless" }));
+    const state = createStoreTestState(storePath);
+    state.deps.defaultAgentId = "ops";
+    state.deps.cronEnabled = false;
+    expect(state.store).toBeNull();
+
+    await reloadForConfigAdoption(state, incomingRoster("ops", "research"));
+
+    expect(state.store?.jobs[0]).toMatchObject({ id: "lazy-ownerless", agentId: "ops" });
+    expect((await loadCronStore(storePath)).jobs[0]).toMatchObject({
+      id: "lazy-ownerless",
+      agentId: "ops",
+    });
+  });
+
+  it("prefers and retires the retained legacy owner during lazy config adoption", async () => {
+    const { storePath } = await makeStorePath();
+    await writeSingleJobStore(storePath, createReloadCronJob({ id: "lazy-retained-owner" }));
+    const state = createStoreTestState(storePath);
+    state.deps.defaultAgentId = "research";
+    state.deps.resolveDefaultAgentId = () => "research";
+    state.deps.legacyDefaultAgentId = "ops";
+    state.deps.cronEnabled = false;
+    expect(state.store).toBeNull();
+
+    await reloadForConfigAdoption(state, incomingRoster("ops", "research"));
+
+    expect(state.store?.jobs[0]).toMatchObject({ id: "lazy-retained-owner", agentId: "ops" });
+    expect((await loadCronStore(storePath)).jobs[0]).toMatchObject({
+      id: "lazy-retained-owner",
+      agentId: "ops",
+    });
+    expect(state.deps.legacyDefaultAgentId).toBe("ops");
+    completeConfigAdoption(state, incomingRoster("ops", "research"));
+    expect(state.deps.legacyDefaultAgentId).toBeUndefined();
+  });
+
+  it("keeps the retained owner after adopting a leaf edit on a legacy fleet", async () => {
+    const { storePath } = await makeStorePath();
+    const state = createStoreTestState(storePath);
+    state.deps.legacyDefaultAgentId = "ops";
+    const incomingConfig = retainLegacyDefaultAgentId(
+      {
+        agents: {
+          entries: {
+            ops: { model: "openai/gpt-5.4" },
+            research: {},
+          },
+        },
+      },
+      "ops",
+    );
+
+    await reloadForConfigAdoption(state, incomingConfig);
+    completeConfigAdoption(state, incomingConfig);
+
+    expect(state.deps.legacyDefaultAgentId).toBe("ops");
+  });
+
+  it("reloads but does not migrate rows when the incoming roster removes the old owner", async () => {
+    const { storePath } = await makeStorePath();
+    await writeSingleJobStore(storePath, createReloadCronJob({ id: "departed-owner" }));
+    const state = createStoreTestState(storePath);
+    state.deps.legacyDefaultAgentId = "ops";
+    state.deps.cronEnabled = false;
+
+    await reloadForConfigAdoption(state, incomingRoster("research", "writer"));
+
+    expect(state.store?.jobs[0]).toMatchObject({ id: "departed-owner" });
+    expect(state.store?.jobs[0]?.agentId).toBeUndefined();
+    expect((await loadCronStore(storePath)).jobs[0]?.agentId).toBeUndefined();
+    expect(state.deps.legacyDefaultAgentId).toBe("ops");
+  });
+
+  it("does not pin ownerless rows to a renamed sole agent", async () => {
+    const { storePath } = await makeStorePath();
+    await writeSingleJobStore(storePath, createReloadCronJob({ id: "renamed-sole-owner" }));
+    const state = createStoreTestState(storePath);
+    state.deps.defaultAgentId = "main";
+    state.deps.cronEnabled = false;
+
+    await reloadForConfigAdoption(state, { agents: { entries: { ops: {} } } });
+
+    expect(state.store?.jobs[0]).toMatchObject({ id: "renamed-sole-owner" });
+    expect(state.store?.jobs[0]?.agentId).toBeUndefined();
+    expect((await loadCronStore(storePath)).jobs[0]?.agentId).toBeUndefined();
+  });
+
+  it("aborts config adoption when legacy-owner materialization cannot persist", async () => {
+    const { storePath } = await makeStorePath();
+    await writeSingleJobStore(storePath, createReloadCronJob({ id: "ownerless-warning" }));
+    const state = createStoreTestState(storePath);
+    state.deps.defaultAgentId = "ops";
+    vi.spyOn(legacyOwnerMigrationModule, "materializeLegacyDefaultCronJobOwners").mockResolvedValue(
+      {
+        changes: [],
+        warnings: ["forced epoch conflict"],
+      },
+    );
+
+    await expect(reloadForConfigAdoption(state, incomingRoster("ops", "research"))).rejects.toThrow(
+      "forced epoch conflict",
+    );
+  });
+
+  it("refuses a stale state-only write and preserves replacement runtime state", async () => {
+    const { storePath } = await makeStorePath();
+    const jobId = "state-only-epoch";
+    await writeSingleJobStore(
+      storePath,
+      createReloadCronJob({ id: jobId, state: { nextRunAtMs: STORE_TEST_NOW + 60_000 } }),
+    );
+    const state = createStoreTestState(storePath);
+    await ensureLoaded(state, { skipRecompute: true });
+    const staleJob = findJobOrThrow(state, jobId);
+    staleJob.state.nextRunAtMs = STORE_TEST_NOW + 120_000;
+
+    const replacementNextRunAtMs = STORE_TEST_NOW + 300_000;
+    await saveCronStore(
+      storePath,
+      {
+        version: 1,
+        jobs: [
+          createReloadCronJob({
+            id: jobId,
+            name: "replacement topology",
+            state: { nextRunAtMs: replacementNextRunAtMs },
+          }),
+        ],
+      },
+      { expectedStoreEpoch: state.storeEpoch },
+    );
+
+    await expect(persist(state, { stateOnly: true })).rejects.toBeInstanceOf(
+      CronStoreEpochMismatchError,
+    );
+    expect(state.store?.jobs[0]).toMatchObject({
+      id: jobId,
+      name: "replacement topology",
+      state: { nextRunAtMs: replacementNextRunAtMs },
+    });
+    expect((await loadCronStore(storePath)).jobs[0]?.state.nextRunAtMs).toBe(
+      replacementNextRunAtMs,
+    );
+  });
+
+  it("persists missing wake times discovered during an epoch-conflict reload", async () => {
+    const { storePath } = await makeStorePath();
+    const existing = createReloadCronJob({
+      id: "existing",
+      state: { nextRunAtMs: STORE_TEST_NOW + 60_000 },
+    });
+    await writeSingleJobStore(storePath, existing);
+    const state = createStoreTestState(storePath);
+    await ensureLoaded(state, { skipRecompute: true });
+
+    await saveCronStore(
+      storePath,
+      {
+        version: 1,
+        jobs: [existing, createReloadCronJob({ id: "discovered", state: {} })],
+      },
+      { expectedStoreEpoch: state.storeEpoch },
+    );
+
+    await expect(persist(state)).rejects.toBeInstanceOf(CronStoreEpochMismatchError);
+    expect(state.store?.jobs.find((job) => job.id === "discovered")?.state.nextRunAtMs).toEqual(
+      expect.any(Number),
+    );
+    expect(
+      (await loadCronStore(storePath)).jobs.find((job) => job.id === "discovered")?.state
+        .nextRunAtMs,
+    ).toEqual(expect.any(Number));
+  });
+
+  it("retains the stale-writer barrier after the newer epoch deletes its final job", async () => {
+    const { storePath } = await makeStorePath();
+    await writeSingleJobStore(storePath, createReloadCronJob({ id: "last-ownerless" }));
+    const state = createStoreTestState(storePath);
+    await ensureLoaded(state, { skipRecompute: true });
+
+    await materializeLegacyDefaultCronJobOwners({
+      storePath,
+      legacyDefaultAgentId: "ops",
+    });
+    await saveCronStore(storePath, { version: 1, jobs: [] }, { expectedStoreEpoch: 2 });
+
+    await expect(persist(state)).rejects.toBeInstanceOf(CronStoreEpochMismatchError);
+    expect(state.store?.jobs).toEqual([]);
+    expect((await loadCronStore(storePath)).jobs).toEqual([]);
+  });
+
+  it("never restores a stale snapshot when the epoch reload also fails", async () => {
+    const { storePath } = await makeStorePath();
+    await writeSingleJobStore(storePath, createReloadCronJob({ id: "reload-failure" }));
+    const state = createStoreTestState(storePath);
+    await ensureLoaded(state, { skipRecompute: true });
+    const snapshot = snapshotStoreForRollback(state);
+    await materializeLegacyDefaultCronJobOwners({
+      storePath,
+      legacyDefaultAgentId: "ops",
+    });
+    vi.spyOn(cronStoreModule, "loadCronJobsStoreWithConfigJobs").mockRejectedValueOnce(
+      new Error("reload unavailable"),
+    );
+
+    await expect(persistOrRestore(state, snapshot)).rejects.toBeInstanceOf(
+      CronStoreEpochMismatchError,
+    );
+    expect(state.store).toBeNull();
+    expect((await loadCronStore(storePath)).jobs[0]).toMatchObject({
+      id: "reload-failure",
+      agentId: "ops",
+    });
+  });
+
   it("advances durable wake state while suppressing duplicate scheduled delivery", async () => {
     const { storePath } = await makeStorePath();
     const initialNextRunAtMs = STORE_TEST_NOW + 60_000;
@@ -281,6 +597,7 @@ describe("cron service store seam coverage", () => {
     await persist(state, { stateOnly: true });
 
     expect(onEvent).not.toHaveBeenCalled();
+    expect(state.store.jobs.map((job) => job.id)).toEqual(["durable-state-only-job"]);
     expect([...state.durableNextRunAtMsByJobId.keys()]).toEqual(["durable-state-only-job"]);
     expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual([
       "durable-state-only-job",
@@ -338,7 +655,11 @@ describe("cron service store seam coverage", () => {
 
     await persist(state, { stateOnly: true });
 
-    expect(saveStore).toHaveBeenCalledWith(storePath, state.store, undefined);
+    expect(saveStore).toHaveBeenCalledWith(
+      storePath,
+      state.store,
+      expect.objectContaining({ expectedStoreEpoch: 1, expectedRuntimeRevision: 1 }),
+    );
     expect(onEvent).toHaveBeenCalledTimes(1);
     expect(onEvent).toHaveBeenLastCalledWith(
       expect.objectContaining({

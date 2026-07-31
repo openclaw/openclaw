@@ -1,7 +1,11 @@
 // Gateway plugin startup bootstrap.
 // Runs startup maintenance, loads plugin runtime, and prepares advertised methods.
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  listAgentEntries,
+  tryResolveConfiguredAgentWorkspaceDir,
+} from "../agents/agent-scope-config.js";
 import { initSubagentRegistry } from "../agents/subagent-registry.js";
+import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -28,6 +32,23 @@ type GatewayPluginBootstrapLog = {
 type GatewayStartupTrace = {
   detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
 };
+
+function resolveGatewayPluginWorkspaceDir(config: OpenClawConfig): string | undefined {
+  const configured = tryResolveConfiguredAgentWorkspaceDir(config);
+  if (configured) {
+    return configured;
+  }
+  if (listAgentEntries(config).length <= 1) {
+    return resolveDefaultAgentWorkspaceDir();
+  }
+  const explicitLoadPaths = config.plugins?.load?.paths;
+  if (Array.isArray(explicitLoadPaths) && explicitLoadPaths.some((entry) => entry.trim())) {
+    return undefined;
+  }
+  throw new Error(
+    "Multi-agent plugin discovery needs a shared agents.defaults.workspace or explicit plugins.load.paths.",
+  );
+}
 
 /** Returns the config snapshot used by channel/plugin startup maintenance. */
 export function resolveGatewayStartupMaintenanceConfig(params: {
@@ -128,14 +149,17 @@ export async function prepareGatewayPluginBootstrap(params: {
         ambientEnvTriggers: params.ambientEnvTriggers,
       });
   const pluginsGloballyDisabled = gatewayPluginConfig.plugins?.enabled === false;
-  const defaultAgentId = resolveDefaultAgentId(gatewayPluginConfig);
-  const defaultWorkspaceDir = resolveAgentWorkspaceDir(gatewayPluginConfig, defaultAgentId);
+  const pluginWorkspaceDir =
+    params.minimalTestGateway || pluginsGloballyDisabled
+      ? undefined
+      : resolveGatewayPluginWorkspaceDir(gatewayPluginConfig);
+  const defaultWorkspaceDir = pluginWorkspaceDir ?? resolveDefaultAgentWorkspaceDir();
   const pluginLookUpTable =
     params.minimalTestGateway || pluginsGloballyDisabled
       ? undefined
       : loadPluginLookUpTable({
           config: gatewayPluginConfig,
-          workspaceDir: defaultWorkspaceDir,
+          workspaceDir: pluginWorkspaceDir,
           env: process.env,
           activationSourceConfig,
           metadataSnapshot: params.pluginMetadataSnapshot,
@@ -181,7 +205,7 @@ export async function prepareGatewayPluginBootstrap(params: {
       {
         cfg: gatewayPluginConfig,
         activationSourceConfig,
-        workspaceDir: defaultWorkspaceDir,
+        workspaceDir: pluginWorkspaceDir,
         log: params.log,
         baseMethods,
         coreGatewayMethodNames,
@@ -199,7 +223,7 @@ export async function prepareGatewayPluginBootstrap(params: {
       {
         cfg: gatewayPluginConfig,
         activationSourceConfig,
-        workspaceDir: defaultWorkspaceDir,
+        workspaceDir: pluginWorkspaceDir,
         log: params.log,
         baseMethods,
         coreGatewayMethodNames,
@@ -225,6 +249,7 @@ export async function prepareGatewayPluginBootstrap(params: {
   return {
     gatewayPluginConfigAtStart: gatewayPluginConfig,
     defaultWorkspaceDir,
+    pluginWorkspaceDir,
     deferredConfiguredChannelPluginIds,
     startupPluginIds,
     pluginManifestRecords,
@@ -263,7 +288,7 @@ export function warnUnregisteredConfiguredMemoryEmbeddingProviders(params: {
 export async function loadGatewayStartupPluginRuntime(params: {
   cfg: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
-  workspaceDir: string;
+  workspaceDir?: string;
   log: GatewayPluginBootstrapLog;
   baseMethods: string[];
   coreGatewayMethodNames?: readonly string[];

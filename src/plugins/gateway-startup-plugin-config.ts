@@ -7,6 +7,7 @@ import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
   listExplicitlyDisabledChannelIdsForConfig,
   listPotentialConfiguredChannelIds,
+  listPotentialConfiguredChannelPresenceSignals,
   type AmbientEnvTriggerPolicy,
 } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -73,21 +74,37 @@ function isConfigActivationValueEnabled(value: unknown): boolean {
   return true;
 }
 
-export function listPotentialEnabledChannelIds(
+function listPotentialEnabledChannelIds(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
-  ambientEnvTriggers: AmbientEnvTriggerPolicy = "allow",
+  options: {
+    ambientEnvTriggers?: AmbientEnvTriggerPolicy;
+    includePersistedAuthState?: boolean;
+  } = {},
 ): string[] {
   const disabled = new Set(listExplicitlyDisabledChannelIdsForConfig(config));
-  return sortUniquePluginIds([
+  const enabledSignals = [
     ...listPotentialConfiguredChannelIds(config, env, {
       includePersistedAuthState: false,
-      ambientEnvTriggers,
+      ambientEnvTriggers: options.ambientEnvTriggers,
     }),
     ...listExplicitConfiguredChannelIdsForConfig(config),
-  ])
+  ]
     .map((id) => normalizeOptionalLowercaseString(id) ?? "")
     .filter((id) => id && !disabled.has(id));
+  if (options.includePersistedAuthState !== true) {
+    return sortUniquePluginIds(enabledSignals);
+  }
+  const persistedSignals = listPotentialConfiguredChannelPresenceSignals(config, env, {
+    includePersistedAuthState: true,
+    ambientEnvTriggers: options.ambientEnvTriggers,
+  })
+    .filter((signal) => signal.source === "persisted-auth")
+    .map((signal) => normalizeOptionalLowercaseString(signal.channelId) ?? "")
+    .filter(Boolean);
+  // Migration discovery unions only proven persisted-auth evidence back into the
+  // normal enabled set; ordinary config/env signals remain suppressed by enabled:false.
+  return sortUniquePluginIds([...enabledSignals, ...persistedSignals]);
 }
 
 function isGatewayStartupMemoryPlugin(plugin: InstalledPluginIndexRecord): boolean {
@@ -367,14 +384,17 @@ export function collectConfiguredStartupChannelIds(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
+  includePersistedAuthState?: boolean;
 }): string[] {
   return sortUniquePluginIds([
-    ...listPotentialEnabledChannelIds(params.config, params.env, params.ambientEnvTriggers),
-    ...listPotentialEnabledChannelIds(
-      params.activationSourceConfig,
-      params.env,
-      params.ambientEnvTriggers,
-    ),
+    ...listPotentialEnabledChannelIds(params.config, params.env, {
+      ambientEnvTriggers: params.ambientEnvTriggers,
+      includePersistedAuthState: params.includePersistedAuthState,
+    }),
+    ...listPotentialEnabledChannelIds(params.activationSourceConfig, params.env, {
+      ambientEnvTriggers: params.ambientEnvTriggers,
+      includePersistedAuthState: params.includePersistedAuthState,
+    }),
   ]);
 }
 
@@ -419,6 +439,8 @@ export function collectConfigValidationChannelIds(params: {
       config: params.config,
       activationSourceConfig: params.config,
       env: params.env,
+      // Config reads and backup discovery must not create or migrate the state DB.
+      includePersistedAuthState: false,
     }),
     ...collectValidationHeartbeatTargetChannelIds(params.config),
   ]);

@@ -954,16 +954,15 @@ function collectAgentRosterFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
   if (agents.length === 0 && !hasAgentRosterProperty(cfg)) {
     return [];
   }
-  const defaultCount = agents.filter((agent) => agent?.default === true).length;
-  if (defaultCount === 1) {
+  if (agents.length > 0) {
     return [];
   }
   return [
     {
-      checkId: "config.agent_roster.invalid_default_count",
+      checkId: "config.agent_roster.empty",
       severity: "warn",
-      title: "Agent roster has an invalid default selection",
-      detail: `Expected exactly one agents.entries default=true entry, found ${defaultCount}.`,
+      title: "Agent roster is empty",
+      detail: "agents.entries must contain at least one configured agent.",
       remediation: "Run `openclaw doctor --fix` to repair the authored agent roster.",
     },
   ];

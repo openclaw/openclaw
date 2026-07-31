@@ -10,14 +10,14 @@ function targetMap(cfg: OpenClawConfig): Map<string, string[]> {
 }
 
 describe("collectChannelRouteTargets", () => {
-  it("uses runtime routing to suppress default targets covered by channel routes", () => {
+  it("omits ownerless channel targets on a multi-agent fleet", () => {
     const targets = targetMap({
       channels: {
         discord: {},
         telegram: {},
       },
       agents: {
-        list: [{ id: "main", default: true }, { id: "commander" }],
+        entries: { main: {}, commander: {} },
       },
       bindings: [
         {
@@ -30,7 +30,7 @@ describe("collectChannelRouteTargets", () => {
     });
 
     expect(targets.get("commander")).toEqual(["discord"]);
-    expect(targets.get("main")).toEqual(["telegram"]);
+    expect(targets.has("main")).toBe(false);
   });
 
   it("samples configured accounts through resolveAgentRoute", () => {
@@ -44,7 +44,7 @@ describe("collectChannelRouteTargets", () => {
         },
       },
       agents: {
-        list: [{ id: "main", default: true }, { id: "personal-agent" }, { id: "work-agent" }],
+        entries: { main: {}, "personal-agent": {}, "work-agent": {} },
       },
       bindings: [
         {
@@ -75,7 +75,7 @@ describe("collectChannelRouteTargets", () => {
         imessage: {},
       },
       agents: {
-        list: [{ id: "main", default: true }, { id: "ios-agent" }],
+        entries: { main: {}, "ios-agent": {} },
       },
       bindings: [
         {
@@ -88,6 +88,6 @@ describe("collectChannelRouteTargets", () => {
     });
 
     expect(targets.get("ios-agent")).toEqual(["imsg"]);
-    expect(targets.get("main")).toEqual(["imessage"]);
+    expect(targets.has("main")).toBe(false);
   });
 });

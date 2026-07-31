@@ -209,6 +209,7 @@ Route inbound messages to the delegate agent using [Multi-Agent Routing](/concep
 ```json5
 {
   agents: {
+    ownership: "explicit",
     list: [
       { id: "main", workspace: "~/.openclaw/workspace" },
       {
@@ -255,10 +256,10 @@ A complete delegate configuration handling email, calendar, and social media:
 ```json5
 {
   agents: {
-    list: [
-      { id: "main", default: true, workspace: "~/.openclaw/workspace" },
-      {
-        id: "org-assistant",
+    ownership: "explicit",
+    entries: {
+      main: { workspace: "~/.openclaw/workspace" },
+      "org-assistant": {
         name: "[Organization] Assistant",
         workspace: "~/.openclaw/workspace-org",
         agentDir: "~/.openclaw/agents/org-assistant/agent",
@@ -268,7 +269,7 @@ A complete delegate configuration handling email, calendar, and social media:
           deny: ["write", "edit", "apply_patch", "browser", "canvas"],
         },
       },
-    ],
+    },
   },
   bindings: [
     {

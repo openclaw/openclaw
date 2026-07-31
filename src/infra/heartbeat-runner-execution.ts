@@ -1,6 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { appendCronStyleCurrentTimeLine } from "../agents/current-time.js";
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
 import { listActiveEmbeddedRunSessionKeys } from "../agents/embedded-agent-runner/run-state.js";
@@ -60,6 +59,7 @@ import { HEARTBEAT_RUN_SCOPE, type HeartbeatRunScope } from "./heartbeat-run-sco
 import {
   canHeartbeatDeliverCommitments,
   heartbeatLog,
+  resolveAmbientHeartbeatAgentId,
   resolveHeartbeatAckMaxChars,
   resolveHeartbeatForWake,
   resolveHeartbeatTimeoutOverrideSeconds,
@@ -77,6 +77,7 @@ import {
   resolveStaleHeartbeatIsolatedSessionKey,
 } from "./heartbeat-runner-session.js";
 import { isHeartbeatEnabledForAgent, resolveHeartbeatIntervalMs } from "./heartbeat-summary.js";
+import { consumeHeartbeatSystemEventEntriesBySource } from "./heartbeat-system-event-consumption.js";
 import { resolveHeartbeatVisibility } from "./heartbeat-visibility.js";
 import {
   inferHeartbeatWakeSourceFromReason,
@@ -97,7 +98,6 @@ import {
   resolveHeartbeatDeliveryTargetWithSessionRoute,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
-import { consumeSelectedSystemEventEntries } from "./system-events.js";
 
 const log = heartbeatLog;
 
@@ -155,7 +155,7 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
   const forcedSessionAgentId =
     explicitAgentId.length > 0 ? undefined : parseAgentSessionKey(opts.sessionKey)?.agentId;
   const agentId = normalizeAgentId(
-    explicitAgentId || forcedSessionAgentId || resolveDefaultAgentId(cfg),
+    explicitAgentId || forcedSessionAgentId || resolveAmbientHeartbeatAgentId(cfg),
   );
   const wakeSource = opts.source ?? inferHeartbeatWakeSourceFromReason(opts.reason);
   const heartbeat = resolveHeartbeatForWake({
@@ -474,7 +474,7 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
       hasCronEvents: heartbeatRunPrompt.hasCronEvents,
     });
     if (shouldConsumeInspectedEvents && inspectedSystemEventsToConsume.length > 0) {
-      consumeSelectedSystemEventEntries(sessionKey, inspectedSystemEventsToConsume);
+      consumeHeartbeatSystemEventEntriesBySource(sessionKey, inspectedSystemEventsToConsume);
     }
     return { kind: "skipped", reason: "not-due" } as const;
   }

@@ -1019,7 +1019,7 @@ describe("sessions tools", () => {
     let sendCallCount = 0;
     let lastWaitedRunId: string | undefined;
     const replyByRunId = new Map<string, string>();
-    const requesterKey = "discord:group:req";
+    const requesterKey = "agent:main:discord:group:req";
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: unknown };
       calls.push(request);
@@ -1083,7 +1083,7 @@ describe("sessions tools", () => {
     }
 
     const fire = await tool.execute("call5", {
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       message: "ping",
       timeoutSeconds: 0,
     });
@@ -1097,7 +1097,7 @@ describe("sessions tools", () => {
     await waitForCalls(() => historyCallCount, 3);
 
     const waitPromise = tool.execute("call6", {
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       message: "wait",
       timeoutSeconds: 1,
     });
@@ -1270,7 +1270,7 @@ describe("sessions tools", () => {
     });
 
     const tool = createOpenClawTools({
-      agentSessionKey: "discord:group:req",
+      agentSessionKey: "agent:main:discord:group:req",
       agentChannel: "discord",
     }).find((candidate) => candidate.name === "sessions_send");
     if (!tool) {
@@ -1278,7 +1278,7 @@ describe("sessions tools", () => {
     }
 
     const result = await tool.execute("call-pending-error", {
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       message: "check status",
       timeoutSeconds: 1,
     });
@@ -1345,8 +1345,8 @@ describe("sessions tools", () => {
     let agentCallCount = 0;
     let lastWaitedRunId: string | undefined;
     const replyByRunId = new Map<string, string>();
-    const requesterKey = "discord:group:req";
-    const targetKey = "discord:group:target";
+    const requesterKey = "agent:main:discord:group:req";
+    const targetKey = "agent:main:discord:group:target";
     let sendParams: { to?: string; channel?: string; message?: string } = {};
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: unknown };

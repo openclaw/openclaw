@@ -1,3 +1,5 @@
+import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type {
   SessionEventSubscriberRegistry,
@@ -9,15 +11,18 @@ export function createSessionObserverAudience(params: {
   subscribers: SessionMessageSubscriberRegistry;
   sessionEventSubscribers?: SessionEventSubscriberRegistry;
   isVisible: (connId: string) => boolean;
-  getDefaultAgentId: () => string;
+  getConfig: () => OpenClawConfig;
 }) {
   const messageSubscriberKeys = (sessionKey: string, agentId: string): string[] => {
     // sessions.messages.subscribe canonicalizes selected-agent global aliases
     // to this same qualified key before registering the connection.
     const scopedKey = sessionObserverScopeKey(sessionKey, agentId);
+    const cfg = params.getConfig();
+    const compatibilityAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
     if (
       sessionKey === "global" &&
-      normalizeAgentId(agentId) === normalizeAgentId(params.getDefaultAgentId())
+      compatibilityAgentId !== undefined &&
+      normalizeAgentId(agentId) === normalizeAgentId(compatibilityAgentId)
     ) {
       // Keep legacy default-agent global subscribers while non-default global
       // sessions remain confined to their agent-qualified stream.

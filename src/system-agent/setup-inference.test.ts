@@ -38,6 +38,10 @@ import { runSystemAgentTurnWithDeps } from "./agent-turn.test-support.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
 import { applySystemAgentModelSelection } from "./setup-apply.js";
 import { runSetupInferenceTest } from "./setup-inference-persist.js";
+import {
+  projectManualInferenceConfig,
+  projectSetupTargetModelMetadata,
+} from "./setup-inference-plan-helpers.js";
 import { resolveSetupInferenceProbeStreamParams } from "./setup-inference-probe.js";
 import {
   SetupInferenceActivationIndeterminateError,
@@ -87,7 +91,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
       issues: [],
       config: {},
       sourceConfig: {},
-      runtimeConfig: { agents: { entries: { main: { default: true } } } },
+      runtimeConfig: { agents: { entries: { main: {} } } },
     })),
   };
 });
@@ -117,7 +121,7 @@ vi.mock("../commands/onboard-inference.js", async (importActual) => {
 
 const runtime = { log: () => {}, error: () => {}, exit: () => {} } as never;
 const materializedMainRuntimeConfig: OpenClawConfig = {
-  agents: { entries: { main: { default: true } } },
+  agents: { entries: { main: {} } },
 };
 const testCliRuntimeArtifactFingerprint = "test-cli-runtime-artifact";
 const testCodexRuntimeArtifact = {
@@ -145,12 +149,35 @@ const deferSuiteTempDirCleanup = async () => {};
 function canonicalizeAgentEntriesForTest(config: OpenClawConfig): OpenClawConfig {
   const next = structuredClone(config);
   const list = next.agents?.list;
-  if (!list) {
+  const entries = list
+    ? Object.fromEntries(list.map(({ id, ...entry }) => [id, entry]))
+    : next.agents?.entries;
+  if (!entries) {
     return next;
   }
+  const legacyDefaultAgentId = Object.entries(entries).find(
+    ([, entry]) => entry.default === true,
+  )?.[0];
+  const canonicalEntries = Object.fromEntries(
+    Object.entries(entries).map(([id, entry]) => {
+      const { default: _default, ...canonicalEntry } = entry;
+      return [id, canonicalEntry];
+    }),
+  );
   next.agents = {
     ...next.agents,
-    entries: Object.fromEntries(list.map(({ id, ...entry }) => [id, entry])),
+    ...(legacyDefaultAgentId && !next.agents?.defaults?.systemAgent?.agentId
+      ? {
+          defaults: {
+            ...next.agents?.defaults,
+            systemAgent: {
+              ...next.agents?.defaults?.systemAgent,
+              agentId: legacyDefaultAgentId,
+            },
+          },
+        }
+      : {}),
+    entries: canonicalEntries,
   };
   delete next.agents.list;
   return next;
@@ -439,6 +466,50 @@ describe("applySystemAgentModelSelection", () => {
     expect(config.agents.entries.ops?.models?.["openai/gpt-5.5"]?.agentRuntime?.id).toBe(
       "openclaw",
     );
+  });
+
+  it("projects and copies model metadata for the explicit setup route", () => {
+    const modelRef = "openai/gpt-5.5";
+    const baseConfig = {
+      agents: {
+        defaults: { systemAgent: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    } satisfies OpenClawConfig;
+    const preparedConfig = {
+      ...baseConfig,
+      agents: {
+        ...baseConfig.agents,
+        entries: {
+          ...baseConfig.agents.entries,
+          research: {
+            models: { [modelRef]: { agentRuntime: { id: "codex" } } },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(projectSetupTargetModelMetadata(preparedConfig, modelRef, "research")).toMatchObject({
+      defaultAgentId: "research",
+      agent: {
+        [modelRef]: {
+          exists: true,
+          value: { agentRuntime: { id: "codex" } },
+        },
+      },
+    });
+
+    const projected = projectManualInferenceConfig({
+      baseConfig,
+      preparedConfig,
+      modelRef,
+      providerId: "openai",
+      routeAgentId: "research",
+    });
+    expect(projected.agents?.entries?.research?.models?.[modelRef]).toEqual({
+      agentRuntime: { id: "codex" },
+    });
+    expect(projected.agents?.entries?.ops?.models?.[modelRef]).toBeUndefined();
   });
 });
 
@@ -1393,6 +1464,60 @@ describe("activateSetupInference", () => {
     expect(runtimeLog).not.toHaveBeenCalled();
   });
 
+  it("keeps the validated route owner when staged config has no ambient fleet target", async () => {
+    const initialConfig = {
+      agents: {
+        defaults: { systemAgent: { agentId: "ops" } },
+        entries: {
+          ops: { model: "claude-cli/claude-opus-5" },
+          research: {},
+        },
+      },
+    } satisfies OpenClawConfig;
+    const configHarness = createConfigTransformHarness(initialConfig);
+
+    const result = await activateSetupInference({
+      kind: "claude-cli",
+      surface: "gateway",
+      runtime,
+      deps: {
+        readConfigFileSnapshot: vi.fn(async () => ({
+          exists: true,
+          valid: true,
+          path: "/tmp/openclaw.json",
+          issues: [],
+          config: initialConfig,
+          sourceConfig: initialConfig,
+          runtimeConfig: initialConfig,
+        })) as never,
+        applySystemAgentModelSelection: async (params) => {
+          expect(params.targetAgentId).toBe("ops");
+          const staged = await applySystemAgentModelSelection({
+            ...params,
+            config: {
+              ...params.config,
+              agents: {
+                ...params.config.agents,
+                defaults: {
+                  ...params.config.agents?.defaults,
+                  systemAgent: { agentId: "research" },
+                },
+              },
+            },
+          });
+          const defaults = { ...staged.agents?.defaults };
+          delete defaults.systemAgent;
+          return { ...staged, agents: { ...staged.agents, defaults } };
+        },
+        runCliAgent: vi.fn(successfulRunner("claude-cli", "claude-opus-5")) as never,
+        transformConfigWithPendingPluginInstalls: configHarness.transform as never,
+        createTempDir: makeTempDir,
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, modelRef: "claude-cli/claude-opus-5" });
+  });
+
   it("disposes the temporary auth database before Windows-style removal", async () => {
     const tempDir = await makeTempDir();
     const databasePath = path.join(tempDir, "agent", "openclaw-agent.sqlite");
@@ -1543,7 +1668,7 @@ describe("activateSetupInference", () => {
     expect(configHarness.current()).toMatchObject({
       agents: {
         defaults: { model: "claude-cli/claude-opus-5" },
-        entries: { main: { default: true } },
+        entries: { main: {} },
       },
     });
   });
@@ -1704,13 +1829,13 @@ describe("activateSetupInference", () => {
     const persistedConfig = configHarness.current();
     expect(persistedConfig.agents?.entries).toEqual({
       work: {
-        default: true,
         model: "claude-cli/claude-opus-5",
         name: "edited during probe",
         models: { "claude-cli/claude-opus-5": {} },
       },
       "new-agent": { model: "anthropic/claude-opus-5" },
     });
+    expect(persistedConfig.agents?.defaults?.systemAgent?.agentId).toBe("work");
   });
 
   it.each([
@@ -4240,7 +4365,7 @@ describe("activateSetupInference", () => {
       expect.objectContaining({
         cfg: expect.objectContaining({
           agents: expect.objectContaining({
-            defaults: { model: { primary: "openai/gpt-5.4" } },
+            defaults: expect.objectContaining({ model: { primary: "openai/gpt-5.4" } }),
             entries: expect.objectContaining({
               ops: expect.objectContaining({
                 model: {
@@ -4322,9 +4447,7 @@ describe("activateSetupInference", () => {
       authProfileStateMode: "read-only",
       config: {
         agents: expect.objectContaining({
-          defaults: {
-            model: { primary: "openai/gpt-5.4" },
-          },
+          defaults: expect.objectContaining({ model: { primary: "openai/gpt-5.4" } }),
           entries: expect.objectContaining({
             ops: expect.objectContaining({
               model: {

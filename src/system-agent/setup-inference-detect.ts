@@ -12,6 +12,7 @@ import {
 } from "../plugins/provider-auth-choices.js";
 import { resolvePluginProviders } from "../plugins/providers.runtime.js";
 import { listRecommendedToolInstalls } from "../plugins/recommended-tool-installs.js";
+import { resolveSystemAgentTargetAgentId } from "./inference-route.js";
 import { probeLocalCommand } from "./probes.js";
 import {
   listSetupInferenceAuthOptions,
@@ -97,7 +98,12 @@ export async function listManualSetupInferenceOptions(
     workspace,
     // Derived from config only (no probing): a pre-existing default model must
     // keep classifying the install as configured even when scanning declined.
-    setupComplete: Boolean(resolveAgentEffectiveModelPrimary(cfg, resolveDefaultAgentId(cfg))),
+    setupComplete: Boolean(
+      resolveAgentEffectiveModelPrimary(
+        cfg,
+        resolveSystemAgentTargetAgentId(cfg, deps.targetAgentId),
+      ),
+    ),
   };
 }
 
@@ -110,7 +116,10 @@ export async function detectSetupInference(
     throw new Error(invalidSetupConfigError(snapshot));
   }
   const cfg = snapshot.runtimeConfig ?? snapshot.config;
-  const detected = await (deps.detectInferenceBackends ?? detectInferenceBackends)({ config: cfg });
+  const detected = await (deps.detectInferenceBackends ?? detectInferenceBackends)({
+    config: cfg,
+    agentId: deps.targetAgentId,
+  });
   const unavailableCandidates: SetupInferenceUnavailableCandidate[] = [];
   const deferredUnavailableCandidates: SetupInferenceUnavailableCandidate[] = [];
   const probe = deps.probeLocalCommand ?? probeLocalCommand;

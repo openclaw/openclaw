@@ -9,8 +9,14 @@ import "./test-helpers.mocks.js";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
-import { parseConfigJson5, resetConfigRuntimeState } from "../config/config.js";
-import { resolveMainSessionKeyFromConfig, type SessionEntry } from "../config/sessions.js";
+import { listAgentIds } from "../agents/agent-scope-config.js";
+import {
+  clearConfigCache,
+  getRuntimeConfig,
+  parseConfigJson5,
+  resetConfigRuntimeState,
+} from "../config/config.js";
+import type { SessionEntry } from "../config/sessions.js";
 import {
   applySessionEntryLifecycleMutation,
   listSessionEntries,
@@ -109,20 +115,23 @@ let activeSuiteHookScopeCount = 0;
 // Keep suite fixtures loopback-stable inside containers; bind-specific tests opt in explicitly.
 const DEFAULT_GATEWAY_TEST_BIND = "loopback" as const;
 
+export function setTestAgentsConfig(config: Record<string, unknown> | undefined): void {
+  testState.agentsConfig = config;
+  clearConfigCache();
+  resetConfigRuntimeState();
+}
+
 function resolveGatewayTestMainSessionKeys(): string[] {
-  const resolved = resolveMainSessionKeyFromConfig();
-  const keys = new Set<string>();
-  if (resolved) {
-    keys.add(resolved);
-  }
-  if (resolved !== "global") {
-    const parsed = parseAgentSessionKey(resolved);
-    const agentId = parsed?.agentId ?? DEFAULT_AGENT_ID;
-    keys.add(`agent:${agentId}:main`);
-    const configuredMainKey = normalizeMainKey(
-      (testState.sessionConfig as { mainKey?: unknown } | undefined)?.mainKey as string | undefined,
-    );
-    keys.add(`agent:${agentId}:${configuredMainKey}`);
+  const configuredAgentIds = listAgentIds({ agents: testState.agentsConfig });
+  const agentIds = configuredAgentIds.length > 0 ? configuredAgentIds : [DEFAULT_AGENT_ID];
+  const configuredMainKey = normalizeMainKey(
+    (testState.sessionConfig as { mainKey?: unknown } | undefined)?.mainKey as string | undefined,
+  );
+  const keys = new Set<string>(["global"]);
+  for (const agentId of agentIds) {
+    const normalizedAgentId = normalizeAgentId(agentId);
+    keys.add(`agent:${normalizedAgentId}:main`);
+    keys.add(`agent:${normalizedAgentId}:${configuredMainKey}`);
   }
   return [...keys];
 }
@@ -204,6 +213,11 @@ async function persistTestSessionConfig(): Promise<void> {
     await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
   }
   resetConfigRuntimeState();
+  // Session-store writes can indirectly read runtime config before the next RPC.
+  // Republish the mutable test overlays now so a stale implicit-main snapshot cannot win.
+  if (testState.agentsConfig) {
+    getRuntimeConfig();
+  }
   lastSyncedSessionStorePath = testState.sessionStorePath;
   lastSyncedSessionConfigJson = serializeGatewayTestSessionConfig();
 }
@@ -1321,4 +1335,5 @@ export async function waitForSystemEvent(timeoutMs = 2000) {
   }
   throw new Error("timeout waiting for system event");
 }
+
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -3085,33 +3085,6 @@ describe("cron method validation", () => {
     expectInvalidCronPatternError(respond);
   });
 
-  it("returns INVALID_REQUEST when cron.add rejects an incompatible main agent", async () => {
-    const context = createCronContext();
-    context.cron.add.mockRejectedValueOnce(
-      new Error(
-        'cron: sessionTarget "main" is only valid for the default agent. Use sessionTarget "isolated" with payload.kind "agentTurn" for non-default agents (agentId: worker)',
-      ),
-    );
-    const { respond } = await invokeCron(
-      "cron.add",
-      {
-        name: "bad-main-agent",
-        enabled: true,
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "ping" },
-        agentId: "worker",
-      },
-      { context },
-    );
-
-    expectResponseError(respond, {
-      code: "INVALID_REQUEST",
-      messageIncludes: 'sessionTarget "main" is only valid',
-    });
-  });
-
   it("returns INVALID_REQUEST when cron.update throws a croner parse error (#74066)", async () => {
     const existingJob = createCronJob();
     const context = createCronContext(existingJob);

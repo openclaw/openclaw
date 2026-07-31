@@ -1,6 +1,11 @@
 // Route resolution helpers map user targets to configured channel routes.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { listAgentEntries, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  AgentSelectionRequiredError,
+  listAgentEntries,
+  resolveDefaultAgentId,
+  tryResolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import type { ChatType } from "../channels/chat-type.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -124,7 +129,7 @@ function listAgents(cfg: OpenClawConfig) {
 type AgentLookupCache = {
   agentsRef: OpenClawConfig["agents"] | undefined;
   byNormalizedId: Map<string, string>;
-  fallbackDefaultAgentId: string;
+  fallbackSoleAgentId?: string;
 };
 
 const agentLookupCacheByCfg = new WeakMap<OpenClawConfig, AgentLookupCache>();
@@ -147,7 +152,7 @@ function resolveAgentLookupCache(cfg: OpenClawConfig): AgentLookupCache {
   const next: AgentLookupCache = {
     agentsRef,
     byNormalizedId,
-    fallbackDefaultAgentId: sanitizeAgentId(resolveDefaultAgentId(cfg)),
+    fallbackSoleAgentId: tryResolveDefaultAgentId(cfg),
   };
   agentLookupCacheByCfg.set(cfg, next);
   return next;
@@ -157,20 +162,33 @@ export function pickFirstExistingAgentId(cfg: OpenClawConfig, agentId: string): 
   const lookup = resolveAgentLookupCache(cfg);
   const trimmed = (agentId ?? "").trim();
   if (!trimmed) {
-    return lookup.fallbackDefaultAgentId;
+    return sanitizeAgentId(
+      lookup.fallbackSoleAgentId ??
+        resolveDefaultAgentId(cfg, {
+          surface: "agent lookup",
+          hint: "Pass an explicit agent id instead of relying on an implicit route.",
+        }),
+    );
   }
   const normalized = normalizeAgentId(trimmed);
   const resolved = lookup.byNormalizedId.get(normalized);
   if (resolved) {
     return resolved;
   }
-  if (trimmed === DEFAULT_AGENT_ID) {
+  // Physical main remains a valid explicit binding even when the configured
+  // roster omits it; other stale binding owners must still fail closed.
+  if (normalized === DEFAULT_AGENT_ID) {
     return DEFAULT_AGENT_ID;
   }
+  // Shipped binding-only configs may omit the roster entirely; in that shape
+  // an explicit binding id is authoritative because there is no roster to contradict it.
   if (lookup.byNormalizedId.size === 0) {
     return sanitizeAgentId(trimmed);
   }
-  return lookup.fallbackDefaultAgentId;
+  throw new AgentSelectionRequiredError([...lookup.byNormalizedId.values()], {
+    surface: "route binding",
+    hint: `Update the binding agentId "${trimmed}" to a configured agent.`,
+  });
 }
 
 type NormalizedPeerConstraint =
@@ -814,6 +832,12 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     }
   }
 
-  return choose(resolveDefaultAgentId(input.cfg), "default");
+  return choose(
+    resolveDefaultAgentId(input.cfg, {
+      surface: `inbound ${channel} account "${accountId}" routing`,
+      hint: `Add a binding with "openclaw agents bind --agent <id> --bind ${channel}:${accountId}" (or a channel-wide ${channel}:* binding).`,
+    }),
+    "default",
+  );
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

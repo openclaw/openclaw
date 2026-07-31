@@ -412,6 +412,7 @@ export function createOpenClawTools(
   const heartbeatTool = options?.enableHeartbeatTool ? createHeartbeatResponseTool() : null;
   options?.recordToolPrepStage?.("openclaw-tools:message-tool");
   const nodesToolBase = createNodesTool({
+    agentId: sessionAgentId,
     agentSessionKey: options?.agentSessionKey,
     agentChannel: options?.agentChannel,
     agentAccountId: options?.agentAccountId,
@@ -642,6 +643,7 @@ export function createOpenClawTools(
           // stamp for materialized agent roots (opts.callGateway === undefined
           // is the gate in ensureConfiguredAgentMainSession).
           createSessionsSendTool({
+            agentId: sessionAgentId,
             agentSessionKey: options?.agentSessionKey,
             agentChannel: options?.agentChannel,
             sandboxed: options?.sandboxed,

@@ -82,6 +82,7 @@ export type AgentBinding = AgentRouteBinding | AgentAcpBinding;
 
 export type AgentConfig = {
   id: string;
+  /** @deprecated Raw legacy list compatibility only; canonical agents.entries rejects this key. */
   default?: boolean;
   name?: string;
   /** Optional human-authored agent description. */
@@ -168,9 +169,15 @@ export type AgentConfig = {
   runtime?: AgentRuntimeConfig;
 };
 
+/**
+ * Public SDK compatibility shape. Runtime schema rejects `default`; raw config
+ * migration consumes it before validation.
+ */
 export type AgentEntryConfig = Omit<AgentConfig, "id">;
 
 export type AgentsConfig = {
+  /** Marks a multi-agent roster as using explicit per-surface ownership. */
+  ownership?: "explicit";
   defaults?: AgentDefaultsConfig;
   entries?: Record<string, AgentEntryConfig>;
   /** Internal non-serialized projection materialized by validation for ID-based runtime code. */

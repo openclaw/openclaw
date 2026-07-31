@@ -2,11 +2,17 @@
 // plugin hooks, notifications, and cron lifecycle cleanup.
 import { retireSessionMcpRuntime } from "../agents/agent-bundle-mcp-tools.js";
 import { isAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
-import { listAgentEntries, listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  listAgentEntries,
+  listAgentIds,
+  resolveDefaultAgentId,
+  tryResolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { abortAndDrainEmbeddedAgentRun } from "../agents/embedded-agent.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { tryGetLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import {
   canonicalizeMainSessionAlias,
   resolveAgentIdFromSessionKey,
@@ -289,15 +295,20 @@ export function buildGatewayCronService(params: {
     const runtimeConfig = getRuntimeConfig();
     const normalized =
       typeof requested === "string" && requested.trim() ? normalizeAgentId(requested) : undefined;
-    const defaultAgentId = resolveDefaultAgentId(runtimeConfig);
+    const soleAgentId = tryResolveDefaultAgentId(runtimeConfig);
     if (
       normalized !== undefined &&
-      normalized !== defaultAgentId &&
+      normalized !== soleAgentId &&
       !hasConfiguredAgent(runtimeConfig, normalized)
     ) {
       throw new Error(`cron job agent is unavailable: ${normalized}`);
     }
-    const agentId = normalized ?? defaultAgentId;
+    const agentId =
+      normalized ??
+      resolveDefaultAgentId(runtimeConfig, {
+        surface: "cron job creation",
+        hint: "Set the job agentId or pass --agent <id> when creating the cron job.",
+      });
     if (isAgentDeletionBlocked(agentId)) {
       throw new Error(`cron job agent is unavailable: ${agentId}`);
     }
@@ -409,12 +420,18 @@ export function buildGatewayCronService(params: {
     return sanitizeCronHeartbeatOverride(heartbeatOverride);
   };
 
-  const defaultAgentId = resolveDefaultAgentId(params.cfg);
-  const resolveSessionStorePath = (agentId?: string) =>
-    resolveStorePath(params.cfg.session?.store, {
-      agentId: agentId ?? defaultAgentId,
-    });
-  const sessionStorePath = resolveSessionStorePath(defaultAgentId);
+  const defaultAgentId = tryResolveDefaultAgentId(params.cfg);
+  const legacyDefaultAgentId = tryGetLegacyDefaultAgentId(params.cfg);
+  const resolveSessionStorePath = (agentId?: string) => {
+    const ownerAgentId =
+      agentId ??
+      resolveDefaultAgentId(getRuntimeConfig(), {
+        surface: "cron session-store selection",
+        hint: "Persist an agentId on the cron job or pass --agent <id> when creating it.",
+      });
+    return resolveStorePath(params.cfg.session?.store, { agentId: ownerAgentId });
+  };
+  const sessionStorePath = defaultAgentId ? resolveSessionStorePath(defaultAgentId) : undefined;
   const scriptRuntime =
     params.cfg.cron?.triggers?.enabled === true
       ? createCronScriptRuntime({ config: params.cfg })
@@ -604,6 +621,7 @@ export function buildGatewayCronService(params: {
   };
 
   const cron = new CronService({
+    env,
     storePath,
     cronEnabled,
     cronConfig: params.cfg.cron,
@@ -626,8 +644,9 @@ export function buildGatewayCronService(params: {
             }),
         }
       : {}),
-    defaultAgentId,
-    resolveDefaultAgentId: () => resolveDefaultAgentId(getRuntimeConfig()),
+    ...(defaultAgentId ? { defaultAgentId } : {}),
+    ...(legacyDefaultAgentId ? { legacyDefaultAgentId } : {}),
+    resolveDefaultAgentId: () => tryResolveDefaultAgentId(getRuntimeConfig()),
     resolveSessionStoreAgentIds: () => {
       const cfg = getRuntimeConfig();
       try {
@@ -644,7 +663,7 @@ export function buildGatewayCronService(params: {
       !isAgentDeletionBlocked(agentId) &&
       listAgentIds(getRuntimeConfig()).some((id) => normalizeAgentId(id) === agentId),
     resolveSessionStorePath,
-    sessionStorePath,
+    ...(sessionStorePath ? { sessionStorePath } : {}),
     enqueueSystemEvent: (text, opts) => {
       const { sessionKey } = resolveCronTarget(opts);
       if (!sessionKey) {
@@ -1196,7 +1215,6 @@ export function buildGatewayCronService(params: {
     // update must leave the live source and its buffered events untouched.
     const validated = structuredClone(current);
     applyJobPatch(validated, patch, {
-      defaultAgentId: cron.getDefaultAgentId(),
       scheduleValidationNowMs: nowMs,
       cronConfig: params.cfg.cron,
     });

@@ -63,12 +63,12 @@ describe("agent roster persistence", () => {
     const persisted = await addWorkerToConfig({ gateway: { mode: "local" } });
 
     expect(persisted.agents?.entries).toMatchObject({
-      main: { default: true },
+      main: { workspace: expect.any(String) },
       worker: { workspace: expect.any(String) },
     });
-    expect(
-      Object.values(persisted.agents?.entries ?? {}).filter((entry) => entry.default === true),
-    ).toHaveLength(1);
+    expect(Object.values(persisted.agents?.entries ?? {})).not.toContainEqual(
+      expect.objectContaining({ default: expect.anything() }),
+    );
   });
 
   it("replaces a legacy list with the complete keyed roster", async () => {
@@ -83,7 +83,7 @@ describe("agent roster persistence", () => {
 
     expect(persisted.agents).not.toHaveProperty("list");
     expect(persisted.agents?.entries).toMatchObject({
-      main: { default: true },
+      main: { workspace: expect.any(String) },
       ops: { workspace: "/srv/ops" },
       worker: { workspace: expect.any(String) },
     });

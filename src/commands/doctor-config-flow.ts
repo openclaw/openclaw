@@ -4,6 +4,7 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { readAgentRosterProperty } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { configIncludeOwnsAgentRoster } from "../config/agent-roster-provenance.js";
+import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -28,7 +29,6 @@ import {
   type DoctorConfigMutationResult,
   type DoctorConfigMutationState,
 } from "./doctor/shared/config-mutation-state.js";
-import { materializeDefaultAgentRoles } from "./doctor/shared/default-agent-role-materialization.js";
 import { isSingleTopLevelIncludeMigration } from "./doctor/shared/include-migration-ownership.js";
 import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
 
@@ -163,6 +163,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     fixHints: [],
   };
   let shouldRepairCronCodexModelRefsAfterConfigWrite = false;
+  let blockConfigWrite = false;
   const doctorFixCommand = formatCliCommand("openclaw doctor --fix");
   const applyConfigMutation = (
     mutation: DoctorConfigMutationResult & { warnings?: string[] },
@@ -187,6 +188,14 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const sourceLastTouchedVersion =
     typeof sourceMeta?.lastTouchedVersion === "string" ? sourceMeta.lastTouchedVersion : undefined;
 
+  const rawRosterMigrations = [snapshot.sourceConfigBeforeMigrations, snapshot.parsed]
+    .filter((source) => source !== undefined)
+    .map((source) => migratePersistedImplicitMainRoster(source));
+  const rosterMigrations = rawRosterMigrations.filter((migration) => migration.changed);
+  const rosterMigrationNeeded = rosterMigrations.length > 0;
+  const legacyDefaultAgentId = rawRosterMigrations
+    .map((migration) => migration.retainedLegacyDefaultAgentId)
+    .find((agentId) => agentId !== undefined);
   const legacyStep = applyLegacyCompatibilityStep({
     snapshot,
     state,
@@ -194,34 +203,59 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     doctorFixCommand,
   });
   state = legacyStep.state;
+  if (legacyDefaultAgentId) {
+    retainLegacyDefaultAgentId(state.cfg, legacyDefaultAgentId);
+    retainLegacyDefaultAgentId(state.candidate, legacyDefaultAgentId);
+  }
   const legacyMigrationPartiallyValid = legacyStep.partiallyValid === true;
-  const rosterMigrationNeeded = [snapshot.sourceConfigBeforeMigrations, snapshot.parsed].some(
-    (source) => source !== undefined && migratePersistedImplicitMainRoster(source).changed,
-  );
   const includeOwnsRoster = configIncludeOwnsAgentRoster(snapshot);
   if (snapshot.exists && rosterMigrationNeeded && !includeOwnsRoster) {
     // Runtime roster normalization is read-only; doctor --fix owns persistence.
     const migrated = migratePersistedImplicitMainRoster(state.candidate).config as OpenClawConfig;
     const migratedRoster = readAgentRosterProperty(migrated);
     const migratedEntries = migratedRoster?.kind === "entries" ? migratedRoster.value : undefined;
-    const { list: _legacyList, ...candidateAgents } = state.candidate.agents ?? {};
+    const { list: _legacyList, ...candidateAgents } = migrated.agents ?? {};
+    const stampsExplicitOwnership =
+      legacyDefaultAgentId !== undefined && Object.keys(migratedEntries ?? {}).length > 1;
     const rosterRepair = {
       config: {
-        ...state.candidate,
+        ...migrated,
         agents: {
           ...candidateAgents,
+          ...(stampsExplicitOwnership ? { ownership: "explicit" as const } : {}),
           entries: migratedEntries as NonNullable<OpenClawConfig["agents"]>["entries"],
         },
       },
-      changes: ["Persisted agents.entries with exactly one explicit default agent."],
+      changes: [
+        ...new Set(
+          rosterMigrations
+            .flatMap((migration) => migration.diagnostics)
+            .concat(
+              "Persisted the canonical agent roster without retired default markers.",
+              ...(stampsExplicitOwnership
+                ? ["Stamped the multi-agent roster for explicit per-surface ownership."]
+                : []),
+            ),
+        ),
+      ],
     };
     applyConfigMutation(rosterRepair, {
       fixHint: `Run "${doctorFixCommand}" to persist the explicit agent roster.`,
     });
   }
-  applyConfigMutation(materializeDefaultAgentRoles(state.candidate), {
-    fixHint: `Run "${doctorFixCommand}" to persist explicit ambient agent targets.`,
-  });
+  if (snapshot.exists && shouldRepair && legacyDefaultAgentId) {
+    const { materializeLegacyDefaultCronJobOwners } =
+      await import("./doctor/cron/legacy-repair.js");
+    const cronOwnerMigration = await materializeLegacyDefaultCronJobOwners({
+      cfg: state.candidate,
+      legacyDefaultAgentId,
+    });
+    emitDoctorChangesPanel(cronOwnerMigration.changes, true);
+    if (cronOwnerMigration.warnings.length > 0) {
+      blockConfigWrite = true;
+      emitDoctorNotes({ note, warningNotes: cronOwnerMigration.warnings });
+    }
+  }
   const { collectBlockedLegacyOpenAICodexProviderPlan } =
     await import("./doctor/shared/legacy-config-migrations.runtime.models.js");
   const blockedCodexProviderPlan = collectBlockedLegacyOpenAICodexProviderPlan(state.candidate);
@@ -483,10 +517,13 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   return {
     cfg,
     path: snapshot.path ?? CONFIG_PATH,
-    shouldWriteConfig: finalized.shouldWriteConfig,
+    shouldWriteConfig: blockConfigWrite ? false : finalized.shouldWriteConfig,
     sourceConfigValid: snapshot.valid,
     ...(sourceLastTouchedVersion ? { sourceLastTouchedVersion } : {}),
     ...(legacyMigrationPartiallyValid ? { skipPluginValidationOnWrite: true } : {}),
+    ...(rosterMigrationNeeded && !includeOwnsRoster && !blockConfigWrite
+      ? { persistCanonicalAgentRoster: true }
+      : {}),
     ...(singleTopLevelIncludeWrite ? { skipWizardMetadataForIncludeWrite: true } : {}),
     ...(shouldRepairCronCodexModelRefsAfterConfigWrite
       ? { shouldRepairCronCodexModelRefsAfterConfigWrite: true }

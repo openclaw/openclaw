@@ -58,6 +58,8 @@ export type OnboardOptions = OnboardDynamicProviderOptions & {
   /** Force the terminal hatch instead of the guided browser handoff. */
   tui?: boolean;
   workspace?: string;
+  /** Explicit agent target when onboarding an existing multi-agent roster. */
+  agent?: string;
   nonInteractive?: boolean;
   /** Required for non-interactive setup; skips the interactive risk prompt when true. */
   acceptRisk?: boolean;

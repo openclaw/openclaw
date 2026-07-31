@@ -8,12 +8,14 @@ import {
   listAgentEntries,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
+  tryResolveDefaultAgentId,
   toAgentEntriesRecord,
 } from "../agents/agent-scope.js";
 import { resolveAgentAvatarUrlFromSource } from "../agents/identity-avatar-file.js";
 import type { AgentIdentityFile } from "../agents/identity-file.js";
 import { identityHasValues, loadAgentIdentityFromWorkspace } from "../agents/identity-file.js";
+import { pinLegacyInheritedAuthOwnerForRosterTransition } from "../agents/legacy-inherited-auth-dir.js";
+import { pinSoleAgentWorkspaceForFleetExpansion } from "../config/agent-workspace-ownership.js";
 import { listRouteBindings } from "../config/bindings.js";
 import type { IdentityConfig } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -69,12 +71,14 @@ export function loadAgentIdentity(workspace: string): AgentIdentity | null {
 
 /** Build config-derived summaries for text/JSON agent listing. */
 export function buildAgentSummaries(cfg: OpenClawConfig): AgentSummary[] {
-  const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
+  const defaultAgentId = tryResolveDefaultAgentId(cfg);
   const configuredAgents = listAgentEntries(cfg);
   const orderedIds =
     configuredAgents.length > 0
       ? configuredAgents.map((agent) => normalizeAgentId(agent.id))
-      : [defaultAgentId];
+      : defaultAgentId
+        ? [defaultAgentId]
+        : [];
   const bindingCounts = new Map<string, number>();
   for (const binding of listRouteBindings(cfg)) {
     const agentId = normalizeAgentId(binding.agentId);
@@ -113,7 +117,7 @@ export function buildAgentSummaries(cfg: OpenClawConfig): AgentSummary[] {
       agentDir: resolveAgentDir(cfg, id),
       model: resolveAgentModel(cfg, id),
       bindings: bindingCounts.get(id) ?? 0,
-      isDefault: id === defaultAgentId,
+      isDefault: defaultAgentId !== undefined && id === normalizeAgentId(defaultAgentId),
     };
     if (identityAvatarUrl) {
       summary.identityAvatarUrl = identityAvatarUrl;
@@ -122,7 +126,7 @@ export function buildAgentSummaries(cfg: OpenClawConfig): AgentSummary[] {
   });
 }
 
-/** Add or update one agent entry. The first roster entry becomes the explicit default. */
+/** Add or update one canonical agent entry. */
 export function applyAgentConfig(
   cfg: OpenClawConfig,
   params: {
@@ -138,10 +142,7 @@ export function applyAgentConfig(
   const name = params.name?.trim();
   const list = listAgentEntries(cfg);
   const index = findAgentEntryIndex(list, agentId);
-  const base = (index >= 0 ? list[index] : undefined) ?? {
-    id: agentId,
-    ...(list.length === 0 ? { default: true } : {}),
-  };
+  const base = (index >= 0 ? list[index] : undefined) ?? { id: agentId };
   const mergedIdentity = params.identity ? { ...base.identity, ...params.identity } : undefined;
   const nextEntry: AgentEntry = {
     ...base,
@@ -157,19 +158,35 @@ export function applyAgentConfig(
     nextEntry.model = params.model;
   }
   const nextList = [...list];
+  let nextPlugins = cfg.plugins;
   if (index >= 0) {
     nextList[index] = nextEntry;
   } else {
+    if (nextList.length === 1 && !nextList[0]?.workspace?.trim()) {
+      const soleAgent = nextList[0]!;
+      const pinned = pinSoleAgentWorkspaceForFleetExpansion({
+        sourceConfig: cfg,
+        targetConfig: cfg,
+        agentId: soleAgent.id,
+      });
+      nextList[0] = listAgentEntries(pinned.config)[0]!;
+      nextPlugins = pinned.config.plugins;
+    }
     nextList.push(nextEntry);
   }
-  const { list: _legacyList, ...agentsConfig } = cfg.agents ?? {};
-  return {
+  const { list: _legacyList, ownership: _ownership, ...agentsConfig } = cfg.agents ?? {};
+  const nextConfig: OpenClawConfig = {
     ...cfg,
+    ...(nextPlugins ? { plugins: nextPlugins } : {}),
     agents: {
       ...agentsConfig,
+      ...(nextList.length > 1 ? { ownership: "explicit" as const } : {}),
       entries: toAgentEntriesRecord(nextList),
     },
   };
+  return list.length === 1 && nextList.length > 1
+    ? pinLegacyInheritedAuthOwnerForRosterTransition(cfg, nextConfig)
+    : nextConfig;
 }
 
 /** Remove an agent and any config references that route or allow traffic to it. */
@@ -222,11 +239,19 @@ export function pruneAgentConfig(
         },
       }
     : cfg.agents?.defaults;
-  const { list: _legacyList, ...agentsConfig } = cfg.agents ?? {};
+  const { list: _legacyList, ownership: _ownership, ...agentsConfig } = cfg.agents ?? {};
   const nextAgentsConfig = cfg.agents
-    ? { ...agentsConfig, defaults: nextDefaults, entries: nextAgents }
+    ? {
+        ...agentsConfig,
+        ...(nextAgentsList.length > 1 ? { ownership: "explicit" as const } : {}),
+        defaults: nextDefaults,
+        entries: nextAgents,
+      }
     : nextAgents
-      ? { entries: nextAgents }
+      ? {
+          ...(nextAgentsList.length > 1 ? { ownership: "explicit" as const } : {}),
+          entries: nextAgents,
+        }
       : undefined;
   const nextTools = cfg.tools?.agentToAgent
     ? {
@@ -238,13 +263,28 @@ export function pruneAgentConfig(
       }
     : cfg.tools;
 
+  const preliminaryConfig: OpenClawConfig = {
+    ...cfg,
+    agents: nextAgentsConfig,
+    bindings: filteredBindings.length > 0 ? filteredBindings : undefined,
+    tools: nextTools,
+  };
+  const pinned =
+    nextAgentsList.length === 1
+      ? pinSoleAgentWorkspaceForFleetExpansion({
+          sourceConfig: cfg,
+          targetConfig: preliminaryConfig,
+          agentId: nextAgentsList[0]!.id,
+        })
+      : { config: preliminaryConfig };
+
+  const transitionPinnedConfig =
+    agents.length > 1 && nextAgentsList.length === 1
+      ? pinLegacyInheritedAuthOwnerForRosterTransition(cfg, pinned.config)
+      : pinned.config;
+
   return {
-    config: {
-      ...cfg,
-      agents: nextAgentsConfig,
-      bindings: filteredBindings.length > 0 ? filteredBindings : undefined,
-      tools: nextTools,
-    },
+    config: transitionPinnedConfig,
     removedBindings: bindings.length - filteredBindings.length,
     removedAllow: allow.length - filteredAllow.length,
   };

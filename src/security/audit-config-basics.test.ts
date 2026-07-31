@@ -30,16 +30,13 @@ function captureSecurityEvents(): {
 }
 
 describe("security audit config basics", () => {
-  it("preserves malformed roster defaults through the shared audit helper", async () => {
+  it("accepts a multi-agent roster without a stored default", async () => {
     const findings = await collectSecurityAuditFindings({
       agents: { entries: { main: {}, ops: {} } },
     });
 
-    expect(findings).toContainEqual(
-      expect.objectContaining({
-        checkId: "config.agent_roster.invalid_default_count",
-        detail: expect.stringContaining("found 0"),
-      }),
+    expect(findings.some((finding) => finding.checkId.startsWith("config.agent_roster."))).toBe(
+      false,
     );
   });
 

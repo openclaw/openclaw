@@ -29,6 +29,7 @@ export {
   startGatewayServerWithRetries,
   startServer,
   startServerWithClient,
+  setTestAgentsConfig,
   trackConnectChallengeNonce,
   waitForSystemEvent,
   withGatewayServer,

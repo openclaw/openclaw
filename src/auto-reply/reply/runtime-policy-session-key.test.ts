@@ -78,6 +78,28 @@ describe("resolveRuntimePolicySessionKey", () => {
     ).toBe("agent:main:discord:channel:123:thread:456");
   });
 
+  it("uses a scoped owner without resolving an ambient default", () => {
+    const explicitFleet = {
+      agents: {
+        ownership: "explicit",
+        entries: { ops: {}, research: {} },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      resolveRuntimePolicySessionKey({
+        cfg: explicitFleet,
+        sessionKey: "agent:ops:main",
+        ctx: {
+          AgentId: "ops",
+          SessionKey: "agent:ops:main",
+          Provider: "webchat",
+          ChatType: "direct",
+        },
+      }),
+    ).toBe("agent:ops:main");
+  });
+
   it("uses native command target sessions as the policy base", () => {
     expect(
       resolveRuntimePolicySessionKey({

@@ -1,7 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
-type LoadStaticCatalog =
-  typeof import("./embedded-agent-runner/model.static-catalog.js").loadBundledProviderStaticCatalogContextModels;
+import type { LoadStaticCatalog } from "./prepared-model-runtime.lifecycle.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   authStorage: {
@@ -44,7 +42,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./model-catalog.js", () => ({
   buildPreparedModelCatalogSnapshot: (...args: unknown[]) =>
-    mocks.buildPreparedModelCatalogSnapshot(...args),
+    Reflect.apply(mocks.buildPreparedModelCatalogSnapshot, undefined, args),
 }));
 
 vi.mock("./agent-auth-discovery.js", () => ({
@@ -74,12 +72,26 @@ vi.mock("./agent-scope.js", () => ({
   listAgentIds: () => mocks.configuredAgentIds,
   resolveAgentDir: (_config: unknown, agentId: string) =>
     mocks.configuredAgentDirs.get(agentId) ??
-    (agentId === "default" ? "/tmp/unused-agent" : `/tmp/configured-${agentId}`),
+    (agentId === "default" || agentId === "main"
+      ? "/tmp/unused-agent"
+      : `/tmp/configured-${agentId}`),
   resolveAgentWorkspaceDir: (_config: unknown, agentId: string) =>
     mocks.configuredWorkspaces.get(agentId) ??
     (agentId === "default" ? "/tmp/unused-workspace" : `/tmp/workspace-${agentId}`),
   resolveDefaultAgentDir: () => "/tmp/unused-agent",
   resolveDefaultAgentId: () => "default",
+  tryResolveSoleAgentId: () =>
+    mocks.configuredAgentIds.length === 1 ? mocks.configuredAgentIds[0] : undefined,
+}));
+
+vi.mock("./agent-scope-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agent-scope-config.js")>()),
+  tryResolveSoleAgentId: () =>
+    mocks.configuredAgentIds.length === 1 ? mocks.configuredAgentIds[0] : undefined,
+}));
+
+vi.mock("./legacy-inherited-auth-dir.js", () => ({
+  resolveLegacyInheritedAuthDir: () => "/tmp/unused-agent",
 }));
 
 vi.mock("./auth-profiles/runtime-snapshots.js", () => ({
@@ -96,7 +108,8 @@ vi.mock("./model-discovery-context.js", () => ({
 }));
 
 vi.mock("./models-config.js", () => ({
-  ensureOpenClawModelsJson: (...args: unknown[]) => mocks.ensureOpenClawModelsJson(...args),
+  ensureOpenClawModelsJson: (...args: unknown[]) =>
+    Reflect.apply(mocks.ensureOpenClawModelsJson, undefined, args),
   planOpenClawModelsJsonSource: (...args: unknown[]) => mocks.planOpenClawModelsJsonSource(...args),
 }));
 
@@ -968,15 +981,12 @@ describe("prepared model runtime snapshots", () => {
     );
   });
 
-  it("tracks default auth inheritance when the owner omits the directory", async () => {
+  it("tracks main auth inheritance when the owner omits the directory", async () => {
     const config = {};
     const agentDir = "/tmp/prepared-model-runtime-implicit-inheritance";
     await publishPreparedModelRuntimeSnapshot({ config, agentDir });
 
-    mocks.mutationListener?.({
-      agentDir: "/tmp/unused-agent",
-      affectsInheritedStores: false,
-    });
+    mocks.mutationListener?.({ agentDir: "/tmp/unused-agent", affectsInheritedStores: false });
 
     await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2));
     expect(mocks.discoverAuthStorage).toHaveBeenLastCalledWith(

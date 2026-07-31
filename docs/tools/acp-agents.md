@@ -377,6 +377,7 @@ Use `agents.entries.*.runtime` to define ACP defaults once per agent:
 ```json5
 {
   agents: {
+    ownership: "explicit",
     list: [
       {
         id: "codex",

@@ -3253,22 +3253,22 @@ describe("agent event handler", () => {
     );
   });
 
-  it("routes hidden bare global chat events to the configured default agent subscriber", () => {
+  it("routes hidden bare global chat events to the sole agent subscriber", () => {
     vi.mocked(getRuntimeConfig).mockReturnValue({
-      agents: { list: [{ id: "main" }, { id: "ops", default: true }] },
+      agents: { entries: { ops: {} } },
     });
     const { broadcastToConnIds, chatRunState, handler, sessionMessageSubscribers } =
       createHarness();
     sessionMessageSubscribers.subscribe("conn-main", "agent:main:global");
     sessionMessageSubscribers.subscribe("conn-ops", "agent:ops:global");
-    registerChatRun(chatRunState, "run-hidden-default", "global", "client-hidden-default");
-    registerAgentRunContext("run-hidden-default", {
+    registerChatRun(chatRunState, "run-hidden-sole", "global", "client-hidden-sole");
+    registerAgentRunContext("run-hidden-sole", {
       sessionKey: "global",
       isControlUiVisible: false,
     });
 
-    emitAgentEvent(handler, "run-hidden-default", "assistant", {
-      text: "hidden default global reply",
+    emitAgentEvent(handler, "run-hidden-sole", "assistant", {
+      text: "hidden sole-agent global reply",
     });
 
     const chatCall = broadcastToConnIds.mock.calls.find(([event]) => event === "chat");

@@ -123,7 +123,7 @@ function resolveAuthorizedQueuedTurnsForSession(params: {
   sessionKeys: string[];
   sessionId?: string;
   agentId?: string;
-  defaultAgentId: string;
+  defaultAgentId?: string;
   requester: ChatAbortRequester;
 }) {
   const chatQueuedTurns = ensureChatQueuedTurns(params.context);
@@ -171,7 +171,7 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
   agentId?: string;
   sessionId?: string;
   persistSessionKey?: string;
-  defaultAgentId: string;
+  defaultAgentId?: string;
   abortOrigin: AbortOrigin;
   stopReason?: string;
   requester: ChatAbortRequester;

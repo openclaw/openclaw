@@ -18,7 +18,7 @@ describe("prepareEmbeddedAttemptSetup", () => {
     resolveProviderRuntimePluginHandle.mockReset();
   });
 
-  it("prepares the default and session agent identities together", async () => {
+  it("uses the scoped session owner for both prepared agent identities", async () => {
     const setup = await prepareEmbeddedAttemptSetup({
       config: {
         agents: {
@@ -35,7 +35,7 @@ describe("prepareEmbeddedAttemptSetup", () => {
       workspaceDir: path.join(os.tmpdir(), "openclaw-attempt-setup-agent-identities"),
     } as unknown as EmbeddedRunAttemptParams);
 
-    expect(setup.defaultAgentId).toBe("main");
+    expect(setup.defaultAgentId).toBe("marketing");
     expect(setup.sessionAgentId).toBe("marketing");
   });
 

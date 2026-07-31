@@ -1,5 +1,5 @@
 /** CLI entrypoint for non-mutating doctor lint health checks. */
-import { resolveAgentWorkspaceDir, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
+import { tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { registerBundledHealthChecks } from "../flows/bundled-health-checks.js";
 import { configValidationIssuesToHealthFindings } from "../flows/doctor-core-checks.js";
@@ -72,12 +72,11 @@ export async function runDoctorLintCli(
     return exitCodeFromFindings(findings, sevMin);
   }
 
-  const defaultAgentId = tryResolveDefaultAgentId(snapshot.config);
   const ctx: HealthCheckContext = {
     mode: "lint",
     runtime,
     cfg: snapshot.config,
-    cwd: defaultAgentId ? resolveAgentWorkspaceDir(snapshot.config, defaultAgentId) : process.cwd(),
+    cwd: tryResolveConfiguredAgentWorkspaceDir(snapshot.config) ?? process.cwd(),
     allowExecSecretRefs: opts.allowExec === true,
     ...(snapshot.path !== undefined ? { configPath: snapshot.path } : {}),
   };

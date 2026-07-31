@@ -2,6 +2,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
+import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import * as taskExecutor from "../../tasks/task-executor.js";
 import { findTaskByRunId, listTaskRecordsUnsorted } from "../../tasks/task-registry.js";
@@ -12,14 +14,20 @@ import { createCronExecutionId } from "../run-id.js";
 import * as cronSchedule from "../schedule.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import * as cronStoreModule from "../store.js";
-import { loadCronJobsStoreWithConfigJobs, loadCronStore } from "../store.js";
+import { loadCronJobsStoreWithConfigJobs, loadCronStore, saveCronJobsStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
+import * as ownerMigrationModule from "../store/owner-migration.js";
+import { getCronStoreKysely } from "../store/schema.js";
 import type { CronJob } from "../types.js";
-import { start, stop } from "./ops-lifecycle.js";
+import { reloadForConfigAdoption, start, stop } from "./ops-lifecycle.js";
 import { add, remove, removeStaleJobFamily, update } from "./ops-mutations.js";
 import { list } from "./ops-read.js";
 import { run } from "./ops-run.js";
-import { createCronServiceState, type CronEvent } from "./state.js";
+import {
+  createCronServiceState,
+  type CronEvent,
+  resolveCronServiceDefaultAgentId,
+} from "./state.js";
 import { tryCreateCronTaskRun, tryFinishCronTaskRun } from "./task-runs.js";
 import { runMissedJobs } from "./timer.js";
 
@@ -112,6 +120,130 @@ describe("scheduled tool policy provenance", () => {
     expect(reauthorized.scheduledToolPolicy?.mode).toBe("account");
     if (state.timer) {
       clearTimeout(state.timer);
+    }
+  });
+});
+
+describe("cron agent ownership reloads", () => {
+  const createInput = (name: string) => ({
+    name,
+    enabled: true,
+    schedule: { kind: "every" as const, everyMs: 60_000 },
+    sessionTarget: "isolated" as const,
+    wakeMode: "next-heartbeat" as const,
+    payload: { kind: "agentTurn" as const, message: name },
+  });
+
+  it("treats a live resolver's undefined as ownerless after a sole-to-multi transition", async () => {
+    const { storePath } = await makeStorePath();
+    let currentDefaultAgentId: string | undefined = "main";
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      defaultAgentId: "stale-startup-owner",
+      resolveDefaultAgentId: () => currentDefaultAgentId,
+      isAgentAvailable: () => true,
+      log: logger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(),
+    });
+
+    const sole = await add(state, createInput("sole"));
+    expect(sole.agentId).toBe("main");
+
+    currentDefaultAgentId = undefined;
+    await expect(add(state, createInput("ownerless-multi"))).rejects.toBeInstanceOf(
+      AgentSelectionRequiredError,
+    );
+    expect(resolveCronServiceDefaultAgentId(state.deps)).toBeUndefined();
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+  });
+
+  it("rejects mismatched explicit owners during creation", async () => {
+    const { storePath } = await makeStorePath();
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      resolveDefaultAgentId: () => undefined,
+      isAgentAvailable: () => true,
+      log: logger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(),
+    });
+
+    await expect(
+      add(state, {
+        ...createInput("mismatched-create-owner"),
+        agentId: "ops",
+        sessionKey: "agent:research:main",
+      }),
+    ).rejects.toThrow("cron job agentId ops does not match sessionKey owner research");
+  });
+
+  it("revalidates both cleared and retargeted session ownership patches", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.now();
+    const legacyJob = (id: string): CronJob => ({
+      id,
+      name: id,
+      enabled: true,
+      createdAtMs: now,
+      updatedAtMs: now,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      sessionKey: "agent:main:main",
+      payload: { kind: "agentTurn", message: id },
+      state: {},
+    });
+    await writeCronStoreSnapshot({
+      storePath,
+      jobs: [
+        legacyJob("clear-owner"),
+        legacyJob("unavailable-owner"),
+        { ...legacyJob("retarget-owner"), agentId: "main" },
+        { ...legacyJob("clear-explicit-empty"), agentId: "main" },
+        { ...legacyJob("clear-explicit-whitespace"), agentId: "main" },
+        { ...legacyJob("clear-explicit-undefined"), agentId: "main" },
+      ],
+    });
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      defaultAgentId: "stale-startup-owner",
+      resolveDefaultAgentId: () => undefined,
+      isAgentAvailable: (agentId) => agentId !== "retired",
+      log: logger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(),
+    });
+
+    await expect(update(state, "clear-owner", { sessionKey: undefined })).rejects.toBeInstanceOf(
+      AgentSelectionRequiredError,
+    );
+    await expect(
+      update(state, "unavailable-owner", { sessionKey: "agent:retired:main" }),
+    ).rejects.toThrow("cron job agent is unavailable: retired");
+    await expect(
+      update(state, "retarget-owner", { sessionKey: "agent:research:main" }),
+    ).resolves.toMatchObject({
+      agentId: "research",
+      sessionKey: "agent:research:main",
+    });
+    for (const [jobId, agentId] of [
+      ["clear-explicit-empty", ""],
+      ["clear-explicit-whitespace", "   "],
+      ["clear-explicit-undefined", undefined],
+    ] as const) {
+      await expect(update(state, jobId, { agentId })).resolves.toMatchObject({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+      });
     }
   });
 });
@@ -388,7 +520,232 @@ function createMissedIsolatedJob(now: number): CronJob {
   };
 }
 
+function deleteCronJobWithoutEpoch(storePath: string, jobId: string): void {
+  runOpenClawStateWriteTransaction(({ db }) =>
+    executeSqliteQuerySync(
+      db,
+      getCronStoreKysely(db)
+        .deleteFrom("cron_jobs")
+        .where("store_key", "=", cronStoreKey(storePath))
+        .where("job_id", "=", jobId),
+    ),
+  );
+}
+
 describe("cron service ops seam coverage", () => {
+  it("materializes a legacy owner after load merges imported jobs", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-07-25T12:00:00.000Z");
+    const importedJob: CronJob = {
+      id: "legacy-json-import",
+      name: "legacy json import",
+      enabled: true,
+      createdAtMs: now,
+      updatedAtMs: now,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: now },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "run" },
+      state: { nextRunAtMs: now + 60_000 },
+    };
+    const loadSpy = vi
+      .spyOn(cronStoreModule, "loadCronJobsStoreWithConfigJobs")
+      .mockResolvedValueOnce({
+        store: { version: 1, jobs: [structuredClone(importedJob)] },
+        storeEpoch: 0,
+        runtimeRevision: 0,
+        configJobs: [structuredClone(importedJob) as unknown as Record<string, unknown>],
+        configJobIndexes: [0],
+        legacyImportedJobIndexes: [0],
+        configJobRuntimeEntries: [],
+        topologyFingerprintByJobId: new Map(),
+        invalidConfigRows: [],
+      });
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      legacyDefaultAgentId: "ops",
+      nowMs: () => now,
+      log: logger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    try {
+      await start(state);
+      expect(state.store?.jobs[0]?.agentId).toBe("ops");
+      expect(await loadCronStore(storePath)).toMatchObject({
+        jobs: [{ id: "legacy-json-import", agentId: "ops" }],
+      });
+      expect(state.legacyImportedJobIds).toEqual(new Set());
+
+      deleteCronJobWithoutEpoch(storePath, importedJob.id);
+      await reloadForConfigAdoption(state, {
+        agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+      });
+      expect(state.store?.jobs).toEqual([]);
+      expect((await loadCronStore(storePath)).jobs).toEqual([]);
+    } finally {
+      stop(state);
+      loadSpy.mockRestore();
+    }
+  });
+
+  it("materializes an imported ID concurrently inserted into SQLite", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-07-25T12:15:00.000Z");
+    const importedJob: CronJob = {
+      id: "legacy-json-concurrent-sqlite",
+      name: "legacy json concurrent sqlite",
+      enabled: true,
+      createdAtMs: now,
+      updatedAtMs: now,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: now },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "run" },
+      state: { nextRunAtMs: now + 60_000 },
+    };
+    const committed = await saveCronJobsStore(storePath, {
+      version: 1,
+      jobs: [structuredClone(importedJob)],
+    });
+    if (!committed) {
+      throw new Error("expected cron fixture write result");
+    }
+    const loadSpy = vi
+      .spyOn(cronStoreModule, "loadCronJobsStoreWithConfigJobs")
+      .mockResolvedValueOnce({
+        store: { version: 1, jobs: [structuredClone(importedJob)] },
+        storeEpoch: committed.storeEpoch,
+        runtimeRevision: committed.runtimeRevision,
+        configJobs: [structuredClone(importedJob) as unknown as Record<string, unknown>],
+        configJobIndexes: [0],
+        legacyImportedJobIndexes: [0],
+        configJobRuntimeEntries: [],
+        topologyFingerprintByJobId: new Map(),
+        invalidConfigRows: [],
+      });
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      legacyDefaultAgentId: "ops",
+      nowMs: () => now,
+      log: logger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    try {
+      await start(state);
+      expect((await loadCronStore(storePath)).jobs[0]).toMatchObject({
+        id: importedJob.id,
+        agentId: "ops",
+      });
+    } finally {
+      stop(state);
+      loadSpy.mockRestore();
+    }
+  });
+
+  it("does not resurrect a loaded SQLite record deleted by a pre-upgrade writer", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-07-25T12:30:00.000Z");
+    const deletedJob: CronJob = {
+      id: "deleted-after-load",
+      name: "deleted after load",
+      enabled: true,
+      createdAtMs: now,
+      updatedAtMs: now,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: now },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "do not resurrect" },
+      state: { nextRunAtMs: now + 60_000 },
+    };
+    await saveCronJobsStore(storePath, { version: 1, jobs: [deletedJob] });
+    const loadedBeforeDelete = await loadCronJobsStoreWithConfigJobs(storePath);
+    deleteCronJobWithoutEpoch(storePath, deletedJob.id);
+    const loadSpy = vi
+      .spyOn(cronStoreModule, "loadCronJobsStoreWithConfigJobs")
+      .mockResolvedValueOnce(loadedBeforeDelete);
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      legacyDefaultAgentId: "ops",
+      nowMs: () => now,
+      log: logger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    try {
+      await start(state);
+      expect(state.store?.jobs).toEqual([]);
+      expect((await loadCronStore(storePath)).jobs).toEqual([]);
+    } finally {
+      stop(state);
+      loadSpy.mockRestore();
+    }
+  });
+
+  it("retries one epoch conflict and blocks after a second conflict", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-07-25T12:45:00.000Z");
+    const importedJob: CronJob = {
+      id: "repeated-owner-conflict",
+      name: "repeated owner conflict",
+      enabled: true,
+      createdAtMs: now,
+      updatedAtMs: now,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: now },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "run" },
+      state: { nextRunAtMs: now + 60_000 },
+    };
+    const loadSpy = vi
+      .spyOn(cronStoreModule, "loadCronJobsStoreWithConfigJobs")
+      .mockResolvedValueOnce({
+        store: { version: 1, jobs: [importedJob] },
+        storeEpoch: 0,
+        runtimeRevision: 0,
+        configJobs: [importedJob as unknown as Record<string, unknown>],
+        configJobIndexes: [0],
+        legacyImportedJobIndexes: [0],
+        configJobRuntimeEntries: [],
+        topologyFingerprintByJobId: new Map(),
+        invalidConfigRows: [],
+      });
+    const migrationSpy = vi
+      .spyOn(ownerMigrationModule, "materializeCronJobsStoreOwners")
+      .mockResolvedValue({ matched: false, rewritten: 0 });
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      legacyDefaultAgentId: "ops",
+      nowMs: () => now,
+      log: logger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    try {
+      await expect(start(state)).rejects.toThrow(
+        "cron store changed during legacy owner migration twice",
+      );
+      expect(migrationSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      stop(state);
+      loadSpy.mockRestore();
+      migrationSpy.mockRestore();
+    }
+  });
+
   it("keeps core add paths on SQLite and leaves legacy JSON for doctor migration", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-05-20T08:00:00.000Z");

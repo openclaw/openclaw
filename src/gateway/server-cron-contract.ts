@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 // Gateway cron contracts stay separate from the runtime so shared request
 // types do not pull scheduler implementation dependencies into their graph.
 import type { CronJobScratchState, CronJobScratchWriteResult } from "../cron/scratch-store.js";
@@ -20,6 +21,12 @@ export type GatewayCronServiceContract = CronServiceContract & {
   /** Temporarily disarm ticks without running startup recovery on resume. */
   pauseScheduling(): void;
   resumeScheduling(): void;
+  /** Reload durable rows before publishing a config with new agent resolution. */
+  reloadForConfigAdoption(incomingConfig: OpenClawConfig): Promise<void>;
+  /** Publish the incoming config's retained owner after durable config adoption. */
+  completeConfigAdoption(incomingConfig: OpenClawConfig): void;
+  /** Restore the prior scheduler snapshot after a config candidate is rejected. */
+  rejectConfigAdoption(): Promise<void>;
   /** Scheduler-owned work not represented by active cron run markers. */
   getSuspensionBlockerCount?(): number;
   /** Materialize lazy cron dependencies before a synchronous operator wake. */

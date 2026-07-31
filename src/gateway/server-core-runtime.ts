@@ -138,7 +138,7 @@ export async function startGatewayCoreRuntime(input: {
     coreGatewayMethodNames,
     pluginHostServices,
     baseMethods,
-    defaultWorkspaceDir,
+    pluginWorkspaceDir,
     ambientEnvTriggers,
     workerEnvironmentStartup,
     broadcastPluginEvent,
@@ -430,7 +430,7 @@ export async function startGatewayCoreRuntime(input: {
     });
     const nextPluginLookUpTable = loadPluginLookUpTable({
       config: nextPluginActivationConfig,
-      workspaceDir: defaultWorkspaceDir,
+      workspaceDir: pluginWorkspaceDir,
       env: params.env,
       activationSourceConfig: params.nextConfig,
       // Workers can be created after startup; reload planning needs the live durable set.
@@ -490,7 +490,7 @@ export async function startGatewayCoreRuntime(input: {
     );
     const loaded = prepareGatewayPluginLoad({
       cfg: params.nextConfig,
-      workspaceDir: defaultWorkspaceDir,
+      workspaceDir: pluginWorkspaceDir,
       log,
       coreGatewayMethodNames,
       hostServices: pluginHostServices,
@@ -501,7 +501,7 @@ export async function startGatewayCoreRuntime(input: {
     setCurrentPluginMetadataSnapshot(nextPluginLookUpTable, {
       config: params.nextConfig,
       env: params.env,
-      workspaceDir: defaultWorkspaceDir,
+      workspaceDir: pluginWorkspaceDir,
     });
     replaceAttachedPluginRuntime(loaded);
     runtimeState.pluginServices = null;
@@ -512,7 +512,7 @@ export async function startGatewayCoreRuntime(input: {
     runtimeState.pluginServices = await startPluginServices({
       registry: loaded.pluginRegistry,
       config: params.nextConfig,
-      workspaceDir: defaultWorkspaceDir,
+      workspaceDir: pluginWorkspaceDir,
       broadcastPluginEvent,
     });
     const afterChannelTargets = listAttachedChannelConfigTargets();

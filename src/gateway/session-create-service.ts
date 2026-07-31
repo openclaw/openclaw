@@ -185,9 +185,13 @@ export function resolveRequestedSessionAgentId(
   key: string,
   explicitAgentId?: string,
 ): RequestedSessionAgentIdResolution {
-  const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey: key });
   const parsed = parseAgentSessionKey(key);
   const requestedAgentId = normalizeOptionalString(explicitAgentId);
+  const canonicalKey = resolveSessionStoreKey({
+    cfg,
+    sessionKey: key,
+    ...(requestedAgentId ? { storeAgentId: requestedAgentId } : {}),
+  });
   if (requestedAgentId) {
     const agentId = normalizeAgentId(requestedAgentId);
     if (!listAgentIds(cfg).includes(agentId)) {
@@ -326,8 +330,13 @@ export async function createGatewaySession(params: {
   const requestedKey = normalizeOptionalString(params.key);
   const parentSessionKey = normalizeOptionalString(params.parentSessionKey);
   const generatedDisplayName = normalizeOptionalString(params.generatedDisplayName);
+  const explicitKeyAgentId = parseAgentSessionKey(requestedKey)?.agentId;
+  const parentKeyAgentId = parseAgentSessionKey(parentSessionKey)?.agentId;
   const agentId = normalizeAgentId(
-    normalizeOptionalString(params.agentId) ?? resolveDefaultAgentId(params.cfg),
+    normalizeOptionalString(params.agentId) ??
+      explicitKeyAgentId ??
+      parentKeyAgentId ??
+      resolveDefaultAgentId(params.cfg),
   );
   const catalogModel = normalizeOptionalString(params.catalogTarget?.model);
   const catalogAgentRuntime = normalizeOptionalAgentRuntimeId(params.catalogTarget?.agentRuntime);
@@ -611,6 +620,7 @@ export async function createGatewaySession(params: {
     // on that fence would deadlock callers that must reject its visible pending row.
     const pendingEntry = resolveSessionEntryAccessTarget({
       cfg: params.cfg,
+      agentId,
       sessionKey: creationTarget.canonicalKey,
     }).entry;
     if (pendingEntry?.initializationPending === true) {

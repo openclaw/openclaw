@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { retainLegacyDefaultAgentId } from "../legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { purgeAgentSessionStoreEntries } from "./cleanup-service.js";
 
@@ -48,5 +49,24 @@ describe("purgeAgentSessionStoreEntries", () => {
       storePath: "/tmp/openclaw-agent-purge-sessions.json",
     });
     expect(sessionAccessorMocks.applySessionEntryLifecycleMutation).not.toHaveBeenCalled();
+  });
+
+  it("preserves the retained legacy owner for a fixed store", async () => {
+    const cfg = retainLegacyDefaultAgentId(
+      {
+        session: { store: "/tmp/openclaw-agent-purge-sessions.json" },
+        agents: { entries: { main: {}, ops: {} } },
+      },
+      "ops",
+    );
+
+    await purgeAgentSessionStoreEntries(cfg, "main");
+
+    expect(sessionAccessorMocks.purgeDeletedAgentSessionEntries).toHaveBeenCalledWith({
+      cfg,
+      agentId: "main",
+      storeAgentId: "ops",
+      storePath: "/tmp/openclaw-agent-purge-sessions.json",
+    });
   });
 });

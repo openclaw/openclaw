@@ -34,6 +34,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { isAcpSessionKey } from "../sessions/session-key-utils.js";
 import { listGatewayAgentsBasic } from "./agent-list.js";
+import type { GatewayAgentOwnership } from "./agent-list.js";
 import { resolveGatewaySessionThinkingDefault } from "./session-utils-model.js";
 import {
   resolveGatewaySessionStoreTarget,
@@ -312,6 +313,8 @@ export function listAgentsForGateway(
   },
 ): {
   defaultId: string;
+  ownership: GatewayAgentOwnership;
+  selectionRequired: boolean;
   mainKey: string;
   scope: SessionScope;
   agents: GatewayAgentRow[];
@@ -394,5 +397,12 @@ export function listAgentsForGateway(
       model ? { model } : {},
     );
   });
-  return { defaultId: basic.defaultId, mainKey: basic.mainKey, scope: basic.scope, agents };
+  return {
+    defaultId: basic.defaultId,
+    ownership: basic.ownership,
+    selectionRequired: basic.selectionRequired,
+    mainKey: basic.mainKey,
+    scope: basic.scope,
+    agents,
+  };
 }

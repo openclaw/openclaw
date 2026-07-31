@@ -1754,16 +1754,22 @@ describe("session.message websocket events", () => {
       await connectOk(workWs, { scopes: ["operator.read"] });
       await connectOk(mainWs, { scopes: ["operator.read"] });
       await connectOk(bareWs, { scopes: ["operator.read"] });
-      await rpcReq(workWs, "sessions.messages.subscribe", {
+      const workSubscribe = await rpcReq(workWs, "sessions.messages.subscribe", {
         key: "global",
         agentId: "work",
       });
-      await rpcReq(mainWs, "sessions.messages.subscribe", {
+      const mainSubscribe = await rpcReq(mainWs, "sessions.messages.subscribe", {
         key: "global",
         agentId: "main",
       });
-      await rpcReq(bareWs, "sessions.messages.subscribe", {
+      const bareSubscribe = await rpcReq(bareWs, "sessions.messages.subscribe", {
         key: "global",
+      });
+      expect(workSubscribe).toMatchObject({ ok: true, payload: { key: "global" } });
+      expect(mainSubscribe).toMatchObject({ ok: true, payload: { key: "global" } });
+      expect(bareSubscribe).toMatchObject({
+        ok: false,
+        error: { code: "INVALID_REQUEST" },
       });
 
       const workMessagePromise = waitForSessionMessageEvent(workWs, "global");
@@ -1771,21 +1777,21 @@ describe("session.message websocket events", () => {
         watch: (timeoutMs) => waitForSessionMessageEvent(mainWs, "global", timeoutMs),
         timeoutMs: 250,
       });
-      const bareMessagePromise = expectNoMessageWithin({
-        watch: (timeoutMs) => waitForSessionMessageEvent(bareWs, "global", timeoutMs),
-        timeoutMs: 250,
-      });
       emitSessionTranscriptUpdate({
         sessionFile: transcriptPath,
-        sessionKey: "global",
-        agentId: "work",
+        target: {
+          agentId: "work",
+          sessionId: "sess-work-global",
+          sessionKey: "global",
+          storePath,
+        },
         message: transcriptMessage,
         messageId: "msg-work-global",
+        messageSeq: 1,
       });
 
       const workMessage = await workMessagePromise;
       await mainMessagePromise;
-      await bareMessagePromise;
       expectRecordFields(workMessage.payload, {
         sessionKey: "global",
         agentId: "work",

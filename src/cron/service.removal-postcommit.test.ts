@@ -164,7 +164,7 @@ describe.each(removalPaths)("cron one-shot removal via %s", (path) => {
         finalDeletionAttempts += 1;
         throw new Error("final persist failed");
       }
-      await realSave(...args);
+      return await realSave(...args);
     });
 
     try {

@@ -1266,6 +1266,13 @@ describe("saveCronStore", () => {
     expect(loaded).toEqual(dummyStore);
   });
 
+  it("persists and round-trips an ordinary cron job through the shared transaction", async () => {
+    const { storePath } = await makeStorePath();
+    const store = makeStore("ordinary-save", true);
+    await saveCronStore(storePath, store);
+    await expect(loadCronStore(storePath)).resolves.toEqual(store);
+  });
+
   it("does not use legacy file writes on SQLite saves", async () => {
     const { storePath } = await makeStorePath();
     await saveCronStore(storePath, dummyStore);

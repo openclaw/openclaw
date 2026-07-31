@@ -1,9 +1,5 @@
 // OpenClaw overview gathers config, agent, tool, docs, source, and gateway status.
-import {
-  listAgentEntries,
-  resolveAgentEffectiveModelPrimary,
-  resolveDefaultAgentId,
-} from "../agents/agent-scope.js";
+import { listAgentEntries, resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import {
   OPENCLAW_DOCS_URL,
   OPENCLAW_SOURCE_URL,
@@ -19,6 +15,7 @@ import {
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { resolveSystemAgentTargetAgentId } from "./inference-route.js";
 import { probeGatewayUrl, probeLocalCommand, type LocalCommandProbe } from "./probes.js";
 
 type SystemAgentSummary = {
@@ -92,7 +89,7 @@ function issueMessages(snapshot: ConfigFileSnapshot): string[] {
 }
 
 function buildAgentSummaries(cfg: OpenClawConfig): SystemAgentSummary[] {
-  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const defaultAgentId = resolveSystemAgentTargetAgentId(cfg);
   const entries = listAgentEntries(cfg);
   if (entries.length === 0) {
     return [
@@ -150,7 +147,7 @@ export async function loadSystemAgentOverview(
   const readSnapshot = deps.readConfigFileSnapshot ?? readConfigFileSnapshot;
   const snapshot = await readSnapshot();
   const cfg = snapshot.runtimeConfig ?? snapshot.sourceConfig ?? {};
-  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const defaultAgentId = resolveSystemAgentTargetAgentId(cfg);
   const defaultModel =
     resolveAgentEffectiveModelPrimary(cfg, defaultAgentId) ??
     resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model);

@@ -494,7 +494,7 @@ route is eligible to select Codex implicitly:
 
 ### Mixed provider deployment
 
-Keep Claude as the default agent and add a named Codex agent:
+Configure a Claude `main` agent and add a named Codex agent:
 
 ```json5
 {
@@ -506,29 +506,28 @@ Keep Claude as the default agent and add a named Codex agent:
     },
   },
   agents: {
+    ownership: "explicit",
     defaults: {
       model: "anthropic/claude-opus-4-6",
     },
-    list: [
-      {
-        id: "main",
-        default: true,
+    entries: {
+      main: {
         model: "anthropic/claude-opus-4-6",
       },
-      {
-        id: "codex",
+      codex: {
         name: "Codex",
         model: "openai/gpt-5.6-sol",
       },
-    ],
+    },
   },
 }
 ```
 
-The `main` agent uses its normal provider path. The `codex` agent uses Codex
-app-server when its effective OpenAI route remains compatible; add explicit
-model-scoped `agentRuntime.id: "codex"` when that should be a fail-closed
-requirement.
+This explicit fleet has no default agent. Target `main` or `codex` with an
+agent-scoped session, `--agent`, or a binding. The `main` agent uses its normal
+provider path. The `codex` agent uses Codex app-server when its effective
+OpenAI route remains compatible; add explicit model-scoped
+`agentRuntime.id: "codex"` when that should be a fail-closed requirement.
 
 ### Fail-closed Codex deployment
 

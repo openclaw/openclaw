@@ -13,7 +13,7 @@ import type {
   CronRunOutcome,
   CronRunTelemetry,
 } from "../types.js";
-import type { CronServiceState } from "./state.js";
+import { type CronServiceState, resolveCronServiceDefaultAgentId } from "./state.js";
 
 export const MAX_TIMER_DELAY_MS = 60_000;
 
@@ -132,10 +132,7 @@ export function resolveMainSessionCronDeliveryContext(
   const explicitAgentId = job.agentId?.trim();
   const agentId = normalizeAgentId(
     explicitAgentId ||
-      resolveAgentIdFromSessionKey(
-        targetSessionKey,
-        state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
-      ),
+      resolveAgentIdFromSessionKey(targetSessionKey, resolveCronServiceDefaultAgentId(state.deps)),
   );
   const storePath = state.deps.resolveSessionStorePath?.(agentId) ?? state.deps.sessionStorePath;
   if (!storePath) {

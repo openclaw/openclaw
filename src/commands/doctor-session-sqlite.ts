@@ -219,9 +219,7 @@ function resolveDoctorSessionSqliteConfig(options: DoctorSessionSqliteOptions): 
     return options.cfg;
   }
   const requestedAgentId = normalizeAgentId(options.agent ?? LEGACY_IMPLICIT_AGENT_ID);
-  return options.store
-    ? { agents: { entries: { [requestedAgentId]: { default: true } } } }
-    : getRuntimeConfig();
+  return options.store ? { agents: { entries: { [requestedAgentId]: {} } } } : getRuntimeConfig();
 }
 
 function resolveDoctorSessionSqliteTargets(params: {

@@ -240,6 +240,7 @@ export async function runSubagentAnnounceFlow(params: {
   childSessionKey: string;
   childRunId: string;
   requesterSessionKey: string;
+  requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
   requesterDisplayKey: string;
   task: string;
@@ -271,6 +272,8 @@ export async function runSubagentAnnounceFlow(params: {
   let shouldDeleteChildSession = params.cleanup === "delete";
   try {
     let targetRequesterSessionKey = params.requesterSessionKey;
+    let targetRequesterAgentId = params.requesterAgentId;
+    const cfg = subagentAnnounceDeps.getRuntimeConfig();
     let targetRequesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
     const childSessionId = (() => {
       const entry = loadSessionEntryByKey(params.childSessionKey);
@@ -314,7 +317,10 @@ export async function runSubagentAnnounceFlow(params: {
     if (failedTerminalOutcome) {
       reply = undefined;
     }
-    let requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
+    let requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey, {
+      cfg,
+      agentId: targetRequesterAgentId,
+    });
     const requesterIsInternalSession = () =>
       requesterDepth >= 1 || isCronSessionKey(targetRequesterSessionKey);
 
@@ -521,9 +527,13 @@ export async function runSubagentAnnounceFlow(params: {
             return false;
           }
           targetRequesterSessionKey = fallback.requesterSessionKey;
+          targetRequesterAgentId = fallback.requesterAgentId;
           targetRequesterOrigin =
             normalizeDeliveryContext(fallback.requesterOrigin) ?? targetRequesterOrigin;
-          requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
+          requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey, {
+            cfg,
+            agentId: targetRequesterAgentId,
+          });
           requesterIsSubagent = requesterIsInternalSession();
         }
       }
@@ -560,7 +570,10 @@ export async function runSubagentAnnounceFlow(params: {
     // follow-up injection (deliver=false) so the orchestrator receives it.
     let directOrigin = targetRequesterOrigin;
     if (!requesterIsSubagent) {
-      const { entry } = loadRequesterSessionEntry(targetRequesterSessionKey);
+      const { entry } = loadRequesterSessionEntry(
+        targetRequesterSessionKey,
+        targetRequesterAgentId,
+      );
       directOrigin = resolveAnnounceOrigin(entry, targetRequesterOrigin);
     }
     const completionDirectOrigin =
@@ -577,6 +590,7 @@ export async function runSubagentAnnounceFlow(params: {
     const directIdempotencyKey = buildAnnounceIdempotencyKey(announceId);
     const delivery = await deliverSubagentAnnouncement({
       requesterSessionKey: targetRequesterSessionKey,
+      requesterAgentId: targetRequesterAgentId,
       announceId,
       triggerMessage,
       steerMessage: triggerMessage,

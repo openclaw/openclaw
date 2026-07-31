@@ -51,8 +51,8 @@ when personas must not share compiled wiki knowledge.
 | -------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
 | Config                           | `~/.openclaw/openclaw.json`                                                            | `OPENCLAW_CONFIG_PATH`                                                                      |
 | State dir                        | `~/.openclaw`                                                                          | `OPENCLAW_STATE_DIR`                                                                        |
-| Default agent's workspace        | `~/.openclaw/workspace` (or `workspace-<profile>` when `OPENCLAW_PROFILE` is set)      | `agents.entries.*.workspace`, then `agents.defaults.workspace`, or `OPENCLAW_WORKSPACE_DIR` |
-| Other agents' workspace          | `<stateDir>/workspace-<agentId>` (or `<agents.defaults.workspace>/<agentId>` when set) | `agents.entries.*.workspace`                                                                |
+| Sole agent's workspace           | `~/.openclaw/workspace` (or `workspace-<profile>` when `OPENCLAW_PROFILE` is set)      | `agents.entries.*.workspace`, then `agents.defaults.workspace`, or `OPENCLAW_WORKSPACE_DIR` |
+| Multi-agent workspace            | `<stateDir>/workspace-<agentId>` (or `<agents.defaults.workspace>/<agentId>` when set) | `agents.entries.*.workspace`                                                                |
 | Agent dir                        | `~/.openclaw/agents/<agentId>/agent`                                                   | `agents.entries.*.agentDir`                                                                 |
 | Sessions and transcripts         | `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`                             | —                                                                                           |
 | Legacy/archive session artifacts | `~/.openclaw/agents/<agentId>/sessions`                                                | —                                                                                           |
@@ -168,6 +168,7 @@ To let one agent search another agent's QMD session transcripts, add extra colle
 ```json5
 {
   agents: {
+    ownership: "explicit",
     defaults: {
       workspace: "~/workspaces/main",
     },
@@ -210,6 +211,7 @@ Direct chats collapse to the agent's main session key by default, so true isolat
 ```json5
 {
   agents: {
+    ownership: "explicit",
     list: [
       { id: "alex", workspace: "~/.openclaw/workspace-alex" },
       { id: "mia", workspace: "~/.openclaw/workspace-mia" },
@@ -238,13 +240,13 @@ DM access control (pairing/allowlist) is global per WhatsApp account, not per ag
 
 ## Routing rules
 
-Bindings are deterministic and most-specific wins. See [Channel routing](/channels/channel-routing#routing-rules-how-an-agent-is-chosen) for the full tier order (exact peer, parent peer, peer wildcard, guild+roles, guild, team, account, channel, default agent). A few rules worth calling out here:
+Bindings are deterministic and most-specific wins. See [Channel routing](/channels/channel-routing#routing-rules-how-an-agent-is-chosen) for the full tier order (exact peer, parent peer, peer wildcard, guild+roles, guild, team, account, channel, sole configured agent). A multi-agent fleet with no matching binding fails with an actionable owner-selection error instead of routing to an arbitrary agent. A few rules worth calling out here:
 
 - If multiple bindings match within the same tier, the first one in config order wins.
 - If a binding sets multiple match fields (for example `peer` + `guildId`), all specified fields must match (`AND` semantics).
 - A binding that omits `accountId` matches only the default account, not every account. Use `accountId: "*"` for a channel-wide fallback, or `accountId: "<name>"` for one account. Adding the same binding again with an explicit account id upgrades the existing channel-only binding instead of duplicating it.
 
-For existing multi-agent configs, `openclaw doctor --fix` materializes legacy ambient default routing into channel-wide bindings plus explicit heartbeat, Custodian, and Talk targets. Single-agent configs are unchanged.
+For existing multi-agent configs, `openclaw doctor --fix` materializes a retired `default: true` marker into channel-wide bindings plus explicit heartbeat, Custodian, and Talk targets, then removes the marker. Older marker-free rosters used the first entry as a fallback even when they also contained narrower peer bindings, so OpenClaw temporarily materializes that first-entry owner independently for each still-unowned ambient surface and warns with the explicit setting to persist. After Doctor writes those owners, newly added surfaces are genuinely ownerless and fail closed until you add their binding or target. A sole agent needs no marker and resolves trivially.
 
 ## Multiple accounts / phone numbers
 
@@ -270,6 +272,7 @@ Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imess
     ```json5
     {
       agents: {
+        ownership: "explicit",
         list: [
           { id: "main", workspace: "~/.openclaw/workspace-main" },
           { id: "coding", workspace: "~/.openclaw/workspace-coding" },
@@ -317,6 +320,7 @@ Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imess
     ```json5
     {
       agents: {
+        ownership: "explicit",
         list: [
           { id: "main", workspace: "~/.openclaw/workspace-main" },
           { id: "alerts", workspace: "~/.openclaw/workspace-alerts" },
@@ -366,22 +370,26 @@ Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imess
     ```js
     {
       agents: {
-        list: [
-          {
-            id: "home",
-            default: true,
+        ownership: "explicit",
+        defaults: {
+          heartbeat: { agentId: "home" },
+          systemAgent: { agentId: "home" },
+        },
+        entries: {
+          home: {
             name: "Home",
             workspace: "~/.openclaw/workspace-home",
             agentDir: "~/.openclaw/agents/home/agent",
           },
-          {
-            id: "work",
+          work: {
             name: "Work",
             workspace: "~/.openclaw/workspace-work",
             agentDir: "~/.openclaw/agents/work/agent",
           },
-        ],
+        },
       },
+
+      talk: { agentId: "home" },
 
       // Deterministic routing: first match wins (most-specific first).
       bindings: [
@@ -436,6 +444,7 @@ Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imess
     ```json5
     {
       agents: {
+        ownership: "explicit",
         list: [
           {
             id: "chat",
@@ -467,6 +476,7 @@ Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imess
     ```json5
     {
       agents: {
+        ownership: "explicit",
         list: [
           {
             id: "chat",
@@ -553,6 +563,7 @@ Each agent can have its own sandbox and tool restrictions:
 ```js
 {
   agents: {
+    ownership: "explicit",
     list: [
       {
         id: "personal",

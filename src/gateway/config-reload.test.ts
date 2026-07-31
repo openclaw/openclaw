@@ -315,6 +315,7 @@ describe("buildGatewayReloadPlan", () => {
     "plugins.installs.telegram.installPath",
     "plugins.load.paths.0",
     "gateway.auth.mode",
+    "agents",
   ])("keeps restart-owned path restart-backed: %s", (path) => {
     const plan = buildGatewayReloadPlan([path]);
 
@@ -362,6 +363,19 @@ describe("buildGatewayReloadPlan", () => {
       noopPaths: [],
       ...expected,
     });
+  });
+
+  it("restarts when a whole agents replacement embeds a workspace change", () => {
+    const changedPaths = diffConfigPaths(
+      {},
+      { agents: { defaults: { workspace: "/srv/openclaw/workspace" } } },
+    );
+    expect(changedPaths).toEqual(["agents"]);
+
+    const plan = buildGatewayReloadPlan(changedPaths);
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toEqual(["agents"]);
+    expect(plan.restartHeartbeat).toBe(false);
   });
 
   it.each(["gateway.remote.url", "secrets.providers.default.path", "tui.footer.showRemoteHost"])(

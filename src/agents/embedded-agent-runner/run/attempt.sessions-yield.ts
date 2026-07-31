@@ -1,6 +1,6 @@
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import type { SessionManager } from "../../sessions/index.js";
+import type { SessionEntry, SessionManager } from "../../sessions/index.js";
 /**
  * Handles sessions-yield interruption, persistence, and artifact cleanup.
  */
@@ -12,6 +12,15 @@ const SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE = "openclaw.sessions_yield_interrupt"
 const SESSIONS_YIELD_CONTEXT_CUSTOM_TYPE = "openclaw.sessions_yield";
 
 const SESSIONS_YIELD_ABORT_SETTLE_TIMEOUT_MS = resolveEmbeddedAbortSettleTimeoutMs();
+
+function preserveSessionsYieldTrailingEntry(entry: SessionEntry): boolean {
+  return (
+    entry.type === "custom" ||
+    entry.type === "label" ||
+    entry.type === "session_info" ||
+    (entry.type === "message" && isTranscriptOnlyOpenClawAssistantMessage(entry.message))
+  );
+}
 
 // Persist a hidden context reminder so the next turn knows why the runner stopped.
 function buildSessionsYieldContextMessage(message: string): string {
@@ -177,7 +186,7 @@ export async function persistSessionsYieldContextMessage(
 export function stripSessionsYieldArtifacts(activeSession: {
   messages: AgentMessage[];
   agent: { state: { messages: AgentMessage[] } };
-  sessionManager: Pick<SessionManager, "removeTrailingEntries">;
+  sessionManager: Pick<SessionManager, "branch" | "getLeafEntry" | "removeTrailingEntries">;
 }) {
   const strippedMessages = activeSession.messages.slice();
 
@@ -206,7 +215,10 @@ export function stripSessionsYieldArtifacts(activeSession: {
   let remainingAssistantCount = removedMessages.filter(
     (message) => message.role === "assistant",
   ).length;
-  activeSession.sessionManager.removeTrailingEntries(
+  const trailingLeaf = activeSession.sessionManager.getLeafEntry();
+  const preservedLeafId =
+    trailingLeaf && preserveSessionsYieldTrailingEntry(trailingLeaf) ? trailingLeaf.id : undefined;
+  const removedEntryCount = activeSession.sessionManager.removeTrailingEntries(
     (entry) => {
       if (
         entry.type === "custom_message" &&
@@ -225,11 +237,12 @@ export function stripSessionsYieldArtifacts(activeSession: {
       return true;
     },
     {
-      preserveTrailing: (entry) =>
-        entry.type === "custom" ||
-        entry.type === "label" ||
-        entry.type === "session_info" ||
-        (entry.type === "message" && isTranscriptOnlyOpenClawAssistantMessage(entry.message)),
+      preserveTrailing: preserveSessionsYieldTrailingEntry,
     },
   );
+  if (removedEntryCount > 0 && preservedLeafId) {
+    // removeTrailingEntries preserves metadata records but resets the active
+    // leaf to the removed suffix's parent; restore the preserved metadata tail.
+    activeSession.sessionManager.branch(preservedLeafId);
+  }
 }

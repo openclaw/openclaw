@@ -22,6 +22,7 @@ import {
   embeddedRunMock,
   installGatewayTestHooks,
   agentDiscoveryMock,
+  setTestAgentsConfig,
   testState,
   writeSessionStore,
 } from "../test-helpers.js";
@@ -401,7 +402,7 @@ export function setupGatewaySessionsTestHarness() {
     const storeTemplate = path.join(dir, "agents", "{agentId}", "sessions", "sessions.json");
     testState.sessionStorePath = storeTemplate;
     testState.sessionConfig = { scope: "global" };
-    testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+    setTestAgentsConfig({ list: [{ id: "main", default: true }, { id: "work" }] });
     return {
       dir,
       storeTemplate,

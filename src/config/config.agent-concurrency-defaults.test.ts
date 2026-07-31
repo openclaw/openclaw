@@ -40,7 +40,7 @@ describe("agent concurrency defaults", () => {
             maxChildrenPerAgent: 7,
           },
         },
-        entries: { main: { default: true } },
+        entries: { main: {} },
       },
     });
 

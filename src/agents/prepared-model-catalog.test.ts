@@ -25,6 +25,11 @@ vi.mock("./agent-scope.js", () => ({
   resolveDefaultAgentId: () => "main",
 }));
 
+vi.mock("./legacy-inherited-auth-dir.js", () => ({
+  resolveLegacyInheritedAuthDir: () =>
+    mocks.agentDirs.get("main") ?? "/tmp/prepared-model-catalog-agent",
+}));
+
 vi.mock("./prepared-model-runtime.js", () => {
   class PreparedModelRuntimeOwnerNotPublishedError extends Error {}
   return {
@@ -135,6 +140,23 @@ describe("prepared model catalog access", () => {
     mocks.getSnapshot.mockReturnValue(snapshot);
     expect(getPreparedModelCatalogSnapshot({ readOnly: true })).toBe(configuredCatalog);
     expect(getPreparedModelCatalogSnapshot()).toBe(configuredCatalog);
+  });
+
+  it("inherits catalog credentials from the physical main agent", async () => {
+    mocks.agentIds = ["worker", "research"];
+    mocks.agentDirs.set("main", "/tmp/main-auth-agent");
+    mocks.agentDirs.set("worker", "/tmp/worker-agent");
+    mocks.prepareSnapshot.mockResolvedValue(fullSnapshot);
+
+    await loadPreparedModelCatalogSnapshot({ agentId: "worker", readOnly: true });
+
+    expect(mocks.prepareSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "worker",
+        agentDir: "/tmp/worker-agent",
+        inheritedAuthDir: "/tmp/main-auth-agent",
+      }),
+    );
   });
 
   it("carries an explicit dynamic workspace into the read-only loader", async () => {

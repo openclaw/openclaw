@@ -493,6 +493,7 @@ export async function prepareGatewayServerBootstrap(input: {
   const {
     gatewayPluginConfigAtStart,
     defaultWorkspaceDir,
+    pluginWorkspaceDir,
     deferredConfiguredChannelPluginIds,
     startupPluginIds,
     pluginManifestRecords,
@@ -513,7 +514,7 @@ export async function prepareGatewayServerBootstrap(input: {
     config: startupActivationSourceConfig,
     compatibleConfigs: [startupRuntimeConfig, cfgAtStart, gatewayPluginConfigAtStart],
     env: process.env,
-    workspaceDir: defaultWorkspaceDir,
+    workspaceDir: pluginWorkspaceDir,
   });
   if (pluginLookUpTable) {
     const metrics = pluginLookUpTable.metrics;
@@ -562,6 +563,7 @@ export async function prepareGatewayServerBootstrap(input: {
     pluginBootstrap,
     gatewayPluginConfigAtStart,
     defaultWorkspaceDir,
+    pluginWorkspaceDir,
     deferredConfiguredChannelPluginIds,
     startupPluginIds,
     pluginManifestRecords,

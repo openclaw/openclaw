@@ -95,7 +95,8 @@ function readPluginSdkEntrypointBudgetEnv(name, fallback, env = process.env) {
 const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   core: 2,
   routing: 1,
-  health: 0,
+  // +1: deprecated default-agent resolver alias retained for source compatibility.
+  health: 1,
   "channel-streaming": 54,
   "approval-gateway-runtime": 1,
   "approval-handler-runtime": 1,
@@ -117,7 +118,10 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "reply-payload": 2,
   // +1: flushLogger projected through the deprecated text-runtime barrel.
   "text-runtime": 192,
-  "agent-runtime": 2,
+  // +1: deprecated default-agent resolver alias retained beside sole-agent resolution.
+  "agent-runtime": 3,
+  // +1: deprecated default-agent resolver alias retained for memory plugins.
+  "memory-host-core": 1,
   "channel-secret-runtime": 23,
   "agent-harness-runtime": 4,
   "agent-config-primitives": 2,
@@ -206,7 +210,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: shared ingress retention defaults through channel-outbound and channel-message.
       // +1: collision-safe MCP server-name assignment for native harness catalogs.
       // +45: restore typed session-catalog and tool-results exports promised to plugins.
-      4819,
+      // +4: sole-agent resolver functions, typed selection error, and context type.
+      4823,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -245,7 +250,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: shared ingress error factory through channel-outbound and channel-message.
       // +1: collision-safe MCP server-name assignment for native harness catalogs.
       // +14: restore callable session-catalog and tool-results helpers promised to plugins.
-      2896,
+      // +2: throwing and non-throwing sole-agent resolvers.
+      2898,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -257,7 +263,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: flushLogger projected through the deprecated text-runtime barrel.
       // +1: shared ingress error factory projected through channel-message.
       // +1: shared ingress retention defaults projected through channel-message.
-      1703,
+      // +3: default-agent resolver aliases retained across existing public surfaces.
+      1706,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

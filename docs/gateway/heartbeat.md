@@ -65,7 +65,7 @@ Example config:
 - Interval: `30m`. Applying Anthropic provider defaults bumps this to `1h` when the resolved auth mode is OAuth/token (including Claude CLI reuse), but only while `heartbeat.every` is unset. Set `agents.defaults.heartbeat.every` or per-agent `agents.entries.*.heartbeat.every`; use `0m` to disable.
 - Prompt body (configurable via `agents.defaults.heartbeat.prompt`): `Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
 - Timeout: unset heartbeat turns use `agents.defaults.timeoutSeconds` when set. Otherwise, they use the heartbeat cadence capped at 600 seconds. Set `agents.defaults.heartbeat.timeoutSeconds` or per-agent `agents.entries.*.heartbeat.timeoutSeconds` for longer heartbeat work.
-- The heartbeat prompt is sent **verbatim** as the user message. The system prompt automatically includes a "Heartbeats" section when cadence is enabled for the default agent; that guidance has no separate heartbeat toggle.
+- The heartbeat prompt is sent **verbatim** as the user message. The system prompt automatically includes a "Heartbeats" section when cadence is enabled for the selected agent; that guidance has no separate heartbeat toggle.
 - When heartbeats are disabled with `0m`, the monitor automation job stays but is disabled, and its scratch is retained for when you re-enable the cadence.
 - When automations are disabled entirely, scheduled heartbeats do not run even if heartbeat cadence remains enabled.
 - Active hours (`heartbeat.activeHours`) are checked in the configured timezone. Outside the window, heartbeats are skipped until the next tick inside the window.
@@ -145,16 +145,16 @@ Example: two agents, only the second agent runs heartbeats.
 ```json5
 {
   agents: {
+    ownership: "explicit",
     defaults: {
       heartbeat: {
         every: "30m",
         target: "last", // explicit delivery to last contact (default is "none")
       },
     },
-    list: [
-      { id: "main", default: true },
-      {
-        id: "ops",
+    entries: {
+      main: {},
+      ops: {
         heartbeat: {
           every: "1h",
           target: "whatsapp",
@@ -163,7 +163,7 @@ Example: two agents, only the second agent runs heartbeats.
           prompt: "Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
         },
       },
-    ],
+    },
   },
 }
 ```

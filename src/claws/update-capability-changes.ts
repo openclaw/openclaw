@@ -405,18 +405,25 @@ function resolvePortableMemorySearch(config: OpenClawConfig, agentId: string): u
 function prepareCapabilityComparisonConfig(
   config: OpenClawConfig,
   entries: AgentConfig[],
-  preferredDefaultAgentId: string,
+  preferredAgentId: string,
 ): OpenClawConfig {
-  const hasDefault = entries.some((entry) => entry.default === true);
-  const comparisonEntries = hasDefault
-    ? entries
-    : entries.map((entry) =>
-        entry.id === preferredDefaultAgentId ? { ...entry, default: true } : entry,
-      );
   const { list: _legacyList, ...agents } = config.agents ?? {};
+  const needsHeartbeatOwner =
+    !agents.defaults?.heartbeat && !entries.some((entry) => entry.heartbeat !== undefined);
   return {
     ...config,
-    agents: { ...agents, entries: toAgentEntriesRecord(comparisonEntries) },
+    agents: {
+      ...agents,
+      ...(needsHeartbeatOwner
+        ? {
+            defaults: {
+              ...agents.defaults,
+              heartbeat: { agentId: preferredAgentId },
+            },
+          }
+        : {}),
+      entries: toAgentEntriesRecord(entries),
+    },
   };
 }
 export function pushResolvedAgentCapabilityChanges(params: {

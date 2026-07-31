@@ -104,8 +104,12 @@ export class GatewayHotReloadCancelledError extends Error {
 }
 
 export class GatewayHotReloadRecoveryError extends Error {
-  constructor(surface: string) {
-    super(`config hot reload committed but could not schedule recovery for ${surface}`);
+  constructor(surface: string, options?: { recoveryPending?: boolean }) {
+    super(
+      options?.recoveryPending
+        ? `config hot reload committed with recovery pending for ${surface}`
+        : `config hot reload committed but could not schedule recovery for ${surface}`,
+    );
     this.name = "GatewayHotReloadRecoveryError";
   }
 }

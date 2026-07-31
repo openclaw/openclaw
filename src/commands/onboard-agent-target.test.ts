@@ -22,11 +22,12 @@ describe("onboarding agent target", () => {
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const config = {
         agents: {
+          ownership: "explicit" as const,
           defaults: { workspace: globalWorkspace },
-          entries: { ops: { default: true, workspace: opsWorkspace } },
+          entries: { main: {}, ops: { workspace: opsWorkspace } },
         },
       };
-      const target = resolveOnboardingAgentTarget(config);
+      const target = resolveOnboardingAgentTarget(config, "ops");
 
       expect(target).toEqual({
         agentId: "ops",

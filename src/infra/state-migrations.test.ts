@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { loadNodeHostConfig } from "../node-host/config.js";
 import { readChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -871,6 +872,49 @@ describe("state migrations", () => {
     expect(migrateLegacyState).toHaveBeenCalledOnce();
   });
 
+  it("keeps Doctor state migration available for an ownerless multi-agent roster", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg: OpenClawConfig = {
+      agents: { entries: { ops: {}, research: {} } },
+    };
+
+    await expect(
+      autoMigrateLegacyState({
+        cfg,
+        env,
+        homedir: () => root,
+        doctorOnlyStateMigrations: true,
+      }),
+    ).resolves.toMatchObject({ warnings: [] });
+  });
+
+  it("defers legacy session state when an explicit fleet has no migration owner", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const legacySessionsDir = path.join(stateDir, "sessions");
+    const legacyStorePath = path.join(legacySessionsDir, "sessions.json");
+    const env = createEnv(stateDir);
+    await fs.mkdir(legacySessionsDir, { recursive: true });
+    await fs.writeFile(legacyStorePath, "{}", "utf8");
+
+    const result = await autoMigrateLegacyState({
+      cfg: {
+        agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+      },
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
+
+    expect(result.warnings).toContain(
+      "Deferred legacy agent/session state migration because the multi-agent fleet has no migration owner",
+    );
+    await expect(fs.readFile(legacyStorePath, "utf8")).resolves.toBe("{}");
+    expect(fsSync.existsSync(path.join(stateDir, "agents", "main", "sessions"))).toBe(false);
+  });
+
   it("checks automatic migrations independently for each state directory", async () => {
     const root = await createTempDir();
     const stateDirs = [path.join(root, "state-a"), path.join(root, "state-b")];
@@ -1113,10 +1157,13 @@ describe("state migrations", () => {
       }),
       "utf8",
     );
-    const cfg = {
-      session: { mainKey: "work", store: configuredStorePath },
-      agents: { list: [{ id: "ops", default: true }, { id: "research" }] },
-    } as OpenClawConfig;
+    const cfg = retainLegacyDefaultAgentId(
+      {
+        session: { mainKey: "work", store: configuredStorePath },
+        agents: { entries: { ops: {}, research: {} } },
+      },
+      "ops",
+    );
     const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
     expect(detected.sessions.preserveAmbiguousKeys).toBe(true);
 
@@ -1913,10 +1960,13 @@ describe("state migrations", () => {
       }),
       "utf8",
     );
-    const cfg = {
-      session: { mainKey: "desk", store: storeTemplate },
-      agents: { list: [{ id: "main", default: true }, { id: "voice" }] },
-    } as OpenClawConfig;
+    const cfg = retainLegacyDefaultAgentId(
+      {
+        session: { mainKey: "desk", store: storeTemplate },
+        agents: { entries: { main: {}, voice: {} } },
+      },
+      "main",
+    );
 
     const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
 

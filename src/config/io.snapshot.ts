@@ -1,4 +1,7 @@
-import { includeContributionOwnsAgentRoster } from "./agent-roster-provenance.js";
+import {
+  includeContributionOwnsAgentRoster,
+  includeContributionOwnsBindings,
+} from "./agent-roster-provenance.js";
 import { resolveManagedUnsetPathsForWrite } from "./config-path-mutation.js";
 import { ConfigIncludeError } from "./includes.js";
 import type { ConfigIoContext } from "./io.context.js";
@@ -85,6 +88,7 @@ export async function readConfigFileSnapshotInternal(
   const includeFilePathsForWatch = new Set<string>();
   const includeProvenance: NonNullable<ConfigFileSnapshot["includeProvenance"]>[number][] = [];
   let agentRosterIncludeOwned = false;
+  let bindingsIncludeOwned = false;
 
   try {
     const raw = await deps.measure("config.snapshot.read.file", () =>
@@ -132,6 +136,7 @@ export async function readConfigFileSnapshotInternal(
             const { value: _value, ...ownership } = event;
             includeProvenance.push(ownership);
             agentRosterIncludeOwned ||= includeContributionOwnsAgentRoster(event);
+            bindingsIncludeOwned ||= includeContributionOwnsBindings(event);
           },
         ),
       );
@@ -168,7 +173,10 @@ export async function readConfigFileSnapshotInternal(
       path: warning.configPath,
       message: `Missing env var "${warning.varName}" - feature using this value will be unavailable`,
     }));
-    const rosterMigration = migratePersistedImplicitMainRoster(readResolution.resolvedConfigRaw);
+    const rosterMigration = migratePersistedImplicitMainRoster(
+      readResolution.resolvedConfigRaw,
+      deps.env,
+    );
     envVarWarnings.push(
       ...rosterMigration.diagnostics.map((message) => ({ path: "agents.entries", message })),
     );
@@ -210,6 +218,7 @@ export async function readConfigFileSnapshotInternal(
           parsed: snapshotParsed,
           includeProvenance,
           agentRosterIncludeOwned,
+          bindingsIncludeOwned,
           sourceConfigBeforeMigrations: coerceConfig(readResolution.resolvedConfigRaw),
           sourceConfig: coerceConfig(effectiveConfigRaw),
           valid: false,
@@ -288,6 +297,7 @@ export async function readConfigFileSnapshotInternal(
             parsed: snapshotParsed,
             includeProvenance,
             agentRosterIncludeOwned,
+            bindingsIncludeOwned,
             sourceConfigBeforeMigrations: coerceConfig(readResolution.resolvedConfigRaw),
             sourceConfig: coerceConfig(effectiveConfigRaw),
             valid: true,

@@ -13,6 +13,7 @@ import {
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
 import { HEARTBEAT_SKIP_CRON_IN_PROGRESS } from "./heartbeat-wake.js";
+import { resolveSystemEventQueueKey } from "./system-event-queue-key.js";
 import { enqueueSystemEvent, peekSystemEvents, resetSystemEventsForTest } from "./system-events.js";
 
 beforeEach(() => {
@@ -42,6 +43,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
     target?: "telegram" | "none";
     isolatedSession?: boolean;
     activeHours?: boolean;
+    sessionScope?: "global";
   }): Promise<{ cfg: OpenClawConfig; sessionKey: string }> => {
     const cfg: OpenClawConfig = {
       agents: {
@@ -58,7 +60,10 @@ describe("Ghost reminder bug (issue #13317)", () => {
         },
       },
       channels: { telegram: { allowFrom: ["*"] } },
-      session: { store: params.storePath },
+      session: {
+        store: params.storePath,
+        ...(params.sessionScope ? { scope: params.sessionScope } : {}),
+      },
     };
     const sessionKey = await seedMainSessionStore(params.storePath, cfg, {
       lastChannel: "telegram",
@@ -202,6 +207,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
     cronNestedLaneDepth?: number;
     activeHours?: boolean;
     nowMs?: number;
+    sessionScope?: "global";
   }): Promise<{
     result: Awaited<ReturnType<typeof runHeartbeatOnce>>;
     sendTelegram: ReturnType<typeof vi.fn>;
@@ -222,6 +228,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
           target: params.target,
           isolatedSession: params.isolatedSession,
           activeHours: params.activeHours,
+          sessionScope: params.sessionScope,
         });
         params.enqueue(sessionKey);
         const owningCronJobMarker = params.owningCronJobId
@@ -755,6 +762,24 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(calledCtx?.Body).toContain("deploy succeeded");
     expect(calledCtx?.Body).not.toContain("Node connected");
     expect(peekSystemEvents(sessionKey)).toEqual(["Node connected"]);
+  });
+
+  it("consumes inspected global events from their agent-scoped queue", async () => {
+    let physicalQueueKey = "";
+    const { result } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-global-queue-consume-",
+      replyText: "Handled global wake",
+      reason: "hook:wake",
+      target: "none",
+      sessionScope: "global",
+      enqueue: (sessionKey) => {
+        physicalQueueKey = resolveSystemEventQueueKey({ sessionKey, agentId: "main" });
+        enqueueSystemEvent("Global hook wake", { sessionKey: physicalQueueKey });
+      },
+    });
+
+    expect(result.status).toBe("ran");
+    expect(peekSystemEvents(physicalQueueKey)).toEqual([]);
   });
 
   it("classifies hook:wake exec completions as exec-event prompts", async () => {

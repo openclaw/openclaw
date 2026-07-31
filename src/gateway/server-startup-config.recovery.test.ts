@@ -1,8 +1,13 @@
 // Startup config recovery tests cover prepared snapshots, plugin metadata,
 // auto-enable behavior, model defaults, and recovery diagnostics.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  retainLegacyDefaultAgentId,
+  tryGetLegacyDefaultAgentId,
+} from "../config/legacy.default-agent-owner.js";
 import type { ConfigFileSnapshot, ModelDefinitionConfig, OpenClawConfig } from "../config/types.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { buildTestConfigSnapshot } from "./test-helpers.config-snapshots.js";
 
 const applyPluginAutoEnable = vi.hoisted(() =>
@@ -442,6 +447,39 @@ describe("gateway startup config validation", () => {
       enabled: true,
     });
     expectRuntimeOnlyAutoEnableLogged(log);
+  });
+
+  it("keeps an env-activated channel bound to the retired owner through startup auto-enable", async () => {
+    const sourceConfig = retainLegacyDefaultAgentId(
+      { agents: { entries: { ops: {}, research: {} } } },
+      "ops",
+    );
+    const autoEnabledConfig: OpenClawConfig = {
+      ...sourceConfig,
+      channels: { discord: { enabled: true } },
+    };
+    const snapshot = buildRuntimeSnapshot(sourceConfig);
+    mockStartupSnapshot(snapshot);
+    mockRuntimeAutoEnable(autoEnabledConfig);
+
+    const result = await loadTestStartup({
+      minimalTestGateway: false,
+      log: testStartupLog(),
+    });
+
+    expect(result.snapshot.config.bindings).toContainEqual({
+      agentId: "ops",
+      match: { channel: "discord", accountId: "*" },
+    });
+    expect(tryGetLegacyDefaultAgentId(result.snapshot.config)).toBe("ops");
+    expect(
+      resolveAgentRoute({
+        cfg: result.snapshot.config,
+        channel: "discord",
+        accountId: "default",
+        peer: { kind: "direct", id: "user-1" },
+      }).agentId,
+    ).toBe("ops");
   });
 
   it("keeps plugin auto-enable runtime-only in Nix mode", async () => {

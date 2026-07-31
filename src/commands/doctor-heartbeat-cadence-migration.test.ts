@@ -2,9 +2,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { heartbeatMonitorAgentId } from "../cron/heartbeat-monitor.js";
-import { loadCronJobsStore, resolveCronJobsStorePathFromConfig } from "../cron/store.js";
+import {
+  loadCronJobsStoreWithConfigJobs,
+  resolveCronJobsStorePathFromConfig,
+} from "../cron/store.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { resolveHeartbeatPhaseMs } from "../infra/heartbeat-schedule.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -55,8 +59,12 @@ async function createFixture(every = "15m") {
   return { cfg, env, storePath };
 }
 
-async function loadMonitor(storePath: string, agentId: string) {
-  const store = await loadCronJobsStore(storePath);
+async function loadMonitor(
+  storePath: string,
+  agentId: string,
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  const store = (await loadCronJobsStoreWithConfigJobs(storePath, env)).store;
   return store.jobs.find((job) => heartbeatMonitorAgentId(job) === agentId);
 }
 
@@ -145,6 +153,29 @@ describe("heartbeat cadence cron migration", () => {
     expect(await loadMainMonitor(fixture.storePath)).toEqual(
       expect.objectContaining({ enabled: false, payload: { kind: "heartbeat" } }),
     );
+  });
+
+  it("ignores a retained owner that has left the sole-agent roster", async () => {
+    const fixture = await createFixture();
+    const cfg = retainLegacyDefaultAgentId(
+      {
+        agents: {
+          defaults: { heartbeat: { every: "15m" } },
+          entries: { research: {} },
+        },
+      },
+      "ops",
+    );
+
+    const result = await maybeMigrateHeartbeatCadenceToCron({
+      cfg,
+      shouldRepair: true,
+      env: fixture.env,
+    });
+
+    expect(result.changes).toEqual(['Create heartbeat monitor for agent "research" at 15m.']);
+    expect(await loadMonitor(fixture.storePath, "research", fixture.env)).toBeDefined();
+    expect(await loadMonitor(fixture.storePath, "ops", fixture.env)).toBeUndefined();
   });
 
   it("keeps multi-agent updates and creates scoped to their declared monitors", async () => {
@@ -258,7 +289,7 @@ describe("heartbeat cadence cron migration", () => {
     });
 
     expect(result.warnings).toEqual([]);
-    const monitor = await loadMonitor(storePath, agentId);
+    const monitor = await loadMonitor(storePath, agentId, suppliedEnv);
     expect(monitor?.schedule).toEqual(
       expect.objectContaining({
         kind: "every",

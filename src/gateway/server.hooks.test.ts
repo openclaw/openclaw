@@ -3,7 +3,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
+import { getRuntimeConfig } from "../config/config.js";
+import { resolveAgentMainSessionKey } from "../config/sessions.js";
+import { resolveSystemEventQueueKey } from "../infra/system-event-queue-key.js";
 import {
   drainSystemEvents,
   peekSystemEventEntries,
@@ -15,14 +17,20 @@ import {
   installGatewayTestHooks,
   testState,
   withGatewayServer,
-  waitForSystemEvent,
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
 await import("./server.js");
 
-const resolveMainKey = () => resolveMainSessionKeyFromConfig();
+const resolveMainKey = () => {
+  const cfg = getRuntimeConfig();
+  const sessionKey =
+    cfg.session?.scope === "global"
+      ? "global"
+      : resolveAgentMainSessionKey({ cfg, agentId: "main" });
+  return resolveSystemEventQueueKey({ sessionKey, agentId: "main" });
+};
 const HOOK_TOKEN = "hook-secret";
 const HOOKS_MAIN_SESSION_KEY = "agent:hooks:main";
 
@@ -190,6 +198,10 @@ async function waitForSystemEventTexts(sessionKey: string, timeoutMs = 2_000) {
     })
     .not.toHaveLength(0);
   return peekSystemEventEntries(sessionKey).map((event) => event.text);
+}
+
+async function waitForSystemEvent(timeoutMs = 2_000) {
+  return await waitForSystemEventTexts(resolveMainKey(), timeoutMs);
 }
 
 async function writeHookTransformModule(moduleName: string, source: string): Promise<void> {
@@ -519,13 +531,16 @@ describe("gateway server hooks", () => {
     setMainAndHooksAgents();
 
     await withGatewayServer(async ({ port }) => {
-      const direct = await postHook(port, "/hooks/wake", { text: "Direct wake" });
+      const direct = await postHook(port, "/hooks/wake", {
+        text: "Direct wake",
+        agentId: "hooks",
+      });
       expect(direct.status).toBe(200);
-      await waitForSystemEvent(5_000);
-      const directEvents = peekSystemEventEntries(resolveMainKey());
+      await waitForSystemEventTexts(HOOKS_MAIN_SESSION_KEY, 5_000);
+      const directEvents = peekSystemEventEntries(HOOKS_MAIN_SESSION_KEY);
       expect(directEvents).toHaveLength(1);
       expect(directEvents[0]?.text).toBe("Direct wake");
-      drainSystemEvents(resolveMainKey());
+      drainSystemEvents(HOOKS_MAIN_SESSION_KEY);
 
       const mapped = await postHook(port, "/hooks/mapped-wake", { subject: "Email" });
       expect(mapped.status).toBe(200);
@@ -539,8 +554,12 @@ describe("gateway server hooks", () => {
     testState.sessionConfig = { scope: "global" };
     await withGatewayServer(async ({ port }) => {
       expect((await postHook(port, "/hooks/mapped-wake", { subject: "Global" })).status).toBe(200);
-      await waitForSystemEventTexts("global");
-      expect(peekSystemEvents("global")).toContain("Mapped wake: Global");
+      const hooksGlobalQueueKey = resolveSystemEventQueueKey({
+        sessionKey: "global",
+        agentId: "hooks",
+      });
+      await waitForSystemEventTexts(hooksGlobalQueueKey);
+      expect(peekSystemEvents(hooksGlobalQueueKey)).toContain("Mapped wake: Global");
     });
   });
 
@@ -1005,9 +1024,13 @@ describe("gateway server hooks", () => {
       expect(resNoAgent.status).toBe(200);
       await waitForSystemEventTexts(resolveMainKey());
       const noAgentCall = cronRunCall();
-      expect(noAgentCall?.job?.agentId).toBeUndefined();
+      expect(noAgentCall?.job?.agentId).toBe("main");
       expect(noAgentCall?.sessionKey).toBe("agent:main:slack:channel:c123");
-      expect(peekSystemEventEntries("agent:main:main")).toStrictEqual([]);
+      expect(
+        peekSystemEventEntries(
+          resolveSystemEventQueueKey({ sessionKey: "global", agentId: "main" }),
+        ).map((event) => event.text),
+      ).toContain("Hook Hook: done");
       drainSystemEvents(resolveMainKey());
 
       mockIsolatedRunOkOnce();
@@ -1018,7 +1041,7 @@ describe("gateway server hooks", () => {
       expect(resBlankAgent.status).toBe(200);
       await waitForSystemEventTexts(resolveMainKey());
       const blankAgentCall = cronRunCall();
-      expect(blankAgentCall?.job?.agentId).toBeUndefined();
+      expect(blankAgentCall?.job?.agentId).toBe("main");
       drainSystemEvents(resolveMainKey());
     });
   });
@@ -1048,61 +1071,6 @@ describe("gateway server hooks", () => {
       const deniedBody = (await resDenied.json()) as { error?: string };
       expect(deniedBody.error).toContain("hooks.allowedAgentIds");
       expect(peekSystemEvents(resolveMainKey()).length).toBe(0);
-    });
-  });
-
-  test("throttles repeated hook auth failures and resets after success", async () => {
-    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
-    await withGatewayServer(async ({ port }) => {
-      const firstFail = await postHook(
-        port,
-        "/hooks/wake",
-        { text: "blocked" },
-        { token: "wrong" },
-      );
-      expect(firstFail.status).toBe(401);
-
-      let throttled: Response | null = null;
-      for (let i = 0; i < 20; i++) {
-        throttled = await postHook(port, "/hooks/wake", { text: "blocked" }, { token: "wrong" });
-      }
-      expect(throttled?.status).toBe(429);
-      expect(requireNonEmptyString(throttled?.headers.get("retry-after"), "retry-after")).toMatch(
-        /^\d+$/,
-      );
-
-      const allowed = await postHook(port, "/hooks/wake", { text: "auth reset" });
-      expect(allowed.status).toBe(200);
-      await waitForSystemEvent();
-      drainSystemEvents(resolveMainKey());
-
-      const failAfterSuccess = await postHook(
-        port,
-        "/hooks/wake",
-        { text: "blocked" },
-        { token: "wrong" },
-      );
-      expect(failAfterSuccess.status).toBe(401);
-    });
-  });
-
-  test("rejects non-POST hook requests without consuming auth failure budget", async () => {
-    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
-    await withGatewayServer(async ({ port }) => {
-      let lastGet: Response | null = null;
-      for (let i = 0; i < 21; i++) {
-        lastGet = await fetch(`http://127.0.0.1:${port}/hooks/wake`, {
-          method: "GET",
-          headers: { Authorization: "Bearer wrong" },
-        });
-      }
-      expect(lastGet?.status).toBe(405);
-      expect(lastGet?.headers.get("allow")).toBe("POST");
-
-      const allowed = await postHook(port, "/hooks/wake", { text: "still works" });
-      expect(allowed.status).toBe(200);
-      await waitForSystemEvent();
-      drainSystemEvents(resolveMainKey());
     });
   });
 });

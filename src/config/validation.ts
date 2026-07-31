@@ -2,20 +2,14 @@
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
-import {
-  listAgentEntriesWithSource,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../agents/agent-scope.js";
+import { listAgentEntriesWithSource } from "../agents/agent-scope.js";
 import type { ChannelDmAllowFromMode } from "../channels/plugins/dm-access.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
+import { listChannelIdsForOwnershipMigration } from "../plugins/channel-presence-policy.js";
 import { normalizePluginsConfig, normalizePluginId } from "../plugins/config-state.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-reader.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import {
-  resolvePluginMetadataSnapshot,
-  type PluginMetadataSnapshot,
-} from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { resolveWebSearchInstallCatalogEntries } from "../plugins/web-search-install-catalog.js";
 import { isRecord } from "../utils.js";
@@ -24,6 +18,16 @@ import {
   collectChannelDmPolicyMetadata,
   collectChannelSchemaMetadataWithOwnership,
 } from "./channel-config-metadata.js";
+import { resolveConfigWidePluginMetadataSnapshot } from "./io.plugin-metadata.js";
+import {
+  appendLegacyOwnershipWarnings,
+  inheritLegacyDefaultAgentId,
+  tryGetLegacyDefaultAgentId,
+} from "./legacy.default-agent-owner.js";
+import {
+  materializeLegacyDefaultAgentRoles,
+  type LegacyDefaultAgentRoleMaterialization,
+} from "./legacy.default-agent-roles.js";
 import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
@@ -35,6 +39,10 @@ import {
   normalizeBundledChannelId,
 } from "./validation-channel-rules.js";
 import { validateConfigObjectRaw } from "./validation-core.js";
+import {
+  collectCurrentAgentOwnershipWarnings,
+  refreshMaterializedAgentOwnershipWarnings,
+} from "./validation-ownership-warnings.js";
 import {
   collectExplicitPluginReferences,
   resolveExplicitPluginReferencePath,
@@ -72,37 +80,117 @@ export function validateConfigObjectWithPlugins(
   raw: unknown,
   params?: ValidateConfigWithPluginsParams,
 ): ValidateConfigWithPluginsResult {
-  const migrated = migratePersistedImplicitMainRoster(raw).config;
-  return validateConfigObjectWithPluginsBase(migrated, {
-    applyDefaults: true,
-    env: params?.env,
-    pluginValidation: params?.pluginValidation ?? "full",
-    pluginMetadataSnapshot: params?.pluginMetadataSnapshot,
-    loadPluginMetadataSnapshot: params?.loadPluginMetadataSnapshot,
-    sourceRaw: params?.sourceRaw,
-    preservedLegacyRootKeys: params?.preservedLegacyRootKeys,
-  });
+  const migrated = migratePersistedImplicitMainRoster(raw, params?.env).config as OpenClawConfig;
+  let manifestRegistry = params?.pluginMetadataSnapshot?.manifestRegistry;
+  return materializeLegacyActiveChannelOwners(
+    validateConfigObjectWithPluginsBase(migrated, {
+      applyDefaults: true,
+      env: params?.env,
+      pluginValidation: params?.pluginValidation ?? "full",
+      pluginMetadataSnapshot: params?.pluginMetadataSnapshot,
+      loadPluginMetadataSnapshot: params?.loadPluginMetadataSnapshot,
+      sourceRaw: params?.sourceRaw,
+      preservedLegacyRootKeys: params?.preservedLegacyRootKeys,
+      onManifestRegistryResolved: (registry) => {
+        manifestRegistry = registry;
+      },
+    }),
+    migrated,
+    params?.env,
+    manifestRegistry,
+  );
 }
 
 export function validateConfigObjectRawWithPlugins(
   raw: unknown,
   params?: ValidateConfigWithPluginsParams,
 ): ValidateConfigWithPluginsResult {
-  const migrated = migratePersistedImplicitMainRoster(raw).config;
-  return validateConfigObjectWithPluginsBase(migrated, {
-    applyDefaults: false,
-    env: params?.env,
-    pluginValidation: params?.pluginValidation ?? "full",
-    pluginMetadataSnapshot: params?.pluginMetadataSnapshot,
-    loadPluginMetadataSnapshot: params?.loadPluginMetadataSnapshot,
-    sourceRaw: params?.sourceRaw,
-    preservedLegacyRootKeys: params?.preservedLegacyRootKeys,
+  const migrated = migratePersistedImplicitMainRoster(raw, params?.env).config as OpenClawConfig;
+  let manifestRegistry = params?.pluginMetadataSnapshot?.manifestRegistry;
+  return materializeLegacyActiveChannelOwners(
+    validateConfigObjectWithPluginsBase(migrated, {
+      applyDefaults: false,
+      env: params?.env,
+      pluginValidation: params?.pluginValidation ?? "full",
+      pluginMetadataSnapshot: params?.pluginMetadataSnapshot,
+      loadPluginMetadataSnapshot: params?.loadPluginMetadataSnapshot,
+      sourceRaw: params?.sourceRaw,
+      preservedLegacyRootKeys: params?.preservedLegacyRootKeys,
+      onManifestRegistryResolved: (registry) => {
+        manifestRegistry = registry;
+      },
+    }),
+    migrated,
+    params?.env,
+    manifestRegistry,
+  );
+}
+
+function materializeLegacyActiveChannelOwners(
+  result: ValidateConfigWithPluginsResult,
+  migrated: OpenClawConfig,
+  env: NodeJS.ProcessEnv | undefined,
+  manifestRegistry: PluginManifestRegistry | undefined,
+): ValidateConfigWithPluginsResult {
+  if (!result.ok) {
+    return result;
+  }
+  const legacyDefaultAgentId = tryGetLegacyDefaultAgentId(migrated);
+  if (!legacyDefaultAgentId) {
+    return result;
+  }
+  // Zod returns a fresh object, so carry the non-schema migration state across
+  // validation before active-channel discovery decides whether it is durable.
+  const validatedConfig = inheritLegacyDefaultAgentId(migrated, result.config);
+  const materialized = materializeLegacyAgentOwnershipForActiveChannelsResult(
+    validatedConfig,
+    legacyDefaultAgentId,
+    env,
+    manifestRegistry?.plugins,
+  );
+  const config = materialized.config;
+  const warnings = refreshMaterializedAgentOwnershipWarnings({
+    warnings: result.warnings,
+    before: result.config,
+    after: config,
+    env,
+    manifestRecords: manifestRegistry?.plugins,
   });
+  return {
+    ...result,
+    config,
+    warnings,
+  };
+}
+
+export function materializeLegacyAgentOwnershipForActiveChannelsResult(
+  config: OpenClawConfig,
+  legacyDefaultAgentId: string,
+  env?: NodeJS.ProcessEnv,
+  manifestRecords?: PluginManifestRegistry["plugins"],
+  options?: { materializeWorkspace?: boolean },
+): LegacyDefaultAgentRoleMaterialization {
+  const ambientChannelIds = listChannelIdsForOwnershipMigration({
+    config,
+    env,
+    ...(manifestRecords ? { manifestRecords } : {}),
+  });
+  const materialized = materializeLegacyDefaultAgentRoles(config, legacyDefaultAgentId, {
+    ambientChannelIds,
+    materializeWorkspace: options?.materializeWorkspace,
+    env,
+  });
+  const next = inheritLegacyDefaultAgentId(config, materialized.config);
+  appendLegacyOwnershipWarnings(next, materialized.warnings);
+  return { ...materialized, config: next };
 }
 
 function validateConfigObjectWithPluginsBase(
   raw: unknown,
-  opts: ValidateConfigWithPluginsParams & { applyDefaults: boolean },
+  opts: ValidateConfigWithPluginsParams & {
+    applyDefaults: boolean;
+    onManifestRegistryResolved?: (registry: PluginManifestRegistry) => void;
+  },
 ): ValidateConfigWithPluginsResult {
   const base = validateConfigObjectRaw(raw, {
     sourceRaw: opts.sourceRaw,
@@ -113,13 +201,17 @@ function validateConfigObjectWithPluginsBase(
     return { ok: false, issues: base.issues, warnings: [] };
   }
 
+  const rememberRegistry = (registry: PluginManifestRegistry): RegistryInfo => {
+    opts.onManifestRegistryResolved?.(registry);
+    return { registry };
+  };
   let registryInfo: RegistryInfo | null = opts.pluginMetadataSnapshot
-    ? { registry: opts.pluginMetadataSnapshot.manifestRegistry }
+    ? rememberRegistry(opts.pluginMetadataSnapshot.manifestRegistry)
     : null;
   if (opts.applyDefaults && !registryInfo) {
     const pluginMetadataSnapshot = opts.loadPluginMetadataSnapshot?.(base.config);
     if (pluginMetadataSnapshot) {
-      registryInfo = { registry: pluginMetadataSnapshot.manifestRegistry };
+      registryInfo = rememberRegistry(pluginMetadataSnapshot.manifestRegistry);
     }
   }
   const config = opts.applyDefaults
@@ -127,12 +219,24 @@ function validateConfigObjectWithPluginsBase(
         manifestRegistry: registryInfo?.registry,
       })
     : base.config;
+  const collectOwnershipWarnings = () =>
+    collectCurrentAgentOwnershipWarnings({
+      config,
+      env: opts.env,
+      manifestRecords: registryInfo?.registry.plugins,
+    });
+  const ownershipWarnings = collectOwnershipWarnings();
   if (opts.pluginValidation === "skip") {
-    return { ok: true, config, warnings: [] };
+    return { ok: true, config, warnings: ownershipWarnings };
   }
 
   const issues: ConfigValidationIssue[] = [];
-  const warnings: ConfigValidationIssue[] = [];
+  const warnings: ConfigValidationIssue[] = [...ownershipWarnings];
+  const ownershipWarningRefs = new Set(ownershipWarnings);
+  const finalizedWarnings = () => [
+    ...warnings.filter((warning) => !ownershipWarningRefs.has(warning)),
+    ...collectOwnershipWarnings(),
+  ];
   const hasExplicitPluginsConfig = isRecord(raw) && Object.hasOwn(raw, "plugins");
   const explicitPluginReferences = collectExplicitPluginReferences(raw);
 
@@ -174,17 +278,14 @@ function validateConfigObjectWithPluginsBase(
   const loadValidationRegistry = (): RegistryInfo => {
     const pluginMetadataSnapshot = opts.loadPluginMetadataSnapshot?.(config);
     if (pluginMetadataSnapshot) {
-      registryInfo = { registry: pluginMetadataSnapshot.manifestRegistry };
+      registryInfo = rememberRegistry(pluginMetadataSnapshot.manifestRegistry);
       return registryInfo;
     }
-    const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config), opts.env);
-    const registry = resolvePluginMetadataSnapshot({
+    const registry = resolveConfigWidePluginMetadataSnapshot({
       config,
-      workspaceDir: workspaceDir ?? undefined,
       env: opts.env ?? process.env,
-      allowWorkspaceScopedCurrent: true,
     }).manifestRegistry;
-    registryInfo = { registry };
+    registryInfo = rememberRegistry(registry);
     return registryInfo;
   };
 
@@ -612,9 +713,10 @@ function validateConfigObjectWithPluginsBase(
   validateConfiguredModelRefs();
 
   if (!hasExplicitPluginsConfig) {
+    const finalWarnings = finalizedWarnings();
     return issues.length > 0
-      ? { ok: false, issues, warnings }
-      : { ok: true, config: mutatedConfig, warnings };
+      ? { ok: false, issues, warnings: finalWarnings }
+      : { ok: true, config: mutatedConfig, warnings: finalWarnings };
   }
 
   const { registry } = ensureRegistry();
@@ -634,7 +736,8 @@ function validateConfigObjectWithPluginsBase(
     warnings,
   });
 
+  const finalWarnings = finalizedWarnings();
   return issues.length > 0
-    ? { ok: false, issues, warnings }
-    : { ok: true, config: mutatedConfig, warnings };
+    ? { ok: false, issues, warnings: finalWarnings }
+    : { ok: true, config: mutatedConfig, warnings: finalWarnings };
 }

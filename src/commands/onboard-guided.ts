@@ -1,7 +1,9 @@
+import { listAgentEntries } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withConsoleSubsystemsSuppressed } from "../logging/console.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 // Guided onboarding: detect AI access, live-test it, then persist only a working route.
 import type {
@@ -13,6 +15,8 @@ import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { requireRiskAcknowledgement } from "../wizard/setup.shared.js";
+import { resolveCliAgentId } from "./agent-selection.js";
+import { resolveOnboardingAgentTarget } from "./onboard-agent-target.js";
 import type {
   probeBrowserHatchGateway,
   runBrowserHatchHandoff,
@@ -184,11 +188,36 @@ async function runGuidedOnboardingFlow(
     }
   }
 
-  // Inference is the only prerequisite for OpenClaw. Use the caller's or
-  // current default workspace as isolated probe context; OpenClaw owns any
-  // workspace choice and persistence after the live completion succeeds.
+  const agentSelectionConfig = snapshot.runtimeConfig ?? snapshot.config;
+  const authoredAgentConfig =
+    snapshot.sourceConfigBeforeMigrations ??
+    (snapshot.exists ? (snapshot.sourceConfig ?? snapshot.config) : {});
+  const configuredAgents =
+    listAgentEntries(authoredAgentConfig).length > 0 ? listAgentEntries(agentSelectionConfig) : [];
+  const selectedAgentId =
+    configuredAgents.length === 0
+      ? normalizeAgentId(opts.agent?.trim() || "main")
+      : await resolveCliAgentId({
+          cfg: agentSelectionConfig,
+          runtime,
+          agentInput: opts.agent,
+          surface: "onboarding",
+          deps: {
+            interactive: true,
+            selectAgent: (selection) => prompter.select<string>(selection),
+          },
+        });
+  const selectedAgentExists = configuredAgents.some(
+    (entry) => normalizeAgentId(entry.id) === selectedAgentId,
+  );
+
+  // Resolve the target before discovery so probing, activation, workspace,
+  // and final setup all operate on the same agent route.
   const workspace = resolveUserPath(
     opts.workspace?.trim() ||
+      (selectedAgentExists
+        ? resolveOnboardingAgentTarget(agentSelectionConfig, selectedAgentId).workspaceDir
+        : undefined) ||
       acknowledgedConfig.agents?.defaults?.workspace?.trim() ||
       onboardHelpers.DEFAULT_WORKSPACE,
   );
@@ -218,7 +247,7 @@ async function runGuidedOnboardingFlow(
 
   if (wantsDiscovery) {
     const detectionProgress = prompter.progress(t("wizard.guided.detecting"));
-    detection = await detect();
+    detection = await detect({ targetAgentId: selectedAgentId });
     detectionProgress.stop(t("wizard.guided.detected"));
     if (detection.candidates.length === 0) {
       await prompter.note(t("wizard.guided.foundNothing"), t("wizard.guided.detectedTitle"));
@@ -280,6 +309,7 @@ async function runGuidedOnboardingFlow(
         runtime,
         prompter,
         activate,
+        targetAgentId: selectedAgentId,
         // Legacy chat handoff keeps loud per-candidate failures.
         ...(custodianMode
           ? { collectFailure: (failure: LadderFailure) => ladderFailures.push(failure) }
@@ -312,7 +342,7 @@ async function runGuidedOnboardingFlow(
       unavailableCandidates: [],
       // Install suggestions come from scanning; a declined scan offers none.
       recommendedInstalls: [],
-      ...(await listManualOptions()),
+      ...(await listManualOptions({ targetAgentId: selectedAgentId })),
     };
   }
 
@@ -357,6 +387,7 @@ async function runGuidedOnboardingFlow(
         runtime,
         prompter,
         activate,
+        targetAgentId: selectedAgentId,
         hasActiveRoute: true,
       });
       // Skip keeps the already-persisted working route instead of aborting.
@@ -385,6 +416,7 @@ async function runGuidedOnboardingFlow(
       runtime,
       prompter,
       activate,
+      targetAgentId: selectedAgentId,
     });
     if (!manualResult) {
       return null;
@@ -425,7 +457,7 @@ async function runGuidedOnboardingFlow(
     canConfirmMove: !alreadyConfigured,
   });
   const { allowWorkspaceChange, conflict: workspaceConflict } = workspaceSelection;
-  const appliedWorkspace = workspaceSelection.workspaceDir;
+  let appliedWorkspace = workspaceSelection.workspaceDir;
   if (alreadyConfigured) {
     await prompter.note(t("wizard.guided.alreadySetUp"), t("wizard.guided.welcomeTitle"));
     if (workspaceConflict) {
@@ -442,14 +474,27 @@ async function runGuidedOnboardingFlow(
     const { ensureOnboardingAgent } = await import("./onboard-agent.js");
     // Only fresh-file creation is a side effect here. Pre-roster authored persistence
     // remains doctor-owned; the injected main roster is intentionally not flattened.
-    await ensureOnboardingAgent({ config: existingConfig, workspace, baseConfig: existingConfig });
+    const onboardingAgent = await ensureOnboardingAgent({
+      config: existingConfig,
+      workspace,
+      baseConfig: existingConfig,
+      agentId: selectedAgentId,
+      runtime,
+    });
+    if (!opts.workspace?.trim() && selectedAgentExists) {
+      appliedWorkspace = resolveOnboardingAgentTarget(
+        onboardingAgent.config,
+        selectedAgentId,
+      ).workspaceDir;
+    }
     const applySetup =
       deps.applySetup ?? (await import("../system-agent/setup-apply.js")).applySystemAgentSetup;
     const applyProgress = prompter.progress(t("wizard.guided.settingUp"));
     try {
       const applied = await withConsoleSubsystemsSuppressed(() =>
         applySetup({
-          workspace,
+          workspace: appliedWorkspace,
+          targetAgentId: selectedAgentId,
           ...(allowWorkspaceChange ? { allowWorkspaceChange: true } : {}),
           surface: "cli",
           runtime,
@@ -472,7 +517,7 @@ async function runGuidedOnboardingFlow(
         }),
         t("wizard.guided.aiAccessTitle"),
       );
-      return { workspace, next: "chat" };
+      return { workspace: appliedWorkspace, next: "chat" };
     }
   }
   if (wantsDiscovery) {
@@ -483,7 +528,7 @@ async function runGuidedOnboardingFlow(
       config: persistedConfig,
       prompter,
       runtime,
-      workspaceDir: workspace,
+      workspaceDir: appliedWorkspace,
       modelRouteVerified: true,
     });
     const recommendedConfig = recommendationOutcome.config;

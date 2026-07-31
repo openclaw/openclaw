@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { tryCronScheduleIdentity } from "../schedule-identity.js";
 import type { CronJob } from "../types.js";
 import {
   loadedCronStoreFromRows,
@@ -52,6 +53,41 @@ describe("cron trigger SQLite codec", () => {
       const [decoded] = loadedCronStoreFromRows(loadCronRows(handle.db, "test")).store.jobs;
       expect(decoded?.trigger).toEqual(job.trigger);
       expect(decoded?.state).toEqual(job.state);
+    } finally {
+      handle.walMaintenance.close();
+      handle.db.close();
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("persists a repaired schedule identity through a runtime-only save", async () => {
+    const job = {
+      id: "identity-job",
+      name: "identity job",
+      enabled: true,
+      createdAtMs: 1,
+      updatedAtMs: 2,
+      schedule: { kind: "every", everyMs: 30_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: { nextRunAtMs: 30_001 },
+    } satisfies CronJob;
+    const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cron-schedule-identity-"));
+    const handle = openOpenClawStateDatabase({ path: path.join(fixtureRoot, "state.sqlite") });
+    try {
+      replaceCronRows(handle.db, "test", { version: 1, jobs: [job] });
+      handle.db
+        .prepare("UPDATE cron_jobs SET schedule_identity = 'stale' WHERE store_key = 'test'")
+        .run();
+
+      updateCronRuntimeRows(handle.db, "test", { version: 1, jobs: [job] });
+
+      const reloaded = loadedCronStoreFromRows(loadCronRows(handle.db, "test"));
+      expect(reloaded.configJobRuntimeEntries[0]?.scheduleIdentity).toBe(
+        tryCronScheduleIdentity(job),
+      );
+      expect(reloaded.store.jobs[0]?.state.nextRunAtMs).toBe(30_001);
     } finally {
       handle.walMaintenance.close();
       handle.db.close();

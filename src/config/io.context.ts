@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import { collectManifestModelIdNormalizationPolicies } from "@openclaw/model-catalog-core/provider-model-id-normalization";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { ensureOwnerDisplaySecret } from "../agents/owner-display.js";
 import {
   loadShellEnvFallback,
@@ -9,14 +8,12 @@ import {
   shouldEnableShellEnvFallback,
 } from "../infra/shell-env.js";
 import { createConfigValidationMetadataPluginIdScope } from "../plugins/gateway-startup-plugin-ids.js";
-import {
-  resolvePluginMetadataSnapshot,
-  type PluginMetadataSnapshot,
-} from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
 import { applyConfigEnvVars, cloneEnvWithPlatformSemantics } from "./config-env-vars.js";
 import { observeConfigSnapshotSync } from "./io.observe.js";
 import { retainGeneratedOwnerDisplaySecret } from "./io.owner-display-secret.js";
+import { resolveConfigWidePluginMetadataSnapshot } from "./io.plugin-metadata.js";
 import {
   coerceConfig,
   normalizeConfigIoDeps,
@@ -26,6 +23,7 @@ import {
 } from "./io.read-helpers.js";
 import { autoOwnerDisplaySecretByPath } from "./io.state.js";
 import type { ConfigIoFactoryOptions, NormalizedConfigIoDeps } from "./io.types.js";
+import { inheritLegacyDefaultAgentId } from "./legacy.default-agent-owner.js";
 import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
@@ -84,7 +82,7 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
       cfg,
       () => pendingValue ?? crypto.randomBytes(32).toString("hex"),
     );
-    return applyConfigOverrides(
+    const finalized = applyConfigOverrides(
       retainGeneratedOwnerDisplaySecret({
         config: resolvedConfig,
         configPath,
@@ -92,6 +90,7 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
         state: { pendingByPath: autoOwnerDisplaySecretByPath },
       }),
     );
+    return inheritLegacyDefaultAgentId(cfg, finalized);
   }
 
   function createValidationPluginMetadataSnapshotLoader(params: {
@@ -105,12 +104,9 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
           return snapshot;
         }
         const metadataConfig = config;
-        const defaultAgentId = resolveDefaultAgentId(metadataConfig);
-        snapshot = resolvePluginMetadataSnapshot({
+        snapshot = resolveConfigWidePluginMetadataSnapshot({
           config: metadataConfig,
-          workspaceDir: resolveAgentWorkspaceDir(metadataConfig, defaultAgentId, params.env),
           env: params.env,
-          allowWorkspaceScopedCurrent: true,
           pluginIdScope: createConfigValidationMetadataPluginIdScope({
             config: metadataConfig,
             env: params.env,
@@ -126,7 +122,9 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
     const env = { ...deps.env } as NodeJS.ProcessEnv;
     const resolvedIncludes = resolveConfigIncludesForRead(candidate, configPath, { ...deps, env });
     const resolution = resolveConfigForRead(resolvedIncludes, env, deps.lowerPrecedenceEnv);
-    return coerceConfig(migratePersistedImplicitMainRoster(resolution.resolvedConfigRaw).config);
+    return coerceConfig(
+      migratePersistedImplicitMainRoster(resolution.resolvedConfigRaw, env).config,
+    );
   }
 
   function resolveSuspiciousRecoveryBackupCandidate(parsed: unknown): OpenClawConfig | null {

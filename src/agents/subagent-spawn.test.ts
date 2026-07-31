@@ -648,6 +648,7 @@ describe("spawnSubagentDirect seam flow", () => {
     await vi.waitFor(() =>
       expect(hoisted.emitSessionLifecycleEventMock).toHaveBeenCalledWith({
         sessionKey: result.childSessionKey,
+        agentId: "main",
         reason: "delete",
         parentSessionKey: "agent:main:main",
       }),
@@ -1024,6 +1025,7 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(registerInput.spawnMode).toBe("run");
     expect(hoisted.emitSessionLifecycleEventMock).toHaveBeenCalledWith({
       sessionKey: childSessionKey,
+      agentId: "main",
       reason: "create",
       parentSessionKey: "agent:main:main",
       label: undefined,

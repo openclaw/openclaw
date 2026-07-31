@@ -373,11 +373,13 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
 
     await runSessionsSendA2AFlow({
       targetSessionKey: "agent:worker:discord:group:dev",
+      targetAgentId: "worker",
       displayKey: "agent:worker:discord:group:dev",
       message: "Test message",
       announceTimeoutMs: 10_000,
       maxPingPongTurns: 2,
       requesterSessionKey: "agent:main:discord:group:req",
+      requesterAgentId: "main",
       requesterChannel: "discord",
       notifyRequesterOnWaitFailure: true,
       baseline: {
@@ -390,6 +392,7 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     expect(readLatestAssistantReplySnapshot).not.toHaveBeenCalled();
     expect(runAgentStep).toHaveBeenCalledOnce();
     expect(firstMockArg(vi.mocked(runAgentStep), "agent step")).toMatchObject({
+      agentId: "main",
       sessionKey: "agent:main:discord:group:req",
       sourceSessionKey: "agent:worker:discord:group:dev",
       sourceTool: "sessions_send",
@@ -476,6 +479,7 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
 
     await runSessionsSendA2AFlow({
       targetSessionKey,
+      targetAgentId: "other",
       displayKey: targetSessionKey,
       message: "Test message",
       announceTimeoutMs: 10_000,
@@ -487,8 +491,43 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
 
     expect(runAgentStep).toHaveBeenCalledOnce();
     expect(firstMockArg(vi.mocked(runAgentStep), "agent step")).toMatchObject({
+      agentId: "other",
       sessionKey: targetSessionKey,
       message: "Agent-to-agent announce step.",
+    });
+  });
+
+  it("keeps cross-agent global sessions distinct while alternating A2A roles", async () => {
+    vi.mocked(runAgentStep)
+      .mockResolvedValueOnce("requester reply")
+      .mockResolvedValueOnce("target reply")
+      .mockResolvedValueOnce("ANNOUNCE_SKIP");
+
+    await runSessionsSendA2AFlow({
+      targetSessionKey: "global",
+      targetAgentId: "work",
+      displayKey: "global",
+      message: "Test message",
+      announceTimeoutMs: 10_000,
+      maxPingPongTurns: 2,
+      requesterSessionKey: "global",
+      requesterAgentId: "main",
+      requesterChannel: "webchat",
+      roundOneReply: "initial target reply",
+    });
+
+    expect(runAgentStep).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(runAgentStep).mock.calls[0]?.[0]).toMatchObject({
+      agentId: "main",
+      sessionKey: "global",
+      sourceSessionKey: "global",
+      extraSystemPrompt: expect.stringContaining("Agent 1 (requester)"),
+    });
+    expect(vi.mocked(runAgentStep).mock.calls[1]?.[0]).toMatchObject({
+      agentId: "work",
+      sessionKey: "global",
+      sourceSessionKey: "global",
+      extraSystemPrompt: expect.stringContaining("Agent 2 (target)"),
     });
   });
 

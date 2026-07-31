@@ -1,6 +1,6 @@
 // Doctor core checks collect environment, config, and runtime readiness diagnostics.
 import path from "node:path";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { isExperimentalClawsEnabled } from "../claws/experimental.js";
 import {
   detectLegacyClawdBrowserProfileResidue,
@@ -554,54 +554,55 @@ const bootstrapSizeCheck: HealthCheck = {
     const { resolveBootstrapContextForRun } = await import("../agents/bootstrap-files.js");
     const { resolveBootstrapMaxChars, resolveBootstrapTotalMaxChars } =
       await import("../agents/embedded-agent-helpers.js");
-    const defaultAgentId = resolveDefaultAgentId(ctx.cfg);
-    const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, defaultAgentId);
-    const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({
-      workspaceDir,
-      config: ctx.cfg,
-      agentId: defaultAgentId,
-    });
-    const analysis = analyzeBootstrapBudget({
-      files: buildBootstrapInjectionStats({
-        bootstrapFiles,
-        injectedFiles: contextFiles,
-      }),
-      bootstrapMaxChars: resolveBootstrapMaxChars(ctx.cfg, defaultAgentId),
-      bootstrapTotalMaxChars: resolveBootstrapTotalMaxChars(ctx.cfg, defaultAgentId),
-    });
     const findings: HealthFinding[] = [];
-    for (const file of analysis.truncatedFiles) {
-      findings.push({
-        checkId: "core/doctor/bootstrap-size",
-        severity: "warning",
-        message: `${file.name} exceeds bootstrap limits and will be truncated.`,
-        path: file.path,
-        fixHint:
-          "Reduce the file size or tune `agents.entries.*.bootstrapMaxChars` / `bootstrapTotalMaxChars` for this agent, or the corresponding `agents.defaults.*` fallback.",
+    for (const agentId of listAgentIds(ctx.cfg)) {
+      const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, agentId);
+      const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({
+        workspaceDir,
+        config: ctx.cfg,
+        agentId,
       });
-    }
-    for (const file of analysis.nearLimitFiles) {
-      if (file.truncated) {
-        continue;
+      const analysis = analyzeBootstrapBudget({
+        files: buildBootstrapInjectionStats({
+          bootstrapFiles,
+          injectedFiles: contextFiles,
+        }),
+        bootstrapMaxChars: resolveBootstrapMaxChars(ctx.cfg, agentId),
+        bootstrapTotalMaxChars: resolveBootstrapTotalMaxChars(ctx.cfg, agentId),
+      });
+      for (const file of analysis.truncatedFiles) {
+        findings.push({
+          checkId: "core/doctor/bootstrap-size",
+          severity: "warning",
+          message: `${file.name} exceeds bootstrap limits and will be truncated.`,
+          path: file.path,
+          fixHint:
+            "Reduce the file size or tune `agents.entries.*.bootstrapMaxChars` / `bootstrapTotalMaxChars` for this agent, or the corresponding `agents.defaults.*` fallback.",
+        });
       }
-      findings.push({
-        checkId: "core/doctor/bootstrap-size",
-        severity: "info",
-        message: `${file.name} is near the configured bootstrap file limit.`,
-        path: file.path,
-        fixHint:
-          "Reduce the file size or tune `agents.entries.*.bootstrapMaxChars` for this agent, or `agents.defaults.bootstrapMaxChars` as fallback, for per-file limits.",
-      });
-    }
-    if (analysis.totalNearLimit) {
-      findings.push({
-        checkId: "core/doctor/bootstrap-size",
-        severity: analysis.hasTruncation ? "warning" : "info",
-        message: "Total bootstrap context is near the configured total limit.",
-        path: workspaceDir,
-        fixHint:
-          "Reduce bootstrap file sizes or tune `agents.entries.*.bootstrapTotalMaxChars` for this agent, or `agents.defaults.bootstrapTotalMaxChars` as fallback.",
-      });
+      for (const file of analysis.nearLimitFiles) {
+        if (file.truncated) {
+          continue;
+        }
+        findings.push({
+          checkId: "core/doctor/bootstrap-size",
+          severity: "info",
+          message: `${file.name} is near the configured bootstrap file limit.`,
+          path: file.path,
+          fixHint:
+            "Reduce the file size or tune `agents.entries.*.bootstrapMaxChars` for this agent, or `agents.defaults.bootstrapMaxChars` as fallback, for per-file limits.",
+        });
+      }
+      if (analysis.totalNearLimit) {
+        findings.push({
+          checkId: "core/doctor/bootstrap-size",
+          severity: analysis.hasTruncation ? "warning" : "info",
+          message: "Total bootstrap context is near the configured total limit.",
+          path: workspaceDir,
+          fixHint:
+            "Reduce bootstrap file sizes or tune `agents.entries.*.bootstrapTotalMaxChars` for this agent, or `agents.defaults.bootstrapTotalMaxChars` as fallback.",
+        });
+      }
     }
     return findings;
   },
@@ -1240,8 +1241,16 @@ function createWorkspaceSuggestionsCheck(
     defaultEnabled: false,
     source: "doctor",
     async detect(ctx) {
-      const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
-      const notes = await deps.collectWorkspaceSuggestionNotes(workspaceDir);
+      const workspaceDirs = new Set(
+        listAgentIds(ctx.cfg).map((agentId) => resolveAgentWorkspaceDir(ctx.cfg, agentId)),
+      );
+      const notes = (
+        await Promise.all(
+          [...workspaceDirs].map((workspaceDir) =>
+            deps.collectWorkspaceSuggestionNotes(workspaceDir),
+          ),
+        )
+      ).flat();
       return notes.map((text) =>
         noteTextToFinding({
           checkId: "core/doctor/workspace-suggestions",

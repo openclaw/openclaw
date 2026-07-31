@@ -1,8 +1,9 @@
 /** Doctor-owned materialization of heartbeat cadence config into cron monitor rows. */
 import { isDeepStrictEqual } from "node:util";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listAgentIds, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { tryGetLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   heartbeatMonitorAgentId,
@@ -18,6 +19,7 @@ import type { HealthFinding } from "../flows/health-checks.js";
 import { formatErrorMessage as errorMessage } from "../infra/errors.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.js";
 import { resolveHeartbeatSchedulerSeed } from "../infra/heartbeat-runner.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { shortenHomePath } from "../utils.js";
 
 const HEARTBEAT_CADENCE_MIGRATION_CHECK_ID = "core/doctor/heartbeat-cadence-migration";
@@ -35,14 +37,26 @@ type HeartbeatMonitorPlan = {
   changes: HeartbeatMonitorChange[];
 };
 
-function createDoctorCronService(storePath: string, cfg: OpenClawConfig): CronService {
+function createDoctorCronService(
+  storePath: string,
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): CronService {
   const noop = () => {};
   const log = { debug: noop, info: noop, warn: noop, error: noop };
+  const retainedAgentId = tryGetLegacyDefaultAgentId(cfg);
+  const retainedAgentAvailable =
+    retainedAgentId !== undefined &&
+    listAgentIds(cfg).some(
+      (agentId) => normalizeAgentId(agentId) === normalizeAgentId(retainedAgentId),
+    );
   return new CronService({
+    env,
     storePath,
     cronEnabled: false,
     cronConfig: cfg.cron,
-    defaultAgentId: resolveDefaultAgentId(cfg),
+    defaultAgentId:
+      (retainedAgentAvailable ? retainedAgentId : undefined) ?? tryResolveDefaultAgentId(cfg),
     log,
     enqueueSystemEvent: () => false,
     requestHeartbeat: noop,
@@ -104,7 +118,7 @@ async function loadHeartbeatMonitorPlan(
   storePath: string,
   env: NodeJS.ProcessEnv,
 ): Promise<{ cron: CronService; plan: HeartbeatMonitorPlan }> {
-  const cron = createDoctorCronService(storePath, cfg);
+  const cron = createDoctorCronService(storePath, cfg, env);
   const jobs = await cron.list({ includeDisabled: true });
   const schedulerSeed = resolveHeartbeatSchedulerSeed(undefined, { env });
   return { cron, plan: resolveHeartbeatMonitorPlan(cfg, jobs, { schedulerSeed }) };
@@ -182,7 +196,7 @@ export async function ensureHeartbeatMonitorJobs(
   storePath: string,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<Map<string, CronJob>> {
-  const cron = createDoctorCronService(storePath, cfg);
+  const cron = createDoctorCronService(storePath, cfg, env);
   const jobs = await cron.list({ includeDisabled: true });
   const schedulerSeed = resolveHeartbeatSchedulerSeed(undefined, { env });
   const specs = resolveHeartbeatMonitorSpecs(cfg, jobs, { schedulerSeed });

@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   appendTranscriptMessageSync,
@@ -627,10 +628,14 @@ describe("chat abort transcript persistence", () => {
       ]),
       ...(needsGlobalConfig
         ? {
-            getRuntimeConfig: () => ({
-              agents: { list: [{ id: "main", default: true }, { id: "work" }] },
-              session: { scope: "global" },
-            }),
+            getRuntimeConfig: () =>
+              retainLegacyDefaultAgentId(
+                {
+                  agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+                  session: { scope: "global" },
+                },
+                "main",
+              ),
           }
         : {}),
     });

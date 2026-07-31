@@ -224,6 +224,10 @@
       "label": "Call Log Store Path",
       "advanced": true
     },
+    "agentId": {
+      "label": "Agent Owner",
+      "help": "Required for multi-agent fleets; sole-agent fleets use their only configured agent."
+    },
     "sessionScope": {
       "label": "Session Scope",
       "help": "Use per-phone to preserve caller memory across calls, or per-call to isolate every call into a fresh voice session."
@@ -878,6 +882,10 @@
       },
       "store": {
         "type": "string"
+      },
+      "agentId": {
+        "type": "string",
+        "minLength": 1
       },
       "sessionScope": {
         "type": "string",

@@ -15,7 +15,11 @@ import {
   TUI,
 } from "@earendil-works/pi-tui";
 import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js";
-import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  resolveAgentIdByWorkspacePath,
+  resolveDefaultAgentId,
+  tryResolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { normalizeThinkLevel } from "../auto-reply/thinking.shared.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
@@ -221,7 +225,7 @@ export function resolveTuiSessionKey(params: {
 
 export function resolveInitialTuiAgentId(params: {
   cfg: OpenClawConfig;
-  fallbackAgentId: string;
+  fallbackAgentId?: string;
   initialSessionInput?: string;
   cwd?: string;
 }) {
@@ -236,7 +240,13 @@ export function resolveInitialTuiAgentId(params: {
     return inferredFromWorkspace;
   }
 
-  return normalizeAgentId(params.fallbackAgentId);
+  return normalizeAgentId(
+    params.fallbackAgentId ??
+      resolveDefaultAgentId(params.cfg, {
+        surface: "TUI startup",
+        hint: "Pass an agent-scoped --session key or start the TUI from an agent workspace.",
+      }),
+  );
 }
 
 export function resolveGatewayDisconnectState(reason?: string): {
@@ -611,12 +621,13 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   const initialSessionInput = (opts.session ?? "").trim();
   let sessionScope: SessionScope = (config.session?.scope ?? "per-sender") as SessionScope;
   let sessionMainKey = normalizeMainKey(config.session?.mainKey);
-  let agentDefaultId = resolveDefaultAgentId(config);
+  const configuredDefaultAgentId = tryResolveDefaultAgentId(config);
   let currentAgentId = resolveInitialTuiAgentId({
     cfg: config,
-    fallbackAgentId: agentDefaultId,
+    fallbackAgentId: configuredDefaultAgentId,
     initialSessionInput,
   });
+  let agentDefaultId = configuredDefaultAgentId ?? currentAgentId;
   let agents: AgentSummary[] = [];
   const agentNames = new Map<string, string>();
   let currentSessionKey = "";

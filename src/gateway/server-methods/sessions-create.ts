@@ -184,7 +184,8 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       return;
     }
     let sessionKey = p.key;
-    let sessionAgentId = catalogAgentId ?? p.agentId;
+    let sessionAgentId =
+      catalogAgentId ?? p.agentId ?? parseAgentSessionKey(p.parentSessionKey ?? "")?.agentId;
     let sessionWorktree: Awaited<ReturnType<typeof managedWorktrees.create>> | undefined;
     const sessionExecCwd = requestedExecNode ? requestedCwd : undefined;
     let sessionCwd = requestedExecNode ? undefined : requestedCwd;

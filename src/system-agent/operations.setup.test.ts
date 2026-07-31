@@ -449,8 +449,9 @@ describe("parseSystemAgentOperation", () => {
       agents: {
         defaults: {
           model: { primary: "anthropic/claude-sonnet-4-6", fallbacks: ["openai/gpt-5.2"] },
+          systemAgent: { agentId: "main" },
         },
-        entries: { main: { default: true, workspace: "/tmp/main" } },
+        entries: { main: { workspace: "/tmp/main" } },
       },
       gateway: { port: 18789 },
       models: { providers: { openai: { baseUrl: "https://api.openai.com/v1" } } },
@@ -509,7 +510,7 @@ describe("parseSystemAgentOperation", () => {
               models: { "google/unrelated": { agentRuntime: { id: "openclaw" } } },
             },
             entries: {
-              main: { default: true, workspace: "/tmp/main" },
+              main: { workspace: "/tmp/main" },
               work: { workspace: "/tmp/work" },
             },
           },
@@ -556,7 +557,7 @@ describe("parseSystemAgentOperation", () => {
       requireRecord(requireRecord(persisted.agents, "agents").defaults, "defaults").model,
     ).toEqual({ primary: "openai/gpt-5.5", fallbacks: ["openai/gpt-5.2"] });
     expect(requireRecord(persisted.agents, "agents").entries).toEqual({
-      main: { default: true, workspace: "/tmp/main" },
+      main: { workspace: "/tmp/main" },
       work: { workspace: "/tmp/work" },
     });
     expect(requireRecord(persisted.auth, "auth").profiles).toEqual({
@@ -598,15 +599,17 @@ describe("parseSystemAgentOperation", () => {
       field: "default agent",
       initial: {
         agents: {
-          defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
-          entries: { main: { default: true }, work: {} },
+          defaults: {
+            model: { primary: "anthropic/claude-sonnet-4-6" },
+            systemAgent: { agentId: "main" },
+          },
+          entries: { main: {}, work: {} },
         },
       },
       change: (config: TestConfig) => {
         const next = structuredClone(config);
-        const entries = requireRecord(requireRecord(next.agents, "agents").entries, "entries");
-        delete requireRecord(entries.main, "main").default;
-        requireRecord(entries.work, "work").default = true;
+        const defaults = requireRecord(requireRecord(next.agents, "agents").defaults, "defaults");
+        requireRecord(defaults.systemAgent, "systemAgent").agentId = "work";
         return next;
       },
     },

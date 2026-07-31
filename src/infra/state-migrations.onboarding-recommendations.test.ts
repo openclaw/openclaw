@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { createOnboardingRecommendationsStore } from "../state/onboarding-recommendations.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -61,7 +62,32 @@ afterEach(() => {
 });
 
 describe("onboarding recommendations scope migration", () => {
-  it("moves the legacy singleton row to the default workspace", async () => {
+  it("does not warn about a missing owner when no legacy row exists", async () => {
+    await withOpenClawTestState(
+      { label: "onboarding-recommendations-no-legacy-row" },
+      async (state) => {
+        const database = { env: state.env };
+        createOnboardingRecommendationsStore({
+          workspaceDir: state.workspaceDir,
+          database,
+        }).read();
+
+        expect(
+          migrateLegacyOnboardingRecommendationsScope({
+            cfg: {
+              agents: {
+                ownership: "explicit",
+                entries: { ops: {}, research: {} },
+              },
+            },
+            env: state.env,
+          }),
+        ).toEqual({ changes: [], warnings: [] });
+      },
+    );
+  });
+
+  it("moves the legacy singleton row to the retained owner workspace", async () => {
     await withOpenClawTestState(
       { label: "onboarding-recommendations-migration" },
       async (state) => {
@@ -73,17 +99,22 @@ describe("onboarding recommendations scope migration", () => {
         });
 
         const result = migrateLegacyOnboardingRecommendationsScope({
-          cfg: {
-            agents: {
-              defaults: { workspace: state.workspaceDir },
-              entries: { main: { default: true } },
-            },
-          } as OpenClawConfig,
+          cfg: retainLegacyDefaultAgentId(
+            {
+              agents: {
+                defaults: { workspace: state.workspaceDir },
+                entries: { main: { workspace: state.workspaceDir }, research: {} },
+              },
+            } as OpenClawConfig,
+            "main",
+          ),
           env: state.env,
         });
 
         expect(result).toEqual({
-          changes: ["Migrated onboarding recommendation state to the default workspace scope."],
+          changes: [
+            "Migrated onboarding recommendation state to the legacy owner workspace scope.",
+          ],
           warnings: [],
         });
         expect(
@@ -98,6 +129,42 @@ describe("onboarding recommendations scope migration", () => {
           acceptedAt: 2_000,
           updatedAt: 2_000,
         });
+        expect(readRecommendationKey(database, "primary")).toBeUndefined();
+      },
+    );
+  });
+
+  it("uses the sole live workspace when the retained owner departed", async () => {
+    await withOpenClawTestState(
+      { label: "onboarding-recommendations-departed-owner" },
+      async (state) => {
+        const database = { env: state.env };
+        insertRecommendationRow({
+          database,
+          configKey: "primary",
+          inventoryHash: "legacy-inventory",
+        });
+        const cfg = retainLegacyDefaultAgentId(
+          {
+            agents: {
+              entries: { research: { workspace: state.workspaceDir } },
+            },
+          } as OpenClawConfig,
+          "ops",
+        );
+
+        expect(migrateLegacyOnboardingRecommendationsScope({ cfg, env: state.env })).toEqual({
+          changes: [
+            "Migrated onboarding recommendation state to the legacy owner workspace scope.",
+          ],
+          warnings: [],
+        });
+        expect(
+          createOnboardingRecommendationsStore({
+            workspaceDir: state.workspaceDir,
+            database,
+          }).read(),
+        ).toMatchObject({ inventoryHash: "legacy-inventory" });
         expect(readRecommendationKey(database, "primary")).toBeUndefined();
       },
     );
@@ -125,18 +192,21 @@ describe("onboarding recommendations scope migration", () => {
         });
 
         const result = migrateLegacyOnboardingRecommendationsScope({
-          cfg: {
-            agents: {
-              defaults: { workspace: state.workspaceDir },
-              entries: { main: { default: true } },
-            },
-          } as OpenClawConfig,
+          cfg: retainLegacyDefaultAgentId(
+            {
+              agents: {
+                defaults: { workspace: state.workspaceDir },
+                entries: { main: { workspace: state.workspaceDir }, research: {} },
+              },
+            } as OpenClawConfig,
+            "main",
+          ),
           env: state.env,
         });
 
         expect(result).toEqual({
           changes: [
-            "Removed ambiguous legacy onboarding recommendation state; kept the default workspace record.",
+            "Removed ambiguous legacy onboarding recommendation state; kept the legacy owner workspace record.",
           ],
           warnings: [],
         });

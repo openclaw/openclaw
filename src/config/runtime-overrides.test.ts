@@ -70,7 +70,9 @@ describe("runtime overrides", () => {
         "/tmp/jarvis-workspace",
         "/tmp/worker-workspace",
       ]);
-      expect(resolveMainSessionKey(runtimeConfig)).toBe("agent:jarvis:main");
+      expect(() => resolveMainSessionKey(runtimeConfig)).toThrow(
+        "main-session routing has no explicit owner",
+      );
     }
   });
 

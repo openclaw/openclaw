@@ -210,6 +210,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
 
   // Agent runtime
   agents: {
+    ownership: "explicit",
     defaults: {
       workspace: "~/.openclaw/workspace",
       userTimezone: "America/Chicago",
@@ -275,7 +276,6 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
     },
     entries: {
       main: {
-        default: true,
         identity: {
           name: "Samantha",
           theme: "helpful sloth",
@@ -482,12 +482,13 @@ example `~/.agents/skills/manager -> ~/Projects/manager/skills`.
 ```json5
 {
   agents: {
+    ownership: "explicit",
     defaults: {
       workspace: "~/.openclaw/workspace",
       skills: ["github", "weather"],
     },
     entries: {
-      main: { default: true },
+      main: {},
       docs: { workspace: "~/.openclaw/workspace-docs", skills: ["docs-search"] },
     },
   },

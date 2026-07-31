@@ -183,7 +183,7 @@ Top-level keys under `plugins.entries.voice-call.config` not shown above:
 | `outbound.notifyHangupDelaySec` | `3`          | Seconds to wait after TTS before auto-hangup in notify mode.                                       |
 | `skipSignatureVerification`     | `false`      | Local testing only; never enable in production.                                                    |
 | `store`                         | unset        | Overrides the default `$OPENCLAW_STATE_DIR/voice-calls` path (normally `~/.openclaw/voice-calls`). |
-| `agentId`                       | `"main"`     | Agent used for response generation and session storage.                                            |
+| `agentId`                       | sole agent   | Agent used for response generation and session storage; required for multi-agent fleets.           |
 | `responseModel`                 | unset        | Overrides the default model for classic (non-realtime) responses.                                  |
 | `responseSystemPrompt`          | generated    | Custom system prompt for classic responses.                                                        |
 | `responseTimeoutMs`             | `30000`      | Timeout for classic response generation (ms).                                                      |

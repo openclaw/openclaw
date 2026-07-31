@@ -276,11 +276,11 @@ describe("resolveSessionKeyFromResolveParams", () => {
     const cfg = {};
     const result = await resolveSessionKeyFromResolveParams({
       cfg,
-      p: { label: "my-label", agentId: "main" },
+      p: { label: "my-label", agentId: "deleted-agent" },
     });
 
     expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(cfg, {
-      agentId: "main",
+      agentId: "deleted-agent",
     });
     expect(result).toEqual({
       ok: false,

@@ -284,6 +284,16 @@ describe("resolveInitialTuiAgentId", () => {
     ).toBe("main");
   });
 
+  it("uses an explicit agent session without requiring a fleet default", () => {
+    expect(
+      resolveInitialTuiAgentId({
+        cfg: { agents: { ownership: "explicit", entries: { ops: {}, research: {} } } },
+        initialSessionInput: "agent:ops:incident",
+        cwd: "/var/tmp/unrelated",
+      }),
+    ).toBe("ops");
+  });
+
   it("falls back when cwd has no matching workspace", () => {
     expect(
       resolveInitialTuiAgentId({

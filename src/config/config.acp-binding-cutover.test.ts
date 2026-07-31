@@ -7,7 +7,7 @@ describe("ACP binding cutover schema", () => {
     const parsed = OpenClawSchema.safeParse({
       agents: {
         entries: {
-          main: { default: true, runtime: { type: "embedded" } },
+          main: { runtime: { type: "embedded" } },
           coding: {
             runtime: {
               type: "acp",

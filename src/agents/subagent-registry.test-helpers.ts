@@ -123,6 +123,7 @@ export function resolveRequesterForChildSession(childSessionKey: string) {
   }
   return {
     requesterSessionKey: resolved.requesterSessionKey,
+    requesterAgentId: resolved.requesterAgentId,
     requesterOrigin: normalizeDeliveryContext(resolved.requesterOrigin),
   };
 }

@@ -235,6 +235,32 @@ describe("config io write", () => {
     };
   };
 
+  itWithHome(
+    "retains explicit ownership when an explicit agents write omits the marker",
+    async (home) => {
+      const { configPath } = await writeConfigFixture(home, {
+        agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+        gateway: { mode: "local", port: 18_789 },
+      });
+      const io = createFastConfigIO(home);
+
+      const markerless = {
+        agents: { entries: { ops: {}, research: {} } },
+        gateway: { mode: "local", port: 19_001 },
+      } satisfies OpenClawConfig;
+      await io.writeConfigFile(markerless, {
+        explicitSetPaths: [["agents"]],
+        explicitSetValueSource: markerless,
+      });
+
+      const persisted = await readPersistedConfig(configPath);
+      expect(persisted.agents).toEqual({
+        ownership: "explicit",
+        entries: { ops: {}, research: {} },
+      });
+    },
+  );
+
   itWithHome("writes health state to SQLite through public config reads", async (home) => {
     const configPath = configPathForHome(home);
     const healthPath = path.join(home, ".openclaw", "logs", "config-health.json");
@@ -946,7 +972,10 @@ describe("config io write", () => {
         alias: "GPT",
         params: { transport: "sse", openaiWsWarmup: false },
       });
-      expect(persisted.agents?.entries).toEqual({ main: {}, ops: {} });
+      expect(persisted.agents?.entries).toEqual({
+        main: { workspace: expect.any(String) },
+        ops: {},
+      });
     },
   );
 
@@ -968,11 +997,11 @@ describe("config io write", () => {
     expect(snapshot.parsed).toEqual(original);
     expect(snapshot.sourceConfig).toEqual({
       ...original,
-      agents: { entries: { main: { default: true } } },
+      agents: { entries: { main: {} } },
     });
     expect(snapshot.config).toEqual({
       ...original,
-      agents: { entries: { main: { default: true } } },
+      agents: { entries: { main: {} } },
     });
     expect(snapshot.issues[0]?.message).toContain("unknown channel id: test-plugin-channel");
   });
@@ -1314,7 +1343,7 @@ describe("config io write", () => {
     const io = createFastConfigIO(home, { configPath });
     const snapshot = await io.readConfigFileSnapshot();
     expect(snapshot.exists).toBe(false);
-    expect(snapshot.config.agents?.entries).toEqual({ main: { default: true } });
+    expect(snapshot.config.agents?.entries).toEqual({ main: {} });
     let preflightConfig: OpenClawConfig | undefined;
 
     await io.writeConfigFile(
@@ -1333,7 +1362,7 @@ describe("config io write", () => {
       },
     );
 
-    expect(preflightConfig?.agents?.entries).toEqual({ main: { default: true } });
+    expect(preflightConfig?.agents?.entries).toEqual({ main: {} });
     const persisted = await readPersistedConfig(configPath);
     expect(persisted.agents?.defaults?.model).toBe("claude-cli/claude-opus-4-8");
     expect(persisted.agents?.entries).toBeUndefined();
@@ -1351,7 +1380,7 @@ describe("config io write", () => {
     });
 
     const persisted = await readPersistedConfig(configPath);
-    expect(persisted.agents?.entries).toEqual({ main: { default: true } });
+    expect(persisted.agents?.entries).toEqual({ main: {} });
     expect(persisted.agents?.list).toBeUndefined();
   });
 
@@ -1754,7 +1783,7 @@ describe("config io write", () => {
     await io.writeConfigFile({
       agents: {
         entries: {
-          main: { default: true, workspace: "/resolved/agent-workspace" },
+          main: { workspace: "/resolved/agent-workspace" },
         },
       },
     });
@@ -1966,7 +1995,7 @@ describe("config io write", () => {
               defaults: {
                 model: { primary: "openrouter/anthropic/claude-sonnet-4.6" },
               },
-              entries: { main: { default: true } },
+              entries: { main: {} },
             });
           },
         );

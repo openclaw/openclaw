@@ -370,6 +370,7 @@ function runSwarmNoteBridge(params: {
   }
   codeModeSwarmDeps.emitSessionLifecycleEvent({
     sessionKey,
+    ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
     reason: "swarm-note",
     swarmGroupId: resolveCodeModeSwarmGroupId(params.ctx),
     kind,

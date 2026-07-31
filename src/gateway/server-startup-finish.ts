@@ -8,47 +8,28 @@ import {
 } from "../config/io.js";
 import { isNixMode } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.js";
 import { collectGatewayProcessMemoryUsageMb, finishGatewayRestartTrace } from "./restart-trace.js";
-import type { startGatewayCoreRuntime } from "./server-core-runtime.js";
 import { GATEWAY_EVENTS } from "./server-methods-list.js";
 import { setFallbackGatewayContextResolver } from "./server-plugins.js";
 import {
   enforceSharedGatewaySessionGenerationForConfigWrite,
   getRequiredSharedGatewaySessionGeneration,
 } from "./server-shared-auth-generation.js";
+import type { FinishGatewayStartupParams } from "./server-startup-finish.types.js";
 import {
   getHealthCache,
   getHealthVersion,
   incrementPresenceVersion,
 } from "./server/health-state.js";
 
-type GatewayCoreRuntime = Awaited<ReturnType<typeof startGatewayCoreRuntime>>;
-type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
-
 const POST_READY_MAINTENANCE_DELAY_MS = 250;
 const RETAINED_PLUGIN_CLEANUP_DELAY_MS = 30_000;
 
-export async function finishGatewayStartup(params: {
-  coreRuntime: GatewayCoreRuntime;
-  port: number;
-  opts: GatewayCoreRuntime["opts"];
-  log: GatewayLogger;
-  logHealth: GatewayLogger;
-  logWsControl: GatewayLogger;
-  logHooks: GatewayLogger;
-  logChannels: GatewayLogger;
-  logCron: GatewayLogger;
-  logReload: GatewayLogger;
-  logTailscale: GatewayLogger;
-  loadGatewayStartupPostAttachModule: () => Promise<
-    typeof import("./server-startup-post-attach.js")
-  >;
-}) {
+export async function finishGatewayStartup(params: FinishGatewayStartupParams) {
   const {
     coreRuntime: runtime,
     port,
@@ -150,6 +131,7 @@ export async function finishGatewayStartup(params: {
     gatewayPluginConfigAtStart,
     startupActivationSourceConfig,
     defaultWorkspaceDir,
+    pluginWorkspaceDir,
     coreGatewayMethodNames,
     pluginHostServices,
     baseMethods,
@@ -318,7 +300,7 @@ export async function finishGatewayStartup(params: {
         reloadDeferredGatewayPlugins({
           cfg: gatewayPluginConfigAtStart,
           activationSourceConfig: startupActivationSourceConfig,
-          workspaceDir: defaultWorkspaceDir,
+          workspaceDir: pluginWorkspaceDir,
           log,
           coreGatewayMethodNames,
           hostServices: pluginHostServices,
@@ -460,7 +442,7 @@ export async function finishGatewayStartup(params: {
                 return loadGatewayStartupPluginRuntime({
                   cfg: gatewayPluginConfigAtStart,
                   activationSourceConfig: startupActivationSourceConfig,
-                  workspaceDir: defaultWorkspaceDir,
+                  workspaceDir: pluginWorkspaceDir,
                   log,
                   baseMethods,
                   coreGatewayMethodNames,

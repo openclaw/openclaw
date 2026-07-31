@@ -11,6 +11,7 @@ const resolveAgentWorkspaceDirMock = vi.fn<
 const resolveDefaultAgentIdMock = vi.fn<
   typeof import("../../agents/agent-scope.js").resolveDefaultAgentId
 >(() => "default");
+const tryResolveConfiguredAgentWorkspaceDirMock = vi.fn(() => "/resolved-workspace");
 const manifestRegistry = { diagnostics: [], plugins: [] };
 const metadataSnapshot = {
   configFingerprint: "fingerprint",
@@ -44,6 +45,7 @@ vi.mock("../../config/plugin-auto-enable.js", () => ({
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: resolveAgentWorkspaceDirMock,
   resolveDefaultAgentId: resolveDefaultAgentIdMock,
+  tryResolveConfiguredAgentWorkspaceDir: tryResolveConfiguredAgentWorkspaceDirMock,
 }));
 
 vi.mock("../plugin-metadata-snapshot.js", () => ({
@@ -75,6 +77,7 @@ describe("resolvePluginRuntimeLoadContext", () => {
     setCurrentPluginMetadataSnapshotMock.mockClear();
     resolveAgentWorkspaceDirMock.mockClear();
     resolveDefaultAgentIdMock.mockClear();
+    tryResolveConfiguredAgentWorkspaceDirMock.mockClear();
 
     loadConfigMock.mockReturnValue({ plugins: {} });
     applyPluginAutoEnableMock.mockImplementation((params) => ({
@@ -139,8 +142,7 @@ describe("resolvePluginRuntimeLoadContext", () => {
       env,
       workspaceDir: "/resolved-workspace",
     });
-    expect(resolveDefaultAgentIdMock).toHaveBeenCalledWith(resolvedConfig);
-    expect(resolveAgentWorkspaceDirMock).toHaveBeenCalledWith(resolvedConfig, "default");
+    expect(tryResolveConfiguredAgentWorkspaceDirMock).toHaveBeenCalledWith(resolvedConfig, env);
   });
 
   it("stores derived metadata as the reusable runtime snapshot", () => {

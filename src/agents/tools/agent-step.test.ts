@@ -45,6 +45,7 @@ describe("runAgentStep", () => {
 
     await expect(
       runAgentStep({
+        agentId: "main",
         sessionKey: "agent:main:subagent:child",
         message: "hello",
         extraSystemPrompt: "reply briefly",
@@ -54,6 +55,7 @@ describe("runAgentStep", () => {
 
     const params = gatewayCalls[0]?.params as
       | {
+          agentId?: string;
           message?: string;
           sessionKey?: string;
           deliver?: boolean;
@@ -62,6 +64,7 @@ describe("runAgentStep", () => {
           inputProvenance?: { kind?: string; sourceTool?: string };
         }
       | undefined;
+    expect(params?.agentId).toBe("main");
     expect(params?.message).toContain("[Inter-session message");
     expect(params?.sessionKey).toBe("agent:main:subagent:child");
     expect(params?.deliver).toBe(false);
@@ -116,6 +119,7 @@ describe("runAgentStep", () => {
     });
 
     await runAgentStep({
+      agentId: "main",
       sessionKey: "agent:main:subagent:child",
       message: "internal announce step",
       transcriptMessage: "",
@@ -126,9 +130,17 @@ describe("runAgentStep", () => {
     expect(gatewayCalls).toStrictEqual([]);
     expect(agentCommandFromIngress).toHaveBeenCalledTimes(1);
     const ingressCalls = agentCommandFromIngress.mock.calls as unknown as Array<
-      [{ message?: string; sourceReplyDeliveryMode?: string; transcriptMessage?: string }]
+      [
+        {
+          agentId?: string;
+          message?: string;
+          sourceReplyDeliveryMode?: string;
+          transcriptMessage?: string;
+        },
+      ]
     >;
     const ingress = ingressCalls[0]?.[0];
+    expect(ingress?.agentId).toBe("main");
     expect(ingress?.message).toContain("internal announce step");
     expect(ingress?.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(ingress?.transcriptMessage).toBe("");

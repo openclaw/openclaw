@@ -83,7 +83,8 @@ const mocks = vi.hoisted(() => ({
   maybeRepairLegacyPluginManifestContracts: vi.fn().mockResolvedValue(undefined),
   detectLegacyClawdBrowserProfileResidue: vi.fn(),
   maybeArchiveLegacyClawdBrowserProfileResidue: vi.fn(),
-  resolveAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-workspace"),
+  resolveAgentWorkspaceDir: vi.fn((_cfg: unknown, _agentId: string) => "/tmp/openclaw-workspace"),
+  listAgentIds: vi.fn(() => ["default"]),
   resolveDefaultAgentId: vi.fn(() => "default"),
   resolveAgentContextLimits: vi.fn(
     (cfg: { agents?: { defaults?: { contextLimits?: unknown } } }) =>
@@ -354,6 +355,7 @@ vi.mock("../commands/doctor-browser.js", () => ({
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
+  listAgentIds: mocks.listAgentIds,
   resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
   resolveDefaultAgentId: mocks.resolveDefaultAgentId,
   resolveAgentContextLimits: mocks.resolveAgentContextLimits,
@@ -667,6 +669,8 @@ describe("doctor health contributions", () => {
     });
     mocks.resolveAgentWorkspaceDir.mockReset();
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/openclaw-workspace");
+    mocks.listAgentIds.mockReset();
+    mocks.listAgentIds.mockReturnValue(["default"]);
     mocks.resolveDefaultAgentId.mockReset();
     mocks.resolveDefaultAgentId.mockReturnValue("default");
     mocks.resolveAgentContextLimits.mockReset();
@@ -2735,6 +2739,36 @@ describe("doctor health contributions", () => {
     expect(ctx.cfgForPersistence).toEqual({});
     expect(ctx.runtime.error).toHaveBeenCalledWith("structured warning");
     expect(ctx.runtime.log).toHaveBeenCalledWith("changed from structured health");
+  });
+
+  it("does not invent a workspace owner for structured multi-agent health", async () => {
+    mocks.listAgentIds.mockReturnValue(["ops", "research"]);
+    mocks.resolveAgentWorkspaceDir.mockImplementation(
+      (_cfg: unknown, agentId: string) => `/tmp/${agentId}-workspace`,
+    );
+    const contribution = createDoctorHealthContribution({
+      id: "doctor:test-multi-agent-health",
+      label: "Test multi-agent health",
+      healthChecks: {
+        description: "test multi-agent health",
+        detect: vi.fn(async () => []),
+      },
+    });
+    const ctx = {
+      cfg: { agents: { entries: { ops: {}, research: {} } } },
+      cfgForPersistence: {},
+      configResult: { cfg: {} },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      configPath: "/tmp/fake-openclaw.json",
+    } as unknown as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    const [input] = mocks.runDoctorHealthRepairs.mock.calls.at(-1) ?? [];
+    expect(input).not.toHaveProperty("cwd");
   });
 
   it("renders findings from structured health when legacy run is omitted", async () => {

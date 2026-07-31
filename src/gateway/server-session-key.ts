@@ -99,7 +99,14 @@ export function resolveSessionKeyForRun(runId: string, opts: { agentId?: string 
   if (!explicitAgentId && cached) {
     return cached;
   }
-  const requestedAgentId = explicitAgentId ?? normalizeAgentId(resolveDefaultAgentId(cfg));
+  const requestedAgentId =
+    explicitAgentId ??
+    normalizeAgentId(
+      resolveDefaultAgentId(cfg, {
+        surface: "run-id session lookup",
+        hint: "Pass agentId with the unscoped run id so the owning session store is explicit.",
+      }),
+    );
   const cacheAgentId = requestedAgentId;
   if (cached && sessionKeyMatchesAgent(cached, requestedAgentId, cfg)) {
     const sessionKey = resolveRunSessionKeyForCaller(cached);

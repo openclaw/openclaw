@@ -199,20 +199,24 @@ describe("session catalog Gateway methods", () => {
     const followerBroadcast = vi.fn();
     const leader = startCall(
       "sessions.catalog.list",
-      { progressId: "leader-progress" },
+      { agentId: "main", progressId: "leader-progress" },
       config,
       { connId: "leader" },
       { broadcastToConnIds: leaderBroadcast },
     );
     const follower = startCall(
       "sessions.catalog.list",
-      { progressId: "follower-progress" },
+      { agentId: "main", progressId: "follower-progress" },
       config,
       { connId: "follower" },
       { broadcastToConnIds: followerBroadcast },
     );
     const otherAgent = startCall("sessions.catalog.list", { agentId: "research" }, config);
-    const otherParams = startCall("sessions.catalog.list", { search: "other" }, config);
+    const otherParams = startCall(
+      "sessions.catalog.list",
+      { agentId: "main", search: "other" },
+      config,
+    );
 
     await vi.waitFor(() => expect(list).toHaveBeenCalledTimes(3));
     release();

@@ -1,7 +1,6 @@
 /** Validation helpers for cron schedules, targets, payloads, and delivery. */
 import { resolveCronTriggerMinIntervalMs } from "../../config/cron-limits.js";
 import type { CronConfig } from "../../config/types.cron.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
 import { compileSafeRegexDetailed } from "../../security/safe-regex.js";
 import { parseCronPacingBounds } from "../pacing.js";
 import { assertSafeCronSessionTargetId } from "../session-target.js";
@@ -157,31 +156,6 @@ export function assertCronExpressionSatisfiable(
   throw new Error(
     `cron expression "${job.schedule.expr}" has no upcoming run time and would never fire`,
   );
-}
-
-export function assertMainSessionAgentId(
-  job: Pick<CronJob, "sessionTarget" | "agentId" | "payload">,
-  defaultAgentId: string | undefined,
-) {
-  if (job.sessionTarget !== "main") {
-    return;
-  }
-  if (!job.agentId) {
-    return;
-  }
-  // Script payloads run no agent turn; heartbeat monitors only poke the wake
-  // bus and the heartbeat runner resolves the owning agent's main session
-  // itself, so both are valid for non-default agents.
-  if (job.payload.kind === "script" || job.payload.kind === "heartbeat") {
-    return;
-  }
-  const normalized = normalizeAgentId(job.agentId);
-  const normalizedDefault = normalizeAgentId(defaultAgentId);
-  if (normalized !== normalizedDefault) {
-    throw new Error(
-      `cron: sessionTarget "main" is only valid for the default agent. Use sessionTarget "isolated" with payload.kind "agentTurn" for non-default agents (agentId: ${job.agentId})`,
-    );
-  }
 }
 
 export function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">) {

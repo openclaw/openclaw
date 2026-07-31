@@ -61,7 +61,7 @@ export type StatusSummary = {
     authAgeMs: number | null;
   };
   heartbeat: {
-    defaultAgentId: string;
+    defaultAgentId?: string;
     agents: HeartbeatStatus[];
   };
   channelSummary: string[];

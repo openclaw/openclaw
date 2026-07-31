@@ -495,6 +495,11 @@ export interface CronJobs {
   wake_mode: string;
 }
 
+export interface CronStoreEpochs {
+  store_epoch: Generated<number>;
+  store_key: string;
+}
+
 export interface CurrentConversationBindings {
   account_id: string;
   binding_id: string;
@@ -1578,6 +1583,7 @@ export interface DB {
   config_machine_state: ConfigMachineState;
   cron_job_scratch: CronJobScratch;
   cron_jobs: CronJobs;
+  cron_store_epochs: CronStoreEpochs;
   current_conversation_bindings: CurrentConversationBindings;
   delivery_queue_entries: DeliveryQueueEntries;
   device_auth_tokens: DeviceAuthTokens;

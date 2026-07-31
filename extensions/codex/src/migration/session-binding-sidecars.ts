@@ -5,6 +5,7 @@ import {
   listAgentIds,
   resolveAgentDir,
   resolveSessionAgentIds,
+  tryResolveSoleAgentId,
 } from "openclaw/plugin-sdk/agent-runtime";
 import { withFileLock, type FileLockOptions } from "openclaw/plugin-sdk/file-lock";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -34,7 +35,7 @@ const LEGACY_BINDING_LOCK_OPTIONS: FileLockOptions = {
 };
 
 type MigrationParams = Parameters<PluginDoctorStateMigration["migrateLegacyState"]>[0];
-type MigrationEnvironment = Pick<MigrationParams, "config" | "env" | "stateDir">;
+type MigrationEnvironment = Pick<MigrationParams, "config" | "context" | "env" | "stateDir">;
 
 type SessionSurface = {
   root: string;
@@ -145,8 +146,10 @@ async function collectSessionSurfaces(params: MigrationEnvironment): Promise<Ses
   }
 
   const legacyRoot = path.join(params.stateDir, "sessions");
-  const defaultAgentId = resolveSessionAgentIds({ config: params.config }).defaultAgentId;
-  await add(legacyRoot, path.join(legacyRoot, "sessions.json"), defaultAgentId, true);
+  const migrationAgentId = params.context.migrationAgentId ?? tryResolveSoleAgentId(params.config);
+  if (migrationAgentId) {
+    await add(legacyRoot, path.join(legacyRoot, "sessions.json"), migrationAgentId, true);
+  }
   return [...surfaces.values()].toSorted((a, b) => a.root.localeCompare(b.root));
 }
 

@@ -219,6 +219,7 @@ test("sessions.delete rejects main and aborts active runs", async () => {
 
   await expectSessionDeleteSucceeds({
     key: "discord:group:dev",
+    agentId: "main",
   });
   expectActiveRunCleanup(
     "agent:main:discord:group:dev",
@@ -882,6 +883,7 @@ test("sessions.delete closes child ACP runtimes spawned from the deleted parent"
 
   await expectSessionDeleteSucceeds({
     key: "acp-parent",
+    agentId: "main",
   });
 
   // Deleting the parent must also close its spawned ACP child, not just its own
@@ -908,6 +910,7 @@ test("sessions.delete emits session_end with deleted reason and no replacement",
 
   await expectSessionDeleteSucceeds({
     key: "discord:group:delete",
+    agentId: "main",
   });
   expect(sessionLifecycleHookMocks.runSessionEnd).toHaveBeenCalledTimes(1);
   expect(sessionLifecycleHookMocks.runSessionStart).not.toHaveBeenCalled();
@@ -1040,6 +1043,7 @@ test("sessions.delete returns unavailable when active run does not stop", async 
 
   const deleted = await rpcReq(ws, "sessions.delete", {
     key: "discord:group:dev",
+    agentId: "main",
   });
   expect(deleted.ok).toBe(false);
   expect(deleted.error?.code).toBe("UNAVAILABLE");

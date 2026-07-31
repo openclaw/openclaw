@@ -10,7 +10,6 @@ import {
   listAgentIds,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import { createOpenClawCodingTools } from "../agents/agent-tools.js";
 import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
@@ -60,13 +59,14 @@ function formatGatewayHealthTarget(url: string): string {
 }
 
 export function detectUnavailableSkills(cfg: OpenClawConfig): SkillStatusEntry[] {
-  const agentId = resolveDefaultAgentId(cfg);
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-  const report = buildWorkspaceSkillStatus(workspaceDir, {
-    config: cfg,
-    agentId,
+  return listAgentIds(cfg).flatMap((agentId) => {
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+    const report = buildWorkspaceSkillStatus(workspaceDir, {
+      config: cfg,
+      agentId,
+    });
+    return collectUnavailableAgentSkills(report);
   });
-  return collectUnavailableAgentSkills(report);
 }
 
 export async function collectLocalAudioAccelerationFindings(): Promise<readonly HealthFinding[]> {
@@ -605,86 +605,95 @@ export async function collectProviderCatalogProjectionFindings(
   const { runProviderStaticCatalog } = await import("../plugins/provider-discovery.js");
   const { resolvePluginProviders } = await import("../plugins/providers.runtime.js");
   const env = process.env;
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
-  let providers: Awaited<ReturnType<typeof resolvePluginProviders>>;
-  try {
-    providers = resolvePluginProviders({
-      config: cfg,
-      workspaceDir,
-      env,
-      includeUntrustedWorkspacePlugins: false,
-    });
-  } catch (error) {
-    return [
-      {
+  const findings: HealthFinding[] = [];
+  for (const agentId of listAgentIds(cfg)) {
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+    let providers: Awaited<ReturnType<typeof resolvePluginProviders>>;
+    try {
+      providers = resolvePluginProviders({
+        config: cfg,
+        workspaceDir,
+        env,
+        includeUntrustedWorkspacePlugins: false,
+      });
+    } catch (error) {
+      findings.push({
         checkId: "core/doctor/provider-catalog-projection",
         severity: "error",
         message: "Provider catalog hooks could not be loaded for doctor validation.",
         requirement: formatErrorMessage(error),
         fixHint: "Fix plugin provider discovery loading, then rerun doctor.",
-      },
-    ];
-  }
+      });
+      continue;
+    }
 
-  const findings: HealthFinding[] = [];
-  const grouped = groupProviderCatalogsForDoctor(providers);
-  findings.push(...grouped.findings);
-  for (const order of PROVIDER_CATALOG_ORDERS) {
-    for (const provider of grouped.byOrder[order]) {
-      let staticCatalog: unknown;
-      let staticCatalogRun: unknown;
-      try {
-        staticCatalog = provider.staticCatalog;
-        staticCatalogRun = isReadableRecord(staticCatalog) ? staticCatalog.run : undefined;
-      } catch (error) {
+    const grouped = groupProviderCatalogsForDoctor(providers);
+    findings.push(...grouped.findings);
+    for (const order of PROVIDER_CATALOG_ORDERS) {
+      for (const provider of grouped.byOrder[order]) {
+        let staticCatalog: unknown;
+        let staticCatalogRun: unknown;
+        try {
+          staticCatalog = provider.staticCatalog;
+          staticCatalogRun = isReadableRecord(staticCatalog) ? staticCatalog.run : undefined;
+        } catch (error) {
+          findings.push(
+            providerCatalogProjectionFinding({
+              providerId: provider.id,
+              pluginId: provider.pluginId,
+              message: `Provider catalog ${provider.id} static catalog hook cannot be read during doctor validation.`,
+              error,
+            }),
+          );
+          continue;
+        }
+        if (staticCatalog === undefined) {
+          continue;
+        }
+        if (typeof staticCatalogRun !== "function") {
+          findings.push(
+            providerCatalogProjectionFinding({
+              providerId: provider.id,
+              pluginId: provider.pluginId,
+              message: `Provider catalog ${provider.id} static catalog hook is invalid during doctor validation.`,
+              error: new Error("static catalog run must be a function"),
+            }),
+          );
+          continue;
+        }
+        let result: Awaited<ReturnType<typeof runProviderStaticCatalog>>;
+        try {
+          result = await runProviderStaticCatalog({ provider });
+        } catch (error) {
+          findings.push(
+            providerCatalogProjectionFinding({
+              providerId: provider.id,
+              pluginId: provider.pluginId,
+              message: `Provider catalog ${provider.id} failed during doctor validation.`,
+              error,
+            }),
+          );
+          continue;
+        }
         findings.push(
-          providerCatalogProjectionFinding({
+          ...collectProviderCatalogResultFindings({
             providerId: provider.id,
             pluginId: provider.pluginId,
-            message: `Provider catalog ${provider.id} static catalog hook cannot be read during doctor validation.`,
-            error,
+            result,
           }),
         );
-        continue;
       }
-      if (staticCatalog === undefined) {
-        continue;
-      }
-      if (typeof staticCatalogRun !== "function") {
-        findings.push(
-          providerCatalogProjectionFinding({
-            providerId: provider.id,
-            pluginId: provider.pluginId,
-            message: `Provider catalog ${provider.id} static catalog hook is invalid during doctor validation.`,
-            error: new Error("static catalog run must be a function"),
-          }),
-        );
-        continue;
-      }
-      let result: Awaited<ReturnType<typeof runProviderStaticCatalog>>;
-      try {
-        result = await runProviderStaticCatalog({ provider });
-      } catch (error) {
-        findings.push(
-          providerCatalogProjectionFinding({
-            providerId: provider.id,
-            pluginId: provider.pluginId,
-            message: `Provider catalog ${provider.id} failed during doctor validation.`,
-            error,
-          }),
-        );
-        continue;
-      }
-      findings.push(
-        ...collectProviderCatalogResultFindings({
-          providerId: provider.id,
-          pluginId: provider.pluginId,
-          result,
-        }),
-      );
     }
   }
-  return findings;
+  const seen = new Set<string>();
+  return findings.filter((finding) => {
+    const key = JSON.stringify(finding);
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
 }
 
 function buildDoctorRuntimeModel(params: {

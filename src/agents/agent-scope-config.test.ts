@@ -2,11 +2,14 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  AgentSelectionRequiredError,
   listAgentEntriesWithSource,
   listAgentIds,
   resolveAgentConfig,
   resolveDefaultAgentId,
+  resolveSoleAgentId,
   tryResolveDefaultAgentId,
+  tryResolveSoleAgentId,
 } from "./agent-scope-config.js";
 
 vi.unmock("./agent-scope-config.js");
@@ -26,35 +29,30 @@ describe("agent roster resolution", () => {
     expect(() => resolveDefaultAgentId({ agents: { list: [] } })).toThrow("No agents configured");
   });
 
-  it("preserves legacy first-entry selection while diagnostic lookup stays strict", () => {
-    const missingDefault = { agents: { list: [{ id: "alpha" }, { id: "beta" }] } };
-    expect(resolveDefaultAgentId(missingDefault)).toBe("alpha");
-    expect(tryResolveDefaultAgentId(missingDefault)).toBeUndefined();
-    expect(
-      resolveDefaultAgentId({
-        agents: { list: [{ id: "alpha" }, { id: "beta", default: true }] },
-      }),
-    ).toBe("beta");
-    const duplicateDefaults = {
-      agents: {
-        list: [
-          { id: "alpha", default: true },
-          { id: "beta", default: true },
-        ],
-      },
+  it("keeps raw retired markers only at the deprecated compatibility alias", () => {
+    expect(resolveSoleAgentId({ agents: { entries: { alpha: {} } } })).toBe("alpha");
+    expect(tryResolveSoleAgentId({ agents: { entries: { alpha: {} } } })).toBe("alpha");
+    const multi = {
+      agents: { list: [{ id: "alpha", default: true }, { id: "beta" }] },
     };
-    expect(resolveDefaultAgentId(duplicateDefaults)).toBe("alpha");
-    expect(tryResolveDefaultAgentId(duplicateDefaults)).toBeUndefined();
+    expect(tryResolveDefaultAgentId(multi)).toBe("alpha");
+    expect(resolveDefaultAgentId(multi)).toBe("alpha");
+    expect(() => resolveSoleAgentId(multi)).toThrow(AgentSelectionRequiredError);
+    expect(() =>
+      resolveDefaultAgentId({
+        agents: { ownership: "explicit", list: multi.agents.list },
+      }),
+    ).toThrow("Multiple agents are configured, but this operation has no explicit owner");
   });
 
-  it("offers a non-throwing diagnostic lookup for malformed rosters", () => {
-    expect(tryResolveDefaultAgentId({ agents: { list: [{ id: "alpha" }] } })).toBeUndefined();
+  it("offers a non-throwing sole-agent lookup for raw SDK rosters", () => {
+    expect(tryResolveDefaultAgentId({ agents: { list: [{ id: "alpha" }] } })).toBe("alpha");
     for (const marker of ["false", 1]) {
       expect(
         tryResolveDefaultAgentId({
           agents: { entries: { alpha: { default: marker } } },
         } as unknown as OpenClawConfig),
-      ).toBeUndefined();
+      ).toBe("alpha");
     }
   });
 

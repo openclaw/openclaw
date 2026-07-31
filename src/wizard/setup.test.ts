@@ -1685,9 +1685,9 @@ describe("runSetupWizard", () => {
     const finalConfig = persistedWizardConfigs().at(-1);
     expect(finalConfig?.agents?.defaults?.workspace).toBe(requestedWorkspace);
     expect(ensureWorkspaceAndSessions).toHaveBeenCalledWith(
-      requestedWorkspace,
-      expect.anything(),
-      expect.any(Object),
+      path.join(requestedWorkspace, "main"),
+      expect.objectContaining({ log: expect.any(Function) }),
+      expect.objectContaining({ agentId: "main", skipBootstrap: false }),
     );
   });
 

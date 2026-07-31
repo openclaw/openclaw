@@ -180,6 +180,8 @@ export type ActivateSetupInferenceParams = {
   /** Manual step only: the pasted API key or token. Never logged. */
   apiKey?: string;
   workspace?: string;
+  /** Configured agent whose route is being probed and persisted. */
+  targetAgentId?: string;
   surface: "cli" | "gateway";
   /** False when an enclosing persistent-operation boundary owns the setup audit. */
   recordSetupAudit?: boolean;
@@ -243,6 +245,7 @@ export type ActivateSetupInferenceDeps = {
   readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
   runEmbeddedAgent?: SetupInferenceRunEmbeddedAgent;
   runCliAgent?: typeof import("../agents/cli-runner.js").runCliAgent;
+  applySystemAgentModelSelection?: typeof import("./setup-apply.js").applySystemAgentModelSelection;
   ensureCodexRuntimePlugin?: typeof import("../commands/codex-runtime-plugin-install.js").ensureCodexRuntimePluginForModelSelection;
   ensureSelectedAgentHarnessPlugin?: typeof import("../agents/harness/runtime-plugin.js").ensureSelectedAgentHarnessPlugin;
   transformConfigWithPendingPluginInstalls?: typeof import("../plugins/install-record-commit.js").transformConfigWithPendingPluginInstalls;
@@ -276,6 +279,7 @@ export type ActivateSetupInferenceDeps = {
 };
 
 export type DetectSetupInferenceDeps = {
+  targetAgentId?: string;
   detectInferenceBackends?: typeof detectInferenceBackends;
   probeLocalCommand?: typeof probeLocalCommand;
   resolveManifestProviderAuthChoices?: typeof resolveManifestProviderAuthChoices;

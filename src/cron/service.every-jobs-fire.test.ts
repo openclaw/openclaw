@@ -56,7 +56,7 @@ describe("CronService interval/cron jobs fire on time", () => {
       throw new Error(`missing system event ${expectedText}`);
     }
     const options = matchingCall[1] as Record<string, unknown>;
-    expect(options.agentId).toBeUndefined();
+    expect(options.agentId).toBe("main");
     expectCronRunSessionKey(options.sessionKey, jobId);
     expect(typeof options.contextKey).toBe("string");
     expect(String(options.contextKey).startsWith("cron:")).toBe(true);

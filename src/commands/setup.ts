@@ -8,8 +8,9 @@ import fs from "node:fs/promises";
 import {
   listAgentEntries,
   resolveAgentEntry,
-  resolveDefaultAgentId,
+  resolveAgentWorkspaceDir,
   toAgentEntriesRecord,
+  tryResolveSoleAgentId,
 } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
@@ -20,10 +21,12 @@ import type { ConfigWriteOptions, ReadConfigFileSnapshotForWriteResult } from ".
 import { migratePersistedImplicitMainRoster } from "../config/legacy.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime, writeRuntimeJson } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { shortenHomePath } from "../utils.js";
+import { resolveCliAgentId, type CliAgentSelectionDeps } from "./agent-selection.js";
 
 type ConfigIO = {
   configPath: string;
@@ -44,6 +47,7 @@ type EnsureAgentWorkspace = (params: {
 }) => Promise<{ dir: string }>;
 
 type SetupCommandDeps = {
+  agentSelection?: CliAgentSelectionDeps;
   createConfigIO?: () => ConfigIO;
   defaultAgentWorkspaceDir?: string | (() => string | Promise<string>);
   ensureAgentWorkspace?: EnsureAgentWorkspace;
@@ -134,7 +138,7 @@ async function resolveDefaultSessionTranscriptsDir(agentId: string): Promise<str
 
 /** Prepares config, workspace, and session directories for a usable installation. */
 export async function setupCommand(
-  opts?: { workspace?: string; json?: boolean },
+  opts?: { workspace?: string; agent?: string; json?: boolean },
   runtime: RuntimeEnv = defaultRuntime,
   deps: SetupCommandDeps = {},
 ) {
@@ -165,22 +169,46 @@ export async function setupCommand(
     : snapshot.sourceConfig;
   const authoredDefaults = cfg.agents?.defaults ?? {};
   const resolvedDefaults = resolvedConfig.agents?.defaults ?? authoredDefaults;
-  const defaultEntry = resolveAgentEntry(resolvedConfig, resolveDefaultAgentId(resolvedConfig));
+  const setupAgentId = await resolveCliAgentId({
+    cfg: resolvedConfig,
+    runtime,
+    agentInput: opts?.agent,
+    surface: "setup workspace selection",
+    deps: deps.agentSelection,
+  });
+  const defaultEntry = resolveAgentEntry(resolvedConfig, setupAgentId);
   const defaultEntryWorkspace = defaultEntry?.workspace?.trim();
-  const configuredWorkspace = defaultEntryWorkspace || resolvedDefaults.workspace;
+  const hasConfiguredWorkspace = Boolean(
+    defaultEntryWorkspace || resolvedDefaults.workspace?.trim(),
+  );
+  const configuredWorkspace = hasConfiguredWorkspace
+    ? resolveAgentWorkspaceDir(resolvedConfig, setupAgentId)
+    : undefined;
+  const requestsWorkspaceChange =
+    desiredWorkspace !== undefined && configuredWorkspace !== desiredWorkspace;
+  const selectedAgentWorkspaceOverride =
+    snapshot.exists &&
+    requestsWorkspaceChange &&
+    (Boolean(opts?.agent?.trim()) || tryResolveSoleAgentId(resolvedConfig) === undefined);
+  const includeOwnsRoster = configIncludeOwnsAgentRoster(snapshot);
+  if (selectedAgentWorkspaceOverride && includeOwnsRoster) {
+    throw new Error(
+      `Cannot set agents.entries.${setupAgentId}.workspace because the agent roster is $include-owned. Edit the included agent entry directly, then rerun setup.`,
+    );
+  }
 
   const workspace =
     desiredWorkspace ?? configuredWorkspace ?? (await resolveDefaultAgentWorkspaceDir(deps));
   // Bare setup is observational for an established roster. Only a caller
   // override or fresh bootstrap owns a persisted workspace change.
-  const shouldWriteWorkspace =
-    !snapshot.exists || (desiredWorkspace !== undefined && configuredWorkspace !== workspace);
+  const shouldWriteWorkspace = !snapshot.exists || requestsWorkspaceChange;
   const shouldWriteGatewayMode = resolvedConfig.gateway?.mode === undefined;
   const writeInheritedWorkspaceOverride =
     snapshot.exists &&
     shouldWriteWorkspace &&
     !defaultEntryWorkspace &&
-    configIncludeOwnsAgentRoster(snapshot);
+    includeOwnsRoster &&
+    !selectedAgentWorkspaceOverride;
 
   // Keep the candidate runtime-shaped. replaceConfigFile persists only its
   // diff against snapshot.parsed, never resolved include/env values wholesale.
@@ -195,9 +223,13 @@ export async function setupCommand(
   if (shouldWriteWorkspace) {
     if (!writeInheritedWorkspaceOverride) {
       const roster = structuredClone(listAgentEntries(next));
-      if (!snapshot.exists || Boolean(defaultEntryWorkspace)) {
+      if (
+        !snapshot.exists ||
+        Boolean(defaultEntryWorkspace) ||
+        (desiredWorkspace !== undefined && !writeInheritedWorkspaceOverride)
+      ) {
         for (const entry of roster) {
-          if (entry.default === true) {
+          if (normalizeAgentId(entry.id) === setupAgentId) {
             // Fresh bootstrap and explicitly entry-owned workspaces stay aligned.
             // Inherited defaults must not turn an include-owned roster into a roster write.
             entry.workspace = workspace;
@@ -210,7 +242,9 @@ export async function setupCommand(
         ...next,
         agents: {
           ...agents,
-          defaults: { ...agents.defaults, workspace },
+          ...(selectedAgentWorkspaceOverride
+            ? {}
+            : { defaults: { ...agents.defaults, workspace } }),
           ...(entries ? { entries } : {}),
         },
       };
@@ -260,7 +294,11 @@ export async function setupCommand(
     } else if (!opts?.json) {
       const updates: string[] = [];
       if (shouldWriteWorkspace) {
-        updates.push("set agents.defaults.workspace");
+        updates.push(
+          selectedAgentWorkspaceOverride
+            ? `set agents.entries.${setupAgentId}.workspace`
+            : "set agents.defaults.workspace",
+        );
       }
       if (shouldWriteGatewayMode) {
         updates.push("set gateway.mode");
@@ -288,10 +326,9 @@ export async function setupCommand(
     runtime.log(`Workspace OK: ${shortenHomePath(ws.dir)}`);
   }
 
-  const defaultAgentId = resolveDefaultAgentId(next);
   const sessionsDir = await (
     deps.resolveSessionTranscriptsDir ?? resolveDefaultSessionTranscriptsDir
-  )(defaultAgentId);
+  )(setupAgentId);
   await (deps.mkdir ?? fs.mkdir)(sessionsDir, { recursive: true });
   if (opts?.json) {
     writeRuntimeJson(runtime, {

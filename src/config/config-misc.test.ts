@@ -101,7 +101,7 @@ describe("agent timeoutSeconds config", () => {
     ["fractional", 1.5, false],
   ])("agents.defaults.timeoutSeconds %s", (_label, timeoutSeconds, ok) => {
     const result = OpenClawSchema.safeParse({
-      agents: { defaults: { timeoutSeconds }, entries: { main: { default: true } } },
+      agents: { defaults: { timeoutSeconds }, entries: { main: {} } },
     });
     expect(result.success).toBe(ok);
   });

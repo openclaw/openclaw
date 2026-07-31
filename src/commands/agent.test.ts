@@ -2004,33 +2004,33 @@ describe("agentCommand", () => {
     });
   });
 
-  it("scopes bare explicit session keys to the default agent for embedded runs", async () => {
+  it("scopes bare explicit session keys to an explicitly selected agent", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
       mockConfig(home, store, undefined, undefined, [{ id: "ops", default: true }, { id: "main" }]);
 
-      await agentCommand({ message: "hi", sessionKey: "incident-42" }, runtime);
+      await agentCommand({ message: "hi", sessionKey: "incident-42", agentId: "ops" }, runtime);
 
       let callArgs = getLastEmbeddedCall();
       expect(callArgs?.agentId).toBe("ops");
       expect(callArgs?.sessionKey).toBe("agent:ops:incident-42");
 
-      await agentCommand({ message: "hi", sessionKey: "global" }, runtime);
+      await agentCommand({ message: "hi", sessionKey: "global", agentId: "ops" }, runtime);
 
       callArgs = getLastEmbeddedCall();
       expect(callArgs?.agentId).toBe("ops");
-      expect(callArgs?.sessionKey).toBe("global");
+      expect(callArgs?.sessionKey).toBe("agent:ops:global");
       expectSqliteSessionFileMarker({
         agentId: "ops",
         sessionFile: callArgs?.sessionFile,
         storePath: store,
       });
 
-      await agentCommand({ message: "hi", sessionKey: "unknown" }, runtime);
+      await agentCommand({ message: "hi", sessionKey: "unknown", agentId: "ops" }, runtime);
 
       callArgs = getLastEmbeddedCall();
       expect(callArgs?.agentId).toBe("ops");
-      expect(callArgs?.sessionKey).toBe("unknown");
+      expect(callArgs?.sessionKey).toBe("agent:ops:unknown");
       expectSqliteSessionFileMarker({
         agentId: "ops",
         sessionFile: callArgs?.sessionFile,

@@ -54,6 +54,8 @@ export type SessionAccessScope = {
 };
 
 export type LogicalSessionAccessScope = {
+  /** Explicit owner for unqualified global/unknown keys. */
+  agentId?: string;
   /** Runtime config whose session store rules define the logical session owner. */
   cfg: OpenClawConfig;
   /** Environment override used when resolving configured/discovered agent stores. */

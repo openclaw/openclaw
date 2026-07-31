@@ -1,6 +1,7 @@
 // Gateway Protocol schema module defines protocol validation shapes.
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { AgentOwnershipSchema } from "./agents-models-skills.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
@@ -186,6 +187,8 @@ const HealthSnapshotSchema = closedObject({
 /** Default session routing keys included in initial gateway snapshots. */
 const SessionDefaultsSchema = closedObject({
   defaultAgentId: NonEmptyString,
+  ownership: Type.Optional(AgentOwnershipSchema),
+  selectionRequired: Type.Optional(Type.Boolean()),
   mainKey: NonEmptyString,
   mainSessionKey: NonEmptyString,
   scope: Type.Optional(NonEmptyString),

@@ -143,6 +143,7 @@ const NodesToolSchema = Type.Object({
 });
 
 export function createNodesTool(options?: {
+  agentId?: string;
   agentSessionKey?: string;
   agentChannel?: GatewayMessageChannel;
   agentAccountId?: string;
@@ -153,6 +154,7 @@ export function createNodesTool(options?: {
   allowMediaInvokeCommands?: boolean;
 }): AnyAgentTool {
   const agentId = resolveSessionAgentId({
+    agentId: options?.agentId,
     sessionKey: options?.agentSessionKey,
     config: options?.config,
   });

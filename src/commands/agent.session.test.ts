@@ -3,7 +3,8 @@ import path from "node:path";
 import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAgentDir, resolveSessionAgentId } from "../agents/agent-scope.js";
-import { resolveSession } from "../agents/command/session.js";
+import { resolveSession, resolveSessionKeyForRequest } from "../agents/command/session.js";
+import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import {
   appendTranscriptEvent,
   loadSessionEntry,
@@ -109,6 +110,186 @@ describe("agent session resolution", () => {
       expect(resolveAgentDir(cfg, agentId)).toContain(
         `${path.sep}agents${path.sep}exec${path.sep}agent`,
       );
+    });
+  });
+
+  it("rejects an explicit agent that does not own the resumed session id", async () => {
+    await withCrossAgentResumeFixture(async ({ sessionId, cfg }) => {
+      expect(() => resolveSession({ cfg, sessionId, agentId: "dev" })).toThrowError(
+        expect.objectContaining({ code: "AGENT_SESSION_OWNER_MISMATCH" }),
+      );
+    });
+  });
+
+  it("does not resume a removed agent from a stale shared-store key", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const cfg = mockConfig(home, store, [{ id: "ops" }, { id: "research" }]);
+      await replaceSessionEntry(
+        { agentId: "retired", sessionKey: "agent:retired:legacy", storePath: store },
+        { sessionId: "retired-session", updatedAt: 1 },
+      );
+
+      const resolution = resolveSessionKeyForRequest({
+        cfg,
+        sessionId: "retired-session",
+        agentId: "ops",
+      });
+
+      expect(resolution.agentId).toBe("ops");
+      expect(resolution.sessionKey).toBe("agent:ops:explicit:retired-session");
+    });
+  });
+
+  it("derives a shared-store session owner from its scoped key", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      await writeSessionStoreSeed(store, {
+        "agent:research:main": {
+          sessionId: "research-shared-session",
+          updatedAt: Date.now(),
+        },
+      });
+      const cfg = mockConfig(home, store, [{ id: "dev" }, { id: "research" }]);
+
+      expect(() =>
+        resolveSession({ cfg, sessionId: "research-shared-session", agentId: "dev" }),
+      ).toThrowError(expect.objectContaining({ code: "AGENT_SESSION_OWNER_MISMATCH" }));
+    });
+  });
+
+  it("prefers an explicit owner's match when a shared store has duplicate session ids", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const cfg = mockConfig(home, store, [{ id: "dev" }, { id: "research" }]);
+      await replaceSessionEntry(
+        { agentId: "dev", sessionKey: "agent:dev:main", storePath: store },
+        { sessionId: "duplicate-shared-session", updatedAt: 1 },
+      );
+      await replaceSessionEntry(
+        { agentId: "research", sessionKey: "agent:research:main", storePath: store },
+        { sessionId: "duplicate-shared-session", updatedAt: 2 },
+      );
+
+      const resolution = resolveSession({
+        cfg,
+        sessionId: "duplicate-shared-session",
+        agentId: "dev",
+      });
+
+      expect(resolution.sessionKey).toBe("agent:dev:main");
+    });
+  });
+
+  it("preserves the requested store when bare keys collide across agents", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const cfg = mockConfig(home, store, [{ id: "dev" }, { id: "research" }]);
+      await replaceSessionEntry(
+        { agentId: "dev", sessionKey: "main", storePath: store },
+        { sessionId: "bare-shared-session", updatedAt: 1 },
+      );
+      await replaceSessionEntry(
+        { agentId: "research", sessionKey: "main", storePath: store },
+        { sessionId: "bare-shared-session", updatedAt: 2 },
+      );
+
+      const resolution = resolveSession({
+        cfg,
+        sessionId: "bare-shared-session",
+        agentId: "dev",
+      });
+
+      expect(resolution.sessionKey).toBe("agent:dev:main");
+      expect(resolution.storePath).toBe(store);
+    });
+  });
+
+  it("uses the retained legacy owner for a bare shared-store session", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const cfg = retainLegacyDefaultAgentId(
+        mockConfig(home, store, [{ id: "ops" }, { id: "research" }]),
+        "ops",
+      );
+      await replaceSessionEntry(
+        { agentId: "ops", sessionKey: "main", storePath: store },
+        { sessionId: "legacy-shared-session", updatedAt: 1 },
+      );
+
+      const resolution = resolveSessionKeyForRequest({
+        cfg,
+        sessionId: "legacy-shared-session",
+      });
+
+      expect(resolution.agentId).toBe("ops");
+    });
+  });
+
+  it("uses the per-agent store owner before the retained legacy fallback", async () => {
+    await withTempHome(async (home) => {
+      const storePattern = path.join(home, "agents", "{agentId}", "sessions", "sessions.json");
+      const researchStore = path.join(home, "agents", "research", "sessions", "sessions.json");
+      const cfg = retainLegacyDefaultAgentId(
+        mockConfig(home, storePattern, [{ id: "ops" }, { id: "research" }]),
+        "ops",
+      );
+      await replaceSessionEntry(
+        { agentId: "research", sessionKey: "main", storePath: researchStore },
+        { sessionId: "research-bare-session", updatedAt: 1 },
+      );
+
+      expect(
+        resolveSessionKeyForRequest({
+          cfg,
+          sessionId: "research-bare-session",
+          agentId: "research",
+        }).agentId,
+      ).toBe("research");
+      expect(() =>
+        resolveSessionKeyForRequest({
+          cfg,
+          sessionId: "research-bare-session",
+          agentId: "ops",
+        }),
+      ).toThrowError(expect.objectContaining({ code: "AGENT_SESSION_OWNER_MISMATCH" }));
+    });
+  });
+
+  it("rejects another agent for a retained owner's bare shared-store session", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const cfg = retainLegacyDefaultAgentId(
+        mockConfig(home, store, [{ id: "ops" }, { id: "research" }]),
+        "ops",
+      );
+      await replaceSessionEntry(
+        { agentId: "ops", sessionKey: "main", storePath: store },
+        { sessionId: "legacy-owner-session", updatedAt: 1 },
+      );
+
+      expect(() =>
+        resolveSessionKeyForRequest({
+          cfg,
+          sessionId: "legacy-owner-session",
+          agentId: "research",
+        }),
+      ).toThrowError(expect.objectContaining({ code: "AGENT_SESSION_OWNER_MISMATCH" }));
+    });
+  });
+
+  it("requires an agent for an ownerless bare shared-store session", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const cfg = mockConfig(home, store, [{ id: "ops" }, { id: "research" }]);
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey: "main", storePath: store },
+        { sessionId: "ownerless-shared-session", updatedAt: 1 },
+      );
+
+      expect(() =>
+        resolveSessionKeyForRequest({ cfg, sessionId: "ownerless-shared-session" }),
+      ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
     });
   });
 

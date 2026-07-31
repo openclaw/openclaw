@@ -122,5 +122,11 @@ export async function runNonInteractiveSetup(
     return;
   }
 
-  await runNonInteractiveLocalSetup({ opts, runtime, baseConfig, baseHash: snapshot.hash });
+  await runNonInteractiveLocalSetup({
+    opts,
+    runtime,
+    baseConfig,
+    baseHash: snapshot.hash,
+    agentRosterIncludeOwned: snapshot.agentRosterIncludeOwned === true,
+  });
 }

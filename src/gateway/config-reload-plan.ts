@@ -154,6 +154,13 @@ const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
   { prefix: "discovery", kind: "restart" },
 ];
 
+const WHOLE_AGENTS_RELOAD_RULE: ReloadRule = {
+  prefix: "agents",
+  // A whole-object diff can hide defaults.workspace and other startup-owned
+  // fields, so only expanded child paths are eligible for narrower hot rules.
+  kind: "restart",
+};
+
 let cachedReloadRules: ReloadRule[] | null = null;
 let cachedRegistry: ReturnType<typeof getActivePluginHttpRouteRegistry> | null = null;
 let cachedGatewayRegistryVersion = -1;
@@ -255,6 +262,9 @@ function listReloadRules(): ReloadRule[] {
 }
 
 function matchRule(path: string): ReloadRule | null {
+  if (path === "agents") {
+    return WHOLE_AGENTS_RELOAD_RULE;
+  }
   for (const rule of listReloadRules()) {
     if (path === rule.prefix || path.startsWith(`${rule.prefix}.`)) {
       return rule;

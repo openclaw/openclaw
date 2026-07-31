@@ -107,7 +107,7 @@ export function readPreRegisteredAgentDedupePayloadForSession(params: {
   runId: string;
   sessionKey: string;
   agentId?: string;
-  defaultAgentId: string;
+  defaultAgentId?: string;
   includeHidden?: boolean;
 }): PreRegisteredAgentDedupePayload | undefined {
   if (!params.entry?.ok) {
@@ -219,9 +219,12 @@ function resolvePreRegisteredAgentDedupeKeys(
 
 export function resolveStoredGlobalRunAgentId(
   agentId: string | undefined,
-  defaultAgentId: string,
-): string {
-  return normalizeOptionalText(agentId)?.toLowerCase() ?? defaultAgentId.toLowerCase();
+  defaultAgentId: string | undefined,
+): string | undefined {
+  return (
+    normalizeOptionalText(agentId)?.toLowerCase() ??
+    normalizeOptionalText(defaultAgentId)?.toLowerCase()
+  );
 }
 
 export function writePreRegisteredAgentAbort(params: {
@@ -290,7 +293,7 @@ export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
   context: GatewayRequestContext;
   sessionKeys: Iterable<string>;
   agentId?: string;
-  defaultAgentId: string;
+  defaultAgentId?: string;
   requester: ChatAbortRequester;
   keyPrefix: string;
   preserveSideRuns?: boolean;
@@ -371,7 +374,7 @@ export function resolveAuthorizedRunsForSessionKeys(params: {
   sessionKeys: Iterable<string>;
   sessionIds?: Iterable<string | undefined>;
   agentId?: string;
-  defaultAgentId: string;
+  defaultAgentId?: string;
   requester: ChatAbortRequester;
   preserveSideRuns?: boolean;
 }) {

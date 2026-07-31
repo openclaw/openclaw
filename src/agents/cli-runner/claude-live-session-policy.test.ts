@@ -15,16 +15,17 @@ describe("resolveClaudeLiveMode", () => {
 });
 
 describe("Claude live configured exec policy", () => {
-  it("uses the configured default agent for an unscoped legacy session key", () => {
+  it("uses the explicitly selected agent for an unscoped legacy session key", () => {
     const context = {
       params: {
+        agentId: "ops",
         sessionKey: "main",
         config: {
           tools: { exec: { security: "full", ask: "off" } },
           agents: {
             entries: {
               main: {},
-              ops: { default: true, tools: { exec: { security: "deny", ask: "always" } } },
+              ops: { tools: { exec: { security: "deny", ask: "always" } } },
             },
           },
         },

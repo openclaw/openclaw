@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { subagentRuns } from "../../agents/subagent-registry-memory.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { prepareAgentRequestPreflight } from "./agent-request-preflight.js";
@@ -9,6 +11,7 @@ function runPreflight(
   options?: {
     enabled?: boolean;
     requesterOnlyEnabled?: boolean;
+    selectedOnlyEnabled?: boolean;
     backend?: boolean;
     register?: boolean;
     requesterAgentId?: string;
@@ -19,9 +22,12 @@ function runPreflight(
     cached?: boolean;
     completed?: boolean;
     ended?: boolean;
+    requestAgentId?: string;
+    sessionStore?: string;
+    sessionKey?: string;
   },
 ) {
-  const sessionKey = "agent:worker:subagent:collector";
+  const sessionKey = options?.sessionKey ?? "agent:worker:subagent:collector";
   if (options?.register) {
     subagentRuns.set("collector-run", {
       runId: "collector-run",
@@ -45,6 +51,7 @@ function runPreflight(
   const result = prepareAgentRequestPreflight({
     params: {
       message: "collect",
+      agentId: options?.requestAgentId,
       sessionKey,
       idempotencyKey: options?.idempotencyKey ?? "collector-run",
       lane: "subagent",
@@ -52,16 +59,26 @@ function runPreflight(
     },
     respond,
     context: {
-      getRuntimeConfig: () =>
-        options?.requesterOnlyEnabled
+      getRuntimeConfig: () => {
+        const runtimeConfig = options?.selectedOnlyEnabled
           ? {
               agents: {
-                list: [{ id: "main", tools: { swarm: true } }, { id: "worker" }],
+                list: [{ id: "main" }, { id: "work", tools: { swarm: true } }],
               },
             }
-          : options?.enabled
-            ? { tools: { swarm: true } }
-            : {},
+          : options?.requesterOnlyEnabled
+            ? {
+                agents: {
+                  list: [{ id: "main", tools: { swarm: true } }, { id: "worker" }],
+                },
+              }
+            : options?.enabled
+              ? { tools: { swarm: true } }
+              : {};
+        return options?.sessionStore
+          ? { ...runtimeConfig, session: { store: options.sessionStore } }
+          : runtimeConfig;
+      },
       dedupe: options?.cached
         ? new Map([
             [
@@ -83,6 +100,8 @@ function runPreflight(
 }
 
 describe("agent request Swarm preflight", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
   beforeEach(() => {
     subagentRuns.clear();
     vi.spyOn(sessionAccessor, "loadSessionEntry").mockReturnValue(undefined);
@@ -198,6 +217,96 @@ describe("agent request Swarm preflight", () => {
       undefined,
       expect.objectContaining({ code: "INVALID_REQUEST" }),
     );
+  });
+
+  it("loads a bare retained collector key from the explicitly selected agent store", () => {
+    vi.mocked(sessionAccessor.loadSessionEntry).mockReturnValue({
+      sessionId: "collector-session",
+      updatedAt: 1,
+      swarmCollector: true,
+    });
+
+    runPreflight({ type: "object" }, true, {
+      enabled: true,
+      backend: true,
+      includeCollectorFields: false,
+      requestAgentId: "work",
+      sessionKey: "subagent:collector",
+    });
+
+    expect(sessionAccessor.loadSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "subagent:collector",
+        storePath: expect.stringContaining("/agents/work/"),
+      }),
+    );
+  });
+
+  it("uses the selected logical owner inside a fixed shared store", async () => {
+    vi.mocked(sessionAccessor.loadSessionEntry).mockRestore();
+    const storePath = path.join(tempDirs.make("openclaw-agent-preflight-"), "sessions.sqlite");
+    const sessionKey = "subagent:collector";
+    await sessionAccessor.upsertSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      { sessionId: "main-collector", swarmCollector: true, updatedAt: 1 },
+    );
+    await sessionAccessor.upsertSessionEntry(
+      { agentId: "work", sessionKey, storePath },
+      { sessionId: "work-ordinary", swarmCollector: false, updatedAt: 2 },
+    );
+
+    const { respond, result } = runPreflight(undefined, false, {
+      backend: true,
+      includeCollectorFields: false,
+      requestAgentId: "work",
+      selectedOnlyEnabled: true,
+      sessionKey,
+      sessionStore: storePath,
+    });
+
+    expect(result).toBeDefined();
+    expect(respond).not.toHaveBeenCalled();
+  });
+
+  it("loads a bare retained collector key from the sole-agent store", () => {
+    vi.mocked(sessionAccessor.loadSessionEntry).mockReturnValue({
+      sessionId: "collector-session",
+      updatedAt: 1,
+      swarmCollector: true,
+    });
+
+    runPreflight({ type: "object" }, true, {
+      backend: true,
+      includeCollectorFields: false,
+      sessionKey: "subagent:collector",
+    });
+
+    expect(sessionAccessor.loadSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "subagent:collector",
+        storePath: expect.stringContaining("/agents/main/"),
+      }),
+    );
+  });
+
+  it("uses the selected owner for a retained collector with a bare requester key", () => {
+    vi.mocked(sessionAccessor.loadSessionEntry).mockReturnValue({
+      sessionId: "collector-session",
+      updatedAt: 1,
+      swarmCollector: true,
+    });
+
+    const { respond, result } = runPreflight({ type: "object" }, true, {
+      backend: true,
+      register: true,
+      requestAgentId: "work",
+      requesterSessionKey: "main",
+      selectedOnlyEnabled: true,
+      sessionKey: "subagent:collector",
+    });
+
+    expect(result).toBeDefined();
+    expect(respond).not.toHaveBeenCalled();
   });
 
   it("keeps a provisionally ended collector session reserved until completion", () => {

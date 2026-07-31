@@ -562,7 +562,7 @@ describe("resolveModel", () => {
     expect(discoverModels).toHaveBeenCalledTimes(1);
   });
 
-  it("reuses inherited auth from one lifecycle generation", async () => {
+  it("keeps an explicitly owned lifecycle generation isolated from another agent auth store", async () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-model-cache-"));
     const agentDir = path.join(rootDir, "agent");
     const defaultAgentDir = path.join(rootDir, "default-agent");
@@ -586,7 +586,9 @@ describe("resolveModel", () => {
     });
 
     const first = await resolveModelAsync("openai", "gpt-5.5", agentDir, cfg, {
+      agentId: "worker",
       runtimeHooks: createRuntimeHooks(),
+      workspaceDir: agentDir,
     });
     saveAuthProfileStore(
       {
@@ -597,7 +599,9 @@ describe("resolveModel", () => {
       { filterExternalAuthProfiles: false, syncExternalCli: false },
     );
     const second = await resolveModelAsync("openai", "gpt-5.5", agentDir, cfg, {
+      agentId: "worker",
       runtimeHooks: createRuntimeHooks(),
+      workspaceDir: agentDir,
     });
 
     expectResolvedModel(first);

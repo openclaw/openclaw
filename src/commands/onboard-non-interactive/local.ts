@@ -4,6 +4,7 @@
  * This entrypoint applies config changes, optionally installs the gateway
  * daemon, verifies health, and emits machine-readable setup output.
  */
+import { listAgentEntries } from "../../agents/agent-scope-config.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { resolveGatewayPort } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
@@ -170,6 +171,7 @@ export async function runNonInteractiveLocalSetup(params: {
   runtime: RuntimeEnv;
   baseConfig: OpenClawConfig;
   baseHash?: string;
+  agentRosterIncludeOwned?: boolean;
 }) {
   const { opts, runtime, baseConfig, baseHash } = params;
   const mode = "local" as const;
@@ -179,7 +181,20 @@ export async function runNonInteractiveLocalSetup(params: {
     baseConfig,
     defaultWorkspaceDir: DEFAULT_WORKSPACE,
   });
-  const workspaceConflict = resolveOnboardingWorkspaceConflict(baseConfig, requestedWorkspaceDir);
+  const explicitWorkspaceRequested =
+    typeof opts.workspace === "string" && opts.workspace.trim().length > 0;
+  const selectedWorkspaceRequested = explicitWorkspaceRequested && Boolean(opts.agent?.trim());
+  if (params.agentRosterIncludeOwned === true && selectedWorkspaceRequested) {
+    const includedTarget = resolveOnboardingAgentTarget(baseConfig, opts.agent);
+    if (includedTarget.workspaceDir !== requestedWorkspaceDir) {
+      throw new Error(
+        `Cannot set agents.entries.${includedTarget.agentId}.workspace because the agent roster is $include-owned. Edit the included agent entry directly, then rerun setup.`,
+      );
+    }
+  }
+  const workspaceConflict = selectedWorkspaceRequested
+    ? undefined
+    : resolveOnboardingWorkspaceConflict(baseConfig, requestedWorkspaceDir);
   const workspaceDir = workspaceConflict?.currentWorkspaceDir ?? requestedWorkspaceDir;
   if (workspaceConflict) {
     runtime.error(
@@ -195,13 +210,16 @@ export async function runNonInteractiveLocalSetup(params: {
   let nextConfig: OpenClawConfig = applyLocalSetupWorkspaceConfig(
     baseConfig,
     requestedWorkspaceDir,
+    selectedWorkspaceRequested && params.agentRosterIncludeOwned !== true
+      ? { agentId: opts.agent }
+      : {},
   );
   if (opts.skipBootstrap) {
     nextConfig = applySkipBootstrapConfig(nextConfig);
   }
   // Workspace defaults are already staged above; provider discovery must use
   // that requested owner before first-agent creation is allowed to write.
-  const authTarget = resolveOnboardingAgentTarget(nextConfig);
+  const authTarget = resolveOnboardingAgentTarget(nextConfig, opts.agent);
 
   const inferredAuthChoice = opts.authChoice
     ? undefined
@@ -266,8 +284,35 @@ export async function runNonInteractiveLocalSetup(params: {
     config: nextConfig,
     workspace: workspaceDir,
     baseConfig,
+    agentId: opts.agent,
+    // Auth discovery stages this entry so it can resolve the requested owner;
+    // it is not provisioned until the canonical createAgent path runs below.
+    candidateRosterIsStagedFirstAgent:
+      selectedWorkspaceRequested &&
+      params.agentRosterIncludeOwned !== true &&
+      listAgentEntries(baseConfig).length === 0,
+    runtime,
+    selectionDeps: { interactive: false },
   });
-  nextConfig = applyLocalSetupWorkspaceConfig(created.config, requestedWorkspaceDir);
+  const currentTarget = resolveOnboardingAgentTarget(created.config, created.agentId);
+  if (
+    params.agentRosterIncludeOwned === true &&
+    explicitWorkspaceRequested &&
+    !workspaceConflict &&
+    currentTarget.workspaceDir !== requestedWorkspaceDir
+  ) {
+    throw new Error(
+      `Cannot set agents.entries.${created.agentId}.workspace because the agent roster is $include-owned. Edit the included agent entry directly, then rerun setup.`,
+    );
+  }
+  nextConfig =
+    params.agentRosterIncludeOwned === true && explicitWorkspaceRequested
+      ? created.config
+      : applyLocalSetupWorkspaceConfig(
+          created.config,
+          requestedWorkspaceDir,
+          explicitWorkspaceRequested && !workspaceConflict ? { agentId: created.agentId } : {},
+        );
   // First-agent creation is the first permitted config mutation. Preserve its
   // resulting hash so the canonical wizard write still rejects foreign edits.
   const effectiveBaseHash = created.configHash ?? baseHash;
@@ -284,7 +329,7 @@ export async function runNonInteractiveLocalSetup(params: {
   });
   logConfigUpdated(runtime);
 
-  const finalTarget = resolveOnboardingAgentTarget(nextConfig);
+  const finalTarget = resolveOnboardingAgentTarget(nextConfig, created.agentId);
   await ensureOnboardingAgentWorkspace(finalTarget, runtime, {
     skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
     skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,

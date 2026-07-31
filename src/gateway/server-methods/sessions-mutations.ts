@@ -10,6 +10,7 @@ import {
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
 import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import {
   applySessionPatchProjection,
   type SessionPatchProjectionSnapshot,
@@ -74,6 +75,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       return;
     }
     const requestedAgentId = requestedAgent.agentId;
+    const compatibilityDefaultAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
     const { target, storePath } = resolveGatewaySessionTargetFromKey(key, cfg, {
       agentId: requestedAgentId,
     });
@@ -199,7 +201,8 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
             requestedKey: key,
             canonicalKey,
             sessionId: entry?.sessionId,
-            defaultAgentId: resolveDefaultAgentId(cfg),
+            agentId: requestedAgentId,
+            defaultAgentId: compatibilityDefaultAgentId,
           })
         ) {
           respond(
@@ -346,7 +349,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     const agentId = normalizeAgentId(
       target.canonicalKey === "global"
         ? target.agentId
-        : (parsed?.agentId ?? resolveDefaultAgentId(cfg)),
+        : (parsed?.agentId ?? target.agentId ?? resolveDefaultAgentId(cfg)),
     );
     const resolved = resolveSessionModelRef(cfg, applied.entry, agentId);
     if (

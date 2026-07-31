@@ -594,6 +594,7 @@ export async function spawnSubagentDirect(
           if (cleanupComplete) {
             emitSessionLifecycleEvent({
               sessionKey: childSessionKey,
+              agentId: targetAgentId,
               reason: "delete",
               parentSessionKey: requesterInternalKey,
             });
@@ -611,6 +612,7 @@ export async function spawnSubagentDirect(
     // Emit lifecycle event so the gateway can broadcast sessions.changed to SSE subscribers.
     emitSessionLifecycleEvent({
       sessionKey: childSessionKey,
+      agentId: targetAgentId,
       reason: "create",
       parentSessionKey: requesterInternalKey,
       label: label || undefined,

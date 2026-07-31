@@ -51,7 +51,9 @@ describe("buildCleanupPlan", () => {
 
     expect(plan.configInsideState).toBe(true);
     expect(plan.oauthInsideState).toBe(false);
-    expect(new Set(plan.workspaceDirs)).toEqual(new Set([defaultWorkspace, opsWorkspace]));
+    expect(new Set(plan.workspaceDirs)).toEqual(
+      new Set([path.join(defaultWorkspace, "main"), opsWorkspace]),
+    );
   });
 
   test("includes implicit per-agent workspaces under the state dir", () => {
@@ -79,7 +81,7 @@ describe("buildCleanupPlan", () => {
         });
 
         expect(new Set(plan.workspaceDirs)).toEqual(
-          new Set([path.join(stateDir, "workspace"), path.join(stateDir, "workspace-work")]),
+          new Set([path.join(stateDir, "workspace-main"), path.join(stateDir, "workspace-work")]),
         );
       },
     );

@@ -8,20 +8,19 @@ import {
   errorShape,
   type SessionsResolveParams,
 } from "../../packages/gateway-protocol/src/index.js";
-import type { SessionEntry } from "../config/sessions.js";
+import { listKnownSessionStoreAgentIds, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSessionIdMatchSelection } from "../sessions/session-id-resolution.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
 import {
   filterAndSortSessionEntries,
-  listSessionsFromStore,
   loadCombinedSessionStoreForGateway,
   resolveDeletedAgentIdFromSessionKey,
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils.js";
 
 export type SessionsResolveResult =
-  | { ok: true; key: string }
+  | { ok: true; key: string; agentId?: string }
   | { ok: true; missing: true }
   | { ok: false; error: ErrorShape };
 
@@ -99,6 +98,23 @@ function findVisibleSessionIdMatches(params: {
   );
 }
 
+function listVisibleGlobalSessionMatches(params: {
+  cfg: OpenClawConfig;
+  p: SessionsResolveParams;
+  matches: (store: Record<string, SessionEntry>, agentId: string) => boolean;
+}): Array<{ agentId: string; entry: SessionEntry }> {
+  if (params.p.includeGlobal !== true) {
+    return [];
+  }
+  const requestedOwner = normalizeOptionalString(params.p.agentId);
+  const ownerIds = requestedOwner ? [requestedOwner] : listKnownSessionStoreAgentIds(params.cfg);
+  return ownerIds.flatMap((agentId) => {
+    const ownerStore = loadCombinedSessionStoreForGateway(params.cfg, { agentId }).store;
+    const entry = ownerStore.global;
+    return entry && params.matches(ownerStore, agentId) ? [{ agentId, entry }] : [];
+  });
+}
+
 export async function resolveSessionKeyFromResolveParams(params: {
   cfg: OpenClawConfig;
   p: SessionsResolveParams;
@@ -159,7 +175,19 @@ export async function resolveSessionKeyFromResolveParams(params: {
     // sessionId can collide across stores; delegate selection so exact key
     // matches and ambiguity rules stay shared with other session-id callers.
     const { store } = loadCombinedSessionStoreForGateway(cfg, { agentId: p.agentId });
+    const globalMatches = listVisibleGlobalSessionMatches({
+      cfg,
+      p,
+      matches: (ownerStore) =>
+        findVisibleSessionIdMatches({ cfg, store: ownerStore, p, sessionId }).some(
+          ([matchKey]) => matchKey === "global",
+        ),
+    });
     const matches = findVisibleSessionIdMatches({ cfg, store, p, sessionId });
+    const globalMatch = globalMatches[0];
+    if (globalMatch && !matches.some(([matchKey]) => matchKey === "global")) {
+      matches.push(["global", globalMatch.entry]);
+    }
     const selection = resolveSessionIdMatchSelection(matches, sessionId);
     if (selection.kind === "none") {
       return noSessionFoundResult({ p, message: `No session found: ${sessionId}` });
@@ -174,6 +202,17 @@ export async function resolveSessionKeyFromResolveParams(params: {
         ),
       };
     }
+    if (selection.sessionKey === "global" && globalMatches.length > 1) {
+      return {
+        ok: false,
+        error: errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `Multiple sessions found for sessionId: ${sessionId} (${globalMatches
+            .map(({ agentId }) => `agent:${agentId}:global`)
+            .join(", ")})`,
+        ),
+      };
+    }
     const selectedEntry = matches.find(([matchKey]) => matchKey === selection.sessionKey)?.[1];
     const agentCheckSessionId = validateSessionAgentExists(
       cfg,
@@ -183,7 +222,15 @@ export async function resolveSessionKeyFromResolveParams(params: {
     if (agentCheckSessionId) {
       return agentCheckSessionId;
     }
-    return { ok: true, key: selection.sessionKey };
+    if (selection.sessionKey !== "global") {
+      return { ok: true, key: selection.sessionKey };
+    }
+    const ownerAgentId = globalMatch?.agentId;
+    return {
+      ok: true,
+      key: selection.sessionKey,
+      ...(ownerAgentId ? { agentId: ownerAgentId } : {}),
+    };
   }
 
   const parsedLabel = parseSessionLabel(p.label);
@@ -194,28 +241,58 @@ export async function resolveSessionKeyFromResolveParams(params: {
     };
   }
 
-  const { storePath, store } = loadCombinedSessionStoreForGateway(cfg, { agentId: p.agentId });
-  const list = listSessionsFromStore({
+  const { store } = loadCombinedSessionStoreForGateway(cfg, { agentId: p.agentId });
+  const globalMatches = listVisibleGlobalSessionMatches({
     cfg,
-    storePath,
+    p,
+    matches: (ownerStore, agentId) =>
+      filterAndSortSessionEntries({
+        cfg,
+        store: ownerStore,
+        now: Date.now(),
+        opts: {
+          includeGlobal: true,
+          label: parsedLabel.label,
+          agentId,
+          spawnedBy: p.spawnedBy,
+        },
+      }).some(([matchKey]) => matchKey === "global"),
+  });
+  if (globalMatches.length > 1) {
+    return {
+      ok: false,
+      error: errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        `Multiple sessions found with label: ${parsedLabel.label} (${globalMatches
+          .map(({ agentId }) => `agent:${agentId}:global`)
+          .join(", ")})`,
+      ),
+    };
+  }
+  const labelMatches = filterAndSortSessionEntries({
+    cfg,
     store,
+    now: Date.now(),
     opts: {
       includeGlobal: p.includeGlobal === true,
       includeUnknown: p.includeUnknown === true,
       label: parsedLabel.label,
       agentId: p.agentId,
       spawnedBy: p.spawnedBy,
-      limit: 2,
     },
-  });
-  if (list.sessions.length === 0) {
+  }).slice(0, 2);
+  const globalMatch = globalMatches[0];
+  if (globalMatch && !labelMatches.some(([matchKey]) => matchKey === "global")) {
+    labelMatches.push(["global", globalMatch.entry]);
+  }
+  if (labelMatches.length === 0) {
     return noSessionFoundResult({
       p,
       message: `No session found with label: ${parsedLabel.label}`,
     });
   }
-  if (list.sessions.length > 1) {
-    const keys = list.sessions.map((s) => s.key).join(", ");
+  if (labelMatches.length > 1) {
+    const keys = labelMatches.map(([matchKey]) => matchKey).join(", ");
     return {
       ok: false,
       error: errorShape(
@@ -225,13 +302,18 @@ export async function resolveSessionKeyFromResolveParams(params: {
     };
   }
 
-  const labelKey = expectDefined(list.sessions[0], "sessions entry at 0").key;
+  const labelKey = expectDefined(labelMatches[0], "sessions entry at 0")[0];
   const agentCheckLabel = validateSessionAgentExists(cfg, labelKey, store[labelKey]);
   if (agentCheckLabel) {
     return agentCheckLabel;
   }
+  if (labelKey !== "global") {
+    return { ok: true, key: labelKey };
+  }
+  const ownerAgentId = globalMatch?.agentId;
   return {
     ok: true,
-    key: expectDefined(list.sessions[0], "sessions entry at 0").key,
+    key: labelKey,
+    ...(ownerAgentId ? { agentId: ownerAgentId } : {}),
   };
 }

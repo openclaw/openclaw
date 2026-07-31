@@ -64,7 +64,10 @@ export function loadConfigFromContext(
       deps.env,
       deps.lowerPrecedenceEnv,
     );
-    const rosterMigration = migratePersistedImplicitMainRoster(readResolution.resolvedConfigRaw);
+    const rosterMigration = migratePersistedImplicitMainRoster(
+      readResolution.resolvedConfigRaw,
+      deps.env,
+    );
     const effectiveConfigRaw = rosterMigration.config;
     const validationConfigRaw = effectiveConfigRaw;
     const snapshotRaw = raw;

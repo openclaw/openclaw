@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentDeletionCommitUncertainError } from "../agents/agent-lifecycle-registry.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { saveCronStore } from "../cron/store.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -2426,15 +2427,16 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it("routes relative cron wake session keys to the configured default agent", () => {
+  it("rejects relative cron wake keys without an explicit multi-agent owner", () => {
     const cfg = {
       session: { mainKey: "main" },
       cron: {
         store: path.join(os.tmpdir(), `server-cron-relative-default-${Date.now()}`, "cron.json"),
       },
       agents: {
+        ownership: "explicit",
         entries: {
-          primary: { default: true, model: "test/primary" },
+          primary: { model: "test/primary" },
           main: { model: "test/main" },
         },
       },
@@ -2463,24 +2465,21 @@ describe("buildGatewayCronService", () => {
         }
       ).state?.deps;
 
-      cronDeps?.enqueueSystemEvent?.("hello", {
-        sessionKey: "discord:channel:ops",
-      });
-      cronDeps?.requestHeartbeat?.({
-        source: "cron",
-        intent: "event",
-        reason: "cron:test",
-        sessionKey: "discord:channel:ops",
-      });
-
-      const enqueueCall = lastMockCall(enqueueSystemEventMock, "enqueue system event");
-      const wakeCall = lastMockCall(requestHeartbeatMock, "request heartbeat");
-      expect((enqueueCall?.[1] as { sessionKey?: string } | undefined)?.sessionKey).toBe(
-        "agent:primary:discord:channel:ops",
-      );
-      const wakeRequest = wakeCall?.[0] as { agentId?: string; sessionKey?: string } | undefined;
-      expect(wakeRequest?.agentId).toBe("primary");
-      expect(wakeRequest?.sessionKey).toBe("agent:primary:discord:channel:ops");
+      expect(() =>
+        cronDeps?.enqueueSystemEvent?.("hello", {
+          sessionKey: "discord:channel:ops",
+        }),
+      ).toThrow("cron job creation has no explicit owner");
+      expect(() =>
+        cronDeps?.requestHeartbeat?.({
+          source: "cron",
+          intent: "event",
+          reason: "cron:test",
+          sessionKey: "discord:channel:ops",
+        }),
+      ).toThrow("cron job creation has no explicit owner");
+      expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+      expect(requestHeartbeatMock).not.toHaveBeenCalled();
     } finally {
       state.cron.stop();
     }
@@ -2869,6 +2868,61 @@ describe("buildGatewayCronService", () => {
     }
   });
 
+  it("keeps ownerless legacy jobs from blocking explicit-owner cleanup", async () => {
+    const tmpDir = path.join(os.tmpdir(), `server-cron-ownerless-cleanup-${Date.now()}`);
+    const storePath = path.join(tmpDir, "cron.json");
+    const cfg = {
+      cron: { store: storePath },
+      agents: { ownership: "explicit", entries: { yinze: {}, other: {} } },
+    } as OpenClawConfig;
+    loadConfigMock.mockReturnValue(cfg);
+    const seed = buildGatewayCronService({ cfg, deps: {} as CliDeps, broadcast: () => {} });
+    const explicit = await seed.cron.add({
+      name: "explicit",
+      enabled: true,
+      schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      agentId: "yinze",
+      payload: { kind: "systemEvent", text: "explicit" },
+    });
+    seed.cron.stop();
+    const { agentId: _agentId, ...ownerlessLegacy } = explicit;
+    await saveCronStore(
+      storePath,
+      {
+        version: 1,
+        jobs: [
+          explicit,
+          {
+            ...ownerlessLegacy,
+            id: "ownerless-legacy",
+            name: "ownerless-legacy",
+          },
+        ],
+      },
+      { env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir } },
+    );
+    const state = buildGatewayCronService({ cfg, deps: {} as CliDeps, broadcast: () => {} });
+    try {
+      const ownerlessBeforeCleanup = (await state.cron.list({ includeDisabled: true })).find(
+        (job) => job.id === "ownerless-legacy",
+      );
+      expect(ownerlessBeforeCleanup).toBeDefined();
+      expect(ownerlessBeforeCleanup?.agentId).toBeUndefined();
+      expect(ownerlessBeforeCleanup?.sessionKey).toBeUndefined();
+      expect(state.cron.getDefaultAgentId()).toBeUndefined();
+      await expect(
+        state.cron.removeAgentJobsTransactional("yinze", async () => "committed"),
+      ).resolves.toBe("committed");
+      expect((await state.cron.list({ includeDisabled: true })).map((job) => job.name)).toEqual([
+        "ownerless-legacy",
+      ]);
+    } finally {
+      state.cron.stop();
+    }
+  });
+
   it("keeps removed jobs deleted when the roster commit outcome is uncertain", async () => {
     const tmpDir = path.join(os.tmpdir(), `server-cron-agent-uncertain-${Date.now()}`);
     const cfg = {
@@ -2906,15 +2960,14 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it("keeps agent-less jobs owned by the current runtime default", async () => {
+  it("requires explicit ownership when creating jobs on a multi-agent fleet", async () => {
     const tmpDir = path.join(os.tmpdir(), `server-cron-default-change-${Date.now()}`);
     const startupCfg = {
       cron: { store: path.join(tmpDir, "cron.json") },
-      agents: { entries: { main: {}, yinze: { default: true }, other: {} } },
-    } as OpenClawConfig;
-    const runtimeCfg = {
-      ...startupCfg,
-      agents: { entries: { main: {}, yinze: {}, other: { default: true } } },
+      agents: {
+        ownership: "explicit",
+        entries: { main: {}, yinze: {}, other: {} },
+      },
     } as OpenClawConfig;
     loadConfigMock.mockReturnValue(startupCfg);
     const state = buildGatewayCronService({
@@ -2923,31 +2976,53 @@ describe("buildGatewayCronService", () => {
       broadcast: () => {},
     });
     try {
-      await state.cron.add({
-        name: "follows-runtime-default",
+      await expect(
+        state.cron.add({
+          name: "ownerless",
+          enabled: true,
+          schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
+          sessionTarget: "isolated",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "agentTurn", message: "must fail" },
+        }),
+      ).rejects.toThrow("cron job creation has no explicit owner");
+      await expect(
+        state.cron.add({
+          name: "explicit-owner",
+          enabled: true,
+          schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
+          sessionTarget: "isolated",
+          wakeMode: "next-heartbeat",
+          agentId: "yinze",
+          payload: { kind: "agentTurn", message: "keep" },
+        }),
+      ).resolves.toBeDefined();
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("persists the resolved sole owner on newly created jobs", async () => {
+    const tmpDir = path.join(os.tmpdir(), `server-cron-sole-owner-${Date.now()}`);
+    const cfg = {
+      cron: { store: path.join(tmpDir, "cron.json") },
+      agents: { entries: { ops: {} } },
+    } as OpenClawConfig;
+    loadConfigMock.mockReturnValue(cfg);
+    const state = buildGatewayCronService({ cfg, deps: {} as CliDeps, broadcast: () => {} });
+    try {
+      const job = await state.cron.add({
+        name: "sole-owner",
         enabled: true,
         schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
         sessionTarget: "isolated",
         wakeMode: "next-heartbeat",
         payload: { kind: "agentTurn", message: "keep" },
       });
-      loadConfigMock.mockReturnValue(runtimeCfg);
-
-      await state.cron.removeAgentJobsTransactional("yinze", async () => {});
-      await expect(
-        state.cron.add({
-          name: "new-runtime-default",
-          enabled: true,
-          schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
-          sessionTarget: "isolated",
-          wakeMode: "next-heartbeat",
-          payload: { kind: "agentTurn", message: "keep too" },
-        }),
-      ).resolves.toBeDefined();
-      expect((await state.cron.list({ includeDisabled: true })).map((job) => job.name)).toEqual([
-        "follows-runtime-default",
-        "new-runtime-default",
-      ]);
+      expect(job).toMatchObject({ agentId: "ops" });
+      await expect(state.cron.update(job.id, { agentId: "" })).resolves.toMatchObject({
+        agentId: "ops",
+      });
     } finally {
       state.cron.stop();
     }

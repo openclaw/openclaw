@@ -2,7 +2,7 @@ import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
-import type { OpenClawConfig } from "../config.js";
+import { retainLegacyDefaultAgentId } from "../legacy.default-agent-owner.js";
 import { replaceSessionEntry } from "./session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { listKnownSessionStoreAgentIds } from "./targets.js";
@@ -13,10 +13,13 @@ describe("known session store owners", () => {
       const stateDir = path.join(home, ".openclaw");
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const storePath = path.join(stateDir, "shared", "sessions.json");
-      const cfg: OpenClawConfig = {
-        session: { store: storePath },
-        agents: { entries: { ops: { default: true } } },
-      };
+      const cfg = retainLegacyDefaultAgentId(
+        {
+          session: { store: storePath },
+          agents: { entries: { ops: {} } },
+        },
+        "ops",
+      );
 
       await replaceSessionEntry(
         {
@@ -37,10 +40,13 @@ describe("known session store owners", () => {
       const stateDir = path.join(home, ".openclaw");
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const storePath = path.join(stateDir, "shared", "sessions.json");
-      const cfg: OpenClawConfig = {
-        session: { store: storePath },
-        agents: { entries: { ops: { default: true } } },
-      };
+      const cfg = retainLegacyDefaultAgentId(
+        {
+          session: { store: storePath },
+          agents: { entries: { ops: {} } },
+        },
+        "ops",
+      );
 
       await replaceSessionEntry(
         {
@@ -68,10 +74,13 @@ describe("known session store owners", () => {
       const stateDir = path.join(home, ".openclaw");
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const storePath = path.join(stateDir, "shared", "sessions.json");
-      const cfg: OpenClawConfig = {
-        session: { store: storePath },
-        agents: { entries: { ops: { default: true } } },
-      };
+      const cfg = retainLegacyDefaultAgentId(
+        {
+          session: { store: storePath },
+          agents: { entries: { ops: {} } },
+        },
+        "ops",
+      );
 
       await replaceSessionEntry(
         {

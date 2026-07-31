@@ -133,7 +133,7 @@ export type OpenClawConfig = {
       workspace?: string;
       contextLimits?: AgentContextLimitsConfig;
     };
-    entries?: Record<string, Omit<AgentConfig, "id">>;
+    entries?: Record<string, Omit<AgentConfig, "id" | "default">>;
     list?: AgentConfig[];
   };
   session?: {
@@ -296,14 +296,13 @@ function listAgentEntries(cfg: OpenClawConfig): AgentConfig[] {
     : [];
 }
 
-/** Resolve the default agent id from explicit default marker or first agent entry. */
-function resolveDefaultAgentId(cfg: OpenClawConfig): string {
+/** Resolve the sole configured agent without consulting retired default markers. */
+function tryResolveSoleAgentId(cfg: OpenClawConfig): string | undefined {
   const agents = listAgentEntries(cfg);
   if (agents.length === 0) {
     return DEFAULT_AGENT_ID;
   }
-  const chosen = (agents.find((agent) => agent.default) ?? agents[0])?.id;
-  return normalizeAgentId(chosen || DEFAULT_AGENT_ID);
+  return agents.length === 1 ? normalizeAgentId(agents[0]!.id) : undefined;
 }
 
 /** Find one agent config by canonical id. */
@@ -329,7 +328,7 @@ export function resolveMemoryHostAgentWorkspaceDir(
     return stripNullBytes(resolveMemoryHostUserPath(configured, env));
   }
   const fallback = cfg.agents?.defaults?.workspace?.trim();
-  if (id === resolveDefaultAgentId(cfg)) {
+  if (id === tryResolveSoleAgentId(cfg)) {
     return stripNullBytes(
       fallback ? resolveMemoryHostUserPath(fallback, env) : resolveDefaultAgentWorkspaceDir(env),
     );

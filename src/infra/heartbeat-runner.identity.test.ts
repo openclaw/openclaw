@@ -1,5 +1,6 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveStorePath } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveIsolatedHeartbeatSessionKey } from "./heartbeat-runner-session.js";
@@ -11,6 +12,8 @@ import {
   readSessionStoreForTest,
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
+import { resolveSystemEventQueueKey } from "./system-event-queue-key.js";
+import { drainSystemEvents, enqueueSystemEvent } from "./system-events.js";
 
 installHeartbeatRunnerTestRuntime({ includeSlack: true });
 
@@ -71,6 +74,17 @@ describe("runHeartbeatOnce identity", () => {
           lastTo: "channel:HISTORIAN",
         });
         const mainStoreBefore = readSessionStoreForTest(mainStorePath);
+        const mainEventQueueKey = resolveSystemEventQueueKey({
+          sessionKey: "global",
+          agentId: "main",
+        });
+        const historianEventQueueKey = resolveSystemEventQueueKey({
+          sessionKey: "global",
+          agentId: "historian2",
+        });
+        enqueueSystemEvent("main-only wake", { sessionKey: mainEventQueueKey });
+        enqueueSystemEvent("historian-only wake", { sessionKey: historianEventQueueKey });
+        enqueueSystemEvent("unowned compatibility wake", { sessionKey: "global" });
         replySpy.mockResolvedValue({ text: "needs attention" });
         const sendSlack = vi.fn().mockResolvedValue({ messageId: "m1", channelId: "HISTORIAN" });
 
@@ -89,6 +103,10 @@ describe("runHeartbeatOnce identity", () => {
           AgentId: "historian2",
           SessionKey: expectedSessionKey,
         });
+        const prompt = JSON.stringify(replySpy.mock.calls[0]?.[0]);
+        expect(prompt).toContain("historian-only wake");
+        expect(prompt).not.toContain("main-only wake");
+        expect(prompt).not.toContain("unowned compatibility wake");
         expect(sendSlack).toHaveBeenCalledWith(
           "channel:HISTORIAN",
           "needs attention",
@@ -100,9 +118,52 @@ describe("runHeartbeatOnce identity", () => {
         expect(historianStore["agent:historian2:global:heartbeat"] !== undefined).toBe(
           isolatedSession,
         );
+        expect(drainSystemEvents("global")).toEqual(["unowned compatibility wake"]);
+        drainSystemEvents(mainEventQueueKey);
+        drainSystemEvents(historianEventQueueKey);
       });
     },
   );
+
+  it("lets the sole remaining agent drain the raw global compatibility queue", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, replySpy }) => {
+      const storeTemplate = path.join(tmpDir, "agents", "{agentId}", "sessions.json");
+      const cfg = retainLegacyDefaultAgentId(
+        {
+          agents: {
+            defaults: {
+              workspace: tmpDir,
+              heartbeat: { every: "5m", target: "last" },
+            },
+            entries: { research: {} },
+          },
+          session: { scope: "global", store: storeTemplate },
+        },
+        "ops",
+      );
+      const researchStorePath = resolveStorePath(storeTemplate, { agentId: "research" });
+      await seedSessionStore(researchStorePath, "global", {
+        lastChannel: "slack",
+        lastProvider: "slack",
+        lastTo: "channel:RESEARCH",
+      });
+      enqueueSystemEvent("legacy global wake", { sessionKey: "global" });
+      replySpy.mockResolvedValue({ text: "handled" });
+
+      await runHeartbeatOnce({
+        cfg,
+        agentId: "research",
+        deps: {
+          getReplyFromConfig: replySpy,
+          slack: vi.fn().mockResolvedValue({ messageId: "m1", channelId: "RESEARCH" }),
+          getQueueSize: () => 0,
+        },
+      });
+
+      expect(JSON.stringify(replySpy.mock.calls[0]?.[0])).toContain("legacy global wake");
+      expect(drainSystemEvents("global")).toEqual([]);
+    });
+  });
 
   it.each([
     { name: "alert", replyText: "needs attention", showOk: false },

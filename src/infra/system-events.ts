@@ -20,6 +20,8 @@ export type SystemEvent = {
   ts: number;
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
+  /** Queue provenance retained only while a multi-queue heartbeat inspects this event. */
+  sourceQueueKey?: string;
 };
 
 const MAX_EVENTS = 20;

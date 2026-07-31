@@ -1,9 +1,13 @@
 import { existsSync } from "node:fs";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-store.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   executeSqliteQuerySync,
@@ -30,44 +34,62 @@ export function migrateLegacyOnboardingRecommendationsScope(params: {
   }
 
   try {
-    const workspaceDir = resolveAgentWorkspaceDir(
-      params.cfg,
-      resolveDefaultAgentId(params.cfg),
-      env,
+    const { db: database } = openOpenClawStateDatabase({ env });
+    const db = getNodeSqliteKysely<OnboardingRecommendationsMigrationDatabase>(database);
+    const legacy = executeSqliteQueryTakeFirstSync(
+      database,
+      db
+        .selectFrom("onboarding_recommendations")
+        .select("config_key")
+        .where("config_key", "=", LEGACY_ONBOARDING_RECOMMENDATIONS_KEY),
     );
+    if (!legacy) {
+      return { changes: [], warnings: [] };
+    }
+    const migrationAgentId = tryResolveLegacyCompatibilityAgentId(params.cfg);
+    if (!migrationAgentId) {
+      return {
+        changes: [],
+        warnings: [
+          "Deferred legacy onboarding recommendation workspace migration because the fleet has no migration owner",
+        ],
+      };
+    }
+    const workspaceDir = resolveAgentWorkspaceDir(params.cfg, migrationAgentId, env);
     const workspaceKey = resolveWorkspaceStateIdentity(workspaceDir).workspaceKey;
     const outcome = runOpenClawStateWriteTransaction(
-      ({ db: database }) => {
-        const db = getNodeSqliteKysely<OnboardingRecommendationsMigrationDatabase>(database);
-        const legacy = executeSqliteQueryTakeFirstSync(
-          database,
-          db
+      ({ db: writeDatabase }) => {
+        const writeDb =
+          getNodeSqliteKysely<OnboardingRecommendationsMigrationDatabase>(writeDatabase);
+        const legacyAtCommit = executeSqliteQueryTakeFirstSync(
+          writeDatabase,
+          writeDb
             .selectFrom("onboarding_recommendations")
             .select("config_key")
             .where("config_key", "=", LEGACY_ONBOARDING_RECOMMENDATIONS_KEY),
         );
-        if (!legacy) {
+        if (!legacyAtCommit) {
           return "unchanged" as const;
         }
         const scoped = executeSqliteQueryTakeFirstSync(
-          database,
-          db
+          writeDatabase,
+          writeDb
             .selectFrom("onboarding_recommendations")
             .select("config_key")
             .where("config_key", "=", workspaceKey),
         );
         if (scoped) {
           executeSqliteQuerySync(
-            database,
-            db
+            writeDatabase,
+            writeDb
               .deleteFrom("onboarding_recommendations")
               .where("config_key", "=", LEGACY_ONBOARDING_RECOMMENDATIONS_KEY),
           );
           return "removed-legacy" as const;
         }
         executeSqliteQuerySync(
-          database,
-          db
+          writeDatabase,
+          writeDb
             .updateTable("onboarding_recommendations")
             .set({ config_key: workspaceKey })
             .where("config_key", "=", LEGACY_ONBOARDING_RECOMMENDATIONS_KEY),
@@ -80,14 +102,14 @@ export function migrateLegacyOnboardingRecommendationsScope(params: {
 
     if (outcome === "migrated") {
       return {
-        changes: ["Migrated onboarding recommendation state to the default workspace scope."],
+        changes: ["Migrated onboarding recommendation state to the legacy owner workspace scope."],
         warnings: [],
       };
     }
     if (outcome === "removed-legacy") {
       return {
         changes: [
-          "Removed ambiguous legacy onboarding recommendation state; kept the default workspace record.",
+          "Removed ambiguous legacy onboarding recommendation state; kept the legacy owner workspace record.",
         ],
         warnings: [],
       };

@@ -5,6 +5,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
+import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 const chatAbortMock = vi.fn();
@@ -103,10 +104,12 @@ function createContext(
     extra?: Partial<GatewayRequestContext>;
   } = {},
 ): GatewayRequestContext {
-  const cfg = {
+  const rawConfig = {
     agents: { list: options.agents ?? createDefaultAgents() },
     ...(options.globalScope ? { session: { scope: "global" as const } } : {}),
   };
+  const retainedOwner = rawConfig.agents.list.find((entry) => entry.default === true)?.id;
+  const cfg = retainedOwner ? retainLegacyDefaultAgentId(rawConfig, retainedOwner) : rawConfig;
   return {
     chatAbortControllers: new Map(options.activeRuns ?? []),
     getRuntimeConfig: () => cfg,
@@ -203,6 +206,10 @@ async function expectListedGlobalSessionActiveRun(params: {
   listSessionsFromStoreAsyncMock.mockResolvedValue({
     sessions: [{ key: "global", hasActiveRun: false }],
   });
+  loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+    storePath: "/tmp/openclaw-sessions.json",
+    store: { global: { sessionId: "sess-global" } },
+  });
   const respond = await callSessions(
     "sessions.list",
     { includeGlobal: true, agentId: params.agentId },
@@ -259,6 +266,12 @@ describe("sessions.abort agent scope", () => {
     });
     listSessionsFromStoreAsyncMock.mockResolvedValue({
       sessions: [{ key: "agent:main:openclaw-weixin:direct:user", sessionId: "sess-weixin" }],
+    });
+    loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      storePath: "/tmp/openclaw-sessions.json",
+      store: {
+        "agent:main:openclaw-weixin:direct:user": { sessionId: "sess-weixin" },
+      },
     });
     isEmbeddedAgentRunInProgressMock.mockImplementation(
       (sessionId: string) => sessionId === "sess-weixin",

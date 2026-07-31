@@ -2,10 +2,15 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
+import { materializeLegacyDefaultCronJobOwnersInRecords } from "../legacy-default-agent-owner-records.js";
 import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
-import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
+import {
+  getInvalidPersistedCronJobOwnerReason,
+  getInvalidPersistedCronJobReason,
+} from "../persisted-shape.js";
 import { tryCronScheduleIdentity } from "../schedule-identity.js";
 import { normalizeCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import type { CronJob, CronJobState, CronPacing, CronSchedule, CronStoreFile } from "../types.js";
@@ -13,16 +18,38 @@ import { bindDeliveryColumns, deliveryFromRow } from "./delivery-codec.js";
 import { bindFailureAlertColumns, failureAlertFromRow } from "./failure-alert-codec.js";
 import { bindPayloadColumns, payloadFromRow } from "./payload-codec.js";
 import {
+  CronRuntimeRevisionMismatchError,
+  CronStoreEpochMismatchError,
+  CronStoreTopologyMismatchError,
+  incrementCronRuntimeRevision,
+  incrementCronStoreEpoch,
+  readCronRuntimeRevision,
+  readCronStoreEpoch,
+  writeCronStoreEpoch,
+} from "./row-revisions.js";
+import { cronRowTopologyFingerprint, cronStoreTopologyMatches } from "./row-topology.js";
+import { preserveConcurrentCronRuntime } from "./runtime-merge.js";
+import { writeCronRuntimeRowDeltas } from "./runtime-row-writes.js";
+import {
   booleanToInteger,
   integerToBoolean,
   normalizeNumber,
   parseJsonObject,
 } from "./scalar-codec.js";
 import type { CronJobInsert, CronJobRow } from "./schema.js";
-import { getCronStoreKysely } from "./schema.js";
+import { ensureCronStoreEpochSchema, getCronStoreKysely } from "./schema.js";
 import { bindStateColumns, stateFromRow } from "./state-codec.js";
 import { bindTriggerColumns, triggerFromRow } from "./trigger-codec.js";
 import type { LoadedCronStore } from "./types.js";
+
+export {
+  CronRuntimeRevisionMismatchError,
+  CronStoreEpochMismatchError,
+  CronStoreTopologyMismatchError,
+  incrementCronStoreEpoch,
+  readCronRuntimeRevision,
+  readCronStoreEpoch,
+} from "./row-revisions.js";
 
 function bindScheduleColumns(
   schedule: CronSchedule,
@@ -186,6 +213,9 @@ function bindCronJobRow(storeKey: string, job: CronJob, sortOrder: number): Cron
 
 function normalizeCronJobForSqlite(job: CronStoreFile["jobs"][number]): CronJob | null {
   const raw = structuredClone(job) as unknown as Record<string, unknown>;
+  if (getInvalidPersistedCronJobOwnerReason(raw)) {
+    return null;
+  }
   const hadDeleteAfterRun = Object.hasOwn(raw, "deleteAfterRun");
   normalizeCronJobIdentityFields(raw);
   const normalized = normalizeCronJobInput(raw, { applyDefaults: true });
@@ -274,6 +304,12 @@ function pacingFromRow(row: CronJobRow): CronPacing | undefined {
 
 function rowToCronJob(row: CronJobRow): CronJob | null {
   const jobJson = parseJsonObject<Record<string, unknown>>(row.job_json, {});
+  const rawAgentId =
+    row.agent_id !== null
+      ? row.agent_id
+      : Object.hasOwn(jobJson, "agentId")
+        ? jobJson.agentId
+        : undefined;
   const jsonOwner = isRecord(jobJson.owner) ? jobJson.owner : undefined;
   const ownerAccountId = normalizeOptionalAccountId(
     typeof jsonOwner?.accountId === "string" ? jsonOwner.accountId : undefined,
@@ -312,7 +348,8 @@ function rowToCronJob(row: CronJobRow): CronJob | null {
     createdAtMs,
     updatedAtMs:
       normalizeNumber(row.runtime_updated_at_ms) ?? normalizeNumber(row.updated_at) ?? createdAtMs,
-    ...(row.agent_id ? { agentId: row.agent_id } : {}),
+    // Preserve malformed explicit sidecar ownership for doctor/adoption validation.
+    ...(rawAgentId !== undefined ? { agentId: rawAgentId as string } : {}),
     ...(row.session_key ? { sessionKey: row.session_key } : {}),
     schedule,
     ...(pacing !== undefined ? { pacing } : {}),
@@ -354,50 +391,162 @@ export function loadCronRows(db: DatabaseSync, storeKey: string): CronJobRow[] {
   ).rows;
 }
 
-export type CronJobFamilyIdentity = {
-  declarationKey: string;
-  name: string;
-  ownerPluginTag: string;
-};
-
-/** Removes one owned job family from obsolete store partitions. */
-export function deleteStaleCronJobFamilyRows(
+/** Loads cron topology and its stale-writer epoch from one SQLite snapshot. */
+export function loadCronRowsWithEpoch(
   db: DatabaseSync,
-  activeStoreKey: string,
-  family: CronJobFamilyIdentity,
-): number {
-  const staleRows = executeSqliteQuerySync(
-    db,
-    getCronStoreKysely(db)
-      .selectFrom("cron_jobs")
-      .select(["store_key", "job_id", "declaration_key", "name", "description"])
-      .where("store_key", "!=", activeStoreKey),
-  ).rows.filter(
-    (row) =>
-      row.declaration_key === family.declarationKey ||
-      (row.name === family.name && row.description?.includes(family.ownerPluginTag) === true),
-  );
-  for (const row of staleRows) {
-    executeSqliteQuerySync(
-      db,
-      getCronStoreKysely(db)
-        .deleteFrom("cron_job_scratch")
-        .where("store_key", "=", row.store_key)
-        .where("job_id", "=", row.job_id),
-    );
-    executeSqliteQuerySync(
-      db,
-      getCronStoreKysely(db)
-        .deleteFrom("cron_jobs")
-        .where("store_key", "=", row.store_key)
-        .where("job_id", "=", row.job_id),
-    );
+  storeKey: string,
+  options?: { ensureEpochSchema?: boolean; epochSchemaPresent?: boolean },
+): { rows: CronJobRow[]; storeEpoch: number; runtimeRevision: number } {
+  if (options?.ensureEpochSchema !== false) {
+    ensureCronStoreEpochSchema(db);
   }
-  return staleRows.length;
+  return runSqliteDeferredTransactionSync(db, () => ({
+    rows: loadCronRows(db, storeKey),
+    storeEpoch:
+      options?.epochSchemaPresent === false
+        ? 0
+        : readCronStoreEpoch(db, storeKey, { ensureSchema: false }),
+    runtimeRevision:
+      options?.epochSchemaPresent === false
+        ? 0
+        : readCronRuntimeRevision(db, storeKey, { ensureSchema: false }),
+  }));
 }
 
-/** Replaces all persisted cron rows for one store key from the config store snapshot. */
-export function replaceCronRows(db: DatabaseSync, storeKey: string, store: CronStoreFile): void {
+/** Materializes retired default ownership without rewriting unrelated cron row fields.
+ * The caller owns the shared-state write transaction so row and epoch updates commit together. */
+export function materializeCronRowAgentOwners(
+  db: DatabaseSync,
+  storeKey: string,
+  legacyDefaultAgentId: string,
+  options?: { jobIds?: ReadonlySet<string> },
+): number {
+  let rewritten = 0;
+  for (const row of loadCronRows(db, storeKey)) {
+    if (options?.jobIds && !options.jobIds.has(row.job_id)) {
+      continue;
+    }
+    const jobJson = parseJsonObject<Record<string, unknown>>(row.job_json, {});
+    const owner = {
+      ...(row.agent_id !== null
+        ? { agentId: row.agent_id }
+        : Object.hasOwn(jobJson, "agentId")
+          ? { agentId: jobJson.agentId }
+          : {}),
+      ...(row.session_key === null ? {} : { sessionKey: row.session_key }),
+    };
+    if (
+      materializeLegacyDefaultCronJobOwnersInRecords([owner], legacyDefaultAgentId) === 0 ||
+      typeof owner.agentId !== "string"
+    ) {
+      continue;
+    }
+    jobJson.agentId = owner.agentId;
+    executeSqliteQuerySync(
+      db,
+      getCronStoreKysely(db)
+        .updateTable("cron_jobs")
+        .set({ agent_id: owner.agentId, job_json: JSON.stringify(jobJson) })
+        .where("store_key", "=", storeKey)
+        .where("job_id", "=", row.job_id),
+    );
+    rewritten += 1;
+  }
+  if (rewritten > 0) {
+    incrementCronStoreEpoch(db, storeKey);
+  }
+  return rewritten;
+}
+
+/** Replaces all persisted cron rows for one store key from the config store snapshot.
+ * The caller owns the shared-state write transaction; never nest another BEGIN here. */
+export function replaceCronRows(
+  db: DatabaseSync,
+  storeKey: string,
+  store: CronStoreFile,
+  options?: {
+    expectedStoreEpoch?: number;
+    expectedTopologyFingerprintByJobId?: ReadonlyMap<string, string>;
+    expectedRuntimeRevision?: number;
+    expectedRuntimeStateByJobId?: ReadonlyMap<string, CronJob["state"] | undefined>;
+    expectedRuntimeUpdatedAtMsByJobId?: ReadonlyMap<string, number>;
+    bumpStoreEpoch?: boolean;
+  },
+): number {
+  // This primitive is exported for transactional migrations as well as the public
+  // save path; validate before DELETE so malformed preserved rows fail atomically.
+  assertCronStoreCanPersist(store);
+  const currentRows = loadCronRows(db, storeKey);
+  const currentStoreEpoch = readCronStoreEpoch(db, storeKey);
+  const currentRuntimeRevision = readCronRuntimeRevision(db, storeKey);
+  if (
+    options?.expectedStoreEpoch !== undefined &&
+    options.expectedStoreEpoch !== currentStoreEpoch
+  ) {
+    throw new CronStoreEpochMismatchError(options.expectedStoreEpoch, currentStoreEpoch);
+  }
+  // A revision-blind writer may have already committed the caller's exact topology.
+  // That is convergence, not a third conflicting state, so the replacement remains safe.
+  const topologyMatchesIncoming = cronStoreTopologyMatches({
+    rows: currentRows,
+    store,
+    normalizeJob: normalizeCronJobForSqlite,
+    loadRow: (row) => {
+      const loaded = loadedCronStoreFromRows([row]);
+      return { job: loaded.store.jobs[0], configJob: loaded.configJobs[0] };
+    },
+  });
+  if (options?.expectedTopologyFingerprintByJobId) {
+    const currentTopology = new Map(
+      currentRows.map((row) => [row.job_id, cronRowTopologyFingerprint(row)]),
+    );
+    if (
+      !topologyMatchesIncoming &&
+      (currentTopology.size !== options.expectedTopologyFingerprintByJobId.size ||
+        [...currentTopology].some(
+          ([jobId, fingerprint]) =>
+            options.expectedTopologyFingerprintByJobId?.get(jobId) !== fingerprint,
+        ))
+    ) {
+      throw new CronStoreTopologyMismatchError();
+    }
+  }
+  const currentRowsByJobId = new Map(currentRows.map((row) => [row.job_id, row]));
+  const expectedRuntimeRevision = options?.expectedRuntimeRevision;
+  const expectedRuntimeStateByJobId = options?.expectedRuntimeStateByJobId;
+  const expectedRuntimeUpdatedAtMsByJobId = options?.expectedRuntimeUpdatedAtMsByJobId;
+  const preserveCurrentRuntime =
+    expectedRuntimeStateByJobId !== undefined && expectedRuntimeUpdatedAtMsByJobId !== undefined;
+  const runtimeRevisionChanged =
+    expectedRuntimeRevision !== undefined && expectedRuntimeRevision !== currentRuntimeRevision;
+  if (
+    (runtimeRevisionChanged ||
+      expectedRuntimeStateByJobId !== undefined ||
+      expectedRuntimeUpdatedAtMsByJobId !== undefined) &&
+    store.jobs.some(
+      (job) =>
+        currentRowsByJobId.has(job.id) &&
+        (expectedRuntimeStateByJobId?.has(job.id) !== true ||
+          expectedRuntimeUpdatedAtMsByJobId?.has(job.id) !== true),
+    )
+  ) {
+    // A persisted row without a complete per-job baseline is ambiguous. Reject the
+    // full snapshot so it cannot overwrite runtime state the caller never loaded.
+    throw new CronRuntimeRevisionMismatchError(
+      expectedRuntimeRevision ?? currentRuntimeRevision,
+      currentRuntimeRevision,
+    );
+  }
+  const topologyChanged = !topologyMatchesIncoming;
+  const nextStoreEpoch =
+    options?.bumpStoreEpoch && topologyChanged
+      ? incrementCronStoreEpoch(db, storeKey)
+      : currentStoreEpoch;
+  // Persist zero for an empty partition so it has the same stale-writer
+  // barrier as a nonempty one even before the first topology change.
+  if (nextStoreEpoch === 0) {
+    writeCronStoreEpoch(db, storeKey, nextStoreEpoch);
+  }
   executeSqliteQuerySync(
     db,
     getCronStoreKysely(db).deleteFrom("cron_jobs").where("store_key", "=", storeKey),
@@ -407,13 +556,34 @@ export function replaceCronRows(db: DatabaseSync, storeKey: string, store: CronS
     if (!normalized) {
       continue;
     }
+    const currentRow = currentRowsByJobId.get(normalized.id);
+    const expectedRuntimeState = expectedRuntimeStateByJobId?.get(normalized.id);
+    const hasRuntimeBaseline = expectedRuntimeStateByJobId?.has(normalized.id) === true;
+    const expectedRuntimeUpdatedAtMs = expectedRuntimeUpdatedAtMsByJobId?.get(normalized.id);
+    const merged =
+      !preserveCurrentRuntime || !currentRow || !hasRuntimeBaseline
+        ? normalized
+        : preserveConcurrentCronRuntime({
+            current: rowToCronJob(currentRow) ?? undefined,
+            next: normalized,
+            expectedRuntimeState: expectedRuntimeState ?? {},
+            expectedRuntimeUpdatedAtMs: expectedRuntimeUpdatedAtMs ?? normalized.updatedAtMs,
+          });
+    if (!merged) {
+      throw new CronRuntimeRevisionMismatchError(
+        expectedRuntimeRevision ?? currentRuntimeRevision,
+        currentRuntimeRevision,
+      );
+    }
     executeSqliteQuerySync(
       db,
       getCronStoreKysely(db)
         .insertInto("cron_jobs")
-        .values(bindCronJobRow(storeKey, normalized, index)),
+        .values(bindCronJobRow(storeKey, merged, index)),
     );
   }
+  incrementCronRuntimeRevision(db, storeKey);
+  return nextStoreEpoch;
 }
 
 /** Upserts one persisted cron row without rewriting unrelated jobs in its store partition. */
@@ -422,19 +592,26 @@ export function upsertCronJobRow(
   storeKey: string,
   job: CronJob,
   sortOrder: number,
-): void {
-  const normalized = normalizeCronJobForSqlite(job);
-  if (!normalized) {
-    throw new Error(`Cannot persist invalid cron job ${job.id}`);
-  }
-  const values = bindCronJobRow(storeKey, normalized, sortOrder);
-  executeSqliteQuerySync(
-    db,
-    getCronStoreKysely(db)
-      .insertInto("cron_jobs")
-      .values(values)
-      .onConflict((conflict) => conflict.columns(["store_key", "job_id"]).doUpdateSet(values)),
-  );
+): number {
+  const upsert = () => {
+    const normalized = normalizeCronJobForSqlite(job);
+    if (!normalized) {
+      throw new Error(`Cannot persist invalid cron job ${job.id}`);
+    }
+    const values = bindCronJobRow(storeKey, normalized, sortOrder);
+    executeSqliteQuerySync(
+      db,
+      getCronStoreKysely(db)
+        .insertInto("cron_jobs")
+        .values(values)
+        .onConflict((conflict) => conflict.columns(["store_key", "job_id"]).doUpdateSet(values)),
+    );
+    // Row upserts replace runtime columns as well as topology. Advance both revisions
+    // in this transaction so a stale runtime writer cannot interleave after the row write.
+    incrementCronRuntimeRevision(db, storeKey);
+    return incrementCronStoreEpoch(db, storeKey);
+  };
+  return db.isTransaction ? upsert() : runSqliteDeferredTransactionSync(db, upsert);
 }
 
 /** Updates only mutable runtime columns without rewriting full job config JSON. */
@@ -442,26 +619,46 @@ export function updateCronRuntimeRows(
   db: DatabaseSync,
   storeKey: string,
   store: CronStoreFile,
-): void {
-  for (const job of store.jobs) {
-    executeSqliteQuerySync(
+  options?: {
+    expectedRuntimeRevision?: number;
+    currentRuntimeRevision?: number;
+    expectedRuntimeStateByJobId?: ReadonlyMap<string, CronJob["state"] | undefined>;
+    expectedRuntimeUpdatedAtMsByJobId?: ReadonlyMap<string, number>;
+  },
+): number {
+  const expectedRuntimeRevision = options?.expectedRuntimeRevision;
+  const currentRuntimeRevision = options?.currentRuntimeRevision;
+  const write = () =>
+    writeCronRuntimeRowDeltas({
       db,
-      getCronStoreKysely(db)
-        .updateTable("cron_jobs")
-        .set({
-          ...bindStateColumns(job.state ?? {}),
-          state_json: JSON.stringify(job.state ?? {}),
-          runtime_updated_at_ms: job.updatedAtMs,
-          schedule_identity: tryCronScheduleIdentity(job as unknown as Record<string, unknown>),
-        })
-        .where("store_key", "=", storeKey)
-        .where("job_id", "=", job.id),
-    );
-  }
+      storeKey,
+      store,
+      expectedRuntimeRevision,
+      currentRuntimeRevision,
+      expectedRuntimeStateByJobId: options?.expectedRuntimeStateByJobId,
+      expectedRuntimeUpdatedAtMsByJobId: options?.expectedRuntimeUpdatedAtMsByJobId,
+      scheduleIdentityFromRow: (row) => {
+        const current = rowToCronJob(row);
+        return current
+          ? tryCronScheduleIdentity(current as unknown as Record<string, unknown>)
+          : undefined;
+      },
+      conflictError: () =>
+        new CronRuntimeRevisionMismatchError(
+          expectedRuntimeRevision ?? 0,
+          currentRuntimeRevision ?? 0,
+        ),
+      incrementRevision: () => incrementCronRuntimeRevision(db, storeKey),
+    });
+  return db.isTransaction ? write() : runSqliteDeferredTransactionSync(db, write);
 }
 
 /** Reconstructs loaded cron store data and config-runtime sidecars from SQLite rows. */
-export function loadedCronStoreFromRows(rows: CronJobRow[]): LoadedCronStore {
+export function loadedCronStoreFromRows(
+  rows: CronJobRow[],
+  storeEpoch = 0,
+  runtimeRevision = 0,
+): LoadedCronStore {
   const parsedJobs = rows.map(rowToCronJob);
   const jobs = parsedJobs.filter((job): job is CronJob => job !== null);
   const configJobs = rows.map((row, index) =>
@@ -480,8 +677,14 @@ export function loadedCronStoreFromRows(rows: CronJobRow[]): LoadedCronStore {
   }));
   return {
     store: { version: 1, jobs },
+    topologyFingerprintByJobId: new Map(
+      rows.map((row) => [row.job_id, cronRowTopologyFingerprint(row)]),
+    ),
+    storeEpoch,
+    runtimeRevision,
     configJobs,
     configJobIndexes: rows.map((_row, index) => index),
+    legacyImportedJobIndexes: [],
     configJobRuntimeEntries,
     invalidConfigRows: [],
   };

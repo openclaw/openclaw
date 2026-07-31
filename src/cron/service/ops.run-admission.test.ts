@@ -192,7 +192,7 @@ describe("cron service run admission", () => {
         if (reservationsPersisted && nextFailingJob?.state.runningAtMs === dueAt + 1) {
           throw new Error("scheduled sibling activation failed");
         }
-        await realSave(storePath, nextStore, opts);
+        const persisted = await realSave(storePath, nextStore, opts);
         if (
           !reservationsPersisted &&
           nextStore.jobs.every((job) => job.state.queuedAtMs === dueAt)
@@ -200,6 +200,7 @@ describe("cron service run admission", () => {
           reservationsPersisted = true;
           now = dueAt + 1;
         }
+        return persisted;
       });
 
     try {
@@ -865,10 +866,11 @@ describe("cron service run admission", () => {
     const saveSpy = vi
       .spyOn(cronStoreModule, "saveCronJobsStore")
       .mockImplementation(async (storePath, nextStore, opts) => {
-        await realSave(storePath, nextStore, opts);
+        const persisted = await realSave(storePath, nextStore, opts);
         if (nextStore.jobs.find((entry) => entry.id === job.id)?.state.queuedAtMs === dueAt) {
           stop(state);
         }
+        return persisted;
       });
     const realLoad = cronStoreModule.loadCronJobsStoreWithConfigJobs;
     let cleanupReloadFailed = false;
@@ -929,7 +931,7 @@ describe("cron service run admission", () => {
         if (saveCount === 3) {
           throw new Error("finalization persist failed");
         }
-        await realSave(storePath, nextStore, opts);
+        return await realSave(storePath, nextStore, opts);
       });
 
     try {

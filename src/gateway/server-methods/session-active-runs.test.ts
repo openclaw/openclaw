@@ -8,6 +8,7 @@ import {
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
+import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import {
   buildProjectedAgentRunIndex,
   clearAgentRunContext,
@@ -16,8 +17,40 @@ import {
 import {
   collectTrackedActiveSessionRuns,
   hasVisibleActiveSessionRun,
+  resolveActiveSessionRunDefaultAgentId,
   resolveVisibleActiveSessionRunState,
 } from "./session-active-runs.js";
+
+it("keeps a retained global run scoped to its compatibility owner", () => {
+  const cfg = retainLegacyDefaultAgentId(
+    { agents: { ownership: "explicit", entries: { main: {}, work: {} } } },
+    "main",
+  );
+  const defaultAgentId = resolveActiveSessionRunDefaultAgentId(cfg);
+  const context = {
+    chatAbortControllers: new Map([["run-global", { sessionKey: "global", agentId: "main" }]]),
+  } as never;
+
+  expect(defaultAgentId).toBe("main");
+  expect(
+    resolveVisibleActiveSessionRunState({
+      context,
+      requestedKey: "global",
+      canonicalKey: "global",
+      agentId: "work",
+      defaultAgentId,
+    }),
+  ).toEqual({ active: false, runIds: [] });
+  expect(
+    resolveVisibleActiveSessionRunState({
+      context,
+      requestedKey: "global",
+      canonicalKey: "global",
+      agentId: "main",
+      defaultAgentId,
+    }),
+  ).toEqual({ active: true, runIds: ["run-global"] });
+});
 
 it("keeps prebuilt active-run indexes in parity with per-row scans", () => {
   const context = {

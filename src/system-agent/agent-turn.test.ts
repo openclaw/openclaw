@@ -760,6 +760,7 @@ describe("runSystemAgentTurn", () => {
       agents: {
         defaults: {
           model: { primary: "anthropic/claude-global" },
+          systemAgent: { agentId: "ops" },
           models: {
             "openai/gpt-5.4": { agentRuntime: { id: "openclaw" } },
           },
@@ -767,7 +768,6 @@ describe("runSystemAgentTurn", () => {
         list: [
           {
             id: "ops",
-            default: true,
             agentDir,
             model: { primary: "openai/gpt-5.4@openai:ops" },
             params: { temperature: 0.2 },

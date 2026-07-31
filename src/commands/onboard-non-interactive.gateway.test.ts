@@ -387,6 +387,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
   it("preserves existing config on onboard rerun (openclaw#84692)", async () => {
     await withStateDir("state-preserve-agents-", async (stateDir) => {
       const workspace = path.join(stateDir, "openclaw");
+      const requestedWorkspace = path.join(stateDir, "requested-workspace");
       const warningRuntime = { ...runtime, error: vi.fn() };
       const passwordRef = { source: "env" as const, provider: "default", id: "GATEWAY_PASSWORD" };
       const seededAgents = [
@@ -427,7 +428,8 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         {
           nonInteractive: true,
           mode: "local",
-          workspace: path.join(stateDir, "requested-workspace"),
+          agent: "alpha",
+          workspace: requestedWorkspace,
           authChoice: "skip",
           skipSkills: true,
           skipHealth: true,
@@ -439,10 +441,12 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       const cfg = readTestConfig();
       expect(cfg.agents?.list?.map((a) => a.id)).toEqual(["alpha", "beta"]);
       expect(cfg.agents?.defaults?.workspace).toBe(workspace);
-      expect(cfg.bindings).toEqual(seededBindings);
-      expect(warningRuntime.error).toHaveBeenCalledWith(
-        expect.stringContaining("existing agents keep their current workspace"),
+      expect(cfg.agents?.list?.find((agent) => agent.id === "alpha")?.workspace).toBe(
+        requestedWorkspace,
       );
+      expect(cfg.agents?.list?.find((agent) => agent.id === "beta")?.workspace).toBeUndefined();
+      expect(cfg.bindings).toEqual(seededBindings);
+      expect(warningRuntime.error).not.toHaveBeenCalled();
       expect(cfg.gateway?.port).toBe(24680);
 
       const onboardWrite = capturedReplaceConfigFileCalls.at(-1);

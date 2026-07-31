@@ -44,7 +44,7 @@ Options: `--workspace <dir>`, `--model <id>`, `--agent-dir <dir>`, `--bind <chan
 - Passing any explicit add flag switches the command into the non-interactive path.
 - Non-interactive mode requires both an agent name and `--workspace`.
 - `main` is reserved and cannot be used as the new agent id.
-- Interactive mode seeds auth by copying only portable static credentials (`api_key` and static `token` profiles) unless a credential opts out with `copyToAgents: false`; OAuth refresh-token profiles are not copied unless a provider opts in with `copyToAgents: true`. Without a copy, OAuth stays available only through read-through inheritance from the real `main` agent store. If the configured default agent is not `main`, sign in separately for OAuth profiles on the new agent.
+- Interactive mode seeds auth by copying only portable static credentials (`api_key` and static `token` profiles) unless a credential opts out with `copyToAgents: false`; OAuth refresh-token profiles are not copied unless a provider opts in with `copyToAgents: true`. Without a copy, OAuth stays available only through read-through inheritance from the real `main` agent store. Sign in separately when another agent needs its own OAuth profile.
 
 ### `agents bindings`
 
@@ -52,11 +52,11 @@ Options: `--agent <id>`, `--json`.
 
 ### `agents bind`
 
-Options: `--agent <id>` (defaults to the current default agent), `--bind <channel[:accountId]>` (repeatable), `--json`.
+Options: `--agent <id>`, `--bind <channel[:accountId]>` (repeatable), `--json`. When omitted, a sole agent is selected automatically; an interactive multi-agent terminal shows a picker, while non-interactive use requires `--agent`.
 
 ### `agents unbind`
 
-Options: `--agent <id>` (defaults to the current default agent), `--bind <channel[:accountId]>` (repeatable), `--all`, `--json`. Accepts either `--all` or one or more `--bind` values, not both.
+Options: `--agent <id>`, `--bind <channel[:accountId]>` (repeatable), `--all`, `--json`. When omitted, a sole agent is selected automatically; an interactive multi-agent terminal shows a picker, while non-interactive use requires `--agent`. Accepts either `--all` or one or more `--bind` values, not both.
 
 ### `agents set-identity`
 
@@ -100,7 +100,7 @@ openclaw agents add work --workspace ~/.openclaw/workspace-work --bind telegram:
 
 If you omit `accountId` (`--bind <channel>`), OpenClaw resolves it from plugin setup hooks, forced account binding, or the channel's configured account count.
 
-If you omit `--agent` for `bind` or `unbind`, OpenClaw targets the current default agent.
+If you omit `--agent` for `bind` or `unbind`, OpenClaw uses the sole configured agent or prompts in an interactive multi-agent terminal. Non-interactive multi-agent calls must pass `--agent`.
 
 ### `--bind` format
 

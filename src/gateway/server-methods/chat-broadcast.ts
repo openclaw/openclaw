@@ -1,6 +1,8 @@
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { projectChatDisplayMessage } from "../chat-display-projection.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -35,10 +37,15 @@ function resolveGlobalAwareNodeChatDeliveryKeys(params: {
   if (params.sessionKey !== "global") {
     return [params.sessionKey];
   }
-  const defaultAgentId = resolveDefaultAgentId(params.cfg);
-  const scopedAgentId = params.agentId ?? defaultAgentId;
+  const compatibilityAgentId = tryResolveLegacyCompatibilityAgentId(params.cfg);
+  const scopedAgentId = normalizeAgentId(
+    params.agentId ?? compatibilityAgentId ?? resolveDefaultAgentId(params.cfg),
+  );
   const keys = [`agent:${scopedAgentId}:global`];
-  if (scopedAgentId === defaultAgentId) {
+  if (
+    compatibilityAgentId &&
+    normalizeAgentId(compatibilityAgentId) === normalizeAgentId(scopedAgentId)
+  ) {
     keys.push("global");
   }
   return keys;

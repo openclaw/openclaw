@@ -22,7 +22,11 @@ import {
   type ManagedGatewayConfigReloaderParams,
   type RuntimeSecretsPreflightParams,
 } from "./server-reload-contracts.js";
-import { createGatewayReloadHandlers } from "./server-reload-hot.js";
+import { beginGatewayCronConfigAdoption } from "./server-reload-cron-adoption.js";
+import {
+  createGatewayReloadHandlers,
+  reloadPlanChangesAgentResolution,
+} from "./server-reload-hot.js";
 import {
   createManagedReloadSecretHandlers,
   isRuntimeSecretsPreparationCurrent,
@@ -168,7 +172,22 @@ export function startManagedGatewayConfigReloader(
         throw new GatewayConfigReloadSupersededError();
       }
     };
-    assertCurrent();
+    let cronAdoption: Awaited<ReturnType<typeof beginGatewayCronConfigAdoption>> = null;
+    try {
+      assertCurrent();
+      // The old scheduler still owns the retained legacy id. Adopt its rows before
+      // restart tears it down, or the replacement can cold-start ownerless jobs.
+      cronAdoption = await beginGatewayCronConfigAdoption({
+        cron: params.getState().cronState.cron,
+        enabled: reloadPlanChangesAgentResolution(plan),
+        nextConfig,
+        failureLabel: "gateway restart preparation failed",
+        isCurrent,
+      });
+      assertCurrent();
+    } catch (error) {
+      throw cronAdoption ? await cronAdoption.reject(error) : error;
+    }
     const restartLifecycle = beginGatewayRestartLifecycle();
     let preparation:
       | {
@@ -218,7 +237,7 @@ export function startManagedGatewayConfigReloader(
       }
     } catch (error) {
       restartLifecycle.settle("rejected");
-      throw error;
+      throw cronAdoption ? await cronAdoption.reject(error) : error;
     }
     const {
       ownership: preparationOwnership,
@@ -276,6 +295,14 @@ export function startManagedGatewayConfigReloader(
       if (restartTransaction.status === "recovery-pending") {
         throw new GatewayHotReloadRecoveryError("config restart");
       }
+      assertCurrent();
+      if (reloadPlanChangesAgentResolution(plan)) {
+        cronAdoption?.complete();
+      }
+      // Commit edge ordering:
+      // - all secret/plugin preparation and fallible cron adoption completed above;
+      // - stale-client disconnect, restart settlement, runtime-env publication, and lifecycle
+      //   settlement below are synchronous irreversible edges with no fallible work after them.
       if (previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration) {
         disconnectStaleSharedGatewayAuthClients({
           clients: params.clients,
@@ -296,7 +323,7 @@ export function startManagedGatewayConfigReloader(
           previousRequiredSharedGatewaySessionGeneration,
         );
       }
-      throw error;
+      throw cronAdoption ? await cronAdoption.reject(error) : error;
     }
   };
 

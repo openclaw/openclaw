@@ -68,6 +68,8 @@ export type CronSystemEventEnqueueResult =
 
 /** Dependency injection surface for the cron service runtime. */
 export type CronServiceDeps = {
+  /** State/config environment used to resolve the shared SQLite database. */
+  env?: NodeJS.ProcessEnv;
   nowMs?: () => number;
   log: Logger;
   storePath: string;
@@ -84,7 +86,9 @@ export type CronServiceDeps = {
   /** Default agent id for jobs without an agent id. */
   defaultAgentId?: string;
   /** Resolve the current default when runtime config can change after startup. */
-  resolveDefaultAgentId?: () => string;
+  resolveDefaultAgentId?: () => string | undefined;
+  /** Upgrade-only owner consumed by the startup SQLite migration. */
+  legacyDefaultAgentId?: string;
   /** Resolve configured or persisted owners whose session stores need periodic cleanup. */
   resolveSessionStoreAgentIds?: () => string[];
   /** Revalidate agent ownership inside the cron mutation lock. */
@@ -251,9 +255,29 @@ type QueuedCronRunReservation = {
 export type CronServiceState = {
   deps: CronServiceDepsInternal;
   store: CronStoreFile | null;
+  /** Epoch read with the current in-memory topology. */
+  storeEpoch: number;
+  /** Per-row topology loaded with storeEpoch, including revision-blind legacy writes. */
+  durableTopologyFingerprintByJobId: Map<string, string>;
+  /** Last accepted schedules, kept separate from locally mutated live job objects. */
+  durableSchedulingJobsById: Map<string, CronJob>;
+  /** Runtime-only revision read with the current in-memory state. */
+  runtimeRevision: number;
+  /** Previous retained owner while a Gateway config candidate is prepared. */
+  pendingConfigAdoption?: {
+    legacyDefaultAgentId: string | undefined;
+    rollbackDurableAdoption?: () => Promise<void>;
+  };
   /** Last known durable wake for each persisted job. Map presence distinguishes
    * a durably unscheduled job from one that is not part of durable topology. */
   durableNextRunAtMsByJobId: Map<string, number | undefined>;
+  /** Runtime state from the last accepted store revision, used to distinguish
+   * stale sibling snapshots from intentional runtime cleanup writes. */
+  durableRuntimeStateByJobId: Map<string, CronJob["state"]>;
+  /** Runtime timestamps paired with durableRuntimeStateByJobId baselines. */
+  durableRuntimeUpdatedAtMsByJobId: Map<string, number>;
+  /** Loaded records proven to originate outside SQLite from the legacy JSON import. */
+  legacyImportedJobIds: Set<string>;
   timer: NodeJS.Timeout | null;
   running: boolean;
   stopped: boolean;
@@ -279,6 +303,13 @@ export type CronServiceState = {
   storeLoadedAtMs: number | null;
 };
 
+/** Uses the static startup owner only when no live resolver was supplied. */
+export function resolveCronServiceDefaultAgentId(
+  deps: Pick<CronServiceDeps, "defaultAgentId" | "resolveDefaultAgentId">,
+): string | undefined {
+  return deps.resolveDefaultAgentId ? deps.resolveDefaultAgentId() : deps.defaultAgentId;
+}
+
 /** Creates mutable cron service state with a concrete clock dependency. */
 export function createCronServiceState(deps: CronServiceDeps): CronServiceState {
   // The public CronService constructor shipped before roster-aware callers.
@@ -288,7 +319,14 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
   return {
     deps: { ...deps, defaultAgentId, nowMs: deps.nowMs ?? (() => Date.now()) },
     store: null,
+    storeEpoch: 0,
+    durableTopologyFingerprintByJobId: new Map<string, string>(),
+    durableSchedulingJobsById: new Map<string, CronJob>(),
+    runtimeRevision: 0,
     durableNextRunAtMsByJobId: new Map<string, number | undefined>(),
+    durableRuntimeStateByJobId: new Map<string, CronJob["state"]>(),
+    durableRuntimeUpdatedAtMsByJobId: new Map<string, number>(),
+    legacyImportedJobIds: new Set<string>(),
     timer: null,
     running: false,
     stopped: false,

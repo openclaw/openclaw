@@ -801,6 +801,49 @@ describe("validateConfigObjectWithPlugins bundled allowlist compatibility", () =
     }
   });
 
+  it("uses the provided channel manifest when materializing legacy ownership", () => {
+    const result = validateConfigObjectWithPlugins(
+      {
+        agents: { entries: { ops: { default: true }, research: {} } },
+        channels: { snapshotchat: { enabled: true } },
+        plugins: { entries: { "snapshot-owner": { enabled: true } } },
+      },
+      {
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            diagnostics: [],
+            plugins: [
+              createPluginManifestRecord({
+                id: "snapshot-owner",
+                channels: ["snapshotchat"],
+                configSchema: { type: "object", additionalProperties: true },
+                channelConfigs: {
+                  snapshotchat: {
+                    schema: { type: "object", additionalProperties: true },
+                  },
+                },
+              }),
+            ],
+          },
+        },
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.bindings).toContainEqual({
+        agentId: "ops",
+        match: { channel: "snapshotchat", accountId: "*" },
+      });
+      expect(result.warnings).not.toContainEqual(
+        expect.objectContaining({
+          path: "channels.snapshotchat",
+          message: expect.stringContaining("has no channel-wide owner"),
+        }),
+      );
+    }
+  });
+
   it("loads a plugin metadata snapshot once during plugin validation", () => {
     const loadPluginMetadataSnapshot = vi.fn((_configForTest: unknown) => ({
       manifestRegistry: createPluginConfigSchemaRegistry(),

@@ -1,11 +1,12 @@
 /** Shared cron operation invariants used across lifecycle, CRUD, and manual runs. */
+import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { clearCronJobActive, markCronJobActive, type CronActiveJobMarker } from "../active-jobs.js";
 import { cronStreamScheduleKey } from "../stream-schedule.js";
 import type { CronJob } from "../types.js";
 import { recomputeNextRunsForMaintenance } from "./jobs.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
-import type { CronServiceState } from "./state.js";
+import { type CronServiceState, resolveCronServiceDefaultAgentId } from "./state.js";
 import { ensureLoaded, persist } from "./store.js";
 import {
   type IsolatedAgentSetupTimeoutSignal,
@@ -18,14 +19,25 @@ export function resolveEffectiveJobAgentId(
   job: { agentId?: string | null; sessionKey?: string | null },
   defaultAgentId: string | undefined,
 ): string {
-  const agentId =
-    normalizeOptionalAgentId(job.agentId) ??
-    normalizeOptionalAgentId(parseAgentSessionKey(job.sessionKey)?.agentId) ??
-    normalizeOptionalAgentId(defaultAgentId);
+  const agentId = tryResolveEffectiveJobAgentId(job, defaultAgentId);
   if (!agentId) {
-    throw new Error("Cron job requires an agent id or prepared configured default.");
+    throw new AgentSelectionRequiredError([], {
+      surface: "cron job creation",
+      hint: "Set the job agentId or pass --agent <id> when creating the cron job.",
+    });
   }
   return agentId;
+}
+
+export function tryResolveEffectiveJobAgentId(
+  job: { agentId?: string | null; sessionKey?: string | null },
+  defaultAgentId: string | undefined,
+): string | undefined {
+  return (
+    normalizeOptionalAgentId(job.agentId) ??
+    normalizeOptionalAgentId(parseAgentSessionKey(job.sessionKey)?.agentId) ??
+    normalizeOptionalAgentId(defaultAgentId)
+  );
 }
 
 export function markManualCronJobActive(
@@ -82,7 +94,7 @@ export async function ensureLoadedForRead(state: CronServiceState) {
 
 /** Resolves the current configured default agent without caching reloadable state. */
 export function resolveCurrentDefaultAgentId(state: CronServiceState): string | undefined {
-  return state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId;
+  return resolveCronServiceDefaultAgentId(state.deps);
 }
 
 /** Returns whether a stream event still belongs to the job's current logical source. */

@@ -3,7 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { listAgentIds, resolveAgentDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
+import { tryResolveSoleAgentId } from "../agents/agent-scope-config.js";
+import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/store.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -88,7 +89,11 @@ function listAuthProfileRepairCandidates(
   env: NodeJS.ProcessEnv,
 ): AuthProfileRepairCandidate[] {
   const candidates = new Map<string, AuthProfileRepairCandidate>();
-  addCandidate(candidates, resolveDefaultAgentDir(cfg, env));
+  addCandidate(candidates, resolveAgentDir(cfg, "main", env));
+  const soleAgentId = tryResolveSoleAgentId(cfg);
+  if (soleAgentId) {
+    addCandidate(candidates, resolveAgentDir(cfg, soleAgentId, env));
+  }
   const envAgentDir = readNonEmptyString(env.OPENCLAW_AGENT_DIR);
   if (envAgentDir) {
     addCandidate(candidates, envAgentDir);

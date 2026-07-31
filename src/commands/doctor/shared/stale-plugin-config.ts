@@ -1,11 +1,9 @@
 // Doctor scanner and repair for plugin/channel config that references missing plugins.
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
-import { resolveAgentWorkspaceDir, tryResolveDefaultAgentId } from "../../../agents/agent-scope.js";
 import { CHANNEL_IDS } from "../../../channels/ids.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizePluginId } from "../../../plugins/config-state.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../../../plugins/installed-plugin-index-records.js";
-import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import {
   listOfficialExternalPluginCatalogEntries,
   resolveOfficialExternalPluginId,
@@ -13,6 +11,7 @@ import {
 import { defaultSlotIdForKey, type PluginSlotKey } from "../../../plugins/slots.js";
 import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 import { asObjectRecord } from "./object.js";
+import { resolveDoctorPluginMetadataSnapshots } from "./plugin-metadata-snapshots.js";
 import {
   filterRepairableStalePluginHits,
   type StalePluginSurface,
@@ -40,14 +39,12 @@ function collectPluginRegistryState(
   env?: NodeJS.ProcessEnv,
 ): StalePluginRegistryState {
   const environment = env ?? process.env;
-  const defaultAgentId = tryResolveDefaultAgentId(cfg);
-  const workspaceDir = defaultAgentId ? resolveAgentWorkspaceDir(cfg, defaultAgentId) : undefined;
-  const registry = loadManifestMetadataSnapshot({
-    config: cfg,
-    workspaceDir: workspaceDir ?? undefined,
-    env: environment,
-  }).manifestRegistry;
-  const knownIds = new Set(registry.plugins.map((plugin) => plugin.id));
+  const registries = resolveDoctorPluginMetadataSnapshots(cfg, environment).map(
+    ({ metadata }) => metadata.manifestRegistry,
+  );
+  const knownIds = new Set(
+    registries.flatMap((registry) => registry.plugins.map((plugin) => plugin.id)),
+  );
   // Official catalog config remains valid even when its package is not installed yet.
   const officialIds = new Set(
     listOfficialExternalPluginCatalogEntries()
@@ -74,11 +71,13 @@ function collectPluginRegistryState(
     // Missing/corrupt install-record state must not block normal doctor scans.
   }
   const knownChannelIds = new Set(CHANNEL_IDS.map((channelId) => normalizePluginId(channelId)));
-  for (const plugin of registry.plugins) {
-    for (const channelId of plugin.channels) {
-      const normalized = normalizePluginId(channelId);
-      if (normalized) {
-        knownChannelIds.add(normalized);
+  for (const registry of registries) {
+    for (const plugin of registry.plugins) {
+      for (const channelId of plugin.channels) {
+        const normalized = normalizePluginId(channelId);
+        if (normalized) {
+          knownChannelIds.add(normalized);
+        }
       }
     }
   }
@@ -87,7 +86,9 @@ function collectPluginRegistryState(
     officialIds,
     knownChannelIds,
     missingInstalledIds: new Set([...installedIds].filter((pluginId) => !knownIds.has(pluginId))),
-    hasDiscoveryErrors: registry.diagnostics.some((diag) => diag.level === "error"),
+    hasDiscoveryErrors: registries.some((registry) =>
+      registry.diagnostics.some((diag) => diag.level === "error"),
+    ),
   };
 }
 

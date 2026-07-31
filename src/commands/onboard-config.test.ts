@@ -87,6 +87,15 @@ describe("applyLocalSetupWorkspaceConfig", () => {
     expect(result.agents?.defaults?.workspace).toBe("/tmp/new-workspace");
   });
 
+  it("stages a missing first agent workspace on its candidate entry", () => {
+    const result = applyLocalSetupWorkspaceConfig({}, "/tmp/ops-workspace", {
+      agentId: "ops",
+      env: { HOME: "/tmp/fresh-home", OPENCLAW_STATE_DIR: "/tmp/fresh-state" },
+    });
+
+    expect(result.agents?.entries?.ops?.workspace).toBe("/tmp/ops-workspace");
+  });
+
   it("preserves the current workspace when an agent roster exists", () => {
     const baseConfig: OpenClawConfig = {
       agents: {

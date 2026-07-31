@@ -1,5 +1,4 @@
 import { expect } from "vitest";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveCliBackendConfig } from "../agents/cli-backends.js";
 // OpenClaw test helpers build runtime environments for rescue tests.
 import {
@@ -13,7 +12,10 @@ import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-compl
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { listSystemAgentAuditEntriesForTests } from "./audit.test-support.js";
-import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
+import {
+  resolveSystemAgentConfiguredRouteFromConfig,
+  resolveSystemAgentTargetAgentId,
+} from "./inference-route.js";
 import {
   createSystemAgentVerifiedInferenceBinding,
   type SystemAgentVerifiedInferenceBinding,
@@ -59,7 +61,7 @@ export function expectSystemAgentAuditRecord(
 export async function createSystemAgentVerifiedInferenceTestFixture(
   config: OpenClawConfig,
 ): Promise<SystemAgentVerifiedInferenceTestFixture> {
-  const routeAgentId = resolveDefaultAgentId(config);
+  const routeAgentId = resolveSystemAgentTargetAgentId(config);
   const selection = resolveSimpleCompletionSelectionForAgent({
     cfg: config,
     agentId: routeAgentId,

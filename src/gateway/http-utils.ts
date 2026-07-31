@@ -125,7 +125,13 @@ export async function resolveOpenAiCompatModelOverride(params: {
   model: string | undefined;
 }): Promise<{ modelOverride?: string; errorMessage?: string }> {
   const requestModel = params.model?.trim();
-  if (requestModel && !resolveAgentIdFromModel(requestModel)) {
+  const normalizedRequestModel = normalizeLowercaseStringOrEmpty(requestModel);
+  if (
+    requestModel &&
+    normalizedRequestModel !== OPENCLAW_MODEL_ID &&
+    normalizedRequestModel !== OPENCLAW_DEFAULT_MODEL_ID &&
+    !resolveAgentIdFromModel(requestModel)
+  ) {
     return {
       errorMessage: "Invalid `model`. Use `openclaw` or `openclaw/<agentId>`.",
     };

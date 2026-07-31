@@ -325,6 +325,7 @@ export function hasUpdatedAssistantReplySnapshot(
 /** Read the latest non-tool assistant message for a session. */
 export async function readLatestAssistantReplySnapshot(params: {
   sessionKey: string;
+  agentId?: string;
   limit?: number;
   // Waited reply paths stop at transcript artifacts so they do not resurrect
   // an older assistant message as a fresh post-run reply.
@@ -335,7 +336,11 @@ export async function readLatestAssistantReplySnapshot(params: {
     messages: Array<unknown>;
   }>({
     method: "chat.history",
-    params: { sessionKey: params.sessionKey, limit: params.limit ?? 50 },
+    params: {
+      sessionKey: params.sessionKey,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      limit: params.limit ?? 50,
+    },
   });
   return resolveLatestAssistantReplySnapshot(
     stripToolMessages(Array.isArray(history?.messages) ? history.messages : []),
@@ -346,12 +351,14 @@ export async function readLatestAssistantReplySnapshot(params: {
 /** Read only the latest assistant text for call sites that do not need fingerprints. */
 export async function readLatestAssistantReply(params: {
   sessionKey: string;
+  agentId?: string;
   limit?: number;
   callGateway?: GatewayCaller;
 }): Promise<string | undefined> {
   return (
     await readLatestAssistantReplySnapshot({
       sessionKey: params.sessionKey,
+      agentId: params.agentId,
       limit: params.limit,
       callGateway: params.callGateway,
     })
@@ -397,6 +404,7 @@ export async function waitForAgentRun(params: {
 export async function waitForAgentRunAndReadUpdatedAssistantReply(params: {
   runId: string;
   sessionKey: string;
+  agentId?: string;
   timeoutMs: number;
   limit?: number;
   baseline?: AssistantReplySnapshot;
@@ -413,6 +421,7 @@ export async function waitForAgentRunAndReadUpdatedAssistantReply(params: {
 
   const latestReply = await readLatestAssistantReplySnapshot({
     sessionKey: params.sessionKey,
+    agentId: params.agentId,
     limit: params.limit,
     stopAtTranscriptArtifact: true,
     callGateway: params.callGateway,

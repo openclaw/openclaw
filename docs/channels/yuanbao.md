@@ -283,6 +283,7 @@ Use `bindings` to route Yuanbao DMs or groups to different agents:
 ```json5
 {
   agents: {
+    ownership: "explicit",
     list: [
       { id: "main" },
       { id: "agent-a", workspace: "/home/user/agent-a" },

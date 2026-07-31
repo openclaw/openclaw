@@ -82,6 +82,37 @@ describe("doctor stale plugin config helpers", () => {
     ]);
   });
 
+  it("preserves plugins discovered in any configured agent workspace", () => {
+    vi.mocked(manifestRegistry.loadPluginManifestRegistry).mockImplementation((params = {}) => ({
+      plugins: params.workspaceDir === "/tmp/openclaw-ops" ? [manifest("workspace-plugin")] : [],
+      diagnostics: [],
+    }));
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          ops: { workspace: "/tmp/openclaw-ops" },
+          research: { workspace: "/tmp/openclaw-research" },
+        },
+      },
+      plugins: {
+        allow: ["workspace-plugin"],
+        entries: { "workspace-plugin": { enabled: true } },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(scanStalePluginConfig(cfg)).toEqual([]);
+    const result = maybeRepairStalePluginConfig(cfg);
+    expect(result.changes).toEqual([]);
+    expect(result.config).toEqual(cfg);
+    expect(manifestRegistry.loadPluginManifestRegistry).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: "/tmp/openclaw-ops" }),
+    );
+    expect(manifestRegistry.loadPluginManifestRegistry).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: "/tmp/openclaw-research" }),
+    );
+  });
+
   it("removes stale plugin ids from policy lists and entries without changing valid refs", () => {
     const result = maybeRepairStalePluginConfig({
       plugins: {

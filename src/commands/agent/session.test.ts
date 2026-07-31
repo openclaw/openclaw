@@ -34,6 +34,10 @@ vi.mock("../../agents/agent-scope.js", async () => {
   );
   return {
     listAgentIds: mocks.listAgentIds,
+    tryResolveSoleAgentId: (cfg: OpenClawConfig) => {
+      const agentIds = mocks.listAgentIds(cfg);
+      return agentIds.length === 1 ? normalizeAgentId(agentIds[0]) : undefined;
+    },
     resolveDefaultAgentId: (cfg: OpenClawConfig) => {
       const agents = cfg.agents?.list ?? [];
       return normalizeAgentId(agents.find((agent) => agent?.default)?.id ?? agents[0]?.id);
@@ -294,7 +298,7 @@ describe("resolveSessionKeyForRequest", () => {
     expect(result.storePath).toBe(MYBOT_STORE_PATH);
   });
 
-  it("does not search other agent stores when --agent scopes --session-id", () => {
+  it("rejects --agent when --session-id belongs to another agent", () => {
     setupMainAndMybotStorePaths();
     mockStoresByPath({
       [MAIN_STORE_PATH]: {
@@ -306,18 +310,16 @@ describe("resolveSessionKeyForRequest", () => {
       [MYBOT_STORE_PATH]: {},
     });
 
-    const result = resolveSessionKeyForRequest({
-      cfg: baseCfg,
-      agentId: "mybot",
-      sessionId: "target-session-id",
-    });
-
-    expect(result.sessionKey).toBe("agent:mybot:explicit:target-session-id");
-    expect(result.storePath).toBe(MYBOT_STORE_PATH);
-    expect(mocks.listSessionEntries).toHaveBeenCalledTimes(1);
+    expect(() =>
+      resolveSessionKeyForRequest({
+        cfg: baseCfg,
+        agentId: "mybot",
+        sessionId: "target-session-id",
+      }),
+    ).toThrow('Agent id "mybot" does not match session id "target-session-id" owner "main".');
     expect(mocks.listSessionEntries).toHaveBeenCalledWith({
-      agentId: "mybot",
-      storePath: MYBOT_STORE_PATH,
+      agentId: "main",
+      storePath: MAIN_STORE_PATH,
     });
   });
 

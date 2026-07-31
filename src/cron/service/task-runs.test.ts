@@ -48,7 +48,7 @@ describe("cron task run terminal records", () => {
       "agent:ops:cron:default-owner:run:1500",
     );
     expect(() => resolveMainSessionCronRunSessionKey(job, 1_500, undefined)).toThrow(
-      "Cron job has no agent id and no configured default was provided.",
+      "Multiple agents are configured, but cron job execution has no explicit owner.",
     );
   });
 

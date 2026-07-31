@@ -1108,11 +1108,11 @@ describe("resolveAgentConfig", () => {
     expect(workspace).toBe(path.resolve("/shared-ws/main"));
   });
 
-  it("default agent without per-agent workspace uses agents.defaults.workspace directly", () => {
+  it("sole agent without per-agent workspace uses agents.defaults.workspace directly", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: { workspace: "/shared-ws" },
-        list: [{ id: "main" }, { id: "work", default: true }],
+        list: [{ id: "work" }],
       },
     };
     const workspace = resolveAgentWorkspaceDir(cfg, "work");

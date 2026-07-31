@@ -175,24 +175,6 @@ describe("resolveSessionStoreTargets", () => {
     ]);
   });
 
-  it("keeps a colliding fixed-store target on the configured default", async () => {
-    await withTempHome(async (home) => {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(home, ".openclaw") };
-      const storePath = path.join(home, "ops.json");
-      const diagnostics: string[] = [];
-      const cfg: OpenClawConfig = {
-        session: { store: storePath },
-        agents: { entries: { main: { default: true }, ops: {} } },
-      };
-
-      expect(resolveSessionStoreTargets(cfg, { allAgents: true }, { env, diagnostics })).toEqual([
-        { agentId: "main", storePath },
-        { agentId: "ops", storePath },
-      ]);
-      expect(diagnostics).toContainEqual(expect.stringContaining('suffixed owner(s): "ops"'));
-    });
-  });
-
   it("lands colliding fixed-store writes in distinct owner databases", async () => {
     await withTempHome(async (home) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(home, ".openclaw") };
@@ -408,14 +390,14 @@ describe("resolveSessionStoreTargets", () => {
     });
   });
 
-  it("honors a registered owner over the configured default for a fixed-store collision", async () => {
+  it("honors a registered owner after the legacy marker is retired and reloaded", async () => {
     await withTempHome(async (home) => {
       const stateDir = path.join(home, ".openclaw");
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const storePath = path.join(home, "ops.json");
       const cfg: OpenClawConfig = {
         session: { store: storePath },
-        agents: { entries: { main: { default: true }, ops: {} } },
+        agents: { entries: { main: {}, ops: {} } },
       };
       const unsuffixedPath = resolveSqliteTargetFromSessionStorePath(storePath).path;
       registerOpenClawAgentDatabase({ agentId: "ops", env, path: unsuffixedPath });
@@ -609,6 +591,25 @@ describe("resolveSessionStoreTargets", () => {
         },
       ]);
     });
+  });
+
+  it("allows an explicit store path with an explicit fleet agent", () => {
+    const storePath = path.resolve("/tmp/explicit-fleet-sessions.json");
+    const cfg: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { Ops: {}, research: {} } },
+    };
+
+    expect(resolveSessionStoreTargets(cfg, { agent: "ops", store: storePath })).toEqual([
+      { agentId: "ops", storePath },
+    ]);
+    expect(resolveSessionStoreTargets(cfg, { agent: "ops" })[0]?.agentId).toBe("ops");
+
+    expect(() =>
+      resolveSessionStoreTargets(cfg, {
+        agent: "ops",
+        store: path.resolve("/tmp/agents/research/sessions/sessions.json"),
+      }),
+    ).toThrow('Session store belongs to agent "research", not requested agent "ops"');
   });
 
   it("accepts case-insensitive legacy main paths but rejects aliases", () => {

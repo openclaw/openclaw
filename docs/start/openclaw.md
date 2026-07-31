@@ -127,15 +127,13 @@ Example:
       // Start with 0; enable later.
       heartbeat: { every: "0m" },
     },
-    list: [
-      {
-        id: "main",
-        default: true,
+    entries: {
+      main: {
         groupChat: {
           mentionPatterns: ["@openclaw", "openclaw"],
         },
       },
-    ],
+    },
   },
   channels: {
     whatsapp: {

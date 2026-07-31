@@ -63,6 +63,7 @@ const rawSqliteAllowPathGroups = {
     "src/state/openclaw-state-db-schema-repair.ts",
     "src/state/openclaw-state-db-startup-checkpoint.ts",
     "src/state/openclaw-state-db.ts",
+    "src/cron/store/schema.ts",
     "src/transcripts/sqlite-schema.ts",
     "src/state/sqlite-schema-shape.test-support.ts",
   ],

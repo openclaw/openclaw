@@ -346,7 +346,6 @@ Each fact defaults to enabled when the channel produces it. Set the correspondin
   agents: {
     entries: {
       main: {
-        default: true,
         groupChat: {
           mentionPatterns: ["@openclaw", "openclaw", "\\+15555550123"],
           historyLimit: 50,

@@ -18,7 +18,6 @@ const DEFAULT_TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1000;
 function makeLegacyJob(overrides: Record<string, unknown>): Record<string, unknown> {
   return {
     id: "job-legacy",
-    agentId: undefined,
     name: "Legacy job",
     description: null,
     enabled: true,

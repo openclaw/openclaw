@@ -58,6 +58,8 @@ export type PluginDoctorStateMigrationDetection = {
 };
 
 export type PluginDoctorStateMigrationContext = {
+  /** Upgrade-only owner captured before Doctor retires legacy default metadata. */
+  migrationAgentId?: string;
   openPluginStateKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>;
   /** Doctor-only batch import preserving source age and remaining retention. */
   importPluginStateEntries?: (

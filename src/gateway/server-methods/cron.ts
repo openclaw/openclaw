@@ -164,7 +164,6 @@ function compactCronListJob(job: CronJob) {
 
 async function assertValidCronUpdatePatch(params: {
   cfg: OpenClawConfig;
-  defaultAgentId?: string;
   currentJob: CronJob;
   patch: CronJobPatch;
 }) {
@@ -173,7 +172,6 @@ async function assertValidCronUpdatePatch(params: {
   // stale existing delivery does not block unrelated updates like disabling.
   const nextJob = structuredClone(params.currentJob);
   applyJobPatch(nextJob, params.patch, {
-    defaultAgentId: params.defaultAgentId,
     cronConfig: params.cfg.cron,
   });
   if (
@@ -844,7 +842,6 @@ export const cronHandlers: GatewayRequestHandlers = {
     try {
       const nextJob = await assertValidCronUpdatePatch({
         cfg,
-        defaultAgentId: context.cron.getDefaultAgentId(),
         currentJob,
         patch,
       });
@@ -891,7 +888,6 @@ export const cronHandlers: GatewayRequestHandlers = {
           }
           const nextJob = await assertValidCronUpdatePatch({
             cfg,
-            defaultAgentId: context.cron.getDefaultAgentId(),
             currentJob: lockedJob,
             patch,
           });

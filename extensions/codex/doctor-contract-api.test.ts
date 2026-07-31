@@ -179,6 +179,24 @@ describe("codex doctor contract", () => {
     expect(legacyConfigRules[2]?.match({ approvalPolicy: "on-request" })).toBe(false);
   });
 
+  it("detects legacy bindings with Doctor's captured migration owner", async () => {
+    const fixture = await createBindingMigrationFixture({
+      name: "ownerless-fleet",
+      threadId: "thread-ownerless-fleet",
+    });
+    try {
+      fixture.params.config = {
+        agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+      };
+      fixture.params.context.migrationAgentId = "ops";
+      await expect(fixture.migration.detectLegacyState(fixture.params)).resolves.toMatchObject({
+        preview: [expect.stringContaining("Codex app-server bindings")],
+      });
+    } finally {
+      await fs.rm(fixture.stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("removes the retired dynamic tools profile without dropping other Codex config", () => {
     const original = {
       plugins: {

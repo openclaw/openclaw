@@ -15,16 +15,21 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { resolveConfigDir } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { readCronStoreStatePath } from "./store/config-state.js";
+import { deleteStaleCronJobFamilyRows, type CronJobFamilyIdentity } from "./store/job-family.js";
 import { cronStoreKey } from "./store/key.js";
 import {
   assertCronStoreCanPersist,
-  deleteStaleCronJobFamilyRows,
+  CronRuntimeRevisionMismatchError,
+  CronStoreEpochMismatchError,
+  CronStoreTopologyMismatchError,
   loadedCronStoreFromRows,
   loadCronRows,
+  loadCronRowsWithEpoch,
+  readCronRuntimeRevision,
+  readCronStoreEpoch,
   replaceCronRows,
   updateCronRuntimeRows,
 } from "./store/row-codec.js";
-import type { CronJobFamilyIdentity } from "./store/row-codec.js";
 import type {
   CronQuarantineFile,
   LoadedCronStore,
@@ -35,7 +40,13 @@ export type {
   LoadedCronStore,
   QuarantinedCronConfigJob,
 } from "./store/types.js";
-import type { CronStoreFile } from "./types.js";
+import type { CronJob, CronStoreFile } from "./types.js";
+
+export {
+  CronRuntimeRevisionMismatchError,
+  CronStoreEpochMismatchError,
+  CronStoreTopologyMismatchError,
+};
 
 function resolveDefaultCronDir(env: NodeJS.ProcessEnv): string {
   return path.join(resolveConfigDir(env), "cron");
@@ -76,18 +87,25 @@ export function resolveCronJobsStorePathFromConfig(
 }
 
 /** Loads cron jobs plus config/runtime sidecars from the SQLite-backed store. */
-export async function loadCronJobsStoreWithConfigJobs(storePath: string): Promise<LoadedCronStore> {
+export async function loadCronJobsStoreWithConfigJobs(
+  storePath: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<LoadedCronStore> {
   const resolvedStorePath = path.resolve(storePath);
   const storeKey = cronStoreKey(resolvedStorePath);
-  const database = openOpenClawStateDatabase().db;
-  const rows = loadCronRows(database, storeKey);
+  const database = openOpenClawStateDatabase({ env }).db;
+  const { rows, storeEpoch, runtimeRevision } = loadCronRowsWithEpoch(database, storeKey);
   if (rows.length > 0) {
-    return loadedCronStoreFromRows(rows);
+    return loadedCronStoreFromRows(rows, storeEpoch, runtimeRevision);
   }
   return {
     store: { version: 1, jobs: [] },
+    topologyFingerprintByJobId: new Map(),
+    storeEpoch,
+    runtimeRevision,
     configJobs: [],
     configJobIndexes: [],
+    legacyImportedJobIndexes: [],
     configJobRuntimeEntries: [],
     invalidConfigRows: [],
   };
@@ -106,11 +124,15 @@ export function removeStaleCronJobFamilyRows(
   );
 }
 
-function emptyLoadedCronStore(): LoadedCronStore {
+function emptyLoadedCronStore(storeEpoch = 0, runtimeRevision = 0): LoadedCronStore {
   return {
     store: { version: 1, jobs: [] },
+    topologyFingerprintByJobId: new Map(),
+    storeEpoch,
+    runtimeRevision,
     configJobs: [],
     configJobIndexes: [],
+    legacyImportedJobIndexes: [],
     configJobRuntimeEntries: [],
     invalidConfigRows: [],
   };
@@ -140,11 +162,15 @@ export async function loadCronJobsStoreWithConfigJobsReadOnly(
     if (!tableExists(db, "cron_jobs")) {
       return emptyLoadedCronStore();
     }
-    const rows = loadCronRows(db, storeKey);
+    const epochSchemaPresent = tableExists(db, "cron_store_epochs");
+    const { rows, storeEpoch, runtimeRevision } = loadCronRowsWithEpoch(db, storeKey, {
+      ensureEpochSchema: false,
+      epochSchemaPresent,
+    });
     if (rows.length > 0) {
-      return loadedCronStoreFromRows(rows);
+      return loadedCronStoreFromRows(rows, storeEpoch, runtimeRevision);
     }
-    return emptyLoadedCronStore();
+    return emptyLoadedCronStore(storeEpoch, runtimeRevision);
   } finally {
     db.close();
   }
@@ -169,6 +195,27 @@ export function loadCronJobsStoreSync(storePath: string): CronStoreFile {
 
 type SaveCronStoreOptions = {
   stateOnly?: boolean;
+  env?: NodeJS.ProcessEnv;
+  /** Reject a stale full-store writer instead of replacing newer topology. */
+  expectedStoreEpoch?: number;
+  /** Caller-loaded topology fingerprints that catch epoch-blind legacy writers. */
+  expectedTopologyFingerprintByJobId?: ReadonlyMap<string, string>;
+  /** Detect runtime writes committed since this snapshot was loaded. */
+  expectedRuntimeRevision?: number;
+  /** Per-job runtime baseline for distinguishing stale siblings from intentional writes. */
+  expectedRuntimeStateByJobId?: ReadonlyMap<string, CronJob["state"] | undefined>;
+  /** Per-job runtime timestamp baseline paired with expectedRuntimeStateByJobId. */
+  expectedRuntimeUpdatedAtMsByJobId?: ReadonlyMap<string, number>;
+  /** Advance the epoch when an ownership migration changes topology meaning. */
+  bumpStoreEpoch?: boolean;
+};
+
+type SaveCronJobsStoreResult = {
+  storeEpoch: number;
+  runtimeRevision: number;
+  runtimeMerged: boolean;
+  store: CronStoreFile;
+  topologyFingerprintByJobId: Map<string, string>;
 };
 
 async function atomicWrite(filePath: string, content: string, dirMode = 0o700): Promise<void> {
@@ -188,21 +235,81 @@ export async function saveCronJobsStore(
   storePath: string,
   store: CronStoreFile,
   opts?: SaveCronStoreOptions,
-) {
+): Promise<SaveCronJobsStoreResult | void> {
   const resolvedStorePath = path.resolve(storePath);
   const storeKey = cronStoreKey(resolvedStorePath);
+  // Epoch/revision checks catch new-code writers; legacy writers are epoch-blind,
+  // so every write path must compare against a caller-loaded baseline (topology
+  // fingerprint + per-job runtime baselines) and preserve rows it did not intend to change.
   if (opts?.stateOnly) {
     // Hot-path timer updates only mutate runtime columns; full config JSON stays
     // untouched so user-authored cron definitions do not churn.
-    runOpenClawStateWriteTransaction(({ db }) => {
-      updateCronRuntimeRows(db, storeKey, store);
-    });
-    return;
+    const result = runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        const storeEpoch = readCronStoreEpoch(db, storeKey);
+        if (opts.expectedStoreEpoch !== undefined && opts.expectedStoreEpoch !== storeEpoch) {
+          throw new CronStoreEpochMismatchError(opts.expectedStoreEpoch, storeEpoch);
+        }
+        const runtimeRevision = readCronRuntimeRevision(db, storeKey);
+        const runtimeMerged =
+          opts.expectedRuntimeRevision !== undefined &&
+          opts.expectedRuntimeRevision !== runtimeRevision;
+        const nextRuntimeRevision = updateCronRuntimeRows(db, storeKey, store, {
+          expectedRuntimeRevision: opts.expectedRuntimeRevision,
+          currentRuntimeRevision: runtimeRevision,
+          expectedRuntimeStateByJobId: opts.expectedRuntimeStateByJobId,
+          expectedRuntimeUpdatedAtMsByJobId: opts.expectedRuntimeUpdatedAtMsByJobId,
+        });
+        const loaded = loadedCronStoreFromRows(
+          loadCronRows(db, storeKey),
+          storeEpoch,
+          nextRuntimeRevision,
+        );
+        return {
+          storeEpoch,
+          runtimeRevision: nextRuntimeRevision,
+          runtimeMerged,
+          store: loaded.store,
+          topologyFingerprintByJobId: loaded.topologyFingerprintByJobId,
+        };
+      },
+      { env: opts?.env },
+    );
+    // The service layer owns publication into reference-stable live jobs. Keep this
+    // storage primitive side-effect free so it cannot detach timer-held job objects.
+    return result;
   }
   assertCronStoreCanPersist(store);
-  runOpenClawStateWriteTransaction(({ db }) => {
-    replaceCronRows(db, storeKey, store);
-  });
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const runtimeRevisionBeforeWrite = readCronRuntimeRevision(db, storeKey);
+      const runtimeMerged =
+        opts?.expectedRuntimeRevision !== undefined &&
+        opts.expectedRuntimeRevision !== runtimeRevisionBeforeWrite;
+      const storeEpoch = replaceCronRows(db, storeKey, store, {
+        expectedStoreEpoch: opts?.expectedStoreEpoch,
+        expectedTopologyFingerprintByJobId: opts?.expectedTopologyFingerprintByJobId,
+        expectedRuntimeRevision: opts?.expectedRuntimeRevision,
+        expectedRuntimeStateByJobId: opts?.expectedRuntimeStateByJobId,
+        expectedRuntimeUpdatedAtMsByJobId: opts?.expectedRuntimeUpdatedAtMsByJobId,
+        bumpStoreEpoch: opts?.bumpStoreEpoch ?? true,
+      });
+      const runtimeRevision = readCronRuntimeRevision(db, storeKey);
+      const loaded = loadedCronStoreFromRows(
+        loadCronRows(db, storeKey),
+        storeEpoch,
+        runtimeRevision,
+      );
+      return {
+        storeEpoch,
+        runtimeRevision,
+        runtimeMerged,
+        store: loaded.store,
+        topologyFingerprintByJobId: loaded.topologyFingerprintByJobId,
+      };
+    },
+    { env: opts?.env },
+  );
 }
 
 /** Atomically acquire doctor migration metadata and replace cron rows only for the winner. */
@@ -210,17 +317,21 @@ export async function saveCronJobsStoreWithMetadata(
   storePath: string,
   store: CronStoreFile,
   acquireMetadata: (db: DatabaseSync) => boolean,
+  env: NodeJS.ProcessEnv = process.env,
 ): Promise<boolean> {
   const resolvedStorePath = path.resolve(storePath);
   const storeKey = cronStoreKey(resolvedStorePath);
   assertCronStoreCanPersist(store);
-  return runOpenClawStateWriteTransaction(({ db }) => {
-    if (!acquireMetadata(db)) {
-      return false;
-    }
-    replaceCronRows(db, storeKey, store);
-    return true;
-  });
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      if (!acquireMetadata(db)) {
+        return false;
+      }
+      replaceCronRows(db, storeKey, store, { bumpStoreEpoch: true });
+      return true;
+    },
+    { env },
+  );
 }
 
 // Public plugin SDK seam; core callers use the SQLite-backed cron-jobs names above.

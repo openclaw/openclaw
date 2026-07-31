@@ -21,6 +21,31 @@ export type ListedAgentEntry = {
   source: { kind: "entries"; key: string } | { kind: "list"; index: number };
 };
 
+export type AgentSelectionContext = {
+  surface: string;
+  hint: string;
+};
+
+/** Raised when an operation needs one agent but a multi-agent roster has no explicit owner. */
+export class AgentSelectionRequiredError extends Error {
+  readonly code = "AGENT_SELECTION_REQUIRED";
+  readonly agentIds: string[];
+  readonly surface: string;
+  readonly hint: string;
+
+  constructor(agentIds: string[], context?: AgentSelectionContext) {
+    const surface = context?.surface ?? "this operation";
+    const hint =
+      context?.hint ??
+      "Select an agent explicitly; CLI callers can pass --agent <id>, channels can add a binding, and ambient services can set their agentId target.";
+    super(`Multiple agents are configured, but ${surface} has no explicit owner. ${hint}`);
+    this.name = "AgentSelectionRequiredError";
+    this.agentIds = agentIds;
+    this.surface = surface;
+    this.hint = hint;
+  }
+}
+
 /** Per-agent config after applying agent defaults and normalizing scalar fields. */
 export type ResolvedAgentConfig = {
   name?: string;
@@ -65,11 +90,22 @@ function stripNullBytes(s: string): string {
 /** Lists valid configured agent entries from config. */
 export function listAgentEntriesWithSource(cfg: OpenClawConfig): ListedAgentEntry[] {
   const roster = readAgentRosterProperty(cfg);
-  if (roster?.kind === "entries" && roster.value && typeof roster.value === "object") {
-    return Object.entries(roster.value).map(([id, entry]) => ({
-      entry: { ...(entry as Omit<AgentEntry, "id">), id },
-      source: { kind: "entries", key: id },
-    }));
+  if (
+    roster?.kind === "entries" &&
+    roster.value &&
+    typeof roster.value === "object" &&
+    !Array.isArray(roster.value)
+  ) {
+    return Object.entries(roster.value).flatMap(([id, entry]) =>
+      entry !== null && typeof entry === "object" && !Array.isArray(entry)
+        ? [
+            {
+              entry: { ...(entry as Omit<AgentEntry, "id">), id },
+              source: { kind: "entries" as const, key: id },
+            },
+          ]
+        : [],
+    );
   }
   if (roster?.kind !== "list" || !Array.isArray(roster.value)) {
     return [];
@@ -141,30 +177,53 @@ export function listAgentIds(cfg: OpenClawConfig): string[] {
   return ids;
 }
 
-/** Resolves the configured default while preserving the shipped Plugin SDK legacy shape. */
-export function resolveDefaultAgentId(cfg: OpenClawConfig): string {
+/** Returns the sole configured agent, tolerating only the shipped pre-roster SDK shape. */
+export function tryResolveSoleAgentId(cfg: OpenClawConfig): string | undefined {
   const agents = listAgentEntries(cfg);
   if (agents.length === 0) {
-    // Runtime config loading materializes this entry. Keep the roster-property-absent
-    // case for shipped Plugin SDK callers that still pass a pre-roster config object.
     if (!hasAgentRosterProperty(cfg)) {
       return LEGACY_IMPLICIT_AGENT_ID;
     }
-    throw new Error("No agents configured. Run `openclaw onboard` or `openclaw agents add` first.");
-  }
-  // Runtime config loading canonicalizes zero/multiple markers before this helper is called.
-  // External SDK callers may still pass the shipped list shape, which chose the first candidate.
-  return normalizeAgentId((agents.find((agent) => agent?.default === true) ?? agents[0])!.id);
-}
-
-/** Returns the configured default when diagnostics must tolerate an invalid raw roster. */
-export function tryResolveDefaultAgentId(cfg: OpenClawConfig): string | undefined {
-  const agents = listAgentEntries(cfg);
-  const defaults = agents.filter((agent) => agent?.default === true);
-  if (defaults.length !== 1) {
     return undefined;
   }
-  return normalizeAgentId(defaults[0]!.id);
+  return agents.length === 1 ? normalizeAgentId(agents[0]!.id) : undefined;
+}
+
+/** Resolves the sole configured agent or raises a typed owner-selection error. */
+export function resolveSoleAgentId(cfg: OpenClawConfig, context?: AgentSelectionContext): string {
+  const agents = listAgentEntries(cfg);
+  const sole = tryResolveSoleAgentId(cfg);
+  if (sole) {
+    return sole;
+  }
+  if (agents.length === 0) {
+    throw new Error("No agents configured. Run `openclaw onboard` or `openclaw agents add` first.");
+  }
+  throw new AgentSelectionRequiredError(
+    agents.map((agent) => normalizeAgentId(agent.id)),
+    context,
+  );
+}
+
+function tryResolveRawLegacyDefaultAgentId(cfg: OpenClawConfig): string | undefined {
+  if (cfg.agents?.ownership === "explicit") {
+    return undefined;
+  }
+  const marked = listAgentEntries(cfg).filter((entry) => entry.default === true);
+  return marked.length === 1 ? normalizeAgentId(marked[0]!.id) : undefined;
+}
+
+/** @deprecated Use resolveSoleAgentId; accepts raw shipped markers only for input compatibility. */
+export function resolveDefaultAgentId(
+  cfg: OpenClawConfig,
+  context?: AgentSelectionContext,
+): string {
+  return tryResolveRawLegacyDefaultAgentId(cfg) ?? resolveSoleAgentId(cfg, context);
+}
+
+/** @deprecated Use tryResolveSoleAgentId; accepts raw shipped markers only for input compatibility. */
+export function tryResolveDefaultAgentId(cfg: OpenClawConfig): string | undefined {
+  return tryResolveRawLegacyDefaultAgentId(cfg) ?? tryResolveSoleAgentId(cfg);
 }
 
 export function resolveAgentEntry(cfg: OpenClawConfig, agentId: string): AgentEntry | undefined {
@@ -270,9 +329,9 @@ export function resolveAgentWorkspaceDir(
   if (configured) {
     return stripNullBytes(resolveUserPath(configured, env));
   }
-  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const defaultAgentId = tryResolveSoleAgentId(cfg);
   const fallback = cfg.agents?.defaults?.workspace?.trim();
-  if (id === defaultAgentId) {
+  if (defaultAgentId && id === defaultAgentId) {
     if (fallback) {
       return stripNullBytes(resolveUserPath(fallback, env));
     }
@@ -283,6 +342,19 @@ export function resolveAgentWorkspaceDir(
   }
   const stateDir = resolveStateDir(env);
   return stripNullBytes(path.join(stateDir, `workspace-${id}`));
+}
+
+/** Resolves the configured workspace used for fleet-wide plugin and manifest discovery. */
+export function tryResolveConfiguredAgentWorkspaceDir(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  const soleAgentId = tryResolveSoleAgentId(cfg);
+  if (soleAgentId) {
+    return resolveAgentWorkspaceDir(cfg, soleAgentId, env);
+  }
+  const configured = cfg.agents?.defaults?.workspace?.trim();
+  return configured ? stripNullBytes(resolveUserPath(configured, env)) : undefined;
 }
 
 export function resolveAgentDir(

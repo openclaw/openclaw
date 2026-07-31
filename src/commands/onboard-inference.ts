@@ -3,13 +3,14 @@ import { randomInt } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { resolveAgentConfig, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
+import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import {
   readClaudeCliCredentialsCached,
   readCodexCliCredentialsCached,
   readGeminiCliCredentialsCached,
 } from "../agents/cli-credentials.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { probeLocalCommand, type LocalCommandProbe } from "../system-agent/probes.js";
@@ -49,6 +50,7 @@ type DetectInferenceBackendsDeps = {
 
 type DetectInferenceBackendsOptions = {
   config?: OpenClawConfig;
+  agentId?: string;
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   deps?: DetectInferenceBackendsDeps;
@@ -191,10 +193,13 @@ export async function detectInferenceBackends(
     (() => readGeminiCliCredentialsCached({ ttlMs: 60_000 }));
 
   const candidates: InferenceBackendCandidate[] = [];
-  const defaultAgentId = options.config ? resolveDefaultAgentId(options.config) : undefined;
-  const defaultAgentModel = options.config
-    ? resolveAgentConfig(options.config, resolveDefaultAgentId(options.config))?.model
+  const defaultAgentId = options.config
+    ? options.agentId?.trim() || tryResolveLegacyCompatibilityAgentId(options.config)
     : undefined;
+  const defaultAgentModel =
+    options.config && defaultAgentId
+      ? resolveAgentConfig(options.config, defaultAgentId)?.model
+      : undefined;
   const existingModel =
     resolveAgentModelPrimaryValue(defaultAgentModel) ??
     resolveAgentModelPrimaryValue(options.config?.agents?.defaults?.model);

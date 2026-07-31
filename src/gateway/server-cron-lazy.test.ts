@@ -228,6 +228,121 @@ describe("createLazyGatewayCronState", () => {
     expect(cron["resumeScheduling"]).toHaveBeenCalledTimes(2);
   });
 
+  it("forwards config-adoption completion to the loaded service", async () => {
+    const cron = createCronService();
+    hoisted.setState(createCronState(cron));
+    const lazy = createLazyGatewayCronState(createParams());
+    const incomingConfig = { agents: { entries: { ops: {} } } };
+
+    await lazy.cron.reloadForConfigAdoption(incomingConfig);
+    lazy.cron.completeConfigAdoption(incomingConfig);
+
+    expect(cron["reloadForConfigAdoption"]).toHaveBeenCalledWith(incomingConfig);
+    expect(cron["completeConfigAdoption"]).toHaveBeenCalledWith(incomingConfig);
+  });
+
+  it("applies config-adoption completion when the service loads later", async () => {
+    const cron = createCronService();
+    hoisted.setState(createCronState(cron));
+    const lazy = createLazyGatewayCronState(createParams());
+    const incomingConfig = { agents: { ownership: "explicit" as const, entries: { ops: {} } } };
+
+    lazy.cron.completeConfigAdoption(incomingConfig);
+    expect(hoisted.buildGatewayCronService).not.toHaveBeenCalled();
+    await lazy.cron.status();
+
+    expect(cron["completeConfigAdoption"]).toHaveBeenCalledWith(incomingConfig);
+  });
+
+  it("preserves an accepted unloaded completion when the next adoption fails loading", async () => {
+    const cron = createCronService();
+    cron.pauseScheduling = vi.fn().mockImplementationOnce(() => {
+      throw new Error("candidate load failed");
+    });
+    hoisted.setState(createCronState(cron));
+    const lazy = createLazyGatewayCronState(createParams());
+    const acceptedConfig = { agents: { entries: { ops: {} } } };
+    const rejectedConfig = { agents: { entries: { research: {} } } };
+
+    lazy.cron.completeConfigAdoption(acceptedConfig);
+    lazy.cron.pauseScheduling();
+    const reload = lazy.cron.reloadForConfigAdoption(rejectedConfig);
+    lazy.cron.completeConfigAdoption(rejectedConfig);
+    await expect(reload).rejects.toThrow("candidate load failed");
+    await lazy.cron.rejectConfigAdoption();
+    await lazy.cron.status();
+
+    expect(cron["completeConfigAdoption"]).toHaveBeenCalledWith(acceptedConfig);
+    expect(cron["completeConfigAdoption"]).not.toHaveBeenCalledWith(rejectedConfig);
+    expect(cron["reloadForConfigAdoption"]).not.toHaveBeenCalled();
+    expect(cron["rejectConfigAdoption"]).not.toHaveBeenCalled();
+  });
+
+  it("clears the current adoption's own unloaded completion on rejection", async () => {
+    const cron = createCronService();
+    cron.pauseScheduling = vi.fn().mockImplementationOnce(() => {
+      throw new Error("candidate load failed");
+    });
+    hoisted.setState(createCronState(cron));
+    const lazy = createLazyGatewayCronState(createParams());
+    const rejectedConfig = { agents: { entries: { research: {} } } };
+
+    lazy.cron.pauseScheduling();
+    const reload = lazy.cron.reloadForConfigAdoption(rejectedConfig);
+    lazy.cron.completeConfigAdoption(rejectedConfig);
+    await lazy.cron.rejectConfigAdoption();
+    await expect(reload).rejects.toThrow("candidate load failed");
+    await lazy.cron.status();
+
+    expect(cron["completeConfigAdoption"]).not.toHaveBeenCalled();
+    expect(cron["reloadForConfigAdoption"]).not.toHaveBeenCalled();
+  });
+
+  it("defers an in-flight adoption completion until reload preparation finishes", async () => {
+    const reloadForConfigAdoption = vi.fn(async () => {});
+    const completeConfigAdoption = vi.fn();
+    const cron = {
+      ...createCronService(),
+      reloadForConfigAdoption,
+      completeConfigAdoption,
+    };
+    hoisted.setState(createCronState(cron));
+    const lazy = createLazyGatewayCronState(createParams());
+    const incomingConfig = { agents: { entries: { research: {} } } };
+
+    const reload = lazy.cron.reloadForConfigAdoption(incomingConfig);
+    lazy.cron.completeConfigAdoption(incomingConfig);
+    await reload;
+
+    expect(reloadForConfigAdoption).toHaveBeenCalledWith(incomingConfig);
+    expect(completeConfigAdoption).toHaveBeenCalledWith(incomingConfig);
+    expect(reloadForConfigAdoption.mock.invocationCallOrder[0]).toBeLessThan(
+      completeConfigAdoption.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("rejects a queued completion when loaded reload preparation fails", async () => {
+    const finishReload = deferred();
+    const cron = createCronService();
+    cron.reloadForConfigAdoption = vi.fn(async () => {
+      await finishReload.promise;
+      throw new Error("reload preparation failed");
+    });
+    hoisted.setState(createCronState(cron));
+    const lazy = createLazyGatewayCronState(createParams());
+    const incomingConfig = { agents: { entries: { research: {} } } };
+
+    const reload = lazy.cron.reloadForConfigAdoption(incomingConfig);
+    await vi.waitFor(() => expect(cron["reloadForConfigAdoption"]).toHaveBeenCalledOnce());
+    lazy.cron.completeConfigAdoption(incomingConfig);
+    finishReload.resolve();
+    await expect(reload).rejects.toThrow("reload preparation failed");
+    await lazy.cron.rejectConfigAdoption();
+
+    expect(cron["completeConfigAdoption"]).not.toHaveBeenCalled();
+    expect(cron["rejectConfigAdoption"]).toHaveBeenCalledOnce();
+  });
+
   it("waits to start while scheduling is paused", async () => {
     const cron = createCronService();
     hoisted.setState(createCronState(cron));
@@ -347,6 +462,9 @@ function createCronService(): GatewayCronServiceContract {
     stop: vi.fn(),
     pauseScheduling: vi.fn(),
     resumeScheduling: vi.fn(),
+    reloadForConfigAdoption: vi.fn(async () => {}),
+    completeConfigAdoption: vi.fn(),
+    rejectConfigAdoption: vi.fn(async () => {}),
     status: vi.fn(async () => ({ enabled: true }) as never),
     list: vi.fn(async () => [] as never),
     listPage: vi.fn(async () => ({ items: [], total: 0 }) as never),

@@ -29,6 +29,10 @@ openclaw automations create "0 7 * * *" \
   --agent ops
 ```
 
+With one configured agent, `--agent` is optional. Multi-agent fleets must pass
+`--agent <id>` when creating an agent-backed job unless the creation context
+already carries an agent-scoped session owner.
+
 Use `--webhook <url>` when the job should POST the finished payload instead of delivering to a chat target:
 
 ```bash

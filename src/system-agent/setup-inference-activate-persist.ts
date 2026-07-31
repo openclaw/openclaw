@@ -7,8 +7,9 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { normalizePluginTargetConfig } from "../plugins/config-state.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import {
-  projectDefaultInferenceRoute,
+  projectInferenceRoute,
   resolveSystemAgentConfiguredRouteFromConfig,
+  resolveSystemAgentTargetAgentId,
   sameDefaultInferenceRoute,
 } from "./inference-route.js";
 import type { SystemAgentConfiguredRoute } from "./inference-route.js";
@@ -35,11 +36,12 @@ import {
 import {
   projectSetupTargetModelMetadata,
   resolveSetupAgentRuntimeId,
+  resolveSetupModelSelectionTargetAgentId,
   type SetupInferenceTestPlan,
 } from "./setup-inference-plan-helpers.js";
 import type { SystemAgentOwnerPluginArtifactSnapshot } from "./verified-inference.js";
 
-type ProjectedInferenceRoute = Awaited<ReturnType<typeof projectDefaultInferenceRoute>>;
+type ProjectedInferenceRoute = Awaited<ReturnType<typeof projectInferenceRoute>>;
 
 export type SetupInferenceActivationPersistenceState = {
   committedConfig: OpenClawConfig | undefined;
@@ -99,9 +101,21 @@ export async function persistActivatedSetupInference(input: {
 
   const { stripPendingPluginInstallRecords } = await import("../plugins/install-record-commit.js");
   const agentRuntimeId = resolveSetupAgentRuntimeId(params.kind);
+  const selectionTargetAgentId = resolveSetupModelSelectionTargetAgentId(
+    plan.config,
+    plan.routeAgentId,
+  );
+  const baselineAmbientAgentId = (() => {
+    try {
+      return resolveSystemAgentTargetAgentId(cfg);
+    } catch {
+      return undefined;
+    }
+  })();
   const selectModel = plan.persistModelRef
     ? await createSystemAgentModelSelectionUpdater({
         model: plan.persistModelRef,
+        ...(selectionTargetAgentId ? { targetAgentId: selectionTargetAgentId } : {}),
         ...(agentRuntimeId ? { agentRuntimeId } : {}),
         ...(plan.manualAuth && plan.authProfileId ? { authProfileId: plan.authProfileId } : {}),
       })
@@ -154,15 +168,17 @@ export async function persistActivatedSetupInference(input: {
   // so post-write reconciliation must compare against the stripped route
   // and verify the exact index record separately below.
   const persistedRoute = pendingCodexInstall
-    ? await projectDefaultInferenceRoute(
+    ? await projectInferenceRoute(
         stripPendingPluginInstallRecords(stageCandidate(cfg, "runtime")),
+        plan.routeAgentId,
       )
     : verifiedRoute;
   // Runtime config may materialize provider defaults that are intentionally
   // absent from authored config. Compare source writes against the candidate
   // produced from the original source shape, without ignoring concurrent rows.
-  const expectedSourceCandidateRoute = await projectDefaultInferenceRoute(
+  const expectedSourceCandidateRoute = await projectInferenceRoute(
     stageCandidate(sourceCfg, "source"),
+    plan.routeAgentId,
   );
   // Resolve every fallible config-commit dependency before writing a
   // credential into the real agent store. From this point onward, any
@@ -174,8 +190,11 @@ export async function persistActivatedSetupInference(input: {
   if (hasPreparedAuthProfiles && plan.manualAuth) {
     throwIfSetupInferenceCancelled(params);
     const initialCandidate = stageCandidate(cfg, "runtime");
-    const initialRoute = await projectDefaultInferenceRoute(initialCandidate);
-    const resolvedRoute = await resolveSystemAgentConfiguredRouteFromConfig(initialCandidate);
+    const initialRoute = await projectInferenceRoute(initialCandidate, plan.routeAgentId);
+    const resolvedRoute = await resolveSystemAgentConfiguredRouteFromConfig(
+      initialCandidate,
+      plan.routeAgentId,
+    );
     if (
       !sameDefaultInferenceRoute(initialRoute, verifiedRoute) ||
       !resolvedRoute ||
@@ -229,15 +248,32 @@ export async function persistActivatedSetupInference(input: {
         // Validate that the candidate is still admissible before reporting
         // broader route drift, so policy revocations retain their actionable error.
         const stagedRuntime = stageCandidate(latestRuntime, "runtime");
-        const latestBaseline = await projectDefaultInferenceRoute(latestRuntime);
+        const latestBaseline = await projectInferenceRoute(latestRuntime, plan.routeAgentId);
         if (!sameDefaultInferenceRoute(latestBaseline, baselineRoute)) {
           throw new Error(
             "The default-agent inference route changed during its live test, so the verified candidate was not saved. Review the current model/auth/runtime settings and retry.",
           );
         }
+        if (baselineAmbientAgentId === plan.routeAgentId) {
+          let latestAmbientAgentId: string | undefined;
+          try {
+            latestAmbientAgentId = resolveSystemAgentTargetAgentId(latestRuntime);
+          } catch {
+            latestAmbientAgentId = undefined;
+          }
+          if (latestAmbientAgentId !== baselineAmbientAgentId) {
+            throw new Error(
+              "The default-agent inference route changed during its live test, so the verified candidate was not saved. Review the current model/auth/runtime settings and retry.",
+            );
+          }
+        }
         if (
           !isDeepStrictEqual(
-            projectSetupTargetModelMetadata(latestRuntime, stagedRoute.modelLabel),
+            projectSetupTargetModelMetadata(
+              latestRuntime,
+              stagedRoute.modelLabel,
+              plan.routeAgentId,
+            ),
             baselineTargetModelMetadata,
           )
         ) {
@@ -245,13 +281,16 @@ export async function persistActivatedSetupInference(input: {
             "The target model metadata changed during its live inference test, so the verified candidate was not saved. Review the current model settings and retry.",
           );
         }
-        const currentRoute = await projectDefaultInferenceRoute(stagedRuntime);
+        const currentRoute = await projectInferenceRoute(stagedRuntime, plan.routeAgentId);
         if (!sameDefaultInferenceRoute(currentRoute, verifiedRoute)) {
           throw new Error(
             "The default-agent inference route changed during its live test, so the verified candidate was not saved. Review the current model/auth/runtime settings and retry.",
           );
         }
-        const resolvedRoute = await resolveSystemAgentConfiguredRouteFromConfig(stagedRuntime);
+        const resolvedRoute = await resolveSystemAgentConfiguredRouteFromConfig(
+          stagedRuntime,
+          plan.routeAgentId,
+        );
         if (
           !resolvedRoute ||
           resolvedRoute.modelLabel !== plan.modelRef ||
@@ -263,7 +302,7 @@ export async function persistActivatedSetupInference(input: {
         }
         if (
           !isDeepStrictEqual(
-            projectSetupTargetModelMetadata(current, stagedRoute.modelLabel),
+            projectSetupTargetModelMetadata(current, stagedRoute.modelLabel, plan.routeAgentId),
             sourceTargetModelMetadata,
           )
         ) {
@@ -277,8 +316,11 @@ export async function persistActivatedSetupInference(input: {
           modelRef: plan.modelRef,
         });
         const nextConfig = stageCandidate(current, "source");
-        const nextRouteProjection = await projectDefaultInferenceRoute(nextConfig);
-        const nextResolvedRoute = await resolveSystemAgentConfiguredRouteFromConfig(nextConfig);
+        const nextRouteProjection = await projectInferenceRoute(nextConfig, plan.routeAgentId);
+        const nextResolvedRoute = await resolveSystemAgentConfiguredRouteFromConfig(
+          nextConfig,
+          plan.routeAgentId,
+        );
         if (
           !sameDefaultInferenceRoute(nextRouteProjection, expectedSourceCandidateRoute) ||
           !nextResolvedRoute ||
@@ -326,7 +368,7 @@ export async function persistActivatedSetupInference(input: {
         ? (reconciledSnapshot.runtimeConfig ?? reconciledSnapshot.config)
         : undefined;
     const reconciledRoute = reconciledRuntime
-      ? await projectDefaultInferenceRoute(reconciledRuntime)
+      ? await projectInferenceRoute(reconciledRuntime, plan.routeAgentId)
       : undefined;
     const codexInstallPersisted = pendingCodexInstall
       ? await isCodexInstallRecordPersisted(pendingCodexInstall, deps)

@@ -105,8 +105,7 @@ export async function prepareAgentContentPhase(params: {
         ...(agentId ? { agentId } : {}),
         clone: false,
       });
-      const sessionAgentId =
-        canonicalKey === "global" && agentId ? agentId : resolveAgentIdFromSessionKey(canonicalKey);
+      const sessionAgentId = resolveAgentIdFromSessionKey(canonicalKey, agentId);
       catalogAgentId = sessionAgentId;
       const modelRef = resolveSessionModelRef(cfg, entry, sessionAgentId);
       baseProvider = modelRef.provider;

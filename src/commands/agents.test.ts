@@ -19,7 +19,7 @@ function requireAgentSummary(
 }
 
 describe("agents helpers", () => {
-  it("buildAgentSummaries includes default + configured agents", () => {
+  it("buildAgentSummaries includes configured agents without inventing a fleet default", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -29,7 +29,6 @@ describe("agents helpers", () => {
         entries: {
           main: {},
           work: {
-            default: true,
             name: "Work",
             workspace: "/work-ws",
             agentDir: "/state/agents/work/agent",
@@ -59,7 +58,8 @@ describe("agents helpers", () => {
     expect(work.workspace).toBe(path.resolve("/work-ws"));
     expect(work.agentDir).toBe(path.resolve("/state/agents/work/agent"));
     expect(work.bindings).toBe(1);
-    expect(work.isDefault).toBe(true);
+    expect(main.isDefault).toBe(false);
+    expect(work.isDefault).toBe(false);
   });
 
   it("buildAgentSummaries renders local avatars and omits absent avatars", () => {
@@ -69,7 +69,7 @@ describe("agents helpers", () => {
       const cfg: OpenClawConfig = {
         agents: {
           entries: {
-            main: { default: true, workspace },
+            main: { workspace },
             work: { workspace, identity: { avatar: "avatar.png" } },
           },
         },
@@ -106,10 +106,28 @@ describe("agents helpers", () => {
     expect(work?.model).toBe("anthropic/claude");
   });
 
-  it("applyAgentConfig marks the first roster entry as default", () => {
+  it("applyAgentConfig leaves a first roster entry trivially sole", () => {
     const next = applyAgentConfig({}, { agentId: "work", name: "Work" });
 
-    expect(next.agents?.entries).toEqual({ work: { name: "Work", default: true } });
+    expect(next.agents?.entries).toEqual({ work: { name: "Work" } });
+    expect(requireAgentSummary(buildAgentSummaries(next), "work").isDefault).toBe(true);
+  });
+
+  it("stamps explicit ownership and pins a blank sole workspace on fleet expansion", () => {
+    const next = applyAgentConfig(
+      {
+        agents: {
+          defaults: { workspace: "/srv/shared" },
+          entries: { ops: { workspace: "" } },
+        },
+      },
+      { agentId: "research" },
+    );
+
+    expect(next.agents?.ownership).toBe("explicit");
+    expect(next.agents?.entries?.ops?.workspace).toBe("/srv/shared");
+    expect(next.agents?.entries).toHaveProperty("research");
+    expect(next.agents?.defaults?.authInheritance?.agentId).toBe("ops");
   });
 
   it("applyAgentConfig clears a model override", () => {
@@ -117,7 +135,7 @@ describe("agents helpers", () => {
       agents: {
         defaults: { model: { primary: "openai/gpt-5.6-luna" } },
         entries: {
-          work: { default: true, workspace: "/work-ws", model: "anthropic/claude" },
+          work: { workspace: "/work-ws", model: "anthropic/claude" },
         },
       },
     };
@@ -423,7 +441,7 @@ describe("agents helpers", () => {
       agents: {
         defaults: { subagents: { allowAgents: ["work", "home"] } },
         entries: {
-          work: { default: true, workspace: "/work-ws" },
+          work: { workspace: "/work-ws" },
           home: {
             workspace: "/home-ws",
             subagents: { allowAgents: ["WORK", "home"] },
@@ -450,5 +468,24 @@ describe("agents helpers", () => {
     expect(result.config.agents?.entries?.home?.subagents?.allowAgents).toEqual(["home"]);
     expect(result.removedBindings).toBe(1);
     expect(result.removedAllow).toBe(1);
+  });
+
+  it("pins the surviving fleet workspace before pruning to a sole agent", () => {
+    const result = pruneAgentConfig(
+      {
+        agents: {
+          ownership: "explicit",
+          defaults: { workspace: "/srv/agents" },
+          entries: { work: {}, home: {} },
+        },
+      },
+      "work",
+    );
+
+    expect(result.config.agents?.ownership).toBeUndefined();
+    expect(result.config.agents?.entries).toEqual({
+      home: { workspace: "/srv/agents/home" },
+    });
+    expect(result.config.agents?.defaults?.authInheritance?.agentId).toBe("main");
   });
 });

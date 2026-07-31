@@ -119,7 +119,10 @@ async function consultMeetingAgent(params: {
 }): Promise<{ text: string }> {
   const agentId = params.agentId
     ? normalizeAgentId(params.agentId)
-    : resolveDefaultAgentId(params.config);
+    : resolveDefaultAgentId(params.config, {
+        surface: `${params.surface.surface} meeting consult routing`,
+        hint: "Set the meeting surface agentId target or pass an explicit consult agent id.",
+      });
   const requesterSessionKey =
     normalizeOptionalString(params.requesterSessionKey) ?? `agent:${agentId}:main`;
   const sessionKey = `agent:${agentId}:subagent:${params.surface.id}:${params.meetingSessionId}`;

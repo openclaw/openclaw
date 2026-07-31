@@ -23,6 +23,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { resolveUserPath } from "./home-dir.js";
 import {
   detectLegacyWorkspaceState,
   migrateLegacyWorkspaceState,
@@ -351,9 +352,10 @@ describe("sandbox workspace Doctor migration", () => {
 
   it("never imports inactive, overlapping, or unrelated session sandbox copies", async () => {
     const context = setup();
-    const sandboxRoot = path.join(context.homeDir, "sandboxes");
+    const sandboxRoot = resolveUserPath("~/sandboxes", context.env, () => context.homeDir);
     const cfg = {
       agents: {
+        ownership: "explicit",
         defaults: {
           workspace: context.workspaceDir,
           sandbox: {
@@ -364,7 +366,7 @@ describe("sandbox workspace Doctor migration", () => {
           },
         },
         entries: {
-          main: { default: true },
+          main: {},
           "main-foo": { sandbox: { mode: "off" } },
           writer: { sandbox: { workspaceAccess: "rw" } },
         },
@@ -373,19 +375,23 @@ describe("sandbox workspace Doctor migration", () => {
     const activeLayout = resolveSandboxWorkspaceLayoutPaths({
       cfg: { scope: "session", workspaceAccess: "ro", workspaceRoot: sandboxRoot },
       rawSessionKey: "agent:main:telegram:direct:doctor-proof",
-      workspaceDir: context.workspaceDir,
+      workspaceDir: resolveAgentWorkspaceDir(cfg, "main", context.env),
     });
     const inactiveLayout = resolveSandboxWorkspaceLayoutPaths({
       cfg: { scope: "session", workspaceAccess: "ro", workspaceRoot: sandboxRoot },
       rawSessionKey: "agent:main-foo:telegram:direct:doctor-proof",
-      workspaceDir: context.workspaceDir,
+      workspaceDir: resolveAgentWorkspaceDir(cfg, "main-foo", context.env),
     });
     const readWriteLayout = resolveSandboxWorkspaceLayoutPaths({
       cfg: { scope: "session", workspaceAccess: "rw", workspaceRoot: sandboxRoot },
       rawSessionKey: "agent:writer:telegram:direct:doctor-proof",
-      workspaceDir: context.workspaceDir,
+      workspaceDir: resolveAgentWorkspaceDir(cfg, "writer", context.env),
     });
     const activePath = path.join(activeLayout.sandboxWorkspaceDir, "openclaw-workspace-state.json");
+    const activeSourcePath = path.join(
+      resolveWorkspaceStateIdentity(activeLayout.sandboxWorkspaceDir).workspacePath,
+      "openclaw-workspace-state.json",
+    );
     const protectedPaths = [
       path.join(inactiveLayout.sandboxWorkspaceDir, "openclaw-workspace-state.json"),
       path.join(readWriteLayout.sandboxWorkspaceDir, "openclaw-workspace-state.json"),
@@ -393,7 +399,7 @@ describe("sandbox workspace Doctor migration", () => {
         resolveSandboxWorkspaceLayoutPaths({
           cfg: { scope: "session", workspaceAccess: "ro", workspaceRoot: sandboxRoot },
           rawSessionKey: "agent:main",
-          workspaceDir: context.workspaceDir,
+          workspaceDir: resolveAgentWorkspaceDir(cfg, "main", context.env),
         }).sandboxWorkspaceDir,
         "openclaw-workspace-state.json",
       ),
@@ -401,7 +407,7 @@ describe("sandbox workspace Doctor migration", () => {
         resolveSandboxWorkspaceLayoutPaths({
           cfg: { scope: "session", workspaceAccess: "ro", workspaceRoot: sandboxRoot },
           rawSessionKey: "shared",
-          workspaceDir: context.workspaceDir,
+          workspaceDir: resolveAgentWorkspaceDir(cfg, "main", context.env),
         }).sandboxWorkspaceDir,
         "openclaw-workspace-state.json",
       ),
@@ -431,11 +437,15 @@ describe("sandbox workspace Doctor migration", () => {
     });
 
     expect(detected.sources).toContainEqual(
-      expect.objectContaining({ kind: "setup", sourcePath: activePath }),
+      expect.objectContaining({ kind: "setup", sourcePath: activeSourcePath }),
     );
     for (const protectedPath of protectedPaths) {
+      const protectedSourcePath = path.join(
+        resolveWorkspaceStateIdentity(path.dirname(protectedPath)).workspacePath,
+        path.basename(protectedPath),
+      );
       expect(detected.sources).not.toContainEqual(
-        expect.objectContaining({ kind: "setup", sourcePath: protectedPath }),
+        expect.objectContaining({ kind: "setup", sourcePath: protectedSourcePath }),
       );
     }
 

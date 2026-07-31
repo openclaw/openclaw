@@ -39,6 +39,7 @@ export type SubagentProgressOrigin = {
 
 export type PendingFinalDeliveryPayload = {
   requesterSessionKey: string;
+  requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
   requesterDisplayKey: string;
   childSessionKey: string;

@@ -342,7 +342,7 @@ async function isDefaultAgentListPath(segments: readonly string[]): Promise<bool
     return true;
   }
   const { readConfigFileSnapshot } = await loadConfigModule();
-  const { resolveDefaultAgentId } = await import("../agents/agent-scope.js");
+  const { resolveSystemAgentTargetAgentId } = await import("./inference-route.js");
   const snapshot = await readConfigFileSnapshot();
   if (!snapshot.exists || !snapshot.valid) {
     return true;
@@ -354,7 +354,7 @@ async function isDefaultAgentListPath(segments: readonly string[]): Promise<bool
     // Unknown or id-less entry: cannot prove it is off the default route.
     return true;
   }
-  const defaultAgentId = resolveDefaultAgentId(config ?? {});
+  const defaultAgentId = resolveSystemAgentTargetAgentId(config ?? {});
   return normalizeAgentId(entry.id) === normalizeAgentId(defaultAgentId);
 }
 

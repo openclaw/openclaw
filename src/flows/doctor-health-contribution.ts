@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   DoctorContributionHealthCheck,
   DoctorHealthContribution,
@@ -5,6 +6,17 @@ import type {
 } from "./doctor-health-contribution-types.js";
 import type { HealthCheckInput } from "./health-check-runner-types.js";
 import type { HealthFinding } from "./health-checks.js";
+
+/** Returns a workspace only when every configured agent resolves to the same path. */
+export async function resolveDoctorHealthWorkspaceDir(
+  cfg: OpenClawConfig,
+): Promise<string | undefined> {
+  const { listAgentIds, resolveAgentWorkspaceDir } = await import("../agents/agent-scope.js");
+  const workspaceDirs = new Set(
+    listAgentIds(cfg).map((agentId) => resolveAgentWorkspaceDir(cfg, agentId)),
+  );
+  return workspaceDirs.size === 1 ? workspaceDirs.values().next().value : undefined;
+}
 
 export function createDoctorHealthContribution(params: {
   id: string;
@@ -89,19 +101,14 @@ async function runStructuredDoctorHealthContribution(params: {
     throw new Error(`doctor contribution ${params.contributionId} has no structured health`);
   }
   const { runDoctorHealthRepairs } = await import("./doctor-repair-flow.js");
-  const { resolveAgentWorkspaceDir, resolveDefaultAgentId } =
-    await import("../agents/agent-scope.js");
-  const workspaceDir = resolveAgentWorkspaceDir(
-    params.ctx.cfg,
-    resolveDefaultAgentId(params.ctx.cfg),
-  );
+  const workspaceDir = await resolveDoctorHealthWorkspaceDir(params.ctx.cfg);
   const dryRun = !params.ctx.prompter.shouldRepair;
   const result = await runDoctorHealthRepairs(
     {
       mode: "fix",
       runtime: params.ctx.runtime,
       cfg: params.ctx.cfg,
-      cwd: workspaceDir,
+      ...(workspaceDir ? { cwd: workspaceDir } : {}),
       configPath: params.ctx.configPath,
       dryRun,
       allowExecSecretRefs: params.ctx.options.allowExec === true,

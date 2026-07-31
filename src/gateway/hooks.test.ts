@@ -3,6 +3,7 @@
 import type { IncomingMessage } from "node:http";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
@@ -52,16 +53,20 @@ describe("gateway hooks helpers", () => {
   };
 
   const buildHookAgentConfig = (allowedAgentIds: string[]) =>
-    ({
-      hooks: {
-        enabled: true,
-        token: "secret",
-        allowedAgentIds,
+    retainLegacyDefaultAgentId(
+      {
+        hooks: {
+          enabled: true,
+          token: "secret",
+          allowedAgentIds,
+        },
+        agents: {
+          ownership: "explicit",
+          entries: { main: {}, hooks: {} },
+        },
       },
-      agents: {
-        list: [{ id: "main", default: true }, { id: "hooks" }],
-      },
-    }) as OpenClawConfig;
+      "main",
+    );
 
   const buildStaticShadowingMappingConfig = (params: {
     firstMatch?: Partial<{ path: string; source: string }>;
@@ -139,9 +144,9 @@ describe("gateway hooks helpers", () => {
   });
 
   test("normalizeWakePayload trims + validates", () => {
-    expect(normalizeWakePayload({ text: "  hi " })).toEqual({
+    expect(normalizeWakePayload({ text: "  hi ", agentId: " ops " })).toEqual({
       ok: true,
-      value: { text: "hi", mode: "now" },
+      value: { text: "hi", mode: "now", agentId: "ops" },
     });
     expect(normalizeWakePayload({ text: "  ", mode: "now" }).ok).toBe(false);
   });
@@ -342,13 +347,24 @@ describe("gateway hooks helpers", () => {
     }
   });
 
-  test("resolveHookTargetAgentId preserves omitted default target intent", () => {
-    const cfg = {
+  test("keeps explicit-fleet hook startup available without an implicit target", () => {
+    const resolved = resolveHooksConfigOrThrow({
       hooks: { enabled: true, token: "secret" },
-      agents: {
-        list: [{ id: "main", default: true }, { id: "hooks" }],
+      agents: { ownership: "explicit", entries: { main: {}, hooks: {} } },
+    });
+
+    expect(resolveHookTargetAgentId(resolved, "hooks")).toBe("hooks");
+    expect(resolveEffectiveHookTargetAgentId(resolved, undefined)).toBeUndefined();
+  });
+
+  test("resolveHookTargetAgentId preserves omitted default target intent", () => {
+    const cfg = retainLegacyDefaultAgentId(
+      {
+        hooks: { enabled: true, token: "secret" },
+        agents: { ownership: "explicit", entries: { main: {}, hooks: {} } },
       },
-    } as OpenClawConfig;
+      "main",
+    );
     const resolved = resolveHooksConfigOrThrow(cfg);
     expect(resolveHookTargetAgentId(resolved, "hooks")).toBe("hooks");
     expect(resolveHookTargetAgentId(resolved, "missing-agent")).toBe("main");

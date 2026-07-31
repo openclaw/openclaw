@@ -116,7 +116,6 @@ export async function ensureDevGatewayConfig(opts: { reset?: boolean }) {
         },
         entries: {
           dev: {
-            default: true,
             workspace,
             identity: {
               name: DEV_IDENTITY_NAME,

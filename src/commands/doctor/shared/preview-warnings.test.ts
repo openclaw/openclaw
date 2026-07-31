@@ -1408,28 +1408,26 @@ describe("doctor preview warnings", () => {
     expect(warnings.join("\n")).not.toContain("defaults");
   });
 
-  it("warns only for configured channels not covered by channel routes", async () => {
+  it("does not invent a default route for configured channels without owners", async () => {
     const warnings = await collectChannelBoundMessageToolPolicyWarningsThroughDoctor({
       channels: {
         discord: {},
         telegram: {},
       },
       agents: {
-        list: [
-          {
-            id: "main",
-            default: true,
+        ownership: "explicit",
+        entries: {
+          main: {
             tools: {
               allow: ["read"],
             },
           },
-          {
-            id: "commander",
+          commander: {
             tools: {
               profile: "messaging",
             },
           },
-        ],
+        },
       },
       bindings: [
         {
@@ -1441,34 +1439,28 @@ describe("doctor preview warnings", () => {
       ],
     });
 
-    expect(warnings).toEqual([
-      '- Agent "main" is routed from channel "telegram", but the message tool is unavailable for that agent; explicit channel actions such as sendAttachment, upload-file, thread-reply, or reply can fail. Add "message" to the agent tool allowlist, add "group:messaging", or switch the agent to a profile that includes messaging tools.',
-    ]);
-    expect(warnings.join("\n")).not.toContain("discord");
-    expect(warnings.join("\n")).not.toContain("commander");
+    expect(warnings).toStrictEqual([]);
   });
 
-  it("warns for default-routed traffic when a channel only has scoped routes", async () => {
+  it("does not invent a default route when a channel only has scoped routes", async () => {
     const warnings = await collectChannelBoundMessageToolPolicyWarningsThroughDoctor({
       channels: {
         discord: {},
       },
       agents: {
-        list: [
-          {
-            id: "main",
-            default: true,
+        ownership: "explicit",
+        entries: {
+          main: {
             tools: {
               allow: ["read"],
             },
           },
-          {
-            id: "commander",
+          commander: {
             tools: {
               profile: "messaging",
             },
           },
-        ],
+        },
       },
       bindings: [
         {
@@ -1481,10 +1473,7 @@ describe("doctor preview warnings", () => {
       ],
     });
 
-    expect(warnings).toEqual([
-      '- Agent "main" is routed from channel "discord", but the message tool is unavailable for that agent; explicit channel actions such as sendAttachment, upload-file, thread-reply, or reply can fail. Add "message" to the agent tool allowlist, add "group:messaging", or switch the agent to a profile that includes messaging tools.',
-    ]);
-    expect(warnings.join("\n")).not.toContain("commander");
+    expect(warnings).toStrictEqual([]);
   });
 
   it("skips the default-agent warning when a wildcard account route covers the channel", async () => {
@@ -1577,27 +1566,25 @@ describe("doctor preview warnings", () => {
     expect(warnings).toStrictEqual([]);
   });
 
-  it("does not treat channel aliases as route coverage when runtime would not match them", async () => {
+  it("does not invent an owner for an unmatched channel alias", async () => {
     const warnings = await collectChannelBoundMessageToolPolicyWarningsThroughDoctor({
       channels: {
         imessage: {},
       },
       agents: {
-        list: [
-          {
-            id: "main",
-            default: true,
+        ownership: "explicit",
+        entries: {
+          main: {
             tools: {
               allow: ["read"],
             },
           },
-          {
-            id: "ios-agent",
+          "ios-agent": {
             tools: {
               profile: "messaging",
             },
           },
-        ],
+        },
       },
       bindings: [
         {
@@ -1609,14 +1596,10 @@ describe("doctor preview warnings", () => {
       ],
     });
 
-    expect(warnings).toEqual([
-      '- Agent "main" is routed from channel "imessage", but the message tool is unavailable for that agent; explicit channel actions such as sendAttachment, upload-file, thread-reply, or reply can fail. Add "message" to the agent tool allowlist, add "group:messaging", or switch the agent to a profile that includes messaging tools.',
-    ]);
-    expect(warnings.join("\n")).not.toContain("ios-agent");
-    expect(warnings.join("\n")).not.toContain("imsg");
+    expect(warnings).toStrictEqual([]);
   });
 
-  it("warns for the default agent when configured account routes are incomplete", async () => {
+  it("does not invent a default owner when configured account routes are incomplete", async () => {
     const warnings = await collectChannelBoundMessageToolPolicyWarningsThroughDoctor({
       channels: {
         discord: {
@@ -1627,21 +1610,19 @@ describe("doctor preview warnings", () => {
         },
       },
       agents: {
-        list: [
-          {
-            id: "main",
-            default: true,
+        ownership: "explicit",
+        entries: {
+          main: {
             tools: {
               allow: ["read"],
             },
           },
-          {
-            id: "personal-agent",
+          "personal-agent": {
             tools: {
               profile: "messaging",
             },
           },
-        ],
+        },
       },
       bindings: [
         {
@@ -1654,10 +1635,7 @@ describe("doctor preview warnings", () => {
       ],
     });
 
-    expect(warnings).toEqual([
-      '- Agent "main" is routed from channel "discord", but the message tool is unavailable for that agent; explicit channel actions such as sendAttachment, upload-file, thread-reply, or reply can fail. Add "message" to the agent tool allowlist, add "group:messaging", or switch the agent to a profile that includes messaging tools.',
-    ]);
-    expect(warnings.join("\n")).not.toContain("personal-agent");
+    expect(warnings).toStrictEqual([]);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

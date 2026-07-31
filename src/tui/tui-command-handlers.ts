@@ -1021,7 +1021,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       tui.requestRender();
       const sendResult = await client.sendChat({
         sessionKey: sendSelection.sessionKey,
-        ...(sendSelection.sessionKey === "global" ? { agentId: sendSelection.agentId } : {}),
+        agentId: sendSelection.agentId,
         sessionId: sendSessionId,
         message: text,
         thinking: opts.thinking,

@@ -309,7 +309,7 @@ async function followSelections(
 }
 
 function resolveTailTargetAgent(opts: SessionsTailOptions): string | undefined {
-  if (opts.agent?.trim() || opts.store?.trim() || opts.allAgents === true) {
+  if (opts.agent?.trim() || opts.allAgents === true) {
     return opts.agent;
   }
   return opts.sessionKey?.trim() ? resolveAgentIdFromSessionKey(opts.sessionKey) : undefined;

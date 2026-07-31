@@ -99,6 +99,7 @@ export function resolveGatewayStartupMetadataPluginIds(params: {
     activationSourceConfig,
     env: params.env,
     ambientEnvTriggers: params.ambientEnvTriggers,
+    includePersistedAuthState: false,
   });
   if (!lookup.hasDirectChannelOwners(configuredChannelIds)) {
     return undefined;
@@ -181,6 +182,7 @@ export function createGatewayStartupMetadataPluginIdScope(params: {
     activationSourceConfig: params.activationSourceConfig ?? params.config,
     env: params.env,
     ambientEnvTriggers: params.ambientEnvTriggers,
+    includePersistedAuthState: false,
   });
   const workerProviderIds = normalizeWorkerProviderIds(params.workerProviderIds ?? []);
   return {

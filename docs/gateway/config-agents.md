@@ -11,6 +11,33 @@ Agent-scoped configuration keys under `agents.*`, `multiAgent.*`, `session.*`,
 `messages.*`, and `talk.*`. For channels, tools, gateway runtime, and other
 top-level keys, see [Configuration reference](/gateway/configuration-reference).
 
+## Multi-agent ownership generation
+
+Multi-agent rosters created by current OpenClaw versions carry
+`agents.ownership: "explicit"`. This write-once generation marker means there is
+no fleet-wide default agent: inbound channels and other ambient surfaces must
+name their owner through bindings or their surface-specific `agentId` target.
+Operations that still have no owner fail closed instead of selecting the first
+roster entry.
+
+```json5
+{
+  agents: {
+    ownership: "explicit",
+    entries: {
+      ops: { workspace: "~/.openclaw/workspace-ops" },
+      research: { workspace: "~/.openclaw/workspace-research" },
+    },
+  },
+  bindings: [{ agentId: "ops", match: { channel: "telegram", accountId: "*" } }],
+}
+```
+
+OpenClaw writes this field when a sole roster expands into a fleet. During an
+upgrade, a marker-free multi-agent roster is treated as a legacy roster whose
+first entry owned ambient work; `openclaw doctor --fix` materializes those
+per-surface owners and stamps the field. Sole-agent configs do not need it.
+
 ## Agent defaults
 
 ### `agents.defaults.workspace`
@@ -24,8 +51,9 @@ Default: `OPENCLAW_WORKSPACE_DIR` when set, otherwise `~/.openclaw/workspace` (o
 ```
 
 An explicit `agents.defaults.workspace` value takes precedence over
-`OPENCLAW_WORKSPACE_DIR`. Use the environment variable to point default agents
-at a mounted workspace when you do not want to write that path into config.
+`OPENCLAW_WORKSPACE_DIR`. A sole agent uses this path directly. In a multi-agent
+fleet, agents without their own `workspace` use an agent-id subdirectory so no
+implicit owner claims the shared root.
 
 ### `agents.defaults.repoRoot`
 
@@ -45,6 +73,7 @@ Optional default skill allowlist for agents that do not set
 ```json5
 {
   agents: {
+    ownership: "explicit",
     defaults: { skills: ["github", "weather"] },
     list: [
       { id: "writer" }, // inherits github, weather
@@ -579,7 +608,39 @@ Selects the agent whose model and credentials own ambient OpenClaw system-agent 
 }
 ```
 
-Delegated consults with a requesting agent keep that requester as their owner. When `agentId` is absent, OpenClaw preserves configured-default routing.
+Delegated consults with a requesting agent keep that requester as their owner. When `agentId` is absent, a sole configured agent resolves implicitly; ambient consults in a multi-agent fleet fail with an actionable error.
+
+### `agents.defaults.authInheritance`
+
+Upgrade compatibility binding for inherited model credentials:
+
+```json5
+{
+  agents: {
+    defaults: {
+      authInheritance: { agentId: "ops" },
+    },
+  },
+}
+```
+
+Doctor writes this only when retiring a legacy non-`main` default marker would otherwise switch credential inheritance to the physical `main` store. Keep it until the H2-2 credential-relocation migration moves inherited credentials to their final per-agent stores; new fleets normally do not need to set it.
+
+### `agents.defaults.sessionStore`
+
+Upgrade compatibility binding for a fixed legacy session store:
+
+```json5
+{
+  agents: {
+    defaults: {
+      sessionStore: { agentId: "ops" },
+    },
+  },
+}
+```
+
+Doctor writes this only when retiring a legacy non-`main` default marker would otherwise reassign unscoped rows in a fixed `session.store`. Keep it until SQLite session migration records the store's owner; new fleets and per-agent session stores do not need to set it.
 
 ### `agents.defaults.compaction`
 
@@ -970,10 +1031,8 @@ for provider examples and precedence.
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "main",
-        default: true,
+    entries: {
+      main: {
         name: "Main Agent",
         workspace: "~/.openclaw/workspace",
         agentDir: "~/.openclaw/agents/main/agent",
@@ -1014,13 +1073,13 @@ for provider examples and precedence.
           elevated: { enabled: true },
         },
       },
-    ],
+    },
   },
 }
 ```
 
-- `id`: stable agent id (required).
-- `default`: when multiple are set, first wins (warning logged). If none set, first list entry is default.
+- The `agents.entries` object key is the stable agent id.
+- `default` is retired. Exactly one configured agent resolves implicitly; multi-agent operations require a binding, surface `agentId` target, scoped session/store owner, or explicit `--agent`/request field.
 - `model`: string form sets a strict per-agent primary with no model fallback; object form `{ primary }` is also strict unless you add `fallbacks`. Use `{ primary, fallbacks: [...] }` to opt that agent into fallback, or `{ primary, fallbacks: [] }` to make strict behavior explicit. Cron jobs that only override `primary` still inherit default fallbacks unless you set `fallbacks: []`.
 - `utilityModel`: optional per-agent override for short internal tasks such as generated session and thread titles. Falls back to `agents.defaults.utilityModel`, then the effective session provider's declared small-model default. Dashboard titles retry once with the effective regular session model. An empty string skips the alternate utility route for this agent without disabling dashboard title generation.
 - `params`: per-agent stream params merged over the selected model entry in `agents.defaults.models`. Use this for agent-specific overrides like `cacheRetention`, `temperature`, or `maxTokens` without duplicating the whole model catalog.
@@ -1051,15 +1110,21 @@ Run multiple isolated agents inside one Gateway. See [Multi-Agent](/concepts/mul
 ```json5
 {
   agents: {
-    list: [
-      { id: "home", default: true, workspace: "~/.openclaw/workspace-home" },
-      { id: "work", workspace: "~/.openclaw/workspace-work" },
-    ],
+    ownership: "explicit",
+    defaults: {
+      heartbeat: { agentId: "home" },
+      systemAgent: { agentId: "home" },
+    },
+    entries: {
+      home: { workspace: "~/.openclaw/workspace-home" },
+      work: { workspace: "~/.openclaw/workspace-work" },
+    },
   },
   bindings: [
     { agentId: "home", match: { channel: "whatsapp", accountId: "personal" } },
     { agentId: "work", match: { channel: "whatsapp", accountId: "biz" } },
   ],
+  talk: { agentId: "home" },
 }
 ```
 

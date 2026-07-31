@@ -334,6 +334,27 @@ describe("resolveSessionReference", () => {
     });
   });
 
+  it("preserves the owning agent returned for a global session id", async () => {
+    callGatewayMock
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({ key: "global", agentId: "orion" });
+
+    const result = await resolveSessionReference({
+      sessionKey: "b0d79b63-0f73-4bc9-a6b5-6d8e20f42c3c",
+      alias: "global",
+      mainKey: "main",
+      requesterInternalKey: "global",
+      restrictToSpawned: false,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      agentId: "orion",
+      key: "global",
+      resolvedViaSessionId: true,
+    });
+  });
+
   it("retries literal current probes without allowMissing for older gateways", async () => {
     const unsupportedAllowMissing = () =>
       new GatewayClientRequestError({

@@ -4,7 +4,7 @@ import {
   errorShape,
   validateChatAbortParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { abortChatRunById } from "../chat-abort.js";
@@ -61,10 +61,14 @@ export async function handleChatAbortRequestWithLifecycle(
   };
   const agentIdOverride = normalizeOptionalText((params as { agentId?: string }).agentId);
   const abortCfg = context.getRuntimeConfig();
-  const defaultAgentId = resolveDefaultAgentId(abortCfg);
   const parsedAbortSessionKey = parseAgentSessionKey(rawSessionKey);
+  const compatibilityDefaultAgentId = tryResolveLegacyCompatibilityAgentId(abortCfg);
   const abortSessionResolvesGlobal =
-    resolveSessionStoreKey({ cfg: abortCfg, sessionKey: rawSessionKey }) === "global";
+    resolveSessionStoreKey({
+      cfg: abortCfg,
+      sessionKey: rawSessionKey,
+      storeAgentId: agentIdOverride,
+    }) === "global";
   const inferredGlobalAgentId =
     !agentIdOverride && parsedAbortSessionKey && abortSessionResolvesGlobal
       ? normalizeAgentId(parsedAbortSessionKey.agentId)
@@ -72,7 +76,18 @@ export async function handleChatAbortRequestWithLifecycle(
   const abortAgentId =
     agentIdOverride ??
     inferredGlobalAgentId ??
-    (abortSessionResolvesGlobal ? defaultAgentId : undefined);
+    (abortSessionResolvesGlobal ? compatibilityDefaultAgentId : undefined);
+  if (abortSessionResolvesGlobal && !abortAgentId) {
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "agentId is required for global chat.abort when no compatibility owner exists",
+      ),
+    );
+    return;
+  }
   if (
     agentIdOverride &&
     parsedAbortSessionKey &&
@@ -113,7 +128,7 @@ export async function handleChatAbortRequestWithLifecycle(
       sessionKeyAliases: canonicalAbortSessionKey === rawSessionKey ? undefined : [rawSessionKey],
       agentId: abortAgentId,
       sessionId: abortSessionEntry?.sessionId,
-      defaultAgentId,
+      defaultAgentId: compatibilityDefaultAgentId,
       abortOrigin: "rpc",
       stopReason: "rpc",
       requester,
@@ -139,7 +154,7 @@ export async function handleChatAbortRequestWithLifecycle(
         runId,
         sessionKey: canonicalAbortSessionKey,
         agentId: abortAgentId,
-        defaultAgentId,
+        defaultAgentId: compatibilityDefaultAgentId,
         includeHidden: true,
       });
       if (canonicalMatch) {
@@ -158,7 +173,7 @@ export async function handleChatAbortRequestWithLifecycle(
         runId,
         sessionKey: rawSessionKey,
         agentId: abortAgentId,
-        defaultAgentId,
+        defaultAgentId: compatibilityDefaultAgentId,
         includeHidden: true,
       });
       return aliasMatch
@@ -223,7 +238,8 @@ export async function handleChatAbortRequestWithLifecycle(
       if (
         normalizedAgentIdOverride &&
         queued.sessionKey === "global" &&
-        resolveStoredGlobalRunAgentId(queued.agentId, defaultAgentId) !== normalizedAgentIdOverride
+        resolveStoredGlobalRunAgentId(queued.agentId, compatibilityDefaultAgentId) !==
+          normalizedAgentIdOverride
       ) {
         respond(
           false,
@@ -278,7 +294,8 @@ export async function handleChatAbortRequestWithLifecycle(
   if (
     normalizedAgentIdOverride &&
     active.sessionKey === "global" &&
-    resolveStoredGlobalRunAgentId(active.agentId, defaultAgentId) !== normalizedAgentIdOverride
+    resolveStoredGlobalRunAgentId(active.agentId, compatibilityDefaultAgentId) !==
+      normalizedAgentIdOverride
   ) {
     respond(
       false,

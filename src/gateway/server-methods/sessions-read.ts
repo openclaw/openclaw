@@ -24,7 +24,6 @@ import {
 } from "../../config/sessions.js";
 import { listSessionEntriesReadOnly } from "../../config/sessions/session-accessor.js";
 import { searchSessionTranscripts } from "../../config/sessions/session-transcript-search.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildProjectedAgentRunIndex } from "../../infra/agent-events.js";
 import {
   measureDiagnosticsTimelineSpan,
@@ -60,6 +59,7 @@ import type {
 } from "../session-utils-store-lookup.js";
 import {
   buildGatewaySessionRow,
+  listSessionsFromStore,
   listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGateway,
   resolveCanonicalSessionEntryFromStoreKeys,
@@ -74,21 +74,18 @@ import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { loadOptionalServerMethodModelCatalog } from "./optional-model-catalog.js";
 import {
   collectTrackedActiveSessionRuns,
+  resolveActiveSessionRunDefaultAgentId,
   resolveVisibleActiveSessionRunState,
 } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
+import { sessionListInflightMap } from "./sessions-list-inflight.js";
 import {
   filterSessionStoreToConfiguredAgents,
   loadSessionEntriesForTarget,
   requireSessionKey,
 } from "./sessions-shared.js";
-import type { GatewayClient, GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
+import type { GatewayClient, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
-
-const sessionListsByContext = new WeakMap<
-  GatewayRequestContext,
-  { config: OpenClawConfig; inFlight: Map<string, Promise<unknown>> }
->();
 
 function sessionListVisibilityIdentity(client: GatewayClient | null): string {
   if (isGatewayAdmin(client)) {
@@ -103,18 +100,6 @@ function sessionListWorkKey(params: SessionsListParams, client: GatewayClient | 
     sessionListVisibilityIdentity(client),
     Object.entries(params).toSorted(([left], [right]) => left.localeCompare(right)),
   ]);
-}
-
-function sessionListInflightMap(
-  context: GatewayRequestContext,
-  config: OpenClawConfig,
-): Map<string, Promise<unknown>> {
-  let state = sessionListsByContext.get(context);
-  if (!state || state.config !== config) {
-    state = { config, inFlight: new Map() };
-    sessionListsByContext.set(context, state);
-  }
-  return state.inFlight;
 }
 
 export const sessionReadHandlers: GatewayRequestHandlers = {
@@ -314,8 +299,8 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             : store;
           const result = await measureDiagnosticsTimelineSpan(
             "gateway.sessions.list.rows",
-            () =>
-              listSessionsFromStoreAsync({
+            () => {
+              const listParams = {
                 cfg,
                 durableStorePath,
                 ...(entryFilter ? { entryFilter } : {}),
@@ -323,7 +308,12 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                 store: listStore,
                 modelCatalog,
                 opts: p,
-              }),
+              };
+              // Empty stores have no transcript or row work to yield around.
+              return Object.keys(listStore).length === 0
+                ? listSessionsFromStore(listParams)
+                : listSessionsFromStoreAsync(listParams);
+            },
             {
               config: cfg,
               phase: "sessions.list",
@@ -408,7 +398,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           );
           const trackedActiveRuns = collectTrackedActiveSessionRuns(context);
           const projectedAgentRunIndex = buildProjectedAgentRunIndex();
-          const defaultAgentId = resolveDefaultAgentId(cfg);
+          const defaultAgentId = resolveActiveSessionRunDefaultAgentId(cfg);
           const sessions = measureDiagnosticsTimelineSpanSync(
             "gateway.sessions.list.active_run_flags",
             () => {
@@ -674,7 +664,15 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       respond(true, { ok: false }, undefined);
       return;
     }
-    respond(true, { ok: true, key: resolved.key }, undefined);
+    respond(
+      true,
+      {
+        ok: true,
+        key: resolved.key,
+        ...(resolved.agentId ? { agentId: resolved.agentId } : {}),
+      },
+      undefined,
+    );
   },
   "sessions.get": async ({ params, respond, context }) => {
     const p = params as {

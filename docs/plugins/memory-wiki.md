@@ -408,6 +408,7 @@ normalized agent id:
 ```json5
 {
   agents: {
+    ownership: "explicit",
     list: [{ id: "support" }, { id: "marketing" }],
   },
   plugins: {

@@ -430,6 +430,7 @@ function prepareSessionList(params: ListSessionsFromStoreParams) {
 
 function buildSessionsListResult(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   list: ReturnType<typeof prepareSessionList>;
   modelCatalog?: ModelCatalogEntry[];
   sessions: GatewaySessionRow[];
@@ -446,6 +447,7 @@ function buildSessionsListResult(params: {
     hasMore: list.hasMore,
     creators: list.creators,
     defaults: getSessionDefaults(params.cfg, params.modelCatalog, {
+      ...(typeof params.agentId === "string" ? { agentId: params.agentId } : {}),
       allowPluginNormalization: false,
     }),
     sessions,
@@ -494,7 +496,13 @@ export function listSessionsFromStore(params: ListSessionsFromStoreParams): Sess
       rowContext: list.rowContext,
     });
   });
-  return buildSessionsListResult({ cfg, list, modelCatalog: params.modelCatalog, sessions });
+  return buildSessionsListResult({
+    cfg,
+    agentId: opts.agentId,
+    list,
+    modelCatalog: params.modelCatalog,
+    sessions,
+  });
 }
 
 /**
@@ -584,6 +592,12 @@ export async function listSessionsFromStoreAsync(
       }
     }
 
-    return buildSessionsListResult({ cfg, list, modelCatalog: params.modelCatalog, sessions });
+    return buildSessionsListResult({
+      cfg,
+      agentId: opts.agentId,
+      list,
+      modelCatalog: params.modelCatalog,
+      sessions,
+    });
   });
 }

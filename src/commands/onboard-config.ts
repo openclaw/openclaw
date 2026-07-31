@@ -7,6 +7,7 @@ import { setConfigValueAtPath } from "../config/config-paths.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ToolProfileId } from "../config/types.tools.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 
 /** Default tool profile selected during local onboarding. */
@@ -72,6 +73,7 @@ export function applyLocalSetupWorkspaceConfig(
   baseConfig: OpenClawConfig,
   workspaceDir: string,
   options: {
+    agentId?: string;
     allowWorkspaceChange?: boolean;
     preserveWorkspace?: boolean;
     env?: NodeJS.ProcessEnv;
@@ -83,19 +85,54 @@ export function applyLocalSetupWorkspaceConfig(
     options.env,
   );
   const hasRoster = listAgentEntries(baseConfig).length > 0;
+  const selectedAgentId = options.agentId?.trim() ? normalizeAgentId(options.agentId) : undefined;
+  const selectedAgentExists = selectedAgentId
+    ? listAgentEntries(baseConfig).some((entry) => normalizeAgentId(entry.id) === selectedAgentId)
+    : false;
   const shouldUpdateWorkspace =
     !options.preserveWorkspace &&
-    (options.allowWorkspaceChange || (!hasRoster && !workspaceConflict));
+    (Boolean(selectedAgentId) ||
+      options.allowWorkspaceChange ||
+      (!hasRoster && !workspaceConflict));
+  const selectedWorkspaceRoster =
+    selectedAgentId && selectedAgentExists
+      ? baseConfig.agents?.entries
+        ? {
+            entries: Object.fromEntries(
+              Object.entries(baseConfig.agents.entries).map(([id, entry]) => [
+                id,
+                normalizeAgentId(id) === selectedAgentId
+                  ? { ...entry, workspace: workspaceDir }
+                  : entry,
+              ]),
+            ),
+          }
+        : Array.isArray(baseConfig.agents?.list)
+          ? {
+              list: baseConfig.agents.list.map((entry) =>
+                normalizeAgentId(entry.id) === selectedAgentId
+                  ? { ...entry, workspace: workspaceDir }
+                  : entry,
+              ),
+            }
+          : {}
+      : selectedAgentId && !hasRoster
+        ? { entries: { [selectedAgentId]: { workspace: workspaceDir } } }
+        : undefined;
   return {
     ...baseConfig,
     ...(shouldUpdateWorkspace
       ? {
           agents: {
             ...baseConfig.agents,
-            defaults: {
-              ...baseConfig.agents?.defaults,
-              workspace: workspaceDir,
-            },
+            ...(selectedAgentId && selectedWorkspaceRoster
+              ? selectedWorkspaceRoster
+              : {
+                  defaults: {
+                    ...baseConfig.agents?.defaults,
+                    workspace: workspaceDir,
+                  },
+                }),
           },
         }
       : {}),

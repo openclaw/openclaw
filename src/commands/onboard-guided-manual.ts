@@ -55,6 +55,7 @@ export async function tryCandidate(params: {
   runtime: RuntimeEnv;
   prompter: WizardPrompter;
   activate: ActivateSetupInference;
+  targetAgentId: string;
   /** Auto-ladder failures collect into one quiet summary; manual retries stay loud. */
   collectFailure?: (failure: LadderFailure) => void;
 }): Promise<CandidateAttempt> {
@@ -69,6 +70,7 @@ export async function tryCandidate(params: {
       kind: params.candidate.kind,
       modelRef: params.candidate.modelRef,
       workspace: params.workspace,
+      targetAgentId: params.targetAgentId,
       surface: "cli",
       runtime: params.runtime,
     }),
@@ -97,6 +99,7 @@ export async function runManualStage(params: {
   runtime: RuntimeEnv;
   prompter: WizardPrompter;
   activate: ActivateSetupInference;
+  targetAgentId: string;
   /** A working route is already persisted; skipping keeps it instead of exiting AI-less. */
   hasActiveRoute?: boolean;
 }): Promise<string[] | null> {
@@ -177,6 +180,7 @@ export async function runManualStage(params: {
         runtime: params.runtime,
         prompter: params.prompter,
         activate: params.activate,
+        targetAgentId: params.targetAgentId,
       });
       if (attempt.kind === "success") {
         return activationLines(attempt.result);
@@ -191,6 +195,7 @@ export async function runManualStage(params: {
           kind: "provider-auth",
           authChoice: authOption.id,
           workspace: params.workspace,
+          targetAgentId: params.targetAgentId,
           surface: "cli",
           runtime: params.runtime,
           prompter: params.prompter,
@@ -225,6 +230,7 @@ export async function runManualStage(params: {
         authChoice: provider.id,
         apiKey,
         workspace: params.workspace,
+        targetAgentId: params.targetAgentId,
         surface: "cli",
         runtime: params.runtime,
       }),

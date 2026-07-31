@@ -9,6 +9,7 @@ import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-co
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { AgentRouteBinding } from "../../config/types.agents.js";
@@ -19,6 +20,7 @@ import { normalizeRouteBindingChannelId } from "../../routing/binding-scope.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import {
   buildAgentMainSessionKey,
+  isUnscopedSessionKeySentinel,
   isSubagentSessionKey,
   normalizeAccountId,
   normalizeAgentId,
@@ -39,7 +41,7 @@ import {
   type GatewayMessageChannel,
   INTERNAL_MESSAGE_CHANNEL,
 } from "../../utils/message-channel.js";
-import { resolveDefaultAgentId } from "../agent-scope-config.js";
+import { tryResolveSoleAgentId } from "../agent-scope-config.js";
 import { listAgentIds } from "../agent-scope.js";
 import {
   type EmbeddedAgentQueueMessageOptions,
@@ -185,26 +187,31 @@ function resolveConfiguredAgentMainSessionKey(params: {
 
 function isConfiguredAgentMainSessionKey(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   sessionKey: string;
   mainKey: string;
 }): boolean {
-  const agentId = resolveAgentIdFromSessionKey(
-    params.sessionKey,
-    resolveDefaultAgentId(params.cfg),
-  );
+  if (isUnscopedSessionKeySentinel(params.sessionKey)) {
+    return false;
+  }
+  const agentId =
+    params.agentId ??
+    resolveAgentIdFromSessionKey(params.sessionKey, tryResolveSoleAgentId(params.cfg));
   return (
+    params.sessionKey === params.mainKey ||
     params.sessionKey ===
-    resolveConfiguredAgentMainSessionKey({
-      cfg: params.cfg,
-      agentId,
-      mainKey: params.mainKey,
-    })
+      resolveConfiguredAgentMainSessionKey({
+        cfg: params.cfg,
+        agentId,
+        mainKey: params.mainKey,
+      })
   );
 }
 
 async function ensureConfiguredAgentMainSession(params: {
   cfg: OpenClawConfig;
   callGateway: GatewayCaller;
+  agentId?: string;
   sessionKey: string;
   mainKey: string;
   requesterSessionKey?: string;
@@ -213,17 +220,21 @@ async function ensureConfiguredAgentMainSession(params: {
   if (
     !isConfiguredAgentMainSessionKey({
       cfg: params.cfg,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
       sessionKey: params.sessionKey,
       mainKey: params.mainKey,
     })
   ) {
     return { ok: true };
   }
+  const targetAgentId =
+    params.agentId ??
+    resolveAgentIdFromSessionKey(params.sessionKey, tryResolveSoleAgentId(params.cfg));
 
   try {
     await params.callGateway({
       method: "sessions.resolve",
-      params: { key: params.sessionKey },
+      params: { key: params.sessionKey, agentId: targetAgentId },
       timeoutMs: 10_000,
     });
     return { ok: true };
@@ -231,7 +242,7 @@ async function ensureConfiguredAgentMainSession(params: {
     try {
       const createParams = {
         key: params.sessionKey,
-        agentId: resolveAgentIdFromSessionKey(params.sessionKey, resolveDefaultAgentId(params.cfg)),
+        agentId: targetAgentId,
       };
       if (
         params.useTrustedInProcessCreation &&
@@ -434,6 +445,7 @@ async function startAgentRun(params: {
 }
 
 export function createSessionsSendTool(opts?: {
+  agentId?: string;
   agentSessionKey?: string;
   agentChannel?: GatewayMessageChannel;
   sandboxed?: boolean;
@@ -455,6 +467,10 @@ export function createSessionsSendTool(opts?: {
       const timeoutSeconds = readNonNegativeIntegerParam(params, "timeoutSeconds") ?? 30;
       const { cfg, mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
         resolveSessionToolContext(opts);
+      const requesterAgentId = normalizeAgentId(
+        opts?.agentId ??
+          resolveAgentIdFromSessionKey(effectiveRequesterKey, tryResolveSoleAgentId(cfg)),
+      );
 
       const a2aPolicy = createAgentToAgentPolicy(cfg);
       const sessionVisibility = resolveEffectiveSessionToolsVisibility({
@@ -467,6 +483,7 @@ export function createSessionsSendTool(opts?: {
       const labelAgentIdParam = normalizeOptionalString(readStringParam(params, "agentId"));
 
       let sessionKey = sessionKeyParam;
+      let resolvedTargetAgentId: string | undefined;
       if (!sessionKey && !labelParam && labelAgentIdParam) {
         const agentMainKey = resolveConfiguredAgentMainSessionKey({
           cfg,
@@ -483,10 +500,6 @@ export function createSessionsSendTool(opts?: {
         sessionKey = agentMainKey;
       }
       if (!sessionKey && labelParam) {
-        const requesterAgentId = resolveAgentIdFromSessionKey(
-          effectiveRequesterKey,
-          resolveDefaultAgentId(cfg),
-        );
         const requestedAgentId = labelAgentIdParam
           ? normalizeAgentId(labelAgentIdParam)
           : undefined;
@@ -524,12 +537,13 @@ export function createSessionsSendTool(opts?: {
         };
         let resolvedKey;
         try {
-          const resolved = await gatewayCall<{ key: string }>({
+          const resolved = await gatewayCall<{ agentId?: string; key: string }>({
             method: "sessions.resolve",
             params: resolveParams,
             timeoutMs: 10_000,
           });
           resolvedKey = normalizeOptionalString(resolved?.key) ?? "";
+          resolvedTargetAgentId = normalizeOptionalString(resolved?.agentId);
         } catch (err) {
           const msg = formatErrorMessage(err);
           if (restrictToSpawned) {
@@ -603,6 +617,35 @@ export function createSessionsSendTool(opts?: {
       // Normalize sessionKey/sessionId input into a canonical session key.
       const resolvedKey = visibleSession.key;
       const displayKey = visibleSession.displayKey;
+      const resolvedKeyAgentId = parseAgentSessionKey(resolvedKey)?.agentId;
+      const compatibilityTargetAgentId =
+        !resolvedKeyAgentId && !isUnscopedSessionKeySentinel(resolvedKey)
+          ? tryResolveLegacyCompatibilityAgentId(cfg)
+          : undefined;
+      const mayUseRequesterForLiteralSentinel =
+        !labelParam &&
+        sessionKeyParam !== undefined &&
+        isUnscopedSessionKeySentinel(sessionKeyParam.trim());
+      const targetAgentId =
+        visibleSession.agentId ??
+        resolvedTargetAgentId ??
+        resolvedKeyAgentId ??
+        (labelParam && labelAgentIdParam ? normalizeAgentId(labelAgentIdParam) : undefined) ??
+        (mayUseRequesterForLiteralSentinel ? requesterAgentId : undefined) ??
+        compatibilityTargetAgentId;
+      if (
+        !targetAgentId &&
+        !resolvedKeyAgentId &&
+        (!isUnscopedSessionKeySentinel(resolvedKey) || resolvedSession.resolvedViaSessionId)
+      ) {
+        return jsonResult({
+          runId: crypto.randomUUID(),
+          status: "forbidden",
+          error:
+            "Session ownership could not be verified. Upgrade the gateway or use an agent-prefixed session key.",
+          sessionKey: unresolvedDisplayKey,
+        });
+      }
       const rawRequesterSessionKey = opts?.agentSessionKey ? effectiveRequesterKey : undefined;
       const parsedRequesterSessionKey = parseAgentSessionKey(rawRequesterSessionKey);
       const requesterRouteBindings = cfg.bindings?.filter(
@@ -726,12 +769,19 @@ export function createSessionsSendTool(opts?: {
       }
       const visibilityGuard = await createSessionVisibilityGuard({
         action: "send",
-        defaultAgentId: resolveDefaultAgentId(cfg),
+        requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
         visibility: sessionVisibility,
         a2aPolicy,
       });
-      const access = visibilityGuard.check(resolvedKey);
+      // Authorization must use the resolved owner even when the stored key is
+      // bare; otherwise a cross-agent key is interpreted in the requester store.
+      const authorizationTargetKey = mayUseRequesterForLiteralSentinel
+        ? effectiveRequesterKey
+        : targetAgentId && !parseAgentSessionKey(resolvedKey) && !mayUseRequesterForLiteralSentinel
+          ? `agent:${targetAgentId}:${resolvedKey}`
+          : resolvedKey;
+      const access = visibilityGuard.check(authorizationTargetKey);
       if (!access.allowed) {
         return jsonResult({
           runId: crypto.randomUUID(),
@@ -749,6 +799,7 @@ export function createSessionsSendTool(opts?: {
           const ensuredSession = await ensureConfiguredAgentMainSession({
             cfg,
             callGateway: gatewayCall,
+            ...(targetAgentId ? { agentId: targetAgentId } : {}),
             sessionKey: resolvedKey,
             mainKey,
             requesterSessionKey,
@@ -799,12 +850,14 @@ export function createSessionsSendTool(opts?: {
             timeoutSeconds !== 0
               ? await readLatestAssistantReplySnapshot({
                   sessionKey: resolvedKey,
+                  agentId: targetAgentId,
                   limit: SESSIONS_SEND_REPLY_HISTORY_LIMIT,
                   callGateway: gatewayCall,
                 })
               : sameSessionA2A || isIsolatedCronRequester
                 ? await readLatestAssistantReplySnapshot({
                     sessionKey: resolvedKey,
+                    agentId: targetAgentId,
                     limit: SESSIONS_SEND_REPLY_HISTORY_LIMIT,
                     callGateway: gatewayCall,
                   }).catch(() => undefined)
@@ -815,6 +868,7 @@ export function createSessionsSendTool(opts?: {
             fallbackA2ASessionKey && fallbackA2ASessionKey !== resolvedKey
               ? await readLatestAssistantReplySnapshot({
                   sessionKey: fallbackA2ASessionKey,
+                  agentId: targetAgentId,
                   limit: SESSIONS_SEND_REPLY_HISTORY_LIMIT,
                   callGateway: gatewayCall,
                 }).catch(() => undefined)
@@ -833,6 +887,7 @@ export function createSessionsSendTool(opts?: {
           };
           const sendParams = {
             message: annotateInterSessionPromptText(message, inputProvenance),
+            agentId: targetAgentId,
             sessionKey: resolvedKey,
             idempotencyKey,
             deliver: false,
@@ -860,8 +915,12 @@ export function createSessionsSendTool(opts?: {
           // unrelated sender that can see the same target (e.g. under
           // `tools.sessions.visibility=all`) must still go through the normal A2A
           // path so it actually receives a follow-up delivery.
-          const targetSessionEntry = loadSessionEntryByKey(resolvedKey);
-          const targetAcpMeta = readAcpSessionMeta({ sessionKey: resolvedKey });
+          const targetSessionEntry = loadSessionEntryByKey(resolvedKey, targetAgentId);
+          const targetAcpMeta = readAcpSessionMeta({
+            sessionKey: resolvedKey,
+            agentId: targetAgentId,
+            cfg,
+          });
           const targetSessionEntryWithAcp =
             targetAcpMeta && targetSessionEntry
               ? { ...targetSessionEntry, acp: targetAcpMeta }
@@ -906,6 +965,7 @@ export function createSessionsSendTool(opts?: {
                 : baselineReply;
             void runSessionsSendA2AFlow({
               targetSessionKey: flowTargetSessionKey,
+              targetAgentId,
               displayKey: flowDisplayKey,
               message,
               announceTimeoutMs,
@@ -913,6 +973,7 @@ export function createSessionsSendTool(opts?: {
               // requester turns, but the target-side announce still runs.
               maxPingPongTurns: isIsolatedCronRequester ? 0 : maxPingPongTurns,
               requesterSessionKey: replyRequesterSessionKey,
+              requesterAgentId,
               requesterChannel,
               baseline: flowBaseline,
               roundOneReply,
@@ -962,6 +1023,7 @@ export function createSessionsSendTool(opts?: {
           const result = await waitForAgentRunAndReadUpdatedAssistantReply({
             runId,
             sessionKey: resolvedKey,
+            agentId: targetAgentId,
             timeoutMs,
             limit: SESSIONS_SEND_REPLY_HISTORY_LIMIT,
             baseline: baselineReply,

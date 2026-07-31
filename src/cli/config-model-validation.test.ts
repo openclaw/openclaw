@@ -87,13 +87,14 @@ describe("config model validation", () => {
     const result = await checkTouchedTextModelRefs({
       config: {
         agents: {
+          ownership: "explicit",
           defaults: {
             model: {
               primary: "openai/gpt-5.4-mini",
               fallbacks: ["anthropic/claude-sonnet-4-6"],
             },
           },
-          entries: { main: { default: true }, ops: {} },
+          entries: { main: {}, ops: {} },
         },
       },
       touchedPaths: [["agents", "defaults", "model"]],
@@ -107,9 +108,9 @@ describe("config model validation", () => {
         agentId: call.ref.agentId,
       })),
     ).toEqual([
-      { path: "agents.defaults.model.primary", agentId: undefined },
+      { path: "agents.defaults.model.primary", agentId: "main" },
       { path: "agents.defaults.model.primary", agentId: "ops" },
-      { path: "agents.defaults.model.fallbacks.0", agentId: undefined },
+      { path: "agents.defaults.model.fallbacks.0", agentId: "main" },
       { path: "agents.defaults.model.fallbacks.0", agentId: "ops" },
     ]);
   });
@@ -150,7 +151,7 @@ describe("config model validation", () => {
       config: {
         agents: {
           defaults: { model: { primary: "openai/gpt-5.4-mini@work" } },
-          entries: { main: { default: true } },
+          entries: { main: {} },
         },
       },
       touchedPaths: [["agents", "defaults", "model", "primary"]],
@@ -162,7 +163,7 @@ describe("config model validation", () => {
       config: {
         agents: {
           defaults: { model: { primary: "openai/gpt-5.4-mini@work" } },
-          entries: { main: { default: true } },
+          entries: { main: {} },
         },
       },
       ref: {
@@ -523,6 +524,7 @@ describe("config model validation", () => {
     const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
     const config: OpenClawConfig = {
       agents: {
+        ownership: "explicit",
         defaults: {
           model: {
             primary: "provider-b/main",
@@ -530,7 +532,7 @@ describe("config model validation", () => {
           },
         },
         entries: {
-          main: { default: true },
+          main: {},
           ops: {
             model: {
               primary: "provider-c/main",
@@ -719,6 +721,7 @@ describe("config model validation", () => {
     const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
     const config: OpenClawConfig = {
       agents: {
+        ownership: "explicit",
         defaults: {
           model: {
             primary: "openai/gpt-5.4-mini",
@@ -726,7 +729,7 @@ describe("config model validation", () => {
           },
         },
         entries: {
-          main: { default: true },
+          main: {},
           ops: { model: { primary: "google/gemini-3.1-pro-preview" } },
         },
       },
@@ -746,6 +749,7 @@ describe("config model validation", () => {
       {
         path: "agents.defaults.model.fallbacks.0",
         value: "anthropic/claude-sonnet-4-6",
+        agentId: "main",
         fallback: true,
       },
       {

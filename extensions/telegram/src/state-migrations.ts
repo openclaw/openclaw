@@ -1,7 +1,7 @@
 // Telegram plugin module implements state migrations behavior.
 import fs from "node:fs";
 import path from "node:path";
-import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
+import { tryResolveSoleAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { ChannelLegacyStateMigrationPlan } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { fileExists } from "openclaw/plugin-sdk/security-runtime";
@@ -72,6 +72,13 @@ function resolveAgentSessionStorePath(params: {
     env: params.env,
     agentId: params.agentId,
   });
+}
+
+function resolveLegacyStateMigrationAgentId(params: {
+  cfg: OpenClawConfig;
+  migrationAgentId?: string;
+}): string | undefined {
+  return params.migrationAgentId?.trim() || tryResolveSoleAgentId(params.cfg);
 }
 
 function resolveMigrationStateDir(params: { env: NodeJS.ProcessEnv; stateDir?: string }): string {
@@ -195,10 +202,15 @@ function detectTelegramMessageCacheLegacyStateMigration(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   stateDir?: string;
+  migrationAgentId?: string;
 }): ChannelLegacyStateMigrationPlan[] {
+  const migrationAgentId = resolveLegacyStateMigrationAgentId(params);
+  if (!migrationAgentId) {
+    return [];
+  }
   const storePath = resolveAgentSessionStorePath({
     ...params,
-    agentId: resolveDefaultAgentId(params.cfg),
+    agentId: migrationAgentId,
   });
   const legacyMainStorePath = resolveAgentSessionStorePath({ ...params, agentId: "main" });
   const runtimePersistedPath = resolveTelegramMessageCachePath(storePath);
@@ -338,8 +350,12 @@ function detectTelegramSentMessageCacheLegacyStateMigration(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   stateDir?: string;
+  migrationAgentId?: string;
 }): ChannelLegacyStateMigrationPlan[] {
-  const defaultAgentId = resolveDefaultAgentId(params.cfg);
+  const defaultAgentId = resolveLegacyStateMigrationAgentId(params);
+  if (!defaultAgentId) {
+    return [];
+  }
   const storePath = resolveAgentSessionStorePath({ ...params, agentId: defaultAgentId });
   const legacyMainStorePath = resolveAgentSessionStorePath({ ...params, agentId: "main" });
   const legacyStorePath = resolveLegacySessionStorePath(params);
@@ -424,6 +440,7 @@ function detectTelegramTopicNameCacheLegacyStateMigration(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   stateDir?: string;
+  migrationAgentId?: string;
 }): ChannelLegacyStateMigrationPlan[] {
   const accountSources = listTelegramAccountIds(params.cfg).map((accountId) => {
     const storePath = resolveStorePath(params.cfg.session?.store, {
@@ -432,10 +449,10 @@ function detectTelegramTopicNameCacheLegacyStateMigration(params: {
     });
     return topicNameCacheImportSource({ sourceStorePath: storePath });
   });
-  const defaultStorePath = resolveAgentSessionStorePath({
-    ...params,
-    agentId: resolveDefaultAgentId(params.cfg),
-  });
+  const migrationAgentId = resolveLegacyStateMigrationAgentId(params);
+  const defaultStorePath = migrationAgentId
+    ? resolveAgentSessionStorePath({ ...params, agentId: migrationAgentId })
+    : undefined;
   const legacyMainStorePath = resolveAgentSessionStorePath({ ...params, agentId: "main" });
   const defaultAccountStorePath = resolveStorePath(params.cfg.session?.store, {
     env: params.env,
@@ -445,8 +462,10 @@ function detectTelegramTopicNameCacheLegacyStateMigration(params: {
   const sourcesByKey = new Map(
     [
       ...accountSources,
-      topicNameCacheImportSource({ sourceStorePath: defaultStorePath }),
       topicNameCacheImportSource({ sourceStorePath: legacyMainStorePath }),
+      ...(defaultStorePath
+        ? [topicNameCacheImportSource({ sourceStorePath: defaultStorePath })]
+        : []),
       topicNameCacheImportSource({
         sourceStorePath: legacyStorePath,
         targetStorePath: defaultAccountStorePath,
@@ -482,6 +501,7 @@ export async function detectTelegramLegacyStateMigrations(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   stateDir?: string;
+  migrationAgentId?: string;
 }): Promise<ChannelLegacyStateMigrationPlan[]> {
   const plans: ChannelLegacyStateMigrationPlan[] = [];
   plans.push(...detectTelegramUpdateOffsetLegacyStateMigration(params));

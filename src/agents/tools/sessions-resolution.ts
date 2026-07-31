@@ -157,6 +157,7 @@ export function shouldResolveSessionIdInput(value: string): boolean {
 type SessionReferenceResolution =
   | {
       ok: true;
+      agentId?: string;
       key: string;
       displayKey: string;
       resolvedViaSessionId: boolean;
@@ -166,6 +167,7 @@ type SessionReferenceResolution =
 type VisibleSessionReferenceResolution =
   | {
       ok: true;
+      agentId?: string;
       key: string;
       displayKey: string;
     }
@@ -177,6 +179,7 @@ type VisibleSessionReferenceResolution =
     };
 
 function buildResolvedSessionReference(params: {
+  agentId?: string;
   key: string;
   alias: string;
   mainKey: string;
@@ -184,6 +187,7 @@ function buildResolvedSessionReference(params: {
 }): Extract<SessionReferenceResolution, { ok: true }> {
   return {
     ok: true,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     key: params.key,
     displayKey: resolveDisplaySessionKey({
       key: params.key,
@@ -243,7 +247,7 @@ async function callGatewayResolveSessionId(params: {
   requesterInternalKey?: string;
   restrictToSpawned: boolean;
   allowMissing?: boolean;
-}): Promise<string> {
+}): Promise<{ agentId?: string; key: string }> {
   const result = await callGatewayResolveSession(buildSessionIdResolveParams(params));
   const key = normalizeOptionalString(result?.key) ?? "";
   if (!key) {
@@ -251,7 +255,8 @@ async function callGatewayResolveSessionId(params: {
       `Session not found: ${params.sessionId} (use the full sessionKey from sessions_list)`,
     );
   }
-  return key;
+  const agentId = normalizeOptionalString(result?.agentId);
+  return { key, ...(agentId ? { agentId } : {}) };
 }
 
 async function resolveSessionKeyFromSessionId(params: {
@@ -264,8 +269,9 @@ async function resolveSessionKeyFromSessionId(params: {
 }): Promise<SessionReferenceResolution> {
   try {
     // Resolve via gateway so we respect store routing and visibility rules.
-    const key = await callGatewayResolveSessionId(params);
+    const { key, agentId } = await callGatewayResolveSessionId(params);
     return buildResolvedSessionReference({
+      agentId,
       key,
       alias: params.alias,
       mainKey: params.mainKey,
@@ -309,7 +315,9 @@ async function resolveSessionKeyFromKey(params: {
     if (!key) {
       return null;
     }
+    const agentId = normalizeOptionalString(result?.agentId);
     return buildResolvedSessionReference({
+      agentId,
       key,
       alias: params.alias,
       mainKey: params.mainKey,
@@ -329,8 +337,9 @@ async function tryResolveSessionKeyFromSessionId(params: {
   allowMissing?: boolean;
 }): Promise<Extract<SessionReferenceResolution, { ok: true }> | null> {
   try {
-    const key = await callGatewayResolveSessionId(params);
+    const { key, agentId } = await callGatewayResolveSessionId(params);
     return buildResolvedSessionReference({
+      agentId,
       key,
       alias: params.alias,
       mainKey: params.mainKey,
@@ -493,7 +502,12 @@ export async function resolveVisibleSessionReference(params: {
       displayKey,
     };
   }
-  return { ok: true, key: resolvedKey, displayKey };
+  return {
+    ok: true,
+    ...(params.resolvedSession.agentId ? { agentId: params.resolvedSession.agentId } : {}),
+    key: resolvedKey,
+    displayKey,
+  };
 }
 
 const testing = {

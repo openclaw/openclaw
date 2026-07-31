@@ -116,7 +116,7 @@ vi.mock("../agents/agent-scope.js", async (importOriginal) => ({
     resolveAgentEntry(config, agentId)?.agentDir ?? `/agents/${agentId}`,
 }));
 
-import { applySystemAgentModelSelection, applySystemAgentSetup } from "./setup-apply.js";
+import { applySystemAgentSetup } from "./setup-apply.js";
 
 const runtime: RuntimeEnv = {
   log: vi.fn(),
@@ -201,57 +201,6 @@ function baseParams(overrides: Partial<Parameters<typeof applySystemAgentSetup>[
     ...overrides,
   };
 }
-
-describe("applySystemAgentModelSelection", () => {
-  it("clears stale harness pins in both model scopes for a native route", async () => {
-    const config = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
-          },
-        },
-        entries: {
-          work: {
-            default: true,
-            model: "openai/gpt-5.5",
-            models: {
-              "openai/gpt-5.5": {
-                alias: "primary",
-                agentRuntime: { id: "codex" },
-              },
-            },
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    const result = await applySystemAgentModelSelection({
-      config,
-      model: "openai/gpt-5.5",
-    });
-
-    expect(result.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime).toBeUndefined();
-    expect(result.agents?.entries?.work?.models?.["openai/gpt-5.5"]).toEqual({ alias: "primary" });
-    expect(result.agents?.entries?.work?.model).toBe("openai/gpt-5.5");
-  });
-
-  it("pins the verified credential without creating a global visibility map", async () => {
-    const result = await applySystemAgentModelSelection({
-      config: {
-        agents: {
-          defaults: { model: "openai/gpt-5.5" },
-          entries: { main: { default: true } },
-        },
-      },
-      model: "openai/gpt-5.5",
-      authProfileId: "openai:verified",
-    });
-
-    expect(result.agents?.defaults?.model).toBe("openai/gpt-5.5@openai:verified");
-    expect(result.agents?.defaults?.models).toBeUndefined();
-  });
-});
 
 describe("applySystemAgentSetup transaction boundaries", () => {
   beforeEach(() => {
@@ -483,14 +432,14 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     expect(mocks.state.persistedConfig?.agents?.defaults?.workspace).toBe("/tmp/current-workspace");
   });
 
-  it("keeps the fleet workspace and provisions the configured default agent", async () => {
+  it("keeps the fleet workspace and provisions the explicit target agent", async () => {
     const config = {
       agents: {
+        ownership: "explicit" as const,
         defaults: { workspace: "/tmp/current-workspace" },
         entries: {
           main: {},
           ops: {
-            default: true,
             agentDir: "/agents/ops",
             workspace: "/tmp/ops-workspace",
           },
@@ -504,6 +453,8 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     await applySystemAgentSetup(
       baseParams({
         workspace: "/tmp/requested-workspace",
+        targetAgentId: "ops",
+        expectedAgentId: "ops",
         configPatch: {
           agents: { defaults: { workspace: "/tmp/patch-workspace" }, entries: null },
         },
@@ -517,6 +468,77 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       runtime,
       expect.objectContaining({ agentId: "ops" }),
     );
+  });
+
+  it("rejects differing mutation and verified setup owners", async () => {
+    const config = {
+      agents: {
+        ownership: "explicit" as const,
+        entries: { ops: {}, research: {} },
+      },
+    } satisfies OpenClawConfig;
+    mocks.state.initialSnapshot = snapshot("probe", config);
+    mocks.state.commitConfig = structuredClone(config);
+    mocks.state.commitSnapshot = snapshot("probe", config);
+
+    await expect(
+      applySystemAgentSetup(baseParams({ targetAgentId: "research", expectedAgentId: "ops" })),
+    ).rejects.toThrow("setup target agent does not match the verified inference owner");
+
+    expect(mocks.state.persistedConfig).toBeUndefined();
+    expect(mocks.ensureWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("accepts the validated implicit agent without requiring a stored roster entry", async () => {
+    const config = {} satisfies OpenClawConfig;
+    mocks.state.initialSnapshot = snapshot("probe", config);
+    mocks.state.commitConfig = structuredClone(config);
+    mocks.state.commitSnapshot = snapshot("probe", config);
+
+    await expect(
+      applySystemAgentSetup(baseParams({ expectedAgentId: "main", model: "openai/gpt-5.5" })),
+    ).resolves.toMatchObject({ configPath: "/tmp/openclaw.json" });
+    expect(mocks.state.persistedConfig?.agents?.defaults?.model).toBe("openai/gpt-5.5");
+  });
+
+  it("rejects a non-main setup target when no roster is authored", async () => {
+    const config = {} satisfies OpenClawConfig;
+    mocks.state.initialSnapshot = snapshot("probe", config);
+    mocks.state.commitConfig = structuredClone(config);
+    mocks.state.commitSnapshot = snapshot("probe", config);
+
+    await expect(
+      applySystemAgentSetup(
+        baseParams({
+          targetAgentId: "ops",
+          expectedAgentId: "ops",
+          model: "openai/gpt-5.5",
+        }),
+      ),
+    ).rejects.toThrow(
+      'Cannot apply setup to agent "ops" because the config has no authored agent roster',
+    );
+
+    expect(mocks.state.persistedConfig).toBeUndefined();
+    expect(mocks.ensureWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("rejects an ownerless workspace-only setup before persisting the candidate", async () => {
+    const config: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+    };
+    mocks.state.initialSnapshot = snapshot("probe", config);
+    mocks.state.commitConfig = structuredClone(config);
+    mocks.state.commitSnapshot = snapshot("probe", config);
+
+    await expect(
+      applySystemAgentSetup(baseParams({ workspace: "/tmp/requested-workspace" })),
+    ).rejects.toMatchObject({ code: "AGENT_SELECTION_REQUIRED" });
+
+    expect(mocks.state.persistedConfig).toBeUndefined();
+    expect(mocks.events).toEqual([]);
+    expect(mocks.ensureWorkspace).not.toHaveBeenCalled();
+    expect(mocks.ensureGatewayService).not.toHaveBeenCalled();
   });
 
   it("rejects invalid config before any setup mutation", async () => {

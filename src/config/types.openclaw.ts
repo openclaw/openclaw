@@ -282,6 +282,8 @@ export type ConfigFileSnapshot = {
   includeProvenance?: readonly ConfigIncludeOwnership[];
   /** Temporary roster-only projection retained until write preparation uses generic ownership. */
   agentRosterIncludeOwned?: boolean;
+  /** Temporary bindings projection retained until write preparation uses generic ownership. */
+  bindingsIncludeOwned?: boolean;
   /** Whether the config file exists on disk. */
   exists: boolean;
   /** Raw file contents before parsing; null when missing. */

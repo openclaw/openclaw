@@ -111,16 +111,16 @@ describe("cron batch outcome finalization", () => {
         .mockImplementation(async (...args) => {
           const persistedJob = args[1].jobs.find((entry) => entry.id === job.id);
           if (!reservationPersisted && persistedJob?.state.queuedAtMs === reservedAt) {
-            await save(...args);
+            const persisted = await save(...args);
             reservationPersisted = true;
             now = startedAt;
-            return;
+            return persisted;
           }
           if (!terminalWriteRejected && persistedJob?.state.lastRunStatus === "ok") {
             terminalWriteRejected = true;
             throw new Error("cron terminal write failed");
           }
-          await save(...args);
+          return await save(...args);
         });
 
       let recoveryState: ReturnType<typeof createCronServiceState> | undefined;

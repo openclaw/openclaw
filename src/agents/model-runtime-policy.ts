@@ -10,7 +10,8 @@ import type { AgentModelEntryConfig } from "../config/types.agent-defaults.js";
 import type { AgentRuntimePolicyConfig } from "../config/types.agents-shared.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { tryResolveSoleAgentId } from "./agent-scope-config.js";
 import { listAgentEntries, resolveSessionAgentIds } from "./agent-scope.js";
 
 /** Config surface that supplied a resolved model runtime policy. */
@@ -190,14 +191,17 @@ function resolveAgentModelEntryRuntimePolicy(params: {
   if (!params.config || (!modelId && params.matchKind !== "provider-wildcard")) {
     return {};
   }
-  const { sessionAgentId } = resolveSessionAgentIds({
-    config: params.config,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-  });
-  const agentEntry = listAgentEntries(params.config).find(
-    (entry) => normalizeAgentId(entry.id) === sessionAgentId,
-  );
+  const hasScopedOwner = Boolean(params.agentId?.trim() || parseAgentSessionKey(params.sessionKey));
+  const sessionAgentId = hasScopedOwner
+    ? resolveSessionAgentIds({
+        config: params.config,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+      }).sessionAgentId
+    : tryResolveSoleAgentId(params.config);
+  const agentEntry = sessionAgentId
+    ? listAgentEntries(params.config).find((entry) => normalizeAgentId(entry.id) === sessionAgentId)
+    : undefined;
   const modelMaps: Array<Record<string, AgentModelEntryConfig> | undefined> = [
     agentEntry?.models,
     params.config.agents?.defaults?.models,

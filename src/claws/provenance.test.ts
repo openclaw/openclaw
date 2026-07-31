@@ -416,7 +416,7 @@ describe("applyClawAddPlan", () => {
     });
 
     expect(config.agents?.entries).toEqual({
-      main: { default: true },
+      main: {},
       worker: expect.any(Object),
     });
   });

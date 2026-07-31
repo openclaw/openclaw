@@ -485,7 +485,9 @@ async function handleChatHistoryRequest({
   const catalogOwnedBySessionAgent = modelCatalogSnapshot?.agentId === sessionAgentId;
   const catalogConfig = catalogOwnedBySessionAgent ? modelCatalogSnapshot.config : cfg;
   const modelCatalog = catalogOwnedBySessionAgent ? modelCatalogSnapshot.entries : undefined;
-  const defaultAgentId = resolveDefaultAgentId(catalogConfig);
+  // The selected session owns every per-agent projection below. Using a fleet
+  // default here makes explicit multi-agent rosters impossible to inspect.
+  const defaultAgentId = sessionAgentId;
   let startupCatalogProjection:
     | Awaited<ReturnType<typeof buildChatStartupModelCatalogProjection>>
     | undefined;
@@ -547,9 +549,6 @@ async function handleChatHistoryRequest({
     startupAgentsList = startupProjections.agentsList;
   }
   const sessionModelCatalog = startupCatalogProjection?.sessionModelCatalog ?? modelCatalog;
-  const defaultModelCatalog =
-    startupCatalogProjection?.modelCatalogByAgentId.get(normalizeAgentId(defaultAgentId)) ??
-    modelCatalog;
   const sessionInfo = measureDiagnosticsTimelineSpanSync(
     `gateway.${method}.session_info`,
     () =>
@@ -585,7 +584,8 @@ async function handleChatHistoryRequest({
   if (Object.hasOwn(historyPage, "activeLeafEntryId")) {
     sessionInfo.activeLeafEntryId = historyPage.activeLeafEntryId ?? null;
   }
-  const defaults = getSessionDefaults(cfg, defaultModelCatalog, {
+  const defaults = getSessionDefaults(cfg, sessionModelCatalog, {
+    agentId: sessionAgentId,
     allowPluginNormalization: false,
   });
   const thinkingLevel = sessionInfo.thinkingLevel ?? sessionInfo.thinkingDefault;

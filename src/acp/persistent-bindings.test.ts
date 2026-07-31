@@ -727,6 +727,26 @@ describe("resolveConfiguredAcpBindingRecord", () => {
 
     expect(resolved?.spec.cwd).toBe(resolveAgentWorkspaceDir(cfg, "codex"));
   });
+
+  it("derives configured binding cwd from a fleet workspace root", () => {
+    const cfg = createCfgWithBindings(
+      [
+        createDiscordBinding({
+          agentId: "codex",
+          conversationId: defaultDiscordConversationId,
+        }),
+      ],
+      {
+        agents: {
+          defaults: { workspace: "/workspace/fleet" },
+          list: [{ id: "codex" }, { id: "claude" }],
+        },
+      },
+    );
+    const resolved = resolveBindingRecord(cfg);
+
+    expect(resolved?.spec.cwd).toBe(resolveAgentWorkspaceDir(cfg, "codex"));
+  });
 });
 
 describe("resolveConfiguredAcpBindingSpecBySessionKey", () => {

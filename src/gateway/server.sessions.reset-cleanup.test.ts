@@ -857,7 +857,10 @@ test("sessions.reset closes a spawned ACP child that lives in a different agent 
     },
   });
 
-  const reset = await directSessionReq<{ ok: true }>("sessions.reset", { key: "main" });
+  const reset = await directSessionReq<{ ok: true }>("sessions.reset", {
+    key: "main",
+    agentId: "main",
+  });
   expect(reset.ok).toBe(true);
 
   // The child in the codex store is closed even though it is not in the main

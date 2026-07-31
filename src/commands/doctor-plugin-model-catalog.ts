@@ -3,7 +3,7 @@ import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { listAgentIds, resolveAgentDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
+import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
 import {
   decodePluginModelCatalogRelativePathPluginId,
   isGeneratedPluginModelCatalog,
@@ -33,10 +33,11 @@ function resolveMigrationAgentDirs(params: {
   }
   const env = params.env ?? process.env;
   return [
-    ...new Set([
-      resolveDefaultAgentDir(params.cfg, env),
-      ...listAgentIds(params.cfg).map((agentId) => resolveAgentDir(params.cfg, agentId, env)),
-    ]),
+    ...new Set(
+      ["main", ...listAgentIds(params.cfg)].map((agentId) =>
+        resolveAgentDir(params.cfg, agentId, env),
+      ),
+    ),
   ].toSorted((left, right) => left.localeCompare(right));
 }
 

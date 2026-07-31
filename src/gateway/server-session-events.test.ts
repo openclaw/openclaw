@@ -600,6 +600,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
       });
       await Promise.resolve();
       expect(received).toHaveBeenCalledWith({
+        agentId: "main",
         sessionKey: "agent:main:main",
         label: "Renamed session",
         reason: "rename",

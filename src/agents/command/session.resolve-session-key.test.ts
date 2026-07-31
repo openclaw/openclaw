@@ -1,6 +1,7 @@
 // Covers cross-store session-key resolution for multi-agent session stores.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -31,6 +32,7 @@ vi.mock("../../config/sessions/main-session.js", () => ({
 vi.mock("../agent-scope.js", () => ({
   listAgentIds: () => hoisted.listAgentIdsMock(),
   resolveDefaultAgentId: () => "main",
+  tryResolveSoleAgentId: () => undefined,
 }));
 
 const { resolveSessionKeyForRequest, resolveStoredSessionKeyForSessionId } =
@@ -135,6 +137,26 @@ describe("resolveSessionKeyForRequest", () => {
     expect(result.sessionStore).toEqual(embeddedAgentStore);
     expect(result.storePath).toBe("/stores/embedded-agent.json");
     expect(hoisted.listSessionEntriesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("anchors session-id scans to the sole live agent after a retained owner departs", () => {
+    const researchStore = {
+      main: { sessionId: "research-session", updatedAt: 10 },
+    } satisfies Record<string, SessionEntry>;
+    mockSessionStores({ "/stores/research.json": researchStore });
+    const cfg = retainLegacyDefaultAgentId(
+      {
+        session: { store: "/stores/{agentId}.json" },
+        agents: { entries: { research: {} } },
+      },
+      "ops",
+    );
+
+    const result = resolveSessionKeyForRequest({ cfg, sessionId: "research-session" });
+
+    expect(result.sessionKey).toBe("main");
+    expect(result.sessionStore).toEqual(researchStore);
+    expect(result.storePath).toBe("/stores/research.json");
   });
 
   it("borrows session stores when requested", () => {

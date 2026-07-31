@@ -17,7 +17,7 @@ function requireCronAgentId(agentId: string | undefined): string {
 }
 
 function resolveCurrentDefaultAgentId(state: CronServiceState): string | undefined {
-  return state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId;
+  return resolveCronServiceDefaultAgentId(state.deps);
 }
 import {
   createRunningTaskRun,
@@ -43,7 +43,11 @@ import {
 import { cronRunLogEntryFromEvent } from "../task-run-event-codec.js";
 import type { CronJob, CronRunErrorClassification, CronRunStatus } from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
-import type { CronEvent, CronServiceState } from "./state.js";
+import {
+  type CronEvent,
+  type CronServiceState,
+  resolveCronServiceDefaultAgentId,
+} from "./state.js";
 import { CRON_TASK_RUNNING_PROGRESS_SUMMARY } from "./task-ledger.js";
 
 /** Converts cron ids into bounded session-key path segments with a fallback for empty input. */

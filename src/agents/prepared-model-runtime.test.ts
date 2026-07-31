@@ -74,11 +74,28 @@ vi.mock("../plugins/synthetic-auth.runtime.js", () => ({
 vi.mock("./agent-scope.js", () => ({
   listAgentIds: () => mocks.configuredAgentIds,
   resolveAgentDir: (_config: unknown, agentId: string) =>
-    agentId === "default" ? "/tmp/unused-agent" : `/tmp/configured-${agentId}`,
+    agentId === "default" || agentId === "main"
+      ? "/tmp/unused-agent"
+      : `/tmp/configured-${agentId}`,
   resolveAgentWorkspaceDir: (_config: unknown, agentId: string) =>
     agentId === "default" ? "/tmp/unused-workspace" : `/tmp/workspace-${agentId}`,
   resolveDefaultAgentDir: () => "/tmp/unused-agent",
   resolveDefaultAgentId: () => "default",
+  tryResolveSoleAgentId: () =>
+    mocks.configuredAgentIds.length === 1 ? mocks.configuredAgentIds[0] : undefined,
+}));
+
+vi.mock("./agent-scope-config.js", () => ({
+  resolveAgentEntry: (
+    config: { agents?: { entries?: Record<string, unknown> } },
+    agentId: string,
+  ) => config.agents?.entries?.[agentId],
+  tryResolveSoleAgentId: () =>
+    mocks.configuredAgentIds.length === 1 ? mocks.configuredAgentIds[0] : undefined,
+}));
+
+vi.mock("./legacy-inherited-auth-dir.js", () => ({
+  resolveLegacyInheritedAuthDir: () => "/tmp/unused-agent",
 }));
 
 vi.mock("./auth-profiles/runtime-snapshots.js", () => ({

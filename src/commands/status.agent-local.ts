@@ -21,7 +21,7 @@ export type AgentLocalStatus = {
 };
 
 type AgentLocalStatusesResult = {
-  defaultId: string;
+  defaultId?: string;
   agents: AgentLocalStatus[];
   totalSessions: number;
   bootstrapPendingCount: number;
@@ -74,7 +74,7 @@ export async function getAgentLocalStatuses(
   const totalSessions = statuses.reduce((sum, s) => sum + s.sessionsCount, 0);
   const bootstrapPendingCount = statuses.reduce((sum, s) => sum + (s.bootstrapPending ? 1 : 0), 0);
   return {
-    defaultId: agentList.defaultId,
+    ...(!agentList.selectionRequired ? { defaultId: agentList.defaultId } : {}),
     agents: statuses,
     totalSessions,
     bootstrapPendingCount,

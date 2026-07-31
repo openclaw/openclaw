@@ -509,13 +509,13 @@ Query-string tokens are rejected.
 
 <AccordionGroup>
   <Accordion title="POST /hooks/wake">
-    Enqueue a system event for the main session:
+    Enqueue a system event for the selected agent's main session:
 
     ```bash
     curl -X POST http://127.0.0.1:18789/hooks/wake \
       -H 'Authorization: Bearer SECRET' \
       -H 'Content-Type: application/json' \
-      -d '{"text":"New email received","mode":"now"}'
+      -d '{"text":"New email received","mode":"now","agentId":"main"}'
     ```
 
     <ParamField path="text" type="string" required>
@@ -523,6 +523,9 @@ Query-string tokens are rejected.
     </ParamField>
     <ParamField path="mode" type="string" default="now">
       `now` or `next-heartbeat`.
+    </ParamField>
+    <ParamField path="agentId" type="string">
+      Target agent. Required when the configured agent fleet has no implicit or retained legacy owner.
     </ParamField>
 
   </Accordion>

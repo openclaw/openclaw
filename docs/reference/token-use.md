@@ -233,6 +233,7 @@ agents:
 
 ```yaml
 agents:
+  ownership: "explicit"
   defaults:
     model:
       primary: "anthropic/claude-opus-4-6"
@@ -240,12 +241,11 @@ agents:
       "anthropic/claude-opus-4-6":
         params:
           cacheRetention: "long" # default baseline for most agents
-  list:
-    - id: "research"
-      default: true
+  entries:
+    research:
       heartbeat:
         every: "55m" # keep long cache warm for deep sessions
-    - id: "alerts"
+    alerts:
       params:
         cacheRetention: "none" # avoid cache writes for bursty notifications
 ```

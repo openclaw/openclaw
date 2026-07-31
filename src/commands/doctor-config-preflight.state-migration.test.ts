@@ -899,7 +899,7 @@ describe("runDoctorConfigPreflight state migration", () => {
     );
   });
 
-  it("runs plugin state migrations with resolved legacy config before config repair removes retired paths", async () => {
+  it("runs plugin state migrations with resolved canonical config before config repair", async () => {
     const parsedConfig = { $include: "memory-search.json" };
     const resolvedConfig = {
       cron: { webhook: "https://example.invalid/cron-finished" },
@@ -951,7 +951,7 @@ describe("runDoctorConfigPreflight state migration", () => {
         }),
         agents: expect.objectContaining({
           defaults: expect.objectContaining({}),
-          entries: { main: { default: true } },
+          entries: { main: {} },
         }),
       }),
       migrateCodexModelRefs: false,
@@ -967,7 +967,7 @@ describe("runDoctorConfigPreflight state migration", () => {
         }),
         agents: expect.objectContaining({
           defaults: expect.objectContaining({}),
-          entries: { main: { default: true } },
+          entries: { main: {} },
         }),
       }),
       pluginDoctorConfig: resolvedConfig,

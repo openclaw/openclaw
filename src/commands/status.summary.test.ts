@@ -143,6 +143,8 @@ vi.mock("../config/sessions/session-accessor.js", () => ({
 vi.mock("../gateway/agent-list.js", () => ({
   listGatewayAgentsBasic: vi.fn(() => ({
     defaultId: "main",
+    ownership: "sole",
+    selectionRequired: false,
     agents: [{ id: "main" }],
   })),
 }));
@@ -264,6 +266,8 @@ describe("getStatusSummary", () => {
     vi.mocked(resolveStorePath).mockReturnValue("/tmp/sessions.json");
     vi.mocked(listGatewayAgentsBasic).mockReturnValue({
       defaultId: "main",
+      ownership: "sole",
+      selectionRequired: false,
       mainKey: "main",
       scope: "per-sender",
       agents: [{ id: "main" }],
@@ -324,6 +328,21 @@ describe("getStatusSummary", () => {
       includeAllowFrom: true,
       sourceConfig,
     });
+  });
+
+  it("omits a compatibility default from ownerless fleet heartbeat status", async () => {
+    vi.mocked(listGatewayAgentsBasic).mockReturnValue({
+      defaultId: "ops",
+      ownership: "explicit",
+      selectionRequired: true,
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "ops" }, { id: "research" }],
+    });
+
+    const summary = await getStatusSummary();
+
+    expect(summary.heartbeat).not.toHaveProperty("defaultAgentId");
   });
 
   it("reports degraded SecretRef owners without exposing ref identifiers", async () => {
@@ -712,6 +731,8 @@ describe("getStatusSummary", () => {
   it("passes agent scope when listing configured agent session stores", async () => {
     vi.mocked(listGatewayAgentsBasic).mockReturnValue({
       defaultId: "main",
+      ownership: "sole",
+      selectionRequired: false,
       mainKey: "main",
       scope: "per-sender",
       agents: [{ id: "main" }, { id: "ops" }],
@@ -749,6 +770,8 @@ describe("getStatusSummary", () => {
   it("aggregates shared file session stores only once", async () => {
     vi.mocked(listGatewayAgentsBasic).mockReturnValue({
       defaultId: "main",
+      ownership: "sole",
+      selectionRequired: false,
       mainKey: "main",
       scope: "per-sender",
       agents: [{ id: "main" }, { id: "ops" }],

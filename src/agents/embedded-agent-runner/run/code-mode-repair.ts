@@ -3,14 +3,13 @@ import {
   CODE_MODE_EXEC_TOOL_NAME,
   CODE_MODE_WAIT_TOOL_NAME,
 } from "../../code-mode-control-tools.js";
+import type { CodeModeFailurePhase } from "../../code-mode-worker-types.js";
 import type {
   AfterToolCallResult,
   AfterToolOutcomeContext,
   Agent,
   AgentToolResult,
 } from "../../runtime/index.js";
-
-type CodeModeFailurePhase = "input" | "guest" | "bridge" | "host";
 
 type CodeModeFailure = {
   code: string;

@@ -1,9 +1,10 @@
 import type fs from "node:fs";
 import path from "node:path";
-import { isVerbose } from "../global-state.js";
-import { isVitestRuntimeEnv } from "../infra/env.js";
+import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { listAgentEntries, tryResolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { replaceFileAtomic } from "../infra/replace-file.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { maintainConfigBackups } from "./backup-rotation.js";
 import { collectChangedPaths } from "./config-change-paths.js";
 import {
@@ -22,18 +23,20 @@ import {
   restoreEnvRefsFromMap,
   restoreEnvVarRefs,
 } from "./env-preserve.js";
-import { INCLUDE_KEY, readConfigIncludeFileWithGuards, resolveConfigIncludes } from "./includes.js";
+import { readConfigIncludeFileWithGuards, resolveConfigIncludes } from "./includes.js";
 import {
   appendConfigAuditRecord,
   capConfigAuditIssues,
   capConfigAuditPaths,
   createConfigWriteAuditRecordBase,
   finalizeConfigWriteAuditRecord,
-  formatConfigOverwriteLogMessage,
   type ConfigWriteAuditResult,
 } from "./io.audit.js";
 import type { ConfigIoContext } from "./io.context.js";
+import { planCronStoreWrite, prepareLegacyCronOwnerHandoffs } from "./io.cron-owner-handoff.js";
 import { recordConfigWriteMetadata } from "./io.meta.js";
+import { materializeRetainedOwnerForTopologyWrite } from "./io.ownership-topology-materialization.js";
+import { assertAutomaticBindingsWriteAllowed } from "./io.ownership-write-guard.js";
 import {
   collectEnvRefPaths,
   containsConfigIncludeDirective,
@@ -52,7 +55,19 @@ import type {
 } from "./io.types.js";
 import { ConfigRuntimeRefreshError, configWritePostCommitRollback } from "./io.types.js";
 import { logConfigWarningsOnce } from "./io.warnings.js";
+import {
+  commitConfigFileWrite,
+  createWorkspacePluginDirectory,
+  removeEmptyWorkspacePluginDirectories,
+} from "./io.write-commit.js";
 import { formatConfigValidationFailure } from "./io.write-errors.js";
+import { createConfigWriteLoggers } from "./io.write-logging.js";
+import {
+  hasIncludedGatewayModeOwner,
+  hasOwnIncludeDirective,
+  readConfigPath,
+  setConfigPath,
+} from "./io.write-path-helpers.js";
 import {
   preserveIncludeOwnedConfigForWrite,
   resolvePersistCandidateForWrite,
@@ -70,32 +85,13 @@ import {
 } from "./io.write-safety.js";
 import { formatConfigIssueLines } from "./issue-format.js";
 import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
+import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { assertConfigWriteAllowedInCurrentMode } from "./nix-mode-write-guard.js";
 import { resolveIncludeRoots } from "./paths.js";
 import { preflightRuntimeSnapshotWrite } from "./runtime-snapshot.js";
+import { isSameFixedSessionStoreConfig } from "./sessions/session-store-config.js";
 import type { OpenClawConfig } from "./types.js";
 import { validateConfigObjectRawWithPlugins } from "./validation.js";
-
-function hasOwnIncludeDirective(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && Object.hasOwn(value, INCLUDE_KEY);
-}
-
-function hasIncludedGatewayModeOwner(value: unknown): boolean {
-  if (hasOwnIncludeDirective(value)) {
-    return true;
-  }
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    return false;
-  }
-  const gateway = (value as Record<string, unknown>).gateway;
-  if (hasOwnIncludeDirective(gateway)) {
-    return true;
-  }
-  if (gateway === null || typeof gateway !== "object" || Array.isArray(gateway)) {
-    return false;
-  }
-  return hasOwnIncludeDirective((gateway as Record<string, unknown>).mode);
-}
 
 export async function writeConfigFileFromContext(
   context: ConfigIoContext,
@@ -107,7 +103,8 @@ export async function writeConfigFileFromContext(
   options.assertConfigPathForWrite?.();
   assertConfigWriteAllowedInCurrentMode({ configPath, env: deps.env });
   const unsetPaths = resolveManagedUnsetPathsForWrite(options.unsetPaths);
-  let persistCandidate: unknown = cfg;
+  let nextConfig = cfg;
+  let persistCandidate: unknown;
   const snapshotRead = options.baseSnapshot
     ? {
         snapshot: options.baseSnapshot,
@@ -118,10 +115,166 @@ export async function writeConfigFileFromContext(
   if (options.baseSnapshot) {
     assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);
   }
+  // Retired marker ownership comes from raw input; markerless sole-to-fleet
+  // writes have one equally unambiguous previous owner. cron.store is also
+  // raw-only, so the snapshot remains authoritative until this handoff commits.
+  const sourceRosterMigrations = [snapshot.sourceConfigBeforeMigrations, snapshot.parsed].map(
+    (source) => migratePersistedImplicitMainRoster(source, deps.env),
+  );
+  const retainedLegacyDefaultAgentId = sourceRosterMigrations
+    .map((migration) => migration.retainedLegacyDefaultAgentId)
+    .find((agentId) => agentId !== undefined);
+  const legacySourceInsertedPaths = retainedLegacyDefaultAgentId
+    ? (sourceRosterMigrations
+        .filter(
+          (migration) => migration.retainedLegacyDefaultAgentId === retainedLegacyDefaultAgentId,
+        )
+        .find((migration) => (migration.insertedPaths?.length ?? 0) > 0)?.insertedPaths ?? [])
+    : [];
+  const retainedLegacyRuntimeInsertedPaths =
+    retainedLegacyDefaultAgentId &&
+    Array.isArray(snapshot.config.bindings) &&
+    snapshot.config.bindings.length > 0 &&
+    !isDeepStrictEqual(snapshot.sourceConfigBeforeMigrations?.bindings, snapshot.config.bindings)
+      ? [["bindings"]]
+      : [];
+  const previousSoleAgentId = tryResolveDefaultAgentId(snapshot.config);
+  const previousAgentEntries = listAgentEntries(snapshot.config);
+  const previousAgentCount = previousAgentEntries.length;
+  const nextAgentEntries = listAgentEntries(nextConfig);
+  const nextAgentIds = new Set(nextAgentEntries.map((entry) => normalizeAgentId(entry.id)));
+  const keepsSameFixedSessionStore = isSameFixedSessionStoreConfig(
+    (snapshot.sourceConfigBeforeMigrations ?? snapshot.config).session?.store,
+    nextConfig.session?.store,
+    deps.env,
+  );
+  // Stamp topology transitions and retained legacy owners independently from sole-agent handoff.
+  const entersMultiAgent = previousAgentCount <= 1 && nextAgentEntries.length > 1;
+  const previousSoleRemains =
+    previousSoleAgentId !== undefined && nextAgentIds.has(normalizeAgentId(previousSoleAgentId));
+  const previousSoleHandoffAgentId =
+    entersMultiAgent && previousSoleRemains ? previousSoleAgentId : undefined;
+  const writesOwnershipTopology =
+    !isDeepStrictEqual(previousAgentEntries, nextAgentEntries) ||
+    [...(options.explicitSetPaths ?? []), ...unsetPaths].some(
+      (writePath) =>
+        writePath[0] === "agents" &&
+        (writePath.length === 1 ||
+          writePath[1] === "entries" ||
+          writePath[1] === "list" ||
+          writePath[1] === "ownership"),
+    );
+  // A non-roster write must preserve the authored legacy roster. Retire its
+  // default only when this write explicitly owns the topology migration.
+  const persistOwnership =
+    entersMultiAgent || (retainedLegacyDefaultAgentId !== undefined && writesOwnershipTopology);
+  const retainExplicitOwnership =
+    nextAgentEntries.length > 1 && snapshot.config.agents?.ownership === "explicit";
+  const shouldStampOwnershipGeneration =
+    (persistOwnership || retainExplicitOwnership) && nextConfig.agents?.ownership === undefined;
+  if (shouldStampOwnershipGeneration) {
+    nextConfig = {
+      ...nextConfig,
+      agents: { ...nextConfig.agents, ownership: "explicit" },
+    };
+  }
+  const topologyMaterialization = materializeRetainedOwnerForTopologyWrite({
+    sourceConfig: snapshot.config,
+    targetConfig: nextConfig,
+    previousSoleHandoffAgentId,
+    retainedLegacyDefaultAgentId,
+    writesOwnershipTopology,
+    nextAgentIds,
+    env: deps.env,
+  });
+  nextConfig = topologyMaterialization.config;
+  const transitionInsertedPaths = [
+    ...topologyMaterialization.insertedPaths,
+    ...(shouldStampOwnershipGeneration ? [["agents", "ownership"]] : []),
+  ];
+  const nextSessionStoreOwner = nextConfig.agents?.defaults?.sessionStore;
+  const canSynthesizeSessionStoreOwner =
+    nextSessionStoreOwner === undefined ||
+    (isRecord(nextSessionStoreOwner) && !Object.hasOwn(nextSessionStoreOwner, "agentId"));
+  if (
+    !topologyMaterialization.ownerAgentId &&
+    writesOwnershipTopology &&
+    previousAgentCount === 1 &&
+    previousSoleAgentId &&
+    !previousSoleRemains &&
+    keepsSameFixedSessionStore &&
+    canSynthesizeSessionStoreOwner
+  ) {
+    // A removed sole agent can still physically own unscoped fixed-store rows,
+    // including across a sole-to-sole swap. Preserve that storage owner only.
+    nextConfig = {
+      ...nextConfig,
+      agents: {
+        ...nextConfig.agents,
+        defaults: {
+          ...nextConfig.agents?.defaults,
+          sessionStore: {
+            ...(isRecord(nextSessionStoreOwner) ? nextSessionStoreOwner : {}),
+            agentId: normalizeAgentId(previousSoleAgentId),
+          },
+        },
+      },
+    };
+    transitionInsertedPaths.push(["agents", "defaults", "sessionStore", "agentId"]);
+  }
+  const topologyOwnershipPaths =
+    persistOwnership || retainExplicitOwnership
+      ? [
+          ...new Map(
+            [
+              ...legacySourceInsertedPaths,
+              ...retainedLegacyRuntimeInsertedPaths,
+              ...transitionInsertedPaths,
+            ].map((ownershipPath) => [ownershipPath.join("\0"), ownershipPath]),
+          ).values(),
+        ]
+      : [];
+  assertAutomaticBindingsWriteAllowed({
+    bindingsIncludeOwned: snapshot.bindingsIncludeOwned === true,
+    ownershipPaths: topologyOwnershipPaths,
+    sourceBindings: Array.isArray(snapshot.sourceConfigBeforeMigrations?.bindings)
+      ? snapshot.sourceConfigBeforeMigrations.bindings
+      : [],
+    nextBindings: Array.isArray(nextConfig.bindings) ? nextConfig.bindings : [],
+  });
+  const explicitSetPaths = [...(options.explicitSetPaths ?? []), ...topologyOwnershipPaths];
+  const cronHandoffAgentId =
+    retainedLegacyDefaultAgentId && nextAgentIds.has(normalizeAgentId(retainedLegacyDefaultAgentId))
+      ? retainedLegacyDefaultAgentId
+      : previousSoleHandoffAgentId
+        ? previousSoleHandoffAgentId
+        : undefined;
+  const sourceCronConfig = snapshot.sourceConfigBeforeMigrations ?? snapshot.config;
+  const publishesExplicitOwnership =
+    persistOwnership ||
+    retainExplicitOwnership ||
+    (nextAgentEntries.length > 1 && nextConfig.agents?.ownership === "explicit");
+  const cronStoreWritePlan = await planCronStoreWrite({
+    cronHandoffAgentId,
+    env: deps.env,
+    nextConfig,
+    publishesExplicitOwnership,
+    requiresCurrentStoreValidation: writesOwnershipTopology,
+    sourceConfig: sourceCronConfig,
+  });
+  persistCandidate = nextConfig;
+  let explicitSetValueSource: unknown = options.explicitSetValueSource ?? nextConfig;
+  for (const ownershipPath of topologyOwnershipPaths) {
+    explicitSetValueSource = setConfigPath(
+      explicitSetValueSource,
+      ownershipPath,
+      readConfigPath(nextConfig, ownershipPath),
+    );
+  }
   let envRefMap: Map<string, string> | null = null;
   const changedPaths = new Set<string>();
-  collectChangedPaths(snapshot.config, cfg, "", changedPaths);
-  for (const changedPath of [...(options.explicitSetPaths ?? []), ...(options.unsetPaths ?? [])]) {
+  collectChangedPaths(snapshot.config, nextConfig, "", changedPaths);
+  for (const changedPath of [...explicitSetPaths, ...(options.unsetPaths ?? [])]) {
     const normalizedPath = changedPath.filter((segment) => segment.length > 0).join(".");
     if (normalizedPath) {
       changedPaths.add(normalizedPath);
@@ -138,12 +291,12 @@ export async function writeConfigFileFromContext(
       runtimeConfig: snapshot.config,
       sourceConfig: snapshot.resolved,
       sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
-      nextConfig: cfg,
+      nextConfig,
       rootAuthoredConfig: snapshot.parsed,
       agentRosterIncludeOwned: snapshot.agentRosterIncludeOwned,
       unsetPaths,
-      explicitSetPaths: options.explicitSetPaths,
-      explicitSetValueSource: options.explicitSetValueSource,
+      explicitSetPaths,
+      explicitSetValueSource,
       allowedAgentRosterRemovals: options.allowedAgentRosterRemovals,
       allowIncludeAncestorExplicitSetPaths: options.allowIncludeAncestorExplicitSetPaths,
     });
@@ -151,7 +304,7 @@ export async function writeConfigFileFromContext(
     persistCandidate = preserveIncludeOwnedConfigForWrite({
       runtimeConfig: snapshot.config,
       sourceConfig: snapshot.resolved,
-      nextConfig: cfg,
+      nextConfig,
       rootAuthoredConfig: snapshot.parsed,
     });
   }
@@ -191,11 +344,21 @@ export async function writeConfigFileFromContext(
   const validationCandidate = containsConfigIncludeDirective(validationSourceCandidate)
     ? context.resolveRuntimePreflightSourceConfig(validationSourceCandidate as OpenClawConfig)
     : validationSourceCandidate;
-  const validated = validateConfigObjectRawWithPlugins(validationCandidate, {
-    env: deps.env,
-    pluginValidation: options.skipPluginValidation ? "skip" : "full",
-    preservedLegacyRootKeys: options.preservedLegacyRootKeys,
-  });
+  const validationWorkspacePluginDirectories = topologyMaterialization.pluginPath
+    ? await createWorkspacePluginDirectory(deps.fs, topologyMaterialization.pluginPath)
+    : [];
+  let validated: ReturnType<typeof validateConfigObjectRawWithPlugins>;
+  try {
+    validated = validateConfigObjectRawWithPlugins(validationCandidate, {
+      env: deps.env,
+      pluginValidation: options.skipPluginValidation ? "skip" : "full",
+      preservedLegacyRootKeys: options.preservedLegacyRootKeys,
+    });
+  } finally {
+    // The path exists only for plugin discovery here. Recreate it at the commit
+    // edge so a later validation or preflight failure leaves no directory behind.
+    await removeEmptyWorkspacePluginDirectories(deps.fs, validationWorkspacePluginDirectories);
+  }
   if (!validated.ok) {
     const issue = validated.issues[0];
     throw new Error(
@@ -306,46 +469,17 @@ export async function writeConfigFileFromContext(
     gatewayModeAfter,
   });
 
-  const readTestLogFlag = (name: string) => isVitestRuntimeEnv(deps.env) && deps.env[name] === "1";
-  const logConfigOverwrite = () => {
-    if (
-      !snapshot.exists ||
-      options.skipOutputLogs ||
-      (isVitestRuntimeEnv(deps.env) && !readTestLogFlag("OPENCLAW_TEST_CONFIG_WRITE_LOG"))
-    ) {
-      return;
-    }
-    const testLog = readTestLogFlag("OPENCLAW_TEST_CONFIG_WRITE_LOG");
-    if (!isVerbose() && deps.env.OPENCLAW_CONFIG_OVERWRITE_LOG !== "1" && !testLog) {
-      return;
-    }
-    deps.logger.warn(
-      formatConfigOverwriteLogMessage({
-        configPath,
-        previousHash: previousHash ?? null,
-        nextHash,
-        changedPathCount,
-      }),
-    );
-  };
-  const logConfigWriteAnomalies = () => {
-    const testLog = readTestLogFlag("OPENCLAW_TEST_CONFIG_WRITE_LOG");
-    if (
-      suspiciousReasons.length === 0 ||
-      options.skipOutputLogs ||
-      (isVitestRuntimeEnv(deps.env) && !testLog)
-    ) {
-      return;
-    }
-    const showMissingMeta =
-      isVerbose() || deps.env.OPENCLAW_CONFIG_WRITE_ANOMALY_LOG === "1" || testLog;
-    const visibleReasons = showMissingMeta
-      ? suspiciousReasons
-      : suspiciousReasons.filter((reason) => reason !== "missing-meta-before-write");
-    if (visibleReasons.length > 0) {
-      deps.logger.warn(`Config write anomaly: ${configPath} (${visibleReasons.join(", ")})`);
-    }
-  };
+  const { logConfigOverwrite, logConfigWriteAnomalies } = createConfigWriteLoggers({
+    changedPathCount,
+    configPath,
+    env: deps.env,
+    existsBefore: snapshot.exists,
+    logger: deps.logger,
+    nextHash,
+    previousHash: previousHash ?? null,
+    skipOutputLogs: options.skipOutputLogs,
+    suspiciousReasons,
+  });
 
   const auditRecordBase = createConfigWriteAuditRecordBase({
     configPath,
@@ -415,36 +549,62 @@ export async function writeConfigFileFromContext(
   const sourceConfigForPreflight = context.resolveRuntimePreflightSourceConfig(stampedOutputConfig);
   await preCommitRuntimePreflight(sourceConfigForPreflight);
 
+  let releaseCronHandoffs: (() => void) | undefined;
+  let rollbackCronHandoffs: (() => Promise<void>) | undefined;
+  let createdWorkspacePluginDirectories: string[] = [];
+  let configCommitted = false;
   try {
-    const result = await replaceFileAtomic({
-      filePath: configPath,
+    const result = await commitConfigFileWrite({
+      configPath,
       content: json,
-      dirMode: 0o700,
-      mode: 0o600,
-      tempPrefix: path.basename(configPath),
-      copyFallbackOnPermissionError: true,
-      fileSystem: deps.fs,
+      fsModule: deps.fs,
       beforeRename: async () => {
         options.assertConfigPathForWrite?.();
         if (options.baseSnapshot) {
           assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);
         }
         if (deps.fs.existsSync(configPath)) {
+          // Backup rotation is fallible and must precede the irreversible cron handoff.
+          // Moving it later can leave cron ownership committed when backup creation fails.
           await maintainConfigBackups(configPath, deps.fs.promises);
         }
-        if (options.baseSnapshot) {
-          assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);
+        if (cronStoreWritePlan.recheckExplicitDestination) {
+          // Recheck effective rows at the commit edge. External old-code writers cannot
+          // honor a new fence, so this protects only the inspected ownership boundary.
+          await cronStoreWritePlan.recheckExplicitDestination();
         }
-        options.assertConfigPathForWrite?.();
-        // Warn only after final guards pass, with no later await before rename.
+        if (topologyMaterialization.pluginPath) {
+          createdWorkspacePluginDirectories = await createWorkspacePluginDirectory(
+            deps.fs,
+            topologyMaterialization.pluginPath,
+          );
+        }
+        // Emit the warning before the final conflict guard. After that guard, the
+        // cron handoff is the last fallible operation before the atomic rename.
         warnIfJSON5CommentsWillBeStripped({
           raw: snapshot.raw,
           filePath: configPath,
           warn: (message) => deps.logger.warn(message),
           skipOutputLogs: options.skipOutputLogs,
         });
+        if (cronHandoffAgentId) {
+          const prepared = await prepareLegacyCronOwnerHandoffs({
+            env: deps.env,
+            legacyDefaultAgentId: cronHandoffAgentId,
+            targets: cronStoreWritePlan.targets,
+          });
+          releaseCronHandoffs = prepared.release;
+          rollbackCronHandoffs = prepared.rollback;
+        }
+        // Ordering invariant: this is the final conflict fence. No await may occur
+        // between these synchronous checks and replaceFileAtomic's rename.
+        options.assertConfigPathForWrite?.();
+        if (options.baseSnapshot) {
+          assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);
+        }
       },
     });
+    configCommitted = true;
     try {
       options.assertConfigPathForWrite?.();
     } catch (error) {
@@ -461,6 +621,7 @@ export async function writeConfigFileFromContext(
           { cause: error },
         );
       }
+      configCommitted = false;
       throw error;
     }
     try {
@@ -546,7 +707,21 @@ export async function writeConfigFileFromContext(
       },
     };
   } catch (error) {
-    await appendWriteAudit("failed", error);
-    throw error;
+    let failure = error;
+    if (!configCommitted) {
+      try {
+        await rollbackCronHandoffs?.();
+      } catch (rollbackError) {
+        failure = new AggregateError(
+          [error, rollbackError],
+          "config write failed and cron ownership rollback did not complete",
+        );
+      }
+      await removeEmptyWorkspacePluginDirectories(deps.fs, createdWorkspacePluginDirectories);
+    }
+    await appendWriteAudit("failed", failure);
+    throw failure;
+  } finally {
+    releaseCronHandoffs?.();
   }
 }

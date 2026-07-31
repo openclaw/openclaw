@@ -1233,7 +1233,7 @@ describe("gateway server cron", () => {
     }
   });
 
-  test("keeps delivery updates valid after gateway config changes the default agent", async () => {
+  test("keeps delivery updates valid after gateway config changes the roster", async () => {
     const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-main-default-agent-drift-",
       cronEnabled: false,
@@ -1275,7 +1275,8 @@ describe("gateway server cron", () => {
           mainKey: "main",
         },
         agents: {
-          entries: { main: { default: true }, ops: {} },
+          ownership: "explicit",
+          entries: { main: {}, ops: {} },
         },
         channels: {
           telegram: {
@@ -1347,7 +1348,11 @@ describe("gateway server cron", () => {
       cronEnabled: true,
     });
     await writeCronConfig({
-      agents: { entries: { main: { default: true }, writer: {} } },
+      agents: {
+        ownership: "explicit",
+        defaults: { heartbeat: { agentId: "main" } },
+        entries: { main: {}, writer: {} },
+      },
     });
     const events = createCronEventCollector();
     const cronState = await createDirectCronState({ broadcast: events["broadcast"] });
@@ -1358,6 +1363,7 @@ describe("gateway server cron", () => {
         enabled: true,
         schedule: { kind: "every", everyMs: 60_000 },
         sessionTarget: "main",
+        agentId: "main",
         wakeMode: "next-heartbeat",
         payload: { kind: "systemEvent", text: "hello" },
       });
@@ -1455,6 +1461,7 @@ describe("gateway server cron", () => {
         enabled: true,
         schedule: { kind: "at", at: new Date(Date.now() - 1).toISOString() },
         sessionTarget: "main",
+        agentId: "main",
         wakeMode: "next-heartbeat",
         payload: { kind: "systemEvent", text: "auto" },
       });
@@ -2075,6 +2082,9 @@ describe("gateway server cron", () => {
       tempPrefix: "openclaw-gw-cron-failure-session-target-",
       cronEnabled: false,
     });
+    await writeCronConfig({
+      agents: { ownership: "explicit", entries: { avery: {} } },
+    });
 
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
@@ -2086,6 +2096,7 @@ describe("gateway server cron", () => {
         enabled: true,
         schedule: { kind: "every", everyMs: 60_000 },
         sessionTarget: "session:agent:avery:feishu:direct:ou_founder",
+        agentId: "avery",
         wakeMode: "next-heartbeat",
         payload: { kind: "agentTurn", message: "test" },
         delivery: {
