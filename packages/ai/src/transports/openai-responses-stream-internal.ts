@@ -273,20 +273,21 @@ export async function processResponsesStream<TApi extends Api>(
     // block now and replay the withheld text as one delta.
     materializeDeferredTextSlot(slot);
   };
-  const { finalizeResponse, recoverTerminalOutput } = createResponsesTerminalController({
-    output,
-    stream,
-    model,
-    options,
-    reasoningBlocksById,
-    getLastTextBlock: () => lastTextBlock,
-    setLastTextBlock: (block) => {
-      lastTextBlock = block;
-    },
-    markFinalized: () => {
-      terminalResponseEvent = "finalized";
-    },
-  });
+  const { finalizeResponse, finalizeFailedResponse, recoverTerminalOutput } =
+    createResponsesTerminalController({
+      output,
+      stream,
+      model,
+      options,
+      reasoningBlocksById,
+      getLastTextBlock: () => lastTextBlock,
+      setLastTextBlock: (block) => {
+        lastTextBlock = block;
+      },
+      markFinalized: () => {
+        terminalResponseEvent = "finalized";
+      },
+    });
 
   const guardedStream = adaptResponsesStream(
     withFirstStreamEventTimeout(openaiStream, {
@@ -714,9 +715,7 @@ export async function processResponsesStream<TApi extends Api>(
           event as unknown as Record<string, unknown>,
           model,
         );
-        if (failure.responseId) {
-          output.responseId = failure.responseId;
-        }
+        finalizeFailedResponse(event.response, failure.responseId);
         throw new ResponsesStreamFailure(failure, event.response);
       }
     }

@@ -201,16 +201,12 @@ export function createResponsesTerminalController(params: {
       }
     }
   };
-  const finalizeResponse = (
+  const finalizeTerminalUsage = (
     response: Extract<
       ResponseStreamEvent,
-      { type: "response.completed" | "response.incomplete" }
+      { type: "response.completed" | "response.incomplete" | "response.failed" }
     >["response"],
-    terminalEventType: "response.completed" | "response.incomplete",
   ) => {
-    params.markFinalized();
-    backfillReasoning(response.output ?? []);
-    output.responseId = response.id || output.responseId;
     const usage = mapResponsesTerminalUsage(response.usage);
     const reasoningTokens = readResponsesReasoningTokens(response.usage);
     if (usage) {
@@ -227,6 +223,18 @@ export function createResponsesTerminalController(params: {
         : (response.service_tier ?? options.serviceTier);
       options.applyServiceTierPricing(output.usage, tier);
     }
+  };
+  const finalizeResponse = (
+    response: Extract<
+      ResponseStreamEvent,
+      { type: "response.completed" | "response.incomplete" }
+    >["response"],
+    terminalEventType: "response.completed" | "response.incomplete",
+  ) => {
+    params.markFinalized();
+    backfillReasoning(response.output ?? []);
+    output.responseId = response.id || output.responseId;
+    finalizeTerminalUsage(response);
     const terminal = resolveResponsesTerminalStopReason({
       status: response.status,
       terminalEventType,
@@ -236,5 +244,14 @@ export function createResponsesTerminalController(params: {
     output.stopReason = terminal.stopReason;
     output.errorMessage = terminal.errorMessage;
   };
-  return { finalizeResponse, recoverTerminalOutput };
+  const finalizeFailedResponse = (
+    response: Extract<ResponseStreamEvent, { type: "response.failed" }>["response"],
+    responseId: string | undefined,
+  ) => {
+    if (responseId) {
+      output.responseId = responseId;
+    }
+    finalizeTerminalUsage(response);
+  };
+  return { finalizeResponse, finalizeFailedResponse, recoverTerminalOutput };
 }
