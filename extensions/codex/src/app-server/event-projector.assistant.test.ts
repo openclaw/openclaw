@@ -545,3 +545,83 @@ describe("CodexAppServerEventProjector assistant projection", () => {
     });
   });
 });
+
+describe("CodexAppServerEventProjector trailing silent-token shadowing", () => {
+  it("keeps the real final answer when a late event is answered with NO_REPLY", async () => {
+    const { projector } = await createProjectorWithAssistantHooks();
+
+    // A completed turn that emitted a real answer, then had a late child-completion
+    // event steered in and answered with the contract-mandated silent token.
+    await projector.handleNotification(
+      turnCompleted([
+        { type: "agentMessage", id: "msg-1", phase: "final_answer", text: "here is the answer" },
+        { type: "agentMessage", id: "msg-2", phase: "final_answer", text: "NO_REPLY" },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.assistantTexts).toEqual(["here is the answer"]);
+  });
+
+  it("stays silent when the only assistant item is NO_REPLY", async () => {
+    const { projector } = await createProjectorWithAssistantHooks();
+
+    await projector.handleNotification(
+      turnCompleted([
+        { type: "agentMessage", id: "msg-1", phase: "final_answer", text: "NO_REPLY" },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    // Deliberate whole-turn silence must keep the token: downstream terminal
+    // classification counts it as intentional output, so dropping it here would
+    // let the empty-final fallback fire and break the silence contract.
+    expect(result.assistantTexts).toEqual(["NO_REPLY"]);
+  });
+
+  it("stays silent when commentary precedes a lone NO_REPLY", async () => {
+    const { projector } = await createProjectorWithAssistantHooks();
+
+    await projector.handleNotification(
+      turnCompleted([
+        { type: "agentMessage", id: "msg-1", phase: "commentary", text: "working on it" },
+        { type: "agentMessage", id: "msg-2", phase: "final_answer", text: "NO_REPLY" },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.assistantTexts).toEqual(["NO_REPLY"]);
+  });
+
+  it("recovers a timed-out turn whose real answer is shadowed by a trailing NO_REPLY", async () => {
+    const { projector } = await createProjectorWithAssistantHooks();
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "agentMessage",
+          id: "msg-1",
+          phase: "final_answer",
+          text: "here is the answer",
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: { type: "agentMessage", id: "msg-2", phase: "final_answer", text: "NO_REPLY" },
+      }),
+    );
+
+    projector.markTimedOut();
+
+    // Recovery must still fire even though the newest completed item is the silent
+    // token, and it must surface the shadowed answer rather than the token.
+    expect(projector.recoverCompletedTerminalAssistantAfterTurnWatchTimeout()).toBe(true);
+    expect(projector.buildResult(buildEmptyToolTelemetry()).assistantTexts).toEqual([
+      "here is the answer",
+    ]);
+  });
+});

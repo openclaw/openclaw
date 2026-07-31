@@ -1,5 +1,6 @@
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
+import { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";
 import {
   createAssistantCommentaryMessage as buildAssistantCommentaryMessage,
   createAssistantMessage as buildAssistantMessage,
@@ -52,10 +53,14 @@ export class CodexAssistantProjection {
       return false;
     }
     const finalItem = this.resolveFinalAssistantTextItem();
+    // The deliverable item is not always the newest one: a trailing silent token
+    // answering a late event shadows it. Gate on the resolved item being complete
+    // rather than on it being the newest, so timeout recovery still fires and
+    // delivers the real answer instead of declining on the shadowed turn.
     return (
       this.latestCompletedItemId === latestCompletedItemId &&
-      finalItem?.itemId === latestCompletedItemId &&
-      completedItemIds.has(latestCompletedItemId)
+      finalItem !== undefined &&
+      completedItemIds.has(finalItem.itemId)
     );
   }
 
@@ -521,6 +526,13 @@ export class CodexAssistantProjection {
   }
 
   private resolveFinalAssistantTextItem(): { itemId: string; text: string } | undefined {
+    // A late event steered into a turn that already answered (e.g. a child
+    // completion notice) is answered with the silent token per contract. Taking
+    // the last item verbatim would let that token shadow the real answer and the
+    // turn would deliver nothing. Prefer the newest deliverable item, and fall
+    // back to the trailing silent one only when the whole turn was silent, since
+    // terminal classification reads that token as intentional output.
+    let trailingSilent: { itemId: string; text: string } | undefined;
     for (let i = this.assistantItemOrder.length - 1; i >= 0; i -= 1) {
       const itemId = this.assistantItemOrder[i];
       if (!itemId) {
@@ -530,11 +542,16 @@ export class CodexAssistantProjection {
       if (this.assistantPhaseByItem.get(itemId) === "commentary") {
         continue;
       }
-      if (text && !this.isToolProgressEchoText(itemId, text)) {
-        return { itemId, text };
+      if (!text || this.isToolProgressEchoText(itemId, text)) {
+        continue;
       }
+      if (isSilentReplyText(text)) {
+        trailingSilent ??= { itemId, text };
+        continue;
+      }
+      return { itemId, text };
     }
-    return undefined;
+    return trailingSilent;
   }
 
   private rememberAssistantItem(itemId: string): void {
