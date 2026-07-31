@@ -10,7 +10,10 @@ import {
 } from "../../../config/model-policy-allowlist-migration.js";
 import { isBlockedObjectKey } from "../../../infra/prototype-keys.js";
 
-export function hasOwnDefinedProperty(record: Record<string, unknown>, key: string): boolean {
+export function hasOwnDefinedProperty(
+  record: Record<string, unknown>,
+  key: string,
+): boolean {
   return Object.hasOwn(record, key) && record[key] !== undefined;
 }
 
@@ -19,7 +22,9 @@ function normalizeString(value: unknown): string {
 }
 
 function preferredClaudeSeparator(provider: string | undefined): "." | "-" {
-  return provider === "github-copilot" || provider === "copilot-proxy" ? "." : "-";
+  return provider === "github-copilot" || provider === "copilot-proxy"
+    ? "."
+    : "-";
 }
 
 function claudeTargetModelId(
@@ -28,7 +33,11 @@ function claudeTargetModelId(
   provider?: string,
 ): string {
   const version =
-    family === "opus" && provider !== "venice" && provider !== "vercel-ai-gateway" ? "4.7" : "4.6";
+    family === "opus" &&
+    provider !== "venice" &&
+    provider !== "vercel-ai-gateway"
+      ? "4.7"
+      : "4.6";
   return `claude-${family}-${separator === "." ? version : version.replace(".", "-")}`;
 }
 
@@ -43,7 +52,9 @@ function shouldUpgradeClaudeProvider(provider: string | undefined): boolean {
   );
 }
 
-function modelTable(groups: Readonly<Record<string, string>>): Record<string, string> {
+function modelTable(
+  groups: Readonly<Record<string, string>>,
+): Record<string, string> {
   return Object.fromEntries(
     Object.entries(groups).flatMap(([target, models]) =>
       models.split(" ").map((model) => [model, target]),
@@ -99,11 +110,16 @@ function hasRetiredVersionPrefix(normalized: string, prefix: string): boolean {
   return next === "-" || next === "." || next === ":" || next === "@";
 }
 
-function hasAnyRetiredVersionPrefix(normalized: string, prefixes: readonly string[]): boolean {
+function hasAnyRetiredVersionPrefix(
+  normalized: string,
+  prefixes: readonly string[],
+): boolean {
   return prefixes.some((prefix) => hasRetiredVersionPrefix(normalized, prefix));
 }
 
-const RETIRED_OPUS_ALIASES = new Set("opus-4.5 opus-4.1 opus-4 opus-3".split(" "));
+const RETIRED_OPUS_ALIASES = new Set(
+  "opus-4.5 opus-4.1 opus-4 opus-3".split(" "),
+);
 const RETIRED_SONNET_ALIASES = new Set(
   "sonnet-4.5 sonnet-4.1 sonnet-4.0 sonnet-4 sonnet-3.7 sonnet-3.5 sonnet-3 haiku-3.5 haiku-3".split(
     " ",
@@ -132,7 +148,10 @@ function upgradeOldClaudeToken(
     return null;
   }
   // claude-haiku-4-5 is a current production model and must not be migrated.
-  if (normalized.startsWith("claude-haiku-4-5") || normalized.startsWith("claude-haiku-4.5")) {
+  if (
+    normalized.startsWith("claude-haiku-4-5") ||
+    normalized.startsWith("claude-haiku-4.5")
+  ) {
     return null;
   }
   if (
@@ -205,7 +224,10 @@ function upgradeOldClaudeToken(
   return null;
 }
 
-function upgradeOldClaudeModelPart(model: string, provider: string | undefined): string | null {
+function upgradeOldClaudeModelPart(
+  model: string,
+  provider: string | undefined,
+): string | null {
   const separator = preferredClaudeSeparator(provider);
   const slashParts = model.split("/");
   const lastPart = slashParts.at(-1);
@@ -241,14 +263,17 @@ function upgradeRetiredModelRef(value: string): string | null {
           ? applyRetiredModelTable(
               model,
               RETIRED_OPENAI_MODELS,
-              normalizedProvider === "openai-codex" ? RETIRED_CODEX_MODEL_OVERRIDES : undefined,
+              normalizedProvider === "openai-codex"
+                ? RETIRED_CODEX_MODEL_OVERRIDES
+                : undefined,
             )
           : undefined;
   if (retiredOwnerModel) {
     return `${provider}/${retiredOwnerModel}${split.profile ? `@${split.profile}` : ""}`;
   }
   if (
-    (normalizedProvider === "github-copilot" || normalizedProvider === "copilot-proxy") &&
+    (normalizedProvider === "github-copilot" ||
+      normalizedProvider === "copilot-proxy") &&
     normalizedModel === "grok-code-fast-1"
   ) {
     return `${provider}/gpt-5.4-mini${split.profile ? `@${split.profile}` : ""}`;
@@ -256,7 +281,10 @@ function upgradeRetiredModelRef(value: string): string | null {
   if (!shouldUpgradeClaudeProvider(normalizedProvider || undefined)) {
     return null;
   }
-  const upgradedModel = upgradeOldClaudeModelPart(model, normalizedProvider || undefined);
+  const upgradedModel = upgradeOldClaudeModelPart(
+    model,
+    normalizedProvider || undefined,
+  );
   if (!upgradedModel || upgradedModel === model) {
     return null;
   }
@@ -271,7 +299,8 @@ function normalizeKnownModelRef(value: string): string | null {
   }
   const split = splitTrailingAuthProfile(trimmed);
   const slash = split.model.indexOf("/");
-  const provider = slash > 0 ? normalizeString(split.model.slice(0, slash)) : "";
+  const provider =
+    slash > 0 ? normalizeString(split.model.slice(0, slash)) : "";
   const modelId = slash > 0 ? split.model.slice(slash + 1) : split.model;
   const normalizedModel =
     provider === "google" ||
@@ -282,7 +311,10 @@ function normalizeKnownModelRef(value: string): string | null {
       ? normalizeAgentModelRefForConfig(split.model)
       : split.model;
   const normalized = `${normalizedModel}${split.profile ? `@${split.profile}` : ""}`;
-  return upgradeRetiredModelRef(normalized) ?? (normalized === value ? null : normalized);
+  return (
+    upgradeRetiredModelRef(normalized) ??
+    (normalized === value ? null : normalized)
+  );
 }
 
 const MODEL_REF_STRING_KEYS = new Set([
@@ -318,14 +350,20 @@ function isModelPolicyAllowPath(path: string): boolean {
 }
 
 function isMediaModelPath(path: string): boolean {
-  return ["image", "video", "music"].includes(pathKey(path)) && path.includes(".mediaModels.");
+  return (
+    ["image", "video", "music"].includes(pathKey(path)) &&
+    path.includes(".mediaModels.")
+  );
 }
 
 function isProviderCatalogsPath(path: string): boolean {
   return path === ".providers" || path.endsWith(".models.providers");
 }
 
-function normalizeProviderCatalogModelId(provider: string, modelId: string): string {
+function normalizeProviderCatalogModelId(
+  provider: string,
+  modelId: string,
+): string {
   const trimmed = modelId.trim();
   const normalizedProvider = normalizeString(provider);
   const normalized =
@@ -341,12 +379,15 @@ function normalizeProviderCatalogModelId(provider: string, modelId: string): str
     return normalized;
   }
   const slash = upgradedRef.indexOf("/");
-  return slash > 0 && normalizeString(upgradedRef.slice(0, slash)) === normalizeString(provider)
+  return slash > 0 &&
+    normalizeString(upgradedRef.slice(0, slash)) === normalizeString(provider)
     ? upgradedRef.slice(slash + 1)
     : normalized;
 }
 
-function scanProviderCatalogModelIds(providers: Record<string, unknown>): boolean {
+function scanProviderCatalogModelIds(
+  providers: Record<string, unknown>,
+): boolean {
   return Object.entries(providers).some(([providerId, providerValue]) => {
     const models = getRecord(providerValue)?.models;
     return (
@@ -362,7 +403,11 @@ function scanProviderCatalogModelIds(providers: Record<string, unknown>): boolea
   });
 }
 
-export function scanKnownModelRefs(value: unknown, key?: string, path = ""): boolean {
+export function scanKnownModelRefs(
+  value: unknown,
+  key?: string,
+  path = "",
+): boolean {
   if (typeof value === "string") {
     return Boolean(
       key &&
@@ -389,14 +434,18 @@ export function scanKnownModelRefs(value: unknown, key?: string, path = ""): boo
     return true;
   }
   if (key && MODEL_REF_MAP_KEYS.has(key)) {
-    return Object.keys(record).some((entryKey) => Boolean(normalizeKnownModelRef(entryKey)));
+    return Object.keys(record).some((entryKey) =>
+      Boolean(normalizeKnownModelRef(entryKey)),
+    );
   }
   return Object.entries(record).some(([childKey, child]) =>
     scanKnownModelRefs(child, childKey, `${path}.${childKey}`),
   );
 }
 
-export function collectLegacyDefaultModelAllowRefs(raw: Record<string, unknown>): string[] | null {
+export function collectLegacyDefaultModelAllowRefs(
+  raw: Record<string, unknown>,
+): string[] | null {
   // Marker seeding at the config write boundary ships atomically with metadata-only
   // model maps. Therefore an unmarked map is legacy even if a general write version advanced.
   const defaults = getRecord(getRecord(raw.agents)?.defaults);
@@ -422,32 +471,54 @@ export function migrateExplicitDefaultModelAllowPolicy(
     return;
   }
   const defaultAllow = collectLegacyDefaultModelAllowRefs(raw);
-  if (defaultAllow) {
-    const mutableDefaults = ensureRecord(ensureRecord(raw, "agents"), "defaults");
-    const mutableModelPolicy = ensureRecord(mutableDefaults, "modelPolicy");
-    // The policy builder still retains configured defaults/fallbacks, so copying the
-    // original keys reproduces the legacy effective set, including wildcard expansion.
-    mutableModelPolicy.allow = defaultAllow;
+  // When the migration marker is already stamped, computeModelPolicyAllowlist
+  // returns null — treat this as "already migrated" and skip.
+  if (defaultAllow === null) {
+    return;
   }
+  // When every legacy key is rejected (all-bare map), do NOT write the empty
+  // allowlist or stamp the migration marker. Stamping would retire the legacy
+  // restriction and silently broaden access. Instead, leave the map visible
+  // and emit an actionable diagnostic.
+  if (defaultAllow.length === 0) {
+    const bareKeys = Object.keys(getRecord(defaults?.models) ?? {});
+    changes.push(
+      `Legacy default model map contains only bare provider keys (${bareKeys.join(", ")}) that need manual policy replacement. Run openclaw doctor --fix after updating the map.`,
+    );
+    return;
+  }
+  const mutableDefaults = ensureRecord(ensureRecord(raw, "agents"), "defaults");
+  const mutableModelPolicy = ensureRecord(mutableDefaults, "modelPolicy");
+  // The policy builder still retains configured defaults/fallbacks, so copying the
+  // original keys reproduces the legacy effective set, including wildcard expansion.
+  mutableModelPolicy.allow = defaultAllow;
   const migrations = ensureRecord(ensureRecord(raw, "meta"), "migrations");
   migrations[MODEL_POLICY_ALLOWLIST_MIGRATION_MARKER] = true;
   changes.push(
-    defaultAllow
-      ? "Copied the legacy default model map to agents.defaults.modelPolicy.allow."
-      : "Recorded the legacy default model map as unrestricted without creating modelPolicy.allow.",
+    "Copied the legacy default model map to agents.defaults.modelPolicy.allow.",
   );
 }
 
-function rewriteModelRefString(value: string, path: string, changes: string[]): string {
+function rewriteModelRefString(
+  value: string,
+  path: string,
+  changes: string[],
+): string {
   const upgraded = normalizeKnownModelRef(value);
   if (!upgraded) {
     return value;
   }
-  changes.push(`Upgraded ${path} from ${JSON.stringify(value)} to ${JSON.stringify(upgraded)}.`);
+  changes.push(
+    `Upgraded ${path} from ${JSON.stringify(value)} to ${JSON.stringify(upgraded)}.`,
+  );
   return upgraded;
 }
 
-export function setRecordEntry(record: Record<string, unknown>, key: string, value: unknown): void {
+export function setRecordEntry(
+  record: Record<string, unknown>,
+  key: string,
+  value: unknown,
+): void {
   // Config dictionaries can contain hostile keys; define own properties so
   // rebuilding or copying them never invokes Object.prototype setters.
   Object.defineProperty(record, key, {
@@ -477,7 +548,11 @@ function sanitizeModelRefMapEntry(value: unknown): unknown {
   return sanitized;
 }
 
-function modelRefValuesAreEqual(existing: unknown, incoming: unknown, path: string): boolean {
+function modelRefValuesAreEqual(
+  existing: unknown,
+  incoming: unknown,
+  path: string,
+): boolean {
   if (isDeepStrictEqual(existing, incoming)) {
     return true;
   }
@@ -496,10 +571,15 @@ function mergeModelRefMapEntries(
   if (!existingRecord || !incomingRecord) {
     return {
       value: sanitizeModelRefMapEntry(existing),
-      conflicts: modelRefValuesAreEqual(existing, incoming, path) ? [] : ["value"],
+      conflicts: modelRefValuesAreEqual(existing, incoming, path)
+        ? []
+        : ["value"],
     };
   }
-  const merged = sanitizeModelRefMapEntry(existingRecord) as Record<string, unknown>;
+  const merged = sanitizeModelRefMapEntry(existingRecord) as Record<
+    string,
+    unknown
+  >;
   const conflicts: string[] = [];
   for (const [field, incomingValue] of Object.entries(incomingRecord)) {
     if (incomingValue === undefined || isBlockedObjectKey(field)) {
@@ -517,7 +597,11 @@ function mergeModelRefMapEntries(
     const existingField = getRecord(existingValue);
     const incomingField = getRecord(incomingValue);
     if (existingField && incomingField) {
-      const nested = mergeModelRefMapEntries(existingField, incomingField, fieldPath);
+      const nested = mergeModelRefMapEntries(
+        existingField,
+        incomingField,
+        fieldPath,
+      );
       setRecordEntry(merged, field, nested.value);
       conflicts.push(...nested.conflicts.map((c) => `${field}.${c}`));
       continue;
@@ -547,7 +631,11 @@ function rewriteModelRefMapKeys(
       );
       changed = true;
     }
-    if (upgradedKey && !Object.hasOwn(next, nextKey) && Object.hasOwn(record, nextKey)) {
+    if (
+      upgradedKey &&
+      !Object.hasOwn(next, nextKey) &&
+      Object.hasOwn(record, nextKey)
+    ) {
       // Seed the canonical entry before its retired aliases so canonical conflict
       // precedence and per-alias change reporting do not depend on authored key order.
       setRecordEntry(next, nextKey, record[nextKey]);
@@ -555,7 +643,11 @@ function rewriteModelRefMapKeys(
     }
     if (Object.hasOwn(next, nextKey)) {
       const existing = next[nextKey];
-      const { value, conflicts } = mergeModelRefMapEntries(existing, child, `${path}.${nextKey}`);
+      const { value, conflicts } = mergeModelRefMapEntries(
+        existing,
+        child,
+        `${path}.${nextKey}`,
+      );
       setRecordEntry(next, nextKey, value);
       const sortedConflicts = conflicts.toSorted();
       if (sortedConflicts.length > 0) {
@@ -563,7 +655,9 @@ function rewriteModelRefMapKeys(
           `Merged ${path} key ${JSON.stringify(key)} into ${JSON.stringify(nextKey)}; kept existing values for conflicting fields: ${sortedConflicts.join(", ")}.`,
         );
       } else {
-        changes.push(`Merged ${path} key ${JSON.stringify(key)} into ${JSON.stringify(nextKey)}.`);
+        changes.push(
+          `Merged ${path} key ${JSON.stringify(key)} into ${JSON.stringify(nextKey)}.`,
+        );
       }
       continue;
     }
@@ -593,21 +687,26 @@ function rewriteProviderCatalogModelIds(
     if (!provider || !Array.isArray(provider.models)) {
       continue;
     }
-    const rows: ProviderCatalogModelRow[] = provider.models.map((model, index) => {
-      const modelRecord = getRecord(model);
-      if (!modelRecord || typeof modelRecord.id !== "string") {
-        return { index, model };
-      }
-      const normalizedId = normalizeProviderCatalogModelId(providerId, modelRecord.id);
-      return {
-        index,
-        model,
-        modelRecord,
-        originalId: modelRecord.id,
-        normalizedId,
-        changed: normalizedId !== modelRecord.id,
-      };
-    });
+    const rows: ProviderCatalogModelRow[] = provider.models.map(
+      (model, index) => {
+        const modelRecord = getRecord(model);
+        if (!modelRecord || typeof modelRecord.id !== "string") {
+          return { index, model };
+        }
+        const normalizedId = normalizeProviderCatalogModelId(
+          providerId,
+          modelRecord.id,
+        );
+        return {
+          index,
+          model,
+          modelRecord,
+          originalId: modelRecord.id,
+          normalizedId,
+          changed: normalizedId !== modelRecord.id,
+        };
+      },
+    );
     if (!rows.some((row) => row.changed)) {
       continue;
     }
@@ -639,13 +738,18 @@ function rewriteProviderCatalogModelIds(
       emittedIds.add(row.normalizedId);
 
       const preferred =
-        grouped.find((candidate) => candidate.originalId === candidate.normalizedId) ?? grouped[0];
+        grouped.find(
+          (candidate) => candidate.originalId === candidate.normalizedId,
+        ) ?? grouped[0];
       const preferredRecord = preferred?.modelRecord;
       if (!preferred || !preferredRecord) {
         models.push(row.model);
         continue;
       }
-      let merged: Record<string, unknown> = { ...preferredRecord, id: row.normalizedId };
+      let merged: Record<string, unknown> = {
+        ...preferredRecord,
+        id: row.normalizedId,
+      };
       for (const candidate of grouped) {
         if (candidate === preferred || !candidate.modelRecord) {
           continue;
@@ -702,11 +806,19 @@ export function rewriteKnownModelRefs(
         typeof entry === "string" &&
         (MODEL_REF_ARRAY_KEYS.has(key) || isModelPolicyAllowPath(path))
       ) {
-        const rewritten = rewriteModelRefString(entry, `${path}.${index}`, changes);
+        const rewritten = rewriteModelRefString(
+          entry,
+          `${path}.${index}`,
+          changes,
+        );
         changed ||= rewritten !== entry;
         return rewritten;
       }
-      const rewritten = rewriteKnownModelRefs(entry, `${path}.${index}`, changes);
+      const rewritten = rewriteKnownModelRefs(
+        entry,
+        `${path}.${index}`,
+        changes,
+      );
       changed ||= rewritten.changed;
       return rewritten.value;
     });
@@ -719,7 +831,11 @@ export function rewriteKnownModelRefs(
   let working = record;
   let changed = false;
   if (isProviderCatalogsPath(path)) {
-    const rewrittenCatalogs = rewriteProviderCatalogModelIds(record, path, changes);
+    const rewrittenCatalogs = rewriteProviderCatalogModelIds(
+      record,
+      path,
+      changes,
+    );
     working = rewrittenCatalogs.value;
     changed ||= rewrittenCatalogs.changed;
   }
@@ -730,7 +846,11 @@ export function rewriteKnownModelRefs(
   }
   const next: Record<string, unknown> = {};
   for (const [childKey, child] of Object.entries(working)) {
-    const rewritten = rewriteKnownModelRefs(child, `${path}.${childKey}`, changes);
+    const rewritten = rewriteKnownModelRefs(
+      child,
+      `${path}.${childKey}`,
+      changes,
+    );
     changed ||= rewritten.changed;
     setRecordEntry(next, childKey, rewritten.value);
   }

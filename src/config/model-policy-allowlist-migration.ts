@@ -9,7 +9,9 @@ import {
 
 export const MODEL_POLICY_ALLOWLIST_MIGRATION_MARKER = "modelPolicyAllowlist";
 
-export function hasModelPolicyAllowlistMigrationMarker(value: unknown): boolean {
+export function hasModelPolicyAllowlistMigrationMarker(
+  value: unknown,
+): boolean {
   if (
     isRecord(value) &&
     isRecord(value.meta) &&
@@ -22,7 +24,9 @@ export function hasModelPolicyAllowlistMigrationMarker(value: unknown): boolean 
 }
 
 /** Any policy object opts into the explicit model-policy semantics. */
-export function isExplicitModelPolicy(value: unknown): value is Record<string, unknown> {
+export function isExplicitModelPolicy(
+  value: unknown,
+): value is Record<string, unknown> {
   return isRecord(value);
 }
 
@@ -43,7 +47,9 @@ export function computeModelPolicyAllowlist(params: {
   return collectLegacyDefaultModelAllowRefs(params.defaults);
 }
 
-function collectLegacyDefaultModelAllowRefs(defaults: unknown): string[] | null {
+function collectLegacyDefaultModelAllowRefs(
+  defaults: unknown,
+): string[] | null {
   if (!isRecord(defaults)) {
     return null;
   }
@@ -81,5 +87,9 @@ function collectLegacyDefaultModelAllowRefs(defaults: unknown): string[] | null 
       parseModelPolicyWildcardRef(trimmed) !== null
     );
   });
+  // Return an empty array (not null) when every legacy key is invalid so the
+  // runtime treats the map as a known-but-empty restriction (fail-closed).
+  // The Doctor migration handles the empty case separately to avoid stamping
+  // the migration marker and retiring the legacy restriction.
   return refs.length > 0 ? refs : [];
 }
