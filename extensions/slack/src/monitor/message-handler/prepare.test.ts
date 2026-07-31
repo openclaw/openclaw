@@ -1604,38 +1604,24 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared.ctxPayload.RawBody).toContain("[Forwarded message from Bob]\nForwarded hello");
   });
 
-  it("recovers full Slack DM text from top-level rich text blocks when text is only a preview", async () => {
-    const preview = "Yo Molty what is uppppp ".repeat(7).slice(0, 160);
-    const fullText = `${preview}and this tail should still reach the agent`;
-
-    const prepared = await prepareWithDefaultCtx(
-      createSlackMessage({
-        text: preview,
-        blocks: [
-          {
-            type: "rich_text",
-            block_id: "b1",
-            elements: [
-              {
-                type: "rich_text_section",
-                elements: [{ type: "text", text: fullText }],
-              },
-            ],
-          },
-        ],
-      }),
-    );
-
-    assertPrepared(prepared);
-    expect(prepared.ctxPayload.RawBody).toBe(fullText);
-    expect(prepared.ctxPayload.BodyForAgent).toContain(fullText);
-  });
-
-  it("recovers full Slack DM text when rich text differs from a truncated preview", async () => {
-    const fullText = `First paragraph ${"keeps going ".repeat(14)}
+  it.each([
+    {
+      name: "recovers full Slack DM text from top-level rich text blocks when text is only a preview",
+      createText: () => {
+        const preview = "Yo Molty what is uppppp ".repeat(7).slice(0, 160);
+        return { preview, fullText: `${preview}and this tail should still reach the agent` };
+      },
+    },
+    {
+      name: "recovers full Slack DM text when rich text differs from a truncated preview",
+      createText: () => {
+        const fullText = `First paragraph ${"keeps going ".repeat(14)}
 Second paragraph should still reach the agent after Slack's preview cutoff.`;
-    const preview = `${fullText.slice(0, 200).replace(/\n/g, " ")}...`;
-
+        return { preview: `${fullText.slice(0, 200).replace(/\n/g, " ")}...`, fullText };
+      },
+    },
+  ])("$name", async ({ createText }) => {
+    const { preview, fullText } = createText();
     const prepared = await prepareWithDefaultCtx(
       createSlackMessage({
         text: preview,
@@ -2395,7 +2381,18 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(prepared.ctxPayload.From).toBe("slack:group:G123");
   });
 
-  it("blocks MPIM messages from senders outside the configured allowFrom", async () => {
+  it.each([
+    {
+      name: "blocks MPIM messages from senders outside the configured allowFrom",
+      user: "U_ATTACKER",
+      allowed: false,
+    },
+    {
+      name: "allows MPIM messages from senders in the configured allowFrom",
+      user: "U_OWNER",
+      allowed: true,
+    },
+  ])("$name", async ({ user, allowed }) => {
     const ctx = createReplyToAllSlackCtx();
     ctx.allowFrom = ["U_OWNER"];
     const prepared = await prepareMessageWith(
@@ -2404,26 +2401,14 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       createSlackMessage({
         channel: "G123",
         channel_type: "mpim",
-        user: "U_ATTACKER",
+        user,
       }),
     );
 
-    expect(prepared).toBeNull();
-  });
-
-  it("allows MPIM messages from senders in the configured allowFrom", async () => {
-    const ctx = createReplyToAllSlackCtx();
-    ctx.allowFrom = ["U_OWNER"];
-    const prepared = await prepareMessageWith(
-      ctx,
-      createSlackAccount({ replyToMode: "all" }),
-      createSlackMessage({
-        channel: "G123",
-        channel_type: "mpim",
-        user: "U_OWNER",
-      }),
-    );
-
+    if (!allowed) {
+      expect(prepared).toBeNull();
+      return;
+    }
     assertPrepared(prepared);
     expect(prepared.ctxPayload.ChatType).toBe("group");
   });
@@ -2778,104 +2763,88 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(existing.ctxPayload.InboundHistory).toBeUndefined();
   });
 
-  it("uses room users allowlist for thread context filtering", async () => {
-    const { prepared, replies } = await prepareThreadContextAllowlistCase({
-      channel: "C123",
-      channelType: "channel",
-      user: "U1",
-      userName: "Alice",
-      starterText: "starter from room user",
-      followUpText: "allowed follow-up",
-      startTs: "100.000",
-      replyTs: "100.500",
-      followUpTs: "100.800",
-      currentTs: "101.000",
-      channelsConfig: {
-        C123: {
-          users: ["U1"],
-          requireMention: false,
-        },
+  it.each<{
+    name: string;
+    params: ThreadContextAllowlistCaseParams;
+    expectStarterBody?: boolean;
+  }>([
+    {
+      name: "uses room users allowlist for thread context filtering",
+      params: {
+        channel: "C123",
+        channelType: "channel",
+        user: "U1",
+        userName: "Alice",
+        starterText: "starter from room user",
+        followUpText: "allowed follow-up",
+        startTs: "100.000",
+        replyTs: "100.500",
+        followUpTs: "100.800",
+        currentTs: "101.000",
+        channelsConfig: { C123: { users: ["U1"], requireMention: false } },
+        resolveChannelName: async () => ({ name: "general", type: "channel" }),
       },
-      resolveChannelName: async () => ({ name: "general", type: "channel" }),
-    });
-
-    expectThreadContextAllowsHumanHistory(
-      prepared,
-      replies,
-      "starter from room user",
-      "allowed follow-up",
-    );
-  });
-
-  it("does not apply the owner allowlist to open-room thread context", async () => {
-    const { prepared, replies } = await prepareThreadContextAllowlistCase({
-      channel: "C124",
-      channelType: "channel",
-      user: "U2",
-      userName: "Bob",
-      starterText: "starter from open room",
-      followUpText: "open-room follow-up",
-      startTs: "200.000",
-      replyTs: "200.500",
-      followUpTs: "200.800",
-      currentTs: "201.000",
-      channelsConfig: {
-        C124: {
-          requireMention: false,
-        },
+    },
+    {
+      name: "does not apply the owner allowlist to open-room thread context",
+      params: {
+        channel: "C124",
+        channelType: "channel",
+        user: "U2",
+        userName: "Bob",
+        starterText: "starter from open room",
+        followUpText: "open-room follow-up",
+        startTs: "200.000",
+        replyTs: "200.500",
+        followUpTs: "200.800",
+        currentTs: "201.000",
+        channelsConfig: { C124: { requireMention: false } },
+        resolveChannelName: async () => ({ name: "general", type: "channel" }),
       },
-      resolveChannelName: async () => ({ name: "general", type: "channel" }),
-    });
-
+    },
+    {
+      name: "does not apply the owner allowlist to open DMs when dmPolicy is open",
+      params: {
+        channel: "D300",
+        channelType: "im",
+        user: "U3",
+        userName: "Dana",
+        starterText: "starter from open dm",
+        followUpText: "dm follow-up",
+        startTs: "300.000",
+        replyTs: "300.500",
+        followUpTs: "300.800",
+        currentTs: "301.000",
+        allowFrom: ["*"],
+      },
+      expectStarterBody: false,
+    },
+    {
+      name: "does not apply the owner allowlist to MPIM thread context",
+      params: {
+        channel: "G400",
+        channelType: "mpim",
+        user: "U4",
+        historyUser: "U5",
+        userName: "Evan",
+        starterText: "starter from mpim",
+        followUpText: "mpim follow-up",
+        startTs: "400.000",
+        replyTs: "400.500",
+        followUpTs: "400.800",
+        currentTs: "401.000",
+        allowFrom: ["U4"],
+      },
+    },
+  ])("$name", async ({ params, expectStarterBody }) => {
+    const { prepared, replies } = await prepareThreadContextAllowlistCase(params);
     expectThreadContextAllowsHumanHistory(
       prepared,
       replies,
-      "starter from open room",
-      "open-room follow-up",
+      params.starterText,
+      params.followUpText,
+      expectStarterBody === undefined ? undefined : { expectStarterBody },
     );
-  });
-
-  it("does not apply the owner allowlist to open DMs when dmPolicy is open", async () => {
-    const { prepared, replies } = await prepareThreadContextAllowlistCase({
-      channel: "D300",
-      channelType: "im",
-      user: "U3",
-      userName: "Dana",
-      starterText: "starter from open dm",
-      followUpText: "dm follow-up",
-      startTs: "300.000",
-      replyTs: "300.500",
-      followUpTs: "300.800",
-      currentTs: "301.000",
-      allowFrom: ["*"],
-    });
-
-    expectThreadContextAllowsHumanHistory(
-      prepared,
-      replies,
-      "starter from open dm",
-      "dm follow-up",
-      { expectStarterBody: false },
-    );
-  });
-
-  it("does not apply the owner allowlist to MPIM thread context", async () => {
-    const { prepared, replies } = await prepareThreadContextAllowlistCase({
-      channel: "G400",
-      channelType: "mpim",
-      user: "U4",
-      historyUser: "U5",
-      userName: "Evan",
-      starterText: "starter from mpim",
-      followUpText: "mpim follow-up",
-      startTs: "400.000",
-      replyTs: "400.500",
-      followUpTs: "400.800",
-      currentTs: "401.000",
-      allowFrom: ["U4"],
-    });
-
-    expectThreadContextAllowsHumanHistory(prepared, replies, "starter from mpim", "mpim follow-up");
   });
 
   it("skips loading thread history when thread session already exists in store (bloat fix)", async () => {
