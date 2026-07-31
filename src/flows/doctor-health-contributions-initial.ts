@@ -10,6 +10,7 @@ import {
   runConfigAuditScrubHealth,
   runDatabaseBloatHealth,
   runDiskSpaceHealth,
+  runLegacyBootSessionHealth,
   runLegacyCronHealth,
   runLegacyPluginManifestHealth,
   runPluginRegistryHealth,
@@ -302,6 +303,12 @@ export function resolveInitialDoctorHealthContributions(params: {
       label: "Session locks",
       healthCheckIds: ["core/doctor/session-locks"],
       run: runSessionLocksHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:legacy-boot-session-state",
+      label: "Legacy boot session state",
+      healthCheckIds: ["core/doctor/legacy-boot-session-state"],
+      run: runLegacyBootSessionHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:session-transcripts",

@@ -15,6 +15,10 @@ import {
   shellCompletionStatusToRepairEffects,
 } from "../commands/doctor-completion.js";
 import {
+  detectLegacyBootSessionEntries,
+  repairLegacyBootSessionEntries,
+} from "../commands/doctor-session-legacy-boot.js";
+import {
   detectStaleSessionLocks,
   sessionLockToHealthFinding,
   sessionLockToRepairEffect,
@@ -1002,6 +1006,20 @@ const sessionLocksCheck: SplitHealthCheckInput = {
   },
 };
 
+const legacyBootSessionStateCheck: SplitHealthCheckInput = {
+  id: "core/doctor/legacy-boot-session-state",
+  kind: "core",
+  description: "Legacy pre-7.1 boot session entries are removed before startup.",
+  source: "doctor",
+  defaultEnabled: false,
+  async detect(ctx) {
+    return detectLegacyBootSessionEntries({ cfg: ctx.cfg, env: process.env });
+  },
+  async repair(ctx) {
+    return repairLegacyBootSessionEntries({ cfg: ctx.cfg, env: process.env, dryRun: ctx.dryRun });
+  },
+};
+
 const browserCheck: HealthCheck = {
   id: "core/doctor/browser",
   kind: "core",
@@ -1266,6 +1284,7 @@ function createConvertedWorkflowChecks(
     codexSessionRoutesCheck,
     telegramGeneralTopicConversationsCheck,
     sessionLocksCheck,
+    legacyBootSessionStateCheck,
     shellCompletionCheck,
     uiProtocolFreshnessCheck,
     gatewayServicesExtraCheck,

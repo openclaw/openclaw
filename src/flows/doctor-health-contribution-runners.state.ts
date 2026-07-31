@@ -119,6 +119,33 @@ export async function runSessionLocksHealth(ctx: DoctorHealthFlowContext): Promi
   });
 }
 
+export async function runLegacyBootSessionHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { detectLegacyBootSessionEntries, repairLegacyBootSessionEntries } =
+    await import("../commands/doctor-session-legacy-boot.js");
+  const { note } = await import("../../packages/terminal-core/src/note.js");
+
+  const env = ctx.env ?? process.env;
+  const findings = detectLegacyBootSessionEntries({ cfg: ctx.cfg, env });
+  if (findings.length === 0) {
+    return;
+  }
+
+  if (!ctx.prompter.shouldRepair) {
+    for (const finding of findings) {
+      note(finding.message, "Legacy boot session state");
+    }
+    return;
+  }
+
+  const result = await repairLegacyBootSessionEntries({ cfg: ctx.cfg, env });
+  if (result.changes.length > 0) {
+    note(result.changes.join("\n"), "Doctor changes");
+  }
+  if (result.warnings && result.warnings.length > 0) {
+    note(result.warnings.join("\n"), "Doctor warnings");
+  }
+}
+
 export async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteSessionTranscriptHealth } = await import("../commands/doctor-session-transcripts.js");
   await noteSessionTranscriptHealth({
