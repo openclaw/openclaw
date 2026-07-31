@@ -127,6 +127,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
   @state() private catalog: MemoryCatalog = { kind: "unavailable" };
   @state() private engineBusy = false;
   @state() private engineError: string | null = null;
+  @state() private engineWarning: string | null = null;
   @state() private addonBusy = new Set<string>();
   @state() private addonErrors = new Map<string, string>();
   @state() private addonNotices = new Map<string, MemoryAddonNotice>();
@@ -243,6 +244,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     }
     const connection: CatalogConnection = { client, connected };
     this.connection = connection;
+    this.engineWarning = null;
     this.overviewRequest = null;
     this.probingEmbeddings = false;
     if (!client || !connected) {
@@ -505,13 +507,23 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     try {
       try {
         const processInstanceIdPromise = this.readProcessInstanceId(client);
-        const result = await setPluginEnabled(client, pluginId, enabled);
-        if (result.restartRequired) {
+        const { result, refreshError } = await this.runPluginMutation(
+          connection,
+          pluginId,
+          enabled,
+        );
+        if (result.restartRequired || refreshError !== null) {
           const key = enabled ? "pluginsPage.enabledRestart" : "pluginsPage.disabledRestart";
           const warnings = "warnings" in result ? (result.warnings ?? []) : [];
           const processInstanceId = await processInstanceIdPromise;
           this.addonNotices = new Map(this.addonNotices).set(pluginId, {
-            message: [t(key, { name: result.plugin.name }), ...warnings].filter(Boolean).join(" "),
+            message: [
+              result.restartRequired ? t(key, { name: result.plugin.name }) : null,
+              ...warnings,
+              refreshError ? t("pluginsPage.configRefreshFailed", { error: refreshError }) : null,
+            ]
+              .filter(Boolean)
+              .join(" "),
             processInstanceId,
           });
           const currentConnection = this.connection;
@@ -532,7 +544,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
         currentConnection?.connected && currentConnection.client
           ? this.loadCatalog(currentConnection.client, currentConnection)
           : Promise.resolve();
-      await Promise.allSettled([this.context.runtimeConfig.refresh(), catalogReload]);
+      await catalogReload;
     } finally {
       const busy = new Set(this.addonBusy);
       busy.delete(pluginId);
@@ -555,6 +567,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     }
     if (!engineId) {
       this.engineError = null;
+      this.engineWarning = null;
       this.context.runtimeConfig.patchForm(MEMORY_SLOT_PATH, MEMORY_SLOT_OFF);
       return;
     }
@@ -565,19 +578,48 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     }
     this.engineBusy = true;
     this.engineError = null;
+    this.engineWarning = null;
     try {
-      // `Off` is an autosaved form edit. Let it adopt its ack hash before the
-      // plugin RPC performs its own CAS write, or rapid Off -> engine changes
-      // can race each other and reject the second write as stale.
-      await this.context.runtimeConfig.waitForPendingWrites();
-      await setPluginEnabled(client, engineId, true);
-      await this.context.runtimeConfig.refresh();
-      await this.loadCatalog(client, connection);
+      // The shared owner flushes an Off draft, serializes sibling plugin writes,
+      // and adopts the committed hash before this control leaves its busy state.
+      const { refreshError } = await this.runPluginMutation(connection, engineId, true);
+      if (refreshError !== null) {
+        this.engineWarning = t("pluginsPage.configRefreshFailed", { error: refreshError });
+      }
+      const currentConnection = this.connection;
+      if (currentConnection?.connected && currentConnection.client) {
+        await this.loadCatalog(currentConnection.client, currentConnection);
+      }
     } catch (error) {
       this.engineError = errorMessage(error);
     } finally {
       this.engineBusy = false;
     }
+  }
+
+  private async runPluginMutation(
+    connection: CatalogConnection,
+    pluginId: string,
+    enabled: boolean,
+  ) {
+    const mutation = await this.context.runtimeConfig.runExternalMutation((mutationClient) => {
+      if (
+        this.connection !== connection ||
+        !connection.connected ||
+        this.context.gateway.snapshot.phase !== "connected" ||
+        mutationClient !== connection.client
+      ) {
+        throw new Error("Connection changed before the memory plugin update started.");
+      }
+      return setPluginEnabled(mutationClient, pluginId, enabled);
+    });
+    if (!mutation.ok) {
+      throw new Error(mutation.error);
+    }
+    return {
+      result: mutation.value,
+      refreshError: mutation.refresh.ok ? null : mutation.refresh.error,
+    };
   }
 
   private configObjectFromController(): Record<string, unknown> | null {
@@ -680,6 +722,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
       engineState: this.engineState(engineSelection),
       engineBusy: this.engineBusy || engineMutationDisabled,
       engineError: this.engineError,
+      engineWarning: this.engineWarning,
       onEngineChange: (nextEngineId) => void this.changeEngine(nextEngineId, engineSelection),
       backend,
       backendBusy: this.mutationDisabled,

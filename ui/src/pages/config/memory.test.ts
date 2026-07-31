@@ -27,6 +27,7 @@ function createProps(overrides: Partial<MemoryViewProps> = {}): MemoryViewProps 
     engineState: "enabled",
     engineBusy: false,
     engineError: null,
+    engineWarning: null,
     onEngineChange: vi.fn(),
     backend: "builtin",
     backendBusy: false,

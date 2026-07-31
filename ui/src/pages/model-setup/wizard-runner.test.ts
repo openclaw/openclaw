@@ -222,4 +222,45 @@ describe("ModelSetupWizardRunner", () => {
 
     expect(seen).toEqual(messages);
   });
+
+  it("reports Gateway-owned progress settlement only after its request settles", async () => {
+    let resolveProgress!: (result: { done: true; status: "done" }) => void;
+    const progress = new Promise<{ done: true; status: "done" }>((resolve) => {
+      resolveProgress = resolve;
+    });
+    let nextCalls = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "openclaw.setup.prepare.start") {
+        return { sessionId: "session-progress", done: false, status: "running" };
+      }
+      if (method === "wizard.next") {
+        return nextCalls++ === 0
+          ? {
+              done: false,
+              status: "running",
+              step: { id: "download", type: "progress", executor: "gateway", message: "Waiting" },
+            }
+          : progress;
+      }
+      return {};
+    });
+    const events: string[] = [];
+    const runner = new ModelSetupWizardRunner({
+      getClient: () => ({ request }) as unknown as GatewayBrowserClient,
+      onChange: () => undefined,
+      onDone: () => events.push("done"),
+      onGatewayProgressStarted: () => events.push("started"),
+      onGatewayProgressSettled: () => events.push("settled"),
+      requestFailedMessage: () => "failed",
+      cancelledMessage: () => "cancelled",
+      sessionExpiredMessage: () => "expired",
+    });
+
+    await runner.start("llama-cpp", "openclaw.setup.prepare.start");
+    expect(events).toEqual(["started"]);
+
+    resolveProgress({ done: true, status: "done" });
+
+    await vi.waitFor(() => expect(events).toEqual(["started", "done", "settled"]));
+  });
 });

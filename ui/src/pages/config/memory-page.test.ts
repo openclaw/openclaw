@@ -138,6 +138,7 @@ function createPage(params: {
   const element = document.createElement("openclaw-memory-settings") as MemoryPageElement;
   element.configObject = params.configObject;
   element.routeData = params.routeData ?? memoryTabRoute("settings");
+  let mutationQueue = Promise.resolve();
   const runtimeConfig = {
     state: {
       client: {},
@@ -160,6 +161,32 @@ function createPage(params: {
     removeFormValue: vi.fn(),
     waitForPendingWrites: params.waitForPendingWrites ?? (() => Promise.resolve()),
     refresh: vi.fn(params.refresh ?? (() => Promise.resolve())),
+    runExternalMutation: vi.fn(async (task: (client: unknown) => Promise<unknown>) => {
+      const run = async () => {
+        await runtimeConfig.waitForPendingWrites();
+        try {
+          const value = await task(gateway.snapshot.client);
+          try {
+            await runtimeConfig.refresh();
+            return { ok: true as const, value, refresh: { ok: true as const } };
+          } catch (error) {
+            return {
+              ok: true as const,
+              value,
+              refresh: { ok: false as const, error: (error as Error).message },
+            };
+          }
+        } catch (error) {
+          return { ok: false as const, reason: "error" as const, error: (error as Error).message };
+        }
+      };
+      const queued = mutationQueue.then(run, run);
+      mutationQueue = queued.then(
+        () => undefined,
+        () => undefined,
+      );
+      return queued;
+    }),
     ensureLoaded: () => Promise.resolve(),
   };
   const context = {
@@ -201,6 +228,7 @@ function createPage(params: {
     request,
     setPhase,
     refresh: runtimeConfig.refresh,
+    runExternalMutation: runtimeConfig.runExternalMutation,
     lookupSchemaPath: runtimeConfig.lookupSchemaPath,
   };
 }
@@ -398,6 +426,85 @@ describe("MemorySettingsPage engine slot", () => {
         expect(element.textContent).toContain("plugin not installed: memory-lancedb"),
       );
       expect(element.textContent).toContain("Could not change the memory engine");
+    } finally {
+      element.remove();
+    }
+  });
+
+  it("keeps a committed engine change successful when its config refresh fails", async () => {
+    const { element } = createPage({
+      configObject: {},
+      catalog: [engine("memory-core", true), engine("memory-lancedb", false)],
+      refresh: () => Promise.reject(new Error("engine refresh failed")),
+    });
+    document.body.append(element);
+    try {
+      await waitForFast(() => expect(activeEngine(element)).toBe("memory-core"));
+
+      selectEngine(element, "memory-lancedb");
+
+      await waitForFast(() => expect(element.textContent).toContain("engine refresh failed"));
+      expect(element.textContent).toContain("Needs attention");
+      expect(element.textContent).not.toContain("Could not change the memory engine");
+    } finally {
+      element.remove();
+    }
+  });
+
+  it("clears a stale engine refresh warning when its Gateway connection is replaced", async () => {
+    const { element, setPhase } = createPage({
+      configObject: {},
+      catalog: [engine("memory-core", true), engine("memory-lancedb", false)],
+      refresh: () => Promise.reject(new Error("stale engine refresh failed")),
+    });
+    document.body.append(element);
+    try {
+      await waitForFast(() => expect(activeEngine(element)).toBe("memory-core"));
+      selectEngine(element, "memory-lancedb");
+      await waitForFast(() => expect(element.textContent).toContain("stale engine refresh failed"));
+
+      setPhase("disconnected");
+      setPhase("connected");
+
+      await waitForFast(() => expect(activeEngine(element)).toBe("memory-core"));
+      expect(element.textContent).not.toContain("stale engine refresh failed");
+      expect(element.textContent).not.toContain("Needs attention");
+    } finally {
+      element.remove();
+    }
+  });
+
+  it("reloads the current catalog after an older engine mutation commits across reconnect", async () => {
+    const pluginWrite = deferred<unknown>();
+    const setEnabled = vi.fn(() => pluginWrite.promise);
+    const { element, request, setPhase } = createPage({
+      configObject: {},
+      listCatalog: (call) =>
+        Promise.resolve({
+          plugins:
+            call < 2
+              ? [engine("memory-core", true), engine("memory-lancedb", false)]
+              : [engine("memory-core", false), engine("memory-lancedb", true)],
+        }),
+      setEnabled,
+    });
+    document.body.append(element);
+    try {
+      await waitForFast(() => expect(activeEngine(element)).toBe("memory-core"));
+      selectEngine(element, "memory-lancedb");
+      await waitForFast(() => expect(setEnabled).toHaveBeenCalledOnce());
+
+      setPhase("disconnected");
+      setPhase("connected");
+      await waitForFast(() =>
+        expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(2),
+      );
+      pluginWrite.resolve({});
+
+      await waitForFast(() => {
+        expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(3);
+        expect(element.textContent).toContain("This engine is disabled");
+      });
     } finally {
       element.remove();
     }
@@ -609,6 +716,68 @@ describe("MemorySettingsPage catalog state", () => {
     }
   });
 
+  it("serializes add-on writes through the shared configuration owner", async () => {
+    const firstMutation = deferred<unknown>();
+    const setEnabled = vi.fn((pluginId: string) =>
+      pluginId === "active-memory" ? firstMutation.promise : Promise.resolve({}),
+    );
+    const { element, runExternalMutation } = createPage({
+      configObject: {},
+      catalog: [addon("active-memory", true), addon("memory-wiki", false)],
+      setEnabled,
+    });
+    document.body.append(element);
+    try {
+      await waitForFast(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
+
+      toggleAddon(element, "Active memory", false);
+      toggleAddon(element, "Memory wiki", true);
+
+      await waitForFast(() => expect(runExternalMutation).toHaveBeenCalledTimes(2));
+      await waitForFast(() => expect(setEnabled).toHaveBeenCalledTimes(1));
+      expect(setEnabled).toHaveBeenCalledWith("active-memory", false);
+
+      firstMutation.resolve({});
+      await waitForFast(() => expect(setEnabled).toHaveBeenCalledWith("memory-wiki", true));
+    } finally {
+      element.remove();
+    }
+  });
+
+  it("rejects an add-on write queued across a same-client reconnect", async () => {
+    const pendingWrites = deferred<void>();
+    const setEnabled = vi.fn(() => Promise.resolve({}));
+    const { element, runExternalMutation, setPhase } = createPage({
+      configObject: {},
+      catalog: [addon("active-memory", true)],
+      waitForPendingWrites: () => pendingWrites.promise,
+      setEnabled,
+    });
+    document.body.append(element);
+    try {
+      await waitForFast(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
+      toggleAddon(element, "Active memory", false);
+      await waitForFast(() => expect(runExternalMutation).toHaveBeenCalledOnce());
+
+      setPhase("disconnected");
+      setPhase("connected");
+      await waitForFast(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
+
+      const queued = runExternalMutation.mock.results[0]?.value as Promise<unknown>;
+      pendingWrites.resolve();
+      await queued;
+
+      expect(setEnabled).not.toHaveBeenCalled();
+      await waitForFast(() =>
+        expect(element.textContent).toContain(
+          "Connection changed before the memory plugin update started.",
+        ),
+      );
+    } finally {
+      element.remove();
+    }
+  });
+
   it("does not let a stale mutation supersede a reconnect catalog reload", async () => {
     const mutation = deferred<unknown>();
     const mutationReload = deferred<{ plugins: readonly PluginCatalogItem[] }>();
@@ -623,6 +792,7 @@ describe("MemorySettingsPage catalog state", () => {
     try {
       await waitForFast(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(true));
       toggleAddon(element, "Active memory", false);
+      await waitForFast(() => expect(setPluginEnabled).toHaveBeenCalledOnce());
 
       setPhase("disconnected");
       setPhase("connected");
@@ -644,7 +814,7 @@ describe("MemorySettingsPage catalog state", () => {
     }
   });
 
-  it("reconciles the catalog without reporting a rejected toggle when config refresh fails", async () => {
+  it("keeps a committed add-on toggle successful and surfaces its config refresh failure", async () => {
     const refresh = vi.fn(() => Promise.reject(new Error("config refresh failed")));
     const initial = [addon("active-memory", true), addon("memory-wiki", false)];
     const updated = [addon("active-memory", false), addon("memory-wiki", false)];
@@ -658,9 +828,10 @@ describe("MemorySettingsPage catalog state", () => {
       await waitForFast(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(true));
       toggleAddon(element, "Active memory", false);
 
-      await waitForFast(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(false));
-      expect(refresh).toHaveBeenCalledOnce();
-      expect(element.textContent).not.toContain("config refresh failed");
+      await waitForFast(() => expect(refresh).toHaveBeenCalledOnce());
+      await waitForFast(() => expect(element.textContent).toContain("config refresh failed"));
+      expect(addonSwitch(element, "Active memory")?.checked).toBe(false);
+      expect(element.textContent).toContain("Needs attention");
       expect(element.textContent).not.toContain("Could not update Active memory");
     } finally {
       element.remove();

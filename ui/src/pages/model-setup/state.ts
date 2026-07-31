@@ -46,6 +46,7 @@ export type ModelSetupWizardState =
       step: WizardStep;
       busy: boolean;
       validationError: string | null;
+      refreshWarning?: string;
     }
   | { phase: "done"; authChoice: string }
   | { phase: "cancelled"; message: string }

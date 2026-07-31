@@ -16,6 +16,8 @@ type WizardRunnerOptions = {
   getClient: () => GatewayBrowserClient | null;
   onChange: (state: ModelSetupWizardState) => void;
   onDone: (startMethod: ModelSetupWizardStartMethod) => void;
+  onGatewayProgressStarted?: (generation: number) => void;
+  onGatewayProgressSettled?: (generation: number) => void;
   requestFailedMessage: () => string;
   cancelledMessage: () => string;
   sessionExpiredMessage: () => string;
@@ -162,9 +164,14 @@ export class ModelSetupWizardRunner {
     // live progress instead of freezing on the first frame.
     if (next.phase === "step" && next.step.executor === "gateway") {
       const generation = this.generation;
-      void this.requestNext(authChoice, undefined, generation).catch((error: unknown) => {
-        this.handleError(error, generation);
-      });
+      this.options.onGatewayProgressStarted?.(generation);
+      void this.requestNext(authChoice, undefined, generation)
+        .catch((error: unknown) => {
+          this.handleError(error, generation);
+        })
+        .finally(() => {
+          this.options.onGatewayProgressSettled?.(generation);
+        });
     }
   }
 

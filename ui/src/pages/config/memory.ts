@@ -61,6 +61,8 @@ type MemoryViewProps = {
   engineBusy: boolean;
   /** Last failed engine write, so a rejected change is not just a snap-back. */
   engineError: string | null;
+  /** A committed engine change stays successful when only its config refresh fails. */
+  engineWarning: string | null;
   onEngineChange: (engineId: string | null) => void;
   /** null when the slot owner runs its own retrieval, so this row does not apply. */
   backend: MemoryBackend | null;
@@ -151,6 +153,16 @@ function renderEngineSection(props: MemoryViewProps) {
             title: t("memoryPage.engine.changeFailed"),
             description: props.engineError,
             control: renderSettingsStatus({ kind: "danger", label: t("common.failed") }),
+          })}
+      ${props.engineWarning === null
+        ? nothing
+        : renderSettingsRow({
+            title: t("pluginsPage.needsAttention"),
+            description: props.engineWarning,
+            control: renderSettingsStatus({
+              kind: "warn",
+              label: t("pluginsPage.needsAttention"),
+            }),
           })}
     `,
   );

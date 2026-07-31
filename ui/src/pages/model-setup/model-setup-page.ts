@@ -1,6 +1,6 @@
 import { consume } from "@lit/context";
 import { initialState, Task } from "@lit/task";
-import { html, type PropertyValues } from "lit";
+import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
@@ -90,10 +90,20 @@ export class ModelSetupPage extends OpenClawLightDomElement {
   @state() private manualError: string | null = null;
   @state() private moreSignInOpen = false;
   @state() private iconUrls: Record<string, string> = {};
+  @state() private staleSetupRefreshWarning: string | null = null;
 
   private observedClient: GatewayBrowserClient | null = null;
+  private observedConnected = false;
   private dataClient: GatewayBrowserClient | null = null;
   private pendingPrepareOption: ModelSetupPrepareOption | null = null;
+  private wizardMutationActive = false;
+  private wizardMutationEpoch = 0;
+  private pendingWizardCompletion: ModelSetupWizardStartMethod | null = null;
+  private readonly gatewayWizardProgress = new Map<
+    number,
+    { ownerEpoch: number; requests: number; done: (() => void) | null }
+  >();
+  private pendingSetupRefreshWarning: string | null = null;
   private readonly iconMisses = new Set<string>();
   private readonly iconRequests = new Map<
     string,
@@ -107,12 +117,46 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     getClient: () => this.context?.gateway.snapshot.client ?? null,
     onChange: (next) => {
       const previousStep = this.wizardState.phase === "step" ? this.wizardState.step.id : null;
-      this.wizardState = next;
+      const refreshWarning =
+        next.phase === "step"
+          ? this.mergeSetupRefreshWarnings(
+              next.refreshWarning ?? null,
+              this.pendingSetupRefreshWarning,
+              this.staleSetupRefreshWarning,
+            )
+          : null;
+      this.wizardState =
+        next.phase === "step" && refreshWarning ? { ...next, refreshWarning } : next;
       if (next.phase === "step" && next.step.id !== previousStep) {
         this.wizardValue = initialWizardValue(next.step);
       }
     },
-    onDone: (startMethod) => void this.handleWizardDone(startMethod),
+    onDone: (startMethod) => {
+      // Final wizard.next commits configuration before returning. Let its
+      // mutation owner adopt the new hash before detection exposes success.
+      if (this.wizardMutationActive) {
+        this.pendingWizardCompletion = startMethod;
+        return;
+      }
+      void this.finishUncoordinatedWizard(startMethod);
+    },
+    onGatewayProgressStarted: (generation) => {
+      const progress = this.gatewayWizardProgress.get(generation) ?? {
+        ownerEpoch: this.wizardMutationEpoch,
+        requests: 0,
+        done: null,
+      };
+      progress.requests += 1;
+      this.gatewayWizardProgress.set(generation, progress);
+    },
+    onGatewayProgressSettled: (generation) => {
+      const progress = this.gatewayWizardProgress.get(generation);
+      if (!progress || --progress.requests > 0) {
+        return;
+      }
+      this.gatewayWizardProgress.delete(generation);
+      progress.done?.();
+    },
     requestFailedMessage: () => t("modelSetup.errors.requestFailed"),
     cancelledMessage: () => t("modelSetup.wizard.cancelled"),
     sessionExpiredMessage: () => t("modelSetup.wizard.sessionExpired"),
@@ -184,11 +228,13 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         return;
       }
       if ("error" in outcome) {
+        const refreshWarning = this.pendingSetupRefreshWarning;
+        this.pendingSetupRefreshWarning = null;
         this.activationState = {
           phase: "failure",
           targetId: current.targetId,
           status: "unknown",
-          error: errorMessage(outcome.error),
+          error: [errorMessage(outcome.error), refreshWarning].filter(Boolean).join("\n"),
         };
         return;
       }
@@ -197,10 +243,17 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         targetId: current.targetId,
         fallbackError: t("modelSetup.errors.activationFailed"),
       });
+      const refreshWarning = this.mergeSetupRefreshWarnings(
+        this.pendingSetupRefreshWarning,
+        outcome.value.refreshError,
+      );
+      this.pendingSetupRefreshWarning = null;
       this.activationState =
-        activationState.phase === "success" && outcome.value.refreshError
-          ? { ...activationState, warning: outcome.value.refreshError }
-          : activationState;
+        refreshWarning === null
+          ? activationState
+          : activationState.phase === "success"
+            ? { ...activationState, warning: refreshWarning }
+            : { ...activationState, error: `${activationState.error}\n${refreshWarning}` };
       if (this.activationState.phase === "success") {
         this.manualApiKey = "";
       }
@@ -227,6 +280,11 @@ export class ModelSetupPage extends OpenClawLightDomElement {
   });
 
   override disconnectedCallback() {
+    this.wizardMutationEpoch += 1;
+    this.wizardMutationActive = false;
+    this.pendingWizardCompletion = null;
+    this.pendingPrepareOption = null;
+    this.pendingSetupRefreshWarning = null;
     void this.detectTask.run([null, null]);
     void this.activationTask.run([null, null]);
     void this.verifyTask.run([null]);
@@ -241,17 +299,30 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       this.pageState = this.routeData.state;
       this.dataClient = this.routeData.client;
       this.observedClient = this.routeData.client;
+      this.observedConnected =
+        this.context.gateway.snapshot.phase === "connected" &&
+        this.context.gateway.snapshot.client === this.routeData.client;
       this.syncManualProvider(this.routeData.state);
     }
   }
 
   override updated() {
     const snapshot = this.context.gateway.snapshot;
-    if (snapshot.client === this.observedClient) {
+    const connected = snapshot.phase === "connected";
+    if (snapshot.client === this.observedClient && connected === this.observedConnected) {
       this.reconcileIcons();
       return;
     }
     this.observedClient = snapshot.client;
+    this.observedConnected = connected;
+    this.wizardMutationEpoch += 1;
+    this.wizardMutationActive = false;
+    this.pendingWizardCompletion = null;
+    this.pendingPrepareOption = null;
+    if (this.pendingSetupRefreshWarning) {
+      this.retainStaleSetupRefreshWarning(this.pendingSetupRefreshWarning);
+    }
+    this.pendingSetupRefreshWarning = null;
     void this.detectTask.run([null, null]);
     this.activationState = { phase: "idle" };
     void this.activationTask.run([null, null]);
@@ -259,7 +330,9 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     void this.verifyTask.run([null]);
     this.resetIcons();
     void this.wizard.cancel();
-    if (!snapshot.client || snapshot.client === this.dataClient) {
+    if (!connected || !snapshot.client) {
+      this.dataClient = null;
+      this.pageState = { phase: "loading" };
       return;
     }
     this.pageState = { phase: "loading" };
@@ -512,24 +585,40 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     input?.focus();
   }
 
-  private async handleWizardDone(startMethod: ModelSetupWizardStartMethod): Promise<void> {
+  private async handleWizardDone(
+    startMethod: ModelSetupWizardStartMethod,
+    refreshError: string | null = null,
+    epoch = this.wizardMutationEpoch,
+  ): Promise<void> {
+    if (epoch !== this.wizardMutationEpoch) {
+      return;
+    }
+    this.pendingSetupRefreshWarning = this.mergeSetupRefreshWarnings(
+      this.pendingSetupRefreshWarning,
+      refreshError,
+    );
     const prepareOption =
       startMethod === "openclaw.setup.prepare.start" ? this.pendingPrepareOption : null;
     this.pendingPrepareOption = null;
     const result = await this.detect();
+    if (epoch !== this.wizardMutationEpoch) {
+      return;
+    }
     if (!result) {
-      this.wizard.fail(t("modelSetup.errors.requestFailed"));
+      this.failWizardWithRefreshWarning(t("modelSetup.errors.requestFailed"));
       return;
     }
     if (startMethod === "openclaw.setup.auth.start" && !result.setupComplete) {
-      this.wizard.fail(t("modelSetup.wizard.notComplete"));
+      this.failWizardWithRefreshWarning(t("modelSetup.wizard.notComplete"));
       return;
     }
     if (startMethod === "openclaw.setup.auth.start") {
       this.activationState = {
         phase: "success",
         modelRef: result.configuredModel ?? t("modelSetup.success.configuredModel"),
+        ...(this.pendingSetupRefreshWarning ? { warning: this.pendingSetupRefreshWarning } : {}),
       };
+      this.pendingSetupRefreshWarning = null;
     }
     if (prepareOption) {
       // Provider setup can persist a model before the live activation check.
@@ -540,7 +629,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       };
       const candidate = findPreparedModelCandidate(result, prepareOption.id);
       if (!candidate) {
-        this.wizard.fail(
+        this.failWizardWithRefreshWarning(
           t("modelSetup.prepare.providerNotReady", { provider: prepareOption.label }),
         );
         return;
@@ -552,20 +641,177 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     this.wizard.close();
   }
 
+  private failWizardWithRefreshWarning(message: string): void {
+    const refreshWarning = this.pendingSetupRefreshWarning;
+    this.pendingSetupRefreshWarning = null;
+    if (refreshWarning) {
+      this.retainStaleSetupRefreshWarning(refreshWarning);
+    }
+    this.wizard.fail([message, refreshWarning].filter(Boolean).join("\n"));
+  }
+
+  private mergeSetupRefreshWarnings(...warnings: Array<string | null>): string | null {
+    const unique = [...new Set(warnings.filter((warning): warning is string => Boolean(warning)))];
+    return unique.length > 0 ? unique.join("\n") : null;
+  }
+
+  private async runWizardMutation(
+    task: () => Promise<void>,
+  ): Promise<{ refreshError: string | null; completionHandled: boolean } | null> {
+    const expectedClient = this.context.gateway.snapshot.client;
+    if (this.wizardMutationActive || !this.canUseSetup(expectedClient)) {
+      return null;
+    }
+    const epoch = this.wizardMutationEpoch;
+    this.wizardMutationActive = true;
+    this.pendingWizardCompletion = null;
+    this.requestUpdate();
+    try {
+      const mutation = await this.context.runtimeConfig.runExternalMutation(
+        async (mutationClient) => {
+          if (
+            epoch !== this.wizardMutationEpoch ||
+            mutationClient !== expectedClient ||
+            this.context.gateway.snapshot.phase !== "connected"
+          ) {
+            throw new Error("Connection changed before model setup started.");
+          }
+          await task();
+          const progress = [...this.gatewayWizardProgress.values()].find(
+            (entry) => entry.ownerEpoch === epoch,
+          );
+          if (progress && progress.requests > 0) {
+            // Autonomous steps can commit before their next human prompt.
+            // Keep that RPC in the mutation lane until it actually settles,
+            // even if cancellation or reconnect invalidates its wizard UI.
+            await new Promise<void>((resolve) => {
+              progress.done = resolve;
+            });
+          }
+          // An already-started Gateway step may have committed before cancellation.
+          // Return normally so the config owner can still refresh its hash;
+          // the outer epoch guard suppresses stale wizard UI afterward.
+        },
+      );
+      if (epoch !== this.wizardMutationEpoch) {
+        if (mutation.ok) {
+          if (!mutation.refresh.ok) {
+            if (this.isConnected) {
+              this.retainStaleSetupRefreshWarning(mutation.refresh.error);
+            }
+          }
+          if (this.isConnected && this.canUseSetup(this.context.gateway.snapshot.client)) {
+            // A cancelled or pre-reconnect RPC can commit after its wizard
+            // disappeared; detect only after the owning mutation settles.
+            void this.detect();
+          }
+        }
+        return null;
+      }
+      const completed = this.pendingWizardCompletion;
+      this.pendingWizardCompletion = null;
+      if (!mutation.ok) {
+        this.pendingPrepareOption = null;
+        this.failWizardWithRefreshWarning(mutation.error);
+        return null;
+      }
+      const refreshError = mutation.refresh.ok ? null : mutation.refresh.error;
+      this.pendingSetupRefreshWarning = this.mergeSetupRefreshWarnings(
+        this.pendingSetupRefreshWarning,
+        refreshError,
+      );
+      if (completed) {
+        this.wizardMutationActive = false;
+        await this.handleWizardDone(completed, refreshError, epoch);
+      } else if (this.wizardState.phase === "error" && this.pendingSetupRefreshWarning) {
+        this.failWizardWithRefreshWarning(this.wizardState.message);
+      } else if (this.wizardState.phase === "step" && this.pendingSetupRefreshWarning) {
+        this.wizardState = {
+          ...this.wizardState,
+          refreshWarning: this.pendingSetupRefreshWarning,
+        };
+      }
+      return { refreshError, completionHandled: Boolean(completed) };
+    } catch (error) {
+      if (epoch === this.wizardMutationEpoch) {
+        this.pendingPrepareOption = null;
+        this.failWizardWithRefreshWarning(errorMessage(error));
+      }
+      return null;
+    } finally {
+      if (epoch === this.wizardMutationEpoch) {
+        this.wizardMutationActive = false;
+        this.requestUpdate();
+      }
+    }
+  }
+
+  private async finishUncoordinatedWizard(startMethod: ModelSetupWizardStartMethod): Promise<void> {
+    const epoch = this.wizardMutationEpoch;
+    const mutation = await this.runWizardMutation(async () => undefined);
+    if (
+      epoch === this.wizardMutationEpoch &&
+      mutation &&
+      !mutation.completionHandled &&
+      this.wizardState.phase === "done"
+    ) {
+      await this.handleWizardDone(startMethod, mutation.refreshError, epoch);
+    }
+  }
+
   private cancelWizard(): void {
+    const refreshWarning = this.pendingSetupRefreshWarning;
+    this.wizardMutationEpoch += 1;
+    this.wizardMutationActive = false;
+    this.pendingWizardCompletion = null;
     this.pendingPrepareOption = null;
+    this.pendingSetupRefreshWarning = null;
     void this.wizard.cancel();
+    if (refreshWarning) {
+      // Cancellation still has to disclose an earlier committed write whose
+      // authoritative snapshot could not be refreshed.
+      this.retainStaleSetupRefreshWarning(refreshWarning);
+      this.wizard.fail(refreshWarning);
+    }
   }
 
   private closeWizard(): void {
+    const refreshWarning = this.pendingSetupRefreshWarning;
+    this.wizardMutationEpoch += 1;
+    this.wizardMutationActive = false;
+    this.pendingWizardCompletion = null;
     this.pendingPrepareOption = null;
+    this.pendingSetupRefreshWarning = null;
+    if (refreshWarning) {
+      this.retainStaleSetupRefreshWarning(refreshWarning);
+      this.wizard.fail(refreshWarning);
+      return;
+    }
     this.wizard.close();
+  }
+
+  private retainStaleSetupRefreshWarning(warning: string): void {
+    // Later runner generations must not overwrite committed-write warnings.
+    this.staleSetupRefreshWarning = this.mergeSetupRefreshWarnings(
+      this.staleSetupRefreshWarning,
+      warning,
+    );
+    if (this.wizardState.phase === "step") {
+      this.wizardState = {
+        ...this.wizardState,
+        refreshWarning: this.mergeSetupRefreshWarnings(
+          this.wizardState.refreshWarning ?? null,
+          this.staleSetupRefreshWarning,
+        )!,
+      };
+    }
   }
 
   private actionsDisabled(): boolean {
     return (
       this.activationState.phase === "testing" ||
       this.verifyState.phase === "checking" ||
+      this.wizardMutationActive ||
       (this.wizardState.phase !== "idle" &&
         this.wizardState.phase !== "error" &&
         this.wizardState.phase !== "cancelled")
@@ -609,12 +855,14 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       onStartAuth: (option: AuthOption) => {
         this.pendingPrepareOption = null;
         this.wizardMode = "auth";
-        void this.wizard.start(option.id);
+        void this.runWizardMutation(() => this.wizard.start(option.id));
       },
       onStartPrepare: (option: ModelSetupPrepareOption) => {
         this.pendingPrepareOption = option;
         this.wizardMode = "prepare";
-        void this.wizard.start(option.id, "openclaw.setup.prepare.start");
+        void this.runWizardMutation(() =>
+          this.wizard.start(option.id, "openclaw.setup.prepare.start"),
+        );
       },
       onManualProviderChange: (providerId) => this.selectManualProvider(providerId),
       onUseManualProvider: (providerId) => void this.useManualProvider(providerId),
@@ -637,7 +885,8 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         void this.detect();
       },
       onWizardValueChange: (value) => (this.wizardValue = value),
-      onWizardAnswer: (value, includeValue) => void this.wizard.answer(value, includeValue),
+      onWizardAnswer: (value, includeValue) =>
+        void this.runWizardMutation(() => this.wizard.answer(value, includeValue)),
       onWizardCancel: () => this.cancelWizard(),
       onWizardClose: () => this.closeWizard(),
     });
@@ -651,6 +900,9 @@ export class ModelSetupPage extends OpenClawLightDomElement {
           </div>
         </div>
       </section>
+      ${this.staleSetupRefreshWarning
+        ? html`<div class="callout warning" role="alert">${this.staleSetupRefreshWarning}</div>`
+        : nothing}
       ${renderSettingsWorkspace(body)}
     `;
   }
