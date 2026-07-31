@@ -303,6 +303,15 @@ export function buildDiscordTextChunks(
   return resolveTextChunksWithFallback(text, chunks);
 }
 
+export function toDiscordFileBlob(data: Blob | Uint8Array, contentType?: string): Blob {
+  if (data instanceof Blob) {
+    return data;
+  }
+  const arrayBuffer = new ArrayBuffer(data.byteLength);
+  new Uint8Array(arrayBuffer).set(data);
+  return new Blob([arrayBuffer], contentType ? { type: contentType } : undefined);
+}
+
 export type DiscordSendProgress = (
   result: { id: string; channel_id: string },
   kind: "text" | "media",
@@ -463,7 +472,7 @@ async function sendDiscordMedia(params: DiscordMediaSendParams) {
     replyTo: resolveDiscordReplyMessageId(reply, true),
     files: [
       {
-        data: media.buffer,
+        data: toDiscordFileBlob(media.buffer, media.contentType),
         name: resolvedFileName,
       },
     ],

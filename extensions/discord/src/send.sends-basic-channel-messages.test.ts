@@ -2,7 +2,11 @@
 import { ChannelType, MessageFlags, PermissionFlagsBits, Routes } from "discord-api-types/v10";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Container, TextDisplay } from "./internal/discord.js";
-import { discordWebMediaMockFactory, makeDiscordRest } from "./send.test-harness.js";
+import {
+  createDiscordLoopbackRest,
+  discordWebMediaMockFactory,
+  makeDiscordRest,
+} from "./send.test-harness.js";
 
 vi.mock("openclaw/plugin-sdk/web-media", () => discordWebMediaMockFactory());
 
@@ -178,6 +182,12 @@ function expectBodyFileName(body: unknown, expectedName: string) {
   const files = requireArray(requireRecord(body, "Discord REST body").files, "Discord files");
   expect(files).toHaveLength(1);
   expectRecordFields(files[0], "Discord file", { name: expectedName });
+}
+
+function requireBodyFile(body: unknown): Record<string, unknown> {
+  const files = requireArray(requireRecord(body, "Discord REST body").files, "Discord files");
+  expect(files).toHaveLength(1);
+  return requireRecord(files[0], "Discord file");
 }
 
 describe("resolveDiscordTargetChannelId", () => {
@@ -729,10 +739,33 @@ describe("sendMessageDiscord", () => {
     });
     expect(res.messageId).toBe("msg");
     expectRestRoute(postMock, 0, Routes.channelMessages("789"));
-    expectBodyFileName(requireRestBody(postMock), "photo.jpg");
+    const file = requireBodyFile(requireRestBody(postMock));
+    expectRecordFields(file, "Discord file", { name: "photo.jpg" });
+    expect(file.data).toBeInstanceOf(Blob);
+    expect((file.data as Blob).type).toBe("image/jpeg");
     expect(loadWebMedia).toHaveBeenCalledWith("file:///tmp/photo.jpg", {
       maxBytes: 100 * 1024 * 1024,
     });
+  });
+
+  it("sends the detected JPEG media type across a real loopback multipart request", async () => {
+    const loopback = await createDiscordLoopbackRest();
+    try {
+      await sendMessageDiscord("channel:789", "photo", {
+        rest: loopback.rest,
+        token: "test-token",
+        cfg: DISCORD_TEST_CFG,
+        mediaUrl: "file:///tmp/photo.jpg",
+      });
+
+      const upload = loopback.requests.find((request) => request.method === "POST");
+      expect(upload?.path).toContain("/channels/789/messages");
+      expect(upload?.contentType).toMatch(/^multipart\/form-data; boundary=/);
+      expect(upload?.body).toContain('name="files[0]"; filename="photo.jpg"');
+      expect(upload?.body).toContain("Content-Type: image/jpeg");
+    } finally {
+      await loopback.close();
+    }
   });
 
   it("preserves text when Discord rejects an upload with error 40005", async () => {

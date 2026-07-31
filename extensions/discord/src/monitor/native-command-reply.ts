@@ -15,6 +15,7 @@ import type {
   StringSelectMenuInteraction,
   TopLevelComponents,
 } from "../internal/discord.js";
+import { toDiscordFileBlob } from "../send.shared.js";
 
 export const DISCORD_EMPTY_VISIBLE_REPLY_WARNING = "⚠️ Command produced no visible reply.";
 
@@ -106,7 +107,7 @@ export async function deliverDiscordInteractionReply(params: {
   let payloadDelivered = false;
   const sendMessage = async (
     content: string,
-    files?: { name: string; data: Buffer }[],
+    files?: { name: string; data: Buffer | Blob; contentType?: string }[],
     components?: TopLevelComponents[],
   ) => {
     const contentPayload = content ? { content } : {};
@@ -122,8 +123,10 @@ export async function deliverDiscordInteractionReply(params: {
               if (file.data instanceof Blob) {
                 return { name: file.name, data: file.data };
               }
-              const arrayBuffer = Uint8Array.from(file.data).buffer;
-              return { name: file.name, data: new Blob([arrayBuffer]) };
+              return {
+                name: file.name,
+                data: toDiscordFileBlob(file.data, file.contentType),
+              };
             }),
           }
         : {
@@ -174,6 +177,7 @@ export async function deliverDiscordInteractionReply(params: {
         return {
           name: loaded.fileName ?? "upload",
           data: loaded.buffer,
+          contentType: loaded.contentType,
         };
       }),
     );

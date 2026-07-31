@@ -25,11 +25,60 @@ let effectiveImageBytesCap: typeof import("./web-media.js").effectiveImageBytesC
 let LocalMediaAccessError: typeof import("./web-media.js").LocalMediaAccessError;
 let loadWebMedia: typeof import("./web-media.js").loadWebMedia;
 let loadWebMediaRaw: typeof import("./web-media.js").loadWebMediaRaw;
+let optimizeImageBufferForWebMedia: typeof import("./web-media.js").optimizeImageBufferForWebMedia;
 let optimizeImageToJpeg: typeof import("./web-media.js").optimizeImageToJpeg;
 let resolveImageCompressionGrid: typeof import("./web-media.js").resolveImageCompressionGrid;
 
 const TINY_PNG_BUFFER = createSolidPngBuffer(1, 1, { r: 255, g: 255, b: 255 });
 const TINY_PNG_BASE64 = TINY_PNG_BUFFER.toString("base64");
+const TINY_WEBP_BUFFER = Buffer.from(
+  "UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEAAgA0JaQAA3AA/v89WAAAAA==",
+  "base64",
+);
+
+function createWebpChunk(type: string, data: Buffer): Buffer {
+  const header = Buffer.alloc(8);
+  header.write(type, 0, "ascii");
+  header.writeUInt32LE(data.length, 4);
+  return Buffer.concat([header, data, ...(data.length % 2 === 0 ? [] : [Buffer.alloc(1)])]);
+}
+
+function createAnimatedWebpBuffer(frameCount: number): Buffer {
+  const extendedHeader = Buffer.alloc(10);
+  extendedHeader[0] = 0x02;
+  const frameHeader = Buffer.alloc(16);
+  frameHeader.writeUIntLE(90, 12, 3);
+  const frameImage = TINY_WEBP_BUFFER.subarray(12);
+  const content = Buffer.concat([
+    Buffer.from("WEBP", "ascii"),
+    createWebpChunk("VP8X", extendedHeader),
+    createWebpChunk("ANIM", Buffer.alloc(6)),
+    ...Array.from({ length: frameCount }, () =>
+      createWebpChunk("ANMF", Buffer.concat([frameHeader, frameImage])),
+    ),
+  ]);
+  const header = Buffer.alloc(8);
+  header.write("RIFF", 0, "ascii");
+  header.writeUInt32LE(content.length, 4);
+  return Buffer.concat([header, content]);
+}
+
+function countAnimatedWebpFrames(buffer: Buffer): number {
+  if (buffer.toString("ascii", 0, 4) !== "RIFF" || buffer.toString("ascii", 8, 12) !== "WEBP") {
+    throw new Error("Expected a RIFF WebP image");
+  }
+  let frameCount = 0;
+  for (let offset = 12; offset + 8 <= buffer.length;) {
+    const chunkSize = buffer.readUInt32LE(offset + 4);
+    if (buffer.toString("ascii", offset, offset + 4) === "ANMF") {
+      frameCount += 1;
+    }
+    offset += 8 + chunkSize + (chunkSize % 2);
+  }
+  return frameCount;
+}
+
+const ANIMATED_WEBP_BUFFER = createAnimatedWebpBuffer(3);
 const CANVAS_HOST_PATH = "/__openclaw__/canvas";
 
 let fixtureRoot = "";
@@ -45,6 +94,7 @@ beforeAll(async () => {
     LocalMediaAccessError,
     loadWebMedia,
     loadWebMediaRaw,
+    optimizeImageBufferForWebMedia,
     optimizeImageToJpeg,
     resolveImageCompressionGrid,
   } = await import("./web-media.js"));
@@ -464,7 +514,6 @@ describe("loadWebMedia", () => {
   });
 
   it("preserves in-limit GIF buffers when optimizing direct image buffers", async () => {
-    const { optimizeImageBufferForWebMedia } = await import("./web-media.js");
     const buffer = createGifHeader(16, 16);
     const result = await optimizeImageBufferForWebMedia({
       buffer,
@@ -479,7 +528,6 @@ describe("loadWebMedia", () => {
   });
 
   it("does not bypass model dimensions for GIF buffers", async () => {
-    const { optimizeImageBufferForWebMedia } = await import("./web-media.js");
     await expect(
       optimizeImageBufferForWebMedia({
         buffer: createGifHeader(1600, 1600),
@@ -488,6 +536,40 @@ describe("loadWebMedia", () => {
         imageCompression: { models: [{ maxSidePx: 512 }] },
       }),
     ).rejects.toThrow(/dimensions exceed model image limits/i);
+  });
+
+  it.each([
+    { name: "static", fileName: "photo.webp", buffer: TINY_WEBP_BUFFER, frames: 0 },
+    { name: "animated", fileName: "animated.webp", buffer: ANIMATED_WEBP_BUFFER, frames: 3 },
+  ])("preserves all original $name WebP bytes and frames when loading media", async (fixture) => {
+    const filePath = path.join(fixtureRoot, fixture.fileName);
+    await fs.writeFile(filePath, fixture.buffer);
+
+    const result = await loadWebMedia(filePath, createLocalWebMediaOptions());
+
+    expect(result.kind).toBe("image");
+    expect(result.contentType).toBe("image/webp");
+    expect(result.fileName).toBe(fixture.fileName);
+    expect(result.buffer.equals(fixture.buffer)).toBe(true);
+    expect(countAnimatedWebpFrames(result.buffer)).toBe(fixture.frames);
+  });
+
+  it.each([
+    { name: "static", fileName: "photo.webp", buffer: TINY_WEBP_BUFFER, frames: 0 },
+    { name: "animated", fileName: "animated.webp", buffer: ANIMATED_WEBP_BUFFER, frames: 3 },
+  ])("preserves all original $name WebP bytes and frames during optimization", async (fixture) => {
+    const result = await optimizeImageBufferForWebMedia({
+      buffer: fixture.buffer,
+      contentType: "image/webp",
+      fileName: fixture.fileName,
+      maxBytes: 1024 * 1024,
+    });
+
+    expect(result.kind).toBe("image");
+    expect(result.contentType).toBe("image/webp");
+    expect(result.fileName).toBe(fixture.fileName);
+    expect(result.buffer.equals(fixture.buffer)).toBe(true);
+    expect(countAnimatedWebpFrames(result.buffer)).toBe(fixture.frames);
   });
 
   it("applies model image maxBytes to the effective image cap", async () => {

@@ -36,6 +36,7 @@ import {
   resolveDiscordChannel,
   stripUndefinedFields,
   SUPPRESS_NOTIFICATIONS_FLAG,
+  toDiscordFileBlob,
   type DiscordAllowedMentions,
 } from "./send.shared.js";
 import type { DiscordSendResult } from "./send.types.js";
@@ -220,7 +221,7 @@ async function buildDiscordComponentPayload(params: {
     const filenameOverride = params.opts.filename?.trim();
     resolvedFileName = filenameOverride || media.fileName || "upload";
     spec = withImplicitComponentAttachmentBlock(spec, resolvedFileName);
-    files = [{ data: media.buffer, name: resolvedFileName }];
+    files = [{ data: toDiscordFileBlob(media.buffer, media.contentType), name: resolvedFileName }];
   }
 
   const attachmentNames = extractComponentAttachmentNames(spec);

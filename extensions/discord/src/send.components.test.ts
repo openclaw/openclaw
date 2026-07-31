@@ -1,7 +1,7 @@
 // Discord tests cover send.components plugin behavior.
 import { ChannelType, MessageFlags } from "discord-api-types/v10";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { makeDiscordRest } from "./send.test-harness.js";
+import { createDiscordLoopbackRest, makeDiscordRest } from "./send.test-harness.js";
 
 const loadConfigMock = vi.hoisted(() => vi.fn(() => ({ session: { dmScope: "main" } })));
 
@@ -52,6 +52,7 @@ function resetClassicMocks(): void {
   loadOutboundMediaFromUrlMock.mockResolvedValue({
     buffer: Buffer.from("media"),
     fileName: "report.pdf",
+    contentType: "application/pdf",
   });
   vi.clearAllMocks();
 }
@@ -82,6 +83,26 @@ function readRecordArg(
     throw new Error(`expected mock call #${callIndex + 1} object argument #${argIndex + 1}`);
   }
   return arg as Record<string, unknown>;
+}
+
+function readComponentRestBody(mock: ReturnType<typeof vi.fn>, callIndex = 0) {
+  const body = readRecordArg(mock, callIndex, 1).body;
+  if (!body || typeof body !== "object") {
+    throw new Error(`expected REST call #${callIndex + 1} body object`);
+  }
+  return body as Record<string, unknown>;
+}
+
+function readSingleUploadFile(body: Record<string, unknown>) {
+  const files = body.files;
+  if (!Array.isArray(files) || files.length !== 1) {
+    throw new Error("expected one Discord upload file");
+  }
+  const file = files[0];
+  if (!file || typeof file !== "object") {
+    throw new Error("expected Discord upload file object");
+  }
+  return file as Record<string, unknown>;
 }
 
 describe("sendDiscordComponentMessage", () => {
@@ -399,6 +420,9 @@ describe("sendDiscordComponentMessage classic message downgrade", () => {
 
     expect(sendMessageDiscordMock).not.toHaveBeenCalled();
     expect(postMock).toHaveBeenCalledTimes(1);
+    const uploadFile = readSingleUploadFile(readComponentRestBody(postMock));
+    expect(uploadFile.data).toBeInstanceOf(Blob);
+    expect((uploadFile.data as Blob).type).toBe("application/pdf");
     expect(registerMock).toHaveBeenCalledTimes(1);
     const registration = readRecordArg(registerMock, 0, 0);
     const modals = registration.modals as Array<{
@@ -410,6 +434,36 @@ describe("sendDiscordComponentMessage classic message downgrade", () => {
     expect(modals[0]?.title).toBe("Feedback");
     expect(modals[0]?.fields).toHaveLength(1);
     expect(modals[0]?.fields?.[0]?.label).toBe("Notes");
+  });
+
+  it("sends the detected PDF media type across a real component multipart request", async () => {
+    const loopback = await createDiscordLoopbackRest();
+    try {
+      await sendDiscordComponentMessage(
+        "channel:789",
+        {
+          text: "report",
+          modal: {
+            title: "Feedback",
+            fields: [{ type: "text", label: "Notes" }],
+          },
+        },
+        {
+          cfg: DISCORD_TEST_CFG,
+          rest: loopback.rest,
+          token: "test-token",
+          mediaUrl: "https://example.com/report.pdf",
+        },
+      );
+
+      const upload = loopback.requests.find((request) => request.method === "POST");
+      expect(upload?.path).toContain("/channels/789/messages");
+      expect(upload?.contentType).toMatch(/^multipart\/form-data; boundary=/);
+      expect(upload?.body).toContain('name="files[0]"; filename="report.pdf"');
+      expect(upload?.body).toContain("Content-Type: application/pdf");
+    } finally {
+      await loopback.close();
+    }
   });
 
   it("treats bare numeric component send targets as channels", async () => {
