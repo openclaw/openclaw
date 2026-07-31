@@ -14,7 +14,6 @@ import {
   collectMemoryWikiOpenItems,
   countMemoryWikiOpenItems,
   WIKI_OPEN_ITEM_KINDS,
-  type MemoryWikiOpenItemKind,
 } from "./open-items.js";
 import { getMemoryWikiPage, searchMemoryWiki, WIKI_SEARCH_MODES } from "./query.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
@@ -93,6 +92,7 @@ const WikiOpenItemsSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+type WikiOpenItemKind = (typeof WIKI_OPEN_ITEM_KINDS)[number];
 const WikiApplySchema = Type.Object(
   {
     op: Type.Union([
@@ -254,7 +254,7 @@ export function createWikiOpenItemsTool(
       "List unresolved wiki items — open questions, contradictions, and low-confidence pages or claims — with their text and page location so they can be reviewed or resolved.",
     parameters: WikiOpenItemsSchema,
     execute: async (_toolCallId, rawParams) => {
-      const params = rawParams as { kinds?: MemoryWikiOpenItemKind[]; limit?: number };
+      const params = rawParams as { kinds?: WikiOpenItemKind[]; limit?: number };
       await syncImportedSourcesIfNeeded(config, appConfig);
       const result = await collectMemoryWikiOpenItems(config.vault.path);
       const kindFilter = params.kinds && params.kinds.length > 0 ? new Set(params.kinds) : null;
