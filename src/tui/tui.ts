@@ -605,6 +605,7 @@ function resolveEmptySessionInfoDefaults(config: OpenClawConfig): SessionInfo {
 
 export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   const isLocalMode = opts.local === true || opts.backend !== undefined;
+  // Locale is a session-lifetime invariant: capture it once and never recreate it on reconnect or refresh.
   const localization = createTuiLocalization();
   const config = opts.config ?? getRuntimeConfig({ skipPluginValidation: !isLocalMode });
   const fallbackCwd = path.dirname(OPENCLAW_CLI_WRAPPER_PATH);
