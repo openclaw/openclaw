@@ -443,6 +443,15 @@ export type DiagnosticPhaseCompletedEvent = DiagnosticBaseEvent &
     type: "diagnostic.phase.completed";
   };
 
+type DiagnosticToolLoopDetector =
+  | "file_mutation_no_progress"
+  | "generic_repeat"
+  | "argument_churn"
+  | "unknown_tool_repeat"
+  | "known_poll_no_progress"
+  | "global_circuit_breaker"
+  | "ping_pong";
+
 export type DiagnosticToolLoopEvent = DiagnosticBaseEvent & {
   type: "tool.loop";
   sessionKey?: string;
@@ -450,13 +459,7 @@ export type DiagnosticToolLoopEvent = DiagnosticBaseEvent & {
   toolName: string;
   level: "warning" | "critical";
   action: "warn" | "block";
-  detector:
-    | "generic_repeat"
-    | "argument_churn"
-    | "unknown_tool_repeat"
-    | "known_poll_no_progress"
-    | "global_circuit_breaker"
-    | "ping_pong";
+  detector: DiagnosticToolLoopDetector;
   count: number;
   message: string;
   pairedToolName?: string;

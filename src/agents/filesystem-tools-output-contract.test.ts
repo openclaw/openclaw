@@ -122,9 +122,10 @@ describe("filesystem tool output contracts", () => {
     expectContract(tool, result.details);
     expect(result.details).toEqual({
       summary: { added: ["added.txt"], modified: [], deleted: [] },
+      changed: true,
     });
     expect(compactToolOutputHint(tool.outputSchema)).toBe(
-      "{ summary: { added: Array<string>; deleted: Array<string>; modified: Array<string> } }",
+      "{ changed: boolean; summary: { added: Array<string>; deleted: Array<string>; modified: Array<string> } }",
     );
   });
 });

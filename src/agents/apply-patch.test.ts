@@ -432,7 +432,7 @@ describe("applyPatch", () => {
     expect(result.summary.modified).toEqual(["source.txt"]);
   });
 
-  it("returns a terminal no-op without rewriting unchanged update hunks", async () => {
+  it("returns a recoverable no-op without rewriting unchanged update hunks", async () => {
     const memory = createMemoryPatchSandbox({
       "source.txt": "foo\nbar\n",
     });
@@ -454,7 +454,11 @@ describe("applyPatch", () => {
 
     const tool = createApplyPatchTool(memory.options);
     const toolResult = await tool.execute("call-no-op", { input: patch }, undefined);
-    expect(toolResult.terminate).toBe(true);
+    expect(toolResult.terminate).toBeUndefined();
+    expect(toolResult.details).toEqual({
+      summary: { added: [], modified: [], deleted: [] },
+      changed: false,
+    });
   });
 
   it("preserves line endings and EOF state for no-op update hunks", async () => {

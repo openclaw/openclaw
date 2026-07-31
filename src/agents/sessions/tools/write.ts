@@ -556,14 +556,12 @@ export function createWriteToolDefinition(
         if (signal?.aborted) {
           throw new Error("Operation aborted");
         }
-        // Terminal no-op: file already has identical content.
+        // Return the no-op to the model once; the pre-tool guard blocks exact
+        // repeats without ending a recoverable agent turn.
         if (precheck.state === "same") {
-          return {
-            ...textResult(`No changes made to ${path}. The file already has identical content.`, {
-              changed: false,
-            } satisfies WriteToolDetails),
-            terminate: true,
-          };
+          return textResult(`No changes made to ${path}. The file already has identical content.`, {
+            changed: false,
+          } satisfies WriteToolDetails);
         }
         const details = await resolveWriteDetails({ absolutePath, content, ops, path, precheck });
         try {

@@ -229,7 +229,7 @@ Values shown are defaults except `applyPatch.allowModels` (empty/unset by defaul
 
 ### `tools.loopDetection`
 
-Tool-loop safety checks are **disabled by default**. Set `enabled: true` to activate detection. Settings can be defined globally in `tools.loopDetection` and overridden per-agent at `agents.entries.*.tools.loopDetection`.
+Rolling-history tool-loop checks are **disabled by default**. The exact-retry guard after a confirmed no-op `write`, `edit`, or `apply_patch` and the post-compaction guard remain active unless `enabled` is explicitly `false`. Set `enabled: true` to activate the rolling detectors too. Settings can be defined globally in `tools.loopDetection` and overridden per-agent at `agents.entries.*.tools.loopDetection`.
 
 ```json5
 {

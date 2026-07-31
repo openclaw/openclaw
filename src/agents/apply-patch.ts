@@ -77,6 +77,7 @@ type ApplyPatchResult = {
 
 type ApplyPatchToolDetails = {
   summary: ApplyPatchSummary;
+  changed: boolean;
 };
 
 function normalizeUpdateComparison(content: string): string {
@@ -107,6 +108,7 @@ const ApplyPatchToolOutputSchema = Type.Object(
       },
       { additionalProperties: false },
     ),
+    changed: Type.Boolean(),
   },
   { additionalProperties: false },
 );
@@ -150,8 +152,7 @@ export function createApplyPatchTool(
 
       return {
         content: [{ type: "text", text: result.text }],
-        details: { summary: result.summary },
-        ...(result.noOp ? { terminate: true } : {}),
+        details: { summary: result.summary, changed: result.noOp !== true },
       };
     },
   };

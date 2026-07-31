@@ -24,7 +24,7 @@ export type ToolCallRecord = {
   argsHash: string;
   toolCallId?: string;
   runId?: string;
-  outcomeKind?: "tool-loop-veto";
+  outcomeKind?: "file-mutation-no-progress" | "tool-loop-veto";
   resultHash?: string;
   noProgress?: true;
   unknownToolName?: string;

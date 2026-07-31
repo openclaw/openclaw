@@ -61,6 +61,7 @@ import {
   normalizeCodeModeExecBeforeHookParams,
   reconcileCodeModeExecBeforeHookParams,
 } from "./code-mode-control-tools.js";
+import { buildUntrackedFileMutationNoProgressResult } from "./tool-loop-file-mutation-outcome.js";
 import { buildToolMutationState } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
 import { formatToolExecutionErrorMessage } from "./tool-result-error.js";
@@ -488,12 +489,12 @@ export function wrapToolWithBeforeToolCallHook(
           ...executionArgs,
         );
         const durationMs = Date.now() - startedAt;
-        const terminalPresentation = resolveToolTerminalPresentation({
+        const recordedTerminalPresentation = resolveToolTerminalPresentation({
           tool,
           toolParams: executeParams,
           result,
         });
-        await recordLoopOutcome({
+        const postExecutionBlock = await recordLoopOutcome({
           ctx,
           toolName: normalizedToolName,
           toolParams: executeParams,
@@ -501,8 +502,22 @@ export function wrapToolWithBeforeToolCallHook(
           result,
           resultContentSource: tool.resultContentSource,
           toolCallOrdinal,
-          terminalPresentation,
+          terminalPresentation: recordedTerminalPresentation,
         });
+        const untrackedTerminalResult =
+          !ctx?.sessionKey && !ctx?.sessionId && ctx?.loopDetection?.enabled !== false
+            ? buildUntrackedFileMutationNoProgressResult(normalizedToolName, result)
+            : undefined;
+        const finalResult = postExecutionBlock
+          ? {
+              content: [{ type: "text" as const, text: postExecutionBlock.reason }],
+              details: {
+                status: "blocked",
+                deniedReason: "tool-loop",
+                reason: postExecutionBlock.reason,
+              },
+            }
+          : (untrackedTerminalResult ?? result);
         rememberPendingTerminalPresentation({
           ctx,
           tool,
@@ -524,7 +539,7 @@ export function wrapToolWithBeforeToolCallHook(
               toolCallId,
             });
           }
-          const terminalEvent = resolveToolResultTerminalDiagnostic(result, durationMs);
+          const terminalEvent = resolveToolResultTerminalDiagnostic(finalResult, durationMs);
           emitTrustedDiagnosticEventWithPrivateData(
             {
               ...eventBase,
@@ -532,12 +547,12 @@ export function wrapToolWithBeforeToolCallHook(
             },
             buildToolContentPrivateData(toolContentPolicy, {
               input: executeParams,
-              output: result,
+              output: finalResult,
               includeOutput: true,
             }),
           );
         }
-        return result;
+        return finalResult;
       } catch (err) {
         if (hookOptions.emitDiagnostics) {
           emitTrustedDiagnosticEventWithPrivateData(

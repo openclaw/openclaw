@@ -10356,6 +10356,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Configuration block
   - H3: Field behavior
   - H2: Recommended setup
+  - H2: No-op file mutation guard
   - H2: Post-compaction guard
   - H2: Logs and expected behavior
   - H2: Related

@@ -16,6 +16,7 @@ vi.mock("./embedded-agent-messaging.js", () => ({
 import { reconcileToolCallExecutionParams } from "./tool-loop-call-reconciliation.js";
 import {
   UNKNOWN_TOOL_THRESHOLD,
+  detectPostExecutionToolCallLoop,
   detectToolCallLoop,
   recordToolCall,
   recordToolCallOutcome,
@@ -309,6 +310,129 @@ describe("tool-loop-detection", () => {
   });
 
   describe("detectToolCallLoop", () => {
+    it.each(["write", "edit", "apply_patch"])(
+      "escalates repeated %s no-op outcomes by default",
+      (toolName) => {
+        const state = createState();
+        const params = { path: "/tmp/a.md", content: "same content" };
+        recordSuccessfulCall(
+          state,
+          toolName,
+          params,
+          {
+            content: [{ type: "text", text: "No changes made." }],
+            details: { changed: false },
+          },
+          0,
+        );
+        recordSuccessfulCall(
+          state,
+          toolName,
+          params,
+          {
+            content: [{ type: "text", text: "No changes made." }],
+            details: { changed: false },
+          },
+          1,
+        );
+        const current = state.toolCallHistory?.at(-1);
+        expect(current).toBeDefined();
+
+        expect(detectPostExecutionToolCallLoop(state, current!)).toMatchObject({
+          stuck: true,
+          level: "critical",
+          detector: "file_mutation_no_progress",
+          count: 2,
+        });
+      },
+    );
+
+    it("disables no-op file mutation protection when loop detection is explicitly disabled", () => {
+      const state = createState();
+      const params = { path: "/tmp/a.md", content: "same content" };
+      recordSuccessfulCall(
+        state,
+        "write",
+        params,
+        {
+          content: [{ type: "text", text: "No changes made." }],
+          details: { changed: false },
+        },
+        0,
+      );
+      recordSuccessfulCall(
+        state,
+        "write",
+        params,
+        {
+          content: [{ type: "text", text: "No changes made." }],
+          details: { changed: false },
+        },
+        1,
+      );
+      const current = state.toolCallHistory?.at(-1);
+      expect(current).toBeDefined();
+
+      expect(detectPostExecutionToolCallLoop(state, current!, { enabled: false })).toEqual({
+        stuck: false,
+      });
+    });
+
+    it("does not treat an ordinary file-tool error as a confirmed no-op by default", () => {
+      const state = createState();
+      const params = { path: "/tmp/a.md", content: "same content" };
+      recordToolCall(state, "write", params, "write-error");
+      recordToolCallOutcome(state, {
+        toolName: "write",
+        toolParams: params,
+        toolCallId: "write-error",
+        error: new Error("disk is temporarily unavailable"),
+      });
+
+      const current = state.toolCallHistory?.at(-1);
+      expect(current).toBeDefined();
+      expect(detectPostExecutionToolCallLoop(state, current!)).toEqual({ stuck: false });
+    });
+
+    it("allows an exact file mutation again after an intervening tool call", () => {
+      const state = createState();
+      const params = { path: "/tmp/a.md", content: "same content" };
+      recordSuccessfulCall(
+        state,
+        "write",
+        params,
+        {
+          content: [{ type: "text", text: "No changes made." }],
+          details: { changed: false },
+        },
+        0,
+      );
+      recordSuccessfulCall(
+        state,
+        "read",
+        { path: "/tmp/a.md" },
+        {
+          content: [{ type: "text", text: "different content" }],
+          details: { kind: "text", content: "different content" },
+        },
+        1,
+      );
+      recordSuccessfulCall(
+        state,
+        "write",
+        params,
+        {
+          content: [{ type: "text", text: "No changes made." }],
+          details: { changed: false },
+        },
+        2,
+      );
+      const current = state.toolCallHistory?.at(-1);
+      expect(current).toBeDefined();
+
+      expect(detectPostExecutionToolCallLoop(state, current!)).toEqual({ stuck: false });
+    });
+
     it("is disabled by default", () => {
       const state = createState();
 

@@ -641,15 +641,18 @@ export async function recordLoopOutcome(args: {
   resultContentSource?: AnyAgentTool["resultContentSource"];
   toolCallOrdinal?: number;
   terminalPresentation?: string;
-}): Promise<void> {
+}): Promise<{ reason: string } | undefined> {
   if (!args.ctx?.sessionKey && !args.ctx?.sessionId) {
-    return;
+    return undefined;
   }
   let recordedOutcome: ToolOutcomeObservation | undefined;
+  let postExecutionBlock: { reason: string } | undefined;
   try {
     const {
+      detectPostExecutionToolCallLoop,
       getArgumentChurnNoProgressStreak,
       getDiagnosticSessionState,
+      logToolLoopAction,
       markDiagnosticArgumentChurnObservation,
       recordToolCallOutcome,
     } = await loadBeforeToolCallRuntime();
@@ -680,6 +683,27 @@ export async function recordLoopOutcome(args: {
       active: churnContinues,
       existingOnly: true,
     });
+    if (record) {
+      const loopResult = detectPostExecutionToolCallLoop(
+        sessionState,
+        record,
+        args.ctx.loopDetection,
+      );
+      if (loopResult.stuck) {
+        logToolLoopAction({
+          sessionKey: args.ctx.sessionKey,
+          sessionId: args.ctx.sessionId,
+          toolName: record.toolName,
+          level: loopResult.level,
+          action: "block",
+          detector: loopResult.detector,
+          count: loopResult.count,
+          message: loopResult.message,
+          pairedToolName: loopResult.pairedToolName,
+        });
+        postExecutionBlock = { reason: loopResult.message };
+      }
+    }
     if (record?.resultHash && args.ctx.onToolOutcome) {
       recordedOutcome = {
         toolName: record.toolName,
@@ -696,6 +720,7 @@ export async function recordLoopOutcome(args: {
   if (recordedOutcome) {
     args.ctx.onToolOutcome?.(recordedOutcome);
   }
+  return postExecutionBlock;
 }
 
 /** Run the full before_tool_call policy chain for a pending tool call. */

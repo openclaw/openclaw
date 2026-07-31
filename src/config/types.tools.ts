@@ -158,7 +158,7 @@ export type MediaToolsConfig = {
 export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
 
 export type ToolLoopDetectionConfig = {
-  /** Enable tool-loop protection (default: false). */
+  /** Enable rolling tool-loop detection; false disables all default-on guards. */
   enabled?: boolean;
 };
 
