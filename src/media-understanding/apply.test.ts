@@ -1194,7 +1194,7 @@ describe("applyMediaUnderstanding", () => {
     );
   });
 
-  it("normalizes HEIC images before tools.media.image provider execution", async () => {
+  it("normalizes MIME-less HEIC images before tools.media.image provider execution", async () => {
     const imagePath = await createTempMediaFile({
       fileName: "photo.heic",
       content: "heic-source",
@@ -1202,7 +1202,7 @@ describe("applyMediaUnderstanding", () => {
     const describeImage = vi.fn(async () => ({ text: "normalized image" }));
     const ctx: MsgContext = {
       Body: "",
-      media: [{ path: imagePath, contentType: "image/heic" }],
+      media: [{ path: imagePath }],
     };
     const cfg: OpenClawConfig = {
       tools: {

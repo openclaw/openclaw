@@ -64,7 +64,11 @@ function activeRegistrySatisfiesScope(
     case "channels":
       return (
         active.channels.length > 0 &&
-        expectedChannelPluginIds.every((pluginId) => activeChannelPluginIds.has(pluginId))
+        expectedChannelPluginIds.every((pluginId) => activeChannelPluginIds.has(pluginId)) &&
+        // Workspace-local plugins can shadow the same channel id, so matching
+        // channel ids alone cannot make another workspace's registry reusable.
+        (requestedWorkspaceDir === undefined ||
+          getActivePluginRegistryWorkspaceDir() === requestedWorkspaceDir)
       );
     case "all":
       return false;

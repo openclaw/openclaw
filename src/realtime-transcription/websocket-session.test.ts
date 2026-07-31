@@ -170,6 +170,45 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     session.close();
   });
 
+  it.each([
+    { scenario: "socket open", readyOnOpen: true, initialEvent: undefined },
+    {
+      scenario: "provider readiness handshake",
+      readyOnOpen: false,
+      initialEvent: { type: "session.created" },
+    },
+  ])(
+    "rejects startup when queued audio fails during $scenario",
+    async ({ readyOnOpen, initialEvent }) => {
+      const server = await createRealtimeServer({ initialEvent });
+      const onError = vi.fn();
+      const session = createRealtimeTranscriptionWebSocketSession<{ type?: string }>({
+        providerId: "test",
+        callbacks: { onError },
+        url: server.url,
+        readyOnOpen,
+        onMessage: (event, transport) => {
+          if (event.type === "session.created") {
+            transport.markReady();
+          }
+        },
+        sendAudio: () => {
+          throw new Error("queued audio send failed");
+        },
+      });
+
+      session.sendAudio(Buffer.from("queued"));
+
+      await expect(session.connect()).rejects.toThrow("queued audio send failed");
+      expect(session.isConnected()).toBe(false);
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect(requireFirstMockArg(onError, "queued audio send error").message).toBe(
+        "queued audio send failed",
+      );
+      session.close();
+    },
+  );
+
   it("resolves async URLs and headers before opening the socket", async () => {
     const seenAuthHeaders: Array<string | string[] | undefined> = [];
     const server = await createRealtimeServer({

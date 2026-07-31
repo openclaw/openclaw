@@ -5,7 +5,11 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
-import { normalizeAttachmentPath, normalizeAttachments } from "./attachments.normalize.js";
+import {
+  normalizeAttachmentPath,
+  normalizeAttachments,
+  resolveAttachmentKind,
+} from "./attachments.normalize.js";
 
 describe("normalizeAttachmentPath", () => {
   it("allows localhost file URLs", () => {
@@ -85,5 +89,18 @@ describe("normalizeAttachments", () => {
         workspaceDir: "/tmp/staged",
       }),
     ]);
+  });
+
+  it.each([
+    { name: "MIME-less HEIC path", media: { path: "/tmp/photo.HEIC" } },
+    {
+      name: "generic-MIME HEIF URL",
+      media: {
+        url: "https://example.test/photo.heif?download=1",
+        contentType: "application/octet-stream",
+      },
+    },
+  ])("classifies a $name as an image", ({ media }) => {
+    expect(normalizeAttachments({ media: [media] }).map(resolveAttachmentKind)).toEqual(["image"]);
   });
 });

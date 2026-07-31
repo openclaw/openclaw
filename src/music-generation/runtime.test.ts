@@ -210,6 +210,71 @@ describe("music-generation runtime", () => {
     ]);
   });
 
+  it.each([
+    {
+      scenario: "do not support reference-image edits",
+      capabilities: { generate: {}, edit: { enabled: false } },
+      inputImageCount: 1,
+      error: "fal/prompt-only does not support reference-image edit inputs",
+    },
+    {
+      scenario: "cannot accept every reference image",
+      capabilities: { generate: {}, edit: { enabled: true, maxInputImages: 1 } },
+      inputImageCount: 2,
+      error: "fal/prompt-only supports at most 1 reference image, 2 requested",
+    },
+  ])(
+    "skips fallback candidates that $scenario",
+    async ({ capabilities, inputImageCount, error }) => {
+      let incompatibleProviderCalled = false;
+      const inputImages = Array.from({ length: inputImageCount }, (_, index) => ({
+        buffer: Buffer.from(`reference-${index}`),
+        mimeType: "image/png",
+      }));
+      providers = [
+        {
+          id: "fal",
+          defaultModel: "prompt-only",
+          capabilities,
+          isConfigured: () => true,
+          async generateMusic() {
+            incompatibleProviderCalled = true;
+            return { tracks: [{ buffer: Buffer.from("ignored-images"), mimeType: "audio/mpeg" }] };
+          },
+        },
+        {
+          id: "google",
+          defaultModel: "lyria-3-clip-preview",
+          capabilities: { edit: { enabled: true, maxInputImages: 10 } },
+          isConfigured: () => true,
+          async generateMusic(request) {
+            expect(request.inputImages).toEqual(inputImages);
+            return { tracks: [{ buffer: Buffer.from("mp3-bytes"), mimeType: "audio/mpeg" }] };
+          },
+        },
+      ];
+
+      const result = await runGenerateMusic({
+        cfg: {
+          agents: {
+            defaults: {
+              musicGenerationModel: {
+                primary: "fal/prompt-only",
+                fallbacks: ["google/lyria-3-clip-preview"],
+              },
+            },
+          },
+        } as OpenClawConfig,
+        prompt: "score the supplied cover art",
+        inputImages,
+      });
+
+      expect(incompatibleProviderCalled).toBe(false);
+      expect(result.provider).toBe("google");
+      expect(result.attempts).toEqual([{ provider: "fal", model: "prompt-only", error }]);
+    },
+  );
+
   it("lists runtime music-generation providers through the provider registry", () => {
     const registryProviders: MusicGenerationProvider[] = [
       {

@@ -246,6 +246,30 @@ describe("ensurePluginRegistryLoaded", () => {
     expect(load.onlyPluginIds).toEqual(["activation-only-channel"]);
   });
 
+  it.each([
+    { scope: "configured-channels", registryWorkspaceDir: "/resolved-workspace", reload: false },
+    { scope: "configured-channels", registryWorkspaceDir: "/other-workspace", reload: true },
+    { scope: "channels", registryWorkspaceDir: "/resolved-workspace", reload: false },
+    { scope: "channels", registryWorkspaceDir: "/other-workspace", reload: true },
+  ] as const)(
+    "keeps $scope registry reuse scoped to $registryWorkspaceDir",
+    ({ scope, registryWorkspaceDir, reload }) => {
+      const activeRegistry = createEmptyPluginRegistry();
+      activeRegistry.channels.push({ plugin: { id: "demo-channel" } } as never);
+      mocks.getActivePluginRegistry.mockReturnValue(activeRegistry);
+      mocks.getActivePluginRegistryWorkspaceDir.mockReturnValue(registryWorkspaceDir);
+      mocks.resolveConfiguredChannelPluginIds.mockReturnValue(["demo-channel"]);
+      mocks.resolveChannelPluginIds.mockReturnValue(["demo-channel"]);
+
+      ensurePluginRegistryLoaded({ scope, config: {} as never });
+
+      expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(reload ? 1 : 0);
+      if (reload) {
+        expect(loadOptions().onlyPluginIds).toEqual(["demo-channel"]);
+      }
+    },
+  );
+
   it("does not cache scoped loads by explicit plugin ids", () => {
     ensurePluginRegistryLoaded({
       scope: "configured-channels",

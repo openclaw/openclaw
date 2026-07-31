@@ -133,8 +133,10 @@ function assertConsistentOptions(
   pluginId: string,
   namespace: string,
   signature: BlobStoreOptionSignature,
+  env?: NodeJS.ProcessEnv,
 ): void {
-  const key = `${pluginId}\0${namespace}`;
+  // Independent state databases can legitimately use different namespace limits.
+  const key = `${resolveOpenClawStateSqlitePath(env)}\0${pluginId}\0${namespace}`;
   const existing = namespaceOptionSignatures.get(key);
   if (!existing) {
     namespaceOptionSignatures.set(key, signature);
@@ -258,13 +260,18 @@ function createPluginBlobStoreInternal<TMetadata>(
   }
   const overflowPolicy = validateOverflowPolicy(options.overflowPolicy);
   const defaultTtlMs = validateTtl(options.defaultTtlMs, "open");
-  assertConsistentOptions(pluginId, namespace, {
-    maxEntries,
-    maxBytesPerEntry,
-    maxBytesPerNamespace,
-    overflowPolicy,
-    defaultTtlMs,
-  });
+  assertConsistentOptions(
+    pluginId,
+    namespace,
+    {
+      maxEntries,
+      maxBytesPerEntry,
+      maxBytesPerNamespace,
+      overflowPolicy,
+      defaultTtlMs,
+    },
+    env,
+  );
 
   const writeParams = (blob: PreparedBlob) => ({
     pluginId,

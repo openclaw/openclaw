@@ -60,7 +60,11 @@ export function resolveAttachmentKind(attachment: MediaAttachment): Exclude<Medi
   if (isAudioFileName(attachment.path ?? attachment.url)) {
     return "audio";
   }
-  if ([".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff", ".tif"].includes(ext)) {
+  if (
+    [".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff", ".tif", ".heic", ".heif"].includes(
+      ext,
+    )
+  ) {
     return "image";
   }
   return "unknown";

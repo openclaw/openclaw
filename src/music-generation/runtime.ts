@@ -76,6 +76,7 @@ export async function generateMusic(
 
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
+  const inputImageCount = params.inputImages?.length ?? 0;
 
   for (const candidate of candidates) {
     const provider = getProvider(candidate.provider, params.cfg);
@@ -89,6 +90,24 @@ export async function generateMusic(
       });
       lastError = new Error(error);
       continue;
+    }
+
+    if (inputImageCount > 0) {
+      const editCapabilities = provider.capabilities.edit;
+      const error = !editCapabilities?.enabled
+        ? `${candidate.provider}/${candidate.model} does not support reference-image edit inputs`
+        : editCapabilities.maxInputImages !== undefined &&
+            inputImageCount > editCapabilities.maxInputImages
+          ? `${candidate.provider}/${candidate.model} supports at most ${editCapabilities.maxInputImages} reference image${editCapabilities.maxInputImages === 1 ? "" : "s"}, ${inputImageCount} requested`
+          : undefined;
+      if (error) {
+        // Fallback must preserve every reference image instead of silently
+        // producing prompt-only music through an incompatible provider.
+        attempts.push({ provider: candidate.provider, model: candidate.model, error });
+        lastError = new Error(error);
+        logger.debug(`music-generation candidate skipped: ${error}`);
+        continue;
+      }
     }
 
     try {
