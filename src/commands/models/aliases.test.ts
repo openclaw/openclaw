@@ -75,6 +75,26 @@ describe("modelsAliasesRemoveCommand", () => {
     expect(written.agents?.defaults?.models?.["openai/gpt-5.4-mini"]?.alias).toBeUndefined();
   });
 
+  it("removes a user-added alias without requiring its original letter casing", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-sonnet-5": { alias: "My-Fav" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    mocks.readConfigFileSnapshot.mockResolvedValue(snapshot(cfg));
+    mocks.replaceConfigFile.mockResolvedValue(undefined);
+
+    await modelsAliasesRemoveCommand("MY-FAV", makeRuntime());
+
+    const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
+    const written = replaceParams?.nextConfig as OpenClawConfig;
+    expect(written.agents?.defaults?.models?.["anthropic/claude-sonnet-5"]?.alias).toBeUndefined();
+  });
+
   it("rejects removal of a built-in alias visible only via materialized defaults", async () => {
     // Source config: model entry exists but no user-set alias. applyModelDefaults
     // would materialize `gpt-mini -> openai/gpt-5.4-mini` into the resolved config,
@@ -114,6 +134,24 @@ describe("modelsAliasesRemoveCommand", () => {
     mocks.readConfigFileSnapshot.mockResolvedValue(snapshot(cfg));
 
     await expect(modelsAliasesRemoveCommand("gemini", makeRuntime())).rejects.toThrow(
+      /built-in alias for "google\/gemini-3\.1-pro-preview"/,
+    );
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("recognizes a built-in alias regardless of the requested letter casing", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          models: {
+            "google/gemini-3.1-pro-preview": {},
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    mocks.readConfigFileSnapshot.mockResolvedValue(snapshot(cfg));
+
+    await expect(modelsAliasesRemoveCommand("GEMINI", makeRuntime())).rejects.toThrow(
       /built-in alias for "google\/gemini-3\.1-pro-preview"/,
     );
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
@@ -209,6 +247,46 @@ describe("modelsAliasesAddCommand", () => {
     expect(written.agents?.defaults?.modelPolicy).toBeUndefined();
     expect(persisted.meta?.migrations?.modelPolicyAllowlist).toBe(true);
     expect(policy.allows({ provider: "openai", model: "gpt-5.6-sol" })).toBe(true);
+  });
+
+  it("rejects aliases that differ from another model's alias only by letter casing", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-sonnet-5": { alias: "Fast" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    mocks.loadModelsConfig.mockResolvedValue(cfg);
+    mocks.readConfigFileSnapshot.mockResolvedValue(snapshot(cfg));
+
+    await expect(
+      modelsAliasesAddCommand("FAST", "anthropic/claude-opus-5", makeRuntime()),
+    ).rejects.toThrow(/already points to anthropic\/claude-sonnet-5/);
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("allows changing the letter casing of an alias on the same model", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-sonnet-5": { alias: "Fast" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    mocks.loadModelsConfig.mockResolvedValue(cfg);
+    mocks.readConfigFileSnapshot.mockResolvedValue(snapshot(cfg));
+    mocks.replaceConfigFile.mockResolvedValue(undefined);
+
+    await modelsAliasesAddCommand("fast", "anthropic/claude-sonnet-5", makeRuntime());
+
+    const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
+    const written = replaceParams?.nextConfig as OpenClawConfig;
+    expect(written.agents?.defaults?.models?.["anthropic/claude-sonnet-5"]?.alias).toBe("fast");
   });
 });
 

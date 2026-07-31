@@ -550,6 +550,28 @@ describe("registerStatusHealthSessionsCommands", () => {
     });
   });
 
+  it.each([
+    {
+      label: "list",
+      args: ["tasks", "--json", "flow", "list"],
+      command: flowsListCommand,
+      expected: { json: true },
+    },
+    {
+      label: "show",
+      args: ["tasks", "--json", "flow", "show", "flow-123"],
+      command: flowsShowCommand,
+      expected: { lookup: "flow-123", json: true },
+    },
+  ])(
+    "inherits the parent tasks --json option for flow $label",
+    async ({ args, command, expected }) => {
+      await runCli(args);
+
+      expectCommandOptions(command, expected);
+    },
+  );
+
   it("runs tasks notify subcommand with lookup and policy forwarding", async () => {
     await runCli(["tasks", "notify", "run-123", "state_changes"]);
 

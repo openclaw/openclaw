@@ -5,6 +5,7 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { setVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
+import { inheritOptionFromParent } from "../command-options.js";
 import { formatHelpExamples } from "../help-format.js";
 import { parsePositiveIntOrUndefined, parseStrictPositiveIntOrUndefined } from "./helpers.js";
 
@@ -716,12 +717,12 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       "--status <name>",
       "Filter by status (queued, running, waiting, blocked, succeeded, failed, cancelled, lost)",
     )
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { flowsListCommand } = await loadFlowsCommands();
         await flowsListCommand(
           {
-            json: Boolean(opts.json),
+            json: Boolean(opts.json || inheritOptionFromParent<boolean>(command, "json")),
             status: opts.status as string | undefined,
           },
           defaultRuntime,
@@ -734,13 +735,13 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .description("Show one TaskFlow by flow id or owner key")
     .argument("<lookup>", "Flow id or owner key")
     .option("--json", "Output as JSON", false)
-    .action(async (lookup, opts) => {
+    .action(async (lookup, opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { flowsShowCommand } = await loadFlowsCommands();
         await flowsShowCommand(
           {
             lookup,
-            json: Boolean(opts.json),
+            json: Boolean(opts.json || inheritOptionFromParent<boolean>(command, "json")),
           },
           defaultRuntime,
         );

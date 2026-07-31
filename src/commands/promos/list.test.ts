@@ -69,6 +69,30 @@ describe("promosListCommand", () => {
     expect(output).toContain("openclaw promos claim spring-models");
   });
 
+  it.each([
+    { remainingMs: 23 * 3_600_000, label: "ends today" },
+    { remainingMs: 25 * 3_600_000, label: "1 day left" },
+    { remainingMs: 49 * 3_600_000, label: "2 days left" },
+  ])(
+    "shows $label when a promotion has $remainingMs ms remaining",
+    async ({ remainingMs, label }) => {
+      const now = 1_780_000_000_000;
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+      mocks.fetchClawHubPromotions.mockResolvedValue([
+        { ...promotion, startsAt: now - 1_000, endsAt: now + remainingMs },
+      ]);
+      const { runtime, lines } = makeRuntime();
+
+      try {
+        await promosListCommand({}, runtime);
+      } finally {
+        nowSpy.mockRestore();
+      }
+
+      expect(lines[0]).toContain(`(${label})`);
+    },
+  );
+
   it("prints an empty-state line when nothing is live", async () => {
     mocks.fetchClawHubPromotions.mockResolvedValue([]);
     const { runtime, lines } = makeRuntime();

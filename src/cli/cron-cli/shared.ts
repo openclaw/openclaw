@@ -188,6 +188,11 @@ function decorateStatusWithFailures(status: string, consecutiveErrors: number | 
 
 function formatCronStatusForDisplay(job: CronJob): string {
   const state = job.state ?? {};
+  // Stream supervision can be disabled independently of the stored job; do
+  // not silently display its unavailable source as an idle automation.
+  if (job.schedule?.kind === "stream" && state.streamStatus === "disabled") {
+    return "disabled";
+  }
   return decorateStatusWithFailures(computeStatus(job), state.consecutiveErrors);
 }
 
@@ -399,7 +404,7 @@ const formatSchedule = (schedule: CronSchedule | undefined, hasTrigger = false) 
   }
   if (schedule?.kind === "stream") {
     const cwd = schedule.cwd ? ` @ ${schedule.cwd}` : "";
-    return `stream ${schedule.command.join(" ")}${cwd}`;
+    return `stream ${schedule.command.join(" ")}${cwd}${suffix}`;
   }
   if (schedule?.kind !== "cron") {
     return "-";
@@ -555,6 +560,10 @@ export function printCronShow(
   runtime.log(`owner session: ${job.owner?.sessionKey ?? "-"}`);
   runtime.log(`enabled: ${job.enabled ? "yes" : "no"}`);
   runtime.log(`schedule: ${formatSchedule(job.schedule, job.trigger !== undefined)}`);
+  if (job.schedule?.kind === "stream") {
+    runtime.log(`stream status: ${job.state.streamStatus ?? "-"}`);
+    runtime.log(`stream error: ${job.state.streamError ?? "-"}`);
+  }
   runtime.log(
     `trigger: ${job.trigger ? `once=${job.trigger.once === true ? "yes" : "no"}; evals=${job.state.triggerEvalCount ?? 0}; last eval=${formatRelative(job.state.lastTriggerEvalAtMs, Date.now())}; last fire=${formatRelative(job.state.lastTriggerFireAtMs, Date.now())}` : "-"}`,
   );

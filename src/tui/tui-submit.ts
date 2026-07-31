@@ -72,7 +72,9 @@ export function createEditorSubmitHandler(params: {
 
     const admission = params.admitMessage?.(value) ?? "allowed";
     if (admission !== "allowed") {
-      params.editor.setText(value);
+      if (!params.editor.getText?.()) {
+        params.editor.setText(value);
+      }
       params.onBlockedMessageSubmit?.(value, admission);
       return;
     }

@@ -68,7 +68,7 @@ function parseLinesOption(value: unknown): number {
   return parsed;
 }
 
-async function readTailLines(file: string, limit: number): Promise<string[]> {
+async function readTailLines(file: string): Promise<string[]> {
   const stat = await fs.stat(file).catch(() => null);
   if (!stat) {
     return [];
@@ -97,9 +97,6 @@ async function readTailLines(file: string, limit: number): Promise<string[]> {
     if (lines.length && lines[lines.length - 1] === "") {
       lines = lines.slice(0, -1);
     }
-    if (lines.length > limit) {
-      lines = lines.slice(lines.length - limit);
-    }
     return lines;
   } finally {
     await handle.close();
@@ -115,7 +112,7 @@ export async function channelsLogsCommand(
   const limit = parseLinesOption(opts.lines);
 
   const file = await resolveLogFile(getResolvedLoggerSettings().file);
-  const rawLines = await readTailLines(file, limit * 4);
+  const rawLines = await readTailLines(file);
   const parsed = rawLines
     .map(parseLogLine)
     .filter((line): line is NonNullable<LogLine> => Boolean(line));

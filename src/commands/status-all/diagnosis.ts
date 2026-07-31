@@ -280,7 +280,9 @@ export async function appendStatusAllDiagnosis(params: {
       params.tailscaleMode === "off"
         ? `Tailscale exposure: off · daemon ${backend}${params.tailscale.dnsName ? ` · ${params.tailscale.dnsName}` : ""}`
         : `Tailscale exposure: ${params.tailscaleMode} · daemon ${backend}${params.tailscale.dnsName ? ` · ${params.tailscale.dnsName}` : ""}`;
-    emitCheck(label, okBackend && (params.tailscaleMode === "off" || hasDns) ? "ok" : "warn");
+    // An intentionally disabled exposure does not depend on the Tailscale daemon being installed.
+    const exposureHealthy = params.tailscaleMode === "off" || (okBackend && hasDns);
+    emitCheck(label, exposureHealthy ? "ok" : "warn");
     if (params.tailscale.error) {
       lines.push(`  ${muted(`error: ${params.tailscale.error}`)}`);
     }
