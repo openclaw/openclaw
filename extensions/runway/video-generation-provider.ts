@@ -7,12 +7,13 @@ import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
-  fetchProviderDownloadResponse,
+  fetchGuardedProviderDownloadResponse,
   pollProviderOperationJson,
   postJsonRequest,
   readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
   type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
@@ -296,6 +297,8 @@ async function downloadRunwayVideos(params: {
   timeoutMs?: ProviderOperationTimeoutMs;
   fetchFn: typeof fetch;
   maxBytes: number;
+  allowPrivateNetwork?: boolean;
+  dispatcherPolicy?: ReturnType<typeof resolveProviderHttpRequestConfig>["dispatcherPolicy"];
 }): Promise<GeneratedVideoAsset[]> {
   const videos: GeneratedVideoAsset[] = [];
   for (const [index, url] of params.urls.entries()) {
@@ -307,30 +310,36 @@ async function downloadRunwayVideos(params: {
       deadline,
       defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     });
-    const response = await fetchProviderDownloadResponse({
+    const { response, release } = await fetchGuardedProviderDownloadResponse({
       url,
       init: { method: "GET" },
       deadline,
       fetchFn: params.fetchFn,
       provider: "runway",
       requestFailedMessage: "Runway generated video download failed",
+      allowPrivateNetwork: params.allowPrivateNetwork,
+      dispatcherPolicy: params.dispatcherPolicy,
     });
-    const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
-    const buffer = await readResponseWithLimit(response, params.maxBytes, {
-      timeoutMs,
-      onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
-        new Error(
-          `Runway generated video download timed out after ${deadline.timeoutMs ?? bodyTimeoutMs}ms`,
-        ),
-      onOverflow: ({ maxBytes }) =>
-        new Error(`Runway generated video download exceeds ${maxBytes} bytes`),
-    });
-    videos.push({
-      buffer,
-      mimeType,
-      fileName: `video-${index + 1}.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`,
-      metadata: { sourceUrl: url },
-    });
+    try {
+      const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
+      const buffer = await readResponseWithLimit(response, params.maxBytes, {
+        timeoutMs,
+        onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
+          new Error(
+            `Runway generated video download timed out after ${deadline.timeoutMs ?? bodyTimeoutMs}ms`,
+          ),
+        onOverflow: ({ maxBytes }) =>
+          new Error(`Runway generated video download exceeds ${maxBytes} bytes`),
+      });
+      videos.push({
+        buffer,
+        mimeType,
+        fileName: `video-${index + 1}.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`,
+        metadata: { sourceUrl: url },
+      });
+    } finally {
+      await release();
+    }
   }
   return videos;
 }
@@ -399,6 +408,9 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
           provider: "runway",
           capability: "video",
           transport: "http",
+          request: sanitizeConfiguredModelProviderRequest(
+            req.cfg?.models?.providers?.runway?.request,
+          ),
         });
       const { response, release } = await postJsonRequest({
         url: `${baseUrl}${endpoint}`,
@@ -441,6 +453,8 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
           }),
           fetchFn,
           maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "video"),
+          allowPrivateNetwork,
+          dispatcherPolicy,
         });
         return {
           videos,

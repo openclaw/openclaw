@@ -10,12 +10,13 @@ import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
-  fetchProviderDownloadResponse,
+  fetchGuardedProviderDownloadResponse,
   pollProviderOperationJson,
   postJsonRequest,
   readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
   type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
@@ -179,6 +180,8 @@ async function downloadBytePlusVideo(params: {
   timeoutMs?: ProviderOperationTimeoutMs;
   fetchFn: typeof fetch;
   maxBytes: number;
+  allowPrivateNetwork?: boolean;
+  dispatcherPolicy?: ReturnType<typeof resolveProviderHttpRequestConfig>["dispatcherPolicy"];
 }): Promise<GeneratedVideoAsset> {
   const deadline = createProviderOperationDeadline({
     timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
@@ -188,29 +191,35 @@ async function downloadBytePlusVideo(params: {
     deadline,
     defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_TIMEOUT_MS,
   });
-  const response = await fetchProviderDownloadResponse({
+  const { response, release } = await fetchGuardedProviderDownloadResponse({
     url: params.url,
     init: { method: "GET" },
     deadline,
     fetchFn: params.fetchFn,
     provider: "byteplus",
     requestFailedMessage: "BytePlus generated video download failed",
+    allowPrivateNetwork: params.allowPrivateNetwork,
+    dispatcherPolicy: params.dispatcherPolicy,
   });
-  const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
-  const buffer = await readResponseWithLimit(response, params.maxBytes, {
-    timeoutMs,
-    onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
-      new Error(
-        `BytePlus generated video download timed out after ${deadline.timeoutMs ?? bodyTimeoutMs}ms`,
-      ),
-    onOverflow: ({ maxBytes }) =>
-      new Error(`BytePlus generated video download exceeds ${maxBytes} bytes`),
-  });
-  return {
-    buffer,
-    mimeType,
-    fileName: `video-1.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`,
-  };
+  try {
+    const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
+    const buffer = await readResponseWithLimit(response, params.maxBytes, {
+      timeoutMs,
+      onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
+        new Error(
+          `BytePlus generated video download timed out after ${deadline.timeoutMs ?? bodyTimeoutMs}ms`,
+        ),
+      onOverflow: ({ maxBytes }) =>
+        new Error(`BytePlus generated video download exceeds ${maxBytes} bytes`),
+    });
+    return {
+      buffer,
+      mimeType,
+      fileName: `video-1.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`,
+    };
+  } finally {
+    await release();
+  }
 }
 
 /** Builds the BytePlus video generation provider registered by the plugin. */
@@ -276,7 +285,6 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
         resolveProviderHttpRequestConfig({
           baseUrl: resolveBytePlusVideoBaseUrl(req),
           defaultBaseUrl: BYTEPLUS_BASE_URL,
-          allowPrivateNetwork: false,
           defaultHeaders: {
             Authorization: `Bearer ${auth.apiKey}`,
             "Content-Type": "application/json",
@@ -284,6 +292,9 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
           provider: "byteplus",
           capability: "video",
           transport: "http",
+          request: sanitizeConfiguredModelProviderRequest(
+            req.cfg?.models?.providers?.byteplus?.request,
+          ),
         });
       const resolvedModel = normalizeOptionalString(req.model) || DEFAULT_BYTEPLUS_VIDEO_MODEL;
 
@@ -379,6 +390,8 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
           }),
           fetchFn,
           maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "video"),
+          allowPrivateNetwork,
+          dispatcherPolicy,
         });
         return {
           videos: [video],
