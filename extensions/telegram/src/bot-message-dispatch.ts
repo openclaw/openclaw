@@ -42,6 +42,7 @@ import {
   buildTelegramNativeQuoteCandidate,
   type TelegramNativeQuoteCandidateByMessageId,
 } from "./bot/native-quote.js";
+import { resolveTelegramPreviewStreamMode } from "./preview-streaming.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
@@ -298,6 +299,20 @@ export const dispatchTelegramMessage = async ({
   const telegramDeps =
     injectedTelegramDeps ?? (await import("./bot-deps.js")).defaultTelegramBotDeps;
   const loadFreshSessionEntry = createFreshTelegramSessionEntryLoader({ cfg, telegramDeps });
+  let sessionStreamingMode: unknown;
+  const streamSessionKey = dispatchContext.ctxPayload.SessionKey;
+  if (streamSessionKey) {
+    try {
+      sessionStreamingMode = loadFreshSessionEntry(dispatchContext.route.agentId, streamSessionKey)
+        .entry?.streamingMode;
+    } catch (err) {
+      logVerbose(`telegram stream mode session lookup failed: ${String(err)}`);
+    }
+  }
+  const effectiveStreamMode = resolveTelegramPreviewStreamMode({
+    streaming: { mode: streamMode },
+    sessionStreamingMode,
+  });
   const isRoomEvent = dispatchContext.ctxPayload.InboundEventKind === "room_event";
   const status = createTelegramDispatchStatus({ context: dispatchContext });
   const tableMode = resolveMarkdownTableMode({
@@ -313,7 +328,7 @@ export const dispatchTelegramMessage = async ({
     loadFreshSessionEntry,
   });
   const forceBlockStreamingForReasoning =
-    resolvedReasoningLevel === "on" && streamMode !== "progress";
+    resolvedReasoningLevel === "on" && effectiveStreamMode !== "progress";
   const quote = resolveTelegramQuoteContext({ context: dispatchContext, replyToMode });
   // Draft messages are provider-visible before final modifiers run. Suppress them when a hook
   // can rewrite or cancel, or the original payload can flash before the normal delivery gate.
@@ -338,7 +353,7 @@ export const dispatchTelegramMessage = async ({
     isRoomEvent,
     replyToMode,
     resolvedReasoningLevel,
-    streamMode,
+    streamMode: effectiveStreamMode,
     tableMode,
     telegramCfg,
     telegramDeps,
@@ -350,7 +365,7 @@ export const dispatchTelegramMessage = async ({
     chatId: dispatchContext.chatId,
     draft,
     statusReactionController: status.controller,
-    streamMode,
+    streamMode: effectiveStreamMode,
     streamReasoningInProgressDraft: draft.streamReasoningInProgressDraft,
     telegramCfg,
     threadId: dispatchContext.threadSpec.id,
@@ -375,7 +390,7 @@ export const dispatchTelegramMessage = async ({
     replyQuoteText: quote.replyQuoteText,
     replyToMode,
     runtime,
-    streamMode,
+    streamMode: effectiveStreamMode,
     tableMode,
     telegramCfg,
     telegramDeps,
@@ -399,7 +414,7 @@ export const dispatchTelegramMessage = async ({
     progress,
     runtime,
     state,
-    streamMode,
+    streamMode: effectiveStreamMode,
     telegramCfg,
   });
 
@@ -441,7 +456,7 @@ export const dispatchTelegramMessage = async ({
         reply,
         state,
         statusReactionController: status.controller,
-        streamMode,
+        streamMode: effectiveStreamMode,
         telegramCfg,
         telegramDeps,
       });
@@ -459,7 +474,7 @@ export const dispatchTelegramMessage = async ({
       }
       await draft.cleanup(isDispatchSuperseded());
       if (
-        streamMode === "progress" &&
+        effectiveStreamMode === "progress" &&
         progress.sawProgressFinal() &&
         !state.dispatchError &&
         !state.hadErrorReplyFailureOrSkip &&

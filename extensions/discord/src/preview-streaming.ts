@@ -7,10 +7,20 @@ import {
 export function resolveDiscordPreviewStreamMode(
   params: {
     streaming?: unknown;
+    sessionStreamingMode?: unknown;
   } = {},
 ): StreamingMode {
-  if (params.streaming === undefined) {
+  const sessionMode =
+    params.sessionStreamingMode === "off" ||
+    params.sessionStreamingMode === "partial" ||
+    params.sessionStreamingMode === "block" ||
+    params.sessionStreamingMode === "progress"
+      ? params.sessionStreamingMode
+      : undefined;
+  if (params.streaming === undefined && sessionMode === undefined) {
     return "progress";
   }
-  return resolveChannelPreviewStreamMode(params, "off");
+  return resolveChannelPreviewStreamMode(params, "off", {
+    sessionMode,
+  });
 }

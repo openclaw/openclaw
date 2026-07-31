@@ -108,6 +108,7 @@ export function createSlackProgressRuntime(runtimeParams: {
       draftStreamActive: Boolean(draftStream) || useNativeProgressStreaming,
       previewToolProgressEnabled,
       previewStreamingEnabled,
+      mode: slackStreaming.mode,
     });
   let previewToolProgressSuppressed = false;
   let legacyPreviewToolProgressLines: ChannelProgressDraftLine[] = [];

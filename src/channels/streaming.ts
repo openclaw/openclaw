@@ -868,12 +868,13 @@ export function resolveChannelStreamingSuppressDefaultToolProgressMessages(
     draftStreamActive?: boolean;
     previewToolProgressEnabled?: boolean;
     previewStreamingEnabled?: boolean;
+    mode?: StreamingMode;
   },
 ): boolean {
   if (options?.draftStreamActive === false || options?.previewStreamingEnabled === false) {
     return false;
   }
-  const mode = resolveChannelPreviewStreamMode(entry, "off");
+  const mode = options?.mode ?? resolveChannelPreviewStreamMode(entry, "off");
   if (mode === "off") {
     return false;
   }
@@ -895,7 +896,12 @@ export function resolveChannelStreamingNativeTransport(
 export function resolveChannelPreviewStreamMode(
   entry: StreamingCompatEntry | null | undefined,
   defaultMode: StreamingMode,
+  options?: { sessionMode?: unknown },
 ): StreamingMode {
+  const sessionMode = parsePreviewStreamingMode(options?.sessionMode);
+  if (sessionMode) {
+    return sessionMode;
+  }
   return parsePreviewStreamingMode(getChannelStreamingConfigObject(entry)?.mode) ?? defaultMode;
 }
 
