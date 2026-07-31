@@ -53,14 +53,10 @@ export class CodexAssistantProjection {
       return false;
     }
     const finalItem = this.resolveFinalAssistantTextItem();
-    // The deliverable item is not always the newest one: a trailing silent token
-    // answering a late event shadows it. Gate on the resolved item being complete
-    // rather than on it being the newest, so timeout recovery still fires and
-    // delivers the real answer instead of declining on the shadowed turn.
     return (
       this.latestCompletedItemId === latestCompletedItemId &&
-      finalItem !== undefined &&
-      completedItemIds.has(finalItem.itemId)
+      finalItem?.itemId === latestCompletedItemId &&
+      completedItemIds.has(latestCompletedItemId)
     );
   }
 

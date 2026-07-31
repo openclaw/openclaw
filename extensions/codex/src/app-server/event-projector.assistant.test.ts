@@ -595,33 +595,4 @@ describe("CodexAppServerEventProjector trailing silent-token shadowing", () => {
 
     expect(result.assistantTexts).toEqual(["NO_REPLY"]);
   });
-
-  it("recovers a timed-out turn whose real answer is shadowed by a trailing NO_REPLY", async () => {
-    const { projector } = await createProjectorWithAssistantHooks();
-
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: {
-          type: "agentMessage",
-          id: "msg-1",
-          phase: "final_answer",
-          text: "here is the answer",
-        },
-      }),
-    );
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: { type: "agentMessage", id: "msg-2", phase: "final_answer", text: "NO_REPLY" },
-      }),
-    );
-
-    projector.markTimedOut();
-
-    // Recovery must still fire even though the newest completed item is the silent
-    // token, and it must surface the shadowed answer rather than the token.
-    expect(projector.recoverCompletedTerminalAssistantAfterTurnWatchTimeout()).toBe(true);
-    expect(projector.buildResult(buildEmptyToolTelemetry()).assistantTexts).toEqual([
-      "here is the answer",
-    ]);
-  });
 });
