@@ -12,19 +12,20 @@ import * as authProfileStoreModule from "../agents/auth-profiles/store.js";
 import * as attemptExecutionRuntime from "../agents/command/attempt-execution.runtime.js";
 import { deliverAgentCommandResult } from "../agents/command/delivery.runtime.js";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
-import { loadManifestModelCatalog, loadModelCatalog } from "../agents/model-catalog.js";
+import { loadManifestModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
+import { loadPreparedModelCatalog } from "../agents/prepared-model-catalog.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import * as runtimeSnapshotModule from "../config/runtime-snapshot.js";
+import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
   listSessionEntries,
   loadSessionEntry,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
+import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent, onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
@@ -39,6 +40,10 @@ import {
   createOutboundTestPlugin,
   createTestRegistry,
 } from "../test-utils/channel-plugins.js";
+import {
+  deliveryContextFromSession,
+  normalizeSessionDeliveryState,
+} from "../utils/delivery-context.shared.js";
 import { getAgentHarnessPluginMocks } from "./agent-command-state.test-mocks.js";
 import { agentCommand, agentCommandFromIngress, testing as agentCommandTesting } from "./agent.js";
 import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
@@ -357,7 +362,7 @@ async function runAgentWithSessionKey(sessionKey: string): Promise<void> {
 
 function mockModelCatalogOnce(entries: ReturnType<typeof loadManifestModelCatalog>): void {
   vi.mocked(loadManifestModelCatalog).mockReturnValueOnce(entries);
-  vi.mocked(loadModelCatalog).mockResolvedValueOnce(entries);
+  vi.mocked(loadPreparedModelCatalog).mockResolvedValueOnce(entries);
 }
 
 function installThinkingTestProviders(channels: Parameters<typeof createTestRegistry>[0] = []) {
@@ -390,7 +395,7 @@ beforeEach(() => {
   runtimeSnapshotModule.clearRuntimeConfigSnapshot();
   vi.mocked(runEmbeddedAgent).mockResolvedValue(createDefaultAgentResult());
   vi.mocked(loadManifestModelCatalog).mockReturnValue([]);
-  vi.mocked(loadModelCatalog).mockResolvedValue([]);
+  vi.mocked(loadPreparedModelCatalog).mockResolvedValue([]);
   vi.mocked(modelSelectionModule.isCliProvider).mockImplementation(() => false);
   configIoMocks.readConfigFileSnapshotForWrite.mockResolvedValue({
     snapshot: { valid: false, resolved: {} as OpenClawConfig },
@@ -990,7 +995,7 @@ describe("agentCommand", () => {
         runtime,
       );
 
-      expect(loadModelCatalog).not.toHaveBeenCalled();
+      expect(loadPreparedModelCatalog).not.toHaveBeenCalled();
       expectLastRunProviderModel("openrouter", "openrouter/auto");
       const thinkingDefaultCall = vi.mocked(modelSelectionModule.resolveThinkingDefault).mock
         .calls[0]?.[0];
@@ -1407,20 +1412,16 @@ describe("agentCommand", () => {
         { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
       ]);
 
-      await expect(
-        agentCommand(
-          {
-            message: "hi",
-            sessionKey: "agent:main:subagent:locked-legacy-auto",
-          },
-          runtime,
-        ),
-      ).rejects.toMatchObject({
-        name: "ModelSelectionLockedError",
-        message: MODEL_SELECTION_LOCKED_MESSAGE,
-      });
+      await agentCommand(
+        {
+          message: "hi",
+          sessionKey: "agent:main:subagent:locked-legacy-auto",
+        },
+        runtime,
+      );
 
-      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+      expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+      expectLastRunProviderModel("anthropic", "claude-opus-4-6");
       const persisted = readSessionStore<{
         providerOverride?: string;
         modelOverride?: string;
@@ -1497,9 +1498,12 @@ describe("agentCommand", () => {
           authProfileOverride: "profile-legacy",
           authProfileOverrideSource: "user",
           authProfileOverrideCompactionCount: 2,
-          fallbackNoticeSelectedModel: "anthropic/claude-opus-4-6",
-          fallbackNoticeActiveModel: "openai/gpt-4.1-mini",
-          fallbackNoticeReason: "fallback",
+          fallbackNotice: {
+            kind: "active",
+            selectedModel: "anthropic/claude-opus-4-6",
+            activeModel: "openai/gpt-4.1-mini",
+            reason: "fallback",
+          },
         },
       });
 
@@ -1529,9 +1533,7 @@ describe("agentCommand", () => {
         authProfileOverride?: string;
         authProfileOverrideSource?: string;
         authProfileOverrideCompactionCount?: number;
-        fallbackNoticeSelectedModel?: string;
-        fallbackNoticeActiveModel?: string;
-        fallbackNoticeReason?: string;
+        fallbackNotice?: unknown;
       }>(clearStore);
       const entry = cleared["agent:main:subagent:clear-overrides"];
       expect(entry?.providerOverride).toBeUndefined();
@@ -1539,13 +1541,11 @@ describe("agentCommand", () => {
       expect(entry?.authProfileOverride).toBeUndefined();
       expect(entry?.authProfileOverrideSource).toBeUndefined();
       expect(entry?.authProfileOverrideCompactionCount).toBeUndefined();
-      expect(entry?.fallbackNoticeSelectedModel).toBeUndefined();
-      expect(entry?.fallbackNoticeActiveModel).toBeUndefined();
-      expect(entry?.fallbackNoticeReason).toBeUndefined();
+      expect(entry?.fallbackNotice).toBeUndefined();
     });
   });
 
-  it("rejects a locked disallowed stored override without clearing it", async () => {
+  it("allows a locked disallowed stored override to run without clearing it", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions-locked-disallowed-override.json");
       const sessionKey = "agent:main:subagent:locked-disallowed";
@@ -1563,6 +1563,7 @@ describe("agentCommand", () => {
       mockConfig(home, store, {
         model: { primary: "openai/gpt-4.1-mini" },
         models: {
+          "anthropic/claude-opus-4-6": {},
           "openai/gpt-4.1-mini": {},
         },
         modelPolicy: { allow: ["openai/gpt-4.1-mini"] },
@@ -1572,11 +1573,9 @@ describe("agentCommand", () => {
         { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
       ]);
 
-      await expect(runAgentWithSessionKey(sessionKey)).rejects.toMatchObject({
-        name: "ModelSelectionLockedError",
-        message: MODEL_SELECTION_LOCKED_MESSAGE,
-      });
-      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+      await runAgentWithSessionKey(sessionKey);
+      expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+      expectLastRunProviderModel("anthropic", "claude-opus-4-6");
       expect(
         readSessionStore<{
           providerOverride?: string;
@@ -1975,8 +1974,9 @@ describe("agentCommand", () => {
         [sessionKey]: {
           sessionId: "wechat-session",
           updatedAt: Date.now(),
-          lastChannel: "telegram",
-          lastTo: "+1555",
+          delivery: normalizeSessionDeliveryState({
+            context: { channel: "telegram", to: "+1555" },
+          }),
         },
       });
       mockConfig(home, store);
@@ -1997,10 +1997,10 @@ describe("agentCommand", () => {
       );
 
       const deliveryCall = vi.mocked(deliverAgentCommandResult).mock.calls.at(-1)?.[0] as
-        | { opts?: { to?: string }; sessionEntry?: { lastTo?: string } }
+        | { opts?: { to?: string }; sessionEntry?: Pick<SessionEntry, "delivery"> }
         | undefined;
       expect(deliveryCall?.opts?.to).toBeUndefined();
-      expect(deliveryCall?.sessionEntry?.lastTo).toBe("+1555");
+      expect(deliveryContextFromSession(deliveryCall?.sessionEntry)?.to).toBe("+1555");
     });
   });
 
