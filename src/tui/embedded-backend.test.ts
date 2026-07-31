@@ -1844,6 +1844,826 @@ describe("EmbeddedTuiBackend", () => {
     });
   });
 
+  it.each([
+    {
+      label: "provider timeout",
+      phase: "end",
+      terminal: {
+        aborted: true,
+        stopReason: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+        error: "agent provider timeout",
+      },
+      expected: { state: "error", errorMessage: "agent provider timeout" },
+    },
+    {
+      label: "provider timeout during an error lifecycle",
+      phase: "error",
+      terminal: {
+        aborted: true,
+        stopReason: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+        error: "agent provider timeout",
+      },
+      expected: { state: "error", errorMessage: "agent provider timeout" },
+    },
+    {
+      label: "provider timeout during an error lifecycle without a mechanical abort",
+      phase: "error",
+      terminal: {
+        stopReason: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+        error: "agent provider timeout",
+      },
+      expected: { state: "error", errorMessage: "agent provider timeout" },
+    },
+    {
+      label: "mechanically aborted provider timeout without an explicit stop reason",
+      phase: "end",
+      terminal: {
+        aborted: true,
+        timeoutPhase: "provider",
+        providerStarted: true,
+        error: "agent provider timeout",
+      },
+      expected: { state: "error", errorMessage: "agent provider timeout" },
+    },
+    {
+      label: "provider-timeout error lifecycle without an abort or stop reason",
+      phase: "error",
+      terminal: {
+        timeoutPhase: "provider",
+        providerStarted: true,
+        error: "agent provider timeout",
+      },
+      expected: { state: "error", errorMessage: "agent provider timeout" },
+    },
+    {
+      label: "operator cancellation before provider startup",
+      phase: "end",
+      terminal: {
+        aborted: true,
+        stopReason: "rpc",
+        timeoutPhase: "queue",
+        providerStarted: false,
+      },
+      expected: { state: "aborted" },
+    },
+    {
+      label: "operator cancellation after provider startup",
+      phase: "end",
+      terminal: { aborted: true, stopReason: "rpc", providerStarted: true },
+      expected: { state: "aborted" },
+    },
+    {
+      label: "operator cancellation after a queue timeout and provider startup",
+      phase: "end",
+      terminal: {
+        aborted: true,
+        stopReason: "rpc",
+        timeoutPhase: "queue",
+        providerStarted: true,
+      },
+      expected: { state: "aborted" },
+    },
+    {
+      label: "RPC cancellation error lifecycle without a mechanical abort",
+      phase: "error",
+      terminal: { stopReason: "rpc" },
+      expected: { state: "aborted" },
+    },
+    {
+      label: "abort cancellation error lifecycle without a mechanical abort",
+      phase: "error",
+      terminal: { stopReason: "aborted" },
+      expected: { state: "aborted" },
+    },
+    {
+      label: "restart cancellation error lifecycle without a mechanical abort",
+      phase: "error",
+      terminal: { stopReason: "restart" },
+      expected: { state: "aborted" },
+    },
+    {
+      label: "stop cancellation error lifecycle without a mechanical abort",
+      phase: "error",
+      terminal: { stopReason: "stop" },
+      expected: { state: "aborted" },
+    },
+    {
+      label: "blocked run despite its mechanical abort",
+      phase: "end",
+      terminal: {
+        aborted: true,
+        stopReason: "aborted",
+        livenessState: "blocked",
+        error: "All fallback candidates ended incomplete",
+      },
+      expected: {
+        state: "error",
+        errorMessage: "All fallback candidates ended incomplete",
+      },
+      result: {
+        payloads: [{ text: "All fallback candidates ended incomplete", isError: true }],
+        meta: {
+          aborted: true,
+          livenessState: "blocked",
+          error: { kind: "incomplete_turn", message: "Internal fallback details" },
+        },
+      },
+    },
+    {
+      label: "mechanically aborted incomplete run without a cancellation reason",
+      phase: "end",
+      terminal: {
+        aborted: true,
+        livenessState: "abandoned",
+        error: "The agent stopped before finishing its tool call",
+      },
+      expected: {
+        state: "error",
+        errorMessage: "The agent stopped before finishing its tool call",
+      },
+      result: {
+        payloads: [{ text: "The agent stopped before finishing its tool call", isError: true }],
+        meta: {
+          aborted: true,
+          livenessState: "abandoned",
+          error: { kind: "incomplete_turn", message: "Internal incomplete-turn details" },
+        },
+      },
+    },
+    {
+      label: "blocked error lifecycle without a mechanical abort",
+      phase: "error",
+      terminal: {
+        livenessState: "blocked",
+        error: "All fallback candidates ended incomplete",
+      },
+      expected: {
+        state: "error",
+        errorMessage: "All fallback candidates ended incomplete",
+      },
+      result: {
+        payloads: [{ text: "All fallback candidates ended incomplete", isError: true }],
+        meta: { livenessState: "blocked" },
+      },
+    },
+    {
+      label: "abandoned error lifecycle without a mechanical abort",
+      phase: "error",
+      terminal: {
+        livenessState: "abandoned",
+        error: "The agent stopped before finishing its tool call",
+      },
+      expected: {
+        state: "error",
+        errorMessage: "The agent stopped before finishing its tool call",
+      },
+      result: {
+        payloads: [{ text: "The agent stopped before finishing its tool call", isError: true }],
+        meta: { livenessState: "abandoned" },
+      },
+    },
+  ] as const)("preserves the terminal distinction for $label", async (testCase) => {
+    const { phase, terminal, expected } = testCase;
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const pending = deferred<{
+      payloads: Array<{ text: string; isError?: boolean }>;
+      meta: Record<string, unknown>;
+    }>();
+    agentCommandFromIngressMock.mockImplementationOnce(() => pending.promise);
+
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = (evt) => {
+      events.push({ event: evt.event, payload: evt.payload });
+    };
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "check the terminal outcome",
+      runId: "run-terminal-outcome",
+    });
+
+    registeredListener?.({
+      runId: "run-terminal-outcome",
+      stream: "lifecycle",
+      data: { phase, ...terminal },
+    });
+    if ("result" in testCase) {
+      pending.resolve(testCase.result);
+    }
+    await flushMicrotasks();
+
+    expect(events).toContainEqual({
+      event: "chat",
+      payload: {
+        runId: "run-terminal-outcome",
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        ...expected,
+      },
+    });
+  });
+
+  it.each([
+    {
+      label: "provider timeout",
+      meta: {
+        aborted: true,
+        stopReason: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+        error: { kind: "retry_limit", message: "agent provider timeout" },
+      },
+      expected: { state: "error", errorMessage: "agent provider timeout" },
+    },
+    {
+      label: "operator cancellation after provider startup",
+      meta: { aborted: true, stopReason: "rpc", providerStarted: true },
+      expected: { state: "aborted" },
+    },
+    {
+      label: "operator cancellation after a queue timeout and provider startup",
+      meta: {
+        aborted: true,
+        stopReason: "rpc",
+        timeoutPhase: "queue",
+        providerStarted: true,
+      },
+      expected: { state: "aborted" },
+    },
+    {
+      label: "blocked run despite its mechanical abort",
+      meta: {
+        aborted: true,
+        livenessState: "blocked",
+        error: {
+          kind: "context_overflow",
+          message: "Internal provider error with private diagnostics",
+        },
+      },
+      payloads: [
+        {
+          isError: true,
+          text: "Context overflow: prompt too large for the model. Try /reset or /new.",
+        },
+      ],
+      expected: {
+        state: "error",
+        errorMessage: "Context overflow: prompt too large for the model. Try /reset or /new.",
+      },
+    },
+    {
+      label: "abandoned run without an abort signal",
+      meta: {
+        livenessState: "abandoned",
+        error: {
+          kind: "incomplete_turn",
+          message: "Agent run ended before producing a complete result.",
+        },
+      },
+      expected: {
+        state: "error",
+        errorMessage: "Agent run ended before producing a complete result.",
+      },
+    },
+    {
+      label: "blocked liveness without an abort or error payload",
+      meta: { livenessState: "blocked" },
+      expected: {
+        state: "error",
+        errorMessage: "Agent run blocked before producing a usable result.",
+      },
+    },
+    {
+      label: "abandoned liveness without an abort or error payload",
+      meta: { livenessState: "abandoned" },
+      expected: {
+        state: "error",
+        errorMessage: "Agent run ended before producing a complete result.",
+      },
+    },
+    {
+      label: "mechanically aborted incomplete run without a cancellation reason",
+      meta: {
+        aborted: true,
+        livenessState: "abandoned",
+        error: {
+          kind: "incomplete_turn",
+          message: "Internal incomplete-turn details",
+        },
+      },
+      payloads: [
+        {
+          isError: true,
+          text: "Search finished successfully. The final response was interrupted.",
+        },
+      ],
+      expected: {
+        state: "error",
+        errorMessage: "Search finished successfully. The final response was interrupted.",
+      },
+    },
+    {
+      label: "provider timeout without a mechanical abort",
+      meta: {
+        timeoutPhase: "provider",
+        providerStarted: true,
+        error: { kind: "retry_limit", message: "agent provider timeout" },
+      },
+      expected: { state: "error", errorMessage: "agent provider timeout" },
+    },
+    {
+      label: "mechanically aborted provider timeout without an explicit stop reason",
+      meta: {
+        aborted: true,
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+      payloads: [
+        {
+          isError: true,
+          text: "Provider timed out. Increase its timeout and try again.",
+        },
+      ],
+      expected: {
+        state: "error",
+        errorMessage: "Provider timed out. Increase its timeout and try again.",
+      },
+    },
+    {
+      label: "provider timeout with an actionable error payload but no metadata error",
+      meta: {
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+      payloads: [
+        {
+          isError: true,
+          text: "Request timed out. Please try again or increase the provider timeout.",
+        },
+      ],
+      expected: {
+        state: "error",
+        errorMessage: "Request timed out. Please try again or increase the provider timeout.",
+      },
+    },
+    {
+      label: "structured agent failure without liveness attribution",
+      meta: {
+        error: {
+          kind: "image_size",
+          message: "Provider rejected a 42 MiB image",
+        },
+      },
+      payloads: [
+        {
+          isError: true,
+          text: "Image too large for the model. Please compress or resize the image and try again.",
+        },
+      ],
+      expected: {
+        state: "error",
+        errorMessage:
+          "Image too large for the model. Please compress or resize the image and try again.",
+      },
+    },
+  ] as const)("preserves the result metadata terminal distinction for $label", async (testCase) => {
+    const { meta, expected } = testCase;
+    const payloads = "payloads" in testCase ? testCase.payloads : [];
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    agentCommandFromIngressMock.mockResolvedValueOnce({ payloads, meta });
+
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = (evt) => {
+      events.push({ event: evt.event, payload: evt.payload });
+    };
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "check the result outcome",
+      runId: "run-result-outcome",
+    });
+    await flushMicrotasks();
+
+    expect(events).toContainEqual({
+      event: "chat",
+      payload: {
+        runId: "run-result-outcome",
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        ...expected,
+      },
+    });
+  });
+
+  it("waits for the actionable provider-timeout result after its metadata-free lifecycle end", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const pending = deferred<{
+      payloads: Array<{ text: string; isError?: boolean }>;
+      meta: Record<string, unknown>;
+    }>();
+    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
+
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = (evt) => {
+      events.push({ event: evt.event, payload: evt.payload });
+    };
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "wait for timeout guidance",
+      runId: "run-timeout-lifecycle-first",
+    });
+
+    registeredListener?.({
+      runId: "run-timeout-lifecycle-first",
+      stream: "lifecycle",
+      data: { phase: "end", aborted: true, stopReason: "timeout" },
+    });
+    await flushMicrotasks();
+
+    expect(
+      events.some(
+        ({ event, payload }) =>
+          event === "chat" && (payload as { state?: string }).state === "error",
+      ),
+    ).toBe(false);
+
+    const timeoutMessage =
+      "Request timed out before a response was generated. Please try again, " +
+      "or increase `agents.defaults.timeoutSeconds` in your config.";
+    pending.resolve({
+      payloads: [{ text: timeoutMessage, isError: true }],
+      meta: {
+        aborted: true,
+        livenessState: "blocked",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+    });
+    await flushMicrotasks();
+
+    expect(events).toContainEqual({
+      event: "chat",
+      payload: {
+        runId: "run-timeout-lifecycle-first",
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        state: "error",
+        errorMessage: timeoutMessage,
+      },
+    });
+    expect(
+      events.filter(
+        ({ event, payload }) =>
+          event === "chat" && (payload as { state?: string }).state === "error",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it.each([
+    {
+      label: "metadata-free provider timeout",
+      lifecycle: { aborted: true, stopReason: "timeout" },
+      result: {
+        payloads: [
+          { text: "Provider timed out; increase its timeout and try again.", isError: true },
+        ],
+        meta: { aborted: true, timeoutPhase: "provider", providerStarted: true },
+      },
+    },
+    {
+      label: "mechanically aborted provider timeout without an explicit stop reason",
+      lifecycle: { aborted: true, timeoutPhase: "provider", providerStarted: true },
+      result: {
+        payloads: [
+          { text: "Provider timed out; increase its timeout and try again.", isError: true },
+        ],
+        meta: { aborted: true, timeoutPhase: "provider", providerStarted: true },
+      },
+    },
+    {
+      label: "provider timeout without a mechanical abort",
+      lifecycle: { stopReason: "timeout" },
+      result: {
+        payloads: [
+          { text: "Provider timed out; increase its timeout and try again.", isError: true },
+        ],
+        meta: { stopReason: "timeout", timeoutPhase: "provider", providerStarted: true },
+      },
+    },
+    {
+      label: "provider timeout status without a mechanical abort",
+      lifecycle: { status: "timeout" },
+      result: {
+        payloads: [
+          { text: "Provider timed out; increase its timeout and try again.", isError: true },
+        ],
+        meta: { status: "timeout", timeoutPhase: "provider", providerStarted: true },
+      },
+    },
+    {
+      label: "mechanically aborted blocked turn",
+      lifecycle: {
+        aborted: true,
+        stopReason: "aborted",
+        livenessState: "blocked",
+        error: "All provider candidates ended incomplete",
+      },
+      result: {
+        payloads: [{ text: "No provider completed the response. Try again.", isError: true }],
+        meta: { aborted: true, livenessState: "blocked" },
+      },
+    },
+    {
+      label: "blocked turn without a mechanical abort",
+      lifecycle: {
+        livenessState: "blocked",
+        error: "All provider candidates ended incomplete",
+      },
+      result: {
+        payloads: [{ text: "No provider completed the response. Try again.", isError: true }],
+        meta: { livenessState: "blocked" },
+      },
+    },
+    {
+      label: "mechanically aborted abandoned turn",
+      lifecycle: {
+        aborted: true,
+        livenessState: "abandoned",
+        error: "The agent stopped before finishing its tool call",
+      },
+      result: {
+        payloads: [{ text: "The response ended before its tool call completed.", isError: true }],
+        meta: { aborted: true, livenessState: "abandoned" },
+      },
+    },
+    {
+      label: "abandoned turn without a mechanical abort",
+      lifecycle: {
+        livenessState: "abandoned",
+        error: "The agent stopped before finishing its tool call",
+      },
+      result: {
+        payloads: [{ text: "The response ended before its tool call completed.", isError: true }],
+        meta: { livenessState: "abandoned" },
+      },
+    },
+  ] as const)(
+    "keeps a deferred $label ahead of queued followups",
+    async ({ lifecycle, result }) => {
+      await withEnvAsync({ OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: "5" }, async () => {
+        const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+        const pending = deferred<{
+          payloads: Array<{ text: string; isError?: boolean }>;
+          meta: Record<string, unknown>;
+        }>();
+        agentCommandFromIngressMock
+          .mockReturnValueOnce(pending.promise)
+          .mockResolvedValueOnce({ payloads: [{ text: "queued response" }], meta: {} });
+        loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
+          cfg: { messages: { queue: { mode: "followup" } } },
+          canonicalKey: sessionKey,
+          storePath: "/tmp/openclaw-sessions.json",
+          store: {},
+          entry: { queueDebounceMs: 0 },
+        }));
+
+        const backend = new EmbeddedTuiBackend();
+        const events: Array<{ event: string; payload: unknown }> = [];
+        backend.onEvent = (evt) => {
+          events.push({ event: evt.event, payload: evt.payload });
+        };
+        backend.start();
+        await backend.sendChat({
+          sessionKey: "agent:main:main",
+          message: "first response",
+          runId: "run-deferred-lifecycle-owner",
+        });
+
+        registeredListener?.({
+          runId: "run-deferred-lifecycle-owner",
+          stream: "assistant",
+          data: { text: "partial response", delta: "partial response" },
+        });
+        registeredListener?.({
+          runId: "run-deferred-lifecycle-owner",
+          stream: "lifecycle",
+          data: { phase: "end", ...lifecycle },
+        });
+        await backend.sendChat({
+          sessionKey: "agent:main:main",
+          message: "queued followup",
+          runId: "run-deferred-lifecycle-followup",
+        });
+        await flushMicrotasks();
+        vi.advanceTimersByTime(6);
+        await flushMicrotasks();
+
+        expect(events).not.toContainEqual({
+          event: "chat",
+          payload: expect.objectContaining({
+            runId: "run-deferred-lifecycle-followup",
+            state: "error",
+          }),
+        });
+        expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
+
+        pending.resolve(result);
+        await vi.waitFor(() => {
+          expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2);
+        });
+        expect(events).toContainEqual({
+          event: "chat",
+          payload: expect.objectContaining({
+            runId: "run-deferred-lifecycle-owner",
+            state: "error",
+            errorMessage: result.payloads[0].text,
+          }),
+        });
+      });
+    },
+  );
+
+  it.each([
+    { label: "mechanically aborted", lifecycle: { aborted: true, stopReason: "timeout" } },
+    { label: "not mechanically aborted", lifecycle: { stopReason: "timeout" } },
+  ] as const)(
+    "bounds a $label provider timeout when its authoritative result never settles",
+    async ({ lifecycle }) => {
+      const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+      const pending = deferred<{
+        payloads: Array<{ text: string }>;
+        meta: Record<string, unknown>;
+      }>();
+      agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
+
+      const backend = new EmbeddedTuiBackend();
+      const events: Array<{ event: string; payload: unknown }> = [];
+      backend.onEvent = (evt) => {
+        events.push({ event: evt.event, payload: evt.payload });
+      };
+      backend.start();
+      await backend.sendChat({
+        sessionKey: "agent:main:main",
+        message: "bound the terminal timeout",
+        runId: "run-timeout-result-missing",
+      });
+
+      registeredListener?.({
+        runId: "run-timeout-result-missing",
+        stream: "lifecycle",
+        data: { phase: "end", ...lifecycle },
+      });
+      await flushMicrotasks();
+      vi.advanceTimersByTime(15_001);
+
+      expect(events).toContainEqual({
+        event: "chat",
+        payload: {
+          runId: "run-timeout-result-missing",
+          sessionKey: "agent:main:main",
+          agentId: "main",
+          state: "error",
+          errorMessage: "Request timed out before a response was generated. Please try again.",
+        },
+      });
+    },
+  );
+
+  it.each([
+    {
+      label: "blocked",
+      lifecycle: {
+        aborted: true,
+        stopReason: "aborted",
+        livenessState: "blocked",
+        error: "Private provider candidate details",
+      },
+    },
+    {
+      label: "blocked without a mechanical abort",
+      lifecycle: {
+        livenessState: "blocked",
+        error: "Private provider candidate details",
+      },
+    },
+    {
+      label: "abandoned",
+      lifecycle: {
+        aborted: true,
+        livenessState: "abandoned",
+        error: "Private incomplete-tool details",
+      },
+    },
+    {
+      label: "abandoned without a mechanical abort",
+      lifecycle: {
+        livenessState: "abandoned",
+        error: "Private incomplete-tool details",
+      },
+    },
+  ] as const)(
+    "bounds a $label turn when its authoritative result never settles",
+    async ({ lifecycle }) => {
+      const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+      agentCommandFromIngressMock.mockReturnValueOnce(new Promise(() => {}));
+
+      const backend = new EmbeddedTuiBackend();
+      const events: Array<{ event: string; payload: unknown }> = [];
+      backend.onEvent = (evt) => {
+        events.push({ event: evt.event, payload: evt.payload });
+      };
+      backend.start();
+      await backend.sendChat({
+        sessionKey: "agent:main:main",
+        message: "bound the incomplete terminal",
+        runId: "run-incomplete-result-missing",
+      });
+
+      registeredListener?.({
+        runId: "run-incomplete-result-missing",
+        stream: "lifecycle",
+        data: { phase: "end", ...lifecycle },
+      });
+      await flushMicrotasks();
+      vi.advanceTimersByTime(15_001);
+
+      expect(events).toContainEqual({
+        event: "chat",
+        payload: {
+          runId: "run-incomplete-result-missing",
+          sessionKey: "agent:main:main",
+          agentId: "main",
+          state: "error",
+          errorMessage: "The agent stopped before finishing its response. Please try again.",
+        },
+      });
+    },
+  );
+
+  it("preserves a thrown provider timeout when its abort signal is also raised", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const { AgentRunTerminalOutcomeError, buildAgentRunTerminalOutcome } =
+      await import("../agents/agent-run-terminal-outcome.js");
+    const pending = deferred<{
+      payloads: Array<{ text: string }>;
+      meta: Record<string, unknown>;
+    }>();
+    agentCommandFromIngressMock.mockImplementationOnce((opts: { abortSignal?: AbortSignal }) => {
+      opts.abortSignal?.addEventListener("abort", () => {
+        pending.reject(
+          new AgentRunTerminalOutcomeError(
+            new Error("agent provider timeout"),
+            buildAgentRunTerminalOutcome({
+              status: "timeout",
+              stopReason: "timeout",
+              timeoutPhase: "provider",
+              providerStarted: true,
+            }),
+          ),
+        );
+      });
+      return pending.promise;
+    });
+
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = (evt) => {
+      events.push({ event: evt.event, payload: evt.payload });
+    };
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "check the thrown timeout",
+      runId: "run-thrown-timeout",
+    });
+    await backend.abortChat({
+      sessionKey: "agent:main:main",
+      runId: "run-thrown-timeout",
+    });
+    await flushMicrotasks();
+
+    expect(events).toContainEqual({
+      event: "chat",
+      payload: {
+        runId: "run-thrown-timeout",
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        state: "error",
+        errorMessage: "agent provider timeout",
+      },
+    });
+  });
+
   it("retains the latest tool validation summary for an aborted chat event", async () => {
     const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
     const pending = deferred<{
