@@ -11,11 +11,10 @@ type ReplayClaimHandle = import("openclaw/plugin-sdk/persistent-dedupe").Channel
 type MatrixIngressPrefixConfig = {
   client: { getUserId: () => Promise<string> };
   senderId: string;
-  dropPreStartupMessages: boolean;
+  preStartupCutoffMs: number | null;
   eventTs?: number;
   eventAge?: number;
   startupMs: number;
-  startupGraceMs: number;
   event: MatrixRawEvent;
   eventType: string;
   eventId: string;
@@ -36,11 +35,10 @@ export async function readMatrixIngressPrefix(config: MatrixIngressPrefixConfig)
   const {
     client,
     senderId,
-    dropPreStartupMessages,
+    preStartupCutoffMs,
     eventTs,
     eventAge,
     startupMs,
-    startupGraceMs,
     event,
     eventType,
     eventId,
@@ -54,11 +52,12 @@ export async function readMatrixIngressPrefix(config: MatrixIngressPrefixConfig)
   if (senderId === selfUserId) {
     return undefined;
   }
-  if (dropPreStartupMessages) {
-    if (typeof eventTs === "number" && eventTs < startupMs - startupGraceMs) {
+  if (preStartupCutoffMs !== null) {
+    const maxEventAgeMs = startupMs - preStartupCutoffMs;
+    if (typeof eventTs === "number" && eventTs < preStartupCutoffMs) {
       return undefined;
     }
-    if (typeof eventTs !== "number" && typeof eventAge === "number" && eventAge > startupGraceMs) {
+    if (typeof eventTs !== "number" && typeof eventAge === "number" && eventAge > maxEventAgeMs) {
       return undefined;
     }
   }

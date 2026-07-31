@@ -434,6 +434,10 @@ export abstract class MatrixClientBase {
     return this.syncStore?.hasSavedSync() === true;
   }
 
+  hasCleanShutdownSyncState(): boolean {
+    return this.syncStore?.hasSavedSyncFromCleanShutdown() === true;
+  }
+
   protected async ensureStartedForCryptoControlPlane(): Promise<void> {
     if (this.started) {
       return;
