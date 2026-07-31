@@ -90,6 +90,8 @@ export type FeishuMediaInfo = {
   path?: string;
   contentType?: string;
   kind: Exclude<import("openclaw/plugin-sdk/media-runtime").MediaKind, "unknown">;
+  /** Original image_key, used to align content_v2 references with downloaded local paths. */
+  sourceKey?: string;
 };
 
 export type FeishuToolsConfig = {

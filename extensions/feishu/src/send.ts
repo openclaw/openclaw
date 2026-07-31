@@ -1,12 +1,10 @@
 // Feishu plugin module implements send behavior.
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
@@ -558,14 +556,7 @@ export async function sendMessageFeishu(
     accountId,
   } = params;
   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
-  const tableMode = resolveMarkdownTableMode({
-    cfg,
-    channel: "feishu",
-  });
-
-  const messageText = materializeFeishuPostMarkdownSoftBreaks(
-    convertMarkdownTables(text ?? "", tableMode),
-  );
+  const messageText = materializeFeishuPostMarkdownSoftBreaks(text ?? "");
 
   const content = buildFeishuPostMessageContent({ messageText, mentions });
   const msgType = "post";
@@ -649,12 +640,7 @@ export async function editMessageFeishu(params: {
     return { messageId, contentType: "interactive" };
   }
 
-  const tableMode = resolveMarkdownTableMode({
-    cfg,
-    channel: "feishu",
-  });
-  const messageText = convertMarkdownTables(text!, tableMode);
-  const normalizedText = materializeFeishuPostMarkdownSoftBreaks(messageText);
+  const normalizedText = materializeFeishuPostMarkdownSoftBreaks(text!);
   const content = buildFeishuPostMessageContent({ messageText: normalizedText });
   assertFeishuPostWithinEnvelope(content, "Feishu message edit");
   const response = await client.im.message.patch({

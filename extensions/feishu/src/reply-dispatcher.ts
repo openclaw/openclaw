@@ -55,11 +55,6 @@ import {
 import { resolveReceiveIdType } from "./targets.js";
 import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
 
-/** Detect if text contains markdown elements that benefit from card rendering */
-function shouldUseCard(text: string): boolean {
-  return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
-}
-
 function mergeStreamingFinalText(
   previousText: string,
   nextText: string,
@@ -277,7 +272,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     fallbackLimit: 4000,
   });
   const chunkMode = core.channel.text.resolveChunkMode(cfg, "feishu", accountId);
-  const tableMode = core.channel.text.resolveMarkdownTableMode({ cfg, channel: "feishu" });
   const renderMode = account.config?.renderMode ?? "auto";
   // Streaming cards cannot attach native mention recipients. Bot-authored ingress
   // therefore uses normal cards/posts so every emitted unit reaches the peer bot.
@@ -328,6 +322,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     | undefined;
   let visibleReplySent = false;
   let skippedFinalReason: string | null = null;
+  let bufferedBlockTexts: string[] = [];
   let skippedFinalAssistantMessageIndex: number | undefined;
   let preparedDeliveryAssistantMessageIndex: number | undefined;
   let idleSideEffectsPromise: Promise<void> = Promise.resolve();
@@ -727,9 +722,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   }): Promise<FeishuReplyDeliveryResult> => {
     const chunkSource = paramsLocal.useCard
       ? paramsLocal.text
-      : materializeFeishuPostMarkdownSoftBreaks(
-          core.channel.text.convertMarkdownTables(paramsLocal.text, tableMode),
-        );
+      : materializeFeishuPostMarkdownSoftBreaks(paramsLocal.text);
     const initialChunks = core.channel.text.chunkMarkdownTextWithMode(
       chunkSource,
       textChunkLimit,
@@ -967,6 +960,40 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     });
   };
 
+  const flushBufferedBlockText = async (): Promise<void> => {
+    if (
+      bufferedBlockTexts.length === 0 ||
+      deliveredFinalTexts.size > 0 ||
+      skippedFinalReason === "silent"
+    ) {
+      bufferedBlockTexts = [];
+      return;
+    }
+    const pendingTexts = bufferedBlockTexts;
+    bufferedBlockTexts = [];
+    for (const [index, text] of pendingTexts.entries()) {
+      const firstChunkMentions = index === 0 && mentionTargets?.length ? mentionTargets : undefined;
+      await sendChunkedTextReply({
+        text,
+        useCard: false,
+        infoKind: "block",
+        firstChunkMentions,
+        chunkMentions: requiredMentionTargets,
+        sendChunk: async ({ chunk, mentions }) =>
+          await sendMessageFeishu({
+            cfg,
+            to: sendTarget,
+            text: chunk,
+            replyToMessageId: sendReplyToMessageId,
+            replyInThread: effectiveReplyInThread,
+            allowTopLevelReplyFallback,
+            accountId,
+            ...(mentions ? { mentions } : {}),
+          }),
+      });
+    }
+  };
+
   function queueIdleSideEffects(): Promise<void> {
     idleRequestedForReply = true;
     if (activeIdleSideEffectsPromise) {
@@ -1056,6 +1083,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               completion.resolve(settledResult);
             }
           }
+          await flushBufferedBlockText();
           if (closeOutcome.error !== undefined) {
             throw toError(closeOutcome.error);
           }
@@ -1201,6 +1229,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         idleRequestedForReply = false;
         visibleReplySent = false;
         skippedFinalReason = null;
+        bufferedBlockTexts = [];
         skippedFinalAssistantMessageIndex = undefined;
         preparedDeliveryAssistantMessageIndex = undefined;
       }
@@ -1272,8 +1301,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       const useStaticCard =
         hasText &&
         (renderMode === "card" ||
-          (info?.kind === "block" && coreBlockStreamingEnabled && renderMode !== "raw") ||
-          (renderMode === "auto" && shouldUseCard(text)));
+          (info?.kind === "block" && coreBlockStreamingEnabled && renderMode !== "raw"));
       const useStreamingCard =
         hasText &&
         streamingEnabled &&
@@ -1359,6 +1387,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 }),
               );
               sentIndependentBlockText = true;
+              if (hasMedia) {
+                await collectMediaDelivery(payload);
+              }
+            } else {
+              // Preserve the only answer when the runtime emits block payloads without a final.
+              bufferedBlockTexts.push(text);
               if (hasMedia) {
                 await collectMediaDelivery(payload);
               }
@@ -1482,6 +1516,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         );
       }
       const result = mergeFeishuReplyDeliveryResults(deliveredResults, text);
+      if (info?.kind === "final" && hasText && result.visibleReplySent) {
+        // A successful final supersedes queued blocks even when voice media suppresses
+        // its text. Retaining them would leak duplicate prose during onIdle.
+        bufferedBlockTexts = [];
+      }
       if (priorClosedStreamingSettlement?.error !== undefined) {
         throw createFeishuPartialReplyDeliveryError(
           isChannelPartialDeliveryError(priorClosedStreamingSettlement.error) &&

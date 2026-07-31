@@ -1,7 +1,6 @@
 import {
   buildChannelInboundEventContext,
   formatAgentEnvelope,
-  formatInboundMediaUnavailableText,
   recordChannelBotPairLoopAndCheckSuppression,
   resolveEnvelopeFormatOptions,
   toInboundMediaFactsWithMetadata,
@@ -46,9 +45,9 @@ import {
   parseMergeForwardContent,
   parseMessageContent,
   resolveFeishuGroupSession,
-  resolveFeishuMediaList,
 } from "./bot-content.js";
 import { resolveGroupName } from "./bot-group-name.js";
+import { resolveFeishuInboundMedia } from "./bot-media.js";
 import { resolveFeishuBotName } from "./bot-name.js";
 import {
   evaluateSupplementalContextVisibility,
@@ -966,25 +965,18 @@ export async function handleFeishuMessage(params: {
     // authoritative transcript turns.
     log(`feishu[${account.accountId}]: ${inboundLabel}: ${preview}`);
 
-    // Resolve media from message
-    const mediaMaxBytes = (feishuCfg?.mediaMaxMb ?? 30) * 1024 * 1024; // 30MB default
-    const mediaList = await resolveFeishuMediaList({
+    const resolvedMedia = await resolveFeishuInboundMedia({
       cfg,
       messageId: ctx.messageId,
       messageType: event.message.message_type,
-      content: event.message.content,
-      maxBytes: mediaMaxBytes,
+      rawContent: event.message.content,
+      content: ctx.content,
+      maxBytes: (feishuCfg?.mediaMaxMb ?? 30) * 1024 * 1024,
       log,
       accountId: account.accountId,
     });
-    const unavailableMediaCount = mediaList.filter((media) => !media.path).length;
-    const mediaFailureContent =
-      unavailableMediaCount > 0
-        ? formatInboundMediaUnavailableText({
-            body: ctx.content,
-            notice: `[feishu ${unavailableMediaCount > 1 ? `${unavailableMediaCount} attachments` : "attachment"} unavailable]`,
-          })
-        : ctx.content;
+    ctx.content = resolvedMedia.content;
+    const { mediaList, mediaFailureContent } = resolvedMedia;
     // Fetch quoted/replied message content before the empty-message guard
     // so a reply with only @bot (no text, no media) is not dropped when
     // the quoted message carries meaningful content.

@@ -13,7 +13,6 @@ import {
   renderMessagePresentationFallbackText,
   resolveLegacyInteractiveTextFallback,
 } from "openclaw/plugin-sdk/interactive-runtime";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import {
   getReplyPayloadTtsSupplement,
@@ -27,7 +26,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { cleanupAmbientCommentTypingReaction } from "./comment-reaction.js";
@@ -106,10 +104,6 @@ function normalizePossibleLocalImagePath(text: string | undefined): string | nul
   }
 
   return raw;
-}
-
-function shouldUseCard(text: string): boolean {
-  return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
 }
 
 function markRenderedFeishuCard(card: Record<string, unknown>): Record<string, unknown> {
@@ -396,10 +390,7 @@ async function sendOutboundText(params: {
   const account = resolveFeishuAccount({ cfg, accountId });
   const renderMode = account.config?.renderMode ?? "auto";
 
-  // Decide card routing on the original text so card content is never
-  // modified by post-md newline normalization. Only the post path below
-  // materializes CommonMark soft breaks for Feishu rendering.
-  if (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text))) {
+  if (renderMode === "card") {
     return sendMarkdownCardFeishu({
       cfg,
       to,
@@ -410,11 +401,8 @@ async function sendOutboundText(params: {
     });
   }
 
-  // Tables need contiguous source rows, so convert them before the parser
-  // materializes prose soft breaks for Feishu post rendering.
-  const tableMode = resolveMarkdownTableMode({ cfg, channel: "feishu" });
-  const tableConvertedText = convertMarkdownTables(text, tableMode);
-  const normalizedText = materializeFeishuPostMarkdownSoftBreaks(tableConvertedText);
+  // Native post tag:md supports tables; only materialize CommonMark soft breaks.
+  const normalizedText = materializeFeishuPostMarkdownSoftBreaks(text);
 
   // Core chunks raw text before channel rendering. Re-chunk after expansion
   // and keep each fenced-code chunk independently valid Markdown.
@@ -826,7 +814,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
 
       const account = resolveFeishuAccount({ cfg, accountId: accountId ?? undefined });
       const renderMode = account.config?.renderMode ?? "auto";
-      const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
+      const useCard = renderMode === "card";
       if (useCard) {
         const header = identity
           ? {
