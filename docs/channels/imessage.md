@@ -593,6 +593,13 @@ All actions are enabled by default; use `channels.imessage.actions` to turn indi
 
   </Accordion>
 
+  <Accordion title="Delivery timeout reconciliation">
+    When a plain-text send times out after dispatch, OpenClaw queries the configured `imsg` transport before deciding whether the message already landed. It only accepts one exact outbound history row for the target chat, reply, final wire text, and send window, then confirms that same message GUID with `message.send_status` (available in `imsg` 0.10.0 and newer). Any missing method, ambiguous match, pending/failed status, RPC error, or unsupported payload shape remains unresolved and is never blindly retried.
+
+    Reconciliation is intentionally limited to one non-empty, unformatted, single-chunk text payload. Media, presentations, interactive payloads, formatted text, and multi-chunk sends remain unresolved. Because `imsg` does not expose an idempotency token, concurrent byte-identical sends to the same chat and reply within one send window cannot be attributed safely; multiple candidates therefore remain unresolved.
+
+  </Accordion>
+
   <Accordion title="Read receipts and typing">
     When the private API bridge is up, accepted inbound chats are marked read and direct chats show a typing bubble as soon as the turn is accepted, while the agent prepares context and generates. Disable read-marking with:
 

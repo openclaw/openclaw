@@ -105,6 +105,17 @@ describe("createIMessageTestPlugin", () => {
   });
 
   it("declares durable final delivery capabilities", () => {
+    expect(requireMessageAdapter().durableFinal).toMatchObject({
+      capabilities: {
+        text: true,
+        media: true,
+        replyTo: true,
+        messageSendingHooks: true,
+        reconcileUnknownSend: true,
+      },
+      reconcileUnknownSendKinds: { text: true },
+      reconcileUnknownSend: expect.any(Function),
+    });
     expect(imessagePlugin.outbound?.deliveryCapabilities?.durableFinal).toStrictEqual({
       text: true,
       media: true,
@@ -358,6 +369,9 @@ describe("createIMessageTestPlugin", () => {
         },
         messageSendingHooks: () => {
           expect(sendText).toBeTypeOf("function");
+        },
+        reconcileUnknownSend: () => {
+          expect(adapter.durableFinal?.reconcileUnknownSend).toBeTypeOf("function");
         },
       },
     });

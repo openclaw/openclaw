@@ -8,13 +8,10 @@ import {
   type MessageReceiptSourceResult,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { kindFromMime, resolveOutboundAttachmentFromUrl } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { sleep as delay } from "openclaw/plugin-sdk/runtime-env";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
-import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-chunking";
 import {
   hasExclusiveIMessageLocalDatabase,
   resolveIMessageAccount,
@@ -31,13 +28,13 @@ import { runIMessageCliJsonCommand } from "./cli-output.js";
 import { resolveIMessageChatDbLookupPath } from "./cli-path.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
 import { DEFAULT_IMESSAGE_SEND_TIMEOUT_MS } from "./constants.js";
-import { extractMarkdownFormatRuns } from "./markdown-format.js";
 import { resolveAuthorizedIMessageReplyReference } from "./message-resource.js";
 import { rememberIMessageReplyCache } from "./monitor-reply-cache.js";
 import {
   forgetPersistedIMessageEchoKey,
   rememberPersistedIMessageEcho,
 } from "./monitor/persisted-echo-cache.js";
+import { prepareIMessageOutboundText } from "./outbound-text.js";
 import {
   formatIMessageChatTarget,
   type IMessageService,
@@ -761,24 +758,14 @@ export async function sendMessageIMessage(
   if (!message.trim() && !filePath) {
     throw new Error("iMessage send requires text or media");
   }
-  if (message.trim()) {
-    const tableMode = resolveMarkdownTableMode({
-      cfg,
-      channel: "imessage",
-      accountId: account.accountId,
-    });
-    message = convertMarkdownTables(message, tableMode);
-  }
-  message = stripInlineDirectiveTagsForDelivery(message).text;
-  if (!message.trim() && !filePath) {
-    throw new Error("iMessage send requires text or media");
-  }
   // Extract markdown bold/italic/underline/strikethrough into typed-run
   // ranges that the imsg bridge applies via attributedBody. The sender needs
   // macOS 15+; pre-Sequoia recipients see the same marker-stripped plain text.
-  const formatted = message.trim()
-    ? extractMarkdownFormatRuns(message)
-    : { text: message, ranges: [] };
+  const formatted = prepareIMessageOutboundText({
+    cfg,
+    accountId: account.accountId,
+    text: message,
+  });
   message = formatted.text;
   if (!message.trim() && !filePath) {
     throw new Error("iMessage send requires text or media");

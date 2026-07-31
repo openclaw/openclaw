@@ -1,6 +1,9 @@
 /** Default timeout for iMessage probe/RPC operations (10 seconds). */
 export const DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS = 10_000;
 
+/** Default maximum text size before core splits one iMessage into multiple sends. */
+export const DEFAULT_IMESSAGE_TEXT_CHUNK_LIMIT = 4_000;
+
 // Sends get a much longer default than probes: on macOS 26 (Tahoe) the private
 // API bridge intermittently stalls up to ~124s before the send completes. The
 // 10s probe timeout aborts those mid-flight, and non-recoverable shapes
