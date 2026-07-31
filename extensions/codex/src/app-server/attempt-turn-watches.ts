@@ -66,6 +66,7 @@ export function createCodexAttemptTurnWatchController(params: {
   let attemptIdleWatchArmed = false;
   let terminalIdleTimer: Timer | undefined;
   let terminalIdleWatchArmed = false;
+  let terminalReleaseDeadlineTimer: Timer | undefined;
   let completionLastActivityAt = Date.now();
   let completionLastActivityReason = "startup";
   let completionLastActivityDetails: Record<string, unknown> | undefined;
@@ -111,11 +112,19 @@ export function createCodexAttemptTurnWatchController(params: {
     }
   };
 
+  const clearTerminalReleaseDeadline = () => {
+    if (terminalReleaseDeadlineTimer) {
+      clearTimeout(terminalReleaseDeadlineTimer);
+      terminalReleaseDeadlineTimer = undefined;
+    }
+  };
+
   const clearAllTimers = () => {
     clearAttemptIdleTimer();
     clearCompletionIdleTimer();
     clearAssistantCompletionIdleTimer();
     clearTerminalIdleTimer();
+    clearTerminalReleaseDeadline();
   };
 
   function scheduleCompletionIdleWatch() {
@@ -507,6 +516,20 @@ export function createCodexAttemptTurnWatchController(params: {
       attemptIdleTimeoutOverrideMs = resolveWatchTimeoutMs(timeoutMs);
       scheduleAttemptIdleWatch();
     },
+    armTerminalReleaseDeadline: (input: { deadlineMs: number; onDeadline: () => void }) => {
+      // Absolute deadline: unlike the idle watches it is never rescheduled by
+      // activity, so post-final generation cannot extend it (bounded cost).
+      clearTerminalReleaseDeadline();
+      terminalReleaseDeadlineTimer = setTimeout(() => {
+        terminalReleaseDeadlineTimer = undefined;
+        if (params.isCompleted() || params.signal.aborted) {
+          return;
+        }
+        input.onDeadline();
+      }, resolveWatchTimeoutMs(input.deadlineMs));
+      terminalReleaseDeadlineTimer.unref?.();
+    },
+    clearTerminalReleaseDeadline,
     scheduleProgressWatches,
     clearCompletionIdleTimer,
     clearAssistantCompletionIdleTimer,

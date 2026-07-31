@@ -19,6 +19,12 @@ const CODEX_POST_TOOL_RAW_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS = 5 * 60_000;
 export const CODEX_POST_REASONING_REPLY_IDLE_TIMEOUT_MS = 5 * 60_000;
 /** Long terminal idle watch for app-server turns that never send completion. */
 const CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;
+// After a terminal dynamic tool result (message final:true, sessions_yield)
+// the turn should end via Codex's own turn/completed so the thread rollout
+// carries no interrupt marker. This absolute deadline bounds how long the
+// model may keep generating past its declared final before we interrupt
+// anyway. Absolute, not idle-based: post-final activity must not extend it.
+export const CODEX_TERMINAL_RELEASE_COMPLETION_DEADLINE_MS = 10_000;
 
 type CodexAppServerStartupErrorReason = "aborted" | "timed_out";
 
