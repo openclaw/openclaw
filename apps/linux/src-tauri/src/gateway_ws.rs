@@ -16,7 +16,7 @@ use std::fmt;
 use std::io::ErrorKind;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 use subtle::ConstantTimeEq;
 use tauri::{AppHandle, Emitter, Manager, Webview};
 use tokio::sync::{mpsc, oneshot};
@@ -369,13 +369,19 @@ impl RequestFailure {
     }
 }
 
+#[derive(Clone, Default)]
+struct CanvasSurfaceState {
+    generation: u64,
+    url: Option<String>,
+}
+
 struct GatewayClientInner {
     config: Mutex<Option<GatewayWsConfig>>,
     config_generation: AtomicU64,
     commands: Mutex<Option<mpsc::Sender<DriverCommand>>>,
     agents_cache: Mutex<Option<CachedAgents>>,
     identity: Mutex<Option<GatewayDeviceIdentityStore>>,
-    canvas_surface_url: Mutex<Option<String>>,
+    canvas_surface: Mutex<CanvasSurfaceState>,
     connection_notice: Mutex<Option<String>>,
     connection_state: AtomicU64,
     reconnect_paused: AtomicBool,
@@ -396,7 +402,7 @@ impl GatewayClient {
                 commands: Mutex::new(None),
                 agents_cache: Mutex::new(None),
                 identity: Mutex::new(None),
-                canvas_surface_url: Mutex::new(None),
+                canvas_surface: Mutex::new(CanvasSurfaceState::default()),
                 connection_notice: Mutex::new(None),
                 connection_state: AtomicU64::new(GatewayConnectionState::Down as u64),
                 reconnect_paused: AtomicBool::new(false),
@@ -416,7 +422,8 @@ impl GatewayClient {
             .agents_cache
             .lock()
             .expect("gateway agents cache mutex poisoned") = None;
-        self.inner.config_generation.fetch_add(1, Ordering::SeqCst);
+        let generation = self.inner.config_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        self.set_canvas_surface_url(generation, None);
         self.inner.reconnect_paused.store(false, Ordering::SeqCst);
         self.set_connection_state(app, GatewayConnectionState::Down, None);
         if let Some(commands) = self
@@ -441,7 +448,8 @@ impl GatewayClient {
             .agents_cache
             .lock()
             .expect("gateway agents cache mutex poisoned") = None;
-        self.inner.config_generation.fetch_add(1, Ordering::SeqCst);
+        let generation = self.inner.config_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        self.set_canvas_surface_url(generation, None);
         self.inner.reconnect_paused.store(false, Ordering::SeqCst);
         self.set_connection_state(app, GatewayConnectionState::Down, None);
         if let Some(commands) = self
@@ -538,20 +546,39 @@ impl GatewayClient {
     }
 
     pub async fn refresh_canvas_surface(&self) -> Result<Option<String>, String> {
-        let observed_url = self.canvas_surface_url();
-        if observed_url.is_none() {
+        let observed = self.canvas_surface_state();
+        if observed.url.is_none() {
             return Ok(None);
         }
+        if self.inner.config_generation.load(Ordering::SeqCst) != observed.generation {
+            return Err("Gateway Canvas surface generation changed before refresh.".to_string());
+        }
         let response = self
-            .request(GatewayRequest::RefreshCanvasSurface { observed_url })
+            .request(GatewayRequest::RefreshCanvasSurface {
+                observed_url: observed.url.clone(),
+            })
             .await?;
         let GatewayResponse::CanvasSurface(refreshed) = response else {
             return Err(
                 "Gateway returned the wrong response for plugin.surface.refresh.".to_string(),
             );
         };
-        self.set_canvas_surface_url(refreshed.clone());
-        Ok(refreshed)
+        let Some(refreshed) = refreshed else {
+            return Err("Gateway did not return a refreshed Canvas surface.".to_string());
+        };
+        let mut current = self
+            .inner
+            .canvas_surface
+            .lock()
+            .map_err(|_| "Gateway Canvas surface state is unavailable.".to_string())?;
+        if self.inner.config_generation.load(Ordering::SeqCst) != observed.generation
+            || current.generation != observed.generation
+            || current.url != observed.url
+        {
+            return Err("Gateway Canvas surface changed during refresh.".to_string());
+        }
+        current.url = Some(refreshed.clone());
+        Ok(Some(refreshed))
     }
 
     pub fn resume_reconnect(&self) {
@@ -694,8 +721,7 @@ impl GatewayClient {
         let mut socket = tokio::time::timeout(CONNECT_TIMEOUT, connect_gateway_socket(config))
             .await
             .map_err(|_| RequestFailure::transport("Gateway connection timed out."))??;
-        let nonce = wait_for_connect_challenge(&mut socket).await?;
-        let signed_at_ms = unix_time_ms().map_err(RequestFailure::transport)?;
+        let challenge = wait_for_connect_challenge(&mut socket).await?;
         // Native child WebViews use platform HTTP trust and cannot bind the optional
         // WebSocket leaf pin, so pinned Gateway connections remain capability-free.
         let inline_widgets_available = config
@@ -705,8 +731,8 @@ impl GatewayClient {
         let params = connect_params(
             &identity,
             &auth,
-            &nonce,
-            signed_at_ms,
+            &challenge.nonce,
+            challenge.issued_at_ms,
             inline_widgets_available,
         )
         .map_err(RequestFailure::transport)?;
@@ -725,10 +751,10 @@ impl GatewayClient {
         if let Some(device_token) = hello.device_token.as_deref() {
             self.persist_device_token(&config.ws_url, device_token)?;
         }
-        self.set_canvas_surface_url(gated_canvas_surface_url(
-            hello.canvas_surface_url,
-            inline_widgets_available,
-        ));
+        self.set_canvas_surface_url(
+            generation,
+            gated_canvas_surface_url(hello.canvas_surface_url, inline_widgets_available),
+        );
 
         let agents = request_agents_list(app, &mut socket).await?;
         if self.inner.config_generation.load(Ordering::SeqCst) != generation {
@@ -859,20 +885,27 @@ impl GatewayClient {
         });
     }
 
-    fn set_canvas_surface_url(&self, canvas_surface_url: Option<String>) {
-        *self
+    fn set_canvas_surface_url(&self, generation: u64, url: Option<String>) {
+        let mut surface = self
             .inner
-            .canvas_surface_url
+            .canvas_surface
             .lock()
-            .expect("gateway canvas surface mutex poisoned") = canvas_surface_url;
+            .expect("gateway canvas surface mutex poisoned");
+        if self.inner.config_generation.load(Ordering::SeqCst) == generation {
+            *surface = CanvasSurfaceState { generation, url };
+        }
     }
 
-    fn canvas_surface_url(&self) -> Option<String> {
+    fn canvas_surface_state(&self) -> CanvasSurfaceState {
         self.inner
-            .canvas_surface_url
+            .canvas_surface
             .lock()
             .expect("gateway canvas surface mutex poisoned")
             .clone()
+    }
+
+    fn canvas_surface_url(&self) -> Option<String> {
+        self.canvas_surface_state().url
     }
 
     fn is_connected(&self) -> bool {
@@ -895,7 +928,7 @@ impl GatewayClient {
                 .agents_cache
                 .lock()
                 .expect("gateway agents cache mutex poisoned") = None;
-            self.set_canvas_surface_url(None);
+            self.set_canvas_surface_url(self.inner.config_generation.load(Ordering::SeqCst), None);
         }
         let notice_changed = {
             let mut current = self
@@ -1093,22 +1126,42 @@ fn request_frame(id: &str, method: &str, params: Value) -> Value {
     })
 }
 
-async fn wait_for_connect_challenge(socket: &mut GatewaySocket) -> Result<String, RequestFailure> {
+#[derive(Debug, PartialEq, Eq)]
+struct ConnectChallenge {
+    nonce: String,
+    issued_at_ms: u64,
+}
+
+fn parse_connect_challenge(value: &Value) -> Result<ConnectChallenge, RequestFailure> {
+    let nonce = value
+        .get("payload")
+        .and_then(|payload| payload.get("nonce"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|nonce| !nonce.is_empty());
+    let issued_at_ms = value
+        .get("payload")
+        .and_then(|payload| payload.get("ts"))
+        .and_then(Value::as_u64)
+        .ok_or_else(|| RequestFailure::transport("Gateway challenge timestamp was invalid."))?;
+    nonce
+        .map(|nonce| ConnectChallenge {
+            nonce: nonce.to_owned(),
+            issued_at_ms,
+        })
+        .ok_or_else(|| RequestFailure::transport("Gateway challenge omitted nonce."))
+}
+
+async fn wait_for_connect_challenge(
+    socket: &mut GatewaySocket,
+) -> Result<ConnectChallenge, RequestFailure> {
     tokio::time::timeout(HANDSHAKE_TIMEOUT, async {
         loop {
             let value = next_json(socket).await?;
             if value.get("type").and_then(Value::as_str) == Some("event")
                 && value.get("event").and_then(Value::as_str) == Some("connect.challenge")
             {
-                let nonce = value
-                    .get("payload")
-                    .and_then(|payload| payload.get("nonce"))
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|nonce| !nonce.is_empty());
-                return nonce
-                    .map(ToOwned::to_owned)
-                    .ok_or_else(|| RequestFailure::transport("Gateway challenge omitted nonce."));
+                return parse_connect_challenge(&value);
             }
         }
     })
@@ -1436,13 +1489,6 @@ fn dispatch_chat_event(app: &AppHandle, frame: &Value) {
     }
 }
 
-fn unix_time_ms() -> Result<u64, String> {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .map_err(|error| format!("Could not read system time: {error}"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1626,8 +1672,37 @@ mod tests {
             false,
         )
         .expect("pinned connect params");
-        assert_eq!(pinned_params["caps"], json!([]));
+        // Pinning only withdraws inline widgets; agent-kind is unconditional.
+        assert_eq!(pinned_params["caps"], json!([AGENT_KIND_CLIENT_CAPABILITY]));
         std::fs::remove_dir_all(directory).expect("remove connect fixture");
+    }
+
+    #[test]
+    fn connect_challenge_uses_gateway_timestamp() {
+        let Ok(challenge) = parse_connect_challenge(&json!({
+            "payload": {
+                "nonce": " fixture-nonce ",
+                "ts": 1_700_000_000_123_u64
+            }
+        })) else {
+            panic!("expected valid challenge");
+        };
+
+        assert_eq!(
+            challenge,
+            ConnectChallenge {
+                nonce: "fixture-nonce".to_string(),
+                issued_at_ms: 1_700_000_000_123,
+            }
+        );
+        assert!(parse_connect_challenge(&json!({
+            "payload": { "nonce": "missing-time" }
+        }))
+        .is_err());
+        assert!(parse_connect_challenge(&json!({
+            "payload": { "nonce": "fixture-nonce", "ts": "1700000000123" }
+        }))
+        .is_err());
     }
 
     #[test]

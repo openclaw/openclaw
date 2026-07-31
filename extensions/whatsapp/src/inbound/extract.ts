@@ -7,7 +7,7 @@ import {
   type NormalizedLocation,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveComparableIdentity, type WhatsAppReplyContext } from "../identity.js";
 import { jidToE164 } from "../text-runtime.js";
 import { parseVcard } from "../vcard.js";
@@ -136,6 +136,26 @@ export function extractMentionedJids(rawMessage: proto.IMessage | undefined): st
   return uniqueStrings(flattened);
 }
 
+function extractNativeFlowResponseText(
+  response: proto.Message.IInteractiveResponseMessage | null | undefined,
+): string | undefined {
+  const paramsJson = response?.nativeFlowResponseMessage?.paramsJson;
+  if (!paramsJson) {
+    return undefined;
+  }
+  try {
+    const params: unknown = JSON.parse(paramsJson);
+    if (!isRecord(params)) {
+      return undefined;
+    }
+    return [params.title, params.id].find(
+      (value): value is string => typeof value === "string" && Boolean(value.trim()),
+    );
+  } catch {
+    return undefined;
+  }
+}
+
 export function extractText(rawMessage: proto.IMessage | undefined): string | undefined {
   const message = unwrapMessage(rawMessage);
   if (!message) {
@@ -160,6 +180,19 @@ export function extractText(rawMessage: proto.IMessage | undefined): string | un
       candidate.documentMessage?.caption;
     if (caption?.trim()) {
       return caption.trim();
+    }
+    const interactiveSelection = [
+      candidate.buttonsResponseMessage?.selectedDisplayText,
+      candidate.buttonsResponseMessage?.selectedButtonId,
+      candidate.listResponseMessage?.title,
+      candidate.listResponseMessage?.singleSelectReply?.selectedRowId,
+      candidate.templateButtonReplyMessage?.selectedDisplayText,
+      candidate.templateButtonReplyMessage?.selectedId,
+      candidate.interactiveResponseMessage?.body?.text,
+      extractNativeFlowResponseText(candidate.interactiveResponseMessage),
+    ].find((value) => Boolean(value?.trim()));
+    if (interactiveSelection) {
+      return interactiveSelection.trim();
     }
   }
   const contactPlaceholder =
@@ -336,8 +369,21 @@ export function describeReplyContext(
   }
   const contextInfo = extractContextInfo(message);
   const quoted = normalizeMessageContent(contextInfo?.quotedMessage as proto.IMessage | undefined);
-  if (!quoted) {
+  if (!quoted && !contextInfo?.stanzaId) {
     return null;
+  }
+  const senderJid = contextInfo?.participant ?? undefined;
+  const sender = resolveComparableIdentity({
+    jid: senderJid,
+    label: senderJid ? (jidToE164(senderJid) ?? senderJid) : "unknown sender",
+  });
+  if (!quoted) {
+    // Baileys may preserve a real reply ID while omitting its private quoted payload.
+    return {
+      id: contextInfo?.stanzaId || undefined,
+      body: "[quoted message unavailable]",
+      sender,
+    };
   }
   const location = extractLocationData(quoted);
   const locationText = location ? formatLocationText(location) : undefined;
@@ -354,11 +400,6 @@ export function describeReplyContext(
     );
     return null;
   }
-  const senderJid = contextInfo?.participant ?? undefined;
-  const sender = resolveComparableIdentity({
-    jid: senderJid,
-    label: senderJid ? (jidToE164(senderJid) ?? senderJid) : "unknown sender",
-  });
   return {
     id: contextInfo?.stanzaId || undefined,
     body: body ?? "",

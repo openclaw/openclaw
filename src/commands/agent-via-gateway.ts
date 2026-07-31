@@ -91,6 +91,7 @@ type AgentDispatchOpts = Omit<AgentCliOpts, "messageFile"> & {
 
 type AgentCliSignal = "SIGINT" | "SIGTERM";
 type AgentCliProcessLike = {
+  exitCode?: NodeJS.Process["exitCode"];
   on(signal: AgentCliSignal, handler: () => void): unknown;
   off(signal: AgentCliSignal, handler: () => void): unknown;
 };
@@ -136,7 +137,6 @@ function resolveGatewayAbortRetryDelaysMs(): readonly number[] {
   return gatewayAbortRetryDelaysMsForTests ?? GATEWAY_ABORT_RETRY_DELAYS_MS;
 }
 
-const loadEmbeddedAgentCommand = embeddedAgentCommandLoader.load;
 const loadAgentSessionModule = agentSessionModuleCache.load;
 
 async function loadRuntimeConfig(): Promise<OpenClawConfig> {
@@ -273,17 +273,6 @@ function resolveGatewayAgentTimeoutMs(timeoutSeconds: number): number {
   return resolveTimerTimeoutMs((timeoutSeconds + 30) * 1000, 10_000, 10_000);
 }
 
-async function getGatewayDispatchConfig(options?: {
-  skipShellEnvFallback?: boolean;
-}): Promise<OpenClawConfig> {
-  // Scoped gateway turns need core agent/session/gateway fields only. The
-  // running gateway owns plugin validation and plugin metadata freshness.
-  if (options?.skipShellEnvFallback === false) {
-    return await readGatewayDispatchConfigWithShellEnvFallback();
-  }
-  return readGatewayDispatchConfig();
-}
-
 async function formatPayloadForLog(payload: {
   text?: string;
   mediaUrls?: string[];
@@ -305,13 +294,6 @@ async function formatPayloadForLog(payload: {
   return lines.join("\n").trimEnd();
 }
 
-function isGatewayAgentTimeoutError(err: unknown): boolean {
-  if (isGatewayTransportError(err)) {
-    return err.kind === "timeout";
-  }
-  return err instanceof Error && err.message.includes("gateway request timeout for agent");
-}
-
 function isCompactControlCommand(message: string): boolean {
   return /^\/compact(?:\s|:|$)/iu.test(message.trim());
 }
@@ -331,10 +313,12 @@ function shouldRetryGatewayDispatchWithShellEnvFallback(err: unknown): boolean {
 function resolveGatewayAgentFailureHint(
   err: unknown,
 ): "timed out" | "connection closed" | undefined {
-  if (isGatewayAgentTimeoutError(err)) {
-    return "timed out";
+  if (!isGatewayTransportError(err)) {
+    return undefined;
   }
-  return isGatewayTransportError(err) && err.kind === "closed" ? "connection closed" : undefined;
+  // callGateway's wrapper timer gives this CLI path typed transport errors.
+  // Legacy request-timeout strings belong to lower-level and in-process callers.
+  return err.kind === "timeout" ? "timed out" : "connection closed";
 }
 
 function isTransientGatewayAgentConnectClose(err: unknown): boolean {
@@ -394,7 +378,7 @@ async function normalizeSessionKeyOptsForDispatch(
     isLegacySessionKey && (agentIdRaw || shouldScopeDefaultAgentKey)
       ? opts.local === true
         ? await loadRuntimeConfig()
-        : await getGatewayDispatchConfig()
+        : readGatewayDispatchConfig()
       : undefined;
   const sessionKey = scopeLegacySessionKeyToAgent({
     agentId: agentIdRaw ?? (shouldScopeDefaultAgentKey ? resolveDefaultAgentId(cfg!) : undefined),
@@ -458,6 +442,9 @@ function createAgentCliSignalBridge(processLike: AgentCliProcessLike = process) 
   return {
     signal: controller.signal,
     getReceivedSignal: () => receivedSignal,
+    setExitCode: (code: number) => {
+      processLike.exitCode = code;
+    },
     dispose: detachHandlers,
   };
 }
@@ -652,6 +639,20 @@ function isInFlightGatewayAgentResponse(response: GatewayAgentResponse): boolean
   return response.status === "in_flight";
 }
 
+function markFailedGatewayAgentResponse(
+  response: GatewayAgentResponse,
+  signalBridge: ReturnType<typeof createAgentCliSignalBridge>,
+): void {
+  if (
+    response.status === "timeout" ||
+    response.status === "error" ||
+    response.status === "cancelled"
+  ) {
+    // Let Node drain structured or text stdout before the process exits.
+    signalBridge.setExitCode(1);
+  }
+}
+
 function formatInFlightGatewayAgentMessage(response: GatewayAgentResponse): string {
   return response.runId
     ? `Agent run ${response.runId} is already in flight; not starting a duplicate run.`
@@ -663,19 +664,17 @@ async function agentViaGatewayCommand(
   runtime: RuntimeEnv,
   signalBridge: ReturnType<typeof createAgentCliSignalBridge>,
 ) {
-  protectJsonStdout(opts);
   const body = opts.message;
   const explicitSessionKey = opts.sessionKey?.trim();
-  if (!body.trim()) {
-    throw missingAgentMessageError();
-  }
   if (!opts.to && !opts.sessionId && !opts.agent && !explicitSessionKey) {
     throw new Error(
       `No target session selected. Use --agent <id>, --session-key <key>, --session-id <id>, or --to <E.164>. Run ${formatCliCommand("openclaw agents list")} to see agents.`,
     );
   }
 
-  let cfg = await getGatewayDispatchConfig();
+  // Scoped gateway turns need core agent/session/gateway fields only. The
+  // running gateway owns plugin validation and plugin metadata freshness.
+  let cfg: OpenClawConfig = readGatewayDispatchConfig();
   const agentIdRaw = opts.agent?.trim();
   const agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : undefined;
   if (agentId) {
@@ -806,7 +805,7 @@ async function agentViaGatewayCommand(
         shouldRetryGatewayDispatchWithShellEnvFallback(err) &&
         consumeShellEnvFallbackRetry()
       ) {
-        cfg = await getGatewayDispatchConfig({ skipShellEnvFallback: false });
+        cfg = await readGatewayDispatchConfigWithShellEnvFallback();
         continue;
       }
       if (
@@ -832,6 +831,7 @@ async function agentViaGatewayCommand(
 
   if (opts.json) {
     writeRuntimeJson(runtime, buildGatewayJsonResponse(response));
+    markFailedGatewayAgentResponse(response, signalBridge);
     return response;
   }
 
@@ -847,6 +847,7 @@ async function agentViaGatewayCommand(
     if (response?.status !== "ok") {
       runtime.log(response?.summary ? response.summary : "No reply from agent.");
     }
+    markFailedGatewayAgentResponse(response, signalBridge);
     return response;
   }
 
@@ -856,6 +857,8 @@ async function agentViaGatewayCommand(
       runtime.log(out);
     }
   }
+
+  markFailedGatewayAgentResponse(response, signalBridge);
 
   return response;
 }
@@ -914,7 +917,7 @@ export async function agentCliCommand(
   const signalBridge = createAgentCliSignalBridge(resolveAgentCliProcessLike(deps));
   try {
     if (dispatchOpts.local === true) {
-      const agentCommand = await loadEmbeddedAgentCommand();
+      const agentCommand = await embeddedAgentCommandLoader.load();
       const result = await agentCommand(
         {
           ...gatewayDispatchOpts,
