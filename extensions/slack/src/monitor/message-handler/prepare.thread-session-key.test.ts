@@ -365,18 +365,19 @@ describe("thread-level session keys", () => {
     expect(routing.threadContext.replyToId).toBeUndefined();
   });
 
-  it("does not seed top-level group DM mentions into thread sessions", () => {
+  it("keeps a group DM thread root and its replies in the same session", () => {
     const ctx = buildCtx({ replyToMode: "all" });
     const account = buildAccount("all");
+    const rootTs = "1777244692.409919";
 
-    const routing = resolveSlackRoutingContext({
+    const root = resolveSlackRoutingContext({
       ctx,
       account,
       message: buildChannelMessage({
         channel: "G123",
         channel_type: "mpim",
         text: "<@B1> send a subagent",
-        ts: "1777244692.409919",
+        ts: rootTs,
       }),
       isDirectMessage: false,
       isGroupDm: true,
@@ -384,9 +385,29 @@ describe("thread-level session keys", () => {
       isRoomish: true,
       seedTopLevelRoomThread: true,
     });
+    const followUp = resolveSlackRoutingContext({
+      ctx,
+      account,
+      message: buildChannelMessage({
+        channel: "G123",
+        channel_type: "mpim",
+        user: "U2",
+        text: "what did you just do?",
+        ts: "1777244714.000100",
+        thread_ts: rootTs,
+        parent_user_id: "U1",
+      }),
+      isDirectMessage: false,
+      isGroupDm: true,
+      isRoom: false,
+      isRoomish: true,
+    });
 
-    expect(routing.sessionKey).toBe("agent:main:slack:group:g123");
-    expect(routing.sessionKey).not.toContain(":thread:");
+    const expectedSessionKey = `agent:main:slack:group:g123:thread:${rootTs}`;
+    expect(root.sessionKey).toBe(expectedSessionKey);
+    expect(followUp.sessionKey).toBe(expectedSessionKey);
+    expect(root.historyKey).toBe("G123");
+    expect(followUp.historyKey).toBe(expectedSessionKey);
   });
 
   it("routes a seeded thread root and replies with the same Slack thread_ts to one parent session", () => {

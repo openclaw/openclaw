@@ -2395,6 +2395,40 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(prepared.ctxPayload.From).toBe("slack:group:G123");
   });
 
+  it("keeps an unmentioned MPIM thread root and reply in the same session", async () => {
+    const ctx = createReplyToAllSlackCtx();
+    const account = createSlackAccount({ replyToMode: "all" });
+    const rootTs = "1.000";
+    const root = await prepareMessageWith(
+      ctx,
+      account,
+      createSlackMessage({
+        channel: "G123",
+        channel_type: "mpim",
+        text: "what day is it?",
+        ts: rootTs,
+      }),
+    );
+    recordSlackThreadParticipation("default", "G123", rootTs);
+    const followUp = await prepareMessageWith(
+      ctx,
+      account,
+      createSlackMessage({
+        channel: "G123",
+        channel_type: "mpim",
+        text: "and the time?",
+        ts: "2.000",
+        thread_ts: rootTs,
+        parent_user_id: "U1",
+      }),
+    );
+
+    assertPrepared(root);
+    assertPrepared(followUp);
+    expect(root.ctxPayload.SessionKey).toBe(`agent:main:slack:group:g123:thread:${rootTs}`);
+    expect(followUp.ctxPayload.SessionKey).toBe(root.ctxPayload.SessionKey);
+  });
+
   it("blocks MPIM messages from senders outside the configured allowFrom", async () => {
     const ctx = createReplyToAllSlackCtx();
     ctx.allowFrom = ["U_OWNER"];
@@ -2464,7 +2498,12 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     assertPrepared(typelessPrepared);
     expect(typelessPrepared.ctxPayload.ChatType).toBe("group");
     expect(typelessPrepared.ctxPayload.From).toBe("slack:group:C0MPDM42");
-    expect(typelessPrepared.ctxPayload.SessionKey).toBe(humanPrepared.ctxPayload.SessionKey);
+    expect(humanPrepared.ctxPayload.SessionKey).toBe(
+      "agent:main:slack:group:c0mpdm42:thread:1.000",
+    );
+    expect(typelessPrepared.ctxPayload.SessionKey).toBe(
+      "agent:main:slack:group:c0mpdm42:thread:2.000",
+    );
     expect(conversationsInfo).toHaveBeenCalledTimes(2);
   });
 

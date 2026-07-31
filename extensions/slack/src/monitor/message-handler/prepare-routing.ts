@@ -232,7 +232,7 @@ export function resolveSlackRoutingContext(params: {
   const seedCandidateThreadId = threadContext.incomingThreadTs ?? threadContext.messageTs;
   const seededRoomThreadId =
     !isThreadReply &&
-    isRoom &&
+    isRoomish &&
     seedTopLevelRoomThread &&
     replyToMode !== "off" &&
     seedCandidateThreadId

@@ -853,7 +853,7 @@ export async function prepareSlackMessage(params: {
   const channelReplyToMode =
     channelConfig?.replyToMode ?? resolveSlackReplyToMode(account, channelChatType);
   const willImplicitlyThreadReply =
-    isRoom && !channelRequireMention && channelReplyToMode !== "off";
+    isRoomish && (isGroupDm || !channelRequireMention) && channelReplyToMode !== "off";
   const seedTopLevelRoomThreadBySource =
     opts.source === "app_mention" ||
     opts.wasMentioned === true ||
