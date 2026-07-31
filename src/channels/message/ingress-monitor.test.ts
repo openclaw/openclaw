@@ -2,9 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { sleep } from "../../utils/sleep.js";
+import { createChannelIngressError } from "./ingress-errors.js";
 import {
   CHANNEL_INGRESS_RETENTION_DEFAULTS,
-  createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressMonitorLifecycle,
