@@ -10,6 +10,7 @@ import {
   installCompletion,
   isCompletionInstalled,
   resolveCompletionCachePath,
+  resolveCompletionProfileHint,
   resolveCompletionProfilePath,
   resolveShellFromEnv,
   usesSlowDynamicCompletion,
@@ -40,21 +41,11 @@ function findProfileWriteError(err: unknown): NodeJS.ErrnoException | undefined 
   return err instanceof Error ? findProfileWriteError(err.cause) : undefined;
 }
 
-function resolveCompletionReloadPath(shell: CompletionShell): string {
-  if (shell === "powershell") {
-    return resolveCompletionProfilePath("powershell");
-  }
-  if (shell === "bash") {
-    return `~/${path.basename(resolveCompletionProfilePath("bash"))}`;
-  }
-  return `~/.${shell === "zsh" ? "zshrc" : "config/fish/config.fish"}`;
-}
-
 function formatCompletionReloadNote(
   shell: CompletionShell,
   action: "installed" | "upgraded",
 ): string {
-  const profilePath = resolveCompletionReloadPath(shell);
+  const profilePath = resolveCompletionProfileHint(shell);
   return `Shell completion ${action}. Restart your shell or run: ${formatCompletionReloadCommand(shell, profilePath)}`;
 }
 

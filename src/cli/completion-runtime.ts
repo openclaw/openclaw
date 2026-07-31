@@ -1,4 +1,5 @@
 // Shell completion runtime: cache paths, profile installation, and shell detection.
+import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -85,14 +86,28 @@ function escapePowerShellSingleQuotedString(value: string): string {
   return value.replace(/'/g, "''");
 }
 
+function escapeDoubleQuotedShellString(shell: CompletionShell, value: string): string {
+  // Backticks substitute commands in POSIX shells but are literal inside Fish double quotes.
+  return value.replace(shell === "fish" ? /[\\$"]/g : /[\\$"`]/g, "\\$&");
+}
+
+function quoteCompletionShellPath(shell: CompletionShell, value: string): string {
+  if (shell !== "fish" && value.includes("!")) {
+    // Interactive Bash and Zsh expand history even inside double quotes.
+    return `'${value.replace(/'/g, "'\\''")}'`;
+  }
+  return `"${escapeDoubleQuotedShellString(shell, value)}"`;
+}
+
 function formatCompletionSourceLine(shell: CompletionShell, cachePath: string): string {
   if (shell === "powershell") {
     return `. '${escapePowerShellSingleQuotedString(cachePath)}'`;
   }
+  const quotedCachePath = quoteCompletionShellPath(shell, cachePath);
   if (shell === "fish") {
-    return `test -f "${cachePath}"; and source "${cachePath}"`;
+    return `test -f ${quotedCachePath}; and source ${quotedCachePath}`;
   }
-  return `[ -f "${cachePath}" ] && source "${cachePath}"`;
+  return `[ -f ${quotedCachePath} ] && source ${quotedCachePath}`;
 }
 
 /** Formats the command users can run to reload the shell profile after installation. */
@@ -100,7 +115,16 @@ export function formatCompletionReloadCommand(shell: CompletionShell, profilePat
   if (shell === "powershell") {
     return `. '${escapePowerShellSingleQuotedString(profilePath)}'`;
   }
-  return `source ${profilePath}`;
+  if (/^[A-Za-z0-9_./~+-]+$/.test(profilePath)) {
+    return `source ${profilePath}`;
+  }
+  if (profilePath.startsWith("~/")) {
+    if (shell !== "fish" && profilePath.includes("!")) {
+      return `source "$HOME"/${quoteCompletionShellPath(shell, profilePath.slice(2))}`;
+    }
+    return `source "$HOME/${escapeDoubleQuotedShellString(shell, profilePath.slice(2))}"`;
+  }
+  return `source ${quoteCompletionShellPath(shell, profilePath)}`;
 }
 
 function isCompletionProfileHeader(line: string): boolean {
@@ -253,29 +277,105 @@ function updateCompletionProfile(
   return { next, changed: next !== content, hadExisting };
 }
 
+type CompletionProfileOptions = {
+  env?: NodeJS.ProcessEnv;
+  homeDir?: () => string;
+  platform?: NodeJS.Platform;
+};
+
+function appendCompletionProfilePath(
+  directory: string,
+  segments: readonly string[],
+  pathApi: typeof path.posix,
+): string {
+  const nativeDirectory = pathApi.sep === "\\" ? directory.replace(/\//g, pathApi.sep) : directory;
+  const separator = nativeDirectory.endsWith(pathApi.sep) ? "" : pathApi.sep;
+  // Shell startup resolves symlinks before `..`; path.join would silently change that target.
+  return `${nativeDirectory}${separator}${segments.join(pathApi.sep)}`;
+}
+
+function resolveZshProfileDirectory(
+  env: NodeJS.ProcessEnv,
+  home: string,
+  pathApi: typeof path.posix,
+): string {
+  const initialDirectory = Object.hasOwn(env, "ZDOTDIR") ? env.ZDOTDIR : undefined;
+  const fallbackDirectory =
+    initialDirectory === undefined
+      ? home
+      : initialDirectory === ""
+        ? pathApi.parse(home).root || pathApi.sep
+        : initialDirectory;
+  const shellPath = normalizeOptionalString(env.SHELL);
+  const zsh = shellPath && resolveShellBasename(shellPath) === "zsh" ? shellPath : "zsh";
+  // Source interactive .zshenv directly so profile discovery never runs the user's .zshrc.
+  const startupProbe = [
+    "setopt rcs",
+    '__openclaw_zdotdir="${ZDOTDIR-${HOME}}"',
+    'if [[ -r "${__openclaw_zdotdir}/.zshenv" ]]; then source "${__openclaw_zdotdir}/.zshenv"; fi',
+    'builtin printf "\\0%s\\0%s\\0" "${ZDOTDIR-${HOME}}" "$PWD"',
+  ].join("; ");
+  const result = spawnSync(zsh, ["-f", "-i", "-c", startupProbe], {
+    encoding: "utf8",
+    env: { ...env, HOME: home },
+    killSignal: "SIGKILL",
+    maxBuffer: 64 * 1024,
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 1_000,
+    windowsHide: true,
+  });
+  if (result.status !== 0 || typeof result.stdout !== "string") {
+    return fallbackDirectory;
+  }
+
+  const end = result.stdout.lastIndexOf("\0");
+  const workingDirectoryStart = result.stdout.lastIndexOf("\0", end - 1);
+  const effectiveDirectoryStart = result.stdout.lastIndexOf("\0", workingDirectoryStart - 1);
+  if (end < 0 || workingDirectoryStart < 0 || effectiveDirectoryStart < 0) {
+    return fallbackDirectory;
+  }
+  const effectiveDirectory = result.stdout.slice(
+    effectiveDirectoryStart + 1,
+    workingDirectoryStart,
+  );
+  if (effectiveDirectory === "") {
+    return pathApi.parse(home).root || pathApi.sep;
+  }
+  if (pathApi.isAbsolute(effectiveDirectory)) {
+    return effectiveDirectory;
+  }
+  const workingDirectory = result.stdout.slice(workingDirectoryStart + 1, end);
+  return workingDirectory
+    ? appendCompletionProfilePath(workingDirectory, [effectiveDirectory], pathApi)
+    : fallbackDirectory;
+}
+
 /** Resolves the shell startup profile path that should contain the OpenClaw completion block. */
 export function resolveCompletionProfilePath(
   shell: CompletionShell,
-  options: {
-    env?: NodeJS.ProcessEnv;
-    homeDir?: () => string;
-    platform?: NodeJS.Platform;
-  } = {},
+  options: CompletionProfileOptions = {},
 ): string {
   const env = options.env ?? process.env;
   const homeDir = options.homeDir ?? os.homedir;
   const platform = options.platform ?? process.platform;
+  const pathApi = platform === "win32" ? path.win32 : path.posix;
   const home = env.HOME || homeDir();
   if (shell === "zsh") {
-    return path.join(home, ".zshrc");
+    return appendCompletionProfilePath(
+      resolveZshProfileDirectory(env, home, pathApi),
+      [".zshrc"],
+      pathApi,
+    );
   }
   if (shell === "bash") {
     // Installation, status, and repairs must inspect the same real Bash profile.
-    const bashrc = path.join(home, ".bashrc");
-    return existsSync(bashrc) ? bashrc : path.join(home, ".bash_profile");
+    const bashrc = pathApi.join(home, ".bashrc");
+    return existsSync(bashrc) ? bashrc : pathApi.join(home, ".bash_profile");
   }
   if (shell === "fish") {
-    return path.join(home, ".config", "fish", "config.fish");
+    // Fish treats every nonempty XDG root literally, including whitespace and relative paths.
+    const configHome = env.XDG_CONFIG_HOME || pathApi.join(home, ".config");
+    return appendCompletionProfilePath(configHome, ["fish", "config.fish"], pathApi);
   }
   if (platform === "win32") {
     const shellPath = normalizeOptionalString(env.SHELL) ?? "";
@@ -288,7 +388,40 @@ export function resolveCompletionProfilePath(
       "Microsoft.PowerShell_profile.ps1",
     );
   }
-  return path.join(home, ".config", "powershell", "Microsoft.PowerShell_profile.ps1");
+  return pathApi.join(home, ".config", "powershell", "Microsoft.PowerShell_profile.ps1");
+}
+
+/** Formats the actual startup profile relative to HOME without misrepresenting external roots. */
+export function resolveCompletionProfileHint(
+  shell: CompletionShell,
+  options: CompletionProfileOptions = {},
+): string {
+  const profilePath = resolveCompletionProfilePath(shell, options);
+  if (shell === "powershell") {
+    return profilePath;
+  }
+
+  const env = options.env ?? process.env;
+  const platform = options.platform ?? process.platform;
+  const pathApi = platform === "win32" ? path.win32 : path.posix;
+  const home = env.HOME || (options.homeDir ?? os.homedir)();
+  if (!pathApi.isAbsolute(profilePath)) {
+    const relativeProfilePath = profilePath.split(pathApi.sep).join("/");
+    // Relative roots can start with tilde, options, or signs; make their filesystem meaning explicit.
+    return relativeProfilePath.startsWith("./") || relativeProfilePath.startsWith("../")
+      ? relativeProfilePath
+      : `./${relativeProfilePath}`;
+  }
+  const normalizedProfilePath = profilePath.split(pathApi.sep).join("/");
+  const normalizedHome = home.split(pathApi.sep).join("/");
+  const homePrefix = normalizedHome.endsWith("/") ? normalizedHome : `${normalizedHome}/`;
+  const comparableProfile =
+    platform === "win32" ? normalizedProfilePath.toLowerCase() : normalizedProfilePath;
+  const comparableHome = platform === "win32" ? homePrefix.toLowerCase() : homePrefix;
+  // Prefix matching keeps symlink-sensitive `..` in the executable startup hint.
+  return comparableProfile.startsWith(comparableHome)
+    ? `~/${normalizedProfilePath.slice(homePrefix.length)}`
+    : normalizedProfilePath;
 }
 
 /** Returns whether a shell profile already contains an OpenClaw completion block or source line. */

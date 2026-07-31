@@ -19,6 +19,8 @@ const originalEnv = captureEnv([
   "HOME",
   "OPENCLAW_STATE_DIR",
   "SHELL",
+  "ZDOTDIR",
+  "XDG_CONFIG_HOME",
   COMPLETION_SKIP_PLUGIN_COMMANDS_ENV,
 ]);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -40,6 +42,48 @@ function status(overrides: Partial<ShellCompletionStatus> = {}): ShellCompletion
 }
 
 describe("shell completion health mapping", () => {
+  it.each([
+    {
+      shell: "zsh" as const,
+      envName: "ZDOTDIR" as const,
+      profileSegments: [".zshrc"],
+    },
+    {
+      shell: "fish" as const,
+      envName: "XDG_CONFIG_HOME" as const,
+      profileSegments: ["fish", "config.fish"],
+    },
+  ])("recognizes cached $shell completion in its configured startup profile", async (testCase) => {
+    const homeDir = tempDirs.make(`openclaw-${testCase.shell}-doctor-home-`);
+    const stateDir = tempDirs.make(`openclaw-${testCase.shell}-doctor-state-`);
+    const configuredRoot = path.join(homeDir, "configured startup");
+    const profilePath = path.join(configuredRoot, ...testCase.profileSegments);
+    const cachePath = path.join(stateDir, "completions", `openclaw.${testCase.shell}`);
+    setTestEnvValue("HOME", homeDir);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    setTestEnvValue("SHELL", `/bin/${testCase.shell}`);
+    setTestEnvValue(testCase.envName, configuredRoot);
+
+    await fs.mkdir(path.dirname(profilePath), { recursive: true });
+    await fs.mkdir(path.dirname(cachePath), { recursive: true });
+    await fs.writeFile(cachePath, "# completion cache\n", "utf-8");
+    await fs.writeFile(
+      profilePath,
+      `# OpenClaw Completion\n# cached completion: ${cachePath}\n`,
+      "utf-8",
+    );
+
+    await expect(
+      checkShellCompletionStatus("openclaw", { shell: testCase.shell }),
+    ).resolves.toEqual({
+      shell: testCase.shell,
+      profileInstalled: true,
+      cacheExists: true,
+      cachePath,
+      usesSlowPattern: false,
+    });
+  });
+
   it("recognizes cached Bash completion from the documented login profile", async () => {
     const homeDir = tempDirs.make("openclaw-bash-profile-home-");
     const stateDir = tempDirs.make("openclaw-bash-profile-state-");
@@ -256,6 +300,38 @@ describe("doctorShellCompletion", () => {
     expect(installCompletionMock).toHaveBeenCalledWith("bash", true, "openclaw");
     expect(noteSpy).toHaveBeenCalledWith(
       expect.stringContaining("source ~/.bash_profile"),
+      "Shell completion",
+    );
+  });
+
+  it.each([
+    {
+      shell: "zsh" as const,
+      envName: "ZDOTDIR" as const,
+      profileSegments: [".zshrc"],
+    },
+    {
+      shell: "fish" as const,
+      envName: "XDG_CONFIG_HOME" as const,
+      profileSegments: ["fish", "config.fish"],
+    },
+  ])("shows the configured $shell startup profile after doctor repair", async (testCase) => {
+    const homeDir = tempDirs.make(`openclaw-${testCase.shell}-doctor-reload-home-`);
+    const stateDir = tempDirs.make(`openclaw-${testCase.shell}-doctor-reload-state-`);
+    const configuredRoot = path.join(homeDir, "configured startup");
+    const relativeProfile = path.join("configured startup", ...testCase.profileSegments);
+    setTestEnvValue("HOME", homeDir);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    setTestEnvValue("SHELL", `/bin/${testCase.shell}`);
+    setTestEnvValue(testCase.envName, configuredRoot);
+    installCompletionMock.mockResolvedValue(undefined);
+    const noteSpy = vi.spyOn(noteModule, "note");
+
+    await doctorShellCompletion({} as never, mockPrompter());
+
+    expect(installCompletionMock).toHaveBeenCalledWith(testCase.shell, true, "openclaw");
+    expect(noteSpy).toHaveBeenCalledWith(
+      expect.stringContaining(`source "$HOME/${relativeProfile}"`),
       "Shell completion",
     );
   });

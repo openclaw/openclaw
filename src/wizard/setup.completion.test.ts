@@ -2,6 +2,7 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resolveCompletionProfilePath } from "../cli/completion-runtime.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { setupWizardShellCompletion } from "./setup.completion.js";
 
 async function withLocale(locale: string, run: () => Promise<void>): Promise<void> {
@@ -125,6 +126,47 @@ describe("setupWizardShellCompletion", () => {
       );
       expect(prompter.note).toHaveBeenCalledWith(
         "Shell completion 已安装。重启 shell 或运行：source ~/.zshrc",
+        "Shell completion",
+      );
+    });
+  });
+
+  it.each([
+    {
+      shell: "zsh" as const,
+      env: { ZDOTDIR: "/Users/ada/.config/zsh", XDG_CONFIG_HOME: undefined },
+      profileHint: "~/.config/zsh/.zshrc",
+    },
+    {
+      shell: "fish" as const,
+      env: { ZDOTDIR: undefined, XDG_CONFIG_HOME: "/Users/ada/custom-xdg" },
+      profileHint: "~/custom-xdg/fish/config.fish",
+    },
+    {
+      shell: "zsh" as const,
+      env: { ZDOTDIR: "/Users/ada/.config/zsh dotfiles", XDG_CONFIG_HOME: undefined },
+      profileHint: '"$HOME/.config/zsh dotfiles/.zshrc"',
+    },
+    {
+      shell: "fish" as const,
+      env: { ZDOTDIR: undefined, XDG_CONFIG_HOME: "/Users/ada/custom xdg" },
+      profileHint: '"$HOME/custom xdg/fish/config.fish"',
+    },
+    {
+      shell: "zsh" as const,
+      env: { ZDOTDIR: "/tmp/configured zsh", XDG_CONFIG_HOME: undefined },
+      profileHint: '"/tmp/configured zsh/.zshrc"',
+    },
+  ])("shows the real configured $shell startup profile after onboarding", async (testCase) => {
+    await withEnvAsync({ HOME: "/Users/ada", ...testCase.env }, async () => {
+      const prompter = createPrompter();
+      const deps = createDeps(testCase.shell);
+
+      await setupWizardShellCompletion({ flow: "quickstart", prompter, deps });
+
+      expect(deps.installCompletion).toHaveBeenCalledWith(testCase.shell, true, "openclaw");
+      expect(prompter.note).toHaveBeenCalledWith(
+        `Shell completion installed. Restart your shell or run: source ${testCase.profileHint}`,
         "Shell completion",
       );
     });
