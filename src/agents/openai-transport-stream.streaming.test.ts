@@ -273,6 +273,100 @@ describe("openai transport stream", () => {
     }
   });
 
+  it.each([
+    {
+      name: "premature EOF",
+      finishReason: null,
+      includeDone: false,
+      expectedTerminal: "error",
+    },
+    {
+      name: "finish_reason",
+      finishReason: "stop",
+      includeDone: false,
+      expectedTerminal: "done",
+    },
+    {
+      name: "exact [DONE]",
+      finishReason: null,
+      includeDone: true,
+      expectedTerminal: "done",
+    },
+  ] as const)(
+    "requires managed Chat terminal evidence over loopback SSE: $name",
+    async ({ finishReason, includeDone, expectedTerminal }) => {
+      const server = createServer((request, response) => {
+        request.resume();
+        request.on("end", () => {
+          response.writeHead(200, {
+            "content-type": "text/event-stream; charset=utf-8",
+            "cache-control": "no-cache",
+            connection: "keep-alive",
+          });
+          response.write(
+            `data: ${JSON.stringify(
+              makeCompletionsChunk({ content: "partial" }, finishReason),
+            )}\n\n`,
+          );
+          if (includeDone) {
+            response.write("data: [DONE]\n\n");
+          }
+          response.end();
+        });
+      });
+
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      try {
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          throw new Error("Missing loopback server address");
+        }
+        const model = makeCompletionsModel({
+          provider: "loopback",
+          baseUrl: `http://127.0.0.1:${address.port}/v1`,
+          reasoning: false,
+        });
+        const stream = await createOpenAICompletionsTransportStreamFn()(
+          model,
+          {
+            messages: [{ role: "user", content: "Reply partially", timestamp: Date.now() }],
+            tools: [],
+          },
+          { apiKey: "test-key", maxRetries: 0 },
+        );
+
+        const terminalEvents: Array<{
+          type: string;
+          error?: { errorMessage?: string; content?: Array<{ type?: string; text?: string }> };
+          message?: { content?: Array<{ type?: string; text?: string }> };
+        }> = [];
+        for await (const event of stream) {
+          if (event.type === "done" || event.type === "error") {
+            terminalEvents.push(event);
+          }
+        }
+
+        expect(terminalEvents).toHaveLength(1);
+        expect(terminalEvents[0]?.type).toBe(expectedTerminal);
+        const terminal = terminalEvents[0];
+        const content = terminal?.message?.content ?? terminal?.error?.content ?? [];
+        expect(content).toContainEqual({ type: "text", text: "partial" });
+        if (expectedTerminal === "error") {
+          expect(terminal?.error?.errorMessage).toContain(
+            "Provider stream ended without finish_reason or [DONE]",
+          );
+        }
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    },
+    COLD_RUNNER_HTTP_TEST_TIMEOUT_MS,
+  );
+
   it.each(["reasoning_content", "reasoning"] as const)(
     "keeps hidden local %s streams alive beyond the model idle timeout",
     async (reasoningField) => {

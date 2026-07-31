@@ -412,7 +412,7 @@ describe("openai transport stream", () => {
     expect(detector.sawDone()).toBe(expected);
   });
 
-  it("does not promote native tool calls when stream ends without [DONE] and without finish_reason", async () => {
+  it("rejects native tool calls when stream ends without [DONE] and without finish_reason", async () => {
     const model = makeCompletionsModel({
       id: "qwen3.6-27b",
       name: "Qwen 3.6 27B",
@@ -443,15 +443,36 @@ describe("openai transport stream", () => {
       }
     }
 
-    // sawStreamDONE defaults to false — connection drop without [DONE]
-    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+    await expect(
+      testing.processOpenAICompletionsStream(mockStream(), output, model, stream, {
+        sawStreamDONE: () => false,
+      }),
+    ).rejects.toThrow("Provider stream ended without finish_reason or [DONE]");
 
-    // EOF without [DONE] and without finish_reason → fail-closed
+    // The partial tool call is removed before the transport reports the dropped stream.
     expect(output.stopReason).toBe("stop");
     expect(
       output.content.filter((block) => (block as { type?: string }).type === "toolCall"),
     ).toStrictEqual([]);
   });
+
+  it.each(["stop", "length", "tool_calls"] as const)(
+    "accepts finish_reason %s without [DONE]",
+    async (finishReason) => {
+      const model = makeCompletionsModel({ reasoning: false });
+      const output = createAssistantOutput(model);
+
+      await expect(
+        testing.processOpenAICompletionsStream(
+          streamChunks([makeCompletionsChunk({ content: "complete" }, finishReason)]),
+          output,
+          model,
+          { push() {} },
+          { sawStreamDONE: () => false },
+        ),
+      ).resolves.toBeUndefined();
+    },
+  );
 
   it("strips tool calls when stream has visible text and no finish_reason", async () => {
     const model = makeCompletionsModel({
@@ -635,7 +656,7 @@ describe("openai transport stream", () => {
     }
   });
 
-  it("keeps tool calls fail-closed through fetch wrapper when stream ends without [DONE] and without finish_reason", async () => {
+  it("rejects tool calls through the fetch wrapper when the stream has no terminal evidence", async () => {
     const server = createServer((req, res) => {
       let body = "";
       req.setEncoding("utf8");
@@ -695,24 +716,26 @@ describe("openai transport stream", () => {
       );
 
       let doneReason: string | undefined;
-      const doneMessage: { content?: Array<{ type?: string }> } = {};
+      let errorMessage: string | undefined;
+      let terminalContent: Array<{ type?: string }> = [];
       for await (const event of stream as AsyncIterable<{
         type: string;
         reason?: string;
         message?: { content?: Array<{ type?: string }> };
+        error?: { content?: Array<{ type?: string }>; errorMessage?: string };
       }>) {
         if (event.type === "done") {
           doneReason = event.reason;
-          if (event.message) {
-            Object.assign(doneMessage, event.message);
-          }
+        }
+        if (event.type === "error") {
+          errorMessage = event.error?.errorMessage;
+          terminalContent = event.error?.content ?? [];
         }
       }
 
-      // EOF without [DONE] → sawStreamDONE stays false → fail-closed
-      expect(doneReason).toBe("stop");
-      const toolCallBlocks =
-        doneMessage.content?.filter((block) => block.type === "toolCall") ?? [];
+      expect(doneReason).toBeUndefined();
+      expect(errorMessage).toContain("Provider stream ended without finish_reason or [DONE]");
+      const toolCallBlocks = terminalContent.filter((block) => block.type === "toolCall");
       expect(toolCallBlocks).toStrictEqual([]);
     } finally {
       await new Promise<void>((resolve, reject) => {

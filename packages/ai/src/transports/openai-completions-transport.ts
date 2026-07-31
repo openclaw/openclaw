@@ -409,6 +409,7 @@ async function processOpenAICompletionsStream(
   const toolCallBlockBytes = new WeakMap<ToolCallBlock, number>();
   const toolCallBlockIndices = new WeakMap<ToolCallBlock, number>();
   let sawStopFinishReason = false;
+  let sawFinishReason = false;
   let sawNativeToolCallDelta = false;
   const blockIndex = () => output.content.length - 1;
   const measureUtf8Bytes = (text: string) => Buffer.byteLength(text, "utf8");
@@ -658,6 +659,7 @@ async function processOpenAICompletionsStream(
       hasReasoningUsageActivity = hasOpenAICompletionsReasoningUsageActivity(choiceUsage);
     }
     if (choice.finish_reason) {
+      sawFinishReason = true;
       const finishReasonResult = mapOpenAIStopReason(choice.finish_reason, {
         allowSingularToolCall: true,
       });
@@ -807,6 +809,7 @@ async function processOpenAICompletionsStream(
   flushDeepSeekTextFilterAtEnd();
   currentBlock = null;
   flushPendingPostToolCallDeltas();
+  const sawStreamDONE = options?.sawStreamDONE?.() ?? false;
   const hasToolCalls = output.content.some((block) => block.type === "toolCall");
   const hasVisibleText = output.content.some(
     (block) =>
@@ -827,7 +830,7 @@ async function processOpenAICompletionsStream(
     output.stopReason === "stop" &&
     hasToolCalls &&
     !hasVisibleText &&
-    (sawStopFinishReason || (sawNativeToolCallDelta && (options?.sawStreamDONE?.() ?? false)))
+    (sawStopFinishReason || (sawNativeToolCallDelta && sawStreamDONE))
   ) {
     output.stopReason = "toolUse";
   }
@@ -839,6 +842,11 @@ async function processOpenAICompletionsStream(
   }
   if (output.stopReason === "toolUse") {
     tagPendingCommentaryText(output.content);
+  }
+  // The SDK treats raw EOF as normal iterator completion, so production callers
+  // provide the raw SSE observer to distinguish a clean terminal from a dropped stream.
+  if (options?.sawStreamDONE && !sawFinishReason && !sawStreamDONE) {
+    throw new Error("Provider stream ended without finish_reason or [DONE]; retry the request");
   }
 }
 
