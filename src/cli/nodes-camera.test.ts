@@ -117,6 +117,62 @@ describe("nodes camera helpers", () => {
     );
   });
 
+  it.each([
+    {
+      name: "malformed base64",
+      payload: { format: "jpg", base64: "not-base64!", width: 1, height: 1 },
+      expectedError: /invalid base64/i,
+    },
+    {
+      name: "non-HTTPS URL",
+      payload: {
+        format: "jpg",
+        url: "http://198.51.100.42/photo.jpg",
+        width: 1,
+        height: 1,
+      },
+      expectedHost: "198.51.100.42",
+      expectedError: /only https/i,
+    },
+    {
+      name: "malformed base64 with a valid URL",
+      payload: {
+        format: "jpg",
+        url: "https://198.51.100.42/photo.jpg",
+        base64: "not-base64!",
+        width: 1,
+        height: 1,
+      },
+      expectedHost: "198.51.100.42",
+      expectedError: /invalid base64/i,
+    },
+    {
+      name: "different URL host",
+      payload: {
+        format: "jpg",
+        url: "https://198.51.100.43/photo.jpg",
+        width: 1,
+        height: 1,
+      },
+      expectedHost: "198.51.100.42",
+      expectedError: /must match node host/i,
+    },
+    {
+      name: "missing node host for URL",
+      payload: {
+        format: "jpg",
+        url: "https://198.51.100.42/photo.jpg",
+        width: 1,
+        height: 1,
+      },
+      expectedError: /node remoteip/i,
+    },
+  ])("rejects a camera.snap payload with $name before writing", (testCase) => {
+    expect(() =>
+      parseCameraSnapPayload(testCase.payload, { expectedHost: testCase.expectedHost }),
+    ).toThrow(testCase.expectedError);
+  });
+
   it("collapses Linux facing requests into one unknown-position capture", () => {
     expect(resolveCameraSnapTargets({ facing: "both", platform: "linux" })).toEqual([
       { artifactFacing: "unknown" },

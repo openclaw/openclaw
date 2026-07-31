@@ -185,7 +185,9 @@ export function registerNodesCameraCommands(nodes: Command) {
             });
 
             const raw = await callGatewayCli("node.invoke", opts, invokeParams);
-            const payload = parseCameraSnapPayload(getGatewayInvokePayload(raw));
+            const payload = parseCameraSnapPayload(getGatewayInvokePayload(raw), {
+              expectedHost: node.remoteIp,
+            });
             const filePath = cameraTempPath({
               kind: "snap",
               facing: target.artifactFacing,

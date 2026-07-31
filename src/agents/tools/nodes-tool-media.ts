@@ -37,6 +37,7 @@ import {
   readFiniteNumberParam,
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
+  textResult,
 } from "./common.js";
 import type { GatewayCallOptions } from "./gateway.js";
 import { callGatewayTool } from "./gateway.js";
@@ -174,7 +175,7 @@ async function executeCameraSnap({
       },
       idempotencyKey: crypto.randomUUID(),
     });
-    const payload = parseCameraSnapPayload(raw?.payload);
+    const payload = parseCameraSnapPayload(raw?.payload, { expectedHost: resolvedNode.remoteIp });
     const normalizedFormat = normalizeLowercaseStringOrEmpty(payload.format);
     if (normalizedFormat !== "jpg" && normalizedFormat !== "jpeg" && normalizedFormat !== "png") {
       throw new Error(`unsupported camera.snap format: ${payload.format}`);
@@ -198,6 +199,8 @@ async function executeCameraSnap({
         data: payload.base64,
         mimeType: imageMimeFromFormat(payload.format) ?? (isJpeg ? "image/jpeg" : "image/png"),
       });
+    } else {
+      content.push({ type: "text", text: `Camera photo saved to ${filePath}.` });
     }
     details.push({
       facing: target.artifactFacing,
@@ -254,18 +257,23 @@ async function executePhotosLatest({
     },
     idempotencyKey: crypto.randomUUID(),
   });
-  const payload =
-    raw?.payload && typeof raw.payload === "object" && !Array.isArray(raw.payload)
-      ? (raw.payload as Record<string, unknown>)
-      : {};
-  const photos = Array.isArray(payload.photos) ? payload.photos : [];
+  const payload = raw?.payload;
+  if (
+    !payload ||
+    typeof payload !== "object" ||
+    Array.isArray(payload) ||
+    !Array.isArray((payload as Record<string, unknown>).photos)
+  ) {
+    throw new Error("invalid photos.latest payload");
+  }
+  const photos = (payload as { photos: unknown[] }).photos;
+  if (photos.length > limit) {
+    throw new Error(`photos.latest returned ${photos.length} photos; requested at most ${limit}`);
+  }
 
   if (photos.length === 0) {
     return await sanitizeToolResultImages(
-      {
-        content: [],
-        details: [],
-      },
+      textResult("No photos found.", []),
       "nodes:photos_latest",
       imageSanitization,
     );
@@ -274,12 +282,26 @@ async function executePhotosLatest({
   const content: AgentToolResult<unknown>["content"] = [];
   const details: Array<Record<string, unknown>> = [];
 
-  for (const [index, photoRaw] of photos.entries()) {
-    const photo = parseCameraSnapPayload(photoRaw);
+  // Validate the complete bounded batch before writing artifacts so malformed
+  // later entries cannot leave an unreported, partially successful capture.
+  const parsedPhotos = photos.map((photoRaw, index) => {
+    let photo: ReturnType<typeof parseCameraSnapPayload>;
+    try {
+      photo = parseCameraSnapPayload(photoRaw, { expectedHost: resolvedNode.remoteIp });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new Error(`invalid photos.latest payload at photo ${index + 1}: ${reason}`, {
+        cause: error,
+      });
+    }
     const normalizedFormat = normalizeLowercaseStringOrEmpty(photo.format);
     if (normalizedFormat !== "jpg" && normalizedFormat !== "jpeg" && normalizedFormat !== "png") {
       throw new Error(`unsupported photos.latest format: ${photo.format}`);
     }
+    return { photoRaw, photo, normalizedFormat };
+  });
+
+  for (const [index, { photoRaw, photo, normalizedFormat }] of parsedPhotos.entries()) {
     const isJpeg = normalizedFormat === "jpg" || normalizedFormat === "jpeg";
     const filePath = cameraTempPath({
       kind: "snap",
@@ -299,6 +321,8 @@ async function executePhotosLatest({
         data: photo.base64,
         mimeType: imageMimeFromFormat(photo.format) ?? (isJpeg ? "image/jpeg" : "image/png"),
       });
+    } else {
+      content.push({ type: "text", text: `Library photo saved to ${filePath}.` });
     }
 
     const createdAt =
