@@ -292,7 +292,11 @@ export type SessionCapability = {
   /** Loads the gateway-owned group catalog, coalescing successful connection attempts. */
   groupsLoad: () => Promise<void>;
   /** Replaces the group catalog; stale means the initiating connection retired. */
-  groupsPut: (
+  groupsPut: (names: readonly string[]) => Promise<SessionGroupMutationResult>;
+  /** Adds one group to the catalog; stale means the initiating connection retired. */
+  groupsAdd: (name: string) => Promise<SessionGroupMutationResult>;
+  /** Reorders the group catalog; stale means the initiating connection retired. */
+  groupsReorder: (
     names: readonly string[],
     sectionOrder?: readonly string[],
   ) => Promise<SessionGroupMutationResult>;
@@ -1164,6 +1168,9 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
 
   const LEGACY_GROUPS_STORAGE_KEY = "openclaw:sessions:custom-groups";
   const GROUPS_LIST_METHOD = "sessions.groups.list";
+  const GROUPS_PUT_METHOD = "sessions.groups.put";
+  const GROUPS_ADD_METHOD = "sessions.groups.add";
+  const GROUPS_REORDER_METHOD = "sessions.groups.reorder";
   const GROUPS_RETRY_DEFAULT_MS = 500;
   const GROUPS_RETRY_MIN_MS = 100;
   const GROUPS_RETRY_MAX_MS = 30_000;
@@ -1310,19 +1317,13 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     await loadGroups(scope, generation, advertised);
   };
 
-  const groupsPut = async (
-    names: readonly string[],
-    sectionOrder?: readonly string[],
-  ): Promise<SessionGroupMutationResult> => {
+  const groupsPut = async (names: readonly string[]): Promise<SessionGroupMutationResult> => {
     const scope = captureConnection();
     if (!scope) {
       return "stale";
     }
     try {
-      const result = await scope.client.request("sessions.groups.put", {
-        names: [...names],
-        ...(sectionOrder === undefined ? {} : { sectionOrder: [...sectionOrder] }),
-      });
+      const result = await scope.client.request(GROUPS_PUT_METHOD, { names: [...names] });
       if (!isCurrentConnection(scope)) {
         return "stale";
       }
@@ -1331,6 +1332,80 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     } catch (error) {
       return finishGroupMutationFailure(isCurrentConnection(scope), error);
     }
+  };
+
+  type GroupMutationRequest =
+    | {
+        method: typeof GROUPS_ADD_METHOD;
+        params: { name: string };
+        fallbackNames: readonly string[];
+      }
+    | {
+        method: typeof GROUPS_REORDER_METHOD;
+        params: { names: string[]; sectionOrder?: string[] };
+        fallbackNames: readonly string[];
+        sectionOrder?: readonly string[];
+      };
+
+  const requestGroupMutation = async (
+    scope: SessionConnectionScope,
+    request: GroupMutationRequest,
+  ): Promise<SessionGroupMutationResult> => {
+    const advertised = isGatewayMethodAdvertised(gateway.snapshot, request.method);
+    try {
+      if (advertised === true) {
+        const result = await scope.client.request(request.method, request.params);
+        if (!isCurrentConnection(scope)) {
+          return "stale";
+        }
+        publishGroupCatalog(readSessionCustomGroupNames(result), readSidebarSectionOrder(result));
+        return "completed";
+      }
+      // Legacy gateways only expose the full-replacement method.
+      const fallbackParams: { names: string[]; sectionOrder?: string[] } = {
+        names: [...request.fallbackNames],
+      };
+      if (request.method === GROUPS_REORDER_METHOD && request.sectionOrder !== undefined) {
+        fallbackParams.sectionOrder = [...request.sectionOrder];
+      }
+      const result = await scope.client.request(GROUPS_PUT_METHOD, fallbackParams);
+      if (!isCurrentConnection(scope)) {
+        return "stale";
+      }
+      publishGroupCatalog(readSessionCustomGroupNames(result), readSidebarSectionOrder(result));
+      return "completed";
+    } catch (error) {
+      return finishGroupMutationFailure(isCurrentConnection(scope), error);
+    }
+  };
+
+  const groupsAdd = async (name: string): Promise<SessionGroupMutationResult> => {
+    const scope = captureConnection();
+    if (!scope) {
+      return "stale";
+    }
+    return requestGroupMutation(scope, {
+      method: GROUPS_ADD_METHOD,
+      params: { name },
+      // Append locally and send the complete catalog so older servers still work.
+      fallbackNames: [...state.groups, name],
+    });
+  };
+
+  const groupsReorder = async (
+    names: readonly string[],
+    sectionOrder?: readonly string[],
+  ): Promise<SessionGroupMutationResult> => {
+    const scope = captureConnection();
+    if (!scope) {
+      return "stale";
+    }
+    return requestGroupMutation(scope, {
+      method: GROUPS_REORDER_METHOD,
+      params: { names: [...names], sectionOrder: sectionOrder ? [...sectionOrder] : undefined },
+      fallbackNames: names,
+      sectionOrder,
+    });
   };
 
   const groupsRename = async (from: string, to: string): Promise<SessionGroupMutationResult> => {
@@ -2005,6 +2080,8 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     switchBranch,
     groupsLoad,
     groupsPut,
+    groupsAdd,
+    groupsReorder,
     groupsRename,
     groupsDelete,
     subscribeCreated(listener) {

@@ -19,6 +19,34 @@ import {
 import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.ts";
 
+function createDataTransferStub() {
+  const data = new Map<string, string>();
+  return {
+    get types() {
+      return [...data.keys()];
+    },
+    setData: (type: string, value: string) => void data.set(type, value),
+    getData: (type: string) => data.get(type) ?? "",
+    effectAllowed: "none",
+    dropEffect: "none",
+  };
+}
+
+function dispatchDragEvent(
+  target: Element,
+  type: "dragstart" | "dragover" | "drop",
+  dataTransfer: ReturnType<typeof createDataTransferStub>,
+  clientY?: number,
+) {
+  const init: EventInit & { clientY?: number } = { bubbles: true, cancelable: true };
+  if (clientY !== undefined) {
+    init.clientY = clientY;
+  }
+  const event = new Event(type, init);
+  Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
+  target.dispatchEvent(event);
+}
+
 describe("AppSidebar multi-select", () => {
   const KEYS = ["agent:main:main", "agent:main:a", "agent:main:b", "agent:main:c"];
 
@@ -317,6 +345,70 @@ describe("AppSidebar transient menus", () => {
     firstMenu?.dispatchEvent(new CustomEvent("wa-after-hide", { bubbles: true, composed: true }));
     await sidebar.updateComplete;
     expect(sidebar.querySelector(".sidebar-customize-menu")).toBe(replacement);
+  });
+});
+
+describe("AppSidebar custom group reordering", () => {
+  async function mountWithGroups(groups: string[]) {
+    const client = {} as GatewayBrowserClient;
+    const gateway = createGateway(client);
+    const harness = createSessionsHarness("main", [
+      "agent:main:main",
+      "agent:main:thread",
+      ...groups.map((_, index) => `agent:main:group-${index}`),
+    ]);
+    const result = harness.sessions.state.result;
+    if (!result) {
+      throw new Error("expected grouped session fixtures");
+    }
+    for (const [index, group] of groups.entries()) {
+      const row = result.sessions.find((entry) => entry.key === `agent:main:group-${index}`);
+      if (!row) {
+        throw new Error(`expected session fixture for ${group}`);
+      }
+      row.category = group;
+    }
+    const { sidebar } = await mountSidebar(gateway, harness.sessions);
+    sidebar.connected = true;
+    harness.publish({ groups });
+    await sidebar.updateComplete;
+    return { sidebar, harness };
+  }
+
+  function groupHeader(sidebar: SidebarLifecycleState, sectionId: string) {
+    const header = sidebar.querySelector(
+      `[data-session-section="${sectionId}"] .sidebar-recent-sessions__head`,
+    );
+    if (!header) {
+      throw new Error(`expected header for section ${sectionId}`);
+    }
+    return header;
+  }
+
+  it("marks custom group headers draggable but keeps smart sections static", async () => {
+    const { sidebar } = await mountWithGroups(["Alpha", "Beta"]);
+
+    expect(groupHeader(sidebar, "category:Alpha").getAttribute("draggable")).toBe("true");
+    expect(groupHeader(sidebar, "ungrouped").getAttribute("draggable")).toBe("true");
+  });
+
+  it("persists the new catalog order when a group header drops onto another group", async () => {
+    const { sidebar, harness } = await mountWithGroups(["Alpha", "Beta", "Gamma"]);
+    const dataTransfer = createDataTransferStub();
+
+    dispatchDragEvent(groupHeader(sidebar, "category:Gamma"), "dragstart", dataTransfer);
+    const alphaSection = sidebar.querySelector('[data-session-section="category:Alpha"]');
+    if (!alphaSection) {
+      throw new Error("expected Alpha section");
+    }
+    dispatchDragEvent(alphaSection, "drop", dataTransfer);
+
+    await waitForFast(() =>
+      expect(harness.groupsReorder).toHaveBeenCalledWith(
+        ["Gamma", "Alpha", "Beta"],
+        ["category:Gamma", "category:Alpha", "category:Beta", "ungrouped", "groups", "work"],
+      ),
+    );
   });
 });
 

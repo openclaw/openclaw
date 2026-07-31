@@ -2,18 +2,22 @@
 import {
   ErrorCodes,
   errorShape,
+  validateSessionsGroupsAddParams,
   validateSessionsGroupsDeleteParams,
   validateSessionsGroupsListParams,
   validateSessionsGroupsPutParams,
   validateSessionsGroupsRenameParams,
+  validateSessionsGroupsReorderParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
+  addSessionGroup,
   deleteSessionGroup,
   listSidebarSectionOrder,
   listSessionGroups,
   putSessionGroups,
   renameSessionGroup,
+  reorderSessionGroups,
 } from "../session-groups.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -39,9 +43,49 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    const groups = putSessionGroups(params.names, params.sectionOrder);
-    respond(true, { ok: true, groups, sectionOrder: listSidebarSectionOrder() }, undefined);
+    putSessionGroups(params.names, params.sectionOrder);
+    respond(
+      true,
+      { ok: true, groups: listSessionGroups(), sectionOrder: listSidebarSectionOrder() },
+      undefined,
+    );
     // Catalog-only changes still need to reach other open clients.
+    emitSessionsChanged(context, { reason: "groups" });
+  },
+  "sessions.groups.add": async ({ params, respond, context }) => {
+    if (
+      !assertValidParams(params, validateSessionsGroupsAddParams, "sessions.groups.add", respond)
+    ) {
+      return;
+    }
+    try {
+      addSessionGroup(params.name);
+      respond(true, { ok: true, groups: listSessionGroups() }, undefined);
+      emitSessionsChanged(context, { reason: "groups" });
+    } catch (error) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
+    }
+  },
+  "sessions.groups.reorder": async ({ params, respond, context }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSessionsGroupsReorderParams,
+        "sessions.groups.reorder",
+        respond,
+      )
+    ) {
+      return;
+    }
+    respond(
+      true,
+      {
+        ok: true,
+        groups: reorderSessionGroups(params.names, params.sectionOrder),
+        sectionOrder: listSidebarSectionOrder(),
+      },
+      undefined,
+    );
     emitSessionsChanged(context, { reason: "groups" });
   },
   "sessions.groups.rename": async ({ params, respond, context, sessionMutationAuthorization }) => {

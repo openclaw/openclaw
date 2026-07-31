@@ -129,7 +129,11 @@ export function listSidebarSectionOrder(env: NodeJS.ProcessEnv = process.env): s
   ).rows.map((row) => row.section_id);
 }
 
-/** Replaces the ordered catalog. Sessions keep their category even when a name is dropped. */
+/**
+ * Replaces the ordered catalog. Sessions keep their category even when a name is
+ * dropped. New mutations should use addSessionGroup/reorderSessionGroups to
+ * avoid clobbering concurrent changes.
+ */
 export function putSessionGroups(
   names: readonly string[],
   sectionOrder?: readonly string[],
@@ -177,6 +181,114 @@ export function putSessionGroups(
     { env },
   );
   return normalized.map((name, position) => ({ name, position }));
+}
+
+/** Adds one group to the catalog, appended at the end. Idempotent for existing names. */
+export function addSessionGroup(
+  name: string,
+  env: NodeJS.ProcessEnv = process.env,
+): SessionGroupRecord {
+  const normalized = normalizeOptionalString(name);
+  if (!normalized) {
+    throw new Error("group add requires a non-empty name");
+  }
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const kysely = kyselyFor(db);
+      const existing = executeSqliteQuerySync(
+        db,
+        kysely
+          .selectFrom("session_groups")
+          .select(["name", "position"])
+          .where("name", "=", normalized)
+          .limit(1),
+      ).rows[0];
+      if (existing) {
+        return { name: existing.name, position: existing.position };
+      }
+      const maxRow = executeSqliteQuerySync(
+        db,
+        kysely.selectFrom("session_groups").select("position").orderBy("position", "desc").limit(1),
+      ).rows[0];
+      const position = (maxRow?.position ?? -1) + 1;
+      const created_at = Date.now();
+      executeSqliteQuerySync(
+        db,
+        kysely.insertInto("session_groups").values({
+          name: normalized,
+          position,
+          created_at,
+        }),
+      );
+      return { name: normalized, position };
+    },
+    { env },
+  );
+}
+
+/**
+ * Reorders the listed groups by their input position. Groups not in the input
+ * keep their current position and are not inserted or deleted.
+ * When sectionOrder is provided, the full sidebar section order is persisted atomically.
+ */
+export function reorderSessionGroups(
+  names: readonly string[],
+  sectionOrder?: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+): SessionGroupRecord[] {
+  const normalized = normalizeGroupNames(names);
+  const shouldPersistSectionOrder = sectionOrder !== undefined;
+  const normalizedSectionOrder = shouldPersistSectionOrder
+    ? normalizeSidebarSectionOrder(sectionOrder, normalized)
+    : undefined;
+  if (normalizedSectionOrder) {
+    ensureSidebarSectionsSchema(env);
+  }
+  runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const kysely = kyselyFor(db);
+      // Read existing groups so unlisted groups can be assigned unique
+      // contiguous positions after the listed groups, preserving their
+      // prior relative order. Without this compaction a partial reorder
+      // can persist duplicate positions and make later catalog reads
+      // depend on a name tie-break instead of the caller's intent.
+      const existing = executeSqliteQuerySync(
+        db,
+        kysely.selectFrom("session_groups").select(["name", "position"]),
+      ).rows;
+      const listedSet = new Set(normalized);
+      const unlisted = existing
+        .filter((row) => !listedSet.has(row.name))
+        .toSorted((a, b) => a.position - b.position || a.name.localeCompare(b.name));
+      let pos = 0;
+      for (const name of normalized) {
+        executeSqliteQuerySync(
+          db,
+          kysely.updateTable("session_groups").set({ position: pos++ }).where("name", "=", name),
+        );
+      }
+      for (const row of unlisted) {
+        executeSqliteQuerySync(
+          db,
+          kysely
+            .updateTable("session_groups")
+            .set({ position: pos++ })
+            .where("name", "=", row.name),
+        );
+      }
+      if (normalizedSectionOrder) {
+        executeSqliteQuerySync(db, kysely.deleteFrom("sidebar_sections"));
+        normalizedSectionOrder.forEach((sectionId, idx) => {
+          executeSqliteQuerySync(
+            db,
+            kysely.insertInto("sidebar_sections").values({ section_id: sectionId, position: idx }),
+          );
+        });
+      }
+    },
+    { env },
+  );
+  return listSessionGroups(env);
 }
 
 /**
