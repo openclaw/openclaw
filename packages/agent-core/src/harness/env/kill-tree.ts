@@ -10,7 +10,18 @@ const UNIX_PROCESS_TREE_TIMEOUT_MS = 500;
 const MAX_UNIX_PROCESS_TREE_PIDS = 4096;
 const MAX_UNIX_PROCESS_TREE_DEPTH = 128;
 
-type UnixProcessTree = readonly number[];
+type UnixProcessEntry = {
+  pid: number;
+  /**
+   * Stable process-instance identity captured at discovery time
+   * (`${pid}:${starttime}`). A recycled PID produces a different identity, so
+   * delayed signals can be bound to the original process instance instead of
+   * the numeric PID alone.
+   */
+  identity?: string;
+};
+
+type UnixProcessTree = readonly UnixProcessEntry[];
 
 export type KillProcessTreeOptions = {
   graceMs?: number;
@@ -65,11 +76,11 @@ export function killProcessTree(pid: number, opts?: KillProcessTreeOptions): voi
   setTimeout(() => {
     const stillAlive = useGroupKill
       ? isProcessAlive(-pid) || isProcessAlive(pid)
-      : (processTree ?? [pid]).some(isProcessAlive);
+      : (processTree ?? [{ pid }]).some((entry) => processInstanceAlive(entry));
     if (!stillAlive) {
       return;
     }
-    const liveProcessTree = processTree?.filter(isProcessAlive);
+    const liveProcessTree = processTree?.filter(processInstanceAlive);
     signalProcessTreeUnix(pid, "SIGKILL", useGroupKill, liveProcessTree);
   }, graceMs).unref();
 }
@@ -173,6 +184,71 @@ function parsePositivePids(value: unknown): number[] {
     .filter((entry) => Number.isSafeInteger(entry) && entry > 0);
 }
 
+/**
+ * Read a stable process-instance identity for `pid`. On Linux this is the
+ * `starttime` field from `/proc/<pid>/stat`; on other Unix platforms it is the
+ * full `lstart=` line from `ps`. Both change when a PID is recycled, so a stale
+ * cached identity no longer matches a reused PID.
+ */
+function readUnixProcessIdentity(pid: number): string | undefined {
+  if (process.platform === "linux") {
+    try {
+      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+      const commEnd = stat.lastIndexOf(")");
+      if (commEnd < 0) {
+        return undefined;
+      }
+      const fields = stat
+        .slice(commEnd + 1)
+        .trim()
+        .split(/\s+/);
+      // Fields after comm: state ppid pgrp sid tty_nr tpgid flags ... starttime
+      // starttime is field 20 in proc(5), which is index 19 in this sliced list.
+      const starttime = fields[19];
+      if (starttime && /^\d+$/u.test(starttime)) {
+        return `${pid}:${starttime}`;
+      }
+      return undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  try {
+    const result = spawnSync("ps", ["-p", String(pid), "-o", "lstart="], {
+      encoding: "utf8",
+      killSignal: "SIGKILL",
+      maxBuffer: 32 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: UNIX_PROCESS_TREE_TIMEOUT_MS,
+    });
+    if (result.error || result.status !== 0) {
+      return undefined;
+    }
+    const startedAt = typeof result.stdout === "string" ? result.stdout.trim() : "";
+    return startedAt ? `${pid}:${startedAt}` : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * True when the captured process instance is still alive at the same identity.
+ * A bare-liveness check alone is unsafe after PID reuse; this re-reads the
+ * identity and compares it to the snapshot. Pairs without an identity fall back
+ * to a bare-liveness probe so the public detached/group-leader paths are
+ * unchanged.
+ */
+function processInstanceAlive(entry: UnixProcessEntry): boolean {
+  if (!isProcessAlive(entry.pid)) {
+    return false;
+  }
+  if (!entry.identity) {
+    return true;
+  }
+  return readUnixProcessIdentity(entry.pid) === entry.identity;
+}
+
 function readUnixProcessChildren(pid: number, deadlineMs: number): number[] | undefined {
   if (process.platform === "linux") {
     try {
@@ -213,9 +289,13 @@ function readUnixProcessChildren(pid: number, deadlineMs: number): number[] | un
  * Capture an attached process tree before signaling its root.
  * Descendants are returned first so they retain their parent relationship; if
  * enumeration is incomplete, callers fall back to the direct PID only.
+ *
+ * Each entry carries a stable process-instance identity captured at discovery
+ * time so delayed grace-period signals can be verified against the original
+ * instance instead of a numeric PID that may have been recycled.
  */
 function collectUnixProcessTree(rootPid: number): UnixProcessTree | undefined {
-  const descendants: number[] = [];
+  const descendants: UnixProcessEntry[] = [];
   const seen = new Set<number>([rootPid]);
   const deadline = Date.now() + UNIX_PROCESS_TREE_TIMEOUT_MS;
 
@@ -239,12 +319,17 @@ function collectUnixProcessTree(rootPid: number): UnixProcessTree | undefined {
       if (!visit(childPid, depth + 1)) {
         return false;
       }
-      descendants.push(childPid);
+      // Capture identity opportunistically; if it cannot be read the entry is
+      // still signalled during the initial SIGTERM pass, but a missing identity
+      // forces fail-closed direct-root fallback during delayed SIGKILL.
+      descendants.push({ pid: childPid, identity: readUnixProcessIdentity(childPid) });
     }
     return true;
   };
 
-  return visit(rootPid, 0) ? [...descendants, rootPid] : undefined;
+  return visit(rootPid, 0)
+    ? [...descendants, { pid: rootPid, identity: readUnixProcessIdentity(rootPid) }]
+    : undefined;
 }
 
 function signalProcessTreeUnix(
@@ -262,9 +347,26 @@ function signalProcessTreeUnix(
     }
   }
 
-  for (const targetPid of processTree ?? [pid]) {
+  const targets = processTree ?? [{ pid }];
+  if (signal === "SIGKILL") {
+    // For the delayed force escalation, every target must still match the
+    // captured process instance; an identity mismatch means the original exited
+    // and the PID was reused, so it must not be signalled.
+    for (const entry of targets) {
+      if (processInstanceAlive(entry)) {
+        try {
+          process.kill(entry.pid, signal);
+        } catch {
+          // A process may exit between the identity check and the signal.
+        }
+      }
+    }
+    return;
+  }
+
+  for (const entry of targets) {
     try {
-      process.kill(targetPid, signal);
+      process.kill(entry.pid, signal);
     } catch {
       // A process may exit between enumeration and signaling.
     }

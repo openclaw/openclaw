@@ -301,6 +301,15 @@ describe("killProcessTree", () => {
       if (filePath === "/proc/5557/task/5557/children") {
         return "";
       }
+      if (filePath === "/proc/5555/stat") {
+        return "5555 (root) S 1 5555 5555 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 100 0";
+      }
+      if (filePath === "/proc/5556/stat") {
+        return "5556 (child) S 5555 5556 5555 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 101 0";
+      }
+      if (filePath === "/proc/5557/stat") {
+        return "5557 (grandchild) S 5556 5557 5555 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 102 0";
+      }
       throw new Error("unexpected proc path");
     });
 
@@ -414,6 +423,60 @@ describe("killProcessTree", () => {
         [5586, "SIGTERM"],
         [5585, "SIGTERM"],
       ]);
+      expect(
+        (killSpy.mock.calls as Array<[number, NodeJS.Signals | number | undefined]>).some(
+          ([pid]) => typeof pid === "number" && pid < 0,
+        ),
+      ).toBe(false);
+    });
+  });
+
+  it("on Unix skips recycled-PID escalation when the process instance changed", async () => {
+    killSpy.mockImplementation(() => true);
+    let rootStatStarttime = "100";
+    // proc(5) stat fields after comm: state ppid pgrp sid tty_nr tpgid flags
+    // minflt cminflt majflt cmajflt utime stime cutime cstime priority nice
+    // num_threads itrealvalue starttime ... -> starttime is index 19.
+    const statLine = (pid: number, comm: string, starttime: string) =>
+      `${pid} (${comm}) S 1 ${pid} ${pid} 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 ${starttime} 0`;
+    readFileSyncMock.mockImplementation((filePath: string) => {
+      if (filePath === "/proc/5590/task/5590/children") {
+        return "5591";
+      }
+      if (filePath === "/proc/5591/task/5591/children") {
+        return "";
+      }
+      if (filePath === "/proc/5590/stat") {
+        return statLine(5590, "root", rootStatStarttime);
+      }
+      if (filePath === "/proc/5591/stat") {
+        return statLine(5591, "child", "101");
+      }
+      throw new Error("unexpected proc path");
+    });
+
+    await withMockedPlatform("linux", async () => {
+      killProcessTree(5590, { graceMs: 10, detached: false });
+
+      // The initial SIGTERM pass uses the captured identity, so the root and its
+      // one descendant are both terminated once.
+      expect(
+        (killSpy.mock.calls as Array<[number, NodeJS.Signals | number | undefined]>).filter(
+          ([, signal]) => signal !== 0,
+        ),
+      ).toEqual([
+        [5591, "SIGTERM"],
+        [5590, "SIGTERM"],
+      ]);
+
+      // Simulate PID reuse: the root exits, its PID is reassigned, and the new
+      // process reports a different start time during the grace escalation.
+      rootStatStarttime = "9999";
+      await vi.advanceTimersByTimeAsync(10);
+
+      // The recycled root must not receive a delayed SIGKILL because its
+      // process-instance identity no longer matches the captured snapshot.
+      expect(killSpy).not.toHaveBeenCalledWith(5590, "SIGKILL");
       expect(
         (killSpy.mock.calls as Array<[number, NodeJS.Signals | number | undefined]>).some(
           ([pid]) => typeof pid === "number" && pid < 0,
