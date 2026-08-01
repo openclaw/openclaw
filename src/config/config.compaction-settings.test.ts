@@ -32,6 +32,10 @@ describe("config compaction settings", () => {
         enabled: false,
         model: "ollama/qwen3:8b",
         softThresholdTokens: 1234,
+        dailyMemorySemanticPolicy: {
+          rejectHeadings: true,
+          deduplicateLines: true,
+        },
       },
       maxActiveTranscriptBytes: "20mb",
     });
@@ -45,6 +49,10 @@ describe("config compaction settings", () => {
     expect(compaction?.memoryFlush?.enabled).toBe(false);
     expect(compaction?.memoryFlush?.model).toBe("ollama/qwen3:8b");
     expect(compaction?.memoryFlush?.softThresholdTokens).toBe(1234);
+    expect(compaction?.memoryFlush?.dailyMemorySemanticPolicy).toEqual({
+      rejectHeadings: true,
+      deduplicateLines: true,
+    });
     expect(compaction?.maxActiveTranscriptBytes).toBe("20mb");
   });
 

@@ -1086,6 +1086,8 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
           wrapToolMemoryFlushAppendOnlyWrite(tool, {
             root: memoryFlushWriteRoot,
             relativePath: memoryFlushWritePath,
+            semanticPolicy:
+              options?.config?.agents?.defaults?.compaction?.memoryFlush?.dailyMemorySemanticPolicy,
             containerWorkdir: sandbox?.containerWorkdir,
             sandbox:
               sandboxRoot && sandboxFsBridge

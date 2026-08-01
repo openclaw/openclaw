@@ -435,4 +435,11 @@ export type AgentCompactionMemoryFlushConfig = {
    * (bytes, or byte-size string like "2mb"). Set to 0 to disable.
    */
   forceFlushTranscriptBytes?: number | string;
+  /** Optional semantic filtering for canonical daily-memory appends. Disabled by default. */
+  dailyMemorySemanticPolicy?: {
+    /** Reject Markdown heading and scaffold-shaped lines. Default: false. */
+    rejectHeadings?: boolean;
+    /** Skip normalized exact lines already present in the daily file. Default: false. */
+    deduplicateLines?: boolean;
+  };
 };

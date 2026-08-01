@@ -168,6 +168,12 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Threshold distance to compaction (in tokens) that triggers pre-compaction memory flush execution. Use earlier thresholds for safer persistence, or tighter thresholds for lower flush frequency.",
   "agents.defaults.compaction.memoryFlush.forceFlushTranscriptBytes":
     'Forces pre-compaction memory flush when active transcript size reaches this threshold (bytes or strings like "2mb"). Use this to prevent long-session hangs even when token counters are stale; set to 0 to disable.',
+  "agents.defaults.compaction.memoryFlush.dailyMemorySemanticPolicy":
+    "Optional semantic filters for canonical daily-memory appends. Structural size and line-count limits remain enforced regardless of these switches.",
+  "agents.defaults.compaction.memoryFlush.dailyMemorySemanticPolicy.rejectHeadings":
+    "Reject Markdown heading and scaffold-shaped daily-memory lines before mutation. Disabled by default.",
+  "agents.defaults.compaction.memoryFlush.dailyMemorySemanticPolicy.deduplicateLines":
+    "Skip normalized exact lines already present in the canonical daily-memory file. Disabled by default.",
   "agents.defaults.embeddedAgent":
     "Embedded OpenClaw runner hardening controls for how workspace-local agent settings are trusted and applied in OpenClaw sessions.",
   "agents.defaults.embeddedAgent.projectSettingsPolicy":
