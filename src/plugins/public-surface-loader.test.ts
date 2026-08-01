@@ -20,6 +20,7 @@ afterEach(() => {
   for (const tempDir of tempDirs.splice(0)) {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
   vi.resetModules();
   vi.doUnmock("jiti");
@@ -329,6 +330,45 @@ describe("bundled plugin public surface loader", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "does not reuse permissive bundled cache entries for external hardlinks",
+    async () => {
+      vi.doMock("./native-module-require.js", () => ({
+        tryNativeRequireJavaScriptModule: () => ({
+          ok: true,
+          moduleExport: { marker: "bundled-hardlink" },
+        }),
+      }));
+
+      const publicSurfaceLoader = await importFreshModule<
+        typeof import("./public-surface-loader.js")
+      >(import.meta.url, "./public-surface-loader.js?scope=hardlink-cache-policy");
+      const tempRoot = createTempDir();
+      const bundledPluginsDir = path.join(tempRoot, "dist");
+      const pluginRoot = path.join(bundledPluginsDir, "demo");
+      const sourcePath = path.join(tempRoot, "api-source.js");
+      const modulePath = path.join(pluginRoot, "api.js");
+      fs.mkdirSync(pluginRoot, { recursive: true });
+      fs.writeFileSync(sourcePath, 'export const marker = "bundled-hardlink";\n', "utf8");
+      fs.linkSync(sourcePath, modulePath);
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
+      process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
+
+      expect(
+        publicSurfaceLoader.loadBundledPluginPublicArtifactModuleSync<{ marker: string }>({
+          dirName: "demo",
+          artifactBasename: "api.js",
+        }).marker,
+      ).toBe("bundled-hardlink");
+      expect(() =>
+        publicSurfaceLoader.loadPluginPublicArtifactModuleSync({
+          pluginRoot,
+          artifactBasename: "api.js",
+        }),
+      ).toThrow("Unable to open plugin public surface api.js");
+    },
+  );
+
   it("does not cache missing public artifact locations", async () => {
     vi.doMock("./native-module-require.js", () => ({
       tryNativeRequireJavaScriptModule: (modulePath: string) => ({
@@ -405,4 +445,104 @@ describe("bundled plugin public surface loader", () => {
     ).toThrow(/changed after validation/);
     expect(createJiti).not.toHaveBeenCalled();
   });
+});
+
+describe("external plugin public surface loader", () => {
+  it.each(["hardlink", "symlink"] as const)(
+    "rejects an external %s before evaluating its public artifact",
+    async (linkKind) => {
+      if (process.platform === "win32") {
+        return;
+      }
+      const publicSurfaceLoader = await importFreshModule<
+        typeof import("./public-surface-loader.js")
+      >(import.meta.url, `./public-surface-loader.js?scope=external-${linkKind}`);
+      const tempRoot = createTempDir();
+      const pluginRoot = path.join(tempRoot, "plugin");
+      const sourcePath = path.join(tempRoot, "outside.cjs");
+      const modulePath = path.join(pluginRoot, "api.cjs");
+      const executedMarker = path.join(tempRoot, "executed.txt");
+      fs.mkdirSync(pluginRoot, { recursive: true });
+      fs.writeFileSync(
+        sourcePath,
+        `require("node:fs").writeFileSync(${JSON.stringify(executedMarker)}, "executed");\n`,
+        "utf8",
+      );
+      if (linkKind === "hardlink") {
+        fs.linkSync(sourcePath, modulePath);
+      } else {
+        fs.symlinkSync(sourcePath, modulePath);
+      }
+
+      expect(() =>
+        publicSurfaceLoader.loadPluginPublicArtifactModuleSync({
+          pluginRoot,
+          artifactBasename: "api.cjs",
+        }),
+      ).toThrow("Unable to open plugin public surface api.cjs");
+      expect(fs.existsSync(executedMarker)).toBe(false);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "allows hardlinked external artifacts only for verified immutable Nix roots",
+    async () => {
+      const tempRoot = fs.realpathSync(createTempDir());
+      const pluginRoot = path.join(tempRoot, "nix-plugin");
+      const sourcePath = path.join(tempRoot, "outside.cjs");
+      const modulePath = path.join(pluginRoot, "api.cjs");
+      fs.mkdirSync(pluginRoot, { recursive: true });
+      fs.writeFileSync(sourcePath, 'module.exports = { marker: "nix-ok" };\n', "utf8");
+      fs.linkSync(sourcePath, modulePath);
+      vi.stubEnv("OPENCLAW_NIX_MODE", "1");
+
+      const pathSafety = await import("./path-safety.js");
+      const originalSafeRealpathSync = pathSafety.safeRealpathSync;
+      vi.spyOn(pathSafety, "safeRealpathSync").mockImplementation((target, cache) =>
+        path.resolve(target) === pluginRoot
+          ? "/nix/store/0123456789-openclaw-plugin"
+          : originalSafeRealpathSync(target, cache),
+      );
+      const publicSurfaceLoader = await importFreshModule<
+        typeof import("./public-surface-loader.js")
+      >(import.meta.url, "./public-surface-loader.js?scope=immutable-nix-hardlink");
+
+      expect(
+        publicSurfaceLoader.loadPluginPublicArtifactModuleSync<{ marker: string }>({
+          pluginRoot,
+          artifactBasename: "api.cjs",
+        }).marker,
+      ).toBe("nix-ok");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "still rejects external hardlinks outside the Nix store in Nix mode",
+    async () => {
+      vi.stubEnv("OPENCLAW_NIX_MODE", "1");
+      const publicSurfaceLoader = await importFreshModule<
+        typeof import("./public-surface-loader.js")
+      >(import.meta.url, "./public-surface-loader.js?scope=mutable-nix-hardlink");
+      const tempRoot = createTempDir();
+      const pluginRoot = path.join(tempRoot, "plugin");
+      const sourcePath = path.join(tempRoot, "outside.cjs");
+      const modulePath = path.join(pluginRoot, "api.cjs");
+      const executedMarker = path.join(tempRoot, "executed.txt");
+      fs.mkdirSync(pluginRoot, { recursive: true });
+      fs.writeFileSync(
+        sourcePath,
+        `require("node:fs").writeFileSync(${JSON.stringify(executedMarker)}, "executed");\n`,
+        "utf8",
+      );
+      fs.linkSync(sourcePath, modulePath);
+
+      expect(() =>
+        publicSurfaceLoader.loadPluginPublicArtifactModuleSync({
+          pluginRoot,
+          artifactBasename: "api.cjs",
+        }),
+      ).toThrow("Unable to open plugin public surface api.cjs");
+      expect(fs.existsSync(executedMarker)).toBe(false);
+    },
+  );
 });

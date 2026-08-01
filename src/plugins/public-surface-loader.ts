@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import {
   createPluginModuleLoaderCache,
@@ -127,8 +128,12 @@ function loadValidatedPublicSurfaceModule(params: {
   boundaryRoot: string;
   boundaryLabel: string;
   surfaceLabel: string;
+  rejectHardlinks: boolean;
 }): object {
-  const cached = publicSurfaceModuleCache.get(params.modulePath);
+  // Permissive bundled/Nix loads must never satisfy a stricter external-root lookup.
+  const cacheKey = (modulePath: string) =>
+    `${params.rejectHardlinks ? "reject" : "allow"}:${modulePath}`;
+  const cached = publicSurfaceModuleCache.get(cacheKey(params.modulePath));
   if (cached) {
     return cached as object;
   }
@@ -137,7 +142,7 @@ function loadValidatedPublicSurfaceModule(params: {
     absolutePath: params.modulePath,
     rootPath: params.boundaryRoot,
     boundaryLabel: params.boundaryLabel,
-    rejectHardlinks: false,
+    rejectHardlinks: params.rejectHardlinks,
   });
   if (!opened.ok) {
     throw new Error(`Unable to open ${params.surfaceLabel}`, { cause: opened.error });
@@ -152,15 +157,15 @@ function loadValidatedPublicSurfaceModule(params: {
   }
 
   const sentinel: Record<string, unknown> = {};
-  publicSurfaceModuleCache.set(params.modulePath, sentinel);
-  publicSurfaceModuleCache.set(validatedPath, sentinel);
+  publicSurfaceModuleCache.set(cacheKey(params.modulePath), sentinel);
+  publicSurfaceModuleCache.set(cacheKey(validatedPath), sentinel);
   try {
     const loaded = loadPublicSurfaceModule(validatedPath) as object;
     Object.assign(sentinel, loaded);
     return sentinel;
   } catch (error) {
-    publicSurfaceModuleCache.delete(params.modulePath);
-    publicSurfaceModuleCache.delete(validatedPath);
+    publicSurfaceModuleCache.delete(cacheKey(params.modulePath));
+    publicSurfaceModuleCache.delete(cacheKey(validatedPath));
     throw error;
   }
 }
@@ -182,6 +187,7 @@ export function loadBundledPluginPublicArtifactModuleSync<T extends object>(para
     boundaryLabel:
       location.boundaryRoot === OPENCLAW_PACKAGE_ROOT ? "OpenClaw package root" : "plugin root",
     surfaceLabel: `bundled plugin public surface ${params.dirName}/${params.artifactBasename}`,
+    rejectHardlinks: false,
   }) as T;
 }
 
@@ -201,6 +207,10 @@ export function loadPluginPublicArtifactModuleSync<T extends object>(params: {
     boundaryRoot: path.resolve(params.pluginRoot),
     boundaryLabel: "plugin root",
     surfaceLabel: `plugin public surface ${params.artifactBasename}`,
+    rejectHardlinks: shouldRejectHardlinkedPluginFiles({
+      origin: "global",
+      rootDir: params.pluginRoot,
+    }),
   }) as T;
 }
 
