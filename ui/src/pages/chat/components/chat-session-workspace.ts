@@ -79,6 +79,8 @@ type SessionWorkspaceState = {
   browserSearchTimer: ReturnType<typeof globalThis.setTimeout> | null;
   collapsed: boolean;
   dock: ChatWorkspaceDock;
+  // Own the gesture before its drag threshold; dockDragging only tracks the overlay.
+  dockDragPointerId: number | null;
   dockDragging: boolean;
   dockDragZone: ChatWorkspaceDock | null;
   error: string | null;
@@ -163,6 +165,7 @@ function getWorkspaceState(state: SessionWorkspaceHost): SessionWorkspaceState {
     // Dock preference is app-wide, seeded from the host's loaded settings;
     // per-session state just carries it forward.
     dock: current?.dock ?? normalizeChatWorkspaceDock(state.settings?.chatWorkspaceDock),
+    dockDragPointerId: null,
     dockDragging: false,
     dockDragZone: null,
     error: null,
@@ -645,6 +648,12 @@ function startSessionWorkspaceDockDrag(state: SessionWorkspaceHost, event: Point
     return;
   }
   const workspace = getWorkspaceState(state);
+  if (workspace.dockDragPointerId !== null) {
+    return;
+  }
+  const activePointerId = event.pointerId;
+  grip.setPointerCapture(activePointerId);
+  workspace.dockDragPointerId = activePointerId;
   const startX = event.clientX;
   const startY = event.clientY;
 
@@ -660,6 +669,9 @@ function startSessionWorkspaceDockDrag(state: SessionWorkspaceHost, event: Point
   };
 
   const handleMove = (move: PointerEvent) => {
+    if (move.pointerId !== activePointerId) {
+      return;
+    }
     if (!workspace.dockDragging) {
       if (Math.hypot(move.clientX - startX, move.clientY - startY) < 5) {
         return;
@@ -675,10 +687,14 @@ function startSessionWorkspaceDockDrag(state: SessionWorkspaceHost, event: Point
       requestUpdate(state);
     }
   };
-  const finish = (apply: boolean) => {
+  const finish = (pointerId: number, apply: boolean) => {
+    if (pointerId !== activePointerId || workspace.dockDragPointerId !== activePointerId) {
+      return;
+    }
     grip.removeEventListener("pointermove", handleMove);
     grip.removeEventListener("pointerup", handleUp);
     grip.removeEventListener("pointercancel", handleCancel);
+    workspace.dockDragPointerId = null;
     const zone = workspace.dockDragZone;
     workspace.dockDragging = false;
     workspace.dockDragZone = null;
@@ -688,10 +704,9 @@ function startSessionWorkspaceDockDrag(state: SessionWorkspaceHost, event: Point
     }
     requestUpdate(state);
   };
-  const handleUp = () => finish(true);
-  const handleCancel = () => finish(false);
+  const handleUp = (up: PointerEvent) => finish(up.pointerId, true);
+  const handleCancel = (cancel: PointerEvent) => finish(cancel.pointerId, false);
 
-  grip.setPointerCapture(event.pointerId);
   grip.addEventListener("pointermove", handleMove);
   grip.addEventListener("pointerup", handleUp);
   grip.addEventListener("pointercancel", handleCancel);

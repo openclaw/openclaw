@@ -123,9 +123,10 @@ class ResizableDivider extends OpenClawLitElement {
   }
 
   private handlePointerDown = (e: PointerEvent) => {
-    if (e.button !== 0) {
+    if (e.button !== 0 || this.activePointerId !== null) {
       return;
     }
+    this.activePointerId = e.pointerId;
     this.isDragging = true;
     this.startPosition = this.orientation === "horizontal" ? e.clientY : e.clientX;
     this.startRatio = this.currentRatio();
@@ -141,7 +142,7 @@ class ResizableDivider extends OpenClawLitElement {
   };
 
   private handlePointerMove = (e: PointerEvent) => {
-    if (!this.isDragging) {
+    if (!this.isDragging || e.pointerId !== this.activePointerId) {
       return;
     }
 
@@ -176,7 +177,10 @@ class ResizableDivider extends OpenClawLitElement {
     this.emitResize(this.startRatio + deltaRatio);
   };
 
-  private handlePointerUp = () => {
+  private handlePointerUp = (e: PointerEvent) => {
+    if (e.pointerId !== this.activePointerId) {
+      return;
+    }
     this.stopDragging();
   };
 
@@ -255,7 +259,6 @@ class ResizableDivider extends OpenClawLitElement {
       return;
     }
     this.setPointerCapture(pointerId);
-    this.activePointerId = pointerId;
   }
 
   private releaseActivePointer() {

@@ -8,6 +8,23 @@ import {
   type SessionWorkspaceHost,
 } from "./chat-session-workspace.ts";
 
+function pointerEvent(
+  type: string,
+  pointerId: number,
+  clientX: number,
+  clientY: number,
+): PointerEvent {
+  const event = new MouseEvent(type, {
+    bubbles: true,
+    button: 0,
+    cancelable: true,
+    clientX,
+    clientY,
+  });
+  Object.defineProperty(event, "pointerId", { value: pointerId });
+  return event as PointerEvent;
+}
+
 function gatewayHello(methods: string[], scopes = ["operator.admin"]) {
   return {
     type: "hello-ok" as const,
@@ -40,6 +57,71 @@ describe("toggleSessionWorkspace", () => {
 
     expect(createSessionWorkspaceProps(state).collapsed).toBe(true);
     expect(requestUpdate).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("session workspace dock drag", () => {
+  it("keeps the drag owned by the pointer that started it", () => {
+    const requestUpdate = vi.fn();
+    const state = {
+      client: null,
+      connected: false,
+      handleOpenSidebar: vi.fn(),
+      hello: null,
+      requestUpdate,
+      sessionKey: "agent:main:current",
+      sessions: {},
+      settings: { chatWorkspaceDock: "bottom" },
+    } as unknown as SessionWorkspaceHost;
+    toggleSessionWorkspace(state);
+    requestUpdate.mockClear();
+
+    const workbench = document.createElement("div");
+    workbench.className = "chat-workbench";
+    const grip = document.createElement("div");
+    workbench.append(grip);
+    document.body.append(workbench);
+    workbench.getBoundingClientRect = vi.fn(() => ({
+      bottom: 600,
+      height: 600,
+      left: 0,
+      right: 1_000,
+      top: 0,
+      width: 1_000,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    }));
+    grip.setPointerCapture = vi.fn();
+    const onDockDragStart = createSessionWorkspaceProps(state).onDockDragStart;
+    grip.addEventListener("pointerdown", onDockDragStart);
+
+    grip.dispatchEvent(pointerEvent("pointerdown", 11, 100, 100));
+    grip.dispatchEvent(pointerEvent("pointerdown", 22, 120, 100));
+    grip.dispatchEvent(pointerEvent("pointermove", 22, 900, 100));
+    grip.dispatchEvent(pointerEvent("pointerup", 22, 900, 100));
+    grip.dispatchEvent(pointerEvent("pointercancel", 22, 900, 100));
+
+    let props = createSessionWorkspaceProps(state);
+    expect(props.dockDragging).toBe(false);
+    expect(props.dockDragZone).toBeNull();
+    expect(props.dock).toBe("bottom");
+    expect(requestUpdate).not.toHaveBeenCalled();
+    expect(grip.setPointerCapture).toHaveBeenCalledTimes(1);
+
+    grip.dispatchEvent(pointerEvent("pointermove", 11, 900, 100));
+    props = createSessionWorkspaceProps(state);
+    expect(props.dockDragging).toBe(true);
+    expect(props.dockDragZone).toBe("right");
+
+    grip.dispatchEvent(pointerEvent("pointercancel", 11, 900, 100));
+    props = createSessionWorkspaceProps(state);
+    expect(props.dockDragging).toBe(false);
+    expect(props.dockDragZone).toBeNull();
+    expect(props.dock).toBe("bottom");
+
+    grip.removeEventListener("pointerdown", onDockDragStart);
+    workbench.remove();
   });
 });
 
