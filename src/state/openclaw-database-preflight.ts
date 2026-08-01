@@ -6,8 +6,11 @@ import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { requireNodeSqlite, resolveNodeSqliteLocation } from "../infra/node-sqlite.js";
-import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import {
+  describeRunningOpenClawBuild,
+  readSqliteUserVersion,
+} from "../infra/sqlite-user-version.js";
 import type { OpenClawSchemaVersions } from "./openclaw-schema-versions.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
@@ -44,7 +47,8 @@ type AgentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "agent_databases"
 export class OpenClawDatabaseSchemaPreflightError extends Error {
   constructor(readonly incompatibleDatabases: readonly IncompatibleOpenClawDatabase[]) {
     super(
-      `Gateway refused startup because ${incompatibleDatabases.length} OpenClaw database schema(s) are newer than this build. See ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}.`,
+      `Gateway refused startup because ${incompatibleDatabases.length} OpenClaw database schema(s) are newer than this build. ` +
+        `Refused by ${describeRunningOpenClawBuild()}. See ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}.`,
     );
     this.name = "OpenClawDatabaseSchemaPreflightError";
   }
@@ -99,10 +103,9 @@ export function preflightOpenClawDatabaseSchemas(options: {
     return result;
   }
 
-  const sqlite = requireNodeSqlite();
   let stateDatabase: DatabaseSync | undefined;
   try {
-    stateDatabase = new sqlite.DatabaseSync(resolveNodeSqliteLocation(statePath), {
+    stateDatabase = openNodeSqliteDatabase(statePath, {
       readOnly: true,
     });
     stateDatabase.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
@@ -137,7 +140,7 @@ export function preflightOpenClawDatabaseSchemas(options: {
       }
       let agentDatabase: DatabaseSync | undefined;
       try {
-        agentDatabase = new sqlite.DatabaseSync(resolveNodeSqliteLocation(agentPath), {
+        agentDatabase = openNodeSqliteDatabase(agentPath, {
           readOnly: true,
         });
         agentDatabase.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
