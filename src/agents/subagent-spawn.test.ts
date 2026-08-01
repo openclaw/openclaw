@@ -1150,7 +1150,7 @@ describe("spawnSubagentDirect seam flow", () => {
     const childSessionKey = result.childSessionKey as string;
     expect(hoisted.updateSessionStoreMock).toHaveBeenCalledTimes(2);
     expect(persistedStore?.[childSessionKey]).toMatchObject({
-      sessionId: expect.any(String),
+      sessionId: result.sessionId,
       lifecycleRevision: expect.any(String),
       spawnedBy: "agent:main:main",
       completionOwnerSessionKey: "agent:main:main",
