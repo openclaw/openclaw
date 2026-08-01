@@ -28,8 +28,8 @@ Browser automation in remote mode is owned by the CLI node host, not the native 
 
 ## Prereqs on the remote host
 
-1. Install Node + pnpm and build OpenClaw (`pnpm install && pnpm build && pnpm ui:build`). Run checkout commands with `pnpm openclaw ...`; do not use `pnpm link`.
-2. Ensure the app can resolve the CLI for non-interactive shells. Set **Project root** to the checkout, or use the [GitHub main checkout installer](/install#install-from-the-github-main-checkout) for a user-local `openclaw` wrapper.
+1. Install Node + pnpm and build OpenClaw (`pnpm install && pnpm build && pnpm ui:build`). Run checkout commands with `pnpm openclaw ...`, or register the checkout's binary globally with `pnpm add -g .`; do not use `pnpm link`.
+2. Ensure the app can resolve the CLI for non-interactive shells. Set **Project root** to the checkout, expose pnpm's global bin directory on that shell's `PATH`, or use the [GitHub main checkout installer](/install#install-from-the-github-main-checkout) for a user-local `openclaw` wrapper.
 3. For SSH transport: set up key-based SSH auth. Tailscale IPs are recommended for stable reachability off-LAN.
 
 ## macOS app setup

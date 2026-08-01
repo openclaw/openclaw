@@ -139,7 +139,9 @@ pnpm install && pnpm build && pnpm ui:build
 pnpm openclaw onboard --install-daemon
 ```
 
-Run checkout commands with `pnpm openclaw ...`. Do not run `pnpm link` inside an OpenClaw checkout: `pnpm link .` can add self-referential `openclaw: link:` entries to `package.json` and `pnpm-workspace.yaml` and rewrite `pnpm-lock.yaml`. If interrupted between those writes, later frozen installs fail. For a persistent `openclaw` command, use the GitHub main checkout installer below; it installs a user-local wrapper without modifying the checkout manifests.
+Run checkout commands with `pnpm openclaw ...`. To register the checkout's binary globally, use `pnpm add -g .`; pnpm v11 documents this as the replacement for the removed `pnpm link --global` flow.
+
+Do not run `pnpm link` inside an OpenClaw checkout: `pnpm link .` can add self-referential `openclaw: link:` entries to `package.json` and `pnpm-workspace.yaml` and rewrite `pnpm-lock.yaml`. If interrupted between those writes, later frozen installs fail. The GitHub main checkout installer below is another persistent-command option; it installs a user-local wrapper without modifying the checkout manifests.
 
 See [Setup](/start/setup) for full development workflows.
 
