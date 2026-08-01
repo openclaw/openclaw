@@ -5,13 +5,19 @@ import { copyPluginToolMeta } from "../plugins/tools.js";
  * guidance constrained to process polling and wake handling.
  */
 import type { AnyAgentTool } from "./agent-tools.types.js";
-import { describeExecTool, describeProcessTool } from "./bash-tools.descriptions.js";
+import {
+  describeExecTool,
+  describeProcessTool,
+} from "./bash-tools.descriptions.js";
 import { copyBeforeToolCallHookMarker } from "./before-tool-call-metadata.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
 import { copyToolTerminalPresentation } from "./tool-terminal-presentation.js";
 import { isAutomationsToolName } from "./tools/automations-tool-name.js";
 
-function replaceDescription(tool: AnyAgentTool, description: string): AnyAgentTool {
+function replaceDescription(
+  tool: AnyAgentTool,
+  description: string,
+): AnyAgentTool {
   const updated = { ...tool, description };
   copyPluginToolMeta(tool, updated);
   copyChannelAgentToolMeta(tool as never, updated as never);
@@ -26,9 +32,22 @@ export function applyDeferredFollowupToolDescriptions(
   params?: { agentId?: string },
 ): AnyAgentTool[] {
   const hasCronTool = tools.some((tool) => isAutomationsToolName(tool.name));
+  const hasFileWriteTool = tools.some(
+    (tool) =>
+      tool.name === "write" ||
+      tool.name === "edit" ||
+      tool.name === "apply_patch",
+  );
   return tools.map((tool) => {
     if (tool.name === "exec") {
-      return replaceDescription(tool, describeExecTool({ agentId: params?.agentId, hasCronTool }));
+      return replaceDescription(
+        tool,
+        describeExecTool({
+          agentId: params?.agentId,
+          hasCronTool,
+          hasFileWriteTool,
+        }),
+      );
     }
     if (tool.name === "process") {
       return replaceDescription(tool, describeProcessTool({ hasCronTool }));

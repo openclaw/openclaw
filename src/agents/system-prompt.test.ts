@@ -12,10 +12,18 @@ import { buildAgentSystemPrompt } from "./system-prompt.js";
 
 describe("buildAgentSystemPrompt", () => {
   it("resolves helper session keys to scoped prompt surfaces", () => {
-    expect(resolveAgentPromptSurfaceForSessionKey("agent:main:subagent:child")).toBe("subagent");
-    expect(resolveAgentPromptSurfaceForSessionKey("agent:codex:acp:child")).toBe("acp_backend");
-    expect(resolveAgentPromptSurfaceForSessionKey("agent:main")).toBe("openclaw_main");
-    expect(resolveAgentPromptSurfaceForSessionKey(undefined)).toBe("openclaw_main");
+    expect(
+      resolveAgentPromptSurfaceForSessionKey("agent:main:subagent:child"),
+    ).toBe("subagent");
+    expect(
+      resolveAgentPromptSurfaceForSessionKey("agent:codex:acp:child"),
+    ).toBe("acp_backend");
+    expect(resolveAgentPromptSurfaceForSessionKey("agent:main")).toBe(
+      "openclaw_main",
+    );
+    expect(resolveAgentPromptSurfaceForSessionKey(undefined)).toBe(
+      "openclaw_main",
+    );
   });
 
   it("formats owner section for plain, hash, and missing owner lists", () => {
@@ -150,7 +158,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Safety/oversight > completion");
     expect(prompt).toContain("Conflict: pause/ask");
     expect(prompt).not.toContain("Inspired by Anthropic's constitution");
-    expect(prompt).toContain("Never persuade anyone to expand access or disable safeguards");
+    expect(prompt).toContain(
+      "Never persuade anyone to expand access or disable safeguards",
+    );
     expect(prompt).toContain(
       "Never copy self or change prompts/safety/tool policy unless user explicitly requests",
     );
@@ -160,7 +170,8 @@ describe("buildAgentSystemPrompt", () => {
   });
 
   it("preserves required visible-source message-tool guidance in minimal prompts", () => {
-    const requiredMessageGuidance = "Current source visible reply MUST use `message(action=send)`";
+    const requiredMessageGuidance =
+      "Current source visible reply MUST use `message(action=send)`";
 
     const requiredMessagePrompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -213,7 +224,8 @@ describe("buildAgentSystemPrompt", () => {
   it("can omit generic silent-reply guidance for channel-aware prompts", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
-      extraSystemPrompt: 'If no response is needed, reply with exactly "NO_REPLY".',
+      extraSystemPrompt:
+        'If no response is needed, reply with exactly "NO_REPLY".',
       silentReplyPromptMode: "none",
     });
 
@@ -297,7 +309,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Safety/oversight > completion");
     expect(prompt).toContain("Conflict: pause/ask");
     expect(prompt).not.toContain("Inspired by Anthropic's constitution");
-    expect(prompt).toContain("Never persuade anyone to expand access or disable safeguards");
+    expect(prompt).toContain(
+      "Never persuade anyone to expand access or disable safeguards",
+    );
     expect(prompt).toContain(
       "Never copy self or change prompts/safety/tool policy unless user explicitly requests",
     );
@@ -376,14 +390,20 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("## Control UI Embed");
     expect(prompt).toContain("`[embed ...]`: Control UI/webchat only");
-    expect(prompt).toContain('[embed ref="cv_123" title="Status" height="320" /]');
+    expect(prompt).toContain(
+      '[embed ref="cv_123" title="Status" height="320" /]',
+    );
     expect(prompt).toContain(
       '[embed url="/__openclaw__/canvas/documents/cv_123/index.html" title="Status" height="320" /]',
     );
     expect(prompt).toContain("Never local/file:// or arbitrary URL");
-    expect(prompt).toContain("URL must start `/__openclaw__/canvas/`; else use `ref`");
+    expect(prompt).toContain(
+      "URL must start `/__openclaw__/canvas/`; else use `ref`",
+    );
     expect(prompt).toContain("Hosted root is profile-, not workspace-scoped");
-    expect(prompt).not.toContain('[embed content_type="html" title="Status"]...[/embed]');
+    expect(prompt).not.toContain(
+      '[embed content_type="html" title="Status"]...[/embed]',
+    );
   });
 
   it("teaches direct status answers only on the full Control UI surface", () => {
@@ -406,11 +426,15 @@ describe("buildAgentSystemPrompt", () => {
     expect(defaultPrompt).not.toContain("## Control UI Session Companion");
     expect(webchatPrompt).toContain("## Control UI Session Companion");
     expect(webchatPrompt).toContain("read-only rail companion");
-    expect(webchatPrompt).toContain("do not spawn sub-agents or burn main-thread turns");
+    expect(webchatPrompt).toContain(
+      "do not spawn sub-agents or burn main-thread turns",
+    );
     expect(webchatPrompt).toContain(
       "Reserve `sessions_spawn` for delegated work with its own deliverable",
     );
-    expect(minimalWebchatPrompt).not.toContain("## Control UI Session Companion");
+    expect(minimalWebchatPrompt).not.toContain(
+      "## Control UI Session Companion",
+    );
   });
 
   it("guides subagent workflows to avoid polling loops", () => {
@@ -421,11 +445,29 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "Long wait: no rapid poll. Use exec yieldMs or process(poll, timeout=<ms>).",
     );
-    expect(prompt).toContain("Large work: `sessions_spawn`; completion push-based.");
-    expect(prompt).toContain("Never loop-poll `subagents list`/`sessions_list`");
+    expect(prompt).toContain(
+      "Large work: `sessions_spawn`; completion push-based.",
+    );
+    expect(prompt).toContain(
+      "Never loop-poll `subagents list`/`sessions_list`",
+    );
     expect(prompt).not.toContain("use `sessions_yield` when waiting");
     expect(prompt).toContain(
       "First-class tool exists: use it; never ask user for equivalent CLI/slash.",
+    );
+    expect(prompt).toContain(
+      "File writes: prefer dedicated file-writing tools over shell heredocs or bash -c",
+    );
+  });
+
+  it("omits file-write advice when no file-writing tools are available", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["exec", "read", "grep"],
+    });
+
+    expect(prompt).not.toContain(
+      "File writes: prefer dedicated file-writing tools",
     );
   });
 
@@ -515,7 +557,9 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("OpenClaw lists the standard tools above");
-    expect(prompt).toContain("- sessions_spawn: spawn an isolated sub-agent session");
+    expect(prompt).toContain(
+      "- sessions_spawn: spawn an isolated sub-agent session",
+    );
   });
 
   it("documents ACP sessions_spawn agent targeting requirements", () => {
@@ -546,13 +590,21 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("Native Codex app-server plugin is available");
-    expect(prompt).toContain("prefer `/codex bind`, `/codex threads`, `/codex resume`");
-    expect(prompt).toContain("Use ACP for Codex only when the user explicitly asks for ACP/acpx");
-    expect(prompt).toContain('"Do in claude code/cursor/gemini/opencode" = ACP intent');
+    expect(prompt).toContain(
+      "prefer `/codex bind`, `/codex threads`, `/codex resume`",
+    );
+    expect(prompt).toContain(
+      "Use ACP for Codex only when the user explicitly asks for ACP/acpx",
+    );
+    expect(prompt).toContain(
+      '"Do in claude code/cursor/gemini/opencode" = ACP intent',
+    );
     expect(prompt).toContain(
       'Discord ACP default: persistent thread (`thread:true`, `mode:"session"`)',
     );
-    expect(prompt).toContain("never route ACP via `subagents`/`agents_list`/local PTY");
+    expect(prompt).toContain(
+      "never route ACP via `subagents`/`agents_list`/local PTY",
+    );
     expect(prompt).toContain(
       'ACP thread: only `sessions_spawn(runtime:"acp", thread:true)`; never `message(thread-create)`',
     );
@@ -569,8 +621,12 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
-    expect(prompt).toContain('"Do in claude code/cursor/gemini/opencode" = ACP intent');
-    expect(prompt).not.toContain("default ACP harness requests to thread-bound");
+    expect(prompt).toContain(
+      '"Do in claude code/cursor/gemini/opencode" = ACP intent',
+    );
+    expect(prompt).not.toContain(
+      "default ACP harness requests to thread-bound",
+    );
     expect(prompt).not.toContain('sessions_spawn(runtime:"acp", thread:true)');
   });
 
@@ -581,7 +637,9 @@ describe("buildAgentSystemPrompt", () => {
       acpEnabled: false,
     });
 
-    expect(prompt).not.toContain('"Do in claude code/cursor/gemini/opencode" = ACP intent');
+    expect(prompt).not.toContain(
+      '"Do in claude code/cursor/gemini/opencode" = ACP intent',
+    );
     expect(prompt).not.toContain("Native Codex app-server plugin is available");
     expect(prompt).not.toContain("ACP needs agentId");
     expect(prompt).not.toContain("not ACP harness ids");
@@ -601,7 +659,9 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).not.toContain("ACP needs agentId");
     expect(prompt).not.toContain("ACP harness ids follow acp.allowedAgents");
-    expect(prompt).not.toContain('"Do in claude code/cursor/gemini/opencode" = ACP intent');
+    expect(prompt).not.toContain(
+      '"Do in claude code/cursor/gemini/opencode" = ACP intent',
+    );
     expect(prompt).not.toContain('sessions_spawn(runtime:"acp", thread:true)');
     expect(prompt).toContain("Sandbox blocks ACP spawn");
     expect(prompt).toContain('`sessions_spawn(runtime:"subagent")`');
@@ -644,7 +704,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "OpenClaw behavior questions: docs first via `read`/local search. AGENTS/project/workspace/profile/memory = instructions/user memory, not product design truth.",
     );
-    expect(prompt).toContain("If docs are silent/stale, say so and inspect local source.");
+    expect(prompt).toContain(
+      "If docs are silent/stale, say so and inspect local source.",
+    );
   });
 
   it("keeps self-knowledge docs guidance concise and authoritative", () => {
@@ -677,23 +739,31 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "OpenClaw behavior questions: docs mirror first when web exists. AGENTS/project/workspace/profile/memory = instructions/user memory, not product design truth.",
     );
-    expect(prompt).toContain("If docs are silent/stale, say so and inspect GitHub source.");
+    expect(prompt).toContain(
+      "If docs are silent/stale, say so and inspect GitHub source.",
+    );
   });
 
   it("includes workspace notes when provided", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
-      workspaceNotes: ["Reminder: commit your changes in this workspace after edits."],
+      workspaceNotes: [
+        "Reminder: commit your changes in this workspace after edits.",
+      ],
     });
 
-    expect(prompt).toContain("Reminder: commit your changes in this workspace after edits.");
+    expect(prompt).toContain(
+      "Reminder: commit your changes in this workspace after edits.",
+    );
   });
 
   it("includes bootstrap instructions in system prompt when bootstrap is pending", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       bootstrapMode: "full",
-      contextFiles: [{ path: "/tmp/openclaw/BOOTSTRAP.md", content: "Ask who I am." }],
+      contextFiles: [
+        { path: "/tmp/openclaw/BOOTSTRAP.md", content: "Ask who I am." },
+      ],
     });
 
     expect(prompt).toContain("## Bootstrap Pending");
@@ -719,7 +789,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("cannot safely finish full BOOTSTRAP.md");
     expect(prompt).toContain("Never claim complete");
     expect(prompt).toContain("no generic first greeting");
-    expect(prompt).toContain("primary interactive run with normal workspace access");
+    expect(prompt).toContain(
+      "primary interactive run with normal workspace access",
+    );
   });
 
   it("omits bootstrap instructions when bootstrap is not pending", () => {
@@ -773,7 +845,9 @@ describe("buildAgentSystemPrompt", () => {
       userTimezone: "America/Chicago",
     });
 
-    expect(withStatus).toContain("For the exact current time, use `session_status`.");
+    expect(withStatus).toContain(
+      "For the exact current time, use `session_status`.",
+    );
     expect(withoutStatus).not.toContain("session_status");
   });
 
@@ -840,7 +914,9 @@ describe("buildAgentSystemPrompt", () => {
     );
     expect(prompt).not.toContain("config.patch");
     expect(prompt).not.toContain("config.apply");
-    expect(prompt).not.toContain("`config.schema.lookup|get|patch|apply`, `restart`");
+    expect(prompt).not.toContain(
+      "`config.schema.lookup|get|patch|apply`, `restart`",
+    );
     expect(prompt).not.toContain("update.run");
     expect(prompt).not.toContain("Use config.schema to");
     expect(prompt).not.toContain("config.schema, config.apply");
@@ -857,6 +933,9 @@ describe("buildAgentSystemPrompt", () => {
     );
     expect(prompt).toContain(
       "Never restart the Gateway through shell commands or write your own config.",
+    );
+    expect(prompt).toContain(
+      "Never write own config; OpenClaw is system expert.",
     );
     expect(prompt).toContain("`visible:true` only web/app user or asked.");
   });
@@ -963,13 +1042,17 @@ describe("buildAgentSystemPrompt", () => {
       toolNames: ["read"],
     });
     expect(withoutTool).not.toContain("## Skill Workshop");
-    expect(withoutTool).not.toContain("Durable reusable skill/playbook/workflow work");
+    expect(withoutTool).not.toContain(
+      "Durable reusable skill/playbook/workflow work",
+    );
 
     const withTool = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["read", "skill_workshop"],
     });
-    expect(withTool).toContain("- skill_workshop: Manage reusable-skill proposals");
+    expect(withTool).toContain(
+      "- skill_workshop: Manage reusable-skill proposals",
+    );
     expect(withTool).toContain("## Skill Workshop");
     expect(withTool).toContain("Durable reusable skill/playbook/workflow work");
     expect(withTool).toContain("Generated = pending proposal");
@@ -1049,7 +1132,8 @@ describe("buildAgentSystemPrompt", () => {
       contextFiles: [
         {
           path: "MEMORY.md",
-          content: "NEVER use [[tts:...]] or TTS commands; ALWAYS use local Piper.",
+          content:
+            "NEVER use [[tts:...]] or TTS commands; ALWAYS use local Piper.",
         },
       ],
       ttsHint:
@@ -1111,7 +1195,9 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
-    expect(prompt).toContain("Set `channel` only outside current/default source.");
+    expect(prompt).toContain(
+      "Set `channel` only outside current/default source.",
+    );
     expect(prompt).not.toContain("No source default");
     expect(prompt).not.toContain("valid ids:");
   });
@@ -1163,12 +1249,18 @@ describe("buildAgentSystemPrompt", () => {
     expect(defaultPrompt).not.toContain("## Sub-Agent Delegation");
     expect(preferPrompt).toContain("## Sub-Agent Delegation");
     expect(preferPrompt).toContain("Mode: prefer");
-    expect(preferPrompt).toContain("You coordinate; children do non-trivial work");
+    expect(preferPrompt).toContain(
+      "You coordinate; children do non-trivial work",
+    );
     expect(preferPrompt).toContain("Otherwise use `sessions_spawn`");
     expect(preferPrompt).toContain("objective, output, inputs/files");
-    expect(preferPrompt).toContain("lowercase `taskName` (underscores/hyphens)");
+    expect(preferPrompt).toContain(
+      "lowercase `taskName` (underscores/hyphens)",
+    );
     expect(preferPrompt).toContain("Child output = evidence");
-    expect(preferPrompt).toContain("`subagents(action=list)` only for requested status");
+    expect(preferPrompt).toContain(
+      "`subagents(action=list)` only for requested status",
+    );
   });
 
   it("adds run-scoped Ultra orchestration only when sessions_spawn is callable", () => {
@@ -1208,9 +1300,15 @@ describe("buildAgentSystemPrompt", () => {
     expect(ultraPrompt).toContain("## Proactive Sub-Agent Orchestration");
     expect(ultraPrompt).toContain("Ultra active");
     expect(ultraPrompt).not.toContain("Mode: prefer");
-    expect(deferredUltraPrompt).toContain("## Proactive Sub-Agent Orchestration");
-    expect(minimalUltraPrompt).toContain("## Proactive Sub-Agent Orchestration");
-    expect(unavailablePrompt).not.toContain("## Proactive Sub-Agent Orchestration");
+    expect(deferredUltraPrompt).toContain(
+      "## Proactive Sub-Agent Orchestration",
+    );
+    expect(minimalUltraPrompt).toContain(
+      "## Proactive Sub-Agent Orchestration",
+    );
+    expect(unavailablePrompt).not.toContain(
+      "## Proactive Sub-Agent Orchestration",
+    );
     expect(rawPrompt).not.toContain("## Proactive Sub-Agent Orchestration");
   });
 
@@ -1232,15 +1330,20 @@ describe("buildAgentSystemPrompt", () => {
         stablePrefix: "## Provider Stable\n\nStable guidance.",
         dynamicSuffix: "## Provider Dynamic\n\nDynamic guidance.",
         sectionOverrides: {
-          tool_call_style: "## Tool Call Style\nProvider-specific tool call guidance.",
+          tool_call_style:
+            "## Tool Call Style\nProvider-specific tool call guidance.",
         },
       },
     });
 
     expect(prompt).toContain("## Provider Stable\n\nStable guidance.");
     expect(prompt).toContain("## Provider Dynamic\n\nDynamic guidance.");
-    expect(prompt).toContain("## Tool Call Style\nProvider-specific tool call guidance.");
-    expect(prompt).not.toContain("Default: do not narrate routine, low-risk tool calls");
+    expect(prompt).toContain(
+      "## Tool Call Style\nProvider-specific tool call guidance.",
+    );
+    expect(prompt).not.toContain(
+      "Default: do not narrate routine, low-risk tool calls",
+    );
     // The relocated exec-approval guidance stays suppressed when tool_call_style is
     // provider-overridden, preserving the "override replaces the whole section" contract.
     expect(prompt).not.toContain("If exec returns approval-pending");
@@ -1307,13 +1410,17 @@ describe("buildAgentSystemPrompt", () => {
     expect(supportedPrompt).toContain(
       "This surface renders `<details>` disclosures. When a reply has optional depth — long derivations, logs, background, worked examples — you may place it inside `<details><summary>Label</summary>` … `</details>` written on their own lines.",
     );
-    expect(supportedPrompt).toContain("Never hide the actual answer behind a disclosure.");
+    expect(supportedPrompt).toContain(
+      "Never hide the actual answer behind a disclosure.",
+    );
     expect(unsupportedPrompt).not.toContain("## Collapsible Details");
     expect(minimalPrompt).not.toContain("## Collapsible Details");
 
     const stablePrefix = (prompt: string) =>
       prompt.slice(0, prompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY));
-    expect(stablePrefix(supportedPrompt)).toBe(stablePrefix(sameChannelUnsupportedPrompt));
+    expect(stablePrefix(supportedPrompt)).toBe(
+      stablePrefix(sameChannelUnsupportedPrompt),
+    );
   });
 
   it("describes source replies without the message tool", () => {
@@ -1360,7 +1467,9 @@ describe("buildAgentSystemPrompt", () => {
         },
       });
 
-      expect(prompt).toContain("Current source visible reply MUST use `message(action=send)`");
+      expect(prompt).toContain(
+        "Current source visible reply MUST use `message(action=send)`",
+      );
       expect(prompt).toContain("Skip tool = user gets nothing");
       expect(prompt).toContain(
         "Media paths = attachments, not prose. One: `media`; many: `attachments: [{media: ...}]`.",
@@ -1390,7 +1499,9 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
-    expect(prompt).toContain("`send`: `target` + `message`; target required this turn");
+    expect(prompt).toContain(
+      "`send`: `target` + `message`; target required this turn",
+    );
     expect(prompt).toContain(
       "Group/channel: stale/joke/light ack/low-value chatter => reaction or silence. Needed reply => `message(action=send)`; final text private.",
     );
@@ -1406,7 +1517,9 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
-    expect(prompt).toContain("Media attachment: own line `MEDIA:<path-or-url>` per item");
+    expect(prompt).toContain(
+      "Media attachment: own line `MEDIA:<path-or-url>` per item",
+    );
     expect(prompt).toContain("path is not prose");
   });
 
@@ -1434,7 +1547,9 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
-    expect(prompt).toContain("Current source visible reply MUST use `message(action=send)`");
+    expect(prompt).toContain(
+      "Current source visible reply MUST use `message(action=send)`",
+    );
     expect(prompt).not.toContain("Group/channel:");
   });
 
@@ -1501,7 +1616,9 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("channel=telegram");
     expect(prompt).toContain("capabilities=inlinebuttons,voice");
-    expect(prompt).not.toContain("capabilities= InlineButtons ,voice,inlinebuttons,Voice");
+    expect(prompt).not.toContain(
+      "capabilities= InlineButtons ,voice,inlinebuttons,Voice",
+    );
   });
 
   it("includes agent and session identity in runtime when provided", () => {
@@ -1630,7 +1747,11 @@ describe("buildAgentSystemPrompt", () => {
         containerWorkspaceDir: "/workspace",
         workspaceAccess: "ro",
         agentWorkspaceMount: "/agent",
-        elevated: { allowed: true, defaultLevel: "on", fullAccessAvailable: true },
+        elevated: {
+          allowed: true,
+          defaultLevel: "on",
+          fullAccessAvailable: true,
+        },
       },
     });
 
@@ -1668,7 +1789,9 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("Elevated exec is available for this session.");
     expect(prompt).toContain("User can toggle with /elevated on|off|ask.");
-    expect(prompt).not.toContain("User can toggle with /elevated on|off|ask|full.");
+    expect(prompt).not.toContain(
+      "User can toggle with /elevated on|off|ask|full.",
+    );
     expect(prompt).toContain(
       "Auto-approved /elevated full is unavailable here (runtime constraints).",
     );
@@ -1702,7 +1825,8 @@ describe("buildAgentSystemPrompt", () => {
       contextFiles: [
         {
           path: "AGENTS.md",
-          content: "Project rules mention ## Messaging, ## Group Chat Context, and ## Reactions.",
+          content:
+            "Project rules mention ## Messaging, ## Group Chat Context, and ## Reactions.",
         },
       ],
       extraSystemPrompt: "Current group-chat facts",
@@ -1714,7 +1838,9 @@ describe("buildAgentSystemPrompt", () => {
     const projectContextPos = prompt.indexOf("# Project Context");
     const boundaryPos = prompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);
     const messagingPos = prompt.lastIndexOf("## Messaging");
-    const conversationContextPos = prompt.lastIndexOf("## Conversation Context");
+    const conversationContextPos = prompt.lastIndexOf(
+      "## Conversation Context",
+    );
     const reactionsPos = prompt.lastIndexOf("## Reactions");
     const voicePos = prompt.lastIndexOf("## Voice (TTS)");
     // These sections vary with approval UI capabilities and owner identity, so
@@ -1745,7 +1871,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(manualApprovalPrompt).toContain("send exact /approve");
     expect(manualApprovalPrompt).not.toContain("native card/buttons first");
     for (const variant of [otherOwnerPrompt, manualApprovalPrompt]) {
-      expect(variant.slice(0, variant.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY))).toBe(stablePrefix);
+      expect(
+        variant.slice(0, variant.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY)),
+      ).toBe(stablePrefix);
     }
   });
 
@@ -1769,7 +1897,9 @@ describe("buildAgentSystemPrompt", () => {
     const firstBoundary = first.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);
     const secondBoundary = second.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);
 
-    expect(firstBoundary).toBeGreaterThan(first.indexOf("### Deferred Tool Schemas"));
+    expect(firstBoundary).toBeGreaterThan(
+      first.indexOf("### Deferred Tool Schemas"),
+    );
     expect(first.slice(0, firstBoundary)).toBe(second.slice(0, secondBoundary));
     expect(first.slice(0, firstBoundary)).toContain(toolSchemaDirectoryPrompt);
     expect(first.slice(firstBoundary)).toContain("Allowlisted senders: +123");
@@ -1795,13 +1925,19 @@ describe("buildSubagentSystemPrompt", () => {
     expect(prompt).toContain("set `agentId` unless default");
     expect(prompt).toContain("Never ask user for slash/CLI");
     expect(prompt).toContain("exec openclaw/acpx");
-    expect(prompt).toContain("`agents_list`/`subagents` = OpenClaw runtime=subagent only");
+    expect(prompt).toContain(
+      "`agents_list`/`subagents` = OpenClaw runtime=subagent only",
+    );
     expect(prompt).toContain("Subagent results auto-announce");
-    expect(prompt).toContain("never sessions_list/history, exec sleep, or poll loops");
+    expect(prompt).toContain(
+      "never sessions_list/history, exec sleep, or poll loops",
+    );
     expect(prompt).toContain("Need wait: `sessions_yield`");
     expect(prompt).toContain("objective, output, inputs/files, write scope");
     expect(prompt).toContain("Track expected session keys");
-    expect(prompt).toContain("Late completion after final: reply ONLY NO_REPLY");
+    expect(prompt).toContain(
+      "Late completion after final: reply ONLY NO_REPLY",
+    );
     expect(prompt).toContain("No polling");
     expect(prompt).toContain("spawned by main agent");
     expect(prompt).toContain("auto-reported to main agent");
@@ -1955,7 +2091,9 @@ describe("watched sessions prompt surfaces", () => {
     expect(prompt).toContain(
       "Readable now (read-only) via sessions_history/sessions_search; rows appear in sessions_list.",
     );
-    expect(prompt).toContain("- agent:main:telegram:group:alpha — Family group");
+    expect(prompt).toContain(
+      "- agent:main:telegram:group:alpha — Family group",
+    );
     expect(prompt).toContain("- agent:main:telegram:group:beta");
     expect(prompt).toContain('(+1 more: sessions_list kinds=["group"].)');
     expect(prompt).toContain(
