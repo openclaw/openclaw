@@ -528,4 +528,67 @@ describe("stageSandboxMedia", () => {
       expect(sessionCtx.media?.[0]?.path).toBe(mediaPath);
     });
   });
+
+  it("returns hostWorkspaceStagingDir for host mode, and cleans it up if staged is empty", async () => {
+    await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
+      const cfg = createSandboxMediaStageConfig(home);
+      const workspaceDir = join(home, "openclaw");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      sandboxMocks.ensureSandboxWorkspaceForSession.mockResolvedValue(null);
+
+      // Oversized media will fail to stage (staged.size === 0)
+      const mediaPath = await writeInboundMedia(
+        home,
+        "oversized.bin",
+        Buffer.alloc(MEDIA_MAX_BYTES + 1, 0x41),
+      );
+
+      const { ctx, sessionCtx } = createSandboxMediaContexts(mediaPath);
+      const result = await stageSandboxMedia({
+        ctx,
+        sessionCtx,
+        cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir,
+      });
+
+      expect(result.staged.size).toBe(0);
+      expect(result.hostWorkspaceStagingDir).toBeUndefined();
+
+      // Verify that no openclaw-staged-* directories were left behind
+      const inboundDir = join(workspaceDir, "media", "inbound");
+      const files = await fs.readdir(inboundDir).catch(() => []);
+      const stagedDirs = files.filter((f) => f.startsWith("openclaw-staged-"));
+      expect(stagedDirs.length).toBe(0);
+    });
+  });
+
+  it("returns hostWorkspaceStagingDir and stages files in host mode", async () => {
+    await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
+      const cfg = createSandboxMediaStageConfig(home);
+      const workspaceDir = join(home, "openclaw");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      sandboxMocks.ensureSandboxWorkspaceForSession.mockResolvedValue(null);
+
+      const fileName = "report.pdf";
+      const mediaPath = await writeInboundMedia(home, fileName, "CONTENT");
+
+      const { ctx, sessionCtx } = createSandboxMediaContexts(mediaPath);
+      const result = await stageSandboxMedia({
+        ctx,
+        sessionCtx,
+        cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir,
+      });
+
+      expect(result.staged.size).toBe(1);
+      expect(result.hostWorkspaceStagingDir).toBeDefined();
+
+      const stagingDir = result.hostWorkspaceStagingDir!;
+      await expect(fs.stat(stagingDir)).resolves.toBeDefined();
+      const stagedFilePath = result.staged.get(0)!;
+      await expect(fs.readFile(stagedFilePath, "utf8")).resolves.toBe("CONTENT");
+    });
+  });
 });
