@@ -928,5 +928,4 @@ describe("describeImageWithModel", () => {
     expect(authRequest?.lockedProfile).toBe(true);
     expect(completeMock).not.toHaveBeenCalled();
   });
-
 });
