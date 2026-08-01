@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   QaGatewayChildRestartOptions,
   QaGatewayChildStateMutationContext,
-} from "./gateway-child.js";
+} from "./gateway-child-contracts.js";
 import type { QaProviderMode } from "./model-selection.js";
 import type { QaTransportActionName, QaTransportAdapter } from "./qa-transport.js";
 

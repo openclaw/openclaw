@@ -44,6 +44,10 @@ import {
 import { assertRepoBoundPath, ensureRepoBoundDirectory } from "./cli-paths.js";
 import { buildQaCodexAppServerArgs } from "./codex-app-server-args.js";
 import { QaSuiteInfraError, toQaErrorObject } from "./errors.js";
+import type {
+  QaGatewayChildRestartOptions,
+  QaGatewayChildStateMutationContext,
+} from "./gateway-child-contracts.js";
 import { formatQaGatewayLogsForError, redactQaGatewayDebugText } from "./gateway-log-redaction.js";
 import {
   createQaGatewayProcessBoundaryController,
@@ -98,16 +102,7 @@ const QA_GATEWAY_CHILD_BLOCKED_SECRET_ENV_VARS = Object.freeze([
   "OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN",
 ]);
 
-export type QaGatewayChildStateMutationContext = {
-  configPath: string;
-  runtimeEnv: NodeJS.ProcessEnv;
-  stateDir: string;
-  tempRoot: string;
-};
-
-export type QaGatewayChildRestartOptions = {
-  shutdownMode?: "graceful" | "hard";
-};
+export type { QaGatewayChildStateMutationContext } from "./gateway-child-contracts.js";
 
 type QaGatewayChildDirectCommand = {
   executablePath: string;
