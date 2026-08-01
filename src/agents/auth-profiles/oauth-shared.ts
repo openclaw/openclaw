@@ -181,10 +181,13 @@ export function shouldBootstrapFromExternalCliCredential(params: {
   now?: number;
 }): boolean {
   const now = params.now ?? Date.now();
-  if (hasUsableOAuthCredential(params.existing, now)) {
+  if (!hasUsableOAuthCredential(params.imported, now)) {
     return false;
   }
-  return hasUsableOAuthCredential(params.imported, now);
+  if (isOAuthRefreshDead(params.existing)) {
+    return !isSameOAuthRefreshGrant(params.existing, params.imported);
+  }
+  return !hasUsableOAuthCredential(params.existing, now);
 }
 
 /** Overlays runtime external OAuth profiles on a cloned store. */

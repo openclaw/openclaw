@@ -24,6 +24,7 @@ import {
   areOAuthCredentialsEquivalent,
   hasMatchingOAuthIdentity,
   hasUsableOAuthCredential,
+  isOAuthRefreshDead,
   isSameOAuthRefreshGrant,
   isSafeToAdoptBootstrapOAuthIdentity,
   isSafeToAdoptMainStoreOAuthIdentity,
@@ -273,7 +274,7 @@ export function resolveEffectiveOAuthCredential(params: {
   if (!imported) {
     return params.credential;
   }
-  if (hasUsableOAuthCredential(params.credential)) {
+  if (hasUsableOAuthCredential(params.credential) && !isOAuthRefreshDead(params.credential)) {
     log.debug("resolved oauth credential from canonical local store", {
       profileId: params.profileId,
       provider: params.credential.provider,
