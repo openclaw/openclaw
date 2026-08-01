@@ -161,7 +161,11 @@ export async function stageSandboxMedia(params: {
   if (staged.size === 0) {
     if (hostWorkspaceStagingDir) {
       const absolutePath = path.resolve(effectiveWorkspaceDir, hostWorkspaceStagingDir);
-      await fs.rm(absolutePath, { recursive: true, force: true }).catch(() => {});
+      await fs.rm(absolutePath, { recursive: true, force: true }).catch((error) => {
+        logVerbose(
+          `[host-staging-cleanup] Failed to clean up empty host workspace staging directory recursively: ${path.basename(absolutePath)}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      });
     }
     return { staged };
   }
