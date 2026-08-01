@@ -9,8 +9,10 @@ import { detectMime } from "@openclaw/media-core/mime";
 import { formatByteSize } from "@openclaw/normalization-core";
 import { isWindowsDrivePath } from "../infra/archive-path.js";
 import { toErrorObject } from "../infra/errors.js";
+import { withFileLock } from "../infra/file-lock.js";
 import {
   canonicalPathFromExistingAncestor,
+  resolveAbsolutePathForWrite,
   root as fsRoot,
   FsSafeError,
 } from "../infra/fs-safe.js";
@@ -23,6 +25,7 @@ import {
   resolveMediaReferenceSandboxPath,
 } from "../media/media-reference.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
+import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { clampNumber } from "../utils.js";
 import {
   REQUIRED_PARAM_GROUPS,
@@ -34,6 +37,15 @@ import {
 } from "./agent-tools.params.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
+import {
+  DAILY_MEMORY_FLUSH_MAX_APPEND_CHARS,
+  DAILY_MEMORY_FLUSH_MAX_APPEND_LINES,
+  DAILY_MEMORY_FLUSH_MAX_EXISTING_FILE_BYTES,
+  memoryFlushAppendRejected,
+  prepareDailyMemoryFlushAppend,
+  type DailyMemoryFlushSemanticPolicy,
+  type PreparedMemoryFlushAppend,
+} from "./memory-flush-append.js";
 import {
   type MemoryWriteProvenanceObserver,
   withMemoryWriteProvenance,
@@ -83,6 +95,12 @@ const OFFSET_BEYOND_EOF_RE = /^Offset \d+ is beyond end of file \(\d+ lines tota
 const READ_CONTINUATION_NOTICE_RE =
   /\n\n\[(?:Showing lines [^\]]*?Use offset=\d+ to continue\.|\d+ more lines in file\. Use offset=\d+ to continue\.)\]\s*$/;
 const DAILY_MEMORY_PATH_RE = /^memory\/\d{4}-\d{2}-\d{2}\.md$/;
+const DAILY_MEMORY_FLUSH_LOCK_OPTIONS = {
+  retries: { retries: 10, factor: 1, minTimeout: 10, maxTimeout: 100, randomize: true },
+  stale: 30_000,
+};
+
+const dailyMemoryFlushProcessLocks = new KeyedAsyncQueue();
 
 function resolveAdaptiveReadMaxBytes(options?: OpenClawReadToolOptions): number {
   const contextWindowTokens = options?.modelContextWindowTokens;
@@ -613,10 +631,11 @@ type MemoryFlushAppendOnlyWriteOptions = {
     root: string;
     bridge: SandboxFsBridge;
   };
+  semanticPolicy?: DailyMemoryFlushSemanticPolicy;
 };
 
 async function readOptionalUtf8File(params: {
-  absolutePath: string;
+  root: string;
   relativePath: string;
   sandbox?: MemoryFlushAppendOnlyWriteOptions["sandbox"];
   signal?: AbortSignal;
@@ -631,6 +650,11 @@ async function readOptionalUtf8File(params: {
       if (!stat) {
         return "";
       }
+      if (stat.size > DAILY_MEMORY_FLUSH_MAX_EXISTING_FILE_BYTES) {
+        throw memoryFlushAppendRejected(
+          `existing daily memory file exceeds ${DAILY_MEMORY_FLUSH_MAX_EXISTING_FILE_BYTES} bytes; compact it before appending more memory-flush content.`,
+        );
+      }
       const buffer = await params.sandbox.bridge.readFile({
         filePath: params.relativePath,
         cwd: params.sandbox.root,
@@ -638,9 +662,19 @@ async function readOptionalUtf8File(params: {
       });
       return buffer.toString("utf-8");
     }
-    return await fs.readFile(params.absolutePath, "utf-8");
+    const root = await fsRoot(params.root);
+    const existing = await root.read(params.relativePath, {
+      hardlinks: "reject",
+      maxBytes: DAILY_MEMORY_FLUSH_MAX_EXISTING_FILE_BYTES,
+      nonBlockingRead: true,
+      symlinks: "reject",
+    });
+    return existing.buffer.toString("utf-8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+    if (
+      (error as NodeJS.ErrnoException | undefined)?.code === "ENOENT" ||
+      (error instanceof FsSafeError && error.code === "not-found")
+    ) {
       return "";
     }
     throw error;
@@ -657,6 +691,7 @@ async function appendMemoryFlushContent(params: {
 }) {
   if (!params.sandbox) {
     const root = await fsRoot(params.root);
+    params.signal?.throwIfAborted();
     await root.append(params.relativePath, params.content, {
       mkdir: true,
       prependNewlineIfNeeded: true,
@@ -665,11 +700,12 @@ async function appendMemoryFlushContent(params: {
   }
 
   const existing = await readOptionalUtf8File({
-    absolutePath: params.absolutePath,
+    root: params.root,
     relativePath: params.relativePath,
     sandbox: params.sandbox,
     signal: params.signal,
   });
+  params.signal?.throwIfAborted();
   const separator =
     existing.length > 0 && !existing.endsWith("\n") && !params.content.startsWith("\n") ? "\n" : "";
   const next = `${existing}${separator}${params.content}`;
@@ -695,12 +731,45 @@ async function appendMemoryFlushContent(params: {
   await fs.writeFile(params.absolutePath, next, "utf-8");
 }
 
+async function prepareMemoryFlushAppend(params: {
+  root: string;
+  relativePath: string;
+  content: string;
+  semanticPolicy?: DailyMemoryFlushSemanticPolicy;
+  sandbox?: MemoryFlushAppendOnlyWriteOptions["sandbox"];
+  signal?: AbortSignal;
+}): Promise<PreparedMemoryFlushAppend> {
+  let existingContent: string;
+  try {
+    existingContent = await readOptionalUtf8File({
+      root: params.root,
+      relativePath: params.relativePath,
+      sandbox: params.sandbox,
+      signal: params.signal,
+    });
+  } catch (error) {
+    if (error instanceof FsSafeError && error.code === "too-large") {
+      throw memoryFlushAppendRejected(
+        `existing daily memory file exceeds ${DAILY_MEMORY_FLUSH_MAX_EXISTING_FILE_BYTES} bytes; compact it before appending more memory-flush content.`,
+      );
+    }
+    throw error;
+  }
+  return prepareDailyMemoryFlushAppend({
+    content: params.content,
+    existingContent,
+    semanticPolicy: params.semanticPolicy,
+  });
+}
+
 /** Restrict a write tool to appending memory-flush content to one path. */
 export function wrapToolMemoryFlushAppendOnlyWrite(
   tool: AnyAgentTool,
   options: MemoryFlushAppendOnlyWriteOptions,
 ): AnyAgentTool {
   const allowedAbsolutePath = path.resolve(options.root, options.relativePath);
+  let acceptedDailyAppendChars = 0;
+  let acceptedDailyAppendLines = 0;
   return {
     ...tool,
     description: `${tool.description} During memory flush, this tool may only append to ${options.relativePath}.`,
@@ -730,21 +799,96 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
         );
       }
 
-      await appendMemoryFlushContent({
-        absolutePath: allowedAbsolutePath,
-        root: options.root,
-        relativePath: options.relativePath,
-        content,
-        sandbox: options.sandbox,
-        signal,
-      });
-      return {
-        content: [{ type: "text", text: `Appended content to ${options.relativePath}.` }],
-        details: {
-          path: options.relativePath,
-          appendOnly: true,
-        },
+      if (!DAILY_MEMORY_PATH_RE.test(options.relativePath)) {
+        await appendMemoryFlushContent({
+          absolutePath: allowedAbsolutePath,
+          root: options.root,
+          relativePath: options.relativePath,
+          content,
+          sandbox: options.sandbox,
+          signal,
+        });
+        return {
+          content: [
+            { type: "text" as const, text: `Appended content to ${options.relativePath}.` },
+          ],
+          details: { path: options.relativePath, appendOnly: true },
+        };
+      }
+
+      const appendPreparedContent = async () => {
+        signal?.throwIfAborted();
+        const preparedAppend = await prepareMemoryFlushAppend({
+          root: options.root,
+          relativePath: options.relativePath,
+          content,
+          semanticPolicy: options.semanticPolicy,
+          sandbox: options.sandbox,
+          signal,
+        });
+        signal?.throwIfAborted();
+        if (preparedAppend.status === "skipped_duplicate") {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `No new memory-flush content appended to ${options.relativePath}; all proposed lines were already present.`,
+              },
+            ],
+            details: {
+              path: options.relativePath,
+              appendOnly: true,
+            },
+          };
+        }
+
+        const cumulativeLines = acceptedDailyAppendLines + preparedAppend.appendedLines;
+        if (cumulativeLines > DAILY_MEMORY_FLUSH_MAX_APPEND_LINES) {
+          throw memoryFlushAppendRejected(
+            `too many lines across this memory-flush run (${cumulativeLines}; max ${DAILY_MEMORY_FLUSH_MAX_APPEND_LINES}). Write 1-3 short pointer lines only.`,
+          );
+        }
+        const cumulativeChars = acceptedDailyAppendChars + preparedAppend.appendChars;
+        if (cumulativeChars > DAILY_MEMORY_FLUSH_MAX_APPEND_CHARS) {
+          throw memoryFlushAppendRejected(
+            `content across this memory-flush run is too large (${cumulativeChars} chars; max ${DAILY_MEMORY_FLUSH_MAX_APPEND_CHARS}). Write 1-3 short pointer lines only.`,
+          );
+        }
+
+        await appendMemoryFlushContent({
+          absolutePath: allowedAbsolutePath,
+          root: options.root,
+          relativePath: options.relativePath,
+          content: preparedAppend.content,
+          sandbox: options.sandbox,
+          signal,
+        });
+        acceptedDailyAppendLines = cumulativeLines;
+        acceptedDailyAppendChars = cumulativeChars;
+        return {
+          content: [
+            { type: "text" as const, text: `Appended content to ${options.relativePath}.` },
+          ],
+          details: {
+            path: options.relativePath,
+            appendOnly: true,
+          },
+        };
       };
+
+      const canonicalRoot = await fs.realpath(options.root);
+      const expectedLockTarget = path.join(canonicalRoot, options.relativePath);
+      const resolvedLockTarget = await resolveAbsolutePathForWrite(expectedLockTarget, {
+        symlinks: "reject",
+      });
+      const lockTarget = resolvedLockTarget.canonicalPath;
+      if (lockTarget !== expectedLockTarget) {
+        throw new FsSafeError("symlink", "path traverses a symlink");
+      }
+      toRelativeWorkspacePath(canonicalRoot, lockTarget);
+      return await dailyMemoryFlushProcessLocks.enqueue(lockTarget, async () =>
+        withFileLock(lockTarget, DAILY_MEMORY_FLUSH_LOCK_OPTIONS, appendPreparedContent),
+      );
     },
   };
 }

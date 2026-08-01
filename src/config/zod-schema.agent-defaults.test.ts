@@ -386,6 +386,23 @@ describe("agent defaults schema", () => {
     ).toBe(false);
   });
 
+  it("accepts memory flush daily-memory semantic policy switches", () => {
+    const result = AgentDefaultsSchema.parse({
+      compaction: {
+        memoryFlush: {
+          dailyMemorySemanticPolicy: {
+            rejectHeadings: true,
+            deduplicateLines: true,
+          },
+        },
+      },
+    })!;
+    expect(result.compaction?.memoryFlush?.dailyMemorySemanticPolicy).toEqual({
+      rejectHeadings: true,
+      deduplicateLines: true,
+    });
+  });
+
   it("accepts compaction.midTurnPrecheck.enabled", () => {
     const result = AgentDefaultsSchema.parse({
       compaction: {

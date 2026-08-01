@@ -633,6 +633,12 @@ export const FIELD_LABELS: Record<string, string> = {
     "Compaction Memory Flush Soft Threshold",
   "agents.defaults.compaction.memoryFlush.forceFlushTranscriptBytes":
     "Compaction Memory Flush Transcript Size Threshold",
+  "agents.defaults.compaction.memoryFlush.dailyMemorySemanticPolicy":
+    "Compaction Memory Flush Daily Memory Semantic Policy",
+  "agents.defaults.compaction.memoryFlush.dailyMemorySemanticPolicy.rejectHeadings":
+    "Compaction Memory Flush Reject Headings",
+  "agents.defaults.compaction.memoryFlush.dailyMemorySemanticPolicy.deduplicateLines":
+    "Compaction Memory Flush Deduplicate Lines",
   "agents.defaults.embeddedAgent": "Embedded OpenClaw",
   "agents.defaults.embeddedAgent.projectSettingsPolicy":
     "Embedded OpenClaw Project Settings Policy",

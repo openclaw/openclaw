@@ -284,9 +284,16 @@ Config (`agents.defaults.compaction.memoryFlush`), full reference at [/gateway/c
 | `model`                     | unset            | exact provider/model override for the flush turn only, for example `ollama/qwen3:8b`                                                                   |
 | `softThresholdTokens`       | `4000`           | gap below the compaction threshold that triggers a flush                                                                                               |
 | `forceFlushTranscriptBytes` | unset (disabled) | force a flush once active transcript history reaches this estimated byte size (or string like `"2mb"`), even if token counters are stale; `0` disables |
+| `dailyMemorySemanticPolicy` | unset            | optional `rejectHeadings` and `deduplicateLines` switches for canonical daily-memory appends; each defaults to `false`                                 |
 
 Notes:
 
+- Writes to `memory/YYYY-MM-DD.md` remain append-only and always reject empty
+  payloads, more than 3 non-empty lines, lines over 500 characters, payloads or
+  cumulative flush-run content over 800 characters, and existing daily files
+  over 16 MiB. Heading rejection and normalized exact-line deduplication are
+  semantic policy choices and run only when their respective
+  `dailyMemorySemanticPolicy` switch is enabled.
 - The built-in prompt and system prompt include a `NO_REPLY` hint to suppress delivery.
 - When `model` is set, the flush turn uses that model without inheriting the active session's fallback chain, so local-only housekeeping does not silently fall back to a paid conversation model on failure.
 - The flush runs once per compaction cycle (tracked in the session row).

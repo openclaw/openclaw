@@ -2121,6 +2121,39 @@ describe("createOpenClawCodingTools", () => {
     }
   });
 
+  it("applies configured daily-memory semantic policy to memory flush tools", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-policy-"));
+    const memoryRelativePath = "memory/2026-03-24.md";
+    try {
+      const tools = createOpenClawCodingTools({
+        workspaceDir,
+        trigger: "memory",
+        memoryFlushWritePath: memoryRelativePath,
+        config: {
+          agents: {
+            defaults: {
+              compaction: {
+                memoryFlush: {
+                  dailyMemorySemanticPolicy: { rejectHeadings: true },
+                },
+              },
+            },
+          },
+        },
+      });
+      const writeExecute = requireToolExecute(requireTool(tools, "write"));
+      await expect(
+        writeExecute("tool-memory-flush-policy", {
+          path: memoryRelativePath,
+          content: "# Daily scaffold",
+        }),
+      ).rejects.toThrow(/disabled by policy/);
+      await expect(fs.stat(path.join(workspaceDir, memoryRelativePath))).rejects.toThrow();
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("records ordinary write, edit, and apply_patch memory provenance from turn taint", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-write-taint-"));
     const rollback = vi.fn(async () => {});
