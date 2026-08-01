@@ -163,6 +163,7 @@ export function buildSessionHistorySnapshot(params: {
 }): SessionHistorySnapshot {
   const projected = projectChatDisplayMessagesWithState(params.rawMessages, {
     maxChars: params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+    redactInlineMedia: true,
   });
   const visibleMessages = toSessionHistoryMessages(projected.messages);
   const history = paginateSessionMessages(visibleMessages, params.limit, params.cursor);
@@ -296,6 +297,7 @@ export class SessionHistorySseState {
     const hadPendingTurnBoundary = this.turnBoundaryPending;
     const nextProjection = projectChatDisplayMessagesWithState([nextMessage], {
       maxChars: this.maxChars,
+      redactInlineMedia: true,
       turnBoundaryPending: hadPendingTurnBoundary,
     });
     this.turnBoundaryPending = nextProjection.turnBoundaryPending;
@@ -305,6 +307,7 @@ export class SessionHistorySseState {
     const projectedMessages = toSessionHistoryMessages(
       projectChatDisplayMessages([...this.sentHistory.messages, nextMessage], {
         maxChars: this.maxChars,
+      redactInlineMedia: true,
       }),
     );
     if (projectedMessages.length > this.sentHistory.messages.length) {
@@ -392,6 +395,7 @@ export class SessionHistorySseState {
     return buildSessionHistorySnapshot({
       rawMessages: rawSnapshot.rawMessages,
       maxChars: this.maxChars,
+      redactInlineMedia: true,
       limit: this.limit,
       cursor: this.cursor,
       ...(typeof rawSnapshot.rawTranscriptSeq === "number"

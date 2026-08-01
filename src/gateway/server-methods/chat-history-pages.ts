@@ -319,11 +319,13 @@ export async function readChatHistoryPage(params: {
     const projected = isTailPage
       ? projectRecentChatDisplayMessages(recencyFilteredMessages, {
           maxChars: effectiveMaxChars,
+          redactInlineMedia: true,
           maxMessages: max,
           turnBoundaryPending: isHeartbeatHistoryTurnBoundaryMessage(overreadContextMessage),
         })
       : projectChatDisplayMessages(recencyFilteredMessages, {
           maxChars: effectiveMaxChars,
+          redactInlineMedia: true,
           turnBoundaryPending: isHeartbeatHistoryTurnBoundaryMessage(overreadContextMessage),
         });
     const windowed = messageId
@@ -415,6 +417,7 @@ export async function readChatHistoryPage(params: {
     );
     const displayMessages = projectChatDisplayMessages(mergedMessages, {
       maxChars: effectiveMaxChars,
+          redactInlineMedia: true,
     });
     return {
       activeLeafEntryId,
@@ -439,6 +442,7 @@ export async function readChatHistoryPage(params: {
   );
   const displayMessages = projectRecentChatDisplayMessages(recencyFilteredMessages, {
     maxChars: effectiveMaxChars,
+          redactInlineMedia: true,
     maxMessages: max,
     turnBoundaryPending,
   });
