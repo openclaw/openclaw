@@ -355,11 +355,31 @@ export async function spawnSubagentDirect(
         swarmSchedulerGroupKey,
         swarmMaxConcurrent: swarmConfig.maxConcurrent,
       });
-    if (initialSession.entry) {
+    // Prefer the post-context persisted child entry so fork paths record and
+    // return the same durable UUID (fork.transcript.sessionId), not the
+    // provisional pre-fork entry identity.
+    const persistedChildEntry =
+      preparedSpawnContext.status === "ok" && preparedSpawnContext.childEntry
+        ? preparedSpawnContext.childEntry
+        : initialSession.entry;
+    const acceptedChildEntry =
+      preparedSpawnContext.status === "ok" && preparedSpawnContext.mode === "fork"
+        ? {
+            ...(persistedChildEntry ?? {
+              sessionId: preparedSpawnContext.forked.sessionId,
+              updatedAt: Date.now(),
+            }),
+            sessionId: preparedSpawnContext.forked.sessionId,
+            ...(preparedSpawnContext.forked.sessionFile
+              ? { sessionFile: preparedSpawnContext.forked.sessionFile }
+              : {}),
+          }
+        : persistedChildEntry;
+    if (acceptedChildEntry) {
       recordSessionCreated({
         sessionKey: childSessionKey,
         agentId: targetAgentId,
-        entry: initialSession.entry,
+        entry: acceptedChildEntry,
       });
     }
     recordSubagentSpawned({
@@ -369,13 +389,10 @@ export async function spawnSubagentDirect(
       agentId: targetAgentId,
     });
 
-    const resolveAcceptedChildSessionId = (): string | undefined => {
-      const forkedSessionId =
-        preparedSpawnContext.status === "ok" && preparedSpawnContext.mode === "fork"
-          ? preparedSpawnContext.forked.sessionId
-          : undefined;
-      return forkedSessionId ?? initialSession.entry?.sessionId;
-    };
+    const resolveAcceptedChildSessionId = (): string | undefined =>
+      typeof acceptedChildEntry?.sessionId === "string" && acceptedChildEntry.sessionId.trim()
+        ? acceptedChildEntry.sessionId.trim()
+        : undefined;
 
     const launchChildRun = async () =>
       await callSubagentGateway(

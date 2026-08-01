@@ -18,6 +18,7 @@ describe("sessions_spawn context modes", () => {
   const forkSessionFromParentMock = vi.fn();
   const ensureContextEnginesInitializedMock = vi.fn();
   const resolveContextEngineMock = vi.fn();
+  const recordSessionCreatedMock = vi.fn();
   let spawnSubagentDirect: Awaited<
     ReturnType<typeof loadSubagentSpawnModuleForTest>
   >["spawnSubagentDirect"];
@@ -31,6 +32,7 @@ describe("sessions_spawn context modes", () => {
       forkSessionFromParentMock,
       ensureContextEnginesInitializedMock,
       resolveContextEngineMock,
+      recordSessionCreatedMock,
       sessionStorePath: storePath,
     }));
   });
@@ -43,6 +45,7 @@ describe("sessions_spawn context modes", () => {
     forkSessionFromParentMock.mockReset();
     ensureContextEnginesInitializedMock.mockReset();
     resolveContextEngineMock.mockReset();
+    recordSessionCreatedMock.mockReset();
     setupAcceptedSubagentGatewayMock(callGatewayMock);
     resolveContextEngineMock.mockResolvedValue({});
   });
@@ -222,6 +225,14 @@ describe("sessions_spawn context modes", () => {
     expect(prepareContext.parentSessionId).toBe("parent-session-id");
     expect(prepareContext.childSessionId).toBe("forked-session-id");
     expect(prepareContext.childSessionFile).toBe("/tmp/forked-session.jsonl");
+    expect(accepted.sessionId).toBe("forked-session-id");
+    expect(accepted.sessionId).toBe(childEntry.sessionId);
+    expect(recordSessionCreatedMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: childSessionKey,
+        entry: expect.objectContaining({ sessionId: "forked-session-id" }),
+      }),
+    );
   });
 
   it("keeps the default spawn context isolated", async () => {

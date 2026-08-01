@@ -145,6 +145,8 @@ export async function loadSubagentSpawnModuleForTest(params: {
   settleFailedQueuedSubagentLaunchMock?: MockFn;
   completeCollectorLaunchCleanupMock?: MockFn;
   emitSessionLifecycleEventMock?: MockFn;
+  recordSessionCreatedMock?: MockFn;
+  recordSubagentSpawnedMock?: MockFn;
   hookRunner?: HookRunner;
   resolveAgentConfig?: (cfg: Record<string, unknown>, agentId: string) => unknown;
   resolveAgentWorkspaceDir?: (cfg: Record<string, unknown>, agentId: string) => string;
@@ -399,7 +401,16 @@ export async function loadSubagentSpawnModuleForTest(params: {
     startQueuedSubagentRun: params.startQueuedSubagentRunMock ?? vi.fn(() => true),
   }));
 
-  const subagentSpawnModule = await import("./subagent-spawn.js");
+  vi.doMock("../sessions/session-state-events.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../sessions/session-state-events.js")>();
+    return {
+      ...actual,
+      recordSessionCreated: params.recordSessionCreatedMock ?? actual.recordSessionCreated,
+      recordSubagentSpawned: params.recordSubagentSpawnedMock ?? actual.recordSubagentSpawned,
+    };
+  });
+
+    const subagentSpawnModule = await import("./subagent-spawn.js");
   return {
     ...subagentSpawnModule,
     resetSubagentRegistryForTests,
