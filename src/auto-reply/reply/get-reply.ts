@@ -1,5 +1,6 @@
 // Main auto-reply pipeline: prepares context, runs commands, and dispatches agents.
 import fs from "node:fs/promises";
+import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   hasLegacyAutoFallbackWithoutOrigin,
@@ -1099,7 +1100,7 @@ export async function getReplyFromConfig(
     hostWorkspaceStagingDir = stageResult.hostWorkspaceStagingDir;
     if (hostWorkspaceStagingDir) {
       logVerbose(
-        `[host-staging-cleanup] Staged inbound media into host workspace directory: ${hostWorkspaceStagingDir}`,
+        `[host-staging-cleanup] Staged inbound media into host workspace directory: ${path.basename(hostWorkspaceStagingDir)}`,
       );
     }
   }
@@ -1165,7 +1166,7 @@ export async function getReplyFromConfig(
   } finally {
     if (hostWorkspaceStagingDir) {
       logVerbose(
-        `[host-staging-cleanup] Cleaning up host workspace staging directory recursively: ${hostWorkspaceStagingDir}`,
+        `[host-staging-cleanup] Cleaning up host workspace staging directory recursively: ${path.basename(hostWorkspaceStagingDir)}`,
       );
       await fs.rm(hostWorkspaceStagingDir, { recursive: true, force: true }).catch(() => {});
     }
