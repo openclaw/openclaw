@@ -180,6 +180,81 @@ describe("dreaming markdown storage", () => {
     expect(content).not.toContain("- Old candidate");
   });
 
+  it("appends a daily block after an oversized dangling start marker", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
+    const inlinePath = path.join(workspaceDir, "memory", "2026-04-05.md");
+    await fs.mkdir(path.dirname(inlinePath), { recursive: true });
+    await fs.writeFile(
+      inlinePath,
+      [
+        "# Daily Memory",
+        "",
+        "A".repeat(MEMORY_DREAMING_MARKDOWN_MAX_BYTES),
+        "",
+        "## Light Sleep",
+        "<!-- openclaw:dreaming:light:start -->",
+        "- Incomplete old candidate",
+        "",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    await writeDailyDreamingPhaseBlock({
+      workspaceDir,
+      phase: "light",
+      bodyLines: ["- Candidate: appended after dangling marker"],
+      nowMs,
+      timezone,
+      storage: {
+        mode: "inline",
+        separateReports: false,
+      },
+    });
+
+    const content = await fs.readFile(inlinePath, "utf-8");
+    expect(content).toContain("- Incomplete old candidate");
+    expect(content).toContain("- Candidate: appended after dangling marker");
+    expect(content.match(/<!-- openclaw:dreaming:light:start -->/g)).toHaveLength(2);
+    expect(content.match(/<!-- openclaw:dreaming:light:end -->/g)).toHaveLength(1);
+    expect(content.endsWith("<!-- openclaw:dreaming:light:end -->\n")).toBe(true);
+  });
+
+  it("rejects an oversized daily file swapped to a symlink before streaming", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
+    const inlinePath = path.join(workspaceDir, "memory", "2026-04-05.md");
+    const originalPath = path.join(workspaceDir, "memory", "2026-04-05.original.md");
+    const sensitivePath = path.join(workspaceDir, "sensitive.txt");
+    await fs.mkdir(path.dirname(inlinePath), { recursive: true });
+    await fs.writeFile(inlinePath, "A".repeat(MEMORY_DREAMING_MARKDOWN_MAX_BYTES + 1), "utf-8");
+    await fs.writeFile(sensitivePath, "sensitive fixture\n", "utf-8");
+
+    const originalLstat = fs.lstat.bind(fs);
+    vi.spyOn(fs, "lstat").mockImplementationOnce(async (target) => {
+      const stat = await originalLstat(target);
+      await fs.rename(inlinePath, originalPath);
+      await fs.symlink(sensitivePath, inlinePath);
+      return stat;
+    });
+
+    await expect(
+      writeDailyDreamingPhaseBlock({
+        workspaceDir,
+        phase: "light",
+        bodyLines: ["- Must not copy the swapped target"],
+        nowMs,
+        timezone,
+        storage: {
+          mode: "inline",
+          separateReports: false,
+        },
+      }),
+    ).rejects.toThrow();
+
+    await expect(fs.readFile(sensitivePath, "utf-8")).resolves.toBe("sensitive fixture\n");
+    await expect(fs.readFile(originalPath, "utf-8")).resolves.not.toContain("sensitive fixture");
+  });
+
   it("preserves an existing daily memory symlink while updating its target", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
     const inlinePath = path.join(workspaceDir, "memory", "2026-04-05.md");
@@ -293,6 +368,44 @@ describe("dreaming markdown storage", () => {
     expect(content).toContain("Diary entry stays.");
     expect(content).toContain("- Durable summary updated.");
     expect(content).not.toContain("- Old durable summary");
+  });
+
+  it("appends a deep block after an oversized dangling start marker", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
+    const dreamsPath = path.join(workspaceDir, "DREAMS.md");
+    await fs.writeFile(
+      dreamsPath,
+      [
+        "# Dream Diary",
+        "",
+        "B".repeat(MEMORY_DREAMING_MARKDOWN_MAX_BYTES),
+        "",
+        "## Deep Sleep",
+        "<!-- openclaw:dreaming:deep:start -->",
+        "- Incomplete old durable summary",
+        "",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    await writeDeepDreamingReport({
+      workspaceDir,
+      bodyLines: ["- Durable summary appended after dangling marker."],
+      storage: {
+        mode: "inline",
+        separateReports: false,
+      },
+      nowMs,
+      timezone,
+    });
+
+    const content = await fs.readFile(dreamsPath, "utf-8");
+    expect(content).toContain("- Incomplete old durable summary");
+    expect(content).toContain("- Durable summary appended after dangling marker.");
+    expect(content.match(/<!-- openclaw:dreaming:deep:start -->/g)).toHaveLength(2);
+    expect(content.match(/<!-- openclaw:dreaming:deep:end -->/g)).toHaveLength(1);
+    expect(content.endsWith("<!-- openclaw:dreaming:deep:end -->\n")).toBe(true);
   });
 
   it("replaces the managed deep summary while preserving the diary block", async () => {

@@ -10,7 +10,11 @@ import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
-import { readRegularFile, replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
+import {
+  openLocalFileSafely,
+  readRegularFile,
+  replaceFileAtomic,
+} from "openclaw/plugin-sdk/security-runtime";
 
 const DREAMS_FILENAMES = ["DREAMS.md", "dreams.md"] as const;
 const DEEP_START_MARKER = "<!-- openclaw:dreaming:deep:start -->";
@@ -149,18 +153,23 @@ function buildManagedMarkdownBlock(params: ManagedMarkdownUpdateParams): string 
 }
 
 async function replaceManagedMarkdownBlockStreaming(
-  params: ManagedMarkdownUpdateParams & { mode: number },
+  params: ManagedMarkdownUpdateParams,
 ): Promise<void> {
   const tempDir = await fs.mkdtemp(
     path.join(path.dirname(params.filePath), `${params.tempPrefix}-`),
   );
   const tempPath = path.join(tempDir, path.basename(params.filePath));
+  let input: FileHandle | undefined;
   let output: FileHandle | undefined;
   const withheldPath = path.join(tempDir, `${path.basename(params.filePath)}.withheld`);
   let withheldFile: FileHandle | undefined;
   try {
-    output = await fs.open(tempPath, "wx", params.mode);
-    await output.chmod(params.mode);
+    const opened = await openLocalFileSafely({ filePath: params.filePath });
+    input = opened.handle;
+    const inputSize = opened.stat.size;
+    const mode = opened.stat.mode & 0o777;
+    output = await fs.open(tempPath, "wx", mode);
+    await output.chmod(mode);
     const managedBlock = buildManagedMarkdownBlock(params);
     const headingSuffixPattern = new RegExp(
       `${params.heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \t]*(?:\r\n|\n|\r)+[ \t]*$`,
@@ -169,16 +178,22 @@ async function replaceManagedMarkdownBlockStreaming(
       Math.max(params.heading.length + params.startMarker.length, params.endMarker.length) + 4096;
     let pending = "";
     let skipping = false;
-    let sawManagedBlock = false;
     let wroteManagedBlock = false;
     let withheldHeadingSuffix = "";
     let wroteAnyContent = false;
+    let outputBytes = 0;
+    let lastNonWhitespaceEndBytes = 0;
 
     // Keep only a rolling marker window in memory. A malformed start marker
     // without an end marker is spooled so the original file can be replayed.
     const writeChunk = async (chunk: string): Promise<void> => {
       if (chunk.length > 0) {
         await output?.write(chunk);
+        const trimmed = chunk.trimEnd();
+        if (trimmed.length > 0) {
+          lastNonWhitespaceEndBytes = outputBytes + Buffer.byteLength(trimmed);
+        }
+        outputBytes += Buffer.byteLength(chunk);
         wroteAnyContent = true;
       }
     };
@@ -220,7 +235,16 @@ async function replaceManagedMarkdownBlockStreaming(
       wroteManagedBlock = true;
     };
 
-    for await (const chunk of createReadStream(params.filePath, { encoding: "utf-8" })) {
+    const inputStream =
+      inputSize > 0
+        ? input.createReadStream({
+            encoding: "utf-8",
+            autoClose: false,
+            start: 0,
+            end: inputSize - 1,
+          })
+        : [];
+    for await (const chunk of inputStream) {
       let current = pending + chunk;
       pending = "";
       while (current.length > 0) {
@@ -253,7 +277,6 @@ async function replaceManagedMarkdownBlockStreaming(
           continue;
         }
 
-        sawManagedBlock = true;
         const prefix = current.slice(0, startIndex);
         const trimmedPrefix = prefix.replace(headingSuffixPattern, "");
         withheldHeadingSuffix = prefix.slice(trimmedPrefix.length);
@@ -278,6 +301,8 @@ async function replaceManagedMarkdownBlockStreaming(
         current = current.slice(afterEndIndex);
       }
     }
+    await input.close();
+    input = undefined;
     if (skipping) {
       await writeChunk(withheldHeadingSuffix);
       await replayWithheld();
@@ -285,16 +310,16 @@ async function replaceManagedMarkdownBlockStreaming(
       pending = "";
     }
     await writeChunk(pending);
-    if (!sawManagedBlock) {
-      if (wroteAnyContent) {
-        await output.write("\n\n");
-      }
-      await output.write(`${managedBlock}\n`);
+    if (!wroteManagedBlock) {
+      await output.truncate(lastNonWhitespaceEndBytes);
+      const separator = wroteAnyContent && lastNonWhitespaceEndBytes > 0 ? "\n\n" : "";
+      await output.write(`${separator}${managedBlock}\n`, lastNonWhitespaceEndBytes, "utf-8");
     }
     await output.close();
     output = undefined;
     await fs.rename(tempPath, params.filePath);
   } catch (err) {
+    await input?.close().catch(() => undefined);
     await output?.close().catch(() => undefined);
     await withheldFile?.close().catch(() => undefined);
     await fs.rm(tempDir, { force: true, recursive: true }).catch(() => undefined);
@@ -336,7 +361,7 @@ export async function updateManagedDreamingMarkdownFile(
     });
     return;
   }
-  await replaceManagedMarkdownBlockStreaming({ ...resolvedParams, mode: stat.mode & 0o777 });
+  await replaceManagedMarkdownBlockStreaming(resolvedParams);
 }
 
 export async function updateDreamsFile<T>(params: {
