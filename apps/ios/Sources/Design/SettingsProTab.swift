@@ -27,6 +27,7 @@ struct SettingsProTab: View {
         TalkModeProviderSelection.gatewayDefault.rawValue
     @AppStorage(TalkModeRealtimeVoiceSelection.storageKey) var talkRealtimeVoiceSelectionRaw: String = ""
     @AppStorage(TalkSpeechLocale.storageKey) var talkSpeechLocale: String = TalkSpeechLocale.automaticID
+    @AppStorage(TalkSystemVoiceSelection.storageKey) var talkSystemVoiceSelectionRaw: String = ""
     @AppStorage("talk.button.enabled") var talkButtonEnabled: Bool = true
     @AppStorage("talk.background.enabled") var talkBackgroundEnabled: Bool = false
     @AppStorage(TalkDefaults.speakerphoneEnabledKey) var talkSpeakerphoneEnabled: Bool =

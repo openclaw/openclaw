@@ -1432,6 +1432,12 @@ final class NodeAppModel {
         self.talkMode.applyProviderSelectionChanged()
     }
 
+    func setTalkSystemVoiceSelection(_ rawValue: String) {
+        let voice = TalkSystemVoiceSelection.resolvedOverride(rawValue) ?? ""
+        UserDefaults.standard.set(voice, forKey: TalkSystemVoiceSelection.storageKey)
+        self.talkMode.applyProviderSelectionChanged()
+    }
+
     private func requestTalkPermissionUpgrade() {
         if self.forceOperatorTalkPermissionUpgradeRequest {
             guard case .requestFailed = self.talkMode.gatewayTalkPermissionState else { return }

@@ -1401,6 +1401,19 @@ extension SettingsProTab {
                 }
             }
             .font(OpenClawType.body)
+            Picker("On-Device Voice", selection: self.talkSystemVoiceSelectionBinding) {
+                ForEach(
+                    TalkSystemVoiceSelection.options(
+                        languageID: self.talkSpeechLocale == TalkSpeechLocale.automaticID ? nil : self
+                            .talkSpeechLocale))
+                { option in
+                    Text(option.label).font(OpenClawType.body).tag(option.id)
+                }
+            }
+            .font(OpenClawType.body)
+            Text("Want more voices? Download them in Settings > Accessibility > Spoken Content > Voices.")
+                .font(OpenClawType.footnote)
+                .foregroundStyle(.secondary)
             self.settingsToggle("Background Listening", isOn: self.$talkBackgroundEnabled)
             self.settingsToggle("Speakerphone", isOn: self.talkSpeakerphoneBinding)
             NavigationLink {

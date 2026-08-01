@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import Observation
+import OpenClawKit
 import Speech
 import SwabbleKit
 import SwiftUI
@@ -204,6 +205,10 @@ struct VoiceWakeSettings: View {
                             subtitle: "Tap Right Option to interrupt speech and return to listening.",
                             binding: self.$state.talkShiftToStopEnabled,
                             showsDivider: false)
+                    }
+
+                    SettingsCardGroup("Speech") {
+                        self.systemVoicePicker
                     }
 
                     SettingsCardGroup("Recognition") {
@@ -575,6 +580,44 @@ struct VoiceWakeSettings: View {
                     .padding(.horizontal, 14)
                     .padding(.bottom, 10)
             }
+        }
+    }
+
+    private var availableSystemVoices: [TalkSystemVoiceCatalog.Voice] {
+        TalkSystemVoiceCatalog.voices(
+            matchingLanguageID: self.state.voiceWakeLocaleID,
+            in: TalkSystemVoiceCatalog.availableVoices())
+    }
+
+    private var systemVoicePicker: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SettingsCardRow(
+                title: "On-device voice",
+                subtitle: "Used when Talk Mode falls back to the built-in system voice.")
+            {
+                Picker("Voice", selection: self.$state.talkSystemVoiceID) {
+                    Text("System Default").tag("")
+                    ForEach(self.availableSystemVoices) { voice in
+                        Text(TalkSystemVoiceCatalog.label(for: voice)).tag(voice.id)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: self.controlWidth)
+                .onAppear {
+                    if !self.state.talkSystemVoiceID.isEmpty,
+                       AVSpeechSynthesisVoice(identifier: self.state.talkSystemVoiceID) == nil
+                    {
+                        self.state.talkSystemVoiceID = ""
+                    }
+                }
+            }
+
+            Text("Want more voices? Download them in System Settings > Accessibility > Spoken Content > Voices.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 10)
         }
     }
 
