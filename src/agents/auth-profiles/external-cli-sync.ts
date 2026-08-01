@@ -185,6 +185,23 @@ function hasManagedProviderOAuth(
   );
 }
 
+function shouldBlockBootstrapOnlyExternalCliProfile(params: {
+  store: AuthProfileStore;
+  providerConfig: ExternalCliSyncProvider;
+  existingOAuth?: OAuthCredential;
+}): boolean {
+  if (!params.providerConfig.bootstrapOnly) {
+    return false;
+  }
+  // A dead target is a retained grant fingerprint, not a usable managed
+  // credential. Let only that slot reach the existing identity and
+  // different-grant checks even when another provider profile is healthy.
+  if (params.existingOAuth && isOAuthRefreshDead(params.existingOAuth)) {
+    return false;
+  }
+  return hasManagedProviderOAuth(params.store, params.providerConfig);
+}
+
 /** Read a CLI credential only for safe bootstrap of an unusable local profile. */
 export function readExternalCliBootstrapCredential(params: {
   store: AuthProfileStore;
@@ -197,7 +214,13 @@ export function readExternalCliBootstrapCredential(params: {
   if (!provider) {
     return null;
   }
-  if (provider.bootstrapOnly && hasManagedProviderOAuth(params.store, provider)) {
+  if (
+    shouldBlockBootstrapOnlyExternalCliProfile({
+      store: params.store,
+      providerConfig: provider,
+      existingOAuth: params.credential,
+    })
+  ) {
     return null;
   }
   if (
@@ -221,7 +244,22 @@ export function readExternalCliBootstrapCredential(params: {
   ) {
     return null;
   }
-  return imported;
+  if (!imported || !isSafeToUseExternalCliCredential(params.credential, imported)) {
+    return null;
+  }
+  if (
+    !isSafeToAdoptBootstrapOAuthIdentity(params.credential, imported) &&
+    !areOAuthCredentialsEquivalent(params.credential, imported)
+  ) {
+    return null;
+  }
+  return shouldBootstrapFromExternalCliCredential({
+    existing: params.credential,
+    imported,
+    now: Date.now(),
+  })
+    ? imported
+    : null;
 }
 
 function normalizeProviderScope(values: Iterable<string> | undefined): Set<string> | undefined {
@@ -284,31 +322,43 @@ function listScopedExternalCliProfileIds(params: {
   options?: ExternalCliAuthProfileOptions;
 }): string[] {
   const { options, providerConfig, store } = params;
-  // Bootstrap-only CLI state must not enter any sibling slot once OpenClaw
-  // owns OAuth for the provider, regardless of how discovery was scoped.
-  if (providerConfig.bootstrapOnly && hasManagedProviderOAuth(store, providerConfig)) {
-    return [];
-  }
-
   const requestedProfileIds = Array.from(options?.profileIds ?? [])
     .map((value) => value.trim())
     .filter((value) => value.length > 0);
+  let scopedProfileIds: string[];
   if (requestedProfileIds.length > 0) {
-    return requestedProfileIds.filter((profileId) =>
+    scopedProfileIds = requestedProfileIds.filter((profileId) =>
       externalCliProfileIdMatches(providerConfig, profileId, {
         allowLegacyNamespace: true,
       }),
     );
+  } else {
+    const existingProfileIds = Object.keys(store.profiles).filter((profileId) =>
+      externalCliProfileIdMatches(providerConfig, profileId),
+    );
+    scopedProfileIds =
+      existingProfileIds.length > 0
+        ? existingProfileIds
+        : options?.providerIds
+          ? [providerConfig.profileId]
+          : [];
   }
-
-  const existingProfileIds = Object.keys(store.profiles).filter((profileId) =>
-    externalCliProfileIdMatches(providerConfig, profileId),
-  );
-  if (existingProfileIds.length > 0) {
-    return existingProfileIds;
-  }
-
-  return options?.providerIds ? [providerConfig.profileId] : [];
+  // Bootstrap-only CLI state must not enter an empty or live sibling slot once
+  // OpenClaw owns OAuth for the provider. A specifically dead target remains
+  // eligible so the later identity and different-grant checks can recover it.
+  return scopedProfileIds.filter((profileId) => {
+    const existing = store.profiles[profileId];
+    const existingOAuth =
+      existing?.type === "oauth" &&
+      listExternalCliProviderIds(providerConfig).includes(existing.provider)
+        ? existing
+        : undefined;
+    return !shouldBlockBootstrapOnlyExternalCliProfile({
+      store,
+      providerConfig,
+      existingOAuth,
+    });
+  });
 }
 
 function backfillExternalCliIdentity(params: {

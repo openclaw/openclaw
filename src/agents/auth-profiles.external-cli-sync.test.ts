@@ -283,6 +283,95 @@ describe("external cli oauth resolution", () => {
     expect(credential).toBeNull();
   });
 
+  it("reads a fresh Codex CLI grant for a dead target beside a healthy OpenAI sibling", () => {
+    const deadTarget: OAuthCredential = {
+      ...makeOAuthCredential({
+        provider: "openai",
+        access: "dead-access",
+        refresh: "dead-refresh",
+        expires: Date.now() - 5_000,
+        accountId: "acct-codex",
+      }),
+      refreshDeadAt: Date.now() - 1_000,
+    };
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        [OPENAI_CODEX_DEFAULT_PROFILE_ID]: deadTarget,
+        "openai:user@example.com": makeOAuthCredential({
+          provider: "openai",
+          access: "healthy-sibling-access",
+          refresh: "healthy-sibling-refresh",
+          expires: Date.now() + 10 * 60_000,
+          accountId: "acct-sibling",
+        }),
+      },
+    };
+    mocks.readCodexCliCredentialsCached.mockReturnValue(
+      makeOAuthCredential({
+        provider: "openai",
+        access: "codex-cli-fresh-access",
+        refresh: "codex-cli-fresh-refresh",
+        expires: Date.now() + 5 * 24 * 60 * 60_000,
+        accountId: "acct-codex",
+      }),
+    );
+
+    const credential = readExternalCliBootstrapCredential({
+      store,
+      profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
+      credential: deadTarget,
+    });
+
+    expectCredentialFields(credential as Record<string, unknown>, {
+      access: "codex-cli-fresh-access",
+      refresh: "codex-cli-fresh-refresh",
+      accountId: "acct-codex",
+    });
+    expect(mocks.readCodexCliCredentialsCached).toHaveBeenCalledOnce();
+  });
+
+  it("refuses a different-account Codex CLI grant for a dead target beside a healthy sibling", () => {
+    const deadTarget: OAuthCredential = {
+      ...makeOAuthCredential({
+        provider: "openai",
+        access: "dead-access",
+        refresh: "dead-refresh",
+        expires: Date.now() - 5_000,
+        accountId: "acct-codex",
+      }),
+      refreshDeadAt: Date.now() - 1_000,
+    };
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        [OPENAI_CODEX_DEFAULT_PROFILE_ID]: deadTarget,
+        "openai:user@example.com": makeOAuthCredential({
+          provider: "openai",
+          access: "healthy-sibling-access",
+          refresh: "healthy-sibling-refresh",
+          accountId: "acct-sibling",
+        }),
+      },
+    };
+    mocks.readCodexCliCredentialsCached.mockReturnValue(
+      makeOAuthCredential({
+        provider: "openai",
+        access: "other-account-access",
+        refresh: "other-account-refresh",
+        accountId: "acct-other",
+      }),
+    );
+
+    expect(
+      readExternalCliBootstrapCredential({
+        store,
+        profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
+        credential: deadTarget,
+      }),
+    ).toBeNull();
+  });
+
   it("bootstraps the default codex profile from Codex CLI credentials when in scope", () => {
     mocks.readCodexCliCredentialsCached.mockReturnValue(
       makeOAuthCredential({
@@ -333,6 +422,35 @@ describe("external cli oauth resolution", () => {
       ),
       {
         providerIds: ["openai"],
+      },
+    );
+
+    expect(profiles).toStrictEqual([]);
+    expect(mocks.readCodexCliCredentialsCached).not.toHaveBeenCalled();
+  });
+
+  it("does not create an explicitly scoped default beside a named managed OpenAI profile", () => {
+    mocks.readCodexCliCredentialsCached.mockReturnValue(
+      makeOAuthCredential({
+        provider: "openai",
+        access: "codex-cli-access",
+        refresh: "codex-cli-refresh",
+      }),
+    );
+
+    const profiles = resolveExternalCliAuthProfiles(
+      makeStore(
+        "openai:user@example.com",
+        makeOAuthCredential({
+          provider: "openai",
+          access: "managed-access",
+          refresh: "managed-refresh",
+          accountId: "acct-sibling",
+        }),
+      ),
+      {
+        providerIds: ["openai"],
+        profileIds: [OPENAI_CODEX_DEFAULT_PROFILE_ID],
       },
     );
 
@@ -413,6 +531,90 @@ describe("external cli oauth resolution", () => {
         accountId: "acct-codex",
       },
     );
+  });
+
+  it("re-seeds a dead codex target without disturbing a healthy OpenAI sibling", () => {
+    mocks.readCodexCliCredentialsCached.mockReturnValue(
+      makeOAuthCredential({
+        provider: "openai",
+        access: "codex-cli-fresh-access",
+        refresh: "codex-cli-fresh-refresh",
+        expires: Date.now() + 5 * 24 * 60 * 60_000,
+        accountId: "acct-codex",
+      }),
+    );
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        [OPENAI_CODEX_DEFAULT_PROFILE_ID]: {
+          ...makeOAuthCredential({
+            provider: "openai",
+            access: "dead-access",
+            refresh: "dead-refresh",
+            expires: Date.now() - 5_000,
+            accountId: "acct-codex",
+          }),
+          refreshDeadAt: Date.now() - 1_000,
+        },
+        "openai:user@example.com": makeOAuthCredential({
+          provider: "openai",
+          access: "healthy-sibling-access",
+          refresh: "healthy-sibling-refresh",
+          expires: Date.now() + 10 * 60_000,
+          accountId: "acct-sibling",
+        }),
+      },
+    };
+
+    const profiles = resolveExternalCliAuthProfiles(store, { providerIds: ["openai"] });
+
+    expectCredentialFields(
+      expectSingleProfileCredential(profiles, OPENAI_CODEX_DEFAULT_PROFILE_ID),
+      {
+        access: "codex-cli-fresh-access",
+        refresh: "codex-cli-fresh-refresh",
+        accountId: "acct-codex",
+      },
+    );
+    expect(store.profiles["openai:user@example.com"]).toMatchObject({
+      access: "healthy-sibling-access",
+      refresh: "healthy-sibling-refresh",
+      accountId: "acct-sibling",
+    });
+  });
+
+  it("refuses a different-account grant for a dead codex target beside a healthy sibling", () => {
+    mocks.readCodexCliCredentialsCached.mockReturnValue(
+      makeOAuthCredential({
+        provider: "openai",
+        access: "other-account-access",
+        refresh: "other-account-refresh",
+        accountId: "acct-other",
+      }),
+    );
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        [OPENAI_CODEX_DEFAULT_PROFILE_ID]: {
+          ...makeOAuthCredential({
+            provider: "openai",
+            access: "dead-access",
+            refresh: "dead-refresh",
+            expires: Date.now() - 5_000,
+            accountId: "acct-codex",
+          }),
+          refreshDeadAt: Date.now() - 1_000,
+        },
+        "openai:user@example.com": makeOAuthCredential({
+          provider: "openai",
+          access: "healthy-sibling-access",
+          refresh: "healthy-sibling-refresh",
+          accountId: "acct-sibling",
+        }),
+      },
+    };
+
+    expect(resolveExternalCliAuthProfiles(store, { providerIds: ["openai"] })).toStrictEqual([]);
   });
 
   it("keeps the gate closed for a corrupt zero refreshDeadAt tombstone", () => {
