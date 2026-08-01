@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { appendSessionCostLine } from "./status-runtime-lines.js";
@@ -351,5 +351,75 @@ describe("buildStatusText thinking facts", () => {
 
     expect(text).toContain("Think: high");
     expect(text).not.toMatch(/Think:\s*off\b/);
+  });
+});
+
+describe("buildStatusText lazy loader retry", () => {
+  afterEach(() => {
+    vi.doUnmock("./status-plugin-health.runtime.js");
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  it("falls back on import failure and retries in the same module instance", async () => {
+    vi.doMock("./status-plugin-health.runtime.js", async () => {
+      throw new Error("Module load failure");
+    });
+    vi.resetModules();
+
+    const { buildStatusText: firstLoadBuildStatusText } = await import("./status-text.js");
+    const failed = await firstLoadBuildStatusText({
+      cfg: {},
+      sessionEntry: { sessionId: "retry-failure", updatedAt: 0 },
+      sessionKey: "agent:main:main",
+      statusChannel: "mobilechat",
+      provider: "openai",
+      model: "gpt-5.4-mini",
+      resolvedHarness: "openclaw",
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      taskLineOverride: "",
+      skipDefaultTaskLookup: true,
+      primaryModelLabelOverride: "openai/gpt-5.4-mini",
+      modelAuthOverride: "api-key",
+      activeModelAuthOverride: "api-key",
+      includeTranscriptUsage: false,
+    });
+    expect(failed).toContain("Plugins: health unavailable");
+
+    vi.doMock("./status-plugin-health.runtime.js", () => ({
+      collectRuntimePluginHealthSnapshot: () => ({
+        plugins: [],
+        diagnostics: [],
+        contextEngineQuarantines: [],
+        runtimeToolQuarantines: [],
+        channelPluginFailures: [],
+      }),
+    }));
+
+    const recovered = await firstLoadBuildStatusText({
+      cfg: {},
+      sessionEntry: { sessionId: "retry-recovery", updatedAt: 0 },
+      sessionKey: "agent:main:main",
+      statusChannel: "mobilechat",
+      provider: "openai",
+      model: "gpt-5.4-mini",
+      resolvedHarness: "openclaw",
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      taskLineOverride: "",
+      skipDefaultTaskLookup: true,
+      primaryModelLabelOverride: "openai/gpt-5.4-mini",
+      modelAuthOverride: "api-key",
+      activeModelAuthOverride: "api-key",
+      includeTranscriptUsage: false,
+    });
+    expect(recovered).not.toContain("Plugins: health unavailable");
   });
 });

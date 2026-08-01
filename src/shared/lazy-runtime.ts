@@ -7,13 +7,24 @@ type LazyRuntimeLoader<T> = (() => Promise<T>) & {
   clear: () => void;
 };
 
+type LazyRuntimeLoaderOptions = {
+  /** Keep rejected load promises cached instead of allowing the next caller to retry. */
+  cacheRejections?: boolean;
+};
+
 // Lazy runtime helpers expose dynamic imports through cached runtime surfaces.
+// These default to caching rejections (evict-by-default is reserved for
+// createLazyPromiseLoader/import loader callers that opt in): status/CLI and
+// plugin surfaces keep their historical sticky-failure behavior unless they
+// explicitly pass cacheRejections: false. Flipping this default silently
+// changes retry semantics for ~40 call sites, so the opt-out is deliberate.
 export function createLazyRuntimeSurface<TModule, TSurface>(
   importer: () => Promise<TModule>,
   select: (module: TModule) => TSurface,
+  options: LazyRuntimeLoaderOptions = {},
 ): LazyRuntimeLoader<TSurface> {
   const loader = createLazyPromiseLoader(() => importer().then(select), {
-    cacheRejections: true,
+    cacheRejections: options.cacheRejections ?? true,
   });
   const load = loader.load as LazyRuntimeLoader<TSurface>;
   load.peek = loader.peek;
@@ -24,16 +35,18 @@ export function createLazyRuntimeSurface<TModule, TSurface>(
 /** Cache the raw dynamically imported runtime module behind a stable loader. */
 export function createLazyRuntimeModule<TModule>(
   importer: () => Promise<TModule>,
+  options?: LazyRuntimeLoaderOptions,
 ): LazyRuntimeLoader<TModule> {
-  return createLazyRuntimeSurface(importer, (module) => module);
+  return createLazyRuntimeSurface(importer, (module) => module, options);
 }
 
 /** Cache a single named runtime export without repeating a custom selector closure per caller. */
 export function createLazyRuntimeNamedExport<TModule, const TKey extends keyof TModule>(
   importer: () => Promise<TModule>,
   key: TKey,
+  options?: LazyRuntimeLoaderOptions,
 ): () => Promise<TModule[TKey]> {
-  return createLazyRuntimeSurface(importer, (module) => module[key]);
+  return createLazyRuntimeSurface(importer, (module) => module[key], options);
 }
 
 export function createLazyRuntimeMethod<TSurface, TArgs extends unknown[], TResult>(
