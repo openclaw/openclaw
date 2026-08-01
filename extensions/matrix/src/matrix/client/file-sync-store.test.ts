@@ -346,16 +346,29 @@ describe("SqliteBackedMatrixSyncStore", () => {
     const store = new SqliteBackedMatrixSyncStore(storageRoot);
     store.setSyncToken("s123");
     let settled = false;
-    const waiting = store.waitForSyncResponseSettled().then(() => {
+    const waiting = store.waitForSyncResponseSettled().then((result) => {
       settled = true;
+      return result;
     });
 
     await Promise.resolve();
     expect(settled).toBe(false);
 
     await store.setSyncData(createSyncResponse("s123"));
-    await waiting;
+    await expect(waiting).resolves.toBe(true);
     expect(settled).toBe(true);
+  });
+
+  it("bounds an abandoned sync response wait", async () => {
+    vi.useFakeTimers();
+    const storageRoot = createStorageRoot();
+    const store = new SqliteBackedMatrixSyncStore(storageRoot);
+    store.setSyncToken("s-abandoned");
+
+    const waiting = store.waitForSyncResponseSettled();
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    await expect(waiting).resolves.toBe(false);
   });
 
   it("clears the clean-shutdown marker once fresh sync data arrives", async () => {

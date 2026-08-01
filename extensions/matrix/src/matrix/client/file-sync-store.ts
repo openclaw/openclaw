@@ -29,6 +29,7 @@ import { claimCurrentTokenStorageState } from "./storage.js";
 
 const STORE_VERSION = 1;
 const PERSIST_DEBOUNCE_MS = 250;
+const SYNC_RESPONSE_SETTLE_TIMEOUT_MS = 5_000;
 const SYNC_CACHE_NAMESPACE = "sync-cache";
 const SYNC_CACHE_MAX_ENTRIES = 20_000;
 const SYNC_CACHE_MAX_CHUNKS = Math.floor((SYNC_CACHE_MAX_ENTRIES - 1) / 2);
@@ -177,7 +178,7 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
   private replayLedgerKnown = false;
   private readonly pendingReplayEvents = new Map<string, PendingReplayEvent>();
   private syncResponseInFlight = false;
-  private readonly syncResponseSettledWaiters = new Set<() => void>();
+  private readonly syncResponseSettledWaiters = new Set<(settled: boolean) => void>();
   private cleanShutdown = false;
   private dirty = false;
   private persistTimer: NodeJS.Timeout | null = null;
@@ -291,12 +292,23 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
     }
   }
 
-  async waitForSyncResponseSettled(): Promise<void> {
+  async waitForSyncResponseSettled(timeoutMs = SYNC_RESPONSE_SETTLE_TIMEOUT_MS): Promise<boolean> {
     if (!this.syncResponseInFlight) {
-      return;
+      return true;
     }
-    await new Promise<void>((resolve) => {
-      this.syncResponseSettledWaiters.add(resolve);
+    return await new Promise<boolean>((resolve) => {
+      let finished = false;
+      const finish = (settled: boolean) => {
+        if (finished) {
+          return;
+        }
+        finished = true;
+        clearTimeout(timer);
+        this.syncResponseSettledWaiters.delete(finish);
+        resolve(settled);
+      };
+      this.syncResponseSettledWaiters.add(finish);
+      const timer = setTimeout(() => finish(false), Math.max(0, timeoutMs));
     });
   }
 
@@ -314,7 +326,7 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
     this.markDirtyAndSchedulePersist();
     this.syncResponseInFlight = false;
     for (const resolve of this.syncResponseSettledWaiters) {
-      resolve();
+      resolve(true);
     }
     this.syncResponseSettledWaiters.clear();
     return Promise.resolve();

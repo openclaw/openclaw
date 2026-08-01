@@ -1312,6 +1312,52 @@ describe("MatrixClient event bridge", () => {
     restarted.stopWithoutPersist();
   });
 
+  it("keeps shutdown dirty when an in-flight sync response is abandoned", async () => {
+    vi.useFakeTimers();
+    const storageRootDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-matrix-sdk-stop-timeout-"),
+    );
+    tempDirs.push(storageRootDir);
+    const client = new MatrixClient("https://matrix.example.org", "token", {
+      storageRootDir,
+    });
+    const store = lastCreateClientOpts?.store as
+      | {
+          flush: () => Promise<void>;
+          setSyncData: (data: ISyncResponse) => Promise<void>;
+          setSyncToken: (token: string) => void;
+        }
+      | undefined;
+    if (!store) {
+      throw new Error("expected Matrix sync store");
+    }
+    await store.setSyncData({
+      next_batch: "s-before-timeout",
+      rooms: { join: {}, invite: {}, leave: {}, knock: {} },
+      account_data: { events: [] },
+    });
+    await store.flush();
+    store.setSyncToken("s-abandoned");
+
+    const stopPromise = client.stopAndPersist();
+    await vi.advanceTimersByTimeAsync(5_000);
+    await stopPromise;
+
+    matrixJsClient = createMatrixJsClientStub();
+    const restarted = new MatrixClient("https://matrix.example.org", "token", {
+      storageRootDir,
+    });
+    const restartedStore = lastCreateClientOpts?.store as
+      | {
+          getSavedSyncToken: () => Promise<string | null>;
+          hasSavedSyncFromCleanShutdown: () => boolean;
+        }
+      | undefined;
+    expect(restartedStore?.hasSavedSyncFromCleanShutdown()).toBe(false);
+    await expect(restartedStore?.getSavedSyncToken()).resolves.toBe("s-before-timeout");
+    restarted.stopWithoutPersist();
+  });
+
   it("hydrates clean cached membership without routing cache callbacks", async () => {
     const roomEvents: string[] = [];
     const invitedRooms: string[] = [];

@@ -456,9 +456,9 @@ export abstract class MatrixClientBase {
     this.started = false;
   }
 
-  async stopSyncAndWaitForPersistBoundary(): Promise<void> {
+  async stopSyncAndWaitForPersistBoundary(): Promise<boolean> {
     this.stopSyncWithoutPersist();
-    await this.syncStore?.waitForSyncResponseSettled();
+    return (await this.syncStore?.waitForSyncResponseSettled()) ?? true;
   }
 
   markInboundEventSettled(roomId: string, eventId: string): void {
@@ -504,9 +504,11 @@ export abstract class MatrixClientBase {
   }
 
   async stopAndPersist(): Promise<void> {
-    await this.stopSyncAndWaitForPersistBoundary();
+    const syncResponseSettled = await this.stopSyncAndWaitForPersistBoundary();
     this.decryptBridge?.stop();
-    this.syncStore?.markCleanShutdown();
+    if (syncResponseSettled) {
+      this.syncStore?.markCleanShutdown();
+    }
     this.beginStoppedStatePersist();
     await this.stopPersistPromise;
   }
