@@ -18,6 +18,7 @@ import {
   mergeCronRunDiagnostics,
 } from "../run-diagnostics.js";
 import type { CronDeliveryTrace, CronRunTelemetry } from "../types.js";
+import { buildCronAssistantCompletion } from "./assistant-completion.js";
 import { resolveCronChannelOutputPolicy } from "./channel-output-policy.js";
 import {
   isHeartbeatOnlyResponse,
@@ -68,6 +69,7 @@ export async function finalizeCronRun(params: {
   const { prepared, execution } = params;
   const finalRunResult = execution.runResult;
   const payloads = finalRunResult.payloads ?? [];
+  const assistantCompletion = buildCronAssistantCompletion(finalRunResult);
   let telemetry: CronRunTelemetry | undefined;
 
   // Late aborted results may still contain billable usage. Recheck before each
@@ -312,6 +314,7 @@ export async function finalizeCronRun(params: {
       deliveryAttempted: result?.deliveryAttempted,
       deliveryError: result?.deliveryError,
       delivery: result?.delivery,
+      assistantCompletion,
       diagnostics: mergeCronRunDiagnostics(
         runDiagnostics,
         hasFatalErrorPayload
@@ -385,6 +388,7 @@ export async function finalizeCronRun(params: {
       outputText: error,
       delivered: false,
       deliveryAttempted: false,
+      assistantCompletion,
       diagnostics: mergeCronRunDiagnostics(
         runDiagnostics,
         createCronRunDiagnosticsFromError("agent-run", error),
@@ -478,6 +482,7 @@ export async function finalizeCronRun(params: {
         deliveryResult.result.deliveryAttempted ?? deliveryResult.deliveryAttempted,
       deliveryError,
       delivery: deliveryTrace,
+      assistantCompletion,
       diagnostics: mergeCronRunDiagnostics(
         runDiagnostics,
         deliveryResult.result.diagnostics,
