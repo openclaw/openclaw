@@ -82,6 +82,87 @@ describe("resolveModelSelection", () => {
     expect(result).toEqual({ kind: "resolved", provider: "openai", model: "shared" });
   });
 
+  it("resolves an oversized model callback against the current provider catalog", () => {
+    const model = "xentriom/gemma-4-12B-agentic-fable5-composer2.5-v2:latest";
+    const callbackData = buildModelSelectionCallbackData({ provider: "ollama", model });
+    expect(callbackData).not.toBeNull();
+    if (!callbackData) {
+      throw new Error("Expected a hashed Telegram model callback");
+    }
+    const callback = parseModelCallbackData(callbackData);
+
+    expect(callback).toEqual({
+      type: "select",
+      provider: "~",
+      model: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
+    });
+    if (callback?.type !== "select") {
+      throw new Error("Expected a hashed Telegram model callback");
+    }
+    expect(
+      resolveModelSelection({
+        callback,
+        providers: ["ollama", "openai"],
+        byProvider: new Map([
+          ["ollama", new Set([model])],
+          ["openai", new Set([model])],
+        ]),
+      }),
+    ).toEqual({ kind: "resolved", provider: "ollama", model });
+  });
+
+  it("rejects a hashed callback when its target is absent from the current catalog", () => {
+    const model = "xentriom/gemma-4-12B-agentic-fable5-composer2.5-v2:latest";
+    const callbackData = buildModelSelectionCallbackData({ provider: "ollama", model });
+    expect(callbackData).not.toBeNull();
+    if (!callbackData) {
+      throw new Error("Expected a hashed Telegram model callback");
+    }
+    const callback = parseModelCallbackData(callbackData);
+
+    expect(callback?.type).toBe("select");
+    if (callback?.type !== "select") {
+      throw new Error("Expected a hashed Telegram model callback");
+    }
+    expect(
+      resolveModelSelection({
+        callback,
+        providers: ["ollama"],
+        byProvider: new Map([["ollama", new Set(["different-model"])]]),
+      }),
+    ).toEqual({
+      kind: "ambiguous",
+      model: callback.model,
+      matchingProviders: [],
+    });
+  });
+
+  it("rejects hashed catalog collisions instead of choosing an ambiguous model", () => {
+    const model = "xentriom/gemma-4-12B-agentic-fable5-composer2.5-v2:latest";
+    const callbackData = buildModelSelectionCallbackData({ provider: "ollama", model });
+    expect(callbackData).not.toBeNull();
+    if (!callbackData) {
+      throw new Error("Expected a hashed Telegram model callback");
+    }
+    const callback = parseModelCallbackData(callbackData);
+
+    expect(callback?.type).toBe("select");
+    if (callback?.type !== "select") {
+      throw new Error("Expected a hashed Telegram model callback");
+    }
+    expect(
+      resolveModelSelection({
+        callback,
+        providers: ["ollama", "ollama"],
+        byProvider: new Map([["ollama", new Set([model])]]),
+      }),
+    ).toEqual({
+      kind: "ambiguous",
+      model: callback.model,
+      matchingProviders: ["ollama", "ollama"],
+    });
+  });
+
   it("returns ambiguous result when zero or multiple providers match", () => {
     const sharedByBoth = resolveModelSelection({
       callback: { type: "select", model: "shared" },
@@ -114,6 +195,10 @@ describe("resolveModelSelection", () => {
 });
 
 describe("buildModelSelectionCallbackData", () => {
+  it("rejects the provider reserved for oversized model callbacks", () => {
+    expect(buildModelSelectionCallbackData({ provider: "~", model: "a".repeat(43) })).toBeNull();
+  });
+
   it("uses standard callback when under limit and compact callback when needed", () => {
     expect(buildModelSelectionCallbackData({ provider: "openai", model: "gpt-4.1" })).toBe(
       "mdl_sel_openai/gpt-4.1",
@@ -124,9 +209,18 @@ describe("buildModelSelectionCallbackData", () => {
     );
   });
 
-  it("returns null when even compact callback exceeds Telegram limit", () => {
+  it("uses a deterministic short token when even the compact callback exceeds the Telegram limit", () => {
     const tooLongModel = "x".repeat(80);
-    expect(buildModelSelectionCallbackData({ provider: "openai", model: tooLongModel })).toBeNull();
+    const callback = buildModelSelectionCallbackData({ provider: "openai", model: tooLongModel });
+
+    expect(callback).toMatch(/^mdl_sel_~\/[A-Za-z0-9_-]{43}$/);
+    if (!callback) {
+      throw new Error("Expected a hashed Telegram model callback");
+    }
+    expect(Buffer.byteLength(callback, "utf8")).toBeLessThanOrEqual(64);
+    expect(buildModelSelectionCallbackData({ provider: "openai", model: tooLongModel })).toBe(
+      callback,
+    );
   });
 });
 
@@ -522,7 +616,7 @@ describe("large model lists (OpenRouter-scale)", () => {
     }
   });
 
-  it("skips models that would exceed callback_data limit", () => {
+  it("keeps oversized model names selectable within Telegram's callback data limit", () => {
     const models = [
       "short-model",
       "this-is-an-extremely-long-model-name-that-definitely-exceeds-the-sixty-four-byte-limit",
@@ -535,10 +629,14 @@ describe("large model lists (OpenRouter-scale)", () => {
       totalPages: 1,
     });
 
-    // Should have 2 model buttons (skipping the long one) + back
+    // Long model names stay selectable without violating Telegram's 64-byte limit.
     const modelButtons = result.filter((row) => !row[0]?.callback_data.startsWith("mdl_back"));
-    expect(modelButtons.length).toBe(2);
+    expect(modelButtons.length).toBe(3);
     expect(modelButtons[0]?.[0]?.text).toBe("short-model");
-    expect(modelButtons[1]?.[0]?.text).toBe("another-short");
+    expect(modelButtons[1]?.[0]?.callback_data).toMatch(/^mdl_sel_~\/[A-Za-z0-9_-]{43}$/);
+    expect(modelButtons[2]?.[0]?.text).toBe("another-short");
+    for (const row of modelButtons) {
+      expect(Buffer.byteLength(row[0]?.callback_data ?? "", "utf8")).toBeLessThanOrEqual(64);
+    }
   });
 });

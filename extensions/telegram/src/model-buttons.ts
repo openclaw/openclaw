@@ -6,8 +6,10 @@
  * - mdl_list_{prov}_{pg}  - show models for provider (page N, 1-indexed)
  * - mdl_sel_{provider/id} - select model (standard)
  * - mdl_sel/{model}       - select model (compact fallback when standard is >64 bytes)
+ * - mdl_sel_~/{sha256}    - resolve an oversized model against the live catalog
  * - mdl_back              - back to providers list
  */
+import { createHash } from "node:crypto";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -44,13 +46,21 @@ export type ModelsKeyboardParams = {
 
 const MODELS_PAGE_SIZE = 8;
 const MODEL_BUTTON_LABEL_MAX_LENGTH = 38;
+// Provider-list callbacks cannot represent `~`; reserve it so digest callbacks
+// cannot collide with an explicit provider/model selection.
+const HASH_SELECTION_PROVIDER = "~";
 const CALLBACK_PREFIX = {
   providers: "mdl_prov",
   back: "mdl_back",
   list: "mdl_list_",
   selectStandard: "mdl_sel_",
   selectCompact: "mdl_sel/",
+  selectHash: "mdl_sel_~/",
 } as const;
+
+function hashModelSelection(provider: string, model: string): string {
+  return createHash("sha256").update(provider).update("\0").update(model).digest("base64url");
+}
 
 /**
  * Parse a model callback_data string into a structured object.
@@ -111,12 +121,19 @@ export function buildModelSelectionCallbackData(params: {
   provider: string;
   model: string;
 }): string | null {
+  if (params.provider === HASH_SELECTION_PROVIDER) {
+    return null;
+  }
   const fullCallbackData = `${CALLBACK_PREFIX.selectStandard}${params.provider}/${params.model}`;
   if (fitsTelegramCallbackData(fullCallbackData)) {
     return fullCallbackData;
   }
   const compactCallbackData = `${CALLBACK_PREFIX.selectCompact}${params.model}`;
-  return fitsTelegramCallbackData(compactCallbackData) ? compactCallbackData : null;
+  if (fitsTelegramCallbackData(compactCallbackData)) {
+    return compactCallbackData;
+  }
+  // Resolve against the current provider catalog; never persist model lookup state.
+  return `${CALLBACK_PREFIX.selectHash}${hashModelSelection(params.provider, params.model)}`;
 }
 
 export function resolveModelSelection(params: {
@@ -124,6 +141,27 @@ export function resolveModelSelection(params: {
   providers: readonly string[];
   byProvider: ReadonlyMap<string, ReadonlySet<string>>;
 }): ResolveModelSelectionResult {
+  if (
+    params.callback.provider === HASH_SELECTION_PROVIDER &&
+    /^[A-Za-z0-9_-]{43}$/.test(params.callback.model)
+  ) {
+    const matches: Array<{ provider: string; model: string }> = [];
+    for (const provider of params.providers) {
+      for (const model of params.byProvider.get(provider) ?? []) {
+        if (hashModelSelection(provider, model) === params.callback.model) {
+          matches.push({ provider, model });
+        }
+      }
+    }
+    if (matches.length === 1) {
+      return { kind: "resolved", ...expectDefined(matches.at(0), "single matching model") };
+    }
+    return {
+      kind: "ambiguous",
+      model: params.callback.model,
+      matchingProviders: matches.map((match) => match.provider),
+    };
+  }
   if (params.callback.provider) {
     return {
       kind: "resolved",
@@ -215,11 +253,9 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
 
   for (const model of pageModels) {
     const callbackData = buildModelSelectionCallbackData({ provider, model });
-    // Skip models that still exceed Telegram's callback_data limit.
     if (!callbackData) {
       continue;
     }
-
     const isCurrentModel = isCurrentModelSelection({ currentModel, provider, model });
     const fallbackLabel = model.includes("/") ? `${provider}/${model}` : model;
     const displayLabel = modelNames?.get(`${provider}/${model}`) ?? fallbackLabel;

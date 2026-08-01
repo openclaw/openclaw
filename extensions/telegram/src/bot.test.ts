@@ -45,6 +45,7 @@ import {
   TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES,
   TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE,
 } from "./message-cache.js";
+import { buildModelSelectionCallbackData } from "./model-buttons.js";
 import { buildTelegramOpaqueCallbackData } from "./native-command-callback-data.js";
 import { setTelegramRuntime } from "./runtime.js";
 import { clearTelegramRuntimeForTest as clearTelegramRuntime } from "./runtime.test-support.js";
@@ -2256,7 +2257,18 @@ describe("createTelegramBot", () => {
   });
 
   const compactModelId = "us.anthropic.claude-3-5-sonnet-20240620-v1:0";
-  it.each([
+  const oversizedModelId = "xentriom/gemma-4-12B-agentic-fable5-composer2.5-v2:latest";
+  it.each<{
+    name: string;
+    callbackId: string;
+    callbackData: string;
+    defaultModel: string;
+    configuredModels:
+      | NonNullable<NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["models"]>
+      | undefined;
+    messageId: number;
+    storeLabel: string;
+  }>([
     {
       name: "routes compact model callbacks against the configured provider",
       callbackId: "cbq-model-compact-1",
@@ -2265,6 +2277,19 @@ describe("createTelegramBot", () => {
       configuredModels: undefined,
       messageId: 14,
       storeLabel: "model-compact",
+    },
+    {
+      name: "routes oversized model callbacks against the configured provider",
+      callbackId: "cbq-model-hashed-1",
+      callbackData:
+        buildModelSelectionCallbackData({
+          provider: "ollama",
+          model: oversizedModelId,
+        }) ?? "mdl_missing_oversized_model_callback",
+      defaultModel: `ollama/${oversizedModelId}`,
+      configuredModels: { [`ollama/${oversizedModelId}`]: {} },
+      messageId: 15,
+      storeLabel: "model-hashed",
     },
     {
       name: "resets overrides when selecting the configured default model",
