@@ -1123,15 +1123,16 @@ export const registerTelegramNativeCommands = ({
         return null;
       }
     }
-    const mediaLocalRoots = nativeCommandRuntime.resolveAgentScopedOutboundMediaAccess({
-      cfg: runtimeCfg,
-      agentId: route.agentId,
-      sessionKey: route.sessionKey,
-      messageProvider: "telegram",
-      accountId: route.accountId,
-      groupId: isGroup ? String(chatId) : undefined,
-      requesterSenderId: senderId,
-    }).localRoots;
+    const mediaLocalRoots =
+      nativeCommandRuntime.resolveAgentScopedOutboundMediaAccess({
+        cfg: runtimeCfg,
+        agentId: route.agentId,
+        sessionKey: route.sessionKey,
+        messageProvider: "telegram",
+        accountId: route.accountId,
+        groupId: isGroup ? String(chatId) : undefined,
+        requesterSenderId: senderId,
+      }).localRoots ?? [];
     const tableMode = resolveMarkdownTableMode({
       cfg: runtimeCfg,
       channel: "telegram",

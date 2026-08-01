@@ -272,5 +272,4 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
     expect(denied.readFile).toBeUndefined();
     expect(denied.localRoots).not.toContain(extraRoot);
   });
-
 });

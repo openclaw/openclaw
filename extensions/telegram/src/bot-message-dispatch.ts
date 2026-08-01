@@ -365,13 +365,14 @@ export const dispatchTelegramMessage = async ({
     draftReplyToMessageId: quote.draftReplyToMessageId,
     isDispatchSuperseded,
     loadFreshSessionEntry,
-    mediaLocalRoots: resolveAgentScopedOutboundMediaAccess({
-      cfg,
-      agentId: dispatchContext.route.agentId,
-      sessionKey: dispatchContext.ctxPayload.SessionKey,
-      messageProvider: "telegram",
-      accountId: dispatchContext.route.accountId,
-    }).localRoots,
+    mediaLocalRoots:
+      resolveAgentScopedOutboundMediaAccess({
+        cfg,
+        agentId: dispatchContext.route.agentId,
+        sessionKey: dispatchContext.ctxPayload.SessionKey,
+        messageProvider: "telegram",
+        accountId: dispatchContext.route.accountId,
+      }).localRoots ?? [],
     opts,
     progress,
     replyQuoteByMessageId: quote.replyQuoteByMessageId,
