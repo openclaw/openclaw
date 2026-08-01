@@ -1,5 +1,5 @@
 import fsSync from "node:fs";
-import fs, { appendFile, readFile, truncate, writeFile } from "node:fs/promises";
+import fs, { appendFile, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { appendAudit, verifyChain } from "./audit.js";
@@ -162,86 +162,6 @@ describe("Node stores", () => {
     await expect(
       new JsonlAuditStore(path, auditKey).appendEvent("one", { id: 1 }, 10),
     ).resolves.toMatchObject({ event: { seq: 1, type: "one" } });
-  });
-
-  it("reads truncated prefix of an oversized audit store without buffering past the cap", async () => {
-    const directory = tempDirs.make("reef-audit-oversized-");
-    const path = join(directory, "audit.jsonl");
-    const store = new JsonlAuditStore(path, auditKey);
-    await store.appendEvent("one", { id: 1 }, 10);
-    // Extend the file past the streaming read cap. The bounded reader stops
-    // at the cap and returns complete records up to that point instead of
-    // throwing — existing oversized stores remain partially readable.
-    const limit = 33 * 1024 * 1024;
-    await truncate(path, limit + 1);
-    const entries = await new JsonlAuditStore(path, auditKey).entries();
-    expect(entries).toHaveLength(1);
-    expect(entries[0]!.event.payload).toEqual({ id: 1 });
-  });
-
-  it("rejects an oversized individual replay record", async () => {
-    const directory = tempDirs.make("reef-replay-oversized-");
-    const path = join(directory, "replay.jsonl");
-    const identity = generateIdentity();
-    const receipt = signReceipt(
-      { id: receiptId, bodyHash: "a".repeat(64), auditHead: "b".repeat(64), status: "accepted" },
-      identity.signing.secretKey,
-    );
-    const body = { text: "test" };
-    const store = new FileReplayStore(path, replayBodyKey, () => new Uint8Array(12).fill(7));
-    await store.claim("alice", receiptId, "c".repeat(64));
-    await store.complete("alice", receiptId, receipt, body);
-    const limit = 33 * 1024 * 1024;
-    await truncate(path, limit + 1);
-    // A single unterminated record still has a hard memory bound.
-    const reopened = new FileReplayStore(path, replayBodyKey);
-    await expect(reopened.claim("alice", receiptId, "c".repeat(64))).rejects.toThrow(
-      "Replay ledger record",
-    );
-  });
-
-  it("streams a replay ledger beyond the audit cap and preserves later receipts", async () => {
-    const directory = tempDirs.make("reef-replay-receipt-before-cap-");
-    const path = join(directory, "replay.jsonl");
-    const identity = generateIdentity();
-    const laterReceiptId = "01JZ0000000000000000000001";
-    const receipt = signReceipt(
-      {
-        id: laterReceiptId,
-        bodyHash: "a".repeat(64),
-        auditHead: "b".repeat(64),
-        status: "rejected",
-      },
-      identity.signing.secretKey,
-    );
-    const earlyClaim = JSON.stringify({
-      op: "claim",
-      peer: "alice",
-      id: receiptId,
-      envelopeHash: "c".repeat(64),
-    });
-    const laterClaim = JSON.stringify({
-      op: "claim",
-      peer: "bob",
-      id: laterReceiptId,
-      envelopeHash: "d".repeat(64),
-    });
-    const laterComplete = JSON.stringify({
-      op: "complete",
-      peer: "bob",
-      id: laterReceiptId,
-      receipt,
-    });
-    const limit = 33 * 1024 * 1024;
-    await writeFile(
-      path,
-      `${earlyClaim}\n${"\n".repeat(limit)}${laterClaim}\n${laterComplete}\n`,
-      "utf8",
-    );
-
-    const reopened = new FileReplayStore(path, replayBodyKey);
-    expect(await reopened.claim("bob", laterReceiptId, "d".repeat(64))).toBe("duplicate");
-    expect(await reopened.completed("bob", laterReceiptId)).toEqual({ receipt });
   });
 
   it("rejects a corrupt middle JSONL record", async () => {

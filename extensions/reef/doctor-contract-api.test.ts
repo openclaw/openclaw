@@ -22,6 +22,7 @@ import {
   base64url,
   generateIdentity,
   MemoryAuditStore,
+  signReceipt,
   type ReviewRequest,
 } from "./protocol/index.js";
 import { ReefChannelConfigSchema } from "./src/config-schema.js";
@@ -497,6 +498,181 @@ describe("Reef doctor contract", () => {
       nextHash: entries[1]!.entryHash,
     });
     expect(fs.existsSync(`${filePath}.migrated`)).toBe(true);
+  });
+
+  it("streams complete legacy audit and replay records beyond 32 MiB", async () => {
+    const legacyDir = path.join(stateDir, ".openclaw", "data", "reef");
+    const auditPath = path.join(legacyDir, "audit.jsonl");
+    const replayPath = path.join(legacyDir, "replay.jsonl");
+    const audit = new MemoryAuditStore(new Uint8Array(32).fill(1));
+    await audit.appendEvent("one", { id: 1 }, 10);
+    await audit.appendEvent("two", { id: 2 }, 11);
+    const auditEntries = await audit.entries();
+    const replayId = "01JZ0000000000000000000000";
+    const laterReplayId = "01JZ0000000000000000000001";
+    const receipt = signReceipt(
+      {
+        id: laterReplayId,
+        bodyHash: "a".repeat(64),
+        auditHead: "b".repeat(64),
+        status: "rejected",
+      },
+      generateIdentity().signing.secretKey,
+    );
+    const gap = "\n".repeat(33 * 1024 * 1024);
+    fs.mkdirSync(legacyDir, { recursive: true });
+    fs.writeFileSync(
+      auditPath,
+      `${JSON.stringify(auditEntries[0])}\n${gap}${JSON.stringify(auditEntries[1])}\n`,
+    );
+    fs.writeFileSync(
+      replayPath,
+      `${JSON.stringify({ op: "claim", peer: "alice", id: replayId, envelopeHash: "c".repeat(64) })}\n${gap}${JSON.stringify({ op: "claim", peer: "bob", id: laterReplayId, envelopeHash: "d".repeat(64) })}\n${JSON.stringify({ op: "complete", peer: "bob", id: laterReplayId, receipt })}\n`,
+    );
+    const context = createDoctorContext(env);
+    const params = {
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context,
+    };
+
+    const auditResult = await migrationById("reef-audit-jsonl-to-plugin-state").migrateLegacyState(
+      params,
+    );
+    const replayResult = await migrationById(
+      "reef-runtime-files-to-plugin-state",
+    ).migrateLegacyState(params);
+
+    expect(auditResult.warnings).toEqual([]);
+    expect(replayResult.warnings).toEqual([]);
+    const headStore = context.openPluginStateKeyedStore<ReefAuditHeadRecord>({
+      namespace: REEF_AUDIT_HEAD_NAMESPACE,
+      maxEntries: REEF_AUDIT_HEAD_MAX_ENTRIES,
+      overflowPolicy: "reject-new",
+    });
+    await expect(headStore.lookup(REEF_AUDIT_HEAD_KEY)).resolves.toMatchObject({
+      hash: auditEntries[1]!.entryHash,
+      seq: 2,
+    });
+    const replayStore = context.openPluginStateKeyedStore<ReefReplayRecord>({
+      namespace: REEF_REPLAY_NAMESPACE,
+      maxEntries: REEF_REPLAY_MAX_ENTRIES,
+      overflowPolicy: "reject-new",
+      defaultTtlMs: REEF_REPLAY_TTL_MS,
+    });
+    await expect(replayStore.lookup(reefReplayStoreKey("bob", laterReplayId))).resolves.toEqual({
+      peer: "bob",
+      id: laterReplayId,
+      envelopeHash: "d".repeat(64),
+      state: "completed",
+      receipt,
+    });
+    expect(fs.existsSync(`${auditPath}.migrated`)).toBe(true);
+    expect(fs.existsSync(`${replayPath}.migrated`)).toBe(true);
+  });
+
+  it("leaves an oversized legacy JSONL record blocked and unarchived", async () => {
+    const legacyDir = path.join(stateDir, ".openclaw", "data", "reef");
+    const replayPath = path.join(legacyDir, "replay.jsonl");
+    fs.mkdirSync(legacyDir, { recursive: true });
+    fs.writeFileSync(
+      replayPath,
+      JSON.stringify({
+        op: "claim",
+        peer: "alice",
+        id: "01JZ0000000000000000000000",
+        envelopeHash: "c".repeat(64),
+      }),
+    );
+    fs.truncateSync(replayPath, 32 * 1024 * 1024 + 1);
+    const migration = migrationById("reef-runtime-files-to-plugin-state");
+    const params = {
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context: createDoctorContext(env),
+    };
+
+    const result = await migration.migrateLegacyState(params);
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      expect.stringContaining("Reef legacy JSONL record exceeds 33554432 bytes"),
+      expect.stringContaining("Reef durable state migration is incomplete"),
+    ]);
+    expect(fs.existsSync(replayPath)).toBe(true);
+    expect(fs.existsSync(`${replayPath}.migrated`)).toBe(false);
+  });
+
+  it("leaves excessive retained legacy replay state blocked and unarchived", async () => {
+    const legacyDir = path.join(stateDir, ".openclaw", "data", "reef");
+    const replayPath = path.join(legacyDir, "replay.jsonl");
+    fs.mkdirSync(legacyDir, { recursive: true });
+    const oversizedHash = "c".repeat(24 * 1024 * 1024);
+    for (let index = 0; index < 3; index += 1) {
+      fs.appendFileSync(
+        replayPath,
+        `${JSON.stringify({
+          op: "claim",
+          peer: "alice",
+          id: `01JZ000000000000000000000${index}`,
+          envelopeHash: oversizedHash,
+        })}\n`,
+      );
+    }
+    const migration = migrationById("reef-runtime-files-to-plugin-state");
+    const params = {
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context: createDoctorContext(env),
+    };
+
+    const result = await migration.migrateLegacyState(params);
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      expect.stringContaining("Reef legacy JSONL retained state exceeds 67108864 bytes"),
+      expect.stringContaining("Reef durable state migration is incomplete"),
+    ]);
+    expect(fs.existsSync(replayPath)).toBe(true);
+    expect(fs.existsSync(`${replayPath}.migrated`)).toBe(false);
+  });
+
+  it("rejects a complete invalid final replay record without a trailing newline", async () => {
+    const legacyDir = path.join(stateDir, ".openclaw", "data", "reef");
+    const replayPath = path.join(legacyDir, "replay.jsonl");
+    fs.mkdirSync(legacyDir, { recursive: true });
+    fs.writeFileSync(
+      replayPath,
+      JSON.stringify({
+        op: "consume",
+        peer: "alice",
+        id: "01JZ0000000000000000000000",
+      }),
+    );
+    const migration = migrationById("reef-runtime-files-to-plugin-state");
+    const params = {
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context: createDoctorContext(env),
+    };
+
+    const result = await migration.migrateLegacyState(params);
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      expect.stringContaining("Reef replay consume lacks claim"),
+      expect.stringContaining("Reef durable state migration is incomplete"),
+    ]);
+    expect(fs.existsSync(replayPath)).toBe(true);
+    expect(fs.existsSync(`${replayPath}.migrated`)).toBe(false);
   });
 
   it("finishes an interrupted migration of an empty audit trail", async () => {
