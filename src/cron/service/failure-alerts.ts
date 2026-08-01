@@ -3,6 +3,8 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { FailoverReason } from "../../agents/embedded-agent-helpers/types.js";
 import { resolveTargetPrefixedChannel } from "../../infra/outbound/channel-target-prefix.js";
+import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
+import { resolveCronJobDisplayName } from "../public-job.js";
 import type { CronFailureNotificationDelivery, CronJob, CronMessageChannel } from "../types.js";
 import type { CronServiceState } from "./state.js";
 
@@ -54,6 +56,27 @@ function normalizeTo(input: unknown): string | undefined {
   }
   const to = input.trim();
   return to ? to : undefined;
+}
+
+function failureAlertTargetMatchesDelivery(params: {
+  channel: CronMessageChannel;
+  alertTo: string;
+  deliveryTo?: string;
+}): boolean {
+  if (!params.deliveryTo) {
+    return false;
+  }
+  if (params.alertTo === params.deliveryTo) {
+    return true;
+  }
+  try {
+    const alertTarget = normalizeTargetForProvider(params.channel, params.alertTo);
+    const deliveryTarget = normalizeTargetForProvider(params.channel, params.deliveryTo);
+    return Boolean(alertTarget && deliveryTarget && alertTarget === deliveryTarget);
+  } catch {
+    // Legacy malformed targets must not break run finalization or inherit a topic.
+    return false;
+  }
 }
 
 function clampPositiveInt(value: unknown, fallback: number): number {
@@ -121,7 +144,8 @@ export function resolveFailureAlert(
   const inheritsDeliveryThread =
     mode !== "webhook" &&
     inheritsDeliveryChannel &&
-    (explicitTo === undefined || explicitTo === deliveryTo) &&
+    (explicitTo === undefined ||
+      failureAlertTargetMatchesDelivery({ channel, alertTo: explicitTo, deliveryTo })) &&
     accountId === job.delivery?.accountId;
 
   // Announce alerts inherit the job delivery target; webhook alerts require an
@@ -157,7 +181,7 @@ function emitFailureAlert(
     status: "error" | "skipped";
   },
 ) {
-  const safeJobName = params.job.name || params.job.id;
+  const safeJobName = resolveCronJobDisplayName(params.job);
   const truncatedError = truncateUtf16Safe(params.error?.trim() || "unknown reason", 200);
   const errorReason = params.status === "error" ? params.errorReason : undefined;
   // Keep alert bodies compact because they may route through chat channels

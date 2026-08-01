@@ -723,6 +723,37 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     });
   });
 
+  it("uses the display name in completion alerts without changing structured jobName", async () => {
+    const job = createWebhookJob({
+      mode: "announce",
+      failureDestination: {
+        mode: "webhook",
+        to: "https://example.invalid/failure",
+      },
+    });
+    job.name = "internal-stable-name";
+    job.displayName = "Operator-visible name";
+
+    dispatchGatewayCronFinishedNotifications({
+      evt: {
+        jobId: job.id,
+        action: "finished",
+        status: "error",
+        error: "provider unavailable",
+      },
+      job,
+      deps: {} as CliDeps,
+      logger: { warn: vi.fn() },
+      resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
+    });
+
+    await waitForFast(() => expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledOnce());
+    expect(webhookRequestBody()).toMatchObject({
+      jobName: "internal-stable-name",
+      message: 'Automation "Operator-visible name" failed: provider unavailable',
+    });
+  });
+
   it("redacts invalid completion webhook targets in warnings", () => {
     const logger = {
       warn: vi.fn(),

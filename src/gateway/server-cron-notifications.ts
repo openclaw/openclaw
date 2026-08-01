@@ -15,6 +15,7 @@ import {
   sendCronAnnouncePayloadStrict,
   sendFailureNotificationAnnounce,
 } from "../cron/delivery.js";
+import { resolveCronJobDisplayName } from "../cron/public-job.js";
 import type { CronEvent } from "../cron/service.js";
 import { resolveCronDeliverySessionKey } from "../cron/session-target.js";
 import type { CronJob, CronMessageChannel } from "../cron/types.js";
@@ -168,7 +169,9 @@ function buildCronWebhookHeaders(webhookToken?: string): Record<string, string> 
 }
 
 function buildCronFailureWebhookPayload(params: { evt: CronEvent; job: CronJob }) {
-  const failureMessage = `Automation "${params.job.name}" failed: ${params.evt.error ?? "unknown error"}`;
+  const failureMessage =
+    `Automation "${resolveCronJobDisplayName(params.job)}" failed: ` +
+    (params.evt.error ?? "unknown error");
   return {
     jobId: params.job.id,
     jobName: params.job.name,
