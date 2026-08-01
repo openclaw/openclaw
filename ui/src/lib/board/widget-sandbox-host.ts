@@ -6,6 +6,7 @@ import {
 } from "./widget-bridge.ts";
 
 const SANDBOX_READY_TIMEOUT_MS = 10_000;
+const WIDGET_CONTENT_FETCH_TIMEOUT_MS = 10_000;
 
 type BoardWidgetSandboxHostOptions = {
   frame: HTMLIFrameElement;
@@ -36,6 +37,7 @@ export class BoardWidgetSandboxHost {
   private readyTimer: number | null = null;
   private loadedDocumentKey = "";
   private loadGeneration = 0;
+  private contentFetchController: AbortController | null = null;
   private requestGeneration = 0;
   private readonly pendingRequests = new Map<string, number>();
 
@@ -91,6 +93,8 @@ export class BoardWidgetSandboxHost {
   reset(): void {
     this.loadGeneration += 1;
     this.requestGeneration += 1;
+    this.contentFetchController?.abort();
+    this.contentFetchController = null;
     this.pendingRequests.clear();
     this.loadedDocumentKey = "";
     this.bridgePort?.close();
@@ -338,8 +342,18 @@ export class BoardWidgetSandboxHost {
     const sourceHref = sourceUrl.href;
     this.options.onFrameUrl(sourceHref);
     const generation = ++this.loadGeneration;
+    this.contentFetchController?.abort();
+    const controller = new AbortController();
+    this.contentFetchController = controller;
+    const timeout = window.setTimeout(
+      () => controller.abort(new DOMException("The operation timed out.", "TimeoutError")),
+      WIDGET_CONTENT_FETCH_TIMEOUT_MS,
+    );
     try {
-      const response = await fetch(sourceHref, { cache: "no-store" });
+      const response = await fetch(sourceHref, {
+        cache: "no-store",
+        signal: controller.signal,
+      });
       if (generation !== this.loadGeneration || !frame.isConnected) {
         return;
       }
@@ -370,6 +384,11 @@ export class BoardWidgetSandboxHost {
     } catch {
       if (generation === this.loadGeneration) {
         this.options.onLoadFailed(widget);
+      }
+    } finally {
+      window.clearTimeout(timeout);
+      if (this.contentFetchController === controller) {
+        this.contentFetchController = null;
       }
     }
   }
