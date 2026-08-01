@@ -1,8 +1,8 @@
 // Control UI chat module implements realtime talk google live behavior.
 import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../../../src/talk/describe-view-tool.js";
 import {
-  base64ToBytes,
   bytesToBase64,
+  estimateBase64DecodedByteLength,
   floatToPcm16,
   RealtimeTalkMediaStreamMeter,
   RealtimeTalkPcmInputPump,
@@ -21,6 +21,7 @@ import {
   submitRealtimeTalkConsult,
   type RealtimeTalkTransport,
   type RealtimeTalkTransportContext,
+  type RealtimeTalkTransportStartResult,
 } from "./realtime-talk-shared.ts";
 import {
   captureRealtimeTalkVideoFrame,
@@ -143,7 +144,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     });
   }
 
-  async start(): Promise<void> {
+  async start(): Promise<RealtimeTalkTransportStartResult> {
     if (!navigator.mediaDevices?.getUserMedia || typeof WebSocket === "undefined") {
       throw new Error("Realtime Talk requires browser WebSocket and microphone access");
     }
@@ -162,7 +163,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
       });
     } catch (error) {
       if (this.closed) {
-        return;
+        return "cancelled";
       }
       throw error;
     } finally {
@@ -172,7 +173,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     }
     if (this.closed) {
       media.getTracks().forEach((track) => track.stop());
-      return;
+      return "cancelled";
     }
     this.media = media;
     this.inputContext = new AudioContext({ sampleRate: this.session.audio.inputSampleRateHz });
@@ -193,16 +194,9 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     this.ws.addEventListener("message", (event) => {
       void this.handleMessage(event.data);
     });
-    this.ws.addEventListener("close", () => {
-      if (!this.closed) {
-        this.ctx.callbacks.onStatus?.("error", "Realtime connection closed");
-      }
-    });
-    this.ws.addEventListener("error", () => {
-      if (!this.closed) {
-        this.ctx.callbacks.onStatus?.("error", "Realtime connection failed");
-      }
-    });
+    this.ws.addEventListener("close", () => this.failConnection("Realtime connection closed"));
+    this.ws.addEventListener("error", () => this.failConnection("Realtime connection failed"));
+    return "ready";
   }
 
   async setVideoEnabled(enabled: boolean): Promise<void> {
@@ -213,11 +207,19 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     await this.camera.switchDevice(videoDeviceId);
   }
 
-  stop(): void {
-    if (!this.closed) {
-      this.emitTalkEvent({ type: "session.closed", final: true });
-    }
+  stop(options?: { emitClosed?: boolean }): void {
+    const emitClosed = !this.closed && options?.emitClosed !== false;
     this.closed = true;
+    try {
+      if (emitClosed) {
+        this.emitTalkEvent({ type: "session.closed", final: true });
+      }
+    } finally {
+      this.releaseResources();
+    }
+  }
+
+  private releaseResources(): void {
     this.mediaSetupController?.abort();
     this.mediaSetupController = null;
     this.setupComplete = false;
@@ -239,6 +241,18 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     this.outputContext = null;
     this.ws?.close();
     this.ws = null;
+  }
+
+  private failConnection(detail: string): void {
+    if (this.closed) {
+      return;
+    }
+    try {
+      this.ctx.callbacks.onStatus?.("error", detail);
+    } finally {
+      // Socket failure is terminal even when a consumer callback rejects the update.
+      this.stop();
+    }
   }
 
   private startMicrophonePump(): void {
@@ -303,6 +317,9 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
         text: content.inputTranscription.text,
         final: content.inputTranscription.finished ?? false,
       });
+      if (this.closed) {
+        return;
+      }
       this.emitTalkEvent({
         type: content.inputTranscription.finished ? "transcript.done" : "transcript.delta",
         final: content.inputTranscription.finished ?? false,
@@ -329,6 +346,9 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
         text: content.outputTranscription.text,
         final: content.outputTranscription.finished ?? false,
       });
+      if (this.closed) {
+        return;
+      }
       this.emitTalkEvent({
         type: content.outputTranscription.finished ? "output.text.done" : "output.text.delta",
         final: content.outputTranscription.finished ?? false,
@@ -340,17 +360,23 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
         this.emitTalkEvent({
           type: "output.audio.delta",
           payload: {
-            byteLength: base64ToBytes(part.inlineData.data).byteLength,
+            byteLength: estimateBase64DecodedByteLength(part.inlineData.data),
             mimeType: part.inlineData.mimeType,
           },
         });
         this.playPcm16(part.inlineData.data);
+        if (this.closed) {
+          return;
+        }
       } else if (!part.thought && typeof part.text === "string" && part.text.trim()) {
         this.ctx.callbacks.onTranscript?.({
           role: "assistant",
           text: part.text,
           final: content?.turnComplete ?? false,
         });
+        if (this.closed) {
+          return;
+        }
         this.emitTalkEvent({
           type: content?.turnComplete ? "output.text.done" : "output.text.delta",
           final: content?.turnComplete ?? false,
@@ -369,7 +395,30 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   }
 
   private playPcm16(base64: string): void {
-    this.outputQueue.play(base64, this.outputContext, this.session.audio.outputSampleRateHz);
+    if (this.closed) {
+      return;
+    }
+    const result = this.outputQueue.play(
+      base64,
+      this.outputContext,
+      this.session.audio.outputSampleRateHz,
+    );
+    if (result !== "overflow") {
+      return;
+    }
+    this.stopOutput();
+    this.emitTalkEvent({
+      type: "turn.cancelled",
+      final: true,
+      payload: { reason: "playback-overflow" },
+    });
+    this.ctx.callbacks.onStatus?.(
+      "error",
+      "Realtime Talk playback exceeded the browser audio buffer limit",
+    );
+    // Google Live exposes server-driven interruption but no client response-cancel
+    // frame, so closing the session is the only deterministic provider-side stop.
+    this.stop();
   }
 
   private stopOutput(): void {

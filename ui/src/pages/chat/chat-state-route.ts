@@ -2,7 +2,7 @@ import { loadLocalAssistantIdentity } from "../../app/assistant-identity.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
-import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import { scopedAgentParamsForSession, type SessionCapability } from "../../lib/sessions/index.ts";
 import {
   DEFAULT_MAIN_KEY,
   areUiSessionKeysEquivalent,
@@ -18,8 +18,12 @@ import {
   resolveUiSelectedGlobalAgentId,
   uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
-import { syncVisibleChatQueueProjection } from "./chat-queue.ts";
-import { resetChatRealtimeConversation } from "./chat-realtime.ts";
+import {
+  readChatQueueForScope,
+  syncVisibleChatQueueProjection,
+  writeChatQueueForScope,
+} from "./chat-queue.ts";
+import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import type { ChatComposerMemoryFallback, ChatPageHost } from "./chat-state-host.ts";
 import { invalidateImageLightbox } from "./chat-state-page.ts";
@@ -95,26 +99,14 @@ export function selectedChatSessionRow(state: ChatPageHost) {
 
 function saveChatQueueForSession(state: ChatPageHost, sessionKey: string) {
   const scope = resolveStoredChatOutboxScope(state, sessionKey);
-  const scopeKey = storedChatOutboxScopeKey(scope);
-  const queueByScope = state.chatQueueByScope;
-  if (state.chatQueue.length > 0) {
-    state.chatQueueByScope = {
-      ...queueByScope,
-      [scopeKey]: [...state.chatQueue],
-    };
-    return;
-  }
-  if (!Object.hasOwn(queueByScope, scopeKey)) {
-    return;
-  }
-  const nextQueueByScope = { ...queueByScope };
-  delete nextQueueByScope[scopeKey];
-  state.chatQueueByScope = nextQueueByScope;
+  writeChatQueueForScope(state, sessionKey, state.chatQueue, scope.agentId, {
+    requestUpdate: false,
+  });
 }
 
 function restoreChatQueueForSession(state: ChatPageHost, sessionKey: string): ChatQueueItem[] {
   const scope = resolveStoredChatOutboxScope(state, sessionKey);
-  return [...(state.chatQueueByScope[storedChatOutboxScopeKey(scope)] ?? [])];
+  return readChatQueueForScope(state, sessionKey, scope.agentId);
 }
 
 function saveChatMessagesForSession(state: ChatPageHost, sessionKey: string) {
@@ -253,6 +245,7 @@ export function resetChatStateForRouteSession(
   } = {},
 ): ChatComposerRouteResetResult {
   cancelChatStreamRenderFrame(state);
+  stopChatRealtimeTalk(state);
   const previousSessionKey = state.sessionKey;
   const previousComposerScopeKey = storedChatOutboxScopeKey(
     options.previousComposerScope ?? resolveStoredChatOutboxScope(state, previousSessionKey),
@@ -321,7 +314,6 @@ export function resetChatStateForRouteSession(
   state.chatAvatarStatus = null;
   state.chatAvatarReason = null;
   clearAuthoritativeTerminal(state);
-  resetChatRealtimeConversation(state);
   state.chatQueue = restoreChatQueueForSession(state, sessionKey);
   restoreChatComposerState(state);
   // Composer hydration reads crash-safe queue states. Reapply the process-live
@@ -404,6 +396,15 @@ export function resolveChatAgentId(state: ChatPageHost) {
       scopedAgentParamsForSession(state, state.sessionKey).agentId ??
       resolveUiSelectedGlobalAgentId(state),
   );
+}
+
+export function patchChatSessionLabel(
+  state: ChatPageHost,
+  sessions: Pick<SessionCapability, "patch">,
+  sessionKey: string,
+  label: string | null,
+) {
+  return sessions.patch(sessionKey, { label }, { agentId: resolveChatAgentId(state) });
 }
 
 export function resolveChatAvatarUrl(state: ChatPageHost): string | null {

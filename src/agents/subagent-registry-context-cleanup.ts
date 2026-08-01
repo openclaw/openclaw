@@ -23,7 +23,7 @@ import type {
 
 export function createSubagentRegistryContextCleanup(config: {
   deps: () => SubagentRegistryDeps;
-  persist: () => void;
+  persist: (...runIds: string[]) => void;
   warn: (message: string, meta?: Record<string, unknown>) => void;
 }) {
   const { deps, persist, warn } = config;
@@ -70,7 +70,7 @@ export function createSubagentRegistryContextCleanup(config: {
   async function cleanupCollectorLaunchResources(entry: SubagentRunRecord): Promise<boolean> {
     let internalEffectsRemoved = true;
     try {
-      await removeInternalSessionEffectsSession(entry.execution?.transcriptTarget);
+      await removeInternalSessionEffectsSession(entry.execution.transcriptTarget);
     } catch (err) {
       internalEffectsRemoved = false;
       warn("failed to remove collector internal session effects", {
@@ -93,7 +93,7 @@ export function createSubagentRegistryContextCleanup(config: {
     ]);
     if (!contextAlreadyEnded && contextEnded) {
       entry.contextEngineCleanupCompletedAt = Date.now();
-      persist();
+      persist(entry.runId);
     }
     return internalEffectsRemoved && attachmentsRemoved && contextEnded;
   }
@@ -182,8 +182,11 @@ export function createSubagentRegistryContextCleanup(config: {
     const outcome =
       reason === SUBAGENT_ENDED_REASON_KILLED
         ? SUBAGENT_ENDED_OUTCOME_KILLED
-        : resolveLifecycleOutcomeFromRunOutcome(params.entry.outcome);
-    const error = params.entry.outcome?.status === "error" ? params.entry.outcome.error : undefined;
+        : resolveLifecycleOutcomeFromRunOutcome(params.entry.execution.outcome);
+    const error =
+      params.entry.execution.outcome?.status === "error"
+        ? params.entry.execution.outcome.error
+        : undefined;
     await emitSubagentEndedHookOnce({
       entry: params.entry,
       reason,

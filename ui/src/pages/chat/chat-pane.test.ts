@@ -55,7 +55,8 @@ function createDeferred<T>() {
 function dispatchSidebarShortcut(pane: TestChatPane, shiftKey = true) {
   const event = new KeyboardEvent("keydown", {
     cancelable: true,
-    key: "b",
+    key: "и",
+    code: "KeyB",
     metaKey: true,
     shiftKey,
   });
@@ -137,6 +138,29 @@ describe("chat pane header state", () => {
     pane.headerRenameValue = "   ";
     pane.commitHeaderRename();
     expect(patch).toHaveBeenLastCalledWith(session.key, { label: null }, { agentId: "main" });
+  });
+
+  it("renames the selected agent's canonical global session", () => {
+    const patch = vi.fn(async () => ({}));
+    const sessions = { patch } as unknown as SessionCapability;
+    const { pane, state } = createTestChatPane({ client: {} as GatewayBrowserClient, sessions });
+    state.sessionKey = "global";
+    state.assistantAgentId = "research";
+    const session = {
+      key: "global",
+      kind: "global",
+      updatedAt: 0,
+    } satisfies GatewaySessionRow;
+
+    pane.beginHeaderRename(session);
+    pane.headerRenameValue = "Research thread";
+    pane.commitHeaderRename();
+
+    expect(patch).toHaveBeenCalledWith(
+      "global",
+      { label: "Research thread" },
+      { agentId: "research" },
+    );
   });
 
   it("cancels and skips unchanged labels", () => {

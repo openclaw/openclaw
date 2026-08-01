@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
@@ -12,6 +13,7 @@ import { normalizePluginsConfig } from "./config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { clearCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { discoverConfiguredPluginLoadPaths, type PluginDiscoveryResult } from "./discovery.js";
+import { resolveActivePluginInstallRoots } from "./install-root-context.js";
 import { fileSignatureMatches, hashJson } from "./installed-plugin-index-hash.js";
 import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-manifest.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
@@ -34,7 +36,7 @@ import {
   type LoadInstalledPluginIndexParams,
   type RefreshInstalledPluginIndexParams,
 } from "./installed-plugin-index.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { loadPluginManifestRegistry, type PluginManifestRegistry } from "./manifest-registry.js";
 import { getPackageManifestMetadata, type PackageManifest } from "./manifest.js";
 import { safeRealpathSync } from "./path-safety.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
@@ -60,6 +62,7 @@ type PluginRegistrySnapshotResult = {
   source: PluginRegistrySnapshotSource;
   diagnostics: readonly PluginRegistrySnapshotDiagnostic[];
   discovery?: PluginDiscoveryResult;
+  manifestRegistry?: PluginManifestRegistry;
 };
 
 const REGISTRY_SNAPSHOT_MEMO_ENV_KEYS = [
@@ -135,6 +138,7 @@ function resolvePluginRegistrySnapshotMemoKey(
     config: params.config ?? null,
     cwd: process.cwd(),
     env: pickRegistrySnapshotMemoEnv(env),
+    installRoots: resolveActivePluginInstallRoots(env),
     hostContractVersion: resolveCompatibilityHostVersion(env),
     preferPersisted: params.preferPersisted ?? null,
     // Install, reload, and persisted-index writes clear this memo explicitly.
@@ -187,7 +191,6 @@ function loadCurrentPluginRegistrySnapshotResult(
     config: params.config,
     env,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-    ...(params.workspaceDir === undefined ? { allowWorkspaceScopedSnapshot: true } : {}),
   });
   if (!current || current.registryDiagnostics.length > 0) {
     return undefined;
@@ -196,6 +199,7 @@ function loadCurrentPluginRegistrySnapshotResult(
     snapshot: current.index,
     source: "provided",
     diagnostics: current.registryDiagnostics,
+    manifestRegistry: current.manifestRegistry,
   };
 }
 
@@ -499,13 +503,13 @@ export function loadPluginRegistrySnapshotWithMetadata(
   // never reuse security-sensitive symlink or plugin-root resolutions.
   const realpathCache = new Map<string, string>();
   const diagnostics: PluginRegistrySnapshotDiagnostic[] = [];
-  const disabledByCaller = params.preferPersisted === false;
-  const persistedReadsEnabled = !disabledByCaller;
-  const persistedInstallRecordReadsEnabled = persistedReadsEnabled;
-  let persistedIndex: InstalledPluginIndex | null;
-  if (persistedInstallRecordReadsEnabled) {
-    persistedIndex = readPersistedInstalledPluginIndexSync(params);
-    if (persistedReadsEnabled && persistedIndex) {
+  const persistedReadsEnabled = params.preferPersisted !== false;
+  const pushStaleSourceDiagnostic = (message: string): void => {
+    diagnostics.push({ level: "warn", code: "persisted-registry-stale-source", message });
+  };
+  if (persistedReadsEnabled) {
+    const persistedIndex = readPersistedInstalledPluginIndexSync(params);
+    if (persistedIndex) {
       if (
         params.config &&
         persistedIndex.policyHash !== resolveInstalledPluginIndexPolicyHash(params.config)
@@ -517,49 +521,31 @@ export function loadPluginRegistrySnapshotWithMetadata(
             "Persisted plugin registry policy does not match current config; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
         });
       } else if (hasMissingPersistedPluginSource(persistedIndex)) {
-        diagnostics.push({
-          level: "warn",
-          code: "persisted-registry-stale-source",
-          message:
-            "Persisted plugin registry points at missing plugin files; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
-        });
+        pushStaleSourceDiagnostic(
+          "Persisted plugin registry points at missing plugin files; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
+        );
       } else if (hasMismatchedPersistedBundledPluginRoot(persistedIndex, env, realpathCache)) {
-        diagnostics.push({
-          level: "warn",
-          code: "persisted-registry-stale-source",
-          message:
-            "Persisted plugin registry points at a different bundled plugin tree; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
-        });
+        pushStaleSourceDiagnostic(
+          "Persisted plugin registry points at a different bundled plugin tree; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
+        );
       } else if (
         hasMismatchedPersistedConfigPathPlugins(persistedIndex, params, env, realpathCache)
       ) {
-        diagnostics.push({
-          level: "warn",
-          code: "persisted-registry-stale-source",
-          message:
-            "Persisted plugin registry does not match configured load-path plugins; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
-        });
+        pushStaleSourceDiagnostic(
+          "Persisted plugin registry does not match configured load-path plugins; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
+        );
       } else if (hasStalePersistedPluginDiagnostics(persistedIndex)) {
-        diagnostics.push({
-          level: "warn",
-          code: "persisted-registry-stale-source",
-          message:
-            "Persisted plugin registry contains diagnostics referencing missing paths; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
-        });
+        pushStaleSourceDiagnostic(
+          "Persisted plugin registry contains diagnostics referencing missing paths; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
+        );
       } else if (hasMissingConfigPathActivationMetadata(persistedIndex)) {
-        diagnostics.push({
-          level: "warn",
-          code: "persisted-registry-stale-source",
-          message:
-            "Persisted plugin registry is missing config-path startup metadata; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
-        });
+        pushStaleSourceDiagnostic(
+          "Persisted plugin registry is missing config-path startup metadata; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
+        );
       } else if (hasStalePersistedPluginMetadata(persistedIndex, realpathCache)) {
-        diagnostics.push({
-          level: "warn",
-          code: "persisted-registry-stale-source",
-          message:
-            "Persisted plugin registry metadata no longer matches plugin manifest or package files; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
-        });
+        pushStaleSourceDiagnostic(
+          "Persisted plugin registry metadata no longer matches plugin manifest or package files; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
+        );
       } else if (
         hasRecoveredInstallRecordsMissingFromPersistedIndex(
           persistedIndex,
@@ -567,12 +553,9 @@ export function loadPluginRegistrySnapshotWithMetadata(
           env,
         )
       ) {
-        diagnostics.push({
-          level: "warn",
-          code: "persisted-registry-stale-source",
-          message:
-            "Persisted plugin registry is missing recoverable managed npm plugins; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
-        });
+        pushStaleSourceDiagnostic(
+          "Persisted plugin registry is missing recoverable managed npm plugins; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
+        );
       } else {
         const persistedResult: PluginRegistrySnapshotResult = {
           snapshot: persistedIndex,
@@ -581,7 +564,7 @@ export function loadPluginRegistrySnapshotWithMetadata(
         };
         return rememberPluginRegistrySnapshotMemo(memoKey, persistedResult);
       }
-    } else if (persistedReadsEnabled) {
+    } else {
       diagnostics.push({
         level: "info",
         code: "persisted-registry-missing",
@@ -592,15 +575,14 @@ export function loadPluginRegistrySnapshotWithMetadata(
 
   const derived = loadInstalledPluginIndexWithDiscovery({
     ...params,
-    installRecords: persistedInstallRecordReadsEnabled
-      ? params.installRecords
-      : (params.installRecords ?? {}),
+    installRecords: persistedReadsEnabled ? params.installRecords : (params.installRecords ?? {}),
   });
   return rememberPluginRegistrySnapshotMemo(memoKey, {
     snapshot: derived.index,
     source: "derived",
     diagnostics,
     discovery: derived.discovery,
+    manifestRegistry: derived.manifestRegistry,
   });
 }
 
@@ -630,5 +612,12 @@ export function inspectPluginRegistry(
 export function refreshPluginRegistry(
   params: RefreshInstalledPluginIndexParams & InstalledPluginIndexStoreOptions,
 ): Promise<PluginRegistrySnapshot> {
-  return refreshPersistedInstalledPluginIndex(params);
+  const workspaceDir =
+    params.workspaceDir ??
+    (params.config
+      ? resolveAgentWorkspaceDir(params.config, resolveDefaultAgentId(params.config), params.env)
+      : undefined);
+  return refreshPersistedInstalledPluginIndex(
+    workspaceDir === undefined ? params : { ...params, workspaceDir },
+  );
 }

@@ -932,7 +932,7 @@ describe("loadGatewayPlugins", () => {
     serverPluginsModule.setFallbackGatewayContext(createTestContext("delegated-tool-policy"));
     handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
       expect(opts.req.params).not.toHaveProperty("delegatedToolPolicyHandoff");
-      expect(opts.client?.internal?.delegatedToolPolicyHandoff).toBe(true);
+      expect(opts.client?.internal?.delegatedToolPolicyHandoffId).toEqual(expect.any(String));
       opts.respond(true, { status: "ok" });
     });
 
@@ -940,7 +940,15 @@ describe("loadGatewayPlugins", () => {
       serverPluginsModule.dispatchGatewayMethodInProcess(
         "agent",
         { sessionKey: "agent:main:main" },
-        { delegatedToolPolicyHandoff: true, forceSyntheticClient: true },
+        {
+          delegatedToolPolicyHandoff: {
+            sourceSessionKey: "agent:main:subagent:child",
+            targetSessionKey: "agent:main:main",
+            targetSessionId: "requester-session",
+            idempotencyKey: "announce-1",
+          },
+          forceSyntheticClient: true,
+        },
       ),
     ).resolves.toEqual({ status: "ok" });
   });
@@ -1054,7 +1062,7 @@ describe("loadGatewayPlugins", () => {
       expect(opts.req.method).toBe("node.list");
       opts.respond(true, {
         nodes: [
-          { nodeId: "connected", connected: true },
+          { nodeId: "connected", connected: true, gatewayLocal: true },
           { nodeId: "offline", connected: false },
         ],
       });
@@ -1066,7 +1074,7 @@ describe("loadGatewayPlugins", () => {
     const result = await runtime.nodes.list({ connected: true });
 
     expect(getLastDispatchedParams()).toStrictEqual({});
-    expect(result.nodes).toEqual([{ nodeId: "connected", connected: true }]);
+    expect(result.nodes).toEqual([{ nodeId: "connected", connected: true, gatewayLocal: true }]);
   });
 
   test("projects effective node-command policy into the plugin node runtime", async () => {
@@ -1509,7 +1517,7 @@ describe("loadGatewayPlugins", () => {
             pluginId: "other-plugin",
             toolNames: ["other_plugin_tool"],
           },
-          delegatedToolPolicyHandoff: true,
+          delegatedToolPolicyHandoffId: "handoff-old",
         },
       } as unknown as GatewayRequestOptions["client"],
       isWebchatConnect: () => false,
@@ -1526,7 +1534,7 @@ describe("loadGatewayPlugins", () => {
 
     expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("workboard");
     expect(getLastDispatchedClientInternal().runtimePluginToolGrant).toBeUndefined();
-    expect(getLastDispatchedClientInternal().delegatedToolPolicyHandoff).toBeUndefined();
+    expect(getLastDispatchedClientInternal().delegatedToolPolicyHandoffId).toBeUndefined();
   });
 
   test("forwards lightContext as lightweight bootstrap context on subagent run", async () => {
