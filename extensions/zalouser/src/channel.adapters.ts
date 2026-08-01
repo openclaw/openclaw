@@ -38,6 +38,7 @@ import {
   isDangerousNameMatchingEnabled,
   isNumericTargetId,
   normalizeAccountId,
+  sanitizeAssistantVisibleText,
   sendPayloadWithChunkedTextAndMedia,
 } from "./channel-api.js";
 import { buildZalouserGroupCandidates, resolveZalouserGroupScope } from "./group-policy.js";
@@ -458,6 +459,7 @@ export const zalouserOutboundAdapter = {
   deliveryMode: "direct" as const,
   chunker: chunkTextForOutbound,
   chunkerMode: "markdown" as const,
+  sanitizeText: ({ text }: { text: string }) => sanitizeAssistantVisibleText(text),
   sendPayload: async (
     ctx: { payload: object } & Parameters<
       NonNullable<typeof zalouserRawSendResultAdapter.sendText>

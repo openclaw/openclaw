@@ -14,7 +14,10 @@ export {
 } from "openclaw/plugin-sdk/core";
 export { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 export type { GroupToolPolicyConfig } from "openclaw/plugin-sdk/config-contracts";
-export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
+export {
+  chunkTextForOutbound,
+  sanitizeAssistantVisibleText,
+} from "openclaw/plugin-sdk/text-chunking";
 export {
   isNumericTargetId,
   sendPayloadWithChunkedTextAndMedia,

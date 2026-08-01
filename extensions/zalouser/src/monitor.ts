@@ -32,6 +32,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sanitizeAssistantVisibleText } from "./channel-api.js";
 import {
   buildZalouserGroupCandidates,
   findZalouserGroupEntry,
@@ -630,13 +631,15 @@ async function processMessage(
         }
         return {
           ...payload,
-          text: core.channel.text.convertMarkdownTables(
-            payload.text,
-            core.channel.text.resolveMarkdownTableMode({
-              cfg: config,
-              channel: "zalouser",
-              accountId: account.accountId,
-            }),
+          text: sanitizeAssistantVisibleText(
+            core.channel.text.convertMarkdownTables(
+              payload.text,
+              core.channel.text.resolveMarkdownTableMode({
+                cfg: config,
+                channel: "zalouser",
+                accountId: account.accountId,
+              }),
+            ),
           ),
         };
       },
