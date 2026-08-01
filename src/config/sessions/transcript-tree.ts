@@ -467,6 +467,27 @@ export function selectSessionTranscriptRestorableMessageNodes<T>(
   return [...selected.values()].toSorted((left, right) => left.index - right.index);
 }
 
+/**
+ * Select messages whose durable artifacts must survive branch evolution.
+ *
+ * A reset narrows immediate replay, but a later compaction on the same branch
+ * restores its full ancestry. Retention therefore follows full canonical paths
+ * to currently reachable tips instead of treating the reset window as a GC boundary.
+ */
+export function selectSessionTranscriptRetainedMessageNodes<T>(
+  tree: SessionTranscriptTree<T>,
+): SessionTranscriptTreeNode<T>[] {
+  const selected = new Map<number, SessionTranscriptTreeNode<T>>();
+  for (const tip of selectSessionTranscriptRestorableBranchTipNodes(tree)) {
+    for (const node of selectSessionTranscriptTreePathNodes(tree, tip.id)) {
+      if (isSessionTranscriptMessageNode(node)) {
+        selected.set(node.index, node);
+      }
+    }
+  }
+  return [...selected.values()].toSorted((left, right) => left.index - right.index);
+}
+
 /** Merge normalized paths in original file order and expose their retained parent links. */
 export function mergeSessionTranscriptTreePaths<T>(
   paths: Array<SessionTranscriptTreeNode<T>[]>,

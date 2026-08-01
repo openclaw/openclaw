@@ -11,6 +11,8 @@ import {
   listSessionBranches,
   loadTranscriptEventRowsAfterSeqSync,
   readSessionTranscriptWatermark,
+  replaceTranscriptEvents,
+  restoreSqliteCompactionCheckpointSession,
   rewindSessionToMessage,
   rewriteTranscriptEventRowsExact,
   switchSessionBranch,
@@ -365,7 +367,7 @@ describe("managed outgoing media retention across transcript branches", () => {
     ).resolves.toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
   });
 
-  it("deletes media retired by the latest reset window", async () => {
+  it("keeps reset-hidden media until a later compaction restores it", async () => {
     await commitManagedRecord("a2");
     const scope = currentTranscriptScope();
     await appendTranscriptEvent(scope, {
@@ -396,25 +398,9 @@ describe("managed outgoing media retention across transcript branches", () => {
     ).resolves.toBeNull();
     await expect(
       cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey, agentId }),
-    ).resolves.toEqual({ deletedRecordCount: 1, deletedFileCount: 1, retainedCount: 0 });
-  });
+    ).resolves.toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
+    expect(await pathExists(originalPath)).toBe(true);
 
-  it("retains pre-reset media when a newer compaction shadows the reset window", async () => {
-    await commitManagedRecord("a2");
-    const scope = currentTranscriptScope();
-    await appendTranscriptEvent(scope, {
-      type: "reset",
-      id: "reset-boundary",
-      parentId: "a3",
-      firstKeptEntryId: "u3",
-      timestamp: "2026-08-01T00:01:00.000Z",
-    });
-    await appendTranscriptMessage(scope, {
-      eventId: "post-reset",
-      message: { role: "user", content: "new context" },
-      now: Date.parse("2026-08-01T00:01:01.000Z"),
-      parentId: "reset-boundary",
-    });
     await appendTranscriptEvent(scope, {
       type: "compaction",
       id: "newer-compaction",
@@ -424,9 +410,99 @@ describe("managed outgoing media retention across transcript branches", () => {
     });
 
     await expect(
+      fetchManagedArtifact(mediaUrl(), {
+        Authorization: "Bearer test-token",
+      }),
+    ).resolves.toEqual({
+      body: Buffer.from("89504e470d0a1a0a", "hex"),
+      status: 200,
+    });
+    await expect(
+      resolveManagedOutgoingMediaArtifactDownload({
+        sessionKey,
+        artifactId: `artifact_managed_image_${attachmentId}`,
+        stateDir,
+      }),
+    ).resolves.not.toBeNull();
+    await expect(
       cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey, agentId }),
     ).resolves.toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
     expect(await pathExists(originalPath)).toBe(true);
+  });
+
+  it("keeps checkpoint-only media through cleanup and restore", async () => {
+    await commitManagedRecord("a2");
+    const currentSessionId = "post-compaction-current";
+    const checkpointId = "managed-media-checkpoint";
+    const currentScope = {
+      agentId,
+      env: process.env,
+      sessionId: currentSessionId,
+      sessionKey,
+    };
+    await replaceTranscriptEvents(currentScope, [
+      { type: "session", id: currentSessionId, version: 3 },
+      {
+        type: "message",
+        id: "post-compaction-message",
+        parentId: null,
+        message: { role: "user", content: "current compacted context" },
+      },
+    ]);
+    await upsertSessionEntry(currentScope, {
+      sessionId: currentSessionId,
+      updatedAt: Date.now(),
+      compactionCheckpoints: [
+        {
+          checkpointId,
+          sessionKey,
+          sessionId: currentSessionId,
+          createdAt: Date.now(),
+          reason: "manual",
+          preCompaction: {
+            sessionId,
+            leafId: "a3",
+          },
+          postCompaction: {
+            sessionId: currentSessionId,
+            entryId: "post-compaction-message",
+          },
+        },
+      ],
+    });
+
+    await expect(
+      fetchManagedArtifact(mediaUrl(), {
+        Authorization: "Bearer test-token",
+      }),
+    ).resolves.toMatchObject({ status: 404 });
+    await expect(
+      cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey, agentId }),
+    ).resolves.toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
+    expect(await pathExists(originalPath)).toBe(true);
+
+    const restored = await restoreSqliteCompactionCheckpointSession({
+      agentId,
+      env: process.env,
+      sessionKey,
+      checkpointId,
+    });
+    expect(restored.status).toBe("created");
+    await expect(
+      fetchManagedArtifact(mediaUrl(), {
+        Authorization: "Bearer test-token",
+      }),
+    ).resolves.toEqual({
+      body: Buffer.from("89504e470d0a1a0a", "hex"),
+      status: 200,
+    });
+    await expect(
+      resolveManagedOutgoingMediaArtifactDownload({
+        sessionKey,
+        artifactId: `artifact_managed_image_${attachmentId}`,
+        stateDir,
+      }),
+    ).resolves.not.toBeNull();
   });
 
   it("still deletes media whose message is absent from every branch", async () => {

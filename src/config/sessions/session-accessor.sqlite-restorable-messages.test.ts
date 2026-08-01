@@ -42,6 +42,12 @@ describe("SQLite restorable transcript messages", () => {
     );
   }
 
+  function retainedIds() {
+    return readSessionTranscriptRestorableMessageSnapshot(scope).retainedEvents.map(
+      ({ event }) => (event as { id?: unknown }).id,
+    );
+  }
+
   it("returns active and inactive branch messages once in storage order", async () => {
     await replaceTranscriptEvents(scope, [
       { type: "session", id: scope.sessionId, version: 3 },
@@ -69,9 +75,10 @@ describe("SQLite restorable transcript messages", () => {
     ]);
 
     expect(ids()).toEqual(["u1", "a1", "u2", "a2", "u3"]);
+    expect(retainedIds()).toEqual(["u1", "a1", "u2", "a2", "u3"]);
   });
 
-  it("applies reset replay semantics and lets a newer compaction shadow the window", async () => {
+  it("keeps reset ancestry retained until a newer compaction makes it restorable", async () => {
     const baseEvents = [
       { type: "session", id: scope.sessionId, version: 3 },
       { type: "message", id: "old", parentId: null, message: { role: "user", content: "old" } },
@@ -127,6 +134,14 @@ describe("SQLite restorable transcript messages", () => {
     await replaceTranscriptEvents(scope, baseEvents);
 
     expect(ids()).toEqual(["kept-user", "kept-assistant", "post-reset", "post-reset-inactive"]);
+    expect(retainedIds()).toEqual([
+      "old",
+      "kept-user",
+      "kept-tool",
+      "kept-assistant",
+      "post-reset",
+      "post-reset-inactive",
+    ]);
 
     await replaceTranscriptEvents(scope, [
       ...baseEvents,
@@ -145,6 +160,183 @@ describe("SQLite restorable transcript messages", () => {
       "kept-assistant",
       "post-reset",
       "post-reset-inactive",
+    ]);
+    expect(retainedIds()).toEqual([
+      "old",
+      "kept-user",
+      "kept-tool",
+      "kept-assistant",
+      "post-reset",
+      "post-reset-inactive",
+    ]);
+  });
+
+  it("retains live compaction checkpoint sources through their fork boundaries", async () => {
+    const preCompactionScope = { ...scope, sessionId: "pre-compaction-session" };
+    const postCompactionScope = { ...scope, sessionId: "post-compaction-session" };
+    await replaceTranscriptEvents(scope, [
+      { type: "session", id: scope.sessionId, version: 3 },
+      {
+        type: "message",
+        id: "current",
+        parentId: null,
+        message: { role: "user", content: "current" },
+      },
+    ]);
+    await replaceTranscriptEvents(preCompactionScope, [
+      { type: "session", id: preCompactionScope.sessionId, version: 3 },
+      {
+        type: "message",
+        id: "pre-one",
+        parentId: null,
+        message: { role: "user", content: "pre one" },
+      },
+      {
+        type: "message",
+        id: "pre-leaf",
+        parentId: "pre-one",
+        message: { role: "assistant", content: "pre leaf" },
+      },
+      {
+        type: "message",
+        id: "pre-after",
+        parentId: "pre-leaf",
+        message: { role: "user", content: "outside checkpoint" },
+      },
+    ]);
+    await replaceTranscriptEvents(postCompactionScope, [
+      { type: "session", id: postCompactionScope.sessionId, version: 3 },
+      {
+        type: "message",
+        id: "post-one",
+        parentId: null,
+        message: { role: "user", content: "post one" },
+      },
+      {
+        type: "message",
+        id: "post-leaf",
+        parentId: "post-one",
+        message: { role: "assistant", content: "post leaf" },
+      },
+      {
+        type: "message",
+        id: "post-after",
+        parentId: "post-leaf",
+        message: { role: "user", content: "outside checkpoint" },
+      },
+    ]);
+    await upsertSessionEntry(scope, {
+      sessionId: scope.sessionId,
+      updatedAt: Date.now(),
+      compactionCheckpoints: [
+        {
+          checkpointId: "checkpoint-retention",
+          sessionKey: scope.sessionKey,
+          sessionId: scope.sessionId,
+          createdAt: Date.now(),
+          reason: "manual",
+          preCompaction: {
+            sessionId: preCompactionScope.sessionId,
+            leafId: "pre-leaf",
+          },
+          postCompaction: {
+            sessionId: postCompactionScope.sessionId,
+            entryId: "post-leaf",
+          },
+        },
+      ],
+    });
+
+    expect(ids()).toEqual(["current"]);
+    expect(retainedIds()).toEqual(["current", "pre-one", "pre-leaf", "post-one", "post-leaf"]);
+    expect(readSessionTranscriptRestorableMessageSnapshot(scope).artifactRetentionComplete).toBe(
+      true,
+    );
+  });
+
+  it("marks file-backed checkpoint retention incomplete", async () => {
+    await replaceTranscriptEvents(scope, [
+      { type: "session", id: scope.sessionId, version: 3 },
+      {
+        type: "message",
+        id: "current",
+        parentId: null,
+        message: { role: "user", content: "current" },
+      },
+    ]);
+    await upsertSessionEntry(scope, {
+      sessionId: scope.sessionId,
+      updatedAt: Date.now(),
+      compactionCheckpoints: [
+        {
+          checkpointId: "legacy-checkpoint-retention",
+          sessionKey: scope.sessionKey,
+          sessionId: scope.sessionId,
+          createdAt: Date.now(),
+          reason: "manual",
+          preCompaction: {
+            sessionFile: "/tmp/pre-compaction.jsonl",
+          },
+          postCompaction: {
+            sessionFile: "/tmp/post-compaction.jsonl",
+          },
+        },
+      ],
+    });
+
+    expect(readSessionTranscriptRestorableMessageSnapshot(scope)).toMatchObject({
+      artifactRetentionComplete: false,
+      events: [expect.objectContaining({ event: expect.objectContaining({ id: "current" }) })],
+    });
+  });
+
+  it("marks an unreadable checkpoint source incomplete while retaining a valid fallback", async () => {
+    const postCompactionScope = { ...scope, sessionId: "post-fallback-session" };
+    await replaceTranscriptEvents(scope, [
+      { type: "session", id: scope.sessionId, version: 3 },
+      {
+        type: "message",
+        id: "current",
+        parentId: null,
+        message: { role: "user", content: "current" },
+      },
+    ]);
+    await replaceTranscriptEvents(postCompactionScope, [
+      { type: "session", id: postCompactionScope.sessionId, version: 3 },
+      {
+        type: "message",
+        id: "post-fallback",
+        parentId: null,
+        message: { role: "assistant", content: "fallback" },
+      },
+    ]);
+    await upsertSessionEntry(scope, {
+      sessionId: scope.sessionId,
+      updatedAt: Date.now(),
+      compactionCheckpoints: [
+        {
+          checkpointId: "checkpoint-fallback-retention",
+          sessionKey: scope.sessionKey,
+          sessionId: scope.sessionId,
+          createdAt: Date.now(),
+          reason: "manual",
+          preCompaction: {
+            sessionId: "missing-pre-session",
+            leafId: "missing-pre-leaf",
+          },
+          postCompaction: {
+            sessionId: postCompactionScope.sessionId,
+            entryId: "post-fallback",
+          },
+        },
+      ],
+    });
+
+    const snapshot = readSessionTranscriptRestorableMessageSnapshot(scope);
+    expect(snapshot.artifactRetentionComplete).toBe(false);
+    expect(snapshot.retainedEvents.map(({ event }) => (event as { id?: unknown }).id)).toEqual([
+      "current",
+      "post-fallback",
     ]);
   });
 
@@ -193,5 +385,6 @@ describe("SQLite restorable transcript messages", () => {
         }),
       }),
     ]);
+    expect(after.retainedEvents).toEqual(after.events);
   });
 });

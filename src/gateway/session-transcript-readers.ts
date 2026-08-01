@@ -333,22 +333,26 @@ export async function readSessionMessagesWithSourceAsync(
 
 export type RestorableBranchSessionMessagesSnapshot = Omit<
   SessionTranscriptRestorableMessageSnapshot,
-  "events"
+  "events" | "retainedEvents"
 > & {
   messages: unknown[];
+  retainedMessages: unknown[];
 };
 
-/** Reads display messages from every branch the session owner can restore. */
+/** Reads immediately restorable messages plus the conservative artifact-retention set. */
 export function readRestorableBranchSessionMessagesSnapshot(
   scope: SessionTranscriptReadScope,
 ): RestorableBranchSessionMessagesSnapshot {
   const target = resolveTranscriptReadTarget(scope);
   const snapshot = readSessionTranscriptRestorableMessageSnapshot(toTranscriptReadScope(target));
   const records = extractMessageRecordsFromEventEntries(snapshot.events);
+  const retainedRecords = extractMessageRecordsFromEventEntries(snapshot.retainedEvents);
   return {
+    artifactRetentionComplete: snapshot.artifactRetentionComplete,
     generation: snapshot.generation,
     maxSeq: snapshot.maxSeq,
     messages: records.map(sqliteRecordMessageWithSeq),
+    retainedMessages: retainedRecords.map(sqliteRecordMessageWithSeq),
   };
 }
 
