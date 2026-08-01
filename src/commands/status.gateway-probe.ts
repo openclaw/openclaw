@@ -14,7 +14,6 @@ export async function resolveGatewayProbeAuthResolution(cfg: OpenClawConfig): Pr
     password?: string;
   };
   warning?: string;
-  failureReason?: string;
 }> {
   const target = resolveGatewayProbeTarget(cfg);
   // Probe auth resolution depends on local/remote mode because token/password sources differ.

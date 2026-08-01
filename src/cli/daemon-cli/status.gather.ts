@@ -668,7 +668,6 @@ export async function gatherDaemonStatus(
   let rpcAuthWarning: string | undefined;
   let allowRpcConfigCredentials = true;
   let skippedProbeAuthForDisabledExecSecretRef = false;
-  let rpcFailureReason: string | undefined;
   if (opts.probe) {
     const probeMode = daemonCfg.gateway?.mode === "remote" ? "remote" : "local";
     const explicitAuth = {
@@ -695,7 +694,6 @@ export async function gatherDaemonStatus(
       );
       daemonProbeAuth = probeAuthResolution.auth;
       rpcAuthWarning = probeAuthResolution.warning;
-      rpcFailureReason = probeAuthResolution.failureReason;
     } else {
       allowRpcConfigCredentials = false;
       skippedProbeAuthForDisabledExecSecretRef = true;
@@ -704,41 +702,30 @@ export async function gatherDaemonStatus(
     }
   }
 
-  // Only short-circuit on rpcFailureReason when the probe is targeting the
-  // local daemon endpoint. When the caller passes an explicit RPC URL override
-  // (probeUrlOverride), local auth config requirements do not apply and the
-  // probe should be attempted regardless of local credential resolution.
-  const skippedProbeForMissingLocalAuth = Boolean(rpcFailureReason) && !probeUrlOverride;
-  const rpc = !opts.probe
-    ? undefined
-    : rpcFailureReason && !probeUrlOverride
-      ? { ok: false as const, error: rpcFailureReason }
-      : await loadDaemonProbeModule().then(({ probeGatewayStatus }) =>
-          probeGatewayStatus({
-            url: gateway.probeUrl,
-            token: daemonProbeAuth?.token,
-            password: daemonProbeAuth?.password,
-            config: daemonCfg,
-            tlsFingerprint:
-              shouldUseLocalTlsRuntime && tlsRuntime?.enabled
-                ? tlsRuntime.fingerprintSha256
-                : undefined,
-            timeoutMs,
-            json: opts.rpc.json,
-            requireRpc: opts.requireRpc,
-            allowRpcConfigCredentials,
-            configPath: daemonConfigSummary.path,
-          }),
-        );
+  const rpc = opts.probe
+    ? await loadDaemonProbeModule().then(({ probeGatewayStatus }) =>
+        probeGatewayStatus({
+          url: gateway.probeUrl,
+          token: daemonProbeAuth?.token,
+          password: daemonProbeAuth?.password,
+          config: daemonCfg,
+          tlsFingerprint:
+            shouldUseLocalTlsRuntime && tlsRuntime?.enabled
+              ? tlsRuntime.fingerprintSha256
+              : undefined,
+          timeoutMs,
+          json: opts.rpc.json,
+          requireRpc: opts.requireRpc,
+          allowRpcConfigCredentials,
+          configPath: daemonConfigSummary.path,
+        }),
+      )
+    : undefined;
   if (rpc?.ok && !skippedProbeAuthForDisabledExecSecretRef) {
     rpcAuthWarning = undefined;
   }
-  // When the rpc failure was synthesized by the missing-local-auth fail-fast,
-  // skip restart-health too: inspectGatewayRestart re-probes loopback via
-  // confirmGatewayReachable and would run the unauthenticated probe the
-  // fail-fast just avoided.
   const health =
-    opts.probe && loaded && rpc?.ok !== true && !skippedProbeForMissingLocalAuth
+    opts.probe && loaded && rpc?.ok !== true
       ? await loadRestartHealthModule()
           .then(({ inspectGatewayRestart }) =>
             inspectGatewayRestart({

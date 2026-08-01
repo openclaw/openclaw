@@ -592,25 +592,20 @@ describe("gateway-status command", () => {
     expect(scopeLimitedWarning?.targetIds).toContain("localLoopback");
   });
 
-  it("surfaces unresolved SecretRef auth diagnostics before probing local token mode", async () => {
+  it("suppresses unresolved SecretRef auth warnings when probe is reachable", async () => {
     const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
     await withEnvAsync(
       { MISSING_GATEWAY_TOKEN: undefined, OPENCLAW_GATEWAY_TOKEN: undefined },
       async () => {
         mockLocalTokenEnvRefConfig();
 
-        await expect(runGatewayStatus(runtime, { timeout: "1000", json: true })).rejects.toThrow(
-          "__exit__:1",
-        );
+        await runGatewayStatus(runtime, { timeout: "1000", json: true });
       },
     );
 
     expect(runtimeErrors).toHaveLength(0);
-    expect(probeGateway).not.toHaveBeenCalled();
     const unresolvedWarning = findUnresolvedSecretRefWarning(runtimeLogs);
-    expect(unresolvedWarning).toBeTruthy();
-    expect(unresolvedWarning?.targetIds).toContain("localLoopback");
-    expect(unresolvedWarning?.message).toContain("env:default:MISSING_GATEWAY_TOKEN");
+    expect(unresolvedWarning).toBeUndefined();
   });
 
   it("surfaces unresolved SecretRef auth diagnostics when probe fails", async () => {
