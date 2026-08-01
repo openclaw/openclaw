@@ -291,12 +291,13 @@ async function requestManagedImage(params: {
   resolveSessionHistoryTranscriptPathMock.mockResolvedValue(
     params.resolvedTranscriptPath ?? params.sessionEntry?.sessionFile ?? "session.jsonl",
   );
-  if (params.transcriptReadError) {
+  const transcriptReadError = params.transcriptReadError;
+  if (transcriptReadError) {
     readSessionTranscriptRevisionMock.mockImplementation(() => {
-      throw params.transcriptReadError;
+      throw transcriptReadError;
     });
     readRestorableBranchSessionMessagesSnapshotMock.mockImplementation(() => {
-      throw params.transcriptReadError;
+      throw transcriptReadError;
     });
   } else {
     readSessionTranscriptRevisionMock.mockReturnValue(
