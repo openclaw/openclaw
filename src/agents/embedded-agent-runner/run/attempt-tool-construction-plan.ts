@@ -268,10 +268,11 @@ export function listMaterializableMcpServerNames(params: {
 }
 
 /**
- * True when an allowlist entry names a configured MCP server (or a server-name
- * glob like `hzr-oa*`) even without the `server__tool` separator. Without this,
- * narrow cron `toolsAllow: ["hzr-oa*"]` skips MCP materialization and fails with
- * an empty callable tool set.
+ * True when an allowlist entry can authorize generated MCP tools for a
+ * configured server. Exact bare server names (e.g. `hzr-oa`) are intentionally
+ * excluded: the final policy only admits concrete names like `hzr-oa__tool` or
+ * globs (`hzr-oa*`, `hzr-oa__*`), so materializing on bare names would start MCP
+ * and still leave an empty callable tool set.
  */
 function matchesConfiguredMcpServerAllowlist(
   normalized: string,
@@ -287,7 +288,6 @@ function matchesConfiguredMcpServerAllowlist(
       continue;
     }
     if (
-      normalized === safeName ||
       normalized === `${safeName}*` ||
       normalized.startsWith(`${safeName}${TOOL_NAME_SEPARATOR}`) ||
       (normalized.endsWith("*") &&

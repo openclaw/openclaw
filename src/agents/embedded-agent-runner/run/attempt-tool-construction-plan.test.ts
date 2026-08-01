@@ -580,6 +580,14 @@ describe("shouldCreateBundleMcpRuntimeForAttempt", () => {
         mcpServerNames: ["hzr-oa"],
       }),
     ).toBe(false);
+
+    expect(
+      shouldCreateBundleMcpRuntimeForAttempt({
+        toolsEnabled: true,
+        toolsAllow: ["hzr-oa"],
+        mcpServerNames: ["hzr-oa"],
+      }),
+    ).toBe(false);
   });
 });
 
