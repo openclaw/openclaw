@@ -214,6 +214,26 @@ describe("registerStatusHealthSessionsCommands", () => {
     });
   });
 
+  it("allows verbose health probes a longer default timeout", async () => {
+    await runCli(["health", "--verbose"]);
+
+    expectCommandOptions(healthCommand, {
+      json: false,
+      timeoutMs: 60_000,
+      verbose: true,
+    });
+  });
+
+  it("keeps the short default timeout for cached health", async () => {
+    await runCli(["health"]);
+
+    expectCommandOptions(healthCommand, {
+      json: false,
+      timeoutMs: 10_000,
+      verbose: false,
+    });
+  });
+
   it("rejects invalid health timeout without calling health command", async () => {
     await runCli(["health", "--timeout", "0"]);
 
