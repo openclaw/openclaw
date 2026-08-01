@@ -3,11 +3,14 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   findTaskByRunId,
   getTaskById,
+  listTasksForOwnerKey,
   listTasksForRelatedSessionKey,
   markTaskTerminalById as markTaskTerminalRecordById,
   resolveTaskForLookupToken,
   updateTaskNotifyPolicyById,
 } from "./task-registry.js";
+
+export { listTasksForOwnerKey };
 import type { TaskNotifyPolicy, TaskRecord } from "./task-registry.types.js";
 import { buildTaskStatusSnapshot } from "./task-status.js";
 
