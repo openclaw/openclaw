@@ -854,6 +854,39 @@ describe("openrouter video generation provider", () => {
     ]);
   });
 
+  it.each([
+    { name: "JSON error", contentType: "application/json", bytes: '{"error":"denied"}' },
+    { name: "problem JSON", contentType: "application/problem+json", bytes: '{"title":"denied"}' },
+    { name: "HTML", contentType: "text/html; charset=utf-8", bytes: "<html>sign in</html>" },
+    { name: "empty video", contentType: "video/mp4", bytes: "" },
+  ])(
+    "rejects a successful $name response as a downloaded OpenRouter video",
+    async ({ contentType, bytes }) => {
+      postJsonRequestMock.mockResolvedValue(
+        releasedJson({
+          id: "job-123",
+          polling_url: "/api/v1/videos/job-123",
+          status: "completed",
+          unsigned_urls: ["https://cdn.openrouter.test/video.mp4"],
+        }),
+      );
+      const download = releasedVideo({ contentType, bytes });
+      fetchWithTimeoutGuardedMock.mockResolvedValueOnce(download);
+
+      const provider = buildOpenRouterVideoGenerationProvider();
+      await expect(
+        provider.generateVideo({
+          provider: "openrouter",
+          model: "google/veo-3.1",
+          prompt: "A glass cube reflects a neon skyline",
+          cfg: {} as never,
+        }),
+      ).rejects.toThrow("OpenRouter generated video download: malformed video response");
+
+      expect(download.release).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("rejects malformed numeric seed values before submitting video jobs", async () => {
     const provider = buildOpenRouterVideoGenerationProvider();
     await expect(
