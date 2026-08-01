@@ -154,11 +154,12 @@ export class DockLayoutController<TDock extends DockPanelSide> implements Reacti
   }
 
   startResize(event: PointerEvent): void {
+    event.preventDefault();
     if (this.resizeCleanup !== null) {
       return;
     }
-    event.preventDefault();
     const activePointerId = event.pointerId;
+    const resizer = event.currentTarget instanceof Element ? event.currentTarget : null;
     const startX = event.clientX;
     const startY = event.clientY;
     const startHeight = this.height;
@@ -183,6 +184,14 @@ export class DockLayoutController<TDock extends DockPanelSide> implements Reacti
       window.removeEventListener("pointerup", onPointerEnd);
       window.removeEventListener("pointercancel", onPointerEnd);
       window.removeEventListener("blur", onBlur);
+      resizer?.removeEventListener("lostpointercapture", onLostPointerCapture);
+      try {
+        if (resizer?.hasPointerCapture(activePointerId)) {
+          resizer.releasePointerCapture(activePointerId);
+        }
+      } catch {
+        // Detached targets may no longer expose a valid capture state.
+      }
       if (this.resizeCleanup === cleanup) {
         this.resizeCleanup = null;
       }
@@ -201,8 +210,21 @@ export class DockLayoutController<TDock extends DockPanelSide> implements Reacti
         finish();
       }
     };
+    const onLostPointerCapture = (lost: PointerEvent) => {
+      if (lost.pointerId === activePointerId) {
+        finish();
+      }
+    };
     const onBlur = () => finish();
     this.resizeCleanup = cleanup;
+    if (resizer) {
+      try {
+        resizer.setPointerCapture(activePointerId);
+        resizer.addEventListener("lostpointercapture", onLostPointerCapture);
+      } catch {
+        // Keep the window listeners as a fallback for synthetic or detached targets.
+      }
+    }
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onPointerEnd);
     window.addEventListener("pointercancel", onPointerEnd);
@@ -261,6 +283,7 @@ export const dockPanelStyles = css`
     position: absolute;
     z-index: 2;
     background: transparent;
+    touch-action: none;
   }
   :is(.bp-resizer, .tp-resizer):hover {
     background: var(--accent, #ff5c5c);

@@ -43,6 +43,7 @@ const STATUS_LABEL: Record<SkillWorkshopStatusFilter, string> = {
 
 const TODAY_PREVIEW_MAX_ITEMS = 3;
 const TODAY_PREVIEW_MAX_ITEM_CHARS = 120;
+const queueResizeSessions = new WeakMap<Element, { cleanup: () => void }>();
 
 const GROUP_LABEL: Record<SkillWorkshopProposal["recencyGroup"], string> = {
   today: "skillWorkshop.recency.today",
@@ -220,7 +221,12 @@ function renderQueueResizer(props: SkillWorkshopProps) {
 function startQueueResize(event: PointerEvent, props: SkillWorkshopProps): void {
   event.preventDefault();
   event.stopPropagation();
+  const resizer = event.currentTarget;
+  if (!(resizer instanceof Element) || queueResizeSessions.has(resizer)) {
+    return;
+  }
 
+  const activePointerId = event.pointerId;
   const startX = event.clientX;
   const startWidth = props.queueWidth;
   const body = document.body;
@@ -232,22 +238,52 @@ function startQueueResize(event: PointerEvent, props: SkillWorkshopProps): void 
   const cleanup = () => {
     window.removeEventListener("pointermove", onMove);
     window.removeEventListener("pointerup", onUp);
-    window.removeEventListener("pointercancel", onUp);
+    window.removeEventListener("pointercancel", onCancel);
+    window.removeEventListener("blur", onBlur);
+    resizer.removeEventListener("lostpointercapture", onLostPointerCapture);
+    const session = queueResizeSessions.get(resizer);
+    if (session?.cleanup === cleanup) {
+      queueResizeSessions.delete(resizer);
+    }
+    try {
+      if (resizer.hasPointerCapture(activePointerId)) {
+        resizer.releasePointerCapture(activePointerId);
+      }
+    } catch {
+      // Detached targets may no longer expose a valid capture state.
+    }
     body.style.cursor = previousCursor;
     body.style.userSelect = previousUserSelect;
   };
 
   const onMove = (moveEvent: PointerEvent) => {
+    if (moveEvent.pointerId !== activePointerId) {
+      return;
+    }
     props.onQueueWidthChange(startWidth + moveEvent.clientX - startX);
   };
 
-  const onUp = () => {
-    cleanup();
+  const finish = (pointerId: number) => {
+    if (pointerId === activePointerId && queueResizeSessions.get(resizer)?.cleanup === cleanup) {
+      cleanup();
+    }
   };
+  const onUp = (upEvent: PointerEvent) => finish(upEvent.pointerId);
+  const onCancel = (cancelEvent: PointerEvent) => finish(cancelEvent.pointerId);
+  const onLostPointerCapture = (lostEvent: PointerEvent) => finish(lostEvent.pointerId);
+  const onBlur = () => cleanup();
 
+  queueResizeSessions.set(resizer, { cleanup });
+  try {
+    resizer.setPointerCapture(activePointerId);
+    resizer.addEventListener("lostpointercapture", onLostPointerCapture);
+  } catch {
+    // Window listeners still own the gesture when capture is unavailable.
+  }
   window.addEventListener("pointermove", onMove);
   window.addEventListener("pointerup", onUp);
-  window.addEventListener("pointercancel", onUp);
+  window.addEventListener("pointercancel", onCancel);
+  window.addEventListener("blur", onBlur);
 }
 
 function resizeQueueWithKeyboard(event: KeyboardEvent, props: SkillWorkshopProps): void {
