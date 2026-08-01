@@ -50,6 +50,7 @@ import { registerMatrixMonitorEvents } from "./events.js";
 import { createMatrixRoomMessageHandler } from "./handler.js";
 import { createMatrixInboundEventDeduper } from "./inbound-dedupe.js";
 import { shouldPromoteRecentInviteRoom } from "./recent-invite.js";
+import { resolveMatrixReplayCutoffMs } from "./replay-horizon.js";
 import { createMatrixRoomInfoResolver } from "./room-info.js";
 import { resolveMatrixRoomConfig } from "./rooms.js";
 import { runMatrixStartupMaintenance } from "./startup.js";
@@ -314,9 +315,12 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       isStopping: () => cleanedUp || opts.abortSignal?.aborted === true,
     });
     client.on("sync.state", onSyncState);
-    // Cold starts should ignore old room history, but once we have a persisted
-    // /sync cursor we want restart backlogs to replay just like other channels.
-    const dropPreStartupMessages = !client.hasPersistedSyncState();
+    const preStartupCutoffMs = resolveMatrixReplayCutoffMs({
+      hasPersistedSyncState: client.hasPersistedSyncState(),
+      hasCleanShutdownSyncState: client.hasCleanShutdownSyncState(),
+      startupMs,
+      startupGraceMs,
+    });
     const { getRoomInfo, getMemberDisplayName, invalidateMemberDisplayName } =
       createMatrixRoomInfoResolver(client);
     const isExplicitlyConfiguredRoom = async (roomId: string): Promise<boolean> => {
@@ -403,8 +407,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       mediaMaxBytes,
       historyLimit,
       startupMs,
-      startupGraceMs,
-      dropPreStartupMessages,
+      preStartupCutoffMs,
       inboundDeduper,
       directTracker,
       getRoomInfo,

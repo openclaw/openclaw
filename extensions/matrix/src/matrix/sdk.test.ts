@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { CryptoEvent } from "matrix-js-sdk/lib/crypto-api/CryptoEvent.js";
 import type { DecryptionFailureCode as DecryptionFailureCodeValue } from "matrix-js-sdk/lib/crypto-api/index.js";
+import type { ISyncResponse } from "matrix-js-sdk/lib/matrix.js";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixTestRuntime } from "../test-runtime.js";
@@ -797,6 +798,41 @@ describe("MatrixClient request hardening", () => {
 
       expect(flushSpy).toHaveBeenCalledTimes(1);
       expect(matrixJsClient.stopClient).toHaveBeenCalledTimes(1);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("trusts a persisted sync cursor after an unclean restart", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-sdk-crash-store-"));
+
+    try {
+      const crashedClient = new MatrixClient("https://matrix.example.org", "token", {
+        storageRootDir: tempDir,
+      });
+      const store = lastCreateClientOpts?.store as
+        | {
+            setSyncData: (data: ISyncResponse) => Promise<void>;
+            flush: () => Promise<void>;
+          }
+        | undefined;
+      if (!store) {
+        throw new Error("expected Matrix sync store");
+      }
+      await store.setSyncData({
+        next_batch: "s-before-crash",
+        rooms: { join: {}, invite: {}, leave: {}, knock: {} },
+        account_data: { events: [] },
+      });
+      await store.flush();
+      crashedClient.stopWithoutPersist();
+
+      const restartedClient = new MatrixClient("https://matrix.example.org", "token", {
+        storageRootDir: tempDir,
+      });
+
+      expect(restartedClient.hasPersistedSyncState()).toBe(true);
+      restartedClient.stopWithoutPersist();
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }

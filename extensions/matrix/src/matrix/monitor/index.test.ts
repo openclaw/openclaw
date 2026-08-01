@@ -2,6 +2,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import type { MatrixConfig, MatrixStreamingMode } from "../../types.js";
+import { MATRIX_UNCLEAN_RESTART_REPLAY_MS } from "./replay-horizon.js";
 import type { MatrixRoomInfo } from "./room-info.js";
 
 type DirectRoomTrackerOptions = {
@@ -61,6 +62,7 @@ const hoisted = vi.hoisted(() => {
   const client = Object.assign(createEmitter(), {
     id: "matrix-client",
     hasPersistedSyncState: vi.fn(() => false),
+    hasCleanShutdownSyncState: vi.fn(() => false),
     stopSyncWithoutPersist: vi.fn(),
     drainPendingDecryptions: vi.fn(async () => undefined),
   });
@@ -473,6 +475,7 @@ describe("monitorMatrixProvider", () => {
     hoisted.stopThreadBindingManager.mockReset();
     hoisted.client.removeAllListeners();
     hoisted.client.hasPersistedSyncState.mockReset().mockReturnValue(false);
+    hoisted.client.hasCleanShutdownSyncState.mockReset().mockReturnValue(false);
     hoisted.client.stopSyncWithoutPersist.mockReset();
     hoisted.client.drainPendingDecryptions.mockReset().mockResolvedValue(undefined);
     hoisted.inboundDeduper.claim
@@ -844,14 +847,44 @@ describe("monitorMatrixProvider", () => {
     expect(hoisted.setActiveMatrixClient).toHaveBeenNthCalledWith(2, null, "default");
   });
 
-  it("disables cold-start backlog dropping only when sync state is cleanly persisted", async () => {
+  it("disables the backlog cutoff entirely when sync state is cleanly persisted", async () => {
     hoisted.client.hasPersistedSyncState.mockReturnValue(true);
+    hoisted.client.hasCleanShutdownSyncState.mockReturnValue(true);
     await startMonitorAndAbortAfterStartup();
 
     const handlerParams = mockCallArg(hoisted.createMatrixRoomMessageHandler) as {
-      dropPreStartupMessages?: unknown;
+      preStartupCutoffMs?: unknown;
     };
-    expect(handlerParams.dropPreStartupMessages).toBe(false);
+    expect(handlerParams.preStartupCutoffMs).toBeNull();
+  });
+
+  it("bounds the backlog cutoff to the crash window after an unclean restart", async () => {
+    hoisted.client.hasPersistedSyncState.mockReturnValue(true);
+    hoisted.client.hasCleanShutdownSyncState.mockReturnValue(false);
+    const before = Date.now();
+    await startMonitorAndAbortAfterStartup();
+    const after = Date.now();
+
+    const handlerParams = mockCallArg(hoisted.createMatrixRoomMessageHandler) as {
+      preStartupCutoffMs?: unknown;
+      startupMs?: unknown;
+    };
+    const cutoff = handlerParams.preStartupCutoffMs as number;
+    expect(cutoff).toBeGreaterThanOrEqual(before - MATRIX_UNCLEAN_RESTART_REPLAY_MS);
+    expect(cutoff).toBeLessThanOrEqual(after - MATRIX_UNCLEAN_RESTART_REPLAY_MS);
+    expect(cutoff).toBeLessThan(handlerParams.startupMs as number);
+  });
+
+  it("keeps the startup cutoff on a true cold start", async () => {
+    hoisted.client.hasPersistedSyncState.mockReturnValue(false);
+    hoisted.client.hasCleanShutdownSyncState.mockReturnValue(false);
+    await startMonitorAndAbortAfterStartup();
+
+    const handlerParams = mockCallArg(hoisted.createMatrixRoomMessageHandler) as {
+      preStartupCutoffMs?: unknown;
+      startupMs?: unknown;
+    };
+    expect(handlerParams.preStartupCutoffMs).toBe(handlerParams.startupMs);
   });
 
   it("stops sync, drains decryptions, then waits for in-flight handlers before persisting", async () => {

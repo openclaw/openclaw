@@ -23,6 +23,7 @@ import {
   createMatrixRoomMessageEvent,
   createMatrixTextMessageEvent,
 } from "./handler.test-helpers.js";
+import { MATRIX_UNCLEAN_RESTART_REPLAY_MS } from "./replay-horizon.js";
 import type { MatrixRawEvent } from "./types.js";
 import { EventType } from "./types.js";
 
@@ -567,7 +568,6 @@ describe("matrix monitor handler pairing account scope", () => {
       dmPolicy: "pairing",
       isDirectMessage: true,
       getMemberDisplayName: async () => "sender",
-      dropPreStartupMessages: true,
       needsRoomAliasesForConfig: false,
       dispatchInboundMessage: async () => ({
         queuedFinal: true,
@@ -2065,8 +2065,7 @@ describe("matrix monitor handler pairing account scope", () => {
       resolveAgentRoute,
       isDirectMessage: true,
       startupMs: 1_000,
-      startupGraceMs: 0,
-      dropPreStartupMessages: true,
+      preStartupCutoffMs: 1_000,
     });
 
     await handler(
@@ -2094,8 +2093,7 @@ describe("matrix monitor handler pairing account scope", () => {
       resolveAgentRoute,
       isDirectMessage: true,
       startupMs: 1_000,
-      startupGraceMs: 0,
-      dropPreStartupMessages: false,
+      preStartupCutoffMs: null,
     });
 
     await handler(
@@ -2108,6 +2106,64 @@ describe("matrix monitor handler pairing account scope", () => {
     );
 
     expect(resolveAgentRoute).toHaveBeenCalledTimes(1);
+  });
+
+  it("delivers crash-downtime dm messages inside the bounded replay window", async () => {
+    const resolveAgentRoute = vi.fn(() => ({
+      agentId: "ops",
+      channel: "matrix",
+      accountId: "ops",
+      sessionKey: "agent:ops:main",
+      mainSessionKey: "agent:ops:main",
+      matchedBy: "binding.account" as const,
+    }));
+    const startupMs = Date.now();
+    const { handler } = createMatrixHandlerTestHarness({
+      resolveAgentRoute,
+      isDirectMessage: true,
+      startupMs,
+      preStartupCutoffMs: startupMs - MATRIX_UNCLEAN_RESTART_REPLAY_MS,
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$downtime-message",
+        body: "hello",
+        originServerTs: startupMs - 60_000,
+      }),
+    );
+
+    expect(resolveAgentRoute).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses stale history older than the bounded replay window", async () => {
+    const resolveAgentRoute = vi.fn(() => ({
+      agentId: "ops",
+      channel: "matrix",
+      accountId: "ops",
+      sessionKey: "agent:ops:main",
+      mainSessionKey: "agent:ops:main",
+      matchedBy: "binding.account" as const,
+    }));
+    const startupMs = Date.now();
+    const { handler } = createMatrixHandlerTestHarness({
+      resolveAgentRoute,
+      isDirectMessage: true,
+      startupMs,
+      preStartupCutoffMs: startupMs - MATRIX_UNCLEAN_RESTART_REPLAY_MS,
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$stale-history",
+        body: "hello",
+        originServerTs: startupMs - MATRIX_UNCLEAN_RESTART_REPLAY_MS - 60_000,
+      }),
+    );
+
+    expect(resolveAgentRoute).not.toHaveBeenCalled();
   });
 });
 

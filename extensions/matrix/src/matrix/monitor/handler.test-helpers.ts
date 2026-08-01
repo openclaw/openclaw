@@ -64,8 +64,7 @@ type MatrixHandlerTestHarnessOptions = {
   textLimit?: number;
   mediaMaxBytes?: number;
   startupMs?: number;
-  startupGraceMs?: number;
-  dropPreStartupMessages?: boolean;
+  preStartupCutoffMs?: number | null;
   needsRoomAliasesForConfig?: boolean;
   isDirectMessage?: boolean;
   historyLimit?: number;
@@ -355,8 +354,10 @@ export function createMatrixHandlerTestHarness(
     textLimit: options.textLimit ?? 8_000,
     mediaMaxBytes: options.mediaMaxBytes ?? 10_000_000,
     startupMs: options.startupMs ?? 0,
-    startupGraceMs: options.startupGraceMs ?? 0,
-    dropPreStartupMessages: options.dropPreStartupMessages ?? true,
+    preStartupCutoffMs:
+      options.preStartupCutoffMs === undefined
+        ? (options.startupMs ?? 0)
+        : options.preStartupCutoffMs,
     inboundDeduper: options.inboundDeduper,
     directTracker: {
       isDirectMessage: async () => options.isDirectMessage ?? true,

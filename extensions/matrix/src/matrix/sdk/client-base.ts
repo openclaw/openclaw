@@ -431,8 +431,10 @@ export abstract class MatrixClientBase {
   }
 
   hasPersistedSyncState(): boolean {
-    // Only trust restart replay when the previous process completed a final
-    // sync-store persist. A stale cursor can make Matrix re-surface old events.
+    return this.syncStore?.hasSavedSync() === true;
+  }
+
+  hasCleanShutdownSyncState(): boolean {
     return this.syncStore?.hasSavedSyncFromCleanShutdown() === true;
   }
 
