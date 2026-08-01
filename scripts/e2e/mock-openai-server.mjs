@@ -152,8 +152,10 @@ function buildMockFunctionCall(name, args) {
 // The Responses API carries that tag as `phase` on the message item, and the
 // transport reads it straight off the item, so an untagged item produces no
 // preamble at all and the scenario silently proves nothing.
-function preambleThenToolCallEvents(preamble, name, args) {
-  const messageItemId = "msg_e2e_preamble";
+function preambleThenToolCallEvents(preamble, name, args, itemSuffix = "") {
+  // Providers give each assistant message its own id; reusing one id makes the
+  // runner accumulate every turn's text into a single growing item.
+  const messageItemId = `msg_e2e_preamble${itemSuffix}`;
   const call = buildMockFunctionCall(name, args);
   return [
     {
@@ -245,6 +247,56 @@ function progressDraftEvents(body, bodyText) {
     });
   }
   return responseEvents("OPENCLAW_E2E_DRAFTPROOF");
+}
+
+// Multi-preamble proof: several commentary runs interleaved with tool calls in
+// one turn. A single-tool turn cannot show commentary that arrives repeatedly,
+// which is the shape channel progress has to keep in one draft.
+function multiPreambleEvents(body, bodyText) {
+  const allText = collectText(body).join("\n");
+  if (!allText.includes("OPENCLAW_E2E_MULTIPROOF")) {
+    return null;
+  }
+  const outputs = collectFunctionCallOutputCount(body);
+  if (!hasDeclaredTool(bodyText, "exec")) {
+    return null;
+  }
+  if (outputs === 0) {
+    return preambleThenToolCallEvents(
+      "First I check the workspace.",
+      "exec",
+      {
+        command: ["bash", "-lc", "sleep 2 && echo multiproof-one"],
+      },
+      "-1",
+    );
+  }
+  if (outputs === 1) {
+    return preambleThenToolCallEvents(
+      "Now I look at the second thing.",
+      "exec",
+      {
+        command: ["bash", "-lc", "sleep 2 && echo multiproof-two"],
+      },
+      "-2",
+    );
+  }
+  if (outputs === 2) {
+    return preambleThenToolCallEvents(
+      "Last one, then I answer.",
+      "exec",
+      {
+        command: ["bash", "-lc", "sleep 2 && echo multiproof-three"],
+      },
+      "-3",
+    );
+  }
+  return responseEvents("OPENCLAW_E2E_MULTIPROOF");
+}
+
+function collectFunctionCallOutputCount(body) {
+  const input = Array.isArray(body?.input) ? body.input : [];
+  return input.filter((item) => item?.type === "function_call_output").length;
 }
 
 function toolCallEvents(name, args) {
@@ -563,6 +615,14 @@ const server = http.createServer((req, res) => {
       const draftEvents = progressDraftEvents(body, bodyText);
       if (draftEvents) {
         writeResponsesEvents(res, body.stream, draftEvents);
+        return;
+      }
+      const multiEvents = multiPreambleEvents(body, bodyText);
+      if (multiEvents) {
+        // Space the turns out: a draft that renders and edits between steps is
+        // the whole point of this scenario, and the mock answers instantly.
+        await delay(readPositiveIntEnv("MOCK_MULTIPROOF_STEP_DELAY_MS", 2500));
+        writeResponsesEvents(res, body.stream, multiEvents);
         return;
       }
       const responseText = resolveResponseText(bodyText);

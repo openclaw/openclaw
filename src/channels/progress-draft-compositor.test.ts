@@ -7,6 +7,41 @@ import {
 } from "./progress-draft-compositor.js";
 import { DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS } from "./streaming.js";
 
+describe("commentary reported twice", () => {
+  // Transports report one commentary item twice: once with the provider's item
+  // id and once without it. Both describe the same note.
+  it("renders one line and counts one note per item", async () => {
+    const updates: string[] = [];
+    const compositor = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { commentary: true } } },
+      mode: "progress",
+      active: true,
+      seed: "",
+      update: (text) => {
+        updates.push(text);
+      },
+      now: () => 0,
+    });
+    const receipt = createChannelProgressReceiptTracker({ now: () => 0 });
+
+    // Both arrival orders: the id-bearing report can land first or last.
+    await compositor.pushCommentaryProgress("First step.", { itemId: "item-1" });
+    receipt.noteCommentary("item-1", "First step.");
+    await compositor.pushCommentaryProgress("First step.");
+    receipt.noteCommentary(undefined, "First step.");
+
+    await compositor.pushCommentaryProgress("Second step.");
+    receipt.noteCommentary(undefined, "Second step.");
+    await compositor.pushCommentaryProgress("Second step.", { itemId: "item-2" });
+    receipt.noteCommentary("item-2", "Second step.");
+
+    const rendered = updates.at(-1) ?? "";
+    expect(rendered.match(/First step\./gu) ?? []).toHaveLength(1);
+    expect(rendered.match(/Second step\./gu) ?? []).toHaveLength(1);
+    expect(receipt.buildSummaryLine()).toContain("💬 2 notes");
+  });
+});
+
 describe("createChannelProgressDraftCompositor", () => {
   it("tracks compact per-turn progress receipts", () => {
     let now = 1_000;

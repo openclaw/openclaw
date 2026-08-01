@@ -50,7 +50,7 @@ export function createChannelProgressReceiptTracker(params?: { now?: () => numbe
   let commentaryNotes = 0;
   let reasoningOpen = false;
   const seenCommentaryIds = new Set<string>();
-  let lastCommentaryText = "";
+  const seenCommentaryTexts = new Set<string>();
 
   const closeReasoning = () => {
     if (!reasoningOpen) {
@@ -67,7 +67,7 @@ export function createChannelProgressReceiptTracker(params?: { now?: () => numbe
     commentaryNotes = 0;
     reasoningOpen = false;
     seenCommentaryIds.clear();
-    lastCommentaryText = "";
+    seenCommentaryTexts.clear();
   };
 
   return {
@@ -86,15 +86,15 @@ export function createChannelProgressReceiptTracker(params?: { now?: () => numbe
       if (!trimmed) {
         return;
       }
+      // One note is reported twice, with and without its item id, in either
+      // order. Counting on first sight of either fact keeps the total honest.
+      const seen =
+        seenCommentaryTexts.has(trimmed) || (itemId ? seenCommentaryIds.has(itemId) : false);
+      seenCommentaryTexts.add(trimmed);
       if (itemId) {
-        if (!seenCommentaryIds.has(itemId)) {
-          seenCommentaryIds.add(itemId);
-          commentaryNotes += 1;
-        }
-        return;
+        seenCommentaryIds.add(itemId);
       }
-      if (trimmed !== lastCommentaryText) {
-        lastCommentaryText = trimmed;
+      if (!seen) {
         commentaryNotes += 1;
       }
     },
@@ -182,6 +182,10 @@ export function createChannelProgressDraftCompositor(params: {
   // place instead of appending one line per growing prefix.
   let lastIdLessCommentaryId: string | undefined;
   let lastIdLessCommentaryBare = "";
+  // Transports report one commentary item twice: once carrying the provider's
+  // item id and once without it. Keying by text lets both resolve to the same
+  // line instead of rendering the note twice.
+  const commentaryLineIdByBareText = new Map<string, string>();
   // Model preambles and narration share the status slot while tool lines keep
   // accumulating underneath for turns where neither source is available.
   let preambleText = "";
@@ -256,6 +260,7 @@ export function createChannelProgressDraftCompositor(params: {
     lastReasoningLine = undefined;
     lastIdLessCommentaryId = undefined;
     lastIdLessCommentaryBare = "";
+    commentaryLineIdByBareText.clear();
     preambleText = "";
     preambleItemId = undefined;
     preambleAt = undefined;
@@ -327,6 +332,15 @@ export function createChannelProgressDraftCompositor(params: {
     normalized: string;
     bareNormalized: string;
   }): string => {
+    // Text first, so the pair resolves to one line in either arrival order: the
+    // id-less report cannot know the item id, and the id-bearing one must not
+    // open a second line for a note already on the board.
+    const knownLineId = commentary.bareNormalized
+      ? commentaryLineIdByBareText.get(commentary.bareNormalized)
+      : undefined;
+    if (knownLineId) {
+      return knownLineId;
+    }
     if (commentary.itemId) {
       return `commentary:${commentary.itemId}`;
     }
@@ -714,6 +728,9 @@ export function createChannelProgressDraftCompositor(params: {
       if (!itemId) {
         lastIdLessCommentaryId = lineId;
         lastIdLessCommentaryBare = bareNormalized;
+      }
+      if (bareNormalized) {
+        commentaryLineIdByBareText.set(bareNormalized, lineId);
       }
       const alreadyStarted = gate.hasStarted;
       await gate.startNow();
