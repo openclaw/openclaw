@@ -1,10 +1,9 @@
-import { mkdtempSync } from "node:fs";
 import fs from "node:fs/promises";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -37,6 +36,7 @@ import { readSessionMessagesWithSourceAsync } from "./session-transcript-readers
 import { loadSessionEntryReadOnly } from "./session-utils.js";
 
 const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const agentId = "main";
 const sessionKey = "agent:main:media-branch";
@@ -225,7 +225,7 @@ async function rewindPastManagedImage(): Promise<string> {
 
 describe("managed outgoing media retention across transcript branches", () => {
   beforeEach(async () => {
-    stateDir = mkdtempSync(path.join(os.tmpdir(), "managed-media-branch-"));
+    stateDir = tempDirs.make("managed-media-branch-");
     mediaRoot = path.join(stateDir, "media");
     originalPath = path.join(mediaRoot, MANAGED_OUTGOING_ORIGINALS_SUBDIR, mediaId);
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
@@ -238,7 +238,6 @@ describe("managed outgoing media retention across transcript branches", () => {
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     envSnapshot.restore();
-    await fs.rm(stateDir, { recursive: true, force: true });
   });
 
   it("retains media referenced only by an inactive branch after a rewind", async () => {
