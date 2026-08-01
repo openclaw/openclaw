@@ -690,7 +690,7 @@ still need normal device approval for scope upgrades.
 
 - Direct announce attempts are best-effort, but admitted session-queued completion handoffs and their owner/task projections survive gateway restarts in the shared SQLite state database.
 - Sub-agents still share the same gateway process resources; treat `maxConcurrent` as a safety valve.
-- `sessions_spawn` is always non-blocking: it returns `{ status: "accepted", runId, childSessionKey, sessionId }` immediately. `sessionId` is the durable child UUID (prefer it over parsing `childSessionKey`). `sessionKey` is returned only for collector launches (same as before).
+- Native `sessions_spawn` (default runtime) is always non-blocking: it returns `{ status: "accepted", runId, childSessionKey, sessionId }` immediately. `sessionId` is the durable child UUID for **native** subagent accepts (prefer it over parsing `childSessionKey`). `sessionKey` is returned only for collector launches. The supported `runtime="acp"` accept shape remains `{ status, runId, childSessionKey }` and does not include `sessionId`.
 - Sub-agent context only injects `AGENTS.md` (no `SOUL.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, or `BOOTSTRAP.md`). Its `## Tools` section carries environment-specific notes. Codex-native subagents follow the same boundary through native `AGENTS.md` discovery, while parent-only persona, identity, and user files are injected as turn-scoped collaboration instructions so children do not clone them.
 - Maximum nesting depth is 5 (`maxSpawnDepth` range: 1-5). Depth 2 is recommended for most use cases.
 - `maxChildrenPerAgent` caps active children per session (default `5`, range `1-20`).
