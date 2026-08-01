@@ -1,6 +1,8 @@
 /** Doctor warnings for source checkout installs with missing pnpm runtime state. */
 import fs from "node:fs";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { parse as parseYaml } from "yaml";
 import { note } from "../../packages/terminal-core/src/note.js";
 
 /** Emits install warnings when a source checkout looks npm-installed or lacks source-run deps. */
@@ -36,34 +38,47 @@ export function noteSourceInstallIssues(root: string | null) {
     warnings.push("- tsx binary is missing for source runs. Run: pnpm install.");
   }
 
-  warnings.push(...detectSelfLinkWarnings(root));
+  const selfLinkLocations = detectSelfLinkLocations(root);
+  if (selfLinkLocations.length > 0) {
+    warnings.push(
+      `- Source checkout dependency state contains a self-referential OpenClaw link in ${selfLinkLocations.join(", ")}. ` +
+        "Inspect package.json, pnpm-workspace.yaml, and pnpm-lock.yaml. " +
+        "For a clean deployment checkout, restore all three from the current commit: git restore --source=HEAD -- package.json pnpm-workspace.yaml pnpm-lock.yaml; then run: pnpm install --frozen-lockfile. " +
+        "If the checkout has intentional dependency edits, remove only the self-link and run pnpm install to reconcile all three files. " +
+        "Never run pnpm link or npm link inside a deployment checkout.",
+    );
+  }
 
   if (warnings.length > 0) {
     note(warnings.join("\n"), "Install");
   }
 }
 
-const SELF_LINK_RECOVERY =
-  "Inspect the diff: git diff package.json pnpm-workspace.yaml. Manually revert only the self-referential link: lines, then reinstall: pnpm install. Never run pnpm link/npm link inside a deployment checkout.";
+const PACKAGE_DEPENDENCY_FIELDS = [
+  "dependencies",
+  "devDependencies",
+  "optionalDependencies",
+] as const;
 
 /** Detects self-referential `openclaw: link:` damage left by link commands run inside a source checkout. */
-function detectSelfLinkWarnings(root: string): string[] {
-  const warnings: string[] = [];
+function detectSelfLinkLocations(root: string): string[] {
+  const locations: string[] = [];
 
   const packageJsonPath = path.join(root, "package.json");
   if (fs.existsSync(packageJsonPath)) {
     try {
-      const manifest = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
-        dependencies?: Record<string, string>;
-        devDependencies?: Record<string, string>;
-      };
-      const selfLink = [manifest.dependencies, manifest.devDependencies].some(
-        (deps) => typeof deps?.openclaw === "string" && deps.openclaw.startsWith("link:"),
-      );
-      if (selfLink) {
-        warnings.push(
-          `- package.json has a self-referential "openclaw": "link:" dependency, which breaks frozen pnpm installs (ERR_PNPM_LOCKFILE_CONFIG_MISMATCH). ${SELF_LINK_RECOVERY}`,
-        );
+      const manifest = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as unknown;
+      if (isRecord(manifest)) {
+        for (const field of PACKAGE_DEPENDENCY_FIELDS) {
+          const dependencies = manifest[field];
+          if (
+            isRecord(dependencies) &&
+            typeof dependencies.openclaw === "string" &&
+            dependencies.openclaw.startsWith("link:")
+          ) {
+            locations.push(`package.json ${field}`);
+          }
+        }
       }
     } catch {
       // Unparseable package.json is reported by other checks; skip link detection.
@@ -72,13 +87,20 @@ function detectSelfLinkWarnings(root: string): string[] {
 
   const workspacePath = path.join(root, "pnpm-workspace.yaml");
   if (fs.existsSync(workspacePath)) {
-    const workspaceYaml = fs.readFileSync(workspacePath, "utf8");
-    if (/^\s*openclaw:\s*['"]?link:/m.test(workspaceYaml)) {
-      warnings.push(
-        `- pnpm-workspace.yaml contains a self-referential "openclaw: link:" entry, which breaks frozen pnpm installs (ERR_PNPM_LOCKFILE_CONFIG_MISMATCH). ${SELF_LINK_RECOVERY}`,
-      );
+    try {
+      const workspace = parseYaml(fs.readFileSync(workspacePath, "utf8")) as unknown;
+      const overrides = isRecord(workspace) ? workspace.overrides : undefined;
+      if (
+        isRecord(overrides) &&
+        typeof overrides.openclaw === "string" &&
+        overrides.openclaw.startsWith("link:")
+      ) {
+        locations.push("pnpm-workspace.yaml overrides");
+      }
+    } catch {
+      // Unparseable workspace YAML is reported by pnpm; skip link detection.
     }
   }
 
-  return warnings;
+  return locations;
 }

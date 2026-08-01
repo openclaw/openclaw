@@ -139,7 +139,9 @@ pnpm install && pnpm build && pnpm ui:build
 pnpm openclaw onboard --install-daemon
 ```
 
-Use `pnpm openclaw ...` from inside the repo, which is the safer default for automation and agent-maintained checkouts: re-running `pnpm link` variants inside the checkout can rewrite `package.json` and `pnpm-workspace.yaml` and break later installs. Never run link commands as part of updating a checkout. See [Setup](/start/setup) for full development workflows.
+Run checkout commands with `pnpm openclaw ...`. Do not run `pnpm link` inside an OpenClaw checkout: `pnpm link .` can add self-referential `openclaw: link:` entries to `package.json` and `pnpm-workspace.yaml` and rewrite `pnpm-lock.yaml`. If interrupted between those writes, later frozen installs fail. For a persistent `openclaw` command, use the GitHub main checkout installer below; it installs a user-local wrapper without modifying the checkout manifests.
+
+See [Setup](/start/setup) for full development workflows.
 
 ### Install from the GitHub main checkout
 
