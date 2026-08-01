@@ -13,6 +13,7 @@ import {
 } from "../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createPinnedLookup } from "../infra/net/ssrf.js";
+import { readImageMetadataFromHeader } from "../media/image-ops.js";
 import { setMediaStoreNetworkDepsForTest } from "../media/store.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -178,6 +179,8 @@ async function createFixture(
     filename?: string;
     contentType?: string;
     body?: Buffer;
+    width?: number;
+    height?: number;
   },
 ) {
   const attachmentId = options?.attachmentId ?? "11111111-1111-4111-8111-111111111111";
@@ -200,8 +203,10 @@ async function createFixture(
         mediaId: filename,
         mediaSubdir: MANAGED_OUTGOING_ORIGINALS_SUBDIR,
         contentType: options?.contentType ?? "image/png",
-        width: options?.contentType?.startsWith("image/") === false ? null : 1024,
-        height: options?.contentType?.startsWith("image/") === false ? null : 768,
+        width:
+          options?.contentType?.startsWith("image/") === false ? null : (options?.width ?? 1024),
+        height:
+          options?.contentType?.startsWith("image/") === false ? null : (options?.height ?? 768),
         sizeBytes: body.byteLength,
         filename: options?.filename ?? "cat.png",
       },
@@ -251,6 +256,7 @@ async function requestManagedImage(params: {
   );
   readSessionMessagesMock.mockImplementation(async () => {
     await params.onReadTranscriptMessages?.();
+    const transcriptPathName = params.pathName.replace(/\/thumbnail(?=\?|$)/u, "/full");
     return (
       params.transcriptMessages ?? [
         {
@@ -258,8 +264,8 @@ async function requestManagedImage(params: {
           content: [
             {
               type: "image",
-              url: params.pathName,
-              openUrl: params.pathName,
+              url: transcriptPathName,
+              openUrl: transcriptPathName,
             },
           ],
           __openclaw: { id: "msg-1" },
@@ -371,6 +377,52 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
       },
       expect.objectContaining({ allowResetArchiveFallback: true }),
     );
+  });
+
+  it("serves bounded PNG thumbnails without changing the full-image route", async () => {
+    const body = createSolidPngBuffer(800, 400, { r: 24, g: 64, b: 128 });
+    const { attachmentId, sessionKey } = await createFixture(stateDir, {
+      body,
+      width: 800,
+      height: 400,
+    });
+
+    const { result } = await requestManagedImage({
+      stateDir,
+      pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/thumbnail`,
+      authResponse: { authMethod: "token" },
+    });
+
+    expect(result.statusCode).toBe(200);
+    expect(result.headers["content-type"]).toBe("image/png");
+    expect(result.headers["content-disposition"]).toContain("-thumbnail.png");
+    expect(readImageMetadataFromHeader(result.body)).toEqual({ width: 300, height: 150 });
+  });
+
+  it("reuses a bounded thumbnail instead of decoding the original for every request", async () => {
+    const body = createSolidPngBuffer(800, 400, { r: 24, g: 64, b: 128 });
+    const { attachmentId, sessionKey } = await createFixture(stateDir, {
+      body,
+      width: 800,
+      height: 400,
+    });
+    const pathName = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/thumbnail`;
+
+    const first = await requestManagedImage({
+      stateDir,
+      pathName,
+      authResponse: { authMethod: "token" },
+    });
+    await fs.writeFile(requireManagedOriginalPath(stateDir, attachmentId), "not-an-image");
+    const second = await requestManagedImage({
+      stateDir,
+      pathName,
+      authResponse: { authMethod: "token" },
+    });
+
+    expect(first.result.statusCode).toBe(200);
+    expect(second.result.statusCode).toBe(200);
+    expect(second.result.body).toEqual(first.result.body);
   });
 
   it("serves Unicode media filenames with an encoded content disposition", async () => {
@@ -814,7 +866,12 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
   });
 
   it("serves an exact transcript image through a short-lived artifact ticket", async () => {
-    const { attachmentId, sessionKey } = await createFixture(stateDir);
+    const body = createSolidPngBuffer(800, 400, { r: 24, g: 64, b: 128 });
+    const { attachmentId, sessionKey } = await createFixture(stateDir, {
+      body,
+      width: 800,
+      height: 400,
+    });
     const canonicalPath = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
     loadSessionEntryMock.mockReturnValue({
       storePath: path.join(stateDir, "gateway-sessions.json"),
@@ -844,7 +901,19 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     });
 
     expect(result.statusCode).toBe(200);
-    expect(result.body.toString("utf-8")).toBe("original-image");
+    expect(result.body).toEqual(body);
+    expect(authorizeGatewayHttpRequestOrReplyMock).not.toHaveBeenCalled();
+
+    const thumbnail = await requestManagedImage({
+      stateDir,
+      pathName: (download?.url ?? "").replace(/\/full(?=\?)/u, "/thumbnail"),
+      denyAuth: true,
+    });
+    expect(thumbnail.result.statusCode).toBe(200);
+    expect(readImageMetadataFromHeader(thumbnail.result.body)).toEqual({
+      width: 300,
+      height: 150,
+    });
     expect(authorizeGatewayHttpRequestOrReplyMock).not.toHaveBeenCalled();
 
     const wrongAttachmentId = "22222222-2222-4222-8222-222222222222";

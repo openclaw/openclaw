@@ -1,10 +1,12 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import {
+  addManagedImageActionProof,
   captureUiProofEnabled,
   copiedViaExec,
   createChatFlowE2eSuite,
+  exerciseManagedImageActions,
   expectDefined,
   installMockGateway,
   installPlainHttpClipboardCapture,
@@ -323,6 +325,7 @@ suite.define(() => {
   });
 
   it("renders a managed image through an artifact-scoped ticket", async () => {
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -333,16 +336,19 @@ suite.define(() => {
     const artifactId = `artifact_managed_image_${attachmentId}`;
     const imageUrl = `/api/chat/media/outgoing/agent%3Amain%3Amain/${attachmentId}/full`;
     const ticketedUrl = `${imageUrl}?mediaTicket=ticket-e2e`;
+    const imageBytes = await readFile(
+      path.join(process.cwd(), "docs/assets/openclaw-banner-dark.png"),
+    );
+    const requestedVariants: string[] = [];
     await page.route("**/api/chat/media/outgoing/**", async (route) => {
       const request = route.request();
-      expect(new URL(request.url()).searchParams.get("mediaTicket")).toBe("ticket-e2e");
+      const requestUrl = new URL(request.url());
+      expect(requestUrl.searchParams.get("mediaTicket")).toBe("ticket-e2e");
       expect(request.headers().authorization).toBeUndefined();
+      requestedVariants.push(requestUrl.pathname.split("/").at(-1) ?? "");
       await route.fulfill({
         contentType: "image/png",
-        body: Buffer.from(
-          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=",
-          "base64",
-        ),
+        body: imageBytes,
       });
     });
     const gateway = await installMockGateway(page, {
@@ -356,8 +362,8 @@ suite.define(() => {
               url: imageUrl,
               alt: "Ticketed generated image",
               mimeType: "image/png",
-              width: 1,
-              height: 1,
+              width: 640,
+              height: 360,
             },
           ],
           timestamp: Date.now(),
@@ -388,12 +394,24 @@ suite.define(() => {
             element instanceof HTMLImageElement && element.complete ? element.naturalWidth : 0,
           ),
         )
-        .toBe(1);
+        .toBeGreaterThan(1);
       const request = await gateway.waitForRequest("artifacts.download");
       expect(request.params).toMatchObject({
         sessionKey: "agent:main:main",
         artifactId,
       });
+      expect(requestedVariants).toEqual(["thumbnail"]);
+
+      const actionProof = await exerciseManagedImageActions(page, requestedVariants);
+
+      if (artifactDir) {
+        await mkdir(artifactDir, { recursive: true });
+        await addManagedImageActionProof(page, actionProof);
+        await page.screenshot({
+          fullPage: true,
+          path: path.join(artifactDir, "managed-generated-image-actions.png"),
+        });
+      }
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -629,12 +647,15 @@ suite.define(() => {
       expect(overflowProof.revoked).toContain(evictedBlobUrl);
       expect(overflowProof.revoked).not.toContain(retainedRecentBlobUrl);
 
-      const evictedPath = new URL(
-        expectDefined(imageUrls[evictedImageIndex], "evicted managed image URL"),
+      const evictedPreviewPath = new URL(
+        expectDefined(imageUrls[evictedImageIndex], "evicted managed image URL").replace(
+          /\/full$/u,
+          "/thumbnail",
+        ),
         suite.server.baseUrl,
       ).pathname;
       const fetchesBeforeRevisit = fetchedMedia.filter(
-        (request) => request.pathname === evictedPath,
+        (request) => request.pathname === evictedPreviewPath,
       ).length;
       const revisitedImageAlt = `Refetched managed image ${evictedImageIndex + 1}`;
       await replaceHistory(
@@ -652,7 +673,7 @@ suite.define(() => {
       await expect.poll(async () => (await readBlobProof()).created.length).toBe(66);
       const finalProof = await readBlobProof();
       const evictedImageFetches = fetchedMedia.filter(
-        (request) => request.pathname === evictedPath,
+        (request) => request.pathname === evictedPreviewPath,
       ).length;
       expect(evictedImageFetches).toBe(fetchesBeforeRevisit + 1);
       expect(fetchedMedia).not.toHaveLength(0);

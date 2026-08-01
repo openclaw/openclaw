@@ -4373,12 +4373,16 @@ describe("grouped chat rendering", () => {
 
   it("fetches managed outgoing chat images with auth and requester scope", async () => {
     const managedChatImageUrl = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
-    const objectUrl = "blob:managed-image";
+    const thumbnailUrl = managedChatImageUrl.replace(/\/full$/u, "/thumbnail");
+    const objectUrls = ["blob:managed-thumbnail", "blob:managed-full"];
+    let objectUrlIndex = 0;
     const NativeUrl = URL;
     vi.stubGlobal(
       "URL",
       class extends NativeUrl {
-        static override createObjectURL = vi.fn(() => objectUrl);
+        static override createObjectURL = vi.fn(
+          () => objectUrls[objectUrlIndex++] ?? "blob:managed-full",
+        );
         static override revokeObjectURL = vi.fn();
       },
     );
@@ -4417,29 +4421,207 @@ describe("grouped chat rendering", () => {
 
     await vi.waitFor(() => {
       const image = container.querySelector<HTMLImageElement>(".chat-message-image");
-      expect(image?.getAttribute("src")).toBe(objectUrl);
+      expect(image?.getAttribute("src")).toBe(objectUrls[0]);
       expect(image?.getAttribute("alt")).toBe("Generated image 1");
     });
-    const [, fetchInit] = requireFetchCallForUrl(fetchMock, managedChatImageUrl);
+    const [, fetchInit] = requireFetchCallForUrl(fetchMock, thumbnailUrl);
     expectSameOriginGet(fetchInit);
+    expect(container.querySelectorAll(".chat-image-action")).toHaveLength(3);
     expectElement(container, ".chat-message-image-button", HTMLButtonElement).click();
+    await vi.waitFor(() => expect(onOpenImage).toHaveBeenCalledTimes(1));
     expect(onOpenImage).toHaveBeenCalledWith(
-      expect.objectContaining({ src: objectUrl, title: "Generated image 1" }),
+      expect.objectContaining({ src: objectUrls[1], title: "Generated image 1" }),
     );
+    expectSameOriginGet(requireFetchCallForUrl(fetchMock, managedChatImageUrl)[1]);
     const activeItem = onOpenImage.mock.calls[0]?.[0];
     activeItem?.release?.();
+  });
+
+  it("downloads managed images with a MIME-accurate filename", async () => {
+    const managedChatImageUrl = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+    const NativeUrl = URL;
+    vi.stubGlobal(
+      "URL",
+      class extends NativeUrl {
+        static override createObjectURL = vi.fn(() => "blob:managed-svg");
+        static override revokeObjectURL = vi.fn();
+      },
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        blob: async () => new Blob(["<svg/>"], { type: "image/svg+xml" }),
+      })) as unknown as typeof fetch,
+    );
+    const downloadedNames: string[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(
+      function (this: HTMLAnchorElement) {
+        downloadedNames.push(this.download);
+      },
+    );
+
+    const container = document.createElement("div");
+    renderAssistantMessage(container, {
+      role: "assistant",
+      content: [
+        {
+          type: "image",
+          url: managedChatImageUrl,
+          alt: "Generated vector.png",
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    await vi.waitFor(() => expect(container.querySelector(".chat-message-image")).not.toBeNull());
+    const actions = container.querySelectorAll<HTMLButtonElement>(".chat-image-action");
+    expect(actions).toHaveLength(3);
+    actions[1]?.click();
+    await vi.waitFor(() => expect(downloadedNames).toEqual(["Generated vector.svg"]));
+  });
+
+  it("starts a managed image clipboard write before the full image resolves", async () => {
+    const managedChatImageUrl = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+    const thumbnailUrl = managedChatImageUrl.replace(/\/full$/u, "/thumbnail");
+    let resolveFullImage:
+      | ((response: { ok: boolean; blob: () => Promise<Blob> }) => void)
+      | undefined;
+    const fetchMock = vi.fn((url: string) => {
+      if (url === thumbnailUrl) {
+        return Promise.resolve({
+          ok: true,
+          blob: async () => new Blob(["thumbnail"], { type: "image/png" }),
+        });
+      }
+      return new Promise<{ ok: boolean; blob: () => Promise<Blob> }>((resolve) => {
+        resolveFullImage = resolve;
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    type ClipboardPayload = Record<string, string | Blob | PromiseLike<string | Blob>>;
+    class TestClipboardItem {
+      constructor(readonly items: ClipboardPayload) {}
+    }
+    vi.stubGlobal("ClipboardItem", TestClipboardItem);
+    const clipboardWrite = vi.fn(async (_items: TestClipboardItem[]) => undefined);
+    const testNavigator = Object.create(navigator) as Navigator;
+    Object.defineProperty(testNavigator, "clipboard", {
+      value: { write: clipboardWrite },
+    });
+    vi.stubGlobal("navigator", testNavigator);
+
+    const container = document.createElement("div");
+    renderAssistantMessage(container, {
+      role: "assistant",
+      content: [{ type: "image", url: managedChatImageUrl, alt: "Clipboard image" }],
+      timestamp: Date.now(),
+    });
+
+    await vi.waitFor(() => expect(container.querySelector(".chat-message-image")).not.toBeNull());
+    const actions = container.querySelectorAll<HTMLButtonElement>(".chat-image-action");
+    actions[2]?.click();
+
+    expect(clipboardWrite).toHaveBeenCalledTimes(1);
+    expect(resolveFullImage).toBeTypeOf("function");
+    const clipboardItem = clipboardWrite.mock.calls[0]?.[0]?.[0] as TestClipboardItem | undefined;
+    const png = clipboardItem?.items["image/png"];
+    expect(png).toBeInstanceOf(Promise);
+
+    resolveFullImage?.({
+      ok: true,
+      blob: async () => new Blob(["full"], { type: "image/png" }),
+    });
+    await expect(png).resolves.toMatchObject({ type: "image/png" });
+  });
+
+  it("falls back to the authenticated full image when thumbnail generation fails", async () => {
+    const managedChatImageUrl = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+    const thumbnailUrl = managedChatImageUrl.replace(/\/full$/u, "/thumbnail");
+    const NativeUrl = URL;
+    vi.stubGlobal(
+      "URL",
+      class extends NativeUrl {
+        static override createObjectURL = vi.fn(() => "blob:managed-full-fallback");
+        static override revokeObjectURL = vi.fn();
+      },
+    );
+    const fetchMock = vi.fn(async (url: string) =>
+      url === thumbnailUrl
+        ? { ok: false, blob: async () => new Blob() }
+        : { ok: true, blob: async () => new Blob(["png"], { type: "image/png" }) },
+    );
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const container = document.createElement("div");
+    renderAssistantMessage(container, {
+      role: "assistant",
+      content: [
+        {
+          type: "image",
+          url: managedChatImageUrl,
+          alt: "Full image fallback",
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    await vi.waitFor(() =>
+      expect(container.querySelector<HTMLImageElement>(".chat-message-image")?.src).toContain(
+        "blob:managed-full-fallback",
+      ),
+    );
+    expect(requireFetchCallForUrl(fetchMock, thumbnailUrl)).toBeDefined();
+    expect(requireFetchCallForUrl(fetchMock, managedChatImageUrl)).toBeDefined();
+    expect(container.querySelectorAll(".chat-image-action")).toHaveLength(3);
+  });
+
+  it("aborts the full-image fallback when its managed image part disconnects", async () => {
+    const managedChatImageUrl = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+    const thumbnailUrl = managedChatImageUrl.replace(/\/full$/u, "/thumbnail");
+    let fullImageSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      if (url === thumbnailUrl) {
+        return Promise.resolve({ ok: false });
+      }
+      fullImageSignal = init?.signal ?? undefined;
+      return rejectWhenAborted<Response>(
+        fullImageSignal!,
+        () => new DOMException("managed image disconnected", "AbortError"),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const container = document.createElement("div");
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: [{ type: "image", url: managedChatImageUrl, alt: "Disconnecting fallback" }],
+        timestamp: Date.now(),
+      },
+      { onRequestUpdate: vi.fn() },
+    );
+    await vi.waitFor(() => expect(fullImageSignal).toBeDefined());
+    expect(fullImageSignal?.aborted).toBe(false);
+
+    render(html``, container);
+
+    expect(fullImageSignal?.aborted).toBe(true);
   });
 
   it("prefers an artifact ticket without forwarding the gateway bearer", async () => {
     const artifactId = `artifact_managed_image_${crypto.randomUUID()}`;
     const managedChatImageUrl = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
     const ticketedUrl = `${managedChatImageUrl}?mediaTicket=ticket`;
+    const ticketedThumbnailUrl = ticketedUrl.replace(/\/full\?/u, "/thumbnail?");
     const resolveArtifactDownload = vi.fn(async () => ({
       url: ticketedUrl,
       expiresAt: "2026-07-28T05:00:00.000Z",
     }));
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-      expect(url).toBe(ticketedUrl);
+      expect([ticketedThumbnailUrl, ticketedUrl]).toContain(url);
       const headers = new Headers(init?.headers);
       expect(headers.get("Authorization")).toBeNull();
       expect(headers.get("x-openclaw-requester-session-key")).toBeNull();
@@ -4448,6 +4630,7 @@ describe("grouped chat rendering", () => {
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
     const container = document.createElement("div");
+    const onOpenImage = vi.fn();
     renderAssistantMessage(
       container,
       {
@@ -4466,6 +4649,7 @@ describe("grouped chat rendering", () => {
         showToolCalls: false,
         assistantAttachmentAuthToken: "must-not-be-forwarded",
         resolveArtifactDownload,
+        onOpenImage,
       },
     );
 
@@ -4474,6 +4658,12 @@ describe("grouped chat rendering", () => {
       sessionKey: "agent:main:main",
       artifactId,
     });
+    expect(requireFetchCallForUrl(fetchMock, ticketedThumbnailUrl)).toBeDefined();
+    expectElement(container, ".chat-image-action", HTMLButtonElement).click();
+    await vi.waitFor(() => expect(onOpenImage).toHaveBeenCalledTimes(1));
+    expect(requireFetchCallForUrl(fetchMock, ticketedUrl)).toBeDefined();
+    expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
+    onOpenImage.mock.calls[0]?.[0]?.release?.();
   });
 
   it("aborts a stalled managed outgoing image fetch after the deadline", async () => {
@@ -4514,7 +4704,10 @@ describe("grouped chat rendering", () => {
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [, fetchInit] = requireFetchCallForUrl(fetchMock, managedChatImageUrl);
+    const [, fetchInit] = requireFetchCallForUrl(
+      fetchMock,
+      managedChatImageUrl.replace(/\/full$/u, "/thumbnail"),
+    );
     expect(fetchInit?.signal?.aborted).toBe(false);
     expectSameOriginGet(fetchInit);
 
@@ -4523,6 +4716,12 @@ describe("grouped chat rendering", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(fetchInit?.signal?.aborted).toBe(true);
 
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [, fallbackFetchInit] = requireFetchCallForUrl(fetchMock, managedChatImageUrl);
+    expect(fallbackFetchInit?.signal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(fallbackFetchInit?.signal?.aborted).toBe(true);
     await vi.advanceTimersByTimeAsync(0);
     expect(container.querySelector(".chat-message-image")).toBeNull();
     expect(vi.getTimerCount()).toBe(0);
@@ -4563,13 +4762,22 @@ describe("grouped chat rendering", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [, fetchInit] = requireFetchCallForUrl(fetchMock, managedChatImageUrl);
+    const [, fetchInit] = requireFetchCallForUrl(
+      fetchMock,
+      managedChatImageUrl.replace(/\/full$/u, "/thumbnail"),
+    );
     expect(fetchInit?.signal?.aborted).toBe(false);
     expectSameOriginGet(fetchInit);
 
     await vi.advanceTimersByTimeAsync(30_000);
     expect(fetchInit?.signal?.aborted).toBe(true);
 
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [, fallbackFetchInit] = requireFetchCallForUrl(fetchMock, managedChatImageUrl);
+    expect(fallbackFetchInit?.signal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(fallbackFetchInit?.signal?.aborted).toBe(true);
     await vi.advanceTimersByTimeAsync(0);
     expect(container.querySelector(".chat-message-image")).toBeNull();
     expect(vi.getTimerCount()).toBe(0);
@@ -4595,7 +4803,7 @@ describe("grouped chat rendering", () => {
       timestamp: Date.now(),
     });
 
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     await flushAssistantAttachmentAvailabilityChecks();
     expect(container.querySelector(".chat-message-image")).toBeNull();
   });
@@ -4688,8 +4896,10 @@ describe("grouped chat rendering", () => {
     await vi.waitFor(() => expect(resolveEvictedRefetch).toBeTypeOf("function"));
 
     newestCurrentImage!.click();
-    expect(acceptedImageOpen).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Generated image 3" }),
+    await vi.waitFor(() =>
+      expect(acceptedImageOpen).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Generated image 3" }),
+      ),
     );
 
     resolveEvictedRefetch?.(response);
@@ -4698,6 +4908,71 @@ describe("grouped chat rendering", () => {
     );
     expect(acceptedImageOpen).toHaveBeenCalledTimes(1);
     (acceptedImageOpen.mock.calls[0]?.[0] as { release?: () => void } | undefined)?.release?.();
+  });
+
+  it("keeps a full-image Blob URL alive while its lightbox is open", async () => {
+    const primaryUrl = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+    const overflowUrls = Array.from(
+      { length: 66 },
+      () => `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`,
+    );
+    let objectUrlIndex = 0;
+    const createObjectURL = vi.fn(() => `blob:retained-full-${objectUrlIndex++}`);
+    const revokeObjectURL = vi.fn();
+    const NativeUrl = URL;
+    vi.stubGlobal(
+      "URL",
+      class extends NativeUrl {
+        static override createObjectURL = createObjectURL;
+        static override revokeObjectURL = revokeObjectURL;
+      },
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        blob: async () => new Blob(["png"], { type: "image/png" }),
+      })) as unknown as typeof fetch,
+    );
+
+    const container = document.createElement("div");
+    const onOpenImage = vi.fn();
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: [{ type: "image", url: primaryUrl, alt: "Retained full image" }],
+        timestamp: Date.now(),
+      },
+      { onOpenImage },
+    );
+    await vi.waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(1));
+    expectElement(container, ".chat-message-image-button", HTMLButtonElement).click();
+    await vi.waitFor(() => expect(onOpenImage).toHaveBeenCalledTimes(1));
+    const fullBlobUrl = onOpenImage.mock.calls[0]?.[0]?.src;
+    expect(fullBlobUrl).toBe("blob:retained-full-1");
+
+    const overflowContainer = document.createElement("div");
+    renderAssistantMessage(overflowContainer, {
+      role: "assistant",
+      content: overflowUrls.slice(0, 65).map((url, index) => ({
+        type: "image",
+        url,
+        alt: `Overflow image ${index + 1}`,
+      })),
+      timestamp: Date.now(),
+    });
+    await vi.waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(67));
+    expect(revokeObjectURL).not.toHaveBeenCalledWith(fullBlobUrl);
+
+    onOpenImage.mock.calls[0]?.[0]?.release?.();
+    const finalContainer = document.createElement("div");
+    renderAssistantMessage(finalContainer, {
+      role: "assistant",
+      content: [{ type: "image", url: overflowUrls[65], alt: "Final overflow image" }],
+      timestamp: Date.now(),
+    });
+    await vi.waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith(fullBlobUrl));
   });
 
   it("bounds managed outgoing image miss retention", async () => {
@@ -4718,7 +4993,7 @@ describe("grouped chat rendering", () => {
       })),
       timestamp: Date.now(),
     });
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(imageUrls.length));
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(imageUrls.length * 2));
     await flushAssistantAttachmentAvailabilityChecks();
 
     const retryContainer = document.createElement("div");
@@ -4728,7 +5003,7 @@ describe("grouped chat rendering", () => {
       timestamp: Date.now(),
     });
 
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(imageUrls.length + 1));
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(imageUrls.length * 2 + 2));
   });
 
   it("does not send auth to cross-origin managed-image-looking URLs", () => {

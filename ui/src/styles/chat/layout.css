@@ -1040,9 +1040,76 @@ openclaw-chat-page {
   cursor: zoom-in;
 }
 
+.chat-image-frame {
+  position: relative;
+  display: inline-flex;
+  max-width: 100%;
+  overflow: hidden;
+  border-radius: var(--radius-md);
+}
+
+.chat-image-actions {
+  position: absolute;
+  z-index: 1;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-2px);
+  transition:
+    opacity 120ms ease-out,
+    transform 120ms ease-out;
+}
+
+.chat-image-frame:hover .chat-image-actions,
+.chat-image-frame:focus-within .chat-image-actions {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+@media (hover: none) {
+  .chat-image-actions {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0);
+  }
+}
+
+.chat-image-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 8px;
+  color: #fff;
+  background: rgba(12, 16, 24, 0.78);
+  backdrop-filter: blur(8px);
+  cursor: pointer;
+}
+
+.chat-image-action:hover {
+  background: rgba(12, 16, 24, 0.94);
+}
+
+.chat-image-action:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.chat-image-action svg {
+  width: 15px;
+  height: 15px;
+}
+
 .chat-message-image-button:focus-visible {
   outline: 2px solid var(--focus-ring);
-  outline-offset: 3px;
+  outline-offset: -3px;
 }
 
 .chat-message-image {

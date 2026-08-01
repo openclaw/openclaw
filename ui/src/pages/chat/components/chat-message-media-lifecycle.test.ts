@@ -37,6 +37,10 @@ function managedImageSource(): string {
   return `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
 }
 
+function managedImageCacheKey(source: string): string {
+  return `${source.replace(/\/full$/u, "/thumbnail")}::::`;
+}
+
 function installManagedImageUrls(): string {
   const NativeUrl = URL;
   const blobUrl = `blob:managed-image-${crypto.randomUUID()}`;
@@ -122,11 +126,12 @@ describe("chat media resource lifecycle", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("wakes a managed image after one transient failure without an external render", async () => {
+  it("wakes a managed thumbnail after transient preview and fallback failures", async () => {
     const source = managedImageSource();
     const blobUrl = installManagedImageUrls();
     const fetchMock = vi
       .fn()
+      .mockResolvedValueOnce({ ok: false })
       .mockResolvedValueOnce({ ok: false })
       .mockResolvedValueOnce(imageResponse());
     vi.stubGlobal("fetch", fetchMock);
@@ -138,15 +143,67 @@ describe("chat media resource lifecycle", () => {
 
     rerender();
     await vi.advanceTimersByTimeAsync(0);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(container.querySelector(".chat-message-image")).toBeNull();
 
     await vi.advanceTimersByTimeAsync(5_000);
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(
       container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
     ).toBe(blobUrl);
+  });
+
+  it("keeps the full fallback visible while a thumbnail retry is pending", async () => {
+    const source = managedImageSource();
+    const thumbnailSource = source.replace(/\/full$/u, "/thumbnail");
+    const NativeUrl = URL;
+    let blobIndex = 0;
+    vi.stubGlobal(
+      "URL",
+      class extends NativeUrl {
+        static override createObjectURL = vi.fn(() => `blob:fallback-retry-${blobIndex++}`);
+        static override revokeObjectURL = vi.fn();
+      },
+    );
+    let thumbnailAttempts = 0;
+    let resolveThumbnailRetry: ((response: ReturnType<typeof imageResponse>) => void) | undefined;
+    const fetchMock = vi.fn((url: string) => {
+      if (url === thumbnailSource) {
+        thumbnailAttempts += 1;
+        if (thumbnailAttempts === 1) {
+          return Promise.resolve({ ok: false });
+        }
+        return new Promise<ReturnType<typeof imageResponse>>((resolve) => {
+          resolveThumbnailRetry = resolve;
+        });
+      }
+      return Promise.resolve(imageResponse());
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const container = document.createElement("div");
+    const rerender = observeSubscriber(() =>
+      renderManagedImage(container, source, { onRequestUpdate: rerender }),
+    );
+
+    rerender();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(
+      container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
+    ).toBe("blob:fallback-retry-0");
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(
+      container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
+    ).toBe("blob:fallback-retry-0");
+
+    resolveThumbnailRetry?.(imageResponse());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(
+      container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
+    ).toBe("blob:fallback-retry-1");
   });
 
   it("stops after one automatic retry for a permanently unavailable managed image", async () => {
@@ -164,7 +221,7 @@ describe("chat media resource lifecycle", () => {
     await vi.advanceTimersByTimeAsync(5_000);
     await vi.advanceTimersByTimeAsync(20_000);
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
     expect(vi.getTimerCount()).toBe(0);
     expect(container.querySelector(".chat-message-image")).toBeNull();
   });
@@ -175,6 +232,7 @@ describe("chat media resource lifecycle", () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce({ ok: false })
+      .mockResolvedValueOnce({ ok: false })
       .mockResolvedValueOnce(imageResponse());
     vi.stubGlobal("fetch", fetchMock);
 
@@ -183,12 +241,12 @@ describe("chat media resource lifecycle", () => {
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(5_000);
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
 
     renderManagedImage(container, source);
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(
       container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
     ).toBe(blobUrl);
@@ -220,7 +278,9 @@ describe("chat media resource lifecycle", () => {
     for (const source of sources) {
       currentSource = source;
       rerender();
-      resources.push(observeChatMediaResource<string | null>("managed-image", `${source}::::`));
+      resources.push(
+        observeChatMediaResource<string | null>("managed-image", managedImageCacheKey(source)),
+      );
       await vi.advanceTimersByTimeAsync(0);
     }
 
@@ -251,11 +311,11 @@ describe("chat media resource lifecycle", () => {
     rerender();
     const firstResource = observeChatMediaResource<string | null>(
       "managed-image",
-      `${firstSource}::::`,
+      managedImageCacheKey(firstSource),
     );
     const secondResource = observeChatMediaResource<string | null>(
       "managed-image",
-      `${secondSource}::::`,
+      managedImageCacheKey(secondSource),
     );
     await vi.advanceTimersByTimeAsync(0);
 
@@ -291,7 +351,7 @@ describe("chat media resource lifecycle", () => {
     await vi.advanceTimersByTimeAsync(0);
     const originalResource = observeChatMediaResource<string | null>(
       "managed-image",
-      `${source}::::`,
+      managedImageCacheKey(source),
     );
     expect(originalResource.subscribers.size).toBe(1);
 
@@ -303,7 +363,7 @@ describe("chat media resource lifecycle", () => {
 
     const reconnectedResource = observeChatMediaResource<string | null>(
       "managed-image",
-      `${source}::::`,
+      managedImageCacheKey(source),
     );
     expect(reconnectedResource.subscribers.size).toBe(1);
     expect(renderImageRow).toHaveBeenCalledTimes(1);
@@ -361,7 +421,7 @@ describe("chat media resource lifecycle", () => {
     const sources = Array.from({ length: 65 }, () => managedImageSource());
     const resources = sources.map((source) => {
       renderManagedImage(document.createElement("div"), source);
-      return observeChatMediaResource<string | null>("managed-image", `${source}::::`);
+      return observeChatMediaResource<string | null>("managed-image", managedImageCacheKey(source));
     });
 
     await vi.advanceTimersByTimeAsync(0);
@@ -375,8 +435,10 @@ describe("chat media resource lifecycle", () => {
       throw new Error("expected the oldest and newest managed images");
     }
     expect(isChatMediaResourceCurrent(oldestResource)).toBe(false);
-    expect(readManagedImageBlobUrl(`${oldestSource}::::`)).toBeUndefined();
-    expect(readManagedImageBlobUrl(`${latestSource}::::`)).toBe("blob:bounded-managed-image-64");
+    expect(readManagedImageBlobUrl(managedImageCacheKey(oldestSource))).toBeUndefined();
+    expect(readManagedImageBlobUrl(managedImageCacheKey(latestSource))).toBe(
+      "blob:bounded-managed-image-64",
+    );
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:bounded-managed-image-0");
 
     renderManagedImage(document.createElement("div"), latestSource);
@@ -386,7 +448,9 @@ describe("chat media resource lifecycle", () => {
     renderManagedImage(document.createElement("div"), oldestSource);
     await vi.advanceTimersByTimeAsync(0);
     expect(fetchMock).toHaveBeenCalledTimes(66);
-    expect(readManagedImageBlobUrl(`${oldestSource}::::`)).toBe("blob:bounded-managed-image-65");
+    expect(readManagedImageBlobUrl(managedImageCacheKey(oldestSource))).toBe(
+      "blob:bounded-managed-image-65",
+    );
   });
 
   it("shares a managed image retry and wakes both subscribed split panes", async () => {
@@ -394,6 +458,7 @@ describe("chat media resource lifecycle", () => {
     const blobUrl = installManagedImageUrls();
     const fetchMock = vi
       .fn()
+      .mockResolvedValueOnce({ ok: false })
       .mockResolvedValueOnce({ ok: false })
       .mockResolvedValueOnce(imageResponse());
     vi.stubGlobal("fetch", fetchMock);
@@ -410,11 +475,11 @@ describe("chat media resource lifecycle", () => {
     rerenderFirst();
     rerenderSecond();
     await vi.advanceTimersByTimeAsync(0);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
 
     await vi.advanceTimersByTimeAsync(5_000);
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(first.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src")).toBe(
       blobUrl,
     );
@@ -778,11 +843,13 @@ describe("chat media resource lifecycle", () => {
     const source = managedImageSource();
     const artifactId = `artifact-${crypto.randomUUID()}`;
     const ticketedUrl = `${source}?mediaTicket=signed`;
+    const ticketedThumbnailUrl = ticketedUrl.replace(/\/full\?/u, "/thumbnail?");
     const blobUrl = installManagedImageUrls();
     const resolveArtifactDownload = vi.fn(async () => ({ url: ticketedUrl }));
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce({ ok: false })
+      .mockResolvedValueOnce(imageResponse())
       .mockResolvedValueOnce(imageResponse());
     vi.stubGlobal("fetch", fetchMock);
 
@@ -804,10 +871,14 @@ describe("chat media resource lifecycle", () => {
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(5_000);
 
-    expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    for (const [requestUrl, init] of fetchMock.mock.calls as Array<[string, RequestInit]>) {
-      expect(requestUrl).toBe(ticketedUrl);
+    expect(resolveArtifactDownload).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls.map(([requestUrl]) => requestUrl)).toEqual([
+      ticketedThumbnailUrl,
+      ticketedUrl,
+      ticketedThumbnailUrl,
+    ]);
+    for (const [, init] of fetchMock.mock.calls as Array<[string, RequestInit]>) {
       const headers = new Headers(init.headers);
       expect(headers.get("Authorization")).toBeNull();
       expect(headers.get("x-openclaw-requester-session-key")).toBeNull();

@@ -68,9 +68,19 @@ const MANAGED_OUTGOING_IMAGE_TICKET_SCOPE = "managed-outgoing-image";
 export const MANAGED_OUTGOING_IMAGE_TICKET_TTL_MS = 5 * 60 * 1000;
 export const MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX = "artifact_managed_image_";
 export const MANAGED_OUTGOING_MEDIA_ARTIFACT_ID_PREFIX = "artifact_managed_media_";
+const DEFAULT_MANAGED_IMAGE_THUMBNAIL_MAX_SIDE = 300;
+const MAX_MANAGED_IMAGE_THUMBNAIL_CACHE_ENTRIES = 128;
+const MAX_MANAGED_IMAGE_THUMBNAIL_CACHE_BYTES = 16 * 1024 * 1024;
+const MAX_CONCURRENT_MANAGED_IMAGE_THUMBNAIL_JOBS = 4;
+const MAX_QUEUED_MANAGED_IMAGE_THUMBNAIL_JOBS = 128;
 const MANAGED_OUTGOING_ATTACHMENT_ID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const managedOutgoingImageTicketSecret = randomBytes(32);
+const managedImageThumbnailCache = new Map<string, Buffer>();
+const managedImageThumbnailJobs = new Map<string, Promise<Buffer>>();
+const managedImageThumbnailJobWaiters: Array<() => void> = [];
+let managedImageThumbnailCacheBytes = 0;
+let activeManagedImageThumbnailJobs = 0;
 
 export const DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS = {
   maxBytes: 12 * 1024 * 1024,
@@ -137,6 +147,92 @@ export type ManagedOutgoingMediaArtifactDownload = {
   url: string;
   expiresAt: string;
 };
+
+function readCachedManagedImageThumbnail(cacheKey: string): Buffer | undefined {
+  const cached = managedImageThumbnailCache.get(cacheKey);
+  if (!cached) {
+    return undefined;
+  }
+  managedImageThumbnailCache.delete(cacheKey);
+  managedImageThumbnailCache.set(cacheKey, cached);
+  return cached;
+}
+
+function cacheManagedImageThumbnail(cacheKey: string, data: Buffer): void {
+  const previous = managedImageThumbnailCache.get(cacheKey);
+  if (previous) {
+    managedImageThumbnailCacheBytes -= previous.byteLength;
+    managedImageThumbnailCache.delete(cacheKey);
+  }
+  managedImageThumbnailCache.set(cacheKey, data);
+  managedImageThumbnailCacheBytes += data.byteLength;
+  while (
+    managedImageThumbnailCache.size > MAX_MANAGED_IMAGE_THUMBNAIL_CACHE_ENTRIES ||
+    managedImageThumbnailCacheBytes > MAX_MANAGED_IMAGE_THUMBNAIL_CACHE_BYTES
+  ) {
+    const oldest = managedImageThumbnailCache.entries().next().value as
+      | [string, Buffer]
+      | undefined;
+    if (!oldest) {
+      break;
+    }
+    managedImageThumbnailCache.delete(oldest[0]);
+    managedImageThumbnailCacheBytes -= oldest[1].byteLength;
+  }
+}
+
+async function resolveManagedImageThumbnail(
+  cacheKey: string,
+  create: () => Promise<Buffer>,
+): Promise<Buffer> {
+  const cached = readCachedManagedImageThumbnail(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const existing = managedImageThumbnailJobs.get(cacheKey);
+  if (existing) {
+    return await existing;
+  }
+  const pending = (async () => {
+    let released = false;
+    if (activeManagedImageThumbnailJobs >= MAX_CONCURRENT_MANAGED_IMAGE_THUMBNAIL_JOBS) {
+      if (managedImageThumbnailJobWaiters.length >= MAX_QUEUED_MANAGED_IMAGE_THUMBNAIL_JOBS) {
+        throw new Error("managed image thumbnail queue capacity exhausted");
+      }
+      await new Promise<void>((resolve) => {
+        managedImageThumbnailJobWaiters.push(resolve);
+      });
+    } else {
+      activeManagedImageThumbnailJobs += 1;
+    }
+    const release = () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      const next = managedImageThumbnailJobWaiters.shift();
+      if (next) {
+        next();
+      } else {
+        activeManagedImageThumbnailJobs -= 1;
+      }
+    };
+    try {
+      return await create();
+    } finally {
+      release();
+    }
+  })()
+    .then((data) => {
+      cacheManagedImageThumbnail(cacheKey, data);
+      return data;
+    })
+    .finally(() => {
+      managedImageThumbnailJobs.delete(cacheKey);
+    });
+  managedImageThumbnailJobs.set(cacheKey, pending);
+  return await pending;
+}
 type SessionManagedOutgoingAttachmentTranscriptStat = Omit<
   SessionManagedOutgoingAttachmentIndexCacheEntry,
   "index"
@@ -1380,7 +1476,9 @@ export async function handleManagedOutgoingMediaHttpRequest(
   },
 ): Promise<boolean> {
   const requestUrl = new URL(req.url ?? "/", "http://localhost");
-  const match = requestUrl.pathname.match(/^\/api\/chat\/media\/outgoing\/([^/]+)\/([^/]+)\/full$/);
+  const match = requestUrl.pathname.match(
+    /^\/api\/chat\/media\/outgoing\/([^/]+)\/([^/]+)\/(full|thumbnail)$/,
+  );
   if (!match) {
     return false;
   }
@@ -1392,7 +1490,8 @@ export async function handleManagedOutgoingMediaHttpRequest(
 
   const encodedSessionKey = match[1];
   const attachmentId = match[2];
-  if (!encodedSessionKey || !attachmentId) {
+  const variant = match[3];
+  if (!encodedSessionKey || !attachmentId || (variant !== "full" && variant !== "thumbnail")) {
     return false;
   }
   if (!MANAGED_OUTGOING_ATTACHMENT_ID_RE.test(attachmentId)) {
@@ -1444,7 +1543,8 @@ export async function handleManagedOutgoingMediaHttpRequest(
       return true;
     }
   }
-  const record = readManagedImageRecord(attachmentId, opts.stateDir);
+  const stateDir = opts.stateDir ?? resolveStateDir();
+  const record = readManagedImageRecord(attachmentId, stateDir);
   if (!record || record.sessionKey !== sessionKey) {
     sendStatus(res, 404, "not found");
     return true;
@@ -1469,6 +1569,65 @@ export async function handleManagedOutgoingMediaHttpRequest(
   let responseContentType = record.original.contentType || "application/octet-stream";
   let responseFilename = record.original.filename;
   const mediaKind = resolveManagedRecordKind(record);
+  if (variant === "thumbnail") {
+    if (mediaKind !== "image") {
+      await opened.handle.close().catch(() => {});
+      sendStatus(res, 404, "not found");
+      return true;
+    }
+    try {
+      const cacheKey = `${path.resolve(stateDir)}\0${attachmentId}`;
+      const thumbnailData = await resolveManagedImageThumbnail(cacheKey, async () => {
+        if (
+          opened.stat.size > DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS.maxBytes ||
+          (record.original.width != null &&
+            record.original.height != null &&
+            record.original.width * record.original.height >
+              DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS.maxPixels)
+        ) {
+          throw new Error("managed image thumbnail input exceeds processing limits");
+        }
+        const body = await opened.handle.readFile();
+        const thumbnail = await createImageProcessor().encode(body, {
+          format: "png",
+          limits: {
+            maxWidth: DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS.maxWidth,
+            maxHeight: DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS.maxHeight,
+            maxPixels: DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS.maxPixels,
+          },
+          resize: {
+            maxSide: DEFAULT_MANAGED_IMAGE_THUMBNAIL_MAX_SIDE,
+            enlarge: false,
+          },
+          compressionLevel: 8,
+        });
+        return thumbnail.data;
+      });
+      await opened.handle.close().catch(() => {});
+      const sourceName = responseFilename?.replace(/\.[a-z0-9]{2,5}$/iu, "") || "generated-image";
+      res.statusCode = 200;
+      res.setHeader("content-type", "image/png");
+      res.setHeader("content-length", String(thumbnailData.byteLength));
+      res.setHeader("x-content-type-options", "nosniff");
+      res.setHeader("referrer-policy", "no-referrer");
+      res.setHeader(
+        "cache-control",
+        hasValidMediaTicket
+          ? `private, max-age=${MANAGED_OUTGOING_IMAGE_TICKET_TTL_MS / 1000}, immutable`
+          : "private, max-age=31536000, immutable",
+      );
+      res.setHeader(
+        "content-disposition",
+        buildManagedMediaContentDisposition(`${sourceName}-thumbnail.png`, "image/png"),
+      );
+      res.end(req.method === "HEAD" ? undefined : thumbnailData);
+      return true;
+    } catch {
+      await opened.handle.close().catch(() => {});
+      sendStatus(res, 404, "not found");
+      return true;
+    }
+  }
   if (
     requestUrl.searchParams.get("playback") === "1" &&
     (mediaKind === "audio" || mediaKind === "video")
