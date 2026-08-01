@@ -1,6 +1,7 @@
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import {
   assertOkOrThrowHttpError,
+  assertProviderBinaryResponseContent,
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
   executeProviderOperationWithRetry,
@@ -94,6 +95,14 @@ export async function downloadXaiVideo(
     fetchFn: params.fetchFn,
   });
   try {
+    try {
+      assertProviderBinaryResponseContent(response, "xAI generated video download", "video");
+    } catch (error) {
+      // A debug-capture clone can keep the tee open, so waiting for cancel would hang
+      // before the rejected response and its dispatcher can be released.
+      void response.body?.cancel().catch(() => undefined);
+      throw error;
+    }
     const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
     const buffer = await readResponseWithLimit(response, params.maxBytes, {
       timeoutMs,
@@ -104,6 +113,9 @@ export async function downloadXaiVideo(
       onOverflow: ({ maxBytes }) =>
         new Error(`xAI generated video download exceeds ${maxBytes} bytes`),
     });
+    if (buffer.byteLength === 0) {
+      throw new Error("xAI generated video download: malformed video response");
+    }
     return {
       buffer,
       mimeType,

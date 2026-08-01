@@ -5,6 +5,7 @@ import { readResponseWithLimit } from "../infra/http-body.js";
 import { resolveGeneratedMediaMaxBytes } from "../media/configured-max-bytes.js";
 import {
   assertOkOrThrowHttpError,
+  assertProviderBinaryResponseContent,
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
   executeProviderOperationWithRetry,
@@ -423,6 +424,18 @@ export async function downloadDashscopeGeneratedVideos(params: {
         await result.response.body?.cancel(error).catch(() => undefined);
         throw error;
       }
+      try {
+        assertProviderBinaryResponseContent(
+          result.response,
+          `${params.providerLabel} generated video download`,
+          "video",
+        );
+      } catch (error) {
+        // A debug-capture clone can keep the tee open, so waiting for cancel would hang
+        // before the rejected response and its dispatcher can be released.
+        void result.response.body?.cancel().catch(() => undefined);
+        throw error;
+      }
       buffer = await readResponseWithLimit(result.response, params.maxBytes, {
         chunkTimeoutMs: downloadTimeoutMs,
         onOverflow: ({ maxBytes }) =>
@@ -432,6 +445,11 @@ export async function downloadDashscopeGeneratedVideos(params: {
             `${params.providerLabel} generated video download stalled: no data received for ${chunkTimeoutMs}ms`,
           ),
       });
+      if (buffer.byteLength === 0) {
+        throw new Error(
+          `${params.providerLabel} generated video download: malformed video response`,
+        );
+      }
       mimeType = result.response.headers.get("content-type")?.trim() || "video/mp4";
     } finally {
       await result.release();

@@ -6,6 +6,7 @@ import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
+  assertProviderBinaryResponseContent,
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
   fetchProviderDownloadResponse,
@@ -152,6 +153,14 @@ async function downloadTogetherVideo(params: {
     provider: "together",
     requestFailedMessage: "Together generated video download failed",
   });
+  try {
+    assertProviderBinaryResponseContent(response, "Together generated video download", "video");
+  } catch (error) {
+    // A debug-capture clone can keep the tee open, so waiting for cancel would hang
+    // before the rejected response and its dispatcher can be released.
+    void response.body?.cancel().catch(() => undefined);
+    throw error;
+  }
   const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
   const buffer = await readResponseWithLimit(response, params.maxBytes, {
     timeoutMs,
@@ -162,6 +171,9 @@ async function downloadTogetherVideo(params: {
     onOverflow: ({ maxBytes }) =>
       new Error(`Together generated video download exceeds ${maxBytes} bytes`),
   });
+  if (buffer.byteLength === 0) {
+    throw new Error("Together generated video download: malformed video response");
+  }
   return {
     buffer,
     mimeType,

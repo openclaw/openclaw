@@ -5,6 +5,7 @@ import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtim
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import {
   assertOkOrThrowHttpError,
+  assertProviderBinaryResponseContent,
   createProviderOperationDeadline,
   readProviderJsonResponse,
   type ProviderOperationDeadline,
@@ -216,6 +217,14 @@ async function downloadFalVideo(
   });
   try {
     await assertOkOrThrowHttpError(response, "fal generated video download failed");
+    try {
+      assertProviderBinaryResponseContent(response, "fal generated video download", "video");
+    } catch (error) {
+      // A debug-capture clone can keep the tee open, so waiting for cancel would hang
+      // before the rejected response and its dispatcher can be released.
+      void response.body?.cancel().catch(() => undefined);
+      throw error;
+    }
     const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
     const fileName = `video-1.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`;
     let exceededMaxBytes = false;
@@ -236,6 +245,9 @@ async function downloadFalVideo(
         };
       }
       throw error;
+    }
+    if (buffer.byteLength === 0) {
+      throw new Error("fal generated video download: malformed video response");
     }
     return {
       url,

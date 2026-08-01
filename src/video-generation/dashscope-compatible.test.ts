@@ -75,6 +75,27 @@ describe("downloadDashscopeGeneratedVideos", () => {
     expect(video?.mimeType).toBe("video/mp4");
   });
 
+  it.each([
+    { name: "JSON error", contentType: "application/json", body: '{"error":"denied"}' },
+    { name: "problem JSON", contentType: "application/problem+json", body: '{"title":"denied"}' },
+    { name: "HTML", contentType: "text/html; charset=utf-8", body: "<html>sign in</html>" },
+    { name: "empty video", contentType: "video/mp4", body: "" },
+  ])("rejects a successful $name response as generated video", async ({ contentType, body }) => {
+    const fetchFn = vi.fn(
+      async () => new Response(body, { status: 200, headers: { "content-type": contentType } }),
+    );
+
+    await expect(
+      downloadDashscopeGeneratedVideos({
+        providerLabel: "Alibaba Wan",
+        urls: ["https://example.com/invalid.mp4"],
+        timeoutMs: 5_000,
+        fetchFn: fetchFn as unknown as typeof fetch,
+        maxBytes: 10 * 1024 * 1024,
+      }),
+    ).rejects.toThrow("Alibaba Wan generated video download: malformed video response");
+  });
+
   it("fails closed before fetch when a function-valued remaining budget is exhausted", async () => {
     const fetchFn = vi.fn(async () => neverChunkingVideoResponse());
     const startedAt = Date.now();

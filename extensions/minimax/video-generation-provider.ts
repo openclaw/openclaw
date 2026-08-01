@@ -6,6 +6,7 @@ import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
+  assertProviderBinaryResponseContent,
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
   executeProviderOperationWithRetry,
@@ -276,6 +277,14 @@ async function downloadVideoFromUrl(params: {
     policy: params.policy,
   });
   try {
+    try {
+      assertProviderBinaryResponseContent(response, "MiniMax generated video download", "video");
+    } catch (error) {
+      // A debug-capture clone can keep the tee open, so waiting for cancel would hang
+      // before the rejected response and its dispatcher can be released.
+      void response.body?.cancel().catch(() => undefined);
+      throw error;
+    }
     const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
     const buffer = await readResponseWithLimit(response, params.maxBytes, {
       timeoutMs,
@@ -286,6 +295,9 @@ async function downloadVideoFromUrl(params: {
       onOverflow: ({ maxBytes }) =>
         new Error(`MiniMax generated video download exceeds ${maxBytes} bytes`),
     });
+    if (buffer.byteLength === 0) {
+      throw new Error("MiniMax generated video download: malformed video response");
+    }
     return {
       buffer,
       mimeType,
@@ -366,6 +378,14 @@ async function downloadVideoFromFileId(params: {
     policy: params.policy,
   });
   try {
+    try {
+      assertProviderBinaryResponseContent(response, "MiniMax generated video download", "video");
+    } catch (error) {
+      // A debug-capture clone can keep the tee open, so waiting for cancel would hang
+      // before the rejected response and its dispatcher can be released.
+      void response.body?.cancel().catch(() => undefined);
+      throw error;
+    }
     const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
     const buffer = await readResponseWithLimit(response, params.maxBytes, {
       timeoutMs,
@@ -376,6 +396,9 @@ async function downloadVideoFromFileId(params: {
       onOverflow: ({ maxBytes }) =>
         new Error(`MiniMax generated video download exceeds ${maxBytes} bytes`),
     });
+    if (buffer.byteLength === 0) {
+      throw new Error("MiniMax generated video download: malformed video response");
+    }
     return {
       buffer,
       mimeType,
