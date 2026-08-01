@@ -205,12 +205,10 @@ async function runPluginsEnableCommandUnlocked(idInput: string): Promise<void> {
   });
   // A blocked request must not displace the active slot or rewrite persisted state.
   if (!enableResult.enabled) {
-    defaultRuntime.log(
-      theme.warn(
-        `Plugin "${id}" could not be enabled (${enableResult.reason ?? "unknown reason"}).`,
-      ),
+    defaultRuntime.error(
+      `Plugin "${id}" could not be enabled (${enableResult.reason ?? "unknown reason"}).`,
     );
-    return;
+    return defaultRuntime.exit(1);
   }
 
   const { applySlotSelectionForPlugin } = await loadPluginSlotSelection();
@@ -375,7 +373,7 @@ export async function runPluginsDoctorCommand(): Promise<void> {
     | undefined;
   const report = buildPluginDiagnosticsReport({ config: cfg, effectiveOnly: true });
   const errors = report.plugins.filter((p) => p.status === "error");
-  const diags = report.diagnostics.filter((d) => d.level === "error");
+  const diags = report.diagnostics.filter((entry) => !isConfigSelectedShadowDiagnostic(entry));
   const shadowed = report.diagnostics.filter((entry) =>
     isErroredConfigSelectedShadowDiagnostic({ entry, plugins: report.plugins }),
   );
