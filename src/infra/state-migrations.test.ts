@@ -2797,6 +2797,46 @@ describe("state migrations", () => {
     await expect(fs.stat(`${voiceWakePath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("rethrows newer-schema refusal on in-process retry after latch was set", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    const stateDbPath = path.join(stateDir, "state", "openclaw.sqlite");
+    await fs.mkdir(path.dirname(stateDbPath), { recursive: true });
+    const db = new DatabaseSync(stateDbPath);
+    try {
+      db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};`);
+    } finally {
+      db.close();
+    }
+
+    await expect(
+      autoMigrateLegacyState({
+        cfg,
+        env,
+        homedir: () => root,
+        doctorOnlyStateMigrations: true,
+      }),
+    ).rejects.toMatchObject({
+      name: "SqliteSchemaVersionError",
+      message: expect.stringMatching(/newer schema version/i),
+    });
+
+    // Must not return skipped:true after the first terminal refusal.
+    await expect(
+      autoMigrateLegacyState({
+        cfg,
+        env,
+        homedir: () => root,
+        doctorOnlyStateMigrations: true,
+      }),
+    ).rejects.toMatchObject({
+      name: "SqliteSchemaVersionError",
+      message: expect.stringMatching(/newer schema version/i),
+    });
+  });
+
   it("reports plugin detector failures in read-only legacy state detection", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");
