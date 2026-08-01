@@ -2,7 +2,6 @@
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { createAbortError } from "../infra/abort-signal.js";
-import { getPluginCompatRecord } from "../plugins/compat/registry.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
@@ -65,8 +64,10 @@ export const CONTEXT_ENGINE_HOST_PARAMS = new Set(
   "sessionKey prompt runtimeSettings sessionTarget runtimeContext".split(" "),
 );
 function wrapContextEngineWithHostParamProjection(engine: ContextEngine): ContextEngine {
-  const removeAfter = getPluginCompatRecord("context-engine-legacy-host-param-default").removeAfter;
   const accepted = engine.info.acceptedHostParams;
+  if (!accepted) {
+    return engine;
+  }
   const engineRecord = engine as unknown as Record<PropertyKey, unknown>;
   const wrappedRecord: Record<PropertyKey, unknown> = {};
   Object.defineProperty(wrappedRecord, "info", { get: () => engine.info });
@@ -76,16 +77,9 @@ function wrapContextEngineWithHostParamProjection(engine: ContextEngine): Contex
       continue;
     }
     wrappedRecord[methodName] = (params: Record<string, unknown>) => {
-      // Removal(2026-08-12): undeclared engines get full params. Contract: context-engine-legacy-host-param-default.
-      const useLegacyDefault =
-        removeAfter !== undefined && new Date().toISOString().slice(0, 10) <= removeAfter;
-      const currentAccepted = accepted ?? (useLegacyDefault ? [] : undefined);
-      if (!currentAccepted) {
-        return method.call(engine, params);
-      }
       const projected = Object.fromEntries(
         Object.entries(params).filter(
-          ([key]) => currentAccepted.includes(key) || !CONTEXT_ENGINE_HOST_PARAMS.has(key),
+          ([key]) => accepted.includes(key) || !CONTEXT_ENGINE_HOST_PARAMS.has(key),
         ),
       );
       return method.call(engine, projected);
