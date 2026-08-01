@@ -332,6 +332,77 @@ describe("SQLite session message cuts", () => {
     });
   });
 
+  it("lists and switches reset branches using only their restorable message paths", async () => {
+    const { env, scope } = await createSession();
+    await appendTranscriptEvent(scope, {
+      type: "reset",
+      id: "reset-boundary",
+      parentId: "assistant-2",
+      firstKeptEntryId: "user-2",
+      timestamp: "2026-07-18T00:00:06.000Z",
+    });
+    await appendTranscriptMessage(scope, {
+      eventId: "post-reset-a",
+      message: { role: "assistant", content: "first reset branch" },
+      now: Date.parse("2026-07-18T00:00:07.000Z"),
+      parentId: "reset-boundary",
+    });
+    await appendTranscriptMessage(scope, {
+      eventId: "post-reset-b",
+      message: { role: "assistant", content: "second reset branch" },
+      now: Date.parse("2026-07-18T00:00:08.000Z"),
+      parentId: "reset-boundary",
+    });
+    await appendTranscriptEvent(scope, {
+      type: "leaf",
+      id: "reset-active-leaf",
+      parentId: "post-reset-b",
+      targetId: "post-reset-a",
+      timestamp: "2026-07-18T00:00:09.000Z",
+    });
+
+    await expect(listSessionBranches({ agentId, env, sessionKey })).resolves.toEqual({
+      status: "ok",
+      branches: [
+        {
+          active: true,
+          headline: "first reset branch",
+          leafEntryId: "post-reset-a",
+          messageCount: 3,
+          updatedAt: "2026-07-18T00:00:07.000Z",
+        },
+        {
+          active: false,
+          headline: "second reset branch",
+          leafEntryId: "post-reset-b",
+          messageCount: 3,
+          updatedAt: "2026-07-18T00:00:08.000Z",
+        },
+      ],
+    });
+
+    const switched = await switchSessionBranch({
+      agentId,
+      env,
+      leafEntryId: "post-reset-b",
+      sessionKey,
+    });
+    expect(switched.status).toBe("created");
+    if (switched.status !== "created") {
+      throw new Error("expected reset branch switch result");
+    }
+    expect(
+      readSessionTranscriptMessageEvents({
+        agentId,
+        env,
+        sessionId: switched.entry.sessionId,
+        sessionKey,
+      }).map(({ event }) =>
+        event && typeof event === "object" && "id" in event ? event.id : undefined,
+      ),
+    ).toEqual(["user-2", "assistant-2", "post-reset-b"]);
+  });
+
   it("switches to another tip and rebuilds the active-path projection", async () => {
     const { env } = await createSession();
 

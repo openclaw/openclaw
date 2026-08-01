@@ -57,7 +57,7 @@ import {
 } from "./managed-image-record-store.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import {
-  readAllBranchSessionMessagesAsync,
+  readRestorableBranchSessionMessagesSnapshot,
   readSessionMessagesWithSourceAsync,
   readSessionTranscriptRevision,
   type SessionTranscriptReadScope,
@@ -853,11 +853,8 @@ function buildManagedOutgoingAttachmentIndex(
 }
 
 function readManagedOutgoingTranscriptRevision(scope: SessionTranscriptReadScope): string | null {
-  try {
-    return `transcript:${readSessionTranscriptRevision(scope)}`;
-  } catch {
-    return null;
-  }
+  const revision = readSessionTranscriptRevision(scope);
+  return revision ? `transcript:${revision}` : null;
 }
 
 async function readManagedOutgoingArchiveRevision(transcriptPath: string): Promise<string | null> {
@@ -900,22 +897,25 @@ async function getSessionManagedOutgoingAttachmentIndex(
       cache?.set(cacheKey, cachedIndex);
       return cachedIndex;
     }
-    const branchMessages = await readAllBranchSessionMessagesAsync(scope);
-    if (branchMessages) {
-      const index = buildManagedOutgoingAttachmentIndex(branchMessages, sessionKey);
-      if (readManagedOutgoingTranscriptRevision(scope) === transcriptRevision) {
-        setCachedSessionManagedOutgoingAttachmentIndex(
-          sessionKey,
-          agentId,
-          transcriptRevision,
-          index,
-        );
-      } else {
-        sessionManagedOutgoingAttachmentIndexCache.delete(cacheKey);
-      }
-      cache?.set(cacheKey, index);
-      return index;
+  }
+  const snapshot = readRestorableBranchSessionMessagesSnapshot(scope);
+  if (snapshot.generation !== null || snapshot.maxSeq !== null) {
+    const index = buildManagedOutgoingAttachmentIndex(snapshot.messages, sessionKey);
+    const snapshotRevision = snapshot.generation
+      ? `transcript:${sessionId}:${snapshot.generation}:${snapshot.maxSeq ?? -1}`
+      : null;
+    if (snapshotRevision) {
+      setCachedSessionManagedOutgoingAttachmentIndex(
+        sessionKey,
+        agentId,
+        snapshotRevision,
+        index,
+      );
+    } else {
+      sessionManagedOutgoingAttachmentIndexCache.delete(cacheKey);
     }
+    cache?.set(cacheKey, index);
+    return index;
   }
 
   const resolvedTranscriptPath = await resolveSessionHistoryTranscriptPathAsync(
@@ -979,7 +979,8 @@ async function recordMatchesTranscriptMessage(
 async function resolveManagedOutgoingMediaArtifactDownloadForRecord(
   record: ManagedImageRecord,
 ): Promise<ManagedOutgoingMediaArtifactDownload | null> {
-  if (!(await recordMatchesTranscriptMessage(record))) {
+  const matchesTranscript = await recordMatchesTranscriptMessage(record).catch(() => false);
+  if (!matchesTranscript) {
     return null;
   }
   const kind = resolveManagedRecordKind(record);
@@ -1442,7 +1443,8 @@ export async function handleManagedOutgoingMediaHttpRequest(
     sendStatus(res, 404, "not found");
     return true;
   }
-  if (!(await recordMatchesTranscriptMessage(record))) {
+  const matchesTranscript = await recordMatchesTranscriptMessage(record).catch(() => false);
+  if (!matchesTranscript) {
     sendStatus(res, 404, "not found");
     return true;
   }

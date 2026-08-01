@@ -42,6 +42,8 @@ import { createSessionTranscriptHeader } from "./transcript-header.js";
 import {
   isSessionTranscriptLeafControl,
   scanSessionTranscriptTree,
+  selectSessionTranscriptRestorableBranchTipNodes,
+  selectSessionTranscriptRestorableMessagePathNodes,
   selectSessionTranscriptTreePathNodes,
   type SessionTranscriptTree,
 } from "./transcript-tree.js";
@@ -349,7 +351,7 @@ function validateBranchTip(
   if (isSessionTranscriptLeafControl(target.entry)) {
     return "not-branch-tip";
   }
-  if (!sessionBranchTipNodes(tree).some((node) => node.id === entryId)) {
+  if (!selectSessionTranscriptRestorableBranchTipNodes(tree).some((node) => node.id === entryId)) {
     return "not-branch-tip";
   }
   return tree.leafId === entryId ? "already-active" : undefined;
@@ -357,7 +359,7 @@ function validateBranchTip(
 
 function summarizeSessionBranches(events: readonly TranscriptEvent[]): SessionBranchSummary[] {
   const tree = scanSessionTranscriptTree(events);
-  return sessionBranchTipNodes(tree)
+  return selectSessionTranscriptRestorableBranchTipNodes(tree)
     .toSorted(
       (left, right) =>
         Number(right.id === tree.leafId) - Number(left.id === tree.leafId) ||
@@ -366,28 +368,16 @@ function summarizeSessionBranches(events: readonly TranscriptEvent[]): SessionBr
     .map((node) => summarizeSessionBranch(tree, node.id));
 }
 
-function sessionBranchTipNodes(tree: SessionTranscriptTree<TranscriptEvent>) {
-  const referencedParents = new Set(
-    tree.nodes.flatMap((node) =>
-      isSessionTranscriptLeafControl(node.entry) || node.parentId === null ? [] : [node.parentId],
-    ),
-  );
-  return tree.nodes.filter(
-    (node) =>
-      !isSessionTranscriptLeafControl(node.entry) &&
-      (node.id === tree.leafId || !referencedParents.has(node.id)),
-  );
-}
-
 function summarizeSessionBranch(
   tree: SessionTranscriptTree<TranscriptEvent>,
   leafEntryId: string,
 ): SessionBranchSummary {
-  const path = selectSessionTranscriptTreePathNodes(tree, leafEntryId);
-  const messages = path.flatMap((node) => {
-    const record = asRecord(node.entry);
-    return record?.type === "message" ? [record] : [];
-  });
+  const messages = selectSessionTranscriptRestorableMessagePathNodes(tree, leafEntryId).flatMap(
+    (node) => {
+      const record = asRecord(node.entry);
+      return record?.type === "message" ? [record] : [];
+    },
+  );
   const headline = messages
     .toReversed()
     .map((record) => extractHeadlineText(record.message))

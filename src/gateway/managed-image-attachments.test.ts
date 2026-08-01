@@ -37,8 +37,14 @@ const resolveOpenAiCompatibleHttpOperatorScopesMock = vi.fn();
 const resolveOpenAiCompatibleHttpSenderIsOwnerMock = vi.fn();
 const loadSessionEntryMock = vi.fn();
 const readSessionMessagesMock = vi.fn();
-const readAllBranchSessionMessagesMock = vi.fn(async (): Promise<unknown[] | null> => null);
-const readSessionTranscriptRevisionMock = vi.fn(() => "sess-main:0:0");
+const readRestorableBranchSessionMessagesSnapshotMock = vi.fn(() => ({
+  generation: "generation-1",
+  maxSeq: 0,
+  messages: [] as unknown[],
+}));
+const readSessionTranscriptRevisionMock = vi.fn<() => string | null>(
+  () => "sess-main:generation-1:0",
+);
 const resolveSessionHistoryTranscriptPathMock = vi.fn();
 const getRuntimeConfigMock = vi.fn(() => ({}));
 const probePlaybackMediaFileDescriptorMock = vi.fn(async () => ({ durationMs: 1000 }));
@@ -65,7 +71,7 @@ vi.mock("./session-utils.js", () => ({
 }));
 
 vi.mock("./session-transcript-readers.js", () => ({
-  readAllBranchSessionMessagesAsync: readAllBranchSessionMessagesMock,
+  readRestorableBranchSessionMessagesSnapshot: readRestorableBranchSessionMessagesSnapshotMock,
   readSessionTranscriptRevision: readSessionTranscriptRevisionMock,
   readSessionMessagesAsync: readSessionMessagesMock,
   readSessionMessagesWithSourceAsync: async (...args: unknown[]) => ({
@@ -226,8 +232,16 @@ async function requestManagedImage(params: {
   transcriptMessages?: Record<string, unknown>[];
   sessionEntry?: { sessionId: string; sessionFile?: string };
   resolvedTranscriptPath?: string | null;
-  onReadTranscriptMessages?: () => Promise<void> | void;
+  transcriptGeneration?: string | null;
+  transcriptMaxSeq?: number | null;
+  transcriptRevision?: string | null;
+  transcriptReadError?: Error;
 }) {
+  const transcriptGeneration =
+    params.transcriptGeneration === undefined
+      ? `generation-${path.basename(params.stateDir)}`
+      : params.transcriptGeneration;
+  const transcriptMaxSeq = params.transcriptMaxSeq === undefined ? 0 : params.transcriptMaxSeq;
   authorizeGatewayHttpRequestOrReplyMock.mockImplementation(async ({ res }) => {
     if (params.denyAuth) {
       res.statusCode = 401;
@@ -253,8 +267,45 @@ async function requestManagedImage(params: {
   resolveSessionHistoryTranscriptPathMock.mockResolvedValue(
     params.resolvedTranscriptPath ?? params.sessionEntry?.sessionFile ?? "session.jsonl",
   );
+  if (params.transcriptReadError) {
+    readSessionTranscriptRevisionMock.mockImplementation(() => {
+      throw params.transcriptReadError;
+    });
+    readRestorableBranchSessionMessagesSnapshotMock.mockImplementation(() => {
+      throw params.transcriptReadError;
+    });
+  } else {
+    readSessionTranscriptRevisionMock.mockReturnValue(
+      params.transcriptRevision === undefined
+        ? transcriptGeneration
+          ? `sess-main:${transcriptGeneration}:${transcriptMaxSeq}`
+          : null
+        : params.transcriptRevision,
+    );
+    readRestorableBranchSessionMessagesSnapshotMock.mockImplementation(() => {
+      return {
+        generation: transcriptGeneration,
+        maxSeq: transcriptMaxSeq,
+        messages:
+          params.resolvedTranscriptPath?.includes(".reset.") === true
+            ? []
+            : (params.transcriptMessages ?? [
+                {
+                  role: "assistant",
+                  content: [
+                    {
+                      type: "image",
+                      url: params.pathName,
+                      openUrl: params.pathName,
+                    },
+                  ],
+                  __openclaw: { id: "msg-1" },
+                },
+              ]),
+      };
+    });
+  }
   readSessionMessagesMock.mockImplementation(async () => {
-    await params.onReadTranscriptMessages?.();
     return (
       params.transcriptMessages ?? [
         {
@@ -341,6 +392,18 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
   beforeEach(async () => {
     stateDir = tempDirs.make("managed-images-");
     vi.clearAllMocks();
+    loadSessionEntryMock.mockReset();
+    readSessionMessagesMock.mockReset();
+    readSessionMessagesMock.mockResolvedValue([]);
+    resolveSessionHistoryTranscriptPathMock.mockReset();
+    resolveSessionHistoryTranscriptPathMock.mockResolvedValue(null);
+    const generation = `generation-${path.basename(stateDir)}`;
+    readSessionTranscriptRevisionMock.mockReturnValue(`sess-main:${generation}:0`);
+    readRestorableBranchSessionMessagesSnapshotMock.mockReturnValue({
+      generation,
+      maxSeq: 0,
+      messages: [],
+    });
   });
 
   afterEach(async () => {
@@ -362,18 +425,11 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(result.headers["content-type"]).toBe("image/png");
     expect(result.headers["content-disposition"]).toContain("inline");
     expect(result.body.toString("utf-8")).toBe("original-image");
-    expect(readSessionMessagesMock).toHaveBeenCalledWith(
-      {
-        agentId: undefined,
-        sessionEntry: {
-          sessionFile: "session.jsonl",
-          sessionId: "sess-1",
-        },
+    expect(readRestorableBranchSessionMessagesSnapshotMock).toHaveBeenCalledWith(
+      expect.objectContaining({
         sessionId: "sess-1",
         sessionKey: "agent:main:main",
-        storePath: path.join(stateDir, "gateway-sessions.json"),
-      },
-      expect.objectContaining({ allowResetArchiveFallback: true }),
+      }),
     );
   });
 
@@ -605,13 +661,17 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
       entry: { sessionId: "sess-1", sessionFile: "session.jsonl" },
     });
     resolveSessionHistoryTranscriptPathMock.mockResolvedValue("session.jsonl");
-    readSessionMessagesMock.mockResolvedValue([
-      {
-        role: "assistant",
-        content: [{ type: "audio", url: canonicalPath, openUrl: canonicalPath }],
-        __openclaw: { id: "msg-1" },
-      },
-    ]);
+    readRestorableBranchSessionMessagesSnapshotMock.mockReturnValue({
+      generation: `generation-${path.basename(stateDir)}`,
+      maxSeq: 0,
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "audio", url: canonicalPath, openUrl: canonicalPath }],
+          __openclaw: { id: "msg-1" },
+        },
+      ],
+    });
     const download = await resolveManagedOutgoingImageArtifactDownload({
       sessionKey,
       artifactId: `${MANAGED_OUTGOING_MEDIA_ARTIFACT_ID_PREFIX}${attachmentId}`,
@@ -692,18 +752,22 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
       entry: { sessionId: "sess-1", sessionFile: "session.jsonl" },
     });
     resolveSessionHistoryTranscriptPathMock.mockResolvedValue("session.jsonl");
-    readSessionMessagesMock.mockResolvedValue([
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "audio",
-            url: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
-          },
-        ],
-        __openclaw: { id: "msg-1" },
-      },
-    ]);
+    readRestorableBranchSessionMessagesSnapshotMock.mockReturnValue({
+      generation: `generation-${path.basename(stateDir)}`,
+      maxSeq: 0,
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "audio",
+              url: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
+            },
+          ],
+          __openclaw: { id: "msg-1" },
+        },
+      ],
+    });
     resolvePlaybackTranscodeMock.mockRejectedValueOnce(new Error("playback inspection failed"));
     const originalOpen = fs.open;
     let closeOpenedHandle: MockInstance<() => Promise<void>> | undefined;
@@ -825,13 +889,17 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
       entry: { sessionId: "sess-1", sessionFile: "session.jsonl" },
     });
     resolveSessionHistoryTranscriptPathMock.mockResolvedValue("session.jsonl");
-    readSessionMessagesMock.mockResolvedValue([
-      {
-        role: "assistant",
-        content: [{ type: "image", url: canonicalPath, openUrl: canonicalPath }],
-        __openclaw: { id: "msg-1" },
-      },
-    ]);
+    readRestorableBranchSessionMessagesSnapshotMock.mockReturnValue({
+      generation: `generation-${path.basename(stateDir)}`,
+      maxSeq: 0,
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "image", url: canonicalPath, openUrl: canonicalPath }],
+          __openclaw: { id: "msg-1" },
+        },
+      ],
+    });
 
     const download = await resolveManagedOutgoingImageArtifactDownload({
       sessionKey,
@@ -1017,6 +1085,29 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(result.statusCode).toBe(404);
   });
 
+  it("fails closed instead of trusting an archive when the canonical read fails", async () => {
+    const { attachmentId, sessionKey } = await createFixture(stateDir);
+    const pathName = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
+
+    const { result } = await requestManagedImage({
+      stateDir,
+      pathName,
+      authResponse: { authMethod: "token" },
+      resolvedTranscriptPath: "/tmp/sess-main.jsonl.reset.old",
+      transcriptMessages: [
+        {
+          role: "assistant",
+          content: [{ type: "image", url: pathName, openUrl: pathName }],
+          __openclaw: { id: "msg-1" },
+        },
+      ],
+      transcriptReadError: new Error("synthetic canonical read failure"),
+    });
+
+    expect(result.statusCode).toBe(404);
+    expect(readSessionMessagesMock).not.toHaveBeenCalled();
+  });
+
   it("reuses the session attachment index across requests until the transcript changes", async () => {
     const { attachmentId, sessionKey } = await createFixture(stateDir);
     const sessionFile = path.join(stateDir, "sessions", "sess-main.jsonl");
@@ -1054,7 +1145,7 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
 
     expect(first.result.statusCode).toBe(200);
     expect(second.result.statusCode).toBe(200);
-    expect(readSessionMessagesMock).toHaveBeenCalledTimes(1);
+    expect(readRestorableBranchSessionMessagesSnapshotMock).toHaveBeenCalledTimes(1);
 
     await fs.writeFile(sessionFile, '{"message":{}}\n{"message":{"content":"updated"}}\n', "utf-8");
 
@@ -1064,10 +1155,13 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
       authResponse: { authMethod: "token" },
       sessionEntry: { sessionId: "sess-main", sessionFile },
       transcriptMessages,
+      transcriptGeneration: "generation-2",
+      transcriptMaxSeq: 1,
+      transcriptRevision: "sess-main:generation-2:1",
     });
 
     expect(third.result.statusCode).toBe(200);
-    expect(readSessionMessagesMock).toHaveBeenCalledTimes(2);
+    expect(readRestorableBranchSessionMessagesSnapshotMock).toHaveBeenCalledTimes(2);
   });
 
   it("reuses the session attachment index for archive-backed requests", async () => {
@@ -1101,6 +1195,9 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
       sessionEntry: { sessionId: "sess-main" },
       resolvedTranscriptPath: archiveFile,
       transcriptMessages,
+      transcriptGeneration: null,
+      transcriptMaxSeq: null,
+      transcriptRevision: null,
     });
     const second = await requestManagedImage({
       stateDir,
@@ -1109,6 +1206,9 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
       sessionEntry: { sessionId: "sess-main" },
       resolvedTranscriptPath: archiveFile,
       transcriptMessages,
+      transcriptGeneration: null,
+      transcriptMaxSeq: null,
+      transcriptRevision: null,
     });
 
     expect(first.result.statusCode).toBe(200);
@@ -1116,7 +1216,7 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(readSessionMessagesMock).toHaveBeenCalledTimes(1);
   });
 
-  it("does not cache a session attachment index when the transcript changes during the read", async () => {
+  it("keys the attachment index to the generation returned by the owner snapshot", async () => {
     const { attachmentId, sessionKey } = await createFixture(stateDir);
     const sessionFile = path.join(stateDir, "sessions", "sess-main.jsonl");
     await fs.mkdir(path.dirname(sessionFile), { recursive: true });
@@ -1135,7 +1235,6 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
       },
     ];
 
-    let mutatedTranscript = false;
     const pathName = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
     const first = await requestManagedImage({
       stateDir,
@@ -1143,12 +1242,9 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
       authResponse: { authMethod: "token" },
       sessionEntry: { sessionId: "sess-main", sessionFile },
       transcriptMessages,
-      onReadTranscriptMessages: async () => {
-        if (!mutatedTranscript) {
-          mutatedTranscript = true;
-          await fs.appendFile(sessionFile, '{"message":{"content":"updated"}}\n', "utf-8");
-        }
-      },
+      transcriptGeneration: "generation-2",
+      transcriptMaxSeq: 0,
+      transcriptRevision: "sess-main:generation-1:0",
     });
     const second = await requestManagedImage({
       stateDir,
@@ -1156,11 +1252,14 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
       authResponse: { authMethod: "token" },
       sessionEntry: { sessionId: "sess-main", sessionFile },
       transcriptMessages,
+      transcriptGeneration: "generation-2",
+      transcriptMaxSeq: 0,
+      transcriptRevision: "sess-main:generation-2:0",
     });
 
     expect(first.result.statusCode).toBe(200);
     expect(second.result.statusCode).toBe(200);
-    expect(readSessionMessagesMock).toHaveBeenCalledTimes(2);
+    expect(readRestorableBranchSessionMessagesSnapshotMock).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -1852,7 +1951,19 @@ describe("cleanupManagedOutgoingImageRecords", () => {
   beforeEach(async () => {
     stateDir = tempDirs.make("managed-image-cleanup-");
     vi.clearAllMocks();
+    loadSessionEntryMock.mockReset();
+    readSessionMessagesMock.mockReset();
+    readSessionMessagesMock.mockResolvedValue([]);
+    resolveSessionHistoryTranscriptPathMock.mockReset();
+    resolveSessionHistoryTranscriptPathMock.mockResolvedValue(null);
     getRuntimeConfigMock.mockReturnValue({});
+    const generation = `generation-${path.basename(stateDir)}`;
+    readSessionTranscriptRevisionMock.mockReturnValue(`sess-main:${generation}:0`);
+    readRestorableBranchSessionMessagesSnapshotMock.mockReturnValue({
+      generation,
+      maxSeq: 0,
+      messages: [],
+    });
   });
 
   afterEach(async () => {
@@ -1866,7 +1977,11 @@ describe("cleanupManagedOutgoingImageRecords", () => {
       storePath: path.join(stateDir, "gateway-sessions.json"),
       entry: { sessionId: "sess-main", sessionFile: "/tmp/sess-main.jsonl" },
     });
-    readSessionMessagesMock.mockReturnValue([]);
+    readRestorableBranchSessionMessagesSnapshotMock.mockReturnValue({
+      generation: `generation-${path.basename(stateDir)}`,
+      maxSeq: 0,
+      messages: [],
+    });
 
     const result = await cleanupManagedOutgoingImageRecords({ stateDir });
 
@@ -1876,13 +1991,76 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     await expectPathMissing(fixture.originalPath);
   });
 
+  it("does not resurrect retired refs from an archive after an empty canonical snapshot", async () => {
+    const fixture = await createFixture(stateDir);
+    loadSessionEntryMock.mockReturnValue({
+      storePath: path.join(stateDir, "gateway-sessions.json"),
+      entry: { sessionId: "sess-main", sessionFile: "/tmp/sess-main.jsonl" },
+    });
+    resolveSessionHistoryTranscriptPathMock.mockResolvedValue("/tmp/sess-main.jsonl.reset.old");
+    readSessionMessagesMock.mockResolvedValue([
+      {
+        __openclaw: { id: "msg-1" },
+        content: [
+          {
+            type: "image",
+            url: `/api/chat/media/outgoing/${encodeURIComponent(fixture.sessionKey)}/${fixture.attachmentId}/full`,
+            openUrl: `/api/chat/media/outgoing/${encodeURIComponent(fixture.sessionKey)}/${fixture.attachmentId}/full`,
+          },
+        ],
+      },
+    ]);
+
+    await expect(cleanupManagedOutgoingImageRecords({ stateDir })).resolves.toEqual({
+      deletedRecordCount: 1,
+      deletedFileCount: 1,
+      retainedCount: 0,
+    });
+    expect(readSessionMessagesMock).not.toHaveBeenCalled();
+    await expectPathMissing(fixture.originalPath);
+  });
+
+  it("aborts cleanup without trusting an archive when the canonical read fails", async () => {
+    const fixture = await createFixture(stateDir);
+    loadSessionEntryMock.mockReturnValue({
+      storePath: path.join(stateDir, "gateway-sessions.json"),
+      entry: { sessionId: "sess-main", sessionFile: "/tmp/sess-main.jsonl" },
+    });
+    resolveSessionHistoryTranscriptPathMock.mockResolvedValue("/tmp/sess-main.jsonl.reset.old");
+    readSessionTranscriptRevisionMock.mockImplementation(() => {
+      throw new Error("synthetic canonical read failure");
+    });
+    readSessionMessagesMock.mockResolvedValue([
+      {
+        __openclaw: { id: "msg-1" },
+        content: [
+          {
+            type: "image",
+            url: `/api/chat/media/outgoing/${encodeURIComponent(fixture.sessionKey)}/${fixture.attachmentId}/full`,
+          },
+        ],
+      },
+    ]);
+
+    await expect(cleanupManagedOutgoingImageRecords({ stateDir })).rejects.toThrow(
+      "synthetic canonical read failure",
+    );
+    expect(readSessionMessagesMock).not.toHaveBeenCalled();
+    expect(readManagedImageRecord(fixture.attachmentId, stateDir)).not.toBeNull();
+    await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
+  });
+
   it("retries a durably claimed file deletion after a filesystem failure", async () => {
     const fixture = await createFixture(stateDir);
     loadSessionEntryMock.mockReturnValue({
       storePath: path.join(stateDir, "gateway-sessions.json"),
       entry: { sessionId: "sess-main", sessionFile: "/tmp/sess-main.jsonl" },
     });
-    readSessionMessagesMock.mockReturnValue([]);
+    readRestorableBranchSessionMessagesSnapshotMock.mockReturnValue({
+      generation: `generation-${path.basename(stateDir)}`,
+      maxSeq: 0,
+      messages: [],
+    });
     const rmSpy = vi.spyOn(fs, "rm").mockRejectedValueOnce(new Error("synthetic rm failure"));
 
     let failed: Awaited<ReturnType<typeof cleanupManagedOutgoingImageRecords>>;
@@ -1984,18 +2162,22 @@ describe("cleanupManagedOutgoingImageRecords", () => {
       storePath: path.join(stateDir, "gateway-sessions.json"),
       entry: { sessionId: "sess-main", sessionFile: "/tmp/sess-main.jsonl" },
     });
-    readSessionMessagesMock.mockReturnValue([
-      {
-        __openclaw: { id: "msg-1" },
-        content: [
-          {
-            type: "image",
-            url: `/api/chat/media/outgoing/${encodeURIComponent(fixture.sessionKey)}/${fixture.attachmentId}/full`,
-            openUrl: `/api/chat/media/outgoing/${encodeURIComponent(fixture.sessionKey)}/${fixture.attachmentId}/full`,
-          },
-        ],
-      },
-    ]);
+    readRestorableBranchSessionMessagesSnapshotMock.mockReturnValue({
+      generation: `generation-${path.basename(stateDir)}`,
+      maxSeq: 0,
+      messages: [
+        {
+          __openclaw: { id: "msg-1" },
+          content: [
+            {
+              type: "image",
+              url: `/api/chat/media/outgoing/${encodeURIComponent(fixture.sessionKey)}/${fixture.attachmentId}/full`,
+              openUrl: `/api/chat/media/outgoing/${encodeURIComponent(fixture.sessionKey)}/${fixture.attachmentId}/full`,
+            },
+          ],
+        },
+      ],
+    });
 
     const result = await cleanupManagedOutgoingImageRecords({ stateDir });
 
@@ -2003,18 +2185,13 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     expect(result.deletedFileCount).toBe(0);
     expect(result.retainedCount).toBe(1);
     await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
-    expect(readSessionMessagesMock).toHaveBeenCalledWith(
-      {
+    expect(readRestorableBranchSessionMessagesSnapshotMock).toHaveBeenCalledWith(
+      expect.objectContaining({
         agentId: undefined,
-        sessionEntry: {
-          sessionFile: "/tmp/sess-main.jsonl",
-          sessionId: "sess-main",
-        },
         sessionId: "sess-main",
         sessionKey: "agent:main:main",
         storePath: path.join(stateDir, "gateway-sessions.json"),
-      },
-      expect.objectContaining({ allowResetArchiveFallback: true }),
+      }),
     );
   });
 
@@ -2031,30 +2208,34 @@ describe("cleanupManagedOutgoingImageRecords", () => {
       storePath: path.join(stateDir, "gateway-sessions.json"),
       entry: { sessionId: "sess-main", sessionFile: "/tmp/sess-main.jsonl" },
     });
-    readSessionMessagesMock.mockReturnValue([
-      {
-        __openclaw: { id: "msg-1" },
-        content: [
-          {
-            type: "image",
-            url: `/api/chat/media/outgoing/${encodeURIComponent(firstFixture.sessionKey)}/${firstFixture.attachmentId}/full`,
-            openUrl: `/api/chat/media/outgoing/${encodeURIComponent(firstFixture.sessionKey)}/${firstFixture.attachmentId}/full`,
-          },
-          {
-            type: "image",
-            url: `/api/chat/media/outgoing/${encodeURIComponent(secondFixture.sessionKey)}/${secondFixture.attachmentId}/full`,
-            openUrl: `/api/chat/media/outgoing/${encodeURIComponent(secondFixture.sessionKey)}/${secondFixture.attachmentId}/full`,
-          },
-        ],
-      },
-    ]);
+    readRestorableBranchSessionMessagesSnapshotMock.mockReturnValue({
+      generation: `generation-${path.basename(stateDir)}`,
+      maxSeq: 0,
+      messages: [
+        {
+          __openclaw: { id: "msg-1" },
+          content: [
+            {
+              type: "image",
+              url: `/api/chat/media/outgoing/${encodeURIComponent(firstFixture.sessionKey)}/${firstFixture.attachmentId}/full`,
+              openUrl: `/api/chat/media/outgoing/${encodeURIComponent(firstFixture.sessionKey)}/${firstFixture.attachmentId}/full`,
+            },
+            {
+              type: "image",
+              url: `/api/chat/media/outgoing/${encodeURIComponent(secondFixture.sessionKey)}/${secondFixture.attachmentId}/full`,
+              openUrl: `/api/chat/media/outgoing/${encodeURIComponent(secondFixture.sessionKey)}/${secondFixture.attachmentId}/full`,
+            },
+          ],
+        },
+      ],
+    });
 
     const result = await cleanupManagedOutgoingImageRecords({ stateDir });
 
     expect(result.deletedRecordCount).toBe(0);
     expect(result.deletedFileCount).toBe(0);
     expect(result.retainedCount).toBe(2);
-    expect(readSessionMessagesMock).toHaveBeenCalledTimes(1);
+    expect(readRestorableBranchSessionMessagesSnapshotMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not delete files still referenced by other sessions during session-scoped cleanup", async () => {
@@ -2074,7 +2255,11 @@ describe("cleanupManagedOutgoingImageRecords", () => {
         sessionFile: "/tmp/session.jsonl",
       },
     }));
-    readSessionMessagesMock.mockReturnValue([]);
+    readRestorableBranchSessionMessagesSnapshotMock.mockReturnValue({
+      generation: `generation-${path.basename(stateDir)}`,
+      maxSeq: 0,
+      messages: [],
+    });
 
     const result = await cleanupManagedOutgoingImageRecords({
       stateDir,
@@ -2102,7 +2287,11 @@ describe("cleanupManagedOutgoingImageRecords", () => {
       storePath: path.join(stateDir, "gateway-sessions.json"),
       entry: { sessionId: "sess-main-global", sessionFile: "/tmp/global-main.jsonl" },
     });
-    readSessionMessagesMock.mockReturnValue([]);
+    readRestorableBranchSessionMessagesSnapshotMock.mockReturnValue({
+      generation: `generation-${path.basename(stateDir)}`,
+      maxSeq: 0,
+      messages: [],
+    });
 
     const result = await cleanupManagedOutgoingImageRecords({
       stateDir,
@@ -2134,7 +2323,11 @@ describe("cleanupManagedOutgoingImageRecords", () => {
       storePath: path.join(stateDir, "gateway-sessions.json"),
       entry: { sessionId: "sess-work-global", sessionFile: "/tmp/global-work.jsonl" },
     });
-    readSessionMessagesMock.mockReturnValue([]);
+    readRestorableBranchSessionMessagesSnapshotMock.mockReturnValue({
+      generation: `generation-${path.basename(stateDir)}`,
+      maxSeq: 0,
+      messages: [],
+    });
 
     const result = await cleanupManagedOutgoingImageRecords({
       stateDir,
@@ -2158,7 +2351,11 @@ describe("cleanupManagedOutgoingImageRecords", () => {
       storePath: path.join(stateDir, "gateway-sessions.json"),
       entry: { sessionId: "sess-work-global", sessionFile: "/tmp/global-work.jsonl" },
     });
-    readSessionMessagesMock.mockReturnValue([]);
+    readRestorableBranchSessionMessagesSnapshotMock.mockReturnValue({
+      generation: `generation-${path.basename(stateDir)}`,
+      maxSeq: 0,
+      messages: [],
+    });
 
     const result = await cleanupManagedOutgoingImageRecords({ stateDir });
 

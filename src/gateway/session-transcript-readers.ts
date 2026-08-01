@@ -1,18 +1,19 @@
 import path from "node:path";
 import {
   isSessionTranscriptProjectionUnavailableError,
-  loadTranscriptEventRowsAfterSeqSync,
   readRecentSessionTranscriptMessageEvents,
+  readSessionTranscriptRestorableMessageSnapshot,
+  readSessionTranscriptWatermark,
   readSessionTranscriptMessageEventById,
   readSessionTranscriptMessageEventCount,
   readSessionTranscriptMessageEventPage,
   readSessionTranscriptMessageEvents,
-  readTranscriptStatsSync,
   resolveConcreteSessionStorePath,
   resolveSessionTranscriptReadTarget,
   waitForSessionTranscriptProjection,
   type SessionTranscriptMessageEvent,
   type SessionTranscriptReadScope,
+  type SessionTranscriptRestorableMessageSnapshot,
   type TranscriptEvent,
 } from "../config/sessions/session-accessor.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
@@ -330,22 +331,34 @@ export async function readSessionMessagesWithSourceAsync(
   };
 }
 
-/** Reads display messages from every retained transcript branch, not only the active path. */
-export async function readAllBranchSessionMessagesAsync(
+export type RestorableBranchSessionMessagesSnapshot = Omit<
+  SessionTranscriptRestorableMessageSnapshot,
+  "events"
+> & {
+  messages: unknown[];
+};
+
+/** Reads display messages from every branch the session owner can restore. */
+export function readRestorableBranchSessionMessagesSnapshot(
   scope: SessionTranscriptReadScope,
-): Promise<unknown[] | null> {
+): RestorableBranchSessionMessagesSnapshot {
   const target = resolveTranscriptReadTarget(scope);
-  const records = extractMessageRecordsFromEventEntries(
-    loadTranscriptEventRowsAfterSeqSync(toTranscriptReadScope(target), -1),
-  );
-  return records.length > 0 ? records.map(sqliteRecordMessageWithSeq) : null;
+  const snapshot = readSessionTranscriptRestorableMessageSnapshot(toTranscriptReadScope(target));
+  const records = extractMessageRecordsFromEventEntries(snapshot.events);
+  return {
+    generation: snapshot.generation,
+    maxSeq: snapshot.maxSeq,
+    messages: records.map(sqliteRecordMessageWithSeq),
+  };
 }
 
 /** Reads the canonical transcript watermark used to validate derived transcript caches. */
-export function readSessionTranscriptRevision(scope: SessionTranscriptReadScope): string {
+export function readSessionTranscriptRevision(scope: SessionTranscriptReadScope): string | null {
   const target = resolveTranscriptReadTarget(scope);
-  const stats = readTranscriptStatsSync(toTranscriptReadScope(target));
-  return `${target.sessionId}:${stats.eventCount}:${stats.maxSeq}`;
+  const watermark = readSessionTranscriptWatermark(toTranscriptReadScope(target));
+  return watermark.generation
+    ? `${target.sessionId}:${watermark.generation}:${watermark.maxSeq ?? -1}`
+    : null;
 }
 
 /** Finds one display message by transcript id through the reader seam. */

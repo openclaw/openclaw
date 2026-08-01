@@ -1,5 +1,7 @@
 import { mkdtempSync } from "node:fs";
 import fs from "node:fs/promises";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -7,7 +9,10 @@ import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   listSessionBranches,
+  loadTranscriptEventRowsAfterSeqSync,
+  readSessionTranscriptWatermark,
   rewindSessionToMessage,
+  rewriteTranscriptEventRowsExact,
   switchSessionBranch,
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
@@ -15,7 +20,9 @@ import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.j
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
+  attachManagedOutgoingMediaToMessage,
   cleanupManagedOutgoingMediaRecords,
+  handleManagedOutgoingMediaHttpRequest,
   resolveManagedOutgoingMediaArtifactDownload,
 } from "./managed-image-attachments.js";
 import {
@@ -23,6 +30,9 @@ import {
   listManagedImageRecordEntries,
   MANAGED_OUTGOING_ORIGINALS_SUBDIR,
 } from "./managed-image-record-store.js";
+import {
+  rewriteAssistantTranscriptMessageByTurnIndexAndMedia,
+} from "./server-methods/chat-transcript-persistence.js";
 import { readSessionMessagesWithSourceAsync } from "./session-transcript-readers.js";
 import { loadSessionEntryReadOnly } from "./session-utils.js";
 
@@ -131,6 +141,71 @@ async function pathExists(target: string): Promise<boolean> {
     .catch(() => false);
 }
 
+async function fetchManagedArtifact(
+  url: string,
+  headers?: Record<string, string>,
+): Promise<{ body: Buffer; status: number }> {
+  const server = http.createServer((req, res) => {
+    void handleManagedOutgoingMediaHttpRequest(req, res, {
+      auth: { mode: "token", token: "test-token", allowTailscale: false },
+      stateDir,
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address() as AddressInfo;
+  try {
+    const response = await fetch(`http://127.0.0.1:${address.port}${url}`, { headers });
+    return {
+      body: Buffer.from(await response.arrayBuffer()),
+      status: response.status,
+    };
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+}
+
+function currentTranscriptScope() {
+  const loaded = loadSessionEntryReadOnly(sessionKey, { agentId });
+  return {
+    agentId,
+    env: process.env,
+    sessionId: loaded.entry?.sessionId ?? sessionId,
+    sessionKey,
+    storePath: loaded.storePath,
+  };
+}
+
+async function rewriteManagedMessageContent(content: unknown) {
+  const scope = currentTranscriptScope();
+  const watermark = readSessionTranscriptWatermark(scope);
+  const row = loadTranscriptEventRowsAfterSeqSync(scope, -1).find(
+    ({ event }) => (event as { id?: unknown }).id === "a2",
+  );
+  if (!row) {
+    throw new Error("expected managed assistant transcript row");
+  }
+  const rewritten = await rewriteTranscriptEventRowsExact(scope, {
+    expectedGeneration: watermark.generation,
+    rows: [
+      {
+        event: {
+          ...(row.event as Record<string, unknown>),
+          message: { role: "assistant", content },
+        },
+        expectedEventJson: JSON.stringify(row.event),
+        seq: row.seq,
+      },
+    ],
+  });
+  expect(rewritten).toEqual({ generation: expect.any(String) });
+  return {
+    after: readSessionTranscriptWatermark(scope),
+    before: watermark,
+  };
+}
+
 async function rewindPastManagedImage(): Promise<string> {
   const rewind = await rewindSessionToMessage({
     agentId,
@@ -200,6 +275,160 @@ describe("managed outgoing media retention across transcript branches", () => {
         stateDir,
       }),
     ).resolves.not.toBeNull();
+  });
+
+  it("streams ticket-authenticated media referenced only by an inactive branch", async () => {
+    await commitManagedRecord("a2");
+    await rewindPastManagedImage();
+    const download = await resolveManagedOutgoingMediaArtifactDownload({
+      sessionKey,
+      artifactId: `artifact_managed_image_${attachmentId}`,
+      stateDir,
+    });
+    if (!download) {
+      throw new Error("expected inactive-branch artifact download");
+    }
+
+    const response = await fetchManagedArtifact(download.url);
+
+    expect(response).toEqual({
+      body: Buffer.from("89504e470d0a1a0a", "hex"),
+      status: 200,
+    });
+  });
+
+  it("streams bearer-authenticated media referenced only by an inactive branch", async () => {
+    await commitManagedRecord("a2");
+    await rewindPastManagedImage();
+
+    const response = await fetchManagedArtifact(mediaUrl(), {
+      Authorization: "Bearer test-token",
+    });
+
+    expect(response).toEqual({
+      body: Buffer.from("89504e470d0a1a0a", "hex"),
+      status: 200,
+    });
+  });
+
+  it("invalidates a warmed index after the production media rewrite rotates generation", async () => {
+    await commitManagedRecord("a2");
+    const source = await rewriteManagedMessageContent([
+      { type: "text", text: "here is the chart\nMEDIA:/tmp/chart.png" },
+    ]);
+    expect(source.after.maxSeq).toBe(source.before.maxSeq);
+    expect(source.after.generation).not.toBe(source.before.generation);
+    await expect(
+      resolveManagedOutgoingMediaArtifactDownload({
+        sessionKey,
+        artifactId: `artifact_managed_image_${attachmentId}`,
+        stateDir,
+      }),
+    ).resolves.toBeNull();
+
+    const managedContent = [
+      { type: "text", text: "here is the chart" },
+      { type: "image", url: mediaUrl(), openUrl: mediaUrl(), mimeType: "image/png" },
+    ];
+    const rewritten = await rewriteAssistantTranscriptMessageByTurnIndexAndMedia({
+      afterSeq: 0,
+      assistantMessageIndex: 2,
+      content: managedContent,
+      expectedGeneration: source.after.generation,
+      mediaUrls: ["/tmp/chart.png"],
+      scope: currentTranscriptScope(),
+    });
+    expect(rewritten).toEqual({
+      generation: expect.any(String),
+      messageId: "a2",
+    });
+    if (!rewritten) {
+      throw new Error("expected production transcript rewrite");
+    }
+    await attachManagedOutgoingMediaToMessage({
+      messageId: rewritten.messageId,
+      blocks: managedContent,
+      stateDir,
+    });
+    const restored = readSessionTranscriptWatermark(currentTranscriptScope());
+    expect(restored.maxSeq).toBe(source.after.maxSeq);
+    expect(restored.generation).toBe(rewritten.generation);
+    expect(restored.generation).not.toBe(source.after.generation);
+
+    await expect(
+      resolveManagedOutgoingMediaArtifactDownload({
+        sessionKey,
+        artifactId: `artifact_managed_image_${attachmentId}`,
+        stateDir,
+      }),
+    ).resolves.not.toBeNull();
+    await expect(
+      cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey, agentId }),
+    ).resolves.toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
+  });
+
+  it("deletes media retired by the latest reset window", async () => {
+    await commitManagedRecord("a2");
+    const scope = currentTranscriptScope();
+    await appendTranscriptEvent(scope, {
+      type: "reset",
+      id: "reset-boundary",
+      parentId: "a3",
+      firstKeptEntryId: "u3",
+      timestamp: "2026-08-01T00:01:00.000Z",
+    });
+    await appendTranscriptMessage(scope, {
+      eventId: "post-reset",
+      message: { role: "user", content: "new context" },
+      now: Date.parse("2026-08-01T00:01:01.000Z"),
+      parentId: "reset-boundary",
+    });
+
+    await expect(
+      fetchManagedArtifact(mediaUrl(), {
+        Authorization: "Bearer test-token",
+      }),
+    ).resolves.toMatchObject({ status: 404 });
+    await expect(
+      resolveManagedOutgoingMediaArtifactDownload({
+        sessionKey,
+        artifactId: `artifact_managed_image_${attachmentId}`,
+        stateDir,
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey, agentId }),
+    ).resolves.toEqual({ deletedRecordCount: 1, deletedFileCount: 1, retainedCount: 0 });
+  });
+
+  it("retains pre-reset media when a newer compaction shadows the reset window", async () => {
+    await commitManagedRecord("a2");
+    const scope = currentTranscriptScope();
+    await appendTranscriptEvent(scope, {
+      type: "reset",
+      id: "reset-boundary",
+      parentId: "a3",
+      firstKeptEntryId: "u3",
+      timestamp: "2026-08-01T00:01:00.000Z",
+    });
+    await appendTranscriptMessage(scope, {
+      eventId: "post-reset",
+      message: { role: "user", content: "new context" },
+      now: Date.parse("2026-08-01T00:01:01.000Z"),
+      parentId: "reset-boundary",
+    });
+    await appendTranscriptEvent(scope, {
+      type: "compaction",
+      id: "newer-compaction",
+      parentId: "post-reset",
+      firstKeptEntryId: "post-reset",
+      timestamp: "2026-08-01T00:01:02.000Z",
+    });
+
+    await expect(
+      cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey, agentId }),
+    ).resolves.toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
+    expect(await pathExists(originalPath)).toBe(true);
   });
 
   it("still deletes media whose message is absent from every branch", async () => {
