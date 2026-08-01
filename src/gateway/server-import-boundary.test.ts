@@ -139,6 +139,11 @@ describe("gateway startup import boundaries", () => {
     const markHelperEnd = serverImpl.indexOf("};", markHelperStart);
     const beginHelperStart = serverImpl.indexOf("const beginClosePrelude = async () => {");
     const beginHelperEnd = serverImpl.indexOf("};", beginHelperStart);
+    const shutdownMarkStart = serverImpl.indexOf("markGatewayShuttingDown();", beginHelperStart);
+    const preludeAwaitStart = serverImpl.indexOf(
+      "await stopConfigReloaderForClose()",
+      beginHelperStart,
+    );
     const postReadyStart = serverImpl.indexOf("scheduleGatewayPostReadyMaintenance({");
     const postReadyEnd = serverImpl.indexOf("});", postReadyStart);
     const postReadyBlock = serverImpl.slice(postReadyStart, postReadyEnd);
@@ -155,6 +160,8 @@ describe("gateway startup import boundaries", () => {
       "cronReconciliation.invalidate();",
     );
     expect(beginHelperStart).toBeGreaterThan(-1);
+    expect(shutdownMarkStart).toBeGreaterThan(beginHelperStart);
+    expect(shutdownMarkStart).toBeLessThan(preludeAwaitStart);
     expect(serverImpl.slice(beginHelperStart, beginHelperEnd)).toContain(
       "markClosePreludeStarted();",
     );

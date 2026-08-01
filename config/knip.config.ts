@@ -389,6 +389,11 @@ const config = {
     // asserted by the focused Beam mirror tests; production wires only the service.
     "extensions/beam/src/mirror.ts": ["exports", "types"],
     "src/infra/heartbeat-wake.ts": ["exports"],
+    // Module-global reset helpers exist only to isolate the restart-trace and
+    // healthz-shutdown-log singletons between focused gateway tests; there is
+    // no production caller, but the state they reset is production state.
+    "src/gateway/restart-trace.ts": ["exports"],
+    "src/gateway/server-http.ts": ["exports"],
   },
   workspaces: {
     ".": {

@@ -21,6 +21,7 @@ import {
 } from "../skills/runtime/remote.js";
 import type { RestartRecoveryCandidate } from "./chat-abort.js";
 import { createControlUiSessionPullRequestSubscriptions } from "./control-ui-session-pr-subscriptions.js";
+import { markGatewayShuttingDown } from "./gateway-shutdown-state.js";
 import { disposeNodeConnectionNotifications } from "./node-connection-notifications.js";
 import { clearNodeWakeState } from "./node-wake-state.js";
 import { createLazyGatewayCronState } from "./server-cron-lazy.js";
@@ -316,6 +317,7 @@ export async function prepareGatewayLifecycle(params: {
     return configReloaderStopPromise;
   };
   const beginClosePrelude = async () => {
+    markGatewayShuttingDown();
     clearSessionSuspensionTimers();
     markClosePreludeStarted();
     // Join the last reload before any owner it can publish into is torn down.
@@ -382,6 +384,7 @@ export async function prepareGatewayLifecycle(params: {
     const { createGatewayCloseHandler, drainActiveSessionsForShutdown } =
       await loadGatewayCloseModule();
     await createGatewayCloseHandler({
+      postShutdownExitWatchdogEnabled: runtime.opts.postShutdownExitWatchdog === true,
       bonjourStop: runtimeState.bonjourStop,
       tailscaleCleanup: runtimeState.tailscaleCleanup,
       releasePluginRouteRegistry,
@@ -452,7 +455,10 @@ export async function prepareGatewayLifecycle(params: {
       await stopRegisteredGatewayLifetimeSidecars();
       await stopRegisteredPostReadySidecars();
       await runClosePrelude();
-      await createCloseHandler()({ reason: "gateway startup failed" });
+      // Nonzero forced-exit status: if this failed-startup cleanup wedges and
+      // the watchdog must kill the process, a failure-only supervisor still
+      // relaunches instead of reading exit 0 as an intentional clean stop.
+      await createCloseHandler()({ reason: "gateway startup failed", postShutdownExitCode: 1 });
     } finally {
       clearFallbackGatewayContextForServer();
     }
