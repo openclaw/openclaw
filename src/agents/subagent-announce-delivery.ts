@@ -1642,6 +1642,7 @@ export async function deliverSubagentAnnouncement(params: {
   targetRequesterSessionKey: string;
   requesterIsSubagent: boolean;
   expectsCompletionMessage: boolean;
+  requireDirectDelivery?: boolean;
   bestEffortDeliver?: boolean;
   durableGeneratedMediaHandoff?: boolean;
   directIdempotencyKey: string;
@@ -1764,6 +1765,7 @@ export async function deliverSubagentAnnouncement(params: {
 
   return await runSubagentAnnounceDispatch({
     expectsCompletionMessage: params.expectsCompletionMessage,
+    requireDirectDelivery: params.requireDirectDelivery,
     signal: params.signal,
     steer: async () =>
       await maybeSteerSubagentAnnounce({
