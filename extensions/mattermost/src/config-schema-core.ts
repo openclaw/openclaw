@@ -2,6 +2,7 @@
 import {
   BlockStreamingCoalesceSchema,
   ChannelImplicitMentionsSchema,
+  ContextVisibilityModeSchema,
   DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
@@ -134,6 +135,7 @@ const MattermostAccountSchemaBase = z
     markdown: MarkdownConfigSchema,
     enabled: z.boolean().optional(),
     configWrites: z.boolean().optional(),
+    contextVisibility: ContextVisibilityModeSchema.optional(),
     botToken: buildSecretInputSchema().optional(),
     baseUrl: z.string().optional(),
     chatmode: z.enum(["oncall", "onmessage", "onchar"]).optional(),
