@@ -15,9 +15,15 @@
  * before the run enters the serialization queue, so a run waiting in the queue
  * owns a config that no process argv references yet. To tell such a live-owned
  * queued dir from a true orphan without deleting the former, the creating
- * gateway's identity (pid + boot-id prefix + process start time) is encoded in
- * the dir NAME by `mkdtemp`; an argv-unreferenced dir is removed only once its
- * owning gateway is provably gone (pid dead, host rebooted, or pid reused).
+ * gateway's identity (pid + boot-id prefix + PID-namespace tag + process start
+ * time) is encoded in the dir NAME by `mkdtemp`; an argv-unreferenced dir is
+ * removed only once its owning gateway is provably gone (pid dead, host
+ * rebooted, or pid reused) AND provably in this PID namespace. `process.kill`
+ * and `/proc` see only the sweeper's own PID namespace, so a dir owned by a
+ * different or unverifiable namespace — e.g. another container sharing the same
+ * `/tmp` mount — is kept rather than judged by a pid that here is absent or
+ * reused; that container's own sweep, where the encoded namespace matches,
+ * reclaims it. This keeps the sweep from deleting a live foreign config.
  *
  * Old-format (legacy) dirs without an encoded owner are NEVER auto-removed.
  * Their owner cannot be proven, so during a rolling upgrade a concurrently
@@ -65,6 +71,12 @@ const NO_BOOT_ID = "nobootid";
 // (that would fail OPEN: a live owner with an unknown creation start could be
 // mistaken for a reused pid and deleted).
 const UNKNOWN_START = "0";
+// Encoded when the PID namespace cannot be read (off-Linux or restricted). Like
+// the other unverifiable sentinels it fails CLOSED: a dir whose namespace is
+// unknown — on either the creating or the sweeping side — can never be proven to
+// live in the sweeper's namespace, so its pid-based liveness is untrustworthy
+// and the dir is kept rather than reclaimed.
+const NO_NS = "nons";
 
 function defaultIsPidAlive(pid: number): boolean {
   try {
@@ -93,6 +105,27 @@ async function readBootTag(): Promise<string> {
 }
 
 /**
+ * The current process's PID-namespace identity: the inode from
+ * `readlink(/proc/self/ns/pid)` (e.g. "pid:[4026531836]"). Two gateways in
+ * different PID namespaces — such as separate containers sharing one `/tmp`
+ * mount — have different inodes here, so a namespace match proves the owner is
+ * visible to THIS process's `process.kill`/`/proc` liveness probes. Returns
+ * NO_NS off-Linux or when the link is unreadable.
+ */
+async function readPidNamespaceTag(): Promise<string> {
+  if (process.platform !== "linux") {
+    return NO_NS;
+  }
+  try {
+    const link = await fs.readlink("/proc/self/ns/pid");
+    const match = /^pid:\[(\d+)\]$/.exec(link);
+    return match?.[1] ?? NO_NS;
+  } catch {
+    return NO_NS;
+  }
+}
+
+/**
  * The owner process's start time in clock ticks since boot, from
  * `/proc/<pid>/stat` field 22. Two processes that reuse a pid within one boot
  * still differ here, so a start-time match proves same-process identity.
@@ -115,35 +148,37 @@ async function defaultReadStartTicks(pid: number): Promise<string | undefined> {
 
 /**
  * The `mkdtemp` prefix *name* that encodes the creating gateway's identity into
- * the temp dir name (pid + boot tag + process start ticks). The random
- * `mkdtemp` suffix is appended atomically — so ownership exists from the instant
- * the dir does. Callers join it onto the temp root themselves; the shared
- * `writeTemporaryBundleMcpJson` does exactly that before calling `fs.mkdtemp`.
+ * the temp dir name (pid + boot tag + PID-namespace tag + process start ticks).
+ * The random `mkdtemp` suffix is appended atomically — so ownership exists from
+ * the instant the dir does. Callers join it onto the temp root themselves; the
+ * shared `writeTemporaryBundleMcpJson` does exactly that before calling
+ * `fs.mkdtemp`.
  */
 export async function bundleMcpOwnedMkdtempPrefixName(): Promise<string> {
   const boot = await readBootTag();
+  const ns = await readPidNamespaceTag();
   const start = (await defaultReadStartTicks(process.pid)) ?? UNKNOWN_START;
-  return `${BUNDLE_MCP_TEMP_PREFIX}${process.pid}-${boot}-${start}-`;
+  return `${BUNDLE_MCP_TEMP_PREFIX}${process.pid}-${boot}-${ns}-${start}-`;
 }
 
-type BundleMcpOwner = { pid: number; boot: string; start: string };
+type BundleMcpOwner = { pid: number; boot: string; ns: string; start: string };
 
-// <prefix><pid>-<boot8|nobootid>-<startTicks>-<mkdtemp suffix>
+// <prefix><pid>-<boot8|nobootid>-<nsInode|nons>-<startTicks>-<mkdtemp suffix>
 const OWNER_NAME_RE = new RegExp(
-  `^${BUNDLE_MCP_TEMP_PREFIX}(\\d+)-([0-9a-f]{8}|${NO_BOOT_ID})-(\\d+)-`,
+  `^${BUNDLE_MCP_TEMP_PREFIX}(\\d+)-([0-9a-f]{8}|${NO_BOOT_ID})-(\\d+|${NO_NS})-(\\d+)-`,
 );
 
 function parseBundleMcpOwner(entryName: string): BundleMcpOwner | undefined {
   const match = OWNER_NAME_RE.exec(entryName);
-  const [, pidText, boot, start] = match ?? [];
-  if (pidText === undefined || boot === undefined || start === undefined) {
+  const [, pidText, boot, ns, start] = match ?? [];
+  if (pidText === undefined || boot === undefined || ns === undefined || start === undefined) {
     return undefined; // Old-format (pre-ownership) dir — treated as legacy.
   }
   const pid = Number(pidText);
   if (!Number.isSafeInteger(pid) || pid <= 0) {
     return undefined;
   }
-  return { pid, boot, start };
+  return { pid, boot, ns, start };
 }
 
 /** Verdict on the gateway that created a dir, driving the sweep's keep/remove. */
@@ -153,14 +188,18 @@ type BundleMcpOwnerVerdict = "legacy" | "alive" | "dead";
  * Classify a dir by the owner encoded in its name. `alive` may be a run still
  * waiting in the serialization queue whose CLI child has not spawned yet — no
  * argv references it, but deleting it would make that run spawn with a missing
- * `--mcp-config`. `dead` (pid gone, boot id changed by a reboot, or the pid
- * reused by a different process) means the queued run died with its gateway, so
- * the dir is reclaimable regardless of age. `legacy` (unparseable old-format
- * name) has no provable owner and is never auto-removed (rolling-upgrade safe).
+ * `--mcp-config`. It also covers an owner the sweep cannot probe: one in a
+ * different (or unverifiable) PID namespace, whose liveness this process cannot
+ * see, so the dir is kept (over-protect). `dead` (pid gone, boot id changed by a
+ * reboot, or the pid reused by a different process) means the queued run died
+ * with its gateway, so the dir is reclaimable regardless of age. `legacy`
+ * (unparseable old-format name) has no provable owner and is never auto-removed
+ * (rolling-upgrade safe).
  */
 async function resolveBundleMcpOwner(
   entryName: string,
   currentBoot: string,
+  currentNs: string,
   isPidAlive: (pid: number) => boolean,
   readStartTicks: (pid: number) => Promise<string | undefined>,
 ): Promise<BundleMcpOwnerVerdict> {
@@ -170,6 +209,18 @@ async function resolveBundleMcpOwner(
   }
   if (owner.boot !== NO_BOOT_ID && currentBoot !== NO_BOOT_ID && owner.boot !== currentBoot) {
     return "dead"; // Host rebooted since creation — the owning gateway is gone.
+  }
+  // `process.kill`/`/proc` liveness only means anything for a process in THIS
+  // PID namespace. When the owner was created in a different namespace — e.g. a
+  // separate container sharing the same `/tmp` mount — its pid here is either
+  // absent (looks dead) or reused by an unrelated local process (start
+  // mismatch), so a liveness verdict would delete a live foreign config. Trust
+  // the pid probes only when the namespace provably matches; a different or
+  // unverifiable namespace (NO_NS on either side) keeps the dir (over-protect),
+  // mirroring the off-Linux and unknown-start fail-closed paths. The owner's own
+  // namespace sweep — where the encoded ns matches — reclaims it once dead.
+  if (owner.ns === NO_NS || currentNs === NO_NS || owner.ns !== currentNs) {
+    return "alive";
   }
   if (!isPidAlive(owner.pid)) {
     return "dead";
@@ -281,6 +332,8 @@ export async function sweepOrphanedBundleMcpTempDirs(params?: {
   readStartTicks?: (pid: number) => Promise<string | undefined>;
   /** Override the current boot tag (tests). Defaults to the host boot-id prefix on Linux. */
   currentBoot?: string;
+  /** Override the current PID-namespace tag (tests). Defaults to the host ns inode on Linux. */
+  currentNs?: string;
   log?: { warn: (msg: string) => void };
 }): Promise<{ removed: string[]; kept: string[] }> {
   const tmpRoot = params?.tmpRoot ?? os.tmpdir();
@@ -310,6 +363,7 @@ export async function sweepOrphanedBundleMcpTempDirs(params?: {
   }
 
   const currentBoot = params?.currentBoot ?? (await readBootTag());
+  const currentNs = params?.currentNs ?? (await readPidNamespaceTag());
 
   // Phase 1 — classify. A dir becomes a removal candidate only when nothing live
   // references it AND its encoded owner is provably gone. Age plays no part: an
@@ -326,7 +380,13 @@ export async function sweepOrphanedBundleMcpTempDirs(params?: {
       kept.push(dir);
       continue;
     }
-    const owner = await resolveBundleMcpOwner(entry, currentBoot, isPidAlive, readStartTicks);
+    const owner = await resolveBundleMcpOwner(
+      entry,
+      currentBoot,
+      currentNs,
+      isPidAlive,
+      readStartTicks,
+    );
     if (owner === "alive") {
       // A queued run of a live gateway whose child has not spawned yet (the
       // config is created at prepare time, before `enqueueCliRun`).

@@ -11,16 +11,17 @@ import {
 const BUNDLE_MCP_TEMP_PREFIX = "openclaw-cli-mcp-";
 const OLD_MTIME = new Date(Date.now() - 24 * 60 * 60 * 1000);
 const BOOT = "a1b2c3d4"; // 8-hex test boot tag
+const NS = "4026531836"; // default owner PID-namespace inode tag
 const START = "100"; // default owner process start ticks
 
-type Owner = { pid: number; boot?: string; start?: string };
+type Owner = { pid: number; boot?: string; ns?: string; start?: string };
 
 /** Build a temp dir name; owner identity is encoded in the name (or omitted = legacy). */
 function dirName(suffix: string, owner?: Owner): string {
   if (!owner) {
     return `${BUNDLE_MCP_TEMP_PREFIX}legacy${suffix}`;
   }
-  return `${BUNDLE_MCP_TEMP_PREFIX}${owner.pid}-${owner.boot ?? BOOT}-${owner.start ?? START}-${suffix}`;
+  return `${BUNDLE_MCP_TEMP_PREFIX}${owner.pid}-${owner.boot ?? BOOT}-${owner.ns ?? NS}-${owner.start ?? START}-${suffix}`;
 }
 
 async function createDir(
@@ -45,6 +46,7 @@ function sweep(root: string, over?: Parameters<typeof sweepOrphanedBundleMcpTemp
   return sweepOrphanedBundleMcpTempDirs({
     tmpRoot: root,
     currentBoot: BOOT,
+    currentNs: NS,
     listCommandLines: () => ["node /usr/bin/unrelated"],
     isPidAlive: () => true,
     readStartTicks: async () => START,
@@ -166,6 +168,39 @@ describe("sweepOrphanedBundleMcpTempDirs", () => {
     await expect(fs.stat(queued)).resolves.toBeDefined();
   });
 
+  it("keeps an owner-encoded dir from a DIFFERENT PID namespace even when its pid looks dead (shared /tmp, invisible foreign owner)", async () => {
+    // A separate container sharing this /tmp has its own PID namespace. Its
+    // gateway pid is not visible here, so process.kill reports it dead — but the
+    // config may still be live over there. The namespace mismatch must keep it,
+    // so the sweep never deletes a live foreign config. That container's own
+    // sweep (where the encoded ns matches) reclaims it once it is truly dead.
+    const foreign = await createDir(root, "foreign-ns", { owner: { pid: 4242, ns: "999999" } });
+    const result = await sweep(root, { currentNs: NS, isPidAlive: () => false });
+    expect(result.removed).toEqual([]);
+    expect(result.kept).toEqual([foreign]);
+    await expect(fs.stat(foreign)).resolves.toBeDefined();
+  });
+
+  it("keeps a dir whose OWNER namespace is unverifiable (nons encoded), even with a dead-looking pid (over-protect)", async () => {
+    // Creator could not read its own ns (off-Linux/restricted) -> encoded nons.
+    // Same-namespace cannot be proven, so pid liveness is untrusted -> keep.
+    const unknownNs = await createDir(root, "owner-nons", { owner: { pid: 4242, ns: "nons" } });
+    const result = await sweep(root, { currentNs: NS, isPidAlive: () => false });
+    expect(result.removed).toEqual([]);
+    expect(result.kept).toEqual([unknownNs]);
+    await expect(fs.stat(unknownNs)).resolves.toBeDefined();
+  });
+
+  it("keeps a dir when the SWEEPER's own namespace is unreadable (nons), even with a dead-looking pid (fail-closed)", async () => {
+    // The sweeping process cannot read /proc/self/ns/pid, so it cannot prove any
+    // owner shares its namespace; every owner-encoded dir is kept.
+    const dir = await createDir(root, "sweeper-nons", { owner: { pid: 4242 } });
+    const result = await sweep(root, { currentNs: "nons", isPidAlive: () => false });
+    expect(result.removed).toEqual([]);
+    expect(result.kept).toEqual([dir]);
+    await expect(fs.stat(dir)).resolves.toBeDefined();
+  });
+
   it("recognizes a name produced by bundleMcpOwnedMkdtempPrefixName as owned by the live gateway", async () => {
     // Producer -> consumer round-trip against real defaults, mirroring the
     // production path: the shared writer joins this name onto the temp root and
@@ -207,7 +242,7 @@ describe("sweepOrphanedBundleMcpTempDirs", () => {
   it("treats an unparseable owner name as legacy (kept, never auto-removed)", async () => {
     // A prefixed dir whose name does not encode a valid owner (e.g. pid 0) is
     // legacy, not owned — like every legacy dir it is never auto-removed.
-    const dir = path.join(root, `${BUNDLE_MCP_TEMP_PREFIX}0-${BOOT}-${START}-badpid`);
+    const dir = path.join(root, `${BUNDLE_MCP_TEMP_PREFIX}0-${BOOT}-${NS}-${START}-badpid`);
     await fs.mkdir(dir, { recursive: true });
     await fs.utimes(dir, OLD_MTIME, OLD_MTIME);
     const result = await sweep(root);
