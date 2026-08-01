@@ -11,6 +11,9 @@
       "huggingface": "refreshable"
     }
   },
+  "contracts": {
+    "imageGenerationProviders": ["huggingface"]
+  },
   "modelIdNormalization": {
     "providers": {
       "huggingface": {

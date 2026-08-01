@@ -1,5 +1,5 @@
 ---
-summary: "Generate and edit images via image_generate across OpenAI, Google, fal, Microsoft Foundry, MiniMax, ComfyUI, DeepInfra, OpenRouter, LiteLLM, xAI, Vydra"
+summary: "Generate and edit images via image_generate across OpenAI, Google, fal, Microsoft Foundry, MiniMax, ComfyUI, DeepInfra, OpenRouter, LiteLLM, xAI, Vydra, Hugging Face"
 read_when:
   - Generating or editing images via the agent
   - Configuring image-generation providers and models
@@ -84,6 +84,7 @@ internal image endpoints remain blocked by default.
 | LiteLLM image generation                             | `litellm/gpt-image-2`                              | `LITELLM_API_KEY`                      |
 | Microsoft Foundry MAI image generation               | `microsoft-foundry/<deployment-name>`              | `AZURE_OPENAI_API_KEY` or Entra ID     |
 | Google Gemini image generation                       | `google/gemini-3.1-flash-image`                    | `GEMINI_API_KEY` or `GOOGLE_API_KEY`   |
+| Hugging Face image generation                        | `huggingface/black-forest-labs/FLUX.1-schnell`     | `HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN`  |
 
 The same tool handles text-to-image and reference-image editing. Use `image`
 for one reference or `images` for multiple. For Krea 2 models on fal, those
@@ -107,6 +108,7 @@ backend. For CLI requests, pass `--openai-moderation low|auto` to either
 | DeepInfra         | `black-forest-labs/FLUX-1-schnell`      | Yes (1 image)                      | `DEEPINFRA_API_KEY`                                   |
 | fal               | `fal-ai/flux/dev`                       | Yes (model-specific limits)        | `FAL_KEY`                                             |
 | Google            | `gemini-3.1-flash-image`                | Yes (up to 5 images)               | `GEMINI_API_KEY` or `GOOGLE_API_KEY`                  |
+| Hugging Face      | `black-forest-labs/FLUX.1-schnell`      | No                                 | `HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN`                 |
 | LiteLLM           | `gpt-image-2`                           | Yes (up to 5 input images)         | `LITELLM_API_KEY`                                     |
 | Microsoft Foundry | `<deployment-name>`                     | Yes (MAI-Image-2.5 models only)    | `AZURE_OPENAI_API_KEY` or Entra ID (`az login`)       |
 | MiniMax           | `image-01`                              | Yes (subject reference)            | `MINIMAX_API_KEY` or MiniMax OAuth (`minimax-portal`) |

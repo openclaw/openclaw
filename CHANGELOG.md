@@ -55,6 +55,7 @@ Docs: https://docs.openclaw.ai
 - **Gateway TTS playback:** add an operator-scoped `tts.speak` RPC that returns configured-provider speech as inline whole-clip audio for remote clients. (#100708, #100770)
 - **Workboard dispatch cap:** add a request-scoped `--max-starts` override while preserving the default cap, sequential starts, and one-card-per-owner guard. (#100174) Thanks @souvikDevloper.
 - **Plugin install provenance warnings:** require explicit `--force` acknowledgement for arbitrary executable plugin sources in CLI and chat installs, keep trusted ClawHub, bundled, official-catalog, and tracked-update flows frictionless, and restrict Crestodian installs to trusted sources. (#102197) Thanks @jesse-merhi.
+- **Hugging Face image generation:** add text-to-image generation through the `hf-inference` Inference Providers route, reusing the existing `HUGGINGFACE_HUB_TOKEN`/`HF_TOKEN` credentials and routing requests through the shared SSRF-guarded provider HTTP helpers; defaults to `black-forest-labs/FLUX.1-schnell` with width/height forwarded from `--size`. Thanks @lyfuci.
 
 ### Fixes
 
