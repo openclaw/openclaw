@@ -399,7 +399,7 @@ export function readSqliteTranscriptRowsForFork(
       status: "created",
       rows: rows.map((row) => ({
         event: JSON.parse(row.event_json) as TranscriptEvent,
-        seq: Number(row.seq),
+        seq: row.seq,
       })),
     };
   } catch {
