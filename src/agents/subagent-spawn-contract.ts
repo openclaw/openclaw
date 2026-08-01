@@ -67,6 +67,7 @@ export type SpawnSubagentResult = {
   childSessionKey?: string;
   /** Durable child session identity (UUID). Prefer this over parsing childSessionKey. */
   sessionId?: string;
+  /** Present only for collector launches (`collect: true`). */
   sessionKey?: string;
   runId?: string;
   mode?: SpawnSubagentMode;

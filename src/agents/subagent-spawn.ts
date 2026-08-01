@@ -648,7 +648,9 @@ export async function spawnSubagentDirect(
       status: "accepted",
       childSessionKey,
       sessionId: resolveAcceptedChildSessionId(),
-      sessionKey: collectorSessionKey ?? childSessionKey,
+      // sessionKey remains collector-launch only; ordinary spawns expose durable
+      // identity via sessionId + childSessionKey without redefining sessionKey.
+      ...(collectorSessionKey ? { sessionKey: collectorSessionKey } : {}),
       runId: childRunId,
       mode: spawnMode,
       taskName,
