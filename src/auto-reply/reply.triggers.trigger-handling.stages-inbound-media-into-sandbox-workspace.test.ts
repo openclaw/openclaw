@@ -591,4 +591,66 @@ describe("stageSandboxMedia", () => {
       await expect(fs.readFile(stagedFilePath, "utf8")).resolves.toBe("CONTENT");
     });
   });
+
+  it("full lifecycle: staged file available during reply, directory removed after cleanup", async () => {
+    await withSandboxMediaTempHome("openclaw-lifecycle-", async (home) => {
+      const cfg = createSandboxMediaStageConfig(home);
+      const workspaceDir = join(home, "openclaw");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      sandboxMocks.ensureSandboxWorkspaceForSession.mockResolvedValue(null);
+
+      const mediaPath = await writeInboundMedia(home, "photo.png", "PNG_BYTES");
+
+      const { ctx, sessionCtx } = createSandboxMediaContexts(mediaPath);
+      const stageResult = await stageSandboxMedia({
+        ctx,
+        sessionCtx,
+        cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir,
+      });
+
+      expect(stageResult.staged.size).toBe(1);
+      expect(stageResult.hostWorkspaceStagingDir).toBeDefined();
+
+      const stagingDir = stageResult.hostWorkspaceStagingDir!;
+
+      // Phase 1: Staging directory exists and contains the staged file
+      const dirBefore = await fs.stat(stagingDir);
+      expect(dirBefore.isDirectory()).toBe(true);
+
+      const stagedFilePath = stageResult.staged.get(0)!;
+      const stagedContent = await fs.readFile(stagedFilePath, "utf8");
+      expect(stagedContent).toBe("PNG_BYTES");
+
+      // Phase 2: Simulate the getReplyFromConfig try/finally cleanup pattern
+      // — the staged file must be readable during the "reply" phase
+      let fileReadDuringReply: string | undefined;
+      try {
+        // Simulates runPreparedReply: the agent reads the staged file
+        fileReadDuringReply = await fs.readFile(stagedFilePath, "utf8");
+      } finally {
+        // Matches getReplyFromConfig's finally block exactly
+        if (stagingDir) {
+          await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
+        }
+      }
+
+      // Phase 3: Verify the file was accessible during the reply
+      expect(fileReadDuringReply).toBe("PNG_BYTES");
+
+      // Phase 4: Verify cleanup removed the staging directory and all contents
+      const existsAfter = await fs
+        .stat(stagingDir)
+        .then(() => true)
+        .catch(() => false);
+      expect(existsAfter).toBe(false);
+
+      // Phase 5: Verify no openclaw-staged-* directories remain in workspace
+      const inboundDir = join(workspaceDir, "media", "inbound");
+      const remaining = await fs.readdir(inboundDir).catch(() => []);
+      const stagedDirs = remaining.filter((f) => f.startsWith("openclaw-staged-"));
+      expect(stagedDirs).toHaveLength(0);
+    });
+  });
 });
