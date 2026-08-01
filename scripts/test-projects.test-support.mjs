@@ -532,11 +532,13 @@ const GITHUB_WORKFLOW_TEST_OWNERS = [
       "check-workflows",
       "plugin-contract-test-plan",
       "plugin-prerelease-test-plan",
+      "localization-catalog-workflow",
       "verify-pr-hosted-gates",
     ],
   ],
   ["crabbox-hydrate", ["package-acceptance-workflow"]],
   ["dependency-guard", ["dependency-guard-workflow"]],
+  ["localization-catalog-refresh", ["localization-catalog-workflow"]],
   ["docker-release", ["src/dockerfile.test.ts"]],
   [
     "full-release-validation",
@@ -658,7 +660,13 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ["test/scripts/setup-pnpm-store-cache-ensure-node.test.ts"],
   ],
   [".github/images/live-media-runner/Dockerfile", LIVE_MEDIA_RUNNER_IMAGE_TEST_TARGETS],
-  [".github/workflows/ci.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
+  [
+    ".github/workflows/ci.yml",
+    [
+      "test/scripts/ci-workflow-guards.test.ts",
+      "test/scripts/localization-catalog-workflow.test.ts",
+    ],
+  ],
   [
     ".github/workflows/ci-check-testbox.yml",
     ["test/scripts/ci-workflow-guards.test.ts", "test/scripts/package-acceptance-workflow.test.ts"],

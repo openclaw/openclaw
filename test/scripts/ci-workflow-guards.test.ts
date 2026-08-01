@@ -2176,6 +2176,7 @@ describe("ci workflow guards", () => {
       "checks-ui",
       "checks-ui-e2e",
       "control-ui-i18n",
+      "localization-catalogs",
       "native-i18n",
       "qa-smoke-ci-profile",
     ]);
@@ -4768,6 +4769,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "pnpm-store-warmup",
       "build-artifacts",
       "native-i18n",
+      "localization-catalogs",
       "checks-ui",
       "checks-ui-e2e",
       "control-ui-i18n",
