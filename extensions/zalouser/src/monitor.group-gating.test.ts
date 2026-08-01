@@ -995,7 +995,7 @@ describe("zalouser monitor group mention gating", () => {
     expect(call?.ctx?.Body ?? "").toContain("[acct] hello");
   });
 
-  it("honors explicit empty account messagePrefix over global responsePrefix", async () => {
+  it("honors explicit empty account messagePrefix without inventing a prefix", async () => {
     const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime({
       commandAuthorized: false,
     });
@@ -1006,19 +1006,18 @@ describe("zalouser monitor group mention gating", () => {
         config: {
           ...createAccount().config,
           messagePrefix: "",
+          // Outbound-only; must not appear on inbound BodyForAgent.
+          responsePrefix: "[outbound]",
           dmPolicy: "open",
         },
       },
-      config: {
-        ...createConfig(),
-        messages: { responsePrefix: "[global]" },
-      },
+      config: createConfig(),
       runtime: createRuntimeEnv(),
     });
 
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
     const call = dispatchReplyCall(dispatchReplyWithBufferedBlockDispatcher);
     expect(call?.ctx?.BodyForAgent).toBe("hello");
-    expect(call?.ctx?.BodyForAgent).not.toContain("[global]");
+    expect(call?.ctx?.BodyForAgent).not.toContain("[outbound]");
   });
 });
