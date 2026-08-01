@@ -341,7 +341,7 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
         if (!restart) {
           throw new Error("Matrix catchup scenario requires Gateway restart support");
         }
-        await restart(async () => await queueMessage());
+        await restart(async () => await queueMessage(), { shutdownMode: "hard" });
         await waitForMatrixAccountReady({
           accountId: params.accountId,
           gateway: input.gateway,

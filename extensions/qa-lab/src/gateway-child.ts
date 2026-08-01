@@ -105,6 +105,10 @@ export type QaGatewayChildStateMutationContext = {
   tempRoot: string;
 };
 
+export type QaGatewayChildRestartOptions = {
+  shutdownMode?: "graceful" | "hard";
+};
+
 type QaGatewayChildDirectCommand = {
   executablePath: string;
   argsPrefix?: string[];
@@ -855,12 +859,26 @@ function resolveQaGatewayChildStopTimeouts(opts?: {
 
 async function stopQaGatewayChildProcessTree(
   child: ChildProcess,
-  opts?: { gracefulTimeoutMs?: number; forceTimeoutMs?: number },
+  opts?: {
+    gracefulTimeoutMs?: number;
+    forceTimeoutMs?: number;
+    shutdownMode?: QaGatewayChildRestartOptions["shutdownMode"];
+  },
 ) {
   if (!isQaGatewayChildProcessTreeAlive(child)) {
     return;
   }
   const timeouts = resolveQaGatewayChildStopTimeouts(opts);
+  if (opts?.shutdownMode === "hard") {
+    // Crash-recovery scenarios inject state only after the process tree is gone.
+    // A graceful signal would let the Gateway persist a clean-shutdown marker.
+    signalQaGatewayChildProcessTree(child, "SIGKILL");
+    const stopped = await waitForQaGatewayChildExit(child, timeouts.forceTimeoutMs);
+    if (!stopped) {
+      throw new Error("qa gateway process tree remained alive after forced shutdown");
+    }
+    return;
+  }
   signalQaGatewayChildProcessTree(child, "SIGTERM");
   if (await waitForQaGatewayChildExit(child, timeouts.gracefulTimeoutMs)) {
     return;
@@ -880,7 +898,11 @@ async function stopQaGatewayChildWithBoundary(params: {
   child: ChildProcess;
   controller: QaGatewayProcessBoundaryController | null;
   identity: QaGatewayVerifiedProcessIdentity | null;
-  opts?: { gracefulTimeoutMs?: number; forceTimeoutMs?: number };
+  opts?: {
+    gracefulTimeoutMs?: number;
+    forceTimeoutMs?: number;
+    shutdownMode?: QaGatewayChildRestartOptions["shutdownMode"];
+  };
 }) {
   const errors: unknown[] = [];
   if (params.controller && params.identity) {
@@ -1670,6 +1692,7 @@ export async function startQaGatewayChild(params: {
       },
       async restartAfterStateMutation(
         mutateState: (context: QaGatewayChildStateMutationContext) => Promise<void>,
+        options?: QaGatewayChildRestartOptions,
       ) {
         throwActiveChildFailure();
         await activeRpcClient.stop().catch(() => {});
@@ -1677,6 +1700,7 @@ export async function startQaGatewayChild(params: {
           child: activeChild,
           controller: processBoundaryController,
           identity: activeIdentity,
+          opts: options,
         });
         await mutateState({
           configPath,
