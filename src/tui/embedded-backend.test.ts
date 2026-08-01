@@ -52,7 +52,11 @@ const loadCombinedSessionStoreForGatewayMock = vi.fn((_options?: unknown) => ({
 }));
 const getRuntimeConfigMock = vi.fn(() => ({}));
 const loadGatewayModelCatalogMock = vi.fn(
-  (_params?: unknown): Array<{ id: string; name: string; provider: string }> => [],
+  (
+    _params?: unknown,
+  ):
+    | Array<{ id: string; name: string; provider: string }>
+    | Promise<Array<{ id: string; name: string; provider: string }>> => [],
 );
 const readSessionMessagesAsyncMock = vi.fn(
   async (
@@ -130,16 +134,22 @@ vi.mock("../config/sessions/session-accessor.js", () => ({
   applySessionPatchProjection: (...args: unknown[]) => applySessionPatchProjectionMock(...args),
 }));
 
-vi.mock("../agents/agent-scope.js", () => ({
-  resolveAgentDir: (_cfg: unknown, agentId: string) => `/tmp/openclaw-agent-${agentId}/agent`,
-  resolveAgentWorkspaceDir: (_cfg: unknown, agentId: string) => `/tmp/openclaw-agent-${agentId}`,
-  resolveDefaultAgentId: (cfg?: {
-    agents?: { list?: Array<{ id?: string; default?: boolean }> };
-  }) =>
-    cfg?.agents?.list?.find((agent) => agent.default)?.id ?? cfg?.agents?.list?.[0]?.id ?? "main",
-  resolveSessionAgentId: (params: { sessionKey?: string; agentId?: string }) =>
-    params.agentId ?? /^agent:([^:]+):/.exec(params.sessionKey ?? "")?.[1] ?? "main",
-}));
+vi.mock("../agents/agent-scope.js", async () => {
+  const { resolveAgentEffectiveModelPrimary, resolveAgentModelFallbacksOverride } =
+    await vi.importActual<typeof import("../agents/agent-scope.js")>("../agents/agent-scope.js");
+  return {
+    resolveAgentDir: (_cfg: unknown, agentId: string) => `/tmp/openclaw-agent-${agentId}/agent`,
+    resolveAgentWorkspaceDir: (_cfg: unknown, agentId: string) => `/tmp/openclaw-agent-${agentId}`,
+    resolveDefaultAgentId: (cfg?: {
+      agents?: { list?: Array<{ id?: string; default?: boolean }> };
+    }) =>
+      cfg?.agents?.list?.find((agent) => agent.default)?.id ?? cfg?.agents?.list?.[0]?.id ?? "main",
+    resolveAgentEffectiveModelPrimary,
+    resolveAgentModelFallbacksOverride,
+    resolveSessionAgentId: (params: { sessionKey?: string; agentId?: string }) =>
+      params.agentId ?? /^agent:([^:]+):/.exec(params.sessionKey ?? "")?.[1] ?? "main",
+  };
+});
 
 vi.mock("../agents/runtime-plugins.js", () => ({
   ensureRuntimePluginsLoaded: (...args: unknown[]) => ensureRuntimePluginsLoadedMock(...args),
@@ -153,20 +163,25 @@ vi.mock("../agents/defaults.js", () => ({
   DEFAULT_PROVIDER: "openai",
 }));
 
-vi.mock("../agents/model-selection.js", () => ({
-  buildAllowedModelSet: ({ catalog }: { catalog: unknown[] }) => ({ allowedCatalog: catalog }),
-  buildConfiguredModelCatalog: ({ cfg }: { cfg: { models?: { providers?: unknown } } }) =>
-    Object.entries(
-      (cfg.models?.providers as Record<string, { models?: Array<{ id: string }> }>) ?? {},
-    ).flatMap(([provider, entry]) =>
-      (entry.models ?? []).map((model) => ({
-        id: `${provider}/${model.id}`,
-        name: model.id,
-        provider,
-      })),
-    ),
-  resolveThinkingDefault: () => undefined,
-}));
+vi.mock("../agents/model-selection.js", async () => {
+  const { buildAllowedModelSet } = await vi.importActual<
+    typeof import("../agents/model-selection.js")
+  >("../agents/model-selection.js");
+  return {
+    buildAllowedModelSet,
+    buildConfiguredModelCatalog: ({ cfg }: { cfg: { models?: { providers?: unknown } } }) =>
+      Object.entries(
+        (cfg.models?.providers as Record<string, { models?: Array<{ id: string }> }>) ?? {},
+      ).flatMap(([provider, entry]) =>
+        (entry.models ?? []).map((model) => ({
+          id: `${provider}/${model.id}`,
+          name: model.id,
+          provider,
+        })),
+      ),
+    resolveThinkingDefault: () => undefined,
+  };
+});
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => getRuntimeConfigMock(),
@@ -644,6 +659,414 @@ describe("EmbeddedTuiBackend", () => {
     expect(loadGatewayModelCatalogMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      name: "global policy",
+      agents: { defaults: { modelPolicy: { allow: ["openai/*"] } } },
+    },
+    {
+      name: "canonical policy with legacy metadata",
+      agents: {
+        defaults: {
+          models: { "openai/*": {} },
+          modelPolicy: { allow: ["openai/*"] },
+        },
+      },
+    },
+    {
+      name: "default-agent policy",
+      agents: {
+        list: [
+          {
+            id: "research",
+            default: true,
+            modelPolicy: { allow: ["openai/*"] },
+          },
+        ],
+      },
+    },
+  ])("discovers replace-mode models for a canonical wildcard $name", async ({ agents }) => {
+    getRuntimeConfigMock.mockReturnValue({
+      agents,
+      models: { mode: "replace", providers: {} },
+    });
+    loadGatewayModelCatalogMock.mockReturnValue([
+      { id: "gpt-5.4", name: "GPT 5.4", provider: "openai" },
+      { id: "claude-sonnet-4-6", name: "Claude Sonnet", provider: "anthropic" },
+    ]);
+
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+
+    await expect(backend.listModels()).resolves.toEqual([
+      {
+        id: "gpt-5.4",
+        name: "GPT 5.4",
+        provider: "openai",
+        contextWindow: undefined,
+        reasoning: undefined,
+      },
+    ]);
+    expect(loadGatewayModelCatalogMock).toHaveBeenCalledWith({ readOnly: false });
+  });
+
+  it("keeps legacy replace-mode discovery on its historical direct path", async () => {
+    getRuntimeConfigMock.mockReturnValue({
+      agents: { defaults: { models: { "openai/*": {} } } },
+      models: { mode: "replace", providers: {} },
+    });
+    loadGatewayModelCatalogMock.mockImplementation(() => new Promise(() => {}));
+
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+    let settled = false;
+    void backend.listModels().then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(750);
+
+    expect(settled).toBe(false);
+    expect(loadGatewayModelCatalogMock).toHaveBeenCalledWith({ readOnly: false });
+  });
+
+  it("keeps an inherited empty agent policy on the legacy discovery path", async () => {
+    getRuntimeConfigMock.mockReturnValue({
+      agents: {
+        defaults: { models: { "openai/*": {} } },
+        list: [{ id: "research", default: true, modelPolicy: {} }],
+      },
+      models: { mode: "replace", providers: {} },
+    });
+    loadGatewayModelCatalogMock.mockImplementation(() => new Promise(() => {}));
+
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+    let settled = false;
+    void backend.listModels().then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(750);
+
+    expect(settled).toBe(false);
+    expect(loadGatewayModelCatalogMock).toHaveBeenCalledWith({ readOnly: false });
+  });
+
+  it.each([
+    {
+      name: "global policy",
+      agents: { defaults: { modelPolicy: { allow: ["openai/*"] } } },
+    },
+    {
+      name: "canonical policy with legacy metadata",
+      agents: {
+        defaults: {
+          models: { "openai/*": {} },
+          modelPolicy: { allow: ["openai/*"] },
+        },
+      },
+    },
+    {
+      name: "default-agent policy",
+      agents: {
+        list: [
+          {
+            id: "research",
+            default: true,
+            modelPolicy: { allow: ["openai/*"] },
+          },
+        ],
+      },
+    },
+  ])("discovers normal-mode models for a canonical wildcard $name", async ({ agents }) => {
+    getRuntimeConfigMock.mockReturnValue({ agents });
+    loadGatewayModelCatalogMock.mockImplementation((options?: unknown) =>
+      (options as { readOnly?: boolean } | undefined)?.readOnly === false
+        ? [
+            { id: "gpt-5.4", name: "GPT 5.4", provider: "openai" },
+            { id: "claude-sonnet-4-6", name: "Claude Sonnet", provider: "anthropic" },
+          ]
+        : [],
+    );
+
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+
+    await expect(backend.listModels()).resolves.toEqual([
+      {
+        id: "gpt-5.4",
+        name: "GPT 5.4",
+        provider: "openai",
+        contextWindow: undefined,
+        reasoning: undefined,
+      },
+    ]);
+    expect(loadGatewayModelCatalogMock).toHaveBeenCalledWith({ readOnly: false });
+  });
+
+  it("bounds explicit model browsing with the canonical discovery deadline", async () => {
+    getRuntimeConfigMock.mockReturnValue({
+      agents: { defaults: { modelPolicy: { allow: ["openai/*"] } } },
+    });
+    loadGatewayModelCatalogMock.mockImplementation(() => new Promise(() => {}));
+
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+    let models: Awaited<ReturnType<typeof backend.listModels>> | undefined;
+    void backend.listModels().then((result) => {
+      models = result;
+    });
+
+    await vi.advanceTimersByTimeAsync(749);
+    expect(models).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(models).toEqual([]);
+    expect(loadGatewayModelCatalogMock).toHaveBeenCalledWith({ readOnly: false });
+  });
+
+  it.each([
+    {
+      name: "global policy",
+      agents: { defaults: { modelPolicy: { allow: ["openai/*"] } } },
+    },
+    {
+      name: "default-agent policy",
+      agents: {
+        list: [
+          {
+            id: "research",
+            default: true,
+            modelPolicy: { allow: ["openai/*"] },
+          },
+        ],
+      },
+    },
+    {
+      name: "canonical policy with legacy metadata",
+      agents: {
+        defaults: {
+          models: { "openai/*": {} },
+          modelPolicy: { allow: ["openai/*"] },
+        },
+      },
+    },
+  ])("bounds canonical replace-mode discovery for $name", async ({ agents }) => {
+    getRuntimeConfigMock.mockReturnValue({
+      agents,
+      models: { mode: "replace", providers: {} },
+    });
+    loadGatewayModelCatalogMock.mockImplementation(() => new Promise(() => {}));
+
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+    let models: Awaited<ReturnType<typeof backend.listModels>> | undefined;
+    void backend.listModels().then((result) => {
+      models = result;
+    });
+
+    await vi.advanceTimersByTimeAsync(749);
+    expect(models).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(models).toEqual([]);
+    expect(loadGatewayModelCatalogMock).toHaveBeenCalledWith({ readOnly: false });
+  });
+
+  it.each([
+    { name: "unrestricted", agents: undefined },
+    {
+      name: "legacy-only wildcard",
+      agents: { defaults: { models: { "openai/*": {} } } },
+    },
+    {
+      name: "explicit empty policy",
+      agents: { defaults: { modelPolicy: { allow: [] } } },
+    },
+    {
+      name: "another agent's wildcard",
+      agents: {
+        list: [
+          { id: "main", default: true },
+          { id: "research", modelPolicy: { allow: ["openai/*"] } },
+        ],
+      },
+    },
+  ])("keeps $name normal-mode model discovery read-only", async ({ agents }) => {
+    getRuntimeConfigMock.mockReturnValue(agents ? { agents } : {});
+    loadGatewayModelCatalogMock.mockReturnValue([
+      { id: "gpt-5.4", name: "GPT 5.4", provider: "openai" },
+    ]);
+
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+
+    await expect(backend.listModels()).resolves.toEqual([
+      {
+        id: "gpt-5.4",
+        name: "GPT 5.4",
+        provider: "openai",
+        contextWindow: undefined,
+        reasoning: undefined,
+      },
+    ]);
+    expect(loadGatewayModelCatalogMock).toHaveBeenCalledWith(undefined);
+  });
+
+  it("keeps an explicit empty policy on the configured-only replace-mode path", async () => {
+    getRuntimeConfigMock.mockReturnValue({
+      agents: { defaults: { modelPolicy: { allow: [] } } },
+      models: { mode: "replace", providers: {} },
+    });
+    loadGatewayModelCatalogMock.mockReturnValue([
+      { id: "gpt-5.4", name: "GPT 5.4", provider: "openai" },
+    ]);
+
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+
+    await expect(backend.listModels()).resolves.toEqual([]);
+    expect(loadGatewayModelCatalogMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves full discovery for another agent's legacy model-map wildcard", async () => {
+    getRuntimeConfigMock.mockReturnValue({
+      agents: {
+        list: [
+          { id: "main", default: true },
+          { id: "research", models: { "openai/*": {} } },
+        ],
+      },
+      models: { mode: "replace", providers: {} },
+    });
+    loadGatewayModelCatalogMock.mockReturnValue([
+      { id: "gpt-5.4", name: "GPT 5.4", provider: "openai" },
+    ]);
+
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+
+    await expect(backend.listModels()).resolves.toEqual([
+      {
+        id: "gpt-5.4",
+        name: "GPT 5.4",
+        provider: "openai",
+        contextWindow: undefined,
+        reasoning: undefined,
+      },
+    ]);
+    expect(loadGatewayModelCatalogMock).toHaveBeenCalledWith({ readOnly: false });
+  });
+
+  it("does not expose other providers when a wildcard policy has no matching models", async () => {
+    getRuntimeConfigMock.mockReturnValue({
+      agents: {
+        defaults: {
+          models: { "openai/*": {} },
+          modelPolicy: { allow: ["openai/*"] },
+        },
+      },
+    });
+    loadGatewayModelCatalogMock.mockReturnValue([
+      { id: "claude-sonnet-4-6", name: "Claude Sonnet", provider: "anthropic" },
+    ]);
+
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+
+    await expect(backend.listModels()).resolves.toEqual([]);
+  });
+
+  it("applies the default agent's own model policy when listing embedded models", async () => {
+    getRuntimeConfigMock.mockReturnValue({
+      agents: {
+        list: [
+          {
+            id: "research",
+            default: true,
+            modelPolicy: { allow: ["openai/*"] },
+          },
+        ],
+      },
+    });
+    loadGatewayModelCatalogMock.mockReturnValue([
+      { id: "claude-sonnet-4-6", name: "Claude Sonnet", provider: "anthropic" },
+    ]);
+
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+
+    await expect(backend.listModels()).resolves.toEqual([]);
+  });
+
+  it("retains the configured primary without exposing an unapproved automatic fallback", async () => {
+    getRuntimeConfigMock.mockReturnValue({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-primary",
+            fallbacks: ["external/sensitive"],
+          },
+          modelPolicy: { allow: ["openai/safe"] },
+        },
+      },
+    });
+    loadGatewayModelCatalogMock.mockReturnValue([
+      { id: "gpt-primary", name: "GPT Primary", provider: "openai" },
+      { id: "safe", name: "GPT Safe", provider: "openai" },
+      { id: "sensitive", name: "Sensitive External", provider: "external" },
+    ]);
+
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+
+    await expect(backend.listModels()).resolves.toEqual([
+      {
+        id: "gpt-primary",
+        name: "GPT Primary",
+        provider: "openai",
+        contextWindow: undefined,
+        reasoning: undefined,
+      },
+      {
+        id: "safe",
+        name: "GPT Safe",
+        provider: "openai",
+        contextWindow: undefined,
+        reasoning: undefined,
+      },
+    ]);
+  });
+
+  it("keeps matching models visible when a provider wildcard excludes sibling providers", async () => {
+    getRuntimeConfigMock.mockReturnValue({
+      agents: {
+        defaults: {
+          models: { "openai/*": {} },
+          modelPolicy: { allow: ["openai/*"] },
+        },
+      },
+    });
+    loadGatewayModelCatalogMock.mockReturnValue([
+      { id: "claude-sonnet-4-6", name: "Claude Sonnet", provider: "anthropic" },
+      { id: "gpt-5.4", name: "GPT 5.4", provider: "openai" },
+    ]);
+
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+
+    await expect(backend.listModels()).resolves.toEqual([
+      {
+        id: "gpt-5.4",
+        name: "GPT 5.4",
+        provider: "openai",
+        contextWindow: undefined,
+        reasoning: undefined,
+      },
+    ]);
+  });
+
   it("loads the gateway catalog for replace-mode provider wildcard allowlists", async () => {
     getRuntimeConfigMock.mockReturnValue({
       agents: {
@@ -677,6 +1100,13 @@ describe("EmbeddedTuiBackend", () => {
       {
         id: "discovered",
         name: "discovered",
+        provider: "tui-pty-mock",
+        contextWindow: undefined,
+        reasoning: undefined,
+      },
+      {
+        id: "configured",
+        name: "configured",
         provider: "tui-pty-mock",
         contextWindow: undefined,
         reasoning: undefined,
@@ -923,6 +1353,204 @@ describe("EmbeddedTuiBackend", () => {
       thinkingLevel: undefined,
     });
     expect(loadGatewayModelCatalogMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps history startup read-only when wildcard provider discovery stalls", async () => {
+    const cfg = {
+      agents: { defaults: { modelPolicy: { allow: ["openai/*"] } } },
+    };
+    getRuntimeConfigMock.mockReturnValue(cfg);
+    loadSessionEntryMock.mockReturnValue({
+      cfg,
+      canonicalKey: "agent:main:main",
+      storePath: "/tmp/openclaw-sessions.json",
+      store: {},
+      entry: {},
+    });
+    loadGatewayModelCatalogMock.mockImplementation((options?: unknown) =>
+      (options as { readOnly?: boolean } | undefined)?.readOnly === false
+        ? new Promise(() => {})
+        : [],
+    );
+
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+    let completed = false;
+    void backend.loadHistory({ sessionKey: "agent:main:main" }).then(() => {
+      completed = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(750);
+
+    expect(completed).toBe(true);
+    expect(loadGatewayModelCatalogMock).toHaveBeenCalledWith(undefined);
+  });
+
+  it("keeps replace-mode startup on configured rows for canonical wildcard policies", async () => {
+    const cfg = {
+      agents: { defaults: { modelPolicy: { allow: ["openai/*"] } } },
+      models: { mode: "replace" as const, providers: {} },
+    };
+    getRuntimeConfigMock.mockReturnValue(cfg);
+    loadSessionEntryMock.mockReturnValue({
+      cfg,
+      canonicalKey: "agent:main:main",
+      storePath: "/tmp/openclaw-sessions.json",
+      store: {},
+      entry: {},
+    });
+    loadGatewayModelCatalogMock.mockImplementation(() => new Promise(() => {}));
+
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+
+    await expect(backend.loadHistory({ sessionKey: "agent:main:main" })).resolves.toMatchObject({
+      sessionKey: "agent:main:main",
+    });
+    expect(loadGatewayModelCatalogMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "explicit canonical allowlist",
+      cfg: {
+        agents: {
+          defaults: {
+            models: { "openai/*": {} },
+            modelPolicy: { allow: ["openai/*"] },
+          },
+        },
+        models: { mode: "replace" as const, providers: {} },
+      },
+    },
+    {
+      name: "explicit empty policy object",
+      cfg: {
+        agents: {
+          defaults: {
+            models: { "openai/*": {} },
+            modelPolicy: {},
+          },
+        },
+        models: { mode: "replace" as const, providers: {} },
+      },
+    },
+    {
+      name: "completed migration marker",
+      cfg: {
+        meta: { migrations: { modelPolicyAllowlist: true } },
+        agents: { defaults: { models: { "openai/*": {} } } },
+        models: { mode: "replace" as const, providers: {} },
+      },
+    },
+    {
+      name: "agent-owned canonical policy",
+      cfg: {
+        agents: {
+          list: [
+            {
+              id: "research",
+              default: true,
+              models: { "openai/*": {} },
+              modelPolicy: { allow: ["openai/*"] },
+            },
+          ],
+        },
+        models: { mode: "replace" as const, providers: {} },
+      },
+    },
+    {
+      name: "default agent policy overriding global metadata",
+      cfg: {
+        agents: {
+          defaults: { models: { "openai/*": {} } },
+          list: [
+            {
+              id: "research",
+              default: true,
+              modelPolicy: { allow: ["anthropic/*"] },
+            },
+          ],
+        },
+        models: { mode: "replace" as const, providers: {} },
+      },
+    },
+    {
+      name: "default agent empty allowlist overriding global metadata",
+      cfg: {
+        agents: {
+          defaults: { models: { "openai/*": {} } },
+          list: [
+            {
+              id: "research",
+              default: true,
+              modelPolicy: { allow: [] },
+            },
+          ],
+        },
+        models: { mode: "replace" as const, providers: {} },
+      },
+    },
+  ])("does not treat $name metadata as a legacy discovery policy", async ({ cfg }) => {
+    getRuntimeConfigMock.mockReturnValue(cfg);
+    loadSessionEntryMock.mockReturnValue({
+      cfg,
+      canonicalKey: "agent:main:main",
+      storePath: "/tmp/openclaw-sessions.json",
+      store: {},
+      entry: {},
+    });
+    loadGatewayModelCatalogMock.mockImplementation((options?: unknown) =>
+      (options as { readOnly?: boolean } | undefined)?.readOnly === false
+        ? new Promise(() => {})
+        : [],
+    );
+
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+    let completed = false;
+    void backend.loadHistory({ sessionKey: "agent:main:main" }).then(() => {
+      completed = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(750);
+
+    expect(completed).toBe(true);
+    expect(loadGatewayModelCatalogMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves another agent's legacy wildcard beside an exact global legacy policy", async () => {
+    const cfg = {
+      agents: {
+        defaults: { models: { "openai/gpt": {} } },
+        list: [
+          { id: "main", default: true },
+          { id: "research", models: { "anthropic/*": {} } },
+        ],
+      },
+      models: { mode: "replace" as const, providers: {} },
+    };
+    getRuntimeConfigMock.mockReturnValue(cfg);
+    loadSessionEntryMock.mockReturnValue({
+      cfg,
+      canonicalKey: "agent:main:main",
+      storePath: "/tmp/openclaw-sessions.json",
+      store: {},
+      entry: {},
+    });
+    loadGatewayModelCatalogMock.mockImplementation(() => new Promise(() => {}));
+
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+    let completed = false;
+    void backend.loadHistory({ sessionKey: "agent:main:main" }).then(() => {
+      completed = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(750);
+
+    expect(completed).toBe(false);
+    expect(loadGatewayModelCatalogMock).toHaveBeenCalledWith({ readOnly: false });
   });
 
   it("loads selected-agent global history from the selected agent store", async () => {

@@ -11,6 +11,7 @@ import {
 import { listAgentEntries } from "../agents/agent-scope-config.js";
 import {
   resolveAgentDir,
+  resolveAgentEffectiveModelPrimary,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
   resolveSessionAgentId,
@@ -21,6 +22,14 @@ import {
   queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunSessionId,
 } from "../agents/embedded-agent-runner/runs.js";
+import {
+  loadPreparedModelCatalogSnapshotForBrowse,
+  modelCatalogBrowseRequiresFullDiscovery,
+} from "../agents/model-catalog-browse.js";
+import {
+  LEGACY_MODEL_POLICY_ALLOW_CONFIG_PATH,
+  parseConfiguredModelVisibilityEntries,
+} from "../agents/model-selection-shared.js";
 import {
   buildAllowedModelSet,
   buildConfiguredModelCatalog,
@@ -39,6 +48,11 @@ import {
 import type { QueueSettings } from "../auto-reply/reply/queue/types.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig } from "../config/config.js";
+import {
+  hasExplicitModelPolicyAllow,
+  hasModelPolicyAllowlistMigrationMarker,
+  isExplicitModelPolicy,
+} from "../config/model-policy-allowlist-migration.js";
 import {
   clearSessionGoal,
   createSessionGoal,
@@ -176,12 +190,30 @@ const embeddedSessionStartupMigrationLog = {
 };
 
 function hasProviderWildcardModelAllowlist(cfg: OpenClawConfig) {
-  const modelMaps = [
-    cfg.agents?.defaults?.models,
-    ...listAgentEntries(cfg).map((agent) => agent.models),
-  ];
-  return modelMaps.some((models) =>
-    Object.keys(models ?? {}).some((key) => key.trim().endsWith("/*")),
+  const policy = parseConfiguredModelVisibilityEntries({
+    cfg,
+    agentId: resolveDefaultAgentId(cfg),
+  });
+
+  // Canonical default-agent policy makes every sibling model map metadata-only.
+  if (policy.configPath !== null && policy.configPath !== LEGACY_MODEL_POLICY_ALLOW_CONFIG_PATH) {
+    return false;
+  }
+
+  // Doctor-stamped/global explicit configs never interpret model metadata as policy.
+  if (
+    hasModelPolicyAllowlistMigrationMarker(cfg) ||
+    isExplicitModelPolicy(cfg.agents?.defaults?.modelPolicy)
+  ) {
+    return false;
+  }
+
+  // A global legacy exact allowlist can coexist with another agent's legacy wildcard.
+  return (
+    policy.providerWildcards.size > 0 ||
+    listAgentEntries(cfg)
+      .filter((agent) => !hasExplicitModelPolicyAllow(agent.modelPolicy))
+      .some((agent) => Object.keys(agent.models ?? {}).some((key) => key.trim().endsWith("/*")))
   );
 }
 
@@ -223,6 +255,24 @@ async function loadEmbeddedTuiModelCatalog(cfg: OpenClawConfig) {
   return await loadGatewayModelCatalog(
     shouldLoadFullGatewayCatalogForReplaceMode(cfg) ? { readOnly: false } : undefined,
   );
+}
+
+async function loadEmbeddedTuiModelCatalogForBrowse(cfg: OpenClawConfig) {
+  const agentId = resolveDefaultAgentId(cfg);
+  if (!modelCatalogBrowseRequiresFullDiscovery({ cfg, agentId })) {
+    return await loadEmbeddedTuiModelCatalog(cfg);
+  }
+
+  // Only the explicit picker may escalate normal-mode discovery; startup stays read-only.
+  const { entries } = await loadPreparedModelCatalogSnapshotForBrowse({
+    cfg,
+    agentId,
+    loadCatalog: async ({ readOnly }) => ({
+      entries: await loadGatewayModelCatalog(readOnly ? undefined : { readOnly: false }),
+      routeVariants: [],
+    }),
+  });
+  return entries;
 }
 
 function resolveBtwQuestion(message: string): string | undefined {
@@ -907,14 +957,16 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
   async listModels(): Promise<TuiModelChoice[]> {
     const cfg = getRuntimeConfig();
-    const catalog = await loadEmbeddedTuiModelCatalog(cfg);
+    const agentId = resolveDefaultAgentId(cfg);
+    const catalog = await loadEmbeddedTuiModelCatalogForBrowse(cfg);
     const { allowedCatalog } = buildAllowedModelSet({
       cfg,
       catalog,
       defaultProvider: DEFAULT_PROVIDER,
+      defaultModel: resolveAgentEffectiveModelPrimary(cfg, agentId),
+      agentId,
     });
-    const entries = allowedCatalog.length > 0 ? allowedCatalog : catalog;
-    return entries.map((entry) => ({
+    return allowedCatalog.map((entry) => ({
       id: entry.id,
       name: entry.name ?? entry.id,
       provider: entry.provider,
