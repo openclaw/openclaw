@@ -94,6 +94,27 @@ describe("root help live config fast path", () => {
     expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
   });
 
+  it("loads the config when the configured file cannot be read", async () => {
+    writeConfig(JSON.stringify({ plugins: {} }));
+    const readError = Object.assign(new Error("unreadable config"), { code: "EACCES" });
+    const readFileSyncSpy = vi.spyOn(fs, "readFileSync").mockImplementation(() => {
+      throw readError;
+    });
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      valid: false,
+      sourceConfig: {},
+      runtimeConfig: {},
+    });
+
+    try {
+      await expect(loadRootHelpRenderOptionsForConfigSensitivePlugins()).resolves.toBeNull();
+      expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(1);
+    } finally {
+      readFileSyncSpy.mockRestore();
+      readConfigFileSnapshotMock.mockReset();
+    }
+  });
+
   it("skips the config load for a config whose plugins cannot affect help", async () => {
     writeConfig(JSON.stringify({ plugins: {} }));
 

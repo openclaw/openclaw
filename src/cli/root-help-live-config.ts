@@ -84,12 +84,14 @@ function configPathsForProbe(env: NodeJS.ProcessEnv): string[] {
   ];
 }
 
-function readFirstConfigText(env: NodeJS.ProcessEnv): string | null {
+function readFirstConfigText(env: NodeJS.ProcessEnv): string | null | undefined {
   for (const candidate of configPathsForProbe(env)) {
     try {
       return fs.readFileSync(candidate, "utf8");
-    } catch {
-      // Missing or unreadable: try the next candidate.
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        return undefined;
+      }
     }
   }
   return null;
@@ -146,6 +148,9 @@ function configCannotAffectPluginHelp(env: NodeJS.ProcessEnv): boolean {
   const raw = readFirstConfigText(env);
   if (raw === null) {
     return true;
+  }
+  if (raw === undefined) {
+    return false;
   }
   let parsed: unknown;
   try {
