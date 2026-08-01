@@ -35,7 +35,12 @@ import {
   protectPreparedProviderRuntimeAuth,
   unwrapSecretSentinelsForProviderEgress,
 } from "../../provider-secret-egress.js";
-import { clampRuntimeAuthRefreshDelayMs } from "../../runtime-auth-refresh.js";
+import {
+  clampRuntimeAuthRefreshDelayMs,
+  RUNTIME_AUTH_REFRESH_HARD_TIMEOUT_MS,
+  RuntimeAuthDeadlineError,
+  withRuntimeAuthRefreshDeadline,
+} from "../../runtime-auth-refresh.js";
 import {
   RUNTIME_AUTH_REFRESH_MARGIN_MS,
   RUNTIME_AUTH_REFRESH_MIN_DELAY_MS,
@@ -211,6 +216,13 @@ export function createEmbeddedRunAuthController(params: {
     });
   };
 
+  // Single hard-deadline backstop applied at EVERY auth boundary that can block
+  // on a provider hook, keychain read, or cross-agent lock/gate. Without it, any
+  // one of those hanging leaves the model-turn lane deadlocked (the rh-bot
+  // freeze). Covers the refresh path AND the cold-start/profile-rotation path.
+  const withAuthDeadline = <T>(work: Promise<T>, label: string): Promise<T> =>
+    withRuntimeAuthRefreshDeadline(work, RUNTIME_AUTH_REFRESH_HARD_TIMEOUT_MS, label);
+
   const clearRuntimeAuthRefreshTimer = () => {
     const runtimeAuthState = params.getRuntimeAuthState();
     if (!runtimeAuthState?.refreshTimer) {
@@ -241,7 +253,7 @@ export function createEmbeddedRunAuthController(params: {
     // after another profile or credential has already become active.
     const refreshGeneration = runtimeAuthState.generation;
     const refreshProfileId = runtimeAuthState.profileId;
-    const refreshPromise: Promise<void> = (async () => {
+    const refreshOperation: Promise<void> = (async () => {
       const currentRuntimeAuthState = params.getRuntimeAuthState();
       const sourceApiKey = currentRuntimeAuthState?.sourceApiKey.trim() ?? "";
       if (!sourceApiKey) {
@@ -284,21 +296,42 @@ export function createEmbeddedRunAuthController(params: {
           `Runtime auth refreshed for ${runtimeModel.provider}; expires in ${Math.max(0, Math.floor(remaining / 1000))}s.`,
         );
       }
-    })()
+    })();
+    // Hard backstop: a provider auth hook, keychain read, or cross-agent lock
+    // wait that never settles must not leave `refreshInFlight` pending forever,
+    // or every later model turn deadlocks awaiting it, freezing the gateway
+    // until restart (observed in production).
+    const refreshPromise: Promise<void> = withAuthDeadline(
+      refreshOperation,
+      params.getRuntimeModel().provider,
+    )
       .catch((err: unknown) => {
         const runtimeModel = params.getRuntimeModel();
+        if (err instanceof RuntimeAuthDeadlineError) {
+          // The deadline abandons refreshOperation without cancelling it, and
+          // the continuation still holds this generation's stale-check
+          // snapshot. Bump the generation so the abandoned completion fails
+          // that check instead of overwriting credentials a retry installs.
+          const activeState = params.getRuntimeAuthState();
+          if (activeState && activeState.generation === refreshGeneration) {
+            activeState.generation = refreshGeneration + 1;
+            params.log.debug(
+              `Invalidated runtime auth generation ${refreshGeneration} for ${runtimeModel.provider}; deadline abandoned an in-flight refresh.`,
+            );
+          }
+        }
         params.log.warn(
           `Runtime auth refresh failed for ${runtimeModel.provider}: ${formatErrorMessage(err)}`,
         );
         throw err;
       })
       .finally(() => {
+        // Clear whenever this promise is still the active in-flight handle.
+        // Intentionally not gated on generation: a profile rotation during a
+        // slow/hung refresh must still release the handle it owns, otherwise the
+        // stale handle wedges the new generation's refreshes.
         const activeState = params.getRuntimeAuthState();
-        if (
-          activeState &&
-          activeState.generation === refreshGeneration &&
-          activeState.refreshInFlight === refreshPromise
-        ) {
+        if (activeState && activeState.refreshInFlight === refreshPromise) {
           activeState.refreshInFlight = undefined;
         }
       });
@@ -458,10 +491,13 @@ export function createEmbeddedRunAuthController(params: {
 
   const applyApiKeyInfo = async (candidate?: string, attemptIndex?: number): Promise<void> => {
     const preparedModel = await params.prepareModelForAuthProfile?.(candidate, attemptIndex);
-    const apiKeyInfo = await resolveApiKeyForCandidate(
-      candidate,
-      preparedModel?.runtimeModel,
-      preparedModel?.allowAuthProfileFallback,
+    const apiKeyInfo = await withAuthDeadline(
+      resolveApiKeyForCandidate(
+        candidate,
+        preparedModel?.runtimeModel,
+        preparedModel?.allowAuthProfileFallback,
+      ),
+      `${params.getRuntimeModel().provider} credential resolution`,
     );
     if (
       preparedModel?.authRequirement &&
@@ -493,12 +529,15 @@ export function createEmbeddedRunAuthController(params: {
       const runtimeModel = params.getRuntimeModel();
       const AWS_SDK_AUTH_SENTINEL = "__aws_sdk_auth__";
       try {
-        const preparedAuth = await prepareRuntimeAuthForModel({
-          runtimeModel,
-          apiKey: AWS_SDK_AUTH_SENTINEL,
-          authMode: apiKeyInfo.mode,
-          profileId: apiKeyInfo.profileId,
-        });
+        const preparedAuth = await withAuthDeadline(
+          prepareRuntimeAuthForModel({
+            runtimeModel,
+            apiKey: AWS_SDK_AUTH_SENTINEL,
+            authMode: apiKeyInfo.mode,
+            profileId: apiKeyInfo.profileId,
+          }),
+          `${runtimeModel.provider} runtime auth`,
+        );
         applyPreparedRuntimeRequestOverrides({ runtimeModel, preparedAuth: preparedAuth ?? {} });
         if (preparedAuth?.apiKey) {
           clearRuntimeAuthRefreshTimer();
@@ -533,12 +572,15 @@ export function createEmbeddedRunAuthController(params: {
     commitPreparedModel(preparedModel);
     let runtimeAuthHandled = false;
     const runtimeModel = params.getRuntimeModel();
-    const preparedAuth = await prepareRuntimeAuthForModel({
-      runtimeModel,
-      apiKey: apiKeyInfo.apiKey,
-      authMode: apiKeyInfo.mode,
-      profileId: apiKeyInfo.profileId,
-    });
+    const preparedAuth = await withAuthDeadline(
+      prepareRuntimeAuthForModel({
+        runtimeModel,
+        apiKey: apiKeyInfo.apiKey,
+        authMode: apiKeyInfo.mode,
+        profileId: apiKeyInfo.profileId,
+      }),
+      `${runtimeModel.provider} runtime auth`,
+    );
     applyPreparedRuntimeRequestOverrides({ runtimeModel, preparedAuth: preparedAuth ?? {} });
     if (preparedAuth?.apiKey) {
       clearRuntimeAuthRefreshTimer();
