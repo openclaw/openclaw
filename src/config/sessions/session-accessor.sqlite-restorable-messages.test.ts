@@ -275,9 +275,11 @@ describe("SQLite restorable transcript messages", () => {
           createdAt: Date.now(),
           reason: "manual",
           preCompaction: {
+            sessionId: "legacy-pre-session",
             sessionFile: "/tmp/pre-compaction.jsonl",
           },
           postCompaction: {
+            sessionId: "legacy-post-session",
             sessionFile: "/tmp/post-compaction.jsonl",
           },
         },
