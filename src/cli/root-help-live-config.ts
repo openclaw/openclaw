@@ -1,7 +1,7 @@
 // Root-help config probe for plugin-sensitive help rendering.
 import fs from "node:fs";
 import path from "node:path";
-import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { resolveRequiredHomeDir, resolveUserPath } from "../infra/home-dir.js";
 import type { RootHelpRenderOptions } from "./program/root-help.js";
 
 /** Env vars that can change which plugins root help renders. */
@@ -56,11 +56,11 @@ function envAffectsPluginHelp(env: NodeJS.ProcessEnv): boolean {
 function configDirForProbe(env: NodeJS.ProcessEnv): string {
   const stateOverride = env.OPENCLAW_STATE_DIR?.trim();
   if (stateOverride) {
-    return stateOverride;
+    return resolveUserPath(stateOverride, env);
   }
   const configPath = env.OPENCLAW_CONFIG_PATH?.trim();
   if (configPath) {
-    return path.dirname(configPath);
+    return path.dirname(resolveUserPath(configPath, env));
   }
   return path.join(resolveRequiredHomeDir(env), ".openclaw");
 }
@@ -68,11 +68,12 @@ function configDirForProbe(env: NodeJS.ProcessEnv): string {
 function configPathsForProbe(env: NodeJS.ProcessEnv): string[] {
   const override = env.OPENCLAW_CONFIG_PATH?.trim();
   if (override) {
-    return [override];
+    return [resolveUserPath(override, env)];
   }
   const stateOverride = env.OPENCLAW_STATE_DIR?.trim();
   if (stateOverride) {
-    return [path.join(stateOverride, "openclaw.json"), path.join(stateOverride, "clawdbot.json")];
+    const stateDir = resolveUserPath(stateOverride, env);
+    return [path.join(stateDir, "openclaw.json"), path.join(stateDir, "clawdbot.json")];
   }
   const home = resolveRequiredHomeDir(env);
   return [

@@ -78,6 +78,17 @@ describe("root help live config fast path", () => {
     fs.writeFileSync(path.join(home, ".openclaw", "openclaw.json"), contents);
   }
 
+  function writePluginSensitiveConfig(configPath: string): void {
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify({ plugins: { enabled: false } }));
+    const runtimeConfig = { plugins: { enabled: false } };
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      valid: true,
+      sourceConfig: runtimeConfig,
+      runtimeConfig,
+    });
+  }
+
   it("skips the config load when no config file exists", async () => {
     await expect(loadRootHelpRenderOptionsForConfigSensitivePlugins()).resolves.toBeNull();
     expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
@@ -124,6 +135,42 @@ describe("root help live config fast path", () => {
     } finally {
       fs.rmSync(openclawHome, { recursive: true, force: true });
     }
+  });
+
+  it("loads plugin-sensitive config from a relative OPENCLAW_CONFIG_PATH", async () => {
+    const configPath = path.join(home, "relative-config", "openclaw.json");
+    writePluginSensitiveConfig(configPath);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.relative(process.cwd(), configPath));
+
+    await expect(loadRootHelpRenderOptionsForConfigSensitivePlugins()).resolves.not.toBeNull();
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads plugin-sensitive config from a tilde-prefixed OPENCLAW_CONFIG_PATH", async () => {
+    const configPath = path.join(home, "tilde-config", "openclaw.json");
+    writePluginSensitiveConfig(configPath);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", "~/tilde-config/openclaw.json");
+
+    await expect(loadRootHelpRenderOptionsForConfigSensitivePlugins()).resolves.not.toBeNull();
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads plugin-sensitive config from a relative OPENCLAW_STATE_DIR", async () => {
+    const stateDir = path.join(home, "relative-state");
+    writePluginSensitiveConfig(path.join(stateDir, "openclaw.json"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.relative(process.cwd(), stateDir));
+
+    await expect(loadRootHelpRenderOptionsForConfigSensitivePlugins()).resolves.not.toBeNull();
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads plugin-sensitive config from a tilde-prefixed OPENCLAW_STATE_DIR", async () => {
+    const stateDir = path.join(home, "tilde-state");
+    writePluginSensitiveConfig(path.join(stateDir, "openclaw.json"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", "~/tilde-state");
+
+    await expect(loadRootHelpRenderOptionsForConfigSensitivePlugins()).resolves.not.toBeNull();
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(1);
   });
 
   it("loads the config when the legacy gateway.env sets a plugin env var (#85396)", async () => {
