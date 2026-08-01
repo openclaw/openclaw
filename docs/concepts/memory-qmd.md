@@ -92,6 +92,44 @@ The first search may be slow - QMD auto-downloads GGUF models (~2 GB) for
 reranking and query expansion on the first `qmd query` run.
 </Info>
 
+### CPU-only VPS guidance
+
+Small CPU-only hosts are a better fit for QMD's default BM25 mode than for the
+semantic modes. `searchMode: "search"` uses lexical search only, so OpenClaw
+does not run QMD embedding maintenance or vector readiness probes. That is the
+recommended starting point for shared 2-4 vCPU VPS deployments where the
+gateway must stay responsive.
+
+`vsearch` and `query` enable local embedding, vector search, query expansion,
+and optional reranking work. Those modes can download multi-GB GGUF models on
+first use and can saturate a small CPU-only VPS while `qmd embed` or reranking
+runs. If you enable them on a CPU-only host, roll out during a quiet window,
+keep startup work disabled, and lengthen the embed cadence before indexing a
+large corpus:
+
+```json5
+{
+  memory: {
+    backend: "qmd",
+    qmd: {
+      searchMode: "search", // BM25-only, safest for small CPU-only VPSes
+      update: {
+        startup: "off",
+        onBoot: false,
+        embedInterval: "6h",
+      },
+    },
+  },
+}
+```
+
+When you are ready to test semantic search, switch `searchMode` to `query` and
+set `rerank: false` first so QMD skips the reranker on QMD 2.1 or newer. Watch
+host CPU and memory during the first `qmd embed` cycle, then shorten
+`memory.qmd.update.embedInterval` or re-enable reranking only if the machine
+has enough headroom. For always-on semantic recall on a busy agent, prefer a
+larger CPU instance or a box dedicated to local model work.
+
 ## Search performance and compatibility
 
 OpenClaw keeps the QMD search path compatible with both current and older QMD
