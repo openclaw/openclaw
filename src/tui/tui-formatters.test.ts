@@ -2,10 +2,12 @@
 import { describe, expect, it } from "vitest";
 import { markInboundContextLabel } from "../auto-reply/reply/inbound-context-marker.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
+import { createTuiLocalization } from "./i18n/runtime.js";
 import {
   extractContentFromMessage,
   extractTextFromMessage,
   extractThinkingFromMessage,
+  formatContextUsageLine,
   formatModelFooter,
   formatGoalFooter,
   formatTuiErrorMessage,
@@ -21,6 +23,17 @@ describe("formatModelFooter", () => {
         thinkingLevel: "high",
       }),
     ).toBe("gpt-5.6-sol high");
+  });
+});
+
+describe("formatContextUsageLine", () => {
+  it("localizes owned labels while preserving usage values", () => {
+    expect(
+      formatContextUsageLine(
+        { total: 12_000, context: 30_000, remaining: 18_000, percent: 40 },
+        createTuiLocalization({ locale: "zh-CN" }),
+      ),
+    ).toBe("令牌数 12k/30k（剩余 18k, 40%）");
   });
 });
 
