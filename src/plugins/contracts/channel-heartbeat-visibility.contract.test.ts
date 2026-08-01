@@ -51,16 +51,36 @@ const CANONICAL_FIELDS = ["showOk", "showAlerts", "useIndicator"] as const;
  */
 const NON_CANONICAL_SHAPE_CHANNELS = new Set(["feishu"]);
 
-function leafOf(channelId: string, scope: "channel" | "account"): JsonSchemaLike | undefined {
+function leavesOf(channelId: string, scope: "channel" | "account"): JsonSchemaLike[] {
   const entry = GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.find(
     (candidate) => candidate.channelId === channelId,
   );
-  const root = asSchema(entry?.schema);
+  return collectLeaves(asSchema(entry?.schema), scope);
+}
+
+/**
+ * Twitch publishes a union of two strict shapes, so the leaf lives inside each
+ * alternative rather than on a top-level `properties`. Walk the alternatives so
+ * the canonical-field assertion actually covers composed schemas instead of
+ * silently finding nothing.
+ */
+function collectLeaves(
+  schema: JsonSchemaLike | undefined,
+  scope: "channel" | "account",
+): JsonSchemaLike[] {
+  if (!schema) {
+    return [];
+  }
+  const alternatives = schema.anyOf ?? schema.oneOf;
+  if (Array.isArray(alternatives) && alternatives.length > 0) {
+    return alternatives.flatMap((branch) => collectLeaves(asSchema(branch), scope));
+  }
   const container =
     scope === "channel"
-      ? root
-      : asSchema(asSchema(root?.properties?.accounts)?.additionalProperties);
-  return asSchema(container?.properties?.heartbeatVisibility);
+      ? schema
+      : asSchema(asSchema(schema.properties?.accounts)?.additionalProperties);
+  const leaf = asSchema(container?.properties?.heartbeatVisibility);
+  return leaf ? [leaf] : [];
 }
 
 describe("channel heartbeatVisibility contract", () => {
@@ -71,12 +91,20 @@ describe("channel heartbeatVisibility contract", () => {
   it.each(channels.filter((channelId) => !NON_CANONICAL_SHAPE_CHANNELS.has(channelId)))(
     "%s accepts the canonical heartbeatVisibility fields",
     (channelId) => {
-      const leaf = leafOf(channelId, "channel");
-      if (!leaf) {
+      const entry = GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.find(
+        (candidate) => candidate.channelId === channelId,
+      );
+      const leaves = leavesOf(channelId, "channel");
+      // Permissive channels (qqbot, synology-chat) accept the documented object
+      // without declaring it, so only closed schemas owe a canonical leaf.
+      if (!rejectsKey(asSchema(entry?.schema), "openclawProbeUnknownKey")) {
         return;
       }
-      for (const field of CANONICAL_FIELDS) {
-        expect(rejectsKey(leaf, field)).toBe(false);
+      expect(leaves.length).toBeGreaterThan(0);
+      for (const leaf of leaves) {
+        for (const field of CANONICAL_FIELDS) {
+          expect(rejectsKey(leaf, field)).toBe(false);
+        }
       }
     },
   );
