@@ -39,6 +39,7 @@ const LANGUAGE_STOP_WORDS = {
     "have",
     "into",
     "just",
+    "kept",
     "line",
     "lines",
     "long",
@@ -71,6 +72,7 @@ const LANGUAGE_STOP_WORDS = {
     "than",
     "that",
     "their",
+    "theme",
     "there",
     "these",
     "they",
@@ -84,7 +86,19 @@ const LANGUAGE_STOP_WORDS = {
     "workspace",
     "year",
   ],
-  english: ["and", "are", "for", "into", "its", "our", "the", "then", "were", "you", "your"],
+  english: [
+    "and",
+    "are",
+    "for",
+    "into",
+    "its",
+    "our",
+    "the",
+    "then",
+    "were",
+    "you",
+    "your",
+  ],
   spanish: [
     "al",
     "con",
@@ -289,7 +303,9 @@ const KATAKANA_RE = /\p{Script=Katakana}/u;
 const HANGUL_RE = /\p{Script=Hangul}/u;
 
 const DEFAULT_WORD_SEGMENTER =
-  typeof Intl.Segmenter === "function" ? new Intl.Segmenter("und", { granularity: "word" }) : null;
+  typeof Intl.Segmenter === "function"
+    ? new Intl.Segmenter("und", { granularity: "word" })
+    : null;
 
 function containsLetterOrNumber(value: string): boolean {
   return LETTER_OR_NUMBER_RE.test(value);
@@ -330,27 +346,46 @@ function isKanaOnlyToken(value: string): boolean {
   );
 }
 
-function normalizeConceptToken(rawToken: string, fromGlossary = false): string | null {
+function normalizeConceptToken(
+  rawToken: string,
+  fromGlossary = false,
+): string | null {
   const normalized = normalizeLowercaseStringOrEmpty(
     rawToken
       .normalize("NFKC")
       .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "")
       .replaceAll("_", "-"),
   );
-  if (!normalized || !containsLetterOrNumber(normalized) || normalized.length > 32) {
+  if (
+    !normalized ||
+    !containsLetterOrNumber(normalized) ||
+    normalized.length > 32
+  ) {
+    return null;
+  }
+
+  // Filter out bare numbers, dates, and number ranges (e.g., "1.00", "51-54", "2024-01-01")
+  if (/^\d+$/.test(normalized)) {
+    return null;
+  }
+  if (/^\d+\.\d+$/.test(normalized)) {
+    return null;
+  }
+  if (/^\d+-\d+$/.test(normalized)) {
     return null;
   }
   if (
-    /^\d+$/.test(normalized) ||
     /^\d{4}-\d{2}-\d{2}$/u.test(normalized) ||
     /^\d{4}-\d{2}-\d{2}\.[\p{L}\p{N}]+$/u.test(normalized)
   ) {
     return null;
   }
+
   const script = classifyConceptTagScript(normalized);
   // Glossary entries are an explicit allowlist of short technical terms (e.g. "kv", "s3"); they
   // bypass the per-script minimum length that would otherwise discard them.
-  if (!fromGlossary && normalized.length < minimumTokenLengthForScript(script)) {
+  const minLength = minimumTokenLengthForScript(script);
+  if (!fromGlossary && normalized.length < minLength) {
     return null;
   }
   if (isKanaOnlyToken(normalized) && normalized.length < 3) {
@@ -362,13 +397,39 @@ function normalizeConceptToken(rawToken: string, fromGlossary = false): string |
   return normalized;
 }
 
+/**
+ * Returns true when a concept tag is junk (stop word, bare number, or number
+ * range) and should be excluded from REM aggregation. Shares the same policy
+ * as normalizeConceptToken so legacy persisted tags are filtered consistently.
+ */
+export function isJunkConceptTag(tag: string): boolean {
+  const normalized = tag.toLowerCase().trim();
+  if (!normalized) {
+    return true;
+  }
+  if (CONCEPT_STOP_WORDS.has(normalized)) {
+    return true;
+  }
+  if (/^\d+$/.test(normalized)) {
+    return true;
+  }
+  if (/^\d+\.\d+$/.test(normalized)) {
+    return true;
+  }
+  if (/^\d+-\d+$/.test(normalized)) {
+    return true;
+  }
+  return false;
+}
+
 // Only entries shorter than their script's minimum token length rely on the glossary bypass, and
 // only those need whole-word matching so they don't fire inside longer words ("kv" in "mkv"). Longer
 // entries keep substring containment (the shipped behavior, e.g. "backup" tagging inside "backups").
 // Precomputed so derive() does not reclassify on every call.
 const GLOSSARY_ENTRIES = PROTECTED_GLOSSARY.map((entry) => ({
   entry,
-  wholeWord: entry.length < minimumTokenLengthForScript(classifyConceptTagScript(entry)),
+  wholeWord:
+    entry.length < minimumTokenLengthForScript(classifyConceptTagScript(entry)),
 }));
 
 function isAlphanumericAt(source: string, index: number): boolean {
@@ -381,7 +442,10 @@ function isAlphanumericAt(source: string, index: number): boolean {
 function includesStandaloneTerm(source: string, entry: string): boolean {
   let from = source.indexOf(entry);
   while (from !== -1) {
-    if (!isAlphanumericAt(source, from - 1) && !isAlphanumericAt(source, from + entry.length)) {
+    if (
+      !isAlphanumericAt(source, from - 1) &&
+      !isAlphanumericAt(source, from + entry.length)
+    ) {
       return true;
     }
     from = source.indexOf(entry, from + 1);
@@ -390,7 +454,9 @@ function includesStandaloneTerm(source: string, entry: string): boolean {
 }
 
 function collectGlossaryMatches(source: string): string[] {
-  const normalizedSource = normalizeLowercaseStringOrEmpty(source.normalize("NFKC"));
+  const normalizedSource = normalizeLowercaseStringOrEmpty(
+    source.normalize("NFKC"),
+  );
   const matches: string[] = [];
   for (const { entry, wholeWord } of GLOSSARY_ENTRIES) {
     const present = wholeWord
