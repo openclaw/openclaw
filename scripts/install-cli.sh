@@ -805,7 +805,37 @@ checkout_git_openclaw_ref() {
     return 0
   fi
 
+  # Fail closed: never substitute an older base tag (for example v2026.7.1
+  # when the requested npm correction release is v2026.7.1-2).
+  if [[ "$ref" =~ ^v[0-9] ]]; then
+    fail "Requested git version not found: ${ref}. No matching GitHub tag for this version. Correction releases must publish an immutable tag that matches the npm version (for example v2026.7.1-2 for npm 2026.7.1-2). Publish the missing tag, or use --install-method npm."
+  fi
   fail "Requested git version not found: ${ref}"
+}
+
+# After checking out a version tag, require package.json to match exactly.
+assert_git_checkout_matches_ref() {
+  local repo_dir="$1"
+  local ref="$2"
+  local expected=""
+  local actual=""
+  local package_json="${repo_dir}/package.json"
+
+  if [[ ! "$ref" =~ ^v[0-9] ]]; then
+    return 0
+  fi
+
+  expected="${ref#v}"
+  if command -v node >/dev/null 2>&1 && [[ -f "$package_json" ]]; then
+    actual="$(node -e 'const fs=require("fs"); const p=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(String(p.version||""));' "$package_json" 2>/dev/null || true)"
+  fi
+  if [[ -z "$actual" && -f "$package_json" ]]; then
+    actual="$(sed -n -E 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$package_json" | head -n1)"
+  fi
+  actual="${actual:-unknown}"
+  if [[ "$actual" != "$expected" ]]; then
+    fail "Git checkout version mismatch for ${ref}: package.json is ${actual}, expected ${expected}. Refusing to continue with a different OpenClaw version than the resolved git ref."
+  fi
 }
 
 git_install_lockfile_flag() {
@@ -1176,7 +1206,7 @@ install_openclaw_from_git() {
   repo_dir="$(cd "$(dirname "$repo_dir")" && pwd)/$(basename "$repo_dir")"
 
   emit_json "{\"event\":\"step\",\"name\":\"openclaw\",\"status\":\"start\",\"method\":\"git\",\"repo\":\"${repo_url//\"/\\\"}\"}"
-  if [[ -d "$repo_dir/.git" ]]; then
+  if [[ -e "$repo_dir/.git" ]]; then
     log "Installing Openclaw from git checkout: ${repo_dir}"
   else
     log "Installing Openclaw from GitHub (${repo_url})..."
@@ -1186,7 +1216,7 @@ install_openclaw_from_git() {
   ensure_pnpm
   ensure_pnpm_binary_for_scripts
 
-  if [[ -d "$repo_dir/.git" ]]; then
+  if [[ -e "$repo_dir/.git" ]]; then
     :
   elif [[ -d "$repo_dir" ]]; then
     if [[ -z "$(ls -A "$repo_dir" 2>/dev/null || true)" ]]; then
@@ -1199,12 +1229,27 @@ install_openclaw_from_git() {
   fi
 
   local git_ref
-  git_ref="$(resolve_git_openclaw_ref)"
-  if [[ -z "$(git -C "$repo_dir" status --porcelain 2>/dev/null || true)" ]]; then
+  if [[ "$GIT_UPDATE" == "0" && -e "$repo_dir/.git" ]]; then
+    # Honor --no-git-update: install prepared tree; do not validate against npm latest.
+    log "Skipping git checkout/update (--no-git-update); using existing checkout"
+    git_ref="$(git -C "$repo_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+    if [[ -z "$git_ref" || "$git_ref" == "HEAD" ]]; then
+      git_ref="$(git -C "$repo_dir" rev-parse --short HEAD 2>/dev/null || echo "HEAD")"
+    fi
+    log "Prepared checkout ref: ${git_ref}"
+  elif [[ -e "$repo_dir/.git" && -n "$(git -C "$repo_dir" status --porcelain 2>/dev/null || true)" ]]; then
+    # Dirty tree: keep checkout; never resolve npm tag (fail-closed) when not updating.
+    log "Repo is dirty; skipping git checkout/update"
+    git_ref="$(git -C "$repo_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+    if [[ -z "$git_ref" || "$git_ref" == "HEAD" ]]; then
+      git_ref="$(git -C "$repo_dir" rev-parse --short HEAD 2>/dev/null || echo "HEAD")"
+    fi
+    log "Dirty checkout ref: ${git_ref}"
+  else
+    git_ref="$(resolve_git_openclaw_ref)"
     log "Using git ref: ${git_ref}"
     checkout_git_openclaw_ref "$repo_dir" "$git_ref"
-  else
-    log "Repo is dirty; skipping git checkout/update"
+    assert_git_checkout_matches_ref "$repo_dir" "$git_ref"
   fi
 
   cleanup_legacy_submodules "$repo_dir"
