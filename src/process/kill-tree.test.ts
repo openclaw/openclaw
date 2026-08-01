@@ -308,16 +308,24 @@ describe("killProcessTree", () => {
       killProcessTree(5555, { graceMs: 10, detached: false });
       await vi.advanceTimersByTimeAsync(10);
 
-      // Descendants are signalled before the root while group kill remains
+      // Descendants are signaled before the root while group kill remains
       // forbidden because the attached child shares the gateway's group.
-      expect(killSpy.mock.calls.filter(([, signal]) => signal !== 0)).toEqual([
+      expect(
+        (killSpy.mock.calls as Array<[number, NodeJS.Signals | number | undefined]>).filter(
+          ([, signal]) => signal !== 0,
+        ),
+      ).toEqual([
         [5557, "SIGTERM"],
         [5556, "SIGTERM"],
         [5555, "SIGTERM"],
         [5556, "SIGKILL"],
         [5555, "SIGKILL"],
       ]);
-      expect(killSpy.mock.calls.some(([pid]) => typeof pid === "number" && pid < 0)).toBe(false);
+      expect(
+        (killSpy.mock.calls as Array<[number, NodeJS.Signals | number | undefined]>).some(
+          ([pid]) => typeof pid === "number" && pid < 0,
+        ),
+      ).toBe(false);
     });
   });
 
@@ -337,12 +345,20 @@ describe("killProcessTree", () => {
       const completed = vi.fn();
       signalProcessTree(5575, "SIGTERM", { detached: false, onComplete: completed });
 
-      expect(killSpy.mock.calls.filter(([, signal]) => signal !== 0)).toEqual([
+      expect(
+        (killSpy.mock.calls as Array<[number, NodeJS.Signals | number | undefined]>).filter(
+          ([, signal]) => signal !== 0,
+        ),
+      ).toEqual([
         [5576, "SIGTERM"],
         [5575, "SIGTERM"],
       ]);
       expect(completed).toHaveBeenCalledOnce();
-      expect(killSpy.mock.calls.some(([pid]) => typeof pid === "number" && pid < 0)).toBe(false);
+      expect(
+        (killSpy.mock.calls as Array<[number, NodeJS.Signals | number | undefined]>).some(
+          ([pid]) => typeof pid === "number" && pid < 0,
+        ),
+      ).toBe(false);
     });
   });
 
@@ -362,11 +378,19 @@ describe("killProcessTree", () => {
       killProcessTree(5565, { force: true, detached: false });
       await vi.advanceTimersByTimeAsync(10);
 
-      expect(killSpy.mock.calls.filter(([, signal]) => signal !== 0)).toEqual([
+      expect(
+        (killSpy.mock.calls as Array<[number, NodeJS.Signals | number | undefined]>).filter(
+          ([, signal]) => signal !== 0,
+        ),
+      ).toEqual([
         [5566, "SIGKILL"],
         [5565, "SIGKILL"],
       ]);
-      expect(killSpy.mock.calls.some(([pid]) => typeof pid === "number" && pid < 0)).toBe(false);
+      expect(
+        (killSpy.mock.calls as Array<[number, NodeJS.Signals | number | undefined]>).some(
+          ([pid]) => typeof pid === "number" && pid < 0,
+        ),
+      ).toBe(false);
     });
   });
 
@@ -382,11 +406,19 @@ describe("killProcessTree", () => {
     await withMockedPlatform("darwin", async () => {
       signalProcessTree(5585, "SIGTERM", { detached: false });
 
-      expect(killSpy.mock.calls.filter(([, signal]) => signal !== 0)).toEqual([
+      expect(
+        (killSpy.mock.calls as Array<[number, NodeJS.Signals | number | undefined]>).filter(
+          ([, signal]) => signal !== 0,
+        ),
+      ).toEqual([
         [5586, "SIGTERM"],
         [5585, "SIGTERM"],
       ]);
-      expect(killSpy.mock.calls.some(([pid]) => typeof pid === "number" && pid < 0)).toBe(false);
+      expect(
+        (killSpy.mock.calls as Array<[number, NodeJS.Signals | number | undefined]>).some(
+          ([pid]) => typeof pid === "number" && pid < 0,
+        ),
+      ).toBe(false);
     });
   });
 
@@ -399,7 +431,11 @@ describe("killProcessTree", () => {
 
       expect(killSpy).toHaveBeenCalledWith(5555, "SIGTERM");
       expect(killSpy).toHaveBeenCalledWith(5555, "SIGKILL");
-      expect(killSpy.mock.calls.some(([pid]) => typeof pid === "number" && pid < 0)).toBe(false);
+      expect(
+        (killSpy.mock.calls as Array<[number, NodeJS.Signals | number | undefined]>).some(
+          ([pid]) => typeof pid === "number" && pid < 0,
+        ),
+      ).toBe(false);
     });
   });
 

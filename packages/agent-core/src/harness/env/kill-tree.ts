@@ -210,7 +210,7 @@ function readUnixProcessChildren(pid: number, deadlineMs: number): number[] | un
 }
 
 /**
- * Capture an attached process tree before signalling its root.
+ * Capture an attached process tree before signaling its root.
  * Descendants are returned first so they retain their parent relationship; if
  * enumeration is incomplete, callers fall back to the direct PID only.
  */
@@ -266,7 +266,7 @@ function signalProcessTreeUnix(
     try {
       process.kill(targetPid, signal);
     } catch {
-      // A process may exit between enumeration and signalling.
+      // A process may exit between enumeration and signaling.
     }
   }
 }
