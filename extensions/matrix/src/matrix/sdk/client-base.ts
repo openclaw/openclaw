@@ -62,6 +62,7 @@ export abstract class MatrixClientBase {
     opts?: { allowRemote?: boolean; maxBytes?: number; readIdleTimeoutMs?: number },
   ): Promise<Buffer>;
   protected abstract registerBridge(): void;
+  protected abstract prepareBridgeForStartup(): void;
   protected abstract emitOutstandingInviteEvents(): void;
   protected abstract refreshDmCache(): Promise<boolean>;
 
@@ -211,6 +212,9 @@ export abstract class MatrixClientBase {
       },
       emitFailedDecryption: (roomId, event, error) => {
         this.emitter.emit("room.failed_decryption", roomId, event, error);
+      },
+      settleFailedDecryption: (roomId, eventId) => {
+        this.syncStore?.markReplayEventSettled(roomId, eventId);
       },
     });
     if (!this.encryptionEnabled) {
@@ -393,6 +397,7 @@ export abstract class MatrixClientBase {
     await this.ensureCryptoSupportInitialized();
     throwIfMatrixStartupAborted(opts.abortSignal);
     this.registerBridge();
+    this.prepareBridgeForStartup();
     await this.initializeCryptoIfNeeded(opts.abortSignal);
 
     await this.client.startClient({
@@ -434,10 +439,6 @@ export abstract class MatrixClientBase {
     return this.syncStore?.hasSavedSync() === true;
   }
 
-  hasCleanShutdownSyncState(): boolean {
-    return this.syncStore?.hasSavedSyncFromCleanShutdown() === true;
-  }
-
   protected async ensureStartedForCryptoControlPlane(): Promise<void> {
     if (this.started) {
       return;
@@ -455,6 +456,15 @@ export abstract class MatrixClientBase {
     this.started = false;
   }
 
+  async stopSyncAndWaitForPersistBoundary(): Promise<void> {
+    this.stopSyncWithoutPersist();
+    await this.syncStore?.waitForSyncResponseSettled();
+  }
+
+  markInboundEventSettled(roomId: string, eventId: string): void {
+    this.syncStore?.markReplayEventSettled(roomId, eventId);
+  }
+
   async drainPendingDecryptions(reason = "matrix client shutdown"): Promise<void> {
     await this.decryptBridge?.drainPendingDecryptions(reason);
   }
@@ -462,8 +472,12 @@ export abstract class MatrixClientBase {
   stop(): void {
     this.stopSyncWithoutPersist();
     this.decryptBridge?.stop();
-    // Final persist on shutdown
-    this.syncStore?.markCleanShutdown();
+    // Synchronous callers cannot prove the SDK finished processing its current
+    // response, so retain dirty replay provenance instead of claiming clean.
+    this.beginStoppedStatePersist();
+  }
+
+  private beginStoppedStatePersist(): void {
     if (loadedMatrixCryptoRuntime) {
       const { persistIdbToDisk } = loadedMatrixCryptoRuntime;
       this.stopPersistPromise = Promise.all([
@@ -490,7 +504,10 @@ export abstract class MatrixClientBase {
   }
 
   async stopAndPersist(): Promise<void> {
-    this.stop();
+    await this.stopSyncAndWaitForPersistBoundary();
+    this.decryptBridge?.stop();
+    this.syncStore?.markCleanShutdown();
+    this.beginStoppedStatePersist();
     await this.stopPersistPromise;
   }
 

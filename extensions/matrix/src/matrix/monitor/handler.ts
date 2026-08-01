@@ -60,7 +60,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     textLimit,
     historyLimit,
     startupMs,
-    preStartupCutoffMs,
+    startupGraceMs,
+    dropPreStartupMessages,
     inboundDeduper,
     directTracker,
     getRoomInfo,
@@ -118,6 +119,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     let inboundReplayClaim:
       | import("openclaw/plugin-sdk/persistent-dedupe").ChannelReplayClaimHandle
       | undefined;
+    let inboundReplayCommitted = false;
+    let retainPendingReplay = false;
     let draftControllerRef: Awaited<ReturnType<typeof createMatrixDraftController>> | undefined;
     try {
       const eventType = event.type;
@@ -158,15 +161,18 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         }
         await inboundReplayClaim.commit();
         inboundReplayClaim = undefined;
+        inboundReplayCommitted = true;
+        retainPendingReplay = false;
       };
       const readIngressPrefix = () =>
         readMatrixIngressPrefix({
           client,
           senderId,
-          preStartupCutoffMs,
+          dropPreStartupMessages,
           eventTs: eventTs ?? undefined,
           eventAge: eventAge ?? undefined,
           startupMs,
+          startupGraceMs,
           event,
           eventType,
           eventId,
@@ -176,6 +182,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           directTracker,
           claimInboundReplay: (handle) => {
             inboundReplayClaim = handle;
+            retainPendingReplay = true;
+          },
+          retainInboundReplay: () => {
+            retainPendingReplay = true;
           },
         });
       const continueIngress = async (paramsLocal: {
@@ -607,6 +617,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       );
       await commitInboundEventIfClaimed();
     } catch (err) {
+      if (!inboundReplayCommitted) {
+        retainPendingReplay = true;
+      }
       runtime.error?.(`matrix handler failed: ${String(err)}`);
     } finally {
       // Stop the draft stream timer so partial drafts don't leak if the
@@ -619,6 +632,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         }
       }
       inboundReplayClaim?.release();
+      if (!retainPendingReplay && eventId) {
+        client.markInboundEventSettled(roomId, eventId);
+      }
     }
   };
 }

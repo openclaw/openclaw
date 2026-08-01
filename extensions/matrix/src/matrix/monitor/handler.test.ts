@@ -23,7 +23,6 @@ import {
   createMatrixRoomMessageEvent,
   createMatrixTextMessageEvent,
 } from "./handler.test-helpers.js";
-import { MATRIX_UNCLEAN_RESTART_REPLAY_MS } from "./replay-horizon.js";
 import type { MatrixRawEvent } from "./types.js";
 import { EventType } from "./types.js";
 
@@ -568,6 +567,7 @@ describe("matrix monitor handler pairing account scope", () => {
       dmPolicy: "pairing",
       isDirectMessage: true,
       getMemberDisplayName: async () => "sender",
+      dropPreStartupMessages: true,
       needsRoomAliasesForConfig: false,
       dispatchInboundMessage: async () => ({
         queuedFinal: true,
@@ -2065,7 +2065,8 @@ describe("matrix monitor handler pairing account scope", () => {
       resolveAgentRoute,
       isDirectMessage: true,
       startupMs: 1_000,
-      preStartupCutoffMs: 1_000,
+      startupGraceMs: 0,
+      dropPreStartupMessages: true,
     });
 
     await handler(
@@ -2080,7 +2081,7 @@ describe("matrix monitor handler pairing account scope", () => {
     expect(resolveAgentRoute).not.toHaveBeenCalled();
   });
 
-  it("replays pre-startup dm messages when persisted sync state exists", async () => {
+  it("replays old incremental dm messages when persisted sync state exists", async () => {
     const resolveAgentRoute = vi.fn(() => ({
       agentId: "ops",
       channel: "matrix",
@@ -2092,8 +2093,9 @@ describe("matrix monitor handler pairing account scope", () => {
     const { handler } = createMatrixHandlerTestHarness({
       resolveAgentRoute,
       isDirectMessage: true,
-      startupMs: 1_000,
-      preStartupCutoffMs: null,
+      startupMs: 3 * 24 * 60 * 60_000,
+      startupGraceMs: 0,
+      dropPreStartupMessages: false,
     });
 
     await handler(
@@ -2101,69 +2103,11 @@ describe("matrix monitor handler pairing account scope", () => {
       createMatrixTextMessageEvent({
         eventId: "$old-resume",
         body: "hello",
-        originServerTs: 999,
+        originServerTs: 24 * 60 * 60_000,
       }),
     );
 
     expect(resolveAgentRoute).toHaveBeenCalledTimes(1);
-  });
-
-  it("delivers crash-downtime dm messages inside the bounded replay window", async () => {
-    const resolveAgentRoute = vi.fn(() => ({
-      agentId: "ops",
-      channel: "matrix",
-      accountId: "ops",
-      sessionKey: "agent:ops:main",
-      mainSessionKey: "agent:ops:main",
-      matchedBy: "binding.account" as const,
-    }));
-    const startupMs = Date.now();
-    const { handler } = createMatrixHandlerTestHarness({
-      resolveAgentRoute,
-      isDirectMessage: true,
-      startupMs,
-      preStartupCutoffMs: startupMs - MATRIX_UNCLEAN_RESTART_REPLAY_MS,
-    });
-
-    await handler(
-      "!room:example.org",
-      createMatrixTextMessageEvent({
-        eventId: "$downtime-message",
-        body: "hello",
-        originServerTs: startupMs - 60_000,
-      }),
-    );
-
-    expect(resolveAgentRoute).toHaveBeenCalledTimes(1);
-  });
-
-  it("suppresses stale history older than the bounded replay window", async () => {
-    const resolveAgentRoute = vi.fn(() => ({
-      agentId: "ops",
-      channel: "matrix",
-      accountId: "ops",
-      sessionKey: "agent:ops:main",
-      mainSessionKey: "agent:ops:main",
-      matchedBy: "binding.account" as const,
-    }));
-    const startupMs = Date.now();
-    const { handler } = createMatrixHandlerTestHarness({
-      resolveAgentRoute,
-      isDirectMessage: true,
-      startupMs,
-      preStartupCutoffMs: startupMs - MATRIX_UNCLEAN_RESTART_REPLAY_MS,
-    });
-
-    await handler(
-      "!room:example.org",
-      createMatrixTextMessageEvent({
-        eventId: "$stale-history",
-        body: "hello",
-        originServerTs: startupMs - MATRIX_UNCLEAN_RESTART_REPLAY_MS - 60_000,
-      }),
-    );
-
-    expect(resolveAgentRoute).not.toHaveBeenCalled();
   });
 });
 
@@ -2603,6 +2547,82 @@ describe("matrix monitor handler durable inbound dedupe", () => {
     expect(recordInboundSession).not.toHaveBeenCalled();
   });
 
+  it("retains replay provenance when sender identity lookup fails before claiming", async () => {
+    const markInboundEventSettled = vi.fn();
+    const runtime = { error: vi.fn() };
+    const { handler } = createMatrixHandlerTestHarness({
+      client: {
+        getUserId: vi.fn(async () => {
+          throw new Error("whoami unavailable");
+        }),
+        markInboundEventSettled,
+      },
+      runtime: runtime as never,
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$identity-error",
+        body: "hello",
+      }),
+    );
+
+    expect(markInboundEventSettled).not.toHaveBeenCalled();
+    expectRuntimeErrorContaining(runtime.error, "whoami unavailable");
+  });
+
+  it("retains replay provenance when the durable dedupe claim fails", async () => {
+    const markInboundEventSettled = vi.fn();
+    const runtime = { error: vi.fn() };
+    const { handler } = createMatrixHandlerTestHarness({
+      client: { markInboundEventSettled },
+      inboundDeduper: {
+        claim: vi.fn(async () => {
+          throw new Error("dedupe unavailable");
+        }),
+      },
+      runtime: runtime as never,
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$claim-error",
+        body: "hello",
+      }),
+    );
+
+    expect(markInboundEventSettled).not.toHaveBeenCalled();
+    expectRuntimeErrorContaining(runtime.error, "dedupe unavailable");
+  });
+
+  it("retains replay provenance when the active duplicate owner releases", async () => {
+    let resolvePending: ((committed: boolean) => void) | undefined;
+    const pending = new Promise<boolean>((resolve) => {
+      resolvePending = resolve;
+    });
+    const markInboundEventSettled = vi.fn();
+    const { handler } = createMatrixHandlerTestHarness({
+      client: { markInboundEventSettled },
+      inboundDeduper: {
+        claim: vi.fn(async () => ({ kind: "inflight" as const, pending })),
+      },
+    });
+
+    const handling = handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$inflight-release",
+        body: "hello",
+      }),
+    );
+    resolvePending?.(false);
+    await handling;
+
+    expect(markInboundEventSettled).not.toHaveBeenCalled();
+  });
+
   it("commits inbound events only after queued replies finish delivering", async () => {
     const callOrder: string[] = [];
     const commit = vi.fn(async () => {
@@ -2631,7 +2651,11 @@ describe("matrix monitor handler durable inbound dedupe", () => {
         counts: { final: 1, block: 0, tool: 0 },
       };
     });
+    const markInboundEventSettled = vi.fn(() => {
+      callOrder.push("settle-replay");
+    });
     const { handler } = createMatrixHandlerTestHarness({
+      client: { markInboundEventSettled },
       inboundDeduper,
       recordInboundSession,
       dispatchInboundMessage,
@@ -2671,6 +2695,7 @@ describe("matrix monitor handler durable inbound dedupe", () => {
       "run-complete",
       "dispatch-idle",
       "commit",
+      "settle-replay",
     ]);
     expect(release).not.toHaveBeenCalled();
   });
@@ -2729,7 +2754,9 @@ describe("matrix monitor handler durable inbound dedupe", () => {
     const runtime = {
       error: vi.fn(),
     };
+    const markInboundEventSettled = vi.fn();
     const { handler } = createMatrixHandlerTestHarness({
+      client: { markInboundEventSettled },
       inboundDeduper,
       runtime: runtime as never,
       recordInboundSession: vi.fn(async () => {
@@ -2751,6 +2778,7 @@ describe("matrix monitor handler durable inbound dedupe", () => {
 
     expect(commit).not.toHaveBeenCalled();
     expect(release).toHaveBeenCalledOnce();
+    expect(markInboundEventSettled).not.toHaveBeenCalled();
     expectRuntimeErrorContaining(runtime.error, "matrix handler failed");
   });
 

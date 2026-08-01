@@ -11,10 +11,11 @@ type ReplayClaimHandle = import("openclaw/plugin-sdk/persistent-dedupe").Channel
 type MatrixIngressPrefixConfig = {
   client: { getUserId: () => Promise<string> };
   senderId: string;
-  preStartupCutoffMs: number | null;
+  dropPreStartupMessages: boolean;
   eventTs?: number;
   eventAge?: number;
   startupMs: number;
+  startupGraceMs: number;
   event: MatrixRawEvent;
   eventType: string;
   eventId: string;
@@ -29,16 +30,18 @@ type MatrixIngressPrefixConfig = {
     }) => Promise<boolean>;
   };
   claimInboundReplay: (handle: ReplayClaimHandle) => void;
+  retainInboundReplay: () => void;
 };
 
 export async function readMatrixIngressPrefix(config: MatrixIngressPrefixConfig) {
   const {
     client,
     senderId,
-    preStartupCutoffMs,
+    dropPreStartupMessages,
     eventTs,
     eventAge,
     startupMs,
+    startupGraceMs,
     event,
     eventType,
     eventId,
@@ -47,17 +50,17 @@ export async function readMatrixIngressPrefix(config: MatrixIngressPrefixConfig)
     logVerboseMessage,
     directTracker,
     claimInboundReplay,
+    retainInboundReplay,
   } = config;
   const selfUserId = await client.getUserId();
   if (senderId === selfUserId) {
     return undefined;
   }
-  if (preStartupCutoffMs !== null) {
-    const maxEventAgeMs = startupMs - preStartupCutoffMs;
-    if (typeof eventTs === "number" && eventTs < preStartupCutoffMs) {
+  if (dropPreStartupMessages) {
+    if (typeof eventTs === "number" && eventTs < startupMs - startupGraceMs) {
       return undefined;
     }
-    if (typeof eventTs !== "number" && typeof eventAge === "number" && eventAge > maxEventAgeMs) {
+    if (typeof eventTs !== "number" && typeof eventAge === "number" && eventAge > startupGraceMs) {
       return undefined;
     }
   }
@@ -92,6 +95,12 @@ export async function readMatrixIngressPrefix(config: MatrixIngressPrefixConfig)
     // Missing identifiers fail open; committed and in-flight events do not.
     if (claim.kind === "claimed") {
       claimInboundReplay(claim.handle);
+    } else if (claim.kind === "inflight") {
+      const committed = await claim.pending.catch(() => false);
+      if (!committed) {
+        retainInboundReplay();
+      }
+      return undefined;
     } else if (claim.kind !== "invalid") {
       logVerboseMessage(`matrix: skip duplicate inbound event room=${roomId} id=${eventId}`);
       return undefined;

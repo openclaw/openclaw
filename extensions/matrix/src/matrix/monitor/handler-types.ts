@@ -48,7 +48,8 @@ export type MatrixMonitorHandlerParams = {
   mediaMaxBytes: number;
   historyLimit: number;
   startupMs: number;
-  preStartupCutoffMs: number | null;
+  startupGraceMs: number;
+  dropPreStartupMessages: boolean;
   inboundDeduper?: Pick<MatrixInboundEventDeduper, "claim">;
   directTracker: {
     isDirectMessage: (params: {
