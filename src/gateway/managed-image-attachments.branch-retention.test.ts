@@ -12,12 +12,12 @@ import {
   loadTranscriptEventRowsAfterSeqSync,
   readSessionTranscriptWatermark,
   replaceTranscriptEvents,
-  restoreSqliteCompactionCheckpointSession,
   rewindSessionToMessage,
   rewriteTranscriptEventRowsExact,
   switchSessionBranch,
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { restoreSqliteCompactionCheckpointSession } from "../config/sessions/session-accessor.sqlite.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
