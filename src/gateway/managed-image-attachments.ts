@@ -655,7 +655,7 @@ async function cleanupManagedOutgoingMediaRecordsSerialized(
       continue;
     }
 
-    let shouldDelete = false;
+    let shouldDelete: boolean;
     if (
       forceDeleteSessionRecords &&
       (!sessionKeyFilter || record.sessionKey === sessionKeyFilter)
