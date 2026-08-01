@@ -29,6 +29,14 @@ const tlonCommonConfigFields = {
   name: z.string().optional(),
   enabled: z.boolean().optional(),
   configWrites: z.boolean().optional(),
+  heartbeatVisibility: z
+    .object({
+      showOk: z.boolean().optional(),
+      showAlerts: z.boolean().optional(),
+      useIndicator: z.boolean().optional(),
+    })
+    .strict()
+    .optional(),
   ship: ShipSchema.optional(),
   url: z.string().optional(),
   code: z.string().optional(),

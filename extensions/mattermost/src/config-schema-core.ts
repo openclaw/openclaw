@@ -134,6 +134,14 @@ const MattermostAccountSchemaBase = z
     markdown: MarkdownConfigSchema,
     enabled: z.boolean().optional(),
     configWrites: z.boolean().optional(),
+    heartbeatVisibility: z
+      .object({
+        showOk: z.boolean().optional(),
+        showAlerts: z.boolean().optional(),
+        useIndicator: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     botToken: buildSecretInputSchema().optional(),
     baseUrl: z.string().optional(),
     chatmode: z.enum(["oncall", "onmessage", "onchar"]).optional(),
