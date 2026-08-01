@@ -410,7 +410,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
     };
   });
 
-    const subagentSpawnModule = await import("./subagent-spawn.js");
+  const subagentSpawnModule = await import("./subagent-spawn.js");
   return {
     ...subagentSpawnModule,
     resetSubagentRegistryForTests,
