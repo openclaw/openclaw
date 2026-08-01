@@ -20,6 +20,14 @@ const TwitchAccountShape = {
   enabled: z.boolean().optional(),
   /** Allow channel-initiated configuration writes */
   configWrites: z.boolean().optional(),
+  heartbeatVisibility: z
+    .object({
+      showOk: z.boolean().optional(),
+      showAlerts: z.boolean().optional(),
+      useIndicator: z.boolean().optional(),
+    })
+    .strict()
+    .optional(),
   /** Allowlist of Twitch user IDs who can interact with the bot (use IDs for safety, not usernames) */
   allowFrom: z.array(z.string()).optional(),
   /** Roles allowed to interact with the bot (e.g., ["moderator", "vip", "subscriber"]) */
@@ -50,6 +58,14 @@ const TwitchConfigBaseShape = {
   name: z.string().optional(),
   enabled: z.boolean().optional(),
   configWrites: z.boolean().optional(),
+  heartbeatVisibility: z
+    .object({
+      showOk: z.boolean().optional(),
+      showAlerts: z.boolean().optional(),
+      useIndicator: z.boolean().optional(),
+    })
+    .strict()
+    .optional(),
   markdown: MarkdownConfigSchema.optional(),
   defaultAccount: z.string().optional(),
 };

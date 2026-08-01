@@ -5,15 +5,28 @@ import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../../config/bundled-
 type JsonSchemaLike = {
   properties?: Record<string, unknown>;
   additionalProperties?: unknown;
+  anyOf?: unknown[];
+  oneOf?: unknown[];
 };
 
 function asSchema(value: unknown): JsonSchemaLike | undefined {
   return value && typeof value === "object" ? (value as JsonSchemaLike) : undefined;
 }
 
-/** A closed schema without the key is what makes config loading fail. */
+/**
+ * A closed schema without the key is what makes config loading fail. Twitch
+ * publishes a union of two strict shapes rather than one flat object, so the
+ * key is only refused when every alternative refuses it.
+ */
 function rejectsKey(schema: JsonSchemaLike | undefined, key: string): boolean {
-  if (!schema || schema.additionalProperties !== false) {
+  if (!schema) {
+    return false;
+  }
+  const alternatives = schema.anyOf ?? schema.oneOf;
+  if (Array.isArray(alternatives) && alternatives.length > 0) {
+    return alternatives.every((branch) => rejectsKey(asSchema(branch), key));
+  }
+  if (schema.additionalProperties !== false) {
     return false;
   }
   return !Object.hasOwn(schema.properties ?? {}, key);
