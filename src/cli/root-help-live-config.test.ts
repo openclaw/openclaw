@@ -114,6 +114,32 @@ describe("root help live config fast path", () => {
     expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(1);
   });
 
+  it("loads plugin-sensitive config when the plugins key uses a JSON escape", async () => {
+    writeConfig('{"pl\\u0075gins":{"enabled":false}}');
+    const runtimeConfig = { plugins: { enabled: false } };
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      valid: true,
+      sourceConfig: runtimeConfig,
+      runtimeConfig,
+    });
+
+    await expect(loadRootHelpRenderOptionsForConfigSensitivePlugins()).resolves.not.toBeNull();
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads the config when a nested include key uses a JSON escape", async () => {
+    writeConfig('{"plugins":{"$incl\\u0075de":"./plugins.json"}}');
+    const runtimeConfig = { plugins: { enabled: false } };
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      valid: true,
+      sourceConfig: runtimeConfig,
+      runtimeConfig,
+    });
+
+    await expect(loadRootHelpRenderOptionsForConfigSensitivePlugins()).resolves.not.toBeNull();
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(1);
+  });
+
   it("loads plugin-sensitive config from OPENCLAW_HOME", async () => {
     const openclawHome = fs.mkdtempSync(path.join(os.tmpdir(), "root-help-openclaw-home-"));
     try {

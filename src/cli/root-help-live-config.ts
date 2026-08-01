@@ -147,12 +147,6 @@ function configCannotAffectPluginHelp(env: NodeJS.ProcessEnv): boolean {
   if (raw === null) {
     return true;
   }
-  if (raw.includes("$include") || raw.includes("${") || raw.includes("$(")) {
-    return false;
-  }
-  if (!raw.includes("plugins")) {
-    return true;
-  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -160,6 +154,12 @@ function configCannotAffectPluginHelp(env: NodeJS.ProcessEnv): boolean {
     return false;
   }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return false;
+  }
+  // Inspect the decoded representation so JSON escapes cannot hide loader-owned
+  // include or environment-substitution syntax from this lightweight probe.
+  const decoded = JSON.stringify(parsed);
+  if (decoded.includes("$include") || decoded.includes("${") || decoded.includes("$(")) {
     return false;
   }
   return !pluginsAffectHelp((parsed as { plugins?: PluginsConfigShape }).plugins);
