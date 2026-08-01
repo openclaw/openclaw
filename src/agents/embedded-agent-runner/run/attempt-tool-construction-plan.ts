@@ -256,8 +256,7 @@ export function listMaterializableMcpServerNames(params: {
     if (!server) {
       continue;
     }
-    const override =
-      overrides && Object.hasOwn(overrides, name) ? overrides[name] : undefined;
+    const override = overrides && Object.hasOwn(overrides, name) ? overrides[name] : undefined;
     if (override === false) {
       continue;
     }
