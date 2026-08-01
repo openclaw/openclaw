@@ -589,6 +589,28 @@ describe("shouldCreateBundleMcpRuntimeForAttempt", () => {
       }),
     ).toBe(false);
   });
+
+  it("uses full-set safe-name assignment for collision suffixes", () => {
+    // Runtime assignSafeServerNames(["mail.prod", "mail-prod"]) →
+    // mail.prod → mail-prod, mail-prod → mail-prod-2.
+    // Use prefix globs without `__` so isBundleMcpAllowlistName does not short-circuit.
+    expect(
+      shouldCreateBundleMcpRuntimeForAttempt({
+        toolsEnabled: true,
+        toolsAllow: ["mail-prod-2*"],
+        mcpServerNames: ["mail-prod"],
+        mcpDeclaredServerNames: ["mail.prod", "mail-prod"],
+      }),
+    ).toBe(true);
+    // Without the declared peer set, the materializable-only alias is mail-prod.
+    expect(
+      shouldCreateBundleMcpRuntimeForAttempt({
+        toolsEnabled: true,
+        toolsAllow: ["mail-prod-2*"],
+        mcpServerNames: ["mail-prod"],
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("listMaterializableMcpServerNames", () => {

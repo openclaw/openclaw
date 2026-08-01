@@ -1,7 +1,7 @@
 /**
  * Plans which core, bundle MCP, and bundle LSP tools an attempt should build.
  */
-import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "../../agent-bundle-mcp-names.js";
+import { assignSafeServerNames, TOOL_NAME_SEPARATOR } from "../../agent-bundle-mcp-names.js";
 import {
   type CoreToolFactoryFamily,
   type OpenClawCodingToolConstructionPlan,
@@ -273,17 +273,30 @@ export function listMaterializableMcpServerNames(params: {
  * excluded: the final policy only admits concrete names like `hzr-oa__tool` or
  * globs (`hzr-oa*`, `hzr-oa__*`), so materializing on bare names would start MCP
  * and still leave an empty callable tool set.
+ *
+ * Safe names come from {@link assignSafeServerNames} over the full declared
+ * server set (declaration order), matching runtime collision-suffix ownership.
+ * `mcpServerNames` only filters which servers may authorize materialization.
  */
 function matchesConfiguredMcpServerAllowlist(
   normalized: string,
-  mcpServerNames?: Iterable<string>,
+  params: {
+    mcpServerNames?: Iterable<string>;
+    mcpDeclaredServerNames?: Iterable<string>;
+  },
 ): boolean {
-  if (!mcpServerNames) {
+  const materializable = [...(params.mcpServerNames ?? [])];
+  if (materializable.length === 0) {
     return false;
   }
-  const usedNames = new Set<string>();
-  for (const serverName of mcpServerNames) {
-    const safeName = normalizeToolName(sanitizeServerName(serverName, usedNames));
+  const declared = [...(params.mcpDeclaredServerNames ?? materializable)];
+  const assignments = assignSafeServerNames(declared);
+  for (const serverName of materializable) {
+    const safeRaw = assignments.get(serverName);
+    if (!safeRaw) {
+      continue;
+    }
+    const safeName = normalizeToolName(safeRaw);
     if (!safeName) {
       continue;
     }
@@ -306,12 +319,21 @@ export function shouldCreateBundleMcpRuntimeForAttempt(params: {
   toolsAllow?: string[];
   /** Enabled `mcp.servers` keys from OpenClaw config (owner-managed MCP). */
   mcpServerNames?: Iterable<string>;
+  /**
+   * Full declared `mcp.servers` keys for collision-stable safe-name assignment.
+   * Must include disabled peers that reserve aliases in the runtime full set.
+   * When omitted, falls back to `mcpServerNames` (no collision peers).
+   */
+  mcpDeclaredServerNames?: Iterable<string>;
 }): boolean {
   return shouldCreateBundleRuntimeForAttempt(params, (normalized) => {
     return (
       isBundleMcpAllowlistName(normalized) ||
       isPluginGroupAllowlistName(normalized) ||
-      matchesConfiguredMcpServerAllowlist(normalized, params.mcpServerNames)
+      matchesConfiguredMcpServerAllowlist(normalized, {
+        mcpServerNames: params.mcpServerNames,
+        mcpDeclaredServerNames: params.mcpDeclaredServerNames,
+      })
     );
   });
 }

@@ -215,15 +215,18 @@ function fingerprintCodexMcpServersConfig(config: CodexMcpServersConfig): string
 export function loadCodexBundleMcpThreadConfig(
   params: LoadCodexBundleMcpThreadConfigParams,
 ): CodexBundleMcpThreadConfig {
+  const configuredMcpServers = params.cfg?.mcp?.servers;
   const configuredMcpServerNames = listMaterializableMcpServerNames({
-    servers: params.cfg?.mcp?.servers,
+    servers: configuredMcpServers,
     toolOverrides: params.toolOverrides,
   });
+  const declaredMcpServerNames = Object.keys(configuredMcpServers ?? {});
   const shouldCreateRuntime = shouldCreateBundleMcpRuntimeForAttempt({
     toolsEnabled: params.toolsEnabled ?? true,
     disableTools: params.disableTools,
     toolsAllow: params.toolsAllow,
     mcpServerNames: configuredMcpServerNames,
+    mcpDeclaredServerNames: declaredMcpServerNames,
   });
   if (!shouldCreateRuntime) {
     return {

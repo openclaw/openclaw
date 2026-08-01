@@ -243,6 +243,68 @@ describe("loadCodexBundleMcpThreadConfig", () => {
     }
   });
 
+  it("uses full-set safe names for Codex materialization precheck collisions", () => {
+    // Sibling Codex path shares shouldCreateBundleMcpRuntimeForAttempt; prove the
+    // thread-config gate honors collision suffixes from the full declared set.
+    mocks.bundleMcp = {
+      config: {
+        mcpServers: {
+          "mail-prod": {
+            type: "http",
+            url: "https://mcp.example.com/mail-prod",
+          },
+        },
+      },
+      diagnostics: [],
+    };
+    const cfgWithCollisionPeer = {
+      mcp: {
+        servers: {
+          "mail.prod": {
+            transport: "streamable-http",
+            url: "https://a.example/mcp",
+            enabled: false,
+          },
+          "mail-prod": {
+            transport: "streamable-http",
+            url: "https://b.example/mcp",
+          },
+        },
+      },
+    } as const;
+    const cfgWithoutCollisionPeer = {
+      mcp: {
+        servers: {
+          "mail-prod": {
+            transport: "streamable-http",
+            url: "https://b.example/mcp",
+          },
+        },
+      },
+    } as const;
+
+    const loaded = loadCodexBundleMcpThreadConfig({
+      workspaceDir: "/workspace",
+      cfg: cfgWithCollisionPeer,
+      toolsEnabled: true,
+      toolsAllow: ["mail-prod-2*"],
+    });
+    expect(loaded.evaluated).toBe(true);
+    expect(loaded.configPatch?.mcp_servers).toMatchObject({
+      "mail-prod": { url: "https://mcp.example.com/mail-prod" },
+    });
+
+    // Without the declared peer, the alias is mail-prod — mail-prod-2* must not open MCP.
+    const skipped = loadCodexBundleMcpThreadConfig({
+      workspaceDir: "/workspace",
+      cfg: cfgWithoutCollisionPeer,
+      toolsEnabled: true,
+      toolsAllow: ["mail-prod-2*"],
+    });
+    expect(skipped.configPatch).toBeUndefined();
+    expect(skipped.evaluated).toBe(true);
+  });
+
   it("omits the config patch when no MCP servers are configured", () => {
     const loaded = loadCodexBundleMcpThreadConfig({
       workspaceDir: "/workspace",

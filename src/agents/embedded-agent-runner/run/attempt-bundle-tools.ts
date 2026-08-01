@@ -81,10 +81,12 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
           isRuntimeToolAllowed(definition.function.name, effectiveToolsAllow),
         )
       : providedClientTools;
+  const configuredMcpServers = params.attempt.config?.mcp?.servers;
   const configuredMcpServerNames = listMaterializableMcpServerNames({
-    servers: params.attempt.config?.mcp?.servers,
+    servers: configuredMcpServers,
     toolOverrides: params.attempt.toolOverrides,
   });
+  const declaredMcpServerNames = Object.keys(configuredMcpServers ?? {});
   const bundleMcpEnabled =
     !params.attempt.forceRestartSafeTools &&
     shouldCreateBundleMcpRuntimeForAttempt({
@@ -92,6 +94,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       disableTools: params.attempt.disableTools || params.isRawModelRun,
       toolsAllow: params.attempt.toolsAllow,
       mcpServerNames: configuredMcpServerNames,
+      mcpDeclaredServerNames: declaredMcpServerNames,
     });
   const bundleMetadataSnapshot = params.getCurrentAttemptPluginMetadataSnapshot();
   // Scoped registries are partial views; only complete snapshots can bypass bundle discovery.
