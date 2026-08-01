@@ -113,15 +113,17 @@ export class GatewayClientTransport implements ConnectableOpenClawTransport {
           try {
             this.options.onConnectError?.(error);
           } finally {
-            if (this.client === client) {
+            if (this.rejectPendingConnect && this.client === client) {
+              // A ready transport owns a persistent client; transient reconnect
+              // failures and retired callbacks cannot cancel its current owner.
               this.client = null;
+              if (this.connectPromise) {
+                this.connectPromise = null;
+              }
+              void client.stopAndWait().catch(() => {});
+              this.rejectPendingConnect = null;
+              reject(error);
             }
-            if (this.connectPromise) {
-              this.connectPromise = null;
-            }
-            void client.stopAndWait().catch(() => {});
-            this.rejectPendingConnect = null;
-            reject(error);
           }
         },
         onReconnectPaused: this.options.onReconnectPaused,

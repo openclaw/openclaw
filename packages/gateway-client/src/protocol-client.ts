@@ -704,7 +704,9 @@ export class GatewayProtocolClient<TPlan> {
           return;
         }
         this.reconnectSignal = null;
-        this.connect();
+        // Initial starts preserve synchronous policy errors; a background
+        // retry must report that same error without leaking a rejected task.
+        this.invoke("reconnect", () => this.connect());
       },
       () => {
         if (this.reconnectSignal === retry.signal) {

@@ -68,20 +68,48 @@ export class EventHub<T> {
       [Symbol.asyncIterator]: (): AsyncIterator<T> => {
         const queue: T[] = options.replay ? this.snapshot(filter) : [];
         let stopped = false;
-        let wake: (() => void) | null = null;
-        const wakePending = () => {
-          const pending = wake;
+        let streamError: unknown;
+        let hasStreamError = false;
+        const pendingWakes = new Map<() => void, (event: T) => void>();
+        const wakePending = (event?: { value: T }) => {
+          const pending = pendingWakes.keys().next().value;
           if (!pending) {
-            return;
+            return false;
           }
-          wake = null;
+          const deliver = pendingWakes.get(pending);
+          pendingWakes.delete(pending);
           this.waiters.delete(pending);
+          if (event) {
+            deliver?.(event.value);
+          }
           pending();
+          return true;
+        };
+        const wakeAllPending = () => {
+          for (const pending of pendingWakes.keys()) {
+            pendingWakes.delete(pending);
+            this.waiters.delete(pending);
+            pending();
+          }
         };
         const listener = (event: T) => {
-          if (!filter || filter(event)) {
-            queue.push(event);
-            wakePending();
+          let matches: boolean;
+          try {
+            matches = !filter || filter(event);
+          } catch (error) {
+            // A broken subscriber owns its failure; never let its predicate
+            // terminate the shared pump or any sibling event stream.
+            streamError = error;
+            hasStreamError = true;
+            cleanup();
+            return;
+          }
+          if (matches) {
+            // Reserve the event for its oldest waiting next() before its
+            // microtask resumes; later readers cannot steal queued work.
+            if (!wakePending({ value: event })) {
+              queue.push(event);
+            }
           }
         };
         const cleanup = () => {
@@ -90,7 +118,9 @@ export class EventHub<T> {
           }
           stopped = true;
           this.listeners.delete(listener);
-          wakePending();
+          // Async iterators may have several next() calls in flight; release
+          // every owner on return, local failure, or shared-hub shutdown.
+          wakeAllPending();
         };
 
         this.listeners.add(listener);
@@ -107,19 +137,26 @@ export class EventHub<T> {
               if (this.closed) {
                 break;
               }
+              let reservedEvent: { value: T } | undefined;
               await new Promise<void>((resolve) => {
                 const wakeCurrent = () => {
-                  if (wake === wakeCurrent) {
-                    wake = null;
-                  }
+                  pendingWakes.delete(wakeCurrent);
                   this.waiters.delete(wakeCurrent);
                   resolve();
                 };
-                wake = wakeCurrent;
+                pendingWakes.set(wakeCurrent, (event) => {
+                  reservedEvent = { value: event };
+                });
                 this.waiters.add(wakeCurrent);
               });
+              if (reservedEvent) {
+                return { done: false, value: reservedEvent.value };
+              }
             }
             cleanup();
+            if (hasStreamError) {
+              throw streamError;
+            }
             if (this.hasCloseError) {
               throw this.closeError;
             }

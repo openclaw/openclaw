@@ -209,6 +209,57 @@ describe("GatewayProtocolClient socket factory recovery", () => {
     expect(vi.getTimerCount()).toBe(0);
     client.stop();
   });
+
+  it("contains a terminal factory failure raised by an asynchronous reconnect", async () => {
+    vi.useFakeTimers();
+    let socketAttempts = 0;
+    let disconnect: ((code: number, reason: string) => void) | undefined;
+    const onConnectError = vi.fn<(error: Error) => void>();
+    const onCallbackError = vi.fn<(label: string, error: unknown) => void>();
+    const client = new GatewayProtocolClient<Record<string, never>>({
+      createSocket: (handlers) => {
+        socketAttempts += 1;
+        if (socketAttempts > 1) {
+          throw new Error("loopback proxy policy rejected");
+        }
+        let open = true;
+        disconnect = (code, reason) => {
+          open = false;
+          handlers.close(code, reason);
+        };
+        return {
+          isOpen: () => open,
+          send: vi.fn(),
+          close: (code, reason) => disconnect?.(code ?? 1000, reason ?? ""),
+        };
+      },
+      createRequestId: () => "request-1",
+      buildConnectPlan: () => ({}),
+      buildConnectParams: (plan) => plan,
+      resolveClose: () => ({ retry: true, notify: true }),
+      onConnectError,
+      onCallbackError,
+      shouldRetrySocketFactoryError: () => true,
+      rethrowSocketFactoryError: () => true,
+      handshake: { mode: "require-challenge", timeoutMs: 100 },
+      reconnect: { initialMs: 10, multiplier: 2, maxMs: 100 },
+    });
+    client.start();
+    disconnect?.(1012, "service restart");
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(socketAttempts).toBe(2);
+    expect(onConnectError).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ message: "loopback proxy policy rejected" }),
+    );
+    expect(onCallbackError).toHaveBeenCalledExactlyOnceWith(
+      "reconnect",
+      expect.objectContaining({ message: "loopback proxy policy rejected" }),
+    );
+    expect(vi.getTimerCount()).toBe(0);
+    client.stop();
+  });
 });
 
 describe("GatewayClient socket factory recovery", () => {

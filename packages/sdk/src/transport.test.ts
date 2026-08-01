@@ -77,6 +77,45 @@ describe("GatewayClientTransport", () => {
     expect(onHelloOk).toHaveBeenCalledWith({ sessionId: "session-1" });
   });
 
+  it("keeps an established client alive through a transient reconnect failure", async () => {
+    const onConnectError = vi.fn();
+    const transport = new GatewayClientTransport({ onConnectError });
+    const connecting = transport.connect();
+    const client = gatewayClientMocks.instances[0];
+    client?.opts.onHelloOk?.({ sessionId: "session-1" });
+    await connecting;
+
+    client?.opts.onConnectError?.(new Error("temporary reconnect failure"));
+
+    expect(onConnectError).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ message: "temporary reconnect failure" }),
+    );
+    expect(client?.stopAndWait).not.toHaveBeenCalled();
+    client?.request.mockResolvedValueOnce({ ok: true });
+    await expect(transport.request("status")).resolves.toEqual({ ok: true });
+    expect(gatewayClientMocks.instances).toHaveLength(1);
+
+    await transport.close();
+  });
+
+  it("ignores stale connect failures after a replacement client starts", async () => {
+    const transport = new GatewayClientTransport();
+    const firstConnect = transport.connect();
+    const firstClient = gatewayClientMocks.instances[0];
+    firstClient?.opts.onConnectError?.(new Error("first connection failed"));
+    await expect(firstConnect).rejects.toThrow("first connection failed");
+
+    const replacementConnect = transport.connect();
+    const replacement = gatewayClientMocks.instances[1];
+    firstClient?.opts.onConnectError?.(new Error("retired connection failed again"));
+    replacement?.opts.onHelloOk?.({ sessionId: "replacement" });
+
+    await expect(replacementConnect).resolves.toBeUndefined();
+    expect(replacement?.stopAndWait).not.toHaveBeenCalled();
+
+    await transport.close();
+  });
+
   it("rejects connect when a connect-error observer throws", async () => {
     const onConnectError = vi.fn(() => {
       throw new Error("connect observer failed");
