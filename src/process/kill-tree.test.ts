@@ -278,24 +278,128 @@ describe("killProcessTree", () => {
     });
   });
 
-  it("on Unix skips group kill when detached:false to avoid SIGTERMing the parent's own process group (#71662)", async () => {
+  it("on Unix cleans attached descendants without signaling the parent's process group", async () => {
     killSpy.mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
-      if (pid === 5555 && signal === 0) {
+      if (signal === 0 && pid === 5555) {
+        return true;
+      }
+      if (signal === 0) {
+        if (pid === 5555 || pid === 5556) {
+          return true;
+        }
         throw new Error("ESRCH");
       }
       return true;
     }) as typeof process.kill);
+    readFileSyncMock.mockImplementation((filePath: string) => {
+      if (filePath === "/proc/5555/task/5555/children") {
+        return "5556";
+      }
+      if (filePath === "/proc/5556/task/5556/children") {
+        return "5557";
+      }
+      if (filePath === "/proc/5557/task/5557/children") {
+        return "";
+      }
+      throw new Error("unexpected proc path");
+    });
 
     await withMockedPlatform("linux", async () => {
       killProcessTree(5555, { graceMs: 10, detached: false });
       await vi.advanceTimersByTimeAsync(10);
 
-      // Direct pid kill is fine. Group kill (`-pid`) is FORBIDDEN here because
-      // when the child wasn't spawned detached, its process group is the
-      // gateway's group — `-pid` would SIGTERM the gateway itself.
+      // Descendants are signalled before the root while group kill remains
+      // forbidden because the attached child shares the gateway's group.
+      expect(killSpy.mock.calls.filter(([, signal]) => signal !== 0)).toEqual([
+        [5557, "SIGTERM"],
+        [5556, "SIGTERM"],
+        [5555, "SIGTERM"],
+        [5556, "SIGKILL"],
+        [5555, "SIGKILL"],
+      ]);
+      expect(killSpy.mock.calls.some(([pid]) => typeof pid === "number" && pid < 0)).toBe(false);
+    });
+  });
+
+  it("on Unix signals attached descendants before the root through signalProcessTree", async () => {
+    killSpy.mockImplementation(() => true);
+    readFileSyncMock.mockImplementation((filePath: string) => {
+      if (filePath === "/proc/5575/task/5575/children") {
+        return "5576";
+      }
+      if (filePath === "/proc/5576/task/5576/children") {
+        return "";
+      }
+      throw new Error("unexpected proc path");
+    });
+
+    await withMockedPlatform("linux", async () => {
+      const completed = vi.fn();
+      signalProcessTree(5575, "SIGTERM", { detached: false, onComplete: completed });
+
+      expect(killSpy.mock.calls.filter(([, signal]) => signal !== 0)).toEqual([
+        [5576, "SIGTERM"],
+        [5575, "SIGTERM"],
+      ]);
+      expect(completed).toHaveBeenCalledOnce();
+      expect(killSpy.mock.calls.some(([pid]) => typeof pid === "number" && pid < 0)).toBe(false);
+    });
+  });
+
+  it("on Unix force-kills attached descendants before the root", async () => {
+    killSpy.mockImplementation(() => true);
+    readFileSyncMock.mockImplementation((filePath: string) => {
+      if (filePath === "/proc/5565/task/5565/children") {
+        return "5566";
+      }
+      if (filePath === "/proc/5566/task/5566/children") {
+        return "";
+      }
+      throw new Error("unexpected proc path");
+    });
+
+    await withMockedPlatform("linux", async () => {
+      killProcessTree(5565, { force: true, detached: false });
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(killSpy.mock.calls.filter(([, signal]) => signal !== 0)).toEqual([
+        [5566, "SIGKILL"],
+        [5565, "SIGKILL"],
+      ]);
+      expect(killSpy.mock.calls.some(([pid]) => typeof pid === "number" && pid < 0)).toBe(false);
+    });
+  });
+
+  it("on macOS enumerates attached descendants with pgrep before signaling", async () => {
+    killSpy.mockImplementation(() => true);
+    spawnSyncMock.mockImplementation((command: string, args: string[]) => {
+      if (command !== "pgrep" || args[0] !== "-P") {
+        throw new Error("unexpected process lookup");
+      }
+      return args[1] === "5585" ? { status: 0, stdout: "5586\n" } : { status: 0, stdout: "" };
+    });
+
+    await withMockedPlatform("darwin", async () => {
+      signalProcessTree(5585, "SIGTERM", { detached: false });
+
+      expect(killSpy.mock.calls.filter(([, signal]) => signal !== 0)).toEqual([
+        [5586, "SIGTERM"],
+        [5585, "SIGTERM"],
+      ]);
+      expect(killSpy.mock.calls.some(([pid]) => typeof pid === "number" && pid < 0)).toBe(false);
+    });
+  });
+
+  it("on Unix falls back to direct-PID signaling when attached descendants cannot be enumerated", async () => {
+    killSpy.mockImplementation(() => true);
+
+    await withMockedPlatform("linux", async () => {
+      killProcessTree(5555, { graceMs: 10, detached: false });
+      await vi.advanceTimersByTimeAsync(10);
+
       expect(killSpy).toHaveBeenCalledWith(5555, "SIGTERM");
-      expect(killSpy).not.toHaveBeenCalledWith(-5555, "SIGTERM");
-      expect(killSpy).not.toHaveBeenCalledWith(-5555, "SIGKILL");
+      expect(killSpy).toHaveBeenCalledWith(5555, "SIGKILL");
+      expect(killSpy.mock.calls.some(([pid]) => typeof pid === "number" && pid < 0)).toBe(false);
     });
   });
 

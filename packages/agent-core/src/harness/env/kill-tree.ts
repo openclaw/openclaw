@@ -5,6 +5,12 @@ import { readFileSync } from "node:fs";
 const DEFAULT_GRACE_MS = 3000;
 const MAX_GRACE_MS = 60_000;
 const TASKKILL_COMPLETION_TIMEOUT_MS = 3000;
+const UNIX_PROCESS_TREE_TIMEOUT_MS = 500;
+// Keep synchronous cancellation bounded on hosts with unusually large trees.
+const MAX_UNIX_PROCESS_TREE_PIDS = 4096;
+const MAX_UNIX_PROCESS_TREE_DEPTH = 128;
+
+type UnixProcessTree = readonly number[];
 
 export type KillProcessTreeOptions = {
   graceMs?: number;
@@ -17,7 +23,9 @@ export type KillProcessTreeOptions = {
  * - Windows: use taskkill /T to include descendants. Sends SIGTERM-equivalent
  *   first (without /F), then force-kills if taskkill refuses or the process
  *   survives the grace period.
- * - Unix: send SIGTERM to process group first, wait grace period, then SIGKILL.
+ * - Unix: send SIGTERM to the process group when ownership is known, wait the
+ *   grace period, then SIGKILL. Attached children are enumerated and signaled
+ *   descendants-first because their process group belongs to the gateway.
  *
  * Group kill (`process.kill(-pid, ...)`) is only used when the PID is verified
  * as its own process group leader, unless `detached: true` is explicitly passed.
@@ -45,21 +53,24 @@ export function killProcessTree(pid: number, opts?: KillProcessTreeOptions): voi
 
   const useGroupKill =
     opts?.detached === true || (opts?.detached !== false && isProcessGroupLeader(pid));
+  const processTree =
+    opts?.detached === false && !useGroupKill ? collectUnixProcessTree(pid) : undefined;
   if (opts?.force === true) {
-    signalProcessTreeUnix(pid, "SIGKILL", useGroupKill);
+    signalProcessTreeUnix(pid, "SIGKILL", useGroupKill, processTree);
     return;
   }
 
   const graceMs = normalizeGraceMs(opts?.graceMs);
-  signalProcessTreeUnix(pid, "SIGTERM", useGroupKill);
+  signalProcessTreeUnix(pid, "SIGTERM", useGroupKill, processTree);
   setTimeout(() => {
     const stillAlive = useGroupKill
       ? isProcessAlive(-pid) || isProcessAlive(pid)
-      : isProcessAlive(pid);
+      : (processTree ?? [pid]).some(isProcessAlive);
     if (!stillAlive) {
       return;
     }
-    signalProcessTreeUnix(pid, "SIGKILL", useGroupKill);
+    const liveProcessTree = processTree?.filter(isProcessAlive);
+    signalProcessTreeUnix(pid, "SIGKILL", useGroupKill, liveProcessTree);
   }, graceMs).unref();
 }
 
@@ -80,7 +91,9 @@ export function signalProcessTree(
 
   const useGroupKill =
     opts?.detached === true || (opts?.detached !== false && isProcessGroupLeader(pid));
-  signalProcessTreeUnix(pid, signal, useGroupKill);
+  const processTree =
+    opts?.detached === false && !useGroupKill ? collectUnixProcessTree(pid) : undefined;
+  signalProcessTreeUnix(pid, signal, useGroupKill, processTree);
   opts?.onComplete?.();
 }
 
@@ -149,10 +162,96 @@ function isProcessGroupLeader(pid: number): boolean {
   return pgid === pid;
 }
 
+function parsePositivePids(value: unknown): number[] {
+  if (typeof value !== "string") {
+    return [];
+  }
+  return value
+    .trim()
+    .split(/\s+/u)
+    .map((entry) => Number(entry))
+    .filter((entry) => Number.isSafeInteger(entry) && entry > 0);
+}
+
+function readUnixProcessChildren(pid: number, deadlineMs: number): number[] | undefined {
+  if (process.platform === "linux") {
+    try {
+      return parsePositivePids(readFileSync(`/proc/${pid}/task/${pid}/children`, "utf8"));
+    } catch {
+      // If a process disappears during the snapshot, abandon descendant cleanup
+      // rather than risking a signal to a reused PID.
+      return undefined;
+    }
+  }
+
+  try {
+    const result = spawnSync("pgrep", ["-P", String(pid)], {
+      encoding: "utf8",
+      killSignal: "SIGKILL",
+      maxBuffer: 128 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: Math.max(1, deadlineMs - Date.now()),
+    });
+    if (result.error) {
+      return undefined;
+    }
+    if (result.status === 1) {
+      // pgrep exits 1 for both "no children" and a missing root. Verify the
+      // root so a reused PID cannot be mistaken for an empty attached tree.
+      return isProcessAlive(pid) ? [] : undefined;
+    }
+    if (result.status !== 0) {
+      return undefined;
+    }
+    return parsePositivePids(result.stdout);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Capture an attached process tree before signalling its root.
+ * Descendants are returned first so they retain their parent relationship; if
+ * enumeration is incomplete, callers fall back to the direct PID only.
+ */
+function collectUnixProcessTree(rootPid: number): UnixProcessTree | undefined {
+  const descendants: number[] = [];
+  const seen = new Set<number>([rootPid]);
+  const deadline = Date.now() + UNIX_PROCESS_TREE_TIMEOUT_MS;
+
+  const visit = (parentPid: number, depth: number): boolean => {
+    if (
+      Date.now() >= deadline ||
+      depth > MAX_UNIX_PROCESS_TREE_DEPTH ||
+      seen.size > MAX_UNIX_PROCESS_TREE_PIDS
+    ) {
+      return false;
+    }
+    const children = readUnixProcessChildren(parentPid, deadline);
+    if (!children) {
+      return false;
+    }
+    for (const childPid of children) {
+      if (seen.has(childPid) || childPid === process.pid) {
+        continue;
+      }
+      seen.add(childPid);
+      if (!visit(childPid, depth + 1)) {
+        return false;
+      }
+      descendants.push(childPid);
+    }
+    return true;
+  };
+
+  return visit(rootPid, 0) ? [...descendants, rootPid] : undefined;
+}
+
 function signalProcessTreeUnix(
   pid: number,
   signal: "SIGTERM" | "SIGKILL",
   useGroupKill: boolean,
+  processTree?: UnixProcessTree,
 ): void {
   if (useGroupKill) {
     try {
@@ -163,10 +262,12 @@ function signalProcessTreeUnix(
     }
   }
 
-  try {
-    process.kill(pid, signal);
-  } catch {
-    // Already gone.
+  for (const targetPid of processTree ?? [pid]) {
+    try {
+      process.kill(targetPid, signal);
+    } catch {
+      // A process may exit between enumeration and signalling.
+    }
   }
 }
 
