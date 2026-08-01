@@ -37,6 +37,8 @@ const resolveOpenAiCompatibleHttpOperatorScopesMock = vi.fn();
 const resolveOpenAiCompatibleHttpSenderIsOwnerMock = vi.fn();
 const loadSessionEntryMock = vi.fn();
 const readSessionMessagesMock = vi.fn();
+const readAllBranchSessionMessagesMock = vi.fn(async (): Promise<unknown[] | null> => null);
+const readSessionTranscriptRevisionMock = vi.fn(() => "sess-main:0:0");
 const resolveSessionHistoryTranscriptPathMock = vi.fn();
 const getRuntimeConfigMock = vi.fn(() => ({}));
 const probePlaybackMediaFileDescriptorMock = vi.fn(async () => ({ durationMs: 1000 }));
@@ -63,6 +65,8 @@ vi.mock("./session-utils.js", () => ({
 }));
 
 vi.mock("./session-transcript-readers.js", () => ({
+  readAllBranchSessionMessagesAsync: readAllBranchSessionMessagesMock,
+  readSessionTranscriptRevision: readSessionTranscriptRevisionMock,
   readSessionMessagesAsync: readSessionMessagesMock,
   readSessionMessagesWithSourceAsync: async (...args: unknown[]) => ({
     messages: await readSessionMessagesMock(...args),

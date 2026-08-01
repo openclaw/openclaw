@@ -1,11 +1,13 @@
 import path from "node:path";
 import {
   isSessionTranscriptProjectionUnavailableError,
+  loadTranscriptEventRowsAfterSeqSync,
   readRecentSessionTranscriptMessageEvents,
   readSessionTranscriptMessageEventById,
   readSessionTranscriptMessageEventCount,
   readSessionTranscriptMessageEventPage,
   readSessionTranscriptMessageEvents,
+  readTranscriptStatsSync,
   resolveConcreteSessionStorePath,
   resolveSessionTranscriptReadTarget,
   waitForSessionTranscriptProjection,
@@ -326,6 +328,24 @@ export async function readSessionMessagesWithSourceAsync(
     messages: records.map(sqliteRecordMessageWithSeq),
     transcriptPath: target.sessionFile,
   };
+}
+
+/** Reads display messages from every retained transcript branch, not only the active path. */
+export async function readAllBranchSessionMessagesAsync(
+  scope: SessionTranscriptReadScope,
+): Promise<unknown[] | null> {
+  const target = resolveTranscriptReadTarget(scope);
+  const records = extractMessageRecordsFromEventEntries(
+    loadTranscriptEventRowsAfterSeqSync(toTranscriptReadScope(target), -1),
+  );
+  return records.length > 0 ? records.map(sqliteRecordMessageWithSeq) : null;
+}
+
+/** Reads the canonical transcript watermark used to validate derived transcript caches. */
+export function readSessionTranscriptRevision(scope: SessionTranscriptReadScope): string {
+  const target = resolveTranscriptReadTarget(scope);
+  const stats = readTranscriptStatsSync(toTranscriptReadScope(target));
+  return `${target.sessionId}:${stats.eventCount}:${stats.maxSeq}`;
 }
 
 /** Finds one display message by transcript id through the reader seam. */
