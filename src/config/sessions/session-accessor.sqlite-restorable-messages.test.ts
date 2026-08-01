@@ -126,12 +126,7 @@ describe("SQLite restorable transcript messages", () => {
     ];
     await replaceTranscriptEvents(scope, baseEvents);
 
-    expect(ids()).toEqual([
-      "kept-user",
-      "kept-assistant",
-      "post-reset",
-      "post-reset-inactive",
-    ]);
+    expect(ids()).toEqual(["kept-user", "kept-assistant", "post-reset", "post-reset-inactive"]);
 
     await replaceTranscriptEvents(scope, [
       ...baseEvents,

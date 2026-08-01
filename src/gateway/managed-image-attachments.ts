@@ -905,12 +905,7 @@ async function getSessionManagedOutgoingAttachmentIndex(
       ? `transcript:${sessionId}:${snapshot.generation}:${snapshot.maxSeq ?? -1}`
       : null;
     if (snapshotRevision) {
-      setCachedSessionManagedOutgoingAttachmentIndex(
-        sessionKey,
-        agentId,
-        snapshotRevision,
-        index,
-      );
+      setCachedSessionManagedOutgoingAttachmentIndex(sessionKey, agentId, snapshotRevision, index);
     } else {
       sessionManagedOutgoingAttachmentIndexCache.delete(cacheKey);
     }

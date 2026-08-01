@@ -30,9 +30,7 @@ import {
   listManagedImageRecordEntries,
   MANAGED_OUTGOING_ORIGINALS_SUBDIR,
 } from "./managed-image-record-store.js";
-import {
-  rewriteAssistantTranscriptMessageByTurnIndexAndMedia,
-} from "./server-methods/chat-transcript-persistence.js";
+import { rewriteAssistantTranscriptMessageByTurnIndexAndMedia } from "./server-methods/chat-transcript-persistence.js";
 import { readSessionMessagesWithSourceAsync } from "./session-transcript-readers.js";
 import { loadSessionEntryReadOnly } from "./session-utils.js";
 

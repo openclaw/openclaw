@@ -432,8 +432,7 @@ export function selectSessionTranscriptRestorableMessagePathNodes<T>(
   const path = selectSessionTranscriptTreePathNodes(tree, leafId);
   const boundaryIndex = path.findLastIndex(
     (node) =>
-      isRecord(node.entry) &&
-      (node.entry.type === "reset" || node.entry.type === "compaction"),
+      isRecord(node.entry) && (node.entry.type === "reset" || node.entry.type === "compaction"),
   );
   const boundary = boundaryIndex >= 0 ? path[boundaryIndex] : undefined;
   const boundaryRecord = boundary && isRecord(boundary.entry) ? boundary.entry : undefined;
