@@ -1097,6 +1097,11 @@ export async function getReplyFromConfig(
       }),
     );
     hostWorkspaceStagingDir = stageResult.hostWorkspaceStagingDir;
+    if (hostWorkspaceStagingDir) {
+      logVerbose(
+        `[host-staging-cleanup] Staged inbound media into host workspace directory: ${hostWorkspaceStagingDir}`,
+      );
+    }
   }
 
   try {
@@ -1159,6 +1164,9 @@ export async function getReplyFromConfig(
     return replyResult;
   } finally {
     if (hostWorkspaceStagingDir) {
+      logVerbose(
+        `[host-staging-cleanup] Cleaning up host workspace staging directory recursively: ${hostWorkspaceStagingDir}`,
+      );
       await fs.rm(hostWorkspaceStagingDir, { recursive: true, force: true }).catch(() => {});
     }
   }
