@@ -374,10 +374,15 @@ function backfillExternalCliIdentity(params: {
   });
   // Matching token material is the only proof the stored profile IS the CLI
   // login; identity fields are absent on the stored side by definition here.
+  const cliRefresh = typeof creds?.refresh === "string" ? creds.refresh.trim() : "";
+  const storedRefresh =
+    typeof params.existingOAuth.refresh === "string" ? params.existingOAuth.refresh.trim() : "";
+  const cliAccess = typeof creds?.access === "string" ? creds.access.trim() : "";
+  const storedAccess = params.existingOAuth.access.trim();
   const sameLogin =
     creds?.email &&
-    (creds.refresh === params.existingOAuth.refresh ||
-      creds.access === params.existingOAuth.access);
+    ((cliRefresh.length > 0 && cliRefresh === storedRefresh) ||
+      (cliAccess.length > 0 && cliAccess === storedAccess));
   return sameLogin ? { ...params.existingOAuth, email: creds.email } : null;
 }
 

@@ -54,6 +54,7 @@ function hasNewerStoredOAuthCredential(
   return Boolean(
     existing &&
     existing.provider === incoming.provider &&
+    hasUsableStoredOAuthCredential(existing, { now: Date.now() }) &&
     existingExpires !== undefined &&
     (incomingExpires === undefined || existingExpires > incomingExpires),
   );
@@ -213,11 +214,14 @@ export function overlayRuntimeExternalOAuthProfiles(
       .filter((profile) => profile.persistence !== "persisted")
       .map((profile) => profile.profileId),
   );
-  // Preserve previous runtime-only profile ids that still exist so repeated
-  // overlays do not accidentally persist or drop external profile metadata.
-  for (const profileId of store.runtimeExternalProfileIds ?? []) {
-    if (next.profiles[profileId]) {
-      runtimeOnlyProfileIds.add(profileId);
+  if (options?.runtimeExternalProfileIdsAuthoritative !== true) {
+    // Scoped overlays are partial. Preserve previous runtime-only profile ids
+    // that still exist, except profiles the current overlay explicitly marks
+    // persisted. An authoritative overlay is a complete replacement instead.
+    for (const profileId of store.runtimeExternalProfileIds ?? []) {
+      if (next.profiles[profileId] && !overlaidProfileIds.has(profileId)) {
+        runtimeOnlyProfileIds.add(profileId);
+      }
     }
   }
   next.runtimeExternalProfileIds =

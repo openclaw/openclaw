@@ -68,4 +68,23 @@ describe("external cli sync email backfill", () => {
 
     expect(resolveExternalCliAuthProfiles(storeWithClaudeProfile())).toEqual([]);
   });
+
+  it("does not treat matching empty refresh grants as proof of the same login", () => {
+    readClaudeCliCredentialsCachedMock.mockReturnValue({
+      type: "oauth",
+      provider: "anthropic",
+      access: "other-access",
+      refresh: "",
+      expires: Date.now() + 3_600_000,
+      email: "someone-else@example.com",
+    });
+    const store = storeWithClaudeProfile();
+    const stored = store.profiles["anthropic:claude-cli"];
+    if (stored?.type !== "oauth") {
+      throw new Error("expected stored Claude OAuth profile");
+    }
+    stored.refresh = "";
+
+    expect(resolveExternalCliAuthProfiles(store)).toEqual([]);
+  });
 });
