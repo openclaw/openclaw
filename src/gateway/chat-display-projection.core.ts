@@ -22,6 +22,7 @@ import { isSuppressedControlReplyText } from "./control-reply-text.js";
 
 type ChatDisplayProjectionOptions = {
   maxChars?: number;
+  redactInlineMedia?: boolean;
   stripEnvelope?: boolean;
   turnBoundaryPending?: boolean;
 };
@@ -169,7 +170,9 @@ export function projectChatDisplayMessagesWithState(
   const projectedErrors = projectEmptyAssistantErrorMessages(toProjectedMessages(mirrored));
   const filtered = filterVisibleProjectedHistoryMessages(
     projectSessionsSendInterSessionMessages(
-      toProjectedMessages(sanitizeChatHistoryMessages(projectedErrors, Number.MAX_SAFE_INTEGER)),
+      toProjectedMessages(
+        sanitizeChatHistoryMessages(projectedErrors, Number.MAX_SAFE_INTEGER, { redactInlineMedia: options?.redactInlineMedia }),
+      ),
     ),
     options?.turnBoundaryPending,
   );
@@ -177,6 +180,7 @@ export function projectChatDisplayMessagesWithState(
     messages: sanitizeChatHistoryMessages(
       mergeTtsSupplementMessages(filtered.messages),
       options?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+      { redactInlineMedia: options?.redactInlineMedia },
     ) as Array<Record<string, unknown>>,
     turnBoundaryPending: filtered.turnBoundaryPending,
   };

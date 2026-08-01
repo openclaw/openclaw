@@ -1,4 +1,5 @@
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
+import { classifyMediaReferenceSource } from "../media/media-reference.js";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -30,9 +31,13 @@ import {
   WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
 } from "./worker-environments/workspace-conflicts.js";
 
+type ChatHistorySanitizeOpts = { preserveExactToolPayload?: boolean; maxChars?: number; redactInlineMedia?: boolean };
+function redactInlineMediaBytes(value: string): { omitted: true; bytes: number } { return { omitted: true, bytes: Buffer.byteLength(value, "utf8") }; }
+function isInlineDataUrl(value: string): boolean { return classifyMediaReferenceSource(value).isDataUrl; }
+
 export function sanitizeChatHistoryContentBlock(
   block: unknown,
-  opts?: { preserveExactToolPayload?: boolean; maxChars?: number },
+  opts?: ChatHistorySanitizeOpts,
 ): { block: unknown; changed: boolean } {
   if (!block || typeof block !== "object") {
     return { block, changed: false };
@@ -103,6 +108,11 @@ export function sanitizeChatHistoryContentBlock(
     entry.omitted = true;
     entry.bytes = bytes;
     changed = true;
+  }
+  if (opts?.redactInlineMedia === true) {
+    if (type === "image" && typeof entry.url === "string" && isInlineDataUrl(entry.url)) { const redacted = redactInlineMediaBytes(entry.url); delete entry.url; entry.omitted = redacted.omitted; entry.bytes = redacted.bytes; changed = true; }
+    if (type === "image" && entry.source && typeof entry.source === "object") { const source = { ...(entry.source as Record<string, unknown>) }; if (typeof source.data === "string") { const redacted = redactInlineMediaBytes(source.data); delete source.data; source.omitted = redacted.omitted; source.bytes = redacted.bytes; entry.source = source; changed = true; } else if (typeof source.url === "string" && isInlineDataUrl(source.url)) { const redacted = redactInlineMediaBytes(source.url); delete source.url; source.omitted = redacted.omitted; source.bytes = redacted.bytes; entry.source = source; changed = true; } }
+    if (type === "input_image") { if (typeof entry.image_url === "string" && isInlineDataUrl(entry.image_url)) { const redacted = redactInlineMediaBytes(entry.image_url); delete entry.image_url; entry.omitted = redacted.omitted; entry.bytes = redacted.bytes; changed = true; } else if (entry.image_url && typeof entry.image_url === "object") { const imageUrl = { ...(entry.image_url as Record<string, unknown>) }; if (typeof imageUrl.url === "string" && isInlineDataUrl(imageUrl.url)) { const redacted = redactInlineMediaBytes(imageUrl.url); delete imageUrl.url; imageUrl.omitted = redacted.omitted; imageUrl.bytes = redacted.bytes; entry.image_url = imageUrl; changed = true; } } if (entry.source && typeof entry.source === "object") { const source = { ...(entry.source as Record<string, unknown>) }; if (typeof source.data === "string") { const redacted = redactInlineMediaBytes(source.data); delete source.data; source.omitted = redacted.omitted; source.bytes = redacted.bytes; entry.source = source; changed = true; } } }
   }
   if (type === "audio" && entry.source && typeof entry.source === "object") {
     const source = { ...(entry.source as Record<string, unknown>) };
@@ -281,6 +291,7 @@ function projectWorkspaceConflictDetails(
 export function sanitizeChatHistoryMessage(
   message: unknown,
   maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+  opts?: Pick<ChatHistorySanitizeOpts, "redactInlineMedia">,
 ): { message: unknown; changed: boolean } {
   if (!message || typeof message !== "object") {
     return { message, changed: false };
@@ -364,6 +375,7 @@ export function sanitizeChatHistoryMessage(
       const sanitized = sanitizeChatHistoryContentBlock(block, {
         preserveExactToolPayload,
         maxChars,
+        redactInlineMedia: opts?.redactInlineMedia,
       });
       if (
         !stripAssistantControlTokens ||
@@ -480,6 +492,7 @@ export function shouldDropAssistantHistoryMessage(message: unknown): boolean {
 export function sanitizeChatHistoryMessages(
   messages: unknown[],
   maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+  opts?: Pick<ChatHistorySanitizeOpts, "redactInlineMedia">,
 ): unknown[] {
   if (messages.length === 0) {
     return messages;
@@ -491,7 +504,7 @@ export function sanitizeChatHistoryMessages(
       changed = true;
       continue;
     }
-    const res = sanitizeChatHistoryMessage(message, maxChars);
+    const res = sanitizeChatHistoryMessage(message, maxChars, opts);
     changed ||= res.changed;
     if (shouldDropAssistantHistoryMessage(res.message)) {
       changed = true;
