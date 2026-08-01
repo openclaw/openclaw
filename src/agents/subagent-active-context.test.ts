@@ -58,8 +58,10 @@ describe("buildActiveSubagentSystemPromptAddition", () => {
     expect(prompt).toContain("taskName=read_email");
     expect(prompt).toContain("session=agent:main:subagent:recent-context");
     expect(prompt).toContain("status=done");
-    expect(prompt).toContain("status=done");
-    expect(prompt).toContain("do not re-spawn that same task");
+    expect(prompt).toContain("execution-complete only");
+    expect(prompt).toContain("avoid blind duplicate spawns");
+    expect(prompt).toContain("do not treat status=done alone as proof");
+    expect(prompt).not.toContain("treat the work as finished");
     expect(prompt).not.toContain("non-success terminal entries");
     expect(prompt).not.toContain("sessions_yield");
   });
@@ -269,9 +271,42 @@ describe("buildActiveSubagentSystemPromptAddition", () => {
     expect(prompt).toContain("status=done");
     expect(prompt).toContain("non-success terminal entries");
     expect(prompt).toContain("you may retry or recover that work");
-    expect(prompt).toContain("do not re-spawn that same task");
-    // Blanket all-terminal suppression must not remain.
+    expect(prompt).toContain("execution-complete only");
+    expect(prompt).toContain("avoid blind duplicate spawns");
+    expect(prompt).toContain("do not treat status=done alone as proof");
+    // Absolute task-success / no-respawn wording must not remain.
+    expect(prompt).not.toContain("treat the work as finished");
     expect(prompt).not.toContain("work already finished — do not re-spawn the same task");
+  });
+
+  it("keeps execution-complete done children recoverable from Result evidence", () => {
+    const now = Date.now();
+    addSubagentRunForTests({
+      runId: "run-recent-done-incomplete",
+      childSessionKey: "agent:main:subagent:recent-done-incomplete",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "partial write",
+      taskName: "done_incomplete_task",
+      cleanup: "keep",
+      createdAt: now - 120_000,
+      startedAt: now - 120_000,
+      endedAt: now - 30_000,
+      outcome: { status: "ok" as const },
+    } satisfies SubagentRunRecordOverrides);
+
+    const prompt = buildActiveSubagentSystemPromptAddition({
+      cfg: {} as OpenClawConfig,
+      controllerSessionKey: "agent:main:main",
+    });
+
+    expect(prompt).toContain("## Recently Completed Subagents");
+    expect(prompt).toContain("status=done");
+    expect(prompt).toContain("execution-complete only");
+    expect(prompt).toContain("completion Result or current task state");
+    expect(prompt).toContain("you may retry or recover");
+    expect(prompt).not.toContain("treat the work as finished — do not re-spawn");
   });
 
   it("caps recently completed prompt entries to the newest subset", () => {

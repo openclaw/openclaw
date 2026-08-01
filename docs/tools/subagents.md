@@ -301,7 +301,7 @@ the current child sessions, run ids, statuses, labels, tasks, and
 `taskName` aliases without polling. When children finished within the
 recent window (default 30 minutes), OpenClaw also injects a
 `Recently Completed Subagents` block with the same quoted fields so later
-turns keep a runtime completion anchor. Successful entries (`status=done`) should not be re-spawned unless the user asks; non-success terminals remain recovery evidence and may be retried.
+turns keep a runtime completion anchor. Entries with `status=done` mean execution-complete only — avoid blind duplicate spawns, but allow retries when the completion Result or remaining task state shows unfinished work; non-success terminals remain recovery evidence and may be retried.
 The prompt keeps only the newest 8 completed entries from that window so
 bursty sequential work cannot unbounded-grow later parent turns.
 Neither block replaces the completion announce Result; they are status
