@@ -526,12 +526,19 @@ function isThreadedReplyUnsupportedError(error: unknown): boolean {
 async function resolveAttachmentChatTarget(params: {
   target: ReturnType<typeof parseIMessageTarget>;
   service?: IMessageService;
+  audioAsVoice?: boolean;
   runCliJson: (args: readonly string[]) => Promise<Record<string, unknown>>;
 }): Promise<string | null> {
   if (params.target.kind === "chat_guid") {
     return params.target.chatGuid;
   }
   if (params.target.kind === "handle") {
+    const service = params.target.service !== "auto" ? params.target.service : params.service;
+    // A service-qualified handle is not proof that its matching chat GUID exists.
+    // Let imsg's RPC resolve the real conversation unless bridge-only voice is required.
+    if (!params.audioAsVoice && (service === "sms" || service === "imessage")) {
+      return null;
+    }
     if (!canSynthesizeAttachmentChatHandle(params.target.to)) {
       return null;
     }
@@ -539,7 +546,6 @@ async function resolveAttachmentChatTarget(params: {
     if (!normalizedHandle) {
       return null;
     }
-    const service = params.target.service !== "auto" ? params.target.service : params.service;
     if (service === "sms") {
       return `SMS;-;${normalizedHandle}`;
     }
@@ -580,6 +586,7 @@ async function trySendAttachmentForTarget(params: {
     attachmentChatTarget = await resolveAttachmentChatTarget({
       target: params.target,
       service: params.service,
+      audioAsVoice: params.audioAsVoice,
       runCliJson: params.runCliJson,
     });
   } catch (error) {

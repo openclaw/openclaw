@@ -903,9 +903,9 @@ describe("sendMessageIMessage receipts", () => {
 
   it("preserves explicit SMS service for bare-handle media sends", async () => {
     const client = createClient({ message_id: 12345 });
-    const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/sms-media-guid" });
+    const runCliJson = vi.fn();
 
-    await sendMessageIMessage("+15550004567", "", {
+    const result = await sendMessageIMessage("+15550004567", "", {
       config: IMESSAGE_TEST_CFG,
       client,
       service: "sms",
@@ -914,23 +914,24 @@ describe("sendMessageIMessage receipts", () => {
       runCliJson,
     });
 
-    expect(runCliJson.mock.calls[0]?.[0]).toEqual([
-      "send-attachment",
-      "--chat",
-      "SMS;-;+15550004567",
-      "--file",
-      "/tmp/image.png",
-      "--transport",
-      "auto",
-    ]);
-    expect(getClientMocks(client).request).not.toHaveBeenCalled();
+    expect(runCliJson).not.toHaveBeenCalled();
+    expect(getClientMocks(client).request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({
+        to: "+15550004567",
+        file: "/tmp/image.png",
+        service: "sms",
+      }),
+      expect.any(Object),
+    );
+    expect(result.messageId).toBe("12345");
   });
 
   it("preserves configured iMessage service for bare-handle media sends", async () => {
     const client = createClient({ message_id: 12345 });
-    const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/imessage-media-guid" });
+    const runCliJson = vi.fn();
 
-    await sendMessageIMessage("+15550004567", "", {
+    const result = await sendMessageIMessage("+15550004567", "", {
       config: {
         channels: {
           imessage: {
@@ -948,16 +949,17 @@ describe("sendMessageIMessage receipts", () => {
       runCliJson,
     });
 
-    expect(runCliJson.mock.calls[0]?.[0]).toEqual([
-      "send-attachment",
-      "--chat",
-      "iMessage;-;+15550004567",
-      "--file",
-      "/tmp/image.png",
-      "--transport",
-      "auto",
-    ]);
-    expect(getClientMocks(client).request).not.toHaveBeenCalled();
+    expect(runCliJson).not.toHaveBeenCalled();
+    expect(getClientMocks(client).request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({
+        to: "+15550004567",
+        file: "/tmp/image.png",
+        service: "imessage",
+      }),
+      expect.any(Object),
+    );
+    expect(result.messageId).toBe("12345");
   });
 
   it("keeps national-format phone media sends on the region-aware RPC path", async () => {
@@ -1009,9 +1011,9 @@ describe("sendMessageIMessage receipts", () => {
     );
   });
 
-  it("sends DM handle media captions as attachment plus follow-up text", async () => {
+  it("sends service-qualified DM media and its caption through the resolved RPC chat", async () => {
     const client = createClient({ guid: "p:0/caption-guid" });
-    const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/dm-media-guid" });
+    const runCliJson = vi.fn();
 
     const result = await sendMessageIMessage("imessage:+15550004567", "caption", {
       config: IMESSAGE_TEST_CFG,
@@ -1021,28 +1023,20 @@ describe("sendMessageIMessage receipts", () => {
       runCliJson,
     });
 
-    expect(runCliJson).toHaveBeenCalledTimes(1);
-    const captionAttachmentArgs = runCliJson.mock.calls[0]?.[0] as string[];
-    expect(captionAttachmentArgs[0]).toBe("send-attachment");
-    expect(captionAttachmentArgs[1]).toBe("--chat");
-    expect(captionAttachmentArgs[2]).toBe("iMessage;-;+15550004567");
-    expect(captionAttachmentArgs.slice(3)).toEqual([
-      "--file",
-      "/tmp/image.png",
-      "--transport",
-      "auto",
-    ]);
+    expect(runCliJson).not.toHaveBeenCalled();
     expect(getClientMocks(client).request).toHaveBeenCalledWith(
       "send",
       expect.objectContaining({
         to: "+15550004567",
         text: "caption",
+        file: "/tmp/image.png",
+        service: "imessage",
       }),
       expect.any(Object),
     );
     expect(result.sentText).toBe("caption");
-    expect(result.receipt.platformMessageIds).toEqual(["p:0/dm-media-guid", "p:0/caption-guid"]);
-    expect(result.receipt.parts.map((part) => part.kind)).toEqual(["media", "text"]);
+    expect(result.receipt.platformMessageIds).toEqual(["p:0/caption-guid"]);
+    expect(result.receipt.parts.map((part) => part.kind)).toEqual(["media"]);
   });
 
   it("does not persist caption text when the caption follow-up send fails", async () => {
@@ -1050,7 +1044,7 @@ describe("sendMessageIMessage receipts", () => {
     const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/dm-media-guid" });
 
     await expect(
-      sendMessageIMessage("imessage:+15550004567", "caption", {
+      sendMessageIMessage("+15550004567", "caption", {
         config: IMESSAGE_TEST_CFG,
         client,
         mediaUrl: "/tmp/image.png",
