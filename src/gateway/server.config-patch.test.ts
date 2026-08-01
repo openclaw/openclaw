@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
-import { AUTH_PROFILE_FILENAME } from "../agents/auth-profiles/path-constants.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import {
   activateSecretsRuntimeSnapshot,
@@ -152,7 +151,7 @@ async function expectSchemaLookupInvalid(pathValue: unknown) {
 
 async function writeUnresolvedAuthProfileTokenRef(missingEnvVar: string) {
   deleteTestEnvValue(missingEnvVar);
-  const authStorePath = path.join(resolveDefaultAgentDir({}), AUTH_PROFILE_FILENAME);
+  const authStorePath = path.join(resolveDefaultAgentDir({}), "auth-profiles.json");
   await fs.mkdir(path.dirname(authStorePath), { recursive: true });
   await fs.writeFile(
     authStorePath,
@@ -403,13 +402,14 @@ describe("gateway config methods", () => {
     }
   });
 
-  it("returns the persisted config from config.set responses", async () => {
+  it("invalidates a warm config.get response when config.set commits", async () => {
     const current = await getCurrentConfigObject();
     const nextConfig = structuredClone(current.config);
     delete nextConfig.meta;
-
-    const gateway = (nextConfig.gateway ??= {}) as Record<string, unknown>;
-    gateway.port = 19001;
+    const ui = (nextConfig.ui ??= {}) as Record<string, unknown>;
+    const prefs = (ui.prefs ??= {}) as Record<string, unknown>;
+    const locale = prefs.locale === "de" ? "en" : "de";
+    prefs.locale = locale;
 
     const res = await rpcReq<{
       ok?: boolean;
@@ -425,6 +425,10 @@ describe("gateway config methods", () => {
     }>(requireWs(), "config.get", {});
     expect(after.ok).toBe(true);
     expect(res.payload?.config).toEqual(after.payload?.config);
+    expect(
+      ((after.payload?.config?.ui as Record<string, unknown>)?.prefs as Record<string, unknown>)
+        ?.locale,
+    ).toBe(locale);
     requireConfigObject(res.payload?.config, "response config");
   });
 

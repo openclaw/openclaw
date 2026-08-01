@@ -15,9 +15,11 @@ type DoctorConfigResult = {
   sourceConfigValid?: boolean;
   sourceLastTouchedVersion?: string;
   skipPluginValidationOnWrite?: boolean;
+  explicitSetPaths?: readonly (readonly string[])[];
   skipWizardMetadataForIncludeWrite?: boolean;
   preservedLegacyRootKeys?: readonly string[];
   shouldRepairCronCodexModelRefsAfterConfigWrite?: boolean;
+  retiredPhoneControlStateCleanupPending?: boolean;
   blockedCodexModelIdentities?: readonly string[];
 };
 
@@ -28,14 +30,20 @@ export type DoctorHealthFlowContext = {
   configResult: DoctorConfigResult;
   cfg: OpenClawConfig;
   cfgForPersistence: OpenClawConfig;
+  /** The finalized config-flow candidate crossed the atomic writer boundary. */
+  configResultWriteCommitted?: boolean;
+  /** One-shot repairs that require a durable config write have completed. */
+  postConfigWriteRepairsCommitted?: boolean;
   sourceConfigValid: boolean;
   configPath: string;
+  /** Whether the selected state directory already existed before doctor startup work. */
+  stateDirExistedAtStart?: boolean;
   env?: NodeJS.ProcessEnv;
   gatewayDetails?: ReturnType<typeof buildGatewayConnectionDetails>;
   healthOk?: boolean;
   gatewayHealthAuthenticated?: boolean;
   gatewayHealthSkipped?: boolean;
-  gatewayStatus?: import("../commands/status.types.js").StatusSummary;
+  gatewayStatus?: import("../status/types.js").StatusSummary;
   gatewayMemoryProbe?: Awaited<ReturnType<typeof probeGatewayMemoryStatus>>;
   postInstallDoctorResult?: UpdatePostInstallDoctorResult;
 };

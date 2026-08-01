@@ -13,7 +13,7 @@ import { loadChatHistory, type ChatHistoryResult, type ChatState } from "./chat-
 import {
   excludeComposerAttachments,
   removeQueuedMessageWithoutReleasing,
-  syncChatQueueFromStoredOutbox,
+  syncVisibleChatQueueProjection,
   updateQueuedMessageForSession,
 } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
@@ -69,6 +69,11 @@ type StoredChatOutboxDrainLane = {
   rerun: boolean;
 };
 
+type StoredChatOutboxClientState = {
+  lanes: Map<string, StoredChatOutboxDrainLane>;
+  retryTimers: Map<string, ReturnType<typeof setTimeout>>;
+};
+
 const STORED_OUTBOX_RETRY_DEFAULT_MS = 500;
 const STORED_OUTBOX_RETRY_MIN_MS = 100;
 const STORED_OUTBOX_RETRY_MAX_MS = 30_000;
@@ -77,25 +82,15 @@ export const UNCONFIRMED_CHAT_SEND_ERROR =
 const UNCERTAIN_CLEAR_SUCCESSOR_ERROR =
   "A preceding /clear may have completed. Review the current conversation before retrying.";
 
-const storedChatOutboxDrainLanesByClient = new WeakMap<
-  GatewayBrowserClient,
-  Map<string, StoredChatOutboxDrainLane>
->();
-const storedChatOutboxRetryTimersByClient = new WeakMap<
-  GatewayBrowserClient,
-  Map<string, ReturnType<typeof setTimeout>>
->();
+const storedChatOutboxClients = new WeakMap<GatewayBrowserClient, StoredChatOutboxClientState>();
 
-function storedChatOutboxClientMap<T>(
-  store: WeakMap<GatewayBrowserClient, Map<string, T>>,
-  client: GatewayBrowserClient,
-): Map<string, T> {
-  const existing = store.get(client);
+function getStoredChatOutboxClientState(client: GatewayBrowserClient): StoredChatOutboxClientState {
+  const existing = storedChatOutboxClients.get(client);
   if (existing) {
     return existing;
   }
-  const created = new Map<string, T>();
-  store.set(client, created);
+  const created = { lanes: new Map(), retryTimers: new Map() };
+  storedChatOutboxClients.set(client, created);
   return created;
 }
 
@@ -118,7 +113,7 @@ export function scheduleStoredChatOutboxRetry(
     return;
   }
   const connectionEpoch = host.connectionEpoch;
-  const timers = storedChatOutboxClientMap(storedChatOutboxRetryTimersByClient, client);
+  const timers = getStoredChatOutboxClientState(client).retryTimers;
   const key = storedChatOutboxScopeKey(scope);
   if (timers.has(key)) {
     return;
@@ -189,7 +184,7 @@ async function readCurrentStoredChatHistory(
   if (!currentOutbox || !currentItem || !sameQueuedDeliveryVersion(currentItem, item)) {
     return "continue";
   }
-  syncChatQueueFromStoredOutbox(host, currentOutbox);
+  syncVisibleChatQueueProjection(host);
   if (chatMessagesContainQueuedSend(history.messages, item)) {
     // Server history owns the turn, but the visible transcript may not have
     // reloaded yet; materialize the turn locally before dropping the queue row
@@ -298,7 +293,7 @@ async function drainStoredChatOutbox(
       return "empty";
     }
     if (item.sendState === "unconfirmed" || item.sendState === "waiting-model") {
-      syncChatQueueFromStoredOutbox(host, outbox);
+      syncVisibleChatQueueProjection(host);
       return "blocked";
     }
     const visible = visibleSessionMatches(host, outbox.sessionKey, outbox.agentId);
@@ -308,7 +303,7 @@ async function drainStoredChatOutbox(
         lane.pendingOptions.delete(item.id);
         return "blocked";
       }
-      syncChatQueueFromStoredOutbox(host, outbox);
+      syncVisibleChatQueueProjection(host);
       if (item.localCommandName === "reset") {
         const resetText = item.localCommandArgs ? `/reset ${item.localCommandArgs}` : "/reset";
         const convertResetToMessage = (sendState?: ChatQueueItem["sendState"]) =>
@@ -499,7 +494,7 @@ async function drainStoredChatOutbox(
       }
     }
     if (visible && isChatBusy(host)) {
-      syncChatQueueFromStoredOutbox(host, outbox);
+      syncVisibleChatQueueProjection(host);
       updateQueuedMessageForSession(host, outbox.sessionKey, item.id, (entry) => ({
         ...entry,
         sendState: host.connected && host.client ? "waiting-idle" : "waiting-reconnect",
@@ -511,7 +506,7 @@ async function drainStoredChatOutbox(
     if (!currentOutbox || !currentItem || !sameQueuedDeliveryVersion(currentItem, item)) {
       continue;
     }
-    syncChatQueueFromStoredOutbox(host, currentOutbox);
+    syncVisibleChatQueueProjection(host);
     const result = await dependencies.sendQueuedChatMessage(
       host,
       item.id,
@@ -542,15 +537,14 @@ export async function scheduleStoredChatOutboxDrain(
     return;
   }
   const key = storedChatOutboxScopeKey(scope);
-  const retryTimers = storedChatOutboxRetryTimersByClient.get(client);
-  const retryTimer = retryTimers?.get(key);
+  const { lanes, retryTimers } = getStoredChatOutboxClientState(client);
+  const retryTimer = retryTimers.get(key);
   if (retryTimer !== undefined) {
     clearTimeout(retryTimer);
-    retryTimers?.delete(key);
+    retryTimers.delete(key);
   }
   // Drain ownership follows the live gateway client. A disconnected client can
   // leave an RPC pending, but its lane must never capture a replacement client.
-  const lanes = storedChatOutboxClientMap(storedChatOutboxDrainLanesByClient, client);
   const existing = lanes.get(key);
   if (existing) {
     const existingHostOwnsScope =

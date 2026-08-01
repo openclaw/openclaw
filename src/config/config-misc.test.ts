@@ -411,28 +411,6 @@ describe("plugins.slots.contextEngine", () => {
   });
 });
 
-describe("models.pricing", () => {
-  it("accepts the model pricing bootstrap toggle", () => {
-    for (const enabled of [true, false]) {
-      const result = OpenClawSchema.safeParse({
-        models: {
-          pricing: { enabled },
-        },
-      });
-      expect(result.success).toBe(true);
-    }
-  });
-
-  it("rejects non-boolean model pricing bootstrap values", () => {
-    const result = OpenClawSchema.safeParse({
-      models: {
-        pricing: { enabled: "false" },
-      },
-    });
-    expect(result.success).toBe(false);
-  });
-});
-
 describe("models.catalogRefresh", () => {
   it("accepts the refresh toggle and an http(s) override", () => {
     expect(
@@ -763,6 +741,8 @@ describe("plugins.entries.*.llm", () => {
             llm: {
               allowModelOverride: true,
               allowedModels: ["anthropic/claude-haiku-4-5"],
+              allowedCompletionModels: ["anthropic/claude-haiku-4-5"],
+              allowAuthProfileOverride: true,
               allowAgentIdOverride: true,
             },
           },
@@ -780,6 +760,8 @@ describe("plugins.entries.*.llm", () => {
             llm: {
               allowModelOverride: "yes",
               allowedModels: [1],
+              allowedCompletionModels: [1],
+              allowAuthProfileOverride: "yes",
               allowAgentIdOverride: "yes",
             },
           },

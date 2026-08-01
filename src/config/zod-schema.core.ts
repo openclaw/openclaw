@@ -210,6 +210,7 @@ const ModelCompatSchema = z
     supportsTemperature: z.boolean().optional(),
     supportsUsageInStreaming: z.boolean().optional(),
     supportsTools: z.boolean().optional(),
+    codeMode: z.enum(["preferred", "capable"]).optional(),
     supportsStrictMode: z.boolean().optional(),
     supportsJsonSchemaResponseFormat: z.boolean().optional(),
     requiresStringContent: z.boolean().optional(),
@@ -548,13 +549,6 @@ const ModelProvidersSchema = z
     }
   });
 
-const ModelPricingConfigSchema = z
-  .object({
-    enabled: z.boolean().optional(),
-  })
-  .strict()
-  .optional();
-
 const ModelCatalogRefreshConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -586,7 +580,6 @@ export const ModelsConfigSchema = z
   .object({
     mode: z.union([z.literal("merge"), z.literal("replace")]).optional(),
     providers: ModelProvidersSchema.optional(),
-    pricing: ModelPricingConfigSchema,
     catalogRefresh: ModelCatalogRefreshConfigSchema,
   })
   .strict()

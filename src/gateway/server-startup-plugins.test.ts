@@ -104,6 +104,9 @@ const resolveOpenClawPackageRootSync = vi.hoisted(() => vi.fn((_params: unknown)
 const runChannelPluginStartupMaintenance = vi.hoisted(() =>
   vi.fn(async (_params: unknown) => undefined),
 );
+const listAmbientOnlyConfiguredChannelIds = vi.hoisted(() =>
+  vi.fn((_params: unknown) => [] as string[]),
+);
 const runStartupSessionMigration = vi.hoisted(() => vi.fn(async (_params: unknown) => undefined));
 vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: () => "/workspace",
@@ -127,6 +130,11 @@ vi.mock("../infra/openclaw-root.js", () => ({
   resolveOpenClawPackageRootSync: (params: unknown) => resolveOpenClawPackageRootSync(params),
 }));
 
+vi.mock("../plugins/channel-presence-policy.js", () => ({
+  listAmbientOnlyConfiguredChannelIds: (params: unknown) =>
+    listAmbientOnlyConfiguredChannelIds(params),
+}));
+
 vi.mock("../plugins/plugin-lookup-table.js", () => ({
   loadPluginLookUpTable: (params: unknown) => loadPluginLookUpTable(params),
 }));
@@ -135,7 +143,8 @@ vi.mock("../plugins/registry.js", () => ({
   createEmptyPluginRegistry: () => ({ diagnostics: [], gatewayHandlers: {}, plugins: [] }),
 }));
 
-vi.mock("../plugins/runtime.js", () => ({
+vi.mock("../plugins/runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/runtime.js")>()),
   getActivePluginRegistry: () => undefined,
   setActivePluginRegistry: vi.fn(),
 }));
@@ -242,6 +251,7 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     applyPluginAutoEnable.mockClear();
     initSubagentRegistry.mockClear();
     loadGatewayStartupPlugins.mockClear();
+    listAmbientOnlyConfiguredChannelIds.mockClear().mockReturnValue([]);
     loadPluginLookUpTable.mockClear().mockReturnValue({
       manifestRegistry: pluginManifestRegistry,
       startup: {
@@ -408,6 +418,34 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
       loadPluginLookUpTable,
     );
     expect(lookupInput.workerProviderIds).toEqual(["static-ssh"]);
+  });
+
+  it("preserves an explicitly empty manifest snapshot for ambient channel planning", async () => {
+    const emptyManifestRegistry: PluginManifestRegistry = { plugins: [], diagnostics: [] };
+    loadPluginLookUpTable.mockReturnValueOnce({
+      manifestRegistry: emptyManifestRegistry,
+      startup: {
+        configuredDeferredChannelPluginIds: [],
+        pluginIds: [],
+      },
+      metrics: pluginLookUpTableMetrics,
+    });
+
+    const log = createLog();
+    const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
+    const result = await prepareGatewayPluginBootstrap({
+      cfgAtStart: { channels: {} },
+      startupRuntimeConfig: { channels: {} },
+      minimalTestGateway: false,
+      ambientEnvTriggers: "suppress",
+      log,
+    });
+
+    expect(result.pluginManifestRecords).toBe(emptyManifestRegistry.plugins);
+    const ambientInput = firstCallArg<{ manifestRecords?: readonly unknown[] }>(
+      listAmbientOnlyConfiguredChannelIds,
+    );
+    expect(ambientInput.manifestRecords).toBe(emptyManifestRegistry.plugins);
   });
 
   it("bypasses plugin lookup when plugins are globally disabled", async () => {

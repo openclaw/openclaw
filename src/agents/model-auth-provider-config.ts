@@ -1,7 +1,7 @@
 /**
  * Provider-entry configuration and stored-profile binding for model auth.
  */
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
@@ -17,12 +17,10 @@ import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state
 import { mintSecretSentinel } from "../secrets/sentinel.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import {
-  type AuthProfileCredential,
-  type AuthProfileStore,
   isConfiguredAwsSdkAuthProfileForProvider,
   isStoredCredentialCompatibleWithAuthProvider,
-  resolveApiKeyForProfile,
-} from "./auth-profiles.js";
+} from "./auth-profiles/order.js";
+import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveEnvApiKey, type EnvApiKeyResult } from "./model-auth-env.js";
 import {
   CUSTOM_LOCAL_AUTH_MARKER,
@@ -32,7 +30,13 @@ import {
   SECRETREF_ENV_HEADER_MARKER_PREFIX,
 } from "./model-auth-markers.js";
 import type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
-import { normalizeProviderId } from "./model-selection.js";
+import { isLocalProviderBaseUrl } from "./model-provider-local.js";
+
+const MODEL_AUTH_LOCAL_HOST_ALIASES = new Set([
+  "docker.orb.internal",
+  "host.docker.internal",
+  "host.orb.internal",
+]);
 
 export function sentinelizeSecretRefProfileApiKey(params: {
   apiKey: string;
@@ -185,7 +189,7 @@ export function resolveUsableCustomProviderApiKey(params: {
     isCustomLocalProviderConfig(customProviderConfig) &&
     (customProviderConfig.api === "openai-completions" || customProviderConfig.api === "ollama") &&
     customProviderConfig.baseUrl &&
-    isLocalBaseUrl(customProviderConfig.baseUrl)
+    isLocalAuthProviderBaseUrl(customProviderConfig.baseUrl)
   ) {
     return {
       apiKey: customProviderConfig.api === "ollama" ? customKey : CUSTOM_LOCAL_AUTH_MARKER,
@@ -215,6 +219,35 @@ export function shouldPreferExplicitConfigApiKeyAuth(
     providerConfig !== undefined &&
     hasExplicitProviderApiKeyConfig(providerConfig)
   );
+}
+
+/** True when a custom local provider can use a synthetic no-auth placeholder. */
+export function hasSyntheticLocalProviderAuthConfig(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+}): boolean {
+  const providerConfig = resolveProviderConfig(params.cfg, params.provider);
+  if (!providerConfig) {
+    return false;
+  }
+  const hasApiConfig =
+    Boolean(providerConfig.api?.trim()) ||
+    Boolean(providerConfig.baseUrl?.trim()) ||
+    (Array.isArray(providerConfig.models) && providerConfig.models.length > 0);
+  if (!hasApiConfig) {
+    return false;
+  }
+  const authOverride = resolveProviderAuthOverride(params.cfg, params.provider);
+  if (authOverride && authOverride !== "api-key") {
+    return false;
+  }
+  if (
+    !isCustomLocalProviderConfig(providerConfig) ||
+    hasExplicitProviderApiKeyConfig(providerConfig)
+  ) {
+    return false;
+  }
+  return Boolean(providerConfig.baseUrl && isLocalAuthProviderBaseUrl(providerConfig.baseUrl));
 }
 
 export function resolveProviderAuthOverride(
@@ -429,6 +462,7 @@ export async function resolveProviderEntryApiKeyBinding(params: {
     return reference;
   }
   try {
+    const { resolveApiKeyForProfile } = await import("./auth-profiles/oauth.js");
     const resolved = await resolveApiKeyForProfile({
       cfg: params.cfg,
       store: params.store,
@@ -477,52 +511,18 @@ export function resolveConfiguredAwsSdkProfileAuth(params: {
   };
 }
 
-export function isLocalBaseUrl(baseUrl: string): boolean {
-  try {
-    let host = normalizeLowercaseStringOrEmpty(new URL(baseUrl).hostname);
-    if (host.startsWith("[") && host.endsWith("]")) {
-      host = host.slice(1, -1);
-    }
-    return (
-      host === "localhost" ||
-      host === "127.0.0.1" ||
-      host === "0.0.0.0" ||
-      host === "::1" ||
-      host === "::ffff:7f00:1" ||
-      host === "::ffff:127.0.0.1" ||
-      host === "docker.orb.internal" ||
-      host === "host.docker.internal" ||
-      host === "host.orb.internal" ||
-      host.endsWith(".local") ||
-      isPrivateIpv4Host(host)
-    );
-  } catch {
-    return false;
-  }
+function isLocalAuthProviderBaseUrl(baseUrl: string): boolean {
+  return isLocalProviderBaseUrl(baseUrl, MODEL_AUTH_LOCAL_HOST_ALIASES);
 }
 
-function isPrivateIpv4Host(host: string): boolean {
-  if (!/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
-    return false;
-  }
-  const octets = host.split(".").map((part) => Number.parseInt(part, 10));
-  if (octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
-    return false;
-  }
-  const [a, b] = octets;
-  return (
-    a === 10 || (a === 172 && b !== undefined && b >= 16 && b <= 31) || (a === 192 && b === 168)
-  );
-}
-
-export function hasExplicitProviderApiKeyConfig(providerConfig: ModelProviderConfig): boolean {
+function hasExplicitProviderApiKeyConfig(providerConfig: ModelProviderConfig): boolean {
   return (
     normalizeOptionalSecretInput(providerConfig.apiKey) !== undefined ||
     coerceSecretRef(providerConfig.apiKey) !== null
   );
 }
 
-export function isCustomLocalProviderConfig(providerConfig: ModelProviderConfig): boolean {
+function isCustomLocalProviderConfig(providerConfig: ModelProviderConfig): boolean {
   return (
     typeof providerConfig.baseUrl === "string" &&
     providerConfig.baseUrl.trim().length > 0 &&
