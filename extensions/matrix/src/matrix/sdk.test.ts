@@ -1058,6 +1058,25 @@ describe("MatrixClient event bridge", () => {
     expect(delivered).toEqual(["$pruned-pending"]);
   });
 
+  it("preserves pending event enrollment order across a selective restart", async () => {
+    const client = await createRestartedClient({
+      cleanShutdown: false,
+      emitCachedEvents: () => {},
+      pendingReplayEvents: [
+        { roomId: "!room:example.org", eventId: "$z-first" },
+        { roomId: "!room:example.org", eventId: "$a-second" },
+      ],
+    });
+    const delivered: string[] = [];
+    client.on("room.message", (_roomId, event) => {
+      delivered.push(event.event_id);
+    });
+
+    await client.start();
+
+    expect(delivered).toEqual(["$z-first", "$a-second"]);
+  });
+
   it("decrypts and settles an encrypted pending payload replayed outside the SDK cache", async () => {
     const client = await createRestartedClient({
       cleanShutdown: false,

@@ -418,9 +418,7 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
       version: STORE_VERSION,
       savedSync: this.savedSync ? cloneJson(this.savedSync) : null,
       cleanShutdown: this.cleanShutdown,
-      pendingReplayEvents: Array.from(this.pendingReplayEvents.values()).toSorted((a, b) =>
-        a.key.localeCompare(b.key),
-      ),
+      pendingReplayEvents: Array.from(this.pendingReplayEvents.values()),
       replayLedgerKnown: this.replayLedgerKnown,
       ...(this.savedClientOptions ? { clientOptions: cloneJson(this.savedClientOptions) } : {}),
     };
