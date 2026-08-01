@@ -235,7 +235,7 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "memory.search.documentInputType":
     "Optional provider-specific `input_type` value for document and indexing memory embeddings. Use this with OpenAI-compatible asymmetric embedding endpoints that require a passage or document label.",
   "memory.search.queryInstructionTemplate":
-    "Use retrieval query templates for Qwen3 and Mixedbread.",
+    "Enables model-specific retrieval query templates for known instruction-aware embedding models such as Qwen3 and Mixedbread. Keep disabled unless your selected OpenAI-compatible embedding model expects query-side prompting; document embeddings remain raw.",
   "memory.search.outputDimensionality":
     "Provider-specific output vector size override for memory embeddings. Gemini embedding-2 supports 768, 1536, or 3072; Bedrock families such as Titan V2, Cohere V4, and Nova expose their own allowed sizes. Expect a full reindex when you change it because stored vector dimensions must stay consistent.",
   "memory.search.remote.baseUrl":
