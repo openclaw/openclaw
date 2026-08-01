@@ -82,6 +82,16 @@ function dropPanel(target: HTMLElement, dataTransfer: object, clientX: number) {
   target.dispatchEvent(drop);
 }
 
+function pointerEvent(type: string, pointerId: number, clientX: number): PointerEvent {
+  const event = new MouseEvent(type, {
+    bubbles: true,
+    button: 0,
+    clientX,
+  });
+  Object.defineProperty(event, "pointerId", { value: pointerId });
+  return event as PointerEvent;
+}
+
 afterEach(() => {
   for (const region of regions.splice(0)) {
     region.parentElement?.remove();
@@ -347,15 +357,9 @@ describe("chat sidebar region", () => {
     divider!.setPointerCapture = vi.fn();
     divider!.releasePointerCapture = vi.fn();
     divider!.hasPointerCapture = vi.fn(() => true);
-    const pointerDown = new MouseEvent("pointerdown", {
-      bubbles: true,
-      button: 0,
-      clientX: 500,
-    });
-    Object.defineProperty(pointerDown, "pointerId", { value: 7 });
-    divider!.dispatchEvent(pointerDown);
-    document.dispatchEvent(new MouseEvent("pointermove", { bubbles: true, clientX: 612 }));
-    document.dispatchEvent(new MouseEvent("pointerup", { bubbles: true, clientX: 612 }));
+    divider!.dispatchEvent(pointerEvent("pointerdown", 7, 500));
+    document.dispatchEvent(pointerEvent("pointermove", 7, 612));
+    document.dispatchEvent(pointerEvent("pointerup", 7, 612));
 
     const resizedWidth = vi.mocked(region.callbacks!.resizeColumn).mock.lastCall?.[1];
     expect(region.callbacks?.resizeColumn).toHaveBeenCalledWith(column!.id, expect.any(Number));

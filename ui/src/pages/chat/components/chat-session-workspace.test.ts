@@ -123,6 +123,100 @@ describe("session workspace dock drag", () => {
     grip.removeEventListener("pointerdown", onDockDragStart);
     workbench.remove();
   });
+
+  it("releases the pointer owner when the workspace collapses", () => {
+    const requestUpdate = vi.fn();
+    const state = {
+      client: null,
+      connected: false,
+      handleOpenSidebar: vi.fn(),
+      hello: null,
+      requestUpdate,
+      sessionKey: "agent:main:current",
+      sessions: {},
+      settings: { chatWorkspaceDock: "bottom" },
+    } as unknown as SessionWorkspaceHost;
+    toggleSessionWorkspace(state);
+
+    const workbench = document.createElement("div");
+    workbench.className = "chat-workbench";
+    const grip = document.createElement("div");
+    workbench.append(grip);
+    document.body.append(workbench);
+    workbench.getBoundingClientRect = vi.fn(() => ({
+      bottom: 600,
+      height: 600,
+      left: 0,
+      right: 1_000,
+      top: 0,
+      width: 1_000,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    }));
+    grip.setPointerCapture = vi.fn();
+    const onDockDragStart = createSessionWorkspaceProps(state).onDockDragStart;
+    grip.addEventListener("pointerdown", onDockDragStart);
+
+    grip.dispatchEvent(pointerEvent("pointerdown", 11, 100, 100));
+    toggleSessionWorkspace(state);
+    toggleSessionWorkspace(state);
+    grip.dispatchEvent(pointerEvent("pointerdown", 22, 100, 100));
+    grip.dispatchEvent(pointerEvent("pointermove", 22, 900, 100));
+
+    const props = createSessionWorkspaceProps(state);
+    expect(grip.setPointerCapture).toHaveBeenCalledTimes(2);
+    expect(props.dockDragging).toBe(true);
+    expect(props.dockDragZone).toBe("right");
+
+    grip.dispatchEvent(pointerEvent("pointercancel", 22, 900, 100));
+    grip.removeEventListener("pointerdown", onDockDragStart);
+    workbench.remove();
+  });
+
+  it("releases the pointer owner when pointer capture is lost", () => {
+    const state = {
+      client: null,
+      connected: false,
+      handleOpenSidebar: vi.fn(),
+      hello: null,
+      requestUpdate: vi.fn(),
+      sessionKey: "agent:main:current",
+      sessions: {},
+      settings: { chatWorkspaceDock: "bottom" },
+    } as unknown as SessionWorkspaceHost;
+    toggleSessionWorkspace(state);
+
+    const workbench = document.createElement("div");
+    workbench.className = "chat-workbench";
+    const grip = document.createElement("div");
+    workbench.append(grip);
+    document.body.append(workbench);
+    workbench.getBoundingClientRect = vi.fn(() => ({
+      bottom: 600,
+      height: 600,
+      left: 0,
+      right: 1_000,
+      top: 0,
+      width: 1_000,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    }));
+    grip.setPointerCapture = vi.fn();
+    const onDockDragStart = createSessionWorkspaceProps(state).onDockDragStart;
+    grip.addEventListener("pointerdown", onDockDragStart);
+
+    grip.dispatchEvent(pointerEvent("pointerdown", 11, 100, 100));
+    grip.dispatchEvent(pointerEvent("lostpointercapture", 11, 100, 100));
+    grip.dispatchEvent(pointerEvent("pointerdown", 22, 100, 100));
+
+    expect(grip.setPointerCapture).toHaveBeenCalledTimes(2);
+
+    grip.dispatchEvent(pointerEvent("pointercancel", 22, 100, 100));
+    grip.removeEventListener("pointerdown", onDockDragStart);
+    workbench.remove();
+  });
 });
 
 describe("custodian panel toggle", () => {
