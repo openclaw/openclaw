@@ -133,7 +133,7 @@ The provider inventory reports the local fallback winner separately from global 
       audio: {
         enabled: true,
         echoTranscript: true,
-        echoFormat: '📝 "{transcript}"',
+        echoFormat: '🎙️ "{transcript}"',
       },
     },
   },
@@ -153,7 +153,7 @@ The provider inventory reports the local fallback winner separately from global 
 - Default `maxChars` for audio is **unset** (full transcript). Set `tools.media.audio.maxChars` or per-entry `maxChars` to trim output.
 - OpenAI auto-detect default is `gpt-4o-transcribe`; set `model: "gpt-4o-mini-transcribe"` for a cheaper/faster option.
 - Transcript is available to templates as `{{Transcript}}`.
-- `tools.media.audio.echoTranscript` is off by default; `echoFormat` accepts a `{transcript}` placeholder.
+- `tools.media.audio.echoTranscript` is off by default; `echoFormat` accepts a `{transcript}` placeholder (default `🎙️ "{transcript}"`). When enabled, the echo is threaded as a reply to the inbound voice message when the channel exposes a message id.
 - CLI stdout is capped at 5MB; keep CLI output concise.
 - CLI `args` should use `{{AttachmentPath}}` for the local audio file path. Run `openclaw doctor --fix` to migrate deprecated `{input}` placeholders from older `audio.transcription.command` configs (retired key: `audio.transcription`, replaced by `tools.media.models`). `{{MediaPath}}` remains a deprecated compatibility alias.
 - `tools.media.concurrency` bounds media tasks; it is not a GPU scheduler.
