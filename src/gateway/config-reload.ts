@@ -32,6 +32,7 @@ import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-l
 import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
 import { createConfigAppliedRevisionTracker } from "./config-applied-revision.js";
 import { diffConfigPaths, diffGatewayReloadPaths } from "./config-diff.js";
+import { bumpConfigReloadObservedGeneration } from "./config-reload-observed.js";
 import {
   buildGatewayReloadPlan,
   isNoopGatewayReloadPlan,
@@ -816,6 +817,10 @@ export function startGatewayConfigReloader(opts: {
       clearTimeout(debounceTimer);
       debounceTimer = null;
     }
+    // Every disk or in-process config observation funnels through here, so
+    // this bump is the invalidation signal for downstream single-slot caches
+    // (health runtime-config drift) that must not poll the file themselves.
+    bumpConfigReloadObservedGeneration();
     try {
       if (pendingInProcessConfig) {
         const pendingWrite = pendingInProcessConfig;

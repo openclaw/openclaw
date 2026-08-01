@@ -9,6 +9,7 @@ import type { HealthSummary } from "../gateway/health/types.js";
 import { createPluginRecord } from "../plugins/status.test-fixtures.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { installHealthConfigMock } from "./health.config.test-mocks.js";
 import {
   createLegacyHealthSnapshotCollector,
   type LegacyHealthSnapshotParams,
@@ -58,10 +59,7 @@ type IMessageHealthAccount = {
 };
 
 async function loadFreshHealthModulesForTest() {
-  vi.doMock("../config/config.js", () => ({
-    getRuntimeConfig: () => testConfig,
-    loadConfig: () => testConfig,
-  }));
+  installHealthConfigMock(() => testConfig);
   vi.doMock("../config/sessions.js", () => ({
     resolveStorePath: () => "/tmp/sessions.json",
     resolveSessionFilePath: vi.fn(() => "/tmp/sessions.json"),
