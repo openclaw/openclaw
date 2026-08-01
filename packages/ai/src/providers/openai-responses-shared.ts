@@ -513,7 +513,18 @@ function resolveResponsesReasoningEffortForPayload<TApi extends Api>(
 }
 
 function supportsResponsesEncryptedReasoningReplay<TApi extends Api>(model: Model<TApi>): boolean {
-  return model.api === "azure-openai-responses" || model.provider === "openai";
+  if (model.api === "azure-openai-responses") {
+    return true;
+  }
+  const compat = model.compat;
+  if (compat && typeof compat === "object") {
+    const declared = (compat as { supportsEncryptedReasoningReplay?: unknown })
+      .supportsEncryptedReasoningReplay;
+    if (typeof declared === "boolean") {
+      return declared;
+    }
+  }
+  return true;
 }
 
 export function applyCommonResponsesParams<TApi extends Api>(

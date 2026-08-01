@@ -352,6 +352,7 @@ describe("Responses reasoning effort", () => {
       name: "Qwen 3 32B",
       provider: "groq",
       baseUrl: "https://api.groq.com/openai/v1",
+      compat: { supportsEncryptedReasoningReplay: false },
       thinkingLevelMap: {
         off: "none",
         low: "default",
@@ -403,6 +404,37 @@ describe("Responses reasoning effort", () => {
     );
     expect(nativeOpenAI).toMatchObject({
       reasoning: { effort: "medium", summary: "auto" },
+      include: ["reasoning.encrypted_content"],
+    });
+  });
+
+  it("preserves encrypted reasoning replay for compatible Responses endpoints by default", () => {
+    const compatibleModel = {
+      ...nativeOpenAIModel,
+      id: "custom-replay-model",
+      name: "Custom Replay Model",
+      provider: "custom-compatible",
+      baseUrl: "https://compatible.example.com/v1",
+      thinkingLevelMap: {
+        low: "provider-low",
+        medium: "provider-medium",
+        high: "provider-high",
+      },
+    } satisfies Model<"openai-responses">;
+
+    const params = {} as never;
+    applyCommonResponsesParams(
+      params,
+      compatibleModel,
+      { messages: [] },
+      {
+        reasoningEffort: "medium",
+        reasoningSummary: "concise",
+      },
+    );
+
+    expect(params).toMatchObject({
+      reasoning: { effort: "provider-medium", summary: "concise" },
       include: ["reasoning.encrypted_content"],
     });
   });
