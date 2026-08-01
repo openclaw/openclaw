@@ -7,6 +7,7 @@ import { sendBuzzTextOneShot, startBuzzBus, type BuzzBus } from "./buzz-bus.js";
 import { handleBuzzInbound } from "./inbound.js";
 import {
   advanceBuzzRecoveryWatermark,
+  createBuzzRecoveryFrontier,
   openBuzzRecoveryWatermarkStore,
   resolveBuzzColdStartSince,
 } from "./recovery-watermark.js";
@@ -89,6 +90,17 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
   const reportWatermarkError = (error: Error) => {
     ctx.log?.warn?.(`[${account.accountId}] Buzz recovery watermark failed: ${error.message}`);
   };
+  const commitRecoveryCheckpoint = async (seconds: number | undefined) => {
+    if (seconds === undefined) {
+      return;
+    }
+    await advanceBuzzRecoveryWatermark({
+      store: watermarkStore,
+      accountId: account.accountId,
+      seconds,
+      onError: reportWatermarkError,
+    });
+  };
 
   let hasAttemptedSession = false;
   let reconnectAttempt = 0;
@@ -112,6 +124,7 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
             onError: reportWatermarkError,
           });
       hasAttemptedSession = true;
+      const recoveryFrontier = createBuzzRecoveryFrontier({ sinceSeconds: sessionSince });
       bus = await startBuzzBus({
         accountId: account.accountId,
         relayUrl: account.relayUrl,
@@ -126,13 +139,20 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
           if (!isConfiguredBuzzChannel(configuredChannelIds, message.channelId)) {
             return;
           }
-          await handleBuzzInbound({ account, cfg: ctx.cfg, bus: sessionBus, message, signal });
-          await advanceBuzzRecoveryWatermark({
-            store: watermarkStore,
-            accountId: account.accountId,
-            seconds: message.createdAt,
-            onError: reportWatermarkError,
+          const token = recoveryFrontier.admit({
+            createdAt: message.createdAt,
+            observedSeconds: Math.floor(Date.now() / 1000),
           });
+          try {
+            await handleBuzzInbound({ account, cfg: ctx.cfg, bus: sessionBus, message, signal });
+          } catch (error) {
+            recoveryFrontier.abandon(token);
+            throw error;
+          }
+          await commitRecoveryCheckpoint(recoveryFrontier.settle(token));
+        },
+        onHistoryDrained: () => {
+          void commitRecoveryCheckpoint(recoveryFrontier.markBacklogDrained());
         },
         onMessageError: (error) => {
           ctx.log?.error?.(`[${account.accountId}] Buzz message failed: ${error.message}`);
