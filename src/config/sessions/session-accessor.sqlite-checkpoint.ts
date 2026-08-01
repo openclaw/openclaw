@@ -34,7 +34,7 @@ import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
 
 // Compaction checkpoint branch/restore owner.
 
-export type SqliteCheckpointTranscriptForkSource = {
+type SqliteCheckpointTranscriptForkSource = {
   sessionId: string;
   leafId?: string;
   totalTokens?: number;

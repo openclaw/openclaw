@@ -331,7 +331,7 @@ export async function readSessionMessagesWithSourceAsync(
   };
 }
 
-export type RestorableBranchSessionMessagesSnapshot = Omit<
+type RestorableBranchSessionMessagesSnapshot = Omit<
   SessionTranscriptRestorableMessageSnapshot,
   "events" | "retainedEvents"
 > & {

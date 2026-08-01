@@ -11,7 +11,7 @@ type SessionTranscriptTreeEntry = {
   appendMode?: "side";
 };
 
-export type SessionTranscriptTreeNode<T> = SessionTranscriptTreeEntry & {
+type SessionTranscriptTreeNode<T> = SessionTranscriptTreeEntry & {
   entry: T;
   index: number;
 };
