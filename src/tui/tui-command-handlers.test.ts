@@ -202,6 +202,10 @@ function createHarness(params?: {
   };
 
   const {
+    isActive,
+    addSystem: addOwnedSystem,
+    requestRender: requestOwnedRender,
+    dispose,
     handleCommand,
     sendMessage,
     captureMessageAdmission,
@@ -255,6 +259,10 @@ function createHarness(params?: {
   });
 
   return {
+    isActive,
+    addOwnedSystem,
+    requestOwnedRender,
+    dispose,
     handleCommand,
     sendMessage,
     captureMessageAdmission,
@@ -299,6 +307,155 @@ function createHarness(params?: {
 }
 
 describe("tui command handlers", () => {
+  it("exposes one durable owner lifetime for external message and render callbacks", () => {
+    const { isActive, addOwnedSystem, requestOwnedRender, dispose, addSystem, requestRender } =
+      createHarness();
+
+    expect(isActive()).toBe(true);
+    dispose();
+    dispose();
+    expect(isActive()).toBe(false);
+    addOwnedSystem("late shutdown notice");
+    requestOwnedRender();
+    expect(addSystem).not.toHaveBeenCalled();
+    expect(requestRender).not.toHaveBeenCalled();
+  });
+
+  it("ignores blocked buffered messages after their command owner is disposed", () => {
+    const { dispose, reportBlockedMessageSubmit, addSystem, requestRender } = createHarness({
+      pendingSubmit: { phase: "sending", runId: "pending", draftText: "pending" },
+    });
+
+    dispose();
+    reportBlockedMessageSubmit("late buffered message", { status: "blocked", reason: "pending" });
+
+    expect(addSystem).not.toHaveBeenCalled();
+    expect(requestRender).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { outcome: "success", result: { ok: true, value: undefined } },
+    { outcome: "failure", result: { ok: false, error: "gateway unavailable" } },
+  ])(
+    "ignores an agent picker refresh $outcome after its command owner is disposed",
+    async ({ result }) => {
+      let settleRefresh: ((value: typeof result) => void) | undefined;
+      const refreshAgents = vi.fn(
+        () =>
+          new Promise<typeof result>((resolve) => {
+            settleRefresh = resolve;
+          }),
+      ) as RefreshAgentsMock;
+      const { dispose, handleCommand, openOverlay, requestRender, addSystem } = createHarness({
+        refreshAgents,
+        agents: [{ id: "cached", name: "Cached Agent" }],
+      });
+
+      const pending = handleCommand("/agents");
+      expect(refreshAgents).toHaveBeenCalledOnce();
+      dispose();
+      dispose();
+      settleRefresh?.(result);
+
+      await pending;
+      expect(openOverlay).not.toHaveBeenCalled();
+      expect(requestRender).not.toHaveBeenCalled();
+      expect(addSystem).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not start another agent picker request after its command owner is disposed", async () => {
+    const { dispose, handleCommand, refreshAgents, requestRender } = createHarness({
+      agents: [{ id: "cached", name: "Cached Agent" }],
+    });
+
+    dispose();
+    await handleCommand("/agents");
+
+    expect(refreshAgents).not.toHaveBeenCalled();
+    expect(requestRender).not.toHaveBeenCalled();
+  });
+
+  it.each(["resolve", "reject"] as const)(
+    "ignores an in-flight model picker %s after its command owner is disposed",
+    async (outcome) => {
+      const deferred = createDeferred<Array<{ provider: string; id: string }>>();
+      const harness = createHarness({ listModels: vi.fn(() => deferred.promise) });
+      const pending = harness.handleCommand("/models");
+      harness.addSystem.mockClear();
+      harness.requestRender.mockClear();
+      harness.dispose();
+      if (outcome === "resolve") {
+        deferred.resolve([{ provider: "openai", id: "model" }]);
+      } else {
+        deferred.reject(new Error("gateway not connected"));
+      }
+
+      await pending;
+      expect(harness.openOverlay).not.toHaveBeenCalled();
+      expect(harness.addSystem).not.toHaveBeenCalled();
+      expect(harness.requestRender).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["resolve", "reject"] as const)(
+    "ignores an in-flight session picker %s after its command owner is disposed",
+    async (outcome) => {
+      const deferred = createDeferred<{ sessions: Array<{ key: string; updatedAt: number }> }>();
+      const harness = createHarness({ listSessions: vi.fn(() => deferred.promise) });
+      const pending = harness.openSessionSelector();
+      harness.dispose();
+      if (outcome === "resolve") {
+        deferred.resolve({ sessions: [{ key: "agent:main:main", updatedAt: 1 }] });
+      } else {
+        deferred.reject(new Error("gateway not connected"));
+      }
+
+      await pending;
+      expect(harness.openOverlay).not.toHaveBeenCalled();
+      expect(harness.addSystem).not.toHaveBeenCalled();
+      expect(harness.requestRender).not.toHaveBeenCalled();
+    },
+  );
+
+  it("ignores a pending chat rejection after its command owner is disposed", async () => {
+    const deferred = createDeferred<{ runId: string }>();
+    const harness = createHarness({ sendChat: vi.fn(() => deferred.promise) });
+    const pending = harness.sendMessage("shutdown proof");
+    harness.addSystem.mockClear();
+    harness.requestRender.mockClear();
+    harness.dispose();
+    deferred.reject(new Error("transport aborted"));
+
+    await pending;
+    expect(harness.addSystem).not.toHaveBeenCalled();
+    expect(harness.requestRender).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { command: "/gateway-status", backendMethod: "getGatewayStatus" },
+    { command: "/new", backendMethod: "createSession" },
+    { command: "/reset", backendMethod: "resetSession" },
+    { command: "/think medium", backendMethod: "patchSession" },
+  ] as const)(
+    "ignores a pending $command rejection after its command owner is disposed",
+    async ({ command, backendMethod }) => {
+      const deferred = createDeferred<unknown>();
+      const backendCall = vi.fn(() => deferred.promise);
+      const harness = createHarness({ [backendMethod]: backendCall });
+      const pending = harness.handleCommand(command);
+      expect(backendCall).toHaveBeenCalledOnce();
+      harness.addSystem.mockClear();
+      harness.requestRender.mockClear();
+      harness.dispose();
+      deferred.reject(new Error("transport aborted"));
+
+      await pending;
+      expect(harness.addSystem).not.toHaveBeenCalled();
+      expect(harness.requestRender).not.toHaveBeenCalled();
+    },
+  );
+
   it("does not open the agent picker from a cached roster after refresh failure", async () => {
     const refreshAgents = vi
       .fn()

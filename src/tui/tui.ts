@@ -1396,12 +1396,12 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   const { openOverlay, closeOverlay } = createOverlayHandlers(tui, editor);
   const pluginApprovals = createTuiPluginApprovalController({
     client,
-    chatLog,
+    chatLog: { addSystem: (line) => commandHandlers.addSystem(line) },
     getAgentId: () => currentAgentId,
     getSessionKey: () => currentSessionKey,
     openOverlay,
     closeOverlay,
-    requestRender: () => tui.requestRender(),
+    requestRender: () => commandHandlers.requestRender(),
   });
   const btw = {
     showResult: (params: { question: string; text: string; isError?: boolean }) => {
@@ -1466,13 +1466,17 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   };
   const taskSuggestions = createTuiTaskSuggestionController({
     client,
-    chatLog,
+    chatLog: { addSystem: (line) => commandHandlers.addSystem(line) },
     getAgentId: () => currentAgentId,
     getSessionKey: () => currentSessionKey,
     openOverlay,
     closeOverlay,
-    requestRender: () => tui.requestRender(),
-    onAccepted: setSession,
+    requestRender: () => commandHandlers.requestRender(),
+    onAccepted: async (sessionKey) => {
+      if (commandHandlers.isActive()) {
+        await setSession(sessionKey);
+      }
+    },
   });
 
   const {
@@ -1527,6 +1531,8 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       return;
     }
     exitRequested = true;
+    commandHandlers.dispose();
+    sessionActions.dispose();
     connectionGeneration += 1;
     exitResult = {
       exitReason: result?.exitReason ?? "exit",
@@ -1554,21 +1560,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       },
     });
   };
-  const exitAwareClient = client as TuiBackend & {
-    setRequestExitHandler?: (handler: () => void) => void;
-  };
-  exitAwareClient.setRequestExitHandler?.(() => requestExit());
-
-  const {
-    handleCommand,
-    sendMessage,
-    captureMessageAdmission,
-    resolveMessageAdmission,
-    reportBlockedMessageSubmit,
-    openModelSelector,
-    openAgentSelector,
-    openSessionSelector,
-  } = createCommandHandlers({
+  const commandHandlers = createCommandHandlers({
     client,
     chatLog,
     tui,
@@ -1596,18 +1588,35 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     runAuthFlow,
     requestExit,
   });
+  const {
+    handleCommand,
+    sendMessage,
+    captureMessageAdmission,
+    resolveMessageAdmission,
+    reportBlockedMessageSubmit,
+    openModelSelector,
+    openAgentSelector,
+    openSessionSelector,
+  } = commandHandlers;
+  const exitAwareClient = client as TuiBackend & {
+    setRequestExitHandler?: (handler: () => void) => void;
+  };
+  exitAwareClient.setRequestExitHandler?.(() => requestExit());
 
   const { runLocalShellLine } = createLocalShellRunner({
-    chatLog,
-    tui,
+    chatLog: { addSystem: commandHandlers.addSystem },
+    tui: { requestRender: commandHandlers.requestRender },
     openOverlay,
     closeOverlay,
   });
   updateAutocompleteProvider();
   const notifySubmitError = (action: TuiSubmitAction, error: unknown) => {
+    if (!commandHandlers.isActive()) {
+      return;
+    }
     const message = formatTuiErrorMessage(error);
-    chatLog.addSystem(`${action} submit failed: ${message}`);
-    tui.requestRender();
+    commandHandlers.addSystem(`${action} submit failed: ${message}`);
+    commandHandlers.requestRender();
   };
   const submitHandler = createEditorSubmitHandler({
     editor,
@@ -1619,7 +1628,11 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     onBlockedMessageSubmit: reportBlockedMessageSubmit,
   });
   editor.onSubmit = createSubmitBurstCoalescer({
-    submit: submitHandler,
+    submit: (value, snapshot) => {
+      if (commandHandlers.isActive()) {
+        submitHandler(value, snapshot);
+      }
+    },
     captureSnapshot: captureMessageAdmission,
     enabled: opts.submitBurstWindowMs !== undefined || shouldEnableWindowsGitBashPasteFallback(),
     burstWindowMs: opts.submitBurstWindowMs,
@@ -1898,16 +1911,29 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     setConnectionStatus(`event gap: expected ${info.expected}, got ${info.received}`, 5000);
     addConnectionNotice(`gateway event gap: expected ${info.expected}, got ${info.received}`);
     reconcileHistoryAfterGap();
+    const gapGeneration = connectionGeneration;
+    const ownsGap = () =>
+      commandHandlers.isActive() && isConnected && connectionGeneration === gapGeneration;
     void (async () => {
       try {
         await pluginApprovals?.refresh();
       } catch (err) {
-        chatLog.addSystem(`plugin approval refresh failed: ${formatTuiErrorMessage(err)}`);
+        if (!ownsGap()) {
+          return;
+        }
+        commandHandlers.addSystem(`plugin approval refresh failed: ${formatTuiErrorMessage(err)}`);
+      }
+      if (!ownsGap()) {
+        return;
       }
       try {
         await taskSuggestions?.refresh();
       } catch (err) {
-        chatLog.addSystem(`task suggestion refresh failed: ${formatTuiErrorMessage(err)}`);
+        if (ownsGap()) {
+          commandHandlers.addSystem(
+            `task suggestion refresh failed: ${formatTuiErrorMessage(err)}`,
+          );
+        }
       }
     })();
     tui.requestRender();
@@ -1930,6 +1956,8 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   client.start();
   await new Promise<void>((resolve) => {
     const finish = () => {
+      commandHandlers.dispose();
+      sessionActions.dispose();
       disposeStatus();
       disposeEventHandlers();
       pluginApprovals?.dispose();

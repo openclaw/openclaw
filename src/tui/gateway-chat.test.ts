@@ -633,16 +633,19 @@ describe("resolveGatewayConnection", () => {
 });
 
 describe("GatewayChatClient", () => {
+  const createGatewayChatClient = () =>
+    new GatewayChatClient({
+      url: "ws://127.0.0.1:18789",
+      token: "test-token",
+      allowInsecureLocalOperatorUi: true,
+    });
+
   afterEach(() => {
     vi.useRealTimers();
   });
 
   it("waits for gateway transport teardown on stop", async () => {
-    const client = new GatewayChatClient({
-      url: "ws://127.0.0.1:18789",
-      token: "test-token",
-      allowInsecureLocalOperatorUi: true,
-    });
+    const client = createGatewayChatClient();
     let finishStop: (() => void) | undefined;
     const stopAndWait = vi.fn(
       () =>
@@ -758,11 +761,7 @@ describe("GatewayChatClient", () => {
       loopbackMode: "block",
     });
     const onDisconnected = vi.fn();
-    const client = new GatewayChatClient({
-      url: "ws://127.0.0.1:18789",
-      token: "test-token",
-      allowInsecureLocalOperatorUi: true,
-    });
+    const client = createGatewayChatClient();
     client.onDisconnected = onDisconnected;
 
     try {
@@ -777,26 +776,20 @@ describe("GatewayChatClient", () => {
     }
   });
 
-  it("retries startup-unavailable chat history until the gateway finishes booting", async () => {
+  it("retries unavailable chat history only while its backend lifetime is active", async () => {
     vi.useFakeTimers();
 
-    const client = new GatewayChatClient({
-      url: "ws://127.0.0.1:18789",
-      token: "test-token",
-      allowInsecureLocalOperatorUi: true,
+    const client = createGatewayChatClient();
+    const startupError = new GatewayClientRequestError({
+      code: "UNAVAILABLE",
+      message: "chat.history unavailable during gateway startup",
+      details: { method: "chat.history" },
+      retryable: true,
+      retryAfterMs: 250,
     });
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(
-        new GatewayClientRequestError({
-          code: "UNAVAILABLE",
-          message: "chat.history unavailable during gateway startup",
-          details: { method: "chat.history" },
-          retryable: true,
-          retryAfterMs: 250,
-        }),
-      )
-      .mockResolvedValueOnce({ messages: [] });
+    const request = vi.fn().mockRejectedValueOnce(startupError).mockResolvedValueOnce({
+      messages: [],
+    });
 
     (client as unknown as { client: { request: typeof request } }).client.request = request;
 
@@ -805,14 +798,24 @@ describe("GatewayChatClient", () => {
 
     await expect(historyPromise).resolves.toEqual({ messages: [] });
     expect(request).toHaveBeenCalledTimes(2);
+
+    request.mockRejectedValueOnce(startupError).mockRejectedValueOnce(startupError);
+    const stopped = Promise.all([
+      client.loadHistory({ sessionKey: "one" }).catch((error: unknown) => error),
+      client.loadHistory({ sessionKey: "two" }).catch((error: unknown) => error),
+    ]);
+    await vi.advanceTimersByTimeAsync(0);
+    await client.stop();
+    await expect(stopped).resolves.toEqual([expect.any(Error), expect.any(Error)]);
+    await expect(client.loadHistory({ sessionKey: "stopped" })).rejects.toThrow(/abort/i);
+    client.start();
+    await expect(client.loadHistory({ sessionKey: "restarted" })).rejects.toThrow(/abort/i);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(request).toHaveBeenCalledTimes(4);
   });
 
   it("passes selected-agent global scope through chat methods", async () => {
-    const client = new GatewayChatClient({
-      url: "ws://127.0.0.1:18789",
-      token: "test-token",
-      allowInsecureLocalOperatorUi: true,
-    });
+    const client = createGatewayChatClient();
     const request = vi.fn().mockResolvedValue({ messages: [] });
     (client as unknown as { client: { request: typeof request } }).client.request = request;
 
@@ -847,11 +850,7 @@ describe("GatewayChatClient", () => {
   });
 
   it("preserves side runs for session-scoped TUI aborts", async () => {
-    const client = new GatewayChatClient({
-      url: "ws://127.0.0.1:18789",
-      token: "test-token",
-      allowInsecureLocalOperatorUi: true,
-    });
+    const client = createGatewayChatClient();
     const request = vi.fn().mockResolvedValue({ ok: true, aborted: true });
     (client as unknown as { client: { request: typeof request } }).client.request = request;
 

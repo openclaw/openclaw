@@ -29,10 +29,10 @@ import {
 } from "../gateway/call.js";
 import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 import { GatewayClient, GatewayClientRequestError } from "../gateway/client.js";
+import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { readActiveGatewayLockPort } from "../infra/gateway-lock.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
-import { sleep } from "../utils/sleep.js";
 import { VERSION } from "../version.js";
 import { TUI_SETUP_AUTH_SOURCE_CONFIG, TUI_SETUP_AUTH_SOURCE_ENV } from "./setup-launch-env.js";
 import type {
@@ -133,6 +133,7 @@ export class GatewayChatClient implements TuiBackend {
   private readyPromise: Promise<void>;
   private resolveReady?: () => void;
   private pendingConnectError?: Error;
+  private readonly historyLifetime = new AbortController();
   readonly connection: ResolvedGatewayConnection;
   hello?: HelloOk;
 
@@ -244,6 +245,7 @@ export class GatewayChatClient implements TuiBackend {
   }
 
   stop() {
+    this.historyLifetime.abort();
     // Keep TUI teardown ordered after the transport closes. Otherwise the
     // late close callback can re-arm UI timers after shutdown cleared them.
     return this.client.stopAndWait();
@@ -306,7 +308,9 @@ export class GatewayChatClient implements TuiBackend {
 
   async loadHistory(opts: { sessionKey: string; agentId?: string; limit?: number }) {
     const startedAt = Date.now();
+    const lifetime = this.historyLifetime.signal;
     for (;;) {
+      lifetime.throwIfAborted();
       try {
         return await this.client.request("chat.history", {
           sessionKey: opts.sessionKey,
@@ -317,7 +321,7 @@ export class GatewayChatClient implements TuiBackend {
         const withinStartupRetryWindow =
           Date.now() - startedAt < STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS;
         if (withinStartupRetryWindow && isRetryableStartupUnavailable(err, "chat.history")) {
-          await sleep(resolveStartupRetryDelayMs(err));
+          await sleepWithAbort(resolveStartupRetryDelayMs(err), lifetime, { ref: false });
           continue;
         }
         throw err;

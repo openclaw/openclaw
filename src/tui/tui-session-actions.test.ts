@@ -135,6 +135,109 @@ describe("tui session actions", () => {
       ...overrides,
     });
 
+  it.each(["resolve", "reject"] as const)(
+    "ignores an in-flight history %s after the session actions are disposed",
+    async (outcome) => {
+      const history = createDeferred<unknown>();
+      const loadHistory = vi.fn(() => history.promise);
+      const { chatLog, addSystem, addUser, clearAll } = createHistoryChatLog();
+      const requestRender = vi.fn();
+      const actions = createTestSessionActions({
+        client: { loadHistory } as unknown as TuiBackend,
+        chatLog,
+        tui: { requestRender } as unknown as import("@earendil-works/pi-tui").TUI,
+      });
+
+      const pending = actions.loadHistory();
+      actions.dispose();
+      actions.dispose();
+      if (outcome === "resolve") {
+        history.resolve({
+          sessionInfo: { key: "agent:main:main", sessionId: "disposed-session" },
+          messages: [{ role: "user", content: "disposed history" }],
+        });
+      } else {
+        history.reject(new Error("aborted"));
+      }
+
+      await expect(pending).resolves.toEqual({ loaded: false });
+      await expect(actions.loadHistory()).resolves.toEqual({ loaded: false });
+      expect(loadHistory).toHaveBeenCalledOnce();
+      expect(addSystem).not.toHaveBeenCalled();
+      expect(addUser).not.toHaveBeenCalled();
+      expect(clearAll).not.toHaveBeenCalled();
+      expect(requestRender).not.toHaveBeenCalled();
+    },
+  );
+
+  it("drops queued session refreshes when their owner is disposed", async () => {
+    const sessionInfo = createDeferred<unknown>();
+    const listSessions = vi.fn(() => sessionInfo.promise);
+    const addSystem = vi.fn();
+    const requestRender = vi.fn();
+    const actions = createTestSessionActions({
+      client: { listSessions } as unknown as TuiBackend,
+      chatLog: { addSystem } as unknown as ChatLog,
+      tui: { requestRender } as unknown as import("@earendil-works/pi-tui").TUI,
+    });
+
+    const first = actions.refreshSessionInfo();
+    const queued = actions.refreshSessionInfo();
+    expect(listSessions).toHaveBeenCalledOnce();
+    actions.dispose();
+    actions.dispose();
+    sessionInfo.reject(new Error("gateway not connected"));
+
+    await Promise.all([first, queued]);
+    await actions.refreshSessionInfo();
+    expect(listSessions).toHaveBeenCalledOnce();
+    expect(addSystem).not.toHaveBeenCalled();
+    expect(requestRender).not.toHaveBeenCalled();
+  });
+
+  it.each(["resolve", "reject"] as const)(
+    "ignores an in-flight agent roster %s after the session actions are disposed",
+    async (outcome) => {
+      const roster = createDeferred<Awaited<ReturnType<TuiBackend["listAgents"]>>>();
+      const listAgents = vi.fn(() => roster.promise);
+      const cachedAgents = [{ id: "cached", name: "Cached Agent" }];
+      const state = createBaseState({ agents: cachedAgents });
+      const agentNames = new Map([["cached", "Cached Agent"]]);
+      const addSystem = vi.fn();
+      const updateHeader = vi.fn();
+      const updateFooter = vi.fn();
+      const actions = createTestSessionActions({
+        client: { listAgents } as unknown as TuiBackend,
+        chatLog: { addSystem } as unknown as ChatLog,
+        state,
+        agentNames,
+        updateHeader,
+        updateFooter,
+      });
+
+      const pending = actions.refreshAgents();
+      actions.dispose();
+      if (outcome === "resolve") {
+        roster.resolve({
+          defaultId: "replacement",
+          mainKey: "replacement",
+          agents: [{ id: "replacement", name: "Replacement Agent" }],
+        });
+      } else {
+        roster.reject(new Error("gateway not connected"));
+      }
+
+      await pending;
+      await expect(actions.refreshAgents()).resolves.toEqual({ ok: true, value: undefined });
+      expect(listAgents).toHaveBeenCalledOnce();
+      expect(state.agents).toBe(cachedAgents);
+      expect([...agentNames]).toEqual([["cached", "Cached Agent"]]);
+      expect(addSystem).not.toHaveBeenCalled();
+      expect(updateHeader).not.toHaveBeenCalled();
+      expect(updateFooter).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps the cached agent roster when a refresh fails", async () => {
     const cachedAgents = [{ id: "cached", name: "Cached Agent" }];
     const state = createBaseState({
