@@ -6,6 +6,8 @@ import {
 import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import { type CronActiveJobMarker, isCronActiveJobMarkerCurrent } from "../active-jobs.js";
 import { isHeartbeatTaskCronJob } from "../heartbeat-task.js";
+/** Executes a cron job without mutating persisted job state. */
+import { cronRunOutcomeFromPrecheck, runCronJobPrecheck } from "../job-precheck.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { appendCronPayloadText, cronStreamScheduleKey } from "../stream-schedule.js";
 import type {
@@ -30,7 +32,6 @@ import {
 } from "./timer-trigger.js";
 import { enqueueCronSystemEvent, requestCronHeartbeat } from "./wake.js";
 
-/** Executes a cron job without mutating persisted job state. */
 export async function executeJobCore(
   state: CronServiceState,
   job: CronJob,
@@ -79,6 +80,33 @@ export async function executeJobCore(
 
   if (abortSignal?.aborted) {
     return resolveAbortError();
+  }
+  // Optional shell precheck #112371 runs first — cheapest gate, no code-mode
+  // executor and no trigger evaluation cost when there is no work.
+  //
+  // Precheck host-shell execution is authorized through the SAME policy surface
+  // as the exec tool / system-run path: `cron.triggers.enabled` PLUS exec
+  // security deny|allowlist|full (approvals file + allowlist analysis). Never
+  // raw $SHELL -c before that gate (#112375 ClawSweeper).
+  if (job.precheck?.command) {
+    const precheckResult = await runCronJobPrecheck(job.precheck, {
+      abortSignal,
+      authz: {
+        triggersEnabled: state.deps.cronConfig?.triggers?.enabled === true,
+        agentId: job.agentId,
+      },
+    });
+    if (precheckResult.decision !== "run") {
+      state.deps.log.debug(
+        {
+          jobId: job.id,
+          decision: precheckResult.decision,
+          exitCode: precheckResult.exitCode,
+        },
+        `cron: precheck ${precheckResult.decision} — skipping payload without a model call`,
+      );
+      return cronRunOutcomeFromPrecheck(precheckResult, () => state.deps.nowMs());
+    }
   }
   if (options?.streamScheduleKey !== undefined || options?.streamSourceIdentity !== undefined) {
     // Defense in depth over the locked admission checks: stream-origin work must
