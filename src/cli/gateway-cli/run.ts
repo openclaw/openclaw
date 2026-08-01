@@ -671,7 +671,7 @@ async function runGatewayLoopWithSupervisedLockRecovery(params: {
       // Emit the zombie_detected signal once per recovery cycle, not every
       // retry tick. A normally-draining previous gateway can otherwise inflate
       // telemetry with duplicate alerts during a 30s drain window. Per
-      // ClawSweeper review on #88908.
+      // Keep the healthy incumbent in control under launchd supervision.
       if (!zombieDetection.loggedThisCycle) {
         recordGatewayRestartTrace("gateway.preflight.zombie_detected", elapsedMs, [
           ["supervisor", supervisor],

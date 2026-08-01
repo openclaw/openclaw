@@ -291,7 +291,7 @@ describe("supervised gateway lock recovery", () => {
         ),
       ).toBe(true);
 
-      // ClawSweeper #88908 review P3: emit the zombie_detected trace + warn
+      // Emit the zombie_detected trace + warn
       // once per recovery cycle, not on every retry tick. Multiple retries
       // against the same draining gateway should not inflate telemetry.
       const zombieWarnCount = warnMessages.filter((msg) =>

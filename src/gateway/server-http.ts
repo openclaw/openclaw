@@ -77,7 +77,6 @@ import { matchUserProfileAvatarPath } from "./user-profiles-http-path.js";
 // Re-export for source compatibility; backing impl now lives in
 // `gateway-shutdown-state.ts` so the per-cycle reset happens at the
 // state-transition site (markGatewayShuttingDown / resetGatewayShuttingDownState).
-// Per ClawSweeper review P3 on #88908.
 export const resetGatewayHealthzShuttingDownLogForTest = resetShuttingDownProbeResponseLogForTest;
 
 // Strict-mode live probe: only the supervised lock-recovery preflight uses
@@ -342,7 +341,7 @@ async function handleGatewayProbeRequest(
   // managers expect 200 on /health and /healthz during normal shutdown),
   // shutdown-aware 503 is gated on an explicit ?strict=1 query parameter that
   // the supervised lock-recovery preflight sets. Public callers without the
-  // strict marker continue to receive 200. Per ClawSweeper review on #88908.
+  // strict marker continue to receive 200.
   const isStrictLiveProbe = isStrictLiveProbeRequest(req);
   if (status === "live" && isStrictLiveProbe && getShuttingDown()) {
     noteShuttingDownProbeResponse(requestPath);

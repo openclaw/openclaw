@@ -21,6 +21,7 @@ import {
 } from "../skills/runtime/remote.js";
 import type { RestartRecoveryCandidate } from "./chat-abort.js";
 import { createControlUiSessionPullRequestSubscriptions } from "./control-ui-session-pr-subscriptions.js";
+import { markGatewayShuttingDown } from "./gateway-shutdown-state.js";
 import { disposeNodeConnectionNotifications } from "./node-connection-notifications.js";
 import { clearNodeWakeState } from "./node-wake-state.js";
 import { createLazyGatewayCronState } from "./server-cron-lazy.js";
@@ -316,6 +317,7 @@ export async function prepareGatewayLifecycle(params: {
     return configReloaderStopPromise;
   };
   const beginClosePrelude = async () => {
+    markGatewayShuttingDown();
     clearSessionSuspensionTimers();
     markClosePreludeStarted();
     // Join the last reload before any owner it can publish into is torn down.

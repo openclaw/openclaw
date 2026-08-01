@@ -25,6 +25,26 @@ import {
 import { createReadinessChecker, type ReadinessChecker } from "./server/readiness.js";
 import { withTempConfig } from "./test-temp-config.js";
 
+const gatewayProbeWarn = vi.hoisted(() => vi.fn());
+
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (...args: Parameters<typeof actual.createSubsystemLogger>) => {
+      const logger = actual.createSubsystemLogger(...args);
+      if (args[0] !== "gateway/probe") {
+        return logger;
+      }
+      return new Proxy(logger, {
+        get(target, property, receiver) {
+          return property === "warn" ? gatewayProbeWarn : Reflect.get(target, property, receiver);
+        },
+      });
+    },
+  };
+});
+
 type GatewayServerHarness = Parameters<typeof dispatchRequest>[0];
 type GatewayRequestOptions = Parameters<typeof createRequest>[0];
 
@@ -38,6 +58,7 @@ async function sendGatewayRequest(server: GatewayServerHarness, options: Gateway
 afterEach(() => {
   resetGatewayShuttingDownForTest();
   resetGatewayHealthzShuttingDownLogForTest();
+  gatewayProbeWarn.mockClear();
 });
 
 describe("gateway OpenAI-compatible disabled HTTP routes", () => {
@@ -636,9 +657,8 @@ describe("gateway probe endpoints", () => {
     });
   });
 
-  // ClawSweeper #88908 review P1: narrowing the live-probe 503 contract to
-  // strict-mode preserves backwards compat for external monitors and service
-  // managers hitting the plain /healthz path. These tests pin that contract.
+  // Strict mode preserves backwards compatibility for external monitors and
+  // service managers hitting the plain /healthz path.
   it("returns 200 on plain /healthz even when shutting down (public probe contract)", async () => {
     await withGatewayServer({
       prefix: "probe-healthz-shutting-down-no-strict",
@@ -671,11 +691,7 @@ describe("gateway probe endpoints", () => {
     });
   });
 
-  // ClawSweeper #88908 review P3: each new shutdown cycle must emit the
-  // gateway.healthz.shutting_down_response signal at least once. The log
-  // dedupe was previously latched across the process lifetime and reset only
-  // by tests, so the second in-process restart's shutdown was silent. Now
-  // markGatewayShuttingDown resets the dedupe via gateway-shutdown-state.
+  // Each new shutdown cycle must emit the shutdown signal exactly once.
   it("resets the shutting-down probe log dedupe on each shutdown cycle", async () => {
     await withGatewayServer({
       prefix: "probe-healthz-strict-dedupe-cycles",
@@ -687,12 +703,19 @@ describe("gateway probe endpoints", () => {
         const { res: res1 } = createResponse();
         await dispatchRequest(server, req1, res1);
         expect(res1.statusCode).toBe(503);
+        expect(gatewayProbeWarn).toHaveBeenCalledTimes(1);
+        expect(gatewayProbeWarn).toHaveBeenLastCalledWith(
+          expect.stringContaining("gateway.healthz.shutting_down_response path=/healthz"),
+        );
 
         // Second probe in the SAME shutdown cycle should not emit again (dedupe).
+        // Repeated close-path marking must be idempotent too.
+        markGatewayShuttingDown();
         const req1b = createRequest({ path: "/healthz?strict=1" });
         const { res: res1b } = createResponse();
         await dispatchRequest(server, req1b, res1b);
         expect(res1b.statusCode).toBe(503);
+        expect(gatewayProbeWarn).toHaveBeenCalledTimes(1);
 
         // Simulate startup completing a new cycle, then a fresh shutdown.
         resetGatewayShuttingDownForTest();
@@ -701,6 +724,7 @@ describe("gateway probe endpoints", () => {
         const { res: res2 } = createResponse();
         await dispatchRequest(server, req2, res2);
         expect(res2.statusCode).toBe(503);
+        expect(gatewayProbeWarn).toHaveBeenCalledTimes(2);
       },
     });
   });

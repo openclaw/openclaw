@@ -107,7 +107,7 @@ export async function startGatewayServer(
   // without process exit) starts answering /healthz as 200 again. Pull from
   // the lightweight `gateway-shutdown-state` module instead of the close
   // runtime so startup does not load shutdown-only agent/channel/plugin
-  // cleanup code. Per ClawSweeper review P2 on #88908.
+  // cleanup code.
   const { resetGatewayShuttingDownState } = await import("./gateway-shutdown-state.js");
   resetGatewayShuttingDownState();
   let releasePostReadyWork: () => void = () => {};

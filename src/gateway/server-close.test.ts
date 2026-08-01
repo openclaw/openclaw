@@ -1918,10 +1918,9 @@ describe("createGatewayCloseHandler", () => {
     expect(armArgs?.shutdownDurationMs).toBe(result.durationMs);
   });
 
-  // ClawSweeper #88908 review P1: the in-process restart path (SIGUSR1) closes
-  // and then immediately starts the next gateway iteration in the same node
-  // process. Arming the unref'd watchdog there would kill the restarted gateway
-  // ~5s into its next life. Restart reasons must skip the watchdog.
+  // The in-process restart path closes and then immediately starts the next
+  // gateway iteration in the same process. Restart reasons must skip the
+  // watchdog so it cannot kill the restarted gateway.
   it("skips the post-shutdown exit watchdog on in-process restart close reasons", async () => {
     const armPostShutdownExitWatchdog = vi.fn<
       (opts: { reason: string; shutdownDurationMs: number }) => { cancel: () => void } | null
@@ -1934,10 +1933,9 @@ describe("createGatewayCloseHandler", () => {
     expect(armPostShutdownExitWatchdog).not.toHaveBeenCalled();
   });
 
-  // ClawSweeper #88908 review P1: startGatewayServer is reused by onboarding's
-  // session gateway (setup.finalize.ts), which handles a startup failure and
-  // continues the wizard. Without the owner opt-in, close must never arm a
-  // process.exit — not even for the failed-startup cleanup's nonzero status.
+  // startGatewayServer is reused by onboarding's session gateway, which handles
+  // a startup failure and continues the wizard. Without owner opt-in, close
+  // must never arm process.exit, even for failed-startup cleanup.
   it("never arms the post-shutdown exit watchdog without the process-owner opt-in", async () => {
     const armPostShutdownExitWatchdog = vi.fn<
       (opts: { reason: string; shutdownDurationMs: number }) => { cancel: () => void } | null
@@ -1968,9 +1966,8 @@ describe("createGatewayCloseHandler", () => {
     expect(armPostShutdownExitWatchdog).toHaveBeenCalledTimes(1);
   });
 
-  // ClawSweeper #88908 review P2: the forced-exit status must distinguish a
-  // clean stop (0) from failed-startup cleanup (nonzero), so a failure-only
-  // supervisor relaunches instead of reading a forced exit 0 as intentional.
+  // The forced-exit status distinguishes a clean stop from failed-startup
+  // cleanup so a failure-only supervisor relaunches.
   it("threads the intended forced-exit status into the watchdog (0 clean, nonzero on startup failure)", async () => {
     const armPostShutdownExitWatchdog = vi.fn<
       (opts: { reason: string; shutdownDurationMs: number; exitCode?: number }) => {

@@ -57,7 +57,6 @@ const POST_SHUTDOWN_EXIT_TIMEOUT_ENV = "OPENCLAW_GATEWAY_POST_SHUTDOWN_EXIT_TIME
 // that only need the running / shutting-down distinction (gateway startup,
 // HTTP probe handler) do not pull in this close-handler module's dependency
 // graph. Re-exported here for source compatibility with prior in-tree callers.
-// Per ClawSweeper review P2 on #88908.
 import {
   isGatewayShuttingDown,
   markGatewayShuttingDown,
@@ -850,7 +849,7 @@ export function createGatewayCloseHandler(
     // Process-ownership gate: only the terminal gateway CLI/daemon path may
     // arm the post-shutdown force-exit. Embedded starts (onboarding session
     // gateway, test harnesses) must stay process-neutral or a handled startup
-    // failure/close would still kill the host process. ClawSweeper P1 #88908.
+    // failure/close would still kill the host process.
     postShutdownExitWatchdogEnabled?: boolean;
   } & RestartRunAbortParams,
 ) {
@@ -1242,8 +1241,7 @@ export function createGatewayCloseHandler(
     // closes and immediately starts the next gateway iteration in the same
     // node process). For restarts the process is intentionally kept alive, so
     // the unref'd timer would otherwise fire 5 seconds after close and call
-    // process.exit(0) on the restarted gateway. Per ClawSweeper review on
-    // #88908 (clawsweeper-verdict:needs-human item=88908).
+    // process.exit(0) on the restarted gateway.
     const armWatchdog = params.armPostShutdownExitWatchdog ?? armGatewayPostShutdownExitWatchdog;
     const isInProcessRestart = /\brestart(ing|ed)?\b/i.test(reason);
     if (!isInProcessRestart && params.postShutdownExitWatchdogEnabled === true) {
