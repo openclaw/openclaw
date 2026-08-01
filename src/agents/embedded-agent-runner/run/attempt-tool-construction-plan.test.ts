@@ -6,6 +6,7 @@ import {
   mergeForcedEmbeddedAttemptToolsAllow,
   resolveEmbeddedAttemptToolConstructionPlan,
   shouldCreateBundleLspRuntimeForAttempt,
+  listMaterializableMcpServerNames,
   shouldCreateBundleMcpRuntimeForAttempt,
 } from "./attempt-tool-construction-plan.js";
 
@@ -579,6 +580,40 @@ describe("shouldCreateBundleMcpRuntimeForAttempt", () => {
         mcpServerNames: ["hzr-oa"],
       }),
     ).toBe(false);
+  });
+});
+
+describe("listMaterializableMcpServerNames", () => {
+  it("includes config-enabled servers and session-enabled overrides", () => {
+    expect(
+      listMaterializableMcpServerNames({
+        servers: {
+          enabled: { enabled: true },
+          disabled: { enabled: false },
+          defaulted: {},
+        },
+        toolOverrides: {
+          mcpServers: {
+            disabled: true,
+            defaulted: false,
+          },
+        },
+      }),
+    ).toEqual(["enabled", "disabled"]);
+  });
+
+  it("feeds session-enabled server names into the materialization precheck", () => {
+    const names = listMaterializableMcpServerNames({
+      servers: { "hzr-oa": { enabled: false } },
+      toolOverrides: { mcpServers: { "hzr-oa": true } },
+    });
+    expect(
+      shouldCreateBundleMcpRuntimeForAttempt({
+        toolsEnabled: true,
+        toolsAllow: ["hzr-oa*"],
+        mcpServerNames: names,
+      }),
+    ).toBe(true);
   });
 });
 

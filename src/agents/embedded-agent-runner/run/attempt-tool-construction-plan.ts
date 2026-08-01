@@ -241,6 +241,34 @@ function shouldCreateBundleRuntimeForAttempt(
  * generic local tool names.
  */
 /**
+ * MCP server names that should participate in materialization prechecks.
+ * Mirrors effective enablement: session `toolOverrides.mcpServers[name] === true`
+ * enables a server even when config has `enabled: false`.
+ */
+export function listMaterializableMcpServerNames(params: {
+  servers?: Record<string, { enabled?: boolean } | null | undefined> | null;
+  toolOverrides?: { mcpServers?: Record<string, boolean> };
+}): string[] {
+  const servers = params.servers ?? {};
+  const overrides = params.toolOverrides?.mcpServers;
+  const names: string[] = [];
+  for (const [name, server] of Object.entries(servers)) {
+    if (!server) {
+      continue;
+    }
+    const override =
+      overrides && Object.hasOwn(overrides, name) ? overrides[name] : undefined;
+    if (override === false) {
+      continue;
+    }
+    if (override === true || server.enabled !== false) {
+      names.push(name);
+    }
+  }
+  return names;
+}
+
+/**
  * True when an allowlist entry names a configured MCP server (or a server-name
  * glob like `hzr-oa*`) even without the `server__tool` separator. Without this,
  * narrow cron `toolsAllow: ["hzr-oa*"]` skips MCP materialization and fails with

@@ -18,6 +18,7 @@ import type { prepareEmbeddedAttemptToolBase } from "./attempt-tool-base-prepare
 import {
   applyEmbeddedAttemptToolsAllow,
   shouldCreateBundleLspRuntimeForAttempt,
+  listMaterializableMcpServerNames,
   shouldCreateBundleMcpRuntimeForAttempt,
 } from "./attempt-tool-construction-plan.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
@@ -80,9 +81,10 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
           isRuntimeToolAllowed(definition.function.name, effectiveToolsAllow),
         )
       : providedClientTools;
-  const configuredMcpServerNames = Object.entries(params.attempt.config?.mcp?.servers ?? {})
-    .filter(([, server]) => server && server.enabled !== false)
-    .map(([name]) => name);
+  const configuredMcpServerNames = listMaterializableMcpServerNames({
+    servers: params.attempt.config?.mcp?.servers,
+    toolOverrides: params.attempt.toolOverrides,
+  });
   const bundleMcpEnabled =
     !params.attempt.forceRestartSafeTools &&
     shouldCreateBundleMcpRuntimeForAttempt({

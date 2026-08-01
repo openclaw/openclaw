@@ -23,7 +23,10 @@ import type {
   CodexMcpServersConfig,
   LoadCodexBundleMcpThreadConfigParams,
 } from "./codex-mcp-config.types.js";
-import { shouldCreateBundleMcpRuntimeForAttempt } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
+import {
+  listMaterializableMcpServerNames,
+  shouldCreateBundleMcpRuntimeForAttempt,
+} from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { partitionMcpServersByConnectionScope } from "./mcp-connection-resolver.js";
 
 function isOpenClawLoopbackMcpServer(name: string, server: BundleMcpServerConfig): boolean {
@@ -212,9 +215,10 @@ function fingerprintCodexMcpServersConfig(config: CodexMcpServersConfig): string
 export function loadCodexBundleMcpThreadConfig(
   params: LoadCodexBundleMcpThreadConfigParams,
 ): CodexBundleMcpThreadConfig {
-  const configuredMcpServerNames = Object.entries(params.cfg?.mcp?.servers ?? {})
-    .filter(([, server]) => server && server.enabled !== false)
-    .map(([name]) => name);
+  const configuredMcpServerNames = listMaterializableMcpServerNames({
+    servers: params.cfg?.mcp?.servers,
+    toolOverrides: params.toolOverrides,
+  });
   const shouldCreateRuntime = shouldCreateBundleMcpRuntimeForAttempt({
     toolsEnabled: params.toolsEnabled ?? true,
     disableTools: params.disableTools,
