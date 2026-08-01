@@ -1,6 +1,7 @@
 // Control UI view renders skill workshop screen content.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
+import { AsyncDirective, directive, type ElementPart } from "lit/async-directive.js";
 import { keyed } from "lit/directives/keyed.js";
 import { styleMap } from "lit/directives/style-map.js";
 import "../../components/file-preview-modal-registration.ts";
@@ -45,6 +46,32 @@ const TODAY_PREVIEW_MAX_ITEMS = 3;
 const TODAY_PREVIEW_MAX_ITEM_CHARS = 120;
 const queueResizeSessions = new WeakMap<Element, { cleanup: () => void }>();
 
+class QueueResizeLifecycleDirective extends AsyncDirective {
+  private root: Element | null = null;
+  private resizeEnabled = false;
+
+  override render(_resizeEnabled: boolean) {
+    return nothing;
+  }
+
+  override update(part: ElementPart, [resizeEnabled]: [boolean]) {
+    if (this.root && this.resizeEnabled && !resizeEnabled) {
+      cleanupQueueResizesWithin(this.root);
+    }
+    this.root = part.element;
+    this.resizeEnabled = resizeEnabled;
+    return nothing;
+  }
+
+  protected override disconnected() {
+    if (this.root) {
+      cleanupQueueResizesWithin(this.root);
+    }
+  }
+}
+
+const manageQueueResizeLifecycle = directive(QueueResizeLifecycleDirective);
+
 const GROUP_LABEL: Record<SkillWorkshopProposal["recencyGroup"], string> = {
   today: "skillWorkshop.recency.today",
   yesterday: "skillWorkshop.recency.yesterday",
@@ -65,6 +92,7 @@ export function renderSkillWorkshop(props: SkillWorkshopProps) {
   const allPending = props.proposals.filter((p) => p.status === "pending");
   const todayHero = selected ?? allPending[0] ?? props.proposals[0];
   const hasNoProposals = props.proposals.length === 0 && !props.loading && !props.error;
+  const queueResizeEnabled = !hasNoProposals && props.mode === "board";
 
   const body = hasNoProposals
     ? renderWorkshopEmptyState({
@@ -91,7 +119,11 @@ export function renderSkillWorkshop(props: SkillWorkshopProps) {
         state: props.historyScan,
         onScan: props.onHistoryScan,
       })}
-      <div class="sw-view" data-mode=${props.mode}>
+      <div
+        ${manageQueueResizeLifecycle(queueResizeEnabled)}
+        class="sw-view"
+        data-mode=${props.mode}
+      >
         ${keyed(props.mode, html`<div class="sw-view__pane">${body}</div>`)}
       </div>
     </section>
@@ -216,6 +248,16 @@ function renderQueueResizer(props: SkillWorkshopProps) {
       @keydown=${(event: KeyboardEvent) => resizeQueueWithKeyboard(event, props)}
     ></div>
   `;
+}
+
+function cleanupQueueResize(resizer: Element): void {
+  queueResizeSessions.get(resizer)?.cleanup();
+}
+
+function cleanupQueueResizesWithin(root: Element): void {
+  for (const resizer of root.querySelectorAll(".sw-queue-resizer")) {
+    cleanupQueueResize(resizer);
+  }
 }
 
 function startQueueResize(event: PointerEvent, props: SkillWorkshopProps): void {

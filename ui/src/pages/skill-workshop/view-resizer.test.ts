@@ -1,13 +1,14 @@
 /* @vitest-environment jsdom */
 
 import { nothing, render } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SkillWorkshopProposal } from "../../lib/skill-workshop/index.ts";
 import { createSkillWorkshopHistoryScanState } from "./state.ts";
 import type { SkillWorkshopProps } from "./view-types.ts";
 import { renderSkillWorkshop } from "./view.ts";
 
 const originalPointerEvent = globalThis.PointerEvent;
+let container: HTMLDivElement;
 
 class TestPointerEvent extends MouseEvent {
   readonly pointerId: number;
@@ -90,9 +91,14 @@ function createProps(): SkillWorkshopProps {
   };
 }
 
+beforeEach(() => {
+  container = document.createElement("div");
+  document.body.append(container);
+});
+
 afterEach(() => {
-  render(nothing, document.body);
-  document.body.replaceChildren();
+  render(nothing, container);
+  container.remove();
   document.body.style.removeProperty("cursor");
   document.body.style.removeProperty("user-select");
   if (originalPointerEvent) {
@@ -115,8 +121,8 @@ describe("Skill Workshop queue resize", () => {
       });
     }
     const props = createProps();
-    render(renderSkillWorkshop(props), document.body);
-    const resizer = document.querySelector<HTMLElement>(".sw-queue-resizer");
+    render(renderSkillWorkshop(props), container);
+    const resizer = container.querySelector<HTMLElement>(".sw-queue-resizer");
     expect(resizer).not.toBeNull();
 
     const capturedPointers = new Set<number>();
@@ -148,5 +154,78 @@ describe("Skill Workshop queue resize", () => {
     window.dispatchEvent(pointer("pointerup", 8, 450));
     expect(document.body.style.cursor).toBe("");
     expect(document.body.style.userSelect).toBe("");
+  });
+
+  it("cleans an active gesture when the board pane is replaced", () => {
+    if (!globalThis.PointerEvent) {
+      Object.defineProperty(globalThis, "PointerEvent", {
+        configurable: true,
+        value: TestPointerEvent as typeof PointerEvent,
+      });
+    }
+    const props = createProps();
+    render(renderSkillWorkshop(props), container);
+    const resizer = container.querySelector<HTMLElement>(".sw-queue-resizer");
+    expect(resizer).not.toBeNull();
+
+    const capturedPointers = new Set<number>();
+    if (resizer) {
+      resizer.setPointerCapture = vi.fn((pointerId) => capturedPointers.add(pointerId));
+      resizer.hasPointerCapture = vi.fn((pointerId) => capturedPointers.has(pointerId));
+      resizer.releasePointerCapture = vi.fn((pointerId) => capturedPointers.delete(pointerId));
+    }
+
+    document.body.style.cursor = "wait";
+    document.body.style.userSelect = "text";
+    resizer?.dispatchEvent(pointer("pointerdown", 7, 400));
+    expect(document.body.style.cursor).toBe("col-resize");
+    expect(document.body.style.userSelect).toBe("none");
+
+    try {
+      props.mode = "today";
+      render(renderSkillWorkshop(props), container);
+
+      expect(document.body.style.cursor).toBe("wait");
+      expect(document.body.style.userSelect).toBe("text");
+      window.dispatchEvent(pointer("pointermove", 7, 460));
+      expect(props.onQueueWidthChange).not.toHaveBeenCalled();
+    } finally {
+      window.dispatchEvent(new Event("blur"));
+    }
+  });
+
+  it("cleans an active gesture when the view is unmounted", () => {
+    if (!globalThis.PointerEvent) {
+      Object.defineProperty(globalThis, "PointerEvent", {
+        configurable: true,
+        value: TestPointerEvent as typeof PointerEvent,
+      });
+    }
+    const props = createProps();
+    render(renderSkillWorkshop(props), container);
+    const resizer = container.querySelector<HTMLElement>(".sw-queue-resizer");
+    expect(resizer).not.toBeNull();
+
+    const capturedPointers = new Set<number>();
+    if (resizer) {
+      resizer.setPointerCapture = vi.fn((pointerId) => capturedPointers.add(pointerId));
+      resizer.hasPointerCapture = vi.fn((pointerId) => capturedPointers.has(pointerId));
+      resizer.releasePointerCapture = vi.fn((pointerId) => capturedPointers.delete(pointerId));
+    }
+
+    document.body.style.cursor = "wait";
+    document.body.style.userSelect = "text";
+    resizer?.dispatchEvent(pointer("pointerdown", 7, 400));
+
+    try {
+      render(nothing, container);
+
+      expect(document.body.style.cursor).toBe("wait");
+      expect(document.body.style.userSelect).toBe("text");
+      window.dispatchEvent(pointer("pointermove", 7, 460));
+      expect(props.onQueueWidthChange).not.toHaveBeenCalled();
+    } finally {
+      window.dispatchEvent(new Event("blur"));
+    }
   });
 });
