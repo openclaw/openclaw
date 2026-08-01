@@ -8,6 +8,7 @@ function downloadVideo(fetchFn: typeof fetch) {
     defaultTimeoutMs: 5_000,
     fetchFn,
     maxBytes: 10 * 1024 * 1024,
+    allowPrivateNetwork: false,
   });
 }
 
