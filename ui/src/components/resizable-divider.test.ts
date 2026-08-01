@@ -250,4 +250,31 @@ describe("resizable-divider", () => {
     expect(divider.classList.contains("dragging")).toBe(false);
     expect(releasePointerCapture).toHaveBeenCalledWith(7);
   });
+
+  it("releases drag ownership on owner capture loss or window blur", async () => {
+    const divider = await renderDivider();
+    const setPointerCapture = vi.fn();
+    const releasePointerCapture = vi.fn();
+    divider.setPointerCapture = setPointerCapture;
+    divider.releasePointerCapture = releasePointerCapture;
+    divider.hasPointerCapture = vi.fn(() => true);
+
+    dispatchPointer(divider, "pointerdown", 100, 7);
+    dispatchPointer(divider, "lostpointercapture", 100, 8);
+    expect(divider.classList.contains("dragging")).toBe(true);
+
+    dispatchPointer(divider, "lostpointercapture", 100, 7);
+    expect(divider.classList.contains("dragging")).toBe(false);
+
+    dispatchPointer(divider, "pointerdown", 120, 9);
+    expect(setPointerCapture).toHaveBeenLastCalledWith(9);
+    expect(divider.classList.contains("dragging")).toBe(true);
+
+    window.dispatchEvent(new Event("blur"));
+    expect(divider.classList.contains("dragging")).toBe(false);
+
+    dispatchPointer(divider, "pointerdown", 140, 10);
+    expect(setPointerCapture).toHaveBeenLastCalledWith(10);
+    expect(divider.classList.contains("dragging")).toBe(true);
+  });
 });

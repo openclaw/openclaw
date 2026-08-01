@@ -54,7 +54,7 @@ function createResizer(controller: DockLayoutController<"right">) {
   return { capturedPointers, resizer };
 }
 
-function createController() {
+function createController(isAvailable: () => boolean = () => true) {
   const save = vi.fn();
   const layout: DockPanelLayoutStore<"right"> = {
     defaults: { open: true, dock: "right", height: 420, width: 500 },
@@ -69,7 +69,7 @@ function createController() {
   const controller = new DockLayoutController(host, {
     layout,
     reservationPrefix: "test",
-    isAvailable: () => true,
+    isAvailable,
   });
   controller.hostConnected();
   activeControllers.push(controller);
@@ -173,5 +173,45 @@ describe("DockLayoutController", () => {
 
     resizer.dispatchEvent(pointer("pointerdown", 8, 450));
     expect(resizer.setPointerCapture).toHaveBeenLastCalledWith(8);
+  });
+
+  it("does not persist a temporary suppressed state when resize capture is lost", () => {
+    const { controller, save } = createController();
+    const { capturedPointers, resizer } = createResizer(controller);
+
+    resizer.dispatchEvent(pointer("pointerdown", 7, 500));
+    window.dispatchEvent(pointer("pointermove", 7, 450));
+    expect(controller.width).toBe(550);
+
+    controller.setSuppressed(true);
+    capturedPointers.delete(7);
+    resizer.dispatchEvent(pointer("lostpointercapture", 7, 450));
+
+    expect(controller.open).toBe(false);
+    expect(save).not.toHaveBeenCalled();
+    expect(controller.setSuppressed(false)).toBe(true);
+    expect(controller.open).toBe(true);
+  });
+
+  it("does not persist a temporary unavailable state when resize capture is lost", () => {
+    let available = true;
+    const { controller, save } = createController(() => available);
+    const { capturedPointers, resizer } = createResizer(controller);
+
+    resizer.dispatchEvent(pointer("pointerdown", 7, 500));
+    window.dispatchEvent(pointer("pointermove", 7, 450));
+    expect(controller.width).toBe(550);
+
+    available = false;
+    controller.hideWithoutPersisting();
+    capturedPointers.delete(7);
+    resizer.dispatchEvent(pointer("lostpointercapture", 7, 450));
+
+    expect(controller.open).toBe(false);
+    expect(save).not.toHaveBeenCalled();
+
+    available = true;
+    expect(controller.restoreOpenState()).toBe(true);
+    expect(controller.open).toBe(true);
   });
 });

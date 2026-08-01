@@ -78,6 +78,7 @@ export class DockLayoutController<TDock extends DockPanelSide> implements Reacti
   }
 
   hideWithoutPersisting(): void {
+    this.clearResizeListeners();
     this.setOpen(false, false);
   }
 
