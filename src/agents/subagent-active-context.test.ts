@@ -10,7 +10,7 @@ import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
 } from "./subagent-registry.test-helpers.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import type { SubagentRunRecordOverrides } from "./subagent-test-fixtures.test-helpers.js";
 
 beforeEach(() => {
   resetSubagentRegistryForTests();
@@ -41,7 +41,7 @@ describe("buildActiveSubagentSystemPromptAddition", () => {
       createdAt: endedAt - 120_000,
       startedAt: endedAt - 120_000,
       endedAt,
-      outcome: { status: "ok" },
+      outcome: { status: "ok" as const },
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(run);
 
@@ -77,7 +77,7 @@ describe("buildActiveSubagentSystemPromptAddition", () => {
       cleanup: "keep",
       createdAt: now,
       startedAt: now,
-    } satisfies SubagentRunRecord);
+    } satisfies SubagentRunRecordOverrides);
     addSubagentRunForTests({
       runId: "run-mixed-recent",
       childSessionKey: "agent:main:subagent:mixed-recent",
@@ -90,8 +90,8 @@ describe("buildActiveSubagentSystemPromptAddition", () => {
       createdAt: now - 180_000,
       startedAt: now - 180_000,
       endedAt: now - 30_000,
-      outcome: { status: "ok" },
-    } satisfies SubagentRunRecord);
+      outcome: { status: "ok" as const },
+    } satisfies SubagentRunRecordOverrides);
 
     const prompt = buildActiveSubagentSystemPromptAddition({
       cfg: {} as OpenClawConfig,
@@ -227,8 +227,8 @@ describe("buildActiveSubagentSystemPromptAddition", () => {
       createdAt: now - 180_000,
       startedAt: now - 180_000,
       endedAt: now - 90_000,
-      outcome: { status: "error", error: "boom" },
-    } satisfies SubagentRunRecord);
+      outcome: { status: "error" as const, error: "boom" },
+    } satisfies SubagentRunRecordOverrides);
     addSubagentRunForTests({
       runId: "run-recent-timeout",
       childSessionKey: "agent:main:subagent:recent-timeout",
@@ -241,8 +241,8 @@ describe("buildActiveSubagentSystemPromptAddition", () => {
       createdAt: now - 170_000,
       startedAt: now - 170_000,
       endedAt: now - 80_000,
-      outcome: { status: "timeout" },
-    } satisfies SubagentRunRecord);
+      outcome: { status: "timeout" as const },
+    } satisfies SubagentRunRecordOverrides);
     addSubagentRunForTests({
       runId: "run-recent-ok-mixed",
       childSessionKey: "agent:main:subagent:recent-ok-mixed",
@@ -255,8 +255,8 @@ describe("buildActiveSubagentSystemPromptAddition", () => {
       createdAt: now - 160_000,
       startedAt: now - 160_000,
       endedAt: now - 70_000,
-      outcome: { status: "ok" },
-    } satisfies SubagentRunRecord);
+      outcome: { status: "ok" as const },
+    } satisfies SubagentRunRecordOverrides);
 
     const prompt = buildActiveSubagentSystemPromptAddition({
       cfg: {} as OpenClawConfig,
@@ -291,8 +291,8 @@ describe("buildActiveSubagentSystemPromptAddition", () => {
         createdAt: endedAt - 30_000,
         startedAt: endedAt - 30_000,
         endedAt,
-        outcome: { status: "ok" },
-      } satisfies SubagentRunRecord);
+        outcome: { status: "ok" as const },
+      } satisfies SubagentRunRecordOverrides);
     }
 
     const prompt = buildActiveSubagentSystemPromptAddition({
