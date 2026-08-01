@@ -89,6 +89,7 @@ Skills own workflows; root owns hard policy and routing. Product direction and m
 
 ## Architecture
 
+- Diagnostics and verbose logging: Avoid logging absolute workspace or operator host filesystem paths (e.g. hostWorkspaceStagingDir, absolute media paths) in verbose log messages or diagnostics. To trace file or directory lifecycles, log only the basename (e.g., path.basename(dir)) or use path-free logs. This prevents exposing the operator's filesystem layout in debug and support artifacts.
 - Core stays plugin-agnostic. No bundled ids/defaults/policy in core when manifest/registry/capability contracts work.
 - Plugins cross into core only via `openclaw/plugin-sdk/*`, manifest metadata, injected runtime helpers, documented barrels (`api.ts`, `runtime-api.ts`).
 - Plugin prod code: no core `src/**`, `src/plugin-sdk-internal/**`, other plugin `src/**`, or relative outside package.
