@@ -111,6 +111,10 @@ export function createSessionActions(context: SessionActionContext) {
     clearLocalRunIds,
     rememberSessionKey,
   } = context;
+  let refreshAgentsInFlight: {
+    promise: ReturnType<typeof refreshTuiAgentList>;
+    owners: Array<() => boolean>;
+  } | null = null;
   let refreshSessionInfoInFlight: Promise<void> | null = null;
   let refreshSessionInfoQueued = false;
   let historyLoadGeneration = 0;
@@ -151,48 +155,66 @@ export function createSessionActions(context: SessionActionContext) {
         agentNames.set(agent.id, agent.name);
       }
     }
-    if (!state.initialSessionApplied) {
-      if (initialSessionAgentId) {
-        if (state.agents.some((agent) => agent.id === initialSessionAgentId)) {
-          state.currentAgentId = initialSessionAgentId;
-        }
-      } else if (!state.agents.some((agent) => agent.id === state.currentAgentId)) {
-        state.currentAgentId =
-          state.agents[0]?.id ?? normalizeAgentId(result.defaultId ?? state.currentAgentId);
+    if (!state.initialSessionApplied && initialSessionAgentId) {
+      if (state.agents.some((agent) => agent.id === initialSessionAgentId)) {
+        state.currentAgentId = initialSessionAgentId;
       }
+    } else if (!state.agents.some((agent) => agent.id === state.currentAgentId)) {
+      state.currentAgentId =
+        state.agents[0]?.id ?? normalizeAgentId(result.defaultId ?? state.currentAgentId);
+    }
+    if (!state.initialSessionApplied) {
       const nextSessionKey = resolveSessionKey(initialSessionInput);
       if (nextSessionKey !== state.currentSessionKey) {
         state.currentSessionKey = nextSessionKey;
       }
       state.initialSessionApplied = true;
-    } else if (!state.agents.some((agent) => agent.id === state.currentAgentId)) {
-      state.currentAgentId =
-        state.agents[0]?.id ?? normalizeAgentId(result.defaultId ?? state.currentAgentId);
     }
     updateHeader();
     updateFooter();
   };
 
-  const refreshAgents = () =>
-    refreshTuiAgentList({
+  const refreshAgents = (options?: { ownsRefresh?: () => boolean }) => {
+    const ownsRefresh = options?.ownsRefresh ?? (() => true);
+    if (refreshAgentsInFlight) {
+      refreshAgentsInFlight.owners.push(ownsRefresh);
+      return refreshAgentsInFlight.promise;
+    }
+    const owners = [ownsRefresh];
+    const refresh = refreshTuiAgentList({
       load: () => client.listAgents(),
-      apply: applyAgentsResult,
-      reportError: (message) => chatLog.addSystem(`agents list failed: ${message}`),
+      apply: (result) => {
+        if (owners.some((ownsResult) => ownsResult())) {
+          applyAgentsResult(result);
+        }
+      },
+      reportError: (message) => {
+        if (owners.some((ownsResult) => ownsResult())) {
+          chatLog.addSystem(`agents list failed: ${message}`);
+        }
+      },
     });
+    refreshAgentsInFlight = { promise: refresh, owners };
+    const releaseRefresh = () => {
+      if (refreshAgentsInFlight?.promise === refresh) {
+        refreshAgentsInFlight = null;
+      }
+    };
+    // One live subscriber owns roster publication and failures; reconnects
+    // remain authoritative after their shared picker is superseded.
+    void refresh.then(releaseRefresh, releaseRefresh);
+    return refresh;
+  };
 
   const updateAgentFromSessionKey = (key: string) => {
     const parsed = parseAgentSessionKey(key);
-    if (!parsed) {
-      return;
-    }
-    const next = normalizeAgentId(parsed.agentId);
-    if (next !== state.currentAgentId) {
-      state.currentAgentId = next;
+    if (parsed) {
+      state.currentAgentId = normalizeAgentId(parsed.agentId);
     }
   };
 
-  const resolveModelSelection = (entry?: SessionInfoEntry) => {
-    return resolveSessionInfoModelSelection({
+  const resolveModelSelection = (entry?: SessionInfoEntry) =>
+    resolveSessionInfoModelSelection({
       currentProvider: state.sessionInfo.modelProvider,
       currentModel: state.sessionInfo.model,
       defaultProvider: lastSessionDefaults?.modelProvider,
@@ -202,7 +224,6 @@ export function createSessionActions(context: SessionActionContext) {
       overrideProvider: entry?.providerOverride,
       overrideModel: entry?.modelOverride,
     });
-  };
 
   const applySessionInfo = (params: {
     entry?: SessionInfoEntry | null;
@@ -236,38 +257,26 @@ export function createSessionActions(context: SessionActionContext) {
     }
 
     const next = { ...state.sessionInfo };
-    if (entry?.thinkingLevel !== undefined) {
-      next.thinkingLevel = entry.thinkingLevel;
+    for (const key of [
+      "thinkingLevel",
+      "agentRuntime",
+      "fastMode",
+      "verboseLevel",
+      "traceLevel",
+      "reasoningLevel",
+      "responseUsage",
+      "effectiveResponseUsage",
+      "inputTokens",
+      "outputTokens",
+      "displayName",
+      "updatedAt",
+    ] as const) {
+      if (entry?.[key] !== undefined) {
+        Object.assign(next, { [key]: entry[key] });
+      }
     }
     if (entry?.thinkingLevels !== undefined || defaults?.thinkingLevels !== undefined) {
       next.thinkingLevels = entry?.thinkingLevels ?? defaults?.thinkingLevels;
-    }
-    if (entry?.agentRuntime !== undefined) {
-      next.agentRuntime = entry.agentRuntime;
-    }
-    if (entry?.fastMode !== undefined) {
-      next.fastMode = entry.fastMode;
-    }
-    if (entry?.verboseLevel !== undefined) {
-      next.verboseLevel = entry.verboseLevel;
-    }
-    if (entry?.traceLevel !== undefined) {
-      next.traceLevel = entry.traceLevel;
-    }
-    if (entry?.reasoningLevel !== undefined) {
-      next.reasoningLevel = entry.reasoningLevel;
-    }
-    if (entry?.responseUsage !== undefined) {
-      next.responseUsage = entry.responseUsage;
-    }
-    if (entry?.effectiveResponseUsage !== undefined) {
-      next.effectiveResponseUsage = entry.effectiveResponseUsage;
-    }
-    if (entry?.inputTokens !== undefined) {
-      next.inputTokens = entry.inputTokens;
-    }
-    if (entry?.outputTokens !== undefined) {
-      next.outputTokens = entry.outputTokens;
     }
     if (entry?.totalTokens !== undefined) {
       next.totalTokens = entry.totalTokens;
@@ -280,11 +289,10 @@ export function createSessionActions(context: SessionActionContext) {
       next.totalTokensFresh = true;
     }
     if (params.clearMissingUsage) {
-      if (entry?.inputTokens === undefined) {
-        next.inputTokens = null;
-      }
-      if (entry?.outputTokens === undefined) {
-        next.outputTokens = null;
+      for (const key of ["inputTokens", "outputTokens"] as const) {
+        if (entry?.[key] === undefined) {
+          next[key] = null;
+        }
       }
       if (entry?.totalTokens === undefined && entry?.totalTokensFresh !== true) {
         next.totalTokens = null;
@@ -298,13 +306,6 @@ export function createSessionActions(context: SessionActionContext) {
       next.contextTokens =
         entry?.contextTokens ?? defaults?.contextTokens ?? state.sessionInfo.contextTokens;
     }
-    if (entry?.displayName !== undefined) {
-      next.displayName = entry.displayName;
-    }
-    if (entry?.updatedAt !== undefined) {
-      next.updatedAt = entry.updatedAt;
-    }
-
     const selection = resolveModelSelection(entry);
     if (selection.modelProvider !== undefined) {
       next.modelProvider = selection.modelProvider;

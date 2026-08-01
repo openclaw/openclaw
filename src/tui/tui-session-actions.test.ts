@@ -210,6 +210,174 @@ describe("tui session actions", () => {
     expect(updateFooter).toHaveBeenCalledTimes(1);
   });
 
+  it("shares overlapping agent refreshes before either can publish a stale roster", async () => {
+    const pendingRoster = createDeferred<{
+      defaultId: string;
+      mainKey: string;
+      agents: Array<{ id: string; name: string }>;
+    }>();
+    const listAgents = vi.fn(() => pendingRoster.promise);
+    const state = createBaseState({
+      agents: [{ id: "cached", name: "Cached Agent" }],
+      currentAgentId: "cached",
+    });
+    const updateHeader = vi.fn();
+    let pickerIsCurrent = true;
+    const { refreshAgents } = createTestSessionActions({
+      client: { listAgents } as unknown as TuiBackend,
+      state,
+      updateHeader,
+    });
+
+    const pickerRefresh = refreshAgents({ ownsRefresh: () => pickerIsCurrent });
+    const reconnectRefresh = refreshAgents();
+    pickerIsCurrent = false;
+    pendingRoster.resolve({
+      defaultId: "main",
+      mainKey: "main",
+      agents: [{ id: "main", name: "Current Agent" }],
+    });
+    await Promise.all([reconnectRefresh, pickerRefresh]);
+
+    expect(listAgents).toHaveBeenCalledTimes(1);
+    expect(updateHeader).toHaveBeenCalledTimes(1);
+    expect(state.currentAgentId).toBe("main");
+    expect(state.agents).toEqual([{ id: "main", kind: undefined, name: "Current Agent" }]);
+  });
+
+  it("does not apply a roster when its only picker owner is superseded", async () => {
+    const pendingRoster = createDeferred<{
+      defaultId: string;
+      mainKey: string;
+      scope: "per-sender";
+      agents: Array<{ id: string; name: string }>;
+    }>();
+    const cachedAgents = [{ id: "cached", name: "Cached Agent" }];
+    const state = createBaseState({
+      agentDefaultId: "cached",
+      sessionMainKey: "cached-main",
+      sessionScope: "global",
+      agents: cachedAgents,
+      currentAgentId: "cached",
+    });
+    const agentNames = new Map([["cached", "Cached Agent"]]);
+    const updateHeader = vi.fn();
+    const updateFooter = vi.fn();
+    let pickerIsCurrent = true;
+    const { refreshAgents } = createTestSessionActions({
+      client: { listAgents: vi.fn(() => pendingRoster.promise) } as unknown as TuiBackend,
+      state,
+      agentNames,
+      updateHeader,
+      updateFooter,
+    });
+
+    const refresh = refreshAgents({ ownsRefresh: () => pickerIsCurrent });
+    pickerIsCurrent = false;
+    pendingRoster.resolve({
+      defaultId: "replacement",
+      mainKey: "replacement-main",
+      scope: "per-sender",
+      agents: [{ id: "replacement", name: "Replacement Agent" }],
+    });
+    await expect(refresh).resolves.toEqual({ ok: true, value: undefined });
+
+    expect(state.currentAgentId).toBe("cached");
+    expect(state.agents).toBe(cachedAgents);
+    expect(state.agentDefaultId).toBe("cached");
+    expect(state.sessionMainKey).toBe("cached-main");
+    expect(state.sessionScope).toBe("global");
+    expect([...agentNames]).toEqual([["cached", "Cached Agent"]]);
+    expect(updateHeader).not.toHaveBeenCalled();
+    expect(updateFooter).not.toHaveBeenCalled();
+  });
+
+  it("shares a failed roster refresh once and allows the next caller to retry", async () => {
+    const pendingFailure = createDeferred<never>();
+    const listAgents = vi
+      .fn()
+      .mockReturnValueOnce(pendingFailure.promise)
+      .mockResolvedValueOnce({
+        defaultId: "main",
+        mainKey: "main",
+        agents: [{ id: "main", name: "Recovered Agent" }],
+      });
+    const addSystem = vi.fn();
+    const { refreshAgents } = createTestSessionActions({
+      client: { listAgents } as unknown as TuiBackend,
+      chatLog: { addSystem } as unknown as import("./components/chat-log.js").ChatLog,
+    });
+
+    const reconnectRefresh = refreshAgents();
+    const pickerRefresh = refreshAgents();
+    pendingFailure.reject(new Error("gateway unavailable"));
+    await expect(Promise.all([reconnectRefresh, pickerRefresh])).resolves.toEqual([
+      { ok: false, error: "gateway unavailable" },
+      { ok: false, error: "gateway unavailable" },
+    ]);
+
+    expect(listAgents).toHaveBeenCalledTimes(1);
+    expect(addSystem).toHaveBeenCalledTimes(1);
+    await expect(refreshAgents()).resolves.toEqual({ ok: true, value: undefined });
+    expect(listAgents).toHaveBeenCalledTimes(2);
+  });
+
+  it("suppresses a failed roster refresh when its only picker consumer is superseded", async () => {
+    const pendingFailure = createDeferred<never>();
+    const addSystem = vi.fn();
+    let pickerIsCurrent = true;
+    const { refreshAgents } = createTestSessionActions({
+      client: { listAgents: vi.fn(() => pendingFailure.promise) } as unknown as TuiBackend,
+      chatLog: { addSystem } as unknown as import("./components/chat-log.js").ChatLog,
+    });
+
+    const refresh = refreshAgents({ ownsRefresh: () => pickerIsCurrent });
+    pickerIsCurrent = false;
+    pendingFailure.reject(new Error("obsolete roster request failed"));
+    await expect(refresh).resolves.toEqual({
+      ok: false,
+      error: "obsolete roster request failed",
+    });
+
+    expect(addSystem).not.toHaveBeenCalled();
+  });
+
+  it("reports a shared reconnect failure even when its picker consumer is superseded", async () => {
+    const pendingFailure = createDeferred<never>();
+    const addSystem = vi.fn();
+    let pickerIsCurrent = true;
+    const { refreshAgents } = createTestSessionActions({
+      client: { listAgents: vi.fn(() => pendingFailure.promise) } as unknown as TuiBackend,
+      chatLog: { addSystem } as unknown as import("./components/chat-log.js").ChatLog,
+    });
+
+    const pickerRefresh = refreshAgents({ ownsRefresh: () => pickerIsCurrent });
+    const reconnectRefresh = refreshAgents();
+    pickerIsCurrent = false;
+    pendingFailure.reject(new Error("gateway unavailable"));
+    await Promise.all([pickerRefresh, reconnectRefresh]);
+
+    expect(addSystem).toHaveBeenCalledTimes(1);
+    expect(addSystem).toHaveBeenCalledWith("agents list failed: gateway unavailable");
+  });
+
+  it("reports a shared picker failure once when its latest picker still owns the request", async () => {
+    const pendingFailure = createDeferred<never>();
+    const addSystem = vi.fn();
+    const { refreshAgents } = createTestSessionActions({
+      client: { listAgents: vi.fn(() => pendingFailure.promise) } as unknown as TuiBackend,
+      chatLog: { addSystem } as unknown as import("./components/chat-log.js").ChatLog,
+    });
+
+    const olderPicker = refreshAgents({ ownsRefresh: () => false });
+    const currentPicker = refreshAgents({ ownsRefresh: () => true });
+    pendingFailure.reject(new Error("current roster request failed"));
+    await Promise.all([olderPicker, currentPicker]);
+
+    expect(addSystem).toHaveBeenCalledTimes(1);
+    expect(addSystem).toHaveBeenCalledWith("agents list failed: current roster request failed");
+  });
+
   it("queues session refreshes and applies the latest result", async () => {
     let resolveFirst: ((value: unknown) => void) | undefined;
     let resolveSecond: ((value: unknown) => void) | undefined;

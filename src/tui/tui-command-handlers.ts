@@ -79,7 +79,7 @@ type CommandHandlerContext = {
   refreshSessionInfo: () => Promise<void>;
   loadHistory: () => Promise<unknown>;
   setSession: (key: string) => Promise<void>;
-  refreshAgents: () => Promise<Result<void, string>>;
+  refreshAgents: (options?: { ownsRefresh?: () => boolean }) => Promise<Result<void, string>>;
   abortActive: (params?: { preferActive?: boolean }) => Promise<void>;
   setActivityStatus: (text: string) => void;
   formatSessionKey: (key: string) => string;
@@ -174,6 +174,21 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     boundary: null as "new" | "reset" | null,
     epoch: 0,
   };
+  let pickerRequestGeneration = 0;
+  let activePickerOverlay: OverlayHandle | null = null;
+
+  // Picker requests and their exact overlays share one lifetime so late
+  // responses cannot restore stale choices after another surface takes focus.
+  const beginPickerRequest = () => {
+    pickerRequestGeneration += 1;
+    if (activePickerOverlay) {
+      const supersededOverlay = activePickerOverlay;
+      activePickerOverlay = null;
+      closeOverlayAndRender(supersededOverlay);
+    }
+    return pickerRequestGeneration;
+  };
+  const isCurrentPickerRequest = (generation: number) => generation === pickerRequestGeneration;
 
   // Hold one owner through the full identity transition so later input cannot
   // target the session being retired while create/reset awaits the backend.
@@ -250,6 +265,14 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     tui.requestRender();
   };
 
+  const closePickerOverlay = (handle: OverlayHandle) => {
+    if (activePickerOverlay !== handle) {
+      return;
+    }
+    activePickerOverlay = null;
+    closeOverlayAndRender(handle);
+  };
+
   const hasTrackedAbortTarget = () => Boolean(state.activeChatRunId || hasPendingSubmit(state));
 
   const hasUnsafeSessionRollover = () =>
@@ -299,26 +322,35 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       onSelect?: (item: SelectItem) => void;
       onCancel?: () => void;
     },
+    requestGeneration: number,
     onSelect: (value: string) => Promise<void>,
   ) => {
+    if (!isCurrentPickerRequest(requestGeneration)) {
+      return;
+    }
     selector.onSelect = (item) => {
+      if (!isCurrentPickerRequest(requestGeneration) || activePickerOverlay !== overlayHandle) {
+        return;
+      }
       void (async () => {
         await onSelect(item.value);
-        closeOverlayAndRender(overlayHandle);
+        closePickerOverlay(overlayHandle);
       })();
     };
-    selector.onCancel = () => closeOverlayAndRender(overlayHandle);
+    selector.onCancel = () => closePickerOverlay(overlayHandle);
     const overlayHandle: OverlayHandle = openOverlay(selector as Component);
+    activePickerOverlay = overlayHandle;
     tui.requestRender();
   };
 
   const openModelSelector = async () => {
+    const requestGeneration = beginPickerRequest();
     const selection = captureSessionSelection();
     try {
       chatLog.addSystem("loading models...");
       tui.requestRender();
       const models = await client.listModels();
-      if (!isCurrentSessionSelection(selection)) {
+      if (!isCurrentPickerRequest(requestGeneration) || !isCurrentSessionSelection(selection)) {
         return;
       }
       if (models.length === 0) {
@@ -335,7 +367,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         };
       });
       const selector = createSearchableSelectList(items, 9);
-      openSelector(selector, async (value) => {
+      openSelector(selector, requestGeneration, async (value) => {
         try {
           const result = await patchCurrentSession({ model: value });
           if (!result) {
@@ -349,7 +381,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         }
       });
     } catch (err) {
-      if (!isCurrentSessionSelection(selection)) {
+      if (!isCurrentPickerRequest(requestGeneration) || !isCurrentSessionSelection(selection)) {
         return;
       }
       chatLog.addSystem(`model list failed: ${formatTuiErrorMessage(err)}`);
@@ -358,7 +390,13 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   };
 
   const openAgentSelector = async () => {
-    const refreshResult = await refreshAgents();
+    const requestGeneration = beginPickerRequest();
+    const refreshResult = await refreshAgents({
+      ownsRefresh: () => isCurrentPickerRequest(requestGeneration),
+    });
+    if (!isCurrentPickerRequest(requestGeneration)) {
+      return;
+    }
     if (!refreshResult.ok) {
       tui.requestRender();
       return;
@@ -375,12 +413,13 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       description: agent.id === state.agentDefaultId ? "default" : "",
     }));
     const selector = createSearchableSelectList(items, 9);
-    openSelector(selector, async (value) => {
+    openSelector(selector, requestGeneration, async (value) => {
       await setAgent(value);
     });
   };
 
   const openContextModeSelector = () => {
+    const requestGeneration = beginPickerRequest();
     const items = [
       {
         value: "list",
@@ -399,12 +438,13 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       },
     ];
     const selector = createSearchableSelectList(items, 9);
-    openSelector(selector, async (value) => {
+    openSelector(selector, requestGeneration, async (value) => {
       await sendMessage(`/context ${value}`);
     });
   };
 
   const openSessionSelector = async () => {
+    const requestGeneration = beginPickerRequest();
     const selection = captureSessionSelection();
     try {
       const result = await client.listSessions({
@@ -416,7 +456,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         includeLastMessage: true,
         agentId: selection.agentId,
       });
-      if (!isCurrentSessionSelection(selection)) {
+      if (!isCurrentPickerRequest(requestGeneration) || !isCurrentSessionSelection(selection)) {
         return;
       }
       const items = result.sessions.map((session) => {
@@ -448,11 +488,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         };
       });
       const selector = createFilterableSelectList(items, 9);
-      openSelector(selector, async (value) => {
+      openSelector(selector, requestGeneration, async (value) => {
         await setSession(value);
       });
     } catch (err) {
-      if (!isCurrentSessionSelection(selection)) {
+      if (!isCurrentPickerRequest(requestGeneration) || !isCurrentSessionSelection(selection)) {
         return;
       }
       chatLog.addSystem(`sessions list failed: ${formatTuiErrorMessage(err)}`);
@@ -461,6 +501,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   };
 
   const openSettings = () => {
+    const requestGeneration = beginPickerRequest();
     const items = [
       {
         id: "tools",
@@ -489,11 +530,13 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         tui.requestRender();
       },
       () => {
-        closeOverlay(overlayHandle);
-        tui.requestRender();
+        if (isCurrentPickerRequest(requestGeneration)) {
+          closePickerOverlay(overlayHandle);
+        }
       },
     );
     const overlayHandle: OverlayHandle = openOverlay(settings);
+    activePickerOverlay = overlayHandle;
     tui.requestRender();
   };
 

@@ -32,6 +32,7 @@ type AbortActiveMock = ReturnType<typeof vi.fn> &
 type SelectableOverlay = {
   items?: Array<{ value: string; label?: string; description?: string }>;
   onSelect?: (item: { value: string; label?: string; description?: string }) => void;
+  getSelectedItem?: () => { value: string } | null;
 };
 type SetActivityStatusMock = ReturnType<typeof vi.fn> & ((text: string) => void);
 type SetSessionMock = ReturnType<typeof vi.fn> & ((key: string) => Promise<void>);
@@ -340,6 +341,240 @@ describe("tui command handlers", () => {
         description: "default",
       },
     ]);
+  });
+
+  it("keeps only the newest agent picker when roster refreshes finish out of order", async () => {
+    const olderRefresh = createDeferred<Result<void, string>>();
+    const newerRefresh = createDeferred<Result<void, string>>();
+    const refreshAgents = vi
+      .fn()
+      .mockReturnValueOnce(olderRefresh.promise)
+      .mockReturnValueOnce(newerRefresh.promise) as RefreshAgentsMock;
+    const harness = createHarness({
+      refreshAgents,
+      agents: [{ id: "current-agent", kind: "agent" }],
+    });
+
+    const olderPicker = harness.handleCommand("/agents");
+    const newerPicker = harness.handleCommand("/agents");
+    newerRefresh.resolve({ ok: true, value: undefined });
+    await newerPicker;
+    olderRefresh.resolve({ ok: true, value: undefined });
+    await olderPicker;
+
+    expect(harness.openOverlay).toHaveBeenCalledTimes(1);
+    expect(
+      (firstMockArg(harness.openOverlay, "openOverlay") as SelectableOverlay).getSelectedItem?.()
+        ?.value,
+    ).toBe("current-agent");
+  });
+
+  it("opens the refreshed agent picker after the selected agent is replaced", async () => {
+    const refresh = createDeferred<Result<void, string>>();
+    const harness = createHarness({
+      currentAgentId: "retired",
+      currentSessionKey: "agent:retired:main",
+      agents: [{ id: "retired", name: "Retired Agent" }],
+      refreshAgents: vi.fn(() => refresh.promise) as RefreshAgentsMock,
+    });
+
+    const openingPicker = harness.handleCommand("/agents");
+    harness.state.currentAgentId = "main";
+    harness.state.agents = [{ id: "main", name: "Available Agent" }];
+    refresh.resolve({ ok: true, value: undefined });
+    await openingPicker;
+
+    expect(harness.openOverlay).toHaveBeenCalledTimes(1);
+    expect(
+      (firstMockArg(harness.openOverlay, "openOverlay") as SelectableOverlay).getSelectedItem?.()
+        ?.value,
+    ).toBe("main");
+  });
+
+  it("keeps only the newest model picker when catalog requests finish out of order", async () => {
+    const olderCatalog = createDeferred<Array<{ provider: string; id: string }>>();
+    const newerCatalog = createDeferred<Array<{ provider: string; id: string }>>();
+    const listModels = vi
+      .fn()
+      .mockReturnValueOnce(olderCatalog.promise)
+      .mockReturnValueOnce(newerCatalog.promise);
+    const harness = createHarness({ listModels });
+
+    const olderPicker = harness.handleCommand("/models");
+    const newerPicker = harness.handleCommand("/models");
+    newerCatalog.resolve([{ provider: "anthropic", id: "current-model" }]);
+    await newerPicker;
+    olderCatalog.resolve([{ provider: "anthropic", id: "obsolete-model" }]);
+    await olderPicker;
+
+    expect(harness.openOverlay).toHaveBeenCalledTimes(1);
+    expect(
+      (firstMockArg(harness.openOverlay, "openOverlay") as SelectableOverlay).getSelectedItem?.()
+        ?.value,
+    ).toBe("anthropic/current-model");
+  });
+
+  it("keeps only the newest session picker when session requests finish out of order", async () => {
+    const olderSessions = createDeferred<{
+      sessions: Array<{ key: string; updatedAt: number }>;
+    }>();
+    const newerSessions = createDeferred<{
+      sessions: Array<{ key: string; updatedAt: number }>;
+    }>();
+    const listSessions = vi
+      .fn()
+      .mockReturnValueOnce(olderSessions.promise)
+      .mockReturnValueOnce(newerSessions.promise);
+    const harness = createHarness({ listSessions });
+
+    const olderPicker = harness.openSessionSelector();
+    const newerPicker = harness.openSessionSelector();
+    newerSessions.resolve({ sessions: [{ key: "agent:main:current", updatedAt: 2 }] });
+    await newerPicker;
+    olderSessions.resolve({ sessions: [{ key: "agent:main:obsolete", updatedAt: 1 }] });
+    await olderPicker;
+
+    expect(harness.openOverlay).toHaveBeenCalledTimes(1);
+    expect(
+      (firstMockArg(harness.openOverlay, "openOverlay") as SelectableOverlay).getSelectedItem?.()
+        ?.value,
+    ).toBe("agent:main:current");
+  });
+
+  it("supersedes an older picker when a different picker surface opens", async () => {
+    const olderModels = createDeferred<Array<{ provider: string; id: string }>>();
+    const harness = createHarness({
+      listModels: vi.fn(() => olderModels.promise),
+      listSessions: vi
+        .fn()
+        .mockResolvedValue({ sessions: [{ key: "agent:main:current", updatedAt: 1 }] }),
+    });
+
+    const olderPicker = harness.handleCommand("/models");
+    await harness.openSessionSelector();
+    olderModels.resolve([{ provider: "anthropic", id: "obsolete-model" }]);
+    await olderPicker;
+
+    expect(harness.openOverlay).toHaveBeenCalledTimes(1);
+    expect(
+      (firstMockArg(harness.openOverlay, "openOverlay") as SelectableOverlay).getSelectedItem?.()
+        ?.value,
+    ).toBe("agent:main:current");
+  });
+
+  it("lets the synchronous context picker supersede an unfinished asynchronous picker", async () => {
+    const olderModels = createDeferred<Array<{ provider: string; id: string }>>();
+    const harness = createHarness({ listModels: vi.fn(() => olderModels.promise) });
+
+    const olderPicker = harness.handleCommand("/models");
+    await harness.handleCommand("/context");
+    olderModels.resolve([{ provider: "anthropic", id: "obsolete-model" }]);
+    await olderPicker;
+
+    expect(harness.openOverlay).toHaveBeenCalledTimes(1);
+    expect(
+      (firstMockArg(harness.openOverlay, "openOverlay") as SelectableOverlay).getSelectedItem?.()
+        ?.value,
+    ).toBe("list");
+  });
+
+  it("lets the synchronous settings picker supersede an unfinished asynchronous picker", async () => {
+    const olderModels = createDeferred<Array<{ provider: string; id: string }>>();
+    const harness = createHarness({ listModels: vi.fn(() => olderModels.promise) });
+
+    const olderPicker = harness.handleCommand("/models");
+    await harness.handleCommand("/settings");
+    olderModels.resolve([{ provider: "anthropic", id: "obsolete-model" }]);
+    await olderPicker;
+
+    expect(harness.openOverlay).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes the exact previously opened picker when another surface supersedes it", async () => {
+    const harness = createHarness({
+      listSessions: vi
+        .fn()
+        .mockResolvedValue({ sessions: [{ key: "agent:main:current", updatedAt: 1 }] }),
+    });
+
+    await harness.handleCommand("/context");
+    const originalHandle = harness.overlayHandle;
+    await harness.openSessionSelector();
+
+    expect(harness.openOverlay).toHaveBeenCalledTimes(2);
+    expect(harness.closeOverlay).toHaveBeenCalledTimes(1);
+    expect(harness.closeOverlay).toHaveBeenCalledWith(originalHandle);
+  });
+
+  it("does not report an older model request failure after a newer picker opens", async () => {
+    const olderCatalog = createDeferred<Array<{ provider: string; id: string }>>();
+    const newerCatalog = createDeferred<Array<{ provider: string; id: string }>>();
+    const harness = createHarness({
+      listModels: vi
+        .fn()
+        .mockReturnValueOnce(olderCatalog.promise)
+        .mockReturnValueOnce(newerCatalog.promise),
+    });
+
+    const olderPicker = harness.handleCommand("/models");
+    const newerPicker = harness.handleCommand("/models");
+    newerCatalog.resolve([{ provider: "anthropic", id: "current-model" }]);
+    await newerPicker;
+    harness.addSystem.mockClear();
+    olderCatalog.reject(new Error("obsolete catalog request failed"));
+    await olderPicker;
+
+    expect(harness.openOverlay).toHaveBeenCalledTimes(1);
+    expect(harness.addSystem).not.toHaveBeenCalled();
+  });
+
+  it("does not report an agent picker failure after another picker supersedes it", async () => {
+    const pendingRefresh = createDeferred<Result<void, string>>();
+    const harness = createHarness({
+      refreshAgents: vi.fn(() => pendingRefresh.promise) as RefreshAgentsMock,
+    });
+
+    const olderPicker = harness.handleCommand("/agents");
+    const [refreshOptions] = harness.refreshAgents.mock.calls[0] as [
+      { ownsRefresh?: () => boolean } | undefined,
+    ];
+    await harness.handleCommand("/context");
+    if (refreshOptions?.ownsRefresh?.() !== false) {
+      harness.addSystem("agents list failed: obsolete roster request failed");
+    }
+    pendingRefresh.resolve({ ok: false, error: "obsolete roster request failed" });
+    await olderPicker;
+
+    expect(harness.openOverlay).toHaveBeenCalledTimes(1);
+    expect(harness.addSystem).not.toHaveBeenCalledWith(
+      "agents list failed: obsolete roster request failed",
+    );
+  });
+
+  it("still reports the newest model picker failure to the operator", async () => {
+    const harness = createHarness({
+      listModels: vi.fn().mockRejectedValue(new Error("current catalog request failed")),
+    });
+
+    await harness.handleCommand("/models");
+
+    expect(harness.openOverlay).not.toHaveBeenCalled();
+    expect(harness.addSystem).toHaveBeenCalledWith(
+      "model list failed: current catalog request failed",
+    );
+  });
+
+  it("still reports the newest session picker failure to the operator", async () => {
+    const harness = createHarness({
+      listSessions: vi.fn().mockRejectedValue(new Error("current sessions request failed")),
+    });
+
+    await harness.openSessionSelector();
+
+    expect(harness.openOverlay).not.toHaveBeenCalled();
+    expect(harness.addSystem).toHaveBeenCalledWith(
+      "sessions list failed: current sessions request failed",
+    );
   });
 
   it("bounds session picker hydration to recent TUI sessions", async () => {
