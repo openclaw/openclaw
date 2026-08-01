@@ -60,7 +60,7 @@ export function getDefaultMediaLocalRoots(): readonly string[] {
 }
 
 /** Normalizes configured media roots; skips empty / relative / unresolved `~` prefixes. */
-function appendConfiguredMediaLocalRoots(
+export function appendConfiguredMediaLocalRoots(
   roots: string[],
   configuredRoots: readonly string[] | undefined,
 ): string[] {
@@ -95,8 +95,11 @@ export function getAgentScopedMediaLocalRoots(
   cfg: OpenClawConfig,
   agentId?: string,
 ): readonly string[] {
+  // Managed OpenClaw roots + agent workspace only. Operator-configured
+  // `agents.defaults.mediaLocalRoots` are appended only by policy-gated outbound
+  // resolvers (see resolveAgentScopedOutboundMediaAccess) so channel reply paths
+  // cannot treat them as an ambient authorization grant.
   const roots = buildMediaLocalRoots(resolveStateDir(), resolveConfigDir());
-  appendConfiguredMediaLocalRoots(roots, cfg.agents?.defaults?.mediaLocalRoots);
   const normalizedAgentId = normalizeOptionalString(agentId);
   if (!normalizedAgentId) {
     return roots;

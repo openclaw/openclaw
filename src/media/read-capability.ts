@@ -11,6 +11,7 @@ import { readLocalFileSafely } from "../infra/fs-safe.js";
 import { createBoundedOutboundMediaReadFile } from "./bounded-read-file.js";
 import type { OutboundMediaAccess, OutboundMediaReadFile } from "./load-options.js";
 import {
+  appendConfiguredMediaLocalRoots,
   getAgentScopedMediaLocalRoots,
   getAgentScopedMediaLocalRootsForSources,
 } from "./local-roots.js";
@@ -121,8 +122,9 @@ export function resolveAgentScopedOutboundMediaAccess(
     params.mediaAccess?.workspaceDir ??
     (params.agentId ? resolveAgentWorkspaceDir(params.cfg, params.agentId) : undefined);
   const hostMediaReadAllowed = isAgentScopedHostMediaReadAllowed(params);
-  // Even when host reads are denied, keep base roots so generated media remains addressable.
-  const baseLocalRoots =
+  // Even when host reads are denied, keep managed/workspace roots so generated
+  // media remains addressable — but never ambient operator-configured roots.
+  let baseLocalRoots =
     params.mediaAccess?.localRoots ??
     (hostMediaReadAllowed
       ? getAgentScopedMediaLocalRootsForSources({
@@ -131,6 +133,12 @@ export function resolveAgentScopedOutboundMediaAccess(
           mediaSources: params.mediaSources,
         })
       : getAgentScopedMediaLocalRoots(params.cfg, params.agentId));
+  if (hostMediaReadAllowed && !params.mediaAccess?.localRoots) {
+    baseLocalRoots = appendConfiguredMediaLocalRoots(
+      [...baseLocalRoots],
+      params.cfg.agents?.defaults?.mediaLocalRoots,
+    );
+  }
   const localRoots = appendWorkspaceDirToLocalRoots(baseLocalRoots, resolvedWorkspaceDir);
   const readFile =
     params.mediaAccess?.readFile ??

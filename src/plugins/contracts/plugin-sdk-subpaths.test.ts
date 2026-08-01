@@ -596,6 +596,7 @@ describe("plugin-sdk subpath exports", () => {
     expectSourceMentions("media-runtime", [
       "createDirectTextMediaOutbound",
       "createScopedChannelMediaMaxBytesResolver",
+      "resolveAgentScopedOutboundMediaAccess",
     ]);
     expectSourceMentions("media-local-roots", [
       "getAgentScopedMediaLocalRoots",

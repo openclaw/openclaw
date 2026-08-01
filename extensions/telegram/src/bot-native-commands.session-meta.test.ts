@@ -1,6 +1,9 @@
 // Telegram tests cover bot native commands.session meta plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
+import {
+  getAgentScopedMediaLocalRoots,
+  resolveAgentScopedOutboundMediaAccess,
+} from "openclaw/plugin-sdk/media-runtime";
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -258,6 +261,7 @@ vi.mock("./bot-native-commands.runtime.js", () => {
     executePluginCommand: pluginRuntimeMocks.executePluginCommand,
     finalizeInboundContext: vi.fn((ctx: unknown) => ctx),
     getAgentScopedMediaLocalRoots,
+    resolveAgentScopedOutboundMediaAccess,
     getPluginCommandSpecs: vi.fn(() => []),
     getSessionEntry: sessionMocks.getSessionEntry,
     matchPluginCommand: pluginRuntimeMocks.matchPluginCommand,
