@@ -42,7 +42,7 @@ describe("buildActiveSubagentSystemPromptAddition", () => {
       startedAt: endedAt - 120_000,
       endedAt,
       outcome: { status: "ok" as const },
-    } satisfies SubagentRunRecord;
+    } satisfies SubagentRunRecordOverrides;
     addSubagentRunForTests(run);
 
     const prompt = buildActiveSubagentSystemPromptAddition({
@@ -118,7 +118,7 @@ describe("buildActiveSubagentSystemPromptAddition", () => {
       cleanup: "keep",
       createdAt: Date.now(),
       execution: { status: "running", startedAt: Date.now() },
-    } satisfies SubagentRunRecord;
+    } satisfies SubagentRunRecordOverrides;
     addSubagentRunForTests(run);
 
     const prompt = buildActiveSubagentSystemPromptAddition({
@@ -146,7 +146,7 @@ describe("buildActiveSubagentSystemPromptAddition", () => {
       cleanup: "keep",
       createdAt: Date.now(),
       execution: { status: "running", startedAt: Date.now() },
-    } satisfies SubagentRunRecord;
+    } satisfies SubagentRunRecordOverrides;
     addSubagentRunForTests(run);
 
     const prompt = buildActiveSubagentSystemPromptAddition({
@@ -171,7 +171,7 @@ describe("buildActiveSubagentSystemPromptAddition", () => {
       cleanup: "keep",
       createdAt: Date.now(),
       execution: { status: "running", startedAt: Date.now() },
-    } satisfies SubagentRunRecord;
+    } satisfies SubagentRunRecordOverrides;
     addSubagentRunForTests(run);
 
     const prompt = buildActiveSubagentSystemPromptAddition({
@@ -200,7 +200,7 @@ describe("buildActiveSubagentSystemPromptAddition", () => {
       cleanup: "keep",
       createdAt: Date.now(),
       execution: { status: "running", startedAt: Date.now() },
-    } satisfies SubagentRunRecord;
+    } satisfies SubagentRunRecordOverrides;
     addSubagentRunForTests(run);
 
     const prompt = buildActiveSubagentSystemPromptAddition({
