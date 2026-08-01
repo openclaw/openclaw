@@ -1310,6 +1310,7 @@ describe("scripts/test-projects changed-target routing", () => {
       mode: "targets",
       targets: [
         "test/scripts/ci-workflow-guards.test.ts",
+        "test/scripts/localization-catalog-workflow.test.ts",
         "test/scripts/changed-lanes.test.ts",
         "test/scripts/check-workflows.test.ts",
         "test/scripts/plugin-contract-test-plan.test.ts",
@@ -1326,6 +1327,18 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/openclaw-npm-postpublish-verify.test.ts",
         "test/scripts/openclaw-npm-extended-stable-workflow.test.ts",
         "test/scripts/package-acceptance-workflow.test.ts",
+        "test/scripts/ci-workflow-guards.test.ts",
+      ],
+    });
+  });
+
+  it("keeps localization refresh workflow edits on its focused contract test", () => {
+    expect(
+      resolveChangedTestTargetPlan([".github/workflows/localization-catalog-refresh.yml"]),
+    ).toEqual({
+      mode: "targets",
+      targets: [
+        "test/scripts/localization-catalog-workflow.test.ts",
         "test/scripts/ci-workflow-guards.test.ts",
       ],
     });
