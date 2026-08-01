@@ -17,6 +17,7 @@ import {
 } from "./task-flow-registry.maintenance.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import { finalizeTaskRunByRunId } from "./task-registry.js";
+import { sweepTaskRegistry } from "./task-registry.maintenance.js";
 import type { TaskRecord } from "./task-registry.types.js";
 import {
   createFlowRecord as createFlowRecordOrNull,
@@ -139,6 +140,49 @@ describe("task-flow-registry maintenance", () => {
         reconciled: 0,
         pruned: 1,
       });
+      expect(getTaskFlowById(oldFlow.flowId)).toBeUndefined();
+    });
+  });
+
+  it("retains durable blocked flows until they have ended", async () => {
+    await withTaskFlowMaintenanceStateDir(async () => {
+      const now = Date.now();
+      const blocked = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/task-flow-maintenance",
+        goal: "Wait for durable follow-up",
+        status: "blocked",
+        createdAt: now - 8 * 24 * 60 * 60_000,
+        updatedAt: now - 8 * 24 * 60 * 60_000,
+      });
+
+      expect(previewTaskFlowRegistryMaintenance()).toEqual({
+        reconciled: 0,
+        pruned: 0,
+      });
+      expect(await runTaskFlowRegistryMaintenance()).toEqual({
+        reconciled: 0,
+        pruned: 0,
+      });
+      expect(getTaskFlowById(blocked.flowId)?.status).toBe("blocked");
+    });
+  });
+
+  it("includes task-flow maintenance in the scheduled task sweep", async () => {
+    await withTaskFlowMaintenanceStateDir(async () => {
+      const now = Date.now();
+      const oldFlow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/task-flow-maintenance",
+        goal: "Old terminal flow",
+        status: "succeeded",
+        createdAt: now - 8 * 24 * 60 * 60_000,
+        updatedAt: now - 8 * 24 * 60 * 60_000,
+        endedAt: now - 8 * 24 * 60 * 60_000,
+      });
+
+      await sweepTaskRegistry();
+
       expect(getTaskFlowById(oldFlow.flowId)).toBeUndefined();
     });
   });

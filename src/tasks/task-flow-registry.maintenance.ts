@@ -33,9 +33,11 @@ export function assertTaskFlowRegistryMaintenanceReady(): void {
 }
 
 function isTerminalFlow(flow: TaskFlowRecord): boolean {
+  // Managed flows use blocked as a durable wait state; only endedAt proves
+  // that a blocked flow is terminal and eligible for retention pruning.
   return (
     flow.status === "succeeded" ||
-    flow.status === "blocked" ||
+    (flow.status === "blocked" && flow.endedAt != null) ||
     flow.status === "failed" ||
     flow.status === "cancelled" ||
     flow.status === "lost"
