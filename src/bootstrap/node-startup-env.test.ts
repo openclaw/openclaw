@@ -77,4 +77,43 @@ describe("resolveNodeStartupTlsEnvironment", () => {
     }).NODE_EXTRA_CA_CERTS;
     expect(value).toBe(GENERIC_CA_BUNDLE_PATH);
   });
+
+  it("treats a blank NODE_EXTRA_CA_CERTS as unset and keeps CA discovery", () => {
+    expect(
+      resolveNodeStartupTlsEnvironment({
+        env: { NODE_EXTRA_CA_CERTS: "", NVM_DIR: "/home/test/.nvm" },
+        platform: "linux",
+        execPath: "/usr/bin/node",
+        accessSync: allowOnly(FEDORA_CA_BUNDLE_PATH),
+      }).NODE_EXTRA_CA_CERTS,
+    ).toBe(FEDORA_CA_BUNDLE_PATH);
+
+    expect(
+      resolveNodeStartupTlsEnvironment({
+        env: { NODE_EXTRA_CA_CERTS: "   " },
+        platform: "darwin",
+      }),
+    ).toEqual({
+      NODE_EXTRA_CA_CERTS: "/etc/ssl/cert.pem",
+      NODE_USE_SYSTEM_CA: "1",
+    });
+
+    expect(
+      resolveNodeStartupTlsEnvironment({
+        env: { NODE_EXTRA_CA_CERTS: "/custom/ca.pem" },
+        platform: "linux",
+        accessSync: allowOnly(FEDORA_CA_BUNDLE_PATH),
+      }).NODE_EXTRA_CA_CERTS,
+    ).toBe("/custom/ca.pem");
+
+    // A nonblank operator path is preserved byte-for-byte; trimming only
+    // detects blankness and must not rewrite the override.
+    expect(
+      resolveNodeStartupTlsEnvironment({
+        env: { NODE_EXTRA_CA_CERTS: " /custom/ca.pem " },
+        platform: "linux",
+        accessSync: allowOnly(FEDORA_CA_BUNDLE_PATH),
+      }).NODE_EXTRA_CA_CERTS,
+    ).toBe(" /custom/ca.pem ");
+  });
 });

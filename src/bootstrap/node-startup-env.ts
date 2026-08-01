@@ -1,4 +1,5 @@
 // Builds Node startup environment variables for subprocess launches.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { type EnvMap, resolveAutoNodeExtraCaCerts } from "./node-extra-ca-certs.js";
 
 // Startup TLS environment defaults for child Node processes. macOS needs
@@ -22,8 +23,15 @@ export function resolveNodeStartupTlsEnvironment(
   const platform = params.platform ?? process.platform;
   const includeDarwinDefaults = params.includeDarwinDefaults ?? true;
 
+  // A blank NODE_EXTRA_CA_CERTS is not a usable override: it would short-circuit
+  // CA auto-discovery and be written verbatim into respawned children and
+  // daemon service units, so treat empty/whitespace values as unset. Trimming
+  // only detects blankness; a nonblank operator path is preserved byte-for-byte.
+  const nodeExtraCaCertsOverride = normalizeOptionalString(env.NODE_EXTRA_CA_CERTS)
+    ? env.NODE_EXTRA_CA_CERTS
+    : undefined;
   const nodeExtraCaCerts =
-    env.NODE_EXTRA_CA_CERTS ??
+    nodeExtraCaCertsOverride ??
     (platform === "darwin" && includeDarwinDefaults
       ? "/etc/ssl/cert.pem"
       : resolveAutoNodeExtraCaCerts({
