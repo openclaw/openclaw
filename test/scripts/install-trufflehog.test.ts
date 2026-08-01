@@ -135,10 +135,19 @@ describe("scripts/install-trufflehog.sh", () => {
     expect(existsSync(installMarker)).toBe(false);
   });
 
+  it("bounds the download with connect, transfer, and retry-window timeouts", () => {
+    const script = readFileSync(SCRIPT, "utf8");
+    const download = script.slice(script.indexOf("curl -fsSL"), script.indexOf('"$url"'));
+
+    expect(download).toContain("--connect-timeout");
+    expect(download).toContain("--max-time");
+    expect(download).toContain("--retry-max-time");
+  });
+
   it("verifies the archive before extraction and replaces the binary atomically", () => {
     const script = readFileSync(SCRIPT, "utf8");
     expect(script).toContain('"$binary" --no-update --version');
-    const download = script.indexOf('curl -fsSL --retry 3 --output "$tmp_dir/$archive" "$url"');
+    const download = script.indexOf("curl -fsSL");
     const verify = script.indexOf("sha256sum -c -");
     const extract = script.indexOf(
       'tar --no-same-owner -xzf "$tmp_dir/$archive" -C "$tmp_dir" trufflehog',
