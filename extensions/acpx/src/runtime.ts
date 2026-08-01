@@ -42,7 +42,7 @@ import {
 } from "./process-lease.js";
 import {
   cleanupOpenClawOwnedAcpxProcessTree,
-  isLiveOpenClawOwnedAcpxWrapper,
+  verifyLiveOpenClawOwnedAcpxWrapper,
   isOpenClawLeaseAwareAcpxProcessCommand,
   type AcpxProcessCleanupDeps,
 } from "./process-reaper.js";
@@ -279,12 +279,14 @@ function createResetAwareSessionStore(
       const recordPid = readRecordAgentPid(record);
       if (
         recordPid &&
-        !(await isLiveOpenClawOwnedAcpxWrapper({
-          pid: recordPid,
-          wrapperRoot: params.wrapperRoot,
-          expectedCommand: readRecordAgentCommand(record),
-          deps: params.processDeps,
-        }))
+        (
+          await verifyLiveOpenClawOwnedAcpxWrapper({
+            pid: recordPid,
+            wrapperRoot: params.wrapperRoot,
+            expectedCommand: readRecordAgentCommand(record),
+            deps: params.processDeps,
+          })
+        ).kind === "dead"
       ) {
         // The wrapper process that owned this session is gone (or the PID has
         // been reused by a different process). Treat the stored session as
@@ -304,17 +306,20 @@ function createResetAwareSessionStore(
       // Defensive: the lease might still be open but its process has died or
       // the PID has been reused by a non-OpenClaw process (e.g. gateway
       // crash). Treat as fresh. Pending leases (rootPid 0) have not been
-      // claimed by a process yet, so there is no identity to verify.
+      // claimed by a process yet, and unavailable process inspection is not
+      // proof of death, so neither resets the stored session.
       if (
         lease.rootPid > 0 &&
-        !(await isLiveOpenClawOwnedAcpxWrapper({
-          pid: lease.rootPid,
-          wrapperRoot: lease.wrapperRoot ?? params.wrapperRoot,
-          expectedCommand: readRecordAgentCommand(record),
-          expectedLeaseId: lease.leaseId,
-          expectedGatewayInstanceId: lease.gatewayInstanceId,
-          deps: params.processDeps,
-        }))
+        (
+          await verifyLiveOpenClawOwnedAcpxWrapper({
+            pid: lease.rootPid,
+            wrapperRoot: lease.wrapperRoot ?? params.wrapperRoot,
+            expectedCommand: readRecordAgentCommand(record),
+            expectedLeaseId: lease.leaseId,
+            expectedGatewayInstanceId: lease.gatewayInstanceId,
+            deps: params.processDeps,
+          })
+        ).kind === "dead"
       ) {
         return undefined;
       }
