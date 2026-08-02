@@ -21,6 +21,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sleep, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { extractInboundMedia } from "./inbound-media.js";
 import { normalizeZaloReactionIcon } from "./reaction.js";
 import { createZalouserSendReceipt } from "./send-receipt.js";
 import {
@@ -896,6 +897,7 @@ export function normalizeZaloInboundMessage(
     normalizedOwnUserId && quoteOwnerId && quoteOwnerId === normalizedOwnUserId,
   );
   const eventMessage = buildEventMessage(data);
+  const media = extractInboundMedia(data.content);
   return {
     threadId,
     isGroup,
@@ -915,6 +917,7 @@ export function normalizeZaloInboundMessage(
     quotedOwnerId: quoteOwnerId || undefined,
     quotedBody: quotedBody || undefined,
     eventMessage,
+    media: media ?? undefined,
     raw: message,
   };
 }

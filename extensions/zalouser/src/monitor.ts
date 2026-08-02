@@ -5,6 +5,7 @@ import {
   implicitMentionKindWhen,
   isChannelPartialDeliveryError,
   resolveInboundMentionDecision,
+  toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
@@ -17,6 +18,7 @@ import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-na
 // Zalouser plugin module implements monitor behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { saveRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import {
   DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
@@ -43,6 +45,7 @@ import {
   findZalouserGroupEntry,
   isZalouserGroupEntryAllowed,
 } from "./group-policy.js";
+import { resolveInboundImageContentType } from "./inbound-media.js";
 import { createZalouserIngressMonitor, type ZalouserIngressLifecycle } from "./ingress.js";
 import { formatZalouserMessageSidFull, resolveZalouserMessageSid } from "./message-sid.js";
 import { getZalouserRuntime } from "./runtime.js";
@@ -53,7 +56,7 @@ import {
   sendTypingZalouser,
 } from "./send.js";
 import { resolveZalouserDmSessionScope } from "./session-scope.js";
-import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
+import type { ResolvedZalouserAccount, ZaloInboundMedia, ZaloInboundMessage } from "./types.js";
 import {
   listZaloFriends,
   listZaloGroups,
@@ -231,8 +234,12 @@ async function processMessage(
     accountId: account.accountId,
   });
 
-  const rawBody = message.content?.trim();
-  if (!rawBody) {
+  const rawBody = message.content?.trim() ?? "";
+  // Allow processing when there's no text body but the message carries a
+  // media attachment (photo-only messages, common in customer-support flows
+  // where users send a photo of a device label without typing anything).
+  // Drop only when there's neither text nor media.
+  if (!rawBody && !message.media) {
     return;
   }
   const commandBody = message.commandContent?.trim() || rawBody;
@@ -559,12 +566,27 @@ async function processMessage(
     cliMsgId: message.cliMsgId,
   });
 
+  // Download inbound photo attachment (if any) to a local file the kernel
+  // media pipeline can pick up. Failures are non-fatal: we log and proceed
+  // with text-only context so the bot still sees the caption + sender even
+  // when the CDN is temporarily unreachable. Photos that download cleanly
+  // are passed as a top-level `media` array on buildContext - the kernel
+  // then derives the full MediaPath/MediaUrl/MediaType/etc. fact set so
+  // the agent runner can attach the photo as a native vision content block
+  // (no separate `image` tool call required - the model sees the photo in
+  // the user message just like any other vision-capable channel).
+  const inboundMediaFacts = await resolveInboundMediaFacts({
+    media: message.media,
+    logVerbose: (msg: string) => logVerbose(core, runtime, msg),
+  });
+
   const ctxPayload = core.channel.inbound.buildContext({
     channel: "zalouser",
     accountId: route.accountId,
     messageId: messageSid,
     messageIdFull: messageSidFull,
     timestamp: message.timestampMs,
+    media: inboundMediaFacts,
     from: isGroup ? `zalouser:group:${chatId}` : `zalouser:${senderId}`,
     sender: {
       id: senderId,
@@ -972,5 +994,57 @@ export async function monitorZalouserProvider(
 
   return { stop };
 }
+
+/**
+ * Download an inbound Zalo photo attachment to a local file via
+ * `saveRemoteMedia` so the kernel media pipeline can build the standard
+ * MediaPath/MediaUrl/MediaType fact set. The path returned by
+ * `saveRemoteMedia` lives under POSIX_OPENCLAW_TMP_DIR which is in the
+ * allowed roots for inbound media (see core/inboundPathAllowed); files
+ * outside that root are silently dropped by the agent runner.
+ *
+ * Returns an array suitable for `buildContext({ media })`. Empty when there
+ * is no inbound media OR when the download failed (logged at verbose;
+ * message processing continues with text only). Exported via __testing for
+ * unit tests; not part of the public plugin surface.
+ */
+async function resolveInboundMediaFacts(params: {
+  media: ZaloInboundMedia | undefined;
+  logVerbose: (msg: string) => void;
+}): Promise<InboundMediaFact[]> {
+  if (!params.media) {
+    return [];
+  }
+  try {
+    const saved = await saveRemoteMedia({
+      url: params.media.url,
+      filePathHint: `zalouser-inbound-${Date.now()}.jpg`,
+      maxBytes: 25 * 1024 * 1024,
+    });
+    // Zalo CDN returns `application/octet-stream` for photos (verified
+    // 2026-05-21 on photo-stal-*.zdn.vn). The kernel's
+    // `resolveCurrentTurnImages` requires `MediaType` to start with
+    // `image/` to attach the photo as a vision content block, so we
+    // override to a real image MIME derived from the URL extension when
+    // saveRemoteMedia's detected contentType is missing or
+    // octet-stream. extractInboundMedia gated us here so we KNOW this
+    // bytes represent an image (`params.media.kind === "image"`).
+    const contentType = resolveInboundImageContentType(saved.contentType, params.media.url);
+    return toInboundMediaFacts([
+      {
+        path: saved.path,
+        url: saved.path,
+        contentType,
+        kind: params.media.kind,
+      },
+    ]);
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    params.logVerbose(`zalouser: inbound media fetch failed for ${params.media.url}: ${reason}`);
+    return [];
+  }
+}
+
+type InboundMediaFact = ReturnType<typeof toInboundMediaFacts>[number];
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
