@@ -538,7 +538,13 @@ and troubleshooting see the main [FAQ](/help/faq).
     If the message is specifically `Extra usage is required for long context requests`,
     the request is trying to use Anthropic's 1M context window (a GA-capable 1M Claude 4.x
     model, or legacy `params.context1m: true` config), and your current credential is not
-    eligible for long-context billing.
+    eligible for long-context billing. OpenClaw classifies this body as a context overflow
+    and automatically attempts **compact + retry**, so if the
+    session fits after compaction the retry succeeds without operator intervention.
+    If compaction cannot refit the session, the run ends blocked; the failing turn is
+    retried on the same model rather than falling back (though the internal compaction
+    call can itself fall back on eligible provider errors). Start a fresh session with
+    `/reset` (or `/new`), or switch to a larger-context model.
 
     Set a **fallback model** so OpenClaw keeps replying while a provider is rate-limited.
     See [Models](/cli/models), [OAuth](/concepts/oauth), and

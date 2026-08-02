@@ -164,12 +164,15 @@ Look for:
 - Current Anthropic credential is not eligible for long-context usage.
 - Requests fail only on long sessions/model runs that need the 1M context path.
 
+OpenClaw classifies this specific 429 body as a context overflow rather than a transient rate limit, so the runtime automatically attempts **compact + retry** to refit the prompt into the model's window before surfacing the error. If the session fits after compaction, the retry succeeds without operator intervention. If compaction cannot refit the session (or repeated retries keep hitting the same body), the run ends **blocked**; because the error is classified as context overflow, the failing turn is retried on the same model instead of moving down the fallback chain. (The internal compaction call itself can still use configured fallback models if it hits an eligible provider error of its own.) At that point the manual options below apply.
+
 Fix options:
 
 <Steps>
   <Step title="Use a standard context window">
     Switch to a standard-window model, or remove legacy `context1m` from older
-    model config that is not GA-capable for 1M context.
+    model config that is not GA-capable for 1M context. Useful when the session
+    keeps tripping this 429 even after compact + retry.
   </Step>
   <Step title="Use an eligible credential">
     Use an Anthropic credential that is eligible for long-context requests, or switch to an Anthropic API key.
