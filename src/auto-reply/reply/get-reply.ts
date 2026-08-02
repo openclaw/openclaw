@@ -1168,11 +1168,13 @@ export async function getReplyFromConfig(
       logVerbose(
         `[host-staging-cleanup] Cleaning up host workspace staging directory recursively: ${path.basename(hostWorkspaceStagingDir)}`,
       );
-      await fs.rm(hostWorkspaceStagingDir, { recursive: true, force: true }).catch((error) => {
-        logVerbose(
-          `[host-staging-cleanup] Failed to clean up host workspace staging directory recursively: ${path.basename(hostWorkspaceStagingDir)}: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      });
+      await fs
+        .rm(hostWorkspaceStagingDir, { recursive: true, force: true })
+        .catch((error: unknown) => {
+          logVerbose(
+            `[host-staging-cleanup] Failed to clean up host workspace staging directory recursively: ${path.basename(hostWorkspaceStagingDir)}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        });
     }
   }
 }
