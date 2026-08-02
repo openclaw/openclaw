@@ -4395,7 +4395,7 @@ describe("matrix monitor handler draft streaming", () => {
     }
   });
 
-  it("redacts partial live drafts when generation aborts mid-stream", async () => {
+  it("preserves and finalizes partial live drafts when generation aborts mid-stream", async () => {
     sendSingleTextMessageMatrixMock
       .mockReset()
       .mockResolvedValue({ messageId: "$draft1", roomId: "!room" });
@@ -4429,6 +4429,50 @@ describe("matrix monitor handler draft streaming", () => {
       createMatrixTextMessageEvent({ eventId: "$msg1", body: "hello" }),
     );
 
+    expectEditLiveFlag("$draft1", "partial", false);
+    expect(redactEventMock).not.toHaveBeenCalled();
+  });
+
+  it("redacts partial live drafts when abort finalization fails", async () => {
+    sendSingleTextMessageMatrixMock
+      .mockReset()
+      .mockResolvedValue({ messageId: "$draft1", roomId: "!room" });
+    editMessageMatrixMock.mockReset().mockRejectedValueOnce(new Error("finalize failed"));
+    deliverMatrixRepliesMock.mockReset().mockResolvedValue(createMockMatrixDeliveryResult());
+
+    const redactEventMock = vi.fn(async () => "$redacted");
+    const logVerboseMessage = vi.fn();
+    let capturedReplyOpts: ReplyOpts | undefined;
+
+    const { handler } = createMatrixHandlerTestHarness({
+      streaming: "partial",
+      client: { redactEvent: redactEventMock },
+      logVerboseMessage,
+      createReplyDispatcherWithTyping: () => ({
+        dispatcher: { markComplete: () => {}, waitForIdle: async () => {} },
+        replyOptions: {},
+        markDispatchIdle: () => {},
+        markRunComplete: () => {},
+      }),
+      dispatchInboundMessage: vi.fn(async (args: { replyOptions?: ReplyOpts }) => {
+        capturedReplyOpts = args?.replyOptions;
+        capturedReplyOpts?.onPartialReply?.({ text: "partial" });
+        await waitForMatrixState(() => {
+          expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+        });
+        throw new Error("model timeout");
+      }) as never,
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({ eventId: "$msg1", body: "hello" }),
+    );
+
+    expect(editMessageMatrixMock).toHaveBeenCalledTimes(1);
+    expect(logVerboseMessage).toHaveBeenCalledWith(
+      expect.stringContaining("draft-stream: finalize edit failed: Error: finalize failed"),
+    );
     expect(redactEventMock).toHaveBeenCalledWith("!room:example.org", "$draft1");
   });
 

@@ -120,6 +120,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       | import("openclaw/plugin-sdk/persistent-dedupe").ChannelReplayClaimHandle
       | undefined;
     let draftControllerRef: Awaited<ReturnType<typeof createMatrixDraftController>> | undefined;
+    // An unconsumed partial remains visible unless a final dispatch settles;
+    // abort cleanup keeps it only after its live marker is cleared.
+    let hasSuccessfulFinalDispatch = false;
     try {
       const eventType = event.type;
       if (eventType === EventType.RoomMessageEncrypted) {
@@ -603,6 +606,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         await commitInboundEventIfClaimed();
         return;
       }
+      hasSuccessfulFinalDispatch = true;
       const finalCount = counts.final;
       logVerboseMessage(
         `matrix: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${replyTarget}`,
@@ -617,7 +621,13 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       if (draftStream) {
         const draftEventId = await draftStream.stop().catch(() => undefined);
         if (draftEventId && draftControllerRef?.isDraftConsumed() !== true) {
-          await redactMatrixDraftEvent(client, roomId, draftEventId);
+          const shouldRedactDraft =
+            streaming !== "partial" ||
+            hasSuccessfulFinalDispatch ||
+            !(await draftStream.finalizeLive());
+          if (shouldRedactDraft) {
+            await redactMatrixDraftEvent(client, roomId, draftEventId);
+          }
         }
       }
       inboundReplayClaim?.release();
