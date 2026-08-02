@@ -875,6 +875,10 @@ describe("openclaw.chat", () => {
       needsApproval: true,
       proposalId: expect.stringMatching(/^system-agent:/),
     });
+    // The actionable hint lives in `reply` (engine's operatorApprovalOnly
+    // branch), not in a separate protocol field — the closed
+    // SystemAgentChatResult schema must not carry approvalHint.
+    expect(first.payload).not.toHaveProperty("approvalHint");
     expect(proposalId).toBeTruthy();
     expect(manager.getSnapshot(proposalId!)).toMatchObject({
       request: { proposalHash, agentId: "main", sessionKey: "agent:main:main" },

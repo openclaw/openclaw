@@ -2899,6 +2899,68 @@ describe("SystemAgentChatEngine", () => {
     expect(engine.hasPendingProposal()).toBe(true);
   });
 
+  it("tells delegated messaging users an approval can't be applied from chat", async () => {
+    // Delegated writes can only be resolved by an operator in the OpenClaw UI;
+    // a messaging user cannot approve by replying "yes". The first-round plan
+    // reply must say so instead of dead-ending on "Say yes to apply", while
+    // keeping the refusal record (what was requested, that it was not applied).
+    const planner = vi.fn(async () => ({
+      reply: "Let's point your agent at gpt-5.5.",
+      command: "set default model openai/gpt-5.5",
+      modelLabel: "claude-cli",
+    }));
+    const engine = new SystemAgentChatEngine({
+      operatorApprovalOnly: true,
+      runAgentTurn: async () => null,
+      planWithAssistant: planner,
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    const reply = await engine.handle("actually use an openai model");
+
+    expect(reply.text).toContain("can't be applied from this chat");
+    expect(reply.text).toContain("OpenClaw operator UI");
+    expect(reply.text).toContain("Refused:");
+    expect(reply.text).toContain("was not applied from this chat");
+    expect(reply.text).not.toContain("Say yes to apply");
+    expect(engine.hasPendingProposal()).toBe(true);
+  });
+
+  it("passes the operator-only boundary through a real agent-loop turn", async () => {
+    // Default engine route: the agent loop replies first and the engine
+    // returns its text directly (no planner fallback). The loop's tool result
+    // is the delegated refusal produced by the fixed ring-zero tool, so a
+    // messaging user sees the operator path instead of a dead-end "reply yes".
+    const runAgentTurn = vi.fn(async (params: { operatorApprovalOnly?: boolean }) => {
+      expect(params.operatorApprovalOnly).toBe(true);
+      return {
+        text: [
+          "needs-approval:system-agent-refusal",
+          'The proposal is registered for operator approval, but this chat is a delegated session: a "yes" reply here cannot resolve it.',
+          "This change needs operator approval in the OpenClaw operator UI and cannot be applied from this chat.",
+        ].join("\n"),
+      };
+    });
+    const planner = vi.fn(async () => {
+      throw new Error("planner must not run when the loop replies");
+    });
+    const engine = new SystemAgentChatEngine({
+      operatorApprovalOnly: true,
+      runAgentTurn: runAgentTurn as never,
+      planWithAssistant: planner,
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    const reply = await engine.handle("switch the thinking level");
+
+    expect(runAgentTurn).toHaveBeenCalledOnce();
+    expect(planner).not.toHaveBeenCalled();
+    expect(reply.text).toContain("OpenClaw operator UI");
+    expect(reply.text).toContain("cannot be applied from this chat");
+    expect(reply.text).not.toContain("ask the user to reply yes");
+    expect(reply.action).toBe("none");
+  });
+
   it("rebinds the live conversation after changing its default model", async () => {
     useTempStateDir();
     const baseConfig = structuredClone(sharedVerifiedInferenceConfig);

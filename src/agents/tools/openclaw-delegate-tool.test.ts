@@ -59,6 +59,26 @@ describe("openclaw delegation tool", () => {
     expect(tool.catalogMode).toBeUndefined();
   });
 
+  it("omits optional fields when the gateway does not provide them", async () => {
+    callGateway.mockResolvedValue({
+      sessionId: "ignored-by-client",
+      reply: "Done.",
+      action: "none",
+    });
+    const tool = createOpenClawDelegateToolsForRun({
+      sessionAgentId: "main",
+      runSessionKey: "agent:main:dm:one",
+    })[0];
+    if (!tool) {
+      throw new Error("expected OpenClaw delegation tool");
+    }
+
+    const result = await tool.execute("call-1", { message: "Status." });
+
+    expect(result.details).toEqual({ reply: "Done." });
+    expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
+  });
+
   it("reuses one session and accepts explicit continuation", async () => {
     callGateway.mockImplementation(async (_method: string, params: Record<string, unknown>) => ({
       sessionId: params.sessionId,

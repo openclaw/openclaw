@@ -1107,6 +1107,9 @@ export class SystemAgentChatEngine {
         // Mutations unlock only on host-verified approval of THIS message;
         // the model cannot self-approve (see system-agent-tool.ts).
         approvalArmed,
+        // Delegated chats cannot resolve approvals by replying "yes"; the
+        // ring-zero tool must not instruct a messaging user to do so.
+        operatorApprovalOnly: this.opts.operatorApprovalOnly,
         session: this.agentSession,
       });
     } catch (error) {
@@ -1382,6 +1385,25 @@ export class SystemAgentChatEngine {
     if (isPersistentSystemAgentOperation(operation) && !this.opts.yes) {
       this.clearPendingProposals();
       this.pending = operation;
+      if (this.opts.operatorApprovalOnly) {
+        // Delegated sessions cannot resolve approvals in-chat: refuse and
+        // surface the operator path. Record the refusal (what was requested,
+        // that it was not applied) instead of the interactive plan copy, which
+        // would tell a messaging user to reply "yes".
+        capture.log(
+          `Refused: ${describeSystemAgentPersistentOperation(operation)} requires operator approval and was not applied from this chat.`,
+        );
+        return {
+          text: [
+            provenance,
+            capture.read(),
+            "This change needs operator approval — it can't be applied from this chat. Approve it in the OpenClaw operator UI, or run the change via the `openclaw` CLI.",
+          ]
+            .filter(Boolean)
+            .join("\n\n"),
+          action: "none",
+        };
+      }
       await executeSystemAgentOperation(operation, capture, {
         approved: false,
         deps: this.commandDeps(),
