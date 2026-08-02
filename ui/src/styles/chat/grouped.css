@@ -428,6 +428,14 @@
   color: inherit;
 }
 
+/* Oversized transcript rows surface a muted notice instead of the raw
+   internal placeholder. Kept distinct from .chat-text so the notice never
+   inherits markdown block styling. */
+.chat-history-omitted {
+  color: var(--muted);
+  font-style: italic;
+}
+
 /* Avatar Styles */
 .chat-avatar {
   width: 36px;
