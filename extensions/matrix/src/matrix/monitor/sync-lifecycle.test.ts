@@ -60,6 +60,69 @@ function expectLastStatusFields(
 }
 
 describe("createMatrixMonitorSyncLifecycle", () => {
+  it("does not clear a transport error when E2EE later recovers", () => {
+    const { setStatus, statusController } = createSyncLifecycleHarness();
+
+    statusController.noteSyncState("SYNCING");
+    statusController.noteE2eeDegraded("Matrix E2EE could not decrypt fresh messages");
+    statusController.noteUnexpectedError(new Error("sync exploded"));
+    statusController.noteE2eeRecovered();
+
+    expectLastStatusFields(setStatus, {
+      connected: false,
+      healthState: "error",
+      lastError: "sync exploded",
+    });
+  });
+
+  it("does not clear a stopped state when E2EE later recovers", () => {
+    const { setStatus, statusController } = createSyncLifecycleHarness();
+
+    statusController.noteSyncState("SYNCING");
+    statusController.noteE2eeDegraded("Matrix E2EE could not decrypt fresh messages");
+    statusController.markStopped();
+    statusController.noteE2eeRecovered();
+
+    expectLastStatusFields(setStatus, {
+      connected: false,
+      healthState: "stopped",
+    });
+  });
+
+  it("does not let delayed E2EE degradation overwrite a transport error", () => {
+    const { setStatus, statusController } = createSyncLifecycleHarness();
+
+    statusController.noteSyncState("SYNCING");
+    statusController.noteUnexpectedError(new Error("sync exploded"));
+    statusController.noteE2eeDegraded("Matrix E2EE could not decrypt fresh messages");
+
+    expectLastStatusFields(setStatus, {
+      connected: false,
+      healthState: "error",
+      lastError: "sync exploded",
+    });
+
+    statusController.noteSyncState("SYNCING");
+    expectLastStatusFields(setStatus, {
+      connected: true,
+      healthState: "degraded",
+      lastError: "Matrix E2EE could not decrypt fresh messages",
+    });
+  });
+
+  it("does not let delayed E2EE degradation overwrite a stopped state", () => {
+    const { setStatus, statusController } = createSyncLifecycleHarness();
+
+    statusController.noteSyncState("SYNCING");
+    statusController.markStopped();
+    statusController.noteE2eeDegraded("Matrix E2EE could not decrypt fresh messages");
+
+    expectLastStatusFields(setStatus, {
+      connected: false,
+      healthState: "stopped",
+    });
+  });
+
   it("rejects the channel wait on unexpected sync errors", async () => {
     const { client, lifecycle, setStatus } = createSyncLifecycleHarness();
 

@@ -48,6 +48,7 @@ export function createMatrixMonitorStatusController(params: {
     lastError: null,
     healthState: "starting",
   };
+  let e2eeDegradationError: string | null = null;
 
   const emit = () => {
     params.statusSink?.({
@@ -65,9 +66,9 @@ export function createMatrixMonitorStatusController(params: {
     if (options?.transportActivity) {
       Object.assign(status, createTransportActivityStatusPatch(at));
     }
-    status.lastError = null;
+    status.lastError = e2eeDegradationError;
     status.lastDisconnect = null;
-    status.healthState = "healthy";
+    status.healthState = e2eeDegradationError ? "degraded" : "healthy";
     emit();
   };
 
@@ -112,6 +113,28 @@ export function createMatrixMonitorStatusController(params: {
     },
     noteUnexpectedError(error: unknown, at = Date.now()) {
       noteDisconnected({ state: "ERROR", at, error });
+    },
+    noteE2eeDegraded(error: string, at = Date.now()) {
+      e2eeDegradationError = error;
+      if (!status.connected) {
+        return;
+      }
+      status.lastEventAt = at;
+      status.lastError = error;
+      status.healthState = "degraded";
+      emit();
+    },
+    noteE2eeRecovered(at = Date.now()) {
+      if (!e2eeDegradationError) {
+        return;
+      }
+      e2eeDegradationError = null;
+      status.lastEventAt = at;
+      if (status.connected) {
+        status.lastError = null;
+        status.healthState = "healthy";
+      }
+      emit();
     },
     markStopped(at = Date.now()) {
       status.connected = false;

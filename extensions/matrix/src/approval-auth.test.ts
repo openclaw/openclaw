@@ -1,6 +1,11 @@
 // Matrix tests cover approval auth plugin behavior.
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { matrixApprovalAuth } from "./approval-auth.js";
+import { installMatrixTestRuntime } from "./test-runtime.js";
+
+beforeEach(() => {
+  installMatrixTestRuntime();
+});
 
 describe("matrixApprovalAuth", () => {
   it("normalizes Matrix user ids before authorizing", () => {
