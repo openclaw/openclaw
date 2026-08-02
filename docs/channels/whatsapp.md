@@ -471,7 +471,7 @@ Per-account override: `channels.whatsapp.accounts.<id>.reactionLevel`.
 }
 ```
 
-Notes: sent immediately after inbound is accepted (pre-reply); when `messages.ackReaction` is unset WhatsApp falls back to the routed agent's identity emoji, then to "👀" (set `ackReaction: ""` or `ackReactionScope: "off"` for no ack); failures are logged but do not block reply delivery; scope `group-mentions` reacts only on mention-triggered group turns, while `group-all` acks every group message.
+Notes: sent immediately after inbound is accepted (pre-reply); leaving `messages.ackReaction` unset (or setting it to `""`) sends no ack reaction at all, and `ackReactionScope: "off"` also disables it; when a value is set but blank after trimming, WhatsApp falls back to the routed agent's identity emoji and then to "👀"; failures are logged but do not block reply delivery; scope `group-mentions` reacts only on mention-triggered group turns, while `group-all` acks every group message.
 
 ## Lifecycle status reactions
 
