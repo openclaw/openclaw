@@ -34,20 +34,13 @@ export function buildInboundLine(params: {
   previousTimestamp?: number;
   envelope?: EnvelopeFormatOptions;
   visibleReplyTo?: WhatsAppReplyContext | null;
-  /**
-   * Prefer the selected account's prepared `messagePrefix` from
-   * `resolveWhatsAppAccount` so account-level overrides win. When omitted,
-   * falls back to channel config on `cfg` (monitor snapshot may already
-   * rewrite channel-level to the resolved account value).
-   */
-  messagePrefix?: string;
 }) {
   const { cfg, msg, agentId, previousTimestamp, envelope } = params;
-  // Prefer selected-account prepared prefix (resolveWhatsAppAccount maps
-  // merged responsePrefix onto account.messagePrefix). Fall back to channel
-  // responsePrefix, then global/identity via resolveMessagePrefix.
+  // Monitor snapshot (`resolveWebMonitorConfigSnapshot`) already pins
+  // channels.whatsapp.responsePrefix to the selected account's prepared
+  // messagePrefix. Keep that as the sole precedence owner here.
   const messagePrefix = resolveMessagePrefix(cfg, agentId, {
-    configured: params.messagePrefix ?? cfg.channels?.whatsapp?.responsePrefix,
+    configured: cfg.channels?.whatsapp?.responsePrefix,
     hasAllowFrom: (cfg.channels?.whatsapp?.allowFrom?.length ?? 0) > 0,
   });
   const admission = requireWhatsAppInboundAdmission(msg);

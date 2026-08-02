@@ -830,11 +830,12 @@ describe("buildInboundLine", () => {
     expect(line).toContain("[PFX] ping");
   });
 
-  it("prefers the selected-account messagePrefix over channel config", () => {
+  it("uses monitor-snapshot channel responsePrefix as the sole prefix source", () => {
+    // resolveWebMonitorConfigSnapshot pins channels.whatsapp.responsePrefix
+    // to account.messagePrefix before buildInboundLine runs.
     const line = buildInboundLine({
-      cfg: makeInboundCfg("[channel]"),
+      cfg: makeInboundCfg("[account]"),
       agentId: "main",
-      messagePrefix: "[account]",
       msg: createDirectMessage({
         admission: {
           conversation: {
@@ -848,14 +849,12 @@ describe("buildInboundLine", () => {
     });
 
     expect(line).toContain("[account] ping");
-    expect(line).not.toContain("[channel]");
   });
 
-  it("honors explicit empty account messagePrefix over channel config", () => {
+  it("honors explicit empty snapshot responsePrefix without inventing a prefix", () => {
     const line = buildInboundLine({
-      cfg: makeInboundCfg("[channel]"),
+      cfg: makeInboundCfg(""),
       agentId: "main",
-      messagePrefix: "",
       msg: createDirectMessage({
         admission: {
           conversation: {
@@ -869,7 +868,7 @@ describe("buildInboundLine", () => {
     });
 
     expect(line).toContain("ping");
-    expect(line).not.toContain("[channel]");
+    expect(line).not.toMatch(/\[.*\] ping/);
   });
 
   it("normalizes direct from labels by stripping whatsapp: prefix", () => {

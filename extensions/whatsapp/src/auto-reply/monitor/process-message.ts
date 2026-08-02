@@ -313,8 +313,6 @@ export async function processMessage(params: {
     previousTimestamp,
     envelope: envelopeOptions,
     visibleReplyTo,
-    // Use the selected account's prepared prefix (account > channel > global).
-    messagePrefix: account.messagePrefix,
   });
   let shouldClearGroupHistory = false;
   const visibleGroupHistory =
