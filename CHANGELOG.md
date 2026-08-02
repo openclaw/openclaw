@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- **Cron job precheck gate:** optional host-shell `job.precheck` before any payload skips LLM turns when probes report no work (`exit 2` / `NO_WORK`), records `precheck-no-work` / `precheck-policy-denied`, shares `cron.triggers.enabled` + exec allowlist policy with unattended system-run, supports Windows `cmd.exe`, and keeps condition `trigger` as a separate stateful admission surface. (#112371, #112375)
 - **Local model setup:** advertise provider-owned Ollama, llama.cpp, and LM Studio setup choices to Control UI and macOS, retry unavailable LM Studio services in place, and verify the exact prepared model before showing success.
 - **Control UI first-run setup:** continue verified model setup into Custodian, explain that the web app is ready without a channel, and offer an optional dismissible path to Channels.
 - **Fish Audio speech:** add hosted S2.1 synthesis with streaming, voice notes, voice discovery, and telephony, plus local Fish S2 Pro reference-voice streaming in native macOS Talk. Thanks @Conan-Scott for the earlier community-plugin implementation.
