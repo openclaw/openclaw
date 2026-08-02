@@ -7,6 +7,7 @@ import { createQaArtifactRunId } from "./artifact-run-id.js";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "./cli-paths.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
 import { splitQaModelRef as splitModelRef, type QaProviderMode } from "./model-selection.js";
+import { scenarioDeclaresQaChannel } from "./profile-planning.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import {
   describeQaProviderLaneMismatches,
@@ -80,6 +81,9 @@ function selectQaFlowSuiteScenarios(params: {
   return params.scenarios.filter(
     (scenario) =>
       scenario.execution.kind === "flow" &&
+      (!params.channel ||
+        params.channelDriver === "qa-channel" ||
+        scenarioDeclaresQaChannel(scenario, params.channel)) &&
       // Explicit single-scenario runs adopt this provider later. Implicit suites must
       // filter it here so a scenario-pinned provider cannot leak into another lane.
       (scenario.execution.providerMode === undefined ||

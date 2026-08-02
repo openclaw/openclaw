@@ -136,11 +136,14 @@ function scrubQaGatewayChildSecretEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv
   return env;
 }
 
-function createQaGatewayEmptyTransport() {
+function createQaGatewayEmptyTransport(): Pick<
+  QaTransportAdapter,
+  "requiredPluginIds" | "createGatewayConfig" | "stageGatewayRuntime"
+> {
   return {
     requiredPluginIds: [] as const,
     createGatewayConfig: () => ({}),
-  } satisfies Pick<QaTransportAdapter, "requiredPluginIds" | "createGatewayConfig">;
+  };
 }
 
 function resolveQaGatewayChildCommand(repoRoot: string): QaGatewayChildCommand {
@@ -1057,7 +1060,10 @@ export async function startQaGatewayChild(params: {
   command?: QaGatewayChildCommand;
   useRepoCli?: boolean;
   providerBaseUrl?: string;
-  transport?: Pick<QaTransportAdapter, "requiredPluginIds" | "createGatewayConfig">;
+  transport?: Pick<
+    QaTransportAdapter,
+    "requiredPluginIds" | "createGatewayConfig" | "stageGatewayRuntime"
+  >;
   transportBaseUrl: string;
   controlUiAllowedOrigins?: string[];
   providerMode?: QaProviderMode;
@@ -1212,6 +1218,7 @@ export async function startQaGatewayChild(params: {
   let env: NodeJS.ProcessEnv | null = null;
 
   try {
+    await transport.stageGatewayRuntime?.({ tempRoot });
     const nodeExecPath = gatewayExecutablePath ?? (await resolveQaNodeExecPath());
     const cliArgsPrefix = gatewayExecutablePath
       ? gatewayArgsPrefix

@@ -139,6 +139,7 @@ describe("live transport QA scenario selection", () => {
   it.each([
     { channelId: "matrix", scenarioId: "thread-follow-up" },
     { channelId: "telegram", scenarioId: "channel-message-flows" },
+    { channelId: "discord", scenarioId: "channel-canary" },
   ] as const)(
     "keeps $scenarioId eligible through both $channelId drivers",
     ({ channelId, scenarioId }) => {
@@ -154,4 +155,22 @@ describe("live transport QA scenario selection", () => {
       expect(selectForDriver("crabline")).toEqual([scenarioId]);
     },
   );
+
+  it("defaults dedicated Discord selection to live and excludes live-only modules from Crabline", () => {
+    const implicitLive = resolveDiscordQaScenarioIds(MOCK_LANE);
+    const explicitLive = resolveDiscordQaScenarioIds({ ...MOCK_LANE, channelDriver: "live" });
+    const crabline = resolveDiscordQaScenarioIds({ ...MOCK_LANE, channelDriver: "crabline" });
+
+    expect(explicitLive).toEqual(implicitLive);
+    expect(implicitLive).toContain("discord-canary");
+    expect(crabline).toContain("discord-crabline-roundtrip");
+    expect(crabline).not.toContain("discord-canary");
+    expect(() =>
+      resolveDiscordQaScenarioIds({
+        ...MOCK_LANE,
+        channelDriver: "crabline",
+        scenarioIds: ["discord-canary"],
+      }),
+    ).toThrow("channelDriver=live");
+  });
 });

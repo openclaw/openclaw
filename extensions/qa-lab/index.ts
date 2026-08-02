@@ -4,6 +4,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { jsonResult } from "openclaw/plugin-sdk/tool-results";
 import { registerQaLabCli } from "./src/cli.js";
+import { registerCrablineDiscordProviderEndpoint } from "./src/crabline-discord-provider-endpoint.js";
 import { createQaLabWebSearchProvider } from "./src/qa-web-search-provider.js";
 import { createStaticSshWorkerProvider } from "./src/static-ssh-worker-provider.js";
 
@@ -18,6 +19,7 @@ export default definePluginEntry({
   name: "QA Lab",
   description: "Private QA automation harness and debugger UI",
   register(api) {
+    registerCrablineDiscordProviderEndpoint(api);
     api.registerTool(
       {
         name: "qa_restart_wait",

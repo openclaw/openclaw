@@ -2,7 +2,8 @@
   "id": "qa-lab",
   "description": "OpenClaw QA lab plugin with private debugger UI and scenario runner.",
   "activation": {
-    "onStartup": false
+    "onStartup": false,
+    "onConfigPaths": ["plugins.entries.qa-lab"]
   },
   "contracts": {
     "webSearchProviders": ["qa-lab-search"],
