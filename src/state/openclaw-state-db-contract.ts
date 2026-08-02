@@ -14,6 +14,7 @@ export const LAZY_ADDITIVE_STATE_TABLES = [
   "skill_workshop_proposal_origin_runs",
   "skill_workshop_proposal_rollbacks",
   "skill_workshop_proposals",
+  "worktree_retention_claims",
 ] as const;
 /** Maximum time one synchronous SQLite call may wait for a lock. */
 export const OPENCLAW_SQLITE_BUSY_TIMEOUT_MS = 5_000;

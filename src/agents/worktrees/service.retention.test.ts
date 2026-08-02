@@ -5,7 +5,11 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
 
 const execFileAsync = promisify(execFile);
@@ -76,5 +80,44 @@ describe("managed worktree retention claims", () => {
     ).toBe(true);
     expect((await restarted.gc({ limits: { maxCount: 0 } })).removed).toEqual([created.id]);
     await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("lazily adds retention claims to a pre-existing v6 database", async () => {
+    const created = await service.create({
+      repoRoot: repo,
+      name: "legacy-retained-artifact",
+      ownerKind: "workboard",
+      ownerId: "card-legacy-retained",
+    });
+    const databasePath = openOpenClawStateDatabase({ env }).path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacy = new DatabaseSync(databasePath);
+    expect(legacy.prepare("PRAGMA user_version").get()).toEqual({ user_version: 6 });
+    legacy.exec("DROP TABLE worktree_retention_claims;");
+    legacy.close();
+
+    const reopened = openOpenClawStateDatabase({ env });
+    expect(
+      reopened.db
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+        .get("worktree_retention_claims"),
+    ).toBeUndefined();
+
+    const restarted = new ManagedWorktreeService({ env, now: () => now });
+    expect(
+      restarted.setRetentionClaimByPath(
+        created.path,
+        { ownerKind: "workboard", ownerId: "card-legacy-retained" },
+        { claimId: "artifact", active: true },
+      ),
+    ).toBe(true);
+    expect(
+      reopened.db
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+        .get("worktree_retention_claims"),
+    ).toEqual({ name: "worktree_retention_claims" });
+    expect(await restarted.removeIfLossless(created.id)).toBe(false);
   });
 });
