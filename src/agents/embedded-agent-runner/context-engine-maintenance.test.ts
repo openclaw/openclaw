@@ -601,7 +601,6 @@ describe("runContextEngineMaintenance", () => {
           compact: async () => ({ ok: true, compacted: false }),
           maintain,
         } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
-
         await runContextEngineMaintenance({
           contextEngine: backgroundEngine,
           sessionId: "session-2",
@@ -1039,7 +1038,6 @@ describe("runContextEngineMaintenance", () => {
           compact: async () => ({ ok: true, compacted: false }),
           maintain,
         } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
-
         await runContextEngineMaintenance({
           contextEngine: backgroundEngine,
           sessionId: "session-legacy",
@@ -1361,12 +1359,20 @@ describe("runContextEngineMaintenance", () => {
           maintain,
         } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
 
+        let deferredMaintenance: Promise<void> | undefined;
+        let deferredMaintenanceSettled = false;
         await runContextEngineMaintenance({
           contextEngine: backgroundEngine,
           sessionId: "session-preempt-blocked",
           sessionKey,
           sessionFile: "/tmp/session-preempt-blocked.jsonl",
           reason: "turn",
+          onDeferredMaintenance: (promise) => {
+            deferredMaintenance = promise;
+            void promise.then(() => {
+              deferredMaintenanceSettled = true;
+            });
+          },
         });
         await waitForAssertion(() => expect(maintain).toHaveBeenCalledOnce());
 
@@ -1383,6 +1389,7 @@ describe("runContextEngineMaintenance", () => {
         ).rejects.toThrow("waiting foreground turn");
         await vi.advanceTimersByTimeAsync(1_001);
         await foregroundWait;
+        expect(deferredMaintenanceSettled).toBe(false);
         const task = listTasksForOwnerKey(sessionKey).find(
           (candidate) => candidate.taskKind === TURN_MAINTENANCE_TASK_KIND,
         );
@@ -1400,12 +1407,17 @@ describe("runContextEngineMaintenance", () => {
           reason: "turn",
         });
         expect(maintain).toHaveBeenCalledOnce();
+        expect(deferredMaintenanceSettled).toBe(false);
 
         if (!releaseMaintenance) {
           throw new Error("Expected maintenance release callback to be initialized");
         }
         releaseMaintenance();
-        await flushAsyncWork();
+        if (!deferredMaintenance) {
+          throw new Error("Expected deferred maintenance promise to be captured");
+        }
+        await deferredMaintenance;
+        expect(deferredMaintenanceSettled).toBe(true);
         expect(task && getTaskById(task.taskId)?.status).toBe("timed_out");
       } finally {
         vi.useRealTimers();
@@ -1413,7 +1425,7 @@ describe("runContextEngineMaintenance", () => {
     });
   });
 
-  it("drains admitted rewrites before routing foreground compaction maintenance to fallback", async () => {
+  it("keeps fallback serialized behind a quarantined maintenance run", async () => {
     await withStateDirEnv("openclaw-turn-maintenance-", async () => {
       vi.useFakeTimers();
       const restoreRegistry = captureContextEngineRegistryStateForTests();
@@ -1476,6 +1488,8 @@ describe("runContextEngineMaintenance", () => {
         const contextEngine = await resolveContextEngine({
           plugins: { slots: { contextEngine: engineId } },
         });
+        let deferredMaintenance: Promise<void> | undefined;
+        let deferredMaintenanceSettled = false;
 
         await runContextEngineMaintenance({
           contextEngine,
@@ -1483,43 +1497,75 @@ describe("runContextEngineMaintenance", () => {
           sessionKey,
           sessionFile: "/tmp/session-preempt-fallback.jsonl",
           reason: "turn",
+          onDeferredMaintenance: (promise) => {
+            deferredMaintenance = promise;
+            void promise.then(() => {
+              deferredMaintenanceSettled = true;
+            });
+          },
         });
         await rewriteStarted;
 
-        let foregroundReleased = false;
         const foregroundMaintenance = runContextEngineMaintenance({
           contextEngine,
           sessionId: "session-preempt-fallback",
           sessionKey,
           sessionFile: "/tmp/session-preempt-fallback.jsonl",
           reason: "compaction",
-        }).then((result) => {
-          foregroundReleased = true;
-          return result;
         });
+        const foregroundFailure = expect(foregroundMaintenance).rejects.toThrow(
+          "this turn was stopped to avoid overlapping engine operations",
+        );
         await vi.advanceTimersByTimeAsync(1_001);
         expect(contextEngine.info.id).toBe("legacy");
-        expect(foregroundReleased).toBe(false);
         expect(maintain).toHaveBeenCalledOnce();
+        await foregroundFailure;
+        expect(deferredMaintenanceSettled).toBe(false);
 
         if (!releaseRewriteRead) {
           throw new Error("Expected transcript read release callback to be initialized");
         }
         releaseRewriteRead();
-        await expect(foregroundMaintenance).resolves.toEqual({
-          changed: false,
-          bytesFreed: 0,
-          rewrittenEntries: 0,
-          reason: "context engine downgraded to legacy",
-        });
-        expect(foregroundReleased).toBe(true);
+        await flushAsyncWork();
+        expect(deferredMaintenanceSettled).toBe(false);
+
+        await expect(
+          runContextEngineMaintenance({
+            contextEngine,
+            sessionId: "session-preempt-fallback",
+            sessionKey,
+            sessionFile: "/tmp/session-preempt-fallback.jsonl",
+            reason: "compaction",
+          }),
+        ).rejects.toThrow("this turn was stopped to avoid overlapping engine operations");
         expect(maintain).toHaveBeenCalledOnce();
+        expect(deferredMaintenanceSettled).toBe(false);
 
         if (!releaseMaintenance) {
           throw new Error("Expected maintenance release callback to be initialized");
         }
         releaseMaintenance();
-        await flushAsyncWork();
+        if (!deferredMaintenance) {
+          throw new Error("Expected deferred maintenance promise to be captured");
+        }
+        await deferredMaintenance;
+        expect(deferredMaintenanceSettled).toBe(true);
+
+        await expect(
+          runContextEngineMaintenance({
+            contextEngine,
+            sessionId: "session-preempt-fallback",
+            sessionKey,
+            sessionFile: "/tmp/session-preempt-fallback.jsonl",
+            reason: "compaction",
+          }),
+        ).resolves.toEqual({
+          changed: false,
+          bytesFreed: 0,
+          rewrittenEntries: 0,
+          reason: "context engine downgraded to legacy",
+        });
+        expect(maintain).toHaveBeenCalledOnce();
         const task = listTasksForOwnerKey(sessionKey).find(
           (candidate) => candidate.taskKind === TURN_MAINTENANCE_TASK_KIND,
         );

@@ -313,6 +313,7 @@ export const rotateTranscriptAfterCompactionMock: Mock<
   rotated: false,
 }));
 export const enqueueCommandInLaneMock = vi.fn((_lane: unknown, task: () => unknown) => task());
+export const waitForDeferredTurnMaintenanceForSessionMock = vi.fn(async () => undefined);
 
 function createCompactHooksRuntimePlan(params: BuildAgentRuntimePlanParams): AgentRuntimePlan {
   const modelApi = params.modelApi ?? params.model?.api ?? undefined;
@@ -540,6 +541,8 @@ export function resetCompactSessionStateMocks(): void {
   rotateTranscriptAfterCompactionMock.mockResolvedValue({ rotated: false });
   enqueueCommandInLaneMock.mockReset();
   enqueueCommandInLaneMock.mockImplementation((_lane: unknown, task: () => unknown) => task());
+  waitForDeferredTurnMaintenanceForSessionMock.mockReset();
+  waitForDeferredTurnMaintenanceForSessionMock.mockResolvedValue(undefined);
   listRegisteredPluginAgentPromptGuidanceMock.mockReset();
   listRegisteredPluginAgentPromptGuidanceMock.mockImplementation((params?: { surface?: string }) =>
     params?.surface === "subagent"
@@ -678,6 +681,16 @@ export async function loadCompactHooksHarness(): Promise<{
   vi.doMock("../harness/compaction.js", () => ({
     maybeCompactAgentHarnessSession: maybeCompactAgentHarnessSessionMock,
   }));
+
+  vi.doMock("./context-engine-maintenance.js", async () => {
+    const actual = await vi.importActual<typeof import("./context-engine-maintenance.js")>(
+      "./context-engine-maintenance.js",
+    );
+    return {
+      ...actual,
+      waitForDeferredTurnMaintenanceForSession: waitForDeferredTurnMaintenanceForSessionMock,
+    };
+  });
 
   vi.doMock("../harness/policy.js", () => ({
     resolveAgentHarnessPolicy: resolveAgentHarnessPolicyMock,

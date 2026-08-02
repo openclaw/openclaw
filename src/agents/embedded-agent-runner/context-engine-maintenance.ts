@@ -87,6 +87,8 @@ type DeferredTurnMaintenanceRunState = {
   phase: "running" | "preempting" | "blocked" | "quarantined" | "settled";
   barrier: Promise<void>;
   releaseBarrier: () => void;
+  foregroundBarrier: Promise<void>;
+  releaseForegroundBarrier: () => void;
   waitError?: Error;
   preemptionTimer?: ReturnType<typeof setTimeout>;
   requestForegroundPreemption: () => void;
@@ -221,7 +223,7 @@ export async function waitForDeferredTurnMaintenanceForSession(sessionKey?: stri
     return;
   }
   activeRun.requestForegroundPreemption();
-  await activeRun.barrier;
+  await activeRun.foregroundBarrier;
   if (activeRun.waitError) {
     throw activeRun.waitError;
   }
@@ -557,6 +559,10 @@ function scheduleDeferredTurnMaintenance(
   const barrier = new Promise<void>((resolve) => {
     releaseBarrier = resolve;
   });
+  let releaseForegroundBarrier = () => {};
+  const foregroundBarrier = new Promise<void>((resolve) => {
+    releaseForegroundBarrier = resolve;
+  });
   const terminalizePreemption = (error: Error, terminalSummary: string) => {
     buildTurnMaintenanceTaskDescriptor({
       sessionKey,
@@ -624,6 +630,7 @@ function scheduleDeferredTurnMaintenance(
       await disposeDeferredMaintenanceContextEngine(discardedRerunParams.contextEngine);
     }
     current.releaseBarrier();
+    current.releaseForegroundBarrier();
   };
   const trackedPromise = runPromise
     .catch((err: unknown) => {
@@ -638,6 +645,8 @@ function scheduleDeferredTurnMaintenance(
     phase: "running",
     barrier,
     releaseBarrier,
+    foregroundBarrier,
+    releaseForegroundBarrier,
     requestForegroundPreemption: () => {
       if (state.phase !== "running") {
         return;
@@ -663,30 +672,16 @@ function scheduleDeferredTurnMaintenance(
           operation: "maintain",
           error: preemptionError,
         });
-        if (!quarantined) {
-          state.phase = "blocked";
-          state.waitError = new Error(
-            "Deferred maintenance did not stop. The active context engine cannot be quarantined, so this turn was stopped to avoid overlapping engine operations. Retry after maintenance finishes or restart the gateway.",
-          );
-          terminalizePreemption(preemptionError, state.waitError.message);
-          state.releaseBarrier();
-          return;
-        }
-        terminalizePreemption(
-          preemptionError,
-          "Deferred maintenance timed out. The context engine is being quarantined; this session will continue with the default fallback after admitted transcript writes finish.",
+        state.phase = quarantined ? "quarantined" : "blocked";
+        state.waitError = new Error(
+          quarantined
+            ? "Deferred maintenance did not stop. The context engine was quarantined, but this turn was stopped to avoid overlapping engine operations. Retry after maintenance finishes or restart the gateway."
+            : "Deferred maintenance did not stop. The active context engine cannot be quarantined, so this turn was stopped to avoid overlapping engine operations. Retry after maintenance finishes or restart the gateway.",
         );
-        void writeDrain.then(() => {
-          if (
-            state.phase !== "preempting" ||
-            activeDeferredTurnMaintenanceRuns.get(sessionKey) !== state
-          ) {
-            return;
-          }
-          state.phase = "quarantined";
-          schedulerAbort.dispose();
-          state.releaseBarrier();
-        });
+        terminalizePreemption(preemptionError, state.waitError.message);
+        // Fail the waiting turn, but keep the run barrier closed until the
+        // original plugin call and every admitted host write have settled.
+        state.releaseForegroundBarrier();
       }, TURN_MAINTENANCE_PREEMPT_GRACE_MS);
       state.preemptionTimer.unref?.();
     },

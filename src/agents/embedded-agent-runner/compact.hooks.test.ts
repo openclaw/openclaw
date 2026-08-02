@@ -57,6 +57,7 @@ import {
   sessionCompactImpl,
   sessionManualCompactionMock,
   triggerInternalHook,
+  waitForDeferredTurnMaintenanceForSessionMock,
 } from "./compact.hooks.harness.js";
 import {
   abortEmbeddedAgentRun,
@@ -2492,6 +2493,25 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       modelRegistry: {},
       preparedModelRuntime: snapshot,
     });
+  });
+
+  it("fails queued compaction before resolving an engine when deferred maintenance is blocked", async () => {
+    waitForDeferredTurnMaintenanceForSessionMock.mockRejectedValueOnce(
+      new Error(
+        "Deferred maintenance did not stop. This turn was stopped to avoid overlapping engine operations.",
+      ),
+    );
+
+    const result = await compactEmbeddedAgentSession(wrappedCompactionArgs({ trigger: "manual" }));
+
+    expect(result).toEqual({
+      ok: false,
+      compacted: false,
+      reason:
+        "Deferred maintenance did not stop. This turn was stopped to avoid overlapping engine operations.",
+    });
+    expect(resolveContextEngineMock).not.toHaveBeenCalled();
+    expect(contextEngineCompactMock).not.toHaveBeenCalled();
   });
 
   it("disposes the context engine once when route materialization rejects", async () => {
