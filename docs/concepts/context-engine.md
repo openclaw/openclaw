@@ -129,7 +129,7 @@ export default function register(api) {
       id: "my-engine",
       name: "My Context Engine",
       ownsCompaction: true,
-      acceptedHostParams: ["sessionKey", "runtimeContext"],
+      acceptedHostParams: ["sessionKey", "runtimeContext", "abortSignal"],
       transcriptSemantics: {
         currentTurnFence: "before-current-turn-entry-v1",
         turnAdvancementIdempotency: "atomic-idempotent-v1",
@@ -216,11 +216,11 @@ Required members:
 
 Set `info.acceptedHostParams` to the host-added lifecycle fields the engine
 accepts. Current keys are `sessionKey`, `prompt`, `runtimeSettings`,
-`sessionTarget`, and `runtimeContext`. OpenClaw intersects the declaration with
-the fields available for each lifecycle method, so undeclared or unknown keys
-are never injected. Engines without this declaration receive the pre-host-field
-legacy parameter set through 2026-08-12; after that date, undeclared engines
-receive every current host field.
+`sessionTarget`, `runtimeContext`, and `abortSignal`. OpenClaw intersects the
+declaration with the fields available for each lifecycle method, so undeclared
+or unknown keys are never injected. Engines without this declaration receive
+the pre-host-field legacy parameter set through 2026-08-12; after that date,
+undeclared engines receive every current host field.
 
 For durable admitted turns, declare both transcript semantics:
 
@@ -286,6 +286,15 @@ Optional members:
 | `prepareSubagentSpawn(params)` | Method | Set up shared state for a child session before it starts.                                                                                    |
 | `onSubagentEnded(params)`      | Method | Clean up after a subagent ends.                                                                                                              |
 | `dispose()`                    | Method | Release resources. Called during gateway shutdown or plugin reload - not per-session.                                                        |
+
+Background `maintain()` implementations should accept `abortSignal` and stop
+promptly when it aborts. OpenClaw requests cancellation when a foreground turn
+is waiting for deferred maintenance. If a selected plugin engine does not
+settle after a short cleanup grace, OpenClaw quarantines it for the current
+Gateway process and continues through the default context engine after any
+already-admitted transcript rewrite finishes. The default engine cannot be
+quarantined; OpenClaw stops the waiting turn with recovery guidance instead of
+starting an overlapping engine operation.
 
 ### Runtime settings
 
