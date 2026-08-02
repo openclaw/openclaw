@@ -18,16 +18,30 @@ describe("sandbox mutation paths", () => {
         markFirstMutationEntered = resolve;
       });
       const writtenPaths: string[] = [];
+      const contentByPath = new Map<string, Buffer>();
       const bridge = {
         mkdirp: async () => {},
-        stat: async () => (operation === "edit" ? { type: "file" as const, size: 6 } : null),
-        readFile: async () => Buffer.from("before"),
-        writeFile: async ({ filePath }: { filePath: string }) => {
+        stat: async ({ filePath }: { filePath: string }) => {
+          const content = contentByPath.get(filePath);
+          if (content) {
+            return { type: "file" as const, size: content.byteLength };
+          }
+          return operation === "edit" ? { type: "file" as const, size: 6 } : null;
+        },
+        readFile: async ({ filePath }: { filePath: string }) => {
+          const content = contentByPath.get(filePath) ?? Buffer.from("before");
+          if (operation === "edit" && content.equals(Buffer.from("after"))) {
+            contentByPath.delete(filePath);
+          }
+          return content;
+        },
+        writeFile: async ({ filePath, data }: { filePath: string; data: Buffer | string }) => {
           writtenPaths.push(filePath);
           if (writtenPaths.length === 1) {
             markFirstMutationEntered();
             await firstMutationGate;
           }
+          contentByPath.set(filePath, Buffer.isBuffer(data) ? data : Buffer.from(data, "utf8"));
         },
       } as unknown as SandboxFsBridge;
       const absolutePath = path.join(sandboxRoot, "note.md");
@@ -60,18 +74,36 @@ describe("sandbox mutation paths", () => {
     const drivePaths = ["/c/work/file.txt", "/cygdrive/c/work/file.txt", "/mnt/c/work/file.txt"];
     const writtenPaths: string[] = [];
     const editedPaths: string[] = [];
+    const writtenContent = new Map<string, Buffer>();
+    const editedContent = new Map(drivePaths.map((filePath) => [filePath, Buffer.from("before")]));
     const writeBridge = {
       mkdirp: async () => {},
-      stat: async () => null,
-      writeFile: async ({ filePath }: { filePath: string }) => {
+      stat: async ({ filePath }: { filePath: string }) => {
+        const content = writtenContent.get(filePath);
+        return content ? { type: "file" as const, size: content.byteLength } : null;
+      },
+      readFile: async ({ filePath }: { filePath: string }) => {
+        const content = writtenContent.get(filePath);
+        if (!content) {
+          throw new Error("No such file or directory");
+        }
+        return content;
+      },
+      writeFile: async ({ filePath, data }: { filePath: string; data: Buffer | string }) => {
         writtenPaths.push(filePath);
+        writtenContent.set(filePath, Buffer.isBuffer(data) ? data : Buffer.from(data, "utf8"));
       },
     } as unknown as SandboxFsBridge;
     const editBridge = {
-      stat: async () => ({ type: "file" as const, size: 6 }),
-      readFile: async () => Buffer.from("before"),
-      writeFile: async ({ filePath }: { filePath: string }) => {
+      stat: async ({ filePath }: { filePath: string }) => ({
+        type: "file" as const,
+        size: (editedContent.get(filePath) ?? Buffer.from("before")).byteLength,
+      }),
+      readFile: async ({ filePath }: { filePath: string }) =>
+        editedContent.get(filePath) ?? Buffer.from("before"),
+      writeFile: async ({ filePath, data }: { filePath: string; data: Buffer | string }) => {
         editedPaths.push(filePath);
+        editedContent.set(filePath, Buffer.isBuffer(data) ? data : Buffer.from(data, "utf8"));
       },
     } as unknown as SandboxFsBridge;
     const writeTool = createSandboxedWriteTool({ root: "/workspace", bridge: writeBridge });

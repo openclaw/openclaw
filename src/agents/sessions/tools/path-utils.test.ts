@@ -97,12 +97,21 @@ describe("injected path resolver ownership", () => {
   ];
 
   it.each(remotePaths)("leaves remote write path %s unchanged", async (remotePath) => {
-    const remoteWriteFile = vi.fn<WriteOperations["writeFile"]>();
+    let persisted: Buffer | undefined;
+    const remoteWriteFile = vi.fn<WriteOperations["writeFile"]>(async (_path, content) => {
+      persisted = Buffer.from(content, "utf8");
+    });
     const operations: WriteOperations = {
       resolvePath: (filePath) => filePath,
       mkdir: async () => {},
       writeFile: remoteWriteFile,
-      statFile: async () => null,
+      readFile: async () => {
+        if (!persisted) {
+          throw new Error("No such file or directory");
+        }
+        return persisted;
+      },
+      statFile: async () => (persisted ? { type: "file", size: persisted.byteLength } : null),
     };
     const tool = createWriteTool("/remote/workspace", { operations });
 
@@ -112,13 +121,17 @@ describe("injected path resolver ownership", () => {
   });
 
   it.each(remotePaths)("leaves remote edit path %s unchanged", async (remotePath) => {
-    const remoteReadFile = vi.fn<EditOperations["readFile"]>(async () => Buffer.from("before"));
-    const remoteWriteFile = vi.fn<EditOperations["writeFile"]>();
+    let persisted = Buffer.from("before");
+    const remoteReadFile = vi.fn<EditOperations["readFile"]>(async () => persisted);
+    const remoteWriteFile = vi.fn<EditOperations["writeFile"]>(async (_path, content) => {
+      persisted = Buffer.from(content, "utf8");
+    });
     const access = vi.fn<EditOperations["access"]>();
     const operations: EditOperations = {
       resolvePath: (filePath) => filePath,
       access,
       readFile: remoteReadFile,
+      statFile: async () => ({ type: "file", size: persisted.byteLength }),
       writeFile: remoteWriteFile,
     };
     const tool = createEditTool("/remote/workspace", { operations });
