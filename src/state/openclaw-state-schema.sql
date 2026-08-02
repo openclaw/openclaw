@@ -1795,6 +1795,15 @@ CREATE TABLE IF NOT EXISTS worktree_provisioned_file_chunks (
   PRIMARY KEY (worktree_id, path, chunk_index)
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS worktree_retention_claims (
+  worktree_id TEXT NOT NULL,
+  claim_id TEXT NOT NULL,
+  claim_owner TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (worktree_id, claim_id)
+) STRICT;
+
 -- Gateway-owned custom session group catalog (names + display order).
 -- Membership stays on each session entry's category field; this table only
 -- owns which groups exist and how operator UIs order them.

@@ -1,6 +1,8 @@
 // Workboard plugin module implements store behavior.
 import { randomUUID } from "node:crypto";
 import type { WorkboardAttachment, WorkboardCard } from "@openclaw/workboard-contract";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { withWorkboardArtifactRetention } from "./artifact-retention.js";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
@@ -291,9 +293,14 @@ export class WorkboardStore extends WorkboardNotificationStore {
     );
   }
 
-  static openSqlite() {
+  static openSqlite(
+    options: { worktrees?: Pick<PluginRuntime["worktrees"], "setRetentionClaim"> } = {},
+  ) {
     const stores = createWorkboardSqliteStores();
-    return new WorkboardStore(stores.cards, {
+    const cards = options.worktrees
+      ? withWorkboardArtifactRetention(stores.cards, options.worktrees)
+      : stores.cards;
+    return new WorkboardStore(cards, {
       boards: stores.boards,
       subscriptions: stores.subscriptions,
       attachments: stores.attachments,

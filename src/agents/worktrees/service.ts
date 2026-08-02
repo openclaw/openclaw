@@ -38,8 +38,10 @@ import {
   getRegistryWorktree,
   getRegistryWorktreeProvisionedPaths,
   getRegistryWorktreeProvisionedState,
+  hasWorktreeRetentionClaimRow,
   insertRegistryWorktree,
   listRegistryWorktrees,
+  setWorktreeRetentionClaimRow,
   updateRegistryWorktree,
 } from "./registry.js";
 import {
@@ -1055,6 +1057,30 @@ export class ManagedWorktreeService {
     }
   }
 
+  setRetentionClaimByPath(
+    worktreePath: string,
+    owner: Pick<CreateManagedWorktreeParams, "ownerKind" | "ownerId">,
+    params: { claimId: string; active: boolean },
+  ): boolean {
+    const claimId = params.claimId.trim();
+    if (!claimId) {
+      throw new Error("worktree retention claim id is required");
+    }
+    const record = params.active
+      ? findLiveRegistryWorktreeByPath(this.env, worktreePath)
+      : findRegistryWorktreeByPath(this.env, worktreePath);
+    if (!record || !worktreeOwnerMatches(record, owner) || !record.ownerId) {
+      return false;
+    }
+    return setWorktreeRetentionClaimRow(this.env, {
+      worktreeId: record.id,
+      claimId,
+      claimOwner: `${record.ownerKind}:${record.ownerId}`,
+      active: params.active,
+      now: this.now(),
+    });
+  }
+
   async gc(params: ManagedWorktreeGcParams = {}): Promise<ManagedWorktreeGcResult> {
     const now = this.now();
     const removed: string[] = [];
@@ -1114,6 +1140,9 @@ export class ManagedWorktreeService {
       record.ownerId !== undefined &&
       shouldProtectOwner?.(record.ownerKind, record.ownerId) === true
     ) {
+      return true;
+    }
+    if (hasWorktreeRetentionClaimRow(this.env, record.id)) {
       return true;
     }
     if (hasLiveWorktreeRunLease(this.env, record.id)) {

@@ -1527,6 +1527,14 @@ export interface WorktreeProvisionedFileChunks {
   worktree_id: string;
 }
 
+export interface WorktreeRetentionClaims {
+  claim_id: string;
+  claim_owner: string;
+  created_at: number;
+  updated_at: number;
+  worktree_id: string;
+}
+
 export interface Worktrees {
   base_ref: string;
   branch: string;
@@ -1656,5 +1664,6 @@ export interface DB {
   workspace_path_aliases: WorkspacePathAliases;
   workspace_setup_state: WorkspaceSetupState;
   worktree_provisioned_file_chunks: WorktreeProvisionedFileChunks;
+  worktree_retention_claims: WorktreeRetentionClaims;
   worktrees: Worktrees;
 }
