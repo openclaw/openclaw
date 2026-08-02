@@ -2,6 +2,8 @@
 import type { SecretInput } from "openclaw/plugin-sdk/secret-input";
 
 export type ZaloAccountConfig = {
+  /** Heartbeat visibility overrides for this channel/account. */
+  heartbeatVisibility?: { showOk?: boolean; showAlerts?: boolean; useIndicator?: boolean };
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
   /** If false, do not start this Zalo account. Default: true. */

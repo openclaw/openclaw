@@ -7,6 +7,8 @@ type QaChannelActionConfig = {
 };
 
 export type QaChannelAccountConfig = {
+  /** Heartbeat visibility overrides for this channel/account. */
+  heartbeatVisibility?: { showOk?: boolean; showAlerts?: boolean; useIndicator?: boolean };
   name?: string;
   enabled?: boolean;
   baseUrl?: string;

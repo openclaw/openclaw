@@ -2,6 +2,8 @@
 import type { SecretInput } from "openclaw/plugin-sdk/secret-input";
 
 type SmsChannelConfigFields = {
+  /** Heartbeat visibility overrides for this channel/account. */
+  heartbeatVisibility?: { showOk?: boolean; showAlerts?: boolean; useIndicator?: boolean };
   enabled?: boolean;
   accountSid?: string;
   authToken?: SecretInput;

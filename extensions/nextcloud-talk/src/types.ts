@@ -25,6 +25,8 @@ type NextcloudTalkNetworkConfig = {
 };
 
 export type NextcloudTalkAccountConfig = {
+  /** Heartbeat visibility overrides for this channel/account. */
+  heartbeatVisibility?: { showOk?: boolean; showAlerts?: boolean; useIndicator?: boolean };
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
   /** If false, do not start this Nextcloud Talk account. Default: true. */
