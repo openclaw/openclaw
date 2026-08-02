@@ -110,8 +110,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "ssrf-policy": 1,
   "ssrf-runtime": 1,
   // +1: deprecated agent media projection re-export during the media migration window.
-  // +1: policy-gated outbound media access resolver for channel reply paths.
-  "media-runtime": 4,
+  "media-runtime": 3,
   // +3: deprecated media projection type, builder, and local-roots compatibility re-export.
   "agent-media-payload": 3,
   // +2: deprecated media projection type and builder.
@@ -211,7 +210,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +45: restore typed session-catalog and tool-results exports promised to plugins.
       // +1: forwarding-routed approver-restricted native approval capability factory.
       // +1: shared inbound-event delivery correlation factory for channel plugins.
-      // +1: resolveAgentScopedOutboundMediaAccess on media-runtime.
+      // +1: resolveAgentScopedOutboundMediaAccess on media-local-roots.
       4823,
       env,
     ),
@@ -254,7 +253,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +14: restore callable session-catalog and tool-results helpers promised to plugins.
       // +1: forwarding-routed approver-restricted native approval capability factory.
       // +1: shared inbound-event delivery correlation factory for channel plugins.
-      // +1: resolveAgentScopedOutboundMediaAccess on media-runtime.
+      // +1: resolveAgentScopedOutboundMediaAccess on media-local-roots.
       2900,
       env,
     ),

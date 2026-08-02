@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   getAgentScopedMediaLocalRoots,
   resolveAgentScopedOutboundMediaAccess,
-} from "openclaw/plugin-sdk/media-runtime";
+} from "openclaw/plugin-sdk/media-local-roots";
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
