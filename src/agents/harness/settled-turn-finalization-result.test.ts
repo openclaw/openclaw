@@ -3,6 +3,7 @@ import type { AssistantMessage } from "../../llm/types.js";
 import type { EmbeddedRunAttemptResult } from "../embedded-agent-runner/run/types.js";
 import {
   assertSettledTurnFinalizationResult,
+  EmptySettledTurnFinalizationError,
   projectSettledTurnFinalizationAttemptResult,
 } from "./settled-turn-finalization-result.js";
 import type { AgentHarnessSettledTurnFinalizationResult } from "./types.js";
@@ -77,20 +78,24 @@ describe("assertSettledTurnFinalizationResult", () => {
     ).toThrow("returned a tool call");
   });
 
-  it("rejects an empty answer", () => {
-    expect(() =>
+  it("classifies a normally stopped empty answer without treating it as a provider failure", () => {
+    const validate = () =>
       assertSettledTurnFinalizationResult({
         assistant: assistantMessage([{ type: "text", text: "  " }]),
-      }),
-    ).toThrow("without a visible answer");
+      });
+
+    expect(validate).toThrow(EmptySettledTurnFinalizationError);
+    expect(validate).toThrow("without a visible answer");
   });
 
-  it("rejects an intentionally silent answer", () => {
-    expect(() =>
+  it("rejects an intentionally silent answer without classifying it as an exhausted finalizer", () => {
+    const validate = () =>
       assertSettledTurnFinalizationResult({
         assistant: assistantMessage([{ type: "text", text: "NO_REPLY" }]),
-      }),
-    ).toThrow("without a visible answer");
+      });
+
+    expect(validate).toThrow("without a visible answer");
+    expect(validate).not.toThrow(EmptySettledTurnFinalizationError);
   });
 
   it.each(["length", "error", "aborted"] as const)(
@@ -136,6 +141,21 @@ describe("assertSettledTurnFinalizationResult", () => {
         }),
       ),
     ).toThrow("did not complete successfully");
+  });
+
+  it("classifies a successful capability-free attempt that stopped without visible text", () => {
+    const assistant = assistantMessage([{ type: "text", text: "  " }]);
+
+    expect(() =>
+      projectSettledTurnFinalizationAttemptResult(
+        successfulAttempt({
+          assistantTexts: [],
+          lastAssistant: assistant,
+          currentAttemptAssistant: assistant,
+          currentAttemptCompletedAssistant: assistant,
+        }),
+      ),
+    ).toThrow(EmptySettledTurnFinalizationError);
   });
 
   it("rejects a full attempt that compacted before producing its answer", () => {

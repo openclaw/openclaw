@@ -20,6 +20,7 @@ import { hasOnlyAssistantReasoningContent } from "../../replay-turn-classificati
 import type { AgentMessage } from "../../runtime/index.js";
 import {
   hasCommittedMessagingToolDeliveryEvidence,
+  hasCompletedTerminalDeliveryEvidence,
   hasMessagingToolDeliveryEvidence,
 } from "../delivery-evidence.js";
 import { isZeroUsageEmptyStopAssistantTurn } from "../empty-assistant-turn.js";
@@ -838,7 +839,9 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
   ) {
     return null;
   }
-  if (hasMessagingToolDeliveryEvidence(params.attempt)) {
+  // Explicit progress is visible but does not complete the source reply; legacy
+  // sends and marked final replies must still suppress duplicate finalization.
+  if (hasCompletedTerminalDeliveryEvidence(params.attempt)) {
     return null;
   }
   if (

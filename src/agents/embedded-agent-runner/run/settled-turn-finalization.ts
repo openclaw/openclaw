@@ -1,5 +1,8 @@
 import { formatErrorMessage } from "../../../infra/errors.js";
-import { resolveSettledTurnFinalizationText } from "../../harness/settled-turn-finalization-result.js";
+import {
+  EmptySettledTurnFinalizationError,
+  resolveSettledTurnFinalizationText,
+} from "../../harness/settled-turn-finalization-result.js";
 import type {
   AgentHarness,
   AgentHarnessSettledTurnFinalizationResult,
@@ -89,8 +92,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       prepared,
       lastRunPromptUsage,
       lastTurnTotal,
-      finalizationAttempted: false,
-      finalizationSucceeded: false,
+      finalizationOutcome: "not-attempted" as const,
     };
   }
 
@@ -141,10 +143,24 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       prepared,
       lastRunPromptUsage,
       lastTurnTotal,
-      finalizationAttempted: true,
-      finalizationSucceeded: true,
+      finalizationOutcome: "completed" as const,
     };
   } catch (error) {
+    if (error instanceof EmptySettledTurnFinalizationError) {
+      // Tools already settled before this capability-free, normally stopped
+      // finalizer. Report their completion without replaying or claiming a summary.
+      log.warn(
+        `settled-turn finalization completed without a visible answer: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
+          `provider=${errorContext.provider}/${errorContext.model} — reporting completed tool work`,
+      );
+      return {
+        ...initial,
+        prepared,
+        lastRunPromptUsage,
+        lastTurnTotal,
+        finalizationOutcome: "empty-answer" as const,
+      };
+    }
     log.warn(
       `settled-turn finalization failed closed: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
         `provider=${errorContext.provider}/${errorContext.model} error=${formatErrorMessage(error)}`,
@@ -154,8 +170,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       prepared,
       lastRunPromptUsage,
       lastTurnTotal,
-      finalizationAttempted: true,
-      finalizationSucceeded: false,
+      finalizationOutcome: "failed" as const,
     };
   }
 }

@@ -15,6 +15,14 @@ const ALLOWED_SETTLED_FINALIZATION_RESULT_KEYS = new Set([
   "diagnosticTrace",
 ]);
 
+/** A normally stopped finalizer exhausted its visible answer without failing or using tools. */
+export class EmptySettledTurnFinalizationError extends Error {
+  constructor() {
+    super("Settled-turn finalization completed without a visible answer");
+    this.name = "EmptySettledTurnFinalizationError";
+  }
+}
+
 function assistantContainsToolCall(
   assistant: AgentHarnessSettledTurnFinalizationResult["assistant"],
 ): boolean {
@@ -61,7 +69,10 @@ export function resolveSettledTurnFinalizationText(
   result: AgentHarnessSettledTurnFinalizationResult,
 ): string {
   const text = resolveFinalAssistantVisibleText(result.assistant);
-  if (!text || isSilentReplyText(text)) {
+  if (!text) {
+    throw new EmptySettledTurnFinalizationError();
+  }
+  if (isSilentReplyText(text)) {
     throw new Error("Settled-turn finalization completed without a visible answer");
   }
   return text;

@@ -1269,6 +1269,72 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expectWarnMessageWith("settled post-tool turn lacked a final answer");
   });
 
+  it("finalizes settled tools after marked progress without treating it as the final reply", async () => {
+    const emptyStopAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "thinking", thinking: " " }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
+      markUserMessagePersisted(attemptParams);
+      return makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "write", meta: "path=note.txt" }],
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["Writing note.txt…"],
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "telegram",
+            to: "chat:123",
+            text: "Writing note.txt…",
+            sourceReplyFinal: false,
+          },
+        ],
+        lastAssistant: emptyStopAssistant,
+        currentAttemptAssistant: emptyStopAssistant,
+      });
+    });
+    const finalAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "text", text: "Write completed. Here is the final answer." }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Write completed. Here is the final answer."],
+        lastAssistant: finalAssistant,
+        currentAttemptAssistant: finalAssistant,
+        currentAttemptCompletedAssistant: finalAssistant,
+      }),
+    );
+    mockedBuildEmbeddedRunPayloads
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce([{ text: "Write completed. Here is the final answer." }]);
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-progress-before-settled-tool-finalization",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(runAttemptCall(1)).toMatchObject({
+      disableTools: true,
+      operation: "settled-tool-finalization",
+      skipPreparedUserTurnMessage: true,
+    });
+    expect(result.payloads).toEqual([{ text: "Write completed. Here is the final answer." }]);
+    expect(result.meta.error).toBeUndefined();
+  });
+
   it.each([
     {
       label: "explicit optional expectation",
@@ -1315,13 +1381,19 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expectNoWarnMessageWith("settled post-tool turn lacked a final answer");
   });
 
-  it("surfaces failure without cascading when the settled-tool continuation is also empty", async () => {
+  it.each([
+    { label: "empty content", content: [] },
+    {
+      label: "whitespace-only thinking",
+      content: [{ type: "thinking", thinking: " " }],
+    },
+  ])("truthfully completes settled tools when finalization returns $label", async ({ content }) => {
     const emptyStopAssistant = {
       role: "assistant",
       stopReason: "stop",
       provider: "openai",
       model: "gpt-5.5",
-      content: [],
+      content,
     } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
@@ -1352,12 +1424,21 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(result.payloads?.[0]).toMatchObject({ isError: true });
-    expect(result.payloads?.[0]?.text).toContain(
-      "some tool actions may have already been executed",
-    );
+    expect(runAttemptCall(1)).toMatchObject({
+      disableTools: true,
+      operation: "settled-tool-finalization",
+      skipPreparedUserTurnMessage: true,
+    });
+    expect(result.payloads, warnMessages().join("\n")).toEqual([
+      {
+        text: "Tool work completed, but a final summary could not be generated. Please check the produced result.",
+      },
+    ]);
+    expect(result.meta.error).toBeUndefined();
+    expect(result.meta.aborted).toBe(false);
+    expect(result.meta.livenessState).not.toBe("abandoned");
     expectNoWarnMessageWith("empty response detected");
-    expectWarnMessageWith("settled-turn finalization failed closed");
+    expectWarnMessageWith("settled-turn finalization completed without a visible answer");
   });
 
   it.each([
@@ -2559,6 +2640,53 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       });
 
       expect(instruction).toBeNull();
+    },
+  );
+
+  it.each([
+    { sourceReplyFinal: false, expectedFinalization: true },
+    { sourceReplyFinal: true, expectedFinalization: false },
+  ])(
+    "honors explicit final-reply evidence when settled tools sent marked progress ($sourceReplyFinal)",
+    ({ sourceReplyFinal, expectedFinalization }) => {
+      const emptyStopAssistant = {
+        role: "assistant",
+        stopReason: "stop",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: [{ type: "thinking", thinking: " " }],
+      } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+      const instruction = resolveSettledToolTerminalContinuationInstruction({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        modelApi: "openai-chatgpt-responses",
+        allowEmptyStopContinuation: true,
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttemptResult({
+          assistantTexts: [],
+          toolMetas: [{ toolName: "write" }],
+          itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+          didSendViaMessagingTool: true,
+          messagingToolSentTexts: ["Writing note.txt…"],
+          messagingToolSentTargets: [
+            {
+              tool: "message",
+              provider: "telegram",
+              to: "chat:123",
+              text: "Writing note.txt…",
+              sourceReplyFinal,
+            },
+          ],
+          lastAssistant: emptyStopAssistant,
+          currentAttemptAssistant: emptyStopAssistant,
+        }),
+      });
+
+      expect(instruction).toBe(
+        expectedFinalization ? SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION : null,
+      );
     },
   );
 
