@@ -49,6 +49,10 @@ import { CommandLaneClearedError, GatewayDrainingError } from "../../process/com
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import {
+  acknowledgeConsumedSessionAttentionDeliveries,
+  releaseConsumedSessionAttentionDeliveries,
+} from "../../sessions/session-attention.js";
+import {
   normalizeDeliveryContext,
   type DeliveryContext,
 } from "../../utils/delivery-context.shared.js";
@@ -1623,6 +1627,7 @@ export async function runReplyAgent(params: {
       cleanupTranscripts: true,
     });
   let preflightCompactionApplied;
+  let sessionAttentionAcknowledged = false;
 
   try {
     await typingSignals.signalRunStart();
@@ -2656,6 +2661,20 @@ export async function runReplyAgent(params: {
       }
     }
 
+    const attentionSessionKey = sessionKey ?? followupRun.run.sessionKey;
+    if (attentionSessionKey) {
+      const acknowledgement =
+        await acknowledgeConsumedSessionAttentionDeliveries(attentionSessionKey);
+      for (const failure of acknowledgement.failed) {
+        logVerbose(
+          `failed to acknowledge consumed session delivery ${failure.id}: ${String(failure.error)}`,
+        );
+      }
+      sessionAttentionAcknowledged = acknowledgement.failed.length === 0;
+    } else {
+      sessionAttentionAcknowledged = true;
+    }
+
     const result = returnWithQueuedFollowupDrain(
       finalPayloads.length === 1 ? finalPayloads[0] : finalPayloads,
     );
@@ -2719,6 +2738,12 @@ export async function runReplyAgent(params: {
     returnWithQueuedFollowupDrain(undefined);
     throw error;
   } finally {
+    if (!sessionAttentionAcknowledged) {
+      const attentionSessionKey = sessionKey ?? followupRun.run.sessionKey;
+      if (attentionSessionKey) {
+        releaseConsumedSessionAttentionDeliveries(attentionSessionKey);
+      }
+    }
     try {
       await clearRestartRecoveryDeliveryContext();
     } catch (error) {

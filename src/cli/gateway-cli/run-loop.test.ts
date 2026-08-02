@@ -69,6 +69,9 @@ const waitForActiveCronJobs = vi.fn(async (_timeoutMs?: number) => ({
 const reloadTaskRegistryFromStore = vi.fn();
 const rotateAgentEventLifecycleGeneration = vi.fn();
 const clearRuntimeConfigSnapshot = vi.fn();
+let runtimeConfigSnapshot: { durable?: { mode?: "off" | "observe" | "authority" } } | undefined;
+const maybeRecordDurableGatewayStartup = vi.fn(async (_params?: unknown) => {});
+const startDurableGatewayRecoveryWorker = vi.fn(async (_params?: unknown) => () => {});
 const restartGatewayProcessWithFreshPid = vi.fn<
   (_opts?: { env?: NodeJS.ProcessEnv }) => {
     mode: "spawned" | "supervised" | "disabled" | "failed";
@@ -185,7 +188,16 @@ vi.mock("../../infra/agent-events.js", () => ({
 }));
 
 vi.mock("../../config/runtime-snapshot.js", () => ({
-  clearRuntimeConfigSnapshot: () => clearRuntimeConfigSnapshot(),
+  clearRuntimeConfigSnapshot: () => {
+    runtimeConfigSnapshot = undefined;
+    clearRuntimeConfigSnapshot();
+  },
+  getRuntimeConfigSnapshot: () => runtimeConfigSnapshot,
+}));
+
+vi.mock("../../durable/startup.js", () => ({
+  maybeRecordDurableGatewayStartup: (params: unknown) => maybeRecordDurableGatewayStartup(params),
+  startDurableGatewayRecoveryWorker: (params: unknown) => startDurableGatewayRecoveryWorker(params),
 }));
 
 vi.mock("../../tasks/task-registry.maintenance.js", () => ({
@@ -410,6 +422,63 @@ function expectRestartHandoffCall(expected: {
 }
 
 describe("runGatewayLoop", () => {
+  it("starts configured durable recovery after gateway config reload", async () => {
+    vi.clearAllMocks();
+    runtimeConfigSnapshot = undefined;
+    const stopRecovery = vi.fn();
+    startDurableGatewayRecoveryWorker.mockResolvedValueOnce(stopRecovery);
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const close = createCloseMock();
+      let resolveStarted: (() => void) | null = null;
+      const started = new Promise<void>((resolve) => {
+        resolveStarted = resolve;
+      });
+      const start = vi.fn(async () => {
+        runtimeConfigSnapshot = { durable: { mode: "authority" } };
+        resolveStarted?.();
+        return { close };
+      });
+      const { runtime, exited } = createRuntimeWithExitSignal();
+      await runLoopWithStart({ start, runtime });
+      await waitForStart(started);
+      await waitForLoopCondition(
+        () => startDurableGatewayRecoveryWorker.mock.calls.length === 1,
+        "durable recovery worker did not start",
+      );
+
+      captureSignal("SIGTERM")();
+
+      await expect(exited).resolves.toBe(0);
+      expect(maybeRecordDurableGatewayStartup).toHaveBeenCalledTimes(1);
+      expect(startDurableGatewayRecoveryWorker).toHaveBeenCalledTimes(1);
+      expect(stopRecovery).toHaveBeenCalledTimes(1);
+    });
+    runtimeConfigSnapshot = undefined;
+  });
+
+  it("closes a live gateway when durable post-start reconciliation fails", async () => {
+    vi.clearAllMocks();
+    runtimeConfigSnapshot = { durable: { mode: "authority" } };
+    maybeRecordDurableGatewayStartup.mockRejectedValueOnce(new Error("durable startup failed"));
+    const close = createCloseMock();
+    const start = vi.fn(async () => ({ close }));
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    const { loopPromise } = await runLoopWithStart({ start, runtime });
+
+    await expect(loopPromise).rejects.toThrow("durable startup failed");
+    expect(close).toHaveBeenCalledWith({
+      reason: "gateway startup failed",
+      restartExpectedMs: null,
+    });
+    runtimeConfigSnapshot = undefined;
+  });
+
   it("exits 0 on SIGTERM after graceful close", async () => {
     vi.clearAllMocks();
 

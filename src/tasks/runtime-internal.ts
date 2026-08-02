@@ -18,6 +18,7 @@ export {
   markTaskRunningByRunId,
   markTaskTerminalById,
   maybeDeliverTaskTerminalUpdate,
+  requestTaskAttentionDelivery,
   recordTaskProgressByRunId,
   reloadTaskRegistryFromStore,
   resetTaskRegistryDeliveryRuntimeForTests,

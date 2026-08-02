@@ -48,3 +48,26 @@ export {
 export { getInspectableActiveTaskRestartBlockers } from "../../tasks/task-registry.maintenance.js";
 export { reloadTaskRegistryFromStore } from "../../tasks/runtime-internal.js";
 export { abortPendingChannelReloads } from "../../gateway/server-reload-handlers.js";
+
+type DurableStartupModule = typeof import("../../durable/startup.js");
+
+let durableStartupModulePromise: Promise<DurableStartupModule> | undefined;
+
+function loadDurableStartupModule(): Promise<DurableStartupModule> {
+  durableStartupModulePromise ??= import("../../durable/startup.js");
+  return durableStartupModulePromise;
+}
+
+export async function maybeRecordDurableGatewayStartup(
+  params: Parameters<DurableStartupModule["maybeRecordDurableGatewayStartup"]>[0],
+): Promise<void> {
+  const durableStartup = await loadDurableStartupModule();
+  await durableStartup.maybeRecordDurableGatewayStartup(params);
+}
+
+export async function startDurableGatewayRecoveryWorker(
+  params: Parameters<DurableStartupModule["startDurableGatewayRecoveryWorker"]>[0],
+): Promise<() => void> {
+  const durableStartup = await loadDurableStartupModule();
+  return await durableStartup.startDurableGatewayRecoveryWorker(params);
+}

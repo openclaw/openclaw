@@ -36,7 +36,11 @@ import {
   type SessionDeliveryRecoveryLogger,
   type SessionDeliveryRoute,
 } from "../infra/session-delivery-queue.js";
-import { enqueueSystemEvent } from "../infra/system-events.js";
+import {
+  enqueueSystemEvent,
+  enqueueSystemEventEntry,
+  peekConsumedSystemEventDeliveryQueueIds,
+} from "../infra/system-events.js";
 import { isPendingControlPlaneUpdateRestartSentinel } from "../infra/update-control-plane-sentinel.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
@@ -87,10 +91,12 @@ function enqueueRestartSentinelWake(
     accountId?: string;
     threadId?: string | number;
   },
+  deliveryQueueId?: string,
 ) {
-  enqueueSystemEvent(message, {
+  enqueueSystemEventEntry(message, {
     sessionKey,
     ...(deliveryContext ? { deliveryContext } : {}),
+    ...(deliveryQueueId ? { deliveryQueueId } : {}),
   });
   requestHeartbeat({ source: "restart-sentinel", intent: "immediate", reason: "wake", sessionKey });
 }
@@ -237,6 +243,23 @@ function resolveQueuedSessionDeliveryContext(entry: QueuedSessionDelivery):
   return entry.deliveryContext;
 }
 
+async function supersedeQueuedDurableWake(params: {
+  entry: Extract<QueuedSessionDelivery, { kind: "systemEvent" }>;
+  actualSessionId?: string;
+}): Promise<void> {
+  if (params.entry.source?.owner !== "durable_wake") {
+    return;
+  }
+  const { supersedeDurableSessionWakeForGenerationChange } =
+    await import("../durable/session-owner-adapter.js");
+  supersedeDurableSessionWakeForGenerationChange({
+    wakeId: params.entry.source.ref,
+    deliveryQueueId: params.entry.id,
+    expectedSessionId: params.entry.expectedSessionId,
+    actualSessionId: params.actualSessionId,
+  });
+}
+
 async function deliverQueuedSessionDelivery(params: {
   deps: CliDeps;
   entry: QueuedSessionDelivery;
@@ -245,8 +268,35 @@ async function deliverQueuedSessionDelivery(params: {
   const queuedDeliveryContext = resolveQueuedSessionDeliveryContext(params.entry);
 
   if (params.entry.kind === "systemEvent") {
-    enqueueRestartSentinelWake(params.entry.text, canonicalKey, queuedDeliveryContext);
-    return;
+    if (params.entry.source?.owner !== "durable_wake") {
+      enqueueRestartSentinelWake(params.entry.text, canonicalKey, queuedDeliveryContext);
+      return undefined;
+    }
+    if (
+      params.entry.expectedSessionId &&
+      (!entry?.sessionId || entry.sessionId !== params.entry.expectedSessionId)
+    ) {
+      log.warn("queued durable wake superseded: session changed", {
+        sessionKey: canonicalKey,
+        queueId: params.entry.id,
+        expectedSessionId: params.entry.expectedSessionId,
+        actualSessionId: entry?.sessionId ?? null,
+      });
+      await supersedeQueuedDurableWake({
+        entry: params.entry,
+        actualSessionId: entry?.sessionId,
+      });
+      return undefined;
+    }
+    if (!peekConsumedSystemEventDeliveryQueueIds(canonicalKey).includes(params.entry.id)) {
+      enqueueRestartSentinelWake(
+        params.entry.text,
+        canonicalKey,
+        queuedDeliveryContext,
+        params.entry.id,
+      );
+    }
+    return { acknowledgement: "deferred" as const };
   }
 
   if (
@@ -260,12 +310,12 @@ async function deliverQueuedSessionDelivery(params: {
       actualSessionId: entry?.sessionId ?? null,
     });
     enqueueRestartSentinelWake(params.entry.message, canonicalKey, queuedDeliveryContext);
-    return;
+    return undefined;
   }
 
   if (!params.entry.route) {
     enqueueRestartSentinelWake(params.entry.message, canonicalKey, queuedDeliveryContext);
-    return;
+    return undefined;
   }
 
   const route = params.entry.route;
@@ -354,6 +404,7 @@ async function deliverQueuedSessionDelivery(params: {
   if (dispatchError) {
     throw toErrorObject(dispatchError, "Non-Error thrown");
   }
+  return undefined;
 }
 
 function buildQueuedRestartContinuation(params: {

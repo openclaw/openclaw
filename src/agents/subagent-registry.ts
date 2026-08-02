@@ -1606,6 +1606,40 @@ export function registerSubagentRun(params: RegisterSubagentRunParams) {
   subagentRunManager.registerSubagentRun(params);
 }
 
+export type SubagentCompletionDeliveryRequestResult =
+  | { status: "accepted" | "already_running" | "delivered"; runId: string }
+  | { status: "not_ready" | "not_required" | "suspended" | "missing"; runId: string };
+
+/** Owner-controlled delivery entry point used by durable attention reconciliation. */
+export function requestSubagentCompletionDelivery(
+  runId: string,
+): SubagentCompletionDeliveryRequestResult {
+  restoreSubagentRunsOnce();
+  const normalizedRunId = runId.trim();
+  const entry = normalizedRunId ? subagentRuns.get(normalizedRunId) : undefined;
+  if (!entry) {
+    return { status: "missing", runId: normalizedRunId };
+  }
+  if (entry.expectsCompletionMessage === false || entry.delivery?.status === "not_required") {
+    return { status: "not_required", runId: normalizedRunId };
+  }
+  if (entry.delivery?.status === "delivered") {
+    return { status: "delivered", runId: normalizedRunId };
+  }
+  if (entry.delivery?.status === "suspended") {
+    return { status: "suspended", runId: normalizedRunId };
+  }
+  if (typeof entry.endedAt !== "number" || !entry.outcome) {
+    return { status: "not_ready", runId: normalizedRunId };
+  }
+  entry.cleanupHandled = false;
+  const started = startSubagentAnnounceCleanupFlow(normalizedRunId, entry);
+  if (started) {
+    persistSubagentRuns();
+  }
+  return { status: started ? "accepted" : "already_running", runId: normalizedRunId };
+}
+
 export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   clearScheduledResumeTimers();
   for (const timer of resumeRetryTimers) {

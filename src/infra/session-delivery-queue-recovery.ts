@@ -25,12 +25,15 @@ import {
 // bounding retry count, backoff, and concurrent drain work.
 type SessionDeliveryRecoverySummary = {
   recovered: number;
+  awaitingConsumption: number;
   failed: number;
   skippedMaxRetries: number;
   deferredBackoff: number;
 };
 
-type DeliverSessionDeliveryFn = (entry: QueuedSessionDelivery) => Promise<void>;
+type DeliverSessionDeliveryFn = (
+  entry: QueuedSessionDelivery,
+) => Promise<void | { acknowledgement: "deferred" }>;
 
 export interface SessionDeliveryRecoveryLogger {
   info(msg: string): void;
@@ -52,6 +55,7 @@ const recoveryReplayPacer = createRecoveryReplayPacer();
 function createEmptyRecoverySummary(): SessionDeliveryRecoverySummary {
   return {
     recovered: 0,
+    awaitingConsumption: 0,
     failed: 0,
     skippedMaxRetries: 0,
     deferredBackoff: 0,
@@ -99,10 +103,13 @@ async function drainQueuedEntry(opts: {
   stateDir?: string;
   onRecovered?: (entry: QueuedSessionDelivery) => void;
   onFailed?: (entry: QueuedSessionDelivery, errMsg: string) => void;
-}): Promise<"recovered" | "failed" | "moved-to-failed" | "already-gone"> {
+}): Promise<"recovered" | "awaiting-consumption" | "failed" | "moved-to-failed" | "already-gone"> {
   const { entry } = opts;
   try {
-    await opts.deliver(entry);
+    const delivery = await opts.deliver(entry);
+    if (delivery?.acknowledgement === "deferred") {
+      return "awaiting-consumption";
+    }
     await ackSessionDelivery(entry.id, opts.stateDir);
     opts.onRecovered?.(entry);
     return "recovered";
@@ -273,6 +280,11 @@ export async function recoverPendingSessionDeliveries(opts: {
       });
       if (result === "recovered") {
         opts.log.info(`Recovered session delivery ${currentEntry.id}`);
+      } else if (result === "awaiting-consumption") {
+        summary.awaitingConsumption += 1;
+        opts.log.info(
+          `Session delivery ${currentEntry.id} is awaiting attached-session consumption`,
+        );
       }
     } finally {
       releaseSharedRecoveryEntry(entriesInProgress, entry.id);

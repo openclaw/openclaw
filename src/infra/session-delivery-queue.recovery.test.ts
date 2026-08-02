@@ -41,6 +41,35 @@ describe("session-delivery queue recovery", () => {
     });
   });
 
+  it("keeps a system event queued until attached-session consumption is persisted", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const id = await enqueueSessionDelivery(
+        {
+          kind: "systemEvent",
+          sessionKey: "agent:main:main",
+          text: "durable attention",
+          expectedSessionId: "session-1",
+        },
+        tempDir,
+      );
+
+      const summary = await recoverPendingSessionDeliveries({
+        deliver: vi.fn(async () => ({ acknowledgement: "deferred" as const })),
+        stateDir: tempDir,
+        log: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+        },
+      });
+
+      expect(summary).toMatchObject({ recovered: 0, awaitingConsumption: 1, failed: 0 });
+      expect(await loadPendingSessionDeliveries(tempDir)).toEqual([
+        expect.objectContaining({ id, expectedSessionId: "session-1" }),
+      ]);
+    });
+  });
+
   it("paces startup replay for multiple eligible session deliveries", async () => {
     vi.useFakeTimers();
     const startedAt = new Date("2026-04-23T00:00:00.000Z");

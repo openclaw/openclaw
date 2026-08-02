@@ -27,6 +27,11 @@ type SessionDeliveryRetryPolicy = {
   maxRetries?: number;
 };
 
+type SessionDeliverySource = {
+  owner: string;
+  ref: string;
+};
+
 export type SessionDeliveryRoute = {
   channel: string;
   to: string;
@@ -42,6 +47,8 @@ export type QueuedSessionDeliveryPayload =
       kind: "systemEvent";
       sessionKey: string;
       text: string;
+      expectedSessionId?: string;
+      source?: SessionDeliverySource;
       deliveryContext?: SessionDeliveryContext;
       idempotencyKey?: string;
     } & SessionDeliveryRetryPolicy)

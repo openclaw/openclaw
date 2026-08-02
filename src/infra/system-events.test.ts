@@ -9,9 +9,11 @@ import {
   consumeSystemEventEntries,
   drainSystemEventEntries,
   enqueueSystemEvent,
+  forgetConsumedSystemEventDeliveryQueueIds,
   hasSystemEvents,
   isSystemEventContextChanged,
   peekSystemEventEntries,
+  peekConsumedSystemEventDeliveryQueueIds,
   peekSystemEvents,
   resetSystemEventsForTest,
   resolveSystemEventDeliveryContext,
@@ -136,6 +138,31 @@ describe("system events (session routing)", () => {
     expect(peekSystemEvents(key)).toEqual(["second"]);
   });
 
+  it("retains durable queue ids until attached-session persistence acknowledges them", () => {
+    const key = "agent:main:test-durable-consumption";
+    enqueueSystemEvent("durable wake", {
+      sessionKey: key,
+      contextKey: "durable-wake:1",
+      deliveryQueueId: "queue-1",
+    });
+    enqueueSystemEvent("durable wake", {
+      sessionKey: key,
+      contextKey: "durable-wake:1",
+      deliveryQueueId: "queue-2",
+    });
+
+    const inspected = peekSystemEventEntries(key);
+    expect(inspected).toHaveLength(1);
+    expect(inspected[0]?.deliveryQueueIds).toEqual(["queue-1", "queue-2"]);
+    consumeSelectedSystemEventEntries(key, inspected);
+    expect(peekConsumedSystemEventDeliveryQueueIds(key)).toEqual(["queue-1", "queue-2"]);
+
+    forgetConsumedSystemEventDeliveryQueueIds(key, ["queue-1"]);
+    expect(peekConsumedSystemEventDeliveryQueueIds(key)).toEqual(["queue-2"]);
+    forgetConsumedSystemEventDeliveryQueueIds(key, ["queue-2"]);
+    expect(peekConsumedSystemEventDeliveryQueueIds(key)).toEqual([]);
+  });
+
   it("matches consumed delivery contexts through normalized route identity", () => {
     const key = "agent:main:test-consume-route-context";
     enqueueSystemEvent("first", {
@@ -193,6 +220,45 @@ describe("system events (session routing)", () => {
 
     expect(peekSystemEvents(key)).toEqual(
       Array.from({ length: 20 }, (_, index) => `event ${index + 3}`),
+    );
+  });
+
+  it("does not evict durable attention when the bounded queue is full", () => {
+    const key = "agent:main:test-durable-max-events";
+    for (let index = 1; index <= 20; index += 1) {
+      enqueueSystemEvent(`durable ${index}`, {
+        sessionKey: key,
+        contextKey: `durable:${index}`,
+        deliveryQueueId: `queue-${index}`,
+      });
+    }
+
+    expect(enqueueSystemEvent("ephemeral overflow", { sessionKey: key })).toBe(false);
+    expect(peekSystemEvents(key)).toEqual(
+      Array.from({ length: 20 }, (_, index) => `durable ${index + 1}`),
+    );
+  });
+
+  it("evicts an ephemeral event before admitted durable attention", () => {
+    const key = "agent:main:test-durable-priority";
+    enqueueSystemEvent("ephemeral", { sessionKey: key });
+    for (let index = 1; index <= 19; index += 1) {
+      enqueueSystemEvent(`durable ${index}`, {
+        sessionKey: key,
+        contextKey: `durable:${index}`,
+        deliveryQueueId: `queue-${index}`,
+      });
+    }
+
+    expect(
+      enqueueSystemEvent("durable 20", {
+        sessionKey: key,
+        contextKey: "durable:20",
+        deliveryQueueId: "queue-20",
+      }),
+    ).toBe(true);
+    expect(peekSystemEvents(key)).toEqual(
+      Array.from({ length: 20 }, (_, index) => `durable ${index + 1}`),
     );
   });
 
