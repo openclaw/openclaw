@@ -25,6 +25,7 @@ import {
 } from "./agent-tools.read.js";
 import { createApplyPatchTool } from "./apply-patch.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./sandbox/constants.js";
+import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { resolveReadOnlyWorkspaceSkillMounts } from "./sandbox/workspace-mounts.js";
 import {
   expectReadWriteEditTools,
@@ -558,6 +559,39 @@ function createSandboxFsTools(params: { sandbox: UnsafeMountedSandbox; workspace
 }
 
 describe("tools.fs.workspaceOnly", () => {
+  it("keeps POSIX drive paths unchanged through sandbox write and edit bridges", async () => {
+    const drivePaths = ["/c/work/file.txt", "/cygdrive/c/work/file.txt", "/mnt/c/work/file.txt"];
+    const writtenPaths: string[] = [];
+    const editedPaths: string[] = [];
+    const writeBridge = {
+      mkdirp: async () => {},
+      stat: async () => null,
+      writeFile: async ({ filePath }: { filePath: string }) => {
+        writtenPaths.push(filePath);
+      },
+    } as unknown as SandboxFsBridge;
+    const editBridge = {
+      stat: async () => ({ type: "file" as const, size: 6 }),
+      readFile: async () => Buffer.from("before"),
+      writeFile: async ({ filePath }: { filePath: string }) => {
+        editedPaths.push(filePath);
+      },
+    } as unknown as SandboxFsBridge;
+    const writeTool = createSandboxedWriteTool({ root: "/workspace", bridge: writeBridge });
+    const editTool = createSandboxedEditTool({ root: "/workspace", bridge: editBridge });
+
+    for (const filePath of drivePaths) {
+      await writeTool.execute("sandbox-write-posix-drive", { path: filePath, content: "content" });
+      await editTool.execute("sandbox-edit-posix-drive", {
+        path: filePath,
+        edits: [{ oldText: "before", newText: "after" }],
+      });
+    }
+
+    expect(writtenPaths).toEqual(drivePaths);
+    expect(editedPaths).toEqual(drivePaths);
+  });
+
   it("preserves valid UTF-8 BOM bytes through real sandbox edit and patch bridges", async () => {
     await withUnsafeMountedSandboxHarness(async ({ sandboxRoot, sandbox }) => {
       const filePath = path.join(sandboxRoot, "source.txt");

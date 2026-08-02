@@ -35,9 +35,7 @@ function normalizeAtPrefix(filePath: string): string {
 }
 
 function expandPath(filePath: string): string {
-  const normalized = normalizeWindowsPosixDrivePath(
-    normalizeUnicodeSpaces(normalizeAtPrefix(filePath)),
-  );
+  const normalized = normalizeUnicodeSpaces(normalizeAtPrefix(filePath));
   if (normalized.startsWith("file://")) {
     try {
       return fileURLToPath(normalized);
@@ -66,8 +64,12 @@ export function resolveToCwd(filePath: string, cwd: string): string {
   return resolvePath(cwd, expanded);
 }
 
+export function resolveLocalToolPath(filePath: string, cwd: string): string {
+  return resolveToCwd(normalizeWindowsPosixDrivePath(filePath), cwd);
+}
+
 export function resolveReadPath(filePath: string, cwd: string): string {
-  const resolved = resolveToCwd(filePath, cwd);
+  const resolved = resolveLocalToolPath(filePath, cwd);
 
   if (pathExistsSync(resolved)) {
     return resolved;

@@ -21,7 +21,7 @@ import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/type
 import { generateDiffString, generateUnifiedPatch } from "./edit-diff.js";
 import { withFileMutationQueue } from "./file-mutation-queue.js";
 import { type PersistedFileStat, verifyPersistedUtf8File } from "./file-write-verification.js";
-import { resolveToCwd } from "./path-utils.js";
+import { resolveLocalToolPath, resolveToCwd } from "./path-utils.js";
 import {
   invalidArgText,
   normalizeDisplayText,
@@ -71,6 +71,8 @@ const WriteToolOutputSchema = Type.Union([
  * Override these to delegate file writing to remote systems (for example SSH).
  */
 export interface WriteOperations {
+  /** Resolve a user-supplied path for this write backend. */
+  resolvePath?: (filePath: string, cwd: string) => string | Promise<string>;
   /** Write content to a file */
   writeFile: (absolutePath: string, content: string) => Promise<void>;
   /** Create directory recursively */
@@ -82,6 +84,7 @@ export interface WriteOperations {
 }
 
 const defaultWriteOperations: WriteOperations = {
+  resolvePath: resolveLocalToolPath,
   writeFile: (path, content) => fsWriteFile(path, content, "utf-8"),
   mkdir: (dir) => fsMkdir(dir, { recursive: true }).then(() => {}),
   readFile: (path) => fsReadFile(path),
@@ -106,6 +109,14 @@ const defaultWriteOperations: WriteOperations = {
     }
   },
 };
+
+async function resolveWriteToolPath(
+  ops: WriteOperations,
+  filePath: string,
+  cwd: string,
+): Promise<string> {
+  return await (ops.resolvePath?.(filePath, cwd) ?? resolveToCwd(filePath, cwd));
+}
 
 export interface WriteToolOptions {
   /** Custom operations for file writing. Default: local filesystem */
@@ -543,7 +554,7 @@ export function createWriteToolDefinition(
       void toolCallId;
       void onUpdate;
       void ctx;
-      const absolutePath = resolveToCwd(path, cwd);
+      const absolutePath = await resolveWriteToolPath(ops, path, cwd);
       const dir = dirname(absolutePath);
       return withFileMutationQueue(absolutePath, async () => {
         const precheck = await readOriginalWriteState(absolutePath, content, ops);

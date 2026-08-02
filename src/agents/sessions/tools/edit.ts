@@ -34,7 +34,7 @@ import {
 } from "./edit-diff.js";
 import { withFileMutationQueue } from "./file-mutation-queue.js";
 import { type PersistedFileStat, verifyPersistedUtf8File } from "./file-write-verification.js";
-import { resolveToCwd } from "./path-utils.js";
+import { resolveLocalToolPath, resolveToCwd } from "./path-utils.js";
 import { invalidArgText, shortenPath, str } from "./render-utils.js";
 import type { EditToolDetails, EditToolInput } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
@@ -96,6 +96,8 @@ const EDIT_MISMATCH_HINT_LIMIT = 800;
  * Override these to delegate file editing to remote systems (for example SSH).
  */
 export interface EditOperations {
+  /** Resolve a user-supplied path for this edit backend. */
+  resolvePath?: (filePath: string, cwd: string) => string | Promise<string>;
   /** Read file contents as a Buffer */
   readFile: (absolutePath: string) => Promise<Buffer>;
   /** Write content to a file */
@@ -107,6 +109,7 @@ export interface EditOperations {
 }
 
 const defaultEditOperations: EditOperations = {
+  resolvePath: resolveLocalToolPath,
   readFile: (path) => fsReadFile(path),
   writeFile: (path, content) => fsWriteFile(path, content, "utf-8"),
   statFile: async (path) => {
@@ -131,6 +134,14 @@ const defaultEditOperations: EditOperations = {
   },
   access: (path) => fsAccess(path, constants.R_OK | constants.W_OK),
 };
+
+async function resolveEditToolPath(
+  ops: EditOperations,
+  filePath: string,
+  cwd: string,
+): Promise<string> {
+  return await (ops.resolvePath?.(filePath, cwd) ?? resolveToCwd(filePath, cwd));
+}
 
 export interface EditToolOptions {
   /** Custom operations for file editing. Default: local filesystem */
@@ -406,7 +417,7 @@ export function createEditToolDefinition(
       void onUpdate;
       void ctx;
       const { path, edits: originalEdits } = validateEditInput(input);
-      const absolutePath = resolveToCwd(path, cwd);
+      const absolutePath = await resolveEditToolPath(ops, path, cwd);
 
       return withFileMutationQueue(absolutePath, async () => {
         if (signal?.aborted) {
