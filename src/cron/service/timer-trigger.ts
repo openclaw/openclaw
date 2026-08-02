@@ -246,6 +246,19 @@ export function resolveDeliveryState(params: {
         };
       }
     }
+    // `none` means the runner does not deliver, not that nothing was delivered: the agent
+    // sends through the message tool itself. For this mode `delivered` is the verified
+    // message-tool delivery, so reporting "not-requested" hid a send that demonstrably
+    // reached its target behind the same value as a job that never sent.
+    if (primaryDeliveryPlan.mode === "none" && params.delivered === true) {
+      return {
+        delivered: true,
+        status: "delivered",
+        failureNotification: {
+          status: alternateFailureNotificationRequested ? "unknown" : "not-requested",
+        },
+      };
+    }
     return {
       status: "not-requested",
       failureNotification: {
