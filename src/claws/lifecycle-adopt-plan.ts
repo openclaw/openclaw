@@ -4,7 +4,7 @@ import { FsSafeError, root as fsSafeRoot, type Root } from "../infra/fs-safe.js"
 import { MAX_MANAGED_FILE_BYTES } from "./source-limits.js";
 import type { ClawAddPlanAction, ClawDiagnostic } from "./types.js";
 
-export type AdoptionPendingFile = {
+type AdoptionPendingFile = {
   action: ClawAddPlanAction;
   manifestPath: string;
 };
