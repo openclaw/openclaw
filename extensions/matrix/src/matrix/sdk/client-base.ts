@@ -486,6 +486,7 @@ export abstract class MatrixClientBase {
       await this.bootstrapCryptoIfNeeded(opts.abortSignal);
     }
     throwIfMatrixStartupAborted(opts.abortSignal);
+    await this.configureRoomEncryptorsForJoinedRooms();
     this.started = true;
     this.emitOutstandingInviteEvents();
     await this.refreshDmCache().catch(noop);
@@ -664,6 +665,51 @@ export abstract class MatrixClientBase {
       this.idbPersistTimer.unref?.();
     } catch (err) {
       LogService.warn("MatrixClientLite", "Failed to initialize rust crypto:", err);
+    }
+  }
+
+  protected async configureRoomEncryptorsForJoinedRooms(): Promise<void> {
+    if (!this.encryptionEnabled || !this.cryptoInitialized) {
+      return;
+    }
+    const crypto = this.client.getCrypto();
+    if (!crypto) return;
+
+    // The SDK's RustCrypto maintains an internal room-encryptor map that is
+    // normally populated from m.room.encryption state events during initial
+    // sync. When encryption is enabled after rooms were already joined (e.g.
+    // after a config toggle or gateway restart with a stored sync token),
+    // incremental sync does not re-send encryption state events, leaving the
+    // encryptor map empty for those rooms. Outbound messages then fail with
+    // "Cannot encrypt event in unconfigured room".
+    //
+    // Retroactively feed the server-side encryption state into the crypto
+    // handler so room encryptors are configured before the first send.
+    const cryptoApi = crypto as {
+      onCryptoEvent?: (room: unknown, event: unknown) => Promise<void>;
+    };
+    if (typeof cryptoApi.onCryptoEvent !== "function") return;
+
+    const rooms = this.client.getRooms();
+    for (const room of rooms) {
+      try {
+        const encEvent = await this.getRoomStateEvent(
+          room.roomId,
+          "m.room.encryption",
+          "",
+        );
+        if (encEvent && typeof (encEvent as Record<string, unknown>).algorithm === "string") {
+          await cryptoApi.onCryptoEvent(room, {
+            getContent: () => encEvent,
+            getType: () => "m.room.encryption",
+            getStateKey: () => "",
+            isState: () => true,
+          });
+        }
+      } catch {
+        // Room may not have encryption state or state fetch may fail.
+        // Skip and continue with remaining rooms.
+      }
     }
   }
 }
