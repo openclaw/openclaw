@@ -75,7 +75,9 @@ describe("sandbox mutation paths", () => {
     const writtenPaths: string[] = [];
     const editedPaths: string[] = [];
     const writtenContent = new Map<string, Buffer>();
-    const editedContent = new Map(drivePaths.map((filePath) => [filePath, Buffer.from("before")]));
+    const editedContent = new Map<string, Buffer>(
+      drivePaths.map((filePath) => [filePath, Buffer.from("before")]),
+    );
     const writeBridge = {
       mkdirp: async () => {},
       stat: async ({ filePath }: { filePath: string }) => {
