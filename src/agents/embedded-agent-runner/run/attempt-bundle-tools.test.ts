@@ -6,10 +6,15 @@ const mocks = vi.hoisted(() => ({
   getOrCreateSessionMcpRuntime: vi.fn(),
   materializeBundleMcpToolsForRun: vi.fn(),
   applyFinalEffectiveToolPolicy: vi.fn(),
+  loadSessionMcpConfig: vi.fn(),
 }));
 
 vi.mock("../../agent-bundle-lsp-runtime.js", () => ({
   createBundleLspToolRuntime: mocks.createBundleLspToolRuntime,
+}));
+
+vi.mock("../../agent-bundle-mcp-runtime-config.js", () => ({
+  loadSessionMcpConfig: mocks.loadSessionMcpConfig,
 }));
 
 vi.mock("../../agent-bundle-mcp-tools.js", () => ({
@@ -41,6 +46,10 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     mocks.createBundleLspToolRuntime.mockReset().mockResolvedValue(undefined);
     mocks.getOrCreateSessionMcpRuntime.mockReset().mockResolvedValue(undefined);
     mocks.materializeBundleMcpToolsForRun.mockReset().mockResolvedValue(undefined);
+    mocks.loadSessionMcpConfig.mockReset().mockReturnValue({
+      loaded: { mcpServers: {}, diagnostics: [] },
+      fingerprint: "fp",
+    });
     mocks.applyFinalEffectiveToolPolicy
       .mockReset()
       .mockImplementation(({ bundledTools }: { bundledTools: unknown[] }) => bundledTools);
@@ -159,6 +168,70 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     expect(mocks.createBundleLspToolRuntime).toHaveBeenCalledWith(
       expect.objectContaining({ reservedToolNames: ["message", "client_allowed"] }),
     );
+  });
+
+  it("uses merged bundle+configured MCP names for collision-safe materialization", async () => {
+    // Runtime assignSafeServerNames(merged) → mail.prod owns mail-prod, user
+    // mail-prod becomes mail-prod-2. Precheck must use that merged declared set.
+    mocks.loadSessionMcpConfig.mockReturnValue({
+      loaded: {
+        mcpServers: {
+          "mail.prod": { type: "http", url: "https://bundled.example/mail" },
+          "mail-prod": { type: "http", url: "https://user.example/mail" },
+        },
+        diagnostics: [],
+      },
+      fingerprint: "fp-merged",
+    });
+    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue({});
+    mocks.materializeBundleMcpToolsForRun.mockResolvedValue({ tools: [] });
+
+    const input = createInput([], []);
+    input.attempt.toolsAllow = ["mail-prod-2*"];
+    input.attempt.config = {
+      mcp: {
+        servers: {
+          "mail-prod": {
+            transport: "streamable-http",
+            url: "https://user.example/mail",
+          },
+        },
+      },
+    };
+
+    await prepareEmbeddedAttemptBundleTools(input);
+
+    expect(mocks.loadSessionMcpConfig).toHaveBeenCalled();
+    expect(mocks.getOrCreateSessionMcpRuntime).toHaveBeenCalled();
+  });
+
+  it("does not materialize collision-suffixed globs without the merged peer set", async () => {
+    mocks.loadSessionMcpConfig.mockReturnValue({
+      loaded: {
+        mcpServers: {
+          "mail-prod": { type: "http", url: "https://user.example/mail" },
+        },
+        diagnostics: [],
+      },
+      fingerprint: "fp-alone",
+    });
+
+    const input = createInput([], []);
+    input.attempt.toolsAllow = ["mail-prod-2*"];
+    input.attempt.config = {
+      mcp: {
+        servers: {
+          "mail-prod": {
+            transport: "streamable-http",
+            url: "https://user.example/mail",
+          },
+        },
+      },
+    };
+
+    await prepareEmbeddedAttemptBundleTools(input);
+
+    expect(mocks.getOrCreateSessionMcpRuntime).not.toHaveBeenCalled();
   });
 
   it("never exposes client functions when the attempt disables every tool", async () => {

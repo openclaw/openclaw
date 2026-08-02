@@ -1,5 +1,6 @@
 import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { createBundleLspToolRuntime } from "../../agent-bundle-lsp-runtime.js";
+import { loadSessionMcpConfig } from "../../agent-bundle-mcp-runtime-config.js";
 import {
   getOrCreateSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
@@ -86,7 +87,26 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     servers: configuredMcpServers,
     toolOverrides: params.attempt.toolOverrides,
   });
-  const declaredMcpServerNames = Object.keys(configuredMcpServers ?? {});
+  const bundleMetadataSnapshot = params.getCurrentAttemptPluginMetadataSnapshot();
+  // Scoped registries are partial views; only complete snapshots can bypass bundle discovery.
+  const bundleManifestRegistry =
+    bundleMetadataSnapshot?.pluginIds === undefined
+      ? bundleMetadataSnapshot?.manifestRegistry
+      : undefined;
+  // Safe-name assignment must match getOrCreateSessionMcpRuntime: the merged
+  // enabled bundle + configured server map (declaration order), not user keys alone.
+  const mergedMcpServerNames =
+    !params.attempt.forceRestartSafeTools && configuredMcpServerNames.length > 0
+      ? Object.keys(
+          loadSessionMcpConfig({
+            workspaceDir: params.effectiveWorkspace,
+            cfg: params.attempt.config,
+            logDiagnostics: false,
+            manifestRegistry: bundleManifestRegistry,
+            toolOverrides: params.attempt.toolOverrides,
+          }).loaded.mcpServers,
+        )
+      : Object.keys(configuredMcpServers ?? {});
   const bundleMcpEnabled =
     !params.attempt.forceRestartSafeTools &&
     shouldCreateBundleMcpRuntimeForAttempt({
@@ -94,14 +114,8 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       disableTools: params.attempt.disableTools || params.isRawModelRun,
       toolsAllow: params.attempt.toolsAllow,
       mcpServerNames: configuredMcpServerNames,
-      mcpDeclaredServerNames: declaredMcpServerNames,
+      mcpDeclaredServerNames: mergedMcpServerNames,
     });
-  const bundleMetadataSnapshot = params.getCurrentAttemptPluginMetadataSnapshot();
-  // Scoped registries are partial views; only complete snapshots can bypass bundle discovery.
-  const bundleManifestRegistry =
-    bundleMetadataSnapshot?.pluginIds === undefined
-      ? bundleMetadataSnapshot?.manifestRegistry
-      : undefined;
   const bundleMcpSessionRuntime = bundleMcpEnabled
     ? await getOrCreateSessionMcpRuntime({
         sessionId: params.attempt.sessionId,

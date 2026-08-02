@@ -591,8 +591,9 @@ describe("shouldCreateBundleMcpRuntimeForAttempt", () => {
   });
 
   it("uses full-set safe-name assignment for collision suffixes", () => {
-    // Runtime assignSafeServerNames(["mail.prod", "mail-prod"]) →
-    // mail.prod → mail-prod, mail-prod → mail-prod-2.
+    // Runtime assignSafeServerNames(merged bundle+configured) e.g.
+    // ["mail.prod", "mail-prod"] → mail.prod → mail-prod, mail-prod → mail-prod-2.
+    // Callers must pass that merged set as mcpDeclaredServerNames.
     // Use prefix globs without `__` so isBundleMcpAllowlistName does not short-circuit.
     expect(
       shouldCreateBundleMcpRuntimeForAttempt({
