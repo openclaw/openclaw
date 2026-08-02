@@ -13,12 +13,11 @@ import {
   loadGatewayStartupPluginPlan,
   resolveConfiguredChannelPluginIds,
 } from "./channel-plugin-ids.js";
-import { normalizePluginsConfig } from "./config-state.js";
+import { normalizePluginsConfig, resolveSelectedContextEnginePluginId } from "./config-state.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import { passesManifestOwnerBasePolicy } from "./manifest-owner-policy.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
-import { defaultSlotIdForKey } from "./slots.js";
 
 function collectConfiguredChannelIds(
   config: OpenClawConfig,
@@ -131,20 +130,8 @@ function collectExplicitEffectivePluginIds(config: OpenClawConfig): string[] {
 
 function collectSelectedContextEnginePluginIds(config: OpenClawConfig): string[] {
   const plugins = normalizePluginsConfig(config.plugins);
-  if (!plugins.enabled) {
-    return [];
-  }
-  const pluginId = plugins.slots.contextEngine;
-  if (!pluginId || pluginId === defaultSlotIdForKey("contextEngine")) {
-    return [];
-  }
-  if (plugins.deny.includes(pluginId)) {
-    return [];
-  }
-  if (plugins.entries[pluginId]?.enabled === false) {
-    return [];
-  }
-  return [pluginId];
+  const pluginId = resolveSelectedContextEnginePluginId(plugins);
+  return pluginId ? [pluginId] : [];
 }
 
 /** Lists plugin ids that are effectively enabled for a config/discovery context. */

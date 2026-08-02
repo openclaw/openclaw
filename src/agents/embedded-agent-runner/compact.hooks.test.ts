@@ -46,6 +46,7 @@ import {
   resolveSessionAgentIdMock,
   resolveSessionAgentIdsMock,
   rotateTranscriptAfterCompactionMock,
+  runContextEngineMaintenanceMock,
   selectAgentHarnessForPreparedModelProvidersMock,
   selectAgentHarnessMock,
   shouldPreferExplicitConfigApiKeyAuthMock,
@@ -2739,16 +2740,10 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     }
   });
 
-  it("runs maintain after successful compaction with a transcript rewrite helper", async () => {
-    const maintain = vi.fn(async (_params?: unknown) => ({
-      changed: false,
-      bytesFreed: 0,
-      rewrittenEntries: 0,
-    }));
+  it("hands successful compaction to maintenance with its runtime context", async () => {
     resolveContextEngineMock.mockResolvedValue({
       info: { ownsCompaction: true },
       compact: contextEngineCompactMock,
-      maintain,
     } as never);
 
     const result = await compactEmbeddedAgentSession(
@@ -2756,16 +2751,17 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     );
 
     expect(result.ok).toBe(true);
-    const runtimeContext = (
-      maintain.mock.calls.at(0)?.[0] as { runtimeContext?: Record<string, unknown> } | undefined
-    )?.runtimeContext;
-    expectRecordFields(mockCallArg(maintain), {
+    const maintenanceParams = mockCallArg(runContextEngineMaintenanceMock) as {
+      runtimeContext?: Record<string, unknown>;
+    };
+    expectRecordFields(maintenanceParams, {
       sessionKey: TEST_SESSION_KEY,
       sessionFile: TEST_SESSION_KEY,
+      reason: "compaction",
     });
+    const runtimeContext = maintenanceParams.runtimeContext;
     expect(runtimeContext?.workspaceDir).toBe(TEST_WORKSPACE_DIR);
     expect(runtimeContext?.cwd).toBe("/tmp/task-repo");
-    expect(runtimeContext?.rewriteTranscriptEntries).toBeTypeOf("function");
   });
 
   it("resolves the effective compaction model before manual engine-owned compaction", async () => {
@@ -3676,19 +3672,15 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
 
   it("fails deferred budget compaction when background maintenance is not scheduled", async () => {
     const dispose = vi.fn(async () => {});
-    const maintain = vi.fn(async () => ({
-      changed: false,
-      bytesFreed: 0,
-      rewrittenEntries: 0,
-    }));
     resolveContextEngineMock.mockResolvedValue({
       info: { ownsCompaction: true, turnMaintenanceMode: "background" },
       compact: contextEngineCompactMock,
       dispose,
-      maintain,
+      maintain: vi.fn(),
     } as never);
-    enqueueCommandInLaneMock.mockImplementationOnce(() => {
-      throw new Error("scheduler offline");
+    runContextEngineMaintenanceMock.mockImplementationOnce(async (params) => {
+      params?.onDeferredMaintenanceFailure?.(new Error("scheduler offline"));
+      return undefined;
     });
 
     const result = await compactEmbeddedAgentSession(
@@ -3703,7 +3695,6 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(result.reason).toBe("failed to schedule background context-engine maintenance");
     expect(result.failure?.reason).toBe("deferred_compaction_not_scheduled");
     expect(dispose).toHaveBeenCalledTimes(1);
-    expect(maintain).not.toHaveBeenCalled();
     expect(contextEngineCompactMock).not.toHaveBeenCalled();
   });
 
@@ -4276,16 +4267,10 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
   });
 
   it("reuses a delegated compaction successor session identity", async () => {
-    const maintain = vi.fn(async (_params?: unknown) => ({
-      changed: false,
-      bytesFreed: 0,
-      rewrittenEntries: 0,
-    }));
     const delegatedSessionId = "delegated-session";
     resolveContextEngineMock.mockResolvedValue({
       info: { ownsCompaction: false },
       compact: contextEngineCompactMock,
-      maintain,
     } as never);
     contextEngineCompactMock.mockResolvedValue({
       ok: true,
@@ -4305,7 +4290,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(result.ok).toBe(true);
     expect(result.result?.sessionId).toBe(delegatedSessionId);
     expect(result.result?.sessionFile).toBeUndefined();
-    expectRecordFields(mockCallArg(maintain), {
+    expectRecordFields(mockCallArg(runContextEngineMaintenanceMock), {
       sessionId: delegatedSessionId,
       sessionFile: TEST_SESSION_KEY,
       sessionTarget: expect.objectContaining({ sessionId: delegatedSessionId }),
@@ -4313,17 +4298,11 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
   });
 
   it("keeps a partial structured successor in the active transcript store", async () => {
-    const maintain = vi.fn(async (_params?: unknown) => ({
-      changed: false,
-      bytesFreed: 0,
-      rewrittenEntries: 0,
-    }));
     const delegatedSessionId = "delegated-session";
     const storePath = "/tmp/custom-active-sessions.json";
     resolveContextEngineMock.mockResolvedValue({
       info: { ownsCompaction: false },
       compact: contextEngineCompactMock,
-      maintain,
     } as never);
     contextEngineCompactMock.mockResolvedValue({
       ok: true,
@@ -4345,7 +4324,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     );
 
     expect(result.ok).toBe(true);
-    expectRecordFields(mockCallArg(maintain), {
+    expectRecordFields(mockCallArg(runContextEngineMaintenanceMock), {
       sessionId: delegatedSessionId,
       sessionTarget: expect.objectContaining({
         agentId: "main",
@@ -4479,18 +4458,12 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
   });
 
   it("preserves a deprecated SQLite marker successor for legacy maintenance", async () => {
-    const maintain = vi.fn(async (_params?: unknown) => ({
-      changed: false,
-      bytesFreed: 0,
-      rewrittenEntries: 0,
-    }));
     const delegatedSessionId = "delegated-marker-session";
     const storePath = "/tmp/sessions.json";
     const marker = `sqlite:main:${delegatedSessionId}:${storePath}`;
     resolveContextEngineMock.mockResolvedValue({
       info: { ownsCompaction: false },
       compact: contextEngineCompactMock,
-      maintain,
     } as never);
     contextEngineCompactMock.mockResolvedValue({
       ok: true,
@@ -4503,7 +4476,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
 
     await compactEmbeddedAgentSession(wrappedCompactionArgs());
 
-    expectRecordFields(mockCallArg(maintain), {
+    expectRecordFields(mockCallArg(runContextEngineMaintenanceMock), {
       sessionFile: marker,
       sessionId: delegatedSessionId,
       sessionTarget: expect.objectContaining({
@@ -4533,11 +4506,6 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
   });
 
   it("rebinds a deprecated SQLite marker successor over the retained active entry", async () => {
-    const maintain = vi.fn(async (_params?: unknown) => ({
-      changed: false,
-      bytesFreed: 0,
-      rewrittenEntries: 0,
-    }));
     const delegatedSessionId = "delegated-marker-session";
     const dir = await mkdtemp(join(tmpdir(), "openclaw-compaction-marker-successor-"));
     const storePath = join(dir, "sessions.json");
@@ -4545,7 +4513,6 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     resolveContextEngineMock.mockResolvedValue({
       info: { ownsCompaction: false },
       compact: contextEngineCompactMock,
-      maintain,
     } as never);
     contextEngineCompactMock.mockResolvedValue({
       ok: true,
@@ -4572,7 +4539,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         }),
       );
 
-      expectRecordFields(mockCallArg(maintain), {
+      expectRecordFields(mockCallArg(runContextEngineMaintenanceMock), {
         sessionId: delegatedSessionId,
         sessionTarget: expect.objectContaining({
           agentId: "main",
@@ -4631,15 +4598,9 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
   });
 
   it("keeps a delegated result that echoes the current transcript on the active transcript", async () => {
-    const maintain = vi.fn(async (_params?: unknown) => ({
-      changed: false,
-      bytesFreed: 0,
-      rewrittenEntries: 0,
-    }));
     resolveContextEngineMock.mockResolvedValue({
       info: { ownsCompaction: false },
       compact: contextEngineCompactMock,
-      maintain,
     } as never);
     contextEngineCompactMock.mockResolvedValue({
       ok: true,
@@ -4659,7 +4620,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(rotateTranscriptAfterCompactionMock).not.toHaveBeenCalled();
     expect(result.result?.sessionId).toBeUndefined();
     expect(result.result?.sessionFile).toBeUndefined();
-    expectRecordFields(mockCallArg(maintain), {
+    expectRecordFields(mockCallArg(runContextEngineMaintenanceMock), {
       sessionId: TEST_SESSION_ID,
       sessionFile: TEST_SESSION_KEY,
     });
