@@ -171,9 +171,7 @@ function fenceRequesterSettleWakeBatch(params: {
   const reason =
     params.mismatch === "requester_replaced"
       ? "requester lifecycle was replaced before the subagent completion settled; stale completion retained without delivery"
-      : params.mismatch === "legacy_unfenced"
-        ? "persisted wake predates requester lifecycle fencing; completion retained without delivery"
-        : "requester session entry is unavailable; completion retained without delivery";
+      : "requester session entry is unavailable; completion retained without delivery";
   params.transitionBatch(params.batchRunIds, {
     ...params.state,
     lifecycleMismatch: params.mismatch,
@@ -363,26 +361,11 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
   const mismatchedEntries = settledBatch.filter(
     (entry) => entry.expectedRequesterLifecycleRevision !== currentRequesterLifecycleRevision,
   );
-  const replacedEntries = mismatchedEntries.filter(
-    (entry) => entry.expectedRequesterLifecycleRevision !== undefined,
-  );
-  const legacyEntries = mismatchedEntries.filter(
-    (entry) => entry.expectedRequesterLifecycleRevision === undefined,
-  );
-  if (replacedEntries.length > 0) {
+  if (mismatchedEntries.length > 0) {
     fenceRequesterSettleWakeBatch({
-      batchRunIds: replacedEntries.map((entry) => entry.runId).toSorted(),
-      state: readSharedBatchState(replacedEntries),
+      batchRunIds: mismatchedEntries.map((entry) => entry.runId).toSorted(),
+      state: readSharedBatchState(mismatchedEntries),
       mismatch: "requester_replaced",
-      requesterSessionKey,
-      transitionBatch: params.transitionBatch,
-    });
-  }
-  if (legacyEntries.length > 0) {
-    fenceRequesterSettleWakeBatch({
-      batchRunIds: legacyEntries.map((entry) => entry.runId).toSorted(),
-      state: readSharedBatchState(legacyEntries),
-      mismatch: "legacy_unfenced",
       requesterSessionKey,
       transitionBatch: params.transitionBatch,
     });
