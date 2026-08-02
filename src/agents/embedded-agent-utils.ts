@@ -6,6 +6,7 @@
 import type { AssistantMessage } from "../llm/types.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import {
+  isIntermediateMonologueTextBlock,
   normalizeAssistantPhase,
   parseAssistantTextSignature,
   type AssistantPhase,
@@ -88,8 +89,9 @@ function extractAssistantTextForPhase(
   });
 
   let hadRequestedPhase = false;
-  const parts = msg.content
-    .map((block) => {
+  const contentBlocks = msg.content;
+  const parts = contentBlocks
+    .map((block, index) => {
       if (!block || typeof block !== "object") {
         return null;
       }
@@ -104,6 +106,18 @@ function extractAssistantTextForPhase(
         return null;
       }
       hadRequestedPhase = true;
+      // Drop unphased text blocks identified as intermediate provider monologue
+      // (#96849 — MiniMax-M3 via openai-completions emits monologue as plain
+      // `text` blocks interleaved with `thinking` blocks). Mirrors the shared
+      // extractor's monologue guard so Discord/main-session final delivery
+      // (which flows through this helper via embedded-agent-subscribe.handlers)
+      // stays consistent with history/channel reads.
+      if (
+        !signature?.phase &&
+        isIntermediateMonologueTextBlock(contentBlocks, index, hasExplicitPhasedTextBlocks)
+      ) {
+        return null;
+      }
       const sanitizerPhase =
         resolvedPhase ??
         (options?.unphasedSignedFinalAnswer === true && signature?.id ? "final_answer" : undefined);
