@@ -30,6 +30,7 @@ import {
   renderMarkdownRichListSource,
   type MarkdownRichListSource,
 } from "./rich-blocks-list.js";
+import { padEndTelegramMonospace, telegramMonospaceWidth } from "./text-width.js";
 
 const TELEGRAM_RICH_TEXT_TABLE_COLUMN_LIMIT = 20;
 
@@ -418,11 +419,11 @@ function renderAsciiTableGrid(table: MarkdownTableMeta): string {
   const widths = Array.from({ length: columnCount }, () => 3);
   for (const row of rows) {
     for (let index = 0; index < columnCount; index += 1) {
-      widths[index] = Math.max(widths[index] ?? 3, row[index]?.length ?? 0);
+      widths[index] = Math.max(widths[index] ?? 3, telegramMonospaceWidth(row[index] ?? ""));
     }
   }
   const renderRow = (row: readonly string[]) =>
-    `| ${widths.map((width, index) => (row[index] ?? "").padEnd(width)).join(" | ")} |`;
+    `| ${widths.map((width, index) => padEndTelegramMonospace(row[index] ?? "", width)).join(" | ")} |`;
   const divider = `| ${widths.map((width) => "-".repeat(width)).join(" | ")} |`;
   return [renderRow(table.headers), divider, ...table.rows.map(renderRow)].join("\n");
 }

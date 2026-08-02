@@ -16,6 +16,7 @@ import {
 } from "./format-assistant-transcript.js";
 import { decodeTelegramHtmlEntities, findTelegramHtmlEntityEnd } from "./format-html.js";
 import { renderTelegramMarkdownIR } from "./format-render.js";
+import { padEndTelegramMonospace, telegramMonospaceWidth } from "./text-width.js";
 
 export type TelegramFormattedChunk = {
   html: string;
@@ -637,7 +638,7 @@ function renderTelegramRichHtmlRawTableFallback(
   const widths = Array.from({ length: columnCount }, () => 3);
   for (const row of rows) {
     for (let index = 0; index < columnCount; index += 1) {
-      widths[index] = Math.max(widths[index] ?? 3, row[index]?.length ?? 0);
+      widths[index] = Math.max(widths[index] ?? 3, telegramMonospaceWidth(row[index] ?? ""));
     }
   }
   const caption =
@@ -651,7 +652,7 @@ function renderTelegramRichHtmlRawTableFallback(
       ? rows
           .map(
             (row) =>
-              `| ${widths.map((width, index) => (row[index] ?? "").padEnd(width)).join(" | ")} |`,
+              `| ${widths.map((width, index) => padEndTelegramMonospace(row[index] ?? "", width)).join(" | ")} |`,
           )
           .join("\n")
       : stripTelegramHtmlForPlainText(tableHtml).trim();

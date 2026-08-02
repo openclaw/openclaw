@@ -129,6 +129,19 @@ describe("markdownToTelegramHtml", () => {
     expect(html).not.toContain("&lt;table");
   });
 
+  it("aligns raw HTML table fallback columns by monospace display width", () => {
+    const input = [
+      "<table>",
+      "<thead><tr><th>Name</th><th>Note</th></tr></thead>",
+      "<tbody><tr><td>小明</td><td>ok</td></tr></tbody>",
+      "</table>",
+    ].join("");
+
+    const html = renderTelegramHtmlText(input, { textMode: "html" });
+
+    expect(html).toBe("<pre><code>| Name | Note |\n| 小明 | ok   |</code></pre>\n\n");
+  });
+
   it("keeps raw HTML tables escaped inside legacy HTML code blocks", () => {
     expect(
       renderTelegramHtmlText("<pre><code><table><tr><td>A</td></tr></table></code></pre>", {
