@@ -79,6 +79,7 @@ export const NostrConfigSchema = z.object({
   /** Whether this channel is enabled */
   enabled: z.boolean().optional(),
   configWrites: z.boolean().optional(),
+  mediaMaxMb: z.number().positive().optional(),
 
   /** Markdown formatting overrides (tables). */
   markdown: MarkdownConfigSchema,

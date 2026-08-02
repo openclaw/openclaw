@@ -13,6 +13,7 @@ const ClickClackAccountConfigSchema = z
     name: z.string().optional(),
     enabled: z.boolean().optional(),
     configWrites: z.boolean().optional(),
+    mediaMaxMb: z.number().positive().optional(),
     baseUrl: z.string().url().optional(),
     apiBaseUrl: z.string().url().optional(),
     token: buildSecretInputSchema().optional(),
