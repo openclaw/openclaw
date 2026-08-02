@@ -321,6 +321,7 @@ the proposal threshold, and troubleshooting.
         mode: "auto",
       },
       allowSymlinkTargetWrites: false,
+      writableRoots: [],
       approvalPolicy: "auto",
       maxPending: 50,
       maxSkillBytes: 40000,
@@ -333,6 +334,7 @@ the proposal threshold, and troubleshooting.
 | -------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `autonomous.mode`          | `"auto"` | `"off"` keeps the suggestion nudge, `"propose"` creates pending captures, and `"auto"` applies captures through the normal Workshop scanner and apply path.         |
 | `allowSymlinkTargetWrites` | `false`  | Lets apply write through workspace skill symlinks whose real target is listed in `skills.load.allowSymlinkTargets`.                                                 |
+| `writableRoots`            | `[]`     | Explicit canonical skill roots that update proposals may target; configured roots win over shadow copies.                                                           |
 | `approvalPolicy`           | `"auto"` | `"auto"` skips an additional prompt for agent-initiated `apply`, `reject`, or `quarantine` (the agent still has to call the action). `"pending"` requires approval. |
 | `maxPending`               | `50`     | Caps pending and quarantined proposals per workspace (1-200).                                                                                                       |
 | `maxSkillBytes`            | `40000`  | Caps proposal body size in bytes (1024-200000).                                                                                                                     |

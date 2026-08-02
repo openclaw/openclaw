@@ -1,13 +1,7 @@
-import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { buildWorkspaceSkillStatus, resolveSkillStatusEntry } from "../discovery/status.js";
 import {
-  buildWorkspaceSkillStatus,
-  resolveSkillStatusEntry,
-  type SkillStatusEntry,
-} from "../discovery/status.js";
-import {
-  assertInsideWorkspace,
   readWorkspaceSkillFile,
   readWorkspaceSupportFile,
 } from "../lifecycle/workspace-skill-write.js";
@@ -26,6 +20,11 @@ import {
   prepareSkillProposalDraft,
   resolveUpdateProposalDescription,
 } from "./proposal-draft.js";
+import {
+  assertWritableProposalTarget,
+  isWritableSkillStatusEntry,
+  resolveWritableSkillTarget,
+} from "./target.js";
 export { readSkillProposalDraftDirectory, readSkillProposalDraftFile } from "./proposal-draft.js";
 import { hashSkillProposalRevision } from "./revision-hash.js";
 import {
@@ -75,7 +74,6 @@ function proposalStoreOptions(env?: NodeJS.ProcessEnv) {
   return env ? { env } : {};
 }
 
-const WRITABLE_WORKSPACE_SOURCES = new Set(["openclaw-workspace", "agents-skills-project"]);
 const APPLY_TRANSITION_DEPENDENCIES = {
   assertExpectedRevisionHash,
   evaluateSkillProposal,
@@ -247,7 +245,13 @@ export function listWritableWorkspaceSkillSummaries(
   });
   const summaries: WritableWorkspaceSkillSummary[] = [];
   for (const skill of status.skills) {
-    if (!WRITABLE_WORKSPACE_SOURCES.has(skill.source)) {
+    if (
+      !isWritableSkillStatusEntry({
+        workspaceDir,
+        skill,
+        config: opts?.config,
+      })
+    ) {
       continue;
     }
     summaries.push(
@@ -272,7 +276,11 @@ export async function proposeUpdateSkill(
   if (!targetSkill) {
     throw new Error(`Skill not found: ${skillName}`);
   }
-  assertWritableSkillTarget(input.workspaceDir, targetSkill);
+  const authorizedRootRealPath = resolveWritableSkillTarget({
+    workspaceDir: input.workspaceDir,
+    skill: targetSkill,
+    config: input.config,
+  });
   const currentContent = await readWorkspaceSkillFile(targetSkill.filePath);
   if (currentContent === null) {
     throw new Error(`Skill file is missing: ${targetSkill.filePath}`);
@@ -330,6 +338,7 @@ export async function proposeUpdateSkill(
       skillDir: targetSkill.baseDir,
       skillFile: targetSkill.filePath,
       source: targetSkill.source,
+      ...(authorizedRootRealPath ? { authorizedRootRealPath } : {}),
       currentContentHash: hashSkillProposalContent(currentContent),
     },
     scan,
@@ -379,8 +388,11 @@ export async function reviseSkillProposal(
   const config = resolveSkillWorkshopConfig(input.config);
   const revision = withPendingSkillProposalMutation(input, "revised", async (read) => {
     const { record } = read;
-    assertInsideWorkspace(input.workspaceDir, record.target.skillFile, "skill file");
-    assertInsideWorkspace(input.workspaceDir, record.target.skillDir, "skill directory");
+    assertWritableProposalTarget({
+      workspaceDir: input.workspaceDir,
+      target: record.target,
+      config: input.config,
+    });
 
     if (record.kind === "create") {
       const currentContent = await readWorkspaceSkillFile(record.target.skillFile);
@@ -695,17 +707,6 @@ async function assertSupportTargetsUnchanged(
       relativePath: file.path,
     });
     await assertSkillProposalSupportTargetUnchanged({ record, file, currentContent, input });
-  }
-}
-
-function assertWritableSkillTarget(workspaceDir: string, skill: SkillStatusEntry): void {
-  if (!WRITABLE_WORKSPACE_SOURCES.has(skill.source)) {
-    throw new Error(`Skill source is not writable by Skill Workshop: ${skill.source}`);
-  }
-  assertInsideWorkspace(workspaceDir, skill.filePath, "skill file");
-  assertInsideWorkspace(workspaceDir, skill.baseDir, "skill directory");
-  if (path.basename(skill.filePath) !== "SKILL.md") {
-    throw new Error("Skill Workshop can only update SKILL.md targets.");
   }
 }
 
