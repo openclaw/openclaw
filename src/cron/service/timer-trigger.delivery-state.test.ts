@@ -15,7 +15,7 @@ function makeJob(delivery: CronJob["delivery"]): CronJob {
     updatedAtMs: 0,
     state: {},
     ...(delivery ? { delivery } : {}),
-  } as CronJob;
+  } as unknown as CronJob;
 }
 
 describe("resolveDeliveryState for delivery.mode none", () => {
