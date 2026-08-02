@@ -49,7 +49,7 @@ import {
   type ReadToolDetails,
   type ReadToolTruncationDetails,
 } from "./sessions/index.js";
-import { resolveLocalToolPath } from "./sessions/tools/path-utils.js";
+import { resolveLocalToolPath, resolveToCwd } from "./sessions/tools/path-utils.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
 // NOTE(steipete): Upstream read now does file-magic MIME detection; we keep the wrapper
@@ -1056,7 +1056,7 @@ function createSandboxReadOperations(params: SandboxToolParams) {
 function createSandboxWriteOperations(params: SandboxToolParams) {
   return withMemoryWriteProvenance(
     {
-      resolvePath: (filePath: string) => resolveContainerPathCandidate(filePath) ?? filePath,
+      resolvePath: (filePath: string) => resolveSandboxMutationPath(params, filePath),
       mkdir: async (dir: string) => {
         await params.bridge.mkdirp({ filePath: dir, cwd: params.root });
       },
@@ -1076,7 +1076,7 @@ function createSandboxWriteOperations(params: SandboxToolParams) {
 function createSandboxEditOperations(params: SandboxToolParams) {
   return withMemoryWriteProvenance(
     {
-      resolvePath: (filePath: string) => resolveContainerPathCandidate(filePath) ?? filePath,
+      resolvePath: (filePath: string) => resolveSandboxMutationPath(params, filePath),
       readFile: (absolutePath: string) =>
         params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
       writeFile: (absolutePath: string, content: string) =>
@@ -1088,6 +1088,12 @@ function createSandboxEditOperations(params: SandboxToolParams) {
     params.memoryWriteProvenance,
     (backendPath) => resolveSandboxObservedPath(params, backendPath),
   );
+}
+
+function resolveSandboxMutationPath(params: SandboxToolParams, filePath: string): string {
+  const candidate = resolveContainerPathCandidate(filePath) ?? filePath;
+  // Queue aliases by the sandbox backend identity while leaving container-absolute paths intact.
+  return resolveToCwd(candidate, params.root);
 }
 
 function resolveSandboxObservedPath(params: SandboxToolParams, backendPath: string): string {

@@ -559,6 +559,93 @@ function createSandboxFsTools(params: { sandbox: UnsafeMountedSandbox; workspace
 }
 
 describe("tools.fs.workspaceOnly", () => {
+  it("serializes relative and sandbox-root absolute write aliases", async () => {
+    await withTempDir("openclaw-sandbox-write-queue-", async (sandboxRoot) => {
+      let releaseFirstWrite!: () => void;
+      const firstWriteGate = new Promise<void>((resolve) => {
+        releaseFirstWrite = resolve;
+      });
+      let markFirstWriteEntered!: () => void;
+      const firstWriteEntered = new Promise<void>((resolve) => {
+        markFirstWriteEntered = resolve;
+      });
+      const writtenPaths: string[] = [];
+      const bridge = {
+        mkdirp: async () => {},
+        stat: async () => null,
+        writeFile: async ({ filePath }: { filePath: string }) => {
+          writtenPaths.push(filePath);
+          if (writtenPaths.length === 1) {
+            markFirstWriteEntered();
+            await firstWriteGate;
+          }
+        },
+      } as unknown as SandboxFsBridge;
+      const writeTool = createSandboxedWriteTool({ root: sandboxRoot, bridge });
+      const absolutePath = path.join(sandboxRoot, "note.md");
+
+      const firstWrite = writeTool.execute("sandbox-write-relative", {
+        path: "note.md",
+        content: "first",
+      });
+      await firstWriteEntered;
+      const secondWrite = writeTool.execute("sandbox-write-absolute", {
+        path: absolutePath,
+        content: "second",
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(writtenPaths).toEqual([absolutePath]);
+      releaseFirstWrite();
+      await Promise.all([firstWrite, secondWrite]);
+      expect(writtenPaths).toEqual([absolutePath, absolutePath]);
+    });
+  });
+
+  it("serializes relative and sandbox-root absolute edit aliases", async () => {
+    await withTempDir("openclaw-sandbox-edit-queue-", async (sandboxRoot) => {
+      let releaseFirstEdit!: () => void;
+      const firstEditGate = new Promise<void>((resolve) => {
+        releaseFirstEdit = resolve;
+      });
+      let markFirstEditEntered!: () => void;
+      const firstEditEntered = new Promise<void>((resolve) => {
+        markFirstEditEntered = resolve;
+      });
+      const writtenPaths: string[] = [];
+      const bridge = {
+        stat: async () => ({ type: "file" as const, size: 6 }),
+        readFile: async () => Buffer.from("before"),
+        writeFile: async ({ filePath }: { filePath: string }) => {
+          writtenPaths.push(filePath);
+          if (writtenPaths.length === 1) {
+            markFirstEditEntered();
+            await firstEditGate;
+          }
+        },
+      } as unknown as SandboxFsBridge;
+      const editTool = createSandboxedEditTool({ root: sandboxRoot, bridge });
+      const absolutePath = path.join(sandboxRoot, "note.md");
+      const edits = [{ oldText: "before", newText: "after" }];
+
+      const firstEdit = editTool.execute("sandbox-edit-relative", {
+        path: "note.md",
+        edits,
+      });
+      await firstEditEntered;
+      const secondEdit = editTool.execute("sandbox-edit-absolute", {
+        path: absolutePath,
+        edits,
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(writtenPaths).toEqual([absolutePath]);
+      releaseFirstEdit();
+      await Promise.all([firstEdit, secondEdit]);
+      expect(writtenPaths).toEqual([absolutePath, absolutePath]);
+    });
+  });
+
   it("keeps POSIX drive paths unchanged through sandbox write and edit bridges", async () => {
     const drivePaths = ["/c/work/file.txt", "/cygdrive/c/work/file.txt", "/mnt/c/work/file.txt"];
     const writtenPaths: string[] = [];
