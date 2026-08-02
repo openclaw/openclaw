@@ -1,4 +1,5 @@
 // Discord plugin module implements interactions behavior.
+import { RESTJSONErrorCodes } from "discord-api-types/rest";
 import {
   ComponentType,
   InteractionResponseType,
@@ -28,6 +29,7 @@ import {
 } from "./interaction-response.js";
 import { extractModalFields, ModalFields } from "./modal-fields.js";
 import { serializePayload, type MessagePayload } from "./payload.js";
+import { DiscordError } from "./rest.js";
 import { assertDiscordInteractionPayload } from "./schemas.js";
 import {
   channelFactory,
@@ -57,6 +59,9 @@ type Modal = {
 };
 
 type ComponentData = Record<string, unknown>;
+type InteractionCallbackProvenance =
+  | { kind: "unique"; type: InteractionResponseType }
+  | { kind: "conflicting" };
 
 export type RawInteraction = APIInteraction & {
   token: string;
@@ -120,6 +125,8 @@ class BaseInteraction {
   readonly channel: DiscordChannel | null;
   message: Message | null = null;
   private readonly response = new InteractionResponseController();
+  private pendingCallback: Promise<unknown> | undefined;
+  private callbackProvenance: InteractionCallbackProvenance | undefined;
 
   constructor(
     public client: InteractionClient,
@@ -149,16 +156,79 @@ class BaseInteraction {
   }
 
   protected async callback(type: InteractionResponseType, data?: unknown) {
-    this.response.recordCallback(type);
-    return await createInteractionCallback(
+    while (this.pendingCallback) {
+      await this.settlePendingCallback();
+    }
+    if (this.response.acknowledged) {
+      throw new Error("Discord interaction already acknowledged");
+    }
+    const pendingCallback = createInteractionCallback(
       this.client.rest,
       this.id,
       this.token,
       data === undefined ? { type } : { type, data },
     );
+    this.pendingCallback = pendingCallback;
+    try {
+      const result = await pendingCallback;
+      // Only an accepted callback owns interaction state; failed callbacks stay retryable.
+      this.response.recordCallback(type);
+      this.callbackProvenance = undefined;
+      return result;
+    } catch (error) {
+      if (this.isAcknowledgedInteractionError(error)) {
+        if (this.callbackProvenance?.kind === "unique") {
+          // Discord's duplicate error proves the earlier ambiguous callback was accepted.
+          this.response.recordCallback(this.callbackProvenance.type);
+          this.callbackProvenance = undefined;
+        } else {
+          // External acknowledgement cannot later become evidence for a local callback.
+          this.callbackProvenance = { kind: "conflicting" };
+        }
+      } else if (!(error instanceof DiscordError) || error.status >= 500) {
+        this.recordAmbiguousCallback(type);
+      }
+      throw error;
+    } finally {
+      if (this.pendingCallback === pendingCallback) {
+        this.pendingCallback = undefined;
+      }
+    }
+  }
+
+  private isAcknowledgedInteractionError(error: unknown): error is DiscordError {
+    return (
+      error instanceof DiscordError &&
+      error.status === 400 &&
+      error.discordCode === RESTJSONErrorCodes.InteractionHasAlreadyBeenAcknowledged
+    );
+  }
+
+  private recordAmbiguousCallback(type: InteractionResponseType): void {
+    if (!this.callbackProvenance) {
+      this.callbackProvenance = { kind: "unique", type };
+      return;
+    }
+    if (this.callbackProvenance.kind === "unique" && this.callbackProvenance.type !== type) {
+      // Discord's duplicate error cannot identify which differing callback was accepted.
+      this.callbackProvenance = { kind: "conflicting" };
+    }
+  }
+
+  private async settlePendingCallback(): Promise<void> {
+    while (this.pendingCallback) {
+      try {
+        await this.pendingCallback;
+      } catch {
+        // A rejected callback does not acknowledge the interaction; the next owner may retry.
+      }
+    }
   }
 
   async reply(payload: MessagePayload): Promise<unknown> {
+    if (this.pendingCallback) {
+      await this.settlePendingCallback();
+    }
     const action = this.response.nextReplyAction();
     if (action === "edit") {
       return await this.editReply(payload);
@@ -166,10 +236,18 @@ class BaseInteraction {
     if (action === "follow-up") {
       return await this.followUp(payload);
     }
-    return await this.callback(
-      InteractionResponseType.ChannelMessageWithSource,
-      serializePayload(payload),
-    );
+    try {
+      return await this.callback(
+        InteractionResponseType.ChannelMessageWithSource,
+        serializePayload(payload),
+      );
+    } catch (error) {
+      if (this.response.acknowledged && this.isAcknowledgedInteractionError(error)) {
+        // Reconcile the accepted prior type before choosing its original edit or follow-up.
+        return await this.reply(payload);
+      }
+      throw error;
+    }
   }
 
   async defer(options?: { ephemeral?: boolean }): Promise<unknown> {
