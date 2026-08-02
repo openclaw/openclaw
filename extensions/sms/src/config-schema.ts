@@ -17,6 +17,7 @@ const SmsAccountConfigSchema = z
     name: z.string().optional(),
     enabled: z.boolean().optional(),
     configWrites: z.boolean().optional(),
+    responsePrefix: z.string().optional(),
     accountSid: z.string().optional(),
     authToken: SecretInputSchema.optional(),
     fromNumber: z.string().optional(),
