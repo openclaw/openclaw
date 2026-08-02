@@ -1,6 +1,6 @@
 // Builds complete read-only Claw add plans without mutating local state.
 import { createHash } from "node:crypto";
-import { lstat, readFile, realpath } from "node:fs/promises";
+import { lstat, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { stableStringify } from "@openclaw/normalization-core";
@@ -8,6 +8,7 @@ import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { assertNoSymlinkParents } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, root as fsSafeRoot, type Root } from "../infra/fs-safe.js";
 import { resolveUserPath } from "../utils.js";
+import { planWorkspaceAdoptionTargets } from "./lifecycle-adopt-plan.js";
 import { digestClawMcpServer } from "./mcp.js";
 import { clawManifestWorkspaceConflictsWithPath } from "./schema.js";
 import { MAX_MANAGED_FILE_BYTES, MAX_MANAGED_WORKSPACE_BYTES } from "./source-limits.js";
@@ -471,43 +472,9 @@ export async function buildClawAddPlan(params: {
   }
 
   if (workspaceAdoption) {
-    for (const pending of pendingWorkspaceFiles) {
-      if (pending.action.blocked || !pending.action.digest) {
-        continue;
-      }
-      const targetState = await lstat(pending.action.target).catch(() => undefined);
-      if (!targetState) {
-        continue;
-      }
-      if (!targetState.isFile() || targetState.size > MAX_MANAGED_FILE_BYTES) {
-        const diagnostic = blocker(
-          "workspace_file_conflict",
-          pending.manifestPath,
-          `Adoptable workspace destination ${JSON.stringify(pending.action.target)} must be a regular file within managed size limits.`,
-        );
-        pending.action.blocked = true;
-        pending.action.reason = diagnostic.message;
-        blockers.push(diagnostic);
-        continue;
-      }
-      const existingContent = await readFile(pending.action.target).catch(() => undefined);
-      const existingDigest = existingContent
-        ? `sha256:${createHash("sha256").update(existingContent).digest("hex")}`
-        : undefined;
-      if (existingDigest === pending.action.digest) {
-        pending.action.action = "adopt";
-        pending.action.details = { ...pending.action.details, expectedState: "existing-identical" };
-        continue;
-      }
-      const diagnostic = blocker(
-        "workspace_file_conflict",
-        pending.manifestPath,
-        `Workspace destination ${JSON.stringify(pending.action.target)} exists with different content; adoption never overwrites existing files.`,
-      );
-      pending.action.blocked = true;
-      pending.action.reason = diagnostic.message;
-      blockers.push(diagnostic);
-    }
+    blockers.push(
+      ...(await planWorkspaceAdoptionTargets({ workspace, pendingFiles: pendingWorkspaceFiles })),
+    );
   }
 
   for (const pkg of params.manifest.packages) {

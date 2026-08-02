@@ -1,5 +1,5 @@
 // Tests for planning Claw adds that adopt an existing workspace directory.
-import { mkdir, writeFile } from "node:fs/promises";
+import { link, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -91,6 +91,29 @@ describe("buildClawAddPlan workspace adoption", () => {
     );
     expect(plan.actions).toContainEqual(
       expect.objectContaining({ kind: "workspaceFile", id: "AGENTS.md", blocked: true }),
+    );
+  });
+
+  it("blocks adoption of a hardlinked declared file before consent", async () => {
+    const { source, workspace } = await createPlanSource();
+    await mkdir(workspace, { recursive: true });
+    await writeFile(join(workspace, "origin.md"), "# Agent\n", "utf8");
+    await link(join(workspace, "origin.md"), join(workspace, "AGENTS.md"));
+
+    const plan = await buildClawAddPlan({
+      manifest: requireManifest(),
+      source,
+      context: { workspace, adoptExistingWorkspace: true },
+    });
+
+    expect(plan.blockers).toContainEqual(
+      expect.objectContaining({ code: "workspace_file_conflict" }),
+    );
+    expect(plan.actions).toContainEqual(
+      expect.objectContaining({ kind: "workspaceFile", id: "AGENTS.md", blocked: true }),
+    );
+    expect(plan.actions).not.toContainEqual(
+      expect.objectContaining({ kind: "workspaceFile", id: "AGENTS.md", action: "adopt" }),
     );
   });
 
