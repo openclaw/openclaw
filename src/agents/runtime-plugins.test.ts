@@ -56,10 +56,10 @@ describe("agent runtime plugin registries", () => {
       selections,
     });
     expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledWith({
-      activate: false,
       config,
       activationSourceConfig: config,
       env,
+      handleRegistrationMode: "runtime",
       workspaceDir: "/tmp/workspace",
       runtimeOptions: { allowGatewaySubagentBinding: true },
     });
@@ -73,9 +73,9 @@ describe("agent runtime plugin registries", () => {
     expect(loadAgentRuntimePluginRegistryHandle(params)).toEqual({ handle: true });
     expect(hoisted.resolveAgentRuntimePluginLoadPlan).not.toHaveBeenCalled();
     expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledWith({
-      activate: false,
       activationSourceConfig: params.config,
       config: params.config,
+      handleRegistrationMode: "runtime",
       onlyPluginIds: [],
       runtimeOptions: undefined,
       workspaceDir: "/tmp/workspace",
