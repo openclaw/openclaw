@@ -1,5 +1,8 @@
 // Google tests cover realtime voice provider plugin behavior.
-import { REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ } from "openclaw/plugin-sdk/realtime-voice";
+import {
+  REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+  resamplePcm,
+} from "openclaw/plugin-sdk/realtime-voice";
 import type { RealtimeVoiceTool } from "openclaw/plugin-sdk/realtime-voice";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildGoogleRealtimeVoiceProvider } from "./realtime-voice-provider.js";
@@ -1128,6 +1131,8 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     firstCallbacks.onopen();
     firstCallbacks.onmessage({ setupComplete: {} });
     firstCallbacks.onclose({ code: 1011, reason: "temporary" });
+    const queuedAudio = Buffer.from([0x7f]);
+    bridge.sendAudio(queuedAudio);
     await vi.advanceTimersByTimeAsync(250);
 
     const freshCallbacks = lastConnectParams().callbacks;
@@ -1142,17 +1147,31 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       "session.created",
     ]);
     expect(onReady).toHaveBeenCalledTimes(1);
+    expect(freshSession.sendRealtimeInput).not.toHaveBeenCalled();
 
     pendingSession.resolve(freshSession);
     await vi.waitFor(() => {
       expect(onReady).toHaveBeenCalledTimes(2);
     });
     const sessionCreatedOrder = onEvent.mock.invocationCallOrder[1];
+    const queuedAudioOrder = freshSession.sendRealtimeInput.mock.invocationCallOrder[0];
     const freshReadyOrder = onReady.mock.invocationCallOrder[1];
-    if (sessionCreatedOrder === undefined || freshReadyOrder === undefined) {
-      throw new Error("expected fresh session creation before readiness");
+    if (
+      sessionCreatedOrder === undefined ||
+      queuedAudioOrder === undefined ||
+      freshReadyOrder === undefined
+    ) {
+      throw new Error("expected fresh session creation, queued audio, and readiness");
     }
-    expect(sessionCreatedOrder).toBeLessThan(freshReadyOrder);
+    expect(sessionCreatedOrder).toBeLessThan(queuedAudioOrder);
+    expect(queuedAudioOrder).toBeLessThan(freshReadyOrder);
+    expect(freshSession.sendRealtimeInput).toHaveBeenCalledOnce();
+    expect(freshSession.sendRealtimeInput).toHaveBeenCalledWith({
+      audio: {
+        data: expect.any(String),
+        mimeType: "audio/pcm;rate=16000",
+      },
+    });
     freshCallbacks.onclose({ code: 1011, reason: "temporary again" });
     await vi.advanceTimersByTimeAsync(250);
 
@@ -1211,6 +1230,106 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     lastConnectParams().callbacks.onmessage({ setupComplete: { sessionId: "session-1" } });
     expect(onReady).toHaveBeenCalledTimes(1);
     expect(connectedSession.sendRealtimeInput).toHaveBeenCalledTimes(1);
+  });
+
+  it("copies and bounds pending audio by aggregate bytes before activation", async () => {
+    const connectedSession = createMockGoogleLiveSession();
+    connectMock.mockResolvedValueOnce(connectedSession);
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+    const backing = Buffer.alloc(2 * 1024 * 1024);
+    const firstChunk = backing.subarray(0, 512 * 1024);
+    firstChunk.writeInt16LE(513);
+    const expectedFirstSample = resamplePcm(Buffer.from(firstChunk), 24_000, 16_000).readInt16LE(0);
+
+    bridge.sendAudio(firstChunk);
+    bridge.sendAudio(Buffer.alloc(512 * 1024, 0x7f));
+    bridge.sendAudio(Buffer.from([0x01]));
+    firstChunk.fill(0);
+
+    await bridge.connect();
+    lastConnectParams().callbacks.onopen();
+    lastConnectParams().callbacks.onmessage({ setupComplete: { sessionId: "session-1" } });
+
+    expect(connectedSession.sendRealtimeInput).toHaveBeenCalledTimes(2);
+    const firstAudio = connectedSession.sendRealtimeInput.mock.calls[0]?.[0]?.audio as
+      | { data?: unknown }
+      | undefined;
+    expect(Buffer.from(String(firstAudio?.data), "base64").readInt16LE(0)).toBe(
+      expectedFirstSample,
+    );
+  });
+
+  it("bounds pending audio by chunk count before activation", async () => {
+    const connectedSession = createMockGoogleLiveSession();
+    connectMock.mockResolvedValueOnce(connectedSession);
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    for (let index = 0; index < 321; index += 1) {
+      bridge.sendAudio(Buffer.alloc(2, index & 0xff));
+    }
+
+    await bridge.connect();
+    lastConnectParams().callbacks.onopen();
+    lastConnectParams().callbacks.onmessage({ setupComplete: { sessionId: "session-1" } });
+
+    expect(connectedSession.sendRealtimeInput).toHaveBeenCalledTimes(320);
+  });
+
+  it("drops reconnect audio on terminal exhaustion until an explicit reconnect owns admission", async () => {
+    vi.useFakeTimers();
+    const reconnectedSession = createMockGoogleLiveSession();
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onClose = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onClose,
+    });
+
+    await bridge.connect();
+    const firstSession = lastConnectParams().callbacks;
+    firstSession.onopen();
+    firstSession.onmessage({ setupComplete: { sessionId: "session-1" } });
+    connectMock
+      .mockRejectedValueOnce(new Error("connect failed 1"))
+      .mockRejectedValueOnce(new Error("connect failed 2"))
+      .mockRejectedValueOnce(new Error("connect failed 3"))
+      .mockResolvedValueOnce(reconnectedSession);
+    firstSession.onclose({ code: 1011, reason: "temporary" });
+    bridge.sendAudio(Buffer.from([0x01, 0x00]));
+
+    await vi.advanceTimersByTimeAsync(1_750);
+    bridge.sendAudio(Buffer.from([0x02, 0x00]));
+
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledWith("error");
+
+    await bridge.connect();
+    const reconnected = lastConnectParams().callbacks;
+    reconnected.onopen();
+    reconnected.onmessage({ setupComplete: { sessionId: "session-2" } });
+    bridge.sendAudio(Buffer.alloc(480, 0x03));
+
+    expect(reconnectedSession.sendRealtimeInput).toHaveBeenCalledOnce();
+    const sent = reconnectedSession.sendRealtimeInput.mock.calls[0]?.[0]?.audio as
+      | { data?: unknown }
+      | undefined;
+    expect(sent?.data).toBeTypeOf("string");
+    bridge.close();
   });
 
   it("does not activate a late session after close during setup", async () => {
