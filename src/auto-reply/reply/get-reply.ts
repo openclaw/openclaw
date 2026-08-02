@@ -1171,8 +1171,12 @@ export async function getReplyFromConfig(
       await fs
         .rm(hostWorkspaceStagingDir, { recursive: true, force: true })
         .catch((error: unknown) => {
+          const errorCode =
+            error instanceof Error && "code" in error && typeof error.code === "string"
+              ? error.code
+              : "UNKNOWN";
           logVerbose(
-            `[host-staging-cleanup] Failed to clean up host workspace staging directory recursively: ${path.basename(hostWorkspaceStagingDir)}: ${error instanceof Error ? error.message : String(error)}`,
+            `[host-staging-cleanup] Failed to clean up host workspace staging directory recursively: ${path.basename(hostWorkspaceStagingDir)} (${errorCode})`,
           );
         });
     }
