@@ -83,6 +83,25 @@ function collectLeaves(
   return leaf ? [leaf] : [];
 }
 
+/** Account schemas across every alternative, so unions are not skipped. */
+function accountSchemasOf(channelId: string): JsonSchemaLike[] {
+  const entry = GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.find(
+    (candidate) => candidate.channelId === channelId,
+  );
+  const walk = (schema: JsonSchemaLike | undefined): JsonSchemaLike[] => {
+    if (!schema) {
+      return [];
+    }
+    const alternatives = schema.anyOf ?? schema.oneOf;
+    if (Array.isArray(alternatives) && alternatives.length > 0) {
+      return alternatives.flatMap((branch) => walk(asSchema(branch)));
+    }
+    const account = asSchema(asSchema(schema.properties?.accounts)?.additionalProperties);
+    return account ? [account] : [];
+  };
+  return walk(asSchema(entry?.schema));
+}
+
 describe("channel heartbeatVisibility contract", () => {
   it("covers the bundled channels", () => {
     expect(channels.length).toBeGreaterThan(0);
@@ -119,13 +138,20 @@ describe("channel heartbeatVisibility contract", () => {
   it.each(channels)(
     "%s accepts channels.<id>.accounts.<account>.heartbeatVisibility",
     (channelId) => {
-      const entry = GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.find(
-        (candidate) => candidate.channelId === channelId,
-      );
-      const accounts = asSchema(asSchema(entry?.schema)?.properties?.accounts);
-      expect(rejectsKey(asSchema(accounts?.additionalProperties), "heartbeatVisibility")).toBe(
-        false,
-      );
+      for (const account of accountSchemasOf(channelId)) {
+        expect(rejectsKey(account, "heartbeatVisibility")).toBe(false);
+      }
+    },
+  );
+
+  it.each(channels.filter((channelId) => !NON_CANONICAL_SHAPE_CHANNELS.has(channelId)))(
+    "%s accepts the canonical fields on accounts.<account>.heartbeatVisibility",
+    (channelId) => {
+      for (const leaf of leavesOf(channelId, "account")) {
+        for (const field of CANONICAL_FIELDS) {
+          expect(rejectsKey(leaf, field)).toBe(false);
+        }
+      }
     },
   );
 });
