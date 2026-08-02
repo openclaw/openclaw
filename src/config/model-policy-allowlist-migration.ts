@@ -9,9 +9,7 @@ import {
 
 export const MODEL_POLICY_ALLOWLIST_MIGRATION_MARKER = "modelPolicyAllowlist";
 
-export function hasModelPolicyAllowlistMigrationMarker(
-  value: unknown,
-): boolean {
+export function hasModelPolicyAllowlistMigrationMarker(value: unknown): boolean {
   if (
     isRecord(value) &&
     isRecord(value.meta) &&
@@ -24,9 +22,7 @@ export function hasModelPolicyAllowlistMigrationMarker(
 }
 
 /** Any policy object opts into the explicit model-policy semantics. */
-export function isExplicitModelPolicy(
-  value: unknown,
-): value is Record<string, unknown> {
+export function isExplicitModelPolicy(value: unknown): value is Record<string, unknown> {
   return isRecord(value);
 }
 
@@ -47,9 +43,7 @@ export function computeModelPolicyAllowlist(params: {
   return collectLegacyDefaultModelAllowRefs(params.defaults);
 }
 
-function collectLegacyDefaultModelAllowRefs(
-  defaults: unknown,
-): string[] | null {
+function collectLegacyDefaultModelAllowRefs(defaults: unknown): string[] | null {
   if (!isRecord(defaults)) {
     return null;
   }
