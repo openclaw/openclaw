@@ -32,6 +32,7 @@ export async function cleanupWorkboardRunWorktree(params: {
   worktrees: Pick<PluginRuntime["worktrees"], "release" | "removeIfLossless">;
   runId: string;
 }): Promise<void> {
+  await params.store.reconcileArtifactRetention();
   const card = (await params.store.list()).find((entry) => entry.runId === params.runId);
   const workspace = card?.metadata?.automation?.workspace;
   if (!card || workspace?.kind !== "worktree" || !workspace.path) {

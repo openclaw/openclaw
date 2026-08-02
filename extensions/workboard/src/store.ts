@@ -2,7 +2,10 @@
 import { randomUUID } from "node:crypto";
 import type { WorkboardAttachment, WorkboardCard } from "@openclaw/workboard-contract";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import { withWorkboardArtifactRetention } from "./artifact-retention.js";
+import {
+  type WorkboardArtifactRetentionStore,
+  withWorkboardArtifactRetention,
+} from "./artifact-retention.js";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
@@ -47,6 +50,33 @@ export type { WorkboardDispatchResult } from "./store-inputs.js";
 
 // Capability layers split review boundaries only; the core still owns persistence and mutation order.
 export class WorkboardStore extends WorkboardNotificationStore {
+  private readonly reconcileArtifactRetentionStore?: () => Promise<void>;
+
+  constructor(
+    store: WorkboardKeyedStore,
+    stores: {
+      boards?: WorkboardKeyedStore<PersistedWorkboardBoard>;
+      subscriptions?: WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>;
+      attachments?: WorkboardKeyedStore<PersistedWorkboardAttachment>;
+      dataVersion?: () => number;
+    } = {},
+  ) {
+    super(store, stores);
+    const retentionStore = store as Partial<WorkboardArtifactRetentionStore>;
+    if (typeof retentionStore.reconcileArtifactRetention === "function") {
+      this.reconcileArtifactRetentionStore =
+        retentionStore.reconcileArtifactRetention.bind(retentionStore);
+    }
+  }
+
+  async reconcileArtifactRetention(): Promise<void> {
+    if (!this.reconcileArtifactRetentionStore) {
+      return;
+    }
+    // Keep upgrade reconciliation ordered with card mutations before GC can observe claims.
+    await this.enqueueMutation(this.reconcileArtifactRetentionStore);
+  }
+
   private async shouldAutoOrchestrate(card: WorkboardCard): Promise<boolean> {
     if (
       card.status !== "triage" ||

@@ -11,9 +11,18 @@ const ARTIFACT_RETENTION_CLAIM_ID = "persisted-local-artifacts";
 
 type WorktreeRetentionRuntime = Pick<PluginRuntime["worktrees"], "setRetentionClaim">;
 
-async function retainedWorkspacePath(card: WorkboardCard | undefined): Promise<string | undefined> {
+export type WorkboardArtifactRetentionStore = WorkboardKeyedStore & {
+  reconcileArtifactRetention(): Promise<void>;
+};
+
+function worktreeWorkspacePath(card: WorkboardCard | undefined): string | undefined {
   const workspace = card?.metadata?.automation?.workspace;
-  if (!card || card.metadata?.archivedAt || workspace?.kind !== "worktree" || !workspace.path) {
+  return workspace?.kind === "worktree" && workspace.path ? workspace.path : undefined;
+}
+
+async function retainedWorkspacePath(card: WorkboardCard | undefined): Promise<string | undefined> {
+  const workspacePath = worktreeWorkspacePath(card);
+  if (!card || card.metadata?.archivedAt || !workspacePath) {
     return undefined;
   }
   const artifactPaths = (card.metadata?.artifacts ?? []).flatMap((artifact) =>
@@ -22,19 +31,19 @@ async function retainedWorkspacePath(card: WorkboardCard | undefined): Promise<s
   if (artifactPaths.length === 0) {
     return undefined;
   }
-  const workspaceRoot = path.resolve(workspace.path);
+  const workspaceRoot = path.resolve(workspacePath);
   try {
     const canonicalWorkspaceRoot = await canonicalPathFromExistingAncestor(workspaceRoot);
     for (const artifact of artifactPaths) {
       const artifactPath = path.resolve(workspaceRoot, artifact);
       const canonicalArtifactPath = await canonicalPathFromExistingAncestor(artifactPath);
       if (isPathInside(canonicalWorkspaceRoot, canonicalArtifactPath)) {
-        return workspace.path;
+        return workspacePath;
       }
     }
   } catch {
     // A path-resolution failure must not turn persisted local state into an unprotected tree.
-    return workspace.path;
+    return workspacePath;
   }
   return undefined;
 }
@@ -62,9 +71,34 @@ async function setArtifactRetentionClaim(params: {
 export function withWorkboardArtifactRetention(
   store: WorkboardKeyedStore,
   worktrees: WorktreeRetentionRuntime,
-): WorkboardKeyedStore {
+): WorkboardArtifactRetentionStore {
+  let reconciliation: Promise<void> | undefined;
+  const reconcileArtifactRetention = () => {
+    reconciliation ??= (async () => {
+      for (const entry of await store.entries()) {
+        const card = entry.value?.version === 1 ? entry.value.card : undefined;
+        const workspacePath = worktreeWorkspacePath(card);
+        if (!card || !workspacePath) {
+          continue;
+        }
+        await setArtifactRetentionClaim({
+          worktrees,
+          card,
+          workspacePath,
+          active: Boolean(await retainedWorkspacePath(card)),
+        });
+      }
+    })().catch((error: unknown) => {
+      reconciliation = undefined;
+      throw error;
+    });
+    return reconciliation;
+  };
+
   return {
+    reconcileArtifactRetention,
     async register(key, value) {
+      await reconcileArtifactRetention();
       const previous = await store.lookup(key);
       const previousCard = previous?.version === 1 ? previous.card : undefined;
       const nextPath = await retainedWorkspacePath(value.card);
@@ -100,9 +134,11 @@ export function withWorkboardArtifactRetention(
       }
     },
     async lookup(key) {
+      await reconcileArtifactRetention();
       return await store.lookup(key);
     },
     async delete(key) {
+      await reconcileArtifactRetention();
       const previous = await store.lookup(key);
       const previousCard = previous?.version === 1 ? previous.card : undefined;
       const previousPath = await retainedWorkspacePath(previousCard);
@@ -118,6 +154,7 @@ export function withWorkboardArtifactRetention(
       return deleted;
     },
     async entries() {
+      await reconcileArtifactRetention();
       return await store.entries();
     },
   };

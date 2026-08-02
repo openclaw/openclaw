@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { closeOpenClawStateDatabaseForTest } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { IDLE_GC_MS, ManagedWorktreeService } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -47,14 +48,7 @@ describe("Workboard artifact worktree retention", () => {
     now = 1_700_000_000_000;
     service = new ManagedWorktreeService({ env, now: () => now });
     sqlite = createWorkboardSqliteStores({ env });
-    const cards = withWorkboardArtifactRetention(sqlite.cards, {
-      setRetentionClaim: async (params) =>
-        service.setRetentionClaimByPath(
-          params.path,
-          { ownerKind: params.ownerKind, ownerId: params.ownerId },
-          { claimId: params.claimId, active: params.active },
-        ),
-    });
+    const cards = withWorkboardArtifactRetention(sqlite.cards, retentionWorktrees());
     store = new WorkboardStore(cards, {
       boards: sqlite.boards,
       subscriptions: sqlite.subscriptions,
@@ -87,6 +81,19 @@ describe("Workboard artifact worktree retention", () => {
       workspaceAccess: { unrestricted: true },
     });
     return { card, worktree };
+  }
+
+  function retentionWorktrees(
+    activeService = service,
+  ): Pick<PluginRuntime["worktrees"], "setRetentionClaim"> {
+    return {
+      setRetentionClaim: async (params) =>
+        activeService.setRetentionClaimByPath(
+          params.path,
+          { ownerKind: params.ownerKind, ownerId: params.ownerId },
+          { claimId: params.claimId, active: params.active },
+        ),
+    };
   }
 
   function runtimeWorktrees(activeService = service) {
@@ -132,6 +139,67 @@ describe("Workboard artifact worktree retention", () => {
       },
     });
     expect((await restarted.gc({ limits: { maxCount: 0 } })).removed).toEqual([worktree.id]);
+    await expect(fs.stat(worktree.path)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("reconciles artifacts persisted before retention claims existed", async () => {
+    const legacyStore = new WorkboardStore(sqlite.cards, {
+      boards: sqlite.boards,
+      subscriptions: sqlite.subscriptions,
+      attachments: sqlite.attachments,
+      dataVersion: sqlite.dataVersion,
+    });
+    const card = await legacyStore.create({
+      title: "legacy-artifact",
+      status: "ready",
+      runId: "run-legacy-artifact",
+    });
+    const worktree = await service.create({
+      repoRoot: repo,
+      name: "legacy-artifact",
+      ownerKind: "workboard",
+      ownerId: card.id,
+    });
+    await service.acquire(worktree.id);
+    await legacyStore.update(card.id, {
+      workspace: { kind: "worktree", path: worktree.path, branch: worktree.branch },
+      workspaceAccess: { unrestricted: true },
+    });
+    await fs.mkdir(path.join(worktree.path, "dist"));
+    await fs.writeFile(path.join(worktree.path, "dist", "report.txt"), "report\n");
+    await legacyStore.addArtifact(card.id, { path: "dist/report.txt" });
+
+    sqlite.close();
+    closeOpenClawStateDatabaseForTest();
+    service = new ManagedWorktreeService({ env, now: () => now });
+    sqlite = createWorkboardSqliteStores({ env });
+    const cards = withWorkboardArtifactRetention(sqlite.cards, retentionWorktrees());
+    store = new WorkboardStore(cards, {
+      boards: sqlite.boards,
+      subscriptions: sqlite.subscriptions,
+      attachments: sqlite.attachments,
+      dataVersion: sqlite.dataVersion,
+    });
+
+    await cleanupWorkboardRunWorktree({
+      store,
+      worktrees: runtimeWorktrees(),
+      runId: "run-legacy-artifact",
+    });
+    await expect(fs.stat(worktree.path)).resolves.toBeDefined();
+    now += IDLE_GC_MS + 1;
+    expect((await service.gc()).removed).toEqual([]);
+    expect((await service.gc({ limits: { maxCount: 0 } })).removed).toEqual([]);
+    expect((await service.gc({ limits: { maxTotalSizeBytes: 1 } })).removed).toEqual([]);
+
+    const persisted = await store.get(card.id);
+    await store.update(card.id, {
+      metadata: {
+        ...persisted?.metadata,
+        artifacts: [{ url: "https://example.invalid/report.txt" }],
+      },
+    });
+    expect((await service.gc({ limits: { maxCount: 0 } })).removed).toEqual([worktree.id]);
     await expect(fs.stat(worktree.path)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
