@@ -202,8 +202,9 @@ async function readProxyErrorData(
 }
 
 async function readProxySseChunk(
-  reader: Pick<SseByteGuard, "read" | "cancel">,
+  reader: Pick<SseByteGuard, "read">,
   readIdleTimeoutMs: number,
+  cancel: (reason?: unknown) => Promise<void>,
 ): Promise<ReadableStreamReadResult<Uint8Array>> {
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
@@ -213,7 +214,7 @@ async function readProxySseChunk(
     );
     timeoutId = setTimeout(() => {
       timedOut = true;
-      void reader.cancel(timeoutError);
+      void cancel(timeoutError);
       reject(timeoutError);
     }, readIdleTimeoutMs);
     void reader.read().then(
@@ -239,7 +240,7 @@ async function readProxySseChunk(
 
 function assertProxySsePendingBufferWithinLimit(
   buffer: string,
-  reader: ReadableStreamDefaultReader<Uint8Array>,
+  cancel: (reason?: unknown) => Promise<void>,
 ): void {
   const size = new TextEncoder().encode(buffer).byteLength;
   if (size <= PROXY_SSE_PENDING_BUFFER_MAX_BYTES) {
@@ -248,7 +249,7 @@ function assertProxySsePendingBufferWithinLimit(
   const error = new Error(
     `Proxy SSE pending buffer exceeded ${PROXY_SSE_PENDING_BUFFER_MAX_BYTES} bytes`,
   );
-  void reader.cancel(error).catch(() => undefined);
+  void cancel(error);
   throw error;
 }
 
@@ -280,12 +281,28 @@ export function streamProxy(
     };
 
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    let readerReachedEof = false;
+    let cleanupReason: unknown;
+    let cancellationRequested = false;
+    let cancellationReason: unknown;
+    let cancellationPromise: Promise<void> | undefined;
+    let sseReader: SseByteGuard | undefined;
     const readIdleTimeoutMs = resolveProxyReadIdleTimeoutMs(options.timeoutMs);
 
-    const abortHandler = () => {
-      if (reader) {
-        reader.cancel("Request aborted by user").catch(() => {});
+    const cancelReader = (reason?: unknown): Promise<void> => {
+      cancellationRequested = true;
+      cancellationReason ??= reason;
+      if (!reader) {
+        return Promise.resolve();
       }
+      cancellationPromise ??= (
+        sseReader?.cancel(cancellationReason) ?? reader.cancel(cancellationReason)
+      ).catch(() => undefined);
+      return cancellationPromise;
+    };
+
+    const abortHandler = () => {
+      void cancelReader("Request aborted by user");
     };
 
     if (options.signal) {
@@ -341,34 +358,40 @@ export function streamProxy(
       }
 
       reader = response.body!.getReader();
-      const sseReader = createSseByteGuard(reader, {
+      sseReader = createSseByteGuard(reader, {
         maxBytes: PROXY_SSE_STREAM_MAX_BYTES,
         onOverflow: ({ maxBytes }) => new Error(`Proxy SSE stream exceeded ${maxBytes} bytes`),
       });
+      if (cancellationRequested) {
+        void cancelReader(cancellationReason);
+      }
       const decoder = new TextDecoder();
       let buffer = "";
       let terminalEventSeen = false;
 
-      const processSseLine = (line: string) => {
+      const processSseLine = (line: string): boolean => {
         if (!line.startsWith("data: ")) {
-          return;
+          return false;
         }
         const data = line.slice(6).trim();
         if (!data) {
-          return;
+          return false;
         }
         const proxyEvent = JSON.parse(data) as ProxyAssistantMessageEvent;
         const event = processProxyEvent(proxyEvent, partial);
         if (!event) {
-          return;
+          return false;
         }
-        terminalEventSeen = event.type === "done" || event.type === "error";
+        const isTerminal = event.type === "done" || event.type === "error";
+        terminalEventSeen ||= isTerminal;
         stream.push(event);
+        return isTerminal;
       };
 
       while (true) {
-        const { done, value } = await readProxySseChunk(sseReader, readIdleTimeoutMs);
+        const { done, value } = await readProxySseChunk(sseReader, readIdleTimeoutMs, cancelReader);
         if (done) {
+          readerReachedEof = !cancellationRequested;
           break;
         }
 
@@ -379,19 +402,28 @@ export function streamProxy(
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
         buffer = lines.pop() || "";
-        assertProxySsePendingBufferWithinLimit(buffer, reader);
+        assertProxySsePendingBufferWithinLimit(buffer, cancelReader);
 
         for (const line of lines) {
-          processSseLine(line);
+          if (processSseLine(line)) {
+            break;
+          }
+        }
+        if (terminalEventSeen) {
+          // A terminal event completes the public result even if HTTP stays
+          // open. Stop here so late frames cannot mutate that resolved result.
+          break;
         }
       }
 
       if (options.signal?.aborted) {
         throw new Error("Request aborted by user");
       }
-      buffer += decoder.decode();
-      if (buffer.trim()) {
-        processSseLine(buffer);
+      if (readerReachedEof) {
+        buffer += decoder.decode();
+        if (buffer.trim()) {
+          processSseLine(buffer);
+        }
       }
       if (!terminalEventSeen) {
         throw new Error("Proxy stream ended before terminal event");
@@ -399,6 +431,7 @@ export function streamProxy(
 
       stream.end();
     } catch (error) {
+      cleanupReason = error;
       const errorMessage = error instanceof Error ? error.message : String(error);
       const reason = options.signal?.aborted ? "aborted" : "error";
       partial.stopReason = reason;
@@ -410,6 +443,9 @@ export function streamProxy(
       });
       stream.end();
     } finally {
+      if (reader && !readerReachedEof) {
+        await cancelReader(cleanupReason);
+      }
       try {
         reader?.releaseLock();
       } catch {
