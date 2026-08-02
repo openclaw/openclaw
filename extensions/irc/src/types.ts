@@ -35,6 +35,8 @@ export type IrcAccountConfig = {
   enabled?: boolean;
   /** Allow channel-initiated config writes (default: true). */
   configWrites?: boolean;
+  /** Heartbeat visibility overrides for this channel/account. */
+  heartbeatVisibility?: { showOk?: boolean; showAlerts?: boolean; useIndicator?: boolean };
   /**
    * Break-glass override: allow nick-only allowlist matching.
    * Default behavior requires host/user-qualified identities.

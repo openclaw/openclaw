@@ -161,6 +161,8 @@ export type MatrixConfig = {
   mentionPatterns?: MentionPatternsPolicyConfig;
   /** Supplemental context visibility policy (all|allowlist|allowlist_quote). */
   contextVisibility?: ContextVisibilityMode;
+  /** Heartbeat visibility overrides for this channel/account. */
+  heartbeatVisibility?: { showOk?: boolean; showAlerts?: boolean; useIndicator?: boolean };
   /** Allowlist for group senders (matrix user IDs). */
   groupAllowFrom?: Array<string | number>;
   /** Control reply threading when reply tags are present (off|first|all|batched). */

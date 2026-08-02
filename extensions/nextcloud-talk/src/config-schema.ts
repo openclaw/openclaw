@@ -29,6 +29,14 @@ const NextcloudTalkAccountSchemaBase = z
     name: z.string().optional(),
     enabled: z.boolean().optional(),
     configWrites: z.boolean().optional(),
+    heartbeatVisibility: z
+      .object({
+        showOk: z.boolean().optional(),
+        showAlerts: z.boolean().optional(),
+        useIndicator: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     markdown: MarkdownConfigSchema,
     baseUrl: z.string().optional(),
     botSecret: buildSecretInputSchema().optional(),

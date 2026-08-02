@@ -131,6 +131,14 @@ const MatrixConfigSchema = z.object({
   name: z.string().optional(),
   enabled: z.boolean().optional(),
   configWrites: z.boolean().optional(),
+  heartbeatVisibility: z
+    .object({
+      showOk: z.boolean().optional(),
+      showAlerts: z.boolean().optional(),
+      useIndicator: z.boolean().optional(),
+    })
+    .strict()
+    .optional(),
   defaultAccount: z.string().optional(),
   // Accounts stay schema-open, but retired scalar streaming must fail loudly
   // instead of silently resolving to "off"; doctor migrates the old spelling.

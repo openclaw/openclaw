@@ -17,6 +17,14 @@ const SmsAccountConfigSchema = z
     name: z.string().optional(),
     enabled: z.boolean().optional(),
     configWrites: z.boolean().optional(),
+    heartbeatVisibility: z
+      .object({
+        showOk: z.boolean().optional(),
+        showAlerts: z.boolean().optional(),
+        useIndicator: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     accountSid: z.string().optional(),
     authToken: SecretInputSchema.optional(),
     fromNumber: z.string().optional(),

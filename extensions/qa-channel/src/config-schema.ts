@@ -27,6 +27,14 @@ const QaChannelAccountConfigSchema = z
     name: z.string().optional(),
     enabled: z.boolean().optional(),
     configWrites: z.boolean().optional(),
+    heartbeatVisibility: z
+      .object({
+        showOk: z.boolean().optional(),
+        showAlerts: z.boolean().optional(),
+        useIndicator: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     baseUrl: z.string().url().optional(),
     botUserId: z.string().optional(),
     botDisplayName: z.string().optional(),

@@ -100,6 +100,8 @@ export type ZalouserGroupConfig = {
 };
 
 type ZalouserSharedConfig = {
+  /** Heartbeat visibility overrides for this channel/account. */
+  heartbeatVisibility?: { showOk?: boolean; showAlerts?: boolean; useIndicator?: boolean };
   enabled?: boolean;
   name?: string;
   profile?: string;

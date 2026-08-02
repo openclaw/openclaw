@@ -25,6 +25,8 @@ export type MattermostAccountConfig = {
   dangerouslyAllowNameMatching?: boolean;
   /** Allow channel-initiated config writes (default: true). */
   configWrites?: boolean;
+  /** Heartbeat visibility overrides for this channel/account. */
+  heartbeatVisibility?: { showOk?: boolean; showAlerts?: boolean; useIndicator?: boolean };
   /** If false, do not start this Mattermost account. Default: true. */
   enabled?: boolean;
   /** Bot token for Mattermost. */

@@ -79,6 +79,14 @@ export const NostrConfigSchema = z.object({
   /** Whether this channel is enabled */
   enabled: z.boolean().optional(),
   configWrites: z.boolean().optional(),
+  heartbeatVisibility: z
+    .object({
+      showOk: z.boolean().optional(),
+      showAlerts: z.boolean().optional(),
+      useIndicator: z.boolean().optional(),
+    })
+    .strict()
+    .optional(),
 
   /** Markdown formatting overrides (tables). */
   markdown: MarkdownConfigSchema,

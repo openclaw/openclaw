@@ -14,6 +14,14 @@ export const ReefChannelConfigSchema = z
   .object({
     enabled: z.boolean().default(true),
     configWrites: z.boolean().optional(),
+    heartbeatVisibility: z
+      .object({
+        showOk: z.boolean().optional(),
+        showAlerts: z.boolean().optional(),
+        useIndicator: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     relayUrl: RelayUrlSchema.default("https://reefwire.ai"),
     handle: HandleSchema.optional(),
     email: z.email().optional(),

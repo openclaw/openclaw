@@ -9,6 +9,8 @@ import {
 } from "openclaw/plugin-sdk/ssrf-runtime";
 
 type TlonAccountConfig = {
+  /** Heartbeat visibility overrides for this channel/account. */
+  heartbeatVisibility?: { showOk?: boolean; showAlerts?: boolean; useIndicator?: boolean };
   name?: string;
   enabled?: boolean;
   ship?: string;

@@ -19,6 +19,8 @@ export type ClickClackGroupConfig = {
 
 /** User-configurable settings for one ClickClack account. */
 export type ClickClackAccountConfig = {
+  /** Heartbeat visibility overrides for this channel/account. */
+  heartbeatVisibility?: { showOk?: boolean; showAlerts?: boolean; useIndicator?: boolean };
   name?: string;
   enabled?: boolean;
   baseUrl?: string;
