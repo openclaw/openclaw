@@ -100,6 +100,8 @@ async function runMessageActivity(params: {
       return handler;
     },
     onMembersAdded: () => handler,
+    onMembersRemoved: () => handler,
+    onInstallationUpdate: () => handler,
     onReactionsAdded: () => handler,
     onReactionsRemoved: () => handler,
     run: vi.fn(async () => undefined),

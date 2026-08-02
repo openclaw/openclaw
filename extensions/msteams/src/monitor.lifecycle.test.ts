@@ -278,6 +278,25 @@ function createStores() {
   };
 }
 
+function startDefaultMonitor(abortSignal: AbortSignal) {
+  const stores = createStores();
+  return monitorMSTeamsProvider({
+    cfg: createConfig(0),
+    runtime: createRuntime(),
+    abortSignal,
+    conversationStore: stores.conversationStore,
+    pollStore: stores.pollStore,
+  });
+}
+
+async function requireLoadedMSTeamsApp() {
+  const sdkResultPromise = loadMSTeamsSdkWithAuth.mock.results[0]?.value;
+  if (!sdkResultPromise) {
+    throw new Error("expected loadMSTeamsSdkWithAuth result");
+  }
+  return (await sdkResultPromise).app;
+}
+
 function requireRegisteredMSTeamsConfig(): OpenClawConfig {
   const registered = registerMSTeamsHandlers.mock.calls[0]?.[1] as
     | { cfg?: OpenClawConfig }
@@ -586,11 +605,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       expect(registerMSTeamsHandlers).toHaveBeenCalled();
     });
 
-    const sdkResultPromise = loadMSTeamsSdkWithAuth.mock.results[0]?.value;
-    if (!sdkResultPromise) {
-      throw new Error("expected loadMSTeamsSdkWithAuth result");
-    }
-    const app = (await sdkResultPromise).app;
+    const app = await requireLoadedMSTeamsApp();
     const signinHandler = app.event.mock.calls.find(
       (call: [string, unknown]) => call[0] === "signin",
     )?.[1];
@@ -636,11 +651,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       expect(registerMSTeamsHandlers).toHaveBeenCalled();
     });
 
-    const sdkResultPromise = loadMSTeamsSdkWithAuth.mock.results[0]?.value;
-    if (!sdkResultPromise) {
-      throw new Error("expected loadMSTeamsSdkWithAuth result");
-    }
-    const app = (await sdkResultPromise).app;
+    const app = await requireLoadedMSTeamsApp();
     const tokenExchangeHandler = app.on.mock.calls.find(
       (call: [string, unknown]) => call[0] === "signin.token-exchange",
     )?.[1];
@@ -675,11 +686,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       expect(registerMSTeamsHandlers).toHaveBeenCalled();
     });
 
-    const sdkResultPromise = loadMSTeamsSdkWithAuth.mock.results[0]?.value;
-    if (!sdkResultPromise) {
-      throw new Error("expected loadMSTeamsSdkWithAuth result");
-    }
-    const app = (await sdkResultPromise).app;
+    const app = await requireLoadedMSTeamsApp();
     const messageSubmitHandler = app.on.mock.calls.find(
       (call: [string, unknown]) => call[0] === "message.submit",
     )?.[1];
@@ -699,10 +706,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     await messageSubmitHandler({ activity, next });
     expect(next).toHaveBeenCalledTimes(1);
 
-    const registeredHandler = registerMSTeamsHandlers.mock.calls[0]?.[0];
-    if (!registeredHandler) {
-      throw new Error("expected registered Teams handler");
-    }
+    const registeredHandler = registerMSTeamsHandlers.mock.calls[0]![0];
     const run = vi.spyOn(registeredHandler, "run");
     const getTeamDetails = vi.fn(async () => ({ aadGroupId: "activity-aad-group" }));
     await activityHandler({
@@ -723,6 +727,51 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     await task;
   });
 
+  it("dispatches Teams removal lifecycle activities to registered lifecycle handlers", async () => {
+    const abort = new AbortController();
+    const task = startDefaultMonitor(abort.signal);
+
+    await vi.waitFor(() => expect(registerMSTeamsHandlers).toHaveBeenCalled());
+
+    const app = await requireLoadedMSTeamsApp();
+    const activityHandler = app.on.mock.calls.find(
+      (call: [string, unknown]) => call[0] === "activity",
+    )?.[1];
+    if (typeof activityHandler !== "function") {
+      throw new Error("expected activity handler");
+    }
+
+    const registeredHandler = registerMSTeamsHandlers.mock.calls[0]?.[0];
+    if (!registeredHandler) {
+      throw new Error("expected registered Teams handler");
+    }
+    const installationUpdate = vi.fn(async () => {});
+    const membersRemoved = vi.fn(async () => {});
+    registeredHandler.onInstallationUpdate(installationUpdate);
+    registeredHandler.onMembersRemoved(membersRemoved);
+
+    await activityHandler({
+      activity: {
+        type: "installationUpdate",
+        action: "remove",
+        conversation: { id: "19:personal", conversationType: "personal" },
+      },
+    });
+    await activityHandler({
+      activity: {
+        type: "conversationUpdate",
+        membersRemoved: [{ id: "bot-id" }],
+        conversation: { id: "19:channel", conversationType: "channel" },
+      },
+    });
+
+    expect(installationUpdate).toHaveBeenCalledTimes(1);
+    expect(membersRemoved).toHaveBeenCalledTimes(1);
+
+    abort.abort();
+    await task;
+  });
+
   it("acks file-consent invokes before upload work settles", async () => {
     let releaseUpload: (() => void) | undefined;
     const uploadWork = new Promise<void>((resolve) => {
@@ -731,23 +780,13 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     runMSTeamsFileConsentInvokeHandler.mockReturnValueOnce(uploadWork);
 
     const abort = new AbortController();
-    const task = monitorMSTeamsProvider({
-      cfg: createConfig(0),
-      runtime: createRuntime(),
-      abortSignal: abort.signal,
-      conversationStore: createStores().conversationStore,
-      pollStore: createStores().pollStore,
-    });
+    const task = startDefaultMonitor(abort.signal);
 
     await waitForMSTeamsTestState(() => {
       expect(registerMSTeamsHandlers).toHaveBeenCalled();
     });
 
-    const sdkResultPromise = loadMSTeamsSdkWithAuth.mock.results[0]?.value;
-    if (!sdkResultPromise) {
-      throw new Error("expected loadMSTeamsSdkWithAuth result");
-    }
-    const app = (await sdkResultPromise).app;
+    const app = await requireLoadedMSTeamsApp();
     const fileConsentHandler = app.on.mock.calls.find(
       (call: [string, unknown]) => call[0] === "file.consent.accept",
     )?.[1];
@@ -768,23 +807,13 @@ describe("monitorMSTeamsProvider lifecycle", () => {
 
   it("acks non-poll card actions after durable admission, before agent dispatch settles", async () => {
     const abort = new AbortController();
-    const task = monitorMSTeamsProvider({
-      cfg: createConfig(0),
-      runtime: createRuntime(),
-      abortSignal: abort.signal,
-      conversationStore: createStores().conversationStore,
-      pollStore: createStores().pollStore,
-    });
+    const task = startDefaultMonitor(abort.signal);
 
     await waitForMSTeamsTestState(() => {
       expect(registerMSTeamsHandlers).toHaveBeenCalled();
     });
 
-    const sdkResultPromise = loadMSTeamsSdkWithAuth.mock.results[0]?.value;
-    if (!sdkResultPromise) {
-      throw new Error("expected loadMSTeamsSdkWithAuth result");
-    }
-    const app = (await sdkResultPromise).app;
+    const app = await requireLoadedMSTeamsApp();
     const cardActionHandler = app.on.mock.calls.find(
       (call: [string, unknown]) => call[0] === "card.action",
     )?.[1];
@@ -865,11 +894,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       expect(registerMSTeamsHandlers).toHaveBeenCalled();
     });
 
-    const sdkResultPromise = loadMSTeamsSdkWithAuth.mock.results[0]?.value;
-    if (!sdkResultPromise) {
-      throw new Error("expected loadMSTeamsSdkWithAuth result");
-    }
-    const app = (await sdkResultPromise).app;
+    const app = await requireLoadedMSTeamsApp();
     const cardActionHandler = app.on.mock.calls.find(
       (call: [string, unknown]) => call[0] === "card.action",
     )?.[1];
@@ -925,11 +950,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       expect(registerMSTeamsHandlers).toHaveBeenCalled();
     });
 
-    const sdkResultPromise = loadMSTeamsSdkWithAuth.mock.results[0]?.value;
-    if (!sdkResultPromise) {
-      throw new Error("expected loadMSTeamsSdkWithAuth result");
-    }
-    const app = (await sdkResultPromise).app;
+    const app = await requireLoadedMSTeamsApp();
     const cardActionHandler = app.on.mock.calls.find(
       (call: [string, unknown]) => call[0] === "card.action",
     )?.[1];

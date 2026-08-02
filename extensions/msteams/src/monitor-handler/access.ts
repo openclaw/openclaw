@@ -218,6 +218,7 @@ export async function admitMSTeamsMessage(params: {
   conversationStore: MSTeamsConversationStore;
   log: MSTeamsMonitorLogger;
   logVerboseMessage: (message: string) => void;
+  persistConversationRef?: boolean;
 }) {
   const core = getMSTeamsRuntime();
   const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
@@ -372,13 +373,15 @@ export async function admitMSTeamsMessage(params: {
     return null;
   }
 
-  params.conversationStore
-    .upsert(params.conversationId, params.conversationRef)
-    .catch((err: unknown) => {
-      params.log.debug?.("failed to save conversation reference", {
-        error: formatUnknownError(err),
+  if (params.persistConversationRef !== false) {
+    params.conversationStore
+      .upsert(params.conversationId, params.conversationRef)
+      .catch((err: unknown) => {
+        params.log.debug?.("failed to save conversation reference", {
+          error: formatUnknownError(err),
+        });
       });
-    });
+  }
 
   return {
     ...access,

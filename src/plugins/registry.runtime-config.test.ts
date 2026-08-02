@@ -517,6 +517,27 @@ describe("plugin registry runtime config scope", () => {
       });
       return patch ? { ...entry, ...patch } : entry;
     });
+    const resetSessionEntryLifecycle = vi.fn(async (params) => {
+      const entry = entries[params.sessionKey as keyof typeof entries];
+      if (!entry) {
+        return null;
+      }
+      if (!("sessionId" in entry)) {
+        return null;
+      }
+      if (params.releasePhysicalOwner) {
+        await params.releasePhysicalOwner({
+          entry,
+          reason: "reset",
+          ...("sessionFile" in entry ? { sessionFile: entry.sessionFile } : {}),
+          sessionId: entry.sessionId,
+          sessionKey: params.sessionKey,
+          storePath: "/tmp/sessions.json",
+        });
+      }
+      return { ...entry, sessionId: "reset-session", updatedAt: 0 };
+    });
+    session.resetSessionEntryLifecycle = resetSessionEntryLifecycle;
     session.upsertSessionEntry = vi.fn(async () => {});
     session.updateSessionStoreEntry = vi.fn(
       async (params) => typedEntries[params.sessionKey] ?? null,
@@ -566,10 +587,12 @@ describe("plugin registry runtime config scope", () => {
     const ownerApi = pluginRegistry.createApi(ownerRecord, { config: {} as OpenClawConfig });
     const otherApi = pluginRegistry.createApi(otherRecord, { config: {} as OpenClawConfig });
     const voiceApi = pluginRegistry.createApi(voiceRecord, { config: {} as OpenClawConfig });
+    const harnessReset = vi.fn(async () => {});
     ownerApi.registerAgentHarness({
       id: "codex",
       label: "Codex",
       delegatedExecutionPluginIds: ["voice-call"],
+      reset: harnessReset,
       supports: () => ({ supported: true }),
       runAttempt: async () => {
         throw new Error("unused");
@@ -639,6 +662,31 @@ describe("plugin registry runtime config scope", () => {
         update: () => ({ label: "must stay owner-only" }),
       }),
     ).rejects.toThrow('owned by plugin "codex-owner"');
+    await expect(
+      voiceApi.runtime.agent.session.resetSessionEntryLifecycle({
+        sessionKey: reservedKey,
+        update: () => ({ updatedAt: 0 }),
+      }),
+    ).rejects.toThrow('owned by plugin "codex-owner"');
+
+    await expect(
+      ownerApi.runtime.agent.session.resetSessionEntryLifecycle({
+        sessionKey: reservedKey,
+        update: () => ({ updatedAt: 0 }),
+      }),
+    ).resolves.toMatchObject({ sessionId: "reset-session", updatedAt: 0 });
+    expect(resetSessionEntryLifecycle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        releasePhysicalOwner: expect.any(Function),
+        sessionKey: reservedKey,
+      }),
+    );
+    expect(harnessReset).toHaveBeenCalledWith({
+      reason: "reset",
+      sessionFile: reservedEntry.sessionFile,
+      sessionId: reservedEntry.sessionId,
+      sessionKey: reservedKey,
+    });
 
     await expect(
       otherApi.runtime.agent.session.patchSessionEntry({
@@ -718,6 +766,13 @@ describe("plugin registry runtime config scope", () => {
         archived: true,
       }),
     ).rejects.toThrow('owned by plugin "codex-owner"');
+    for (const method of ["sessions.branches.switch", "sessions.rewind", "sessions.fork"]) {
+      await expect(
+        otherApi.runtime.gateway.request(method, {
+          sessionKey: reservedKey,
+        }),
+      ).rejects.toThrow('owned by plugin "codex-owner"');
+    }
     await expect(
       otherApi.runtime.gateway.request("agent", {
         sessionId: reservedEntry.sessionId,

@@ -27,6 +27,7 @@ import {
   prepareMSTeamsDebounceEntry,
   type MSTeamsDebounceEntry,
 } from "./inbound-facts.js";
+import { handleMSTeamsDmConversationBoundary } from "./lifecycle-handler.js";
 import { prepareMSTeamsThreadRouting, resolveMSTeamsThreadContext } from "./thread-context.js";
 
 export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
@@ -117,6 +118,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       conversationStore,
       log,
       logVerboseMessage,
+      persistConversationRef: false,
     });
     if (!admission) {
       return;
@@ -174,6 +176,29 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       log,
     });
     const { route, deadline: preprocessingDeadline } = threadRouting;
+
+    if (isDirectMessage) {
+      try {
+        await handleMSTeamsDmConversationBoundary({
+          deps,
+          conversationId,
+          senderId,
+          botId: activity.recipient?.id,
+          routeSessionKey: route.sessionKey,
+          agentId: route.agentId,
+        });
+      } catch (err) {
+        log.debug?.("failed to handle msteams dm conversation boundary", {
+          error: formatUnknownError(err),
+        });
+      }
+    }
+
+    conversationStore.upsert(conversationId, conversationRef).catch((err: unknown) => {
+      log.debug?.("failed to save conversation reference", {
+        error: formatUnknownError(err),
+      });
+    });
 
     const inboundLabel = isDirectMessage
       ? `Teams DM from ${senderName}`

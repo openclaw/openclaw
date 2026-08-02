@@ -196,6 +196,8 @@ export function createActivityHandler(
   } = {
     onMessage: () => handler,
     onMembersAdded: () => handler,
+    onMembersRemoved: () => handler,
+    onInstallationUpdate: () => handler,
     onReactionsAdded: () => handler,
     onReactionsRemoved: () => handler,
     run,
