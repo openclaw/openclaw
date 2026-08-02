@@ -243,41 +243,26 @@ describe("loadCodexBundleMcpThreadConfig", () => {
     }
   });
 
-  it("uses full-set safe names for Codex materialization precheck collisions", () => {
-    // Sibling Codex path shares shouldCreateBundleMcpRuntimeForAttempt; prove the
-    // thread-config gate honors collision suffixes from the full declared set.
+  it("does not open the Codex bundle loader for user-server toolsAllow globs", () => {
+    // User MCP projection is separate; a matching user-server glob must not
+    // activate unrelated enabled bundled servers through this loader.
     mocks.bundleMcp = {
       config: {
         mcpServers: {
-          "mail-prod": {
+          unrelated: {
             type: "http",
-            url: "https://mcp.example.com/mail-prod",
+            url: "https://bundled.example.com/unrelated",
           },
         },
       },
       diagnostics: [],
     };
-    const cfgWithCollisionPeer = {
+    const cfg = {
       mcp: {
         servers: {
-          "mail.prod": {
+          search: {
             transport: "streamable-http",
-            url: "https://a.example/mcp",
-            enabled: false,
-          },
-          "mail-prod": {
-            transport: "streamable-http",
-            url: "https://b.example/mcp",
-          },
-        },
-      },
-    } as const;
-    const cfgWithoutCollisionPeer = {
-      mcp: {
-        servers: {
-          "mail-prod": {
-            transport: "streamable-http",
-            url: "https://b.example/mcp",
+            url: "https://user.example.com/search",
           },
         },
       },
@@ -285,24 +270,13 @@ describe("loadCodexBundleMcpThreadConfig", () => {
 
     const loaded = loadCodexBundleMcpThreadConfig({
       workspaceDir: "/workspace",
-      cfg: cfgWithCollisionPeer,
+      cfg,
       toolsEnabled: true,
-      toolsAllow: ["mail-prod-2*"],
+      toolsAllow: ["search*"],
     });
     expect(loaded.evaluated).toBe(true);
-    expect(loaded.configPatch?.mcp_servers).toMatchObject({
-      "mail-prod": { url: "https://mcp.example.com/mail-prod" },
-    });
-
-    // Without the declared peer, the alias is mail-prod — mail-prod-2* must not open MCP.
-    const skipped = loadCodexBundleMcpThreadConfig({
-      workspaceDir: "/workspace",
-      cfg: cfgWithoutCollisionPeer,
-      toolsEnabled: true,
-      toolsAllow: ["mail-prod-2*"],
-    });
-    expect(skipped.configPatch).toBeUndefined();
-    expect(skipped.evaluated).toBe(true);
+    expect(loaded.configPatch).toBeUndefined();
+    expect(loaded.fingerprint).toBeUndefined();
   });
 
   it("omits the config patch when no MCP servers are configured", () => {

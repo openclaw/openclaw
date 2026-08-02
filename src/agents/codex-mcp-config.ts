@@ -23,10 +23,7 @@ import type {
   CodexMcpServersConfig,
   LoadCodexBundleMcpThreadConfigParams,
 } from "./codex-mcp-config.types.js";
-import {
-  listMaterializableMcpServerNames,
-  shouldCreateBundleMcpRuntimeForAttempt,
-} from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
+import { shouldCreateBundleMcpRuntimeForAttempt } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { partitionMcpServersByConnectionScope } from "./mcp-connection-resolver.js";
 
 function isOpenClawLoopbackMcpServer(name: string, server: BundleMcpServerConfig): boolean {
@@ -215,18 +212,13 @@ function fingerprintCodexMcpServersConfig(config: CodexMcpServersConfig): string
 export function loadCodexBundleMcpThreadConfig(
   params: LoadCodexBundleMcpThreadConfigParams,
 ): CodexBundleMcpThreadConfig {
-  const configuredMcpServers = params.cfg?.mcp?.servers;
-  const configuredMcpServerNames = listMaterializableMcpServerNames({
-    servers: configuredMcpServers,
-    toolOverrides: params.toolOverrides,
-  });
-  const declaredMcpServerNames = Object.keys(configuredMcpServers ?? {});
+  // Bundle-only gate: do not pass user `cfg.mcp.servers` names here.
+  // User MCP is projected separately; a user-server glob must not open this
+  // loader and drag in unrelated enabled bundled servers.
   const shouldCreateRuntime = shouldCreateBundleMcpRuntimeForAttempt({
     toolsEnabled: params.toolsEnabled ?? true,
     disableTools: params.disableTools,
     toolsAllow: params.toolsAllow,
-    mcpServerNames: configuredMcpServerNames,
-    mcpDeclaredServerNames: declaredMcpServerNames,
   });
   if (!shouldCreateRuntime) {
     return {
