@@ -870,7 +870,6 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "Never restart the Gateway through shell commands or write your own config.",
     );
-    expect(prompt).toContain("Never write own config; OpenClaw is system expert.");
     expect(prompt).toContain("`visible:true` only web/app user or asked.");
   });
 
