@@ -180,7 +180,13 @@ export function resolveEmbeddedAgentStreamFn(
 
   const currentStreamFn = params.currentStreamFn ?? llmRuntime.streamSimple;
   if (params.model.provider === "anthropic-vertex") {
-    return createAnthropicVertexStreamFnForModel(params.model);
+    const vertexStreamFn = createAnthropicVertexStreamFnForModel(params.model);
+    return params.signal
+      ? wrapEmbeddedAgentStreamFn(vertexStreamFn, {
+          runSignal: params.signal,
+          providerId: params.model.provider,
+        })
+      : vertexStreamFn;
   }
 
   const openClawNativeCodexResponsesStreamFn = resolveOpenClawNativeCodexResponsesStreamFn({
@@ -245,14 +251,11 @@ export function resolveEmbeddedAgentStreamFn(
   }
 
   const promptCacheKey = params.promptCacheKey?.trim();
-  if (!promptCacheKey) {
+  if (!promptCacheKey && !params.signal) {
     return currentStreamFn;
   }
   return wrapEmbeddedAgentStreamFn(currentStreamFn, {
     runSignal: params.signal,
-    resolvedApiKey: undefined,
-    authProfileId: undefined,
-    authStorage: undefined,
     providerId: params.model.provider,
     promptCacheKey,
   });
@@ -291,9 +294,9 @@ function wrapEmbeddedAgentStreamFn(
   inner: StreamFn,
   params: {
     runSignal: AbortSignal | undefined;
-    resolvedApiKey: string | undefined;
-    authProfileId: string | undefined;
-    authStorage: { getApiKey(provider: string): Promise<string | undefined> } | undefined;
+    resolvedApiKey?: string;
+    authProfileId?: string;
+    authStorage?: { getApiKey(provider: string): Promise<string | undefined> };
     providerId: string;
     sessionId?: string;
     promptCacheKey?: string;
