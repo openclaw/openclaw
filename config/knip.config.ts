@@ -379,6 +379,9 @@ const config = {
     // Registry facades retain direct registration/reset compatibility seams used by focused
     // tests; the full-tree scan still audits every named export against those consumers.
     "src/agents/harness/registry.ts": ["exports"],
+    // Focused lifecycle-revision unit tests consume this test seam; production
+    // code imports only loadRequesterLifecycleRevision.
+    "src/agents/subagent-requester-lifecycle.ts": ["exports"],
     "src/context-engine/registry.ts": ["exports", "types"],
     "src/plugins/compaction-provider.ts": ["exports"],
     "src/plugins/interactive-registry.ts": ["exports"],
