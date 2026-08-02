@@ -193,6 +193,16 @@ function scrubEnvRaw(
   };
 }
 
+function collectPlannedEnvRefIds(targets: readonly SecretsPlanTarget[]): Set<string> {
+  const envRefIds = new Set<string>();
+  for (const target of targets) {
+    if (target.ref.source === "env") {
+      envRefIds.add(target.ref.id);
+    }
+  }
+  return envRefIds;
+}
+
 function applyProviderPlanMutations(params: {
   config: OpenClawConfig;
   upserts: Record<string, SecretProviderConfig> | undefined;
@@ -331,10 +341,12 @@ async function projectPlanState(params: {
     enabled: options.scrubAuthProfilesForProviderTargets,
   });
 
+  const plannedEnvRefIds = collectPlannedEnvRefIds(params.plan.targets);
   const envRawByPath = scrubEnvFiles({
     configPath,
     stateDir,
     scrubbedValues: targetMutations.scrubbedValues,
+    plannedEnvRefIds,
     changedFiles,
     enabled: options.scrubEnv,
   });
@@ -695,6 +707,7 @@ function scrubEnvFiles(params: {
   configPath: string;
   stateDir: string;
   scrubbedValues: Set<string>;
+  plannedEnvRefIds: Set<string>;
   changedFiles: Set<string>;
   enabled: boolean;
 }): Map<string, string> {
@@ -703,6 +716,9 @@ function scrubEnvFiles(params: {
     return envRawByPath;
   }
   const knownSecretEnvVars = new Set(listKnownSecretEnvVarNames());
+  for (const envRefId of params.plannedEnvRefIds) {
+    knownSecretEnvVars.delete(envRefId);
+  }
   for (const envPath of listSecretsDotEnvPaths({
     configPath: params.configPath,
     stateDir: params.stateDir,
