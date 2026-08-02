@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { CryptoEvent } from "matrix-js-sdk/lib/crypto-api/CryptoEvent.js";
 import type { DecryptionFailureCode as DecryptionFailureCodeValue } from "matrix-js-sdk/lib/crypto-api/index.js";
+import { RoomEvent, type ISyncResponse } from "matrix-js-sdk/lib/matrix.js";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixTestRuntime } from "../test-runtime.js";
@@ -222,6 +223,11 @@ class FakeMatrixEvent extends EventEmitter {
     this.emit("decrypted", this, new Error(reason));
   }
 
+  setDecryptionFailureReason(reason: DecryptionFailureCodeValue): void {
+    this.decryptionFailure = true;
+    this.decryptionFailureReasonValue = reason;
+  }
+
   markDecrypted(params: { type: string; content: Record<string, unknown> }): void {
     this.type = params.type;
     this.content = params.content;
@@ -336,6 +342,11 @@ function createMatrixJsClientStub(): MatrixJsClientStub {
 
 let matrixJsClient = createMatrixJsClientStub();
 let lastCreateClientOpts: Record<string, unknown> | null = null;
+
+function emitTimelineEvent(event: FakeMatrixEvent, liveEvent: boolean): void {
+  matrixJsClient.emit(RoomEvent.Timeline, event, undefined, false, false, { liveEvent });
+  matrixJsClient.emit("event", event);
+}
 
 vi.mock("matrix-js-sdk/lib/matrix.js", async () => {
   const actual = await vi.importActual<typeof import("matrix-js-sdk/lib/matrix.js")>(
@@ -877,10 +888,49 @@ describe("MatrixClient request hardening", () => {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
+
+  it("trusts a persisted sync cursor after an unclean restart", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-sdk-crash-store-"));
+
+    try {
+      const crashedClient = new MatrixClient("https://matrix.example.org", "token", {
+        storageRootDir: tempDir,
+      });
+      const store = lastCreateClientOpts?.store as
+        | {
+            setSyncData: (data: ISyncResponse) => Promise<void>;
+            flush: () => Promise<void>;
+          }
+        | undefined;
+      if (!store) {
+        throw new Error("expected Matrix sync store");
+      }
+      await store.setSyncData({
+        next_batch: "s-before-crash",
+        rooms: { join: {}, invite: {}, leave: {}, knock: {} },
+        account_data: { events: [] },
+      });
+      await store.flush();
+      crashedClient.stopWithoutPersist();
+
+      const restartedClient = new MatrixClient("https://matrix.example.org", "token", {
+        storageRootDir: tempDir,
+      });
+
+      expect(restartedClient.hasPersistedSyncState()).toBe(true);
+      restartedClient.stopWithoutPersist();
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("MatrixClient event bridge", () => {
+  const tempDirs: string[] = [];
+
   beforeEach(() => {
+    resetPluginStateStoreForTests();
+    installMatrixTestRuntime();
     matrixJsClient = createMatrixJsClientStub();
     lastCreateClientOpts = null;
   });
@@ -888,6 +938,583 @@ describe("MatrixClient event bridge", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    resetPluginStateStoreForTests();
+    for (const dir of tempDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  async function createRestartedClient(params: {
+    cleanShutdown: boolean;
+    emitCachedEvents: () => void;
+    pendingReplayEvents?: Array<{
+      roomId: string;
+      eventId: string;
+      type?: string;
+      content?: Record<string, unknown>;
+    }>;
+  }): Promise<InstanceType<typeof MatrixClient>> {
+    const storageRootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-sdk-replay-"));
+    tempDirs.push(storageRootDir);
+    const seedClient = new MatrixClient("https://matrix.example.org", "token", {
+      storageRootDir,
+    });
+    const seedStore = lastCreateClientOpts?.store as
+      | {
+          flush: () => Promise<void>;
+          markCleanShutdown: () => void;
+          notePendingReplayEvent: (
+            roomId: string,
+            eventId: string,
+            event: Record<string, unknown>,
+          ) => void;
+          setSyncData: (data: ISyncResponse) => Promise<void>;
+        }
+      | undefined;
+    if (!seedStore) {
+      throw new Error("expected Matrix sync store");
+    }
+    await seedStore.setSyncData({
+      next_batch: "s-before-restart",
+      rooms: {
+        join: {
+          "!room:example.org": {
+            summary: { "m.heroes": [] },
+            state: { events: [] },
+            timeline: { events: [], prev_batch: "t0" },
+            ephemeral: { events: [] },
+            account_data: { events: [] },
+            unread_notifications: {},
+          },
+        },
+        invite: {},
+        leave: {},
+        knock: {},
+      },
+      account_data: { events: [] },
+    });
+    for (const event of params.pendingReplayEvents ?? []) {
+      seedStore.notePendingReplayEvent(event.roomId, event.eventId, {
+        content: event.content ?? { body: event.eventId, msgtype: "m.text" },
+        event_id: event.eventId,
+        origin_server_ts: Date.now(),
+        sender: "@alice:example.org",
+        type: event.type ?? "m.room.message",
+      });
+    }
+    if (params.cleanShutdown) {
+      seedStore.markCleanShutdown();
+    }
+    await seedStore.flush();
+    seedClient.stopWithoutPersist();
+
+    matrixJsClient = createMatrixJsClientStub();
+    matrixJsClient.startClient = vi.fn(async () => {
+      queueMicrotask(() => {
+        params.emitCachedEvents();
+        matrixJsClient.emit("sync", "PREPARED", null, { fromCache: true });
+      });
+    });
+    lastCreateClientOpts = null;
+    return new MatrixClient("https://matrix.example.org", "token", {
+      storageRootDir,
+    });
+  }
+
+  it("suppresses clean cached messages and reactions, then admits live catch-up", async () => {
+    const roomEvents: string[] = [];
+    const delivered: string[] = [];
+    const cachedMessage = new FakeMatrixEvent({
+      roomId: "!room:example.org",
+      eventId: "$cached-message",
+      sender: "@alice:example.org",
+      type: "m.room.message",
+      ts: Date.now() - 72 * 60 * 60_000,
+      content: { msgtype: "m.text", body: "cached" },
+    });
+    const cachedReaction = new FakeMatrixEvent({
+      roomId: "!room:example.org",
+      eventId: "$cached-reaction",
+      sender: "@alice:example.org",
+      type: "m.reaction",
+      ts: Date.now() - 72 * 60 * 60_000,
+      content: {
+        "m.relates_to": {
+          rel_type: "m.annotation",
+          event_id: "$target",
+          key: "ok",
+        },
+      },
+    });
+    const liveCatchup = new FakeMatrixEvent({
+      roomId: "!room:example.org",
+      eventId: "$old-live-event",
+      sender: "@alice:example.org",
+      type: "m.room.message",
+      ts: Date.now() - 72 * 60 * 60_000,
+      content: { msgtype: "m.text", body: "delayed but new since the cursor" },
+    });
+    const client = await createRestartedClient({
+      cleanShutdown: true,
+      emitCachedEvents: () => {
+        matrixJsClient.emit("event", cachedMessage);
+        matrixJsClient.emit("event", cachedReaction);
+      },
+    });
+
+    client.on("room.event", (_roomId, event) => {
+      roomEvents.push(event.type);
+    });
+    client.on("room.message", (_roomId, event) => {
+      delivered.push(event.type);
+    });
+
+    await client.start();
+
+    expect(roomEvents).toEqual([]);
+    expect(delivered).toEqual([]);
+
+    matrixJsClient.emit(RoomEvent.TimelineReset, { roomId: "!room:example.org" }, undefined, true);
+    matrixJsClient.emit("event", liveCatchup);
+
+    expect(roomEvents).toEqual(["m.room.message"]);
+    expect(delivered).toEqual(["m.room.message"]);
+  });
+
+  it("replays dirty cached messages through the normal inbound path", async () => {
+    const cachedMessage = new FakeMatrixEvent({
+      roomId: "!room:example.org",
+      eventId: "$dirty-cached-message",
+      sender: "@alice:example.org",
+      type: "m.room.message",
+      ts: Date.now() - 48 * 60 * 60_000,
+      content: { msgtype: "m.text", body: "unsettled before crash" },
+    });
+    const settledCachedMessage = new FakeMatrixEvent({
+      roomId: "!room:example.org",
+      eventId: "$settled-cached-message",
+      sender: "@alice:example.org",
+      type: "m.room.message",
+      ts: Date.now() - 90 * 24 * 60 * 60_000,
+      content: { msgtype: "m.text", body: "already settled" },
+    });
+    const client = await createRestartedClient({
+      cleanShutdown: false,
+      emitCachedEvents: () => {
+        matrixJsClient.emit("event", settledCachedMessage);
+        matrixJsClient.emit("event", cachedMessage);
+      },
+      pendingReplayEvents: [{ roomId: "!room:example.org", eventId: "$dirty-cached-message" }],
+    });
+    const delivered: string[] = [];
+
+    client.on("room.message", (_roomId, event) => {
+      delivered.push(event.event_id);
+    });
+
+    await client.start();
+
+    expect(delivered).toEqual(["$dirty-cached-message"]);
+  });
+
+  it("replays a durably pending payload even when the SDK cache no longer contains it", async () => {
+    const client = await createRestartedClient({
+      cleanShutdown: false,
+      emitCachedEvents: () => {},
+      pendingReplayEvents: [{ roomId: "!room:example.org", eventId: "$pruned-pending" }],
+    });
+    const delivered: string[] = [];
+
+    client.on("room.message", (_roomId, event) => {
+      delivered.push(event.event_id);
+    });
+
+    await client.start();
+
+    expect(delivered).toEqual(["$pruned-pending"]);
+  });
+
+  it("preserves pending event enrollment order across a selective restart", async () => {
+    const client = await createRestartedClient({
+      cleanShutdown: false,
+      emitCachedEvents: () => {},
+      pendingReplayEvents: [
+        { roomId: "!room:example.org", eventId: "$z-first" },
+        { roomId: "!room:example.org", eventId: "$a-second" },
+      ],
+    });
+    const delivered: string[] = [];
+    client.on("room.message", (_roomId, event) => {
+      delivered.push(event.event_id);
+    });
+
+    await client.start();
+
+    expect(delivered).toEqual(["$z-first", "$a-second"]);
+  });
+
+  it("decrypts and settles an encrypted pending payload replayed outside the SDK cache", async () => {
+    const client = await createRestartedClient({
+      cleanShutdown: false,
+      emitCachedEvents: () => {},
+      pendingReplayEvents: [
+        {
+          roomId: "!room:example.org",
+          eventId: "$encrypted-pending",
+          type: "m.room.encrypted",
+          content: { algorithm: "m.megolm.v1.aes-sha2", ciphertext: "ciphertext" },
+        },
+      ],
+    });
+    matrixJsClient.decryptEventIfNeeded = vi.fn(async (event: unknown) => {
+      const encryptedEvent = event as EventEmitter;
+      encryptedEvent.emit(
+        "decrypted",
+        new FakeMatrixEvent({
+          roomId: "!room:example.org",
+          eventId: "$encrypted-pending",
+          sender: "@alice:example.org",
+          type: "m.room.message",
+          ts: Date.now(),
+          content: { body: "decrypted", msgtype: "m.text" },
+        }),
+      );
+    });
+    const delivered: string[] = [];
+    client.on("room.message", (roomId, event) => {
+      delivered.push(event.event_id);
+      client.markInboundEventSettled(roomId, event.event_id);
+    });
+
+    await client.start();
+    await vi.waitFor(() => {
+      expect(delivered).toEqual(["$encrypted-pending"]);
+    });
+
+    const store = lastCreateClientOpts?.store as
+      | { getStartupReplayState: () => { kind: string } }
+      | undefined;
+    expect(matrixJsClient.decryptEventIfNeeded).toHaveBeenCalledTimes(1);
+    expect(store?.getStartupReplayState()).toEqual({ kind: "hydrate-only" });
+  });
+
+  it("enrolls replay-all cache events before a retryable graceful shutdown", async () => {
+    const cachedMessage = new FakeMatrixEvent({
+      roomId: "!room:example.org",
+      eventId: "$legacy-dirty-message",
+      sender: "@alice:example.org",
+      type: "m.room.message",
+      ts: Date.now() - 90 * 24 * 60 * 60_000,
+      content: { msgtype: "m.text", body: "legacy dirty cache" },
+    });
+    const client = await createRestartedClient({
+      cleanShutdown: false,
+      emitCachedEvents: () => {
+        matrixJsClient.emit("event", cachedMessage);
+      },
+    });
+    const store = lastCreateClientOpts?.store as
+      | {
+          getStartupReplayState: () => { kind: string };
+        }
+      | undefined;
+    if (!store) {
+      throw new Error("expected Matrix sync store");
+    }
+
+    await client.start();
+    await client.stopAndPersist();
+
+    expect(store.getStartupReplayState().kind).toBe("selective");
+  });
+
+  it("records native location and poll events in crash replay provenance", async () => {
+    const storageRootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-sdk-ledger-"));
+    tempDirs.push(storageRootDir);
+    const client = new MatrixClient("https://matrix.example.org", "token", {
+      storageRootDir,
+    });
+    const store = lastCreateClientOpts?.store as
+      | {
+          getStartupReplayState: () =>
+            | { kind: "none" | "hydrate-only" | "replay-all" }
+            | {
+                kind: "selective";
+                events: ReadonlyArray<{ key: string; event: Record<string, unknown> }>;
+              };
+          setSyncData: (data: ISyncResponse) => Promise<void>;
+        }
+      | undefined;
+    if (!store) {
+      throw new Error("expected Matrix sync store");
+    }
+    await client.start();
+    matrixJsClient.emit(
+      "event",
+      new FakeMatrixEvent({
+        roomId: "!room:example.org",
+        eventId: "$location",
+        sender: "@alice:example.org",
+        type: "m.location",
+        ts: Date.now(),
+        content: { body: "location" },
+      }),
+    );
+    matrixJsClient.emit(
+      "event",
+      new FakeMatrixEvent({
+        roomId: "!room:example.org",
+        eventId: "$poll",
+        sender: "@alice:example.org",
+        type: "m.poll.start",
+        ts: Date.now(),
+        content: { "m.poll.start": { question: { body: "pick one" } } },
+      }),
+    );
+    await store.setSyncData({
+      next_batch: "s-ledger",
+      rooms: { join: {}, invite: {}, leave: {}, knock: {} },
+      account_data: { events: [] },
+    });
+
+    const replayState = store.getStartupReplayState();
+    expect(replayState.kind).toBe("selective");
+    if (replayState.kind === "selective") {
+      expect(replayState.events.map((entry) => entry.key).toSorted()).toEqual([
+        "!room:example.org\0$location",
+        "!room:example.org\0$poll",
+      ]);
+    }
+  });
+
+  it("suppresses threaded messages while hydrating a clean cache", async () => {
+    const cachedThreadMessage = new FakeMatrixEvent({
+      roomId: "!room:example.org",
+      eventId: "$cached-thread-message",
+      sender: "@alice:example.org",
+      type: "m.room.message",
+      ts: Date.now() - 72 * 60 * 60_000,
+      content: {
+        msgtype: "m.text",
+        body: "cached thread reply",
+        "m.relates_to": {
+          rel_type: "m.thread",
+          event_id: "$thread-root",
+        },
+      },
+    });
+    const client = await createRestartedClient({
+      cleanShutdown: true,
+      emitCachedEvents: () => {
+        matrixJsClient.emit("event", cachedThreadMessage);
+      },
+    });
+    const delivered: string[] = [];
+    client.on("room.message", (_roomId, event) => {
+      delivered.push(event.event_id);
+    });
+
+    await client.start();
+
+    expect(delivered).toEqual([]);
+  });
+
+  it("resets clean-cache suppression for a reusable sync restart", async () => {
+    const cachedMessage = new FakeMatrixEvent({
+      roomId: "!room:example.org",
+      eventId: "$cached-reusable-message",
+      sender: "@alice:example.org",
+      type: "m.room.message",
+      ts: Date.now() - 72 * 60 * 60_000,
+      content: { msgtype: "m.text", body: "cached" },
+    });
+    const client = await createRestartedClient({
+      cleanShutdown: true,
+      emitCachedEvents: () => {
+        matrixJsClient.emit("event", cachedMessage);
+      },
+    });
+    const delivered: string[] = [];
+    client.on("room.message", (_roomId, event) => {
+      delivered.push(event.event_id);
+    });
+
+    await client.start();
+    client.stopSyncWithoutPersist();
+    await client.start();
+
+    expect(delivered).toEqual([]);
+  });
+
+  it("waits for an in-flight sync store boundary before marking shutdown clean", async () => {
+    const storageRootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-sdk-stop-"));
+    tempDirs.push(storageRootDir);
+    const client = new MatrixClient("https://matrix.example.org", "token", {
+      storageRootDir,
+    });
+    const store = lastCreateClientOpts?.store as
+      | {
+          setSyncData: (data: ISyncResponse) => Promise<void>;
+          setSyncToken: (token: string | null) => void;
+        }
+      | undefined;
+    if (!store) {
+      throw new Error("expected Matrix sync store");
+    }
+    store.setSyncToken("s-late");
+    let stopped = false;
+    const stopPromise = client.stopAndPersist().then(() => {
+      stopped = true;
+    });
+
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+
+    await store.setSyncData({
+      next_batch: "s-late",
+      rooms: { join: {}, invite: {}, leave: {}, knock: {} },
+      account_data: { events: [] },
+    });
+    await stopPromise;
+
+    matrixJsClient = createMatrixJsClientStub();
+    const restarted = new MatrixClient("https://matrix.example.org", "token", {
+      storageRootDir,
+    });
+    const restartedStore = lastCreateClientOpts?.store as
+      | { hasSavedSyncFromCleanShutdown: () => boolean }
+      | undefined;
+    expect(restartedStore?.hasSavedSyncFromCleanShutdown()).toBe(true);
+    restarted.stopWithoutPersist();
+  });
+
+  it("keeps shutdown dirty when an in-flight sync response is abandoned", async () => {
+    vi.useFakeTimers();
+    const storageRootDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-matrix-sdk-stop-timeout-"),
+    );
+    tempDirs.push(storageRootDir);
+    const client = new MatrixClient("https://matrix.example.org", "token", {
+      storageRootDir,
+    });
+    const store = lastCreateClientOpts?.store as
+      | {
+          flush: () => Promise<void>;
+          setSyncData: (data: ISyncResponse) => Promise<void>;
+          setSyncToken: (token: string) => void;
+        }
+      | undefined;
+    if (!store) {
+      throw new Error("expected Matrix sync store");
+    }
+    await store.setSyncData({
+      next_batch: "s-before-timeout",
+      rooms: { join: {}, invite: {}, leave: {}, knock: {} },
+      account_data: { events: [] },
+    });
+    await store.flush();
+    store.setSyncToken("s-abandoned");
+
+    const stopPromise = client.stopAndPersist();
+    await vi.advanceTimersByTimeAsync(5_000);
+    await stopPromise;
+
+    matrixJsClient = createMatrixJsClientStub();
+    const restarted = new MatrixClient("https://matrix.example.org", "token", {
+      storageRootDir,
+    });
+    const restartedStore = lastCreateClientOpts?.store as
+      | {
+          getSavedSyncToken: () => Promise<string | null>;
+          hasSavedSyncFromCleanShutdown: () => boolean;
+        }
+      | undefined;
+    expect(restartedStore?.hasSavedSyncFromCleanShutdown()).toBe(false);
+    await expect(restartedStore?.getSavedSyncToken()).resolves.toBe("s-before-timeout");
+    restarted.stopWithoutPersist();
+  });
+
+  it("hydrates clean cached membership without routing cache callbacks", async () => {
+    const roomEvents: string[] = [];
+    const invitedRooms: string[] = [];
+    const delivered: string[] = [];
+    const cachedMembership = new FakeMatrixEvent({
+      roomId: "!room:example.org",
+      eventId: "$cached-membership",
+      sender: "@alice:example.org",
+      type: "m.room.member",
+      ts: Date.now() - 48 * 60 * 60_000,
+      content: { membership: "invite" },
+      stateKey: "@bot:example.org",
+    });
+    const client = await createRestartedClient({
+      cleanShutdown: true,
+      emitCachedEvents: () => {
+        matrixJsClient.emit("event", cachedMembership);
+        matrixJsClient.emit("Room", {
+          roomId: "!room:example.org",
+          getMyMembership: () => "invite",
+        });
+      },
+    });
+
+    client.on("room.event", (_roomId, event) => {
+      roomEvents.push(event.type);
+    });
+    client.on("room.invite", (roomId) => {
+      invitedRooms.push(roomId);
+    });
+    client.on("room.message", (_roomId, event) => {
+      delivered.push(event.type);
+    });
+
+    await client.start();
+
+    expect(roomEvents).toEqual([]);
+    expect(invitedRooms).toEqual([]);
+    expect(delivered).toEqual([]);
+  });
+
+  it("does not decrypt or retry clean cached encrypted events", async () => {
+    vi.useFakeTimers();
+    const encryptedEvents: string[] = [];
+    const failed: string[] = [];
+    const delivered: string[] = [];
+
+    const encrypted = new FakeMatrixEvent({
+      roomId: "!room:example.org",
+      eventId: "$cached-encrypted",
+      sender: "@alice:example.org",
+      type: "m.room.encrypted",
+      ts: Date.now() - 48 * 60 * 60_000,
+      content: {},
+      decryptionFailure: true,
+    });
+    const client = await createRestartedClient({
+      cleanShutdown: true,
+      emitCachedEvents: () => {
+        matrixJsClient.emit("event", encrypted);
+      },
+    });
+    matrixJsClient.decryptEventIfNeeded = vi.fn(async () => {});
+    client.on("room.encrypted_event", (_roomId, event) => {
+      encryptedEvents.push(event.event_id);
+    });
+    client.on("room.failed_decryption", (_roomId, _event, error) => {
+      failed.push(error.message);
+    });
+    client.on("room.message", (_roomId, event) => {
+      delivered.push(event.event_id);
+    });
+
+    await client.start();
+    encrypted.emit("decrypted", encrypted, new Error("missing room key"));
+    await vi.advanceTimersByTimeAsync(200_000);
+
+    expect(encryptedEvents).toEqual([]);
+    expect(failed).toEqual([]);
+    expect(delivered).toEqual([]);
+    expect(matrixJsClient.decryptEventIfNeeded).not.toHaveBeenCalled();
   });
 
   it("emits room.message only after encrypted events decrypt", async () => {
@@ -920,7 +1547,7 @@ describe("MatrixClient event bridge", () => {
       },
     });
 
-    matrixJsClient.emit("event", encrypted);
+    emitTimelineEvent(encrypted, true);
     expect(messageEvents).toHaveLength(0);
 
     encrypted.emit("decrypted", decrypted);
@@ -935,7 +1562,22 @@ describe("MatrixClient event bridge", () => {
   });
 
   it("emits room.failed_decryption when decrypting fails", async () => {
-    const client = new MatrixClient("https://matrix.example.org", "token");
+    const storageRootDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-matrix-sdk-terminal-decrypt-"),
+    );
+    tempDirs.push(storageRootDir);
+    const client = new MatrixClient("https://matrix.example.org", "token", {
+      storageRootDir,
+    });
+    const store = lastCreateClientOpts?.store as
+      | {
+          getStartupReplayState: () => { kind: string };
+          setSyncData: (data: ISyncResponse) => Promise<void>;
+        }
+      | undefined;
+    if (!store) {
+      throw new Error("expected Matrix sync store");
+    }
     const failed: string[] = [];
     const delivered: string[] = [];
 
@@ -970,14 +1612,37 @@ describe("MatrixClient event bridge", () => {
 
     matrixJsClient.emit("event", encrypted);
     encrypted.emit("decrypted", decrypted, new Error("decrypt failed"));
+    await store.setSyncData({
+      next_batch: "s-terminal-decrypt",
+      rooms: {
+        join: {
+          "!room:example.org": {
+            summary: { "m.heroes": [] },
+            state: { events: [] },
+            timeline: { events: [], prev_batch: "t0" },
+            ephemeral: { events: [] },
+            account_data: { events: [] },
+            unread_notifications: {},
+          },
+        },
+        invite: {},
+        leave: {},
+        knock: {},
+      },
+      account_data: { events: [] },
+    });
 
     expect(failed).toEqual(["decrypt failed"]);
     expect(delivered).toHaveLength(0);
+    expect(store.getStartupReplayState()).toEqual({ kind: "hydrate-only" });
   });
 
   it("retries failed decryption and emits room.message after late key availability", async () => {
     vi.useFakeTimers();
-    const client = new MatrixClient("https://matrix.example.org", "token");
+    const client = await createRestartedClient({
+      cleanShutdown: true,
+      emitCachedEvents: () => {},
+    });
     const failed: string[] = [];
     const delivered: string[] = [];
 
@@ -1014,7 +1679,7 @@ describe("MatrixClient event bridge", () => {
     });
 
     await client.start();
-    matrixJsClient.emit("event", encrypted);
+    emitTimelineEvent(encrypted, true);
     encrypted.emit("decrypted", encrypted, new Error("missing room key"));
 
     expect(failed).toEqual(["missing room key"]);
@@ -1169,6 +1834,67 @@ describe("MatrixClient event bridge", () => {
 
     expect(failed).toEqual(["historical key missing"]);
     expect(matrixJsClient.decryptEventIfNeeded).not.toHaveBeenCalled();
+  });
+
+  it("settles replay provenance when a decrypt retry becomes terminal", async () => {
+    vi.useFakeTimers();
+    const storageRootDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-matrix-sdk-retry-terminal-"),
+    );
+    tempDirs.push(storageRootDir);
+    const client = new MatrixClient("https://matrix.example.org", "token", {
+      storageRootDir,
+    });
+    const store = lastCreateClientOpts?.store as
+      | {
+          getStartupReplayState: () => { kind: string };
+          setSyncData: (data: ISyncResponse) => Promise<void>;
+        }
+      | undefined;
+    if (!store) {
+      throw new Error("expected Matrix sync store");
+    }
+    const encrypted = new FakeMatrixEvent({
+      roomId: "!room:example.org",
+      eventId: "$retry-terminal",
+      sender: "@alice:example.org",
+      type: "m.room.encrypted",
+      ts: Date.now(),
+      content: {},
+      decryptionFailure: true,
+    });
+    matrixJsClient.decryptEventIfNeeded = vi.fn(async () => {
+      encrypted.setDecryptionFailureReason(DecryptionFailureCode.HISTORICAL_MESSAGE_NO_KEY_BACKUP);
+    });
+
+    await client.start();
+    await store.setSyncData({
+      next_batch: "s-retry-terminal",
+      rooms: {
+        join: {
+          "!room:example.org": {
+            summary: { "m.heroes": [] },
+            state: { events: [] },
+            timeline: { events: [], prev_batch: "t0" },
+            ephemeral: { events: [] },
+            account_data: { events: [] },
+            unread_notifications: {},
+          },
+        },
+        invite: {},
+        leave: {},
+        knock: {},
+      },
+      account_data: { events: [] },
+    });
+    matrixJsClient.emit("event", encrypted);
+    encrypted.emit("decrypted", encrypted, new Error("missing room key"));
+    expect(store.getStartupReplayState().kind).toBe("selective");
+
+    await vi.advanceTimersByTimeAsync(1_500);
+
+    expect(matrixJsClient.decryptEventIfNeeded).toHaveBeenCalledTimes(1);
+    expect(store.getStartupReplayState()).toEqual({ kind: "hydrate-only" });
   });
 
   it("emits a recovered message when decrypt retry succeeds without a second SDK decrypted event", async () => {

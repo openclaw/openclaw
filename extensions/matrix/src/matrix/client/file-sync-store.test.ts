@@ -62,6 +62,16 @@ function createSyncResponse(nextBatch: string): ISyncResponse {
   };
 }
 
+function createPendingEvent(eventId: string): Record<string, unknown> {
+  return {
+    content: { body: eventId, msgtype: "m.text" },
+    event_id: eventId,
+    origin_server_ts: 1,
+    sender: "@user:example.org",
+    type: "m.room.message",
+  };
+}
+
 describe("SqliteBackedMatrixSyncStore", () => {
   const tempDirs: string[] = [];
 
@@ -228,6 +238,137 @@ describe("SqliteBackedMatrixSyncStore", () => {
     const afterCleanShutdown = new SqliteBackedMatrixSyncStore(storageRoot);
     expect(afterCleanShutdown.hasSavedSync()).toBe(true);
     expect(afterCleanShutdown.hasSavedSyncFromCleanShutdown()).toBe(true);
+  });
+
+  it("persists only unsettled event provenance for selective crash replay", async () => {
+    const storageRoot = createStorageRoot();
+    const firstStore = new SqliteBackedMatrixSyncStore(storageRoot);
+    firstStore.notePendingReplayEvent(
+      "!room:example.org",
+      "$pending",
+      createPendingEvent("$pending"),
+    );
+    firstStore.notePendingReplayEvent(
+      "!room:example.org",
+      "$settled",
+      createPendingEvent("$settled"),
+    );
+    firstStore.markReplayEventSettled("!room:example.org", "$settled");
+    await firstStore.setSyncData(createSyncResponse("s123"));
+    await firstStore.flush();
+
+    const restartedStore = new SqliteBackedMatrixSyncStore(storageRoot);
+    const replayState = restartedStore.getStartupReplayState();
+    expect(replayState.kind).toBe("selective");
+    if (replayState.kind === "selective") {
+      expect(replayState.events.map((entry) => entry.key)).toEqual(["!room:example.org\0$pending"]);
+    }
+  });
+
+  it("keeps a graceful shutdown dirty while retryable events remain pending", async () => {
+    const storageRoot = createStorageRoot();
+    const firstStore = new SqliteBackedMatrixSyncStore(storageRoot);
+    firstStore.notePendingReplayEvent("!room:example.org", "$retry", createPendingEvent("$retry"));
+    await firstStore.setSyncData(createSyncResponse("s123"));
+    firstStore.markCleanShutdown();
+    await firstStore.flush();
+
+    const restartedStore = new SqliteBackedMatrixSyncStore(storageRoot);
+    const replayState = restartedStore.getStartupReplayState();
+    expect(replayState.kind).toBe("selective");
+    if (replayState.kind === "selective") {
+      expect(replayState.events.map((entry) => entry.key)).toEqual(["!room:example.org\0$retry"]);
+    }
+  });
+
+  it("retains pending payloads outside the SDK timeline and room membership state", async () => {
+    const storageRoot = createStorageRoot();
+    const response = createSyncResponse("s123");
+    const joinedRoom = response.rooms.join["!room:example.org"];
+    if (!joinedRoom) {
+      throw new Error("expected joined room fixture");
+    }
+    joinedRoom.timeline.events = Array.from(
+      { length: 60 },
+      (_, index) => createPendingEvent(`$newer-${index}`) as never,
+    );
+    const store = new SqliteBackedMatrixSyncStore(storageRoot);
+    store.notePendingReplayEvent(
+      "!room:example.org",
+      "$pending-old",
+      createPendingEvent("$pending-old"),
+    );
+    await store.setSyncData(response);
+    await store.setSyncData({
+      next_batch: "s124",
+      rooms: {
+        join: {},
+        invite: {},
+        leave: {
+          "!room:example.org": {
+            state: { events: [] },
+            timeline: { events: [], prev_batch: "t1" },
+            account_data: { events: [] },
+          },
+        },
+        knock: {},
+      },
+      account_data: { events: [] },
+    });
+    await store.flush();
+
+    const restartedStore = new SqliteBackedMatrixSyncStore(storageRoot);
+    const replayState = restartedStore.getStartupReplayState();
+    expect(replayState.kind).toBe("selective");
+    if (replayState.kind === "selective") {
+      expect(replayState.events).toEqual([
+        {
+          key: "!room:example.org\0$pending-old",
+          roomId: "!room:example.org",
+          event: createPendingEvent("$pending-old"),
+        },
+      ]);
+    }
+  });
+
+  it("replays all once when an older dirty cache has no replay ledger", async () => {
+    const storageRoot = createStorageRoot();
+    const firstStore = new SqliteBackedMatrixSyncStore(storageRoot);
+    await firstStore.setSyncData(createSyncResponse("s123"));
+    await firstStore.flush();
+
+    const restartedStore = new SqliteBackedMatrixSyncStore(storageRoot);
+    expect(restartedStore.getStartupReplayState()).toEqual({ kind: "replay-all" });
+  });
+
+  it("waits for the current sync response to reach setSyncData", async () => {
+    const storageRoot = createStorageRoot();
+    const store = new SqliteBackedMatrixSyncStore(storageRoot);
+    store.setSyncToken("s123");
+    let settled = false;
+    const waiting = store.waitForSyncResponseSettled().then((result) => {
+      settled = true;
+      return result;
+    });
+
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    await store.setSyncData(createSyncResponse("s123"));
+    await expect(waiting).resolves.toBe(true);
+    expect(settled).toBe(true);
+  });
+
+  it("bounds an abandoned sync response wait", async () => {
+    vi.useFakeTimers();
+    const storageRoot = createStorageRoot();
+    const store = new SqliteBackedMatrixSyncStore(storageRoot);
+    store.setSyncToken("s-abandoned");
+
+    const waiting = store.waitForSyncResponseSettled();
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    await expect(waiting).resolves.toBe(false);
   });
 
   it("clears the clean-shutdown marker once fresh sync data arrives", async () => {

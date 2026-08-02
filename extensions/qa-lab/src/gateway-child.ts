@@ -44,6 +44,10 @@ import {
 import { assertRepoBoundPath, ensureRepoBoundDirectory } from "./cli-paths.js";
 import { buildQaCodexAppServerArgs } from "./codex-app-server-args.js";
 import { QaSuiteInfraError, toQaErrorObject } from "./errors.js";
+import type {
+  QaGatewayChildRestartOptions,
+  QaGatewayChildStateMutationContext,
+} from "./gateway-child-contracts.js";
 import { formatQaGatewayLogsForError, redactQaGatewayDebugText } from "./gateway-log-redaction.js";
 import {
   createQaGatewayProcessBoundaryController,
@@ -98,12 +102,7 @@ const QA_GATEWAY_CHILD_BLOCKED_SECRET_ENV_VARS = Object.freeze([
   "OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN",
 ]);
 
-export type QaGatewayChildStateMutationContext = {
-  configPath: string;
-  runtimeEnv: NodeJS.ProcessEnv;
-  stateDir: string;
-  tempRoot: string;
-};
+export type { QaGatewayChildStateMutationContext } from "./gateway-child-contracts.js";
 
 type QaGatewayChildDirectCommand = {
   executablePath: string;
@@ -855,12 +854,26 @@ function resolveQaGatewayChildStopTimeouts(opts?: {
 
 async function stopQaGatewayChildProcessTree(
   child: ChildProcess,
-  opts?: { gracefulTimeoutMs?: number; forceTimeoutMs?: number },
+  opts?: {
+    gracefulTimeoutMs?: number;
+    forceTimeoutMs?: number;
+    shutdownMode?: QaGatewayChildRestartOptions["shutdownMode"];
+  },
 ) {
   if (!isQaGatewayChildProcessTreeAlive(child)) {
     return;
   }
   const timeouts = resolveQaGatewayChildStopTimeouts(opts);
+  if (opts?.shutdownMode === "hard") {
+    // Crash-recovery scenarios inject state only after the process tree is gone.
+    // A graceful signal would let the Gateway persist a clean-shutdown marker.
+    signalQaGatewayChildProcessTree(child, "SIGKILL");
+    const stopped = await waitForQaGatewayChildExit(child, timeouts.forceTimeoutMs);
+    if (!stopped) {
+      throw new Error("qa gateway process tree remained alive after forced shutdown");
+    }
+    return;
+  }
   signalQaGatewayChildProcessTree(child, "SIGTERM");
   if (await waitForQaGatewayChildExit(child, timeouts.gracefulTimeoutMs)) {
     return;
@@ -880,7 +893,11 @@ async function stopQaGatewayChildWithBoundary(params: {
   child: ChildProcess;
   controller: QaGatewayProcessBoundaryController | null;
   identity: QaGatewayVerifiedProcessIdentity | null;
-  opts?: { gracefulTimeoutMs?: number; forceTimeoutMs?: number };
+  opts?: {
+    gracefulTimeoutMs?: number;
+    forceTimeoutMs?: number;
+    shutdownMode?: QaGatewayChildRestartOptions["shutdownMode"];
+  };
 }) {
   const errors: unknown[] = [];
   if (params.controller && params.identity) {
@@ -1673,6 +1690,7 @@ export async function startQaGatewayChild(params: {
       },
       async restartAfterStateMutation(
         mutateState: (context: QaGatewayChildStateMutationContext) => Promise<void>,
+        options?: QaGatewayChildRestartOptions,
       ) {
         throwActiveChildFailure();
         await activeRpcClient.stop().catch(() => {});
@@ -1680,6 +1698,7 @@ export async function startQaGatewayChild(params: {
           child: activeChild,
           controller: processBoundaryController,
           identity: activeIdentity,
+          opts: options,
         });
         await mutateState({
           configPath,

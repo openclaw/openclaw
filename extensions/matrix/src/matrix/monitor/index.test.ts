@@ -61,7 +61,8 @@ const hoisted = vi.hoisted(() => {
   const client = Object.assign(createEmitter(), {
     id: "matrix-client",
     hasPersistedSyncState: vi.fn(() => false),
-    stopSyncWithoutPersist: vi.fn(),
+    stopSyncAndWaitForPersistBoundary: vi.fn(async () => undefined),
+    markInboundEventSettled: vi.fn(),
     drainPendingDecryptions: vi.fn(async () => undefined),
   });
   const createMatrixRoomMessageHandler = vi.fn(() => vi.fn());
@@ -473,7 +474,8 @@ describe("monitorMatrixProvider", () => {
     hoisted.stopThreadBindingManager.mockReset();
     hoisted.client.removeAllListeners();
     hoisted.client.hasPersistedSyncState.mockReset().mockReturnValue(false);
-    hoisted.client.stopSyncWithoutPersist.mockReset();
+    hoisted.client.stopSyncAndWaitForPersistBoundary.mockReset().mockResolvedValue(undefined);
+    hoisted.client.markInboundEventSettled.mockReset();
     hoisted.client.drainPendingDecryptions.mockReset().mockResolvedValue(undefined);
     hoisted.inboundDeduper.claim
       .mockReset()
@@ -844,7 +846,7 @@ describe("monitorMatrixProvider", () => {
     expect(hoisted.setActiveMatrixClient).toHaveBeenNthCalledWith(2, null, "default");
   });
 
-  it("disables cold-start backlog dropping only when sync state is cleanly persisted", async () => {
+  it("disables cold-start backlog dropping when any persisted sync cursor exists", async () => {
     hoisted.client.hasPersistedSyncState.mockReturnValue(true);
     await startMonitorAndAbortAfterStartup();
 
@@ -852,6 +854,16 @@ describe("monitorMatrixProvider", () => {
       dropPreStartupMessages?: unknown;
     };
     expect(handlerParams.dropPreStartupMessages).toBe(false);
+  });
+
+  it("keeps the cold-start backlog fence when no persisted sync cursor exists", async () => {
+    hoisted.client.hasPersistedSyncState.mockReturnValue(false);
+    await startMonitorAndAbortAfterStartup();
+
+    const handlerParams = mockCallArg(hoisted.createMatrixRoomMessageHandler) as {
+      dropPreStartupMessages?: unknown;
+    };
+    expect(handlerParams.dropPreStartupMessages).toBe(true);
   });
 
   it("stops sync, drains decryptions, then waits for in-flight handlers before persisting", async () => {
@@ -869,7 +881,7 @@ describe("monitorMatrixProvider", () => {
         });
       }),
     );
-    hoisted.client.stopSyncWithoutPersist.mockImplementation(() => {
+    hoisted.client.stopSyncAndWaitForPersistBoundary.mockImplementation(async () => {
       hoisted.callOrder.push("pause-client");
     });
     hoisted.client.drainPendingDecryptions.mockImplementation(async () => {
