@@ -165,8 +165,7 @@ Browser settings live in `~/.openclaw/openclaw.json`.
     evaluateEnabled: true, // default: true; false disables act:evaluate (arbitrary JS)
     ssrfPolicy: {
       // dangerouslyAllowPrivateNetwork: true, // opt in only for trusted private-network access
-      // hostnameAllowlist: ["*.example.com", "example.com"],
-      // allowedHostnames: ["localhost"],
+      // allowedHostnames: ["*.example.com", "example.com", "localhost"],
     },
     // cdpUrl: "http://127.0.0.1:18792", // legacy single-profile override
     tabCleanup: {
@@ -910,7 +909,7 @@ Important behavior details:
 Security guidance:
 
 - Do **not** relax browser SSRF policy by default.
-- Prefer narrow host exceptions such as `hostnameAllowlist` or `allowedHostnames` over broad private-network access.
+- Prefer narrow `allowedHostnames` exceptions over broad private-network access.
 - Use `dangerouslyAllowPrivateNetwork: true` only in intentionally trusted environments where private-network browser access is required and reviewed.
 
 ## Agent tools + how control works
