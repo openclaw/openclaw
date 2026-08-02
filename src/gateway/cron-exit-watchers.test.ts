@@ -145,6 +145,209 @@ describe("createCronExitWatchers", () => {
     expect(order).toEqual(["persist", "fire"]);
   });
 
+  it("rebinds an in-flight watcher to the replacement scheduler without rearming it", async () => {
+    const { supervisor, runs } = makeFakeSupervisor();
+    const oldPersistCompletion = vi.fn(async () => {});
+    const oldFireOnExit = vi.fn(async () => {});
+    const newPersistCompletion = vi.fn(async () => {});
+    const newFireOnExit = vi.fn(async () => {});
+    const watchers = createCronExitWatchers({
+      getProcessSupervisor: () => supervisor as never,
+      persistCompletion: oldPersistCompletion,
+      fireOnExit: oldFireOnExit,
+      logger: noopLogger,
+    });
+
+    watchers.reconcile([onExitJob("job-a")]);
+    await flush();
+    await watchers.updateHandlers({
+      getProcessSupervisor: () => supervisor as never,
+      persistCompletion: newPersistCompletion,
+      fireOnExit: newFireOnExit,
+      logger: noopLogger,
+    });
+    watchers.reconcile([onExitJob("job-a")]);
+
+    expect(supervisor.spawn).toHaveBeenCalledOnce();
+    expectDefined(runs[0], "runs[0] test invariant").deferred.resolve({
+      exitCode: 0,
+      reason: "exit",
+    });
+    await vi.waitFor(() => expect(newFireOnExit).toHaveBeenCalledOnce());
+    expect(newPersistCompletion).toHaveBeenCalledOnce();
+    expect(oldPersistCompletion).not.toHaveBeenCalled();
+    expect(oldFireOnExit).not.toHaveBeenCalled();
+    expect(supervisor.spawn).toHaveBeenCalledOnce();
+  });
+
+  it("keeps terminal completion with its scheduler when hot reload overlaps persistence", async () => {
+    const { supervisor, runs } = makeFakeSupervisor();
+    let releasePersistence!: () => void;
+    const persistenceGate = new Promise<void>((resolve) => {
+      releasePersistence = resolve;
+    });
+    const releaseCompletion = vi.fn();
+    const oldPersistCompletion = vi.fn(async () => {
+      await persistenceGate;
+      return releaseCompletion;
+    });
+    const oldFireOnExit = vi.fn(async () => {});
+    const newPersistCompletion = vi.fn(async () => {});
+    const newFireOnExit = vi.fn(async () => {});
+    const watchers = createCronExitWatchers({
+      getProcessSupervisor: () => supervisor as never,
+      persistCompletion: oldPersistCompletion,
+      fireOnExit: oldFireOnExit,
+      logger: noopLogger,
+    });
+
+    watchers.reconcile([onExitJob("job-a")]);
+    await flush();
+    expectDefined(runs[0], "runs[0] test invariant").deferred.resolve({
+      exitCode: 0,
+      reason: "exit",
+    });
+    await vi.waitFor(() => expect(oldPersistCompletion).toHaveBeenCalledOnce());
+
+    const handoff = watchers.updateHandlers({
+      getProcessSupervisor: () => supervisor as never,
+      persistCompletion: newPersistCompletion,
+      fireOnExit: newFireOnExit,
+      logger: noopLogger,
+    });
+    // The replacement can observe the disabled store before the old owner's
+    // terminal write and release token have finished settling.
+    watchers.reconcile([onExitJob("job-a", "true", false)]);
+
+    expect(watchers.activeJobIds()).toEqual(["job-a"]);
+    expect(supervisor.cancelScope).not.toHaveBeenCalled();
+
+    expect(handoff).toBeInstanceOf(Promise);
+    releasePersistence();
+    await handoff;
+    await vi.waitFor(() => expect(oldFireOnExit).toHaveBeenCalledOnce());
+    expect(releaseCompletion).toHaveBeenCalledOnce();
+    expect(newPersistCompletion).not.toHaveBeenCalled();
+    expect(newFireOnExit).not.toHaveBeenCalled();
+    expect(supervisor.spawn).toHaveBeenCalledOnce();
+    expect(supervisor.cancelScope).not.toHaveBeenCalled();
+  });
+
+  it("assigns newly exiting watchers to the replacement while old persistence settles", async () => {
+    const { supervisor, runs } = makeFakeSupervisor();
+    let releasePersistence!: () => void;
+    const persistenceGate = new Promise<void>((resolve) => {
+      releasePersistence = resolve;
+    });
+    const oldPersistCompletion = vi.fn(async () => {
+      await persistenceGate;
+    });
+    const oldFireOnExit = vi.fn(async () => {});
+    const newPersistCompletion = vi.fn(async () => {});
+    const newFireOnExit = vi.fn(async () => {});
+    const watchers = createCronExitWatchers({
+      getProcessSupervisor: () => supervisor as never,
+      persistCompletion: oldPersistCompletion,
+      fireOnExit: oldFireOnExit,
+      logger: noopLogger,
+    });
+
+    watchers.reconcile([onExitJob("job-a"), onExitJob("job-b")]);
+    await flush();
+    expect(supervisor.spawn).toHaveBeenCalledTimes(2);
+    expectDefined(runs[0], "runs[0] test invariant").deferred.resolve({
+      exitCode: 0,
+      reason: "exit",
+    });
+    await vi.waitFor(() => expect(oldPersistCompletion).toHaveBeenCalledOnce());
+
+    const handoff = watchers.updateHandlers({
+      getProcessSupervisor: () => supervisor as never,
+      persistCompletion: newPersistCompletion,
+      fireOnExit: newFireOnExit,
+      logger: noopLogger,
+    });
+    expect(handoff).toBeInstanceOf(Promise);
+
+    expectDefined(runs[1], "runs[1] test invariant").deferred.resolve({
+      exitCode: 0,
+      reason: "exit",
+    });
+    await vi.waitFor(() => expect(newFireOnExit).toHaveBeenCalledOnce());
+    expect(newPersistCompletion).toHaveBeenCalledOnce();
+    expect(oldPersistCompletion).toHaveBeenCalledOnce();
+    expect(oldFireOnExit).not.toHaveBeenCalled();
+
+    releasePersistence();
+    await handoff;
+    await vi.waitFor(() => expect(oldFireOnExit).toHaveBeenCalledOnce());
+    expect(supervisor.spawn).toHaveBeenCalledTimes(2);
+    expect(supervisor.cancelScope).not.toHaveBeenCalled();
+  });
+
+  it("waits for replaced terminal persistence while handing off the new watcher", async () => {
+    const { supervisor, runs } = makeFakeSupervisor();
+    let releasePersistence!: () => void;
+    const persistenceGate = new Promise<void>((resolve) => {
+      releasePersistence = resolve;
+    });
+    const releaseCompletion = vi.fn();
+    const oldPersistCompletion = vi.fn(async () => {
+      await persistenceGate;
+      return releaseCompletion;
+    });
+    const oldFireOnExit = vi.fn(async () => {});
+    const newPersistCompletion = vi.fn(async () => {});
+    const newFireOnExit = vi.fn(async () => {});
+    const watchers = createCronExitWatchers({
+      getProcessSupervisor: () => supervisor as never,
+      persistCompletion: oldPersistCompletion,
+      fireOnExit: oldFireOnExit,
+      logger: noopLogger,
+    });
+
+    watchers.reconcile([onExitJob("job-a", "old command")]);
+    await flush();
+    expectDefined(runs[0], "runs[0] test invariant").deferred.resolve({
+      exitCode: 0,
+      reason: "exit",
+    });
+    await vi.waitFor(() => expect(oldPersistCompletion).toHaveBeenCalledOnce());
+
+    // Rearming the same job id replaces its active slot; the old owner's
+    // terminal write survives only in the settling-cancelled collection.
+    watchers.reconcile([onExitJob("job-a", "replacement command")]);
+    await flush();
+    expect(supervisor.spawn).toHaveBeenCalledTimes(2);
+    expect(watchers.activeJobIds()).toEqual(["job-a"]);
+
+    const handoff = watchers.updateHandlers({
+      getProcessSupervisor: () => supervisor as never,
+      persistCompletion: newPersistCompletion,
+      fireOnExit: newFireOnExit,
+      logger: noopLogger,
+    });
+    expect(handoff).toBeInstanceOf(Promise);
+
+    const handoffSettled = vi.fn();
+    void handoff?.then(handoffSettled);
+    await flush();
+    expect(handoffSettled).not.toHaveBeenCalled();
+
+    releasePersistence();
+    await handoff;
+    expect(releaseCompletion).toHaveBeenCalledOnce();
+    expect(oldFireOnExit).not.toHaveBeenCalled();
+
+    expectDefined(runs[1], "runs[1] test invariant").deferred.resolve({
+      exitCode: 0,
+      reason: "exit",
+    });
+    await vi.waitFor(() => expect(newFireOnExit).toHaveBeenCalledOnce());
+    expect(newPersistCompletion).toHaveBeenCalledOnce();
+    expect(supervisor.spawn).toHaveBeenCalledTimes(2);
+  });
+
   it("a fired job stays unarmed across a simulated restart (disabled in store → not re-run)", async () => {
     // persistCompletion disables the job; after a restart the reconcile sees a
     // disabled job and must NOT re-arm (which would re-run the command).

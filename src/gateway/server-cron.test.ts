@@ -352,6 +352,27 @@ describe("buildGatewayCronService", () => {
     });
   });
 
+  it.each([
+    { value: "1", enabled: false },
+    { value: "true", enabled: true },
+    { value: "yes", enabled: true },
+    { value: "on", enabled: true },
+  ])("keeps the published exact cron skip contract for $value", ({ value, enabled }) => {
+    const cfg = createCronConfig("server-cron-skip-env-contract");
+    const state = buildGatewayCronServiceRuntime({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+      env: { ...process.env, OPENCLAW_SKIP_CRON: value },
+    });
+
+    try {
+      expect(state.cronEnabled).toBe(enabled);
+    } finally {
+      state.cron.stop();
+    }
+  });
+
   it("passes the persisted payload tool cap to trigger evaluation", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-14T12:00:00.000Z"));
@@ -436,6 +457,235 @@ describe("buildGatewayCronService", () => {
     } finally {
       state.cron.stop();
       vi.unstubAllEnvs();
+    }
+  });
+
+  it("transfers a running on-exit watcher to the replacement cron scheduler", async () => {
+    const completion = createDeferred<{
+      reason: "exit";
+      exitCode: number;
+      exitSignal: null;
+      durationMs: number;
+      stdout: string;
+      stderr: string;
+      timedOut: false;
+      noOutputTimedOut: false;
+    }>();
+    const cancel = vi.fn();
+    const cancelScope = vi.fn();
+    const spawn = vi.fn(async () => ({
+      runId: "preserved-cron-exit-watcher",
+      startedAtMs: Date.now(),
+      cancel,
+      wait: () => completion.promise,
+    }));
+    getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope });
+    const cfg = createCronConfig("server-cron-transfer-exit-watcher");
+    loadConfigMock.mockReturnValue(cfg);
+    const initial = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    let replacement: ReturnType<typeof buildGatewayCronService> | undefined;
+
+    try {
+      const job = await initial.cron.add({
+        name: "preserve watched build",
+        enabled: true,
+        schedule: { kind: "on-exit", command: "sleep 60" },
+        payload: { kind: "systemEvent", text: "done" },
+        sessionTarget: "main",
+        wakeMode: "now",
+      });
+      await initial.reconcileExitWatchers?.();
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
+
+      replacement = buildGatewayCronService({
+        cfg,
+        deps: {} as CliDeps,
+        broadcast: () => {},
+        exitWatchers: initial.exitWatchers,
+      });
+      expect(replacement.exitWatchers).toBe(initial.exitWatchers);
+      await replacement.activateExitWatchers?.();
+      await initial.stopCronForHotReload?.();
+      await replacement.cron.start();
+      await replacement.reconcileExitWatchers?.();
+
+      expect(spawn).toHaveBeenCalledOnce();
+      expect(cancel).not.toHaveBeenCalled();
+      expect(cancelScope).not.toHaveBeenCalled();
+      completion.resolve({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 1,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+      await vi.waitFor(() => expect(replacement?.cron.getJob(job.id)?.enabled).toBe(false));
+      expect(runHeartbeatOnceMock).toHaveBeenCalledOnce();
+      expect(spawn).toHaveBeenCalledOnce();
+    } finally {
+      completion.resolve({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 1,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+      await (replacement ?? initial).cron.stopAndDrain?.();
+    }
+  });
+
+  it("preserves terminal exit completion when a published replacement reconciles before handoff", async () => {
+    const commandExit = createDeferred<{
+      reason: "exit";
+      exitCode: number;
+      exitSignal: null;
+      durationMs: number;
+      stdout: string;
+      stderr: string;
+      timedOut: false;
+      noOutputTimedOut: false;
+    }>();
+    const completionPersistCommitted = createDeferred();
+    const allowCompletionPersist = createDeferred();
+    const cancel = vi.fn();
+    const cancelScope = vi.fn();
+    const spawn = vi.fn(async () => ({
+      runId: "run-on-exit-replacement-reconcile-during-persistence",
+      startedAtMs: Date.now(),
+      cancel,
+      wait: () => commandExit.promise,
+    }));
+    getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope });
+    const cfg = createCronConfig("server-cron-on-exit-replacement-reconcile-during-persistence");
+    loadConfigMock.mockReturnValue(cfg);
+    const initial = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    let replacement: ReturnType<typeof buildGatewayCronService> | undefined;
+    const originalUpdateWithPrecondition = initial.cron.updateWithPrecondition.bind(initial.cron);
+    let gateTerminalCompletion = true;
+    vi.spyOn(initial.cron, "updateWithPrecondition").mockImplementation(async (...args) => {
+      if (!gateTerminalCompletion) {
+        return await originalUpdateWithPrecondition(...args);
+      }
+      gateTerminalCompletion = false;
+      const result = await originalUpdateWithPrecondition(...args);
+      completionPersistCommitted.resolve();
+      await allowCompletionPersist.promise;
+      return result;
+    });
+
+    try {
+      const job = await initial.cron.add({
+        name: "finish watched command across early replacement reconcile",
+        declarationKey: "agent:main:finish-watched-command-across-early-replacement-reconcile",
+        enabled: true,
+        schedule: { kind: "on-exit", command: "  true  ", cwd: " " },
+        payload: { kind: "systemEvent", text: "done" },
+        sessionTarget: "main",
+        wakeMode: "now",
+      });
+      await initial.reconcileExitWatchers?.();
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
+
+      commandExit.resolve({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 1,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+      await completionPersistCommitted.promise;
+
+      replacement = buildGatewayCronService({
+        cfg,
+        deps: {} as CliDeps,
+        broadcast: () => {},
+        exitWatchers: initial.exitWatchers,
+      });
+      const handoff = replacement.activateExitWatchers?.();
+      expect(handoff).toBeInstanceOf(Promise);
+
+      await replacement.reconcileExitWatchers?.();
+      expect(replacement.cron.getJob(job.id)?.schedule).toEqual({
+        kind: "on-exit",
+        command: "true",
+      });
+
+      const refreshed = await replacement.cron.add(
+        {
+          name: "finish watched command across early replacement reconcile",
+          declarationKey: "agent:main:finish-watched-command-across-early-replacement-reconcile",
+          enabled: true,
+          schedule: { kind: "on-exit", command: "  true  ", cwd: " " },
+          payload: { kind: "systemEvent", text: "done" },
+          sessionTarget: "main",
+          wakeMode: "now",
+        },
+        { enabledExplicit: false },
+      );
+      expect(refreshed.id).toBe(job.id);
+
+      await replacement.cron.update(job.id, {
+        name: "watched command with refreshed metadata",
+      });
+      await replacement.cron.updateWithPrecondition(
+        job.id,
+        { name: "watched command with conditionally refreshed metadata" },
+        () => {},
+      );
+
+      await replacement.cron.add({
+        name: "unrelated job during exit handoff",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: { kind: "systemEvent", text: "unrelated" },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+      });
+      await replacement.reconcileExitWatchers?.();
+
+      expect(replacement.cron.getJob(job.id)?.enabled).toBe(false);
+      expect(initial.exitWatchers?.activeJobIds()).toContain(job.id);
+      expect(cancel).not.toHaveBeenCalled();
+      expect(cancelScope).not.toHaveBeenCalled();
+
+      allowCompletionPersist.resolve();
+      await handoff;
+      await initial.stopCronForHotReload?.();
+      await replacement.cron.start();
+      await replacement.reconcileExitWatchers?.();
+
+      await vi.waitFor(() => expect(runHeartbeatOnceMock).toHaveBeenCalledOnce());
+      expect(spawn).toHaveBeenCalledOnce();
+    } finally {
+      allowCompletionPersist.resolve();
+      commandExit.resolve({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 1,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+      await (replacement ?? initial).cron.stopAndDrain?.();
     }
   });
 
@@ -657,6 +907,122 @@ describe("buildGatewayCronService", () => {
       state.cron.stop();
     }
   });
+
+  it.each(["update", "updateWithPrecondition", "add"] as const)(
+    "does not fire an on-exit payload when %s disables it during terminal persistence",
+    async (mutation) => {
+      const commandExit = createDeferred<{
+        reason: "exit";
+        exitCode: number;
+        exitSignal: null;
+        durationMs: number;
+        stdout: string;
+        stderr: string;
+        timedOut: false;
+        noOutputTimedOut: false;
+      }>();
+      const completionPersistCommitted = createDeferred();
+      const allowCompletionPersist = createDeferred();
+      const cancel = vi.fn();
+      const cancelScope = vi.fn();
+      const spawn = vi.fn(async () => ({
+        runId: "run-on-exit-manually-disabled-during-persistence",
+        startedAtMs: Date.now(),
+        cancel,
+        wait: () => commandExit.promise,
+      }));
+      getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope });
+      const cfg = createCronConfig(
+        `server-cron-on-exit-manual-disable-during-persistence-${mutation}`,
+      );
+      loadConfigMock.mockReturnValue(cfg);
+      const state = buildGatewayCronService({
+        cfg,
+        deps: {} as CliDeps,
+        broadcast: () => {},
+      });
+      const originalUpdateWithPrecondition = state.cron.updateWithPrecondition.bind(state.cron);
+      let gateTerminalCompletion = true;
+      vi.spyOn(state.cron, "updateWithPrecondition").mockImplementation(async (...args) => {
+        if (!gateTerminalCompletion) {
+          return await originalUpdateWithPrecondition(...args);
+        }
+        gateTerminalCompletion = false;
+        const result = await originalUpdateWithPrecondition(...args);
+        completionPersistCommitted.resolve();
+        await allowCompletionPersist.promise;
+        return result;
+      });
+      const run = vi.spyOn(state.cron, "run");
+
+      try {
+        const job = await state.cron.add({
+          name: "watch and honor manual disable",
+          declarationKey: "agent:main:watch-and-honor-manual-disable",
+          enabled: true,
+          schedule: { kind: "on-exit", command: "true" },
+          payload: { kind: "systemEvent", text: "must not fire" },
+          sessionTarget: "main",
+          wakeMode: "now",
+        });
+        await state.reconcileExitWatchers?.();
+        await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
+
+        commandExit.resolve({
+          reason: "exit",
+          exitCode: 0,
+          exitSignal: null,
+          durationMs: 1,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+          noOutputTimedOut: false,
+        });
+        await completionPersistCommitted.promise;
+
+        if (mutation === "updateWithPrecondition") {
+          await state.cron.updateWithPrecondition(job.id, { enabled: false }, () => {});
+        } else if (mutation === "add") {
+          await state.cron.add(
+            {
+              name: "watch and honor manual disable",
+              declarationKey: "agent:main:watch-and-honor-manual-disable",
+              enabled: false,
+              schedule: { kind: "on-exit", command: "true" },
+              payload: { kind: "systemEvent", text: "must not fire" },
+              sessionTarget: "main",
+              wakeMode: "now",
+            },
+            { enabledExplicit: true },
+          );
+        } else {
+          await state.cron.update(job.id, { enabled: false });
+        }
+        expect(state.cron.getJob(job.id)?.enabled).toBe(false);
+        expect(cancel).toHaveBeenCalledWith("manual-cancel");
+        expect(cancelScope).toHaveBeenCalledWith(`cron-exit:${job.id}`, "manual-cancel");
+        allowCompletionPersist.resolve();
+
+        await vi.waitFor(() => expect(state.exitWatchers?.activeJobIds()).toEqual([]));
+        expect(run).not.toHaveBeenCalled();
+        expect(runHeartbeatOnceMock).not.toHaveBeenCalled();
+        expect(spawn).toHaveBeenCalledOnce();
+      } finally {
+        allowCompletionPersist.resolve();
+        commandExit.resolve({
+          reason: "exit",
+          exitCode: 0,
+          exitSignal: null,
+          durationMs: 1,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+          noOutputTimedOut: false,
+        });
+        await state.cron.stopAndDrain?.();
+      }
+    },
+  );
 
   it("aborts and drains active cron runs during shutdown", async () => {
     const controller = new AbortController();

@@ -9,6 +9,7 @@ import {
 } from "../agents/prepared-model-runtime.js";
 import { isRestartEnabled } from "../config/commands.flags.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
@@ -99,6 +100,17 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       !isRestartRetryStopped() && (publication?.isCurrent?.() ?? true);
     const state = params.getState();
     const nextState = { ...state };
+    const cronReloadEnv = publication?.runtimeEnv ?? process.env;
+    const preserveCronExitWatchers =
+      plan.restartCron &&
+      state.cronState.cronEnabled &&
+      // Cron's published skip contract is exactly "1"; match both eager and
+      // lazy scheduler ownership instead of interpreting unrelated env flags.
+      cronReloadEnv.OPENCLAW_SKIP_CRON !== "1" &&
+      nextConfig.cron?.enabled !== false &&
+      state.cronState.storePath === resolveCronJobsStorePathFromConfig(nextConfig, cronReloadEnv) &&
+      state.cronState.stopCronForHotReload !== undefined &&
+      state.cronState.exitWatchers !== undefined;
 
     resetPreparedModelRuntimeStateForHotReload();
 
@@ -119,7 +131,8 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         cfg: nextConfig,
         deps: params.deps,
         broadcast: params.broadcast,
-        env: publication?.runtimeEnv ?? process.env,
+        env: cronReloadEnv,
+        ...(preserveCronExitWatchers ? { exitWatchers: state.cronState.exitWatchers } : {}),
       });
     }
 
@@ -190,7 +203,13 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         if (plan.restartCron) {
           params.cronReconciliation.invalidate();
           params.onCronRestart?.();
-          if (state.cronState.cron.stopAndDrain) {
+          if (preserveCronExitWatchers) {
+            const terminalWatcherHandoff = nextState.cronState.activateExitWatchers?.();
+            if (terminalWatcherHandoff !== undefined) {
+              await terminalWatcherHandoff;
+            }
+            await state.cronState.stopCronForHotReload?.();
+          } else if (state.cronState.cron.stopAndDrain) {
             await state.cronState.cron.stopAndDrain();
           } else {
             state.cronState.cron.stop();

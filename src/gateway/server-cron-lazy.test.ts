@@ -321,6 +321,44 @@ describe("createLazyGatewayCronState", () => {
     expect(cron["start"]).toHaveBeenCalledTimes(1);
     expect(reconcileExitWatchers).not.toHaveBeenCalled();
   });
+
+  it("exposes loaded exit watchers and preserves them during a hot-reload stop", async () => {
+    const cron = createCronService();
+    const exitWatchers = {
+      reconcile: vi.fn(),
+      cancel: vi.fn(),
+      cancelAll: vi.fn(),
+      activeJobIds: vi.fn(() => ["watch-build"]),
+      updateHandlers: vi.fn(),
+    };
+    const stopCronForHotReload = vi.fn(async () => {});
+    hoisted.setState({
+      ...createCronState(cron),
+      exitWatchers,
+      stopCronForHotReload,
+    } satisfies GatewayCronState);
+    const lazy = createLazyGatewayCronState(createParams());
+
+    expect(lazy.exitWatchers).toBeUndefined();
+    expect(hoisted.buildGatewayCronService).not.toHaveBeenCalled();
+    await lazy.cron.start();
+    expect(lazy.exitWatchers).toBe(exitWatchers);
+
+    await lazy.stopCronForHotReload?.();
+
+    expect(stopCronForHotReload).toHaveBeenCalledOnce();
+    expect(cron["stop"]).not.toHaveBeenCalled();
+    expect(exitWatchers.cancelAll).not.toHaveBeenCalled();
+  });
+
+  it("does not load the cron service solely to stop it for hot reload", async () => {
+    const lazy = createLazyGatewayCronState(createParams());
+
+    await lazy.stopCronForHotReload?.();
+
+    expect(lazy.exitWatchers).toBeUndefined();
+    expect(hoisted.buildGatewayCronService).not.toHaveBeenCalled();
+  });
 });
 
 function createParams(overrides: Partial<OpenClawConfig> = {}) {

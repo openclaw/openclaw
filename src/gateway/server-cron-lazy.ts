@@ -79,6 +79,26 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
     return await cronStateLoader.load();
   };
 
+  const stopLoadedCronAndDrain = async (preserveExitWatchers = false): Promise<void> => {
+    stopped = true;
+    lifecycleGeneration += 1;
+    releaseSchedulingResumeWaiters();
+    const resolved = loaded ?? (cronStateLoader.peek() ? await cronStateLoader.peek() : null);
+    if (!resolved) {
+      return;
+    }
+    resolved.phase = "stopped";
+    resolved.underlyingStarted = false;
+    if (preserveExitWatchers && resolved.state.stopCronForHotReload) {
+      await resolved.state.stopCronForHotReload();
+    } else if (resolved.state.cron.stopAndDrain) {
+      await resolved.state.cron.stopAndDrain();
+    } else {
+      resolved.state.cron.stop();
+      await resolved.state.stopStreamWatchers?.();
+    }
+  };
+
   const cron: GatewayCronServiceContract = {
     async start() {
       stopped = false;
@@ -202,21 +222,7 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
       }
     },
     async stopAndDrain() {
-      stopped = true;
-      lifecycleGeneration += 1;
-      releaseSchedulingResumeWaiters();
-      const resolved = loaded ?? (cronStateLoader.peek() ? await cronStateLoader.peek() : null);
-      if (!resolved) {
-        return;
-      }
-      resolved.phase = "stopped";
-      resolved.underlyingStarted = false;
-      if (resolved.state.cron.stopAndDrain) {
-        await resolved.state.cron.stopAndDrain();
-      } else {
-        resolved.state.cron.stop();
-        await resolved.state.stopStreamWatchers?.();
-      }
+      await stopLoadedCronAndDrain();
     },
     pauseScheduling() {
       schedulingPaused = true;
@@ -313,5 +319,11 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
     cron,
     storePath,
     cronEnabled,
+    stopCronForHotReload: async () => {
+      await stopLoadedCronAndDrain(true);
+    },
+    get exitWatchers() {
+      return loaded?.state.exitWatchers;
+    },
   };
 }
