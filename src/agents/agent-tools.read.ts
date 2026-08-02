@@ -1069,6 +1069,7 @@ function createSandboxWriteOperations(params: SandboxToolParams) {
         params.bridge.stat({ filePath: absolutePath, cwd: params.root }),
     } as const,
     params.memoryWriteProvenance,
+    (backendPath) => resolveSandboxObservedPath(params, backendPath),
   );
 }
 
@@ -1085,7 +1086,13 @@ function createSandboxEditOperations(params: SandboxToolParams) {
       access: (absolutePath: string) => assertSandboxFileExists(params, absolutePath),
     } as const,
     params.memoryWriteProvenance,
+    (backendPath) => resolveSandboxObservedPath(params, backendPath),
   );
+}
+
+function resolveSandboxObservedPath(params: SandboxToolParams, backendPath: string): string {
+  const resolved = params.bridge.resolvePath({ filePath: backendPath, cwd: params.root });
+  return resolved.hostPath ?? path.resolve(params.root, resolved.relativePath);
 }
 
 async function assertSandboxFileExists(params: SandboxToolParams, absolutePath: string) {
