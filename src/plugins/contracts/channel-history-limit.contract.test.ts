@@ -36,19 +36,6 @@ function rejectsKey(schema: JsonSchemaLike | undefined, key: string): boolean {
   return !Object.hasOwn(schema.properties ?? {}, key);
 }
 
-/** Account schemas across every alternative, so unions are not skipped. */
-function accountSchemasOf(schema: JsonSchemaLike | undefined): JsonSchemaLike[] {
-  if (!schema) {
-    return [];
-  }
-  const alternatives = schema.anyOf ?? schema.oneOf;
-  if (Array.isArray(alternatives) && alternatives.length > 0) {
-    return alternatives.flatMap((branch) => accountSchemasOf(asSchema(branch)));
-  }
-  const account = asSchema(asSchema(schema.properties?.accounts)?.additionalProperties);
-  return account ? [account] : [];
-}
-
 function schemaFor(channelId: string): JsonSchemaLike | undefined {
   return asSchema(
     GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.find((entry) => entry.channelId === channelId)
@@ -81,12 +68,7 @@ describe("channel historyLimit contract", () => {
     expect(rejectsKey(schemaFor(channelId), "historyLimit")).toBe(false);
   });
 
-  it.each(groupCapableChannels)(
-    "%s accepts channels.<id>.accounts.<account>.historyLimit",
-    (channelId) => {
-      for (const account of accountSchemasOf(schemaFor(channelId))) {
-        expect(rejectsKey(account, "historyLimit")).toBe(false);
-      }
-    },
-  );
+  // No account-scope assertion on purpose: getHistoryLimitFromSessionKey reads
+  // the root provider object and takes no account id, so asserting the account
+  // form would claim precedence the resolver does not implement.
 });
