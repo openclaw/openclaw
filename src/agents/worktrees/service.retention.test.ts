@@ -4,10 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
 
 const execFileAsync = promisify(execFile);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function git(cwd: string, ...args: string[]): Promise<void> {
   await execFileAsync("git", ["-C", cwd, ...args]);
@@ -21,7 +23,7 @@ describe("managed worktree retention claims", () => {
   let service: ManagedWorktreeService;
 
   beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "worktree-retention-"));
+    root = tempDirs.make("worktree-retention-", await fs.realpath(os.tmpdir()));
     repo = path.join(root, "repo");
     await fs.mkdir(repo);
     await git(repo, "init", "-b", "main");
@@ -38,7 +40,6 @@ describe("managed worktree retention claims", () => {
 
   afterEach(async () => {
     closeOpenClawStateDatabaseForTest();
-    await fs.rm(root, { recursive: true, force: true });
   });
 
   it("persists across run-end, idle, count, and size cleanup", async () => {

@@ -3,9 +3,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { closeOpenClawStateDatabaseForTest } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { IDLE_GC_MS, ManagedWorktreeService } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { IDLE_GC_MS, ManagedWorktreeService } from "../../../src/agents/worktrees/service.js";
-import { closeOpenClawStateDatabaseForTest } from "../../../src/state/openclaw-state-db.js";
 import { withWorkboardArtifactRetention } from "./artifact-retention.js";
 import { cleanupWorkboardRunWorktree } from "./dispatcher-workspace.js";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
@@ -27,6 +27,7 @@ describe("Workboard artifact worktree retention", () => {
   let store: WorkboardStore;
 
   beforeEach(async () => {
+    // openclaw-temp-dir: allow extension tests cannot import the core-only tracker.
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "workboard-retention-"));
     repo = path.join(root, "repo");
     await fs.mkdir(repo);
