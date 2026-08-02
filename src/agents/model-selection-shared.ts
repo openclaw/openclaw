@@ -1513,6 +1513,7 @@ export function normalizeModelSelection(value: unknown): string | undefined {
 
 const DEFAULT_MODEL_POLICY_ALLOW_CONFIG_PATH = "agents.defaults.modelPolicy.allow";
 const AGENT_MODEL_POLICY_ALLOW_CONFIG_PATH = "agents.entries.*.modelPolicy.allow";
+export const LEGACY_MODEL_POLICY_ALLOW_CONFIG_PATH = "agents.defaults.models";
 
 function resolvePolicyAliasAgentId(
   configPath: string | null,
@@ -1552,7 +1553,7 @@ export function resolveConfiguredModelPolicyAllow(params: {
   if (legacyDefaultRefs) {
     return {
       refs: legacyDefaultRefs,
-      configPath: "agents.defaults.models",
+      configPath: LEGACY_MODEL_POLICY_ALLOW_CONFIG_PATH,
       repairConfigPath: DEFAULT_MODEL_POLICY_ALLOW_CONFIG_PATH,
     };
   }

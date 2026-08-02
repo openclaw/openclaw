@@ -26,6 +26,8 @@ suite.define(() => {
     const parentKey = "agent:main:release-plan";
     const childOneKey = "agent:main:research-sources";
     const childTwoKey = "agent:main:verify-tests";
+    const staleRunningChildKey = "agent:main:stale-running";
+    const failedChildKey = "agent:main:failed-checks";
     const context = await suite.browser.newContext({
       colorScheme: "dark",
       locale: "en-US",
@@ -52,12 +54,34 @@ suite.define(() => {
                   startedAt: baseTime - 62_000,
                   status: "done",
                 }),
+                {
+                  ...sessionRow(staleRunningChildKey, "Stale activity", baseTime - 3_000, {
+                    hasActiveRun: false,
+                    spawnedBy: parentKey,
+                    startedAt: baseTime - 64_000,
+                    status: "running",
+                  }),
+                  runtimeMs: 61_000,
+                  runtimeSampledAt: baseTime,
+                },
+                {
+                  ...sessionRow(failedChildKey, "Failed checks", baseTime - 4_000, {
+                    endedAt: baseTime - 4_000,
+                    hasActiveRun: true,
+                    spawnedBy: parentKey,
+                    startedAt: baseTime - 64_000,
+                    status: "failed",
+                  }),
+                  lastReadAt: baseTime,
+                  runtimeMs: 60_000,
+                  runtimeSampledAt: baseTime,
+                },
               ]),
             },
             {
               response: sessionsListResponse([
                 sessionRow(parentKey, "Plan release", baseTime, {
-                  childSessions: [childOneKey, childTwoKey],
+                  childSessions: [childOneKey, childTwoKey, staleRunningChildKey, failedChildKey],
                 }),
               ]),
             },
@@ -74,9 +98,11 @@ suite.define(() => {
       await expect.poll(() => page.locator(".sidebar-recent-session--child").count()).toBe(0);
       await captureUiProof(page, "child-sessions-collapsed.png");
 
-      await parent.getByRole("button", { name: "Show 2 child threads for Plan release" }).click();
+      await parent.getByRole("button", { name: "Show 4 child threads for Plan release" }).click();
       await page.getByText("Research sources", { exact: true }).waitFor({ state: "visible" });
       await page.getByText("Verify tests", { exact: true }).waitFor({ state: "visible" });
+      await page.getByText("Stale activity", { exact: true }).waitFor({ state: "visible" });
+      await page.getByText("Failed checks", { exact: true }).waitFor({ state: "visible" });
       await expect
         .poll(async () =>
           (await gateway.getRequests("sessions.list")).some(
@@ -86,11 +112,28 @@ suite.define(() => {
         .toBe(true);
 
       const childRows = page.locator(".sidebar-recent-session--child");
-      await expect.poll(() => childRows.count()).toBe(2);
+      await expect.poll(() => childRows.count()).toBe(4);
       expect(await childRows.getByRole("button", { name: "Open thread menu" }).count()).toBe(0);
       await childRows.nth(0).getByRole("img", { name: "Active run" }).waitFor();
       await childRows.nth(1).getByRole("img", { name: "Done" }).waitFor();
+
+      const staleRunningChild = page.locator(`[data-session-key="${staleRunningChildKey}"]`);
+      const failedChild = page.locator(`[data-session-key="${failedChildKey}"]`);
+      expect(await staleRunningChild.getByRole("img", { name: "Active run" }).count()).toBe(0);
+      expect(await failedChild.getByRole("img", { name: "Active run" }).count()).toBe(0);
+      await failedChild.getByRole("img", { name: "Failed" }).waitFor();
+      await expect.poll(() => childRows.getByRole("img", { name: "Active run" }).count()).toBe(1);
+
+      const childToggle = parent.locator(`[data-child-session-toggle="${parentKey}"]`);
+      expect(await childToggle.getAttribute("class")).toContain(
+        "sidebar-child-session-toggle--running",
+      );
+      for (const child of [staleRunningChild, failedChild]) {
+        expect(await child.locator("openclaw-elapsed-time").count()).toBe(0);
+        expect((await child.locator(".session-row-trail").textContent())?.trim()).toBeTruthy();
+      }
       await captureUiProof(page, "child-sessions-expanded.png");
+      await captureUiProof(page, "child-sessions-run-state-precedence.png");
 
       await childRows.nth(1).getByRole("link").click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(childTwoKey));
@@ -252,6 +295,112 @@ suite.define(() => {
         .poll(() => drawerToggle.evaluate((element) => element === document.activeElement))
         .toBe(true);
       await expectHiddenShortcutsInert(beforeDrawerCollapse);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("names session-row actions and tabs from their menu into the next visible session", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:main", "Main", Date.parse("2026-07-01T16:00:00.000Z")),
+          sessionRow(
+            "agent:main:research",
+            "Research notes",
+            Date.parse("2026-07-01T15:00:00.000Z"),
+          ),
+          sessionRow(
+            "agent:main:follow-up",
+            "Follow-up work",
+            Date.parse("2026-07-01T14:00:00.000Z"),
+          ),
+        ]),
+      },
+      sessionKey: "agent:main:main",
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const researchRow = page.locator('[data-session-key="agent:main:research"]');
+      const followUpRow = page.locator('[data-session-key="agent:main:follow-up"]');
+      const researchMenu = researchRow.getByRole("button", {
+        name: "Open thread menu: Research notes",
+        exact: true,
+      });
+      await researchRow
+        .getByRole("button", { name: "Pin thread: Research notes", exact: true })
+        .waitFor();
+      await followUpRow
+        .getByRole("button", { name: "Open thread menu: Follow-up work", exact: true })
+        .waitFor();
+
+      await researchMenu.focus();
+      await page.keyboard.press("Enter");
+      const menu = page.getByRole("menu", { name: "Actions for Research notes" });
+      await menu.waitFor({ state: "visible" });
+
+      await page
+        .locator("openclaw-session-menu")
+        .getByRole("menuitem", { name: "Change icon" })
+        .click();
+      const iconPicker = page.getByRole("dialog", { name: "Change icon" });
+      await iconPicker.waitFor({ state: "visible" });
+      await expect
+        .poll(() => iconPicker.evaluate((element) => element.contains(document.activeElement)))
+        .toBe(true);
+      await page.keyboard.press("Tab");
+      await expect
+        .poll(() => iconPicker.evaluate((element) => element.contains(document.activeElement)))
+        .toBe(true);
+      await iconPicker.getByRole("button", { name: "Back" }).click();
+      await menu.waitFor({ state: "visible" });
+      await expect
+        .poll(() =>
+          page
+            .locator("openclaw-session-menu")
+            .getByRole("menuitem", { name: "Change icon" })
+            .evaluate((element) => element === document.activeElement),
+        )
+        .toBe(true);
+      await page.keyboard.press("Tab");
+
+      await expect.poll(() => menu.count()).toBe(0);
+      await expect
+        .poll(() =>
+          followUpRow
+            .locator(".sidebar-recent-session__link")
+            .evaluate((element) => element === document.activeElement),
+        )
+        .toBe(true);
+
+      await researchRow.locator(".sidebar-recent-session__link").focus();
+      await page.keyboard.press("Shift+F10");
+      await menu.waitFor({ state: "visible" });
+      await expect
+        .poll(() =>
+          page
+            .locator("openclaw-session-menu")
+            .getByRole("menuitem", { name: "Open chat" })
+            .evaluate((element) => element === document.activeElement),
+        )
+        .toBe(true);
+      await page.keyboard.press("Tab");
+
+      await expect.poll(() => menu.count()).toBe(0);
+      await expect
+        .poll(() =>
+          followUpRow
+            .locator(".sidebar-recent-session__link")
+            .evaluate((element) => element === document.activeElement),
+        )
+        .toBe(true);
     } finally {
       await context.close();
     }
