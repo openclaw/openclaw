@@ -133,6 +133,9 @@ export function createSubagentRegistryLifecycleRequesterWake(
       ...(existing?.rearmGeneration !== undefined
         ? { rearmGeneration: existing.rearmGeneration }
         : {}),
+      ...(existing?.lifecycleMismatch !== undefined
+        ? { lifecycleMismatch: existing.lifecycleMismatch }
+        : {}),
       ...(existing?.lastError !== undefined ? { lastError: existing.lastError } : {}),
       ...(existing?.retireAfterSettle === true || options?.retireAfterSettle === true
         ? { retireAfterSettle: true }

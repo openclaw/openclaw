@@ -58,6 +58,7 @@ import type {
   SubagentRunRecord,
   SwarmQueuedLaunch,
 } from "./subagent-registry.types.js";
+import { loadRequesterLifecycleRevision } from "./subagent-requester-lifecycle.js";
 import {
   compareSubagentRunGeneration,
   nextSubagentRunGeneration,
@@ -750,6 +751,10 @@ export function createSubagentRunManager(params: {
     const next: SubagentRunRecord = normalizeSubagentRunState({
       ...source,
       runId: nextRunId,
+      expectedRequesterLifecycleRevision:
+        source.expectsCompletionMessage === true
+          ? loadRequesterLifecycleRevision(source.requesterSessionKey)
+          : undefined,
       // New rows carry an exact owner. Legacy replacement rows must retain an
       // unknown owner so their bounded session fallback can still find the
       // original detached task across another restart.
@@ -1172,6 +1177,11 @@ export function createSubagentRunManager(params: {
     const entry: SubagentRunRecord = normalizeSubagentRunState({
       runId,
       taskRunId: runId,
+      ...(registerParams.expectsCompletionMessage === true
+        ? {
+            expectedRequesterLifecycleRevision: loadRequesterLifecycleRevision(requesterSessionKey),
+          }
+        : {}),
       ...(requesterTurnRunId && registerParams.expectsCompletionMessage === true
         ? { requesterTurnRunId }
         : {}),

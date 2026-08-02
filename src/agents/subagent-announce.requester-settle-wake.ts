@@ -155,7 +155,33 @@ function readSharedBatchState(batch: readonly SubagentRunRecord[]): RequesterSet
       : {}),
     ...(source?.rearmGeneration !== undefined ? { rearmGeneration: source.rearmGeneration } : {}),
     ...(source?.lastError !== undefined ? { lastError: source.lastError } : {}),
+    ...(source?.lifecycleMismatch !== undefined
+      ? { lifecycleMismatch: source.lifecycleMismatch }
+      : {}),
   };
+}
+
+function fenceRequesterSettleWakeBatch(params: {
+  batchRunIds: readonly string[];
+  state: RequesterSettleWakeBatchState;
+  mismatch: NonNullable<RequesterSettleWakeState["lifecycleMismatch"]>;
+  requesterSessionKey: string;
+  transitionBatch: (runIds: readonly string[], state: RequesterSettleWakeBatchState) => void;
+}): void {
+  const reason =
+    params.mismatch === "requester_replaced"
+      ? "requester lifecycle was replaced before the subagent completion settled; stale completion retained without delivery"
+      : params.mismatch === "legacy_unfenced"
+        ? "persisted wake predates requester lifecycle fencing; completion retained without delivery"
+        : "requester session entry is unavailable; completion retained without delivery";
+  params.transitionBatch(params.batchRunIds, {
+    ...params.state,
+    lifecycleMismatch: params.mismatch,
+    lastError: `${params.mismatch}: ${reason} (requester=${params.requesterSessionKey})`,
+  });
+  logWarn(
+    `requester settle wake fenced (${params.mismatch}); retaining ${params.batchRunIds.length} run(s) without delivery`,
+  );
 }
 
 function deferRequesterSettleWakeBatch(params: {
@@ -273,6 +299,10 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
 
   const batchRunIds = settledBatch.map((entry) => entry.runId).toSorted();
   const selectedState = readSharedBatchState(settledBatch);
+  if (selectedState.lifecycleMismatch) {
+    // Already fenced; retain the explicit mismatch outcome without retrying.
+    return false;
+  }
   if (hasUnsettledDescendants) {
     if (frozenBatchRunIds && frozenBatchRunIds.length > 0) {
       deferRequesterSettleWakeBatch({
@@ -309,10 +339,24 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
 
   const { entry: requesterEntry } = loadRequesterSessionEntry(requesterSessionKey);
   if (!hasUsableSessionEntry(requesterEntry)) {
-    completeRequesterSettleWakeBatch({
-      runIds: batchRunIds,
+    fenceRequesterSettleWakeBatch({
+      batchRunIds,
       state: selectedState,
-      completeBatch,
+      mismatch: "requester_missing",
+      requesterSessionKey,
+      transitionBatch: params.transitionBatch,
+    });
+    return false;
+  }
+  const expectedRequesterLifecycleRevision = settledBatch[0]?.expectedRequesterLifecycleRevision;
+  if (requesterEntry?.lifecycleRevision !== expectedRequesterLifecycleRevision) {
+    fenceRequesterSettleWakeBatch({
+      batchRunIds,
+      state: selectedState,
+      mismatch:
+        expectedRequesterLifecycleRevision === undefined ? "legacy_unfenced" : "requester_replaced",
+      requesterSessionKey,
+      transitionBatch: params.transitionBatch,
     });
     return false;
   }
