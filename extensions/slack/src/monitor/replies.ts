@@ -20,7 +20,7 @@ import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-reference
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { buildSlackBlocksFallbackText } from "../blocks-fallback.js";
 import { markdownToSlackMrkdwnChunks } from "../format.js";
-import { SLACK_TEXT_LIMIT } from "../limits.js";
+import { SLACK_MESSAGE_TEXT_HARD_LIMIT, SLACK_TEXT_LIMIT } from "../limits.js";
 import { emitSlackMessageSentHooks } from "../message-sent-hook.js";
 import {
   buildSlackNativeDataAccessibilityText,
@@ -406,6 +406,10 @@ export async function deliverSlackSlashReplies(params: {
     const plan = buildSlackNativeDataDeliveryPlan({
       blocks: input.blocks,
       baseText: input.baseText,
+      // response_url has a five-call lifetime budget. Use Slack's hard text
+      // limit here so a complete fallback does not exhaust it in 4k chunks.
+      textLimit: SLACK_MESSAGE_TEXT_HARD_LIMIT,
+      textLimitCap: SLACK_MESSAGE_TEXT_HARD_LIMIT,
     });
     return {
       message: {

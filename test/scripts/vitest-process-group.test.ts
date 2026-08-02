@@ -101,6 +101,27 @@ describe("vitest process group helpers", () => {
     expect(kill).not.toHaveBeenCalled();
   });
 
+  it("treats reaped Linux process groups with zombie-only members as joined", async () => {
+    const child = Object.assign(new EventEmitter(), { pid: 4200 });
+    const kill = vi.fn(() => true as const);
+    const readProcessGroupStates = vi.fn(() => ["Z", "X"]);
+    const completion = createVitestProcessCompletion({
+      child: child as never,
+      detached: true,
+      kill,
+      platform: "linux",
+      readProcessGroupStates,
+    });
+
+    child.emit("exit", 0, null);
+    child.emit("close", 0, null);
+
+    await expect(completion).resolves.toEqual({ code: 0, signal: null });
+    expect(kill).toHaveBeenNthCalledWith(1, -4200, "SIGKILL");
+    expect(kill).toHaveBeenNthCalledWith(2, -4200, 0);
+    expect(readProcessGroupStates).toHaveBeenCalledWith(4200);
+  });
+
   it("installs and removes process cleanup listeners", () => {
     const listeners = new Map<string, Set<() => void>>();
     const fakeProcess = {

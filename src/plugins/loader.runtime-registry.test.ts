@@ -14,6 +14,7 @@ import {
   loadAndActivateRootPluginRegistry,
   loadOpenClawPlugins,
   loadPluginRegistryHandle,
+  resolveCompatibleRuntimePluginRegistry,
   resolveRuntimePluginRegistry,
 } from "./loader.js";
 import { makeTempDir, resetPluginLoaderTestStateForTest } from "./loader.test-fixtures.js";
@@ -296,6 +297,15 @@ describe("resolveRuntimePluginRegistry", () => {
     setActivePluginRegistry(registry, "startup-registry");
 
     expect(resolveRuntimePluginRegistry()).toBe(registry);
+  });
+
+  it("matches snapshot-only lookups to the exact active registry", () => {
+    const loadOptions = { cache: false, config: {} };
+    const registry = loadAndActivateRootPluginRegistry(loadOptions);
+
+    expect(resolveCompatibleRuntimePluginRegistry({ ...loadOptions, activate: false })).toBe(
+      registry,
+    );
   });
 });
 

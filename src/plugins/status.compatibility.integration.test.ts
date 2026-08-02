@@ -3,14 +3,18 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
+import { loadAndActivateRootPluginRegistry } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
-  loadOpenClawPlugins,
   makeTempDir,
   resetPluginLoaderTestStateForTest,
   useNoBundledPlugins,
   writePlugin,
 } from "./loader.test-fixtures.js";
+import {
+  buildPluginRuntimeLoadOptions,
+  resolvePluginRuntimeLoadContext,
+} from "./runtime/load-context.js";
 import { buildPluginCompatibilitySnapshotNotices } from "./status.js";
 
 function addStartupActivation(pluginDir: string, onStartup: boolean): void {
@@ -91,7 +95,13 @@ describe("plugin compatibility snapshot notices", () => {
       expect(buildPluginCompatibilitySnapshotNotices(params)).toStrictEqual([]);
       expect(fs.existsSync(runtimeMarker)).toBe(false);
 
-      const registry = loadOpenClawPlugins({ ...params, cache: false });
+      const runtimeLoadOptions = buildPluginRuntimeLoadOptions(
+        resolvePluginRuntimeLoadContext(params),
+      );
+      const registry = loadAndActivateRootPluginRegistry({
+        ...runtimeLoadOptions,
+        cache: false,
+      });
       expect(fs.existsSync(runtimeMarker)).toBe(true);
       expect(registry.typedHooks).toEqual([
         expect.objectContaining({ pluginId: plugin.id, hookName: "message_received" }),

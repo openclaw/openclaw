@@ -62,6 +62,14 @@ function normalizeServiceUrl(serviceUrl: string): string {
   return serviceUrl.replace(/\/+$/, "");
 }
 
+function cancelUnreadBotFrameworkResponse(response: Response): void {
+  if (!response.bodyUsed) {
+    // Guarded fetch capture can tee the body; awaiting cancellation can deadlock
+    // until the sibling branch closes, so cleanup must not block the request path.
+    void response.body?.cancel().catch(() => undefined);
+  }
+}
+
 function buildBotFrameworkAttachmentHeaders(params: {
   url: string;
   accessToken: string;
@@ -113,7 +121,7 @@ async function fetchBotFrameworkAttachmentInfo(params: {
     return undefined;
   }
   if (!response.ok) {
-    await response.body?.cancel().catch(() => undefined);
+    cancelUnreadBotFrameworkResponse(response);
     params.logger?.warn?.("msteams botFramework attachmentInfo non-ok", {
       status: response.status,
     });
@@ -173,7 +181,7 @@ async function saveBotFrameworkAttachmentView(params: {
     return undefined;
   }
   if (!response.ok) {
-    await response.body?.cancel().catch(() => undefined);
+    cancelUnreadBotFrameworkResponse(response);
     params.logger?.warn?.("msteams botFramework attachmentView non-ok", {
       status: response.status,
     });
@@ -183,14 +191,14 @@ async function saveBotFrameworkAttachmentView(params: {
   try {
     contentLength = parseMediaContentLength(response.headers.get("content-length"));
   } catch (err) {
-    await response.body?.cancel().catch(() => undefined);
+    cancelUnreadBotFrameworkResponse(response);
     params.logger?.warn?.("msteams botFramework attachmentView invalid content-length", {
       error: err instanceof Error ? err.message : String(err),
     });
     return undefined;
   }
   if (contentLength !== null && contentLength > params.maxBytes) {
-    await response.body?.cancel().catch(() => undefined);
+    cancelUnreadBotFrameworkResponse(response);
     return undefined;
   }
   try {
@@ -208,7 +216,7 @@ async function saveBotFrameworkAttachmentView(params: {
     });
     return undefined;
   } finally {
-    await response.body?.cancel().catch(() => undefined);
+    cancelUnreadBotFrameworkResponse(response);
   }
 }
 

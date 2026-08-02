@@ -14,9 +14,10 @@ function getExactActivePluginRegistry(options?: PluginLoadOptions): PluginRegist
   if (!activeCacheKey) {
     return undefined;
   }
-  return resolvePluginLoadCacheContext(options).cacheKey === activeCacheKey
-    ? activeRegistry
-    : undefined;
+  // Registry identity excludes the caller's side-effect preference here: an active
+  // registry was necessarily loaded in active mode, even for a snapshot-only lookup.
+  const compatibleCacheKey = resolvePluginLoadCacheContext({ ...options, activate: true }).cacheKey;
+  return compatibleCacheKey === activeCacheKey ? activeRegistry : undefined;
 }
 
 export function resolveRuntimePluginRegistry(

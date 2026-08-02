@@ -1073,6 +1073,14 @@ describe("bundled plugin install/uninstall probe", () => {
     expect(() => runtimeSmoke.assertNoPostReadyRuntimeDepsWork(logPath, readyOffset)).not.toThrow();
     expect(fullRead).not.toHaveBeenCalled();
 
+    fs.appendFileSync(
+      logPath,
+      "dependency unavailable; either the package is not installed (run npm install) or unsupported\n",
+      "utf8",
+    );
+
+    expect(() => runtimeSmoke.assertNoPostReadyRuntimeDepsWork(logPath, readyOffset)).not.toThrow();
+
     fs.appendFileSync(logPath, "post-ready pnpm install should fail\n", "utf8");
 
     expect(() => runtimeSmoke.assertNoPostReadyRuntimeDepsWork(logPath, readyOffset)).toThrow(

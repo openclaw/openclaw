@@ -1,3 +1,5 @@
+import { readdirSync, readFileSync } from "node:fs";
+
 // Shared Vitest child process-group signal forwarding helpers.
 export function shouldUseDetachedVitestProcessGroup(platform = process.platform) {
   return platform !== "win32";
@@ -54,10 +56,37 @@ export function forceKillVitestProcessGroup(child, kill = process.kill.bind(proc
 
 const PROCESS_GROUP_JOIN_TIMEOUT_MS = 1_000;
 
-function isVitestProcessGroupAlive(target, kill) {
+function readLinuxProcessGroupStates(groupId) {
+  const states = [];
+  let entries;
   try {
-    kill(target, 0);
-    return true;
+    entries = readdirSync("/proc", { withFileTypes: true });
+  } catch {
+    return states;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !/^\d+$/u.test(entry.name)) {
+      continue;
+    }
+    try {
+      const stat = readFileSync(`/proc/${entry.name}/stat`, "utf8");
+      const fields = stat
+        .slice(stat.lastIndexOf(") ") + 2)
+        .trim()
+        .split(/\s+/u);
+      if (Number(fields[2]) === groupId && fields[0]) {
+        states.push(fields[0]);
+      }
+    } catch {
+      // Processes can exit while /proc is being scanned.
+    }
+  }
+  return states;
+}
+
+function isVitestProcessGroupAlive(params) {
+  try {
+    params.kill(params.target, 0);
   } catch (error) {
     if (error?.code === "ESRCH") {
       return false;
@@ -67,16 +96,25 @@ function isVitestProcessGroupAlive(target, kill) {
     }
     throw error;
   }
+  if (params.platform === "linux") {
+    const states = (params.readProcessGroupStates ?? readLinuxProcessGroupStates)(
+      Math.abs(params.target),
+    );
+    if (states.length > 0 && states.every((state) => state === "Z" || state === "X")) {
+      return false;
+    }
+  }
+  return true;
 }
 
-async function joinVitestProcessGroup(child, platform, kill) {
+async function joinVitestProcessGroup(child, platform, kill, readProcessGroupStates) {
   const target = resolveVitestProcessGroupSignalTarget({ childPid: child.pid, platform });
   if (target === null) {
     return;
   }
   forwardSignalToVitestProcessGroup({ child, kill, platform, signal: "SIGKILL" });
   const deadlineAt = Date.now() + PROCESS_GROUP_JOIN_TIMEOUT_MS;
-  while (isVitestProcessGroupAlive(target, kill)) {
+  while (isVitestProcessGroupAlive({ target, kill, platform, readProcessGroupStates })) {
     const remainingMs = deadlineAt - Date.now();
     if (remainingMs <= 0) {
       throw new Error(
@@ -110,7 +148,12 @@ export function createVitestProcessCompletion(params) {
   // `close` drains inherited pipes, while the group join proves pipe-independent
   // descendants are gone before a sequential caller advances.
   const groupCompletion = exitCompletion.then(async (result) => {
-    await joinVitestProcessGroup(params.child, platform, params.kill ?? process.kill.bind(process));
+    await joinVitestProcessGroup(
+      params.child,
+      platform,
+      params.kill ?? process.kill.bind(process),
+      params.readProcessGroupStates,
+    );
     return result;
   });
   return Promise.all([groupCompletion, closeCompletion]).then(([result]) => result);

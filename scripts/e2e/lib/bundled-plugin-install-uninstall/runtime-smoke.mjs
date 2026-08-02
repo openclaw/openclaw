@@ -50,7 +50,7 @@ const READY_OFFSET_LOG_NEEDLES = [
   Buffer.from("[gateway] http server listening"),
 ];
 const GATEWAY_LOG_TRUNCATED_NEEDLE = "[gateway log truncated after ";
-const FORBIDDEN_POST_READY_DEPS_WORK = [/\b(?:npm|pnpm|yarn|corepack) install\b/iu];
+const FORBIDDEN_POST_READY_DEPS_WORK = [/(?<!run )\b(?:npm|pnpm|yarn|corepack) install\b/iu];
 const PACKAGE_MANAGER_PROCESS_BASENAME = /^(?:npm|pnpm|yarn|corepack)(?:$|[.-])/u;
 const PROCESS_SNAPSHOT_ARGS = ["-ww", "-eo", "pid=,ppid=,args="];
 const isolatedStateRoots = new WeakMap();

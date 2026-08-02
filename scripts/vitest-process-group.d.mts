@@ -36,6 +36,7 @@ export function createVitestProcessCompletion(params: {
   detached: boolean;
   kill?: (pid: number, signal?: string | number) => true;
   platform?: NodeJS.Platform;
+  readProcessGroupStates?: (groupId: number) => string[];
 }): Promise<{ code: number | null; signal: ChildProcess["signalCode"] }>;
 /**
  * Installs signal/exit cleanup handlers for a Vitest child process group.

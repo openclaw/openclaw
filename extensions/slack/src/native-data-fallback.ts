@@ -156,10 +156,11 @@ export function buildSlackNativeDataDeliveryPlan(params: {
   baseText?: string;
   blocks: readonly (Block | KnownBlock)[];
   textLimit?: number;
+  textLimitCap?: number;
 }): SlackNativeDataDeliveryPlan {
   const baseText = params.baseText?.trim() ?? "";
   const textLimit = Math.min(
-    SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT,
+    params.textLimitCap ?? SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT,
     SLACK_MESSAGE_TEXT_HARD_LIMIT,
     Math.max(1, Math.floor(params.textLimit ?? SLACK_MESSAGE_TEXT_HARD_LIMIT)),
   );
