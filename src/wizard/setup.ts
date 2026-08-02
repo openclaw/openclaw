@@ -9,7 +9,7 @@ import { createMergePatch } from "../config/merge-patch.js";
 import { applyMergePatch } from "../config/merge-patch.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeSecretInputString } from "../config/types.secrets.js";
+import { resolveGatewayProbeSurfaceAuth } from "../gateway/auth-surface-resolution.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   buildPluginCompatibilitySnapshotNotices,
@@ -417,22 +417,18 @@ async function runSetupWizardOnce(
     seededRemoteUrl && remoteOnboard?.validateGatewayWebSocketUrl(seededRemoteUrl) === undefined
       ? seededRemoteUrl
       : "";
-  let remoteGatewayToken = normalizeSecretInputString(remoteSeedConfig.gateway?.remote?.token);
-  try {
-    const resolvedRemoteGatewayToken = await resolveSetupSecretInputString({
-      config: remoteSeedConfig,
-      value: remoteSeedConfig.gateway?.remote?.token,
-      path: "gateway.remote.token",
-      env: process.env,
-    });
-    if (resolvedRemoteGatewayToken) {
-      remoteGatewayToken = resolvedRemoteGatewayToken;
-    }
-  } catch (error) {
+  const remoteProbeAuth = remoteUrl
+    ? await resolveGatewayProbeSurfaceAuth({
+        config: remoteSeedConfig,
+        env: process.env,
+        surface: "remote",
+      })
+    : null;
+  if (remoteProbeAuth?.diagnostics?.length) {
     await prompter.note(
       [
-        "Could not resolve gateway.remote.token SecretRef for setup probe.",
-        formatErrorMessage(error),
+        "Could not resolve remote gateway SecretRef for setup probe.",
+        ...remoteProbeAuth.diagnostics,
       ].join("\n"),
       "Gateway auth",
     );
@@ -440,7 +436,8 @@ async function runSetupWizardOnce(
   const remoteProbe = remoteUrl
     ? await onboardHelpers.probeGatewayReachable({
         url: remoteUrl,
-        token: remoteGatewayToken,
+        token: remoteProbeAuth?.token,
+        ...(remoteProbeAuth?.password ? { password: remoteProbeAuth.password } : {}),
       })
     : null;
 

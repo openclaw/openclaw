@@ -15,6 +15,7 @@ import {
 import { logConfigUpdated } from "../config/logging.js";
 import { ConfigMutationConflictError } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveGatewayProbeSurfaceAuth } from "../gateway/auth-surface-resolution.js";
 import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
 import { commitConfigWithPendingPluginInstalls } from "../plugins/install-record-commit.js";
 import { resolvePluginContributionOwners } from "../plugins/plugin-registry.js";
@@ -471,14 +472,15 @@ export async function runConfigureWizard(
       })();
       const remoteProbePromise = remoteUrl
         ? (async () => {
-            const baseRemoteProbeToken = await resolveGatewaySecretInputForWizard({
-              cfg: baseConfig,
-              value: baseConfig.gateway?.remote?.token,
-              path: "gateway.remote.token",
+            const remoteProbeAuth = await resolveGatewayProbeSurfaceAuth({
+              config: baseConfig,
+              env: process.env,
+              surface: "remote",
             });
             return probeGatewayReachable({
               url: remoteUrl,
-              token: baseRemoteProbeToken,
+              token: remoteProbeAuth.token,
+              ...(remoteProbeAuth.password ? { password: remoteProbeAuth.password } : {}),
               timeoutMs: GATEWAY_HINT_PROBE_TIMEOUT_MS,
             });
           })()

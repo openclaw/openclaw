@@ -859,6 +859,33 @@ describe("runSetupWizard", () => {
     expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining(remoteToken));
   });
 
+  it("uses the configured remote password for the setup reachability probe", async () => {
+    const remotePassword = "remote-password"; // pragma: allowlist secret
+    readConfigFileSnapshot.mockResolvedValueOnce(
+      configSnapshot({
+        gateway: {
+          mode: "remote",
+          remote: {
+            url: "wss://gateway.example.test",
+            password: remotePassword,
+          },
+        },
+      }),
+    );
+
+    await runSetupWizard(
+      { acceptRisk: true, flow: "advanced", mode: "remote" },
+      createRuntime(),
+      buildWizardPrompter({}),
+    );
+
+    expect(probeGatewayReachable).toHaveBeenCalledWith({
+      url: "wss://gateway.example.test",
+      token: undefined,
+      password: remotePassword,
+    });
+  });
+
   it("does not reuse stored remote credentials for an overridden URL", async () => {
     readConfigFileSnapshot.mockResolvedValueOnce({
       path: "/tmp/.openclaw/openclaw.json",

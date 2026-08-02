@@ -476,6 +476,30 @@ describe("runConfigureWizard", () => {
     expect(remoteProbe?.timeoutMs).toBe(300);
   });
 
+  it("uses the configured remote password for the bounded startup hint probe", async () => {
+    const remotePassword = "remote-password"; // pragma: allowlist secret
+    setupBaseWizardState({
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://gateway.example.test",
+          password: remotePassword,
+        },
+      },
+    });
+
+    await runConfigureWizard({ command: "configure", sections: ["gateway"] }, createRuntime());
+
+    const remoteProbe = mocks.probeGatewayReachable.mock.calls
+      .map(([request]) => requireRecord(request, "probe request"))
+      .find((request) => request.url === "wss://gateway.example.test");
+    expect(remoteProbe).toMatchObject({
+      token: undefined,
+      password: remotePassword,
+      timeoutMs: 300,
+    });
+  });
+
   it("ignores blank gateway env credentials when probing the local gateway", async () => {
     setupBaseWizardState({
       gateway: {
