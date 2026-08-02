@@ -126,8 +126,7 @@ describe("concept vocabulary", () => {
     it("filters out stop words like 'kept' and 'theme'", () => {
       const tags = deriveConceptTags({
         path: "memory/2026-08-01.md",
-        snippet:
-          "The theme kept appearing in the conversation about the project.",
+        snippet: "The theme kept appearing in the conversation about the project.",
       });
 
       expect(tags).not.toContain("kept");
@@ -140,8 +139,7 @@ describe("concept vocabulary", () => {
     it("filters out bare numbers like '1.00'", () => {
       const tags = deriveConceptTags({
         path: "memory/2026-08-01.md",
-        snippet:
-          "The price was 1.00 and the total came to 42.50 for the items.",
+        snippet: "The price was 1.00 and the total came to 42.50 for the items.",
       });
 
       expect(tags).not.toContain("1.00");
@@ -154,8 +152,7 @@ describe("concept vocabulary", () => {
     it("filters out number ranges like '51-54'", () => {
       const tags = deriveConceptTags({
         path: "memory/2026-08-01.md",
-        snippet:
-          "Pages 51-54 discuss the router configuration and backup procedures.",
+        snippet: "Pages 51-54 discuss the router configuration and backup procedures.",
       });
 
       expect(tags).not.toContain("51-54");

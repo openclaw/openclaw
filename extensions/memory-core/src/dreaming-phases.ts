@@ -14,8 +14,8 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { appendFailedDreamingEvent } from "./dreaming-events.js";
 import { isJunkConceptTag } from "./concept-vocabulary.js";
+import { appendFailedDreamingEvent } from "./dreaming-events.js";
 import {
   normalizeDailyIngestionState,
   normalizeMemoryDay,

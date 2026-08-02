@@ -86,19 +86,7 @@ const LANGUAGE_STOP_WORDS = {
     "workspace",
     "year",
   ],
-  english: [
-    "and",
-    "are",
-    "for",
-    "into",
-    "its",
-    "our",
-    "the",
-    "then",
-    "were",
-    "you",
-    "your",
-  ],
+  english: ["and", "are", "for", "into", "its", "our", "the", "then", "were", "you", "your"],
   spanish: [
     "al",
     "con",
@@ -303,9 +291,7 @@ const KATAKANA_RE = /\p{Script=Katakana}/u;
 const HANGUL_RE = /\p{Script=Hangul}/u;
 
 const DEFAULT_WORD_SEGMENTER =
-  typeof Intl.Segmenter === "function"
-    ? new Intl.Segmenter("und", { granularity: "word" })
-    : null;
+  typeof Intl.Segmenter === "function" ? new Intl.Segmenter("und", { granularity: "word" }) : null;
 
 function containsLetterOrNumber(value: string): boolean {
   return LETTER_OR_NUMBER_RE.test(value);
@@ -346,21 +332,14 @@ function isKanaOnlyToken(value: string): boolean {
   );
 }
 
-function normalizeConceptToken(
-  rawToken: string,
-  fromGlossary = false,
-): string | null {
+function normalizeConceptToken(rawToken: string, fromGlossary = false): string | null {
   const normalized = normalizeLowercaseStringOrEmpty(
     rawToken
       .normalize("NFKC")
       .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "")
       .replaceAll("_", "-"),
   );
-  if (
-    !normalized ||
-    !containsLetterOrNumber(normalized) ||
-    normalized.length > 32
-  ) {
+  if (!normalized || !containsLetterOrNumber(normalized) || normalized.length > 32) {
     return null;
   }
 
@@ -428,8 +407,7 @@ export function isJunkConceptTag(tag: string): boolean {
 // Precomputed so derive() does not reclassify on every call.
 const GLOSSARY_ENTRIES = PROTECTED_GLOSSARY.map((entry) => ({
   entry,
-  wholeWord:
-    entry.length < minimumTokenLengthForScript(classifyConceptTagScript(entry)),
+  wholeWord: entry.length < minimumTokenLengthForScript(classifyConceptTagScript(entry)),
 }));
 
 function isAlphanumericAt(source: string, index: number): boolean {
@@ -442,10 +420,7 @@ function isAlphanumericAt(source: string, index: number): boolean {
 function includesStandaloneTerm(source: string, entry: string): boolean {
   let from = source.indexOf(entry);
   while (from !== -1) {
-    if (
-      !isAlphanumericAt(source, from - 1) &&
-      !isAlphanumericAt(source, from + entry.length)
-    ) {
+    if (!isAlphanumericAt(source, from - 1) && !isAlphanumericAt(source, from + entry.length)) {
       return true;
     }
     from = source.indexOf(entry, from + 1);
@@ -454,9 +429,7 @@ function includesStandaloneTerm(source: string, entry: string): boolean {
 }
 
 function collectGlossaryMatches(source: string): string[] {
-  const normalizedSource = normalizeLowercaseStringOrEmpty(
-    source.normalize("NFKC"),
-  );
+  const normalizedSource = normalizeLowercaseStringOrEmpty(source.normalize("NFKC"));
   const matches: string[] = [];
   for (const { entry, wholeWord } of GLOSSARY_ENTRIES) {
     const present = wholeWord
