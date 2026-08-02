@@ -236,4 +236,53 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
 
     expect(result.readFile).toBeTypeOf("function");
   });
+  it("includes configured mediaLocalRoots only when host reads are allowed", () => {
+    const extraRoot = process.platform === "win32" ? "C:\\data\\snapshots" : "/data/snapshots";
+    const cfg = {
+      tools: { allow: ["read"] },
+      agents: { defaults: { mediaLocalRoots: [extraRoot] } },
+    } as OpenClawConfig;
+
+    const allowed = resolveAgentScopedOutboundMediaAccess({
+      cfg,
+      messageProvider: "telegram",
+      requesterSenderId: "trusted-user",
+    });
+    expect(allowed.localRoots).toContain(extraRoot);
+    expect(allowed.readFile).toBeTypeOf("function");
+
+    const groupCfg = {
+      ...cfg,
+      channels: {
+        telegram: {
+          groups: {
+            "-100123": {
+              toolsBySender: {
+                "id:attacker": { deny: ["read"] },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    // Without inbound sender identity, toolsBySender denials cannot apply.
+    const bypassedWithoutSender = resolveAgentScopedOutboundMediaAccess({
+      cfg: groupCfg,
+      messageProvider: "telegram",
+      sessionKey: "agent:main:telegram:group:-100123",
+      groupId: "-100123",
+    });
+    expect(bypassedWithoutSender.localRoots).toContain(extraRoot);
+
+    const denied = resolveAgentScopedOutboundMediaAccess({
+      cfg: groupCfg,
+      messageProvider: "telegram",
+      sessionKey: "agent:main:telegram:group:-100123",
+      groupId: "-100123",
+      requesterSenderId: "attacker",
+    });
+    expect(denied.readFile).toBeUndefined();
+    expect(denied.localRoots).not.toContain(extraRoot);
+  });
 });
