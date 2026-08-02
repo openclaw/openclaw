@@ -668,6 +668,15 @@ function createApprovalHandlers<
     }
 
     const cfg = params.getConfig();
+    const forwardingConfig = params.strategy.config(cfg);
+    const outcome = forwardingConfig?.outcome ?? "message";
+    // Contract: `outcome` gates only the resolved-outcome echo for target
+    // forwarding; native approval clients deliver their own resolved
+    // outcomes through channel adapters and are intentionally unaffected.
+    if (outcome === "none") {
+      return;
+    }
+
     let targets = entry?.targets;
     if (!targets) {
       const routeRequest = params.strategy.getRouteRequestFromResolved(resolved);
