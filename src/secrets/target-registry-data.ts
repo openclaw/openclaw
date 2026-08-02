@@ -275,7 +275,7 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     includeInPlan: true,
     includeInConfigure: false,
     includeInAudit: true,
-    providerIdPathSegmentIndex: 6,
+    providerIdPathSegmentIndex: 7,
   },
 
   {
