@@ -3,6 +3,8 @@ export type SessionTabInteractionIdentity = {
   targetId: string;
   baseUrl?: string;
   profile?: string;
+  ownerId?: string;
+  ownerClaim?: number;
 };
 
 export type VolatileSessionTab = SessionTabInteractionIdentity & {
@@ -13,6 +15,7 @@ export type VolatileSessionTab = SessionTabInteractionIdentity & {
 
 const volatileStateSymbol = Symbol.for("openclaw.browser.session-tabs.volatile");
 const activeDurableStateSymbol = Symbol.for("openclaw.browser.session-tabs.active-durable-keys");
+const durableOwnerStateSymbol = Symbol.for("openclaw.browser.session-tabs.durable-owners");
 const coldNativeActivityStateSymbol = Symbol.for(
   "openclaw.browser.session-tabs.cold-native-activity",
 );
@@ -23,6 +26,14 @@ export function activeDurableStorageKeys(): Set<string> {
   };
   state[activeDurableStateSymbol] ??= new Set();
   return state[activeDurableStateSymbol];
+}
+
+export function durableTabOwners(): Map<string, { ownerId: string; ownerClaim?: number }> {
+  const state = globalThis as typeof globalThis & {
+    [durableOwnerStateSymbol]?: Map<string, { ownerId: string; ownerClaim?: number }>;
+  };
+  state[durableOwnerStateSymbol] ??= new Map();
+  return state[durableOwnerStateSymbol];
 }
 
 export function volatileTabsBySession(): Map<string, Map<string, VolatileSessionTab>> {

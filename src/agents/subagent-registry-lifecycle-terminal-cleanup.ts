@@ -2,6 +2,7 @@ import type { createSubagentRegistryLifecycleCleanupBase } from "./subagent-regi
 import type { createSubagentRegistryLifecycleCleanup } from "./subagent-registry-lifecycle-cleanup.js";
 import type { createSubagentRegistryLifecycleCommon } from "./subagent-registry-lifecycle-common.js";
 import { loadCleanupBrowserSessionsForLifecycleEnd } from "./subagent-registry-lifecycle-completion-support.js";
+import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
 import type { SubagentRegistryLifecycleParams } from "./subagent-registry-lifecycle-contracts.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -36,36 +37,35 @@ export function createSubagentRegistryLifecycleTerminalCleanup(
       return;
     }
 
-    // registerSubagentRun fires both an in-process listener and a gateway
-    // waitForSubagentCompletion RPC; both can reach this point for the same
-    // runId in embedded mode. Dedupe only the browser driver tab-close IPC
-    // with a sync check-then-set. The retire + announce tail below must still
-    // run for every caller, so a slow or held first browser cleanup cannot
-    // strand a duplicate caller's completion behind it.
+    // Browser tab close is best-effort and may wait for a real browser service.
+    // Keep it on its own admitted continuation so MCP retirement and completion
+    // delivery do not inherit that external latency.
     if (entry.browserCleanupDispatchedAt === undefined) {
       entry.browserCleanupDispatchedAt = Date.now();
-      try {
-        const cleanupBrowserSessions =
-          params.cleanupBrowserSessionsForLifecycleEnd ??
-          (await loadCleanupBrowserSessionsForLifecycleEnd());
-        await cleanupBrowserSessions({
-          sessionKeys: [entry.childSessionKey],
-          onWarn: (msg) => params.warn(msg, { runId: entry.runId }),
-        });
-      } catch (error) {
-        params.warn("failed to cleanup browser sessions for completed subagent", {
+      void runWithGatewayIndependentRootWorkContinuation(async () => {
+        try {
+          const cleanupBrowserSessions =
+            params.cleanupBrowserSessionsForLifecycleEnd ??
+            (await loadCleanupBrowserSessionsForLifecycleEnd());
+          await cleanupBrowserSessions({
+            sessionKeys: [entry.childSessionKey],
+            ownerId: completeParams.runId,
+            onWarn: (msg) => params.warn(msg, { runId: entry.runId }),
+          });
+        } catch (error) {
+          params.warn("failed to cleanup browser sessions for completed subagent", {
+            error: buildSafeLifecycleErrorMeta(error),
+            runId: maskRunId(completeParams.runId),
+            childSessionKey: maskSessionKey(entry.childSessionKey),
+          });
+        }
+      }).catch((error: unknown) => {
+        params.warn("failed to admit browser cleanup for completed subagent", {
           error: buildSafeLifecycleErrorMeta(error),
           runId: maskRunId(completeParams.runId),
           childSessionKey: maskSessionKey(entry.childSessionKey),
         });
-      }
-      if (!isTerminalCallbackCurrent(completeParams.runId, entry, terminalGeneration)) {
-        return;
-      }
-      if (newerGenerationOwnsSession(entry)) {
-        await retireSupersededSession(entry);
-        return;
-      }
+      });
     }
 
     try {

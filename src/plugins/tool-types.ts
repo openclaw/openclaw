@@ -25,6 +25,8 @@ export type OpenClawPluginToolContext = {
   workspaceDir?: string;
   agentDir?: string;
   agentId?: string;
+  /** Host-issued opaque identifier for the active agent run, when available. */
+  runId?: string;
   sessionKey?: string;
   /** Ephemeral session UUID - regenerated on /new and /reset. Use for per-conversation isolation. */
   sessionId?: string;

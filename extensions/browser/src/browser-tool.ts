@@ -376,6 +376,9 @@ export function createBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
   agentSessionKey?: string;
+  runId?: string;
+  ownerClaim?: number;
+  sessionAccessAlreadyHeld?: boolean;
   agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
@@ -491,6 +494,8 @@ export function createBrowserTool(opts?: {
           : undefined);
       const sessionTabs = createBrowserToolSessionTabs({
         sessionKey: opts?.agentSessionKey,
+        ownerId: opts?.runId,
+        ownerClaim: opts?.ownerClaim,
         requestedProfile: profile,
         defaultProfile: resolvedBrowser.defaultProfile,
         baseUrl,

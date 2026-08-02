@@ -38,6 +38,8 @@ export type OpenClawPluginToolOptions = {
   senderIsOwner?: boolean;
   conversationReadOrigin?: ConversationReadInvocationOrigin;
   requesterAgentIdOverride?: string;
+  /** Host-issued opaque identifier for the active agent run, when available. */
+  runId?: string;
   sessionId?: string;
   conversationRecall?: ConversationRecallContext;
   /**
@@ -99,6 +101,7 @@ export function resolveOpenClawPluginToolInputs(params: {
       workspaceDir,
       agentDir: options?.agentDir,
       agentId: sessionAgentId,
+      runId: options?.runId,
       sessionKey: options?.agentSessionKey,
       sessionId: options?.sessionId,
       toolBindings: options?.toolBindings,

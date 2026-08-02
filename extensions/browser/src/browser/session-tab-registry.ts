@@ -34,6 +34,7 @@ import {
 } from "./session-tab-ephemeral-aliases.js";
 import {
   activeDurableStorageKeys,
+  durableTabOwners,
   deleteVolatileSessionTab,
   forgetColdNativeActivity,
   readColdNativeActivity,
@@ -42,6 +43,14 @@ import {
   type VolatileSessionTab as VolatileTab,
   volatileTabsBySession,
 } from "./session-tab-process-state.js";
+import {
+  acquireBrowserSessionAccess,
+  acquireBrowserSessionCleanup,
+  claimBrowserSessionOwner,
+  isCurrentBrowserSessionOwnerClaim,
+  releaseBrowserSessionOwner,
+  resetBrowserSessionGatesForTests,
+} from "./session-tab-gate.js";
 import {
   browserSessionTabNativeIdentity,
   browserSessionTabStorageKey,
@@ -67,6 +76,8 @@ type SessionTabParams = {
   profileAliases?: Array<string | undefined>;
   ownership?: BrowserTabOwnership;
   aliases?: Array<string | undefined>;
+  ownerId?: string;
+  ownerClaim?: number;
 };
 
 type DurableRecord = BrowserSessionTabRecord;
@@ -91,6 +102,7 @@ type CloseParams = {
     options: { shouldClose: () => boolean },
   ) => Promise<CloseTrackedCdpTargetResult>;
   onWarn?: (message: string) => void;
+  ownerId?: string;
 };
 
 function normalizeSessionKey(value: string): string {
@@ -99,6 +111,11 @@ function normalizeSessionKey(value: string): string {
 
 function normalizeProfile(value?: string): string | undefined {
   return normalizeOptionalLowercaseString(value);
+}
+
+function normalizeOwnerId(value?: string): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed || undefined;
 }
 
 function normalizeProfileAliases(values?: Array<string | undefined>): string[] {
@@ -121,7 +138,15 @@ function resolveInteractionIdentity(params: SessionTabParams): InteractionIdenti
     targetId,
     ...(baseUrl ? { baseUrl } : {}),
     ...(normalizeProfile(params.profile) ? { profile: normalizeProfile(params.profile) } : {}),
+    ...(normalizeOwnerId(params.ownerId) ? { ownerId: normalizeOwnerId(params.ownerId) } : {}),
+    ...(typeof params.ownerClaim === "number" ? { ownerClaim: params.ownerClaim } : {}),
   };
+}
+
+function isCurrentOwner(
+  identity: Pick<InteractionIdentity, "sessionKey" | "ownerId" | "ownerClaim">,
+): boolean {
+  return isCurrentBrowserSessionOwnerClaim(identity);
 }
 
 function durableOwnership(params: SessionTabParams): DurableOwnership | undefined {
@@ -143,6 +168,7 @@ function deleteInvalidRecord(key: string, onWarn?: (message: string) => void): v
     if (deleted) {
       clearDurableTabAliases(key);
       activeDurableStorageKeys().delete(key);
+      durableTabOwners().delete(key);
     }
   } catch (error) {
     onWarn?.(`failed to delete invalid browser session tab record: ${String(error)}`);
@@ -280,6 +306,9 @@ export function trackSessionBrowserTab(params: SessionTabParams & { now?: number
   if (!identity) {
     return;
   }
+  if (!isCurrentOwner(identity)) {
+    return;
+  }
   const ownership = durableOwnership(params);
   const profileAliases = normalizeProfileAliases(params.profileAliases);
   const now = params.now ?? Date.now();
@@ -327,7 +356,39 @@ export function trackSessionBrowserTab(params: SessionTabParams & { now?: number
   });
   rememberDurableTabAliases(identity, params.aliases ?? [], storageKey, persistedProfileAliases);
   activeDurableStorageKeys().add(storageKey);
+  const ownerId = normalizeOwnerId(identity.ownerId);
+  if (ownerId) {
+    durableTabOwners().set(storageKey, { ownerId, ownerClaim: identity.ownerClaim });
+  }
   deleteVolatileMatching(identity);
+}
+
+export function hasTrackedBrowserSessionTabs(sessionKey: string): boolean {
+  const normalized = normalizeSessionKey(sessionKey);
+  return Boolean(
+    normalized &&
+      (volatileTabsBySession().has(normalized) ||
+        readDurableTabs().some((tab) => tab.sessionKey === normalized)),
+  );
+}
+
+export function claimTrackedBrowserSessionOwner(params: {
+  sessionKey?: string;
+  ownerId?: string;
+}): number | undefined {
+  const sessionKey = normalizeSessionKey(params.sessionKey ?? "");
+  const ownerId = normalizeOwnerId(params.ownerId);
+  return sessionKey && ownerId ? claimBrowserSessionOwner(sessionKey, ownerId) : undefined;
+}
+
+export function acquireTrackedBrowserSessionAccess(params: {
+  sessionKey?: string;
+  signal?: AbortSignal;
+}): Promise<() => void> {
+  const sessionKey = normalizeSessionKey(params.sessionKey ?? "");
+  return sessionKey
+    ? acquireBrowserSessionAccess(sessionKey, hasTrackedBrowserSessionTabs, params.signal)
+    : Promise.resolve(() => {});
 }
 
 function canonicalCandidate(
@@ -366,12 +427,24 @@ export function touchSessionBrowserTab(params: SessionTabParams & { now?: number
   if (!identity) {
     return;
   }
+  if (!isCurrentOwner(identity)) {
+    return;
+  }
   const now = params.now ?? Date.now();
   const volatile = resolveVolatile(identity);
   if (volatile) {
+    if (params.ownerId && volatile.tab.ownerId && volatile.tab.ownerId !== params.ownerId) {
+      return;
+    }
     volatileTabsBySession()
       .get(identity.sessionKey)
-      ?.set(volatile.tabKey, { ...volatile.tab, lastUsedAt: now });
+      ?.set(volatile.tabKey, {
+        ...volatile.tab,
+        ...(params.ownerId
+          ? { ownerId: params.ownerId, ownerClaim: params.ownerClaim }
+          : {}),
+        lastUsedAt: now,
+      });
   }
   if (identity.baseUrl) {
     return;
@@ -381,6 +454,16 @@ export function touchSessionBrowserTab(params: SessionTabParams & { now?: number
   }
   const candidate = canonicalCandidate(params, identity);
   if (candidate) {
+    const currentOwner = durableTabOwners().get(candidate.storageKey);
+    if (params.ownerId && currentOwner && currentOwner.ownerId !== params.ownerId) {
+      return;
+    }
+    if (params.ownerId) {
+      durableTabOwners().set(candidate.storageKey, {
+        ownerId: params.ownerId,
+        ownerClaim: params.ownerClaim,
+      });
+    }
     activeDurableStorageKeys().add(candidate.storageKey);
     updateBrowserSessionTab(candidate.storageKey, (current) => {
       const record = parseBrowserSessionTabRecord(current);
@@ -420,6 +503,9 @@ export function untrackSessionBrowserTab(params: SessionTabParams): void {
   if (!identity) {
     return;
   }
+  if (!isCurrentOwner(identity)) {
+    return;
+  }
   const volatile = resolveVolatile(identity);
   if (identity.baseUrl) {
     if (volatile) {
@@ -435,6 +521,10 @@ export function untrackSessionBrowserTab(params: SessionTabParams): void {
   }
   const durable = canonicalCandidate(params, identity);
   if (durable && durableOwnership(params)) {
+    const currentOwner = durableTabOwners().get(durable.storageKey);
+    if (params.ownerId && currentOwner && currentOwner.ownerId !== params.ownerId) {
+      return;
+    }
     deleteDurableCandidate(durable);
     return;
   }
@@ -499,6 +589,10 @@ async function performDurableCleanup(
   now: number,
   cleanupKind: CleanupKind,
 ): Promise<number> {
+  const currentOwner = durableTabOwners().get(candidate.storageKey);
+  if (params.ownerId && currentOwner && currentOwner.ownerId !== params.ownerId) {
+    return 0;
+  }
   const tab = claimCleanup(candidate, now, cleanupKind);
   if (!tab) {
     return 0;
@@ -599,6 +693,9 @@ async function performVolatileCleanup(
   if (!tab) {
     return 0;
   }
+  if (params.ownerId && tab.ownerId && tab.ownerId !== params.ownerId) {
+    return 0;
+  }
   if (cleanupKind === "sweep" && !sameVolatileTab(tab, candidate)) {
     return 0;
   }
@@ -661,11 +758,31 @@ export async function closeTrackedBrowserTabsForSessions(
   if (sessionKeys.size === 0) {
     return 0;
   }
-  const durable = readDurableTabs(params.onWarn).filter((tab) => sessionKeys.has(tab.sessionKey));
-  return await closeTrackedTabs([...durable, ...volatileTabsForSessions(sessionKeys)], {
-    ...params,
-    cleanupKind: "lifecycle",
-  });
+  const normalizedKeys = [...sessionKeys];
+  const releaseCleanup = await acquireBrowserSessionCleanup(
+    normalizedKeys,
+    hasTrackedBrowserSessionTabs,
+  );
+  const ownerId = normalizeOwnerId(params.ownerId);
+  try {
+    const durable = readDurableTabs(params.onWarn).filter((tab) => {
+      if (!sessionKeys.has(tab.sessionKey)) {
+        return false;
+      }
+      const currentOwner = durableTabOwners().get(tab.storageKey);
+      return !ownerId || !currentOwner || currentOwner.ownerId === ownerId;
+    });
+    return await closeTrackedTabs([...durable, ...volatileTabsForSessions(sessionKeys)], {
+      ...params,
+      ownerId,
+      cleanupKind: "lifecycle",
+    });
+  } finally {
+    for (const sessionKey of normalizedKeys) {
+      releaseBrowserSessionOwner(sessionKey, ownerId);
+    }
+    releaseCleanup();
+  }
 }
 
 /** Closes and untracks stale, pending, or excess browser tabs. */
@@ -692,4 +809,10 @@ export async function sweepTrackedBrowserTabs(
     }),
     { ...params, now, cleanupKind: "sweep" },
   );
+}
+
+export function resetTrackedSessionBrowserTabsForTests(): void {
+  volatileTabsBySession().clear();
+  durableTabOwners().clear();
+  resetBrowserSessionGatesForTests();
 }

@@ -11,6 +11,8 @@ type SessionTabParams = {
   profileAliases?: Array<string | undefined>;
   ownership?: BrowserTabOwnership;
   aliases?: Array<string | undefined>;
+  ownerId?: string;
+  ownerClaim?: number;
 };
 
 type SessionTabRegistry = {
@@ -68,6 +70,8 @@ async function trackOpenedBrowserTab(params: {
   sessionKey?: string;
   fallbackProfile?: string;
   baseUrl?: string;
+  ownerId?: string;
+  ownerClaim?: number;
   track: SessionTabRegistry["trackSessionBrowserTab"];
   closeTab: (targetId: string, profile?: string) => Promise<void>;
 }): Promise<void> {
@@ -86,6 +90,8 @@ async function trackOpenedBrowserTab(params: {
       // Keep them process-local even if that server returned durable metadata.
       ownership: params.baseUrl ? undefined : opened.ownership,
       aliases: opened.aliases,
+      ownerId: params.ownerId,
+      ownerClaim: params.ownerClaim,
     });
   } catch (trackingError) {
     if (!opened.targetId) {
@@ -114,6 +120,8 @@ export function createBrowserToolSessionTabs(params: {
   defaultProfile: string;
   baseUrl?: string;
   isHostFallbackActive?: () => boolean;
+  ownerId?: string;
+  ownerClaim?: number;
   registry: SessionTabRegistry;
 }) {
   const profile = params.requestedProfile ?? params.defaultProfile;
@@ -125,6 +133,8 @@ export function createBrowserToolSessionTabs(params: {
     targetId,
     baseUrl: trackedBaseUrl(),
     profile: trackedProfile(),
+    ownerId: params.ownerId,
+    ownerClaim: params.ownerClaim,
   });
   return {
     touch: (targetId: string | undefined): void => {
@@ -150,6 +160,8 @@ export function createBrowserToolSessionTabs(params: {
         sessionKey: params.sessionKey,
         fallbackProfile: baseUrl && !params.requestedProfile ? undefined : profile,
         baseUrl,
+        ownerId: params.ownerId,
+        ownerClaim: params.ownerClaim,
         track: params.registry.trackSessionBrowserTab,
         closeTab,
       });
