@@ -26,6 +26,11 @@ const execFileAsync = promisify(execFile);
 const REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDING_COUNTS = new Map<string, number>([
   ["@openclaw/acpx:dangerous-exec:src/codex-auth-bridge.ts", 1],
   ["@openclaw/acpx:dangerous-exec:src/runtime-internals/mcp-proxy.mjs", 1],
+  // False positive: the scanner's dangerous-exec regex matches the literal text
+  // "spawn()" inside a doc comment explaining why Windows .cmd shims are routed
+  // through resolveWindowsSpawnProgram rather than passed to spawn() directly —
+  // there is no unreviewed exec call at this line.
+  ["@openclaw/claude:dangerous-exec:src/app-server/client.ts", 1],
   ["@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/http.ts", 1],
   ["@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/processes.ts", 1],
   ["@openclaw/codex:dangerous-exec:src/app-server/transport-stdio.ts", 1],

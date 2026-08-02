@@ -7,6 +7,7 @@
   "health",
   "runtime-doctor",
   "runtime-env",
+  "host-env-security",
   "proxy-capture",
   "setup",
   "setup-runtime",

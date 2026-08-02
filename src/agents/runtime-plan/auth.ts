@@ -13,7 +13,11 @@ import {
 } from "../provider-auth-aliases.js";
 import type { AgentRuntimeAuthPlan } from "./types.js";
 
-const CODEX_HARNESS_AUTH_PROVIDER = "openai";
+const HARNESS_AUTH_PROVIDERS: Record<string, string> = {
+  codex: "openai",
+  claude: "anthropic",
+  "claude-bridge": "anthropic",
+};
 // Empty metadata disables plugin alias lookups without changing the downstream
 // resolver contract, matching the "plugins disabled" runtime-plan state.
 const EMPTY_PROVIDER_AUTH_ALIAS_METADATA = {
@@ -26,7 +30,7 @@ function resolveHarnessAuthProvider(params: {
 }): string | undefined {
   const harnessId = normalizeOptionalAgentRuntimeId(params.harnessId);
   const runtime = normalizeOptionalAgentRuntimeId(params.harnessRuntime);
-  return harnessId === "codex" || runtime === "codex" ? CODEX_HARNESS_AUTH_PROVIDER : undefined;
+  return HARNESS_AUTH_PROVIDERS[harnessId ?? ""] ?? HARNESS_AUTH_PROVIDERS[runtime ?? ""];
 }
 
 /** Builds the auth forwarding plan for one resolved agent runtime. */

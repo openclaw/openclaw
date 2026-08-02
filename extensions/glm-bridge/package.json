@@ -1,0 +1,33 @@
+{
+  "name": "@openclaw/glm-bridge",
+  "version": "2026.7.3",
+  "description": "OpenClaw GLM (Zhipu AI / Z.ai) app-server harness plugin — reuses the Claude extension's claude-bridge harness pointed at Z.ai's Anthropic-compatible endpoint.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "npmSpec": "@openclaw/glm-bridge",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.7.1"
+    },
+    "compat": {
+      "pluginApi": ">=2026.7.1"
+    },
+    "build": {
+      "openclawVersion": "2026.7.1"
+    },
+    "release": {
+      "publishToClawHub": false,
+      "publishToNpm": false
+    }
+  }
+}

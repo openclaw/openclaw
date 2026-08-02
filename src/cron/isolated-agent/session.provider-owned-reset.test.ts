@@ -41,6 +41,41 @@ describe("resolveCronSession provider-owned daily reset", () => {
     });
   });
 
+  it("keeps a provider-owned claude-bridge (app-server) session across the default daily boundary", () => {
+    // openclaw-pg9: bridge sessions are keyed on the vendor provider
+    // "anthropic" (not a CLI backend id) and their durable thread lives in the
+    // bridge sidecar. Once the consumer surfaces its threadId as a binding, the
+    // gateway records cliSessionBindings.anthropic and the daily default reset
+    // must exempt the session just like a legacy CLI session.
+    const sessionKey = "agent:main:cron:daily-job";
+    const startedAt = NOW_MS - DAY_MS;
+    const entry: SessionEntry = {
+      sessionId: "old-session-id",
+      updatedAt: startedAt,
+      sessionStartedAt: startedAt,
+      lastInteractionAt: startedAt,
+      model: "claude-opus-4-8",
+      modelProvider: "anthropic",
+      agentHarnessId: "claude-bridge",
+      cliSessionBindings: { anthropic: { sessionId: "thread_pg9_abc123" } },
+    };
+
+    const result = resolveCronSession({
+      cfg: { session: {} } as OpenClawConfig,
+      sessionKey,
+      agentId: "main",
+      nowMs: NOW_MS,
+      forceNew: false,
+      store: { [sessionKey]: entry },
+    });
+
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionEntry.sessionId).toBe("old-session-id");
+    expect(getCliSessionBinding(result.sessionEntry, "anthropic")).toEqual({
+      sessionId: "thread_pg9_abc123",
+    });
+  });
+
   it("still rotates a non-provider-owned session across the daily boundary", () => {
     const sessionKey = "agent:main:cron:daily-job";
     const startedAt = NOW_MS - DAY_MS;
