@@ -13,6 +13,7 @@ const zaloAccountSchema = z.object({
   name: z.string().optional(),
   enabled: z.boolean().optional(),
   configWrites: z.boolean().optional(),
+  historyLimit: z.number().int().min(0).optional(),
   markdown: MarkdownConfigSchema,
   botToken: buildSecretInputSchema().optional(),
   tokenFile: z.string().optional(),
