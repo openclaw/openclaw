@@ -432,9 +432,22 @@ export function migrateExplicitDefaultModelAllowPolicy(
   // restriction and silently broaden access. Instead, leave the map visible
   // and emit an actionable diagnostic.
   if (defaultAllow.length === 0) {
-    const bareKeys = Object.keys(getRecord(defaults?.models) ?? {});
+    const modelKeys = Object.keys(getRecord(defaults?.models) ?? {});
+    const allBlank = modelKeys.every((key) => key.trim().length === 0);
+    if (allBlank) {
+      // Blank-only keys carry no policy meaning — stamp the marker so the map
+      // is treated as known-and-unrestricted without creating modelPolicy.allow.
+      const migrations = ensureRecord(ensureRecord(raw, "meta"), "migrations");
+      migrations[MODEL_POLICY_ALLOWLIST_MIGRATION_MARKER] = true;
+      changes.push(
+        "Recorded the legacy default model map as unrestricted without creating modelPolicy.allow.",
+      );
+      return;
+    }
+    // Bare provider keys (non-blank but invalid refs) — do NOT stamp the marker.
+    // Stamping would retire the legacy restriction and silently broaden access.
     changes.push(
-      `Legacy default model map contains only bare provider keys (${bareKeys.join(", ")}) that need manual policy replacement. Run openclaw doctor --fix after updating the map.`,
+      `Legacy default model map contains only bare provider keys (${modelKeys.join(", ")}) that need manual policy replacement. Run openclaw doctor --fix after updating the map.`,
     );
     return;
   }
