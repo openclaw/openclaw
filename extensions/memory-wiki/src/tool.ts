@@ -1,6 +1,6 @@
 // Memory Wiki plugin module implements tool behavior.
 import path from "node:path";
-import { optionalFiniteNumberSchema } from "openclaw/plugin-sdk/channel-actions";
+import { optionalFiniteNumberSchema, stringEnum } from "openclaw/plugin-sdk/channel-actions";
 import { Type } from "typebox";
 import type { AnyAgentTool, OpenClawConfig } from "../api.js";
 import { applyMemoryWikiMutation, normalizeMemoryWikiMutationInput } from "./apply.js";
@@ -10,6 +10,11 @@ import {
   type ResolvedMemoryWikiConfig,
 } from "./config.js";
 import { lintMemoryWikiVault } from "./lint.js";
+import {
+  collectMemoryWikiOpenItems,
+  countMemoryWikiOpenItems,
+  WIKI_OPEN_ITEM_KINDS,
+} from "./open-items.js";
 import { getMemoryWikiPage, searchMemoryWiki, WIKI_SEARCH_MODES } from "./query.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 import { renderMemoryWikiStatus, resolveMemoryWikiStatus } from "./status.js";
@@ -80,6 +85,20 @@ const WikiClaimSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+// Bound wiki_open_items output: an omitted `limit` must not flush an entire
+// vault's unresolved items into model context. The default keeps typical output
+// under the repo's model-visible-text budget; the schema maximum is a hard cap
+// so even an explicit caller cannot request an unbounded listing.
+const WIKI_OPEN_ITEMS_DEFAULT_LIMIT = 20;
+const WIKI_OPEN_ITEMS_MAX_LIMIT = 100;
+const WikiOpenItemsSchema = Type.Object(
+  {
+    kinds: Type.Optional(Type.Array(stringEnum(WIKI_OPEN_ITEM_KINDS), { minItems: 1 })),
+    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: WIKI_OPEN_ITEMS_MAX_LIMIT })),
+  },
+  { additionalProperties: false },
+);
+type WikiOpenItemKind = (typeof WIKI_OPEN_ITEM_KINDS)[number];
 const WikiApplySchema = Type.Object(
   {
     op: Type.Union([
@@ -225,6 +244,52 @@ export function createWikiLintTool(
           issuesByCategory: result.issuesByCategory,
           reportPath,
         },
+      };
+    },
+  };
+}
+
+export function createWikiOpenItemsTool(
+  config: ResolvedMemoryWikiConfig,
+  appConfig?: OpenClawConfig,
+): AnyAgentTool {
+  return {
+    name: "wiki_open_items",
+    label: "Wiki Open Items",
+    description:
+      "List unresolved wiki items — open questions, contradictions, and low-confidence pages or claims — with their text and page location so they can be reviewed or resolved.",
+    parameters: WikiOpenItemsSchema,
+    execute: async (_toolCallId, rawParams) => {
+      const params = rawParams as { kinds?: WikiOpenItemKind[]; limit?: number };
+      await syncImportedSourcesIfNeeded(config, appConfig);
+      const result = await collectMemoryWikiOpenItems(config.vault.path);
+      const kindFilter = params.kinds && params.kinds.length > 0 ? new Set(params.kinds) : null;
+      let items = kindFilter
+        ? result.items.filter((item) => kindFilter.has(item.kind))
+        : result.items;
+      // Always cap output: apply the conservative default when `limit` is
+      // omitted so a normal call cannot render (or retain in details.items) an
+      // entire vault. The schema maximum bounds explicit callers.
+      const limit = params.limit ?? WIKI_OPEN_ITEMS_DEFAULT_LIMIT;
+      items = items.slice(0, limit);
+      const text =
+        items.length === 0
+          ? "No open wiki items."
+          : items
+              .map((item, index) => {
+                const claimSuffix = item.claimId ? ` (claim ${item.claimId})` : "";
+                const confidenceSuffix =
+                  typeof item.confidence === "number"
+                    ? ` (confidence ${item.confidence.toFixed(2)})`
+                    : "";
+                return `${index + 1}. [${item.kind}] ${item.text}\nPage: ${item.pagePath}${claimSuffix}${confidenceSuffix}`;
+              })
+              .join("\n\n");
+      return {
+        content: [{ type: "text", text }],
+        // counts describe the returned (filtered/limited) items; vaultCounts is
+        // the unfiltered whole-vault tally so callers can tell the two apart.
+        details: { counts: countMemoryWikiOpenItems(items), vaultCounts: result.counts, items },
       };
     },
   };
