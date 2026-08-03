@@ -325,14 +325,16 @@ function collectUnixProcessTree(rootPid: number): UnixProcessTree | undefined {
         continue;
       }
       seen.add(childPid);
-      visit(childPid, depth + 1);
-      // Bind each descendant to a captured identity so a recycled PID can never
-      // match a delayed signal. If the identity cannot be read, drop this entry
-      // (and the subtree it headed) instead of keeping an identity-less PID.
+      // Bind each child to a captured identity BEFORE descending, so a PID
+      // recycled between `/proc/.../children` and this read cannot authorize
+      // traversal (or a later signal) for an unrelated replacement process. A
+      // child whose identity cannot be captured is dropped with its subtree.
       const identity = readUnixProcessIdentity(childPid, deadline);
-      if (identity && Date.now() < deadline) {
-        descendants.push({ pid: childPid, identity });
+      if (!identity || Date.now() >= deadline) {
+        continue;
       }
+      visit(childPid, depth + 1);
+      descendants.push({ pid: childPid, identity });
     }
   };
 

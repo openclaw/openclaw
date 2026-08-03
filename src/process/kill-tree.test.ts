@@ -488,6 +488,58 @@ describe("killProcessTree", () => {
     });
   });
 
+  it("on Linux binds each child identity before traversing its own descendants", async () => {
+    // Discovery-time PID-reuse race: `/proc/<parent>/children` reports 5621,
+    // but the original child exits before its identity can be captured (its
+    // `/proc/5621/stat` no longer exists). The collector must bind the child
+    // identity BEFORE reading its descendants, so neither 5621 nor any PID
+    // reported by a recycled 5621's children file enters the snapshot.
+    const statLine = (pid: number, comm: string, starttime: string) =>
+      `${pid} (${comm}) S 1 ${pid} ${pid} 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 ${starttime} 0`;
+    killSpy.mockImplementation(() => true);
+    const readOrder: string[] = [];
+    readFileSyncMock.mockImplementation((filePath: string) => {
+      readOrder.push(filePath);
+      if (filePath === "/proc/5620/task/5620/children") {
+        return "5621";
+      }
+      // A recycled 5621 would expose its own descendants; traversal must never
+      // reach this because the child identity bind fails first.
+      if (filePath === "/proc/5621/task/5621/children") {
+        return "5622";
+      }
+      if (filePath === "/proc/5620/stat") {
+        return statLine(5620, "root", "100");
+      }
+      // 5621 has already exited, so its identity cannot be captured.
+      throw new Error("child 5621 exited before identity capture");
+    });
+
+    await withMockedPlatform("linux", async () => {
+      killProcessTree(5620, { graceMs: 10, detached: false });
+      await vi.advanceTimersByTimeAsync(10);
+
+      // The child's identity read happens before any attempt to read its
+      // descendants: the recycled children file is never opened.
+      const childStatIndex = readOrder.indexOf("/proc/5621/stat");
+      const childChildrenIndex = readOrder.indexOf("/proc/5621/task/5621/children");
+      expect(childStatIndex).toBeGreaterThanOrEqual(0);
+      expect(childChildrenIndex).toBe(-1);
+      // Only the verified root is signaled; the exited child never enters the
+      // snapshot and its (recycled) subtree is never traversed.
+      expect(
+        (killSpy.mock.calls as Array<[number, NodeJS.Signals | number | undefined]>).filter(
+          ([, signal]) => signal !== 0,
+        ),
+      ).toEqual([
+        [5620, "SIGTERM"],
+        [5620, "SIGKILL"],
+      ]);
+      expect(killSpy).not.toHaveBeenCalledWith(5621, expect.anything());
+      expect(killSpy).not.toHaveBeenCalledWith(5622, expect.anything());
+    });
+  });
+
   it("on Unix force-escalates one attached snapshot without rebuilding it", async () => {
     const statLine = (pid: number, comm: string, starttime: string) =>
       `${pid} (${comm}) S 1 ${pid} ${pid} 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 ${starttime} 0`;
