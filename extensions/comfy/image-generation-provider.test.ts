@@ -1,10 +1,10 @@
 // Comfy tests cover image generation provider plugin behavior.
 import type { LookupAddress } from "node:dns";
-import { mkdtemp, rm, truncate, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { truncate, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildComfyImageGenerationProvider } from "./image-generation-provider.js";
 import {
@@ -22,11 +22,6 @@ const PREVIOUS_COMFY_WORKFLOW_FILE_MAX_BYTES = 16 * 1024 * 1024;
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
 }));
-
-async function makeTempWorkflowDir(prefix: string) {
-  const dir = await mkdtemp(path.join(tmpdir(), prefix));
-  return dir;
-}
 
 type FetchGuardRequest = {
   url?: unknown;
@@ -452,9 +447,8 @@ describe("comfy image-generation provider", () => {
   });
 
   it("submits a local workflow loaded from workflowPath", async () => {
-    const tempRoot = await makeTempWorkflowDir("openclaw-comfy-workflow-");
-    const workflowPath = path.join(tempRoot, "workflow.json");
-    try {
+    await withTempDir("openclaw-comfy-workflow-", async (tempRoot) => {
+      const workflowPath = path.join(tempRoot, "workflow.json");
       await writeFile(
         workflowPath,
         JSON.stringify({
@@ -486,15 +480,12 @@ describe("comfy image-generation provider", () => {
         },
       });
       expect(result.metadata?.promptId).toBe("workflow-path-prompt-1");
-    } finally {
-      await rm(tempRoot, { recursive: true, force: true });
-    }
+    });
   });
 
   it("submits parseable workflow JSON larger than the previous 16 MiB boundary", async () => {
-    const tempRoot = await makeTempWorkflowDir("openclaw-comfy-workflow-");
-    const workflowPath = path.join(tempRoot, "large-workflow.json");
-    try {
+    await withTempDir("openclaw-comfy-workflow-", async (tempRoot) => {
+      const workflowPath = path.join(tempRoot, "large-workflow.json");
       await writeFile(
         workflowPath,
         JSON.stringify({
@@ -535,17 +526,14 @@ describe("comfy image-generation provider", () => {
           "9": { class_type: "SaveImage", inputs: {} },
         },
       });
-    } finally {
-      await rm(tempRoot, { recursive: true, force: true });
-    }
+    });
   });
 
   it("rejects oversized local workflowPath files before Comfy HTTP calls", async () => {
-    const tempRoot = await makeTempWorkflowDir("openclaw-comfy-workflow-");
-    const workflowPath = path.join(tempRoot, "oversized-workflow.json");
-    await writeFile(workflowPath, "", "utf8");
-    await truncate(workflowPath, DEFAULT_COMFY_WORKFLOW_FILE_MAX_BYTES + 1);
-    try {
+    await withTempDir("openclaw-comfy-workflow-", async (tempRoot) => {
+      const workflowPath = path.join(tempRoot, "oversized-workflow.json");
+      await writeFile(workflowPath, "", "utf8");
+      await truncate(workflowPath, DEFAULT_COMFY_WORKFLOW_FILE_MAX_BYTES + 1);
       setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
 
       const provider = buildComfyImageGenerationProvider();
@@ -563,20 +551,17 @@ describe("comfy image-generation provider", () => {
         }),
       ).rejects.toThrow(`exceeds ${DEFAULT_COMFY_WORKFLOW_FILE_MAX_BYTES} bytes`);
       expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
-    } finally {
-      await rm(tempRoot, { recursive: true, force: true });
-    }
+    });
   });
 
   it("honors the shared workflowFileMaxBytes setting for legacy config", async () => {
-    const tempRoot = await makeTempWorkflowDir("openclaw-comfy-workflow-");
-    const workflowPath = path.join(tempRoot, "legacy-workflow.json");
-    const workflow = JSON.stringify({
-      "6": { inputs: { text: "" } },
-      "9": { inputs: {} },
-    });
-    await writeFile(workflowPath, workflow, "utf8");
-    try {
+    await withTempDir("openclaw-comfy-workflow-", async (tempRoot) => {
+      const workflowPath = path.join(tempRoot, "legacy-workflow.json");
+      const workflow = JSON.stringify({
+        "6": { inputs: { text: "" } },
+        "9": { inputs: {} },
+      });
+      await writeFile(workflowPath, workflow, "utf8");
       setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
 
       const provider = buildComfyImageGenerationProvider();
@@ -594,9 +579,7 @@ describe("comfy image-generation provider", () => {
         }),
       ).rejects.toThrow("raise plugins.entries.comfy.config.workflowFileMaxBytes");
       expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
-    } finally {
-      await rm(tempRoot, { recursive: true, force: true });
-    }
+    });
   });
 
   it("honors local private-network access for service-discovery hostnames", async () => {
