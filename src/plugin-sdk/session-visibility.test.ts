@@ -1,11 +1,23 @@
 import { describe, expect, it } from "vitest";
+import { GatewayClientRequestError } from "../gateway/client.js";
+import {
+  classifyLookupRetryable,
+  lookupFailedDenialSuffix,
+} from "./session-visibility-internal.js";
 import {
   createAgentToAgentPolicy,
   createSessionVisibilityChecker,
   createSessionVisibilityRowChecker,
+  sessionVisibilityGatewayTesting,
 } from "./session-visibility.js";
 
 describe("scoped session access providers", () => {
+  it("keeps the legacy public test-hook export reachable from the SDK entrypoint", () => {
+    // `sessionVisibilityGatewayTesting` is published by main; removing it would
+    // break installed plugins/external tests after upgrade.
+    expect(typeof sessionVisibilityGatewayTesting.setCallGatewayForListSpawned).toBe("function");
+  });
+
   it("does not assign an unscoped default-agent row to a non-default requester", () => {
     const checker = createSessionVisibilityChecker({
       action: "history",
@@ -39,6 +51,24 @@ describe("scoped session access providers", () => {
       allowed: false,
       status: "forbidden",
       error: "Session history denied because target agent ownership is unavailable.",
+    });
+  });
+
+  it("accepts a legacy Set spawnedKeys input on the exported checker", () => {
+    const checker = createSessionVisibilityChecker({
+      action: "history",
+      requesterSessionKey: "agent:main:main",
+      visibility: "tree",
+      a2aPolicy: createAgentToAgentPolicy({}),
+      spawnedKeys: new Set(["agent:main:subagent:child-1"]),
+    });
+
+    expect(checker.check("agent:main:subagent:child-1")).toEqual({ allowed: true });
+    expect(checker.check("agent:main:subagent:unrelated")).toEqual({
+      allowed: false,
+      status: "forbidden",
+      error:
+        "Session history visibility is restricted to the current session tree and any watched same-agent group sessions (tools.sessions.visibility=tree).",
     });
   });
 
@@ -157,5 +187,41 @@ describe("scoped session access providers", () => {
     } finally {
       unregister();
     }
+  });
+});
+
+describe("classifyLookupRetryable", () => {
+  // Locks the retryability classification contract so a future refactor cannot
+  // silently collapse permanent credential/config failures into a retryable
+  // "transient" denial (review P1: classify before prescribing retry).
+  it("treats a retryable gateway request error as retryable", () => {
+    const error = new GatewayClientRequestError({
+      code: "UNAVAILABLE",
+      message: "transport timeout",
+      retryable: true,
+    });
+    expect(classifyLookupRetryable(error)).toBe(true);
+  });
+
+  it("treats a non-retryable gateway request error as non-retryable", () => {
+    const error = new GatewayClientRequestError({
+      code: "PERMISSION_DENIED",
+      message: "requires credentials before opening a websocket",
+      retryable: false,
+    });
+    expect(classifyLookupRetryable(error)).toBe(false);
+  });
+
+  it("treats an unknown error as non-retryable", () => {
+    expect(classifyLookupRetryable(new Error("something else"))).toBe(false);
+    expect(classifyLookupRetryable(null)).toBe(false);
+    expect(classifyLookupRetryable(undefined)).toBe(false);
+  });
+
+  it("renders distinct denial suffixes per retryability", () => {
+    expect(lookupFailedDenialSuffix(true)).toMatch(/transient\); retry/i);
+    expect(lookupFailedDenialSuffix(false)).toMatch(/check gateway configuration and credentials/i);
+    // A permanent failure must never prescribe retry.
+    expect(lookupFailedDenialSuffix(false)).not.toMatch(/retry/i);
   });
 });

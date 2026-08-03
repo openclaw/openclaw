@@ -2,7 +2,7 @@
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it } from "vitest";
 import type { callGateway as gatewayCall } from "../../gateway/call.js";
-import { sessionVisibilityGatewayTesting } from "../../plugin-sdk/session-visibility.js";
+import { sessionVisibilityGatewayTesting } from "../../plugin-sdk/session-visibility-internal.js";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
 import { createSessionsSearchTool } from "./sessions-search-tool.js";
 

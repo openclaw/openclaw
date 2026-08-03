@@ -3,22 +3,22 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../packages/normalization-core/src/string-coerce.js";
-import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { callGateway as defaultCallGateway } from "../gateway/call.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { logWarn } from "../logger.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { listAmbientGroupWatchTargets } from "../sessions/session-state-events.js";
+import {
+  listSpawnedSessionKeysWithResult,
+  lookupFailedDenialSuffix,
+  type SpawnedSessionKeysResult,
+} from "./session-visibility-internal.js";
 
-type GatewayCaller = typeof defaultCallGateway;
-
-let callGatewayForListSpawned: GatewayCaller = defaultCallGateway;
-
-/** Test hook: must stay aligned with `sessions-resolution` `testing.setDepsForTest`. */
-export const sessionVisibilityGatewayTesting = {
-  setCallGatewayForListSpawned(overrides?: GatewayCaller) {
-    callGatewayForListSpawned = overrides ?? defaultCallGateway;
-  },
-};
+// Legacy public export preserved for upgrade compatibility: main publishes
+// `sessionVisibilityGatewayTesting` from this SDK subpath, so the name must
+// stay reachable here even though the implementation lives in the core-private
+// module. The richer lookup result helper stays internal-only.
+export { sessionVisibilityGatewayTesting } from "./session-visibility-internal.js";
 
 /** Configured visibility mode for session tools and session-related commands. */
 export type SessionToolsVisibility = "self" | "tree" | "agent" | "all";
@@ -67,8 +67,11 @@ function resolveScopedSessionAccess(
       if (expectedSessionId) {
         return { expectedSessionId };
       }
-    } catch {
+    } catch (error) {
       // Access providers fail closed; normal visibility evaluation still runs.
+      logWarn(
+        `session-visibility: scoped access provider threw for requester=${request.requesterSessionKey} target=${request.targetSessionKey} action=${request.action}: ${formatErrorMessage(error)}`,
+      );
     }
   }
   return undefined;
@@ -83,31 +86,23 @@ export type SessionVisibilityRow = {
   parentSessionKey?: string;
 };
 
-/** List sessions spawned by the requester through the gateway session list method. */
+/**
+ * List sessions spawned by the requester through the gateway session list
+ * method.
+ *
+ * Public plugin-SDK contract: always resolves to a `Set<string>` so existing
+ * plugin callers that use `.has()` keep working. A failed lookup collapses to
+ * an empty set (fail-closed) exactly like previous releases; the failure is
+ * still logged. The visibility guard uses
+ * {@link listSpawnedSessionKeysWithResult} (core-private) so it can
+ * distinguish a failed lookup from a genuine policy denial (issue #114653).
+ */
 export async function listSpawnedSessionKeys(params: {
   requesterSessionKey: string;
   limit?: number;
 }): Promise<Set<string>> {
-  const limit =
-    typeof params.limit === "number" && Number.isFinite(params.limit)
-      ? Math.max(1, Math.floor(params.limit))
-      : undefined;
-  try {
-    const list = await callGatewayForListSpawned<{ sessions: Array<{ key?: unknown }> }>({
-      method: "sessions.list",
-      params: {
-        includeGlobal: false,
-        includeUnknown: false,
-        ...(limit !== undefined ? { limit } : {}),
-        spawnedBy: params.requesterSessionKey,
-      },
-    });
-    const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
-    const keys = normalizeTrimmedStringList(sessions.map((entry) => entry?.key));
-    return new Set(keys);
-  } catch {
-    return new Set();
-  }
+  const result = await listSpawnedSessionKeysWithResult(params);
+  return result.ok ? result.keys : new Set();
 }
 
 /** Resolve configured session-tool visibility, defaulting invalid or missing values to tree. */
@@ -310,16 +305,18 @@ function treeVisibilityMessage(action: SessionAccessAction): string {
   return `${actionPrefix(action)} visibility is restricted to the current session tree and any watched same-agent group sessions (tools.sessions.visibility=tree).`;
 }
 
-/** Create a direct session-key visibility checker for one requester/action pair. */
-function createSessionVisibilityCheckerImpl(params: {
+type SessionVisibilityCheckerParams = {
   action: SessionAccessAction;
   defaultAgentId?: string;
   requesterAgentId?: string;
   requesterSessionKey: string;
   visibility: SessionToolsVisibility;
   a2aPolicy: AgentToAgentPolicy;
-  spawnedKeys: Set<string> | null;
-}): { check: (targetSessionKey: string) => SessionAccessResult } {
+};
+
+function createSessionVisibilityCheckerWithResult(
+  params: SessionVisibilityCheckerParams & { spawnedKeys: SpawnedSessionKeysResult | null },
+): { check: (targetSessionKey: string) => SessionAccessResult } {
   const spawnedKeys = params.spawnedKeys;
   const rowChecker = createSessionVisibilityRowChecker({
     action: params.action,
@@ -341,14 +338,55 @@ function createSessionVisibilityCheckerImpl(params: {
         return { allowed: true, expectedSessionId: scoped.expectedSessionId };
       }
     }
-    const isSpawnedSession = spawnedKeys?.has(targetSessionKey) === true;
-    return rowChecker.check({
+    const spawnedKeySet = spawnedKeys?.ok ? spawnedKeys.keys : undefined;
+    const isSpawnedSession = spawnedKeySet?.has(targetSessionKey) === true;
+    const result = rowChecker.check({
       key: targetSessionKey,
       spawnedBy: isSpawnedSession ? params.requesterSessionKey : undefined,
     });
+    if (!result.allowed) {
+      // A failed ownership lookup fail-closes as a denial under tree visibility,
+      // where direct-key targets rely on the spawned-session set to prove
+      // ownership. It is marked distinct from a policy denial so callers can
+      // tell a transient lookup failure apart from a genuine authorization
+      // refusal. The row checker still runs first so durable watched same-agent
+      // group reads (and self/current targets) keep their existing allowance:
+      // those grants do not depend on the spawned-session set. Under "all"
+      // visibility this override does not apply — cross-agent targets are
+      // evaluated by the agent-to-agent policy regardless of spawned ownership.
+      // See issue #114653.
+      const lookupFailed =
+        spawnedKeys !== null &&
+        !spawnedKeys.ok &&
+        params.visibility === "tree" &&
+        targetSessionKey !== params.requesterSessionKey &&
+        targetSessionKey !== "current";
+      if (lookupFailed) {
+        // The denial text carries the lookup's retryability so a transient
+        // transport failure (retry) is distinguishable from a permanent
+        // credential/configuration failure (do not retry). Both still fail
+        // closed. See issue #114653 (review P1: classify before prescribing retry).
+        return {
+          allowed: false,
+          status: "forbidden",
+          error: `${actionPrefix(params.action)} denied because ${lookupFailedDenialSuffix(spawnedKeys.retryable)}`,
+        };
+      }
+    }
+    return result;
   };
 
   return { check };
+}
+
+/** Create a direct session-key visibility checker for one requester/action pair. */
+function createSessionVisibilityCheckerImpl(
+  params: SessionVisibilityCheckerParams & { spawnedKeys: Set<string> | null },
+): { check: (targetSessionKey: string) => SessionAccessResult } {
+  return createSessionVisibilityCheckerWithResult({
+    ...params,
+    spawnedKeys: params.spawnedKeys ? { ok: true, keys: params.spawnedKeys } : null,
+  });
 }
 
 /** Direct-key visibility checker plus registration for narrow host-owned grants. */
@@ -485,9 +523,9 @@ export async function createSessionVisibilityGuard(params: {
   // this lookup until every caller can pass a normalized session row.
   const spawnedKeys =
     params.action !== "list" && (params.visibility === "tree" || params.visibility === "all")
-      ? await listSpawnedSessionKeys({ requesterSessionKey: params.requesterSessionKey })
+      ? await listSpawnedSessionKeysWithResult({ requesterSessionKey: params.requesterSessionKey })
       : null;
-  return createSessionVisibilityChecker({
+  return createSessionVisibilityCheckerWithResult({
     action: params.action,
     defaultAgentId: params.defaultAgentId,
     requesterAgentId: params.requesterAgentId,

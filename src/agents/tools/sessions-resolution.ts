@@ -12,11 +12,13 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { logWarn } from "../../logger.js";
 import {
-  createSessionVisibilityChecker,
-  listSpawnedSessionKeys,
+  listSpawnedSessionKeysWithResult,
+  lookupFailedDenialSuffix,
   sessionVisibilityGatewayTesting,
-} from "../../plugin-sdk/session-visibility.js";
+} from "../../plugin-sdk/session-visibility-internal.js";
+import { createSessionVisibilityChecker } from "../../plugin-sdk/session-visibility.js";
 import {
   isAcpSessionKey,
   isIncognitoSessionKey,
@@ -93,33 +95,79 @@ export function resolveCurrentSessionClientAlias(params: {
   return requesterKey;
 }
 
+type SpawnedVisibilityOutcome =
+  | { kind: "visible" }
+  | { kind: "not-owned" }
+  | { kind: "lookup-failed"; retryable: boolean };
+
+/**
+ * Detects the expected "No session found" miss from the speculative
+ * `sessions.resolve` probe in {@link isRequesterSpawnedSessionVisible}. A valid
+ * target outside the requester's spawned set is a normal policy miss, not an
+ * operational lookup failure, so it must not trigger the warn trail (review P2).
+ */
+function isExpectedSessionResolveMiss(error: unknown): boolean {
+  if (!(error instanceof GatewayClientRequestError)) {
+    return false;
+  }
+  if (error.gatewayCode !== "INVALID_REQUEST") {
+    return false;
+  }
+  return Boolean(error.message?.includes("No session found"));
+}
+
 async function isRequesterSpawnedSessionVisible(params: {
   requesterSessionKey: string;
   targetSessionKey: string;
   limit?: number;
-}): Promise<boolean> {
+}): Promise<SpawnedVisibilityOutcome> {
   if (params.requesterSessionKey === params.targetSessionKey) {
-    return true;
+    return { kind: "visible" };
   }
   try {
-    const resolved = await sessionsResolutionDeps.callGateway({
-      method: "sessions.resolve",
-      params: {
-        key: params.targetSessionKey,
-        spawnedBy: params.requesterSessionKey,
-      },
+    // This is a speculative probe: a valid target outside the requester's
+    // spawned set is an EXPECTED miss, not an operational failure. Pass
+    // `allowMissing: true` so the gateway returns a successful no-match
+    // response instead of throwing "No session found" — otherwise routine
+    // sandbox policy denials get logged as lookup faults and bury the real
+    // failures this PR is meant to diagnose (review P2). Only a genuine
+    // transport/credential error throws here and is logged below.
+    const resolved = await callGatewayResolveSession({
+      key: params.targetSessionKey,
+      spawnedBy: params.requesterSessionKey,
+      allowMissing: true,
     });
     if (typeof resolved?.key === "string" && resolved.key.trim() === params.targetSessionKey) {
-      return true;
+      return { kind: "visible" };
     }
-  } catch {
-    // Fall back to the spawned-session listing path below.
+  } catch (error) {
+    // A valid target outside the requester's spawned set is an EXPECTED miss
+    // on this speculative probe (the resolver deliberately falls back to
+    // `sessions.list` below). On newer gateways `allowMissing: true` makes the
+    // server return a successful no-match response so no error is thrown; on
+    // older gateways that reject the additive field the retry surfaces the
+    // normal "No session found" INVALID_REQUEST. Either way this is not an
+    // operational lookup failure, so suppress the warn and fall back quietly —
+    // logging it would bury the real failures this PR is meant to diagnose
+    // (review P2). Only a genuine transport/credential error is logged.
+    if (!isExpectedSessionResolveMiss(error)) {
+      logWarn(
+        `sessions-resolution: sessions.resolve threw for requester=${params.requesterSessionKey} target=${params.targetSessionKey}: ${formatErrorMessage(error)}`,
+      );
+    }
   }
-  const keys = await listSpawnedSessionKeys({
+  const result = await listSpawnedSessionKeysWithResult({
     requesterSessionKey: params.requesterSessionKey,
     limit: params.limit,
   });
-  return keys.has(params.targetSessionKey);
+  // A failed lookup fail-closes as a distinct outcome carrying retryability, so
+  // a transient transport failure (retry) is distinguishable from a permanent
+  // credential/configuration failure (do not retry); it must not collapse into
+  // the generic sandboxed-session denial (review P1: classify before prescribing retry).
+  if (!result.ok) {
+    return { kind: "lookup-failed", retryable: result.retryable };
+  }
+  return result.keys.has(params.targetSessionKey) ? { kind: "visible" } : { kind: "not-owned" };
 }
 
 function looksLikeSessionKey(value: string): boolean {
@@ -175,6 +223,19 @@ type VisibleSessionReferenceResolution =
       error: string;
       displayKey: string;
     };
+
+function resolutionActionPrefix(action: "history" | "send" | "status" | "list"): string {
+  if (action === "history") {
+    return "Session history";
+  }
+  if (action === "send") {
+    return "Session send";
+  }
+  if (action === "status") {
+    return "Session status";
+  }
+  return "Session list";
+}
 
 function buildResolvedSessionReference(params: {
   key: string;
@@ -478,14 +539,22 @@ export async function resolveVisibleSessionReference(params: {
           requesterSessionKey: params.requesterSessionKey,
           targetSessionKey: resolvedKey,
         });
-  const visible =
-    Boolean(scopedAccess) ||
-    !shouldVerifySpawnedVisibility ||
-    (await isRequesterSpawnedSessionVisible({
-      requesterSessionKey: params.requesterSessionKey,
-      targetSessionKey: resolvedKey,
-    }));
-  if (!visible) {
+  if (Boolean(scopedAccess) || !shouldVerifySpawnedVisibility) {
+    return { ok: true, key: resolvedKey, displayKey };
+  }
+  const spawnedOutcome = await isRequesterSpawnedSessionVisible({
+    requesterSessionKey: params.requesterSessionKey,
+    targetSessionKey: resolvedKey,
+  });
+  if (spawnedOutcome.kind === "lookup-failed") {
+    return {
+      ok: false,
+      status: "forbidden",
+      error: `${resolutionActionPrefix(params.action)} denied because ${lookupFailedDenialSuffix(spawnedOutcome.retryable)}`,
+      displayKey,
+    };
+  }
+  if (spawnedOutcome.kind === "not-owned") {
     return {
       ok: false,
       status: "forbidden",

@@ -3,6 +3,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { GatewayClientRequestError } from "../../gateway/client.js";
 import {
   createAgentToAgentPolicy,
   createSessionVisibilityGuard,
@@ -19,6 +20,12 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveSandboxedSessionToolContext } from "./sessions-access.js";
 import { testing as sessionsResolutionTesting } from "./sessions-resolution.test-support.js";
+
+const loggerMocks = vi.hoisted(() => ({ logWarn: vi.fn() }));
+vi.mock("../../logger.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../logger.js")>()),
+  logWarn: loggerMocks.logWarn,
+}));
 
 describe("resolveSessionToolsVisibility", () => {
   it("defaults to tree when unset or invalid", () => {
@@ -538,5 +545,144 @@ describe("createSessionVisibilityGuard", () => {
       error:
         "Session history visibility is restricted to the current session (tools.sessions.visibility=self).",
     });
+  });
+
+  it("reports a transient tree-visibility lookup failure distinctly", async () => {
+    loggerMocks.logWarn.mockClear();
+    sessionsResolutionTesting.setDepsForTest({
+      callGateway: vi.fn(async () => {
+        // A retryable request-level transport failure must surface the
+        // "transient; retry" denial so callers can distinguish it from a
+        // genuine policy refusal (review P1: classify before prescribing retry).
+        throw new GatewayClientRequestError({
+          code: "UNAVAILABLE",
+          message: "transport timeout Authorization: Bearer sk-evidence-secret-9f3a2c",
+          retryable: true,
+        });
+      }) as never,
+    });
+    try {
+      const guard = await createSessionVisibilityGuard({
+        action: "history",
+        requesterSessionKey: "agent:main:main",
+        visibility: "tree",
+        a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+      });
+
+      const result = guard.check("agent:main:subagent:child-1");
+      // Fail-closed: still denied, but distinguishable from a policy denial.
+      expect(result.allowed).toBe(false);
+      expect(result).toMatchObject({
+        status: "forbidden",
+      });
+      if (!result.allowed) {
+        expect(result.error).toMatch(/ownership lookup failed/i);
+        expect(result.error).toMatch(/transient\); retry/i);
+      }
+      // The warn log must carry the requester key and the underlying error, but
+      // sensitive text inside the error must go through the repository's
+      // redacting formatter (P1 security finding).
+      const warnText = loggerMocks.logWarn.mock.calls.map((call) => String(call[0])).join("\n");
+      expect(warnText).toContain("requester=agent:main:main");
+      expect(warnText).not.toContain("sk-evidence-secret-9f3a2c");
+    } finally {
+      sessionsResolutionTesting.setDepsForTest();
+    }
+  });
+
+  it("classifies a permanent credential lookup failure as non-retryable under tree visibility", async () => {
+    // A credentials/configuration failure surfaces before a socket is opened
+    // and will not recover through retry, so the guard must NOT prescribe retry
+    // (review P1: classify before prescribing retry). The denial still
+    // fail-closes.
+    sessionsResolutionTesting.setDepsForTest({
+      callGateway: vi.fn(async () => {
+        throw new GatewayClientRequestError({
+          code: "PERMISSION_DENIED",
+          message: "gateway sessions.list requires credentials before opening a websocket",
+          retryable: false,
+        });
+      }) as never,
+    });
+    try {
+      const guard = await createSessionVisibilityGuard({
+        action: "history",
+        requesterSessionKey: "agent:main:main",
+        visibility: "tree",
+        a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+      });
+
+      const result = guard.check("agent:main:subagent:child-1");
+      expect(result).toEqual({
+        allowed: false,
+        status: "forbidden",
+        error:
+          "Session history denied because spawned-session ownership lookup failed; check gateway configuration and credentials.",
+      });
+      // A permanent failure must never tell the caller to retry.
+      expect(result.allowed ? "" : result.error).not.toMatch(/retry/i);
+    } finally {
+      sessionsResolutionTesting.setDepsForTest();
+    }
+  });
+
+  it("keeps watched same-agent group reads allowed when the spawned lookup throws", async () => {
+    const tempDirs: string[] = [];
+    const stateDir = makeTempDir(tempDirs, "openclaw-session-visibility-");
+    closeOpenClawStateDatabaseForTest();
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    try {
+      const requesterSessionKey = "agent:main:main";
+      const watchedSessionKey = "agent:main:telegram:group:watched";
+      expect(
+        registerMainSessionGroupWatch({
+          sessionKey: watchedSessionKey,
+          agentId: "main",
+          entry: { sessionId: "watched", updatedAt: Date.now(), chatType: "group" },
+          dmScope: "main",
+        }),
+      ).toBe(true);
+      expect(listAmbientGroupWatchTargets(requesterSessionKey)).toEqual(
+        new Set([watchedSessionKey]),
+      );
+
+      sessionsResolutionTesting.setDepsForTest({
+        callGateway: vi.fn(async () => {
+          throw new GatewayClientRequestError({
+            code: "UNAVAILABLE",
+            message: "transport timeout",
+            retryable: true,
+          });
+        }) as never,
+      });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const guard = await createSessionVisibilityGuard({
+          action: "history",
+          requesterSessionKey,
+          visibility: "tree",
+          a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+        });
+
+        // The durable watched-group allowance does not depend on the spawned
+        // lookup; it must survive a failed lookup (P1 regression guard).
+        expect(guard.check(watchedSessionKey)).toEqual({ allowed: true });
+        // A non-watched, non-spawned same-agent target still fails closed, but
+        // the denial is distinguishable from a genuine policy denial.
+        expect(guard.check("agent:main:telegram:group:unwatched")).toEqual({
+          allowed: false,
+          status: "forbidden",
+          error:
+            "Session history denied because spawned-session ownership lookup failed (transient); retry the operation.",
+        });
+      } finally {
+        warnSpy.mockRestore();
+        sessionsResolutionTesting.setDepsForTest();
+      }
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+      vi.unstubAllEnvs();
+      cleanupTempDirs(tempDirs);
+    }
   });
 });

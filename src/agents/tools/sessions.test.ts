@@ -8,6 +8,7 @@ import type { ChannelMessagingAdapter } from "../../channels/plugins/types.publi
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { GatewayClientRequestError } from "../../gateway/client.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { extractAssistantText, sanitizeTextContent } from "./chat-history-text.js";
 
@@ -30,9 +31,13 @@ const facadeRuntimeMock = vi.hoisted(() => ({
   >(),
 }));
 
-vi.mock("../../gateway/call.js", () => ({
-  callGateway: (opts: unknown) => callGatewayMock(opts),
-}));
+vi.mock("../../gateway/call.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../gateway/call.js")>();
+  return {
+    ...actual,
+    callGateway: (opts: unknown) => callGatewayMock(opts),
+  };
+});
 vi.mock("./in-process-gateway.js", () => ({
   callInProcessGatewayToolWithCreation: (method: unknown, params: unknown, creation: unknown) =>
     inProcessCreationMock(method, params, creation),
@@ -909,6 +914,47 @@ describe("sessions_send gating", () => {
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
     expect(requireGatewayRequest().method).toBe("sessions.list");
     expect(requireDetails(result).status).toBe("forbidden");
+  });
+
+  it("classifies a failed spawned-lookup as lookup-failed for sandboxed sends", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      agents: { defaults: { sandbox: { sessionToolsVisibility: "spawned" } } },
+      tools: { agentToAgent: { enabled: false }, sessions: { visibility: "all" } },
+    });
+    callGatewayMock.mockImplementation(async () => {
+      // A retryable request-level failure preserves the PR's evidence semantics
+      // (transient store read error) while exercising the retryable
+      // classification path (review P1: classify before prescribing retry).
+      throw new GatewayClientRequestError({
+        code: "UNAVAILABLE",
+        message: "simulated transient store read error (evidence)",
+        retryable: true,
+      });
+    });
+    const tool = createSessionsSendTool({
+      agentSessionKey: MAIN_AGENT_SESSION_KEY,
+      agentChannel: MAIN_AGENT_CHANNEL,
+      sandboxed: true,
+    });
+
+    const result = await tool.execute("call-lookup-failed", {
+      sessionKey: "agent:main:subagent:worker-1",
+      message: "hi",
+      timeoutSeconds: 0,
+    });
+
+    // sessions_send hits the resolution preflight before the direct guard; the
+    // failed lookup must surface the same retryable classification, not the
+    // generic sandboxed-session denial.
+    const details = requireDetails(result);
+    expect(details.status).toBe("forbidden");
+    expect(String(details.error)).toBe(
+      "Session send denied because spawned-session ownership lookup failed (transient); retry the operation.",
+    );
+    expect(String(details.error)).not.toContain(
+      "Session not visible from this sandboxed agent session",
+    );
   });
 
   it("rejects direct thread session targets before dispatching an agent run", async () => {
