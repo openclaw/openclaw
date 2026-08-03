@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { updateDreamsFile } from "./dreaming-dreams-file.js";
 import { writeDailyDreamingPhaseBlock, writeDeepDreamingReport } from "./dreaming-markdown.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
@@ -493,5 +494,76 @@ describe("dreaming markdown storage", () => {
       }),
     ).rejects.toThrow("Refusing to write symlinked DREAMS.md");
     await expect(fs.readFile(targetPath, "utf-8")).resolves.toBe("outside\n");
+  });
+
+  it("serializes deep summary updates with an overlapping diary writer", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
+    const dreamsPath = path.join(workspaceDir, "DREAMS.md");
+    await fs.writeFile(
+      dreamsPath,
+      [
+        "# Dream Diary",
+        "",
+        "## Deep Sleep",
+        "<!-- openclaw:dreaming:deep:start -->",
+        "- Old durable summary",
+        "<!-- openclaw:dreaming:deep:end -->",
+        "",
+        "Diary entry stays.",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    let enteredUpdater!: () => void;
+    let releaseUpdater!: () => void;
+    const enteredUpdaterPromise = new Promise<void>((resolve) => {
+      enteredUpdater = resolve;
+    });
+    const releaseUpdaterPromise = new Promise<void>((resolve) => {
+      releaseUpdater = resolve;
+    });
+    const diaryWrite = updateDreamsFile({
+      workspaceDir,
+      updater: async (existing, lockedDreamsPath) => {
+        enteredUpdater();
+        await releaseUpdaterPromise;
+        return {
+          content: `${existing}\n\n*2026-04-05*\n\nNarrative entry written under the diary lock.`,
+          result: { written: 1, lockedDreamsPath },
+        };
+      },
+    });
+    await enteredUpdaterPromise;
+
+    const deepWrite = writeDeepDreamingReport({
+      workspaceDir,
+      bodyLines: ["- Durable summary updated."],
+      storage: {
+        mode: "inline",
+        separateReports: false,
+      },
+      nowMs,
+      timezone,
+    });
+    let deepFinished = false;
+    void deepWrite.then(() => {
+      deepFinished = true;
+    });
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 50);
+    });
+    expect(deepFinished).toBe(false);
+
+    releaseUpdater();
+    const diaryResult = await diaryWrite;
+    await deepWrite;
+    expect(diaryResult.written).toBe(1);
+
+    const content = await fs.readFile(dreamsPath, "utf-8");
+    expect(content).toContain("- Durable summary updated.");
+    expect(content).not.toContain("- Old durable summary");
+    expect(content).toContain("Narrative entry written under the diary lock.");
+    expect(content).toContain("Diary entry stays.");
   });
 });

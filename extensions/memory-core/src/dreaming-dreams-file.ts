@@ -364,6 +364,28 @@ export async function updateManagedDreamingMarkdownFile(
   await replaceManagedMarkdownBlockStreaming(resolvedParams);
 }
 
+async function withDreamsFileLock<T>(
+  workspaceDir: string,
+  fn: (dreamsPath: string) => Promise<T>,
+): Promise<T> {
+  const dreamsPath = await resolveDreamsPath(workspaceDir);
+  await fs.mkdir(path.dirname(dreamsPath), { recursive: true });
+  let lockEntry = dreamsFileLocks.get(dreamsPath);
+  if (!lockEntry) {
+    lockEntry = { withLock: createAsyncLock(), refs: 0 };
+    dreamsFileLocks.set(dreamsPath, lockEntry);
+  }
+  lockEntry.refs += 1;
+  try {
+    return await lockEntry.withLock(() => fn(dreamsPath));
+  } finally {
+    lockEntry.refs -= 1;
+    if (lockEntry.refs <= 0 && dreamsFileLocks.get(dreamsPath) === lockEntry) {
+      dreamsFileLocks.delete(dreamsPath);
+    }
+  }
+}
+
 export async function updateDreamsFile<T>(params: {
   workspaceDir: string;
   updater: (
@@ -377,29 +399,14 @@ export async function updateDreamsFile<T>(params: {
         shouldWrite?: boolean;
       };
 }): Promise<T> {
-  const dreamsPath = await resolveDreamsPath(params.workspaceDir);
-  await fs.mkdir(path.dirname(dreamsPath), { recursive: true });
-  let lockEntry = dreamsFileLocks.get(dreamsPath);
-  if (!lockEntry) {
-    lockEntry = { withLock: createAsyncLock(), refs: 0 };
-    dreamsFileLocks.set(dreamsPath, lockEntry);
-  }
-  lockEntry.refs += 1;
-  try {
-    return await lockEntry.withLock(async () => {
-      const existing = await readDreamsFile(dreamsPath);
-      const { content, result, shouldWrite = true } = await params.updater(existing, dreamsPath);
-      if (shouldWrite) {
-        await writeDreamsFileAtomic(dreamsPath, content.endsWith("\n") ? content : `${content}\n`);
-      }
-      return result;
-    });
-  } finally {
-    lockEntry.refs -= 1;
-    if (lockEntry.refs <= 0 && dreamsFileLocks.get(dreamsPath) === lockEntry) {
-      dreamsFileLocks.delete(dreamsPath);
+  return await withDreamsFileLock(params.workspaceDir, async (dreamsPath) => {
+    const existing = await readDreamsFile(dreamsPath);
+    const { content, result, shouldWrite = true } = await params.updater(existing, dreamsPath);
+    if (shouldWrite) {
+      await writeDreamsFileAtomic(dreamsPath, content.endsWith("\n") ? content : `${content}\n`);
     }
-  }
+    return result;
+  });
 }
 
 export async function updateDeepDreamsFile(params: {
@@ -407,14 +414,15 @@ export async function updateDeepDreamsFile(params: {
   bodyLines: string[];
 }): Promise<string> {
   const body = params.bodyLines.length > 0 ? params.bodyLines.join("\n") : "- No durable changes.";
-  const dreamsPath = await resolveDreamsPath(params.workspaceDir);
-  await updateManagedDreamingMarkdownFile({
-    filePath: dreamsPath,
-    heading: "## Deep Sleep",
-    startMarker: DEEP_START_MARKER,
-    endMarker: DEEP_END_MARKER,
-    body,
-    tempPrefix: `${path.basename(dreamsPath)}.dreams`,
+  return await withDreamsFileLock(params.workspaceDir, async (dreamsPath) => {
+    await updateManagedDreamingMarkdownFile({
+      filePath: dreamsPath,
+      heading: "## Deep Sleep",
+      startMarker: DEEP_START_MARKER,
+      endMarker: DEEP_END_MARKER,
+      body,
+      tempPrefix: `${path.basename(dreamsPath)}.dreams`,
+    });
+    return dreamsPath;
   });
-  return dreamsPath;
 }
