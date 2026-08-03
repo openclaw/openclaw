@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayServer } from "../../gateway/server.impl.js";
 import type { GatewayBonjourBeacon } from "../../infra/bonjour-discovery.js";
+import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import {
   GATEWAY_AGENT_MEDIA_MIGRATION_REQUIRED_REASON,
   OpenClawAgentDatabaseMediaMigrationRequiredError,
@@ -945,6 +946,13 @@ describe("runGatewayLoop", () => {
         sessionKeys: new Set(["agent:main:deferral-timeout"]),
         reason: "gateway restart drain",
       });
+      expect(markRestartAbortedMainSessions).toHaveBeenCalledTimes(2);
+      expect(markRestartAbortedMainSessions).toHaveBeenLastCalledWith({
+        cfg: {},
+        sessionIds: new Set(["session-deferral-timeout"]),
+        sessionKeys: new Set(["agent:main:deferral-timeout"]),
+        reason: "config reload forced restart",
+      });
       expect(gatewayLog.warn).toHaveBeenCalledWith(
         "failed to mark interrupted main sessions for restart recovery: Error: store read-only",
       );
@@ -1003,6 +1011,7 @@ describe("runGatewayLoop", () => {
         sessionKeys: new Set(["agent:main:forced-task"]),
         reason: "gateway restart drain",
       });
+      expect(markRestartAbortedMainSessions).toHaveBeenCalledTimes(1);
       expect(gatewayLog.warn).toHaveBeenCalledWith(
         "restart blocked by active background task run(s): taskId=task-force runId=run-force status=running runtime=cron label=forced",
       );
@@ -1041,6 +1050,10 @@ describe("runGatewayLoop", () => {
       const closeSecond = createCloseMock();
       const closeThird = createCloseMock();
       const { runtime, exited } = createRuntimeWithExitSignal();
+      const lifecycleSlot = resolveGlobalMap<string, number>(
+        Symbol("run-loop-lifecycle-slot"),
+        (state) => state.clear(),
+      );
 
       const start = vi.fn<StartServer>();
       let resolveFirst: (() => void) | null = null;
@@ -1057,6 +1070,7 @@ describe("runGatewayLoop", () => {
         resolveSecond = resolve;
       });
       start.mockImplementationOnce(async () => {
+        expect(lifecycleSlot.size).toBe(0);
         resolveSecond?.();
         return { close: closeSecond };
       });
@@ -1066,6 +1080,7 @@ describe("runGatewayLoop", () => {
         resolveThird = resolve;
       });
       start.mockImplementationOnce(async () => {
+        expect(lifecycleSlot.size).toBe(0);
         resolveThird?.();
         return { close: closeThird };
       });
@@ -1077,6 +1092,7 @@ describe("runGatewayLoop", () => {
       });
 
       await startedFirst;
+      lifecycleSlot.set("first", 1);
       const sigusr1 = captureSignal("SIGUSR1");
       const sigterm = captureSignal("SIGTERM");
       expect(start).toHaveBeenCalledTimes(1);
@@ -1149,6 +1165,7 @@ describe("runGatewayLoop", () => {
         resetAllLanes.mock.invocationCallOrder[0] ?? Infinity,
       );
 
+      lifecycleSlot.set("second", 2);
       sigusr1();
 
       await startedThird;
@@ -1772,6 +1789,7 @@ describe("runGatewayLoop", () => {
         sessionKeys: new Set(["agent:main:file-intent"]),
         reason: "gateway restart drain",
       });
+      expect(markRestartAbortedMainSessions).toHaveBeenCalledTimes(1);
       expect(start).toHaveBeenCalledTimes(2);
 
       sigint();

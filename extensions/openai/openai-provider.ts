@@ -58,6 +58,7 @@ import {
   buildOpenAICodexProviderHooks,
 } from "./openai-chatgpt-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
+import { resolveAuthoredOpenAIProviderConfig } from "./provider-policy-api.js";
 import {
   buildOpenAIResponsesProviderHooks,
   buildOpenAISyntheticCatalogEntry,
@@ -138,10 +139,19 @@ const OPENAI_GPT_55_PRO_TEMPLATE_MODEL_IDS = [
 const OPENAI_GPT_55_MEDIA_INPUT = {
   image: { maxSidePx: 6000, preferredSidePx: 2048, tokenMode: "detail" },
 } as const satisfies ProviderRuntimeModel["mediaInput"];
-const OPENAI_GPT_54_TEMPLATE_MODEL_IDS = [OPENAI_GPT_55_MODEL_ID] as const;
-const OPENAI_GPT_54_PRO_TEMPLATE_MODEL_IDS = [OPENAI_GPT_55_PRO_MODEL_ID] as const;
-const OPENAI_GPT_54_MINI_TEMPLATE_MODEL_IDS = ["gpt-5-mini"] as const;
-const OPENAI_GPT_54_NANO_TEMPLATE_MODEL_IDS = ["gpt-5-nano", "gpt-5-mini"] as const;
+// Repair an already-authorized model before borrowing an older family template;
+// remote discovery must not be needed to restore its native image capability.
+const OPENAI_GPT_54_TEMPLATE_MODEL_IDS = [OPENAI_GPT_54_MODEL_ID, OPENAI_GPT_55_MODEL_ID] as const;
+const OPENAI_GPT_54_PRO_TEMPLATE_MODEL_IDS = [
+  OPENAI_GPT_54_PRO_MODEL_ID,
+  OPENAI_GPT_55_PRO_MODEL_ID,
+] as const;
+const OPENAI_GPT_54_MINI_TEMPLATE_MODEL_IDS = [OPENAI_GPT_54_MINI_MODEL_ID, "gpt-5-mini"] as const;
+const OPENAI_GPT_54_NANO_TEMPLATE_MODEL_IDS = [
+  OPENAI_GPT_54_NANO_MODEL_ID,
+  "gpt-5-nano",
+  "gpt-5-mini",
+] as const;
 const OPENAI_CHAT_LATEST_TEMPLATE_MODEL_IDS = [
   OPENAI_GPT_55_MODEL_ID,
   OPENAI_GPT_54_MODEL_ID,
@@ -181,7 +191,11 @@ function buildOpenAIManifestModelsForBaseUrl(baseUrl: string): ModelDefinitionCo
   return OPENAI_MANIFEST_PROVIDER.models.map((model) =>
     model.api === "openai-chatgpt-responses" || isOpenAICodexBaseUrl(model.baseUrl)
       ? { ...model }
-      : { ...model, baseUrl },
+      : {
+          ...model,
+          api: model.api ?? OPENAI_MANIFEST_PROVIDER.api ?? "openai-responses",
+          baseUrl,
+        },
   );
 }
 
@@ -651,27 +665,7 @@ function resolveAuthoredOpenAIConfigRoute(params: {
 }):
   | { configuredModel?: ModelDefinitionConfig; configuredProvider: ModelProviderConfig }
   | undefined {
-  if (normalizeProviderId(params.provider) !== PROVIDER_ID) {
-    return undefined;
-  }
-  const providers = Object.entries(params.config?.models?.providers ?? {});
-  const requestedProvider = params.provider.trim();
-  const providerKey =
-    providers.find(([providerId]) => providerId.trim() === requestedProvider)?.[0].trim() ??
-    providers.find(([providerId]) => normalizeProviderId(providerId) === PROVIDER_ID)?.[0].trim();
-  let providerConfig: ModelProviderConfig | undefined;
-  for (const [providerId, candidate] of providers) {
-    if (providerId.trim() !== providerKey || !candidate) {
-      continue;
-    }
-    providerConfig = providerConfig
-      ? {
-          ...providerConfig,
-          ...candidate,
-          models: candidate.models ?? providerConfig.models,
-        }
-      : candidate;
-  }
+  const providerConfig = resolveAuthoredOpenAIProviderConfig(params);
   if (!providerConfig) {
     return undefined;
   }

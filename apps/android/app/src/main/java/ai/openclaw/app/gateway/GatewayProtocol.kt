@@ -334,6 +334,7 @@ enum class GatewayMethod(
   SessionsUnsubscribe("sessions.unsubscribe"),
   SessionsMessagesSubscribe("sessions.messages.subscribe"),
   SessionsMessagesUnsubscribe("sessions.messages.unsubscribe"),
+  SessionsViewersSet("sessions.viewers.set"),
   SessionsPreview("sessions.preview"),
   SessionsDescribe("sessions.describe"),
   SessionsCompactionList("sessions.compaction.list"),
@@ -503,6 +504,9 @@ enum class GatewayMethod(
   MemorySearch("memory.search"),
   SkillsProposalsEventsList("skills.proposals.events.list"),
   SkillsProposalsEvaluate("skills.proposals.evaluate"),
+  HooksStatus("hooks.status"),
+  TasksRetry("tasks.retry"),
+  TasksDismiss("tasks.dismiss"),
 }
 
 enum class GatewayEvent(

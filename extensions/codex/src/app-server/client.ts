@@ -358,6 +358,11 @@ export class CodexAppServerClient {
     return redactCodexAppServerLinePreview(this.stderrTail) || undefined;
   }
 
+  /** Returns the terminal transport error that closed this physical client. */
+  getCloseError(): Error | undefined {
+    return this.closeError;
+  }
+
   /** Stable generation id for this exact physical client instance. */
   getInstanceId(): string {
     return this.instanceId;
@@ -929,9 +934,13 @@ export class CodexAppServerClient {
 
   private handleNotification(notification: CodexServerNotification): void {
     for (const handler of this.notificationHandlers) {
-      Promise.resolve(handler(notification)).catch((error: unknown) => {
+      try {
+        Promise.resolve(handler(notification)).catch((error: unknown) => {
+          embeddedAgentLog.warn("codex app-server notification handler failed", { error });
+        });
+      } catch (error) {
         embeddedAgentLog.warn("codex app-server notification handler failed", { error });
-      });
+      }
     }
   }
 

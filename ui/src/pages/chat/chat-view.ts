@@ -30,6 +30,7 @@ import type {
 } from "../../lib/chat/chat-types.ts";
 import type { ControlUiFollowUpMode } from "../../lib/chat/follow-up-mode.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
+import { resolveAsciiShortcutKey } from "../../lib/keyboard-shortcuts.ts";
 import type { ProviderUsageDisplayProps } from "../../lib/provider-quota-summary.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
@@ -53,7 +54,7 @@ import {
   renderSessionWorkspaceRail,
   type SessionWorkspaceProps,
 } from "./components/chat-session-workspace.ts";
-import type { SidebarContent } from "./components/chat-sidebar.ts";
+import type { SidebarContent, SidebarFullMessageLoader } from "./components/chat-sidebar.ts";
 import { renderChatSwarmProgress } from "./components/chat-swarm-progress.ts";
 import { renderChatTaskSuggestions } from "./components/chat-task-suggestions.ts";
 import {
@@ -107,8 +108,10 @@ export type ChatProps = {
   onObserverVisibilityChange?: (visible: boolean) => void;
   sessionRailCompanion?: ChatSessionCompanionThread;
   sessionRailOpenRequest?: number;
+  sessionRailConsumedOpenRequest?: number;
   sessionRailMode?: SessionRailMode;
   sessionRailDocked?: boolean;
+  onSessionRailOpenRequestConsumed?: (openRequest: number) => void;
   onSessionRailSubmit?: (question: string) => void;
   onSessionRailDraftChange?: (draft: string) => void;
   onSessionRailClear?: () => void;
@@ -239,6 +242,7 @@ export type ChatProps = {
   } | null;
   currentAgentId: string;
   fullMessageAgentId?: string;
+  loadFullAssistantMessage?: SidebarFullMessageLoader | null;
   onAgentChange: (agentId: string) => void;
   onNavigateToAgent?: () => void;
   onSessionSelect?: (sessionKey: string) => void;
@@ -354,6 +358,7 @@ export function renderChat(props: ChatProps) {
       userAvatar: props.userAvatar,
       basePath: props.basePath,
       fullMessageAgentId: props.fullMessageAgentId,
+      loadFullAssistantMessage: props.loadFullAssistantMessage,
       localMediaPreviewRoots: props.localMediaPreviewRoots,
       assistantAttachmentAuthToken: props.assistantAttachmentAuthToken,
       resolveArtifactDownload: props.resolveArtifactDownload,
@@ -519,7 +524,12 @@ export function renderChat(props: ChatProps) {
           props.onClearReply?.();
           return;
         }
-        if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key === "f") {
+        if (
+          (event.metaKey || event.ctrlKey) &&
+          !event.altKey &&
+          !event.shiftKey &&
+          resolveAsciiShortcutKey(event) === "f"
+        ) {
           event.preventDefault();
           toggleChatThreadSearch(props.paneId, requestUpdate);
         }
@@ -635,6 +645,8 @@ export function renderChat(props: ChatProps) {
                       .companion=${props.sessionRailCompanion}
                       .connected=${props.connected}
                       .openRequest=${props.sessionRailOpenRequest ?? 0}
+                      .consumedOpenRequest=${props.sessionRailConsumedOpenRequest ?? 0}
+                      .onOpenRequestConsumed=${props.onSessionRailOpenRequestConsumed}
                       .onSubmit=${props.onSessionRailSubmit}
                       .onDraftChange=${props.onSessionRailDraftChange}
                       .onClear=${props.onSessionRailClear}

@@ -290,6 +290,29 @@ describe("startCodexAttemptThread", () => {
     expect(harness.process.stdin.destroyed).toBe(true);
   });
 
+  it("carries the session agent id into the startup client factory", async () => {
+    const clientFactory = vi.fn(
+      async (options: Parameters<CodexAppServerClientFactory>[0]) =>
+        await getLeasedSharedCodexAppServerClient(options),
+    );
+    const { harness, run } = startThreadWithHarness(5_000, new AbortController().signal, {
+      attemptClientFactory: () => clientFactory,
+    });
+    await answerInitialize(harness);
+    const threadStart = await waitForThreadStart(harness);
+    harness.send({
+      id: threadStart.id,
+      error: { code: -32000, message: "stop after startup" },
+    });
+
+    await expect(run).rejects.toThrow("stop after startup");
+    expect(clientFactory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "agent-1",
+      }),
+    );
+  });
+
   it("rejects an expected artifact mismatch before any native thread request", async () => {
     const paths = createAttemptPaths();
     await fs.mkdir(paths.workspaceDir, { recursive: true });
@@ -766,6 +789,7 @@ describe("startCodexAttemptThread", () => {
   });
 
   it("continues with a deny-all apps patch when plugin discovery exceeds its shared deadline", async () => {
+    vi.useFakeTimers();
     const deadlinePluginConfig = {
       appServer: { command: "codex", requestTimeoutMs: 400 },
       codexPlugins: {
@@ -782,11 +806,8 @@ describe("startCodexAttemptThread", () => {
       pluginConfig: deadlinePluginConfig,
     });
     await answerInitialize(harness);
-    // Discovery requests (plugin/installed, and plugin/list only when the
-    // missing-plugin catalog fetch wins the race against the shared deadline)
-    // are deliberately left unanswered; the contract under test is that the
-    // thread still starts, carrying the deny-all apps patch.
     await waitForRequest(harness, "plugin/installed");
+    await vi.advanceTimersByTimeAsync(100);
 
     const threadStart = await waitForThreadStart(harness);
     const startMessage = readHarnessMessages(harness.writes).find(
@@ -826,6 +847,7 @@ describe("startCodexAttemptThread", () => {
 
     const error = await runError;
     expect(error).toBeInstanceOf(AgentHarnessPreflightError);
+    expect(error).toMatchObject({ scope: "harness" });
     const cause = (error as Error).cause;
     expect(isCodexAppServerRequestTimeoutError(cause)).toBe(true);
     expect((cause as Error).message).toBe("plugin/list timed out");
