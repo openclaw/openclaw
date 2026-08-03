@@ -28,6 +28,7 @@ import {
 import { createMemorySearchTool, testing as memoryToolsTesting } from "./tools.js";
 import {
   buildMemorySearchUnavailableResult,
+  MEMORY_SEARCH_CANONICAL_SESSION_MIGRATION_CODE,
   MemoryGetSchema,
   MemorySearchSchema,
 } from "./tools.shared.js";
@@ -349,6 +350,65 @@ describe("memory_search unavailable payloads", () => {
 
     expectUnavailableMemorySearchDetails(result, {
       error: "missing node:sqlite",
+      warning: "custom warning",
+      action: "custom action",
+    });
+  });
+
+  it("preserves typed canonical session migration recovery through cooldown", async () => {
+    const error =
+      "refusing a non-canonical session key write; stop the Gateway and run openclaw doctor --fix";
+    const search = vi.fn(async () => {
+      throw Object.assign(new Error(error), {
+        code: MEMORY_SEARCH_CANONICAL_SESSION_MIGRATION_CODE,
+      });
+    });
+    setMemorySearchImpl(search);
+
+    const tool = createMemorySearchToolOrThrow();
+    const result = await tool.execute("canonical-session-migration", { query: "hello" });
+    expectUnavailableMemorySearchDetails(result.details, {
+      error,
+      warning:
+        "Memory search is unavailable because the session catalog requires canonical-key migration.",
+      action:
+        "Stop the Gateway and run openclaw doctor --fix, then restart the Gateway and retry memory_search.",
+    });
+
+    const cooldownResult = await tool.execute("canonical-session-migration-cooldown", {
+      query: "hello again",
+    });
+    expectUnavailableMemorySearchDetails(cooldownResult.details, {
+      error,
+      warning:
+        "Memory search is unavailable because the session catalog requires canonical-key migration.",
+      action:
+        "Stop the Gateway and run openclaw doctor --fix, then restart the Gateway and retry memory_search.",
+    });
+    expect(search).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not infer canonical migration guidance from error text", () => {
+    const error = "embedding provider rejected a request; run openclaw doctor --fix";
+
+    const result = buildMemorySearchUnavailableResult(error);
+
+    expectUnavailableMemorySearchDetails(result, {
+      error,
+      warning: "Memory search is unavailable due to an embedding/provider error.",
+      action: "Check embedding provider configuration and retry memory_search.",
+    });
+  });
+
+  it("keeps explicit guidance overrides for typed canonical migration failures", () => {
+    const result = buildMemorySearchUnavailableResult("canonical migration required", {
+      code: MEMORY_SEARCH_CANONICAL_SESSION_MIGRATION_CODE,
+      warning: "custom warning",
+      action: "custom action",
+    });
+
+    expectUnavailableMemorySearchDetails(result, {
+      error: "canonical migration required",
       warning: "custom warning",
       action: "custom action",
     });
