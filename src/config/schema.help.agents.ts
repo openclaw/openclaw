@@ -216,11 +216,11 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "mcp.servers.*.codex":
     "OpenClaw projection metadata for Codex app-server threads only. It does not affect ACP sessions or generic Codex harness config. Omit this block to keep the server available to every Codex app-server agent with Codex's default MCP approval behavior.",
   "mcp.servers.*.toolFilter":
-    "Per-server MCP tool selection. Use include to expose only selected MCP tool names, or exclude to hide selected MCP tool names. Entries accept exact names and simple '*' globs.",
+    "Per-server MCP tool selection. Use include to expose only selected MCP tool names, or exclude to hide selected MCP tool names. Entries accept exact raw names and exact names printed by mcp probe; simple '*' globs match raw names only.",
   "mcp.servers.*.toolFilter.include":
-    "Exact MCP tool names or simple '*' globs to expose from this server. When omitted, all server tools remain eligible unless excluded.",
+    "Exact raw MCP tool names, exact names printed by mcp probe, or simple raw-name '*' globs to expose from this server. When omitted, all server tools remain eligible unless excluded.",
   "mcp.servers.*.toolFilter.exclude":
-    "Exact MCP tool names or simple '*' globs to hide from this server.",
+    "Exact raw MCP tool names, exact names printed by mcp probe, or simple raw-name '*' globs to hide from this server.",
   "mcp.servers.*.oauth.authProfileId":
     "Refresh-capable auth profile id used to inject the current bearer token into this remote MCP server. When set, OpenClaw resolves and refreshes the profile at runtime and does not project refresh material downstream.",
   "mcp.servers.*.codex.agents":
