@@ -19,6 +19,7 @@ import {
   getArgumentChurnNoProgressStreak,
 } from "./tool-loop-argument-churn.js";
 import { isKnownPollToolCall } from "./tool-loop-call-kind.js";
+import { execFailureIdentityInput } from "./tool-loop-exec-identity.js";
 import { getNoProgressStreak } from "./tool-loop-no-progress.js";
 import { TOOL_LOOP_WARNING_THRESHOLD } from "./tool-loop-thresholds.js";
 import { isWriteNoProgressOutcome } from "./tool-loop-write-outcome.js";
@@ -328,13 +329,9 @@ function hashToolOutcome(
         ? {
             resultHash: execHash,
             outcomeKind: "terminal-exec-failure",
-            // Same status/exit code from the same command is the same failure
-            // even when the diagnostics text drifts between attempts.
-            failureIdentityHash: digestStable({
-              status: details.status,
-              exitCode,
-              timedOut: details.timedOut === true,
-            }),
+            // Same structured outcome and message shape is the same failure
+            // even when its numbers drift; a new cause changes the shape.
+            failureIdentityHash: digestStable(execFailureIdentityInput(details, exitCode, output)),
           }
         : { resultHash: execHash };
     }

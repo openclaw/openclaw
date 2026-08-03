@@ -1127,6 +1127,43 @@ describe("tool-loop-detection", () => {
       });
     });
 
+    it("resets the terminal-failure tail when the same exit code reports a new cause", () => {
+      const state = createState();
+      const job = { command: "python job.py" };
+
+      for (let index = 0; index < CRITICAL_THRESHOLD - 1; index += 1) {
+        recordSuccessfulCall(
+          state,
+          "exec",
+          job,
+          createExecLoopResult({
+            status: "completed",
+            exitCode: 1,
+            output: `Traceback: missing package (attempt ${index})\n\n(Command exited with code 1)`,
+          }),
+          index,
+        );
+      }
+      // Same command and same exit code, but a materially different diagnostic:
+      // that is new information, not drifting text.
+      recordSuccessfulCall(
+        state,
+        "exec",
+        job,
+        createExecLoopResult({
+          status: "completed",
+          exitCode: 1,
+          output: "Traceback: syntax error in job.py\n\n(Command exited with code 1)",
+        }),
+        CRITICAL_THRESHOLD,
+      );
+
+      expect(detectToolCallLoop(state, "exec", job, enabledLoopDetectionConfig)).toMatchObject({
+        level: "warning",
+        detector: "generic_repeat",
+      });
+    });
+
     it("keeps a succeeding exec command out of the terminal-failure streak", () => {
       const state = createState();
       const params = { command: "docker exec alist /opt/alist/alist admin set admin123" };
