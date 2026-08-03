@@ -1090,6 +1090,43 @@ describe("tool-loop-detection", () => {
       });
     });
 
+    it("resets the terminal-failure tail when the same command fails a different way", () => {
+      const state = createState();
+      const probe = { command: "ssh -q host 'curl -s http://127.0.0.1:9233/json/version'" };
+
+      for (let index = 0; index < CRITICAL_THRESHOLD - 1; index += 1) {
+        recordSuccessfulCall(
+          state,
+          "exec",
+          probe,
+          createExecLoopResult({
+            status: "failed",
+            exitCode: 255,
+            output: `ssh: connect to host port 22: Connection timed out (attempt ${index})`,
+          }),
+          index,
+        );
+      }
+      // Same command, but a genuinely different failure cause: the host answered
+      // and the command itself failed. That is new information, not drift.
+      recordSuccessfulCall(
+        state,
+        "exec",
+        probe,
+        createExecLoopResult({
+          status: "failed",
+          exitCode: 7,
+          output: "curl: (7) Failed to connect to 127.0.0.1 port 9233",
+        }),
+        CRITICAL_THRESHOLD,
+      );
+
+      expect(detectToolCallLoop(state, "exec", probe, enabledLoopDetectionConfig)).toMatchObject({
+        level: "warning",
+        detector: "generic_repeat",
+      });
+    });
+
     it("keeps a succeeding exec command out of the terminal-failure streak", () => {
       const state = createState();
       const params = { command: "docker exec alist /opt/alist/alist admin set admin123" };

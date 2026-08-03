@@ -287,7 +287,10 @@ function hashToolOutcome(
   params: unknown,
   result: unknown,
   error: unknown,
-): Pick<ToolCallRecord, "outcomeKind" | "resultHash" | "noProgress" | "unknownToolName"> {
+): Pick<
+  ToolCallRecord,
+  "outcomeKind" | "resultHash" | "noProgress" | "unknownToolName" | "failureIdentityHash"
+> {
   if (error !== undefined) {
     const unknownToolName = extractUnknownToolName(error);
     return {
@@ -322,7 +325,17 @@ function hashToolOutcome(
         output !== "" &&
         output !== `(Command exited with code ${exitCode})`;
       return terminalFailure
-        ? { resultHash: execHash, outcomeKind: "terminal-exec-failure" }
+        ? {
+            resultHash: execHash,
+            outcomeKind: "terminal-exec-failure",
+            // Same status/exit code from the same command is the same failure
+            // even when the diagnostics text drifts between attempts.
+            failureIdentityHash: digestStable({
+              status: details.status,
+              exitCode,
+              timedOut: details.timedOut === true,
+            }),
+          }
         : { resultHash: execHash };
     }
   }
@@ -752,6 +765,7 @@ export function recordToolCallOutcome(
     }
     call.outcomeKind = outcome.outcomeKind;
     call.resultHash = outcome.resultHash;
+    call.failureIdentityHash = outcome.failureIdentityHash;
     if (outcome.noProgress) {
       call.noProgress = true;
     } else {
@@ -771,6 +785,7 @@ export function recordToolCallOutcome(
       ...(runId && { runId }),
       outcomeKind: outcome.outcomeKind,
       resultHash: outcome.resultHash,
+      failureIdentityHash: outcome.failureIdentityHash,
       ...(outcome.noProgress ? { noProgress: true as const } : {}),
       unknownToolName: outcome.unknownToolName,
       timestamp: Date.now(),

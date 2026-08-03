@@ -23,6 +23,7 @@ function countNoProgressStreak(
   let streak = 0;
   let latestResultHash: string | undefined;
   let latestArgsHash: string | undefined;
+  let latestFailureIdentityHash: string | undefined;
   // Vetoes are provisional until an older concrete outcome anchors them; a newer
   // changed outcome must reset vetoes from the previous no-progress streak.
   let pendingLoopVetoes = 0;
@@ -54,19 +55,24 @@ function countNoProgressStreak(
     if (!latestResultHash) {
       latestResultHash = record.resultHash;
       latestArgsHash = record.argsHash;
+      latestFailureIdentityHash = record.failureIdentityHash;
       streak = pendingLoopVetoes + 1;
       pendingLoopVetoes = 0;
       continue;
     }
     if (record.resultHash !== latestResultHash) {
-      // A distinct terminal failure still resets the tail once the agent moves
-      // on to a different command. Re-running the same command and failing
-      // again is not progress even when the error text drifts (timestamps,
-      // connection ids, changing remote state), so an identical-argument
-      // repeat keeps the streak alive instead of collapsing it to 1. Anchor
-      // that comparison on the newest recorded call rather than the prospective
-      // one, so an intervening distinct failure still resets the tail.
-      if (!terminalExecFailuresOnly || record.argsHash !== latestArgsHash) {
+      // A distinct terminal failure still resets the tail. Only one case is
+      // exempt: the same command failing the same structured way (status, exit
+      // code, timeout) while its diagnostics text drifts across attempts, which
+      // is not progress. Both comparisons anchor on the newest recorded call
+      // rather than the prospective one, so an intervening command or a new
+      // failure cause still resets the tail.
+      const repeatsSameFailure =
+        terminalExecFailuresOnly &&
+        record.argsHash === latestArgsHash &&
+        record.failureIdentityHash !== undefined &&
+        record.failureIdentityHash === latestFailureIdentityHash;
+      if (!repeatsSameFailure) {
         break;
       }
     }
