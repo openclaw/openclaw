@@ -7,7 +7,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   captureCurrentPluginMetadataSnapshotState,
   getCurrentPluginMetadataSnapshot,
-  installCommandPluginMetadataSnapshot,
   restoreCurrentPluginMetadataSnapshotState,
   setCurrentPluginMetadataSnapshot,
 } from "./current-plugin-metadata-snapshot.js";
@@ -16,6 +15,7 @@ import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-
 import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import {
+  installCommandPluginMetadataSnapshot,
   type PluginMetadataSnapshot,
   resolvePluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.js";

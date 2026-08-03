@@ -74,8 +74,8 @@ import {
 } from "../../infra/parse-finite-number.js";
 import { getShellEnvAppliedKeys, shouldEnableShellEnvFallback } from "../../infra/shell-env.js";
 import type { ProviderModelRouteCandidate } from "../../plugin-sdk/provider-model-types.js";
-import { installCommandPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
+import { installCommandPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import type { ProviderSyntheticAuthResult } from "../../plugins/provider-external-auth.types.js";
 import { resolveProviderSyntheticAuthWithPlugin } from "../../plugins/provider-runtime.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../../plugins/synthetic-auth.runtime.js";
