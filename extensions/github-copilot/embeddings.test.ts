@@ -150,7 +150,7 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
 
   it("registers the expected adapter metadata", () => {
     expect(githubCopilotMemoryEmbeddingProviderAdapter.id).toBe("github-copilot");
-    expect(githubCopilotMemoryEmbeddingProviderAdapter.defaultModel).toBe("text-embedding-3-small");
+    expect(githubCopilotMemoryEmbeddingProviderAdapter.defaultModel).toBeUndefined();
     expect(githubCopilotMemoryEmbeddingProviderAdapter.transport).toBe("remote");
     expect(githubCopilotMemoryEmbeddingProviderAdapter.autoSelectPriority).toBe(15);
     expect(githubCopilotMemoryEmbeddingProviderAdapter.allowExplicitWhenConfiguredAuto).toBe(true);

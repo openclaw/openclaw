@@ -291,7 +291,6 @@ async function createGitHubCopilotEmbeddingProvider(
 
 export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapter = {
   id: COPILOT_EMBEDDING_PROVIDER_ID,
-  defaultModel: PREFERRED_MODELS[0],
   transport: "remote",
   authProviderId: COPILOT_EMBEDDING_PROVIDER_ID,
   autoSelectPriority: 15,

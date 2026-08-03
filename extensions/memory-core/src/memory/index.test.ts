@@ -101,11 +101,9 @@ vi.mock("./embeddings.js", () => {
   };
   return {
     resolveEmbeddingProviderFallbackModel: (providerId: string, fallbackSourceModel: string) =>
-      providerId === "github-copilot"
-        ? "text-embedding-3-small"
-        : providerId === "gemini" || providerId === "fallback-provider"
-          ? `${providerId}-embed`
-          : fallbackSourceModel,
+      providerId === "gemini" || providerId === "fallback-provider"
+        ? `${providerId}-embed`
+        : fallbackSourceModel,
     resolveEmbeddingProviderAdapterId: (
       providerId: string,
       config?: {
@@ -172,8 +170,7 @@ vi.mock("./embeddings.js", () => {
         options.provider === "batch-test" ||
         options.provider === "batch-wide-test" ||
         options.provider === identityAliasFixture.provider ||
-        options.provider === "ollama" ||
-        options.provider === "github-copilot"
+        options.provider === "ollama"
           ? options.provider
           : "mock";
       const requestedModel = options.model ?? "mock-embed";
@@ -1424,31 +1421,6 @@ describe("memory index", () => {
       });
     } finally {
       await nextManager.close?.();
-    }
-  });
-
-  it("keeps plain status aligned with the Copilot default model before provider initialization", async () => {
-    const indexedCfg = createCfg({
-      provider: "github-copilot",
-      model: "text-embedding-3-small",
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
-    });
-    const indexedManager = await getFreshManager(indexedCfg);
-    await indexedManager.sync({ reason: "test", force: true });
-    await indexedManager.close?.();
-
-    const statusManager = await getFreshManager(
-      createCfg({
-        provider: "github-copilot",
-        model: "",
-        hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
-      }),
-      "status",
-    );
-    try {
-      expect(statusManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
-    } finally {
-      await statusManager.close?.();
     }
   });
 
