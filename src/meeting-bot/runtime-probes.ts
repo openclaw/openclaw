@@ -1,4 +1,5 @@
 import { sleep } from "../utils/sleep.js";
+import type { MeetingBrowserHealthRefreshOutcome } from "./session-runtime.js";
 import type { MeetingPluginJoinRequest, MeetingPluginProbeHealth } from "./session-types.js";
 
 export function resolveMeetingProbeTimeoutMs(
@@ -32,10 +33,7 @@ type MeetingProbeConfig<Mode extends string> = {
   chromeNode: { node?: string };
 };
 
-export type MeetingProbeRefreshOutcome = {
-  browserHealthChecked: boolean;
-  manualActionIsAuthoritative: boolean;
-};
+export type MeetingProbeRefreshOutcome = MeetingBrowserHealthRefreshOutcome;
 
 type MeetingProbeRefreshResult = MeetingProbeRefreshOutcome | boolean | void;
 
@@ -50,9 +48,12 @@ export type MeetingProbeContext<
   config: Config;
   resolveAgentId(request: Request): string;
   list(): Session[];
-  join(
-    request: Request,
-  ): Promise<{ browserHealthChecked?: boolean; session: Session; spoken?: boolean }>;
+  join(request: Request): Promise<{
+    browserHealthChecked?: boolean;
+    manualActionIsAuthoritative?: boolean;
+    session: Session;
+    spoken?: boolean;
+  }>;
   isReusable(
     session: Session,
     resolved: { url: string; transport: Transport; mode: Mode; agentId: string },
@@ -218,7 +219,8 @@ export function createMeetingRuntimeProbes<
       (health?.manualAction === undefined ||
         // Omitted metadata is a legacy/unknown result; only an explicit false opts into recovery.
         (reusedSession && result.browserHealthChecked === false));
-    let manualActionIsAuthoritative = !shouldWait || result.browserHealthChecked !== false;
+    let manualActionIsAuthoritative =
+      !shouldWait || (result.manualActionIsAuthoritative ?? result.browserHealthChecked !== false);
     let listenVerified = advanced();
     if (shouldWait && !listenVerified) {
       const deadline =

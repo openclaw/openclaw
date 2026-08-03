@@ -4,7 +4,11 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TranscriptsStore } from "../transcripts/store.js";
 import { createMeetingSession } from "./session-factory.js";
-import { MeetingSessionRuntime, type MeetingSessionRuntimeJoinContext } from "./session-runtime.js";
+import {
+  type MeetingBrowserHealthRefreshOutcome,
+  MeetingSessionRuntime,
+  type MeetingSessionRuntimeJoinContext,
+} from "./session-runtime.js";
 import type {
   MeetingBrowserHealth,
   MeetingBrowserTab,
@@ -113,7 +117,9 @@ function createTestRuntime(params: {
     request: TestRequest,
     resolved: { agentId: string; mode: TestMode; transport: TestTransport; url: string },
   ): Promise<{ keepBrowserTab: boolean } | void>;
-  refreshBrowserHealth?(session: TestSession): Promise<boolean | void>;
+  refreshBrowserHealth?(
+    session: TestSession,
+  ): Promise<MeetingBrowserHealthRefreshOutcome | boolean | void>;
   joinTransport(input: {
     request: TestRequest;
     session: TestSession;
@@ -230,29 +236,49 @@ describe("MeetingSessionRuntime probe join health", () => {
       launched: true,
       refreshResult: true,
       reusedBrowserHealthChecked: true,
+      reusedManualActionIsAuthoritative: true,
       refreshCalls: 1,
     },
     {
       launched: true,
       refreshResult: false,
       reusedBrowserHealthChecked: false,
+      reusedManualActionIsAuthoritative: false,
       refreshCalls: 1,
     },
     {
       launched: true,
       refreshResult: undefined,
       reusedBrowserHealthChecked: false,
+      reusedManualActionIsAuthoritative: false,
+      refreshCalls: 1,
+    },
+    {
+      launched: true,
+      refreshResult: {
+        browserHealthChecked: false,
+        manualActionIsAuthoritative: true,
+      },
+      reusedBrowserHealthChecked: false,
+      reusedManualActionIsAuthoritative: true,
       refreshCalls: 1,
     },
     {
       launched: false,
       refreshResult: true,
       reusedBrowserHealthChecked: false,
+      reusedManualActionIsAuthoritative: false,
       refreshCalls: 0,
     },
   ])(
-    "reports browserHealthChecked=$reusedBrowserHealthChecked when launched=$launched and refresh returns $refreshResult",
-    async ({ launched, refreshResult, reusedBrowserHealthChecked, refreshCalls }) => {
+    "reports the closed refresh outcome when launched=$launched and refresh returns $refreshResult",
+    async ({
+      launched,
+      refreshResult,
+      reusedBrowserHealthChecked,
+      reusedManualActionIsAuthoritative,
+      refreshCalls,
+    }) => {
       const refreshBrowserHealth = vi.fn(async () => refreshResult);
       const { runtime } = createTestRuntime({
         refreshBrowserHealth,
@@ -276,7 +302,9 @@ describe("MeetingSessionRuntime probe join health", () => {
       });
 
       expect(first.browserHealthChecked).toBe(true);
+      expect(first.manualActionIsAuthoritative).toBe(true);
       expect(reused.browserHealthChecked).toBe(reusedBrowserHealthChecked);
+      expect(reused.manualActionIsAuthoritative).toBe(reusedManualActionIsAuthoritative);
       expect(refreshBrowserHealth).toHaveBeenCalledTimes(refreshCalls);
     },
   );

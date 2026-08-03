@@ -30,6 +30,7 @@ function runtimeHarness(options?: RuntimeHarnessOptions) {
     meetingEndedOnce: false,
     sessionConflict: false,
     tabListFailures: 0,
+    tabListOutcomes: [] as Array<"success" | "failure" | "pending">,
     targetId: "zoom-tab",
     tabUrl: URL,
   };
@@ -38,6 +39,13 @@ function runtimeHarness(options?: RuntimeHarnessOptions) {
   const browserResult = (value: Record<string, unknown>) => ({ result: JSON.stringify(value) });
   const gatewayRequest = vi.fn(async (_method: string, params: Record<string, unknown>) => {
     if (params.path === "/tabs") {
+      const outcome = state.tabListOutcomes.shift();
+      if (outcome === "failure") {
+        throw new Error("browser node unavailable");
+      }
+      if (outcome === "pending") {
+        await new Promise<void>((resolve) => setTimeout(resolve, 50));
+      }
       if (state.tabListFailures > 0) {
         state.tabListFailures -= 1;
         throw new Error("browser node unavailable");
@@ -310,6 +318,24 @@ describe("Zoom meeting session flow", () => {
         message: "Zoom browser readiness refresh failed: browser node unavailable",
       },
     });
+  });
+
+  it("preserves a launched-tab lifecycle failure when the probe refresh reaches its deadline", async () => {
+    const { harness, runtime } = runtimeFixture();
+    await joinMeeting(runtime);
+    harness.state.tabListOutcomes.push("success", "failure", "pending");
+
+    const result = await runtime.testListen({ url: URL, mode: "transcribe", timeoutMs: 20 });
+
+    expect(result).toMatchObject({
+      listenTimedOut: false,
+      listenVerified: false,
+      manualAction: {
+        reason: "browser-control-unavailable",
+        message: "Zoom browser readiness refresh failed: browser node unavailable",
+      },
+    });
+    expect(harness.state.tabListOutcomes).toEqual([]);
   });
 
   it("refreshes a recovered browser tab target", async () => {

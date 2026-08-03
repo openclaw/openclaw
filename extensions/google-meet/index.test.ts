@@ -5397,6 +5397,7 @@ describe("google-meet plugin", () => {
     vi.spyOn(runtime, "list").mockReturnValue([oldSession]);
     vi.spyOn(MeetingSessionRuntime.prototype, "joinForProbe").mockResolvedValue({
       browserHealthChecked: true,
+      manualActionIsAuthoritative: true,
       session: newSession,
       spoken: false,
     });
@@ -5423,7 +5424,12 @@ describe("google-meet plugin", () => {
     vi.spyOn(runtime, "list").mockReturnValue([session]);
     vi.spyOn(MeetingSessionRuntime.prototype, "joinForProbe").mockImplementation(async () => {
       session.chrome!.health = { transcriptLines: 2, lastCaptionText: "fresh caption" };
-      return { browserHealthChecked: true, session, spoken: false };
+      return {
+        browserHealthChecked: true,
+        manualActionIsAuthoritative: true,
+        session,
+        spoken: false,
+      };
     });
 
     const result = await runtime.testListen({
@@ -5453,7 +5459,12 @@ describe("google-meet plugin", () => {
     const publicJoin = vi.spyOn(runtime, "join").mockResolvedValue({ session, spoken: false });
     const joinForProbe = vi
       .spyOn(MeetingSessionRuntime.prototype, "joinForProbe")
-      .mockResolvedValue({ browserHealthChecked: false, session, spoken: false });
+      .mockResolvedValue({
+        browserHealthChecked: false,
+        manualActionIsAuthoritative: false,
+        session,
+        spoken: false,
+      });
 
     await runtime.testListen({ url: MEET_URL, mode: "transcribe", timeoutMs: 1 });
 

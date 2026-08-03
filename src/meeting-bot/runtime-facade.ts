@@ -19,10 +19,11 @@ import type {
   MeetingRuntimeSession,
   MeetingRuntimeSpeechBlockedReason,
 } from "./runtime-facade-types.js";
-import type { MeetingProbeContext, MeetingProbeRefreshOutcome } from "./runtime-probes.js";
+import type { MeetingProbeContext } from "./runtime-probes.js";
 import { createMeetingSession } from "./session-factory.js";
 import {
   MeetingSessionRuntime,
+  type MeetingBrowserHealthRefreshOutcome,
   type MeetingSessionRuntimeHandles,
   type MeetingSessionRuntimeJoinContext,
 } from "./session-runtime.js";
@@ -119,7 +120,7 @@ export function createMeetingRuntimeFacade<
           await this.#joinTransport(request, session, context),
         releaseBrowserTab: async (session) => await this.#releaseBrowserTab(session),
         refreshBrowserHealth: async (session, refreshOptions) =>
-          (await this.#refreshBrowserHealth(session, refreshOptions)).browserHealthChecked,
+          await this.#refreshBrowserHealth(session, refreshOptions),
         refreshStatus: async (session) => await this.#refreshStatus(session),
         refreshReusableSession: async (session, request) =>
           await options.hooks?.refreshReusableSession?.(session, request, this.#hookContext()),
@@ -397,7 +398,7 @@ export function createMeetingRuntimeFacade<
     async #refreshBrowserHealth(
       session: Session,
       refreshOptions: { readOnly?: boolean; timeoutMs?: number } = {},
-    ): Promise<MeetingProbeRefreshOutcome> {
+    ): Promise<MeetingBrowserHealthRefreshOutcome> {
       try {
         const result = await options.transport.recoverCurrentTab({
           runtime: this.params.runtime,

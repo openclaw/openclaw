@@ -1,4 +1,7 @@
-import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
+import {
+  type MeetingBrowserHealthRefreshOutcome,
+  MeetingPlatformAdapter,
+} from "openclaw/plugin-sdk/meeting-runtime";
 import type { GoogleMeetConfig, GoogleMeetMode, GoogleMeetTransport } from "./config.js";
 import { normalizeMeetUrl } from "./meet-url.js";
 import type {
@@ -24,7 +27,9 @@ export type GoogleMeetRuntimeProbeContext = {
   ): boolean;
   hasHealthHandle(sessionId: string): boolean;
   refreshHealth(sessionId: string): void;
-  refreshCaptionHealth(session: GoogleMeetSession): Promise<boolean | void>;
+  refreshCaptionHealth(
+    session: GoogleMeetSession,
+  ): Promise<MeetingBrowserHealthRefreshOutcome | boolean | void>;
 };
 
 function resolveProbeTimeoutMs(input: number | undefined, fallback: number): number {
