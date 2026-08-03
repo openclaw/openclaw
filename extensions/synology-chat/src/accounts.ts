@@ -136,6 +136,8 @@ export function resolveAccount(
     nasHost: merged.nasHost ?? envNasHost,
     webhookPath: merged.webhookPath ?? "/webhook/synology",
     webhookPathSource,
+    // This controls a network sink outside OpenClaw's process; only a literal boolean opt-in may enable it.
+    dangerouslyAllowNasUrlFetches: merged.dangerouslyAllowNasUrlFetches === true,
     dangerouslyAllowNameMatching: resolveDangerousNameMatchingEnabled({
       providerConfig: channelCfg,
       accountConfig: accountOverrides,

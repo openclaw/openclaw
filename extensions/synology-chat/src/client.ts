@@ -19,6 +19,11 @@ import { z } from "zod";
 
 const MIN_SEND_INTERVAL_MS = 500;
 export const SYNOLOGY_CHAT_TEXT_CHUNK_LIMIT = 2_000;
+export const SYNOLOGY_CHAT_REMOTE_MEDIA_NOTICE =
+  "Remote media omitted: Synology Chat cannot safely fetch remote URLs.";
+const SYNOLOGY_CHAT_REMOTE_URL_NOTICE = "[remote URL omitted]";
+const SYNOLOGY_FORMATTED_LINK_RE = /<https?:\/\/[^<>|]+(?:\|[^<>]*)?>/giu;
+const RAW_HTTP_URL_RE = /https?:\/\/[^\s<>"'|]+/giu;
 /** user_list JSON can be larger than inbound webhook pre-auth payloads. */
 const USER_LIST_RESPONSE_MAX_BYTES = 1 * 1024 * 1024;
 /** Wall-clock budget for user_list fetch including response body. */
@@ -100,14 +105,22 @@ export async function sendMessage(
   text: string,
   userId?: string | number,
   allowInsecureSsl = false,
+  dangerouslyAllowNasUrlFetches = false,
 ): Promise<boolean> {
-  const chunks = chunkTextForOutbound(text, SYNOLOGY_CHAT_TEXT_CHUNK_LIMIT);
-  for (const chunk of chunks.length > 0 ? chunks : [text]) {
+  const safeText = dangerouslyAllowNasUrlFetches ? text : redactPreviewCapableUrls(text);
+  const chunks = chunkTextForOutbound(safeText, SYNOLOGY_CHAT_TEXT_CHUNK_LIMIT);
+  for (const chunk of chunks.length > 0 ? chunks : [safeText]) {
     if (!(await sendMessageChunk(incomingUrl, chunk, userId, allowInsecureSsl))) {
       return false;
     }
   }
   return true;
+}
+
+function redactPreviewCapableUrls(text: string): string {
+  return text
+    .replace(SYNOLOGY_FORMATTED_LINK_RE, SYNOLOGY_CHAT_REMOTE_URL_NOTICE)
+    .replace(RAW_HTTP_URL_RE, SYNOLOGY_CHAT_REMOTE_URL_NOTICE);
 }
 
 async function sendMessageChunk(
@@ -144,17 +157,27 @@ async function sendMessageChunk(
 }
 
 /**
- * Send a file URL to Synology Chat.
+ * Send a safe omission notice by default, or opt into NAS-side URL fetching.
+ *
+ * Synology's file_url field makes the NAS resolve and download the URL after
+ * OpenClaw returns, so OpenClaw cannot keep that request on a validated DNS
+ * destination. Raw text URLs are also unsafe because URL previews can fetch
+ * them automatically.
  */
-export async function sendFileUrl(
+export async function sendFileReference(
   incomingUrl: string,
   fileUrl: string,
   userId?: string | number,
   allowInsecureSsl = false,
+  dangerouslyAllowNasUrlFetches = false,
 ): Promise<boolean> {
   try {
-    const safeFileUrl = await assertSafeWebhookFileUrl(fileUrl);
-    const body = buildWebhookBody({ file_url: safeFileUrl }, userId);
+    const body = buildWebhookBody(
+      dangerouslyAllowNasUrlFetches
+        ? { file_url: await assertSafeWebhookFileUrl(fileUrl) }
+        : { text: SYNOLOGY_CHAT_REMOTE_MEDIA_NOTICE },
+      userId,
+    );
 
     await waitForSendSlot();
     const ok = await doPost(incomingUrl, body, allowInsecureSsl);
@@ -285,7 +308,7 @@ async function waitForSendSlot(): Promise<void> {
   await next;
 }
 
-async function assertSafeWebhookFileUrl(fileUrl: string): Promise<string> {
+function normalizeWebhookFileLink(fileUrl: string): string {
   let parsed: URL;
   try {
     parsed = new URL(fileUrl);
@@ -297,6 +320,11 @@ async function assertSafeWebhookFileUrl(fileUrl: string): Promise<string> {
     throw new Error("Synology Chat file URL must use HTTP or HTTPS");
   }
 
+  return parsed.toString();
+}
+
+async function assertSafeWebhookFileUrl(fileUrl: string): Promise<string> {
+  const parsed = new URL(normalizeWebhookFileLink(fileUrl));
   await resolvePinnedHostnameWithPolicy(parsed.hostname);
   return parsed.toString();
 }

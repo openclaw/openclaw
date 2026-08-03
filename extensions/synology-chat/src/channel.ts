@@ -46,7 +46,12 @@ import {
 } from "openclaw/plugin-sdk/text-chunking";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { synologyChatApprovalAuth } from "./approval-auth.js";
-import { SYNOLOGY_CHAT_TEXT_CHUNK_LIMIT, sendFileUrl, sendMessage } from "./client.js";
+import {
+  SYNOLOGY_CHAT_REMOTE_MEDIA_NOTICE,
+  SYNOLOGY_CHAT_TEXT_CHUNK_LIMIT,
+  sendFileReference,
+  sendMessage,
+} from "./client.js";
 import { SynologyChatChannelConfigSchema } from "./config-schema.js";
 import {
   collectSynologyGatewayRoutingWarnings,
@@ -107,6 +112,7 @@ const synologyChatConfigAdapter = createHybridChannelConfigAdapter<ResolvedSynol
     "incomingUrl",
     "nasHost",
     "webhookPath",
+    "dangerouslyAllowNasUrlFetches",
     "dangerouslyAllowNameMatching",
     "dangerouslyAllowInheritedWebhookPath",
     "dmPolicy",
@@ -130,6 +136,9 @@ const collectSynologyChatSecurityWarnings =
     (account) =>
       account.allowInsecureSsl &&
       "- Synology Chat: SSL verification is disabled (allowInsecureSsl=true). Only use this for local NAS with self-signed certificates.",
+    (account) =>
+      account.dangerouslyAllowNasUrlFetches &&
+      "- Synology Chat: dangerouslyAllowNasUrlFetches=true exposes raw links and lets the NAS fetch URLs for previews and attachments outside OpenClaw's network controls.",
     (account) =>
       account.dangerouslyAllowNameMatching &&
       "- Synology Chat: dangerouslyAllowNameMatching=true re-enables mutable username/nickname recipient matching for replies. Prefer stable numeric user IDs.",
@@ -209,7 +218,7 @@ type SynologyChatPlugin = Omit<
     stopAccount: (ctx: SynologyChannelGatewayContext) => Promise<void>;
   };
   agentPrompt: {
-    messageToolHints: () => string[];
+    messageToolHints: (ctx: { cfg: OpenClawConfig; accountId?: string | null }) => string[];
   };
 };
 
@@ -277,7 +286,13 @@ async function sendSynologyChatText(
     }
     return `<${url.replace(/\\([()])/g, "$1")}|${label.replace(/\\([[\]])/g, "$1")}>`;
   });
-  const ok = await sendMessage(incomingUrl, text, ctx.to, account.allowInsecureSsl);
+  const ok = await sendMessage(
+    incomingUrl,
+    text,
+    ctx.to,
+    account.allowInsecureSsl,
+    account.dangerouslyAllowNasUrlFetches,
+  );
   if (!ok) {
     throw new Error("Failed to send message to Synology Chat");
   }
@@ -292,7 +307,13 @@ async function sendSynologyChatMedia(
 ): Promise<SynologyChatOutboundResult> {
   const account = resolveOutboundAccount(ctx.cfg ?? {}, ctx.accountId);
   const incomingUrl = requireIncomingUrl(account);
-  const ok = await sendFileUrl(incomingUrl, ctx.mediaUrl, ctx.to, account.allowInsecureSsl);
+  const ok = await sendFileReference(
+    incomingUrl,
+    ctx.mediaUrl,
+    ctx.to,
+    account.allowInsecureSsl,
+    account.dangerouslyAllowNasUrlFetches,
+  );
   if (!ok) {
     throw new Error("Failed to send media to Synology Chat");
   }
@@ -448,29 +469,40 @@ function createSynologyChatPlugin(): SynologyChatPlugin {
         },
       },
       agentPrompt: {
-        messageToolHints: () => [
-          "",
-          "### Synology Chat Formatting",
-          "Synology Chat supports limited formatting. Use these patterns:",
-          "",
-          "**Links**: Use `<URL|display text>` to create clickable links.",
-          "  Example: `<https://example.com|Click here>` renders as a clickable link.",
-          "",
-          "**File sharing**: Include a publicly accessible URL to share files or images.",
-          "  The NAS will download and attach the file (max 32 MB).",
-          "",
-          "**Limitations**:",
-          "- No markdown, bold, italic, or code blocks",
-          "- No buttons, cards, or interactive elements",
-          "- No message editing after send",
-          "- Keep messages under 2000 characters for best readability",
-          "",
-          "**Best practices**:",
-          "- Use short, clear responses (Synology Chat has a minimal UI)",
-          "- Use line breaks to separate sections",
-          "- Use numbered or bulleted lists for clarity",
-          "- Wrap URLs with `<URL|label>` for user-friendly links",
-        ],
+        messageToolHints: ({ cfg, accountId }) => {
+          const account = resolveAccount(cfg, accountId);
+          return [
+            "",
+            "### Synology Chat Formatting",
+            "Synology Chat supports limited formatting. Use these patterns:",
+            "",
+            account.dangerouslyAllowNasUrlFetches
+              ? "**Links**: Use `<URL|display text>` to create clickable links."
+              : "**Links**: OpenClaw omits raw HTTP(S) URLs to prevent NAS preview fetches.",
+            account.dangerouslyAllowNasUrlFetches
+              ? "  Example: `<https://example.com|Click here>` renders as a clickable link."
+              : "  Send the relevant information without a remote URL.",
+            "",
+            "**File sharing**: Remote media delivery is available only when NAS URL fetching is explicitly enabled.",
+            account.dangerouslyAllowNasUrlFetches
+              ? "  The NAS is configured to download the URL automatically. Only send URLs the operator trusts the NAS to fetch."
+              : `  OpenClaw omits remote media URLs and sends this notice instead: ${SYNOLOGY_CHAT_REMOTE_MEDIA_NOTICE}`,
+            "",
+            "**Limitations**:",
+            "- No markdown, bold, italic, or code blocks",
+            "- No buttons, cards, or interactive elements",
+            "- No message editing after send",
+            "- Keep messages under 2000 characters for best readability",
+            "",
+            "**Best practices**:",
+            "- Use short, clear responses (Synology Chat has a minimal UI)",
+            "- Use line breaks to separate sections",
+            "- Use numbered or bulleted lists for clarity",
+            ...(account.dangerouslyAllowNasUrlFetches
+              ? ["- Wrap URLs with `<URL|label>` for user-friendly links"]
+              : []),
+          ];
+        },
       },
       message: synologyChatMessageAdapter,
     },
@@ -484,7 +516,13 @@ function createSynologyChatPlugin(): SynologyChatPlugin {
           if (!account.incomingUrl) {
             return;
           }
-          await sendMessage(account.incomingUrl, message, id, account.allowInsecureSsl);
+          await sendMessage(
+            account.incomingUrl,
+            message,
+            id,
+            account.allowInsecureSsl,
+            account.dangerouslyAllowNasUrlFetches,
+          );
         },
       },
     },

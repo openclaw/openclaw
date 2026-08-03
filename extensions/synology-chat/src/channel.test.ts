@@ -12,6 +12,7 @@ const securityAccountDefaults: ResolvedSynologyChatAccount = {
   nasHost: "h",
   webhookPath: "/w",
   webhookPathSource: "default" as const,
+  dangerouslyAllowNasUrlFetches: false,
   dangerouslyAllowNameMatching: false,
   dangerouslyAllowInheritedWebhookPath: false,
   dmPolicy: "allowlist" as const,
@@ -41,7 +42,7 @@ function mockStringMessages(mock: { mock: { calls: unknown[][] } }): string[] {
 const clientModule = await import("./client.js");
 const gatewayRuntimeModule = await import("./gateway-runtime.js");
 const mockSendMessage = vi.spyOn(clientModule, "sendMessage").mockResolvedValue(true);
-const mockSendFileUrl = vi.spyOn(clientModule, "sendFileUrl").mockResolvedValue(true);
+const mockSendFileReference = vi.spyOn(clientModule, "sendFileReference").mockResolvedValue(true);
 const registerSynologyWebhookRouteMock = vi
   .spyOn(gatewayRuntimeModule, "registerSynologyWebhookRoute")
   .mockImplementation(async () => vi.fn(async () => undefined));
@@ -58,10 +59,10 @@ describe("createSynologyChatPlugin", () => {
     vi.stubEnv("SYNOLOGY_CHAT_TOKEN", "");
     vi.stubEnv("SYNOLOGY_CHAT_INCOMING_URL", "");
     mockSendMessage.mockClear();
-    mockSendFileUrl.mockClear();
+    mockSendFileReference.mockClear();
     registerSynologyWebhookRouteMock.mockClear();
     mockSendMessage.mockResolvedValue(true);
-    mockSendFileUrl.mockResolvedValue(true);
+    mockSendFileReference.mockResolvedValue(true);
     registerSynologyWebhookRouteMock.mockImplementation(async () => vi.fn(async () => undefined));
   });
 
@@ -273,6 +274,7 @@ describe("createSynologyChatPlugin", () => {
         nasHost: "h",
         webhookPath: "/w",
         webhookPathSource: "default" as const,
+        dangerouslyAllowNasUrlFetches: false,
         dangerouslyAllowNameMatching: false,
         dangerouslyAllowInheritedWebhookPath: false,
         dmPolicy: "allowlist" as const,
@@ -320,6 +322,7 @@ describe("createSynologyChatPlugin", () => {
         "OpenClaw: your access has been approved.",
         "USER1",
         true,
+        false,
       );
     });
   });
@@ -357,6 +360,13 @@ describe("createSynologyChatPlugin", () => {
       const account = makeSecurityAccount({ allowInsecureSsl: true });
       const warnings = plugin.security.collectWarnings({ cfg: {}, account });
       expectIncludesSubstring(warnings, "SSL");
+    });
+
+    it("warns when automatic NAS file fetching is enabled", () => {
+      const plugin = synologyChatPlugin;
+      const account = makeSecurityAccount({ dangerouslyAllowNasUrlFetches: true });
+      const warnings = plugin.security.collectWarnings({ cfg: {}, account });
+      expectIncludesSubstring(warnings, "dangerouslyAllowNasUrlFetches=true");
     });
 
     it("warns when dangerous name matching is enabled", () => {
@@ -468,10 +478,36 @@ describe("createSynologyChatPlugin", () => {
   describe("agentPrompt", () => {
     it("returns formatting hints", () => {
       const plugin = synologyChatPlugin;
-      const hints = plugin.agentPrompt.messageToolHints();
+      const hints = plugin.agentPrompt.messageToolHints({ cfg: {}, accountId: null });
       expect(hints).toContain("### Synology Chat Formatting");
-      expect(hints).toContain("**Links**: Use `<URL|display text>` to create clickable links.");
+      expect(hints).toContain(
+        "**Links**: OpenClaw omits raw HTTP(S) URLs to prevent NAS preview fetches.",
+      );
       expect(hints).toContain("- No buttons, cards, or interactive elements");
+      expect(hints).toContain(
+        "  OpenClaw omits remote media URLs and sends this notice instead: Remote media omitted: Synology Chat cannot safely fetch remote URLs.",
+      );
+      expect(hints).not.toContain("- Wrap URLs with `<URL|label>` for user-friendly links");
+    });
+
+    it("warns the model when automatic NAS file fetching is enabled", () => {
+      const hints = synologyChatPlugin.agentPrompt.messageToolHints({
+        cfg: {
+          channels: {
+            "synology-chat": { dangerouslyAllowNasUrlFetches: true },
+          },
+        },
+        accountId: null,
+      });
+      expect(hints).toContain(
+        "  The NAS is configured to download the URL automatically. Only send URLs the operator trusts the NAS to fetch.",
+      );
+      expect(hints).toContain("**Links**: Use `<URL|display text>` to create clickable links.");
+      expect(hints).toContain(
+        "**File sharing**: Remote media delivery is available only when NAS URL fetching is explicitly enabled.",
+      );
+      expect(hints.join("\n")).not.toContain("Remote media is safe");
+      expect(hints).toContain("- Wrap URLs with `<URL|label>` for user-friendly links");
     });
   });
 
@@ -579,6 +615,32 @@ describe("createSynologyChatPlugin", () => {
         `**Read** <https://example.com/a_(b)|the docs> <https://example.com|titled> \`[literal](https://example.com)\` \\[escaped](https://example.com) [x > y](https://example.com) [bad](<https://example.com) [bad title](https://example.com "oops') ![logo](https://example.com/logo.png) ${malformedLink}`,
         "user1",
         true,
+        false,
+      );
+    });
+
+    it("passes the NAS URL-fetch opt-in to text delivery", async () => {
+      await synologyChatPlugin.outbound.sendText({
+        cfg: {
+          channels: {
+            "synology-chat": {
+              enabled: true,
+              token: "t",
+              incomingUrl: "https://nas/incoming",
+              dangerouslyAllowNasUrlFetches: true,
+            },
+          },
+        },
+        text: "https://example.com/trusted",
+        to: "user1",
+      });
+
+      expect(mockSendMessage).toHaveBeenLastCalledWith(
+        "https://nas/incoming",
+        "https://example.com/trusted",
+        "user1",
+        false,
+        true,
       );
     });
 
@@ -606,11 +668,12 @@ describe("createSynologyChatPlugin", () => {
       expect(result.receipt.platformMessageIds).toHaveLength(0);
       expect(result.receipt.parts).toHaveLength(0);
       expect(result.receipt.threadId).toBe("user1");
-      expect(mockSendFileUrl).toHaveBeenLastCalledWith(
+      expect(mockSendFileReference).toHaveBeenLastCalledWith(
         "https://nas/incoming",
         "https://example.com/img.png",
         "user1",
         true,
+        false,
       );
     });
 
