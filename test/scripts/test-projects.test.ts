@@ -487,6 +487,9 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/release-scenarios-assertions.test.ts",
         "test/scripts/release-user-journey-assertions.test.ts",
       ],
+      "scripts/e2e/lib/release-plugin-marketplace/lifecycle-assertions.mjs": [
+        "test/scripts/release-plugin-marketplace-lifecycle.test.ts",
+      ],
       "scripts/e2e/lib/openai-chat-tools/write-config.mjs": [
         "test/e2e/qa-lab/runtime/openai-compatible-chat-tools.e2e.test.ts",
       ],
@@ -762,6 +765,10 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/docker-build-helper.test.ts",
         "test/scripts/docker-e2e-plan.test.ts",
         "test/scripts/package-acceptance-workflow.test.ts",
+      ],
+      "scripts/e2e/cli-installer-distribution-docker.sh": [
+        "test/scripts/docker-build-helper.test.ts",
+        "test/scripts/docker-e2e-plan.test.ts",
       ],
       "scripts/e2e/update-channel-switch-docker.sh": [
         "test/scripts/docker-build-helper.test.ts",
@@ -1904,7 +1911,10 @@ describe("scripts/test-projects changed-target routing", () => {
       ],
       "scripts/plugin-clawhub-release-check.ts": ["test/scripts/release-wrapper-scripts.test.ts"],
       "scripts/plugin-clawhub-release-plan.ts": ["test/scripts/release-wrapper-scripts.test.ts"],
-      "scripts/plugin-npm-release-check.ts": ["test/scripts/release-wrapper-scripts.test.ts"],
+      "scripts/plugin-npm-release-check.ts": [
+        "test/e2e/qa-lab/plugins/clawhub-release-policy-contracts.e2e.test.ts",
+        "test/scripts/release-wrapper-scripts.test.ts",
+      ],
       "scripts/plugin-npm-release-plan.ts": ["test/scripts/release-wrapper-scripts.test.ts"],
       "scripts/plugin-release-pretag-pack-check.ts": [
         "test/scripts/plugin-release-pretag-pack-check.test.ts",
