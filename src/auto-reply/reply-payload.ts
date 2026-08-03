@@ -280,6 +280,8 @@ export type ReplyPayloadMetadata = {
     mediaUrls?: string[];
     idempotencyKey?: string;
   };
+  /** The agent run failed even when this host-authored payload is visibly deliverable. */
+  agentRunFailure?: true;
   beforeAgentRunBlocked?: boolean;
   /** Warning synthesized from an observed tool error after the run produced assistant output. */
   nonTerminalToolErrorWarning?: boolean;

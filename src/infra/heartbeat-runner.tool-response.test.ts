@@ -13,6 +13,7 @@ import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
 } from "../auto-reply/reply/agent-runner-failure-copy.js";
+import { buildTerminalAgentRunFailureReplyPayload } from "../auto-reply/reply/agent-runner-failure-reply.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { patchSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -822,7 +823,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
 
       const result = await runHeartbeat(cfg, replySpy, sendTelegram);
 
-      expect(result.status).toBe("ran");
+      expect(result).toEqual({ status: "failed", reason: "agent-runner-failure" });
       expectTelegramSend(sendTelegram, {
         text: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
         cfg,
@@ -836,6 +837,66 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       });
     });
   });
+
+  it.each([
+    {
+      label: "exact",
+      pendingText: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
+      shouldClear: true,
+    },
+    {
+      label: "composite",
+      pendingText: `Original exec completion\n\n${HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT}`,
+      shouldClear: false,
+    },
+  ])(
+    "finalizes producer-marked runner failures without clearing $label pending-final state incorrectly",
+    async ({ pendingText, shouldClear }) => {
+      await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+        const cfg = createConfig({ tmpDir, storePath });
+        const sessionKey = await seedTelegramSession(storePath, cfg);
+        replySpy.mockImplementation(async () => {
+          await patchSessionEntry(
+            { storePath, sessionKey },
+            () => ({
+              pendingFinalDelivery: {
+                kind: "replayable",
+                text: pendingText,
+                createdAt: Date.now(),
+              },
+            }),
+            { preserveActivity: true },
+          );
+          return buildTerminalAgentRunFailureReplyPayload({
+            isHeartbeat: true,
+            sessionCtx: {},
+          });
+        });
+        const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+        await expect(runHeartbeat(cfg, replySpy, sendTelegram)).resolves.toEqual({
+          status: "failed",
+          reason: "agent-runner-failure",
+        });
+
+        const sessionStore = readSessionStoreForTest<{
+          pendingFinalDelivery?: SessionEntry["pendingFinalDelivery"];
+        }>(storePath);
+        expectTelegramSend(sendTelegram, {
+          text: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
+          cfg,
+        });
+        if (shouldClear) {
+          expect(sessionStore[sessionKey]?.pendingFinalDelivery).toBeUndefined();
+        } else {
+          expect(sessionStore[sessionKey]?.pendingFinalDelivery).toMatchObject({
+            kind: "replayable",
+            text: pendingText,
+          });
+        }
+      });
+    },
+  );
 
   it("suppresses internal stream-error fallback placeholders before heartbeat delivery", async () => {
     await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {

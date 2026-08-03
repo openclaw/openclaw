@@ -121,8 +121,9 @@ export function classifyHeartbeatAgentOutcome(params: {
   const replacement = !heartbeatToolResponse
     ? replaceGenericExternalRunFailureText(normalized.text)
     : { text: normalized.text, replaced: false };
-  const deliveredAgentRunFailure = replacement.replaced;
-  if (deliveredAgentRunFailure) {
+  const agentRunFailed =
+    replacement.replaced || getReplyPayloadMetadata(replyPayload ?? {})?.agentRunFailure === true;
+  if (replacement.replaced) {
     normalized.text = replacement.text;
     normalized.shouldSkip = false;
   }
@@ -143,15 +144,20 @@ export function classifyHeartbeatAgentOutcome(params: {
   if (shouldSkipMain) {
     return { kind: "ack", eventStatus: "ok-token", silent: normalized.silent } as const;
   }
-  return {
-    kind: "delivery",
-    normalized,
-    deliveredAgentRunFailure,
-    mediaUrls:
-      heartbeatToolResponse || !replyPayload
-        ? []
-        : resolveSendableOutboundReplyParts(replyPayload).mediaUrls,
-  } as const;
+  const mediaUrls =
+    heartbeatToolResponse || !replyPayload
+      ? []
+      : resolveSendableOutboundReplyParts(replyPayload).mediaUrls;
+  return agentRunFailed
+    ? ({
+        kind: "runner-failure",
+        normalized,
+        mediaUrls,
+        pendingFinalText: replyPayload
+          ? buildRecoverablePendingFinalDeliveryText([replyPayload])
+          : undefined,
+      } as const)
+    : ({ kind: "delivery", normalized, mediaUrls } as const);
 }
 
 type ClassifiedHeartbeatOutcome = ReturnType<typeof classifyHeartbeatAgentOutcome>;
@@ -288,7 +294,8 @@ export async function finalizeHeartbeatOutcome(params: {
     consumeInspectedSystemEvents(params.wake, params.prepared);
     return { status: "ran", durationMs: Date.now() - startedAt };
   }
-  const { deliveredAgentRunFailure, mediaUrls, normalized } = outcome;
+  const { mediaUrls, normalized } = outcome;
+  const agentRunFailed = outcome.kind === "runner-failure";
   // Suppress duplicate heartbeats (same payload) within a short window.
   // This prevents "nagging" when nothing changed but the model repeats the same items.
   const prevHeartbeatText =
@@ -296,6 +303,7 @@ export async function finalizeHeartbeatOutcome(params: {
   const prevHeartbeatAt =
     typeof entry?.lastHeartbeatSentAt === "number" ? entry.lastHeartbeatSentAt : undefined;
   const isDuplicateMain =
+    !agentRunFailed &&
     !mediaUrls.length &&
     Boolean(prevHeartbeatText.trim()) &&
     normalized.text.trim() === prevHeartbeatText.trim() &&
@@ -321,31 +329,43 @@ export async function finalizeHeartbeatOutcome(params: {
 
   const previewText = normalized.text;
   if (delivery.channel === "none" || !delivery.to) {
+    const eventStatus = agentRunFailed ? "failed" : "skipped";
+    const reason = agentRunFailed ? "agent-runner-failure" : (delivery.reason ?? "no-target");
     emitHeartbeatEvent({
-      status: "skipped",
-      reason: delivery.reason ?? "no-target",
+      status: eventStatus,
+      reason,
       preview: truncateHeartbeatPreview(previewText),
       durationMs: Date.now() - startedAt,
       hasMedia: mediaUrls.length > 0,
       accountId: delivery.accountId,
     });
-    consumeInspectedSystemEvents(params.wake, params.prepared);
-    return { status: "ran", durationMs: Date.now() - startedAt };
+    if (!agentRunFailed) {
+      consumeInspectedSystemEvents(params.wake, params.prepared);
+    }
+    return agentRunFailed
+      ? { status: "failed", reason }
+      : { status: "ran", durationMs: Date.now() - startedAt };
   }
   if (!visibility.showAlerts) {
     await restoreHeartbeatUpdatedAt({ storePath, sessionKey, updatedAt: previousUpdatedAt });
     emitHeartbeatEvent({
-      status: "skipped",
-      reason: "alerts-disabled",
+      status: agentRunFailed ? "failed" : "skipped",
+      reason: agentRunFailed ? "agent-runner-failure" : "alerts-disabled",
       preview: truncateHeartbeatPreview(previewText),
       durationMs: Date.now() - startedAt,
       channel: delivery.channel,
       hasMedia: mediaUrls.length > 0,
       accountId: delivery.accountId,
-      indicatorType: visibility.useIndicator ? resolveIndicatorType("sent") : undefined,
+      indicatorType: visibility.useIndicator
+        ? resolveIndicatorType(agentRunFailed ? "failed" : "sent")
+        : undefined,
     });
-    consumeInspectedSystemEvents(params.wake, params.prepared);
-    return { status: "ran", durationMs: Date.now() - startedAt };
+    if (!agentRunFailed) {
+      consumeInspectedSystemEvents(params.wake, params.prepared);
+    }
+    return agentRunFailed
+      ? { status: "failed", reason: "agent-runner-failure" }
+      : { status: "ran", durationMs: Date.now() - startedAt };
   }
 
   const deliveryAccountId = delivery.accountId;
@@ -357,9 +377,11 @@ export async function finalizeHeartbeatOutcome(params: {
       deps: params.opts.deps,
     });
     if (!readiness.ok) {
+      const eventStatus = agentRunFailed ? "failed" : "skipped";
+      const reason = agentRunFailed ? "agent-runner-failure" : readiness.reason;
       emitHeartbeatEvent({
-        status: "skipped",
-        reason: readiness.reason,
+        status: eventStatus,
+        reason,
         preview: truncateHeartbeatPreview(previewText),
         durationMs: Date.now() - startedAt,
         hasMedia: mediaUrls.length > 0,
@@ -370,7 +392,9 @@ export async function finalizeHeartbeatOutcome(params: {
         channel: delivery.channel,
         reason: readiness.reason,
       });
-      return { status: "skipped", reason: readiness.reason };
+      return agentRunFailed
+        ? { status: "failed", reason }
+        : { status: "skipped", reason: readiness.reason };
     }
   }
 
@@ -390,14 +414,15 @@ export async function finalizeHeartbeatOutcome(params: {
     throw send.error;
   }
   const visibleSendSucceeded = send.status === "sent";
+  const heartbeatContentDelivered = visibleSendSucceeded && !agentRunFailed;
   // Suppressed durable sends committed no visible channel message. Keep due
   // commitments and heartbeat dedupe state active so a later heartbeat can retry.
-  if (visibleSendSucceeded) {
+  if (heartbeatContentDelivered) {
     await markDueCommitments("sent");
   }
 
   // Record last delivered heartbeat payload for dedupe.
-  if (visibleSendSucceeded && normalized.text.trim()) {
+  if (heartbeatContentDelivered && normalized.text.trim()) {
     await patchSessionEntry(
       { storePath, sessionKey },
       (current, context) => {
@@ -419,18 +444,24 @@ export async function finalizeHeartbeatOutcome(params: {
       },
       { preserveActivity: true },
     );
+  } else if (visibleSendSucceeded) {
+    // The failure notice itself was delivered, so its recovery record is
+    // satisfied even though the underlying heartbeat work remains retryable.
+    if (outcome.pendingFinalText) {
+      await clearSatisfiedPendingFinalDelivery(
+        params.wake,
+        params.prepared,
+        outcome.pendingFinalText,
+      );
+    }
   }
 
-  const eventStatus = deliveredAgentRunFailure
-    ? "failed"
-    : visibleSendSucceeded
-      ? "sent"
-      : "skipped";
+  const eventStatus = agentRunFailed ? "failed" : visibleSendSucceeded ? "sent" : "skipped";
   emitHeartbeatEvent({
     status: eventStatus,
     to: delivery.to,
-    ...(deliveredAgentRunFailure ? { reason: "agent-runner-failure" } : {}),
-    ...(!deliveredAgentRunFailure && !visibleSendSucceeded ? { reason: send.reason } : {}),
+    ...(agentRunFailed ? { reason: "agent-runner-failure" } : {}),
+    ...(!agentRunFailed && !visibleSendSucceeded ? { reason: send.reason } : {}),
     preview: truncateHeartbeatPreview(previewText),
     durationMs: Date.now() - startedAt,
     hasMedia: mediaUrls.length > 0,
@@ -441,10 +472,12 @@ export async function finalizeHeartbeatOutcome(params: {
   });
   // Intentional internal-only/no-target runs consume above. Once this branch
   // expects visible delivery, suppressed sends must retain the original event.
-  if (visibleSendSucceeded) {
+  if (heartbeatContentDelivered) {
     consumeInspectedSystemEvents(params.wake, params.prepared);
   }
-  return { status: "ran", durationMs: Date.now() - startedAt };
+  return agentRunFailed
+    ? { status: "failed", reason: "agent-runner-failure" }
+    : { status: "ran", durationMs: Date.now() - startedAt };
 }
 
 // The duplicate-suppression branch returns before any send, so it never hits
