@@ -35,8 +35,8 @@ export type KillProcessTreeOptions = {
  *   first (without /F), then force-kills if taskkill refuses or the process
  *   survives the grace period.
  * - Unix: send SIGTERM to the process group when ownership is known, wait the
- *   grace period, then SIGKILL. Attached children are enumerated and signaled
- *   descendants-first because their process group belongs to the gateway.
+ *   grace period, then SIGKILL. Linux attached children are enumerated and
+ *   signaled descendants-first because their process group belongs to the gateway.
  *
  * Group kill (`process.kill(-pid, ...)`) is only used when the PID is verified
  * as its own process group leader, unless `detached: true` is explicitly passed.
@@ -47,42 +47,75 @@ export type KillProcessTreeOptions = {
  * - `detached: true`: use group kill unconditionally (trust caller).
  * - `detached` omitted: use group kill only when PID is the group leader.
  */
-export function killProcessTree(pid: number, opts?: KillProcessTreeOptions): void {
+export function killProcessTree(
+  pid: number,
+  opts?: KillProcessTreeOptions,
+): { force: () => void } | undefined {
   if (!Number.isFinite(pid) || pid <= 0) {
-    return;
+    return undefined;
   }
 
   if (process.platform === "win32") {
     if (opts?.force === true) {
       signalProcessTreeWindows(pid, "SIGKILL");
-      return;
+      return undefined;
     }
     const graceMs = normalizeGraceMs(opts?.graceMs);
     killProcessTreeWindows(pid, graceMs);
-    return;
+    return undefined;
   }
 
   const useGroupKill =
     opts?.detached === true || (opts?.detached !== false && isProcessGroupLeader(pid));
-  const processTree =
-    opts?.detached === false && !useGroupKill ? collectUnixProcessTree(pid) : undefined;
-  if (opts?.force === true) {
-    signalProcessTreeUnix(pid, "SIGKILL", useGroupKill, processTree);
-    return;
+  const attachedLinuxTree =
+    opts?.detached === false && !useGroupKill && process.platform === "linux";
+  const processTree = attachedLinuxTree ? collectUnixProcessTree(pid) : undefined;
+  if (attachedLinuxTree && !processTree) {
+    // A missing /proc identity cannot safely survive PID reuse. Keep the
+    // immediate root TERM, but do not schedule or honor a delayed force.
+    if (opts?.force !== true) {
+      signalProcessTreeUnix(pid, "SIGTERM", false);
+    }
+    return undefined;
   }
 
-  const graceMs = normalizeGraceMs(opts?.graceMs);
-  signalProcessTreeUnix(pid, "SIGTERM", useGroupKill, processTree);
-  setTimeout(() => {
+  let forceRequested = false;
+  const force = () => {
+    if (forceRequested) {
+      return;
+    }
+    forceRequested = true;
+    const liveProcessTree = processTree?.filter(verifiedProcessInstanceAlive) ?? [];
     const stillAlive = useGroupKill
       ? isProcessAlive(-pid) || isProcessAlive(pid)
-      : (processTree ?? [{ pid }]).some((entry) => processInstanceAlive(entry));
+      : attachedLinuxTree
+        ? liveProcessTree.length > 0
+        : isProcessAlive(pid);
     if (!stillAlive) {
       return;
     }
-    const liveProcessTree = processTree?.filter(processInstanceAlive);
-    signalProcessTreeUnix(pid, "SIGKILL", useGroupKill, liveProcessTree);
-  }, graceMs).unref();
+    signalProcessTreeUnix(pid, "SIGKILL", useGroupKill, processTree ? liveProcessTree : undefined);
+  };
+
+  if (opts?.force === true) {
+    if (processTree) {
+      force();
+    } else {
+      signalProcessTreeUnix(pid, "SIGKILL", useGroupKill);
+    }
+    return undefined;
+  }
+
+  signalProcessTreeUnix(pid, "SIGTERM", useGroupKill, processTree);
+  const graceMs = normalizeGraceMs(opts?.graceMs);
+  const forceTimer = setTimeout(force, graceMs);
+  forceTimer.unref();
+  return {
+    force: () => {
+      clearTimeout(forceTimer);
+      force();
+    },
+  };
 }
 
 export function signalProcessTree(
@@ -102,8 +135,14 @@ export function signalProcessTree(
 
   const useGroupKill =
     opts?.detached === true || (opts?.detached !== false && isProcessGroupLeader(pid));
-  const processTree =
-    opts?.detached === false && !useGroupKill ? collectUnixProcessTree(pid) : undefined;
+  const attachedLinuxTree =
+    opts?.detached === false && !useGroupKill && process.platform === "linux";
+  const processTree = attachedLinuxTree ? collectUnixProcessTree(pid) : undefined;
+  if (attachedLinuxTree && !processTree) {
+    signalProcessTreeUnix(pid, signal, false);
+    opts?.onComplete?.();
+    return;
+  }
   signalProcessTreeUnix(pid, signal, useGroupKill, processTree);
   opts?.onComplete?.();
 }
@@ -185,48 +224,34 @@ function parsePositivePids(value: unknown): number[] {
 }
 
 /**
- * Read a stable process-instance identity for `pid`. On Linux this is the
- * `starttime` field from `/proc/<pid>/stat`; on other Unix platforms it is the
- * full `lstart=` line from `ps`. Both change when a PID is recycled, so a stale
- * cached identity no longer matches a reused PID.
+ * Read a stable process-instance identity for `pid`. Linux `starttime` from
+ * `/proc/<pid>/stat` distinguishes recycled PIDs. Other Unix platforms do not
+ * expose a sufficiently precise portable identity, so attached snapshots stay
+ * disabled there rather than authorizing a stale signal.
  */
-function readUnixProcessIdentity(pid: number): string | undefined {
-  if (process.platform === "linux") {
-    try {
-      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-      const commEnd = stat.lastIndexOf(")");
-      if (commEnd < 0) {
-        return undefined;
-      }
-      const fields = stat
-        .slice(commEnd + 1)
-        .trim()
-        .split(/\s+/);
-      // Fields after comm: state ppid pgrp sid tty_nr tpgid flags ... starttime
-      // starttime is field 20 in proc(5), which is index 19 in this sliced list.
-      const starttime = fields[19];
-      if (starttime && /^\d+$/u.test(starttime)) {
-        return `${pid}:${starttime}`;
-      }
-      return undefined;
-    } catch {
-      return undefined;
-    }
+function readUnixProcessIdentity(pid: number, deadlineMs?: number): string | undefined {
+  if (deadlineMs !== undefined && Date.now() >= deadlineMs) {
+    return undefined;
   }
-
+  if (process.platform !== "linux") {
+    // BSD `ps lstart` is only second-granularity, so it cannot bind a delayed
+    // signal to one process instance when a PID is recycled within that second.
+    return undefined;
+  }
   try {
-    const result = spawnSync("ps", ["-p", String(pid), "-o", "lstart="], {
-      encoding: "utf8",
-      killSignal: "SIGKILL",
-      maxBuffer: 32 * 1024,
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: UNIX_PROCESS_TREE_TIMEOUT_MS,
-    });
-    if (result.error || result.status !== 0) {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const commEnd = stat.lastIndexOf(")");
+    if (commEnd < 0) {
       return undefined;
     }
-    const startedAt = typeof result.stdout === "string" ? result.stdout.trim() : "";
-    return startedAt ? `${pid}:${startedAt}` : undefined;
+    const fields = stat
+      .slice(commEnd + 1)
+      .trim()
+      .split(/\s+/);
+    // Fields after comm: state ppid pgrp sid tty_nr tpgid flags ... starttime
+    // starttime is field 20 in proc(5), which is index 19 in this sliced list.
+    const starttime = fields[19];
+    return starttime && /^\d+$/u.test(starttime) ? `${pid}:${starttime}` : undefined;
   } catch {
     return undefined;
   }
@@ -234,102 +259,85 @@ function readUnixProcessIdentity(pid: number): string | undefined {
 
 /**
  * True when the captured process instance is still alive at the same identity.
- * A bare-liveness check alone is unsafe after PID reuse; this re-reads the
- * identity and compares it to the snapshot. Pairs without an identity fall back
- * to a bare-liveness probe so the public detached/group-leader paths are
- * unchanged.
+ * Missing identities are never eligible for an attached-tree signal.
  */
-function processInstanceAlive(entry: UnixProcessEntry): boolean {
-  if (!isProcessAlive(entry.pid)) {
+function verifiedProcessInstanceAlive(entry: UnixProcessEntry): boolean {
+  if (!entry.identity || !isProcessAlive(entry.pid)) {
     return false;
-  }
-  if (!entry.identity) {
-    return true;
   }
   return readUnixProcessIdentity(entry.pid) === entry.identity;
 }
 
-function readUnixProcessChildren(pid: number, deadlineMs: number): number[] | undefined {
-  if (process.platform === "linux") {
-    try {
-      return parsePositivePids(readFileSync(`/proc/${pid}/task/${pid}/children`, "utf8"));
-    } catch {
-      // If a process disappears during the snapshot, abandon descendant cleanup
-      // rather than risking a signal to a reused PID.
-      return undefined;
-    }
-  }
-
+function readUnixProcessChildren(pid: number): number[] | undefined {
   try {
-    const result = spawnSync("pgrep", ["-P", String(pid)], {
-      encoding: "utf8",
-      killSignal: "SIGKILL",
-      maxBuffer: 128 * 1024,
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: Math.max(1, deadlineMs - Date.now()),
-    });
-    if (result.error) {
-      return undefined;
-    }
-    if (result.status === 1) {
-      // pgrep exits 1 for both "no children" and a missing root. Verify the
-      // root so a reused PID cannot be mistaken for an empty attached tree.
-      return isProcessAlive(pid) ? [] : undefined;
-    }
-    if (result.status !== 0) {
-      return undefined;
-    }
-    return parsePositivePids(result.stdout);
+    return parsePositivePids(readFileSync(`/proc/${pid}/task/${pid}/children`, "utf8"));
   } catch {
+    // If a process disappears during the snapshot, abandon descendant cleanup
+    // rather than risking a signal to a reused PID.
     return undefined;
   }
 }
 
 /**
  * Capture an attached process tree before signaling its root.
- * Descendants are returned first so they retain their parent relationship; if
- * enumeration is incomplete, callers fall back to the direct PID only.
+ * Descendants are returned first so they retain their parent relationship.
  *
  * Each entry carries a stable process-instance identity captured at discovery
  * time so delayed grace-period signals can be verified against the original
- * instance instead of a numeric PID that may have been recycled.
+ * instance instead of a numeric PID that may have been recycled. A descendant
+ * whose identity cannot be captured is omitted (fail-closed for that subtree)
+ * rather than retained as an identity-less PID that a delayed signal could
+ * target after reuse. The supervisor-owned root PID is always trusted as the
+ * caller's direct child, so the snapshot always contains it once the root's own
+ * identity verifies, even when every descendant probe fails.
  */
 function collectUnixProcessTree(rootPid: number): UnixProcessTree | undefined {
+  if (process.platform !== "linux") {
+    return undefined;
+  }
   const descendants: UnixProcessEntry[] = [];
   const seen = new Set<number>([rootPid]);
   const deadline = Date.now() + UNIX_PROCESS_TREE_TIMEOUT_MS;
+  const rootIdentity = readUnixProcessIdentity(rootPid, deadline);
+  if (!rootIdentity || Date.now() >= deadline) {
+    // The root identity is the only thing that lets a delayed signal bind to
+    // the supervisor's own child process; without it the caller must fall back
+    // to a single SIGTERM and skip the grace-period escalation entirely.
+    return undefined;
+  }
 
-  const visit = (parentPid: number, depth: number): boolean => {
+  const visit = (parentPid: number, depth: number): void => {
     if (
       Date.now() >= deadline ||
       depth > MAX_UNIX_PROCESS_TREE_DEPTH ||
       seen.size > MAX_UNIX_PROCESS_TREE_PIDS
     ) {
-      return false;
+      return;
     }
-    const children = readUnixProcessChildren(parentPid, deadline);
+    const children = readUnixProcessChildren(parentPid);
     if (!children) {
-      return false;
+      // Children vanished mid-snapshot: stop descending this branch, but the
+      // already-captured ancestors and the root still carry trusted identities.
+      return;
     }
     for (const childPid of children) {
       if (seen.has(childPid) || childPid === process.pid) {
         continue;
       }
       seen.add(childPid);
-      if (!visit(childPid, depth + 1)) {
-        return false;
+      visit(childPid, depth + 1);
+      // Bind each descendant to a captured identity so a recycled PID can never
+      // match a delayed signal. If the identity cannot be read, drop this entry
+      // (and the subtree it headed) instead of keeping an identity-less PID.
+      const identity = readUnixProcessIdentity(childPid, deadline);
+      if (identity && Date.now() < deadline) {
+        descendants.push({ pid: childPid, identity });
       }
-      // Capture identity opportunistically; if it cannot be read the entry is
-      // still signalled during the initial SIGTERM pass, but a missing identity
-      // forces fail-closed direct-root fallback during delayed SIGKILL.
-      descendants.push({ pid: childPid, identity: readUnixProcessIdentity(childPid) });
     }
-    return true;
   };
 
-  return visit(rootPid, 0)
-    ? [...descendants, { pid: rootPid, identity: readUnixProcessIdentity(rootPid) }]
-    : undefined;
+  visit(rootPid, 0);
+  return [...descendants, { pid: rootPid, identity: rootIdentity }];
 }
 
 function signalProcessTreeUnix(
@@ -348,27 +356,14 @@ function signalProcessTreeUnix(
   }
 
   const targets = processTree ?? [{ pid }];
-  if (signal === "SIGKILL") {
-    // For the delayed force escalation, every target must still match the
-    // captured process instance; an identity mismatch means the original exited
-    // and the PID was reused, so it must not be signalled.
-    for (const entry of targets) {
-      if (processInstanceAlive(entry)) {
-        try {
-          process.kill(entry.pid, signal);
-        } catch {
-          // A process may exit between the identity check and the signal.
-        }
-      }
-    }
-    return;
-  }
-
   for (const entry of targets) {
+    if (processTree && !verifiedProcessInstanceAlive(entry)) {
+      continue;
+    }
     try {
       process.kill(entry.pid, signal);
     } catch {
-      // A process may exit between enumeration and signaling.
+      // A process may exit between identity verification and signaling.
     }
   }
 }
