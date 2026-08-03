@@ -257,10 +257,67 @@ describe("basic browser routes", () => {
       expect.objectContaining({
         profileName: "chrome-live",
         targetId: "7",
-        timeoutMs: 12_000,
+        timeoutMs: expect.any(Number),
         signal: expect.any(AbortSignal),
       }),
     );
+    const snapshotCall = takeChromeMcpSnapshotMock.mock.calls[0] as unknown as
+      | [{ timeoutMs: number }]
+      | undefined;
+    const snapshotTimeoutMs = snapshotCall?.[0].timeoutMs;
+    expect(snapshotTimeoutMs).toBeGreaterThan(0);
+    expect(snapshotTimeoutMs).toBeLessThanOrEqual(12_000);
+  });
+
+  it("shares one live-probe deadline across tab selection and the Chrome MCP snapshot", async () => {
+    vi.useFakeTimers();
+    try {
+      const state = createExistingSessionProfileState();
+      const profileCtx = {
+        ...(state.forProfile() as unknown as Record<string, unknown>),
+        ensureTabAvailable: vi.fn(
+          async (_targetId: string | undefined, options?: { signal?: AbortSignal }) => {
+            await new Promise<void>((resolve, reject) => {
+              const timer = setTimeout(resolve, 2_000);
+              options?.signal?.addEventListener(
+                "abort",
+                () => {
+                  clearTimeout(timer);
+                  reject(options.signal?.reason);
+                },
+                { once: true },
+              );
+            });
+            return {
+              targetId: "7",
+              title: "Example",
+              url: "https://example.com",
+              type: "page",
+            };
+          },
+        ),
+      };
+      const { app, getHandlers } = createBrowserRouteApp();
+      registerBrowserBasicRoutes(app, {
+        state: () => state,
+        forProfile: () => profileCtx,
+        mapTabError: vi.fn(() => null),
+      } as never);
+      const response = createBrowserRouteResponse();
+
+      const request = getHandlers.get("/doctor")?.(
+        { params: {}, query: { profile: "chrome-live", deep: "true" } },
+        response.res,
+      );
+      await vi.advanceTimersByTimeAsync(2_000);
+      await request;
+
+      expect(takeChromeMcpSnapshotMock).toHaveBeenCalledWith(
+        expect.objectContaining({ timeoutMs: 10_000 }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not start a stopped managed browser for deep doctor", async () => {
@@ -290,8 +347,9 @@ describe("basic browser routes", () => {
     expect(response.statusCode).toBe(200);
     const body = responseBodyRecord(response);
     expect(body.status).toMatchObject({ running: false });
-    expect(body.checks).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: "live-snapshot" })]),
+    expect(body.ok).toBe(false);
+    expect(body.checks).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "live-snapshot", status: "fail" })]),
     );
     expect(ensureBrowserAvailable).not.toHaveBeenCalled();
     expect(ensureTabAvailable).not.toHaveBeenCalled();

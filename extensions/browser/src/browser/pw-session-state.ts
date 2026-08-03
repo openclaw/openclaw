@@ -153,6 +153,20 @@ export function storeRoleRefsForTarget(opts: {
   });
 }
 
+/** Invalidate role refs before mutating page-owned DOM markers for a new snapshot. */
+export function invalidateRoleRefsForTarget(opts: {
+  page: Page;
+  cdpUrl: string;
+  targetId?: string;
+}): void {
+  const state = ensurePageState(opts.page);
+  clearRoleRefs(state);
+  const targetId = normalizeOptionalString(opts.targetId);
+  if (targetId) {
+    roleRefsByTarget.delete(roleRefsKey(opts.cdpUrl, targetId));
+  }
+}
+
 function clearRoleRefs(state: PageState): void {
   if (state.roleRefsTargetKey) {
     const cached = roleRefsByTarget.get(state.roleRefsTargetKey);

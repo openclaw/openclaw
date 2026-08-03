@@ -9,6 +9,7 @@ import { createDownloadCaptureForPage } from "./pw-download-capture.js";
 import {
   beginActionDownloadCaptureOnPage,
   ensurePageState,
+  invalidateRoleRefsForTarget,
   isDownloadStartingNavigationError,
   refLocator,
   restoreRoleRefsForTarget,
@@ -172,6 +173,26 @@ describe("pw-session refLocator", () => {
 });
 
 describe("pw-session role refs cache", () => {
+  it("invalidates page and cached refs before a replacement marker generation is published", () => {
+    const cdpUrl = "http://127.0.0.1:9222";
+    const targetId = "t1";
+    const { page } = fakePage();
+    storeRoleRefsForTarget({
+      page,
+      cdpUrl,
+      targetId,
+      refs: { ax1: { role: "button", name: "old", domMarker: true } },
+      mode: "role",
+    });
+
+    invalidateRoleRefsForTarget({ page, cdpUrl, targetId });
+
+    expect(() => refLocator(page, "ax1")).toThrow(/Unknown ref/);
+    const { page: replacementPage } = fakePage();
+    restoreRoleRefsForTarget({ cdpUrl, targetId, page: replacementPage });
+    expect(() => refLocator(replacementPage, "ax1")).toThrow(/Unknown ref/);
+  });
+
   it("invalidates cached refs for replacement Pages after main-frame navigation", () => {
     const cdpUrl = "http://127.0.0.1:9222";
     const targetId = "t1";

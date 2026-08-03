@@ -21,6 +21,7 @@ export {
   createObservedDialogAbortSignalForPage,
   ensurePageState,
   getObservedBrowserStateForPage,
+  invalidateRoleRefsForTarget,
   markObservedDialogsHandledRemotelyForPage,
   normalizeCdpUrl,
   respondToObservedDialogOnPage,

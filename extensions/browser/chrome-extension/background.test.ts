@@ -184,6 +184,8 @@ async function loadBackground({
     alarmListener,
     clearAlarm,
     createAlarm,
+    debuggerDetach: chromeMock.debugger.detach,
+    debuggerSendCommand: chromeMock.debugger.sendCommand,
     executeScript: chromeMock.scripting.executeScript,
     messageListener,
     setBadgeText,
@@ -197,6 +199,57 @@ async function loadBackground({
     tabsUngroup: chromeMock.tabs.ungroup,
   };
 }
+
+describe("relay CDP cancellation", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("processes a detach command while the preceding CDP command is still pending", async () => {
+    const harness = await loadBackground();
+    const socket = harness.sockets[0];
+    expect(socket).toBeDefined();
+    socket?.open();
+    await Promise.resolve();
+
+    let rejectCommand!: (reason: unknown) => void;
+    harness.debuggerSendCommand.mockImplementationOnce(
+      async () =>
+        await new Promise<never>((_resolve, reject) => {
+          rejectCommand = reject;
+        }),
+    );
+    harness.debuggerDetach.mockImplementationOnce(async () => {
+      rejectCommand(new Error("Debugger detached while command was pending"));
+    });
+
+    socket?.receive({
+      type: "cdp",
+      seq: 41,
+      tabId: 7,
+      method: "Accessibility.enable",
+      params: {},
+    });
+    await vi.waitFor(() => expect(harness.debuggerSendCommand).toHaveBeenCalledOnce());
+
+    socket?.receive({ type: "detach", seq: 42, tabId: 7 });
+
+    await vi.waitFor(() => expect(harness.debuggerDetach).toHaveBeenCalledWith({ tabId: 7 }));
+    await vi.waitFor(() => {
+      const frames = socket?.send.mock.calls.map(([raw]) => JSON.parse(raw as string)) ?? [];
+      expect(frames).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: "error", seq: 41 }),
+          expect.objectContaining({ type: "result", seq: 42 }),
+        ]),
+      );
+    });
+  });
+});
 
 async function startPendingPageShare(
   harness: Awaited<ReturnType<typeof loadBackground>>,

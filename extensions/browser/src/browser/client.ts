@@ -8,6 +8,10 @@ import {
   clampPositiveTimerTimeoutMs,
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import {
+  BROWSER_DEEP_DOCTOR_LIVE_PROBE_TIMEOUT_MS,
+  BROWSER_DEEP_DOCTOR_STATUS_TIMEOUT_MS,
+} from "./cdp-timeouts.js";
 import { buildProfileQuery, withBaseUrl } from "./client-actions-url.js";
 import { fetchBrowserJson } from "./client-fetch.js";
 import type {
@@ -26,8 +30,11 @@ export type { BrowserDoctorCheck, BrowserDoctorReport } from "./doctor.js";
 
 const BROWSER_STATUS_REQUEST_TIMEOUT_MS = 7_500;
 const BROWSER_DOCTOR_REQUEST_TIMEOUT_MS = 7_500;
-const BROWSER_DEEP_DOCTOR_REQUEST_TIMEOUT_MS = 20_000;
 const BROWSER_OPERATION_REQUEST_GRACE_MS = 5_000;
+const BROWSER_DEEP_DOCTOR_REQUEST_TIMEOUT_MS =
+  BROWSER_DEEP_DOCTOR_STATUS_TIMEOUT_MS +
+  BROWSER_DEEP_DOCTOR_LIVE_PROBE_TIMEOUT_MS +
+  BROWSER_OPERATION_REQUEST_GRACE_MS;
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
 type BrowserClientTimeoutOptions = {
@@ -176,7 +183,7 @@ export async function browserStatus(
 /** Run browser doctor checks for the selected profile. */
 export async function browserDoctor(
   baseUrl?: string,
-  opts?: { profile?: string; deep?: boolean },
+  opts?: { profile?: string; deep?: boolean; timeoutMs?: number },
 ): Promise<BrowserDoctorReport> {
   const params = new URLSearchParams();
   if (opts?.profile) {
@@ -187,9 +194,10 @@ export async function browserDoctor(
   }
   const q = params.size ? `?${params.toString()}` : "";
   return await fetchBrowserJson<BrowserDoctorReport>(withBaseUrl(baseUrl, `/doctor${q}`), {
-    timeoutMs: opts?.deep
-      ? BROWSER_DEEP_DOCTOR_REQUEST_TIMEOUT_MS
-      : BROWSER_DOCTOR_REQUEST_TIMEOUT_MS,
+    timeoutMs: resolveBrowserClientTimeoutMs(
+      opts,
+      opts?.deep ? BROWSER_DEEP_DOCTOR_REQUEST_TIMEOUT_MS : BROWSER_DOCTOR_REQUEST_TIMEOUT_MS,
+    ),
   });
 }
 

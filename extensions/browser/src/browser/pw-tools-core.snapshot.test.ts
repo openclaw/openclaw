@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const getPageForTargetId = vi.fn();
 const ensurePageState = vi.fn();
+const invalidateRoleRefsForTarget = vi.fn();
 const forceDisconnectPlaywrightForTarget = vi.fn(async () => {});
 const storeRoleRefsForTarget = vi.fn();
 const withPageScopedCdpClient = vi.fn();
@@ -24,6 +25,7 @@ vi.mock("./pw-session.js", () => ({
   forceDisconnectPlaywrightForTarget,
   getPageForTargetId,
   gotoPageWithNavigationGuard,
+  invalidateRoleRefsForTarget,
   isDownloadStartingNavigationError: vi.fn(() => false),
   isPolicyDenyNavigationError: vi.fn(() => false),
   normalizeCdpUrl: vi.fn((raw: string) => raw.replace(/\/$/, "")),
@@ -110,6 +112,14 @@ describe("pw-tools-core aria snapshot storage", () => {
       signal: undefined,
       refs: [{ ref: "ax1", backendDOMNodeId: 42 }],
     });
+    expect(invalidateRoleRefsForTarget).toHaveBeenCalledWith({
+      page,
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+    });
+    expect(invalidateRoleRefsForTarget.mock.invocationCallOrder[0]).toBeLessThan(
+      markBackendDomRefsOnPage.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
     expect(storeRoleRefsForTarget).toHaveBeenCalledWith({
       page,
       cdpUrl: "http://127.0.0.1:9222",
@@ -373,6 +383,34 @@ describe("pw-tools-core aria snapshot storage", () => {
         refs: { "ax-new": { role: "button", name: "new", domMarker: true } },
       }),
     );
+  });
+
+  it("invalidates old refs before a partially written marker publication aborts", async () => {
+    const page = { id: "page-1" };
+    const controller = new AbortController();
+    getPageForTargetId.mockResolvedValue(page);
+    markBackendDomRefsOnPage.mockImplementationOnce(async () => {
+      controller.abort(new Error("marker publication interrupted"));
+      throw controller.signal.reason;
+    });
+
+    const mod = await import("./pw-tools-core.snapshot.js");
+    await expect(
+      mod.storeAriaSnapshotRefsViaPlaywright({
+        cdpUrl: "http://127.0.0.1:9222",
+        targetId: "tab-1",
+        page: page as never,
+        signal: controller.signal,
+        nodes: [{ ref: "ax1", role: "button", name: "new", backendDOMNodeId: 42, depth: 0 }],
+      }),
+    ).rejects.toThrow("marker publication interrupted");
+
+    expect(invalidateRoleRefsForTarget).toHaveBeenCalledWith({
+      page,
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+    });
+    expect(storeRoleRefsForTarget).not.toHaveBeenCalled();
   });
 
   it("uses the default aria node limit for non-finite limits", async () => {

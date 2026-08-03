@@ -595,21 +595,30 @@ export function pageTargetInfo(page: Page): Promise<PageTargetInfo | null> {
 async function getPageForTargetIdOnce(opts: {
   cdpUrl: string;
   targetId?: string;
+  signal?: AbortSignal;
   ssrfPolicy?: SsrFPolicy;
 }): Promise<Page> {
+  opts.signal?.throwIfAborted();
   if (opts.targetId && isBlockedTarget(opts.cdpUrl, opts.targetId)) {
     throw new BlockedBrowserTargetError();
   }
-  const { browser } = await connectBrowser(opts.cdpUrl, opts.ssrfPolicy);
-  const pages = await getAllPages(browser);
+  const { browser } = await awaitPageLookupWithAbort(
+    connectBrowser(opts.cdpUrl, opts.ssrfPolicy),
+    opts.signal,
+  );
+  const pages = await awaitPageLookupWithAbort(getAllPages(browser), opts.signal);
   if (!pages.length) {
     throw new Error("No pages available in the connected browser.");
   }
 
-  const { accessible, blockedCount } = await partitionAccessiblePages({
-    cdpUrl: opts.cdpUrl,
-    pages,
-  });
+  const { accessible, blockedCount } = await awaitPageLookupWithAbort(
+    partitionAccessiblePages({
+      cdpUrl: opts.cdpUrl,
+      pages,
+    }),
+    opts.signal,
+  );
+  opts.signal?.throwIfAborted();
   if (!accessible.length) {
     if (blockedCount > 0) {
       throw new BlockedBrowserTargetError();
@@ -629,16 +638,39 @@ async function getPageForTargetIdOnce(opts: {
   throw new BrowserTabNotFoundError();
 }
 
+async function awaitPageLookupWithAbort<T>(task: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) {
+    return await task;
+  }
+  void task.catch(() => {});
+  signal.throwIfAborted();
+  let abortListener: (() => void) | undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    abortListener = () => reject(signal.reason ?? new Error("Page lookup aborted"));
+    signal.addEventListener("abort", abortListener, { once: true });
+  });
+  void aborted.catch(() => {});
+  try {
+    return await Promise.race([task, aborted]);
+  } finally {
+    if (abortListener) {
+      signal.removeEventListener("abort", abortListener);
+    }
+  }
+}
+
 /** Resolve a Playwright page by target id, reconnecting once on stale state. */
 export async function getPageForTargetId(opts: {
   cdpUrl: string;
   targetId?: string;
+  signal?: AbortSignal;
   ssrfPolicy?: SsrFPolicy;
 }): Promise<Page> {
   const reusedCachedBrowser = hasCachedPlaywrightBrowserConnection(opts.cdpUrl);
   try {
     return await getPageForTargetIdOnce(opts);
   } catch (err) {
+    opts.signal?.throwIfAborted();
     if (!isRecoverableStalePageSelectionError(err, reusedCachedBrowser)) {
       throw err;
     }

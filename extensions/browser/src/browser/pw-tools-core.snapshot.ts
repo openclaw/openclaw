@@ -35,6 +35,7 @@ import {
   forceDisconnectPlaywrightForTarget,
   getPageForTargetId,
   gotoPageWithNavigationGuard,
+  invalidateRoleRefsForTarget,
   isDownloadStartingNavigationError,
   isPolicyDenyNavigationError,
   normalizeCdpUrl,
@@ -195,6 +196,12 @@ export async function storeAriaSnapshotRefsViaPlaywright(opts: {
     run: async () => {
       opts.signal?.throwIfAborted();
       ensurePageState(page);
+      invalidateRoleRefsForTarget({
+        page,
+        cdpUrl: opts.cdpUrl,
+        targetId: opts.targetId,
+      });
+      opts.signal?.throwIfAborted();
       const markedRefs = await markBackendDomRefsOnPage({
         page,
         signal: opts.signal,
@@ -219,11 +226,13 @@ export async function storeAriaSnapshotRefsViaPlaywright(opts: {
 async function prepareSnapshotPageViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  signal?: AbortSignal;
   ssrfPolicy?: SsrFPolicy;
 }): Promise<Page> {
   const page = await getPageForTargetId({
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,
+    signal: opts.signal,
   });
   ensurePageState(page);
   if (opts.ssrfPolicy) {
@@ -294,6 +303,7 @@ async function collectAriaSnapshotViaPlaywright(
     const page = await prepareSnapshotPageViaPlaywright({
       cdpUrl: opts.cdpUrl,
       targetId: opts.targetId,
+      signal,
       ssrfPolicy: opts.ssrfPolicy,
     });
     signal?.throwIfAborted();

@@ -73,6 +73,7 @@ type AuxiliaryTabSession = {
   tabId: number;
   parentSessionId: string;
   client: CdpClientState;
+  inFlightExtensionSeqs: Set<number>;
 };
 
 /** Browser identity reported by the paired extension. */
@@ -353,6 +354,7 @@ export class ExtensionRelayBridge {
   private callExtension(
     command: RelayCommandBody,
     timeoutMs = EXTENSION_COMMAND_TIMEOUT_MS,
+    onStart?: (seq: number) => void,
   ): Promise<unknown> {
     const seq = this.nextSeq++;
     return new Promise<unknown>((resolve, reject) => {
@@ -366,6 +368,7 @@ export class ExtensionRelayBridge {
       }, timeoutMs);
       timer.unref?.();
       this.pendingExtension.set(seq, { resolve, reject, timer });
+      onStart?.(seq);
       try {
         this.sendToExtension({ ...command, seq });
       } catch (err) {
@@ -512,6 +515,7 @@ export class ExtensionRelayBridge {
           params: { sessionId: auxiliarySessionId, targetId },
         }),
       );
+      this.rejectAuxiliaryCommands(auxiliary, "CDP session detached before command completed");
       this.auxiliaryTabSessions.delete(auxiliarySessionId);
     }
     // Reap this tab's child sessions (iframes/workers) by owner tabId. Callers
@@ -527,6 +531,19 @@ export class ExtensionRelayBridge {
         client.announcedSessions.delete(childSessionId);
       }
     }
+  }
+
+  private rejectAuxiliaryCommands(auxiliary: AuxiliaryTabSession, message: string): void {
+    for (const seq of auxiliary.inFlightExtensionSeqs) {
+      const pending = this.pendingExtension.get(seq);
+      if (!pending) {
+        continue;
+      }
+      this.pendingExtension.delete(seq);
+      clearTimeout(pending.timer);
+      pending.reject(new Error(message));
+    }
+    auxiliary.inFlightExtensionSeqs.clear();
   }
 
   private forwardExtensionEvent(
@@ -721,14 +738,28 @@ export class ExtensionRelayBridge {
       this.respondError(client, request, `Session not found: ${sessionId}`, -32001);
       return;
     }
-    const result = await this.callExtension({
-      type: "cdp",
-      tabId: route.tabId,
-      ...(route.child ? { sessionId } : {}),
-      method: request.method,
-      params: request.params,
-    });
-    this.respond(client, request, result);
+    let extensionSeq: number | undefined;
+    try {
+      const result = await this.callExtension(
+        {
+          type: "cdp",
+          tabId: route.tabId,
+          ...(route.child ? { sessionId } : {}),
+          method: request.method,
+          params: request.params,
+        },
+        EXTENSION_COMMAND_TIMEOUT_MS,
+        (seq) => {
+          extensionSeq = seq;
+          auxiliary?.inFlightExtensionSeqs.add(seq);
+        },
+      );
+      this.respond(client, request, result);
+    } finally {
+      if (extensionSeq !== undefined) {
+        auxiliary?.inFlightExtensionSeqs.delete(extensionSeq);
+      }
+    }
   }
 
   private async handleBrowserScopedRequest(
@@ -849,6 +880,7 @@ export class ExtensionRelayBridge {
             tabId: found.tabId,
             parentSessionId: request.sessionId,
             client,
+            inFlightExtensionSeqs: new Set(),
           });
           this.respond(client, request, { sessionId });
           return;
@@ -874,7 +906,24 @@ export class ExtensionRelayBridge {
         }
         const auxiliary = sessionId ? this.auxiliaryTabSessions.get(sessionId) : undefined;
         if (auxiliary?.client === client) {
-          this.auxiliaryTabSessions.delete(sessionId as string);
+          if (auxiliary.inFlightExtensionSeqs.size > 0) {
+            const detachTask = this.callExtension({ type: "detach", tabId: auxiliary.tabId });
+            const tab = this.tabs.get(auxiliary.tabId);
+            if (tab?.attached) {
+              const { sessionId: rootSession, targetId } = tab.attached;
+              tab.attached = undefined;
+              this.emitDetachedFromTarget(auxiliary.tabId, rootSession, targetId);
+            } else {
+              this.rejectAuxiliaryCommands(
+                auxiliary,
+                "CDP session detached before command completed",
+              );
+              this.auxiliaryTabSessions.delete(sessionId as string);
+            }
+            await detachTask.catch(() => {});
+          } else {
+            this.auxiliaryTabSessions.delete(sessionId as string);
+          }
           this.respond(client, request, {});
           return;
         }

@@ -599,9 +599,15 @@ describe("browser control server", () => {
     expect(cdpMocks.snapshotAria).toHaveBeenCalledWith({
       wsUrl: "ws://127.0.0.1/devtools/page/abcd1234",
       limit: 25,
-      timeoutMs: 12_000,
+      timeoutMs: expect.any(Number),
       signal: expect.any(AbortSignal),
     });
+    const directSnapshotCall = cdpMocks.snapshotAria.mock.calls[0] as unknown as
+      | [{ timeoutMs: number }]
+      | undefined;
+    const directSnapshotTimeoutMs = directSnapshotCall?.[0].timeoutMs;
+    expect(directSnapshotTimeoutMs).toBeGreaterThan(0);
+    expect(directSnapshotTimeoutMs).toBeLessThanOrEqual(12_000);
   });
 
   it.each(NAVIGATION_TIMEOUT_CASES)(
@@ -680,15 +686,22 @@ describe("browser control server", () => {
     expect(liveSnapshotCheck?.summary).toContain(
       "extension relay command timed out: cdp (tabId=7, method=Accessibility.getFullAXTree)",
     );
-    expect(requirePwMock("captureAriaSnapshotViaPlaywright")).toHaveBeenCalledWith(
+    const captureAriaSnapshot = requirePwMock("captureAriaSnapshotViaPlaywright");
+    expect(captureAriaSnapshot).toHaveBeenCalledWith(
       expect.objectContaining({
         targetId: "extension-target-1",
         limit: 25,
-        timeoutMs: 12_000,
+        timeoutMs: expect.any(Number),
         signal: expect.any(AbortSignal),
         ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
       }),
     );
+    const extensionSnapshotCall = captureAriaSnapshot.mock.calls[0] as unknown as
+      | [{ timeoutMs: number }]
+      | undefined;
+    const extensionSnapshotTimeoutMs = extensionSnapshotCall?.[0].timeoutMs;
+    expect(extensionSnapshotTimeoutMs).toBeGreaterThan(0);
+    expect(extensionSnapshotTimeoutMs).toBeLessThanOrEqual(12_000);
     expect(requirePwMock("snapshotAriaViaPlaywright")).not.toHaveBeenCalled();
     expect(requirePwMock("storeAriaSnapshotRefsViaPlaywright")).not.toHaveBeenCalled();
     expect(cdpMocks.snapshotAria).not.toHaveBeenCalled();

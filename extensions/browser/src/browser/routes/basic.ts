@@ -1,3 +1,7 @@
+import {
+  BROWSER_DEEP_DOCTOR_LIVE_PROBE_TIMEOUT_MS,
+  BROWSER_DEEP_DOCTOR_STATUS_TIMEOUT_MS,
+} from "../cdp-timeouts.js";
 /**
  * Basic browser control routes.
  *
@@ -34,9 +38,9 @@ import {
 const STATUS_CDP_HTTP_TIMEOUT_MS = 300;
 const STATUS_CDP_TRANSPORT_TIMEOUT_MS = 600;
 const STATUS_GRAPHICS_COMMAND_TIMEOUT_MS = 1_000;
-const STATUS_CHROME_MCP_TOTAL_TIMEOUT_MS = 7_000;
+const STATUS_CHROME_MCP_TOTAL_TIMEOUT_MS = BROWSER_DEEP_DOCTOR_STATUS_TIMEOUT_MS;
 const STATUS_CHROME_MCP_TRANSPORT_TIMEOUT_MS = 5_000;
-const LIVE_SNAPSHOT_PROBE_TIMEOUT_MS = 12_000;
+const LIVE_SNAPSHOT_PROBE_TIMEOUT_MS = BROWSER_DEEP_DOCTOR_LIVE_PROBE_TIMEOUT_MS;
 
 function remainingChromeMcpStatusTimeoutMs(startedAtMs: number): number {
   return Math.max(1, STATUS_CHROME_MCP_TOTAL_TIMEOUT_MS - (Date.now() - startedAtMs));
@@ -269,14 +273,35 @@ async function runBrowserLiveProbe(
   signal: AbortSignal,
 ) {
   const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
+  const deadlineAtMs = Date.now() + LIVE_SNAPSHOT_PROBE_TIMEOUT_MS;
   try {
-    const tab = await profileCtx.ensureTabAvailable(undefined, { signal });
+    const tabSelectionAbort = new AbortController();
+    const tabSelectionTimer = setTimeout(
+      () => {
+        tabSelectionAbort.abort(
+          new Error(
+            `Live snapshot probe timed out after ${LIVE_SNAPSHOT_PROBE_TIMEOUT_MS}ms during tab selection.`,
+          ),
+        );
+      },
+      Math.max(1, deadlineAtMs - Date.now()),
+    );
+    tabSelectionTimer.unref?.();
+    let tab;
+    try {
+      tab = await profileCtx.ensureTabAvailable(undefined, {
+        signal: AbortSignal.any([signal, tabSelectionAbort.signal]),
+      });
+    } finally {
+      clearTimeout(tabSelectionTimer);
+    }
+    const remainingTimeoutMs = Math.max(1, deadlineAtMs - Date.now());
     if (capabilities.usesChromeMcp) {
       await takeChromeMcpSnapshot({
         profileName: profileCtx.profile.name,
         profile: profileCtx.profile,
         targetId: tab.targetId,
-        timeoutMs: LIVE_SNAPSHOT_PROBE_TIMEOUT_MS,
+        timeoutMs: remainingTimeoutMs,
         signal,
       });
       return {
@@ -290,7 +315,7 @@ async function runBrowserLiveProbe(
       ? await snapshotAria({
           wsUrl: tab.wsUrl,
           limit: 25,
-          timeoutMs: LIVE_SNAPSHOT_PROBE_TIMEOUT_MS,
+          timeoutMs: remainingTimeoutMs,
           signal,
         })
       : await (async () => {
@@ -302,7 +327,7 @@ async function runBrowserLiveProbe(
             cdpUrl: profileCtx.profile.cdpUrl,
             targetId: tab.targetId,
             limit: 25,
-            timeoutMs: LIVE_SNAPSHOT_PROBE_TIMEOUT_MS,
+            timeoutMs: remainingTimeoutMs,
             signal,
             ssrfPolicy: ctx.state().resolved.ssrfPolicy,
           });
@@ -441,11 +466,21 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
         run: async (signal) => {
           const status = await buildBrowserStatus(ctx, profileCtx, signal);
           const doctorReport = buildBrowserDoctorReport({ status });
-          if (
-            status.running &&
-            (toBoolean(req.query.deep) === true || toBoolean(req.query.live) === true)
-          ) {
-            doctorReport.checks.push(await runBrowserLiveProbe(ctx, profileCtx, signal));
+          const liveRequested =
+            toBoolean(req.query.deep) === true || toBoolean(req.query.live) === true;
+          if (liveRequested) {
+            doctorReport.checks.push(
+              status.running
+                ? await runBrowserLiveProbe(ctx, profileCtx, signal)
+                : {
+                    id: "live-snapshot",
+                    label: "Live snapshot",
+                    status: "fail",
+                    summary: "Live snapshot probe requires a running browser profile.",
+                    fixHint:
+                      "Start or connect the browser profile, then retry with openclaw browser doctor --deep.",
+                  },
+            );
             doctorReport.ok = doctorReport.checks.every((check) => check.status !== "fail");
           }
           return doctorReport;

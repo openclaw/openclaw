@@ -382,7 +382,7 @@ describe("browser client", () => {
     const doctor = calls.find((c) => c.url.endsWith("/doctor"));
     expect(doctor?.init?.timeoutMs).toBe(7_500);
     const deepDoctor = calls.find((c) => c.url.endsWith("/doctor?profile=openclaw&deep=true"));
-    expect(deepDoctor?.init?.timeoutMs).toBeGreaterThan(15_000);
+    expect(deepDoctor?.init?.timeoutMs).toBe(24_000);
     const open = calls.find((c) => c.url.endsWith("/tabs/open"));
     expect(open?.init?.method).toBe("POST");
 
@@ -402,6 +402,27 @@ describe("browser client", () => {
     ) as { targetId?: unknown; timeoutMs?: unknown };
     expect(defaultScreenshotBody.targetId).toBe("t-default");
     expect(defaultScreenshotBody.timeoutMs).toBe(20_000);
+  });
+
+  it("allows callers to override the composed deep-doctor request timeout", async () => {
+    const calls: Array<{ url: string; init?: RequestInit & { timeoutMs?: number } }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit & { timeoutMs?: number }) => {
+        calls.push({ url, init });
+        return jsonResponse({
+          ok: true,
+          profile: "openclaw",
+          transport: "cdp",
+          checks: [],
+          status: { enabled: true, running: true },
+        });
+      }),
+    );
+
+    await browserDoctor("http://127.0.0.1:18791", { deep: true, timeoutMs: 31_000 });
+
+    expect(calls[0]?.init?.timeoutMs).toBe(31_000);
   });
 
   it("marks internally selected close targets as exact", async () => {
