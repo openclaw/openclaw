@@ -1053,6 +1053,43 @@ describe("tool-loop-detection", () => {
       });
     });
 
+    it("resets the terminal-failure tail when a different command fails in between", () => {
+      const state = createState();
+      const probe = { command: "ssh -q host 'curl -s http://127.0.0.1:9233/json/version'" };
+      const other = { command: "docker compose up -d" };
+
+      for (let index = 0; index < CRITICAL_THRESHOLD - 1; index += 1) {
+        recordSuccessfulCall(
+          state,
+          "exec",
+          probe,
+          createExecLoopResult({
+            status: "failed",
+            exitCode: 255,
+            output: `ssh: connect to host port 22: Connection timed out (attempt ${index})`,
+          }),
+          index,
+        );
+      }
+      // A distinct failure under different arguments is the documented reset.
+      recordSuccessfulCall(
+        state,
+        "exec",
+        other,
+        createExecLoopResult({
+          status: "failed",
+          exitCode: 1,
+          output: "docker: network sandbox not ready",
+        }),
+        CRITICAL_THRESHOLD,
+      );
+
+      expect(detectToolCallLoop(state, "exec", probe, enabledLoopDetectionConfig)).toMatchObject({
+        level: "warning",
+        detector: "generic_repeat",
+      });
+    });
+
     it("keeps a succeeding exec command out of the terminal-failure streak", () => {
       const state = createState();
       const params = { command: "docker exec alist /opt/alist/alist admin set admin123" };

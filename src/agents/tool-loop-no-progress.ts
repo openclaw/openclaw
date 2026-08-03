@@ -22,6 +22,7 @@ function countNoProgressStreak(
 ): { count: number; latestResultHash?: string } {
   let streak = 0;
   let latestResultHash: string | undefined;
+  let latestArgsHash: string | undefined;
   // Vetoes are provisional until an older concrete outcome anchors them; a newer
   // changed outcome must reset vetoes from the previous no-progress streak.
   let pendingLoopVetoes = 0;
@@ -52,6 +53,7 @@ function countNoProgressStreak(
     }
     if (!latestResultHash) {
       latestResultHash = record.resultHash;
+      latestArgsHash = record.argsHash;
       streak = pendingLoopVetoes + 1;
       pendingLoopVetoes = 0;
       continue;
@@ -61,8 +63,10 @@ function countNoProgressStreak(
       // on to a different command. Re-running the same command and failing
       // again is not progress even when the error text drifts (timestamps,
       // connection ids, changing remote state), so an identical-argument
-      // repeat keeps the streak alive instead of collapsing it to 1.
-      if (!terminalExecFailuresOnly || record.argsHash !== argsHash) {
+      // repeat keeps the streak alive instead of collapsing it to 1. Anchor
+      // that comparison on the newest recorded call rather than the prospective
+      // one, so an intervening distinct failure still resets the tail.
+      if (!terminalExecFailuresOnly || record.argsHash !== latestArgsHash) {
         break;
       }
     }
