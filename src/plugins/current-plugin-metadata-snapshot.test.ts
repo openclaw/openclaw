@@ -3,9 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   captureCurrentPluginMetadataSnapshotState,
   getCurrentPluginMetadataSnapshot,
+  installCommandPluginMetadataSnapshot,
   restoreCurrentPluginMetadataSnapshotState,
   setCurrentPluginMetadataSnapshot,
 } from "./current-plugin-metadata-snapshot.js";
@@ -13,7 +15,10 @@ import { clearCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-st
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
-import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import {
+  type PluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot,
+} from "./plugin-metadata-snapshot.js";
 
 function createSnapshot(
   params: {
@@ -385,5 +390,58 @@ describe("current plugin metadata snapshot", () => {
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it("serves a command's installed snapshot to same-config readers, then restores the slot", () => {
+    const config = { plugins: { allow: ["alpha"] } } as OpenClawConfig;
+    const snapshot = createSnapshot({ config });
+    clearCurrentPluginMetadataSnapshot();
+
+    const cleanup = installCommandPluginMetadataSnapshot({
+      snapshot,
+      config,
+      env: process.env,
+    });
+
+    // The install is what turns a downstream cold `loadPluginMetadataSnapshot`
+    // into a slot read; `resolvePluginMetadataSnapshot` consults the slot first.
+    expect(getCurrentPluginMetadataSnapshot({ config })).toBe(snapshot);
+    expect(resolvePluginMetadataSnapshot({ config, env: process.env })).toBe(snapshot);
+
+    cleanup();
+
+    expect(getCurrentPluginMetadataSnapshot({ config })).toBeUndefined();
+  });
+
+  it("leaves an outer owner's installed snapshot in place", () => {
+    const config = { plugins: { allow: ["alpha"] } } as OpenClawConfig;
+    const outer = createSnapshot({ config });
+    const inner = createSnapshot({ config });
+    setCurrentPluginMetadataSnapshot(outer, { config });
+
+    const cleanup = installCommandPluginMetadataSnapshot({
+      snapshot: inner,
+      config,
+      env: process.env,
+    });
+    cleanup();
+
+    // A nested install that replaced the slot would publish `inner` when the
+    // outer owner later restored its own captured state.
+    expect(getCurrentPluginMetadataSnapshot({ config })).toBe(outer);
+  });
+
+  it("does not install an incomplete snapshot", () => {
+    const config = { plugins: { allow: ["alpha"] } } as OpenClawConfig;
+    clearCurrentPluginMetadataSnapshot();
+
+    const cleanup = installCommandPluginMetadataSnapshot({
+      snapshot: { policyHash: "hash" } as unknown as PluginMetadataSnapshot,
+      config,
+      env: process.env,
+    });
+    cleanup();
+
+    expect(getCurrentPluginMetadataSnapshot({ config })).toBeUndefined();
   });
 });

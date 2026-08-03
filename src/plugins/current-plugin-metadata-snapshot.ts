@@ -148,6 +148,55 @@ export function restoreCurrentPluginMetadataSnapshotState(
   );
 }
 
+function isCompletePluginMetadataSnapshot(value: unknown): value is PluginMetadataSnapshot {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const snapshot = value as Partial<PluginMetadataSnapshot>;
+  return (
+    typeof snapshot.policyHash === "string" &&
+    snapshot.index !== undefined &&
+    snapshot.manifestRegistry !== undefined
+  );
+}
+
+/** Publishes a command's prepared snapshot into the process-current slot for its own run.
+ *
+ * Routed cold commands build one snapshot and then call helpers that consult the
+ * slot before falling back to a full `loadPluginMetadataSnapshot` scan. Without an
+ * install each of those helpers repeats discovery. The returned closure must run in
+ * the command's `finally`: the slot is a single lifecycle-owned handoff, so a leaked
+ * install would serve one invocation's metadata to the next in-process command. */
+export function installCommandPluginMetadataSnapshot(params: {
+  snapshot: PluginMetadataSnapshot;
+  config: OpenClawConfig | undefined;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+}): () => void {
+  if (!isCompletePluginMetadataSnapshot(params.snapshot)) {
+    return () => {};
+  }
+  // An existing install belongs to an outer owner (gateway startup, a wrapping
+  // command); never replace it, or that owner's restore would publish our snapshot.
+  const current = getCurrentPluginMetadataSnapshot({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  if (current) {
+    return () => {};
+  }
+  const previousState = captureCurrentPluginMetadataSnapshotState();
+  setCurrentPluginMetadataSnapshot(params.snapshot, {
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  return () => {
+    restoreCurrentPluginMetadataSnapshotState(previousState);
+  };
+}
+
 export function getCurrentPluginMetadataSnapshot(
   params: {
     config?: OpenClawConfig;
