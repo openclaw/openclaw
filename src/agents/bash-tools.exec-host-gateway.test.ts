@@ -199,10 +199,16 @@ const detectInterpreterInlineEvalArgvMock = vi.hoisted(() =>
   ),
 );
 const resolveApprovalCommandAuthorizationMock = vi.hoisted(() =>
-  vi.fn((): { authorized: boolean; reason?: string; explicit: boolean } => ({
-    authorized: true,
-    explicit: false,
-  })),
+  vi.fn(
+    (
+      _params: Parameters<
+        typeof import("../infra/channel-approval-auth.js").resolveApprovalCommandAuthorization
+      >[0],
+    ): { authorized: boolean; reason?: string; explicit: boolean } => ({
+      authorized: true,
+      explicit: false,
+    }),
+  ),
 );
 
 vi.mock("../infra/exec-approvals.js", async (importOriginal) => ({
