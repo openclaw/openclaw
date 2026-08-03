@@ -56,7 +56,7 @@ type ComposerDictationControllerOptions = {
   onCommit: (text: string) => void;
   onError: (message: string) => void;
   onStateChange: () => void;
-  onTap: () => void;
+  onTap: (action: Event) => void;
 };
 
 function eventPayload(frame: GatewayEventFrame): DictationEvent | null {
@@ -502,7 +502,7 @@ export class ComposerDictationController {
       event.preventDefault();
       return;
     }
-    this.options.onTap();
+    this.options.onTap(event);
   }
 
   handleContextMenu(event: MouseEvent): void {
@@ -539,7 +539,7 @@ export class ComposerDictationController {
     if (this.phase === "holding") {
       this.clearGesture();
       this.setPhase("idle");
-      this.options.onTap();
+      this.options.onTap(event);
       this.expireClickSuppression();
       return;
     }

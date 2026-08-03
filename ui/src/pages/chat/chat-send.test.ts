@@ -5448,6 +5448,37 @@ describe("handleSendChat", () => {
     expect(host.chatQueue).toStrictEqual([]);
   });
 
+  it("executes one logical chat submission once when its handler re-enters", async () => {
+    const ack = createDeferred<unknown>();
+    const sends: Record<string, unknown>[] = [];
+    const host = makeHost({
+      requestHandlers: {
+        "chat.send": (params: unknown) => {
+          sends.push(requireRecord(params, "re-entered chat send payload"));
+          return ack.promise;
+        },
+      },
+    });
+    const submissionId = "stable-chat-action";
+
+    const first = handleSendChat(host, "same prompt", { submissionId });
+    const reentry = handleSendChat(host, "same prompt", { submissionId });
+
+    try {
+      expect(reentry).toBe(first);
+      await waitForFast(() => expect(sends).toHaveLength(1));
+      expect(host.chatQueue).toEqual([
+        expect.objectContaining({ sendState: "sending", text: "same prompt" }),
+      ]);
+    } finally {
+      ack.resolve({ runId: sends[0]?.idempotencyKey, status: "ok" });
+      await Promise.allSettled([first, reentry]);
+    }
+
+    expect(sends).toHaveLength(1);
+    expect(host.chatQueue).toStrictEqual([]);
+  });
+
   it("keeps a repeated fresh submission queued when the first ACK starts a run", async () => {
     const firstAck = createDeferred<unknown>();
     const sends: Record<string, unknown>[] = [];

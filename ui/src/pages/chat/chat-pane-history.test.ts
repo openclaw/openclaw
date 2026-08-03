@@ -22,7 +22,7 @@ type TestChatPane = HTMLElement & {
   state: ChatPageHost;
   connectedClient: GatewayBrowserClient | null;
   connectionGeneration: number;
-  continueCatalogSession: (key: CatalogSessionKey) => Promise<void>;
+  continueCatalogSession: (key: CatalogSessionKey, submissionId?: string) => Promise<void>;
   catalogLoadGeneration: number;
   catalogSession: SessionCatalogSession | null;
   sessionKey: string;
@@ -684,7 +684,7 @@ describe("chat pane catalog continuation lifecycle", () => {
     const request = vi.fn().mockResolvedValue({ sessionKey: "agent:main:continued" });
     const { key, pane, state } = createCatalogContinuationPane(request);
 
-    await pane.continueCatalogSession(key);
+    await pane.continueCatalogSession(key, "catalog-action");
 
     expect(request).toHaveBeenCalledWith("sessions.catalog.continue", key);
     const onPaneSessionChange = expectDefined(
@@ -708,6 +708,9 @@ describe("chat pane catalog continuation lifecycle", () => {
       "Continue the original catalog conversation",
     );
     expect(state.handleSendChat).toHaveBeenCalledOnce();
+    expect(state.handleSendChat).toHaveBeenCalledWith(undefined, {
+      submissionId: "catalog-action",
+    });
   });
 
   it("does not send a stale catalog draft after the user switches conversations", async () => {

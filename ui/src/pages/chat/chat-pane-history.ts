@@ -412,7 +412,7 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
     }
   }
 
-  protected async continueCatalogSession(key: CatalogSessionKey) {
+  protected async continueCatalogSession(key: CatalogSessionKey, submissionId?: string) {
     const scope = this.captureConnectionScope();
     const state = scope?.state;
     const client = scope?.client;
@@ -463,7 +463,7 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
       adoptedCatalogGeneration = this.catalogLoadGeneration;
       this.onPaneSessionChange?.(this.paneId, result.sessionKey);
       state.handleChatDraftChange(draft);
-      await state.handleSendChat();
+      await state.handleSendChat(undefined, submissionId ? { submissionId } : undefined);
       if (this.activeCatalogContinuation === continuation) {
         this.activeCatalogContinuation = null;
       }

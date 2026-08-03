@@ -10,6 +10,7 @@ import {
   formatGoalUsage,
   goalElapsedMs,
 } from "../../../lib/session-goal.ts";
+import { claimChatSubmissionAction } from "../chat-submission-action.ts";
 import type { ChatComposerState } from "./chat-composer-types.ts";
 
 const goalElapsedTimers = new Map<HTMLElement, ReturnType<typeof setInterval>>();
@@ -49,7 +50,7 @@ function createGoalElapsedRef(goal: SessionGoal) {
 
 type ChatGoalActions = {
   canAct: boolean;
-  onGoalCommand?: (command: string) => void;
+  onGoalCommand?: (command: string, submissionId: string) => void;
   onGoalEdit?: (goal: SessionGoal) => void;
   requestUpdate: () => void;
 };
@@ -58,7 +59,7 @@ function renderChatGoalActionButton(options: {
   className: string;
   label: string;
   icon: TemplateResult;
-  onClick: () => void;
+  onClick: (action: MouseEvent) => void;
 }): TemplateResult {
   return html`
     <openclaw-tooltip content=${options.label}>
@@ -95,6 +96,12 @@ export function renderChatGoal(
     state.goalExpandedId = expanded ? null : goal.id;
     actions.requestUpdate();
   };
+  const submitGoalCommand = (command: string, action: MouseEvent) => {
+    const claim = claimChatSubmissionAction(action);
+    if (claim.firstUse) {
+      actions.onGoalCommand?.(command, claim.submissionId);
+    }
+  };
   return html`
     <div
       class="agent-chat__goal agent-chat__goal--${goal.status}"
@@ -120,7 +127,7 @@ export function renderChatGoal(
                 className: "agent-chat__goal-pause",
                 label: t("chat.goals.pause"),
                 icon: icons.pause,
-                onClick: () => actions.onGoalCommand?.("/goal pause"),
+                onClick: (action) => submitGoalCommand("/goal pause", action),
               })
             : nothing}
           ${showActions && canResume
@@ -128,7 +135,7 @@ export function renderChatGoal(
                 className: "agent-chat__goal-resume",
                 label: t("chat.goals.resume"),
                 icon: icons.play,
-                onClick: () => actions.onGoalCommand?.("/goal resume"),
+                onClick: (action) => submitGoalCommand("/goal resume", action),
               })
             : nothing}
           ${showActions
@@ -136,7 +143,7 @@ export function renderChatGoal(
                 className: "agent-chat__goal-clear",
                 label: t("chat.goals.clear"),
                 icon: icons.trash,
-                onClick: () => actions.onGoalCommand?.("/goal clear"),
+                onClick: (action) => submitGoalCommand("/goal clear", action),
               })
             : nothing}
           <button

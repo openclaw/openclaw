@@ -13,6 +13,7 @@ import {
   type QuotaBudgetSummary,
   type QuotaLimitSummary,
 } from "../../../lib/provider-quota-summary.ts";
+import { claimChatSubmissionAction } from "../chat-submission-action.ts";
 
 const CONTEXT_NOTICE_RATIO = 0.85;
 const CONTEXT_COMPACT_RATIO = 0.9;
@@ -21,7 +22,7 @@ type ContextNoticeOptions = {
   compactBusy?: boolean;
   compactDisabled?: boolean;
   messages?: unknown[];
-  onCompact?: () => void | Promise<void>;
+  onCompact?: (submissionId: string) => void | Promise<void>;
   providerUsage?: ProviderUsageDisplayProps;
 };
 
@@ -513,7 +514,10 @@ export function renderContextNotice(
                 if (compactDisabled) {
                   return;
                 }
-                void options.onCompact?.();
+                const claim = claimChatSubmissionAction(event);
+                if (claim.firstUse) {
+                  void options.onCompact?.(claim.submissionId);
+                }
               }}
             >
               ${options.compactBusy ? icons.loader : icons.minimize}

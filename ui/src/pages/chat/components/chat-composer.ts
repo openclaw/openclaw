@@ -4,8 +4,8 @@ import { loadSettings, normalizeChatSendShortcut, patchSettings } from "../../..
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
-import { generateUUID } from "../../../lib/uuid.ts";
 import { ComposerDictationController, insertComposerDictation } from "../composer-dictation.ts";
+import { claimChatSubmissionAction } from "../chat-submission-action.ts";
 import { discoverRealtimeTalkInputs } from "../realtime-talk-input.ts";
 import { isLargePastedTextAttachment } from "./chat-attachments.ts";
 import { renderContextNotice } from "./chat-composer-context.ts";
@@ -342,7 +342,16 @@ export function renderChatComposer(props: ChatComposerProps) {
           state.slashMenuArgItems,
           props.paneId,
           requestUpdate,
-          (arg, submit) => selectSlashArg(arg, props, requestUpdate, submit),
+          (arg, submit) => {
+            if (!submit) {
+              selectSlashArg(arg, props, requestUpdate, false);
+              return;
+            }
+            const claim = claimChatSubmissionAction(event);
+            if (claim.firstUse) {
+              selectSlashArg(arg, props, requestUpdate, true, claim.submissionId);
+            }
+          },
           scrollActiveSlashMenuOptionIntoView,
         )
       ) {
@@ -358,10 +367,16 @@ export function renderChatComposer(props: ChatComposerProps) {
           state.slashMenuItems,
           props.paneId,
           requestUpdate,
-          (command, submit) =>
-            submit
-              ? selectSlashCommand(command, props, requestUpdate)
-              : tabCompleteSlashCommand(command, props, requestUpdate),
+          (command, submit) => {
+            if (!submit) {
+              tabCompleteSlashCommand(command, props, requestUpdate);
+              return;
+            }
+            const claim = claimChatSubmissionAction(event);
+            if (claim.firstUse) {
+              selectSlashCommand(command, props, requestUpdate, claim.submissionId);
+            }
+          },
           scrollActiveSlashMenuOptionIntoView,
         )
       ) {
@@ -404,9 +419,13 @@ export function renderChatComposer(props: ChatComposerProps) {
         return;
       }
       event.preventDefault();
+      const claim = claimChatSubmissionAction(event);
+      if (!claim.firstUse) {
+        return;
+      }
       const target = event.target as HTMLTextAreaElement;
       commitComposerDraft(props, target.value);
-      props.onSend(generateUUID());
+      props.onSend(claim.submissionId);
       syncComposerDraftAfterSend(target);
     }
   };
@@ -484,7 +503,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     commitComposerDraft(props, target.value);
     props.onTypingChange?.(false);
   };
-  const handleSend = () => {
+  const handleSend = (submissionId: string) => {
     const draft = state.composerTextarea?.value ?? props.draft;
     if (!canSubmitDraft(draft)) {
       return;
@@ -493,17 +512,20 @@ export function renderChatComposer(props: ChatComposerProps) {
     state.composingDraft = null;
     commitComposerDraft(props, draft);
     props.onTypingChange?.(false);
-    props.onSend(generateUUID());
+    props.onSend(submissionId);
     syncComposerDraftAfterSend(state.composerTextarea);
   };
-  const handleVoicePrimaryAction = () => {
+  const handleVoicePrimaryAction = (action: Event) => {
     if (props.realtimeTalkActive) {
       props.onToggleRealtimeTalk?.();
       return;
     }
     const liveDraft = state.composerTextarea?.value ?? visibleDraft;
     if (liveDraft.trim() || props.attachments?.length) {
-      handleSend();
+      const claim = claimChatSubmissionAction(action);
+      if (claim.firstUse) {
+        handleSend(claim.submissionId);
+      }
       return;
     }
     props.onToggleRealtimeTalk?.();

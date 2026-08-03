@@ -246,6 +246,23 @@ describe("renderChatComposer controls", () => {
     expect(submissionIds[0]).not.toBe(submissionIds[1]);
   });
 
+  it("submits once when one send action re-enters its handler", () => {
+    const onSend = vi.fn();
+    const view = renderComposer({ draft: "same prompt", onSend });
+    const input = view.container.querySelector<HTMLTextAreaElement>("textarea");
+    const action = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Enter",
+    });
+
+    input?.dispatchEvent(action);
+    input?.dispatchEvent(action);
+
+    expect(onSend).toHaveBeenCalledOnce();
+    expect(onSend).toHaveBeenCalledWith(expect.any(String));
+  });
+
   it("switches the primary action between voice, send, queue, and stop", () => {
     const onToggleRealtimeTalk = vi.fn();
     let view = renderComposer({ onToggleRealtimeTalk });
@@ -1076,8 +1093,12 @@ describe("renderChatComposer status", () => {
     expect(view.container.querySelector(".context-ring")?.classList).toContain(
       "context-ring--warning",
     );
-    view.container.querySelector<HTMLButtonElement>(".context-ring__action")?.click();
+    const compact = view.container.querySelector<HTMLButtonElement>(".context-ring__action");
+    const action = new MouseEvent("click", { bubbles: true, cancelable: true });
+    compact?.dispatchEvent(action);
+    compact?.dispatchEvent(action);
     expect(onCompact).toHaveBeenCalledOnce();
+    expect(onCompact).toHaveBeenCalledWith(expect.any(String));
 
     view = renderComposer({
       onCompact,
