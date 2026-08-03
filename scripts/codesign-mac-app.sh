@@ -125,6 +125,22 @@ macOS restart.
 WARN
 fi
 
+# codesign accepts a certificate SHA-1 hash as well as a name, and pinning by hash is the
+# standard workaround for two Developer ID certs sharing a common name. Classify the cert
+# rather than the selector text: a hash read as non-Developer-ID silently drops the
+# trusted timestamp that notarization requires.
+identity_is_developer_id_application() {
+  if [[ "$1" == *"Developer ID Application"* ]]; then
+    return 0
+  fi
+  if [[ ! "$1" =~ ^[0-9A-Fa-f]{40}$ ]]; then
+    return 1
+  fi
+  security find-identity -p codesigning -v 2>/dev/null \
+    | grep -i "$1" \
+    | grep -q "Developer ID Application"
+}
+
 timestamp_arg="--timestamp=none"
 case "$TIMESTAMP_MODE" in
   1|on|yes|true)
@@ -134,7 +150,7 @@ case "$TIMESTAMP_MODE" in
     timestamp_arg="--timestamp=none"
     ;;
   auto)
-    if [[ "$IDENTITY" == *"Developer ID Application"* ]]; then
+    if identity_is_developer_id_application "$IDENTITY"; then
       timestamp_arg="--timestamp"
     fi
     ;;
