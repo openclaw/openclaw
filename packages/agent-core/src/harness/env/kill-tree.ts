@@ -325,12 +325,21 @@ function collectUnixProcessTree(rootPid: number): UnixProcessTree | undefined {
     return undefined;
   }
 
-  const visit = (parentPid: number, depth: number): void => {
+  const visit = (parentPid: number, parentIdentity: string, depth: number): void => {
     if (
       Date.now() >= deadline ||
       depth > MAX_UNIX_PROCESS_TREE_DEPTH ||
       seen.size > MAX_UNIX_PROCESS_TREE_PIDS
     ) {
+      return;
+    }
+    // Revalidate that `parentPid` is still the captured process instance before
+    // trusting its children file. A PID reused between the parent's identity
+    // capture and this read would expose an unrelated replacement process's
+    // children, whose numeric ppid would otherwise pass the child check and
+    // admit a foreign subtree. The root is exempt (it has no captured parent)
+    // because its identity is verified once, at snapshot entry.
+    if (depth > 0 && readUnixProcessIdentity(parentPid, deadline) !== parentIdentity) {
       return;
     }
     const children = readUnixProcessChildren(parentPid);
@@ -356,12 +365,12 @@ function collectUnixProcessTree(rootPid: number): UnixProcessTree | undefined {
       if (!instance || instance.ppid !== parentPid || Date.now() >= deadline) {
         continue;
       }
-      visit(childPid, depth + 1);
+      visit(childPid, instance.identity, depth + 1);
       descendants.push({ pid: childPid, identity: instance.identity });
     }
   };
 
-  visit(rootPid, 0);
+  visit(rootPid, rootIdentity, 0);
   return [...descendants, { pid: rootPid, identity: rootIdentity }];
 }
 

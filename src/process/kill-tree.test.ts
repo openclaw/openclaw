@@ -592,6 +592,63 @@ describe("killProcessTree", () => {
     });
   });
 
+  it("on Linux revalidates a non-root parent before reading its children", async () => {
+    // Parent-reuse race at a non-root level: 5640 (root) -> 5641 (child) is
+    // captured. Before the walker reads 5641's children, 5641 exits and its PID
+    // is reused by an unrelated process that reports a grandchild 5642. Because
+    // 5641's identity changed, its (replacement) children file must never be
+    // trusted, so 5642 cannot enter the snapshot.
+    const statLine = (pid: number, comm: string, starttime: string, ppid = 1) =>
+      `${pid} (${comm}) S ${ppid} ${pid} ${pid} 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 ${starttime} 0`;
+    killSpy.mockImplementation(() => true);
+    let child5641Starttime = "200";
+    readFileSyncMock.mockImplementation((filePath: string) => {
+      if (filePath === "/proc/5640/task/5640/children") {
+        return "5641";
+      }
+      if (filePath === "/proc/5641/task/5641/children") {
+        return "5642";
+      }
+      if (filePath === "/proc/5642/task/5642/children") {
+        return "";
+      }
+      if (filePath === "/proc/5640/stat") {
+        return statLine(5640, "root", "100");
+      }
+      if (filePath === "/proc/5641/stat") {
+        // The first read (child capture) sees the original starttime; the
+        // second read (parent revalidation before its children) sees the
+        // recycled replacement's starttime, so the revalidation fails.
+        const starttime = child5641Starttime;
+        child5641Starttime = "777";
+        return statLine(5641, starttime === "200" ? "child" : "replacement", starttime, 5640);
+      }
+      if (filePath === "/proc/5642/stat") {
+        return statLine(5642, "stranger", "778", 5641);
+      }
+      throw new Error("unexpected proc path");
+    });
+
+    await withMockedPlatform("linux", async () => {
+      killProcessTree(5640, { graceMs: 10, detached: false });
+      await vi.advanceTimersByTimeAsync(10);
+
+      // The recycled 5641 fails its signal-time identity re-check, so only the
+      // verified root is signaled; 5641's replacement grandchild (5642) never
+      // enters the snapshot because 5641's identity changed before its
+      // children were read.
+      const realSignals = (
+        killSpy.mock.calls as Array<[number, NodeJS.Signals | number | undefined]>
+      ).filter(([, signal]) => signal !== 0);
+      expect(realSignals).toEqual([
+        [5640, "SIGTERM"],
+        [5640, "SIGKILL"],
+      ]);
+      expect(realSignals.some(([pid]) => pid === 5641)).toBe(false);
+      expect(realSignals.some(([pid]) => pid === 5642)).toBe(false);
+    });
+  });
+
   it("on Unix force-escalates one attached snapshot without rebuilding it", async () => {
     const statLine = (pid: number, comm: string, starttime: string, ppid = 1) =>
       `${pid} (${comm}) S ${ppid} ${pid} ${pid} 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 ${starttime} 0`;
