@@ -819,6 +819,11 @@ catalog, API-key auth, and dynamic model resolution.
         });
         ```
 
+        When the upstream requires WebSocket subprotocol negotiation, pass its
+        protocol name through `protocols` (for example, `protocols: ["binary"]`).
+        Do not set `Sec-WebSocket-Protocol` manually in `headers`; the WebSocket
+        client must negotiate it through the protocol argument.
+
         Batch STT providers that POST multipart audio should use
         `buildAudioTranscriptionFormData(...)` from
         `openclaw/plugin-sdk/provider-http`. The helper normalizes upload
