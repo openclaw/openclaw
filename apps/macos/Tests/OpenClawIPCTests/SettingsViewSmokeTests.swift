@@ -218,6 +218,54 @@ struct SettingsViewSmokeTests {
         _ = view.body
     }
 
+    @Test func `settings panes retain scroll position while inactive panes collapse`() async throws {
+        let state = AppState(preview: true)
+        state.nativeSettingsPanesEnabled = true
+        let hosting = NSHostingView(rootView: SettingsRootView(
+            state: state,
+            updater: nil,
+            initialTab: .permissions))
+        hosting.frame = NSRect(
+            x: 0,
+            y: 0,
+            width: SettingsTab.windowWidth,
+            height: SettingsTab.windowHeight)
+
+        let window = NSWindow(
+            contentRect: hosting.frame,
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false)
+        window.contentView = hosting
+        defer { window.close() }
+
+        try await Self.settleSettings(hosting)
+        #expect(!Self.descendants(of: NSView.self, in: hosting).contains {
+            $0.accessibilityRole() == .tabGroup
+        })
+        let permissionsScroll = try #require(Self.detailScrollView(in: hosting))
+        let maximumOffset = permissionsScroll.documentView.map {
+            max(0, $0.bounds.height - permissionsScroll.contentView.bounds.height)
+        } ?? 0
+        #expect(maximumOffset > 200)
+
+        permissionsScroll.contentView.scroll(to: NSPoint(x: 0, y: min(320, maximumOffset)))
+        permissionsScroll.reflectScrolledClipView(permissionsScroll.contentView)
+        let savedOffset = permissionsScroll.contentView.bounds.origin.y
+        #expect(savedOffset > 0)
+
+        NotificationCenter.default.post(name: .openclawSelectSettingsTab, object: SettingsTab.general)
+        try await Self.settleSettings(hosting)
+        #expect(permissionsScroll.frame.isEmpty)
+        #expect(Self.detailScrollView(in: hosting) !== permissionsScroll)
+
+        NotificationCenter.default.post(name: .openclawSelectSettingsTab, object: SettingsTab.permissions)
+        try await Self.settleSettings(hosting)
+        let restoredScroll = try #require(Self.detailScrollView(in: hosting))
+        #expect(restoredScroll === permissionsScroll)
+        #expect(abs(restoredScroll.contentView.bounds.origin.y - savedOffset) < 1)
+    }
+
     @Test func `Gateway settings is visible and builds body`() throws {
         let tabs = SettingsTabGroup.defaultGroups(showDebug: false, showSystemAgent: false)
             .flatMap(\.tabs)
@@ -327,5 +375,29 @@ struct SettingsViewSmokeTests {
     @Test func `exec approvals settings builds body`() {
         let view = ExecApprovalsSettings()
         _ = view.body
+    }
+
+    private static func detailScrollView(in view: NSView) -> NSScrollView? {
+        self.descendants(of: NSScrollView.self, in: view).first { scrollView in
+            guard scrollView.frame.width > 500, let documentView = scrollView.documentView else { return false }
+            return documentView.bounds.height > scrollView.contentView.bounds.height + 1
+        }
+    }
+
+    private static func descendants<T: NSView>(of type: T.Type, in view: NSView) -> [T] {
+        var matches: [T] = []
+        if let match = view as? T {
+            matches.append(match)
+        }
+        for child in view.subviews {
+            matches.append(contentsOf: self.descendants(of: type, in: child))
+        }
+        return matches
+    }
+
+    private static func settleSettings(_ hosting: NSView) async throws {
+        hosting.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(400))
+        hosting.layoutSubtreeIfNeeded()
     }
 }
