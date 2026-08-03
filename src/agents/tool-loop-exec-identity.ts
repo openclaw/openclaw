@@ -20,7 +20,7 @@ const VOLATILE_DIAGNOSTIC_PATTERNS: readonly RegExp[] = [
  * volatile spans and keep the rest of the message, including any number that
  * carries a cause, so a genuinely different failure stays different.
  */
-export function normalizeExecFailureShape(text: string): string {
+function normalizeExecFailureShape(text: string): string {
   let shape = text;
   for (const pattern of VOLATILE_DIAGNOSTIC_PATTERNS) {
     shape = shape.replace(pattern, "#");
