@@ -697,6 +697,58 @@ describe("killProcessTree", () => {
     });
   });
 
+  it("on Linux stops traversing once the PID cap is reached mid-list", async () => {
+    // Bounds enforcement: a wide child list must stop adding descendants once
+    // the 4,096-PID cap is reached, even when the cap is hit inside the loop
+    // rather than at visit entry. The walker must not keep probing identities
+    // or recursing past the advertised bound.
+    const statLine = (pid: number, comm: string, starttime: string, ppid = 1) =>
+      `${pid} (${comm}) S ${ppid} ${pid} ${pid} 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 ${starttime} 0`;
+    killSpy.mockImplementation(() => true);
+    // The root reports 4,098 children so the 4,096-PID cap (which already
+    // counts the root) is exceeded inside the child loop.
+    const overCapChildren = Array.from({ length: 4098 }, (_, i) => 6000 + i).join(" ");
+    let boundedChildrenRequested = false;
+    readFileSyncMock.mockImplementation((filePath: string) => {
+      if (filePath === "/proc/5999/task/5999/children") {
+        boundedChildrenRequested = true;
+        return overCapChildren;
+      }
+      if (filePath === "/proc/5999/stat") {
+        return statLine(5999, "root", "100");
+      }
+      // Each child has no further descendants and reports the root as parent.
+      const match = filePath.match(/^\/proc\/(\d+)\/stat$/);
+      if (match) {
+        const pid = Number(match[1]);
+        if (pid >= 6000) {
+          return statLine(pid, "child", String(pid), 5999);
+        }
+      }
+      if (/^\/proc\/\d+\/task\/\d+\/children$/.test(filePath)) {
+        return "";
+      }
+      throw new Error("unexpected proc path");
+    });
+
+    await withMockedPlatform("linux", async () => {
+      killProcessTree(5999, { graceMs: 10, detached: false });
+      await vi.advanceTimersByTimeAsync(10);
+
+      // The PID cap is honored: at most 4,096 PIDs (root + up to 4,095
+      // children) are ever signaled. Children past the cap are never admitted.
+      const signaledChildren = (
+        killSpy.mock.calls as Array<[number, NodeJS.Signals | number | undefined]>
+      )
+        .filter(([pid, signal]) => typeof pid === "number" && pid >= 6000 && signal !== 0)
+        .map(([pid]) => pid);
+      expect(new Set(signaledChildren).size).toBeLessThanOrEqual(4095);
+      // The walker did read the root's children list, proving the loop ran but
+      // honored the cap once seen.size exceeded it.
+      expect(boundedChildrenRequested).toBe(true);
+    });
+  });
+
   it("on Unix force-escalates one attached snapshot without rebuilding it", async () => {
     const statLine = (pid: number, comm: string, starttime: string, ppid = 1) =>
       `${pid} (${comm}) S ${ppid} ${pid} ${pid} 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 ${starttime} 0`;

@@ -325,12 +325,13 @@ function collectUnixProcessTree(rootPid: number): UnixProcessTree | undefined {
     return undefined;
   }
 
+  const withinBounds = (depth: number): boolean =>
+    Date.now() < deadline &&
+    depth <= MAX_UNIX_PROCESS_TREE_DEPTH &&
+    seen.size <= MAX_UNIX_PROCESS_TREE_PIDS;
+
   const visit = (parentPid: number, parentIdentity: string, depth: number): void => {
-    if (
-      Date.now() >= deadline ||
-      depth > MAX_UNIX_PROCESS_TREE_DEPTH ||
-      seen.size > MAX_UNIX_PROCESS_TREE_PIDS
-    ) {
+    if (!withinBounds(depth)) {
       return;
     }
     // Revalidate that `parentPid` is still the captured process instance before
@@ -350,6 +351,12 @@ function collectUnixProcessTree(rootPid: number): UnixProcessTree | undefined {
       return;
     }
     for (const childPid of children) {
+      // Re-check the deadline and PID cap on every iteration: a wide child list
+      // can keep probing identities and recursing past the advertised 500 ms /
+      // 4,096-PID bounds if the limit is only tested at visit entry.
+      if (!withinBounds(depth)) {
+        return;
+      }
       if (seen.has(childPid) || childPid === process.pid) {
         continue;
       }
@@ -363,7 +370,7 @@ function collectUnixProcessTree(rootPid: number): UnixProcessTree | undefined {
       // bound or no longer reports `parentPid` as its parent is dropped with
       // its subtree.
       const instance = readUnixProcessInstance(childPid, deadline);
-      if (!instance || instance.ppid !== parentPid || Date.now() >= deadline) {
+      if (!instance || instance.ppid !== parentPid || !withinBounds(depth)) {
         continue;
       }
       visit(childPid, instance.identity, depth + 1);
