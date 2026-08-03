@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   fingerprintAuthProfileCredential,
   fingerprintOpaqueRuntimeOwner,
@@ -25,7 +25,12 @@ import {
   type SystemAgentConfiguredRoute,
 } from "./inference-route.js";
 import { verifyConfigAfterSystemAgentWrite } from "./post-write-verification.js";
-import { createSystemAgentVerifiedInferenceTestFixture } from "./system-agent.test-helpers.js";
+import {
+  createSystemAgentVerifiedInferenceTestFixture,
+  installSystemAgentClaudeCliBackendTestFixture,
+  installSystemAgentPluginMetadataTestSnapshot,
+  type SystemAgentPluginMetadataTestSnapshot,
+} from "./system-agent.test-helpers.js";
 import {
   createSystemAgentVerifiedInferenceBinding,
   type SystemAgentVerifiedInferenceBinding,
@@ -49,6 +54,7 @@ const mocks = vi.hoisted(() => ({
   runSetupMemoryImportStep: vi.fn(),
   writeWizardConfigFile: vi.fn(),
   runCollectedChannelOnboardingPostWriteHooks: vi.fn(async () => {}),
+  sharedVerifiedInference: undefined as SystemAgentVerifiedInferenceBinding | undefined,
 }));
 
 type MemoryImportStepParams = Parameters<typeof runSetupMemoryImportStep>[0];
@@ -90,6 +96,23 @@ vi.mock("../plugins/providers.js", async (importOriginal) => ({
   resolveOwningPluginIdsForProviderRef: vi.fn(() => []),
 }));
 
+vi.mock("./verified-inference.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./verified-inference.js")>();
+  return {
+    ...actual,
+    resolveSystemAgentVerifiedInferenceRoute: (
+      ...args: Parameters<typeof actual.resolveSystemAgentVerifiedInferenceRoute>
+    ) => {
+      // Most cases own chat state, not inference ownership. Explicit bindings
+      // still run the real resolver so every drift and apply-boundary test stays end-to-end.
+      if (args[0] === mocks.sharedVerifiedInference) {
+        return Promise.resolve(args[0].execution);
+      }
+      return actual.resolveSystemAgentVerifiedInferenceRoute(...args);
+    },
+  };
+});
+
 const tempDirs: string[] = [];
 
 const sharedVerifiedInferenceConfig = {
@@ -117,11 +140,13 @@ const sharedVerifiedInferenceConfig = {
 
 let sharedVerifiedInference: SystemAgentVerifiedInferenceBinding | undefined;
 let sharedVerifiedInferenceDeps: SystemAgentVerifiedInferenceDeps | undefined;
+let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
 
 function useTempStateDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-engine-"));
   tempDirs.push(dir);
   vi.stubEnv("OPENCLAW_STATE_DIR", dir);
+  pluginMetadataSnapshot?.rebindForCurrentEnv();
   return dir;
 }
 
@@ -298,18 +323,27 @@ async function advanceGatewayWizardToToken(engine: SystemAgentChatEngine) {
 }
 
 beforeAll(async () => {
+  pluginMetadataSnapshot = installSystemAgentPluginMetadataTestSnapshot(
+    sharedVerifiedInferenceConfig,
+  );
   const fixture = await createSystemAgentVerifiedInferenceTestFixture(
     sharedVerifiedInferenceConfig,
   );
   sharedVerifiedInference = fixture.binding;
+  mocks.sharedVerifiedInference = fixture.binding;
   sharedVerifiedInferenceDeps = fixture.deps;
   mocks.readConfigFileSnapshot.mockResolvedValue(
     configSnapshot(structuredClone(sharedVerifiedInferenceConfig)) as never,
   );
 });
 
+afterAll(() => {
+  pluginMetadataSnapshot?.restore();
+});
+
 afterEach(() => {
   vi.unstubAllEnvs();
+  pluginMetadataSnapshot?.rebindForCurrentEnv();
   vi.clearAllMocks();
   mocks.readConfigFileSnapshot.mockResolvedValue(
     configSnapshot(structuredClone(sharedVerifiedInferenceConfig)) as never,
@@ -325,6 +359,9 @@ afterEach(() => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+const CANCEL_HINT = "Say `cancel` to stop this setup.";
+const countCancelHints = (text: string) => text.split(CANCEL_HINT).length - 1;
 
 describe("SystemAgentChatEngine", () => {
   it("lets only an operator arm delegated persistent writes", async () => {
@@ -451,6 +488,8 @@ describe("SystemAgentChatEngine", () => {
       configHashBefore: "before",
       configHashAfter: "after",
       bootstrapPending: true,
+      workspaceReady: true,
+      gateway: { status: "ready" as const, action: "reused" as const },
       lines: ["Workspace: /tmp/hatch-work"],
     }));
     const engine = new SystemAgentChatEngine({
@@ -515,6 +554,8 @@ describe("SystemAgentChatEngine", () => {
       configHashBefore: "before",
       configHashAfter: "after",
       bootstrapPending: false,
+      workspaceReady: true,
+      gateway: { status: "ready" as const, action: "reused" as const },
       lines: ["Workspace: /tmp/established-work"],
     }));
     const engine = new SystemAgentChatEngine({
@@ -556,6 +597,8 @@ describe("SystemAgentChatEngine", () => {
         configHashBefore: "before",
         configHashAfter: "after",
         bootstrapPending: true,
+        workspaceReady: true,
+        gateway: { status: "ready" as const, action: "reused" as const },
         lines: ["Workspace: /tmp/hatch-work"],
       };
     });
@@ -651,6 +694,8 @@ describe("SystemAgentChatEngine", () => {
       configHashBefore: null,
       configHashAfter: "after",
       bootstrapPending: false,
+      workspaceReady: true,
+      gateway: { status: "ready" as const, action: "reused" as const },
       lines: ["Workspace: /tmp/work"],
     }));
     expect(
@@ -1340,11 +1385,13 @@ describe("SystemAgentChatEngine", () => {
         },
       },
     };
+    const verifiedInference = await createAmbientVerifiedBinding(baseConfig);
     // The route flips between the final turn's entry gate and the
     // persistent-apply recheck; only the apply boundary can catch it.
     let baseReadsRemaining = Number.POSITIVE_INFINITY;
     const engine = new SystemAgentChatEngine({
       surface: "gateway",
+      verifiedInference,
       runAgentTurn: async () => null,
       planWithAssistant: async () => null,
       deps: {
@@ -2048,8 +2095,59 @@ describe("SystemAgentChatEngine", () => {
     const invalid = await engine.handle("banana");
     expect(invalid.text).toContain("Enter port 18789");
     expect(invalid.text).toContain("Port");
+    expect(countCancelHints(invalid.text)).toBe(1);
+    expect(invalid.text.endsWith(CANCEL_HINT)).toBe(true);
     const done = await engine.handle("18789");
     expect(done.text).toContain("telegram is configured");
+  });
+
+  it("hints cancel once per message, only while a step awaits an answer", async () => {
+    useTempStateDir();
+    const engine = new SystemAgentChatEngine({
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        await prompter.note("Open the linked-devices screen.", "Step 1");
+        await prompter.note("Scan the code shown next.", "Step 2");
+        await prompter.note("Keep the phone online.", "Step 3");
+        await prompter.text({ message: "Phone number" });
+        await prompter.note("Linked.", "Step 4");
+      },
+    });
+
+    // Three auto-answered notes concatenate into the prompt's message; the hint
+    // is the message's, not each step's.
+    const prompt = await engine.handle("connect telegram");
+    expect(prompt.text).toContain("Step 3");
+    expect(prompt.text).toContain("Phone number");
+    expect(countCancelHints(prompt.text)).toBe(1);
+    expect(prompt.text.endsWith(CANCEL_HINT)).toBe(true);
+    expect(engine.historySince(0).at(-1)).toEqual({ role: "assistant", text: prompt.text });
+
+    const done = await engine.handle("+15551230000");
+    expect(done.text).toContain("Step 4");
+    expect(done.text).toContain("telegram is configured");
+    expect(countCancelHints(done.text)).toBe(0);
+  });
+
+  it("drops the cancel hint from the cancellation message", async () => {
+    useTempStateDir();
+    const engine = new SystemAgentChatEngine({
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        await prompter.text({ message: "Bot token" });
+      },
+    });
+
+    const prompt = await engine.handle("connect discord");
+    expect(countCancelHints(prompt.text)).toBe(1);
+
+    const cancelled = await engine.handle("cancel");
+    expect(cancelled.text).toContain("cancelled");
+    expect(countCancelHints(cancelled.text)).toBe(0);
   });
 
   it("cancels a hosted wizard mid-flight", async () => {
@@ -2468,6 +2566,8 @@ describe("SystemAgentChatEngine", () => {
       configHashBefore: "before",
       configHashAfter: "after",
       bootstrapPending: false,
+      workspaceReady: true,
+      gateway: { status: "ready" as const, action: "reused" as const },
       lines: ["Workspace: /tmp/new-work"],
     }));
     let pendingOperation = "";
@@ -3048,6 +3148,18 @@ describe("SystemAgentChatEngine", () => {
 });
 
 describe("OpenClaw agent loop backends", () => {
+  let restoreCliBackendFixture: (() => void) | undefined;
+
+  beforeAll(() => {
+    // These cases own chat routing and CLI session continuity. Anthropic setup tests own loading
+    // the generated backend artifact, so keep this integration on the same contract-level fixture.
+    restoreCliBackendFixture = installSystemAgentClaudeCliBackendTestFixture();
+  });
+
+  afterAll(() => {
+    restoreCliBackendFixture?.();
+  });
+
   it("runs a configured claude-cli model through the CLI loop with the ring-zero MCP tool", async () => {
     useTempStateDir();
     const config = {
