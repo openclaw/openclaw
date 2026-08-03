@@ -1022,6 +1022,69 @@ describe("tool-loop-detection", () => {
       });
     });
 
+    it("blocks repeated terminal exec failures whose output text keeps changing", () => {
+      const state = createState();
+      const params = { command: "ssh -q host 'curl -s http://127.0.0.1:9233/json/version'" };
+
+      for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
+        // Real terminal failures rarely repeat byte-for-byte: timestamps and
+        // connection ids drift between attempts even though nothing progresses.
+        recordSuccessfulCall(
+          state,
+          "exec",
+          params,
+          createExecLoopResult({
+            status: "failed",
+            exitCode: 255,
+            output: `ssh: connect to host port 22: Connection timed out (attempt ${index} at 12:0${index % 10}:33)`,
+          }),
+          index,
+        );
+      }
+
+      expect(
+        state.toolCallHistory?.every((record) => record.outcomeKind === "terminal-exec-failure"),
+      ).toBe(true);
+      expect(detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig)).toMatchObject({
+        stuck: true,
+        level: "critical",
+        detector: "generic_repeat",
+        count: CRITICAL_THRESHOLD,
+      });
+    });
+
+    it("keeps a succeeding exec command out of the terminal-failure streak", () => {
+      const state = createState();
+      const params = { command: "docker exec alist /opt/alist/alist admin set admin123" };
+
+      for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
+        recordSuccessfulCall(
+          state,
+          "exec",
+          params,
+          createExecLoopResult({
+            status: "failed",
+            exitCode: 1,
+            output: `Error: container not ready (attempt ${index})`,
+          }),
+          index,
+        );
+      }
+      // A real success is progress and must anchor a fresh streak.
+      recordSuccessfulCall(
+        state,
+        "exec",
+        params,
+        createExecLoopResult({ status: "completed", exitCode: 0, output: "password updated" }),
+        CRITICAL_THRESHOLD,
+      );
+
+      expect(detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig)).toMatchObject({
+        level: "warning",
+        detector: "generic_repeat",
+      });
+    });
+
     it("anchors changing-argument exec vetoes until the global circuit breaker", () => {
       const state = createState();
       const result = createExecLoopResult({

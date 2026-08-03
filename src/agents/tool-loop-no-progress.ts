@@ -57,7 +57,14 @@ function countNoProgressStreak(
       continue;
     }
     if (record.resultHash !== latestResultHash) {
-      break;
+      // A distinct terminal failure still resets the tail once the agent moves
+      // on to a different command. Re-running the same command and failing
+      // again is not progress even when the error text drifts (timestamps,
+      // connection ids, changing remote state), so an identical-argument
+      // repeat keeps the streak alive instead of collapsing it to 1.
+      if (!terminalExecFailuresOnly || record.argsHash !== argsHash) {
+        break;
+      }
     }
     streak += pendingLoopVetoes + 1;
     pendingLoopVetoes = 0;
