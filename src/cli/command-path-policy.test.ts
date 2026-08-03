@@ -213,6 +213,7 @@ describe("command-path-policy", () => {
     for (const commandPath of [
       ["agents", "bind"],
       ["agents", "unbind"],
+      ["agents", "set-default"],
       ["agents", "set-identity"],
       ["agents", "delete"],
     ]) {

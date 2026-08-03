@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   agentsBindCommandMock: vi.fn(),
   agentsDeleteCommandMock: vi.fn(),
   agentsListCommandMock: vi.fn(),
+  agentsSetDefaultCommandMock: vi.fn(),
   agentsSetIdentityCommandMock: vi.fn(),
   agentsUnbindCommandMock: vi.fn(),
   setVerboseMock: vi.fn(),
@@ -29,6 +30,7 @@ const agentsBindingsCommandMock = mocks.agentsBindingsCommandMock;
 const agentsBindCommandMock = mocks.agentsBindCommandMock;
 const agentsDeleteCommandMock = mocks.agentsDeleteCommandMock;
 const agentsListCommandMock = mocks.agentsListCommandMock;
+const agentsSetDefaultCommandMock = mocks.agentsSetDefaultCommandMock;
 const agentsSetIdentityCommandMock = mocks.agentsSetIdentityCommandMock;
 const agentsUnbindCommandMock = mocks.agentsUnbindCommandMock;
 const setVerboseMock = mocks.setVerboseMock;
@@ -64,6 +66,10 @@ vi.mock("../../commands/agents.commands.list.js", () => ({
   agentsListCommand: mocks.agentsListCommandMock,
 }));
 
+vi.mock("../../commands/agents.commands.set-default.js", () => ({
+  agentsSetDefaultCommand: mocks.agentsSetDefaultCommandMock,
+}));
+
 vi.mock("../../global-state.js", () => ({
   setVerbose: mocks.setVerboseMock,
 }));
@@ -90,6 +96,7 @@ describe("agent command registration", () => {
     agentsBindCommandMock.mockResolvedValue(undefined);
     agentsDeleteCommandMock.mockResolvedValue(undefined);
     agentsListCommandMock.mockResolvedValue(undefined);
+    agentsSetDefaultCommandMock.mockResolvedValue(undefined);
     agentsSetIdentityCommandMock.mockResolvedValue(undefined);
     agentsUnbindCommandMock.mockResolvedValue(undefined);
   });
@@ -376,6 +383,17 @@ describe("agent command registration", () => {
     expect((options as { force?: boolean }).force).toBe(true);
     expect((options as { json?: boolean }).json).toBe(true);
     expect(callRuntime).toBe(runtime);
+  });
+
+  it("forwards agents set-default options", async () => {
+    await runCli(["agents", "set-default", "worker-a", "--json"]);
+    expect(agentsSetDefaultCommandMock).toHaveBeenCalledWith(
+      {
+        id: "worker-a",
+        json: true,
+      },
+      runtime,
+    );
   });
 
   it("forwards set-identity options", async () => {

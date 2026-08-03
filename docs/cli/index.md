@@ -234,6 +234,7 @@ openclaw [--dev] [--profile <name>] <command>
     bindings
     bind
     unbind
+    set-default
     set-identity
   attach
   acp

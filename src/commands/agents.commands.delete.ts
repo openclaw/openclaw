@@ -112,7 +112,7 @@ export async function agentsDeleteCommand(
   }
   if (agentId === resolveDefaultAgentId(cfg)) {
     runtime.error(
-      `Agent "${agentId}" is the default and cannot be deleted. Reassign default first.`,
+      `Agent "${agentId}" is the default and cannot be deleted. Reassign it with ${formatCliCommand(`openclaw agents set-default <id>`)} first.`,
     );
     runtime.exit(1);
     return;

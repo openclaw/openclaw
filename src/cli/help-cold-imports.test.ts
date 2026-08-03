@@ -185,6 +185,11 @@ vi.mock("../commands/agents.commands.list.js", () => {
   return { agentsListCommand: vi.fn(async () => {}) };
 });
 
+vi.mock("../commands/agents.commands.set-default.js", () => {
+  loaded.mark("agents-set-default-command");
+  return { agentsSetDefaultCommand: vi.fn(async () => {}) };
+});
+
 vi.mock("@clack/prompts", () => {
   loaded.mark("clack-prompts");
   return {
@@ -335,6 +340,7 @@ describe("subcommand help cold imports", () => {
     expect(loaded.modules).not.toContain("agents-delete-command");
     expect(loaded.modules).not.toContain("agents-identity-command");
     expect(loaded.modules).not.toContain("agents-list-command");
+    expect(loaded.modules).not.toContain("agents-set-default-command");
     expect(loaded.modules).not.toContain("default-runtime");
   });
 

@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw agents` (list/add/delete/bindings/bind/unbind/set identity)"
+summary: "CLI reference for `openclaw agents` (list/add/delete/bindings/bind/unbind/set default/set identity)"
 read_when:
   - You want multiple isolated agents (workspaces + routing + auth)
 title: "Agents"
@@ -26,6 +26,7 @@ openclaw agents add ops --workspace ~/.openclaw/workspace-ops --bind telegram:op
 openclaw agents bindings
 openclaw agents bind --agent work --bind telegram:ops
 openclaw agents unbind --agent work --bind telegram:ops
+openclaw agents set-default work
 openclaw agents set-identity --workspace ~/.openclaw/workspace --from-identity
 openclaw agents set-identity --agent main --avatar avatars/openclaw.png
 openclaw agents delete work
@@ -58,6 +59,12 @@ Options: `--agent <id>` (defaults to the current default agent), `--bind <channe
 
 Options: `--agent <id>` (defaults to the current default agent), `--bind <channel[:accountId]>` (repeatable), `--all`, `--json`. Accepts either `--all` or one or more `--bind` values, not both.
 
+### `agents set-default <id>`
+
+Reassigns the default agent in one config update. If the selected agent is already the default, the command succeeds without rewriting the config.
+
+Options: `--json`.
+
 ### `agents set-identity`
 
 Options: `--agent <id>`, `--workspace <dir>`, `--identity-file <path>`, `--from-identity`, `--name <name>`, `--theme <theme>`, `--emoji <emoji>`, `--avatar <value>`, `--json`. See [Set identity](#set-identity) below.
@@ -67,6 +74,7 @@ Options: `--agent <id>`, `--workspace <dir>`, `--identity-file <path>`, `--from-
 Options: `--force`, `--json`.
 
 - `main` cannot be deleted.
+- The default agent cannot be deleted. Reassign it first with `openclaw agents set-default <id>`.
 - Without `--force`, interactive confirmation is required (fails in a non-TTY session; re-run with `--force`).
 - Workspace, agent state, and session transcript directories move to Trash, not hard-deleted. If Trash is unavailable, agent config deletion still succeeds and reports paths requiring manual cleanup.
 - When the Gateway is reachable, deletion routes through the Gateway so config and session-store cleanup share the same writer as runtime traffic. If the Gateway is unreachable, the CLI falls back to the offline local path.

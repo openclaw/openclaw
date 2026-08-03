@@ -12,6 +12,7 @@ type AgentsBindModule = typeof import("../../commands/agents.commands.bind.js");
 type AgentsDeleteModule = typeof import("../../commands/agents.commands.delete.js");
 type AgentsIdentityModule = typeof import("../../commands/agents.commands.identity.js");
 type AgentsListModule = typeof import("../../commands/agents.commands.list.js");
+type AgentsSetDefaultModule = typeof import("../../commands/agents.commands.set-default.js");
 type CliUtilsModule = typeof import("../cli-utils.js");
 type RuntimeModule = typeof import("../../runtime.js");
 
@@ -47,6 +48,12 @@ async function loadAgentsSetIdentityCommand(): Promise<
 
 async function loadAgentsListCommand(): Promise<AgentsListModule["agentsListCommand"]> {
   return (await import("../../commands/agents.commands.list.js")).agentsListCommand;
+}
+
+async function loadAgentsSetDefaultCommand(): Promise<
+  AgentsSetDefaultModule["agentsSetDefaultCommand"]
+> {
+  return (await import("../../commands/agents.commands.set-default.js")).agentsSetDefaultCommand;
 }
 
 async function loadAgentsActionRuntime(): Promise<{
@@ -192,6 +199,23 @@ export function registerAgentsCommands(program: Command): void {
           },
           runtime,
           { hasFlags },
+        );
+      });
+    });
+
+  agents
+    .command("set-default <id>")
+    .description("Set the default agent")
+    .option("--json", "Output JSON summary", false)
+    .action(async (id, opts): Promise<void> => {
+      await runAgentsCommandAction(async (runtime) => {
+        const agentsSetDefaultCommand = await loadAgentsSetDefaultCommand();
+        await agentsSetDefaultCommand(
+          {
+            id: String(id),
+            json: Boolean(opts.json),
+          },
+          runtime,
         );
       });
     });

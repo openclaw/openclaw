@@ -419,7 +419,7 @@ describe("agents delete command", () => {
       await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
 
       expect(runtime.error).toHaveBeenCalledWith(
-        'Agent "ops" is the default and cannot be deleted. Reassign default first.',
+        'Agent "ops" is the default and cannot be deleted. Reassign it with openclaw agents set-default <id> first.',
       );
       expect(runtime.exit).toHaveBeenCalledWith(1);
       expectSessionStore(cfg, {
