@@ -27,6 +27,7 @@ import {
   settleFailedQueuedSubagentLaunch,
   startQueuedSubagentRun,
 } from "./subagent-registry.js";
+import { loadRequesterLifecycleRevision } from "./subagent-requester-lifecycle.js";
 import { resolveSubagentSpawnAcceptedNote } from "./subagent-spawn-accepted-note.js";
 import { resolveSubagentChildPlan } from "./subagent-spawn-child-plan.js";
 import {
@@ -474,7 +475,9 @@ export async function spawnSubagentDirect(
       admissionReservation,
       progressOrigin,
       progressSessionKey: requesterInternalKey,
-      buildRegistration: (_state, runId) => {
+      captureExpectedRequesterLifecycle: () =>
+        loadRequesterLifecycleRevision(ownership.completionRequesterSessionKey),
+      buildRegistration: (_state, runId, expectedRequesterLifecycleRevision) => {
         if (params.collect) {
           const latestAdmission = resolveAdmission();
           if (!latestAdmission.ok) {
@@ -503,6 +506,7 @@ export async function spawnSubagentDirect(
           workspaceDir: spawnedMetadata.workspaceDir,
           runTimeoutSeconds,
           expectsCompletionMessage: shouldAnnounceCompletion,
+          ...(shouldAnnounceCompletion ? { expectedRequesterLifecycleRevision } : {}),
           spawnMode,
           collect: params.collect === true,
           swarmRequesterSessionKey: params.collect ? requesterInternalKey : undefined,

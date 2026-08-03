@@ -225,6 +225,8 @@ export type RegisterSubagentRunParams = {
   childSessionKey: string;
   controllerSessionKey?: string;
   requesterSessionKey: string;
+  /** Requester lifecycle revision captured before child dispatch by the spawn pipeline. */
+  expectedRequesterLifecycleRevision?: string;
   requesterOrigin?: DeliveryContext;
   progressOrigin?: SubagentProgressOrigin;
   requesterDisplayKey: string;
@@ -1179,7 +1181,7 @@ export function createSubagentRunManager(params: {
       taskRunId: runId,
       ...(registerParams.expectsCompletionMessage === true
         ? {
-            expectedRequesterLifecycleRevision: loadRequesterLifecycleRevision(requesterSessionKey),
+            expectedRequesterLifecycleRevision: registerParams.expectedRequesterLifecycleRevision,
           }
         : {}),
       ...(requesterTurnRunId && registerParams.expectsCompletionMessage === true
