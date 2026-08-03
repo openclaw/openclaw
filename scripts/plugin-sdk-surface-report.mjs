@@ -130,7 +130,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "channel-lifecycle": 23,
   // +1: shared ingress error factory projected through the deprecated message barrel.
   // +1: shared ingress retention defaults projected through the deprecated message barrel.
-  "channel-message": 131,
+  // +3: stall watchdog re-export inherited from channel-outbound through the deprecated message barrel.
+  "channel-message": 134,
   "channel-pairing": 0,
   "channel-policy": 7,
   "channel-send-result": 1,
@@ -210,7 +211,9 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +45: restore typed session-catalog and tool-results exports promised to plugins.
       // +1: forwarding-routed approver-restricted native approval capability factory.
       // +1: shared inbound-event delivery correlation factory for channel plugins.
-      4822,
+      // +3: armable stall watchdog for long-running channel transport (SSE/websocket)
+      // stalls (channel-outbound plus the deprecated channel-message barrel).
+      4828,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -252,7 +255,9 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +14: restore callable session-catalog and tool-results helpers promised to plugins.
       // +1: forwarding-routed approver-restricted native approval capability factory.
       // +1: shared inbound-event delivery correlation factory for channel plugins.
-      2899,
+      // +2: createArmableStallWatchdog for long-running channel transport stalls
+      // (channel-outbound plus the deprecated channel-message barrel).
+      2901,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -264,7 +269,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: flushLogger projected through the deprecated text-runtime barrel.
       // +1: shared ingress error factory projected through channel-message.
       // +1: shared ingress retention defaults projected through channel-message.
-      1703,
+      // +3: stall watchdog projected through the deprecated channel-message barrel.
+      1706,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

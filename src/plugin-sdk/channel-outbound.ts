@@ -43,6 +43,12 @@ export {
 // Bare interval/stop orchestration for channels that own their typing renewal
 // policy (e.g. per-message reply budgets) instead of the createTypingCallbacks lifecycle.
 export { createTypingKeepaliveLoop } from "../channels/typing-lifecycle.js";
+// Idle watchdog for long-running channel transports (SSE/websocket stalls).
+export {
+  createArmableStallWatchdog,
+  type ArmableStallWatchdog,
+  type StallWatchdogTimeoutMeta,
+} from "../channels/transport/stall-watchdog.js";
 
 export {
   createFinalizableDraftLifecycle,
