@@ -233,7 +233,7 @@ describe("pw-tools-core aria snapshot storage", () => {
     }
   });
 
-  it("races snapshotAriaViaPlaywright against an explicit timeoutMs", async () => {
+  it("races snapshotAriaViaPlaywright against an explicit timeoutMs without disconnecting siblings", async () => {
     vi.useFakeTimers();
     try {
       const page = { id: "page-1" };
@@ -263,14 +263,9 @@ describe("pw-tools-core aria snapshot storage", () => {
       await expect(promise).rejects.toThrow(
         /Aria snapshot via Playwright timed out.*targetId=tab-1.*Accessibility\.enable/,
       );
-      expect(forceDisconnectPlaywrightForTarget).toHaveBeenCalledWith({
-        cdpUrl: "http://127.0.0.1:9222",
-        targetId: "tab-1",
-        ssrfPolicy: undefined,
-        reason: "aria snapshot aborted",
-      });
+      expect(forceDisconnectPlaywrightForTarget).not.toHaveBeenCalled();
 
-      rejectEnable(new Error("browser disconnected"));
+      rejectEnable(new Error("page session detached"));
       await vi.runAllTimersAsync();
       expect(send).toHaveBeenCalledTimes(1);
       expect(storeRoleRefsForTarget).not.toHaveBeenCalled();
@@ -279,7 +274,7 @@ describe("pw-tools-core aria snapshot storage", () => {
     }
   });
 
-  it("disconnects an in-flight aria snapshot when its caller aborts", async () => {
+  it("cancels an in-flight aria snapshot without disconnecting the shared browser", async () => {
     const page = { id: "page-1" };
     let rejectEnable!: (reason: unknown) => void;
     const send = vi.fn<ScopedCdpSend>(
@@ -306,15 +301,62 @@ describe("pw-tools-core aria snapshot storage", () => {
     controller.abort(cancellation);
 
     await expect(promise).rejects.toBe(cancellation);
-    expect(forceDisconnectPlaywrightForTarget).toHaveBeenCalledWith({
-      cdpUrl: "http://127.0.0.1:9222",
-      targetId: "tab-1",
-      ssrfPolicy: undefined,
-      reason: "aria snapshot aborted",
-    });
-    rejectEnable(new Error("browser disconnected"));
+    expect(forceDisconnectPlaywrightForTarget).not.toHaveBeenCalled();
+    rejectEnable(new Error("page session detached"));
     await Promise.resolve();
     expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a sibling tab snapshot alive when another tab is cancelled", async () => {
+    const controller = new AbortController();
+    const cancellation = new Error("tab-1 snapshot cancelled");
+    const pages = new Map([
+      ["tab-1", { id: "page-1" }],
+      ["tab-2", { id: "page-2" }],
+    ]);
+    getPageForTargetId.mockImplementation(async ({ targetId }: { targetId: string }) =>
+      pages.get(targetId),
+    );
+    let finishSibling!: (value: { nodes: Array<{ snapshot: string }> }) => void;
+    withPageScopedCdpClient.mockImplementation(
+      async (options: { signal?: AbortSignal; targetId?: string }) => {
+        if (options.targetId === "tab-1") {
+          return await new Promise<never>((_resolve, reject) => {
+            const rejectOnAbort = () => reject(options.signal?.reason ?? new Error("aborted"));
+            options.signal?.addEventListener("abort", rejectOnAbort, { once: true });
+          });
+        }
+        return await new Promise<{ nodes: Array<{ snapshot: string }> }>((resolve) => {
+          finishSibling = resolve;
+        });
+      },
+    );
+    formatAriaSnapshot.mockImplementation((nodes: Array<{ snapshot?: string }>) => [
+      { ref: "ax-sibling", role: "document", name: nodes[0]?.snapshot ?? "" },
+    ]);
+    markBackendDomRefsOnPage.mockResolvedValue(new Set());
+
+    const mod = await import("./pw-tools-core.snapshot.js");
+    const cancelled = mod.snapshotAriaViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      signal: controller.signal,
+    });
+    const sibling = mod.snapshotAriaViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-2",
+    });
+    void cancelled.catch(() => {});
+    await vi.waitFor(() => expect(withPageScopedCdpClient).toHaveBeenCalledTimes(2));
+
+    controller.abort(cancellation);
+    await expect(cancelled).rejects.toBe(cancellation);
+    expect(forceDisconnectPlaywrightForTarget).not.toHaveBeenCalled();
+
+    finishSibling({ nodes: [{ snapshot: "still alive" }] });
+    await expect(sibling).resolves.toEqual({
+      nodes: [{ ref: "ax-sibling", role: "document", name: "still alive" }],
+    });
   });
 
   it("does not publish a timed-out raw snapshot after a newer retry succeeds", async () => {

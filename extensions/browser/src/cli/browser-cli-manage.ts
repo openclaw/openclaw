@@ -308,8 +308,14 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
     }
     for (const canonicalCheck of canonicalDoctor.checks) {
       const mapped = mapCanonicalDoctorCheck(canonicalCheck);
-      if (!checks.some((check) => check.name === mapped.name)) {
+      const existing = checks.find((check) => check.name === mapped.name);
+      if (!existing) {
         checks.push(mapped);
+      } else if (!existing.fixHint && mapped.fixHint) {
+        // The canonical deep-doctor report owns recovery guidance. Preserve a
+        // local enrichment row when present, but do not discard its actionable
+        // hint merely because both rows map to the same display name.
+        existing.fixHint = mapped.fixHint;
       }
     }
     if (!canonicalDoctor.ok && canonicalDoctor.checks.every((check) => check.status !== "fail")) {

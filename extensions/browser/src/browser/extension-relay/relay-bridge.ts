@@ -385,9 +385,10 @@ export class ExtensionRelayBridge {
     const nextIds = new Set(tabs.map((tab) => tab.tabId));
     for (const [tabId, tab] of this.tabs) {
       if (!nextIds.has(tabId)) {
-        if (tab.attached) {
-          this.emitDetachedFromTarget(tabId, tab.attached.sessionId, tab.attached.targetId);
-        }
+        // Establish tab-ID-owned detach state even while the original attach is
+        // unresolved. A same-ID replacement must wait for Chrome to revoke that
+        // attachment before it can publish a fresh session.
+        void this.detachTab(tabId, tab);
         this.tabs.delete(tabId);
       }
     }
@@ -442,8 +443,10 @@ export class ExtensionRelayBridge {
       // the TabState. Writing onto the new TabState would bind stale attach data.
       const current = this.tabs.get(tabId);
       if (current !== tab) {
-        // Original tab vanished (or was recreated); best-effort detach the banner.
-        void this.callExtension({ type: "detach", tabId }).catch(() => {});
+        // Original tab vanished (or was recreated). Reuse the tab-ID-owned
+        // lifecycle started by syncTabs instead of sending an untracked detach
+        // that can race and tear down the replacement attachment.
+        await this.detachTab(tabId, tab);
         throw new Error(`tab ${tabId} closed during attach`);
       }
       current.attached = attached;

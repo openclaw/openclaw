@@ -405,6 +405,23 @@ describe("browser remote profile tab ops via Playwright", () => {
     });
   });
 
+  it("does not create a page when diagnostic selection finds no existing tab", async () => {
+    const listPagesViaPlaywright = vi.fn(deps.createSequentialPageLister([[], []]));
+    const createPageViaPlaywright = vi.fn(async () => page("UNEXPECTED"));
+
+    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue({
+      listPagesViaPlaywright,
+      createPageViaPlaywright,
+    } as unknown as Awaited<ReturnType<typeof deps.pwAiModule.getPwAiModule>>);
+
+    const { remote } = deps.createRemoteRouteHarness();
+
+    await expect(remote.ensureTabAvailable(undefined, { createIfMissing: false })).rejects.toThrow(
+      /tab not found/i,
+    );
+    expect(createPageViaPlaywright).not.toHaveBeenCalled();
+  });
+
   it("rejects stale targetId for remote profiles even when only one tab remains", async () => {
     const responses = Array.from({ length: 2 }, () => [page("T1", "https://example.com")]);
     const listPagesViaPlaywright = vi.fn(deps.createSequentialPageLister(responses));

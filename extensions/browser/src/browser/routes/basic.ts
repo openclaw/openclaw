@@ -46,6 +46,29 @@ const STATUS_CHROME_MCP_TOTAL_TIMEOUT_MS = BROWSER_DEEP_DOCTOR_STATUS_TIMEOUT_MS
 const STATUS_CHROME_MCP_TRANSPORT_TIMEOUT_MS = 5_000;
 const LIVE_SNAPSHOT_PROBE_TIMEOUT_MS = BROWSER_DEEP_DOCTOR_LIVE_PROBE_TIMEOUT_MS;
 
+async function awaitTaskWithAbort<T>(task: Promise<T>, signal: AbortSignal): Promise<T> {
+  // Some underlying libraries do not accept AbortSignal. Observe late failure
+  // before racing so returning at the caller deadline cannot create an
+  // unhandled rejection when the abandoned task eventually settles.
+  void task.catch(() => {});
+  signal.throwIfAborted();
+  let abortListener: (() => void) | undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    abortListener = () => {
+      reject(signal.reason ?? new Error("aborted"));
+    };
+    signal.addEventListener("abort", abortListener, { once: true });
+  });
+  void aborted.catch(() => {});
+  try {
+    return await Promise.race([task, aborted]);
+  } finally {
+    if (abortListener) {
+      signal.removeEventListener("abort", abortListener);
+    }
+  }
+}
+
 function liveProbeFailureFixHint(profileCtx: ProfileContext): string {
   switch (getBrowserProfileCapabilities(profileCtx.profile).mode) {
     case "local-extension":
@@ -331,7 +354,13 @@ async function runBrowserLiveProbe(
   deadlineTimer.unref?.();
   const probeSignal = AbortSignal.any([signal, deadlineAbort.signal]);
   try {
-    const tab = await profileCtx.ensureTabAvailable(undefined, { signal: probeSignal });
+    const tab = await awaitTaskWithAbort(
+      profileCtx.ensureTabAvailable(undefined, {
+        signal: probeSignal,
+        createIfMissing: false,
+      }),
+      probeSignal,
+    );
     if (capabilities.usesChromeMcp) {
       const remainingTimeoutMs = Math.max(1, deadlineAtMs - Date.now());
       await takeChromeMcpSnapshot({
@@ -363,7 +392,7 @@ async function runBrowserLiveProbe(
           signal,
         })
       : await (async () => {
-          const pw = await getPwAiModule();
+          const pw = await awaitTaskWithAbort(getPwAiModule(), probeSignal);
           if (!pw) {
             throw new Error("Playwright is not available for the live snapshot probe.");
           }

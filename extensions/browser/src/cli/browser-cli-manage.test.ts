@@ -740,6 +740,49 @@ describe("browser manage output", () => {
     expect(process.exitCode).toBe(1);
   });
 
+  it("preserves the canonical plugin recovery hint in deep doctor output", async () => {
+    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
+      if (req.path === "/doctor") {
+        return {
+          ok: false,
+          profile: "chrome",
+          transport: "extension",
+          status: {
+            enabled: false,
+            profile: "chrome",
+            driver: "extension",
+            transport: "extension",
+            running: false,
+            cdpReady: false,
+          },
+          checks: [
+            {
+              id: "plugin-enabled",
+              label: "Browser plugin",
+              status: "fail",
+              summary: "disabled in config",
+              fixHint: "Enable the browser plugin and restart the Gateway.",
+            },
+          ],
+        };
+      }
+      if (req.path === "/profiles") {
+        return { profiles: [{ name: "chrome", running: false }] };
+      }
+      return {};
+    });
+
+    const program = createBrowserManageProgram();
+    await program.parseAsync(["browser", "--browser-profile", "chrome", "doctor", "--deep"], {
+      from: "user",
+    });
+
+    expect(lastRuntimeLog()).toContain(
+      "FAIL plugin: disabled in config Fix: Enable the browser plugin and restart the Gateway.",
+    );
+    expect(process.exitCode).toBe(1);
+  });
+
   it("trusts a successful canonical deep doctor after a short CDP status miss", async () => {
     getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
       if (req.path === "/doctor") {

@@ -285,19 +285,7 @@ async function collectAriaSnapshotViaPlaywright(
     opts.signal && timeoutController
       ? AbortSignal.any([opts.signal, timeoutController.signal])
       : (opts.signal ?? timeoutController?.signal);
-  const { abortPromise, cleanup } = createAbortPromiseWithListener(
-    signal,
-    publishRefs
-      ? () => {
-          void forceDisconnectPlaywrightForTarget({
-            cdpUrl: opts.cdpUrl,
-            targetId: opts.targetId,
-            ssrfPolicy: opts.ssrfPolicy,
-            reason: "aria snapshot aborted",
-          }).catch(() => {});
-        }
-      : undefined,
-  );
+  const { abortPromise, cleanup } = createAbortPromiseWithListener(signal);
 
   const collectSnapshot = async () => {
     signal?.throwIfAborted();

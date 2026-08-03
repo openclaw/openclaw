@@ -28,6 +28,7 @@ class FakeSocket {
 function wireExtension(
   bridge: ExtensionRelayBridge,
   opts: {
+    answerAttach?: boolean;
     answerCdp?: boolean | ((msg: Extract<RelayToExtensionMessage, { type: "cdp" }>) => boolean);
     answerDetach?: boolean;
   } = {},
@@ -43,6 +44,9 @@ function wireExtension(
       return;
     }
     queueMicrotask(() => {
+      if (msg.type === "attach" && opts.answerAttach === false) {
+        return;
+      }
       if (msg.type === "detach" && opts.answerDetach === false) {
         return;
       }
@@ -420,6 +424,75 @@ describe("ExtensionRelayBridge", () => {
         );
       }),
     ).toBeTruthy();
+  });
+
+  it("detaches a removed tab whose original attach is still pending before reattaching it", async () => {
+    const bridge = new ExtensionRelayBridge();
+    const { socket: extSocket, handlers } = wireExtension(bridge, {
+      answerAttach: false,
+      answerDetach: false,
+    });
+    sendHello(handlers);
+
+    const client = new FakeSocket();
+    const cdp = bridge.attachCdpClientSocket(client);
+    cdp.onMessage(
+      JSON.stringify({ id: 1, method: "Target.setAutoAttach", params: { autoAttach: true } }),
+    );
+    await flush();
+    const firstAttach = extSocket.frames().find((frame) => frame.type === "attach") as
+      | { seq?: number }
+      | undefined;
+    expect(firstAttach?.seq).toBeTypeOf("number");
+
+    handlers.onMessage(JSON.stringify({ type: "tabs", tabs: [] }));
+    handlers.onMessage(JSON.stringify({ type: "tabs", tabs: defaultTabs() }));
+    await flush();
+    const detach = extSocket.frames().find((frame) => frame.type === "detach") as
+      | { seq?: number }
+      | undefined;
+    expect(detach?.seq).toBeTypeOf("number");
+    expect(extSocket.frames().filter((frame) => frame.type === "attach")).toHaveLength(1);
+
+    handlers.onMessage(
+      JSON.stringify({
+        type: "result",
+        seq: firstAttach?.seq,
+        result: { targetId: "target-1" },
+      }),
+    );
+    await flush();
+    expect(extSocket.frames().filter((frame) => frame.type === "attach")).toHaveLength(1);
+
+    handlers.onMessage(JSON.stringify({ type: "result", seq: detach?.seq, result: {} }));
+    await flush();
+    await flush();
+    const attaches = extSocket.frames().filter((frame) => frame.type === "attach") as Array<{
+      seq?: number;
+    }>;
+    expect(attaches).toHaveLength(2);
+    const replacementAttach = attaches[1];
+    expect(replacementAttach?.seq).toBeTypeOf("number");
+
+    handlers.onMessage(
+      JSON.stringify({
+        type: "result",
+        seq: replacementAttach?.seq,
+        result: { targetId: "target-1" },
+      }),
+    );
+    await flush();
+
+    expect(client.frames().find((frame) => frame.id === 1)?.result).toEqual({});
+    expect(
+      client.frames().find((frame) => {
+        const params = frame.params as { targetInfo?: { targetId?: string } } | undefined;
+        return (
+          frame.method === "Target.attachedToTarget" && params?.targetInfo?.targetId === "target-1"
+        );
+      }),
+    ).toBeTruthy();
+    expect(extSocket.frames().filter((frame) => frame.type === "detach")).toHaveLength(1);
   });
 
   it("identifies an unanswered page CDP command when the relay deadline expires", async () => {

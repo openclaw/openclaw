@@ -667,6 +667,67 @@ describe("basic browser routes", () => {
     }
   });
 
+  it("returns at the absolute live-probe deadline when lazy Playwright loading stalls", async () => {
+    vi.useFakeTimers();
+    try {
+      getPwAiModuleMock.mockImplementationOnce(async () => await new Promise<never>(() => {}));
+      const state = createManagedProfileState(
+        {
+          name: "chrome",
+          driver: "extension",
+          cdpPort: 31002,
+          cdpUrl: "http://127.0.0.1:31002",
+          attachOnly: true,
+        },
+        {
+          isHttpReachable: async () => true,
+          isTransportAvailable: async () => true,
+        },
+      );
+      const ensureTabAvailable = vi.fn(async () => ({
+        targetId: "extension-target-1",
+        title: "Example",
+        url: "https://example.com",
+        type: "page",
+      }));
+      const profileCtx = {
+        ...(state.forProfile() as unknown as Record<string, unknown>),
+        ensureTabAvailable,
+      };
+      const { app, getHandlers } = createBrowserRouteApp();
+      registerBrowserBasicRoutes(app, {
+        state: () => state,
+        forProfile: () => profileCtx,
+        mapTabError: vi.fn(() => null),
+      } as never);
+      const response = createBrowserRouteResponse();
+
+      const request = getHandlers.get("/doctor")?.(
+        { params: {}, query: { profile: "chrome", deep: "true" } },
+        response.res,
+      );
+      await vi.advanceTimersByTimeAsync(12_000);
+      await request;
+
+      expect(ensureTabAvailable).toHaveBeenCalledWith(
+        undefined,
+        expect.objectContaining({ createIfMissing: false, signal: expect.any(AbortSignal) }),
+      );
+      expect(captureAriaSnapshotViaPlaywrightMock).not.toHaveBeenCalled();
+      const checks = responseBodyRecord(response).checks as Array<{
+        id?: string;
+        status?: string;
+        summary?: string;
+      }>;
+      expect(checks.find((check) => check.id === "live-snapshot")).toMatchObject({
+        status: "fail",
+        summary: expect.stringContaining("Live snapshot probe timed out after 12000ms"),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not start a stopped managed browser for deep doctor", async () => {
     const ensureBrowserAvailable = vi.fn(async () => {});
     const ensureTabAvailable = vi.fn(async () => {
