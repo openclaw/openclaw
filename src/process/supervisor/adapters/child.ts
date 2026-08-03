@@ -263,6 +263,12 @@ export async function createChildAdapter(params: {
   let forceKillWaitFallbackTimer: NodeJS.Timeout | null = null;
   let forcedWindowsCloseTimer: NodeJS.Timeout | null = null;
   let attachedTreeTermination: ReturnType<typeof killProcessTree>;
+  // True once a Linux attached SIGTERM delegated to killProcessTree. When that
+  // call declined to return a force handle (the root identity could not be
+  // bound), a later SIGKILL must not fall back to the generic tree-enumerating
+  // signal helper, which could discover and signal a recycled PID. Only the
+  // direct child PID may be signaled in that fail-closed state.
+  let attemptedAttachedLinuxTree = false;
   let hardKillRequested = false;
   let windowsTreeKillCompleted = false;
   let childExitState: { code: number | null; signal: NodeJS.Signals | null } | null = null;
@@ -453,6 +459,25 @@ export async function createChildAdapter(params: {
       attachedTreeTermination.force();
       return;
     }
+    if (
+      (signal === undefined || signal === "SIGKILL") &&
+      attemptedAttachedLinuxTree &&
+      !attachedTreeTermination
+    ) {
+      // The Linux attached SIGTERM delegated to killProcessTree, which declined
+      // to retain a force handle because the root identity could not be bound.
+      // The fail-closed contract forbids re-enumerating a tree here (a recycled
+      // PID could be discovered and signaled), so only the direct child PID is
+      // force-killed.
+      hardKillRequested = true;
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // ignore kill errors
+      }
+      scheduleForceKillWaitFallback("SIGKILL");
+      return;
+    }
     if (signal === undefined || signal === "SIGKILL") {
       hardKillRequested = true;
       scheduleForcedWindowsCloseSettlement();
@@ -489,6 +514,7 @@ export async function createChildAdapter(params: {
       if (process.platform === "linux" && !childIsDetached) {
         // Linux can bind attached descendants to `/proc` identities, so one
         // tree termination owns TERM-to-KILL state even after its root exits.
+        attemptedAttachedLinuxTree = true;
         attachedTreeTermination = killProcessTree(pid, {
           detached: false,
           graceMs: GRACEFUL_CANCEL_TIMEOUT_MS,

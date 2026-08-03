@@ -400,6 +400,32 @@ describe("createChildAdapter", () => {
     },
   );
 
+  it.runIf(process.platform === "linux")(
+    "does not re-enumerate the tree when the attached identity could not be captured",
+    async () => {
+      // When killProcessTree declines a force handle (the root identity could
+      // not be bound), a later SIGKILL must fall back to the direct child PID
+      // only, never the generic tree-enumerating signal helper that could
+      // discover and signal a recycled PID.
+      setPlatform("linux");
+      process.env.OPENCLAW_SERVICE_MARKER = "1";
+      killProcessTreeMock.mockReturnValueOnce(undefined);
+      try {
+        const { adapter, killMock } = await createAdapterHarness({ pid: 7657 });
+        adapter.kill("SIGTERM");
+        adapter.kill("SIGKILL");
+
+        expect(killProcessTreeMock).toHaveBeenCalledOnce();
+        // The fail-closed SIGKILL signals the direct child only.
+        expect(killMock).toHaveBeenCalledWith("SIGKILL");
+        // It must not re-enumerate via the generic signal helper.
+        expect(signalProcessTreeMock).not.toHaveBeenCalled();
+      } finally {
+        delete process.env.OPENCLAW_SERVICE_MARKER;
+      }
+    },
+  );
+
   it("uses process-tree kill for graceful SIGTERM cancellation", async () => {
     const { adapter, killMock } = await createAdapterHarness({ pid: 7654 });
 
