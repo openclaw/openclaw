@@ -253,13 +253,13 @@ describe("sandbox policy bounded reads", () => {
     expect(policy.process.timeoutSeconds).toBe(45);
   });
 
-  test("oversized policy file is rejected before JSON parsing", () => {
+  test("oversized policy file is rejected with the documented size limit", () => {
     const dir = makeTestDir();
     const policyPath = join(dir, "huge-policy.json");
     writeFileSync(policyPath, "x".repeat(MX_SANDBOX_POLICY_MAX_BYTES + 1), "utf-8");
 
     expect(() => loadSandboxBaselinePolicy({ policyPaths: [policyPath] })).toThrow(
-      /Failed to load sandbox policy file/u,
+      `Configured sandbox policy file ${policyPath} exceeds the maximum policy file size of ${MX_SANDBOX_POLICY_MAX_BYTES} bytes (${MX_SANDBOX_POLICY_MAX_BYTES / (1024 * 1024)} MiB). Reduce the file below the limit or remove it from mxcPolicyPaths.`,
     );
   });
 });

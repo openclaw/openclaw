@@ -1,7 +1,7 @@
 import { realpathSync, statSync } from "node:fs";
 import { win32 } from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { readRegularFileSync } from "openclaw/plugin-sdk/security-runtime";
+import { FsSafeError, readRegularFileSync } from "openclaw/plugin-sdk/security-runtime";
 import { z } from "zod";
 import {
   DEFAULT_SANDBOX_BASELINE,
@@ -319,6 +319,12 @@ function policyFileError(policyPath: string, err: unknown): Error {
   if (isNodeError(err) && err.code === "ENOENT") {
     return new Error(
       `Configured sandbox policy file ${policyPath} does not exist. Remove it from mxcPolicyPaths or create the file.`,
+      { cause: err },
+    );
+  }
+  if (err instanceof FsSafeError && err.code === "too-large") {
+    return new Error(
+      `Configured sandbox policy file ${policyPath} exceeds the maximum policy file size of ${MX_SANDBOX_POLICY_MAX_BYTES} bytes (${MX_SANDBOX_POLICY_MAX_BYTES / (1024 * 1024)} MiB). Reduce the file below the limit or remove it from mxcPolicyPaths.`,
       { cause: err },
     );
   }
