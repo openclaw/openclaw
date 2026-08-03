@@ -406,12 +406,15 @@ describe("cdp internal", () => {
 
       const snapshot = snapshotAria({
         wsUrl: `ws://127.0.0.1:${port}/devtools/browser/TEST`,
+        targetId: "TEST",
         timeoutMs: 150,
       });
       void snapshot.catch(() => {});
       await axRequested;
 
-      await expect(snapshot).rejects.toThrow("Aria snapshot via CDP timed out after 150ms");
+      await expect(snapshot).rejects.toThrow(
+        /Aria snapshot via CDP timed out after 150ms.*targetId=TEST.*method=Accessibility\.getFullAXTree/,
+      );
     });
   });
 

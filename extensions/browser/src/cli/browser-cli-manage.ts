@@ -39,6 +39,7 @@ type BrowserDoctorCheck = {
   name: string;
   ok: boolean;
   detail?: string;
+  fixHint?: string;
   warning?: boolean;
 };
 
@@ -137,21 +138,17 @@ function logBrowserTabs(tabs: BrowserTab[], json?: boolean) {
 
 function formatDoctorLine(check: BrowserDoctorCheck): string {
   const prefix = check.warning ? "WARN" : check.ok ? "OK" : "FAIL";
-  return `${prefix} ${check.name}${check.detail ? `: ${check.detail}` : ""}`;
+  return `${prefix} ${check.name}${check.detail ? `: ${check.detail}` : ""}${check.fixHint ? ` Fix: ${check.fixHint}` : ""}`;
 }
 
 function mapCanonicalDoctorCheck(check: BrowserDoctorReport["checks"][number]): BrowserDoctorCheck {
-  const name =
-    check.id === "plugin-enabled"
-      ? "plugin"
-      : check.id === "extension-relay" || check.id === "attach-target"
-        ? "browser"
-        : check.id;
+  const name = check.id === "plugin-enabled" ? "plugin" : check.id;
   return {
     name,
     ok: check.status !== "fail",
     warning: check.status === "warn" || check.status === "info",
     detail: check.summary,
+    fixHint: check.fixHint,
   };
 }
 
@@ -235,13 +232,19 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
     ok: true,
     detail: `${status.profile ?? "openclaw"} (${usesChromeMcpTransport(status) ? "chrome-mcp" : (status.transport ?? "cdp")})`,
   });
-  checks.push({
-    name: "browser",
-    ok: status.running,
-    detail: status.running
-      ? `running${status.cdpReady === false ? ", CDP not ready" : ""}`
-      : "not running; run `openclaw browser start`",
-  });
+  const canonicalOwnsTransportReadiness =
+    deep === true &&
+    canonicalDoctor !== null &&
+    (usesChromeMcpTransport(status) || status.transport === "extension");
+  if (!canonicalOwnsTransportReadiness) {
+    checks.push({
+      name: "browser",
+      ok: status.running,
+      detail: status.running
+        ? `running${status.cdpReady === false ? ", CDP not ready" : ""}`
+        : "not running; run `openclaw browser start`",
+    });
+  }
   if (status.graphics) {
     checks.push({
       name: "graphics",

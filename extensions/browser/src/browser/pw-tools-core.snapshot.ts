@@ -264,7 +264,7 @@ async function collectAriaSnapshotViaPlaywright(
   const limit = resolveIntegerOption(opts.limit, 500, { min: 1, max: 2000 });
   const ariaTimeoutMs =
     typeof opts.timeoutMs === "number" && Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0
-      ? Math.max(500, Math.min(60_000, Math.floor(opts.timeoutMs)))
+      ? Math.max(publishRefs ? 500 : 1, Math.min(60_000, Math.floor(opts.timeoutMs)))
       : undefined;
   const timeoutController = ariaTimeoutMs === undefined ? undefined : new AbortController();
   let activeMethod = "page lookup";

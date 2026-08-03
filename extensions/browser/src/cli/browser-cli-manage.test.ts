@@ -783,6 +783,58 @@ describe("browser manage output", () => {
     expect(process.exitCode).toBe(1);
   });
 
+  it("prints canonical extension pairing guidance instead of managed-browser startup advice", async () => {
+    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
+      if (req.path === "/doctor") {
+        return {
+          ok: false,
+          profile: "chrome",
+          transport: "extension",
+          status: {
+            enabled: true,
+            profile: "chrome",
+            driver: "extension",
+            transport: "extension",
+            running: false,
+            cdpReady: false,
+          },
+          checks: [
+            {
+              id: "extension-relay",
+              label: "Chrome extension relay",
+              status: "fail",
+              summary: "OpenClaw Chrome extension is not connected",
+              fixHint:
+                "Install the OpenClaw Chrome extension, pair it, and paste the pairing string into the extension popup.",
+            },
+            {
+              id: "live-snapshot",
+              label: "Live snapshot",
+              status: "fail",
+              summary: "OpenClaw Chrome extension is not connected",
+            },
+          ],
+        };
+      }
+      if (req.path === "/profiles") {
+        return { profiles: [{ name: "chrome", running: false }] };
+      }
+      return {};
+    });
+
+    const program = createBrowserManageProgram();
+    await program.parseAsync(["browser", "--browser-profile", "chrome", "doctor", "--deep"], {
+      from: "user",
+    });
+
+    const output = lastRuntimeLog();
+    expect(output).toContain(
+      "FAIL extension-relay: OpenClaw Chrome extension is not connected Fix: Install the OpenClaw Chrome extension, pair it, and paste the pairing string into the extension popup.",
+    );
+    expect(output).not.toContain("FAIL browser: not running; run `openclaw browser start`");
+    expect(process.exitCode).toBe(1);
+  });
+
   it("prints one complete JSON browser doctor failure before setting exit status", async () => {
     getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
       if (req.path === "/") {

@@ -174,15 +174,15 @@ describe("browser agent snapshot timeout routing", () => {
     expect(cdpMocks.snapshotAria).toHaveBeenCalledWith(
       expect.objectContaining({
         wsUrl: "ws://127.0.0.1:18800/devtools/page/tab-1",
+        targetId: "tab-1",
         timeoutMs: 4321,
-        signal: expect.any(AbortSignal),
+        signal: controller.signal,
       }),
     );
     const snapshotSignal = (
       cdpMocks.snapshotAria.mock.calls[0]?.[0] as { signal?: AbortSignal } | undefined
     )?.signal;
-    expect(snapshotSignal).toBeInstanceOf(AbortSignal);
-    expect(snapshotSignal).not.toBe(controller.signal);
+    expect(snapshotSignal).toBe(controller.signal);
   });
 
   it("keeps direct CDP capture and ref publication under one deadline", async () => {
@@ -224,11 +224,13 @@ describe("browser agent snapshot timeout routing", () => {
           | { signal?: AbortSignal }
           | undefined
       )?.signal;
-      expect(storeSignal).toBe(snapshotSignal);
+      expect(storeSignal).not.toBe(snapshotSignal);
 
       await vi.advanceTimersByTimeAsync(4321);
 
-      await expect(pending).rejects.toThrow("Aria snapshot operation timed out after 4321ms");
+      await expect(pending).rejects.toThrow(
+        "Aria snapshot ref publication timed out after 4321ms (targetId=tab-1, method=ref storage)",
+      );
       expect(storeSignal?.aborted).toBe(true);
     } finally {
       vi.useRealTimers();

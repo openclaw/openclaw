@@ -191,6 +191,48 @@ describe("pw-tools-core aria snapshot storage", () => {
     }
   });
 
+  it("honors a capture-only diagnostic budget below the normal 500ms floor", async () => {
+    vi.useFakeTimers();
+    try {
+      const page = { id: "page-1" };
+      const send = vi.fn<ScopedCdpSend>(async () => await new Promise<never>(() => {}));
+      getPageForTargetId.mockResolvedValue(page);
+      withPageScopedCdpClient.mockImplementation(
+        async (options: { fn: (send: ScopedCdpSend) => Promise<unknown> }) =>
+          await options.fn(send),
+      );
+
+      const mod = await import("./pw-tools-core.snapshot.js");
+      const promise = mod.captureAriaSnapshotViaPlaywright({
+        cdpUrl: "http://127.0.0.1:9222",
+        targetId: "tab-1",
+        timeoutMs: 25,
+      });
+      void promise.catch(() => {});
+
+      await vi.advanceTimersByTimeAsync(24);
+      let settled = false;
+      void promise.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+
+      await expect(promise).rejects.toThrow(
+        /Aria snapshot via Playwright timed out after 25ms.*targetId=tab-1.*Accessibility\.enable/,
+      );
+      expect(forceDisconnectPlaywrightForTarget).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("races snapshotAriaViaPlaywright against an explicit timeoutMs", async () => {
     vi.useFakeTimers();
     try {

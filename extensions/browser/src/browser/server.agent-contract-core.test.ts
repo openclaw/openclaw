@@ -461,8 +461,9 @@ describe("browser control server", () => {
     expect(snapAria.format).toBe("aria");
     expect(cdpMocks.snapshotAria).toHaveBeenCalledWith({
       wsUrl: "ws://127.0.0.1/devtools/page/abcd1234",
+      targetId: "abcd1234",
       limit: 1,
-      timeoutMs: undefined,
+      timeoutMs: 5_000,
       signal: expect.any(AbortSignal),
     });
     expect(requirePwMock("storeAriaSnapshotRefsViaPlaywright")).toHaveBeenCalledWith({
@@ -598,6 +599,7 @@ describe("browser control server", () => {
     expectRecordFields(liveSnapshotCheck, { id: "live-snapshot", status: "pass" });
     expect(cdpMocks.snapshotAria).toHaveBeenCalledWith({
       wsUrl: "ws://127.0.0.1/devtools/page/abcd1234",
+      targetId: "abcd1234",
       limit: 25,
       timeoutMs: expect.any(Number),
       signal: expect.any(AbortSignal),

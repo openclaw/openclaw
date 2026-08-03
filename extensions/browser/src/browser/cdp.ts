@@ -421,6 +421,7 @@ export function formatAriaSnapshot(nodes: RawAXNode[], limit: number): AriaSnaps
 /** Capture an accessibility-tree snapshot through CDP. */
 export async function snapshotAria(opts: {
   wsUrl: string;
+  targetId?: string;
   limit?: number;
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -430,9 +431,18 @@ export async function snapshotAria(opts: {
     typeof opts.timeoutMs === "number" && Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : 5000,
   );
   const timeoutController = new AbortController();
+  const activeMethods = new Map<string, number>();
+  const targetLabel = opts.targetId ?? "current";
+  const activeMethodLabel = () =>
+    activeMethods.size > 0 ? [...activeMethods.keys()].join("|") : "socket handshake";
   const timer = setTimeout(
     () =>
-      timeoutController.abort(new Error(`Aria snapshot via CDP timed out after ${timeoutMs}ms.`)),
+      timeoutController.abort(
+        new Error(
+          `Aria snapshot via CDP timed out after ${timeoutMs}ms ` +
+            `(targetId=${targetLabel}, method=${activeMethodLabel()}).`,
+        ),
+      ),
     timeoutMs,
   );
   timer.unref?.();
@@ -443,9 +453,22 @@ export async function snapshotAria(opts: {
     return await withCdpSocket(
       opts.wsUrl,
       async (send) => {
-        await prepareCdpPageSession(send);
+        const trackedSend: CdpSendFn = async (method, params, sessionId) => {
+          activeMethods.set(method, (activeMethods.get(method) ?? 0) + 1);
+          try {
+            return await send(method, params, sessionId);
+          } finally {
+            const remaining = (activeMethods.get(method) ?? 1) - 1;
+            if (remaining > 0) {
+              activeMethods.set(method, remaining);
+            } else {
+              activeMethods.delete(method);
+            }
+          }
+        };
+        await prepareCdpPageSession(trackedSend);
         signal.throwIfAborted();
-        const res = (await send("Accessibility.getFullAXTree")) as {
+        const res = (await trackedSend("Accessibility.getFullAXTree")) as {
           nodes?: RawAXNode[];
         };
         signal.throwIfAborted();

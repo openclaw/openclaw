@@ -312,6 +312,7 @@ async function runBrowserLiveProbe(
     const snap = tab.wsUrl
       ? await snapshotAria({
           wsUrl: tab.wsUrl,
+          targetId: tab.targetId,
           limit: 25,
           timeoutMs: remainingTimeoutMs,
           signal,
@@ -354,6 +355,22 @@ async function runBrowserLiveProbe(
   } finally {
     clearTimeout(deadlineTimer);
   }
+}
+
+function isAuthoritativelyStoppedManagedProfile(
+  ctx: BrowserRouteContext,
+  profileCtx: ProfileContext,
+  status: { running: boolean },
+): boolean {
+  const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
+  if (capabilities.mode !== "local-managed" || status.running) {
+    return false;
+  }
+  // A missing managed-process handle is authoritative for an OpenClaw-owned
+  // local browser. Extension, attach-only, and remote profiles have no such
+  // process owner, so a short reachability miss must not suppress their longer
+  // bounded live probe.
+  return ctx.state().profiles.get(profileCtx.profile.name)?.running == null;
 }
 
 function hasQueryKey(query: BrowserRequest["query"], key: string): boolean {
@@ -469,17 +486,22 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
           const liveRequested =
             toBoolean(req.query.deep) === true || toBoolean(req.query.live) === true;
           if (liveRequested) {
+            const managedProfileStopped = isAuthoritativelyStoppedManagedProfile(
+              ctx,
+              profileCtx,
+              status,
+            );
             doctorReport.checks.push(
-              status.running
-                ? await runBrowserLiveProbe(ctx, profileCtx, signal)
-                : {
+              managedProfileStopped
+                ? {
                     id: "live-snapshot",
                     label: "Live snapshot",
                     status: "fail",
                     summary: "Live snapshot probe requires a running browser profile.",
                     fixHint:
                       "Start or connect the browser profile, then retry with openclaw browser doctor --deep.",
-                  },
+                  }
+                : await runBrowserLiveProbe(ctx, profileCtx, signal),
             );
             doctorReport.ok = doctorReport.checks.every((check) => check.status !== "fail");
           }

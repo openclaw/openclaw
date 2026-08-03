@@ -338,6 +338,55 @@ describe("pw-session getPageForTargetId", () => {
     expect(connectOverCdpSpy).toHaveBeenCalledTimes(2);
   });
 
+  it("retires a shared connection attempt when all waiters cancel in one turn", async () => {
+    let resolveLateConnection!: (browser: import("playwright-core").Browser) => void;
+    const lateConnection = new Promise<import("playwright-core").Browser>((resolve) => {
+      resolveLateConnection = resolve;
+    });
+    const late = makeBrowser([{ targetId: "LATE" }]);
+    const fresh = makeBrowser([{ targetId: "FRESH" }]);
+    connectOverCdpSpy
+      .mockImplementationOnce(async () => await lateConnection)
+      .mockResolvedValueOnce(fresh.browser);
+    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+    const firstController = new AbortController();
+    const secondController = new AbortController();
+    const firstCancellation = new Error("first page lookup cancelled");
+    const secondCancellation = new Error("second page lookup cancelled");
+
+    const first = getPageForTargetId({
+      cdpUrl: "http://127.0.0.1:9667",
+      targetId: "LATE",
+      signal: firstController.signal,
+    });
+    const second = getPageForTargetId({
+      cdpUrl: "http://127.0.0.1:9667",
+      targetId: "LATE",
+      signal: secondController.signal,
+    });
+    void first.catch(() => {});
+    void second.catch(() => {});
+    await vi.waitFor(() => expect(connectOverCdpSpy).toHaveBeenCalledOnce());
+    await Promise.resolve();
+    await Promise.resolve();
+
+    firstController.abort(firstCancellation);
+    secondController.abort(secondCancellation);
+
+    await expect(first).rejects.toBe(firstCancellation);
+    await expect(second).rejects.toBe(secondCancellation);
+    resolveLateConnection(late.browser);
+    await vi.waitFor(() => expect(late.browserClose).toHaveBeenCalledOnce());
+
+    await expect(
+      getPageForTargetId({
+        cdpUrl: "http://127.0.0.1:9667",
+        targetId: "FRESH",
+      }),
+    ).resolves.toBe(fresh.pages[0]);
+    expect(connectOverCdpSpy).toHaveBeenCalledTimes(2);
+  });
+
   it("stops target enumeration after the active lookup observes cancellation", async () => {
     let releaseFirstLookup!: () => void;
     const firstLookupGate = new Promise<void>((resolve) => {

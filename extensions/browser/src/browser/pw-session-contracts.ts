@@ -174,7 +174,7 @@ export type PendingBrowserConnection = {
     retired?: ConnectedBrowser;
   };
   promise: Promise<ConnectedBrowser>;
-  waiters: number;
+  waiters: Set<symbol>;
 };
 
 export type PlaywrightConnectionRetirement = {

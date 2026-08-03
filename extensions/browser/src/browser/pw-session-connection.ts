@@ -495,7 +495,7 @@ export async function connectBrowser(
   const pendingConnection: PendingBrowserConnection = {
     attempt: connectionAttempt,
     promise: pending,
-    waiters: 0,
+    waiters: new Set(),
   };
   connectingByCdpUrl.set(normalized, pendingConnection);
 
@@ -527,8 +527,22 @@ async function waitForPendingBrowserConnection(
   pending: PendingBrowserConnection,
   signal?: AbortSignal,
 ): Promise<ConnectedBrowser> {
-  pending.waiters += 1;
+  const waiter = Symbol("playwright-connection-waiter");
+  pending.waiters.add(waiter);
   let abortListener: (() => void) | undefined;
+  const removeWaiter = (cancelWhenLast: boolean) => {
+    if (!pending.waiters.delete(waiter)) {
+      return;
+    }
+    if (
+      cancelWhenLast &&
+      pending.waiters.size === 0 &&
+      connectingByCdpUrl.get(normalizedCdpUrl) === pending
+    ) {
+      connectingByCdpUrl.delete(normalizedCdpUrl);
+      cancelPendingBrowserConnection(pending);
+    }
+  };
   try {
     if (!signal) {
       return await pending.promise;
@@ -537,10 +551,11 @@ async function waitForPendingBrowserConnection(
     void pending.promise.catch(() => {});
     const aborted = new Promise<never>((_resolve, reject) => {
       abortListener = () => {
-        if (pending.waiters === 1 && connectingByCdpUrl.get(normalizedCdpUrl) === pending) {
-          connectingByCdpUrl.delete(normalizedCdpUrl);
-          cancelPendingBrowserConnection(pending);
-        }
+        // Remove this waiter synchronously before inspecting the shared set.
+        // Multiple AbortControllers can fire in the same turn; the last one
+        // must retire the producer even though the other finally blocks have
+        // not run yet.
+        removeWaiter(true);
         reject(signal.reason ?? new Error("Playwright connection aborted."));
       };
       signal.addEventListener("abort", abortListener, { once: true });
@@ -548,7 +563,7 @@ async function waitForPendingBrowserConnection(
     void aborted.catch(() => {});
     return await Promise.race([pending.promise, aborted]);
   } finally {
-    pending.waiters -= 1;
+    removeWaiter(false);
     if (signal && abortListener) {
       signal.removeEventListener("abort", abortListener);
     }
