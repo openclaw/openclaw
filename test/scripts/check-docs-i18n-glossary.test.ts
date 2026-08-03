@@ -2,7 +2,11 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createGitRunner, parseArgs } from "../../scripts/check-docs-i18n-glossary.mjs";
+import {
+  createGitRunner,
+  parseArgs,
+  readGitFile,
+} from "../../scripts/check-docs-i18n-glossary.mjs";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const scriptPath = path.resolve("scripts/check-docs-i18n-glossary.mjs");
@@ -84,6 +88,72 @@ describe("check-docs-i18n-glossary", () => {
 
     await expect(runGit(["merge-base", "origin/main", "HEAD"])).rejects.toThrow(
       "docs:check-i18n-glossary: git merge-base origin/main HEAD timed out after 500ms.",
+    );
+  });
+
+  it("propagates timed-out git show failures from readGitFile", async () => {
+    const tempDir = makeTempDir(tempDirs, "check-docs-i18n-glossary-");
+    const binDir = path.join(tempDir, "bin");
+    mkdirSync(binDir);
+    writeGitFixture(
+      binDir,
+      'if (process.argv[2] === "show") { setTimeout(() => {}, 10_000); }\nelse { process.exit(0); }\n',
+    );
+
+    const git = createGitRunner({
+      timeoutMs: 500,
+      env: {
+        ...process.env,
+        PATH: binDir,
+      },
+    });
+    const startedAt = Date.now();
+
+    await expect(readGitFile("HEAD", "docs/example.md", git)).rejects.toThrow(
+      "docs:check-i18n-glossary: git show HEAD:docs/example.md timed out after 500ms.",
+    );
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(500);
+  });
+
+  it("keeps the empty baseline fallback only for absent base files", async () => {
+    const tempDir = makeTempDir(tempDirs, "check-docs-i18n-glossary-");
+    const binDir = path.join(tempDir, "bin");
+    mkdirSync(binDir);
+    writeGitFixture(
+      binDir,
+      "if (process.argv[2] === \"show\") { console.error(\"fatal: path 'docs/new.md' does not exist in 'HEAD'\"); process.exit(128); }\nprocess.exit(0);\n",
+    );
+
+    const git = createGitRunner({
+      timeoutMs: 500,
+      env: {
+        ...process.env,
+        PATH: binDir,
+      },
+    });
+
+    await expect(readGitFile("HEAD", "docs/new.md", git)).resolves.toBe("");
+  });
+
+  it("surfaces other git show failures instead of an empty baseline", async () => {
+    const tempDir = makeTempDir(tempDirs, "check-docs-i18n-glossary-");
+    const binDir = path.join(tempDir, "bin");
+    mkdirSync(binDir);
+    writeGitFixture(
+      binDir,
+      'if (process.argv[2] === "show") { console.error("fatal: bad object"); process.exit(128); }\nprocess.exit(0);\n',
+    );
+
+    const git = createGitRunner({
+      timeoutMs: 500,
+      env: {
+        ...process.env,
+        PATH: binDir,
+      },
+    });
+
+    await expect(readGitFile("HEAD", "docs/example.md", git)).rejects.toThrow(
+      "docs:check-i18n-glossary: git show HEAD:docs/example.md failed: fatal: bad object",
     );
   });
 

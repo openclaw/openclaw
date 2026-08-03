@@ -9,6 +9,11 @@ export function createGitRunner(options?: {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
 }): (args: string[]) => Promise<string>;
+export function readGitFile(
+  base: string,
+  relPath: string,
+  git?: (args: string[]) => Promise<string>,
+): Promise<string>;
 export type TermMatch = {
   file: string;
   line: number;

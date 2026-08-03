@@ -242,10 +242,31 @@ function isGlossaryCandidate(term, maxWords) {
   return wordCount(term) <= maxWords;
 }
 
-async function readGitFile(base, relPath) {
+const MISSING_BASE_FILE_RE = /does not exist in|exists on disk, but not in/i;
+
+/**
+ * Reads a file from the merge-base revision.
+ *
+ * The empty-string fallback exists for one intended case only: the base
+ * revision has no such file (for example a newly added doc). Every other git
+ * failure, most importantly the runner's tagged timeouts, must propagate so a
+ * stalled `git show` stays an actionable timeout instead of degrading into a
+ * glossary comparison against an empty baseline.
+ *
+ * Test code can inject a short-timeout runner through the optional `git`
+ * parameter without adding a production environment/config surface.
+ *
+ * @param {string} base
+ * @param {string} relPath
+ * @param {(args: string[]) => Promise<string>} [git]
+ */
+export async function readGitFile(base, relPath, git = runGit) {
   try {
-    return await runGit(["show", `${base}:${relPath}`]);
-  } catch {
+    return await git(["show", `${base}:${relPath}`]);
+  } catch (error) {
+    if (error?.timedOut || !MISSING_BASE_FILE_RE.test(error?.message ?? "")) {
+      throw error;
+    }
     return "";
   }
 }
