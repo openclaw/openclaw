@@ -904,6 +904,10 @@ describe("claude live session provisional results", () => {
       name: "FailoverError",
       rawError: expect.stringMatching(/agent crashed/i),
     });
+    await waitForDiagnosticEventsDrained();
+    // A turn that dies before the task list drains must not leave the
+    // diagnostic floor armed for the next turn on this session.
+    expect(hasDiagnosticOutstandingBackgroundWork({ sessionKey: "agent:main:bg" })).toBe(false);
     expect(phases).toEqual(["resolve"]);
   });
 

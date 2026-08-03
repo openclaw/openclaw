@@ -518,6 +518,17 @@ function clearTurnTimers(turn: ClaudeLiveTurn): void {
 
 function clearOutstandingBackgroundTasks(session: ClaudeLiveSession): void {
   session.outstandingBackgroundTaskIds.clear();
+  // Terminal paths can arrive before the task list drains (error result,
+  // abort, process exit, turn timeout). Release the diagnostic floor here too,
+  // or it would stay armed for later turns on this session.
+  const turn = session.currentTurn;
+  if (turn) {
+    recordDiagnosticOutstandingBackgroundWork({
+      sessionId: turn.diagnosticRefs.sessionId,
+      sessionKey: turn.diagnosticRefs.sessionKey,
+      outstanding: false,
+    });
+  }
 }
 
 function settleClaudeLivePendingControlRequest(
