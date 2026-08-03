@@ -45,8 +45,9 @@ const DEFAULT_POLL_INTERVAL_MS = 1_500;
 const DEFAULT_TIMEOUT_MS = 5 * 60_000;
 
 export const DEFAULT_COMFY_MODEL = "workflow";
-// Match ComfyUI's default --max-upload-size. Operators that raise the server
-// limit can opt into the same larger workflow-file boundary below.
+// Matches ComfyUI's default --max-upload-size. The cap is opt-in: operators
+// that want a bounded local read set workflowFileMaxBytes explicitly, while
+// unconfigured workflowPath files keep the previous unbounded behavior.
 export const DEFAULT_COMFY_WORKFLOW_FILE_MAX_BYTES = 100 * 1024 * 1024;
 
 type ComfyMode = "local" | "cloud";
@@ -136,11 +137,11 @@ function readConfigInteger(config: ComfyProviderConfig, key: string): number | u
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
-function resolveComfyWorkflowFileMaxBytes(config: ComfyProviderConfig): number {
+function resolveComfyWorkflowFileMaxBytes(config: ComfyProviderConfig): number | undefined {
   const configured = config.workflowFileMaxBytes;
   return typeof configured === "number" && Number.isSafeInteger(configured) && configured > 0
     ? configured
-    : DEFAULT_COMFY_WORKFLOW_FILE_MAX_BYTES;
+    : undefined;
 }
 
 function getComfyConfig(cfg?: OpenClawConfig): ComfyProviderConfig {

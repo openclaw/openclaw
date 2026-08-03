@@ -543,6 +543,7 @@ describe("comfy image-generation provider", () => {
           model: "workflow",
           prompt: "draw an oversized workflow file",
           cfg: buildComfyConfig({
+            workflowFileMaxBytes: DEFAULT_COMFY_WORKFLOW_FILE_MAX_BYTES,
             workflow: undefined,
             workflowPath,
             promptNodeId: "6",
@@ -550,6 +551,31 @@ describe("comfy image-generation provider", () => {
           }),
         }),
       ).rejects.toThrow(`exceeds ${DEFAULT_COMFY_WORKFLOW_FILE_MAX_BYTES} bytes`);
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("preserves unconfigured workflowPath reads above the optional 100 MiB boundary", async () => {
+    await withTempDir("openclaw-comfy-workflow-", async (tempRoot) => {
+      const workflowPath = path.join(tempRoot, "legacy-large-workflow.json");
+      await writeFile(workflowPath, "", "utf8");
+      await truncate(workflowPath, DEFAULT_COMFY_WORKFLOW_FILE_MAX_BYTES + 1);
+      setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+
+      const provider = buildComfyImageGenerationProvider();
+      await expect(
+        provider.generateImage({
+          provider: "comfy",
+          model: "workflow",
+          prompt: "draw a legacy large workflow file",
+          cfg: buildComfyConfig({
+            workflow: undefined,
+            workflowPath,
+            promptNodeId: "6",
+            outputNodeId: "9",
+          }),
+        }),
+      ).rejects.toThrow(/Unexpected end of JSON input|Unexpected token/);
       expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
     });
   });
