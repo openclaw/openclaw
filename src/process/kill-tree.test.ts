@@ -649,6 +649,54 @@ describe("killProcessTree", () => {
     });
   });
 
+  it("on Linux revalidates the root identity before reading its children", async () => {
+    // Root-reuse race: 5650 (root) is captured at snapshot entry, but the
+    // direct child exits and its PID is reused before the walker reads the
+    // root's children file. The replacement process exposes its own child 5651,
+    // whose numeric ppid would match 5650; without a root identity re-check the
+    // foreign subtree could be admitted and signaled.
+    const statLine = (pid: number, comm: string, starttime: string, ppid = 1) =>
+      `${pid} (${comm}) S ${ppid} ${pid} ${pid} 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 ${starttime} 0`;
+    killSpy.mockImplementation(() => true);
+    let root5650Starttime = "300";
+    readFileSyncMock.mockImplementation((filePath: string) => {
+      if (filePath === "/proc/5650/task/5650/children") {
+        return "5651";
+      }
+      if (filePath === "/proc/5651/task/5651/children") {
+        return "";
+      }
+      if (filePath === "/proc/5650/stat") {
+        // The first read (snapshot entry) sees the original starttime; the
+        // second read (revalidation before children) sees the recycled
+        // replacement's starttime, so the root re-check fails.
+        const starttime = root5650Starttime;
+        root5650Starttime = "666";
+        return statLine(5650, starttime === "300" ? "root" : "replacement", starttime);
+      }
+      if (filePath === "/proc/5651/stat") {
+        return statLine(5651, "stranger", "667", 5650);
+      }
+      throw new Error("unexpected proc path");
+    });
+
+    await withMockedPlatform("linux", async () => {
+      killProcessTree(5650, { graceMs: 10, detached: false });
+      await vi.advanceTimersByTimeAsync(10);
+
+      // The recycled root fails its children-read re-check, so no foreign
+      // descendant is admitted. Because the PID was reused, the captured root
+      // identity no longer matches at signal time either, so the snapshot is
+      // not signaled at all (fail-closed) rather than risking a signal to the
+      // replacement process.
+      const realSignals = (
+        killSpy.mock.calls as Array<[number, NodeJS.Signals | number | undefined]>
+      ).filter(([, signal]) => signal !== 0);
+      expect(realSignals).toEqual([]);
+      expect(realSignals.some(([pid]) => pid === 5651)).toBe(false);
+    });
+  });
+
   it("on Unix force-escalates one attached snapshot without rebuilding it", async () => {
     const statLine = (pid: number, comm: string, starttime: string, ppid = 1) =>
       `${pid} (${comm}) S ${ppid} ${pid} ${pid} 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 ${starttime} 0`;

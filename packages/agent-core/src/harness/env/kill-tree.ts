@@ -337,9 +337,10 @@ function collectUnixProcessTree(rootPid: number): UnixProcessTree | undefined {
     // trusting its children file. A PID reused between the parent's identity
     // capture and this read would expose an unrelated replacement process's
     // children, whose numeric ppid would otherwise pass the child check and
-    // admit a foreign subtree. The root is exempt (it has no captured parent)
-    // because its identity is verified once, at snapshot entry.
-    if (depth > 0 && readUnixProcessIdentity(parentPid, deadline) !== parentIdentity) {
+    // admit a foreign subtree. This includes the root: although the supervisor
+    // owns it, the numeric PID can be recycled between snapshot entry and this
+    // children read, so its identity must still match before descending.
+    if (readUnixProcessIdentity(parentPid, deadline) !== parentIdentity) {
       return;
     }
     const children = readUnixProcessChildren(parentPid);
