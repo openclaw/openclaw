@@ -91,6 +91,64 @@ describe("config form search", () => {
     expect(matched).toBe(true);
   });
 
+  it.each([{ value: [] as string[] }, { value: ["primary"] }])(
+    "searches later positional tuple schemas from $value",
+    ({ value }) => {
+      const matched = matchesNodeSearch({
+        schema: {
+          type: "array",
+          items: [
+            { type: "string", description: "Primary destination" },
+            { type: "string", description: "Secondary destination" },
+          ],
+        },
+        value,
+        path: ["destinations"],
+        hints: {},
+        criteria: parseConfigSearchQuery("secondary destination"),
+      });
+
+      expect(matched).toBe(true);
+    },
+  );
+
+  it("searches populated tuple entries using their positional schemas", () => {
+    const matched = matchesNodeSearch({
+      schema: {
+        type: "array",
+        items: [
+          { type: "string", description: "Primary destination" },
+          { type: "string", description: "Secondary destination" },
+        ],
+      },
+      value: ["primary", "secondary"],
+      path: ["destinations"],
+      hints: {},
+      criteria: parseConfigSearchQuery("secondary destination"),
+    });
+
+    expect(matched).toBe(true);
+  });
+
+  it("searches typed additional tuple entries with their tail schema", () => {
+    const matched = matchesNodeSearch({
+      schema: {
+        type: "array",
+        items: [{ type: "string", description: "Primary destination" }],
+        additionalItems: {
+          type: "string",
+          description: "Overflow destination",
+        },
+      },
+      value: ["primary", "overflow"],
+      path: ["destinations"],
+      hints: {},
+      criteria: parseConfigSearchQuery("overflow destination"),
+    });
+
+    expect(matched).toBe(true);
+  });
+
   it("searches additional-property schemas before entries exist", () => {
     const matched = matchesNodeSearch({
       schema: {

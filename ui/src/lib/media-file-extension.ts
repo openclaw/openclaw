@@ -8,8 +8,9 @@ export function getMediaFileExtension(value: string): string | undefined {
   }
   let filename: string;
   try {
-    if (/^https?:\/\//i.test(trimmed)) {
-      const pathname = new URL(trimmed).pathname;
+    const isRootRelativeUrl = trimmed.startsWith("/") && /[?#]/.test(trimmed);
+    if (/^https?:\/\//i.test(trimmed) || isRootRelativeUrl) {
+      const pathname = new URL(trimmed, "https://openclaw.invalid").pathname;
       filename = pathname.slice(pathname.lastIndexOf("/") + 1);
       try {
         // Match media-core: decode only the filename and keep encoded path

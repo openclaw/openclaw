@@ -48,6 +48,8 @@ public enum OpenClawChatEventText {
             return self.trimmed(text)
         }
         guard let object = self.dictionary(from: value) else { return nil }
+        let type = self.stringValue(object["type"])?.lowercased() ?? "text"
+        guard type == "text" || type.isEmpty else { return nil }
         return self.trimmed(self.stringValue(object["text"]) ?? "")
     }
 

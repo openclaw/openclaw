@@ -7,6 +7,8 @@ import "./tooltip.ts";
 
 const COPIED_FOR_MS = 1500;
 const ERROR_FOR_MS = 2000;
+const feedbackResetTimers = new WeakMap<HTMLButtonElement, number>();
+
 export function copyMarkdownLabel(): string {
   return t("chat.actions.copyAsMarkdown");
 }
@@ -38,6 +40,14 @@ function createCopyButton(options: CopyButtonOptions): TemplateResult {
             return;
           }
 
+          // Each copy owns its feedback window; old timers must not clear a newer result.
+          const previousFeedbackTimer = feedbackResetTimers.get(btn);
+          if (previousFeedbackTimer !== undefined) {
+            window.clearTimeout(previousFeedbackTimer);
+            feedbackResetTimers.delete(btn);
+          }
+          delete btn.dataset.copied;
+          delete btn.dataset.error;
           btn.dataset.copying = "1";
           btn.setAttribute("aria-busy", "true");
           btn.disabled = true;
@@ -51,30 +61,26 @@ function createCopyButton(options: CopyButtonOptions): TemplateResult {
           btn.removeAttribute("aria-busy");
           btn.disabled = false;
 
-          if (!copied) {
+          if (copied) {
+            btn.dataset.copied = "1";
+          } else {
             btn.dataset.error = "1";
-            setButtonLabel(btn, t("common.copyFailed"));
+          }
+          setButtonLabel(btn, t(copied ? "common.copied" : "common.copyFailed"));
 
-            window.setTimeout(() => {
+          const feedbackResetTimer = window.setTimeout(
+            () => {
+              feedbackResetTimers.delete(btn);
               if (!btn.isConnected) {
                 return;
               }
+              delete btn.dataset.copied;
               delete btn.dataset.error;
               setButtonLabel(btn, idleLabel);
-            }, ERROR_FOR_MS);
-            return;
-          }
-
-          btn.dataset.copied = "1";
-          setButtonLabel(btn, t("common.copied"));
-
-          window.setTimeout(() => {
-            if (!btn.isConnected) {
-              return;
-            }
-            delete btn.dataset.copied;
-            setButtonLabel(btn, idleLabel);
-          }, COPIED_FOR_MS);
+            },
+            copied ? COPIED_FOR_MS : ERROR_FOR_MS,
+          );
+          feedbackResetTimers.set(btn, feedbackResetTimer);
         }}
       >
         <span class="chat-copy-btn__icon" aria-hidden="true">

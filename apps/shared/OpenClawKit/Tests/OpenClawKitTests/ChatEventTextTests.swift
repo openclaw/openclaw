@@ -63,4 +63,54 @@ struct ChatEventTextTests {
 
         #expect(OpenClawChatEventText.assistantText(from: event) == "plain reply")
     }
+
+    @Test func `ignores non text assistant content blocks`() {
+        let event = OpenClawChatEventPayload(
+            runId: "run-1",
+            sessionKey: "main",
+            state: "delta",
+            message: AnyCodable([
+                "role": "assistant",
+                "content": [
+                    ["type": "thinking", "text": "hidden reasoning"],
+                    ["type": "text", "text": "visible reply"],
+                    ["type": "toolCall", "text": "tool details"],
+                    ["type": "image", "text": "image caption"],
+                ],
+            ]),
+            errorMessage: nil)
+
+        #expect(OpenClawChatEventText.assistantText(from: event) == "visible reply")
+    }
+
+    @Test func `keeps legacy untyped assistant content blocks`() {
+        let event = OpenClawChatEventPayload(
+            runId: "run-1",
+            sessionKey: "main",
+            state: "final",
+            message: AnyCodable([
+                "role": "assistant",
+                "content": [
+                    ["text": "legacy reply"],
+                    ["type": "", "text": "another legacy reply"],
+                ],
+            ]),
+            errorMessage: nil)
+
+        #expect(OpenClawChatEventText.assistantText(from: event) == "legacy reply\nanother legacy reply")
+    }
+
+    @Test func `non text assistant content alone produces no reply`() {
+        let event = OpenClawChatEventPayload(
+            runId: "run-1",
+            sessionKey: "main",
+            state: "delta",
+            message: AnyCodable([
+                "role": "assistant",
+                "content": [["type": "toolCall", "text": "tool details"]],
+            ]),
+            errorMessage: nil)
+
+        #expect(OpenClawChatEventText.assistantText(from: event) == nil)
+    }
 }
