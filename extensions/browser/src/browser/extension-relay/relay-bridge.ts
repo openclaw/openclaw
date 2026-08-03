@@ -60,6 +60,8 @@ type TabState = {
   /** Set while chrome.debugger is attached: real CDP targetId + synthetic root sessionId. */
   attached?: { targetId: string; sessionId: string };
   attaching?: Promise<{ targetId: string; sessionId: string }>;
+  /** Settles only after the extension's chrome.debugger.detach call settles. */
+  detaching?: Promise<void>;
 };
 
 type CdpClientState = {
@@ -415,6 +417,12 @@ export class ExtensionRelayBridge {
     if (!tab) {
       throw new Error(`tab ${tabId} is not shared with OpenClaw`);
     }
+    if (tab.detaching) {
+      await tab.detaching;
+      if (this.tabs.get(tabId) !== tab) {
+        throw new Error(`tab ${tabId} closed during detach`);
+      }
+    }
     if (tab.attached) {
       return tab.attached;
     }
@@ -425,7 +433,10 @@ export class ExtensionRelayBridge {
       const result = (await this.callExtension({ type: "attach", tabId })) as {
         targetId?: unknown;
       } | null;
-      const targetId = typeof result?.targetId === "string" ? result.targetId : `tab-${tabId}`;
+      if (typeof result?.targetId !== "string" || result.targetId.length === 0) {
+        throw new Error(`extension did not confirm an attached target for tab ${tabId}`);
+      }
+      const targetId = result.targetId;
       const sessionId = `openclaw-tab-${tabId}-${this.nextSessionOrdinal++}`;
       const attached = { targetId, sessionId };
       // Identity check, not just presence: the tab could have left the group and
@@ -446,6 +457,27 @@ export class ExtensionRelayBridge {
     } finally {
       tab.attaching = undefined;
     }
+  }
+
+  private detachTab(tabId: number, tab: TabState): Promise<void> {
+    if (tab.detaching) {
+      return tab.detaching;
+    }
+    const attached = tab.attached;
+    if (attached) {
+      tab.attached = undefined;
+      this.emitDetachedFromTarget(tabId, attached.sessionId, attached.targetId);
+    }
+    const detaching = this.callExtension({ type: "detach", tabId })
+      .then(() => undefined)
+      .catch(() => undefined)
+      .finally(() => {
+        if (tab.detaching === detaching) {
+          tab.detaching = undefined;
+        }
+      });
+    tab.detaching = detaching;
+    return detaching;
   }
 
   private targetInfoForTab(tab: TabState, targetId: string): Record<string, unknown> {
@@ -654,10 +686,7 @@ export class ExtensionRelayBridge {
     }
     for (const [tabId, tab] of this.tabs) {
       if (tab.attached) {
-        const { sessionId, targetId } = tab.attached;
-        tab.attached = undefined;
-        this.emitDetachedFromTarget(tabId, sessionId, targetId);
-        void this.callExtension({ type: "detach", tabId }).catch(() => {});
+        void this.detachTab(tabId, tab);
       }
     }
   }
@@ -907,12 +936,9 @@ export class ExtensionRelayBridge {
         const auxiliary = sessionId ? this.auxiliaryTabSessions.get(sessionId) : undefined;
         if (auxiliary?.client === client) {
           if (auxiliary.inFlightExtensionSeqs.size > 0) {
-            const detachTask = this.callExtension({ type: "detach", tabId: auxiliary.tabId });
             const tab = this.tabs.get(auxiliary.tabId);
             if (tab?.attached) {
-              const { sessionId: rootSession, targetId } = tab.attached;
-              tab.attached = undefined;
-              this.emitDetachedFromTarget(auxiliary.tabId, rootSession, targetId);
+              await this.detachTab(auxiliary.tabId, tab);
             } else {
               this.rejectAuxiliaryCommands(
                 auxiliary,
@@ -920,7 +946,6 @@ export class ExtensionRelayBridge {
               );
               this.auxiliaryTabSessions.delete(sessionId as string);
             }
-            await detachTask.catch(() => {});
           } else {
             this.auxiliaryTabSessions.delete(sessionId as string);
           }
@@ -935,10 +960,7 @@ export class ExtensionRelayBridge {
         if (route && !route.child) {
           const tab = this.tabs.get(route.tabId);
           if (tab?.attached) {
-            const { sessionId: rootSession, targetId } = tab.attached;
-            tab.attached = undefined;
-            this.emitDetachedFromTarget(route.tabId, rootSession, targetId);
-            await this.callExtension({ type: "detach", tabId: route.tabId }).catch(() => {});
+            await this.detachTab(route.tabId, tab);
           }
         }
         this.respond(client, request, {});

@@ -263,7 +263,11 @@ async function attachDebugger(tabId) {
       throw error;
     }
     const target = targets.find((candidate) => candidate.tabId === tabId && candidate.attached);
-    return { targetId: target?.id ?? `tab-${tabId}` };
+    if (!target?.id) {
+      await detachDebugger(tabId);
+      throw new Error(`chrome.debugger did not confirm an attached target for tab ${tabId}`);
+    }
+    return { targetId: target.id };
   })();
   attachingTabs.set(tabId, attach);
   try {

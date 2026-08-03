@@ -287,8 +287,8 @@ async function runBrowserLiveProbe(
   const probeSignal = AbortSignal.any([signal, deadlineAbort.signal]);
   try {
     const tab = await profileCtx.ensureTabAvailable(undefined, { signal: probeSignal });
-    const remainingTimeoutMs = Math.max(1, deadlineAtMs - Date.now());
     if (capabilities.usesChromeMcp) {
+      const remainingTimeoutMs = Math.max(1, deadlineAtMs - Date.now());
       await takeChromeMcpSnapshot({
         profileName: profileCtx.profile.name,
         profile: profileCtx.profile,
@@ -314,7 +314,7 @@ async function runBrowserLiveProbe(
           wsUrl: tab.wsUrl,
           targetId: tab.targetId,
           limit: 25,
-          timeoutMs: remainingTimeoutMs,
+          timeoutMs: Math.max(1, deadlineAtMs - Date.now()),
           signal,
         })
       : await (async () => {
@@ -322,11 +322,16 @@ async function runBrowserLiveProbe(
           if (!pw) {
             throw new Error("Playwright is not available for the live snapshot probe.");
           }
+          // Lazy module loading is part of the advertised probe budget. If it
+          // consumed the deadline, do not begin fresh page work; otherwise give
+          // the snapshot owner only the time that remains so its contextual
+          // target/method timeout still owns an in-flight capture.
+          probeSignal.throwIfAborted();
           return await pw.captureAriaSnapshotViaPlaywright({
             cdpUrl: profileCtx.profile.cdpUrl,
             targetId: tab.targetId,
             limit: 25,
-            timeoutMs: remainingTimeoutMs,
+            timeoutMs: Math.max(1, deadlineAtMs - Date.now()),
             signal,
             ssrfPolicy: ctx.state().resolved.ssrfPolicy,
           });
@@ -362,8 +367,10 @@ function isAuthoritativelyStoppedManagedProfile(
   profileCtx: ProfileContext,
   status: { running: boolean },
 ): boolean {
-  const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
-  if (capabilities.mode !== "local-managed" || status.running) {
+  const profile = profileCtx.profile;
+  const ownsBrowserLaunch =
+    profile.driver === "openclaw" && profile.cdpIsLoopback && !profile.attachOnly;
+  if (!ownsBrowserLaunch || status.running) {
     return false;
   }
   // A missing managed-process handle is authoritative for an OpenClaw-owned

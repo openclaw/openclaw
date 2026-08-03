@@ -740,6 +740,94 @@ describe("browser manage output", () => {
     expect(process.exitCode).toBe(1);
   });
 
+  it("trusts a successful canonical deep doctor after a short CDP status miss", async () => {
+    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
+      if (req.path === "/doctor") {
+        return {
+          ok: true,
+          profile: "attached",
+          transport: "cdp",
+          status: {
+            enabled: true,
+            profile: "attached",
+            driver: "openclaw",
+            transport: "cdp",
+            running: false,
+            cdpReady: false,
+          },
+          checks: [
+            {
+              id: "live-snapshot",
+              label: "Live snapshot",
+              status: "pass",
+              summary: "snapshot succeeded after the short status miss",
+            },
+          ],
+        };
+      }
+      if (req.path === "/profiles") {
+        throw new Error("supplementary profile listing timed out");
+      }
+      return {};
+    });
+
+    const program = createBrowserManageProgram();
+    await program.parseAsync(["browser", "--browser-profile", "attached", "doctor", "--deep"], {
+      from: "user",
+    });
+
+    const output = lastRuntimeLog();
+    expect(output).toContain("OK live-snapshot: snapshot succeeded after the short status miss");
+    expect(output).toContain("WARN profiles: Error: supplementary profile listing timed out");
+    expect(output).not.toContain("FAIL browser: not running");
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("keeps tab enrichment failures advisory when canonical deep doctor succeeds", async () => {
+    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
+      if (req.path === "/doctor") {
+        return {
+          ok: true,
+          profile: "remote",
+          transport: "cdp",
+          status: {
+            enabled: true,
+            profile: "remote",
+            driver: "openclaw",
+            transport: "cdp",
+            running: true,
+            cdpReady: true,
+          },
+          checks: [
+            {
+              id: "live-snapshot",
+              label: "Live snapshot",
+              status: "pass",
+              summary: "remote snapshot succeeded",
+            },
+          ],
+        };
+      }
+      if (req.path === "/profiles") {
+        return { profiles: [{ name: "remote", running: true }] };
+      }
+      if (req.path === "/tabs") {
+        throw new Error("supplementary tab listing timed out");
+      }
+      return {};
+    });
+
+    const program = createBrowserManageProgram();
+    await program.parseAsync(["browser", "--browser-profile", "remote", "doctor", "--deep"], {
+      from: "user",
+    });
+
+    const output = lastRuntimeLog();
+    expect(output).toContain("WARN tabs: Error: supplementary tab listing timed out");
+    expect(output).toContain("OK live-snapshot: remote snapshot succeeded");
+    expect(process.exitCode).toBeUndefined();
+  });
+
   it("reports a stopped deep-doctor profile without probing tabs or snapshots", async () => {
     getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
       if (req.path === "/doctor") {
@@ -773,7 +861,7 @@ describe("browser manage output", () => {
     const program = createBrowserManageProgram();
     await program.parseAsync(["browser", "doctor", "--deep"], { from: "user" });
 
-    expect(lastRuntimeLog()).toContain("FAIL browser: not running");
+    expect(lastRuntimeLog()).not.toContain("FAIL browser: not running");
     expect(lastRuntimeLog()).toContain(
       "FAIL live-snapshot: Live snapshot probe requires a running browser profile.",
     );

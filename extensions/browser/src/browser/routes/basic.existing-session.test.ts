@@ -4,18 +4,23 @@ import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helper
 
 const {
   captureAriaSnapshotViaPlaywrightMock,
+  getPwAiModuleMock,
   inspectChromeGraphicsDiagnosticsMock,
   takeChromeMcpSnapshotMock,
-} = vi.hoisted(() => ({
-  captureAriaSnapshotViaPlaywrightMock: vi.fn(),
-  inspectChromeGraphicsDiagnosticsMock: vi.fn(),
-  takeChromeMcpSnapshotMock: vi.fn(async () => ({})),
-}));
+} = vi.hoisted(() => {
+  const captureAriaSnapshotViaPlaywrightMock = vi.fn();
+  return {
+    captureAriaSnapshotViaPlaywrightMock,
+    getPwAiModuleMock: vi.fn(async () => ({
+      captureAriaSnapshotViaPlaywright: captureAriaSnapshotViaPlaywrightMock,
+    })),
+    inspectChromeGraphicsDiagnosticsMock: vi.fn(),
+    takeChromeMcpSnapshotMock: vi.fn(async () => ({})),
+  };
+});
 
 vi.mock("../pw-ai-module.js", () => ({
-  getPwAiModule: vi.fn(async () => ({
-    captureAriaSnapshotViaPlaywright: captureAriaSnapshotViaPlaywrightMock,
-  })),
+  getPwAiModule: getPwAiModuleMock,
 }));
 
 vi.mock("../chrome-mcp.js", () => ({
@@ -201,6 +206,10 @@ function responseBodyRecord(response: { body: unknown }): Record<string, unknown
 describe("basic browser routes", () => {
   beforeEach(() => {
     captureAriaSnapshotViaPlaywrightMock.mockReset();
+    getPwAiModuleMock.mockReset();
+    getPwAiModuleMock.mockResolvedValue({
+      captureAriaSnapshotViaPlaywright: captureAriaSnapshotViaPlaywrightMock,
+    });
     inspectChromeGraphicsDiagnosticsMock.mockReset();
     takeChromeMcpSnapshotMock.mockClear();
   });
@@ -491,6 +500,122 @@ describe("basic browser routes", () => {
       status: "pass",
       summary: expect.stringContaining("extension-target-1"),
     });
+  });
+
+  it("still probes a loopback attach-only profile after the short status check misses", async () => {
+    captureAriaSnapshotViaPlaywrightMock.mockResolvedValueOnce({
+      nodes: [{ ref: "ax1", role: "document", name: "Example" }],
+    });
+    const state = createManagedProfileState(
+      { name: "attached", attachOnly: true },
+      {
+        isHttpReachable: async () => false,
+        isTransportAvailable: async () => false,
+      },
+    );
+    const ensureTabAvailable = vi.fn(async () => ({
+      targetId: "attached-target-1",
+      title: "Example",
+      url: "https://example.com",
+      type: "page",
+    }));
+    const profileCtx = {
+      ...(state.forProfile() as unknown as Record<string, unknown>),
+      ensureTabAvailable,
+    };
+    const { app, getHandlers } = createBrowserRouteApp();
+    registerBrowserBasicRoutes(app, {
+      state: () => state,
+      forProfile: () => profileCtx,
+      mapTabError: vi.fn(() => null),
+    } as never);
+    const response = createBrowserRouteResponse();
+
+    await getHandlers.get("/doctor")?.(
+      { params: {}, query: { profile: "attached", deep: "true" } },
+      response.res,
+    );
+
+    expect(ensureTabAvailable).toHaveBeenCalledOnce();
+    expect(captureAriaSnapshotViaPlaywrightMock).toHaveBeenCalledOnce();
+    const checks = responseBodyRecord(response).checks as Array<{
+      id?: string;
+      status?: string;
+      summary?: string;
+    }>;
+    expect(checks.find((check) => check.id === "live-snapshot")).toMatchObject({
+      status: "pass",
+      summary: expect.stringContaining("attached-target-1"),
+    });
+  });
+
+  it("charges lazy Playwright loading to the absolute live-probe deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      getPwAiModuleMock.mockImplementationOnce(async () => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 2_000));
+        return { captureAriaSnapshotViaPlaywright: captureAriaSnapshotViaPlaywrightMock };
+      });
+      captureAriaSnapshotViaPlaywrightMock.mockImplementationOnce(
+        async (options: { timeoutMs?: number }) => {
+          await new Promise<void>((resolve) => setTimeout(resolve, options.timeoutMs));
+          throw new Error(`contextual capture timeout after ${options.timeoutMs}ms`);
+        },
+      );
+      const state = createManagedProfileState(
+        {
+          name: "chrome",
+          driver: "extension",
+          cdpPort: 31002,
+          cdpUrl: "http://127.0.0.1:31002",
+          attachOnly: true,
+        },
+        {
+          isHttpReachable: async () => true,
+          isTransportAvailable: async () => true,
+        },
+      );
+      const profileCtx = {
+        ...(state.forProfile() as unknown as Record<string, unknown>),
+        ensureTabAvailable: vi.fn(async () => ({
+          targetId: "extension-target-1",
+          title: "Example",
+          url: "https://example.com",
+          type: "page",
+        })),
+      };
+      const { app, getHandlers } = createBrowserRouteApp();
+      registerBrowserBasicRoutes(app, {
+        state: () => state,
+        forProfile: () => profileCtx,
+        mapTabError: vi.fn(() => null),
+      } as never);
+      const response = createBrowserRouteResponse();
+
+      const startedAtMs = Date.now();
+      const request = getHandlers.get("/doctor")?.(
+        { params: {}, query: { profile: "chrome", deep: "true" } },
+        response.res,
+      );
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      expect(captureAriaSnapshotViaPlaywrightMock).toHaveBeenCalledWith(
+        expect.objectContaining({ timeoutMs: 10_000 }),
+      );
+      await vi.advanceTimersByTimeAsync(10_000);
+      await request;
+
+      expect(Date.now() - startedAtMs).toBe(12_000);
+      const checks = responseBodyRecord(response).checks as Array<{
+        id?: string;
+        summary?: string;
+      }>;
+      expect(checks.find((check) => check.id === "live-snapshot")?.summary).toContain(
+        "contextual capture timeout after 10000ms",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not start a stopped managed browser for deep doctor", async () => {

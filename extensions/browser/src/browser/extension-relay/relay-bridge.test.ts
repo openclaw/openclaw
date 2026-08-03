@@ -29,6 +29,7 @@ function wireExtension(
   bridge: ExtensionRelayBridge,
   opts: {
     answerCdp?: boolean | ((msg: Extract<RelayToExtensionMessage, { type: "cdp" }>) => boolean);
+    answerDetach?: boolean;
   } = {},
 ) {
   const socket = new FakeSocket();
@@ -42,6 +43,9 @@ function wireExtension(
       return;
     }
     queueMicrotask(() => {
+      if (msg.type === "detach" && opts.answerDetach === false) {
+        return;
+      }
       if (msg.type === "cdp") {
         const shouldAnswer =
           typeof opts.answerCdp === "function" ? opts.answerCdp(msg) : opts.answerCdp !== false;
@@ -336,6 +340,73 @@ describe("ExtensionRelayBridge", () => {
     );
     await flush();
     expect(client.frames().find((frame) => frame.id === 6)?.result).toMatchObject({ ok: true });
+  });
+
+  it("waits for same-tab detach before publishing a replacement attachment", async () => {
+    const bridge = new ExtensionRelayBridge();
+    const { socket: extSocket, handlers } = wireExtension(bridge, {
+      answerCdp: false,
+      answerDetach: false,
+    });
+    sendHello(handlers);
+
+    const firstClient = new FakeSocket();
+    const firstCdp = bridge.attachCdpClientSocket(firstClient);
+    firstCdp.onMessage(
+      JSON.stringify({ id: 1, method: "Target.setAutoAttach", params: { autoAttach: true } }),
+    );
+    await flush();
+    firstCdp.onMessage(JSON.stringify({ id: 2, method: "Target.attachToBrowserTarget" }));
+    await flush();
+    const browserSessionId = (
+      firstClient.frames().find((frame) => frame.id === 2)?.result as { sessionId?: string }
+    )?.sessionId;
+    firstCdp.onMessage(
+      JSON.stringify({
+        id: 3,
+        sessionId: browserSessionId,
+        method: "Target.attachToTarget",
+        params: { targetId: "target-1", flatten: true },
+      }),
+    );
+    await flush();
+    const pageSessionId = (
+      firstClient.frames().find((frame) => frame.id === 3)?.result as { sessionId?: string }
+    )?.sessionId;
+    firstCdp.onMessage(
+      JSON.stringify({ id: 4, sessionId: pageSessionId, method: "Accessibility.enable" }),
+    );
+    await flush();
+    firstCdp.onMessage(
+      JSON.stringify({
+        id: 5,
+        sessionId: browserSessionId,
+        method: "Target.detachFromTarget",
+        params: { sessionId: pageSessionId },
+      }),
+    );
+    await flush();
+
+    const detach = extSocket.frames().find((frame) => frame.type === "detach") as
+      | { seq?: number }
+      | undefined;
+    expect(detach?.seq).toBeTypeOf("number");
+
+    const retryClient = new FakeSocket();
+    const retryCdp = bridge.attachCdpClientSocket(retryClient);
+    retryCdp.onMessage(
+      JSON.stringify({ id: 1, method: "Target.setAutoAttach", params: { autoAttach: true } }),
+    );
+    await flush();
+    expect(extSocket.frames().filter((frame) => frame.type === "attach")).toHaveLength(1);
+    expect(retryClient.frames().find((frame) => frame.id === 1)).toBeUndefined();
+
+    handlers.onMessage(JSON.stringify({ type: "result", seq: detach?.seq, result: {} }));
+    await flush();
+    await flush();
+
+    expect(extSocket.frames().filter((frame) => frame.type === "attach")).toHaveLength(2);
+    expect(retryClient.frames().find((frame) => frame.id === 1)?.result).toEqual({});
   });
 
   it("identifies an unanswered page CDP command when the relay deadline expires", async () => {

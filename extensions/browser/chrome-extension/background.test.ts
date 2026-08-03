@@ -81,6 +81,10 @@ async function loadBackground({
   const clearAlarm = vi.fn(async () => true);
   const setBadgeText = vi.fn(async () => undefined);
   const setBadgeBackgroundColor = vi.fn(async () => undefined);
+  const debuggerAttach = vi.fn(async () => undefined);
+  const debuggerGetTargets = vi.fn(async () => []);
+  const tabGroupsQuery = vi.fn(async (): Promise<Array<Record<string, unknown>>> => []);
+  const tabsQuery = vi.fn(async (): Promise<Array<Record<string, unknown>>> => []);
   const chromeMock = {
     action: { setBadgeText, setBadgeBackgroundColor },
     commands: { onCommand: { addListener } },
@@ -101,9 +105,9 @@ async function loadBackground({
     debugger: {
       onEvent: { addListener },
       onDetach: { addListener },
-      attach: vi.fn(async () => undefined),
+      attach: debuggerAttach,
       detach: vi.fn(async () => undefined),
-      getTargets: vi.fn(async () => []),
+      getTargets: debuggerGetTargets,
       sendCommand: vi.fn(async () => ({})),
     },
     runtime: {
@@ -136,13 +140,13 @@ async function loadBackground({
       executeScript: vi.fn(async (): Promise<Array<{ result: PageCaptureResult }>> => []),
     },
     tabGroups: {
-      query: vi.fn(async (): Promise<Array<{ id: number; windowId: number }>> => []),
+      query: tabGroupsQuery,
       update: vi.fn(async () => undefined),
       onUpdated: { addListener },
       onRemoved: { addListener },
     },
     tabs: {
-      query: vi.fn(async (): Promise<Array<{ id: number; windowId: number }>> => []),
+      query: tabsQuery,
       get: vi.fn(async () => ({ id: 1, windowId: 1 })),
       group: vi.fn(async () => 1),
       ungroup: vi.fn(async () => undefined),
@@ -185,6 +189,8 @@ async function loadBackground({
     clearAlarm,
     createAlarm,
     debuggerDetach: chromeMock.debugger.detach,
+    debuggerAttach,
+    debuggerGetTargets,
     debuggerSendCommand: chromeMock.debugger.sendCommand,
     executeScript: chromeMock.scripting.executeScript,
     messageListener,
@@ -192,10 +198,10 @@ async function loadBackground({
     sockets,
     storageRemove: chromeMock.storage.local.remove,
     storageSet: chromeMock.storage.local.set,
-    tabGroupsQuery: chromeMock.tabGroups.query,
+    tabGroupsQuery,
+    tabsQuery,
     tabsGet: chromeMock.tabs.get,
     tabsGroup: chromeMock.tabs.group,
-    tabsQuery: chromeMock.tabs.query,
     tabsUngroup: chromeMock.tabs.ungroup,
   };
 }
@@ -245,6 +251,37 @@ describe("relay CDP cancellation", () => {
         expect.arrayContaining([
           expect.objectContaining({ type: "error", seq: 41 }),
           expect.objectContaining({ type: "result", seq: 42 }),
+        ]),
+      );
+    });
+  });
+
+  it("rejects an attach the debugger target list does not confirm", async () => {
+    const harness = await loadBackground();
+    harness.tabGroupsQuery.mockResolvedValue([{ id: 3, windowId: 1 }]);
+    harness.tabsQuery.mockResolvedValue([
+      { id: 7, windowId: 1, groupId: 3, url: "https://example.com", title: "Example" },
+    ]);
+    harness.debuggerGetTargets.mockResolvedValue([]);
+    const socket = harness.sockets[0];
+    socket?.open();
+    await Promise.resolve();
+
+    socket?.receive({ type: "attach", seq: 51, tabId: 7 });
+
+    await vi.waitFor(() =>
+      expect(harness.debuggerAttach).toHaveBeenCalledWith({ tabId: 7 }, "1.3"),
+    );
+    await vi.waitFor(() => expect(harness.debuggerDetach).toHaveBeenCalledWith({ tabId: 7 }));
+    await vi.waitFor(() => {
+      const frames = socket?.send.mock.calls.map(([raw]) => JSON.parse(raw as string)) ?? [];
+      expect(frames).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "error",
+            seq: 51,
+            message: expect.stringMatching(/did not confirm an attached target/i),
+          }),
         ]),
       );
     });

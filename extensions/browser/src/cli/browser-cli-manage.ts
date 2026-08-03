@@ -232,10 +232,7 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
     ok: true,
     detail: `${status.profile ?? "openclaw"} (${usesChromeMcpTransport(status) ? "chrome-mcp" : (status.transport ?? "cdp")})`,
   });
-  const canonicalOwnsTransportReadiness =
-    deep === true &&
-    canonicalDoctor !== null &&
-    (usesChromeMcpTransport(status) || status.transport === "extension");
+  const canonicalOwnsTransportReadiness = deep === true && canonicalDoctor !== null;
   if (!canonicalOwnsTransportReadiness) {
     checks.push({
       name: "browser",
@@ -269,6 +266,7 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
     checks.push({
       name: "profiles",
       ok: false,
+      warning: canonicalOwnsTransportReadiness,
       detail: String(err),
     });
   }
@@ -294,6 +292,7 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
       checks.push({
         name: "tabs",
         ok: false,
+        warning: canonicalOwnsTransportReadiness,
         detail: String(err),
       });
     }
@@ -323,7 +322,9 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
   }
 
   return {
-    ok: checks.every((check) => check.ok) && (!deep || canonicalDoctor?.ok === true),
+    ok:
+      checks.every((check) => check.ok || check.warning === true) &&
+      (!deep || canonicalDoctor?.ok === true),
     checks,
     status,
   };
