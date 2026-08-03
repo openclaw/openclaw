@@ -2770,6 +2770,180 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(instruction).toBeNull();
   });
 
+  it("finalizes once when an earlier presentation precedes an exact failed terminal batch (#118489)", async () => {
+    const toolUseAssistant = {
+      role: "assistant",
+      stopReason: "toolUse",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "toolCall", id: "tool_read", name: "read", arguments: { path: "notes" } }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams: unknown) => {
+      // The earlier successful tool already recorded a terminal presentation;
+      // the current batch's failed result is persisted exactly.
+      (
+        attemptParams as {
+          onToolOutcome?: (observation: {
+            toolCallOrdinal?: number;
+            terminalPresentation?: string;
+          }) => void;
+        }
+      ).onToolOutcome?.({
+        toolCallOrdinal: 0,
+        terminalPresentation: "Bounded reads completed.",
+      });
+      return makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "read", isError: true }],
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        messagesSnapshot: [
+          toolUseAssistant,
+          { role: "toolResult", toolCallId: "tool_read", toolName: "read", isError: true },
+        ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
+        lastAssistant: toolUseAssistant,
+        currentAttemptAssistant: toolUseAssistant,
+        lastToolError: { toolName: "read", error: "ENOENT" },
+      });
+    });
+    const finalAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "text", text: "CANARY_RECOVERED: second read failed as expected." }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["CANARY_RECOVERED: second read failed as expected."],
+        lastAssistant: finalAssistant,
+        currentAttemptAssistant: finalAssistant,
+        currentAttemptCompletedAssistant: finalAssistant,
+      }),
+    );
+    mockedBuildEmbeddedRunPayloads
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce([{ text: "CANARY_RECOVERED: second read failed as expected." }]);
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-118489-prior-presentation",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    const secondCall = runAttemptCall(1);
+    expect(secondCall.prompt).toContain(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
+    expect(secondCall.prompt).toContain(
+      "If any tool failed, state that failure plainly and do not claim it succeeded.",
+    );
+    expect(secondCall.disableTools).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain(
+      "CANARY_RECOVERED: second read failed as expected.",
+    );
+    expectWarnMessageWith("settled post-tool turn lacked a final answer");
+  });
+
+  it("finalizes a required isolated cron run once with a stale lifecycle activeCount (#118489)", async () => {
+    const toolUseAssistant = {
+      role: "assistant",
+      stopReason: "toolUse",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "toolCall", id: "tool_exec", name: "exec", arguments: {} }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "exec", isError: true }],
+        // The bridge persisted the exact failed result before the lifecycle
+        // decrement, leaving the aggregate count stale.
+        itemLifecycle: { startedCount: 1, completedCount: 0, activeCount: 1 },
+        messagesSnapshot: [
+          toolUseAssistant,
+          { role: "toolResult", toolCallId: "tool_exec", toolName: "exec", isError: true },
+        ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
+        lastAssistant: toolUseAssistant,
+        currentAttemptAssistant: toolUseAssistant,
+        lastToolError: { toolName: "exec", error: "bridge failure" },
+      }),
+    );
+    const finalAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "text", text: "CANARY_RECOVERED: bridge failure explained." }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["CANARY_RECOVERED: bridge failure explained."],
+        lastAssistant: finalAssistant,
+        currentAttemptAssistant: finalAssistant,
+        currentAttemptCompletedAssistant: finalAssistant,
+      }),
+    );
+    mockedBuildEmbeddedRunPayloads
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce([{ text: "CANARY_RECOVERED: bridge failure explained." }]);
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      trigger: "cron",
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-118489-stale-lifecycle-cron",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    const secondCall = runAttemptCall(1);
+    expect(secondCall.prompt).toContain(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
+    expect(secondCall.prompt).toContain(
+      "If any tool failed, state that failure plainly and do not claim it succeeded.",
+    );
+    expect(secondCall.disableTools).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("CANARY_RECOVERED: bridge failure explained.");
+    expectWarnMessageWith("settled post-tool turn lacked a final answer");
+  });
+
+  it("does not finalize a stale-lifecycle batch while an async tool is still active (#118489)", async () => {
+    const toolUseAssistant = {
+      role: "assistant",
+      stopReason: "toolUse",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "toolCall", id: "tool_1", name: "read", arguments: {} }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "read", isError: true, asyncStarted: true }],
+        itemLifecycle: { startedCount: 1, completedCount: 0, activeCount: 1 },
+        messagesSnapshot: [
+          toolUseAssistant,
+          { role: "toolResult", toolCallId: "tool_1", toolName: "read", isError: true },
+        ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
+        lastAssistant: toolUseAssistant,
+        currentAttemptAssistant: toolUseAssistant,
+        lastToolError: { toolName: "read", error: "ENOENT" },
+      }),
+    );
+    mockedBuildEmbeddedRunPayloads.mockReturnValueOnce([]);
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-118489-async-negative",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
+    expectNoWarnMessageWith("settled post-tool turn lacked a final answer");
+  });
+
   it.each([
     { label: "background trigger", allowEmptyStopContinuation: false },
     {
