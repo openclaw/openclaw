@@ -963,6 +963,7 @@ export function registerBrowserAgentSnapshotRoutes(
                     targetId: tab.targetId,
                     limit: plan.limit,
                     timeoutMs: plan.timeoutMs,
+                    signal,
                     ssrfPolicy: ctx.state().resolved.ssrfPolicy,
                   });
                 });

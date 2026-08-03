@@ -40,6 +40,7 @@ import {
   storeRoleRefsForTarget,
 } from "./pw-session.js";
 import { markBackendDomRefsOnPage, withPageScopedCdpClient } from "./pw-session.page-cdp.js";
+import { createAbortPromiseWithListener } from "./pw-tools-core.interactions.navigation.js";
 import { appendSnapshotUrls, type SnapshotUrlEntry } from "./snapshot-urls.js";
 
 function resolveBoundedTimeoutMs(
@@ -197,56 +198,87 @@ export async function snapshotAriaViaPlaywright(opts: {
   targetId?: string;
   limit?: number;
   timeoutMs?: number;
+  signal?: AbortSignal;
   ssrfPolicy?: SsrFPolicy;
 }): Promise<{ nodes: AriaSnapshotNode[] }> {
   const limit = resolveIntegerOption(opts.limit, 500, { min: 1, max: 2000 });
-  const page = await prepareSnapshotPageViaPlaywright({
-    cdpUrl: opts.cdpUrl,
-    targetId: opts.targetId,
-    ssrfPolicy: opts.ssrfPolicy,
-  });
   const ariaTimeoutMs =
     typeof opts.timeoutMs === "number" && Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0
       ? Math.max(500, Math.min(60_000, Math.floor(opts.timeoutMs)))
       : undefined;
-  const collectAxTree = withPageScopedCdpClient({
-    cdpUrl: opts.cdpUrl,
-    page,
-    targetId: opts.targetId,
-    fn: async (send) => {
-      await send("Accessibility.enable").catch(() => {});
-      return (await send("Accessibility.getFullAXTree")) as {
-        nodes?: RawAXNode[];
-      };
-    },
+  const timeoutController = ariaTimeoutMs === undefined ? undefined : new AbortController();
+  let activeMethod = "page lookup";
+  const targetLabel = opts.targetId ?? "current";
+  const timer =
+    timeoutController && ariaTimeoutMs !== undefined
+      ? setTimeout(() => {
+          timeoutController.abort(
+            new Error(
+              `Aria snapshot via Playwright timed out after ${ariaTimeoutMs}ms ` +
+                `(targetId=${targetLabel}, method=${activeMethod}).`,
+            ),
+          );
+        }, ariaTimeoutMs)
+      : undefined;
+  timer?.unref?.();
+  const signal =
+    opts.signal && timeoutController
+      ? AbortSignal.any([opts.signal, timeoutController.signal])
+      : (opts.signal ?? timeoutController?.signal);
+  const { abortPromise, cleanup } = createAbortPromiseWithListener(signal, () => {
+    void forceDisconnectPlaywrightForTarget({
+      cdpUrl: opts.cdpUrl,
+      ssrfPolicy: opts.ssrfPolicy,
+      reason: "aria snapshot aborted",
+    }).catch(() => {});
   });
-  const res = (await (ariaTimeoutMs === undefined
-    ? collectAxTree
-    : (() => {
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        const timeout = new Promise<never>((_, reject) => {
-          timer = setTimeout(() => {
-            reject(new Error(`Aria snapshot via Playwright timed out after ${ariaTimeoutMs}ms.`));
-          }, ariaTimeoutMs);
-          timer.unref?.();
-        });
-        return Promise.race([collectAxTree, timeout]).finally(() => {
-          if (timer) {
-            clearTimeout(timer);
-          }
-        });
-      })())) as {
-    nodes?: RawAXNode[];
+
+  const collectSnapshot = async () => {
+    signal?.throwIfAborted();
+    const page = await prepareSnapshotPageViaPlaywright({
+      cdpUrl: opts.cdpUrl,
+      targetId: opts.targetId,
+      ssrfPolicy: opts.ssrfPolicy,
+    });
+    signal?.throwIfAborted();
+    const res = (await withPageScopedCdpClient({
+      cdpUrl: opts.cdpUrl,
+      page,
+      targetId: opts.targetId,
+      fn: async (send) => {
+        activeMethod = "Accessibility.enable";
+        await send("Accessibility.enable").catch(() => {});
+        signal?.throwIfAborted();
+        activeMethod = "Accessibility.getFullAXTree";
+        const result = (await send("Accessibility.getFullAXTree")) as {
+          nodes?: RawAXNode[];
+        };
+        signal?.throwIfAborted();
+        return result;
+      },
+    })) as { nodes?: RawAXNode[] };
+    const nodes = Array.isArray(res?.nodes) ? res.nodes : [];
+    const formatted = formatAriaSnapshot(nodes, limit);
+    activeMethod = "snapshot ref storage";
+    await storeAriaSnapshotRefsViaPlaywright({
+      cdpUrl: opts.cdpUrl,
+      targetId: opts.targetId,
+      nodes: formatted,
+      page,
+    });
+    signal?.throwIfAborted();
+    return { nodes: formatted };
   };
-  const nodes = Array.isArray(res?.nodes) ? res.nodes : [];
-  const formatted = formatAriaSnapshot(nodes, limit);
-  await storeAriaSnapshotRefsViaPlaywright({
-    cdpUrl: opts.cdpUrl,
-    targetId: opts.targetId,
-    nodes: formatted,
-    page,
-  });
-  return { nodes: formatted };
+
+  try {
+    const snapshot = collectSnapshot();
+    return abortPromise ? await Promise.race([snapshot, abortPromise]) : await snapshot;
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+    cleanup();
+  }
 }
 
 /** Captures Playwright's AI aria snapshot with optional URL appendix and truncation. */

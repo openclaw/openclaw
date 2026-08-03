@@ -3,6 +3,7 @@
  * checks.
  */
 import type { Command } from "commander";
+import type { BrowserDoctorReport } from "../browser-runtime.js";
 import { formatBrowserGraphicsSummary } from "../browser/chrome.graphics.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
@@ -156,10 +157,24 @@ function formatBrowserDoctorGatewayError(error: unknown): string {
 
 async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, deep?: boolean) {
   const checks: BrowserDoctorCheck[] = [];
-  let status: BrowserStatus | null;
+  let status: BrowserStatus;
+  let canonicalDoctor: BrowserDoctorReport | null = null;
 
   try {
-    status = await fetchBrowserStatus(parent, profile);
+    if (deep) {
+      canonicalDoctor = await callBrowserRequest<BrowserDoctorReport>(
+        parent,
+        {
+          method: "GET",
+          path: "/doctor",
+          query: resolveProfileQuery(profile, { deep: true }),
+        },
+        { timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS },
+      );
+      status = canonicalDoctor.status;
+    } else {
+      status = await fetchBrowserStatus(parent, profile);
+    }
     checks.push({
       name: "gateway",
       ok: true,
@@ -246,37 +261,19 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
   }
 
   if (deep && status.running) {
-    try {
-      const result = await callBrowserRequest<
-        | { ok: true; format: "aria"; nodes?: unknown[] }
-        | { ok: true; format: "ai"; snapshot?: string }
-      >(
-        parent,
-        {
-          method: "GET",
-          path: "/snapshot",
-          query: resolveProfileQuery(profile, { format: "aria", limit: 25 }),
-        },
-        { timeoutMs: 10_000 },
-      );
-      const count =
-        result.format === "aria"
-          ? Array.isArray(result.nodes)
-            ? result.nodes.length
-            : 0
-          : typeof result.snapshot === "string"
-            ? result.snapshot.split("\n").length
-            : 0;
-      checks.push({
-        name: "live-snapshot",
-        ok: count > 0,
-        detail: count > 0 ? `${count} nodes/lines` : "snapshot returned no content",
-      });
-    } catch (err) {
+    const liveSnapshot = canonicalDoctor?.checks.find((check) => check.id === "live-snapshot");
+    if (!liveSnapshot) {
       checks.push({
         name: "live-snapshot",
         ok: false,
-        detail: String(err),
+        detail: "canonical browser doctor returned no live snapshot result",
+      });
+    } else {
+      checks.push({
+        name: liveSnapshot.id,
+        ok: liveSnapshot.status !== "fail",
+        warning: liveSnapshot.status === "warn" || liveSnapshot.status === "info",
+        detail: liveSnapshot.summary,
       });
     }
   }

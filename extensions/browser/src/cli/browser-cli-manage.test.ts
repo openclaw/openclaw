@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createBrowserManageProgram,
+  findBrowserManageCall,
   getBrowserManageCallBrowserRequestMock,
 } from "./browser-cli-manage.test-helpers.js";
 import { getBrowserCliRuntime, getBrowserCliRuntimeCapture } from "./browser-cli.test-support.js";
@@ -558,6 +559,66 @@ describe("browser manage output", () => {
     expect(getBrowserCliRuntime().writeJson).not.toHaveBeenCalled();
     expect(getBrowserCliRuntime().exit).not.toHaveBeenCalled();
     expect(process.exitCode).toBeUndefined();
+  });
+
+  it("keeps deep doctor open long enough to surface the relay deadline context", async () => {
+    getBrowserManageCallBrowserRequestMock().mockImplementation(
+      async (_opts: unknown, req, runtimeOpts) => {
+        if (req.path === "/profiles") {
+          return { profiles: [{ name: "chrome", running: true }] };
+        }
+        if (req.path === "/tabs") {
+          return {
+            running: true,
+            tabs: [{ targetId: "extension-target-1", title: "Example", url: "https://x.test" }],
+          };
+        }
+        if (req.path === "/doctor") {
+          if ((runtimeOpts?.timeoutMs ?? 0) <= 15_000) {
+            throw new Error("browser request timed out before the relay deadline");
+          }
+          return {
+            ok: false,
+            profile: "chrome",
+            transport: "extension",
+            status: {
+              enabled: true,
+              profile: "chrome",
+              driver: "extension",
+              transport: "extension",
+              running: true,
+              cdpReady: true,
+            },
+            checks: [
+              {
+                id: "live-snapshot",
+                label: "Live snapshot",
+                status: "fail",
+                summary:
+                  "Error: extension relay command timed out: cdp (tabId=7, method=Accessibility.getFullAXTree)",
+              },
+            ],
+          };
+        }
+        return {};
+      },
+    );
+
+    const program = createBrowserManageProgram();
+    await program.parseAsync(["browser", "--browser-profile", "chrome", "doctor", "--deep"], {
+      from: "user",
+    });
+
+    expect(lastRuntimeLog()).toContain(
+      "FAIL live-snapshot: Error: extension relay command timed out: cdp (tabId=7, method=Accessibility.getFullAXTree)",
+    );
+    expect(findBrowserManageCall("/doctor")?.[2]?.timeoutMs).toBeGreaterThan(15_000);
+    expect(findBrowserManageCall("/doctor")?.[1]?.query).toMatchObject({
+      profile: "chrome",
+      deep: true,
+    });
+    expect(findBrowserManageCall("/snapshot")).toBeUndefined();
+    expect(process.exitCode).toBe(1);
   });
 
   it("prints one complete JSON browser doctor failure before setting exit status", async () => {

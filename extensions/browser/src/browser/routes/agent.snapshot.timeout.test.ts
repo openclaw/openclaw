@@ -2,6 +2,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
+type SnapshotAriaViaPlaywright = (opts: unknown) => Promise<{ nodes: never[] }>;
+
 const cdpMocks = vi.hoisted(() => ({
   captureScreenshot: vi.fn(),
   getMainFrameDocumentIdentityViaCdp: vi.fn(async () => "cdp:test-document"),
@@ -11,6 +13,21 @@ const cdpMocks = vi.hoisted(() => ({
     refs: {},
     stats: { lines: 1, chars: 15, refs: 0, interactive: 0 },
   })),
+}));
+
+const pwMocks = vi.hoisted(() => ({
+  getModule: vi.fn(
+    async () =>
+      null as null | {
+        getObservedBrowserStateViaPlaywright: () => Promise<undefined>;
+        snapshotAriaViaPlaywright: SnapshotAriaViaPlaywright;
+      },
+  ),
+  getObservedBrowserStateViaPlaywright: vi.fn(async () => undefined),
+  requireModule: vi.fn(
+    async () => null as null | { snapshotAriaViaPlaywright: SnapshotAriaViaPlaywright },
+  ),
+  snapshotAriaViaPlaywright: vi.fn(async () => ({ nodes: [] })),
 }));
 
 const profileContext = vi.hoisted(() => ({
@@ -25,11 +42,13 @@ const profileContext = vi.hoisted(() => ({
     headless: false,
     attachOnly: false,
   },
-  ensureTabAvailable: vi.fn(async () => ({
-    targetId: "tab-1",
-    url: "https://example.com",
-    wsUrl: "ws://127.0.0.1:18800/devtools/page/tab-1",
-  })),
+  ensureTabAvailable: vi.fn(
+    async (): Promise<{ targetId: string; url: string; wsUrl: string | undefined }> => ({
+      targetId: "tab-1",
+      url: "https://example.com",
+      wsUrl: "ws://127.0.0.1:18800/devtools/page/tab-1",
+    }),
+  ),
 }));
 
 vi.mock("../cdp.js", () => ({
@@ -68,12 +87,12 @@ vi.mock("../../media/store.js", () => ({
 
 vi.mock("./agent.shared.js", () => ({
   browserNavigationPolicyForProfile: vi.fn(() => ({})),
-  getPwAiModule: vi.fn(async () => null),
+  getPwAiModule: pwMocks.getModule,
   handleRouteError: vi.fn((_ctx, _res, err) => {
     throw err;
   }),
   readBody: vi.fn((req: { body?: unknown }) => req.body ?? {}),
-  requirePwAi: vi.fn(async () => null),
+  requirePwAi: pwMocks.requireModule,
   resolveProfileContext: vi.fn(() => profileContext),
   withPlaywrightRouteContext: vi.fn(),
   withRouteTabContext: vi.fn(
@@ -124,6 +143,11 @@ describe("browser agent snapshot timeout routing", () => {
     cdpMocks.snapshotAria.mockClear();
     cdpMocks.snapshotRoleViaCdp.mockClear();
     profileContext.ensureTabAvailable.mockClear();
+    pwMocks.getModule.mockReset();
+    pwMocks.getModule.mockResolvedValue(null);
+    pwMocks.requireModule.mockReset();
+    pwMocks.requireModule.mockResolvedValue(null);
+    pwMocks.snapshotAriaViaPlaywright.mockClear();
   });
 
   it("passes timeoutMs to direct CDP aria snapshots", async () => {
@@ -137,6 +161,42 @@ describe("browser agent snapshot timeout routing", () => {
       expect.objectContaining({
         wsUrl: "ws://127.0.0.1:18800/devtools/page/tab-1",
         timeoutMs: 4321,
+      }),
+    );
+  });
+
+  it("passes route cancellation to Playwright aria snapshots", async () => {
+    pwMocks.getModule.mockResolvedValueOnce({
+      getObservedBrowserStateViaPlaywright: pwMocks.getObservedBrowserStateViaPlaywright,
+      snapshotAriaViaPlaywright: pwMocks.snapshotAriaViaPlaywright,
+    });
+    pwMocks.requireModule.mockResolvedValueOnce({
+      snapshotAriaViaPlaywright: pwMocks.snapshotAriaViaPlaywright,
+    });
+    profileContext.ensureTabAvailable.mockResolvedValueOnce({
+      targetId: "tab-1",
+      url: "https://example.com",
+      wsUrl: undefined,
+    });
+    const handler = getSnapshotHandler();
+    const response = createBrowserRouteResponse();
+    const controller = new AbortController();
+
+    await handler?.(
+      {
+        params: {},
+        query: { format: "aria", timeoutMs: "4321" },
+        signal: controller.signal,
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(pwMocks.snapshotAriaViaPlaywright).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetId: "tab-1",
+        timeoutMs: 4321,
+        signal: controller.signal,
       }),
     );
   });
