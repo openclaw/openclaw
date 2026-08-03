@@ -42,7 +42,8 @@ import {
 } from "./browser-panel-surface.ts";
 import { normalizeBrowserUrlDraft } from "./browser-url.ts";
 
-const BROWSER_PANEL_DELAY_MS = { inspectThrottle: 120, actionRefresh: 350 } as const;
+const INSPECT_THROTTLE_MS = 120;
+const ACTION_REFRESH_DELAY_MS = 350;
 
 type BrowserPanelMode = "interact" | "annotate" | "inspect";
 
@@ -256,7 +257,7 @@ export class BrowserPanelController implements ReactiveController {
       this.setState("errorText", null);
       await action(client);
       if (current() && refreshView) {
-        this.pendingInput.scheduleRefresh(BROWSER_PANEL_DELAY_MS.actionRefresh, () => {
+        this.pendingInput.scheduleRefresh(ACTION_REFRESH_DELAY_MS, () => {
           if (current() && this.activeTargetId) {
             void this.refreshView(this.activeTargetId, epoch);
           }
@@ -680,11 +681,10 @@ export class BrowserPanelController implements ReactiveController {
   }
 
   private finishOverlayPointerGesture(releasePointerCapture: boolean): void {
-    const gesture = this.drawingGesture;
-    this.drawingGesture = null;
-    if (gesture && releasePointerCapture) {
-      releaseBrowserPanelDrawingGesture(gesture);
+    if (this.drawingGesture && releasePointerCapture) {
+      releaseBrowserPanelDrawingGesture(this.drawingGesture);
     }
+    this.drawingGesture = null;
   }
 
   private queueInspect(event: PointerEvent): void {
@@ -703,7 +703,7 @@ export class BrowserPanelController implements ReactiveController {
         this.mode === "inspect",
     );
     this.setState("inspectPointer", stagePoint);
-    this.pendingInput.queueInspection(BROWSER_PANEL_DELAY_MS.inspectThrottle, current, () => {
+    this.pendingInput.queueInspection(INSPECT_THROTTLE_MS, current, () => {
       void inspectBrowserElementAt(client, { targetId, x: point.x, y: point.y })
         .then((node) => {
           if (current()) {
