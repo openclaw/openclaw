@@ -5,7 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import type { TranscriptStopRequest } from "../../transcripts/provider-types.js";
+import type {
+  TranscriptSourceProvider,
+  TranscriptStopRequest,
+} from "../../transcripts/provider-types.js";
 import { TranscriptsStore } from "../../transcripts/store.js";
 import { createTranscriptsAutoStartService, createTranscriptsTool } from "./transcripts-tool.js";
 
@@ -765,6 +768,7 @@ describe("transcripts tool", () => {
       autoStart: [
         {
           providerId: "discord-voice",
+          accountId: "account-a",
           sessionId: "standup",
           title: "Standup",
           guildId: "guild-1",
@@ -793,6 +797,7 @@ describe("transcripts tool", () => {
       sessionId: "standup",
       title: "Standup",
       source: {
+        accountId: "account-a",
         providerId: "discord-voice",
         guildId: "guild-1",
         channelId: "channel-1",
@@ -801,9 +806,85 @@ describe("transcripts tool", () => {
     expect(request.startupWaitMs).toBe(30_000);
     await expect(storeFor(stateDir).readSession("standup")).resolves.toMatchObject({
       title: "Standup",
+      source: { accountId: "account-a" },
+      metadata: { ownerChannel: "discord", ownerAccountId: "account-a" },
     });
     await service.stop();
     expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it("allows only the resolved account to manage an auto-started source", async () => {
+    const stateDir = await makeStateDir();
+    const start = vi.fn(async (request) => ({ ok: true as const, session: request.session }));
+    const stop = vi.fn(async (request) => ({ ok: true as const, sessionId: request.sessionId }));
+    const provider: TranscriptSourceProvider = {
+      id: "discord-voice",
+      accountBindingChannels: ["discord"],
+      resolveAccountId: ({ source }) => source.accountId ?? "account-a",
+      name: "Discord Voice",
+      sourceKinds: ["live-audio"],
+      start,
+      stop,
+    };
+    getTranscriptSourceProviderMock.mockReturnValue(provider);
+    const pluginConfig = {
+      autoStart: [
+        {
+          providerId: "discord-voice",
+          sessionId: "account-bound-auto-start",
+          guildId: "guild-1",
+          channelId: "channel-1",
+        },
+      ],
+    };
+    const { service } = await createHarness(stateDir, pluginConfig);
+    const { tool: ownerTool } = await createHarness(stateDir, pluginConfig, "main", {
+      channel: "discord",
+      accountId: "account-a",
+    });
+    const { tool: otherAccountTool } = await createHarness(stateDir, pluginConfig, "main", {
+      channel: "discord",
+      accountId: "account-b",
+    });
+
+    service.start();
+    await vi.waitFor(() => {
+      expect(start).toHaveBeenCalledOnce();
+    });
+    await expect(storeFor(stateDir).readSession("account-bound-auto-start")).resolves.toMatchObject(
+      {
+        source: { accountId: "account-a" },
+        metadata: { ownerChannel: "discord", ownerAccountId: "account-a" },
+      },
+    );
+    await expect(
+      ownerTool.execute("owner-status", { action: "status" }, undefined, vi.fn()),
+    ).resolves.toMatchObject({
+      details: { active: [expect.objectContaining({ sessionId: "account-bound-auto-start" })] },
+    });
+    await expect(
+      otherAccountTool.execute("other-status", { action: "status" }, undefined, vi.fn()),
+    ).resolves.toMatchObject({ details: { active: [] } });
+    await expect(
+      otherAccountTool.execute(
+        "other-stop",
+        { action: "stop", sessionId: "account-bound-auto-start" },
+        undefined,
+        vi.fn(),
+      ),
+    ).rejects.toThrow("transcripts session not found: account-bound-auto-start");
+    expect(stop).not.toHaveBeenCalled();
+
+    await ownerTool.execute(
+      "owner-stop",
+      { action: "stop", sessionId: "account-bound-auto-start" },
+      undefined,
+      vi.fn(),
+    );
+    expect(stop).toHaveBeenCalledOnce();
+    expect(stop).toHaveBeenCalledWith(
+      expect.objectContaining({ source: expect.objectContaining({ accountId: "account-a" }) }),
+    );
   });
 
   it("aborts pending auto-starts when the service stops", async () => {

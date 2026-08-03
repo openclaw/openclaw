@@ -143,6 +143,32 @@ function bindSourceToTurnAccount(params: {
   };
 }
 
+function resolveConfiguredLifecycleOwner(params: {
+  accountBindingChannels: string[];
+  accountId: string | undefined;
+  configuredLifecycle: boolean | undefined;
+  providerId: string;
+}): { ownerChannel: string; ownerAccountId: string } | undefined {
+  if (!params.configuredLifecycle || params.accountBindingChannels.length === 0) {
+    return undefined;
+  }
+  if (!params.accountId) {
+    throw new Error(
+      `transcripts provider ${params.providerId} could not resolve an account for configured auto-start`,
+    );
+  }
+  const [ownerChannel] = params.accountBindingChannels;
+  if (!ownerChannel || params.accountBindingChannels.length !== 1) {
+    throw new Error(
+      `transcripts provider ${params.providerId} must declare exactly one account binding channel for configured auto-start`,
+    );
+  }
+  return {
+    ownerChannel,
+    ownerAccountId: params.accountId,
+  };
+}
+
 export function toolText(text: string, details?: Record<string, unknown>) {
   return {
     content: [{ type: "text" as const, text }],
@@ -178,6 +204,7 @@ export async function startTranscripts(params: {
   rawParams: Record<string, unknown>;
   abortSignal?: AbortSignal;
   startupWaitMs?: number;
+  configuredLifecycle?: true;
 }) {
   if (params.abortSignal?.aborted) {
     throw new Error("transcripts start aborted");
@@ -195,17 +222,33 @@ export async function startTranscripts(params: {
     provider,
     source: requestedSource,
   });
-  const providerSource = boundSource.source;
+  const accountBindingChannels = (provider.accountBindingChannels ?? [])
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+  const resolvedAccountId =
+    boundSource.owner?.ownerAccountId ??
+    provider.resolveAccountId?.({ cfg: params.ctx.config, source: boundSource.source })?.trim();
+  const providerSource = {
+    ...boundSource.source,
+    ...(resolvedAccountId ? { accountId: resolvedAccountId } : {}),
+  };
+  const configuredOwner = resolveConfiguredLifecycleOwner({
+    accountBindingChannels,
+    accountId: providerSource.accountId?.trim(),
+    configuredLifecycle: params.configuredLifecycle,
+    providerId: provider.id,
+  });
+  const owner = boundSource.owner ?? configuredOwner;
   const session: TranscriptSessionDescriptor = {
     sessionId: readStringParam(params.rawParams, "sessionId", { trim: true }) ?? createSessionId(),
     title: readStringParam(params.rawParams, "title", { trim: true }),
     source: sanitizeTranscriptSourceLocator(providerSource),
     startedAt: new Date().toISOString(),
-    ...(params.ctx.agentId || boundSource.owner
+    ...(params.ctx.agentId || owner
       ? {
           metadata: {
             ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
-            ...boundSource.owner,
+            ...owner,
           },
         }
       : {}),

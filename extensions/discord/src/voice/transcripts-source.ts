@@ -3,6 +3,7 @@ import type {
   TranscriptSourceProvider,
   TranscriptStartRequest,
 } from "openclaw/plugin-sdk/transcripts";
+import { resolveDefaultDiscordAccountId } from "../accounts.js";
 import type { DiscordVoiceManager } from "./manager.js";
 
 const managersByAccountId = new Map<string, DiscordVoiceManager>();
@@ -27,12 +28,16 @@ export function setDiscordTranscriptsVoiceManager(params: {
   }
 }
 
+const resolveDiscordTranscriptsAccountId: NonNullable<
+  TranscriptSourceProvider["resolveAccountId"]
+> = ({ cfg, source }) => source.accountId?.trim() || resolveDefaultDiscordAccountId(cfg ?? {});
+
 function resolveManager(request: TranscriptStartRequest): DiscordVoiceManager | undefined {
-  const accountId = request.session.source.accountId?.trim();
-  if (accountId) {
-    return managersByAccountId.get(accountId);
-  }
-  return [...managersByAccountId.values()][0];
+  const accountId = resolveDiscordTranscriptsAccountId({
+    cfg: request.cfg,
+    source: request.session.source,
+  });
+  return accountId ? managersByAccountId.get(accountId) : undefined;
 }
 
 async function waitForManager(
@@ -49,7 +54,10 @@ async function waitForManager(
   if (startupWaitMs <= 0) {
     return undefined;
   }
-  const accountId = request.session.source.accountId?.trim() || undefined;
+  const accountId = resolveDiscordTranscriptsAccountId({
+    cfg: request.cfg,
+    source: request.session.source,
+  });
   await new Promise<void>((resolve) => {
     const waiter = {
       accountId,
@@ -75,6 +83,7 @@ export const discordVoiceTranscriptsSourceProvider: TranscriptSourceProvider = {
   id: "discord-voice",
   aliases: ["discord"],
   accountBindingChannels: ["discord"],
+  resolveAccountId: resolveDiscordTranscriptsAccountId,
   name: "Discord Voice",
   sourceKinds: ["live-audio"],
   async start(request) {
