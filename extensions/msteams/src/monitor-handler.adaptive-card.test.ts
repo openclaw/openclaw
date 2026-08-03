@@ -12,6 +12,12 @@ import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
 const runtimeApiMockState = getMSTeamsTestRuntimeState();
+const resolveApprovalOverGateway = vi.hoisted(() => vi.fn(async () => undefined));
+const APPROVER_ID = "5e4b4b6f-c242-45de-b0de-bf44eb233145";
+
+vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
+  resolveApprovalOverGateway,
+}));
 
 vi.mock("./reply-dispatcher.js", () => ({
   createMSTeamsReplyDispatcher: () => ({
@@ -57,6 +63,7 @@ async function runAdaptiveCardInvoke(
     run: NonNullable<MSTeamsActivityHandler["run"]>;
   },
   value: unknown,
+  senderId = "user-aad",
 ) {
   await registered.run({
     activity: {
@@ -67,7 +74,7 @@ async function runAdaptiveCardInvoke(
       serviceUrl: "https://service.example.test",
       from: {
         id: "user-bf",
-        aadObjectId: "user-aad",
+        aadObjectId: senderId,
         name: "User",
       },
       recipient: {
@@ -150,6 +157,7 @@ function lastDispatchedCtxPayload(): Record<string, unknown> {
 describe("msteams adaptive card action invoke", () => {
   beforeEach(() => {
     runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mockClear();
+    resolveApprovalOverGateway.mockClear();
   });
 
   it("forwards adaptive card submitted data to the agent as message text", async () => {
@@ -219,6 +227,44 @@ describe("msteams adaptive card action invoke", () => {
     const ctxPayload = lastDispatchedCtxPayload();
     expect(ctxPayload.BodyForAgent).toBe("/codex plugins menu");
     expect(ctxPayload.CommandBody).toBe("/codex plugins menu");
+  });
+
+  it("resolves approval submit actions before agent dispatch", async () => {
+    const deps = createDeps();
+    deps.cfg = {
+      channels: {
+        msteams: {
+          allowFrom: [APPROVER_ID],
+        },
+      },
+    } as OpenClawConfig;
+    const run = vi.fn(async () => undefined);
+    const handler = createActivityHandler(run);
+    const registered = registerMSTeamsHandlers(handler, deps) as MSTeamsActivityHandler & {
+      run: NonNullable<MSTeamsActivityHandler["run"]>;
+    };
+
+    await runAdaptiveCardInvoke(
+      registered,
+      {
+        action: {
+          type: "Action.Submit",
+          data: "/approve plugin:approval-123 allow-once",
+        },
+      },
+      APPROVER_ID,
+    );
+
+    expect(resolveApprovalOverGateway).toHaveBeenCalledWith({
+      cfg: deps.cfg,
+      approvalId: "plugin:approval-123",
+      decision: "allow-once",
+      senderId: APPROVER_ID,
+      approvalKind: "plugin",
+      clientDisplayName: `Microsoft Teams approval (${APPROVER_ID})`,
+    });
+    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
   });
 
   it("preserves legacy presentation submit values as structured data", async () => {

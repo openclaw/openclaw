@@ -4,29 +4,14 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { splitShellArgs } from "../utils/shell-argv.js";
 import { buildCommandPayloadCandidates } from "./command-analysis/risks.js";
 import { explainShellCommand } from "./command-explainer/extract.js";
+import { parseExecApprovalCommandText } from "./exec-approval-reply.js";
 
-type ParsedExecApprovalCommand = {
-  approvalId: string;
-  decision: "allow-once" | "allow-always" | "deny";
-};
+type UnsafeExecControlShellCommandKind = "approve" | "channel-login" | "skill-workshop-lifecycle";
 
-type UnsafeExecControlShellCommandKind = "approve" | "channel-login";
-
-function parseExecApprovalShellCommand(raw: string): ParsedExecApprovalCommand | null {
-  const normalized = raw.trimStart();
-  const match = normalized.match(
-    /^\/approve(?:@[^\s]+)?\s+([A-Za-z0-9][A-Za-z0-9._:-]*)\s+(allow-once|allow-always|always|deny)\b/i,
-  );
-  if (!match) {
-    return null;
-  }
-  return {
-    approvalId: expectDefined(match[1], "exec control command guard regex capture 1"),
-    decision:
-      normalizeLowercaseStringOrEmpty(match[2]) === "always"
-        ? "allow-always"
-        : (normalizeLowercaseStringOrEmpty(match[2]) as ParsedExecApprovalCommand["decision"]),
-  };
+function parseExecApprovalShellCommand(
+  raw: string,
+): ReturnType<typeof parseExecApprovalCommandText> {
+  return parseExecApprovalCommandText(raw);
 }
 
 function normalizeCommandBaseName(token: string | undefined): string {
@@ -91,6 +76,22 @@ function parseOpenClawChannelsLoginShellCommand(raw: string): boolean {
   );
 }
 
+function parseOpenClawSkillWorkshopLifecycleShellCommand(raw: string): boolean {
+  const argv = splitShellArgs(raw);
+  if (!argv) {
+    return false;
+  }
+  const openclawArgv = stripOpenClawPackageRunner(argv);
+  return (
+    normalizeCommandBaseName(openclawArgv[0]) === "openclaw" &&
+    openclawArgv[1] === "skills" &&
+    openclawArgv[2] === "workshop" &&
+    (openclawArgv[3] === "apply" ||
+      openclawArgv[3] === "reject" ||
+      openclawArgv[3] === "quarantine")
+  );
+}
+
 export async function detectUnsafeExecControlShellCommand(
   command: string,
 ): Promise<UnsafeExecControlShellCommandKind | null> {
@@ -117,6 +118,9 @@ export async function detectUnsafeExecControlShellCommand(
     if (parseOpenClawChannelsLoginShellCommand(candidate)) {
       return "channel-login";
     }
+    if (parseOpenClawSkillWorkshopLifecycleShellCommand(candidate)) {
+      return "skill-workshop-lifecycle";
+    }
   }
   return null;
 }
@@ -136,6 +140,14 @@ export async function rejectUnsafeExecControlShellCommand(command: string): Prom
       [
         "exec cannot run interactive OpenClaw channel login commands.",
         "Run `openclaw channels login` in a terminal on the gateway host, or use the channel-specific login agent tool when available (for WhatsApp: `whatsapp_login`).",
+      ].join(" "),
+    );
+  }
+  if (unsafeKind === "skill-workshop-lifecycle") {
+    throw new Error(
+      [
+        "exec cannot run Skill Workshop lifecycle commands.",
+        "Use the skill_workshop tool so apply, reject, and quarantine actions pass through the formal approval flow.",
       ].join(" "),
     );
   }
