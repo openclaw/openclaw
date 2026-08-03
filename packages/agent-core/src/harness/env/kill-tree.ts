@@ -355,10 +355,11 @@ function collectUnixProcessTree(rootPid: number): UnixProcessTree | undefined {
       return;
     }
     for (const childPid of children) {
-      // Re-check the deadline and PID cap on every iteration: a wide child list
-      // can keep probing identities and recursing past the advertised 500 ms /
-      // 4,096-PID bounds if the limit is only tested at visit entry.
-      if (!withinBounds(depth)) {
+      // Re-check the deadline, PID cap, and child depth on every iteration. The
+      // child lives at `depth + 1`, so the depth bound must be evaluated against
+      // the child's level, not the parent's: otherwise a parent at depth 128
+      // could admit a level-129 descendant despite MAX_UNIX_PROCESS_TREE_DEPTH.
+      if (!withinBounds(depth + 1)) {
         return;
       }
       if (seen.has(childPid) || childPid === process.pid) {
@@ -374,7 +375,7 @@ function collectUnixProcessTree(rootPid: number): UnixProcessTree | undefined {
       // bound or no longer reports `parentPid` as its parent is dropped with
       // its subtree.
       const instance = readUnixProcessInstance(childPid, deadline);
-      if (!instance || instance.ppid !== parentPid || !withinBounds(depth)) {
+      if (!instance || instance.ppid !== parentPid || !withinBounds(depth + 1)) {
         continue;
       }
       visit(childPid, instance.identity, depth + 1);

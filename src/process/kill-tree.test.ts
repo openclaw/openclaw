@@ -755,6 +755,64 @@ describe("killProcessTree", () => {
     });
   });
 
+  it("on Linux rejects a child beyond the advertised depth cap", async () => {
+    // Depth-cap boundary: a chain of exactly MAX_UNIX_PROCESS_TREE_DEPTH levels
+    // (root at depth 0) must not admit a child one level beyond the cap. The
+    // walker must evaluate the child's depth (parent depth + 1), not the
+    // parent's, before probing or appending.
+    const statLine = (pid: number, comm: string, starttime: string, ppid = 1) =>
+      `${pid} (${comm}) S ${ppid} ${pid} ${pid} 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 ${starttime} 0`;
+    killSpy.mockImplementation(() => true);
+    // Build a chain: 7000 (root) -> 7001 -> ... -> 7128 (depth 128). 7129 would
+    // be depth 129, one beyond the cap, so it must never be probed or signaled.
+    const chainPids = Array.from({ length: 129 }, (_, i) => 7000 + i);
+    const overCapPid = 7129;
+    const probedStats = new Set<number>();
+    readFileSyncMock.mockImplementation((filePath: string) => {
+      const childrenMatch = filePath.match(/^\/proc\/(\d+)\/task\/\d+\/children$/);
+      if (childrenMatch) {
+        const pid = Number(childrenMatch[1]);
+        const idx = chainPids.indexOf(pid);
+        if (idx >= 0 && idx < chainPids.length - 1) {
+          return String(chainPids[idx + 1]);
+        }
+        if (idx === chainPids.length - 1) {
+          // The depth-128 parent would expose the over-cap child.
+          return String(overCapPid);
+        }
+        return "";
+      }
+      const statMatch = filePath.match(/^\/proc\/(\d+)\/stat$/);
+      if (statMatch) {
+        const pid = Number(statMatch[1]);
+        probedStats.add(pid);
+        const idx = chainPids.indexOf(pid);
+        if (idx === 0) {
+          return statLine(pid, "root", String(100 + idx));
+        }
+        if (idx > 0) {
+          return statLine(pid, "desc", String(100 + idx), chainPids[idx - 1]);
+        }
+        if (pid === overCapPid) {
+          return statLine(pid, "overcap", "999", chainPids[chainPids.length - 1]);
+        }
+      }
+      throw new Error("unexpected proc path");
+    });
+
+    await withMockedPlatform("linux", async () => {
+      killProcessTree(7000, { graceMs: 10, detached: false });
+      await vi.advanceTimersByTimeAsync(10);
+
+      // The over-cap level-129 child is never probed and never signaled.
+      expect(probedStats.has(overCapPid)).toBe(false);
+      const realSignals = (
+        killSpy.mock.calls as Array<[number, NodeJS.Signals | number | undefined]>
+      ).filter(([pid, signal]) => pid === overCapPid && signal !== 0);
+      expect(realSignals).toHaveLength(0);
+    });
+  });
+
   it("on Unix force-escalates one attached snapshot without rebuilding it", async () => {
     const statLine = (pid: number, comm: string, starttime: string, ppid = 1) =>
       `${pid} (${comm}) S ${ppid} ${pid} ${pid} 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 ${starttime} 0`;
