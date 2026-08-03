@@ -163,8 +163,12 @@ export async function readActionsPayload(opts: {
     if (opts.actionsFile === "-") {
       return await readStdinText();
     }
+    // Resolve symlinks so an --actions-file that points to a regular file keeps
+    // working, while the bounded regular-file read still rejects directories,
+    // FIFOs, and oversized targets.
+    const resolvedActionsPath = await fs.realpath(opts.actionsFile);
     const { buffer } = await readRegularFile({
-      filePath: opts.actionsFile,
+      filePath: resolvedActionsPath,
       maxBytes: ACTIONS_INPUT_MAX_BYTES,
     });
     return buffer.toString("utf8");
