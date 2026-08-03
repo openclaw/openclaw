@@ -113,7 +113,7 @@ function isExpectedSessionResolveMiss(error: unknown): boolean {
   if (error.gatewayCode !== "INVALID_REQUEST") {
     return false;
   }
-  return Boolean(error.message?.includes("No session found"));
+  return error.message?.includes("No session found") ?? false;
 }
 
 async function isRequesterSpawnedSessionVisible(params: {
