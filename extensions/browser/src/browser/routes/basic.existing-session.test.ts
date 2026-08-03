@@ -226,6 +226,40 @@ describe("basic browser routes", () => {
     expect(ensureTabAvailable).toHaveBeenCalledTimes(2);
   });
 
+  it("does not start a stopped managed browser for deep doctor", async () => {
+    const ensureBrowserAvailable = vi.fn(async () => {});
+    const ensureTabAvailable = vi.fn(async () => {
+      throw new Error("deep doctor must not create a tab while stopped");
+    });
+    const state = createManagedProfileState();
+    const profileCtx = {
+      ...(state.forProfile() as unknown as Record<string, unknown>),
+      ensureBrowserAvailable,
+      ensureTabAvailable,
+    };
+    const { app, getHandlers } = createBrowserRouteApp();
+    registerBrowserBasicRoutes(app, {
+      state: () => state,
+      forProfile: () => profileCtx,
+      mapTabError: vi.fn(() => null),
+    } as never);
+    const response = createBrowserRouteResponse();
+
+    await getHandlers.get("/doctor")?.(
+      { params: {}, query: { profile: "openclaw", deep: "true" } },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    const body = responseBodyRecord(response);
+    expect(body.status).toMatchObject({ running: false });
+    expect(body.checks).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "live-snapshot" })]),
+    );
+    expect(ensureBrowserAvailable).not.toHaveBeenCalled();
+    expect(ensureTabAvailable).not.toHaveBeenCalled();
+  });
+
   it("reports Linux no-display headless fallback for local managed profiles", async () => {
     const originalPlatform = process.platform;
     const originalDisplay = process.env.DISPLAY;

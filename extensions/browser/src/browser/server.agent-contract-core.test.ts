@@ -462,11 +462,14 @@ describe("browser control server", () => {
     expect(cdpMocks.snapshotAria).toHaveBeenCalledWith({
       wsUrl: "ws://127.0.0.1/devtools/page/abcd1234",
       limit: 1,
+      timeoutMs: undefined,
+      signal: expect.any(AbortSignal),
     });
     expect(requirePwMock("storeAriaSnapshotRefsViaPlaywright")).toHaveBeenCalledWith({
       cdpUrl: state.cdpBaseUrl,
       targetId: "abcd1234",
       nodes: [{ ref: "1", role: "link", name: "x", depth: 0 }],
+      signal: expect.any(AbortSignal),
     });
 
     const snapAi = (await realFetch(`${base}/snapshot?format=ai`).then((r) => r.json())) as {
@@ -597,6 +600,7 @@ describe("browser control server", () => {
       wsUrl: "ws://127.0.0.1/devtools/page/abcd1234",
       limit: 25,
       timeoutMs: 12_000,
+      signal: expect.any(AbortSignal),
     });
   });
 
@@ -655,7 +659,7 @@ describe("browser control server", () => {
         type: "page",
       },
     ]);
-    pwMocks.snapshotAriaViaPlaywright = vi.fn(async () => {
+    pwMocks.captureAriaSnapshotViaPlaywright = vi.fn(async () => {
       throw new Error(
         "extension relay command timed out: cdp (tabId=7, method=Accessibility.getFullAXTree)",
       );
@@ -676,7 +680,7 @@ describe("browser control server", () => {
     expect(liveSnapshotCheck?.summary).toContain(
       "extension relay command timed out: cdp (tabId=7, method=Accessibility.getFullAXTree)",
     );
-    expect(requirePwMock("snapshotAriaViaPlaywright")).toHaveBeenCalledWith(
+    expect(requirePwMock("captureAriaSnapshotViaPlaywright")).toHaveBeenCalledWith(
       expect.objectContaining({
         targetId: "extension-target-1",
         limit: 25,
@@ -685,6 +689,8 @@ describe("browser control server", () => {
         ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
       }),
     );
+    expect(requirePwMock("snapshotAriaViaPlaywright")).not.toHaveBeenCalled();
+    expect(requirePwMock("storeAriaSnapshotRefsViaPlaywright")).not.toHaveBeenCalled();
     expect(cdpMocks.snapshotAria).not.toHaveBeenCalled();
   });
 

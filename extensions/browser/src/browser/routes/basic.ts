@@ -290,13 +290,14 @@ async function runBrowserLiveProbe(
           wsUrl: tab.wsUrl,
           limit: 25,
           timeoutMs: LIVE_SNAPSHOT_PROBE_TIMEOUT_MS,
+          signal,
         })
       : await (async () => {
           const pw = await getPwAiModule();
           if (!pw) {
             throw new Error("Playwright is not available for the live snapshot probe.");
           }
-          return await pw.snapshotAriaViaPlaywright({
+          return await pw.captureAriaSnapshotViaPlaywright({
             cdpUrl: profileCtx.profile.cdpUrl,
             targetId: tab.targetId,
             limit: 25,
@@ -439,7 +440,10 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
         run: async (signal) => {
           const status = await buildBrowserStatus(ctx, profileCtx, signal);
           const doctorReport = buildBrowserDoctorReport({ status });
-          if (toBoolean(req.query.deep) === true || toBoolean(req.query.live) === true) {
+          if (
+            status.running &&
+            (toBoolean(req.query.deep) === true || toBoolean(req.query.live) === true)
+          ) {
             doctorReport.checks.push(await runBrowserLiveProbe(ctx, profileCtx, signal));
             doctorReport.ok = doctorReport.checks.every((check) => check.status !== "fail");
           }

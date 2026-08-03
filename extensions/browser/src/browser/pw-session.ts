@@ -22,6 +22,7 @@ export {
   ensurePageState,
   getObservedBrowserStateForPage,
   markObservedDialogsHandledRemotelyForPage,
+  normalizeCdpUrl,
   respondToObservedDialogOnPage,
   restoreRoleRefsForTarget,
   storeRoleRefsForTarget,

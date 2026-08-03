@@ -191,6 +191,9 @@ const pwMocks = vi.hoisted(() => {
     armFileUploadViaPlaywright: vi.fn(async () => {}),
     uploadViaPlaywright: vi.fn(async () => {}),
     batchViaPlaywright: vi.fn(async (_opts?: unknown) => ({ results: [] })),
+    captureAriaSnapshotViaPlaywright: vi.fn(async () => ({
+      nodes: [{ ref: "1", role: "link", name: "x", depth: 0 }],
+    })),
     clickCoordsViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
     clickViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
     closePageViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
@@ -232,6 +235,9 @@ const pwMocks = vi.hoisted(() => {
     selectOptionViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
     setInputFilesViaPlaywright: vi.fn(async () => {}),
     snapshotAiViaPlaywright: vi.fn(async () => ({ snapshot: "ok" })),
+    snapshotAriaViaPlaywright: vi.fn(async () => ({
+      nodes: [{ ref: "1", role: "link", name: "x", depth: 0 }],
+    })),
     snapshotRoleViaPlaywright: vi.fn(async () => ({
       snapshot: '- button "Role" [ref=e1]',
       refs: { e1: { role: "button", name: "Role" } },

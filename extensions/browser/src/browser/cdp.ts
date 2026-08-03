@@ -29,6 +29,7 @@ import {
 import { assertBrowserNavigationAllowed, withBrowserNavigationPolicy } from "./navigation-guard.js";
 import { finalizeRoleSnapshot, type RoleSnapshotIdentityMode } from "./pw-role-snapshot.js";
 import { CONTENT_ROLES, INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
+import { normalizeBrowserTimerDelayMs } from "./timer-delay.js";
 
 export { appendCdpPath } from "./cdp.helpers.js";
 export { type CdpActionTimeouts, waitForCdpCommittedNavigationUrl } from "./cdp-page-session.js";
@@ -422,20 +423,45 @@ export async function snapshotAria(opts: {
   wsUrl: string;
   limit?: number;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<{ nodes: AriaSnapshotNode[] }> {
   const limit = resolveIntegerOption(opts.limit, 500, { min: 1, max: 2000 });
-  return await withCdpSocket(
-    opts.wsUrl,
-    async (send) => {
-      await prepareCdpPageSession(send);
-      const res = (await send("Accessibility.getFullAXTree")) as {
-        nodes?: RawAXNode[];
-      };
-      const nodes = Array.isArray(res?.nodes) ? res.nodes : [];
-      return { nodes: formatAriaSnapshot(nodes, limit) };
-    },
-    { commandTimeoutMs: opts.timeoutMs ?? 5000 },
+  const timeoutMs = normalizeBrowserTimerDelayMs(
+    typeof opts.timeoutMs === "number" && Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : 5000,
   );
+  const timeoutController = new AbortController();
+  const timer = setTimeout(
+    () =>
+      timeoutController.abort(new Error(`Aria snapshot via CDP timed out after ${timeoutMs}ms.`)),
+    timeoutMs,
+  );
+  timer.unref?.();
+  const signal = opts.signal
+    ? AbortSignal.any([opts.signal, timeoutController.signal])
+    : timeoutController.signal;
+  try {
+    return await withCdpSocket(
+      opts.wsUrl,
+      async (send) => {
+        await prepareCdpPageSession(send);
+        signal.throwIfAborted();
+        const res = (await send("Accessibility.getFullAXTree")) as {
+          nodes?: RawAXNode[];
+        };
+        signal.throwIfAborted();
+        const nodes = Array.isArray(res?.nodes) ? res.nodes : [];
+        return { nodes: formatAriaSnapshot(nodes, limit) };
+      },
+      { commandTimeoutMs: timeoutMs, signal },
+    );
+  } catch (error) {
+    if (opts.signal?.aborted) {
+      throw opts.signal.reason ?? error;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Role snapshot ref metadata used by agent-facing snapshots. */

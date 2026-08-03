@@ -153,14 +153,23 @@ describe("browser agent snapshot timeout routing", () => {
   it("passes timeoutMs to direct CDP aria snapshots", async () => {
     const handler = getSnapshotHandler();
     const response = createBrowserRouteResponse();
+    const controller = new AbortController();
 
-    await handler?.({ params: {}, query: { format: "aria", timeoutMs: "4321" } }, response.res);
+    await handler?.(
+      {
+        params: {},
+        query: { format: "aria", timeoutMs: "4321" },
+        signal: controller.signal,
+      },
+      response.res,
+    );
 
     expect(response.statusCode).toBe(200);
     expect(cdpMocks.snapshotAria).toHaveBeenCalledWith(
       expect.objectContaining({
         wsUrl: "ws://127.0.0.1:18800/devtools/page/tab-1",
         timeoutMs: 4321,
+        signal: controller.signal,
       }),
     );
   });

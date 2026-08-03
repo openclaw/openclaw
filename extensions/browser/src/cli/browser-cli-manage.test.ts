@@ -621,6 +621,38 @@ describe("browser manage output", () => {
     expect(process.exitCode).toBe(1);
   });
 
+  it("reports a stopped deep-doctor profile without probing tabs or snapshots", async () => {
+    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
+      if (req.path === "/doctor") {
+        return {
+          ok: false,
+          status: {
+            enabled: true,
+            profile: "openclaw",
+            driver: "openclaw",
+            transport: "cdp",
+            running: false,
+            cdpReady: false,
+          },
+          checks: [],
+        };
+      }
+      if (req.path === "/profiles") {
+        return { profiles: [{ name: "openclaw", running: false }] };
+      }
+      return {};
+    });
+
+    const program = createBrowserManageProgram();
+    await program.parseAsync(["browser", "doctor", "--deep"], { from: "user" });
+
+    expect(lastRuntimeLog()).toContain("FAIL browser: not running");
+    expect(findBrowserManageCall("/doctor")).toBeDefined();
+    expect(findBrowserManageCall("/tabs")).toBeUndefined();
+    expect(findBrowserManageCall("/snapshot")).toBeUndefined();
+    expect(process.exitCode).toBe(1);
+  });
+
   it("prints one complete JSON browser doctor failure before setting exit status", async () => {
     getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
       if (req.path === "/") {

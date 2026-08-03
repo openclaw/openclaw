@@ -67,7 +67,9 @@ export async function readMainFrameDocumentIdentityForPage(
 export async function markBackendDomRefsOnPage(opts: {
   page: Page;
   refs: MarkBackendDomRef[];
+  signal?: AbortSignal;
 }): Promise<Set<string>> {
+  opts.signal?.throwIfAborted();
   await opts.page
     .locator(`[${BROWSER_REF_MARKER_ATTRIBUTE}]`)
     .evaluateAll((elements, attr) => {
@@ -78,6 +80,7 @@ export async function markBackendDomRefsOnPage(opts: {
       }
     }, BROWSER_REF_MARKER_ATTRIBUTE)
     .catch(() => {});
+  opts.signal?.throwIfAborted();
 
   const refs = opts.refs.filter(
     (entry) =>
@@ -99,12 +102,15 @@ export async function markBackendDomRefsOnPage(opts: {
         ) => Promise<unknown>
       )(method, params);
 
+    opts.signal?.throwIfAborted();
     await send("DOM.enable").catch(() => {});
+    opts.signal?.throwIfAborted();
 
     const backendNodeIds = uniqueValues(refs.map((entry) => Math.floor(entry.backendDOMNodeId)));
     const pushed = (await send("DOM.pushNodesByBackendIdsToFrontend", {
       backendNodeIds,
     }).catch(() => ({}))) as { nodeIds?: number[] };
+    opts.signal?.throwIfAborted();
     const nodeIds = Array.isArray(pushed.nodeIds) ? pushed.nodeIds : [];
     const nodeIdByBackendId = new Map<number, number>();
     for (let index = 0; index < backendNodeIds.length; index += 1) {
@@ -121,13 +127,16 @@ export async function markBackendDomRefsOnPage(opts: {
         continue;
       }
       try {
+        opts.signal?.throwIfAborted();
         await send("DOM.setAttributeValue", {
           nodeId,
           name: BROWSER_REF_MARKER_ATTRIBUTE,
           value: entry.ref,
         });
+        opts.signal?.throwIfAborted();
         marked.add(entry.ref);
       } catch {
+        opts.signal?.throwIfAborted();
         // Best-effort marker write. Unmarked refs fall back to role metadata.
       }
     }

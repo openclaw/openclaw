@@ -26,6 +26,7 @@ vi.mock("./pw-session.js", () => ({
   gotoPageWithNavigationGuard,
   isDownloadStartingNavigationError: vi.fn(() => false),
   isPolicyDenyNavigationError: vi.fn(() => false),
+  normalizeCdpUrl: vi.fn((raw: string) => raw.replace(/\/$/, "")),
   storeRoleRefsForTarget,
 }));
 
@@ -104,6 +105,7 @@ describe("pw-tools-core aria snapshot storage", () => {
     expect(typeof scopedClientOptions.fn).toBe("function");
     expect(markBackendDomRefsOnPage).toHaveBeenCalledWith({
       page,
+      signal: undefined,
       refs: [{ ref: "ax1", backendDOMNodeId: 42 }],
     });
     expect(storeRoleRefsForTarget).toHaveBeenCalledWith({
@@ -115,6 +117,27 @@ describe("pw-tools-core aria snapshot storage", () => {
       },
       mode: "role",
     });
+  });
+
+  it("captures aria nodes without publishing refs or DOM markers", async () => {
+    const page = { id: "page-1" };
+    const rawNodes = [{ backendDOMNodeId: 42 }];
+    const formattedNodes = [{ ref: "ax1", role: "button", name: "OK", backendDOMNodeId: 42 }];
+
+    getPageForTargetId.mockResolvedValue(page);
+    withPageScopedCdpClient.mockResolvedValue({ nodes: rawNodes });
+    formatAriaSnapshot.mockReturnValue(formattedNodes);
+
+    const mod = await import("./pw-tools-core.snapshot.js");
+    const result = await mod.captureAriaSnapshotViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      limit: 5,
+    });
+
+    expect(result).toEqual({ nodes: formattedNodes });
+    expect(markBackendDomRefsOnPage).not.toHaveBeenCalled();
+    expect(storeRoleRefsForTarget).not.toHaveBeenCalled();
   });
 
   it("races snapshotAriaViaPlaywright against an explicit timeoutMs", async () => {
@@ -149,6 +172,7 @@ describe("pw-tools-core aria snapshot storage", () => {
       );
       expect(forceDisconnectPlaywrightForTarget).toHaveBeenCalledWith({
         cdpUrl: "http://127.0.0.1:9222",
+        targetId: "tab-1",
         ssrfPolicy: undefined,
         reason: "aria snapshot aborted",
       });
@@ -191,12 +215,122 @@ describe("pw-tools-core aria snapshot storage", () => {
     await expect(promise).rejects.toBe(cancellation);
     expect(forceDisconnectPlaywrightForTarget).toHaveBeenCalledWith({
       cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
       ssrfPolicy: undefined,
       reason: "aria snapshot aborted",
     });
     rejectEnable(new Error("browser disconnected"));
     await Promise.resolve();
     expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not publish a timed-out raw snapshot after a newer retry succeeds", async () => {
+    const page = { id: "page-1" };
+    const controller = new AbortController();
+    let releaseFirstRaw!: () => void;
+    const firstRaw = new Promise<void>((resolve) => {
+      releaseFirstRaw = resolve;
+    });
+    let collectCount = 0;
+    withPageScopedCdpClient.mockImplementation(async () => {
+      collectCount += 1;
+      if (collectCount === 1) {
+        await firstRaw;
+        return { nodes: [{ snapshot: "old" }] };
+      }
+      return { nodes: [{ snapshot: "new" }] };
+    });
+    formatAriaSnapshot.mockImplementation((nodes: Array<{ snapshot?: string }>) => [
+      {
+        ref: nodes[0]?.snapshot === "old" ? "ax-old" : "ax-new",
+        role: "button",
+        name: nodes[0]?.snapshot ?? "",
+      },
+    ]);
+    getPageForTargetId.mockResolvedValue(page);
+    markBackendDomRefsOnPage.mockResolvedValue(new Set());
+
+    const mod = await import("./pw-tools-core.snapshot.js");
+    const first = mod.snapshotAriaViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      signal: controller.signal,
+    });
+    void first.catch(() => {});
+    await vi.waitFor(() => expect(withPageScopedCdpClient).toHaveBeenCalledTimes(1));
+    controller.abort(new Error("first snapshot timed out"));
+    await expect(first).rejects.toThrow("first snapshot timed out");
+
+    await expect(
+      mod.snapshotAriaViaPlaywright({
+        cdpUrl: "http://127.0.0.1:9222",
+        targetId: "tab-1",
+      }),
+    ).resolves.toEqual({
+      nodes: [{ ref: "ax-new", role: "button", name: "new" }],
+    });
+    releaseFirstRaw();
+    await vi.waitFor(() => expect(formatAriaSnapshot).toHaveBeenCalledTimes(2));
+
+    expect(storeRoleRefsForTarget).toHaveBeenCalledTimes(1);
+    expect(storeRoleRefsForTarget).toHaveBeenCalledWith(
+      expect.objectContaining({ refs: { "ax-new": { role: "button", name: "new" } } }),
+    );
+  });
+
+  it("publishes a retry only after an aborted marker write settles", async () => {
+    const page = { id: "page-1" };
+    const controller = new AbortController();
+    let releaseFirstMarkers!: () => void;
+    const firstMarkers = new Promise<Set<string>>((resolve) => {
+      releaseFirstMarkers = () => resolve(new Set(["ax-old"]));
+    });
+    let collectCount = 0;
+    withPageScopedCdpClient.mockImplementation(async () => ({
+      nodes: [{ snapshot: ++collectCount === 1 ? "old" : "new" }],
+    }));
+    formatAriaSnapshot.mockImplementation((nodes: Array<{ snapshot?: string }>) => [
+      {
+        ref: nodes[0]?.snapshot === "old" ? "ax-old" : "ax-new",
+        role: "button",
+        name: nodes[0]?.snapshot ?? "",
+      },
+    ]);
+    getPageForTargetId.mockResolvedValue(page);
+    markBackendDomRefsOnPage
+      .mockImplementationOnce(async () => await firstMarkers)
+      .mockResolvedValueOnce(new Set(["ax-new"]));
+
+    const mod = await import("./pw-tools-core.snapshot.js");
+    const first = mod.snapshotAriaViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      signal: controller.signal,
+    });
+    void first.catch(() => {});
+    await vi.waitFor(() => expect(markBackendDomRefsOnPage).toHaveBeenCalledTimes(1));
+    controller.abort(new Error("first marker publication timed out"));
+    await expect(first).rejects.toThrow("first marker publication timed out");
+
+    const retry = mod.snapshotAriaViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+    });
+    await Promise.resolve();
+    expect(markBackendDomRefsOnPage).toHaveBeenCalledTimes(1);
+    expect(storeRoleRefsForTarget).not.toHaveBeenCalled();
+
+    releaseFirstMarkers();
+    await expect(retry).resolves.toEqual({
+      nodes: [{ ref: "ax-new", role: "button", name: "new" }],
+    });
+    expect(markBackendDomRefsOnPage).toHaveBeenCalledTimes(2);
+    expect(storeRoleRefsForTarget).toHaveBeenCalledTimes(1);
+    expect(storeRoleRefsForTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        refs: { "ax-new": { role: "button", name: "new", domMarker: true } },
+      }),
+    );
   });
 
   it("uses the default aria node limit for non-finite limits", async () => {

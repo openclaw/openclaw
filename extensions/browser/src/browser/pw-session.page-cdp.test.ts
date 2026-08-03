@@ -128,6 +128,73 @@ describe("pw-session page-scoped CDP client", () => {
     expect(marked).toEqual(new Set());
   });
 
+  it("stops after marker cleanup when publication is aborted", async () => {
+    const controller = new AbortController();
+    const cancellation = new Error("marker publication cancelled");
+    const newCDPSession = vi.fn();
+    const page = {
+      context: () => ({ newCDPSession }),
+      locator: vi.fn(() => ({
+        evaluateAll: vi.fn(async () => {
+          controller.abort(cancellation);
+        }),
+      })),
+    };
+
+    await expect(
+      markBackendDomRefsOnPage({
+        page: page as never,
+        refs: [{ ref: "ax1", backendDOMNodeId: 42 }],
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(cancellation);
+
+    expect(newCDPSession).not.toHaveBeenCalled();
+  });
+
+  it("does not swallow cancellation between marker writes", async () => {
+    const controller = new AbortController();
+    const cancellation = new Error("marker write cancelled");
+    const sessionSend = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "DOM.pushNodesByBackendIdsToFrontend") {
+        return { nodeIds: [101, 202] };
+      }
+      if (method === "DOM.setAttributeValue" && params?.value === "ax1") {
+        controller.abort(cancellation);
+      }
+      return {};
+    });
+    const page = {
+      context: () => ({
+        newCDPSession: vi.fn(async () => ({
+          send: sessionSend,
+          detach: vi.fn(async () => {}),
+        })),
+      }),
+      locator: vi.fn(() => ({ evaluateAll: vi.fn(async () => {}) })),
+    };
+
+    await expect(
+      markBackendDomRefsOnPage({
+        page: page as never,
+        refs: [
+          { ref: "ax1", backendDOMNodeId: 42 },
+          { ref: "ax2", backendDOMNodeId: 84 },
+        ],
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(cancellation);
+
+    expect(sessionSend).toHaveBeenCalledWith(
+      "DOM.setAttributeValue",
+      expect.objectContaining({ value: "ax1" }),
+    );
+    expect(sessionSend).not.toHaveBeenCalledWith(
+      "DOM.setAttributeValue",
+      expect.objectContaining({ value: "ax2" }),
+    );
+  });
+
   it("keeps unmarked refs out of the marked set when marker writes fail", async () => {
     const sessionSend = vi.fn(async (method: string) => {
       if (method === "DOM.pushNodesByBackendIdsToFrontend") {

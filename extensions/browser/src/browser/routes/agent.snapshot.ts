@@ -972,6 +972,7 @@ export function registerBrowserAgentSnapshotRoutes(
                 wsUrl: tab.wsUrl ?? "",
                 limit: plan.limit,
                 timeoutMs: plan.timeoutMs,
+                signal,
               });
 
           const resolved = await Promise.resolve(snap);
@@ -983,6 +984,7 @@ export function registerBrowserAgentSnapshotRoutes(
               cdpUrl: profileCtx.profile.cdpUrl,
               targetId: tab.targetId,
               nodes: resolved.nodes,
+              signal,
             });
           }
           return res.json({

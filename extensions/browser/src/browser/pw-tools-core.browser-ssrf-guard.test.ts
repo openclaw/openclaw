@@ -37,6 +37,7 @@ const sessionMocks = vi.hoisted(() => ({
   isBrowserObservedDialogBlockedError: vi.fn(() => false),
   isPolicyDenyNavigationError: vi.fn((_err: unknown) => false),
   markObservedDialogsHandledRemotelyForPage: vi.fn(() => ({})),
+  normalizeCdpUrl: vi.fn((raw: string) => raw.replace(/\/$/, "")),
   quarantineBlockedNavigationTarget: vi.fn(async () => {}),
   refLocator: vi.fn(() => {
     if (!pageState.locator) {

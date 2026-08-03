@@ -37,6 +37,7 @@ import {
   gotoPageWithNavigationGuard,
   isDownloadStartingNavigationError,
   isPolicyDenyNavigationError,
+  normalizeCdpUrl,
   storeRoleRefsForTarget,
 } from "./pw-session.js";
 import { markBackendDomRefsOnPage, withPageScopedCdpClient } from "./pw-session.page-cdp.js";
@@ -139,34 +140,79 @@ function buildStoredAriaRefs(
   return refs;
 }
 
+type AriaRefPublication = { settled: Promise<void> };
+const activeAriaRefPublications = new Map<string, AriaRefPublication>();
+
+async function publishAriaRefsInOrder<T>(opts: {
+  key: string;
+  signal?: AbortSignal;
+  run: () => Promise<T>;
+}): Promise<T> {
+  const previous = activeAriaRefPublications.get(opts.key);
+  const execution = Promise.resolve().then(async () => {
+    await previous?.settled;
+    opts.signal?.throwIfAborted();
+    return await opts.run();
+  });
+  const settled = execution.then(
+    () => {},
+    () => {},
+  );
+  const active = { settled };
+  activeAriaRefPublications.set(opts.key, active);
+  void settled.then(() => {
+    if (activeAriaRefPublications.get(opts.key) === active) {
+      activeAriaRefPublications.delete(opts.key);
+    }
+  });
+  const { abortPromise, cleanup } = createAbortPromiseWithListener(opts.signal);
+  try {
+    return abortPromise ? await Promise.race([execution, abortPromise]) : await execution;
+  } finally {
+    cleanup();
+  }
+}
+
 /** Stores aria snapshot refs so later tool calls can resolve stable element refs. */
 export async function storeAriaSnapshotRefsViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   nodes: AriaSnapshotNode[];
   page?: Page;
+  signal?: AbortSignal;
 }): Promise<void> {
+  opts.signal?.throwIfAborted();
   const page =
     opts.page ??
     (await getPageForTargetId({
       cdpUrl: opts.cdpUrl,
       targetId: opts.targetId,
     }));
-  ensurePageState(page);
-  const markedRefs = await markBackendDomRefsOnPage({
-    page,
-    refs: opts.nodes.flatMap((node) =>
-      typeof node.backendDOMNodeId === "number"
-        ? [{ ref: node.ref, backendDOMNodeId: node.backendDOMNodeId }]
-        : [],
-    ),
-  });
-  storeRoleRefsForTarget({
-    page,
-    cdpUrl: opts.cdpUrl,
-    targetId: opts.targetId,
-    refs: buildStoredAriaRefs(opts.nodes, markedRefs),
-    mode: "role",
+  opts.signal?.throwIfAborted();
+  await publishAriaRefsInOrder({
+    key: `${normalizeCdpUrl(opts.cdpUrl)}::${opts.targetId ?? "current"}`,
+    signal: opts.signal,
+    run: async () => {
+      opts.signal?.throwIfAborted();
+      ensurePageState(page);
+      const markedRefs = await markBackendDomRefsOnPage({
+        page,
+        signal: opts.signal,
+        refs: opts.nodes.flatMap((node) =>
+          typeof node.backendDOMNodeId === "number"
+            ? [{ ref: node.ref, backendDOMNodeId: node.backendDOMNodeId }]
+            : [],
+        ),
+      });
+      opts.signal?.throwIfAborted();
+      storeRoleRefsForTarget({
+        page,
+        cdpUrl: opts.cdpUrl,
+        targetId: opts.targetId,
+        refs: buildStoredAriaRefs(opts.nodes, markedRefs),
+        mode: "role",
+      });
+    },
   });
 }
 
@@ -192,15 +238,19 @@ async function prepareSnapshotPageViaPlaywright(opts: {
   return page;
 }
 
-/** Captures a raw accessibility tree snapshot and stores matching role refs. */
-export async function snapshotAriaViaPlaywright(opts: {
+type AriaSnapshotViaPlaywrightOptions = {
   cdpUrl: string;
   targetId?: string;
   limit?: number;
   timeoutMs?: number;
   signal?: AbortSignal;
   ssrfPolicy?: SsrFPolicy;
-}): Promise<{ nodes: AriaSnapshotNode[] }> {
+};
+
+async function collectAriaSnapshotViaPlaywright(
+  opts: AriaSnapshotViaPlaywrightOptions,
+  publishRefs: boolean,
+): Promise<{ nodes: AriaSnapshotNode[] }> {
   const limit = resolveIntegerOption(opts.limit, 500, { min: 1, max: 2000 });
   const ariaTimeoutMs =
     typeof opts.timeoutMs === "number" && Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0
@@ -228,6 +278,7 @@ export async function snapshotAriaViaPlaywright(opts: {
   const { abortPromise, cleanup } = createAbortPromiseWithListener(signal, () => {
     void forceDisconnectPlaywrightForTarget({
       cdpUrl: opts.cdpUrl,
+      targetId: opts.targetId,
       ssrfPolicy: opts.ssrfPolicy,
       reason: "aria snapshot aborted",
     }).catch(() => {});
@@ -259,14 +310,17 @@ export async function snapshotAriaViaPlaywright(opts: {
     })) as { nodes?: RawAXNode[] };
     const nodes = Array.isArray(res?.nodes) ? res.nodes : [];
     const formatted = formatAriaSnapshot(nodes, limit);
-    activeMethod = "snapshot ref storage";
-    await storeAriaSnapshotRefsViaPlaywright({
-      cdpUrl: opts.cdpUrl,
-      targetId: opts.targetId,
-      nodes: formatted,
-      page,
-    });
-    signal?.throwIfAborted();
+    if (publishRefs) {
+      activeMethod = "snapshot ref storage";
+      await storeAriaSnapshotRefsViaPlaywright({
+        cdpUrl: opts.cdpUrl,
+        targetId: opts.targetId,
+        nodes: formatted,
+        page,
+        signal,
+      });
+      signal?.throwIfAborted();
+    }
     return { nodes: formatted };
   };
 
@@ -279,6 +333,20 @@ export async function snapshotAriaViaPlaywright(opts: {
     }
     cleanup();
   }
+}
+
+/** Captures an accessibility tree without publishing interaction refs or DOM markers. */
+export async function captureAriaSnapshotViaPlaywright(
+  opts: AriaSnapshotViaPlaywrightOptions,
+): Promise<{ nodes: AriaSnapshotNode[] }> {
+  return await collectAriaSnapshotViaPlaywright(opts, false);
+}
+
+/** Captures an accessibility tree snapshot and stores matching role refs. */
+export async function snapshotAriaViaPlaywright(
+  opts: AriaSnapshotViaPlaywrightOptions,
+): Promise<{ nodes: AriaSnapshotNode[] }> {
+  return await collectAriaSnapshotViaPlaywright(opts, true);
 }
 
 /** Captures Playwright's AI aria snapshot with optional URL appendix and truncation. */

@@ -783,11 +783,17 @@ export async function withCdpSocket<T>(
       ws.once("error", (err) => reject(err));
       ws.once("close", () => reject(new Error("CDP socket closed")));
     });
-    // A stalled HTTP upgrade must release its TCP socket on cancellation.
-    const abortHandshake = () => ws.terminate();
-    opts?.signal?.addEventListener("abort", abortHandshake, { once: true });
+    // Cancellation owns the whole socket attempt, from opening handshake
+    // through the final callback command.
+    const abortOperation = () => {
+      const reason = opts?.signal?.reason;
+      const error = reason instanceof Error ? reason : new Error("CDP operation aborted");
+      closeWithError(error);
+      ws.terminate();
+    };
+    opts?.signal?.addEventListener("abort", abortOperation, { once: true });
     if (opts?.signal?.aborted) {
-      abortHandshake();
+      abortOperation();
     }
 
     try {
@@ -802,6 +808,7 @@ export async function withCdpSocket<T>(
       // Cancellation on the final attempt must not become a handshake error.
       opts?.signal?.throwIfAborted();
       if (attempt >= maxHandshakeRetries || !shouldRetryCdpHandshakeError(err)) {
+        opts?.signal?.removeEventListener("abort", abortOperation);
         throw err;
       }
       // Retry only handshake failures. Once CDP commands are flowing, callers
@@ -813,17 +820,18 @@ export async function withCdpSocket<T>(
           throw error;
         },
       );
+      opts?.signal?.removeEventListener("abort", abortOperation);
       continue;
-    } finally {
-      opts?.signal?.removeEventListener("abort", abortHandshake);
     }
 
     try {
+      opts?.signal?.throwIfAborted();
       return await fn(send);
     } catch (err) {
       closeWithError(err instanceof Error ? err : new Error(String(err)));
       throw err;
     } finally {
+      opts?.signal?.removeEventListener("abort", abortOperation);
       ws.close();
     }
   }
