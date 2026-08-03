@@ -603,6 +603,7 @@ function resolveActiveTurnContext(messagesUnknown: unknown): ActiveTurnContext {
 async function resolveImagesForRequest(
   activeTurnContext: Pick<ActiveTurnContext, "imageUrls">,
   limits: ResolvedOpenAiChatCompletionsLimits,
+  signal?: AbortSignal,
 ): Promise<ImageContent[]> {
   if (activeTurnContext.imageUrls.kind === "invalid") {
     throw new Error("image_url part is missing a valid URL");
@@ -618,6 +619,7 @@ async function resolveImagesForRequest(
   const images: ImageContent[] = [];
   let totalBytes = 0;
   for (const url of urls) {
+    signal?.throwIfAborted();
     const source = parseImageUrlToSource(url);
     if (source.type === "base64") {
       const sourceBytes = estimateBase64DecodedBytes(source.data);
@@ -628,7 +630,7 @@ async function resolveImagesForRequest(
       }
     }
 
-    const image = await extractImageContentFromSource(source, limits.images);
+    const image = await extractImageContentFromSource(source, limits.images, signal);
     totalBytes += estimateBase64DecodedBytes(image.data);
     if (totalBytes > limits.maxTotalImageBytes) {
       throw new Error(
@@ -637,6 +639,7 @@ async function resolveImagesForRequest(
     }
     images.push(image);
   }
+  signal?.throwIfAborted();
   return images;
 }
 
@@ -1031,10 +1034,16 @@ export async function handleOpenAiHttpRequest(
     });
     return true;
   }
+  const abortController = new AbortController();
+  const stopWatchingMediaDisconnect = watchClientDisconnect(req, res, abortController);
   let images: ImageContent[];
   try {
-    images = await resolveImagesForRequest(activeTurnContext, limits);
+    images = await resolveImagesForRequest(activeTurnContext, limits, abortController.signal);
   } catch (err) {
+    stopWatchingMediaDisconnect();
+    if (abortController.signal.aborted) {
+      return true;
+    }
     logWarn(`openai-compat: invalid image_url content: ${String(err)}`);
     sendJson(res, 400, {
       error: {
@@ -1042,6 +1051,10 @@ export async function handleOpenAiHttpRequest(
         type: "invalid_request_error",
       },
     });
+    return true;
+  }
+  stopWatchingMediaDisconnect();
+  if (abortController.signal.aborted) {
     return true;
   }
 
@@ -1057,7 +1070,6 @@ export async function handleOpenAiHttpRequest(
 
   const runId = `chatcmpl_${randomUUID()}`;
   const deps = createDefaultDeps();
-  const abortController = new AbortController();
   const mergedExtraSystemPrompt = [prompt.extraSystemPrompt, toolChoicePrompt]
     .filter((part): part is string => Boolean(part))
     .join("\n\n");

@@ -208,6 +208,7 @@ async function fetchWithGuard(params: {
   maxRedirects: number;
   policy?: SsrFPolicy;
   auditContext?: string;
+  signal?: AbortSignal;
 }): Promise<InputFetchResult> {
   const { response, release } = await fetchWithSsrFGuard({
     url: params.url,
@@ -215,6 +216,7 @@ async function fetchWithGuard(params: {
     timeoutMs: params.timeoutMs,
     policy: params.policy,
     auditContext: params.auditContext,
+    signal: params.signal,
     init: { headers: { "User-Agent": "OpenClaw-Gateway/1.0" } },
   });
 
@@ -278,18 +280,26 @@ function clampText(text: string, maxChars: number): string {
 }
 
 function withInputFileTimeout<T>(params: {
-  task: Promise<T>;
+  run: (signal: AbortSignal) => Promise<T>;
   timeoutMs: number;
   label: string;
+  signal?: AbortSignal;
 }): Promise<T> {
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
+  const timeoutController = new AbortController();
+  const signal = params.signal
+    ? AbortSignal.any([params.signal, timeoutController.signal])
+    : timeoutController.signal;
   let timeout: NodeJS.Timeout | undefined;
   const timedOut = new Promise<never>((_, reject) => {
     timeout = setTimeout(() => {
-      reject(new Error(`${params.label} timed out after ${timeoutMs}ms`));
+      const error = new Error(`${params.label} timed out after ${timeoutMs}ms`);
+      timeoutController.abort(error);
+      reject(error);
     }, timeoutMs);
   });
-  return Promise.race([params.task, timedOut]).finally(() => {
+  const task = params.run(signal);
+  return Promise.race([task, timedOut]).finally(() => {
     if (timeout) {
       clearTimeout(timeout);
     }
@@ -300,7 +310,9 @@ async function normalizeInputImage(params: {
   buffer: Buffer;
   mimeType?: string;
   limits: InputImageLimits;
+  signal?: AbortSignal;
 }): Promise<InputImageContent> {
+  params.signal?.throwIfAborted();
   const declaredMime = normalizeMimeType(params.mimeType) ?? "application/octet-stream";
   const detectedMime = normalizeMimeType(
     await detectMime({ buffer: params.buffer, headerMime: params.mimeType }),
@@ -309,6 +321,7 @@ async function normalizeInputImage(params: {
     throw new Error(`Unsupported image MIME type: ${detectedMime}`);
   }
   const sourceMime = detectedMime?.startsWith("image/") ? detectedMime : declaredMime;
+  params.signal?.throwIfAborted();
   if (!params.limits.allowedMimes.has(sourceMime)) {
     throw new Error(`Unsupported image MIME type: ${sourceMime}`);
   }
@@ -322,7 +335,8 @@ async function normalizeInputImage(params: {
   }
 
   // Normalize HEIC/HEIF to JPEG because downstream model and channel surfaces expect common images.
-  const normalizedBuffer = await convertHeicToJpeg(params.buffer);
+  const normalizedBuffer = await convertHeicToJpeg(params.buffer, params.signal);
+  params.signal?.throwIfAborted();
   if (normalizedBuffer.byteLength > params.limits.maxBytes) {
     throw new Error(
       `Image too large after HEIC conversion: ${normalizedBuffer.byteLength} bytes (limit: ${params.limits.maxBytes} bytes)`,
@@ -353,7 +367,9 @@ async function resolveInputFileMime(params: {
 export async function extractImageContentFromSource(
   source: InputImageSource,
   limits: InputImageLimits,
+  signal?: AbortSignal,
 ): Promise<InputImageContent> {
+  signal?.throwIfAborted();
   if (source.type === "base64") {
     rejectOversizedBase64Payload({ data: source.data, maxBytes: limits.maxBytes, label: "Image" });
     const canonicalData = canonicalizeBase64(source.data);
@@ -370,6 +386,7 @@ export async function extractImageContentFromSource(
       buffer,
       mimeType: normalizeMimeType(source.mediaType) ?? "image/png",
       limits,
+      signal,
     });
   }
 
@@ -387,11 +404,13 @@ export async function extractImageContentFromSource(
         hostnameAllowlist: limits.urlAllowlist,
       },
       auditContext: "openresponses.input_image",
+      signal,
     });
     return await normalizeInputImage({
       buffer: result.buffer,
       mimeType: result.mimeType,
       limits,
+      signal,
     });
   }
 
@@ -403,8 +422,10 @@ export async function extractFileContentFromSource(params: {
   source: InputFileSource;
   limits: InputFileLimits;
   config?: OpenClawConfig;
+  signal?: AbortSignal;
 }): Promise<InputFileExtractResult> {
   const { source, limits } = params;
+  params.signal?.throwIfAborted();
   const filename = source.filename || "file";
 
   let buffer: Buffer;
@@ -435,6 +456,7 @@ export async function extractFileContentFromSource(params: {
         hostnameAllowlist: limits.urlAllowlist,
       },
       auditContext: "openresponses.input_file",
+      signal: params.signal,
     });
     const parsed = parseContentType(result.contentType);
     mimeType = parsed.mimeType ?? normalizeMimeType(result.mimeType);
@@ -446,7 +468,9 @@ export async function extractFileContentFromSource(params: {
     throw new Error(`File too large: ${buffer.byteLength} bytes (limit: ${limits.maxBytes} bytes)`);
   }
 
+  params.signal?.throwIfAborted();
   mimeType = await resolveInputFileMime({ buffer, declaredMime: mimeType });
+  params.signal?.throwIfAborted();
 
   if (!mimeType) {
     throw new Error("input_file missing media type");
@@ -459,16 +483,19 @@ export async function extractFileContentFromSource(params: {
     const extracted = await withInputFileTimeout({
       label: "PDF extraction",
       timeoutMs: limits.timeoutMs,
-      task: extractPdfContent({
-        buffer,
-        maxPages: limits.pdf.maxPages,
-        maxPixels: limits.pdf.maxPixels,
-        minTextChars: limits.pdf.minTextChars,
-        ...(params.config ? { config: params.config } : {}),
-        onImageExtractionError: (err) => {
-          logWarn(`media: PDF image extraction skipped, ${String(err)}`);
-        },
-      }),
+      ...(params.signal ? { signal: params.signal } : {}),
+      run: (signal) =>
+        extractPdfContent({
+          buffer,
+          maxPages: limits.pdf.maxPages,
+          maxPixels: limits.pdf.maxPixels,
+          minTextChars: limits.pdf.minTextChars,
+          ...(params.config ? { config: params.config } : {}),
+          signal,
+          onImageExtractionError: (err) => {
+            logWarn(`media: PDF image extraction skipped, ${String(err)}`);
+          },
+        }),
     });
     const text = extracted.text ? clampText(extracted.text, limits.maxChars) : "";
     return {

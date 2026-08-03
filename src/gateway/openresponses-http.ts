@@ -483,6 +483,8 @@ export async function handleOpenResponsesHttpRequest(
     return true;
   }
 
+  const abortController = new AbortController();
+  const stopWatchingMediaDisconnect = watchClientDisconnect(req, res, abortController);
   // Extract images + files from input (Phase 2)
   let images: ImageContent[] = [];
   const fileContexts: string[] = [];
@@ -527,7 +529,11 @@ export async function handleOpenResponsesHttpRequest(
                       data: source.data ?? "",
                       mediaType: source.media_type,
                     };
-              const image = await extractImageContentFromSource(imageSource, limits.images);
+              const image = await extractImageContentFromSource(
+                imageSource,
+                limits.images,
+                abortController.signal,
+              );
               images.push(image);
               continue;
             }
@@ -564,6 +570,7 @@ export async function handleOpenResponsesHttpRequest(
                         filename: source.filename,
                       },
                 limits: limits.files,
+                signal: abortController.signal,
               });
               const rawText = file.text;
               if (rawText?.trim()) {
@@ -599,10 +606,18 @@ export async function handleOpenResponsesHttpRequest(
       }
     }
   } catch (err) {
+    stopWatchingMediaDisconnect();
+    if (abortController.signal.aborted) {
+      return true;
+    }
     logWarn(`openresponses: request parsing failed: ${String(err)}`);
     sendJson(res, 400, {
       error: { message: "invalid request", type: "invalid_request_error" },
     });
+    return true;
+  }
+  stopWatchingMediaDisconnect();
+  if (abortController.signal.aborted) {
     return true;
   }
 
@@ -689,7 +704,6 @@ export async function handleOpenResponsesHttpRequest(
     storeResponseSession(responseId, sessionKey, responseSessionScope);
   const outputItemId = `msg_${randomUUID()}`;
   const deps = createDefaultDeps();
-  const abortController = new AbortController();
   const streamMaxTokens =
     typeof payload.max_output_tokens === "number" ? payload.max_output_tokens : undefined;
   const streamTemperature =

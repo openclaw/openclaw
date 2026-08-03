@@ -255,6 +255,25 @@ describe("HEIC input image normalization", () => {
     await expectResolvedImageContentCase(testCase);
   });
 
+  it("passes the caller abort signal through HEIC conversion", async () => {
+    const controller = new AbortController();
+    const sourceBytes = Buffer.from("heic-source");
+    detectMimeMock.mockResolvedValueOnce("image/heic");
+    convertHeicToJpegMock.mockResolvedValueOnce(Buffer.from("jpeg-normalized"));
+
+    await extractImageContentFromSource(
+      {
+        type: "base64",
+        data: sourceBytes.toString("base64"),
+        mediaType: "image/heic",
+      },
+      createImageSourceLimits(["image/heic", "image/jpeg"]),
+      controller.signal,
+    );
+
+    expect(convertHeicToJpegMock).toHaveBeenCalledWith(sourceBytes, controller.signal);
+  });
+
   it.each([
     {
       name: "rejects spoofed base64 images when detected bytes are not an image",
@@ -286,6 +305,41 @@ describe("HEIC input image normalization", () => {
 });
 
 describe("guarded input file URL fetches", () => {
+  it("passes the caller abort signal through guarded image and file fetches", async () => {
+    const controller = new AbortController();
+    const imageSource = { type: "url", url: "https://example.com/photo.png" } as const;
+    mockUrlFetchResponse({
+      source: imageSource,
+      fetchedContentType: "image/png",
+      fetchedBody: Buffer.from("png-bytes"),
+    });
+    detectMimeMock.mockResolvedValueOnce("image/png");
+
+    await extractImageContentFromSource(
+      imageSource,
+      createImageSourceLimits(["image/png"], true),
+      controller.signal,
+    );
+    expect(fetchWithSsrFGuardMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ signal: controller.signal }),
+    );
+
+    mockUrlFetchResponse({
+      source: { type: "url", url: "https://example.com/note.txt" },
+      fetchedContentType: "text/plain",
+      fetchedBody: Buffer.from("hello"),
+    });
+    detectMimeMock.mockResolvedValueOnce("text/plain");
+    await extractFileContentFromSource({
+      source: { type: "url", url: "https://example.com/note.txt" },
+      limits: createFileSourceLimits(["text/plain"], true),
+      signal: controller.signal,
+    });
+    expect(fetchWithSsrFGuardMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ signal: controller.signal }),
+    );
+  });
+
   it("cancels ignored HTTP error bodies", async () => {
     let canceled = false;
     const stream = new ReadableStream<Uint8Array>({
@@ -487,8 +541,16 @@ describe("input file MIME sniffing", () => {
   it("times out local PDF extraction with the input file timeout", async () => {
     vi.useFakeTimers();
     try {
+      let extractionSignal: AbortSignal | undefined;
       detectMimeMock.mockResolvedValueOnce("application/pdf");
-      extractPdfContentMock.mockReturnValueOnce(new Promise(() => {}));
+      extractPdfContentMock.mockImplementationOnce(
+        (params: { signal?: AbortSignal }) =>
+          new Promise((_resolve, reject) => {
+            extractionSignal = params.signal;
+            const rejectForAbort = () => reject(params.signal?.reason);
+            params.signal?.addEventListener("abort", rejectForAbort, { once: true });
+          }),
+      );
 
       const pending = expect(
         extractFileContentFromSource({
@@ -503,10 +565,39 @@ describe("input file MIME sniffing", () => {
       ).rejects.toThrow("PDF extraction timed out after 1ms");
 
       await vi.advanceTimersByTimeAsync(1);
+      expect(extractionSignal?.aborted).toBe(true);
+      expect(extractionSignal?.reason).toEqual(new Error("PDF extraction timed out after 1ms"));
       await pending;
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("passes the caller abort signal through PDF extraction", async () => {
+    const controller = new AbortController();
+    let extractionSignal: AbortSignal | undefined;
+    detectMimeMock.mockResolvedValueOnce("application/pdf");
+    extractPdfContentMock.mockImplementationOnce((params: { signal?: AbortSignal }) => {
+      extractionSignal = params.signal;
+      return Promise.resolve({ text: "", images: [] });
+    });
+
+    await extractFileContentFromSource({
+      source: {
+        type: "base64",
+        data: Buffer.from("%PDF-1.4\n").toString("base64"),
+        mediaType: "application/pdf",
+        filename: "scan.pdf",
+      },
+      limits: createFileSourceLimits(["application/pdf"]),
+      signal: controller.signal,
+    });
+
+    expect(extractionSignal).toBeInstanceOf(AbortSignal);
+    expect(extractionSignal?.aborted).toBe(false);
+    controller.abort(new Error("client disconnected"));
+    expect(extractionSignal?.aborted).toBe(true);
+    expect(extractionSignal?.reason).toEqual(new Error("client disconnected"));
   });
 });
 
