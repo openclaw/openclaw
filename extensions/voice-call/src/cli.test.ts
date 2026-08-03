@@ -53,6 +53,18 @@ function captureStdout() {
   };
 }
 
+function captureStderr() {
+  let output = "";
+  const writeSpy = vi.spyOn(process.stderr, "write").mockImplementation(((chunk: unknown) => {
+    output += String(chunk);
+    return true;
+  }) as typeof process.stderr.write);
+  return {
+    output: () => output,
+    restore: () => writeSpy.mockRestore(),
+  };
+}
+
 describe("voice-call CLI status fallback", () => {
   afterEach(() => {
     callGatewayFromCliMock.mockReset();
@@ -287,7 +299,7 @@ describe("voice-call CLI status fallback", () => {
     expect(result.output).toContain('{"word":"café"}\n');
   });
 
-  it("drops a partial leading JSONL record from capped diagnostic reads", async () => {
+  it("drops a partial leading JSONL record from capped diagnostic reads and warns on stderr", async () => {
     const tempRoot = makeTempDir("openclaw-voice-call-cli-");
     const file = path.join(tempRoot, "diagnostics.jsonl");
     const completeRecords = [
@@ -300,21 +312,27 @@ describe("voice-call CLI status fallback", () => {
     try {
       const latencyProgram = buildProgram({});
       const latencyOutput = captureStdout();
+      const latencyWarnings = captureStderr();
       try {
         await latencyProgram.parseAsync(["voicecall", "latency", "--file", file], {
           from: "user",
         });
       } finally {
+        latencyWarnings.restore();
         latencyOutput.restore();
       }
       expect(JSON.parse(latencyOutput.output())).toMatchObject({
         recordsScanned: 2,
         turnLatency: { count: 2 },
       });
+      expect(latencyWarnings.output()).toContain(
+        "of a partial JSONL record at the start of the capped read",
+      );
 
       sleepMock.mockRejectedValueOnce(new Error("stop tail after initial output"));
       const tailProgram = buildProgram({});
       const tailOutput = captureStdout();
+      const tailWarnings = captureStderr();
       try {
         await expect(
           tailProgram.parseAsync(["voicecall", "tail", "--file", file, "--since", "10"], {
@@ -322,12 +340,54 @@ describe("voice-call CLI status fallback", () => {
           }),
         ).rejects.toThrow("stop tail after initial output");
       } finally {
+        tailWarnings.restore();
         tailOutput.restore();
       }
       expect(tailOutput.output().trim().split("\n")).toEqual(completeRecords);
+      expect(tailWarnings.output()).toContain(
+        "of a partial JSONL record at the start of the capped read",
+      );
     } finally {
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
+  });
+
+  it("warns on stderr when a follow-up record exceeds the JSONL read cap", async () => {
+    const tempRoot = makeTempDir("openclaw-voice-call-cli-discard-");
+    const file = path.join(tempRoot, "diagnostics.jsonl");
+    fs.writeFileSync(file, `${JSON.stringify({ seq: 0 })}\n`, "utf8");
+    const oversizedRecord = `${JSON.stringify({ seq: 1, padding: "x".repeat(1_100_000) })}\n`;
+    const tailRecord = `${JSON.stringify({ seq: 2 })}\n`;
+
+    sleepMock
+      .mockImplementationOnce(async () => {
+        fs.appendFileSync(file, oversizedRecord, "utf8");
+      })
+      .mockImplementationOnce(async () => {
+        fs.appendFileSync(file, tailRecord, "utf8");
+      })
+      .mockRejectedValueOnce(new Error("stop tail after discard output"));
+
+    const program = buildProgram({});
+    const output = captureStdout();
+    const warnings = captureStderr();
+    try {
+      await expect(
+        program.parseAsync(["voicecall", "tail", "--file", file, "--since", "1"], {
+          from: "user",
+        }),
+      ).rejects.toThrow("stop tail after discard output");
+    } finally {
+      warnings.restore();
+      output.restore();
+    }
+
+    const lines = output.output().trim().split("\n");
+    expect(lines).toHaveLength(2);
+    expect(JSON.parse(lines[0] ?? "")).toEqual({ seq: 0 });
+    expect(JSON.parse(lines[1] ?? "")).toEqual({ seq: 2 });
+    expect(warnings.output()).toContain("discarding a JSONL record larger than");
+    expect(warnings.output()).toContain(String(1_000_000));
   });
 
   it("reads follow-up appends in bounded chunks and retains a partial final record", async () => {

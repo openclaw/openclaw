@@ -72,6 +72,10 @@ function writeStdoutLine(...values: unknown[]): void {
   process.stdout.write(`${format(...values)}\n`);
 }
 
+function writeStderrLine(...values: unknown[]): void {
+  process.stderr.write(`${format(...values)}\n`);
+}
+
 function writeStdoutJson(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
 }
@@ -93,7 +97,13 @@ function isSameJsonlFileIdentity(left: JsonlFileIdentity, right: JsonlFileIdenti
 function readJsonlTailSync(
   filePath: string,
   maxBytes: number,
-): { text: string; bytes: Buffer; end: number; identity: JsonlFileIdentity } {
+): {
+  text: string;
+  bytes: Buffer;
+  end: number;
+  identity: JsonlFileIdentity;
+  droppedLeadingBytes: number;
+} {
   const fd = fs.openSync(filePath, "r");
   try {
     const stat = fs.fstatSync(fd);
@@ -101,7 +111,7 @@ function readJsonlTailSync(
     const start = Math.max(0, stat.size - maxBytes);
     const length = stat.size - start;
     if (length === 0) {
-      return { text: "", bytes: Buffer.alloc(0), end: stat.size, identity };
+      return { text: "", bytes: Buffer.alloc(0), end: stat.size, identity, droppedLeadingBytes: 0 };
     }
     let startsAtRecordBoundary = start === 0;
     if (start > 0) {
@@ -118,14 +128,45 @@ function readJsonlTailSync(
       bytesRead += read;
     }
     let bytes = buf.subarray(0, bytesRead);
+    let droppedLeadingBytes = 0;
     if (!startsAtRecordBoundary) {
       const firstNewline = bytes.indexOf(0x0a);
-      bytes = firstNewline === -1 ? Buffer.alloc(0) : bytes.subarray(firstNewline + 1);
+      if (firstNewline === -1) {
+        droppedLeadingBytes = bytes.length;
+        bytes = Buffer.alloc(0);
+      } else {
+        droppedLeadingBytes = firstNewline + 1;
+        bytes = bytes.subarray(firstNewline + 1);
+      }
     }
-    return { text: bytes.toString("utf8"), bytes, end: start + bytesRead, identity };
+    return {
+      text: bytes.toString("utf8"),
+      bytes,
+      end: start + bytesRead,
+      identity,
+      droppedLeadingBytes,
+    };
   } finally {
     fs.closeSync(fd);
   }
+}
+
+function warnJsonlCappedLeadingOmission(droppedLeadingBytes: number, filePath: string): void {
+  if (droppedLeadingBytes > 0) {
+    writeStderrLine(
+      "voicecall: skipped %d bytes of a partial JSONL record at the start of the capped read (%s)",
+      droppedLeadingBytes,
+      filePath,
+    );
+  }
+}
+
+function warnJsonlFollowDiscard(filePath: string): void {
+  writeStderrLine(
+    "voicecall: discarding a JSONL record larger than %d bytes while following %s",
+    VOICE_CALL_CLI_MAX_JSONL_TAIL_BYTES,
+    filePath,
+  );
 }
 
 type JsonlFollowState = {
@@ -150,6 +191,7 @@ function readJsonlFollowRangeSync(params: {
     if (params.state.pending.length + fragment.length > VOICE_CALL_CLI_MAX_JSONL_TAIL_BYTES) {
       params.state.pending = Buffer.alloc(0);
       params.state.discardUntilNewline = true;
+      warnJsonlFollowDiscard(params.filePath);
       return;
     }
     // Retain raw bytes so UTF-8 code points split across read chunks decode only after completion.
@@ -894,7 +936,9 @@ export function registerVoiceCallCli(params: {
           bytes: initial,
           end,
           identity,
+          droppedLeadingBytes,
         } = readJsonlTailSync(file, VOICE_CALL_CLI_MAX_JSONL_TAIL_BYTES);
+        warnJsonlCappedLeadingOmission(droppedLeadingBytes, file);
         const finalNewline = initial.lastIndexOf(0x0a);
         const completeInitial =
           finalNewline === -1 ? Buffer.alloc(0) : initial.subarray(0, finalNewline + 1);
@@ -952,7 +996,11 @@ export function registerVoiceCallCli(params: {
       const last = parseVoiceCallIntOption(options.last, "--last", { min: 1 });
 
       if (fs.existsSync(file) && path.basename(file) !== "calls.jsonl") {
-        const { text: content } = readJsonlTailSync(file, VOICE_CALL_CLI_MAX_JSONL_TAIL_BYTES);
+        const { text: content, droppedLeadingBytes } = readJsonlTailSync(
+          file,
+          VOICE_CALL_CLI_MAX_JSONL_TAIL_BYTES,
+        );
+        warnJsonlCappedLeadingOmission(droppedLeadingBytes, file);
         const calls = content
           .split("\n")
           .filter(Boolean)
