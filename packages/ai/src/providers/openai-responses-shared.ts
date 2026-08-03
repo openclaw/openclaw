@@ -500,15 +500,12 @@ function resolveResponsesReasoningEffortForPayload<TApi extends Api>(
   model: Model<TApi>,
   effort: ModelThinkingLevel,
 ): string | undefined {
-  const thinkingLevelMap = Object.fromEntries(
-    Object.entries(model.thinkingLevelMap ?? {}).filter(
-      (entry): entry is [string, string] => typeof entry[1] === "string",
-    ),
-  );
+  // Keep null entries: ThinkingLevelMap marks a level unsupported with null, so
+  // the payload must omit reasoning instead of emitting the generic value.
   return resolveOpenAIReasoningEffortForModel({
     model,
     effort,
-    fallbackMap: thinkingLevelMap,
+    fallbackMap: model.thinkingLevelMap,
   });
 }
 

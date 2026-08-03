@@ -173,7 +173,7 @@ export function supportsOpenAIReasoningEffort(
 export function resolveOpenAIReasoningEffortForModel(params: {
   model: OpenAIReasoningModel;
   effort: string;
-  fallbackMap?: Record<string, string>;
+  fallbackMap?: Partial<Record<string, string | null>>;
 }): OpenAIApiReasoningEffort | undefined {
   const requested = normalizeOpenAIReasoningEffort(params.effort);
   // Config preserves map-key casing, so only canonical keys get a folded lookup.
@@ -184,6 +184,11 @@ export function resolveOpenAIReasoningEffortForModel(params: {
           ([effort]) => normalizeOpenAIReasoningEffort(effort) === requested,
         )?.[1]
       : undefined);
+  // A null map entry marks the level as explicitly unsupported; never fall back
+  // to the generic requested value for it.
+  if (mapped === null) {
+    return undefined;
+  }
   // Explicit maps are the canonical provider-native contract; preserve their exact casing.
   const normalized = mapped === undefined ? requested : mapped.trim();
   if (mapped !== undefined) {

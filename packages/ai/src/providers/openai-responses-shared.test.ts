@@ -408,6 +408,57 @@ describe("Responses reasoning effort", () => {
     });
   });
 
+  it("omits reasoning for explicitly unsupported levels declared with null", () => {
+    const nullableModel = {
+      ...nativeOpenAIModel,
+      id: "qwen/qwen3-32b",
+      name: "Qwen 3 32B",
+      provider: "groq",
+      baseUrl: "https://api.groq.com/openai/v1",
+      compat: { supportsEncryptedReasoningReplay: false },
+      thinkingLevelMap: {
+        off: "none",
+        low: "default",
+        medium: null,
+        high: "default",
+      },
+    } satisfies Model<"openai-responses">;
+
+    const explicit = {} as never;
+    applyCommonResponsesParams(
+      explicit,
+      nullableModel,
+      { messages: [] },
+      {
+        reasoningEffort: "medium",
+      },
+    );
+
+    const summaryOnly = {} as never;
+    applyCommonResponsesParams(
+      summaryOnly,
+      nullableModel,
+      { messages: [] },
+      {
+        reasoningSummary: "concise",
+      },
+    );
+
+    const supportedSibling = {} as never;
+    applyCommonResponsesParams(
+      supportedSibling,
+      nullableModel,
+      { messages: [] },
+      {
+        reasoningEffort: "high",
+      },
+    );
+
+    expect(explicit).not.toHaveProperty("reasoning");
+    expect(summaryOnly).not.toHaveProperty("reasoning");
+    expect(supportedSibling).toMatchObject({ reasoning: { effort: "default" } });
+  });
+
   it("preserves encrypted reasoning replay for compatible Responses endpoints by default", () => {
     const compatibleModel = {
       ...nativeOpenAIModel,
