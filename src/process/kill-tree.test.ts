@@ -440,8 +440,8 @@ describe("killProcessTree", () => {
     // proc(5) stat fields after comm: state ppid pgrp sid tty_nr tpgid flags
     // minflt cminflt majflt cmajflt utime stime cutime cstime priority nice
     // num_threads itrealvalue starttime ... -> starttime is index 19.
-    const statLine = (pid: number, comm: string, starttime: string) =>
-      `${pid} (${comm}) S 1 ${pid} ${pid} 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 ${starttime} 0`;
+    const statLine = (pid: number, comm: string, starttime: string, ppid = 1) =>
+      `${pid} (${comm}) S ${ppid} ${pid} ${pid} 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 ${starttime} 0`;
     readFileSyncMock.mockImplementation((filePath: string) => {
       if (filePath === "/proc/5590/task/5590/children") {
         return "5591";
@@ -453,7 +453,7 @@ describe("killProcessTree", () => {
         return statLine(5590, "root", rootStatStarttime);
       }
       if (filePath === "/proc/5591/stat") {
-        return statLine(5591, "child", "101");
+        return statLine(5591, "child", "101", 5590);
       }
       throw new Error("unexpected proc path");
     });
@@ -494,8 +494,8 @@ describe("killProcessTree", () => {
     // `/proc/5621/stat` no longer exists). The collector must bind the child
     // identity BEFORE reading its descendants, so neither 5621 nor any PID
     // reported by a recycled 5621's children file enters the snapshot.
-    const statLine = (pid: number, comm: string, starttime: string) =>
-      `${pid} (${comm}) S 1 ${pid} ${pid} 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 ${starttime} 0`;
+    const statLine = (pid: number, comm: string, starttime: string, ppid = 1) =>
+      `${pid} (${comm}) S ${ppid} ${pid} ${pid} 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 ${starttime} 0`;
     killSpy.mockImplementation(() => true);
     const readOrder: string[] = [];
     readFileSyncMock.mockImplementation((filePath: string) => {
@@ -540,9 +540,61 @@ describe("killProcessTree", () => {
     });
   });
 
+  it("on Linux rejects a recycled child PID whose replacement no longer belongs to the parent", async () => {
+    // PID-reuse-to-unrelated-subtree race: `/proc/<parent>/children` lists 5631,
+    // but the original child exits and an unrelated process reuses 5631 before
+    // the identity read. The replacement has its own valid identity and its own
+    // descendant 5632, but its ppid is no longer the verified parent 5630, so it
+    // must not be admitted into the snapshot or traversed.
+    const statLine = (pid: number, comm: string, starttime: string, ppid = 1) =>
+      `${pid} (${comm}) S ${ppid} ${pid} ${pid} 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 ${starttime} 0`;
+    killSpy.mockImplementation(() => true);
+    readFileSyncMock.mockImplementation((filePath: string) => {
+      if (filePath === "/proc/5630/task/5630/children") {
+        return "5631";
+      }
+      if (filePath === "/proc/5631/task/5631/children") {
+        return "5632";
+      }
+      if (filePath === "/proc/5632/task/5632/children") {
+        return "";
+      }
+      if (filePath === "/proc/5630/stat") {
+        return statLine(5630, "root", "100");
+      }
+      // The replacement process reuses 5631 with a fresh starttime but reports a
+      // different parent, proving it never belonged to the captured tree.
+      if (filePath === "/proc/5631/stat") {
+        return statLine(5631, "replacement", "888", 9999);
+      }
+      if (filePath === "/proc/5632/stat") {
+        return statLine(5632, "stranger", "889", 5631);
+      }
+      throw new Error("unexpected proc path");
+    });
+
+    await withMockedPlatform("linux", async () => {
+      killProcessTree(5630, { graceMs: 10, detached: false });
+      await vi.advanceTimersByTimeAsync(10);
+
+      // Only the verified root is signaled; the recycled child (5631) and the
+      // replacement process's descendant (5632) are rejected by the ppid check.
+      expect(
+        (killSpy.mock.calls as Array<[number, NodeJS.Signals | number | undefined]>).filter(
+          ([, signal]) => signal !== 0,
+        ),
+      ).toEqual([
+        [5630, "SIGTERM"],
+        [5630, "SIGKILL"],
+      ]);
+      expect(killSpy).not.toHaveBeenCalledWith(5631, expect.anything());
+      expect(killSpy).not.toHaveBeenCalledWith(5632, expect.anything());
+    });
+  });
+
   it("on Unix force-escalates one attached snapshot without rebuilding it", async () => {
-    const statLine = (pid: number, comm: string, starttime: string) =>
-      `${pid} (${comm}) S 1 ${pid} ${pid} 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 ${starttime} 0`;
+    const statLine = (pid: number, comm: string, starttime: string, ppid = 1) =>
+      `${pid} (${comm}) S ${ppid} ${pid} ${pid} 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 ${starttime} 0`;
     killSpy.mockImplementation(() => true);
     readFileSyncMock.mockImplementation((filePath: string) => {
       if (filePath === "/proc/5597/task/5597/children") {
@@ -555,7 +607,7 @@ describe("killProcessTree", () => {
         return statLine(5597, "root", "100");
       }
       if (filePath === "/proc/5598/stat") {
-        return statLine(5598, "child", "101");
+        return statLine(5598, "child", "101", 5597);
       }
       throw new Error("unexpected proc path");
     });
@@ -579,8 +631,8 @@ describe("killProcessTree", () => {
   });
 
   it("on Unix skips an attached descendant without an identity during escalation", async () => {
-    const statLine = (pid: number, comm: string, starttime: string) =>
-      `${pid} (${comm}) S 1 ${pid} ${pid} 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 ${starttime} 0`;
+    const statLine = (pid: number, comm: string, starttime: string, ppid = 1) =>
+      `${pid} (${comm}) S ${ppid} ${pid} ${pid} 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 ${starttime} 0`;
     killSpy.mockImplementation(() => true);
     readFileSyncMock.mockImplementation((filePath: string) => {
       if (filePath === "/proc/5592/task/5592/children") {
@@ -625,8 +677,8 @@ describe("killProcessTree", () => {
   });
 
   it("on Unix keeps an attached descendant snapshot after its root exits", async () => {
-    const statLine = (pid: number, comm: string, starttime: string) =>
-      `${pid} (${comm}) S 1 ${pid} ${pid} 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 ${starttime} 0`;
+    const statLine = (pid: number, comm: string, starttime: string, ppid = 1) =>
+      `${pid} (${comm}) S ${ppid} ${pid} ${pid} 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 ${starttime} 0`;
     let rootAlive = true;
     killSpy.mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
       if (signal === 0 && pid === 5595) {
@@ -648,7 +700,7 @@ describe("killProcessTree", () => {
         return statLine(5595, "root", "100");
       }
       if (filePath === "/proc/5596/stat") {
-        return statLine(5596, "child", "101");
+        return statLine(5596, "child", "101", 5595);
       }
       throw new Error("unexpected proc path");
     });

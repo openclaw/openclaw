@@ -230,6 +230,20 @@ function parsePositivePids(value: unknown): number[] {
  * disabled there rather than authorizing a stale signal.
  */
 function readUnixProcessIdentity(pid: number, deadlineMs?: number): string | undefined {
+  return readUnixProcessInstance(pid, deadlineMs)?.identity;
+}
+
+/**
+ * Read a process-instance identity and its current parent PID from
+ * `/proc/<pid>/stat`. The `ppid` lets the caller revalidate that a numeric PID
+ * reported by `/proc/<parent>/children` still belongs to the verified parent at
+ * capture time, so a PID reused between the children read and this read cannot
+ * be admitted as an authorized descendant.
+ */
+function readUnixProcessInstance(
+  pid: number,
+  deadlineMs?: number,
+): { identity: string; ppid: number } | undefined {
   if (deadlineMs !== undefined && Date.now() >= deadlineMs) {
     return undefined;
   }
@@ -249,9 +263,14 @@ function readUnixProcessIdentity(pid: number, deadlineMs?: number): string | und
       .trim()
       .split(/\s+/);
     // Fields after comm: state ppid pgrp sid tty_nr tpgid flags ... starttime
-    // starttime is field 20 in proc(5), which is index 19 in this sliced list.
+    // starttime is field 20 in proc(5), which is index 19 in this sliced list;
+    // ppid is field 4, index 1 in this sliced list (state is index 0).
+    const ppid = Number(fields[1]);
     const starttime = fields[19];
-    return starttime && /^\d+$/u.test(starttime) ? `${pid}:${starttime}` : undefined;
+    if (!starttime || !/^\d+$/u.test(starttime) || !Number.isSafeInteger(ppid)) {
+      return undefined;
+    }
+    return { identity: `${pid}:${starttime}`, ppid };
   } catch {
     return undefined;
   }
@@ -325,16 +344,20 @@ function collectUnixProcessTree(rootPid: number): UnixProcessTree | undefined {
         continue;
       }
       seen.add(childPid);
-      // Bind each child to a captured identity BEFORE descending, so a PID
-      // recycled between `/proc/.../children` and this read cannot authorize
-      // traversal (or a later signal) for an unrelated replacement process. A
-      // child whose identity cannot be captured is dropped with its subtree.
-      const identity = readUnixProcessIdentity(childPid, deadline);
-      if (!identity || Date.now() >= deadline) {
+      // Bind each child to a captured identity BEFORE descending, and
+      // revalidate its parent membership against the verified `parentPid` in
+      // the same `/proc/<child>/stat` read. Without the ppid check, a PID
+      // reused between `/proc/<parent>/children` and this read would be
+      // admitted as an authorized descendant even though the replacement
+      // process never belonged to the captured tree. A child that cannot be
+      // bound or no longer reports `parentPid` as its parent is dropped with
+      // its subtree.
+      const instance = readUnixProcessInstance(childPid, deadline);
+      if (!instance || instance.ppid !== parentPid || Date.now() >= deadline) {
         continue;
       }
       visit(childPid, depth + 1);
-      descendants.push({ pid: childPid, identity });
+      descendants.push({ pid: childPid, identity: instance.identity });
     }
   };
 
