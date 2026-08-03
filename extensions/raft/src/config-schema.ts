@@ -10,6 +10,7 @@ const RaftAccountSchema = z
     name: z.string().optional(),
     enabled: z.boolean().optional(),
     configWrites: z.boolean().optional(),
+    mediaMaxMb: z.number().positive().optional(),
     profile: z.string().min(1).optional(),
   })
   .strict();

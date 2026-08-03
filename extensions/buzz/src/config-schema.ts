@@ -19,6 +19,7 @@ const RawBuzzConfigSchema = z
     name: z.string().optional(),
     enabled: z.boolean().optional(),
     configWrites: z.boolean().optional(),
+    mediaMaxMb: z.number().positive().optional(),
     markdown: MarkdownConfigSchema,
     relayUrl: z
       .string()
