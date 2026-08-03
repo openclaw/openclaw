@@ -169,6 +169,12 @@ export async function registerPluginSubagentRunFromGateway(params: {
     agentId: resolveAgentIdFromSessionKey(childSessionKey),
   });
   const requesterSessionKey = params.requester?.sessionKey ?? ownerSessionKey;
+  // Snapshot the accepting lifecycle before the lazy registry import: a reset
+  // interleaving with the await must not re-tag this admission.
+  const requesterLifecycleRevision =
+    params.requester !== undefined
+      ? loadRequesterLifecycleRevision(requesterSessionKey)
+      : undefined;
   const { registerSubagentRun } = await import("../../agents/subagent-registry.js");
   registerSubagentRun({
     runId: params.runId,
@@ -181,10 +187,8 @@ export async function registerPluginSubagentRunFromGateway(params: {
     cleanup: "keep",
     ...(params.pluginId ? { label: `plugin:${params.pluginId}` } : {}),
     expectsCompletionMessage: params.requester !== undefined,
-    ...(params.requester !== undefined
-      ? {
-          expectedRequesterLifecycleRevision: loadRequesterLifecycleRevision(requesterSessionKey),
-        }
+    ...(requesterLifecycleRevision !== undefined
+      ? { expectedRequesterLifecycleRevision: requesterLifecycleRevision }
       : {}),
     spawnMode: "run",
   });
