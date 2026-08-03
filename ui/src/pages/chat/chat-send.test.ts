@@ -1309,16 +1309,17 @@ describe("handleSendChat", () => {
       sessionKey: "agent:main",
     });
 
-    const send = handleSendChat(host);
-    const duplicate = handleSendChat(host);
+    const submissionId = "redirect-submission";
+    const send = handleSendChat(host, undefined, { submissionId });
+    const duplicate = handleSendChat(host, undefined, { submissionId });
+    expect(duplicate).toBe(send);
     expect(await raceWithMacrotask(send)).toBe("pending");
-    await duplicate;
     expect(host.request).not.toHaveBeenCalled();
     expect(host.chatMessage).toBe("/redirect start over");
 
     host.chatMessage = "new draft";
     settingsPatch.resolve(true);
-    await send;
+    await Promise.all([send, duplicate]);
 
     expect(host.request).toHaveBeenCalledWith("sessions.steer", {
       key: "agent:main",
@@ -5413,41 +5414,75 @@ describe("handleSendChat", () => {
     }
   });
 
-  it("coalesces duplicate in-flight chat submits before the gateway acknowledges them", async () => {
-    const sent = createDeferred<unknown>();
-
+  it("queues distinct identical chat submissions while the first ACK is pending", async () => {
+    const firstAck = createDeferred<unknown>();
+    const sends: Record<string, unknown>[] = [];
     const host = makeHost({
       requestHandlers: {
-        "chat.send": () => sent.promise,
+        "chat.send": (params: unknown) => {
+          const payload = requireRecord(params, "repeated chat send payload");
+          sends.push(payload);
+          return sends.length === 1
+            ? firstAck.promise
+            : Promise.resolve({ runId: payload.idempotencyKey, status: "ok" });
+        },
       },
     });
 
     const first = handleSendChat(host, "same prompt");
+    await waitForFast(() => expect(sends).toHaveLength(1));
     const second = handleSendChat(host, "same prompt");
 
-    expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
-    expect(host.chatQueue).toHaveLength(1);
-    expect(host.chatQueue[0]?.text).toBe("same prompt");
-    expect(host.chatQueue[0]?.sendState).toBe("sending");
-    expect(host.chatMessages).toStrictEqual([]);
+    try {
+      await waitForFast(() => expect(host.chatQueue).toHaveLength(2));
+      expect(sends).toHaveLength(1);
+      expect(host.chatQueue.map((item) => item.text)).toEqual(["same prompt", "same prompt"]);
+      expect(host.chatQueue.every((item) => item.sendState !== "failed")).toBe(true);
+    } finally {
+      firstAck.resolve({ runId: sends[0]?.idempotencyKey, status: "ok" });
+      await Promise.all([first, second]);
+    }
 
-    const queuedRunId = host.chatQueue[0]?.sendRunId;
-    sent.resolve({ runId: queuedRunId, status: "started" });
-    await Promise.all([first, second]);
-
-    expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
-    expect(host.chatQueue).toEqual([
-      expect.objectContaining({ sendState: "sending", text: "same prompt" }),
-    ]);
-    expect(loadChatComposerSnapshot(host, host.sessionKey)?.queue).toEqual([
-      expect.objectContaining({ sendAttempts: 1, sendState: "waiting-reconnect" }),
-    ]);
-    expect(host.chatMessages).toStrictEqual([]);
+    expect(sends.map((payload) => payload.message)).toEqual(["same prompt", "same prompt"]);
+    expect(sends[0]?.idempotencyKey).not.toBe(sends[1]?.idempotencyKey);
+    expect(host.chatQueue).toStrictEqual([]);
   });
 
-  it("coalesces duplicate queued local commands while the first command is running", async () => {
-    const command = createDeferred<{ content: string }>();
-    executeSlashCommandMock.mockImplementation(() => command.promise);
+  it("keeps a repeated fresh submission queued when the first ACK starts a run", async () => {
+    const firstAck = createDeferred<unknown>();
+    const sends: Record<string, unknown>[] = [];
+    const host = makeHost({
+      requestHandlers: {
+        "chat.send": (params: unknown) => {
+          const payload = requireRecord(params, "active repeated chat send payload");
+          sends.push(payload);
+          return firstAck.promise;
+        },
+      },
+    });
+
+    const first = handleSendChat(host, "same prompt");
+    await waitForFast(() => expect(sends).toHaveLength(1));
+    const second = handleSendChat(host, "same prompt");
+    await waitForFast(() => expect(host.chatQueue).toHaveLength(2));
+
+    const firstRunId = String(sends[0]?.idempotencyKey);
+    firstAck.resolve({ runId: firstRunId, status: "started" });
+    await Promise.all([first, second]);
+
+    expect(sends).toHaveLength(1);
+    expect(host.chatRunId).toBe(firstRunId);
+    expect(host.chatQueue.filter((item) => item.sendState === "waiting-idle")).toEqual([
+      expect.objectContaining({ text: "same prompt" }),
+    ]);
+  });
+
+  it("queues two identical local commands and executes both in FIFO order", async () => {
+    const firstCommand = createDeferred<{ content: string }>();
+    const secondCommand = createDeferred<{ content: string }>();
+    executeSlashCommandMock
+      .mockImplementationOnce(() => firstCommand.promise)
+      .mockImplementationOnce(() => secondCommand.promise);
     const host = makeHost({
       requestHandlers: {
         "chat.history": () => idleChatHistory(),
@@ -5456,17 +5491,25 @@ describe("handleSendChat", () => {
 
     const first = handleSendChat(host, "/compact");
     await waitForFast(() => expect(executeSlashCommandMock).toHaveBeenCalledOnce());
-    const duplicate = handleSendChat(host, "/compact");
+    const second = handleSendChat(host, "/compact");
 
     try {
-      expect(host.chatQueue.filter((item) => item.localCommandName === "compact")).toHaveLength(1);
+      await waitForFast(() =>
+        expect(host.chatQueue.filter((item) => item.localCommandName === "compact")).toHaveLength(
+          2,
+        ),
+      );
       expect(executeSlashCommandMock).toHaveBeenCalledOnce();
+      firstCommand.resolve({ content: "First compaction complete." });
+      await waitForFast(() => expect(executeSlashCommandMock).toHaveBeenCalledTimes(2));
     } finally {
-      command.resolve({ content: "Compaction complete." });
-      await Promise.all([first, duplicate]);
+      firstCommand.resolve({ content: "First compaction complete." });
+      secondCommand.resolve({ content: "Second compaction complete." });
+      await Promise.allSettled([first, second]);
     }
 
-    expect(executeSlashCommandMock).toHaveBeenCalledOnce();
+    expect(executeSlashCommandMock).toHaveBeenCalledTimes(2);
+    expect(host.chatQueue.filter((item) => item.localCommandName === "compact")).toStrictEqual([]);
   });
 
   it("keeps normal prompt text visible as pending until chat.send is acknowledged", async () => {

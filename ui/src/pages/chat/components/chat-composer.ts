@@ -4,6 +4,7 @@ import { loadSettings, normalizeChatSendShortcut, patchSettings } from "../../..
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
+import { generateUUID } from "../../../lib/uuid.ts";
 import { ComposerDictationController, insertComposerDictation } from "../composer-dictation.ts";
 import { discoverRealtimeTalkInputs } from "../realtime-talk-input.ts";
 import { isLargePastedTextAttachment } from "./chat-attachments.ts";
@@ -405,7 +406,7 @@ export function renderChatComposer(props: ChatComposerProps) {
       event.preventDefault();
       const target = event.target as HTMLTextAreaElement;
       commitComposerDraft(props, target.value);
-      props.onSend();
+      props.onSend(generateUUID());
       syncComposerDraftAfterSend(target);
     }
   };
@@ -492,7 +493,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     state.composingDraft = null;
     commitComposerDraft(props, draft);
     props.onTypingChange?.(false);
-    props.onSend();
+    props.onSend(generateUUID());
     syncComposerDraftAfterSend(state.composerTextarea);
   };
   const handleVoicePrimaryAction = () => {

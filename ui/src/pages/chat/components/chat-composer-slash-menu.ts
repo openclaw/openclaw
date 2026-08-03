@@ -10,6 +10,7 @@ import {
   type SlashCommandCategory,
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
+import { generateUUID } from "../../../lib/uuid.ts";
 import { exportChatMarkdown } from "../export.ts";
 import { commitComposerDraft, getChatComposerState } from "./chat-composer-state.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
@@ -150,7 +151,7 @@ export function selectSlashCommand(
     state.slashMenuOpen = false;
     resetSlashMenuState(state);
     commitComposerDraft(props, `/${cmd.name}`);
-    props.onSend();
+    props.onSend(generateUUID());
   } else {
     commitComposerDraft(props, `/${cmd.name} `);
     closeSlashMenuIfNeeded(state, requestUpdate);
@@ -192,7 +193,7 @@ export function selectSlashArg(
   resetSlashMenuState(state);
   commitComposerDraft(props, `/${cmdName} ${arg}`);
   if (run) {
-    props.onSend();
+    props.onSend(generateUUID());
   }
   requestUpdate();
 }
