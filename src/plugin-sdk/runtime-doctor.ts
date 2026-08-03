@@ -49,6 +49,7 @@ export {
 export type { OpenClawStateDatabaseSchemaMigration } from "../state/openclaw-state-db.js";
 export { removePluginFromConfig } from "../plugins/uninstall.js";
 export type {
+  PluginDoctorChannelIngressQueueAccess,
   PluginDoctorStateMigration,
   PluginDoctorStateMigrationContext,
 } from "../plugins/doctor-contract-registry.js";

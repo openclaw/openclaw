@@ -53,6 +53,7 @@ const pluginDoctorStateMigrationEntries = vi.hoisted(
     ({
       entries: [] as Array<{
         pluginId: string;
+        channelIds?: string[];
         migration: {
           id: string;
           label: string;
@@ -62,14 +63,14 @@ const pluginDoctorStateMigrationEntries = vi.hoisted(
             env: NodeJS.ProcessEnv;
             stateDir: string;
             oauthDir: string;
-            context: unknown;
+            context: PluginDoctorStateMigrationContext;
           }) => Promise<{ preview: string[] } | null> | { preview: string[] } | null;
           migrateLegacyState: (params: {
             config: OpenClawConfig;
             env: NodeJS.ProcessEnv;
             stateDir: string;
             oauthDir: string;
-            context: unknown;
+            context: PluginDoctorStateMigrationContext;
           }) =>
             | Promise<{ changes: string[]; warnings: string[] }>
             | {
@@ -81,6 +82,7 @@ const pluginDoctorStateMigrationEntries = vi.hoisted(
     }) satisfies {
       entries: Array<{
         pluginId: string;
+        channelIds?: string[];
         migration: {
           id: string;
           label: string;
@@ -89,14 +91,14 @@ const pluginDoctorStateMigrationEntries = vi.hoisted(
             env: NodeJS.ProcessEnv;
             stateDir: string;
             oauthDir: string;
-            context: unknown;
+            context: PluginDoctorStateMigrationContext;
           }) => Promise<{ preview: string[] } | null> | { preview: string[] } | null;
           migrateLegacyState: (params: {
             config: OpenClawConfig;
             env: NodeJS.ProcessEnv;
             stateDir: string;
             oauthDir: string;
-            context: unknown;
+            context: PluginDoctorStateMigrationContext;
           }) =>
             | Promise<{ changes: string[]; warnings: string[] }>
             | {
@@ -833,6 +835,53 @@ describe("state migrations", () => {
       `migrate:${customHome}`,
     ]);
     expect(result.changes).toContain("Migrated fixture environment");
+  });
+
+  it("scopes doctor channel ingress queue access to the plugin's own channels", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const discovered: string[] = [];
+    const offeredChannelIds: string[][] = [];
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "line",
+        channelIds: ["line"],
+        migration: {
+          id: "line-ingress-scope-test",
+          label: "LINE ingress scope test",
+          async detectLegacyState({ context }) {
+            const queues = context.channelIngressQueues ?? [];
+            // The host hands out only owner-bound lanes; a foreign channel has no entry.
+            offeredChannelIds.push(queues.map((entry) => entry.channelId));
+            const line = queues.find((entry) => entry.channelId === "line");
+            const queue = line?.openChannelIngressQueue<{ note: string }>({ accountId: "default" });
+            await queue?.enqueue("ingress-scope-test", { note: "owned" });
+            discovered.push(...(line?.listChannelIngressQueueAccountIds() ?? []));
+            return null;
+          },
+          migrateLegacyState: () => ({ changes: [], warnings: [] }),
+        },
+      },
+    ];
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: createConfig(),
+      env,
+      homedir: () => root,
+    });
+
+    expect(
+      detected.warnings.filter((warning) => warning.includes("LINE ingress scope test")),
+    ).toStrictEqual([]);
+    // Detection can run more than once per pass; every run must see the same
+    // owner-bound lane set and the seeded account.
+    expect(offeredChannelIds.length).toBeGreaterThan(0);
+    for (const channelIds of offeredChannelIds) {
+      expect(channelIds).toStrictEqual(["line"]);
+    }
+    expect(discovered.length).toBeGreaterThan(0);
+    expect([...new Set(discovered)]).toStrictEqual(["default"]);
   });
 
   it("runs doctor-only plugin file imports only during explicit Doctor repair", async () => {

@@ -4,7 +4,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import {
+  normalizeTrimmedStringList,
+  normalizeUniqueTrimmedStringList,
+} from "@openclaw/normalization-core/string-normalization";
+import type { ChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import type { LegacyConfigRule } from "../config/legacy.shared.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type {
@@ -46,6 +50,7 @@ type PluginDoctorSessionStoreAgentIdsResolver = (params: {
 
 type PluginDoctorContractEntry = {
   pluginId: string;
+  channelIds: string[];
   rules: LegacyConfigRule[];
   normalizeCompatibilityConfig?: PluginDoctorCompatibilityNormalizer;
   resolveSessionStoreAgentIds?: PluginDoctorSessionStoreAgentIdsResolver;
@@ -66,6 +71,22 @@ export type PluginDoctorStateMigrationContext = {
   ) => void;
   /** Plugin-wide live-row capacity for import preflight. Older test hosts may omit it. */
   getPluginStateCapacity?: () => { liveEntries: number; maxEntries: number };
+  /** Owner-bound ingress queue access, one entry per manifest-declared channel;
+   *  the host fixes the channel identity and doctor state directory. Older test
+   *  hosts may omit it. */
+  channelIngressQueues?: readonly PluginDoctorChannelIngressQueueAccess[];
+};
+
+/** Doctor access to one host-bound channel's durable ingress queues. It mirrors
+ *  the runtime proxy's accessor, minus the state-dir override the host fixes. */
+export type PluginDoctorChannelIngressQueueAccess = {
+  channelId: string;
+  openChannelIngressQueue: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(options?: {
+    accountId?: string;
+  }) => ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>;
+  /** Account ids currently holding ingress rows, so migrations also sweep
+   *  accounts retired from config. */
+  listChannelIngressQueueAccountIds: () => string[];
 };
 
 export type PluginDoctorStateMigration = {
@@ -96,6 +117,7 @@ export type PluginDoctorStateMigration = {
 
 type PluginDoctorStateMigrationEntry = {
   pluginId: string;
+  channelIds: string[];
   migration: PluginDoctorStateMigration;
 };
 
@@ -397,6 +419,7 @@ function loadPluginDoctorContractEntry(
   }
   return {
     pluginId: record.id,
+    channelIds: normalizeUniqueTrimmedStringList(record.channels),
     rules,
     normalizeCompatibilityConfig,
     resolveSessionStoreAgentIds,
@@ -503,6 +526,7 @@ export function listPluginDoctorStateMigrationEntries(params?: {
   return resolvePluginDoctorContracts(params).flatMap((entry) =>
     entry.stateMigrations.map((migration) => ({
       pluginId: entry.pluginId,
+      channelIds: entry.channelIds,
       migration,
     })),
   );
