@@ -4,6 +4,7 @@ import { hashSystemAgentOperation } from "../agents/tools/system-agent-tool.js";
 import {
   buildSystemAgentToolsMcpServerConfig,
   OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_APPROVAL_ARMED_ENV,
+  OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_OPERATOR_APPROVAL_ONLY_ENV,
   OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_PROPOSAL_ENV,
   OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_SURFACE_ENV,
   OPENCLAW_TOOLS_MCP_TOOLS_ENV,
@@ -116,5 +117,60 @@ describe("OpenClaw tools MCP server", () => {
       [OPENCLAW_TOOLS_MCP_TOOLS_ENV]: "openclaw",
       [OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_SURFACE_ENV]: "gateway",
     });
+  });
+
+  it("serializes operator-approval-only through the native CLI MCP config", () => {
+    // A delegated CLI-backed turn threads operatorApprovalOnly into the tool
+    // options; the per-run MCP config must carry it so the out-of-process
+    // stdio server can reconstruct the same delegated refusal branch.
+    const config = buildSystemAgentToolsMcpServerConfig({
+      surface: "cli",
+      operatorApprovalOnly: true,
+      proposalRef: { current: "deadbeef" },
+    });
+    const server = config.mcpServers.openclaw as { env?: Record<string, string> };
+    expect(server.env?.[OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_OPERATOR_APPROVAL_ONLY_ENV]).toBe("1");
+
+    // Non-delegated configs must not set the flag (direct sessions keep the
+    // interactive "reply yes" approval flow).
+    const direct = buildSystemAgentToolsMcpServerConfig({ surface: "cli" });
+    const directServer = direct.mcpServers.openclaw as { env?: Record<string, string> };
+    expect(directServer.env).not.toHaveProperty(
+      OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_OPERATOR_APPROVAL_ONLY_ENV,
+    );
+  });
+
+  it("reconstructs the delegated refusal from env on the native CLI MCP tool", async () => {
+    // End-to-end at the stdio boundary: the host serializes the delegated
+    // state, the server recreates createSystemAgentTool from env, and a
+    // persistent call returns the operator-UI handoff (never "reply yes")
+    // while still registering the proposal and keeping the needs-approval
+    // marker so out-of-process CLI hosts mirror the refusal.
+    const operation = {
+      kind: "config-set",
+      path: "agents.defaults.subagents.thinking",
+      value: "high",
+    } as const;
+    vi.stubEnv(OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_OPERATOR_APPROVAL_ONLY_ENV, "1");
+    vi.stubEnv(OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_PROPOSAL_ENV, hashSystemAgentOperation(operation));
+    const handlers = createPluginToolsMcpHandlers(
+      resolveOpenClawToolsForMcp({ tools: ["openclaw"], systemAgentSurface: "cli" }),
+    );
+
+    const result = await handlers.callTool({
+      name: "openclaw",
+      arguments: {
+        action: "config_set",
+        path: "agents.defaults.subagents.thinking",
+        value: "high",
+        approved: true,
+      },
+    });
+
+    const text = JSON.stringify(result);
+    expect(text).toContain("needs-approval:");
+    expect(text).toContain("OpenClaw operator UI");
+    expect(text).toContain("cannot be applied from this chat");
+    expect(text).not.toContain("ask the user to reply yes");
   });
 });

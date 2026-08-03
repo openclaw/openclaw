@@ -18,6 +18,8 @@ export const OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_APPROVAL_ARMED_ENV =
   "OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_APPROVAL_ARMED";
 export const OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_PROPOSAL_ENV =
   "OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_PROPOSAL";
+export const OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_OPERATOR_APPROVAL_ONLY_ENV =
+  "OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_OPERATOR_APPROVAL_ONLY";
 
 const OPENCLAW_TOOLS_MCP_TOOL_IDS = ["cron", "openclaw"] as const;
 export type OpenClawToolsMcpToolId = (typeof OPENCLAW_TOOLS_MCP_TOOL_IDS)[number];
@@ -66,15 +68,23 @@ export function resolveOpenClawToolsMcpSystemAgentSurface(
  * stdio server runs out of process, so the host passes the armed bit and the
  * pending proposal hash through env; the host mirrors transitions back from
  * tool events (see mirrorSystemAgentProposalFromToolEvents in agent-turn.ts).
+ *
+ * `operatorApprovalOnly` is also transported here so delegated (messaging)
+ * CLI-backed sessions get the operator-UI handoff instead of a dead-end
+ * "reply yes" prompt — the same boundary the embedded loop enforces.
  */
 export function resolveOpenClawToolsMcpSystemAgentApproval(env: NodeJS.ProcessEnv = process.env): {
   approvalArmed: boolean;
   proposalRef: { current?: string };
+  operatorApprovalOnly?: boolean;
 } {
   const pendingProposal = env[OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_PROPOSAL_ENV]?.trim();
   return {
     approvalArmed: env[OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_APPROVAL_ARMED_ENV]?.trim() === "1",
     proposalRef: pendingProposal ? { current: pendingProposal } : {},
+    ...(env[OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_OPERATOR_APPROVAL_ONLY_ENV]?.trim() === "1"
+      ? { operatorApprovalOnly: true }
+      : {}),
   };
 }
 
@@ -139,6 +149,12 @@ export function buildSystemAgentToolsMcpServerConfig(
             : {}),
           ...(pendingProposal
             ? { [OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_PROPOSAL_ENV]: pendingProposal }
+            : {}),
+          // Delegated sessions can only resolve approvals in the operator UI;
+          // the stdio server recreates the tool from env, so the flag must
+          // travel here or a CLI-backed delegated turn still says "reply yes".
+          ...(options.operatorApprovalOnly === true
+            ? { [OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_OPERATOR_APPROVAL_ONLY_ENV]: "1" }
             : {}),
         },
       },
