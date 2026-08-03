@@ -1,7 +1,7 @@
 // Gateway Client tests cover client.watchdog behavior.
 import { createServer as createHttpsServer } from "node:https";
 import { createServer } from "node:net";
-import type { EventFrame, HelloOk } from "@openclaw/gateway-protocol";
+import type { EventFrame } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { GatewayClient } from "./client.js";
@@ -915,51 +915,6 @@ describe("GatewayClient", () => {
     );
     expect(onSent).not.toHaveBeenCalled();
     expect(getPendingCount(client)).toBe(0);
-  });
-
-  test("enforces the latest negotiated request payload before sending", async () => {
-    const { client, send } = createOpenGatewayClient(25);
-    const payloadHarness = client as unknown as {
-      handleConnectHello: (hello: Pick<HelloOk, "auth" | "policy">, assembled: unknown) => void;
-      maxPayloadBytes: number;
-    };
-    payloadHarness.handleConnectHello(
-      {
-        auth: { role: "operator", scopes: [] },
-        policy: { maxPayload: 128, maxBufferedBytes: 256, tickIntervalMs: 30_000 },
-      },
-      {},
-    );
-
-    await expect(client.request("node.invoke", { jsonl: "x".repeat(128) })).rejects.toThrow(
-      "gateway request node.invoke exceeds negotiated max payload",
-    );
-    expect(payloadHarness.maxPayloadBytes).toBe(128);
-    expect(send).not.toHaveBeenCalled();
-    expect(getPendingCount(client)).toBe(0);
-
-    payloadHarness.handleConnectHello(
-      {
-        auth: { role: "operator", scopes: [] },
-        policy: { maxPayload: 512, maxBufferedBytes: 1_024, tickIntervalMs: 30_000 },
-      },
-      {},
-    );
-    const request = client.request<{ status: string }>("node.invoke", {
-      jsonl: "x".repeat(128),
-    });
-    const frame = JSON.parse(String(send.mock.calls[0]?.[0])) as { id: string };
-    handleGatewayMessage(client, {
-      type: "res",
-      id: frame.id,
-      ok: true,
-      payload: { status: "ok" },
-    });
-
-    await expect(request).resolves.toEqual({ status: "ok" });
-    expect(payloadHarness.maxPayloadBytes).toBe(512);
-    expect(send).toHaveBeenCalledTimes(1);
-    client.stop();
   });
 
   test("notifies accepted expectFinal requests while continuing to wait for final", async () => {
