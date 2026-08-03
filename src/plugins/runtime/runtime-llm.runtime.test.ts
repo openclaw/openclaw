@@ -703,9 +703,13 @@ describe("runtime.llm.complete", () => {
       models: {
         providers: {
           codex: {
+            baseUrl: "https://chatgpt.com/backend-api",
             models: [
               {
                 id: "gpt-unknown",
+                name: "gpt-unknown",
+                reasoning: false,
+                input: ["text"],
                 cost: {
                   input: 0,
                   output: 0,
@@ -713,6 +717,8 @@ describe("runtime.llm.complete", () => {
                   cacheWrite: 0,
                   pricingUnavailable: true,
                 },
+                contextWindow: 128_000,
+                maxTokens: 4096,
               },
             ],
           },
@@ -761,10 +767,16 @@ describe("runtime.llm.complete", () => {
       models: {
         providers: {
           openai: {
+            baseUrl: "https://api.openai.com/v1",
             models: [
               {
                 id: "free-model",
+                name: "free-model",
+                reasoning: false,
+                input: ["text"],
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                maxTokens: 4096,
               },
             ],
           },
