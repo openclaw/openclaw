@@ -14,6 +14,7 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { recordDiagnosticOutstandingBackgroundWork } from "./diagnostic-background-work.js";
 import { withDiagnosticPhase } from "./diagnostic-phase.js";
 import {
   getDiagnosticSessionActivitySnapshot,
@@ -1201,6 +1202,60 @@ describe("stuck session diagnostics threshold", () => {
       { sessionId: "s1", sessionKey: "main", queueDepth: 0, allowActiveAbort: true },
       ["ageMs", "stateGeneration"],
     );
+  });
+
+  it("keeps a quiet model call alive while the backend reports outstanding background work", async () => {
+    const recoverStuckSession = vi.fn();
+    const stuckSessionAbortMs = 60_000;
+    startDiagnosticHeartbeat({ diagnostics: { enabled: true } }, { recoverStuckSession });
+    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+    markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+    markDiagnosticModelStartedForTest({
+      sessionId: "s1",
+      sessionKey: "main",
+      runId: "run-1",
+      provider: "anthropic",
+      model: "claude-opus-5",
+    });
+    // The CLI backend reports a subagent/workflow task still holding the turn.
+    recordDiagnosticOutstandingBackgroundWork({
+      sessionId: "s1",
+      sessionKey: "main",
+      outstanding: true,
+    });
+
+    vi.advanceTimersByTime(stuckSessionAbortMs);
+
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+  });
+
+  it("recovers a quiet model call once the backend reports background work finished", async () => {
+    const recoverStuckSession = vi.fn();
+    const stuckSessionAbortMs = 60_000;
+    startDiagnosticHeartbeat({ diagnostics: { enabled: true } }, { recoverStuckSession });
+    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+    markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+    markDiagnosticModelStartedForTest({
+      sessionId: "s1",
+      sessionKey: "main",
+      runId: "run-1",
+      provider: "anthropic",
+      model: "claude-opus-5",
+    });
+    recordDiagnosticOutstandingBackgroundWork({
+      sessionId: "s1",
+      sessionKey: "main",
+      outstanding: true,
+    });
+    recordDiagnosticOutstandingBackgroundWork({
+      sessionId: "s1",
+      sessionKey: "main",
+      outstanding: false,
+    });
+
+    vi.advanceTimersByTime(stuckSessionAbortMs);
+
+    expect(recoverStuckSession).toHaveBeenCalled();
   });
 
   it("recovers stale model calls without active embedded-run ownership", async () => {

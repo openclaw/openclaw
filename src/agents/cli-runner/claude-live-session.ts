@@ -26,6 +26,7 @@ import {
   type ExecAsk,
   type ExecSecurity,
 } from "../../infra/exec-approvals.js";
+import { recordDiagnosticOutstandingBackgroundWork } from "../../logging/diagnostic-background-work.js";
 import { BLOCKED_TOOL_CALL_ABORT_FLOOR_MS } from "../../logging/diagnostic-run-activity.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
@@ -923,6 +924,17 @@ function applyBackgroundTasksChanged(
     if (taskId) {
       session.outstandingBackgroundTaskIds.add(taskId);
     }
+  }
+  // The diagnostic watchdog only sees stream silence. Hand it the same
+  // authoritative signal this session already uses to extend its own no-output
+  // deadline, so the two watchdogs stop disagreeing about the same run.
+  const turn = session.currentTurn;
+  if (turn) {
+    recordDiagnosticOutstandingBackgroundWork({
+      sessionId: turn.diagnosticRefs.sessionId,
+      sessionKey: turn.diagnosticRefs.sessionKey,
+      outstanding: session.outstandingBackgroundTaskIds.size > 0,
+    });
   }
 }
 

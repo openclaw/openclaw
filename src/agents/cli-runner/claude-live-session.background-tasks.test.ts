@@ -5,6 +5,10 @@ import {
   waitForDiagnosticEventsDrained,
 } from "../../infra/diagnostic-events.js";
 import {
+  hasDiagnosticOutstandingBackgroundWork,
+  resetDiagnosticBackgroundWorkForTest,
+} from "../../logging/diagnostic-background-work.js";
+import {
   BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
   getDiagnosticSessionActivitySnapshot,
   resetDiagnosticRunActivityForTest,
@@ -32,6 +36,7 @@ type SupervisorSpawnFn = ProcessSupervisor["spawn"];
 beforeEach(() => {
   setDiagnosticsEnabledForProcess(true);
   resetDiagnosticRunActivityForTest();
+  resetDiagnosticBackgroundWorkForTest();
   startDiagnosticRunActivityTracking();
   resetClaudeLiveSessionsForTest();
   restoreCliRunnerPrepareTestDeps();
@@ -964,6 +969,52 @@ describe("claude live session provisional results", () => {
     const result = await resultPromise;
     expect(result.output.text).toContain("done after wait");
     expect(driver.cancel).not.toHaveBeenCalled();
+  });
+
+  it("reports outstanding background work into the diagnostic activity snapshot", async () => {
+    const driver = installLiveStdoutDriver();
+    const resultPromise = startLiveTurn({ runId: "run-bg-diagnostic", timeoutMs: 3_600_000 });
+    await driver.stdout.waitReady();
+
+    driver.stdout.emit(
+      jsonl([
+        { type: "system", subtype: "init", session_id: "live-bg-diagnostic" },
+        {
+          type: "system",
+          subtype: "background_tasks_changed",
+          tasks: [{ task_id: "task-diag", task_type: "local_agent", description: "long work" }],
+        },
+        {
+          type: "result",
+          subtype: "success",
+          session_id: "live-bg-diagnostic",
+          result: "started",
+          stop_reason: "end_turn",
+        },
+      ]),
+    );
+    await waitForDiagnosticEventsDrained();
+
+    // The diagnostic watchdog must see the same liveness signal the session
+    // uses for its own no-output deadline.
+    expect(hasDiagnosticOutstandingBackgroundWork({ sessionKey: "agent:main:bg" })).toBe(true);
+
+    driver.stdout.emit(
+      jsonl([
+        { type: "system", subtype: "background_tasks_changed", tasks: [] },
+        {
+          type: "result",
+          subtype: "success",
+          session_id: "live-bg-diagnostic",
+          result: "done after wait",
+          origin: { kind: "task-notification" },
+        },
+      ]),
+    );
+    await resultPromise;
+    await waitForDiagnosticEventsDrained();
+
+    expect(hasDiagnosticOutstandingBackgroundWork({ sessionKey: "agent:main:bg" })).toBe(false);
   });
 
   it("still aborts on overall turn timeout while waiting for a never-finishing background task", async () => {

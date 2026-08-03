@@ -12,6 +12,10 @@ import {
   type DiagnosticLivenessWarningReason,
 } from "../infra/diagnostic-events.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import {
+  hasDiagnosticOutstandingBackgroundWork,
+  resetDiagnosticBackgroundWorkForTest,
+} from "./diagnostic-background-work.js";
 import { emitDiagnosticMemorySample, resetDiagnosticMemoryForTest } from "./diagnostic-memory.js";
 import {
   getCurrentDiagnosticPhase,
@@ -548,17 +552,26 @@ function isStalledModelCallRecoveryEligible(params: {
   classification: SessionAttentionClassification | undefined;
   activity?: DiagnosticSessionActivitySnapshot;
   stuckSessionAbortMs: number;
+  hasOutstandingBackgroundWork?: boolean;
 }): boolean {
   const lastProgressAgeMs = params.activity?.lastProgressAgeMs;
   // Local providers are not blanket-exempt from recovery. Streaming model
   // chunks refresh run activity while emitted progress events are throttled, so
   // active streams stay fresh and silent/non-streaming calls can be recovered.
+  // A run whose backend still reports outstanding background work is the one
+  // exception: its child emits nothing through the parent, so quiet time is not
+  // evidence of a wedge. Give only that case the same floor the CLI watchdog
+  // already grants it, and leave every other model call on the configured
+  // threshold.
+  const abortMs = params.hasOutstandingBackgroundWork
+    ? Math.max(params.stuckSessionAbortMs, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS)
+    : params.stuckSessionAbortMs;
   return (
     params.classification?.eventType === "session.stalled" &&
     params.classification.classification === "stalled_agent_run" &&
     params.classification.activeWorkKind === "model_call" &&
     typeof lastProgressAgeMs === "number" &&
-    lastProgressAgeMs >= params.stuckSessionAbortMs
+    lastProgressAgeMs >= abortMs
   );
 }
 
@@ -566,6 +579,7 @@ function isActiveAbortRecoveryEligible(params: {
   classification: SessionAttentionClassification | undefined;
   activity?: DiagnosticSessionActivitySnapshot;
   stuckSessionAbortMs: number;
+  hasOutstandingBackgroundWork?: boolean;
 }): boolean {
   return (
     isStalledEmbeddedRunRecoveryEligible(params) ||
@@ -1012,6 +1026,10 @@ export function logSessionAttention(
       classification,
       activity,
       stuckSessionAbortMs,
+      hasOutstandingBackgroundWork: hasDiagnosticOutstandingBackgroundWork({
+        sessionId: state.sessionId,
+        sessionKey: state.sessionKey,
+      }),
     });
   // The warning backoff throttles repeated log lines/events only. It must never
   // gate recovery: a recovery-eligible session has to return its classification
@@ -1332,6 +1350,10 @@ export function startDiagnosticHeartbeat(
             classification,
             activity,
             stuckSessionAbortMs,
+            hasOutstandingBackgroundWork: hasDiagnosticOutstandingBackgroundWork({
+              sessionId: state.sessionId,
+              sessionKey: state.sessionKey,
+            }),
           });
         if (!classification.recoveryEligible && !activeAbortEligible) {
           continue;
@@ -1381,6 +1403,7 @@ export function resetDiagnosticStateForTest(): void {
   resetDiagnosticSessionStateForTest();
   resetDiagnosticActivityForTest();
   resetDiagnosticRunActivityForTest();
+  resetDiagnosticBackgroundWorkForTest();
   webhookStats.received = 0;
   webhookStats.processed = 0;
   webhookStats.errors = 0;
