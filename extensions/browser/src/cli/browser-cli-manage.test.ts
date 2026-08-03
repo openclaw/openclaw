@@ -1,5 +1,5 @@
 // Browser tests cover browser cli manage plugin behavior.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createBrowserManageProgram,
   findBrowserManageCall,
@@ -621,6 +621,59 @@ describe("browser manage output", () => {
     expect(process.exitCode).toBe(1);
   });
 
+  it("shares one 24-second default budget across deep-doctor requests", async () => {
+    vi.useFakeTimers();
+    try {
+      getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
+        if (req.path === "/doctor") {
+          await new Promise<void>((resolve) => setTimeout(resolve, 5_000));
+          return {
+            ok: true,
+            status: {
+              enabled: true,
+              profile: "chrome",
+              driver: "extension",
+              transport: "extension",
+              running: true,
+              cdpReady: true,
+            },
+            checks: [
+              {
+                id: "live-snapshot",
+                label: "Live snapshot",
+                status: "pass",
+                summary: "snapshot succeeded",
+              },
+            ],
+          };
+        }
+        if (req.path === "/profiles") {
+          await new Promise<void>((resolve) => setTimeout(resolve, 4_000));
+          return { profiles: [{ name: "chrome", running: true }] };
+        }
+        if (req.path === "/tabs") {
+          return { running: true, tabs: [] };
+        }
+        return {};
+      });
+
+      const program = createBrowserManageProgram();
+      const pending = program.parseAsync(
+        ["browser", "--browser-profile", "chrome", "doctor", "--deep"],
+        { from: "user" },
+      );
+      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(4_000);
+      await pending;
+
+      expect(findBrowserManageCall("/doctor")?.[2]?.timeoutMs).toBe(24_000);
+      expect(findBrowserManageCall("/profiles")?.[2]?.timeoutMs).toBe(19_000);
+      expect(findBrowserManageCall("/tabs")?.[2]?.timeoutMs).toBe(15_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not report success when the canonical deep-doctor report is unsuccessful", async () => {
     getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
       if (req.path === "/doctor") {
@@ -700,7 +753,15 @@ describe("browser manage output", () => {
             running: false,
             cdpReady: false,
           },
-          checks: [],
+          checks: [
+            {
+              id: "live-snapshot",
+              label: "Live snapshot",
+              status: "fail",
+              summary: "Live snapshot probe requires a running browser profile.",
+              fixHint: "Start or connect the browser profile, then retry.",
+            },
+          ],
         };
       }
       if (req.path === "/profiles") {
@@ -713,6 +774,9 @@ describe("browser manage output", () => {
     await program.parseAsync(["browser", "doctor", "--deep"], { from: "user" });
 
     expect(lastRuntimeLog()).toContain("FAIL browser: not running");
+    expect(lastRuntimeLog()).toContain(
+      "FAIL live-snapshot: Live snapshot probe requires a running browser profile.",
+    );
     expect(findBrowserManageCall("/doctor")).toBeDefined();
     expect(findBrowserManageCall("/tabs")).toBeUndefined();
     expect(findBrowserManageCall("/snapshot")).toBeUndefined();

@@ -2,9 +2,20 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
-const { inspectChromeGraphicsDiagnosticsMock, takeChromeMcpSnapshotMock } = vi.hoisted(() => ({
+const {
+  captureAriaSnapshotViaPlaywrightMock,
+  inspectChromeGraphicsDiagnosticsMock,
+  takeChromeMcpSnapshotMock,
+} = vi.hoisted(() => ({
+  captureAriaSnapshotViaPlaywrightMock: vi.fn(),
   inspectChromeGraphicsDiagnosticsMock: vi.fn(),
   takeChromeMcpSnapshotMock: vi.fn(async () => ({})),
+}));
+
+vi.mock("../pw-ai-module.js", () => ({
+  getPwAiModule: vi.fn(async () => ({
+    captureAriaSnapshotViaPlaywright: captureAriaSnapshotViaPlaywrightMock,
+  })),
 }));
 
 vi.mock("../chrome-mcp.js", () => ({
@@ -189,6 +200,7 @@ function responseBodyRecord(response: { body: unknown }): Record<string, unknown
 
 describe("basic browser routes", () => {
   beforeEach(() => {
+    captureAriaSnapshotViaPlaywrightMock.mockReset();
     inspectChromeGraphicsDiagnosticsMock.mockReset();
     takeChromeMcpSnapshotMock.mockClear();
   });
@@ -272,6 +284,18 @@ describe("basic browser routes", () => {
   it("shares one live-probe deadline across tab selection and the Chrome MCP snapshot", async () => {
     vi.useFakeTimers();
     try {
+      takeChromeMcpSnapshotMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const options = args[0] as { signal?: AbortSignal } | undefined;
+        return await new Promise<never>((_resolve, reject) => {
+          const rejectOnAbort = () =>
+            reject(options?.signal?.reason ?? new Error("snapshot aborted"));
+          if (options?.signal?.aborted) {
+            rejectOnAbort();
+            return;
+          }
+          options?.signal?.addEventListener("abort", rejectOnAbort, { once: true });
+        });
+      });
       const state = createExistingSessionProfileState();
       const profileCtx = {
         ...(state.forProfile() as unknown as Record<string, unknown>),
@@ -305,15 +329,111 @@ describe("basic browser routes", () => {
       } as never);
       const response = createBrowserRouteResponse();
 
+      const startedAtMs = Date.now();
       const request = getHandlers.get("/doctor")?.(
         { params: {}, query: { profile: "chrome-live", deep: "true" } },
         response.res,
       );
+      let settled = false;
+      void request?.then(() => {
+        settled = true;
+      });
       await vi.advanceTimersByTimeAsync(2_000);
-      await request;
 
       expect(takeChromeMcpSnapshotMock).toHaveBeenCalledWith(
         expect.objectContaining({ timeoutMs: 10_000 }),
+      );
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await request;
+
+      expect(Date.now() - startedAtMs).toBe(12_000);
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toMatchObject({ ok: false });
+      expect((response.body as { checks?: unknown[] }).checks).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "live-snapshot",
+            status: "fail",
+          }),
+        ]),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves Playwright target and method context at the live-probe deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      captureAriaSnapshotViaPlaywrightMock.mockImplementationOnce(
+        async (options: { signal?: AbortSignal; targetId?: string; timeoutMs?: number }) =>
+          await new Promise<never>((_resolve, reject) => {
+            const timeoutMs = options.timeoutMs ?? 12_000;
+            const timer = setTimeout(
+              () =>
+                reject(
+                  new Error(
+                    `Aria snapshot via Playwright timed out after ${timeoutMs}ms ` +
+                      `(targetId=${options.targetId ?? "current"}, method=Accessibility.enable).`,
+                  ),
+                ),
+              timeoutMs,
+            );
+            options.signal?.addEventListener(
+              "abort",
+              () => {
+                clearTimeout(timer);
+                reject(options.signal?.reason ?? new Error("snapshot aborted"));
+              },
+              { once: true },
+            );
+          }),
+      );
+      const state = createManagedProfileState(
+        {
+          name: "chrome",
+          driver: "extension",
+          cdpPort: 31002,
+          cdpUrl: "http://127.0.0.1:31002",
+          attachOnly: true,
+        },
+        {
+          isHttpReachable: async () => true,
+          isTransportAvailable: async () => true,
+        },
+      );
+      const profileCtx = {
+        ...(state.forProfile() as unknown as Record<string, unknown>),
+        ensureTabAvailable: vi.fn(async () => ({
+          targetId: "extension-target-1",
+          title: "Example",
+          url: "https://example.com",
+          type: "page",
+        })),
+      };
+      const { app, getHandlers } = createBrowserRouteApp();
+      registerBrowserBasicRoutes(app, {
+        state: () => state,
+        forProfile: () => profileCtx,
+        mapTabError: vi.fn(() => null),
+      } as never);
+      const response = createBrowserRouteResponse();
+
+      const request = getHandlers.get("/doctor")?.(
+        { params: {}, query: { profile: "chrome", deep: "true" } },
+        response.res,
+      );
+      await vi.advanceTimersByTimeAsync(12_000);
+      await request;
+
+      const checks = responseBodyRecord(response).checks as Array<{
+        id?: string;
+        summary?: string;
+      }>;
+      expect(checks.find((check) => check.id === "live-snapshot")?.summary).toContain(
+        "targetId=extension-target-1, method=Accessibility.enable",
       );
     } finally {
       vi.useRealTimers();

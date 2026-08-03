@@ -188,6 +188,7 @@ export async function storeAriaSnapshotRefsViaPlaywright(opts: {
     (await getPageForTargetId({
       cdpUrl: opts.cdpUrl,
       targetId: opts.targetId,
+      signal: opts.signal,
     }));
   opts.signal?.throwIfAborted();
   await publishAriaRefsInOrder({

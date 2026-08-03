@@ -154,7 +154,7 @@ export function takeCachedPlaywrightBrowserConnection(cdpUrl: string): Connected
   if (pending) {
     // Invalidation must also retire an in-flight connect. Otherwise it can
     // resolve after cleanup and repopulate the cache with the stale pipe.
-    pending.attempt.cancelled = true;
+    cancelPendingBrowserConnection(pending);
   }
   connectingByCdpUrl.delete(normalized);
   if (!cur) {
@@ -164,6 +164,14 @@ export function takeCachedPlaywrightBrowserConnection(cdpUrl: string): Connected
     cur.browser.off("disconnected", cur.onDisconnected);
   }
   return cur;
+}
+
+function cancelPendingBrowserConnection(pending: PendingBrowserConnection): void {
+  if (pending.attempt.cancelled) {
+    return;
+  }
+  pending.attempt.cancelled = true;
+  pending.attempt.abortController.abort(new Error("Playwright connection attempt retired."));
 }
 
 /** Raised when a page target has been quarantined after policy denial. */
@@ -385,7 +393,9 @@ function observeBrowser(browser: Browser) {
 export async function connectBrowser(
   cdpUrl: string,
   ssrfPolicy?: SsrFPolicy,
+  signal?: AbortSignal,
 ): Promise<ConnectedBrowser> {
+  signal?.throwIfAborted();
   const normalized = normalizeCdpUrl(cdpUrl);
   const cached = cachedByCdpUrl.get(normalized);
   if (cached) {
@@ -394,12 +404,16 @@ export async function connectBrowser(
   // Run SSRF policy check only on cache miss so transient DNS failures
   // do not break active sessions that already hold a live CDP connection.
   await assertCdpEndpointAllowed(normalized, ssrfPolicy);
+  signal?.throwIfAborted();
   const connecting = connectingByCdpUrl.get(normalized);
   if (connecting) {
-    return await connecting.promise;
+    return await waitForPendingBrowserConnection(normalized, connecting, signal);
   }
 
-  const connectionAttempt: PendingBrowserConnection["attempt"] = { cancelled: false };
+  const connectionAttempt: PendingBrowserConnection["attempt"] = {
+    cancelled: false,
+    abortController: new AbortController(),
+  };
   const connectWithRetry = async (): Promise<ConnectedBrowser> => {
     let lastErr: unknown;
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -464,9 +478,7 @@ export async function connectBrowser(
           break;
         }
         const delay = resolveCdpConnectRetryDelayMs(attempt);
-        await new Promise((r) => {
-          setTimeout(r, delay);
-        });
+        await waitForPendingBrowserRetryDelay(delay, connectionAttempt);
       }
     }
     const message = lastErr ? formatErrorMessage(lastErr) : "CDP connect failed";
@@ -480,9 +492,67 @@ export async function connectBrowser(
       connectingByCdpUrl.delete(normalized);
     }
   });
-  connectingByCdpUrl.set(normalized, { attempt: connectionAttempt, promise: pending });
+  const pendingConnection: PendingBrowserConnection = {
+    attempt: connectionAttempt,
+    promise: pending,
+    waiters: 0,
+  };
+  connectingByCdpUrl.set(normalized, pendingConnection);
 
-  return await pending;
+  return await waitForPendingBrowserConnection(normalized, pendingConnection, signal);
+}
+
+async function waitForPendingBrowserRetryDelay(
+  delayMs: number,
+  attempt: PendingBrowserConnection["attempt"],
+): Promise<void> {
+  if (attempt.cancelled) {
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(finish, delayMs);
+    timer.unref?.();
+    const onAbort = () => finish();
+    function finish() {
+      clearTimeout(timer);
+      attempt.abortController.signal.removeEventListener("abort", onAbort);
+      resolve();
+    }
+    attempt.abortController.signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+async function waitForPendingBrowserConnection(
+  normalizedCdpUrl: string,
+  pending: PendingBrowserConnection,
+  signal?: AbortSignal,
+): Promise<ConnectedBrowser> {
+  pending.waiters += 1;
+  let abortListener: (() => void) | undefined;
+  try {
+    if (!signal) {
+      return await pending.promise;
+    }
+    signal.throwIfAborted();
+    void pending.promise.catch(() => {});
+    const aborted = new Promise<never>((_resolve, reject) => {
+      abortListener = () => {
+        if (pending.waiters === 1 && connectingByCdpUrl.get(normalizedCdpUrl) === pending) {
+          connectingByCdpUrl.delete(normalizedCdpUrl);
+          cancelPendingBrowserConnection(pending);
+        }
+        reject(signal.reason ?? new Error("Playwright connection aborted."));
+      };
+      signal.addEventListener("abort", abortListener, { once: true });
+    });
+    void aborted.catch(() => {});
+    return await Promise.race([pending.promise, aborted]);
+  } finally {
+    pending.waiters -= 1;
+    if (signal && abortListener) {
+      signal.removeEventListener("abort", abortListener);
+    }
+  }
 }
 
 export async function getAllPages(browser: Browser): Promise<Page[]> {
@@ -491,19 +561,31 @@ export async function getAllPages(browser: Browser): Promise<Page[]> {
   return pages;
 }
 
-async function partitionAccessiblePages(opts: { cdpUrl: string; pages: Page[] }): Promise<{
+async function partitionAccessiblePages(opts: {
+  cdpUrl: string;
+  pages: Page[];
+  signal?: AbortSignal;
+}): Promise<{
   accessible: Array<{ page: Page; targetId: string | null }>;
   blockedCount: number;
 }> {
   const accessible: Array<{ page: Page; targetId: string | null }> = [];
   let blockedCount = 0;
   for (const page of opts.pages) {
+    opts.signal?.throwIfAborted();
     if (isBlockedPageRef(opts.cdpUrl, page)) {
       blockedCount += 1;
       continue;
     }
     ensurePageState(page);
-    const targetId = (await pageTargetInfo(page).catch(() => null))?.targetId ?? null;
+    let targetInfo: PageTargetInfo | null = null;
+    try {
+      targetInfo = await pageTargetInfo(page, opts.signal);
+    } catch {
+      opts.signal?.throwIfAborted();
+    }
+    opts.signal?.throwIfAborted();
+    const targetId = targetInfo?.targetId ?? null;
     // Fail closed when we cannot resolve a target id while this session has
     // quarantined targets; otherwise a blocked tab can become selectable.
     if (!targetId) {
@@ -530,7 +612,11 @@ type PageTargetInfo = { targetId: string; title: string };
 // temporary CDP session. Settled reads evict themselves so later calls observe fresh metadata.
 const targetInfoReads = new WeakMap<Page, Promise<PageTargetInfo | null>>();
 
-async function readPageTargetInfo(page: Page): Promise<PageTargetInfo | null> {
+async function readPageTargetInfo(
+  page: Page,
+  signal?: AbortSignal,
+): Promise<PageTargetInfo | null> {
+  signal?.throwIfAborted();
   let session: CDPSession | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
@@ -550,14 +636,29 @@ async function readPageTargetInfo(page: Page): Promise<PageTargetInfo | null> {
     }, PLAYWRIGHT_TARGET_INFO_TIMEOUT_MS);
     timer.unref?.();
   });
+  let abortListener: (() => void) | undefined;
+  const aborted = signal
+    ? new Promise<never>((_resolve, reject) => {
+        abortListener = () => {
+          detach();
+          reject(signal.reason ?? new Error("Page target lookup aborted."));
+        };
+        signal.addEventListener("abort", abortListener, { once: true });
+      })
+    : undefined;
   const read = (async () => {
     session = await page.context().newCDPSession(page);
+    if (signal?.aborted) {
+      detach();
+      throw signal.reason ?? new Error("Page target lookup aborted.");
+    }
     if (timedOut) {
       detach();
       return null;
     }
     try {
       const { targetInfo } = await session.send("Target.getTargetInfo");
+      signal?.throwIfAborted();
       const targetId = normalizeOptionalString(targetInfo.targetId) ?? "";
       if (!targetId) {
         return null;
@@ -567,16 +668,24 @@ async function readPageTargetInfo(page: Page): Promise<PageTargetInfo | null> {
       detach();
     }
   })();
+  void read.catch(() => {});
+  void aborted?.catch(() => {});
   try {
-    return await Promise.race([read, timeout]);
+    return await Promise.race([read, timeout, ...(aborted ? [aborted] : [])]);
   } finally {
     if (timer) {
       clearTimeout(timer);
     }
+    if (signal && abortListener) {
+      signal.removeEventListener("abort", abortListener);
+    }
   }
 }
 
-export function pageTargetInfo(page: Page): Promise<PageTargetInfo | null> {
+export function pageTargetInfo(page: Page, signal?: AbortSignal): Promise<PageTargetInfo | null> {
+  if (signal) {
+    return readPageTargetInfo(page, signal);
+  }
   const existing = targetInfoReads.get(page);
   if (existing) {
     return existing;
@@ -602,22 +711,19 @@ async function getPageForTargetIdOnce(opts: {
   if (opts.targetId && isBlockedTarget(opts.cdpUrl, opts.targetId)) {
     throw new BlockedBrowserTargetError();
   }
-  const { browser } = await awaitPageLookupWithAbort(
-    connectBrowser(opts.cdpUrl, opts.ssrfPolicy),
-    opts.signal,
-  );
-  const pages = await awaitPageLookupWithAbort(getAllPages(browser), opts.signal);
+  const { browser } = await connectBrowser(opts.cdpUrl, opts.ssrfPolicy, opts.signal);
+  opts.signal?.throwIfAborted();
+  const pages = await getAllPages(browser);
+  opts.signal?.throwIfAborted();
   if (!pages.length) {
     throw new Error("No pages available in the connected browser.");
   }
 
-  const { accessible, blockedCount } = await awaitPageLookupWithAbort(
-    partitionAccessiblePages({
-      cdpUrl: opts.cdpUrl,
-      pages,
-    }),
-    opts.signal,
-  );
+  const { accessible, blockedCount } = await partitionAccessiblePages({
+    cdpUrl: opts.cdpUrl,
+    pages,
+    signal: opts.signal,
+  });
   opts.signal?.throwIfAborted();
   if (!accessible.length) {
     if (blockedCount > 0) {
@@ -636,27 +742,6 @@ async function getPageForTargetIdOnce(opts: {
     return found.page;
   }
   throw new BrowserTabNotFoundError();
-}
-
-async function awaitPageLookupWithAbort<T>(task: Promise<T>, signal?: AbortSignal): Promise<T> {
-  if (!signal) {
-    return await task;
-  }
-  void task.catch(() => {});
-  signal.throwIfAborted();
-  let abortListener: (() => void) | undefined;
-  const aborted = new Promise<never>((_resolve, reject) => {
-    abortListener = () => reject(signal.reason ?? new Error("Page lookup aborted"));
-    signal.addEventListener("abort", abortListener, { once: true });
-  });
-  void aborted.catch(() => {});
-  try {
-    return await Promise.race([task, aborted]);
-  } finally {
-    if (abortListener) {
-      signal.removeEventListener("abort", abortListener);
-    }
-  }
 }
 
 /** Resolve a Playwright page by target id, reconnecting once on stale state. */

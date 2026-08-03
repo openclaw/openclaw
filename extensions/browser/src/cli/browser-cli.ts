@@ -10,7 +10,7 @@ import {
 } from "openclaw/plugin-sdk/cli-runtime";
 import { resolveBrowserLazySubcommand } from "../../cli-output-mode.js";
 import { browserActionExamples, browserCoreExamples } from "./browser-cli-examples.js";
-import type { BrowserParentOpts } from "./browser-cli-shared.js";
+import { resolveBrowserParentOpts, type BrowserParentOpts } from "./browser-cli-shared.js";
 import {
   addGatewayClientOptions,
   danger,
@@ -156,10 +156,6 @@ function buildBrowserCommandGroups(params: {
     placeholders: entry.placeholders,
     register: async () => await entry.register(params),
   }));
-}
-
-function resolveBrowserParentOpts(cmd: Command): BrowserParentOpts {
-  return cmd.optsWithGlobals<BrowserParentOpts>();
 }
 
 function registerLazyBrowserCommands(

@@ -14,6 +14,21 @@ type MarkBackendDomRef = { ref: string; backendDOMNodeId: number };
 /** Attribute used to mark DOM nodes that correspond to generated browser refs. */
 export const BROWSER_REF_MARKER_ATTRIBUTE = "data-openclaw-browser-ref";
 
+const CLEAR_BROWSER_REF_MARKERS_EXPRESSION = `(() => {
+  const attribute = '${BROWSER_REF_MARKER_ATTRIBUTE}';
+  const clearRoot = (root) => {
+    root.querySelectorAll('[' + attribute + ']').forEach((element) =>
+      element.removeAttribute(attribute),
+    );
+    root.querySelectorAll('*').forEach((element) => {
+      if (element.shadowRoot) {
+        clearRoot(element.shadowRoot);
+      }
+    });
+  };
+  clearRoot(document);
+})()`;
+
 async function awaitWithAbort<T>(
   task: Promise<T>,
   signal?: AbortSignal,
@@ -152,7 +167,7 @@ export async function markBackendDomRefsOnPage(opts: {
         await sendPageCdpCommand(session, method, params, opts.signal);
 
       await send("Runtime.evaluate", {
-        expression: `document.querySelectorAll('[${BROWSER_REF_MARKER_ATTRIBUTE}]').forEach((element) => element.removeAttribute('${BROWSER_REF_MARKER_ATTRIBUTE}'))`,
+        expression: CLEAR_BROWSER_REF_MARKERS_EXPRESSION,
         returnByValue: true,
       }).catch(() => {});
       opts.signal?.throwIfAborted();

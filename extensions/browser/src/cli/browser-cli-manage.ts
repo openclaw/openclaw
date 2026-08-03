@@ -4,10 +4,12 @@
  */
 import type { Command } from "commander";
 import type { BrowserDoctorReport } from "../browser-runtime.js";
+import { BROWSER_DEEP_DOCTOR_REQUEST_TIMEOUT_MS } from "../browser/cdp-timeouts.js";
 import { formatBrowserGraphicsSummary } from "../browser/chrome.graphics.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
   callBrowserRequest,
+  parseBrowserPositiveIntegerOption,
   parseBrowserPositiveIntegerValue,
   printBrowserJsonResult as printJsonResult,
   resolveBrowserProfileQuery as resolveProfileQuery,
@@ -69,6 +71,7 @@ async function callTabAction(
 async function fetchBrowserStatus(
   parent: BrowserParentOpts,
   profile?: string,
+  timeoutMs = BROWSER_MANAGE_REQUEST_TIMEOUT_MS,
 ): Promise<BrowserStatus> {
   return await callBrowserRequest<BrowserStatus>(
     parent,
@@ -78,7 +81,7 @@ async function fetchBrowserStatus(
       query: resolveProfileQuery(profile),
     },
     {
-      timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS,
+      timeoutMs,
     },
   );
 }
@@ -170,10 +173,28 @@ function formatBrowserDoctorGatewayError(error: unknown): string {
   return "Gateway auth SecretRef is unavailable in this command path; browser doctor cannot reach the admin-scoped browser.request endpoint. Set OPENCLAW_GATEWAY_TOKEN or OPENCLAW_GATEWAY_PASSWORD, then retry.";
 }
 
+function resolveBrowserDoctorTimeoutMs(parent: BrowserParentOpts, deep: boolean): number {
+  if (typeof parent.timeout === "string" && !parent.timeoutIsDefault) {
+    return parseBrowserPositiveIntegerOption(parent.timeout, "--timeout");
+  }
+  return deep ? BROWSER_DEEP_DOCTOR_REQUEST_TIMEOUT_MS : BROWSER_MANAGE_REQUEST_TIMEOUT_MS;
+}
+
+function remainingBrowserDoctorTimeoutMs(deadlineAtMs: number, totalTimeoutMs: number): number {
+  const remainingMs = deadlineAtMs - Date.now();
+  if (remainingMs <= 0) {
+    throw new Error(`Browser doctor timed out after ${totalTimeoutMs}ms.`);
+  }
+  return Math.max(1, Math.floor(remainingMs));
+}
+
 async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, deep?: boolean) {
   const checks: BrowserDoctorCheck[] = [];
   let status: BrowserStatus;
   let canonicalDoctor: BrowserDoctorReport | null = null;
+  const totalTimeoutMs = resolveBrowserDoctorTimeoutMs(parent, deep === true);
+  const deadlineAtMs = Date.now() + totalTimeoutMs;
+  const remainingTimeoutMs = () => remainingBrowserDoctorTimeoutMs(deadlineAtMs, totalTimeoutMs);
 
   try {
     if (deep) {
@@ -184,11 +205,11 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
           path: "/doctor",
           query: resolveProfileQuery(profile, { deep: true }),
         },
-        { timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS },
+        { timeoutMs: remainingTimeoutMs() },
       );
       status = canonicalDoctor.status;
     } else {
-      status = await fetchBrowserStatus(parent, profile);
+      status = await fetchBrowserStatus(parent, profile, remainingTimeoutMs());
     }
     checks.push({
       name: "gateway",
@@ -234,7 +255,7 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
     const profiles = await callBrowserRequest<{ profiles: ProfileStatus[] }>(
       parent,
       { method: "GET", path: "/profiles" },
-      { timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS },
+      { timeoutMs: remainingTimeoutMs() },
     );
     checks.push({
       name: "profiles",
@@ -258,7 +279,7 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
           path: "/tabs",
           query: resolveProfileQuery(profile),
         },
-        { timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS },
+        { timeoutMs: remainingTimeoutMs() },
       );
       const tabs = result.tabs ?? [];
       checks.push({
@@ -275,29 +296,15 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
     }
   }
 
-  if (deep && status.running) {
-    const liveSnapshot = canonicalDoctor?.checks.find((check) => check.id === "live-snapshot");
-    if (!liveSnapshot) {
+  if (deep && canonicalDoctor) {
+    if (!canonicalDoctor.checks.some((check) => check.id === "live-snapshot")) {
       checks.push({
         name: "live-snapshot",
         ok: false,
         detail: "canonical browser doctor returned no live snapshot result",
       });
-    } else {
-      checks.push({
-        name: liveSnapshot.id,
-        ok: liveSnapshot.status !== "fail",
-        warning: liveSnapshot.status === "warn" || liveSnapshot.status === "info",
-        detail: liveSnapshot.summary,
-      });
     }
-  }
-
-  if (deep && canonicalDoctor) {
     for (const canonicalCheck of canonicalDoctor.checks) {
-      if (canonicalCheck.id === "live-snapshot") {
-        continue;
-      }
       const mapped = mapCanonicalDoctorCheck(canonicalCheck);
       if (!checks.some((check) => check.name === mapped.name)) {
         checks.push(mapped);

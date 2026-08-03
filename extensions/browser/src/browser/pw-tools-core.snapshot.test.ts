@@ -413,6 +413,43 @@ describe("pw-tools-core aria snapshot storage", () => {
     expect(storeRoleRefsForTarget).not.toHaveBeenCalled();
   });
 
+  it("passes ref-publication cancellation into a pending page lookup", async () => {
+    const controller = new AbortController();
+    const cancellation = new Error("ref publication lookup cancelled");
+    getPageForTargetId.mockImplementationOnce(
+      async (options: { signal?: AbortSignal }) =>
+        await new Promise<never>((_resolve, reject) => {
+          const rejectOnAbort = () => reject(options.signal?.reason ?? new Error("aborted"));
+          if (options.signal?.aborted) {
+            rejectOnAbort();
+            return;
+          }
+          options.signal?.addEventListener("abort", rejectOnAbort, { once: true });
+        }),
+    );
+
+    const mod = await import("./pw-tools-core.snapshot.js");
+    const pending = mod.storeAriaSnapshotRefsViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      signal: controller.signal,
+      nodes: [],
+    });
+    void pending.catch(() => {});
+    await vi.waitFor(() => expect(getPageForTargetId).toHaveBeenCalledOnce());
+
+    expect(getPageForTargetId).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      signal: controller.signal,
+    });
+    controller.abort(cancellation);
+
+    await expect(pending).rejects.toBe(cancellation);
+    expect(markBackendDomRefsOnPage).not.toHaveBeenCalled();
+    expect(storeRoleRefsForTarget).not.toHaveBeenCalled();
+  });
+
   it("uses the default aria node limit for non-finite limits", async () => {
     const page = { id: "page-1" };
     const rawNodes = [{ nodeId: "1" }];

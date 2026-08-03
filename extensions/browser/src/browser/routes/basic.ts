@@ -274,27 +274,19 @@ async function runBrowserLiveProbe(
 ) {
   const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
   const deadlineAtMs = Date.now() + LIVE_SNAPSHOT_PROBE_TIMEOUT_MS;
+  const deadlineAbort = new AbortController();
+  const deadlineTimer = setTimeout(
+    () => {
+      deadlineAbort.abort(
+        new Error(`Live snapshot probe timed out after ${LIVE_SNAPSHOT_PROBE_TIMEOUT_MS}ms.`),
+      );
+    },
+    Math.max(1, deadlineAtMs - Date.now()),
+  );
+  deadlineTimer.unref?.();
+  const probeSignal = AbortSignal.any([signal, deadlineAbort.signal]);
   try {
-    const tabSelectionAbort = new AbortController();
-    const tabSelectionTimer = setTimeout(
-      () => {
-        tabSelectionAbort.abort(
-          new Error(
-            `Live snapshot probe timed out after ${LIVE_SNAPSHOT_PROBE_TIMEOUT_MS}ms during tab selection.`,
-          ),
-        );
-      },
-      Math.max(1, deadlineAtMs - Date.now()),
-    );
-    tabSelectionTimer.unref?.();
-    let tab;
-    try {
-      tab = await profileCtx.ensureTabAvailable(undefined, {
-        signal: AbortSignal.any([signal, tabSelectionAbort.signal]),
-      });
-    } finally {
-      clearTimeout(tabSelectionTimer);
-    }
+    const tab = await profileCtx.ensureTabAvailable(undefined, { signal: probeSignal });
     const remainingTimeoutMs = Math.max(1, deadlineAtMs - Date.now());
     if (capabilities.usesChromeMcp) {
       await takeChromeMcpSnapshot({
@@ -302,7 +294,7 @@ async function runBrowserLiveProbe(
         profile: profileCtx.profile,
         targetId: tab.targetId,
         timeoutMs: remainingTimeoutMs,
-        signal,
+        signal: probeSignal,
       });
       return {
         id: "live-snapshot",
@@ -311,6 +303,12 @@ async function runBrowserLiveProbe(
         summary: `Chrome MCP snapshot succeeded on ${tab.suggestedTargetId ?? tab.targetId}`,
       };
     }
+    // The CDP/Playwright snapshot owners already turn the remaining numeric
+    // budget into a single abort signal that records the active target and
+    // method. Keep request cancellation, but do not let the route-level
+    // deadline race that contextual timeout and replace it with a generic
+    // live-probe error. Chrome MCP still needs probeSignal above because its
+    // lock wait and tool call would otherwise each restart the same budget.
     const snap = tab.wsUrl
       ? await snapshotAria({
           wsUrl: tab.wsUrl,
@@ -332,7 +330,7 @@ async function runBrowserLiveProbe(
             ssrfPolicy: ctx.state().resolved.ssrfPolicy,
           });
         })();
-    signal.throwIfAborted();
+    probeSignal.throwIfAborted();
     return {
       id: "live-snapshot",
       label: "Live snapshot",
@@ -353,6 +351,8 @@ async function runBrowserLiveProbe(
       summary: String(err),
       fixHint: "Run openclaw browser start, then retry with openclaw browser doctor --deep.",
     };
+  } finally {
+    clearTimeout(deadlineTimer);
   }
 }
 

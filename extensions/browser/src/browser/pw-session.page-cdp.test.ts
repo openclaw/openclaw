@@ -1,4 +1,5 @@
 // Browser tests cover pw session.page cdp plugin behavior.
+import vm from "node:vm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   BROWSER_REF_MARKER_ATTRIBUTE,
@@ -135,6 +136,77 @@ describe("pw-session page-scoped CDP client", () => {
     );
     expect(sessionDetach).toHaveBeenCalledOnce();
     expect(marked).toEqual(new Set());
+  });
+
+  it("clears a previous snapshot marker inside an open shadow root", async () => {
+    type FakeElement = {
+      attributes: Map<string, string>;
+      removeAttribute: ReturnType<typeof vi.fn>;
+      shadowRoot?: FakeRoot;
+    };
+    type FakeRoot = {
+      querySelectorAll: (selector: string) => FakeElement[];
+    };
+    const createElement = (): FakeElement => {
+      const attributes = new Map<string, string>();
+      return {
+        attributes,
+        removeAttribute: vi.fn((name: string) => attributes.delete(name)),
+      };
+    };
+    const createRoot = (elements: FakeElement[]): FakeRoot => ({
+      querySelectorAll: (selector: string) =>
+        selector === "*"
+          ? elements
+          : elements.filter((element) => element.attributes.has(BROWSER_REF_MARKER_ATTRIBUTE)),
+    });
+    const staleShadowElement = createElement();
+    const shadowRoot = createRoot([staleShadowElement]);
+    const shadowHost = { ...createElement(), shadowRoot };
+    const currentLightElement = createElement();
+    const documentRoot = createRoot([shadowHost, currentLightElement]);
+    const elementByNodeId = new Map([
+      [101, staleShadowElement],
+      [202, currentLightElement],
+    ]);
+    let snapshotIndex = 0;
+    const sessionSend = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "Runtime.evaluate") {
+        vm.runInNewContext(String(params?.expression), { document: documentRoot });
+      }
+      if (method === "DOM.pushNodesByBackendIdsToFrontend") {
+        snapshotIndex += 1;
+        return { nodeIds: [snapshotIndex === 1 ? 101 : 202] };
+      }
+      if (method === "DOM.setAttributeValue") {
+        const element = elementByNodeId.get(Number(params?.nodeId));
+        element?.attributes.set(String(params?.name), String(params?.value));
+      }
+      return {};
+    });
+    const page = {
+      context: () => ({
+        newCDPSession: vi.fn(async () => ({
+          send: sessionSend,
+          detach: vi.fn(async () => {}),
+        })),
+      }),
+    };
+
+    await markBackendDomRefsOnPage({
+      page: page as never,
+      refs: [{ ref: "ax1", backendDOMNodeId: 42 }],
+    });
+    expect(staleShadowElement.attributes.get(BROWSER_REF_MARKER_ATTRIBUTE)).toBe("ax1");
+
+    await markBackendDomRefsOnPage({
+      page: page as never,
+      refs: [{ ref: "ax1", backendDOMNodeId: 84 }],
+    });
+
+    expect(staleShadowElement.attributes.has(BROWSER_REF_MARKER_ATTRIBUTE)).toBe(false);
+    expect(staleShadowElement.removeAttribute).toHaveBeenCalledWith(BROWSER_REF_MARKER_ATTRIBUTE);
+    expect(currentLightElement.attributes.get(BROWSER_REF_MARKER_ATTRIBUTE)).toBe("ax1");
   });
 
   it("stops after marker cleanup when publication is aborted", async () => {

@@ -1,6 +1,7 @@
 /**
  * Shared Browser CLI option parsing and gateway request helpers.
  */
+import type { Command } from "commander";
 import {
   parseStrictNonNegativeInteger,
   parseStrictPositiveInteger,
@@ -18,11 +19,26 @@ import { callGatewayFromCli, type GatewayRpcOpts } from "./core-api.js";
 export type BrowserParentOpts = GatewayRpcOpts & {
   json?: boolean;
   browserProfile?: string;
+  /** True when Commander supplied the generic Gateway timeout default. */
+  timeoutIsDefault?: boolean;
 };
 
 /** Help text for user-facing tab references accepted by Browser CLI commands. */
 export const BROWSER_TAB_REFERENCE_HELP =
   "Tab reference: suggested target id, tab id, label, raw target id, or unique raw prefix";
+
+/** Resolve Browser parent options while preserving whether timeout came from Commander defaults. */
+export function resolveBrowserParentOpts(cmd: Command): BrowserParentOpts {
+  const opts = cmd.optsWithGlobals<BrowserParentOpts>();
+  let browserCommand: Command | null = cmd;
+  while (browserCommand && browserCommand.name() !== "browser") {
+    browserCommand = browserCommand.parent;
+  }
+  return {
+    ...opts,
+    timeoutIsDefault: browserCommand?.getOptionValueSource("timeout") === "default",
+  };
+}
 
 type BrowserRequestParams = {
   method: "GET" | "POST" | "DELETE";
@@ -105,16 +121,29 @@ export async function callBrowserRequest<T>(
   params: BrowserRequestParams,
   extra?: { timeoutMs?: number; progress?: boolean },
 ): Promise<T> {
-  const resolvedTimeout =
+  const requestTimeoutMs =
     typeof extra?.timeoutMs === "number" && Number.isFinite(extra.timeoutMs)
       ? normalizeBrowserTimerDelayMs(extra.timeoutMs)
-      : typeof opts.timeout === "string"
-        ? normalizeBrowserTimerDelayMs(parseBrowserPositiveIntegerOption(opts.timeout, "--timeout"))
-        : undefined;
-  const timeout = resolvedTimeout === undefined ? opts.timeout : String(resolvedTimeout);
+      : undefined;
+  const parentTimeoutMs =
+    typeof opts.timeout === "string"
+      ? normalizeBrowserTimerDelayMs(parseBrowserPositiveIntegerOption(opts.timeout, "--timeout"))
+      : undefined;
+  const resolvedTimeoutMs =
+    requestTimeoutMs !== undefined && parentTimeoutMs !== undefined
+      ? opts.timeoutIsDefault
+        ? requestTimeoutMs
+        : Math.min(requestTimeoutMs, parentTimeoutMs)
+      : (requestTimeoutMs ?? parentTimeoutMs);
+  const resolvedTimeout =
+    typeof resolvedTimeoutMs === "number" && Number.isFinite(resolvedTimeoutMs)
+      ? resolvedTimeoutMs
+      : undefined;
+  const timeout = typeof resolvedTimeout === "number" ? String(resolvedTimeout) : opts.timeout;
+  const { timeoutIsDefault: _timeoutIsDefault, ...gatewayOpts } = opts;
   const payload = await callGatewayFromCli(
     BROWSER_REQUEST_GATEWAY_METHOD,
-    { ...opts, timeout },
+    { ...gatewayOpts, timeout },
     {
       method: params.method,
       path: params.path,

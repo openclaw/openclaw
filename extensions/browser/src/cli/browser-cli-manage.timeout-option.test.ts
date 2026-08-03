@@ -74,4 +74,48 @@ describe("browser manage start timeout option", () => {
     const openCall = findBrowserManageCall("/tabs/open");
     expect(openCall?.[2]).toEqual({ timeoutMs: 45_000 });
   });
+
+  it("honors an explicit parent timeout as the whole deep-doctor budget", async () => {
+    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
+      if (req.path === "/doctor") {
+        return {
+          ok: true,
+          status: {
+            enabled: true,
+            profile: "chrome",
+            driver: "extension",
+            transport: "extension",
+            running: true,
+            cdpReady: true,
+          },
+          checks: [
+            {
+              id: "live-snapshot",
+              label: "Live snapshot",
+              status: "pass",
+              summary: "snapshot succeeded",
+            },
+          ],
+        };
+      }
+      if (req.path === "/profiles") {
+        return { profiles: [{ name: "chrome", running: true }] };
+      }
+      if (req.path === "/tabs") {
+        return { running: true, tabs: [] };
+      }
+      return {};
+    });
+
+    const program = createBrowserManageProgram({ withParentTimeout: true });
+    await program.parseAsync(["browser", "--timeout", "1000", "doctor", "--deep"], {
+      from: "user",
+    });
+
+    for (const path of ["/doctor", "/profiles", "/tabs"]) {
+      const timeoutMs = findBrowserManageCall(path)?.[2]?.timeoutMs;
+      expect(timeoutMs).toBeGreaterThan(0);
+      expect(timeoutMs).toBeLessThanOrEqual(1_000);
+    }
+  });
 });
