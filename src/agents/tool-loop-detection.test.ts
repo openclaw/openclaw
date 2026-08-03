@@ -1164,6 +1164,43 @@ describe("tool-loop-detection", () => {
       });
     });
 
+    it("resets the terminal-failure tail when only a diagnostic number changes meaning", () => {
+      const state = createState();
+      const probe = { command: "curl -sf http://127.0.0.1:9233/json/version" };
+
+      for (let index = 0; index < CRITICAL_THRESHOLD - 1; index += 1) {
+        recordSuccessfulCall(
+          state,
+          "exec",
+          probe,
+          createExecLoopResult({
+            status: "failed",
+            exitCode: 22,
+            output: `curl: server replied with errno 111 at 12:0${index % 10}:33`,
+          }),
+          index,
+        );
+      }
+      // Same command, same exit code, and only a number changed - but that
+      // number names the failure cause, so it is new information.
+      recordSuccessfulCall(
+        state,
+        "exec",
+        probe,
+        createExecLoopResult({
+          status: "failed",
+          exitCode: 22,
+          output: "curl: server replied with errno 113 at 12:09:33",
+        }),
+        CRITICAL_THRESHOLD,
+      );
+
+      expect(detectToolCallLoop(state, "exec", probe, enabledLoopDetectionConfig)).toMatchObject({
+        level: "warning",
+        detector: "generic_repeat",
+      });
+    });
+
     it("keeps a succeeding exec command out of the terminal-failure streak", () => {
       const state = createState();
       const params = { command: "docker exec alist /opt/alist/alist admin set admin123" };
