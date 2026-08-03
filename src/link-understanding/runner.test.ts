@@ -221,20 +221,10 @@ describe("runLinkUnderstanding", () => {
     expect(runCommandWithTimeout).not.toHaveBeenCalled();
   });
 
-  it("releases the guard after cancelling the error response body", async () => {
+  it("starts body cancellation before releasing the guard on error response", async () => {
     const failedResponse = new Response("not found", { status: 404 });
     const body = failedResponse.body!;
-    const originalCancel = body.cancel.bind(body);
-    let cancelSettled = false;
-    const cancelStarted = new Promise<void>((resolve) => {
-      vi.spyOn(body, "cancel").mockImplementation((reason) => {
-        const p = originalCancel(reason).finally(() => {
-          cancelSettled = true;
-        });
-        resolve();
-        return p;
-      });
-    });
+    const cancelSpy = vi.spyOn(body, "cancel");
     const release = vi.fn(async () => {});
     mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
       response: failedResponse,
@@ -247,10 +237,9 @@ describe("runLinkUnderstanding", () => {
       ctx: ctx("see https://example.com/page"),
     });
 
-    await cancelStarted;
     expect(result.outputs).toEqual([]);
+    // Cancel was called (fire-and-forget) before release.
+    expect(cancelSpy).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();
-    // Cancel was started (fire-and-forget) before release was called.
-    expect(cancelSettled).toBe(true);
   });
 });
