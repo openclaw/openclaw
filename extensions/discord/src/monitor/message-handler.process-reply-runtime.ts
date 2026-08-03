@@ -3,6 +3,7 @@ import {
   createChannelMessageReplyPipeline,
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { logInfo } from "openclaw/plugin-sdk/logging-core";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
@@ -14,6 +15,7 @@ import { readLatestAssistantTextByIdentity } from "openclaw/plugin-sdk/session-t
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { discordInboundEventDelivery } from "../inbound-event-delivery.js";
 import type { RequestClient } from "../internal/discord.js";
+import { resolveTimestampMs } from "./format.js";
 import { buildDiscordMessageProcessContext } from "./message-handler.context.js";
 import { createDiscordDraftPreviewController } from "./message-handler.draft-preview.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
@@ -93,6 +95,7 @@ export function createDiscordMessageReplyRuntime(params: {
     guildHistories,
     historyLimit,
     textLimit,
+    message,
     messageChannelId,
     isDirectMessage,
     route,
@@ -101,6 +104,7 @@ export function createDiscordMessageReplyRuntime(params: {
   const typingChannelId = deliverTarget.startsWith("channel:")
     ? deliverTarget.slice("channel:".length)
     : messageChannelId;
+  let typingLatencyLogged = false;
   let typingFeedback: ReturnType<typeof createDiscordReplyTypingFeedback> | undefined;
   const getTypingFeedback = () =>
     (typingFeedback ??= createDiscordReplyTypingFeedback({
@@ -121,7 +125,29 @@ export function createDiscordMessageReplyRuntime(params: {
     // The core lifecycle reaches this callback only after reply admission.
     // Silent pre-dispatch outcomes therefore never allocate or emit feedback.
     typingCallbacks: {
-      onReplyStart: () => getTypingFeedback().onReplyStart(),
+      onReplyStart: () => {
+        // Inbound→typing latency, recorded where it happens: sinceMessageMs is
+        // the user-perceived gap (Discord message creation → first typing
+        // call, network + ingress + preflight included); sinceDispatchMs
+        // isolates the post-dispatch share. Their difference is the
+        // pre-dispatch (ingress/prune/preflight) share — the segment invisible
+        // to gateway-internal prompt_build→first_llm timing.
+        if (!typingLatencyLogged) {
+          typingLatencyLogged = true;
+          const now = Date.now();
+          const messageTimestampMs = resolveTimestampMs(message.timestamp) ?? 0;
+          // logInfo is the always-on console emitter (journald-visible). NOT the
+          // runtime-env `info`, which is a theme FORMATTER that discards its
+          // output — that identifier mixup silenced this metric once already.
+          const sinceMessage =
+            messageTimestampMs > 0 ? ` sinceMessageMs=${now - messageTimestampMs}` : "";
+          logInfo(
+            `[discord] inbound→typing latency channel=${typingChannelId}${sinceMessage} ` +
+              `sinceDispatchMs=${now - params.dispatchStartedAt}`,
+          );
+        }
+        return getTypingFeedback().onReplyStart();
+      },
       onIdle: () => typingFeedback?.onIdle?.(),
       onCleanup: () => typingFeedback?.onCleanup?.(),
     },

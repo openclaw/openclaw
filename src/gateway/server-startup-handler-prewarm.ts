@@ -1,4 +1,4 @@
-import { listAgentIds } from "../agents/agent-scope-config.js";
+import { listAgentIds, resolveConfiguredAgentWorkspaceDirs } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { scheduleGatewayIdleTask, type GatewayIdleTaskHandle } from "./server-idle-task.js";
@@ -82,6 +82,29 @@ function dashboardDataPrewarmItems(
           return;
         }
         await prewarmGatewaySessionListData(cfg, agentId);
+      },
+    })),
+    // Dispatch resolves the runtime plugin registry under a per-agent-workspace
+    // cache key; a cold key pays a multi-second synchronous load that freezes
+    // the whole event loop on that agent's FIRST message. Warm every
+    // configured workspace's key here instead, while nobody is waiting.
+    ...resolveConfiguredAgentWorkspaceDirs(cfg).map((workspaceDir, index) => ({
+      name: `runtime-plugins.${index}`,
+      load: async () => {
+        const { ensureRuntimePluginsLoaded } = await import("../agents/runtime-plugins.js");
+        ensureRuntimePluginsLoaded({ config: cfg, workspaceDir });
+      },
+    })),
+    // getReply resolves the published model-catalog owner per agent before its
+    // first traced phase; a cold catalog runs live provider discovery (5s
+    // timeout per provider) plus a manifest-model scan — measured 16s on an
+    // agent's first message. Warm each agent's catalog after the registries.
+    ...agentIds.map((agentId) => ({
+      name: `model-catalog.${agentId}`,
+      load: async () => {
+        const { loadResolvedPublishedModelCatalogOwner } =
+          await import("../agents/prepared-model-catalog.js");
+        await loadResolvedPublishedModelCatalogOwner({ agentId });
       },
     })),
     {

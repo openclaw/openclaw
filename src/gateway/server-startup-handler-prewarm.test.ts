@@ -29,6 +29,14 @@ const mocks = vi.hoisted(() => ({
   prewarmSessionCatalogList: vi.fn(async (params: { agentId: string }) => {
     mocks.events.push(`catalog.${params.agentId}`);
   }),
+  ensureRuntimePluginsLoaded: vi.fn((params: { workspaceDir?: string }) => {
+    mocks.events.push(`runtime-plugins.${params.workspaceDir ?? ""}`);
+    return undefined;
+  }),
+  loadResolvedPublishedModelCatalogOwner: vi.fn(async (params: { agentId: string }) => {
+    mocks.events.push(`model-catalog.${params.agentId}`);
+    return {};
+  }),
 }));
 
 vi.mock("../config/sessions/combined-store-gateway.js", () => ({
@@ -48,6 +56,23 @@ vi.mock("./server-methods/session-catalog.js", () => ({
   prewarmSessionCatalogList: mocks.prewarmSessionCatalogList,
 }));
 
+vi.mock("../agents/runtime-plugins.js", () => ({
+  ensureRuntimePluginsLoaded: mocks.ensureRuntimePluginsLoaded,
+}));
+
+vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadResolvedPublishedModelCatalogOwner: mocks.loadResolvedPublishedModelCatalogOwner,
+}));
+
+vi.mock("../agents/agent-scope-config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/agent-scope-config.js")>();
+  return {
+    ...actual,
+    // Keep workspace-dir derivation deterministic for order assertions.
+    resolveConfiguredAgentWorkspaceDirs: () => ["/ws/main", "/ws/research"],
+  };
+});
+
 const { scheduleGatewayHandlerPrewarm } = await import("./server-startup-handler-prewarm.js");
 
 beforeEach(() => {
@@ -61,6 +86,8 @@ beforeEach(() => {
   mocks.listSessionsFromStoreAsync.mockClear();
   mocks.listManagedPlugins.mockClear();
   mocks.prewarmSessionCatalogList.mockClear();
+  mocks.ensureRuntimePluginsLoaded.mockClear();
+  mocks.loadResolvedPublishedModelCatalogOwner.mockClear();
 });
 
 afterEach(() => {
@@ -89,6 +116,10 @@ describe("scheduleGatewayHandlerPrewarm", () => {
       "sessions.rows.main",
       "sessions.load.research",
       "sessions.rows.research",
+      "runtime-plugins./ws/main",
+      "runtime-plugins./ws/research",
+      "model-catalog.main",
+      "model-catalog.research",
       "plugins",
       "catalog.main",
       "catalog.research",
@@ -252,7 +283,14 @@ describe("scheduleGatewayHandlerPrewarm", () => {
     });
     await vi.runAllTimersAsync();
 
-    expect(mocks.events).toEqual(["sessions.count", "plugins"]);
+    expect(mocks.events).toEqual([
+      "sessions.count",
+      "runtime-plugins./ws/main",
+      "runtime-plugins./ws/research",
+      "model-catalog.main",
+      "model-catalog.research",
+      "plugins",
+    ]);
     expect(mocks.prewarmSessionCatalogList).not.toHaveBeenCalled();
     expect(info).toHaveBeenCalledWith(
       "skipping optional dashboard session prewarm: combined stores exceed 2000 rows",
