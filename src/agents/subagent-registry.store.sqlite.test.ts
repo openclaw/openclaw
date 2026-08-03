@@ -281,7 +281,6 @@ describe("subagent registry sqlite store", () => {
     });
   });
 
-<<<<<<< HEAD
   it("promotes legacy retained results into canonical completion state once", async () => {
     await withTempStateEnv(async () => {
       const run = createRun({
