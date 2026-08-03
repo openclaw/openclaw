@@ -1,6 +1,6 @@
 // Comfy tests cover image generation provider plugin behavior.
 import type { LookupAddress } from "node:dns";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
@@ -15,7 +15,9 @@ import {
   parseComfyJsonBody,
 } from "./test-helpers.js";
 import { setComfyFetchGuardForTesting } from "./test-support.js";
-const COMFY_WORKFLOW_FILE_MAX_BYTES = 16 * 1024 * 1024;
+import { DEFAULT_COMFY_WORKFLOW_FILE_MAX_BYTES } from "./workflow-runtime.js";
+
+const PREVIOUS_COMFY_WORKFLOW_FILE_MAX_BYTES = 16 * 1024 * 1024;
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -489,10 +491,60 @@ describe("comfy image-generation provider", () => {
     }
   });
 
+  it("submits parseable workflow JSON larger than the previous 16 MiB boundary", async () => {
+    const tempRoot = await makeTempWorkflowDir("openclaw-comfy-workflow-");
+    const workflowPath = path.join(tempRoot, "large-workflow.json");
+    try {
+      await writeFile(
+        workflowPath,
+        JSON.stringify({
+          "6": {
+            class_type: "CLIPTextEncode",
+            inputs: { text: "" },
+            _meta: { title: "x".repeat(PREVIOUS_COMFY_WORKFLOW_FILE_MAX_BYTES) },
+          },
+          "9": { class_type: "SaveImage", inputs: {} },
+        }),
+        "utf8",
+      );
+      setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+      mockLocalImageResponses("large-workflow-path-prompt-1");
+
+      const provider = buildComfyImageGenerationProvider();
+      const result = await provider.generateImage({
+        provider: "comfy",
+        model: "workflow",
+        prompt: "draw a large workflow file",
+        cfg: buildComfyConfig({
+          workflowFileMaxBytes: DEFAULT_COMFY_WORKFLOW_FILE_MAX_BYTES,
+          image: {
+            workflowPath,
+            promptNodeId: "6",
+            outputNodeId: "9",
+          },
+        }),
+      });
+
+      expect(result.metadata?.promptId).toBe("large-workflow-path-prompt-1");
+      expect(parseJsonBody(1)).toMatchObject({
+        prompt: {
+          "6": {
+            class_type: "CLIPTextEncode",
+            inputs: { text: "draw a large workflow file" },
+          },
+          "9": { class_type: "SaveImage", inputs: {} },
+        },
+      });
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it("rejects oversized local workflowPath files before Comfy HTTP calls", async () => {
     const tempRoot = await makeTempWorkflowDir("openclaw-comfy-workflow-");
     const workflowPath = path.join(tempRoot, "oversized-workflow.json");
-    await writeFile(workflowPath, "x".repeat(COMFY_WORKFLOW_FILE_MAX_BYTES + 1), "utf8");
+    await writeFile(workflowPath, "", "utf8");
+    await truncate(workflowPath, DEFAULT_COMFY_WORKFLOW_FILE_MAX_BYTES + 1);
     try {
       setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
 
@@ -509,7 +561,38 @@ describe("comfy image-generation provider", () => {
             outputNodeId: "9",
           }),
         }),
-      ).rejects.toThrow(`exceeds ${COMFY_WORKFLOW_FILE_MAX_BYTES} bytes`);
+      ).rejects.toThrow(`exceeds ${DEFAULT_COMFY_WORKFLOW_FILE_MAX_BYTES} bytes`);
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("honors the shared workflowFileMaxBytes setting for legacy config", async () => {
+    const tempRoot = await makeTempWorkflowDir("openclaw-comfy-workflow-");
+    const workflowPath = path.join(tempRoot, "legacy-workflow.json");
+    const workflow = JSON.stringify({
+      "6": { inputs: { text: "" } },
+      "9": { inputs: {} },
+    });
+    await writeFile(workflowPath, workflow, "utf8");
+    try {
+      setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+
+      const provider = buildComfyImageGenerationProvider();
+      await expect(
+        provider.generateImage({
+          provider: "comfy",
+          model: "workflow",
+          prompt: "draw a legacy workflow file",
+          cfg: buildLegacyComfyConfig({
+            workflowPath,
+            workflowFileMaxBytes: Buffer.byteLength(workflow) - 1,
+            promptNodeId: "6",
+            outputNodeId: "9",
+          }),
+        }),
+      ).rejects.toThrow("raise plugins.entries.comfy.config.workflowFileMaxBytes");
       expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
     } finally {
       await rm(tempRoot, { recursive: true, force: true });

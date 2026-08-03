@@ -45,6 +45,9 @@ const DEFAULT_POLL_INTERVAL_MS = 1_500;
 const DEFAULT_TIMEOUT_MS = 5 * 60_000;
 
 export const DEFAULT_COMFY_MODEL = "workflow";
+// Match ComfyUI's default --max-upload-size. Operators that raise the server
+// limit can opt into the same larger workflow-file boundary below.
+export const DEFAULT_COMFY_WORKFLOW_FILE_MAX_BYTES = 100 * 1024 * 1024;
 
 type ComfyMode = "local" | "cloud";
 type ComfyCapability = "image" | "music" | "video";
@@ -131,6 +134,13 @@ function readConfigBoolean(config: ComfyProviderConfig, key: string): boolean | 
 function readConfigInteger(config: ComfyProviderConfig, key: string): number | undefined {
   const value = config[key];
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
+}
+
+function resolveComfyWorkflowFileMaxBytes(config: ComfyProviderConfig): number {
+  const configured = config.workflowFileMaxBytes;
+  return typeof configured === "number" && Number.isSafeInteger(configured) && configured > 0
+    ? configured
+    : DEFAULT_COMFY_WORKFLOW_FILE_MAX_BYTES;
 }
 
 function getComfyConfig(cfg?: OpenClawConfig): ComfyProviderConfig {
@@ -244,7 +254,8 @@ async function loadComfyWorkflow(config: ComfyProviderConfig): Promise<ComfyWork
   }
 
   const resolvedPath = resolveUserPath(source.workflowPath);
-  const raw = await readComfyWorkflowFile(resolvedPath);
+  const maxBytes = resolveComfyWorkflowFileMaxBytes(config);
+  const raw = await readComfyWorkflowFile(resolvedPath, maxBytes);
   const parsed = JSON.parse(raw) as unknown;
   if (!isRecord(parsed)) {
     throw new Error(`Comfy workflow at ${resolvedPath} must be a JSON object`);
