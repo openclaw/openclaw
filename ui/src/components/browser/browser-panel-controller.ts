@@ -43,6 +43,11 @@ const INSPECT_THROTTLE_MS = 120;
 const ACTION_REFRESH_DELAY_MS = 350;
 
 type BrowserPanelMode = "interact" | "annotate" | "inspect";
+type BrowserPanelDrawingGesture = {
+  pointerId: number;
+  captureTarget: HTMLElement;
+  stroke: AnnotationStroke;
+};
 
 export type { BrowserPanelControllerHost } from "./browser-panel-operation-ownership.ts";
 
@@ -67,7 +72,7 @@ export class BrowserPanelController implements ReactiveController {
   private readonly operations: BrowserPanelOperationOwnership;
   private readonly pendingInput = new BrowserPanelPendingInput();
   private activeClient: GatewayBrowserClient | null = null;
-  private drawingStroke: AnnotationStroke | null = null;
+  private drawingGesture: BrowserPanelDrawingGesture | null = null;
   private suppressStageClick = false;
   private urlDraftEditing = false;
 
@@ -77,6 +82,7 @@ export class BrowserPanelController implements ReactiveController {
   }
 
   hostDisconnected(): void {
+    this.cancelOverlayPointerGesture();
     this.invalidateViewOperations();
     this.setState("loading", false);
   }
@@ -108,6 +114,7 @@ export class BrowserPanelController implements ReactiveController {
   }
 
   resetBrowserState(): void {
+    this.cancelOverlayPointerGesture();
     this.invalidateViewOperations();
     this.setState("running", null);
     this.setState("tabs", []);
@@ -118,7 +125,6 @@ export class BrowserPanelController implements ReactiveController {
     this.setState("noticeText", null);
     this.setState("mode", "interact");
     this.setState("strokes", []);
-    this.drawingStroke = null;
     this.setState("inspected", null);
     this.setState("inspectPointer", null);
     this.setState("pendingNewTab", false);
@@ -519,11 +525,11 @@ export class BrowserPanelController implements ReactiveController {
   }
 
   exitCaptureModes(): void {
+    this.cancelOverlayPointerGesture();
     this.operations.invalidateInspection();
     this.pendingInput.clearInput();
     this.setState("mode", "interact");
     this.setState("strokes", []);
-    this.drawingStroke = null;
     this.setState("inspected", null);
     this.setState("inspectPointer", null);
   }
@@ -632,27 +638,40 @@ export class BrowserPanelController implements ReactiveController {
       void this.sendAnnotation({ element: this.inspected });
       return;
     }
-    if (this.mode !== "annotate") {
+    if (this.mode !== "annotate" || event.button !== 0 || this.drawingGesture) {
       return;
     }
     const point = browserPanelNormalizedPoint(this.stageElement(), event);
-    if (!point) {
+    const captureTarget =
+      event.currentTarget instanceof HTMLElement
+        ? event.currentTarget
+        : event.target instanceof HTMLElement
+          ? event.target
+          : null;
+    if (!point || !captureTarget) {
       return;
     }
-    (event.target as HTMLElement).setPointerCapture?.(event.pointerId);
-    this.drawingStroke = { points: [point] };
-    this.setState("strokes", [...this.strokes, this.drawingStroke]);
+    event.preventDefault();
+    try {
+      captureTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // Detached or synthetic targets may reject capture; owner filtering still applies.
+    }
+    const stroke: AnnotationStroke = { points: [point] };
+    this.drawingGesture = { pointerId: event.pointerId, captureTarget, stroke };
+    this.setState("strokes", [...this.strokes, stroke]);
     this.paintOverlay();
   }
 
   handleOverlayPointerMove(event: PointerEvent): void {
     if (this.mode === "annotate") {
-      if (!this.drawingStroke) {
+      const gesture = this.drawingGesture;
+      if (!gesture || event.pointerId !== gesture.pointerId) {
         return;
       }
       const point = browserPanelNormalizedPoint(this.stageElement(), event);
       if (point) {
-        this.drawingStroke.points.push(point);
+        gesture.stroke.points.push(point);
         this.paintOverlay();
       }
       return;
@@ -662,8 +681,33 @@ export class BrowserPanelController implements ReactiveController {
     }
   }
 
-  handleOverlayPointerUp(): void {
-    this.drawingStroke = null;
+  handleOverlayPointerUp(event: PointerEvent): void {
+    if (event.pointerId !== this.drawingGesture?.pointerId) {
+      return;
+    }
+    this.finishOverlayPointerGesture(false);
+  }
+
+  cancelOverlayPointerGesture(): void {
+    this.finishOverlayPointerGesture(true);
+  }
+
+  private finishOverlayPointerGesture(releasePointerCapture: boolean): void {
+    const gesture = this.drawingGesture;
+    if (!gesture) {
+      return;
+    }
+    this.drawingGesture = null;
+    if (!releasePointerCapture) {
+      return;
+    }
+    try {
+      if (gesture.captureTarget.hasPointerCapture(gesture.pointerId)) {
+        gesture.captureTarget.releasePointerCapture(gesture.pointerId);
+      }
+    } catch {
+      // Capture may already be gone because the canvas was detached.
+    }
   }
 
   private queueInspect(event: PointerEvent): void {
@@ -701,18 +745,19 @@ export class BrowserPanelController implements ReactiveController {
   }
 
   undoStroke(): void {
+    this.cancelOverlayPointerGesture();
     this.setState("strokes", this.strokes.slice(0, -1));
-    this.drawingStroke = null;
     this.paintOverlay();
   }
 
   clearStrokes(): void {
+    this.cancelOverlayPointerGesture();
     this.setState("strokes", []);
-    this.drawingStroke = null;
     this.paintOverlay();
   }
 
   async sendAnnotation(params: { element?: BrowserInspectedNode | null }): Promise<void> {
+    this.cancelOverlayPointerGesture();
     const view = this.view;
     const tab = this.tabs.find((entry) => entry.id === this.activeTargetId);
     const element = params.element ?? null;
