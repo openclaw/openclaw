@@ -950,51 +950,74 @@ export function registerBrowserAgentSnapshotRoutes(
             profile: profileCtx.profile,
             wsUrl: tab.wsUrl,
           });
-          const snap = usePlaywrightAriaSnapshot
-            ? (() => {
-                // Extension relay doesn't expose per-page WS URLs; run AX snapshot via Playwright CDP session.
-                // Also covers cases where wsUrl is missing/unusable.
-                return requirePwAi(res, "aria snapshot").then(async (pw) => {
-                  if (!pw) {
-                    return null;
-                  }
-                  return await pw.snapshotAriaViaPlaywright({
-                    cdpUrl: profileCtx.profile.cdpUrl,
-                    targetId: tab.targetId,
-                    limit: plan.limit,
-                    timeoutMs: plan.timeoutMs,
-                    signal,
-                    ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+          const directSnapshotTimeoutMs = plan.timeoutMs ?? 5_000;
+          const directSnapshotDeadline = usePlaywrightAriaSnapshot
+            ? undefined
+            : new AbortController();
+          const directSnapshotTimer = directSnapshotDeadline
+            ? setTimeout(() => {
+                directSnapshotDeadline.abort(
+                  new Error(
+                    `Aria snapshot operation timed out after ${directSnapshotTimeoutMs}ms.`,
+                  ),
+                );
+              }, normalizeBrowserTimerDelayMs(directSnapshotTimeoutMs))
+            : undefined;
+          directSnapshotTimer?.unref?.();
+          const snapshotSignal = directSnapshotDeadline
+            ? AbortSignal.any([signal, directSnapshotDeadline.signal])
+            : signal;
+          try {
+            const snap = usePlaywrightAriaSnapshot
+              ? (() => {
+                  // Extension relay doesn't expose per-page WS URLs; run AX snapshot via Playwright CDP session.
+                  // Also covers cases where wsUrl is missing/unusable.
+                  return requirePwAi(res, "aria snapshot").then(async (pw) => {
+                    if (!pw) {
+                      return null;
+                    }
+                    return await pw.snapshotAriaViaPlaywright({
+                      cdpUrl: profileCtx.profile.cdpUrl,
+                      targetId: tab.targetId,
+                      limit: plan.limit,
+                      timeoutMs: plan.timeoutMs,
+                      signal: snapshotSignal,
+                      ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+                    });
                   });
+                })()
+              : snapshotAria({
+                  wsUrl: tab.wsUrl ?? "",
+                  limit: plan.limit,
+                  timeoutMs: plan.timeoutMs,
+                  signal: snapshotSignal,
                 });
-              })()
-            : snapshotAria({
-                wsUrl: tab.wsUrl ?? "",
-                limit: plan.limit,
-                timeoutMs: plan.timeoutMs,
-                signal,
-              });
 
-          const resolved = await Promise.resolve(snap);
-          if (!resolved) {
-            return;
-          }
-          if (!usePlaywrightAriaSnapshot) {
-            await pwModule?.storeAriaSnapshotRefsViaPlaywright?.({
-              cdpUrl: profileCtx.profile.cdpUrl,
+            const resolved = await Promise.resolve(snap);
+            if (!resolved) {
+              return;
+            }
+            if (!usePlaywrightAriaSnapshot) {
+              await pwModule?.storeAriaSnapshotRefsViaPlaywright?.({
+                cdpUrl: profileCtx.profile.cdpUrl,
+                targetId: tab.targetId,
+                nodes: resolved.nodes,
+                signal: snapshotSignal,
+              });
+            }
+            return res.json({
+              ok: true,
+              format: plan.format,
               targetId: tab.targetId,
-              nodes: resolved.nodes,
-              signal,
+              url: tab.url,
+              ...browserStateResponseFields(observedBrowserState),
+              ...resolved,
             });
+          } finally {
+            if (directSnapshotTimer) {
+              clearTimeout(directSnapshotTimer);
+            }
           }
-          return res.json({
-            ok: true,
-            format: plan.format,
-            targetId: tab.targetId,
-            url: tab.url,
-            ...browserStateResponseFields(observedBrowserState),
-            ...resolved,
-          });
         },
       });
     } catch (err) {

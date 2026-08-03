@@ -47,6 +47,7 @@ type ScopedCdpClientOptions = {
   cdpUrl?: unknown;
   fn?: unknown;
   page?: unknown;
+  signal?: unknown;
   targetId?: unknown;
 };
 
@@ -101,6 +102,7 @@ describe("pw-tools-core aria snapshot storage", () => {
     const scopedClientOptions = requireScopedCdpClientOptions();
     expect(scopedClientOptions.cdpUrl).toBe("http://127.0.0.1:9222");
     expect(scopedClientOptions.page).toBe(page);
+    expect(scopedClientOptions.signal).toBeUndefined();
     expect(scopedClientOptions.targetId).toBe("tab-1");
     expect(typeof scopedClientOptions.fn).toBe("function");
     expect(markBackendDomRefsOnPage).toHaveBeenCalledWith({
@@ -138,6 +140,45 @@ describe("pw-tools-core aria snapshot storage", () => {
     expect(result).toEqual({ nodes: formattedNodes });
     expect(markBackendDomRefsOnPage).not.toHaveBeenCalled();
     expect(storeRoleRefsForTarget).not.toHaveBeenCalled();
+  });
+
+  it("cancels a capture-only diagnostic without disconnecting the shared browser", async () => {
+    vi.useFakeTimers();
+    try {
+      const page = { id: "page-1" };
+      let rejectEnable!: (reason: unknown) => void;
+      const send = vi.fn<ScopedCdpSend>(
+        async () =>
+          await new Promise<never>((_resolve, reject) => {
+            rejectEnable = reject;
+          }),
+      );
+      getPageForTargetId.mockResolvedValue(page);
+      withPageScopedCdpClient.mockImplementation(
+        async (options: { fn: (send: ScopedCdpSend) => Promise<unknown> }) =>
+          await options.fn(send),
+      );
+
+      const mod = await import("./pw-tools-core.snapshot.js");
+      const promise = mod.captureAriaSnapshotViaPlaywright({
+        cdpUrl: "http://127.0.0.1:9222",
+        targetId: "tab-1",
+        timeoutMs: 750,
+      });
+      void promise.catch(() => {});
+
+      await vi.advanceTimersByTimeAsync(750);
+
+      await expect(promise).rejects.toThrow(
+        /Aria snapshot via Playwright timed out.*targetId=tab-1.*Accessibility\.enable/,
+      );
+      expect(forceDisconnectPlaywrightForTarget).not.toHaveBeenCalled();
+
+      rejectEnable(new Error("page session detached"));
+      await vi.runAllTimersAsync();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("races snapshotAriaViaPlaywright against an explicit timeoutMs", async () => {
@@ -278,13 +319,9 @@ describe("pw-tools-core aria snapshot storage", () => {
     );
   });
 
-  it("publishes a retry only after an aborted marker write settles", async () => {
+  it("does not wedge a retry when an aborted marker write never returns", async () => {
     const page = { id: "page-1" };
     const controller = new AbortController();
-    let releaseFirstMarkers!: () => void;
-    const firstMarkers = new Promise<Set<string>>((resolve) => {
-      releaseFirstMarkers = () => resolve(new Set(["ax-old"]));
-    });
     let collectCount = 0;
     withPageScopedCdpClient.mockImplementation(async () => ({
       nodes: [{ snapshot: ++collectCount === 1 ? "old" : "new" }],
@@ -298,7 +335,17 @@ describe("pw-tools-core aria snapshot storage", () => {
     ]);
     getPageForTargetId.mockResolvedValue(page);
     markBackendDomRefsOnPage
-      .mockImplementationOnce(async () => await firstMarkers)
+      .mockImplementationOnce(
+        async (opts: { signal?: AbortSignal }) =>
+          await new Promise<Set<string>>((_resolve, reject) => {
+            const rejectOnAbort = () => reject(opts.signal?.reason ?? new Error("aborted"));
+            if (opts.signal?.aborted) {
+              rejectOnAbort();
+              return;
+            }
+            opts.signal?.addEventListener("abort", rejectOnAbort, { once: true });
+          }),
+      )
       .mockResolvedValueOnce(new Set(["ax-new"]));
 
     const mod = await import("./pw-tools-core.snapshot.js");
@@ -316,11 +363,6 @@ describe("pw-tools-core aria snapshot storage", () => {
       cdpUrl: "http://127.0.0.1:9222",
       targetId: "tab-1",
     });
-    await Promise.resolve();
-    expect(markBackendDomRefsOnPage).toHaveBeenCalledTimes(1);
-    expect(storeRoleRefsForTarget).not.toHaveBeenCalled();
-
-    releaseFirstMarkers();
     await expect(retry).resolves.toEqual({
       nodes: [{ ref: "ax-new", role: "button", name: "new" }],
     });

@@ -2,13 +2,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
-const { inspectChromeGraphicsDiagnosticsMock } = vi.hoisted(() => ({
+const { inspectChromeGraphicsDiagnosticsMock, takeChromeMcpSnapshotMock } = vi.hoisted(() => ({
   inspectChromeGraphicsDiagnosticsMock: vi.fn(),
+  takeChromeMcpSnapshotMock: vi.fn(async () => ({})),
 }));
 
 vi.mock("../chrome-mcp.js", () => ({
   getChromeMcpPid: vi.fn(() => 4321),
-  takeChromeMcpSnapshot: vi.fn(async () => ({})),
+  takeChromeMcpSnapshot: takeChromeMcpSnapshotMock,
 }));
 
 vi.mock("../chrome.graphics.js", async (importOriginal) => {
@@ -189,6 +190,7 @@ function responseBodyRecord(response: { body: unknown }): Record<string, unknown
 describe("basic browser routes", () => {
   beforeEach(() => {
     inspectChromeGraphicsDiagnosticsMock.mockReset();
+    takeChromeMcpSnapshotMock.mockClear();
   });
 
   it("releases the doctor transaction, restarts once, and retries the live probe", async () => {
@@ -224,6 +226,41 @@ describe("basic browser routes", () => {
     expect(response.statusCode).toBe(200);
     expect(ensureBrowserAvailable).toHaveBeenCalledOnce();
     expect(ensureTabAvailable).toHaveBeenCalledTimes(2);
+  });
+
+  it("bounds Chrome MCP deep-doctor snapshots with the live-probe timeout", async () => {
+    const state = createExistingSessionProfileState();
+    const profileCtx = {
+      ...(state.forProfile() as unknown as Record<string, unknown>),
+      ensureTabAvailable: vi.fn(async () => ({
+        targetId: "7",
+        title: "Example",
+        url: "https://example.com",
+        type: "page",
+      })),
+    };
+    const { app, getHandlers } = createBrowserRouteApp();
+    registerBrowserBasicRoutes(app, {
+      state: () => state,
+      forProfile: () => profileCtx,
+      mapTabError: vi.fn(() => null),
+    } as never);
+    const response = createBrowserRouteResponse();
+
+    await getHandlers.get("/doctor")?.(
+      { params: {}, query: { profile: "chrome-live", deep: "true" } },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(takeChromeMcpSnapshotMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileName: "chrome-live",
+        targetId: "7",
+        timeoutMs: 12_000,
+        signal: expect.any(AbortSignal),
+      }),
+    );
   });
 
   it("does not start a stopped managed browser for deep doctor", async () => {

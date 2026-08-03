@@ -137,6 +137,21 @@ function formatDoctorLine(check: BrowserDoctorCheck): string {
   return `${prefix} ${check.name}${check.detail ? `: ${check.detail}` : ""}`;
 }
 
+function mapCanonicalDoctorCheck(check: BrowserDoctorReport["checks"][number]): BrowserDoctorCheck {
+  const name =
+    check.id === "plugin-enabled"
+      ? "plugin"
+      : check.id === "extension-relay" || check.id === "attach-target"
+        ? "browser"
+        : check.id;
+  return {
+    name,
+    ok: check.status !== "fail",
+    warning: check.status === "warn" || check.status === "info",
+    detail: check.summary,
+  };
+}
+
 function isGatewaySecretRefUnavailableErrorShape(error: unknown): boolean {
   if (!(error instanceof Error)) {
     return false;
@@ -278,7 +293,30 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
     }
   }
 
-  return { ok: checks.every((check) => check.ok), checks, status };
+  if (deep && canonicalDoctor) {
+    for (const canonicalCheck of canonicalDoctor.checks) {
+      if (canonicalCheck.id === "live-snapshot") {
+        continue;
+      }
+      const mapped = mapCanonicalDoctorCheck(canonicalCheck);
+      if (!checks.some((check) => check.name === mapped.name)) {
+        checks.push(mapped);
+      }
+    }
+    if (!canonicalDoctor.ok && canonicalDoctor.checks.every((check) => check.status !== "fail")) {
+      checks.push({
+        name: "canonical-doctor",
+        ok: false,
+        detail: "browser server reported an unsuccessful diagnostic",
+      });
+    }
+  }
+
+  return {
+    ok: checks.every((check) => check.ok) && (!deep || canonicalDoctor?.ok === true),
+    checks,
+    status,
+  };
 }
 
 type BrowserProfileDriver = "openclaw" | "existing-session" | "extension";

@@ -71,12 +71,10 @@ describe("pw-session page-scoped CDP client", () => {
       send: sessionSend,
       detach: sessionDetach,
     }));
-    const evaluateAll = vi.fn(async () => {});
     const page = {
       context: () => ({
         newCDPSession,
       }),
-      locator: vi.fn(() => ({ evaluateAll })),
     };
 
     const marked = await markBackendDomRefsOnPage({
@@ -87,18 +85,24 @@ describe("pw-session page-scoped CDP client", () => {
       ],
     });
 
-    expect(page.locator).toHaveBeenCalledWith(`[${BROWSER_REF_MARKER_ATTRIBUTE}]`);
-    expect(evaluateAll).toHaveBeenCalledTimes(1);
-    expect(sessionSend).toHaveBeenNthCalledWith(1, "DOM.enable", undefined);
-    expect(sessionSend).toHaveBeenNthCalledWith(2, "DOM.pushNodesByBackendIdsToFrontend", {
+    expect(sessionSend).toHaveBeenNthCalledWith(
+      1,
+      "Runtime.evaluate",
+      expect.objectContaining({
+        expression: expect.stringContaining(BROWSER_REF_MARKER_ATTRIBUTE),
+        returnByValue: true,
+      }),
+    );
+    expect(sessionSend).toHaveBeenNthCalledWith(2, "DOM.enable", undefined);
+    expect(sessionSend).toHaveBeenNthCalledWith(3, "DOM.pushNodesByBackendIdsToFrontend", {
       backendNodeIds: [42, 84],
     });
-    expect(sessionSend).toHaveBeenNthCalledWith(3, "DOM.setAttributeValue", {
+    expect(sessionSend).toHaveBeenNthCalledWith(4, "DOM.setAttributeValue", {
       nodeId: 101,
       name: BROWSER_REF_MARKER_ATTRIBUTE,
       value: "ax1",
     });
-    expect(sessionSend).toHaveBeenNthCalledWith(4, "DOM.setAttributeValue", {
+    expect(sessionSend).toHaveBeenNthCalledWith(5, "DOM.setAttributeValue", {
       nodeId: 202,
       name: BROWSER_REF_MARKER_ATTRIBUTE,
       value: "ax2",
@@ -108,13 +112,13 @@ describe("pw-session page-scoped CDP client", () => {
   });
 
   it("clears stale markers even when no backend refs are valid", async () => {
-    const newCDPSession = vi.fn();
-    const evaluateAll = vi.fn(async () => {});
+    const sessionSend = vi.fn(async () => ({}));
+    const sessionDetach = vi.fn(async () => {});
+    const newCDPSession = vi.fn(async () => ({ send: sessionSend, detach: sessionDetach }));
     const page = {
       context: () => ({
         newCDPSession,
       }),
-      locator: vi.fn(() => ({ evaluateAll })),
     };
 
     const marked = await markBackendDomRefsOnPage({
@@ -122,23 +126,30 @@ describe("pw-session page-scoped CDP client", () => {
       refs: [{ ref: "e1", backendDOMNodeId: 0 }],
     });
 
-    expect(page.locator).toHaveBeenCalledWith(`[${BROWSER_REF_MARKER_ATTRIBUTE}]`);
-    expect(evaluateAll).toHaveBeenCalledTimes(1);
-    expect(newCDPSession).not.toHaveBeenCalled();
+    expect(newCDPSession).toHaveBeenCalledOnce();
+    expect(sessionSend).toHaveBeenCalledWith(
+      "Runtime.evaluate",
+      expect.objectContaining({
+        expression: expect.stringContaining(BROWSER_REF_MARKER_ATTRIBUTE),
+      }),
+    );
+    expect(sessionDetach).toHaveBeenCalledOnce();
     expect(marked).toEqual(new Set());
   });
 
   it("stops after marker cleanup when publication is aborted", async () => {
     const controller = new AbortController();
     const cancellation = new Error("marker publication cancelled");
-    const newCDPSession = vi.fn();
+    const sessionDetach = vi.fn(async () => {});
+    const sessionSend = vi.fn(async (method: string) => {
+      if (method === "Runtime.evaluate") {
+        controller.abort(cancellation);
+      }
+      return {};
+    });
+    const newCDPSession = vi.fn(async () => ({ send: sessionSend, detach: sessionDetach }));
     const page = {
       context: () => ({ newCDPSession }),
-      locator: vi.fn(() => ({
-        evaluateAll: vi.fn(async () => {
-          controller.abort(cancellation);
-        }),
-      })),
     };
 
     await expect(
@@ -149,7 +160,9 @@ describe("pw-session page-scoped CDP client", () => {
       }),
     ).rejects.toBe(cancellation);
 
-    expect(newCDPSession).not.toHaveBeenCalled();
+    expect(sessionSend).toHaveBeenCalledTimes(1);
+    expect(sessionSend).not.toHaveBeenCalledWith("DOM.enable", undefined);
+    expect(sessionDetach).toHaveBeenCalledOnce();
   });
 
   it("does not swallow cancellation between marker writes", async () => {
@@ -171,7 +184,6 @@ describe("pw-session page-scoped CDP client", () => {
           detach: vi.fn(async () => {}),
         })),
       }),
-      locator: vi.fn(() => ({ evaluateAll: vi.fn(async () => {}) })),
     };
 
     await expect(
@@ -213,7 +225,6 @@ describe("pw-session page-scoped CDP client", () => {
           detach: sessionDetach,
         })),
       }),
-      locator: vi.fn(() => ({ evaluateAll: vi.fn(async () => {}) })),
     };
 
     const marked = await markBackendDomRefsOnPage({
@@ -226,5 +237,56 @@ describe("pw-session page-scoped CDP client", () => {
 
     expect(marked).toEqual(new Set());
     expect(sessionDetach).toHaveBeenCalledTimes(1);
+  });
+
+  it("detaches an aborted page session without disrupting a sibling page session", async () => {
+    const firstController = new AbortController();
+    const cancellation = new Error("first page probe timed out");
+    const firstDetach = vi.fn(async () => {});
+    const firstSend = vi.fn(
+      async () =>
+        await new Promise<never>(() => {
+          // Intentionally never settles; abort must retire only this page session.
+        }),
+    );
+    const secondDetach = vi.fn(async () => {});
+    const secondSend = vi.fn(async () => ({ ok: true }));
+    const firstPage = {
+      context: () => ({
+        newCDPSession: vi.fn(async () => ({ send: firstSend, detach: firstDetach })),
+      }),
+    };
+    const secondPage = {
+      context: () => ({
+        newCDPSession: vi.fn(async () => ({ send: secondSend, detach: secondDetach })),
+      }),
+    };
+
+    const first = withPageScopedCdpClient({
+      cdpUrl: "http://127.0.0.1:9222",
+      page: firstPage as never,
+      targetId: "tab-1",
+      signal: firstController.signal,
+      fn: async (send) => await send("Accessibility.enable"),
+    });
+    void first.catch(() => {});
+    await vi.waitFor(() => expect(firstSend).toHaveBeenCalledOnce());
+    firstController.abort(cancellation);
+
+    await expect(first).rejects.toBe(cancellation);
+    await expect(
+      withPageScopedCdpClient({
+        cdpUrl: "http://127.0.0.1:9222",
+        page: secondPage as never,
+        targetId: "tab-2",
+        fn: async (send) => await send("Runtime.evaluate", { expression: "document.title" }),
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    expect(firstDetach).toHaveBeenCalledOnce();
+    expect(secondSend).toHaveBeenCalledWith("Runtime.evaluate", {
+      expression: "document.title",
+    });
+    expect(secondDetach).toHaveBeenCalledOnce();
   });
 });

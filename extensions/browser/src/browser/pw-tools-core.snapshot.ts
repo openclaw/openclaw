@@ -275,14 +275,19 @@ async function collectAriaSnapshotViaPlaywright(
     opts.signal && timeoutController
       ? AbortSignal.any([opts.signal, timeoutController.signal])
       : (opts.signal ?? timeoutController?.signal);
-  const { abortPromise, cleanup } = createAbortPromiseWithListener(signal, () => {
-    void forceDisconnectPlaywrightForTarget({
-      cdpUrl: opts.cdpUrl,
-      targetId: opts.targetId,
-      ssrfPolicy: opts.ssrfPolicy,
-      reason: "aria snapshot aborted",
-    }).catch(() => {});
-  });
+  const { abortPromise, cleanup } = createAbortPromiseWithListener(
+    signal,
+    publishRefs
+      ? () => {
+          void forceDisconnectPlaywrightForTarget({
+            cdpUrl: opts.cdpUrl,
+            targetId: opts.targetId,
+            ssrfPolicy: opts.ssrfPolicy,
+            reason: "aria snapshot aborted",
+          }).catch(() => {});
+        }
+      : undefined,
+  );
 
   const collectSnapshot = async () => {
     signal?.throwIfAborted();
@@ -296,6 +301,7 @@ async function collectAriaSnapshotViaPlaywright(
       cdpUrl: opts.cdpUrl,
       page,
       targetId: opts.targetId,
+      signal,
       fn: async (send) => {
         activeMethod = "Accessibility.enable";
         await send("Accessibility.enable").catch(() => {});

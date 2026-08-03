@@ -14,15 +14,84 @@ type MarkBackendDomRef = { ref: string; backendDOMNodeId: number };
 /** Attribute used to mark DOM nodes that correspond to generated browser refs. */
 export const BROWSER_REF_MARKER_ATTRIBUTE = "data-openclaw-browser-ref";
 
+async function awaitWithAbort<T>(
+  task: Promise<T>,
+  signal?: AbortSignal,
+  onAbort?: () => void,
+): Promise<T> {
+  if (!signal) {
+    return await task;
+  }
+  // The abort race may return before the underlying Playwright/CDP promise
+  // observes session detachment. Attach the observer before checking an
+  // already-aborted signal because task creation can synchronously abort it.
+  void task.catch(() => {});
+  signal.throwIfAborted();
+  let abortListener: (() => void) | undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    abortListener = () => {
+      onAbort?.();
+      reject(signal.reason ?? new Error("aborted"));
+    };
+    signal.addEventListener("abort", abortListener, { once: true });
+  });
+  void aborted.catch(() => {});
+  try {
+    return await Promise.race([task, aborted]);
+  } finally {
+    if (abortListener) {
+      signal.removeEventListener("abort", abortListener);
+    }
+  }
+}
+
+async function sendPageCdpCommand(
+  session: CDPSession,
+  method: string,
+  params?: Record<string, unknown>,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  const task = (
+    session.send as unknown as (
+      method: string,
+      params?: Record<string, unknown>,
+    ) => Promise<unknown>
+  )(method, params);
+  return await awaitWithAbort(task, signal);
+}
+
 async function withPlaywrightPageCdpSession<T>(
   page: Page,
   fn: (session: CDPSession) => Promise<T>,
+  signal?: AbortSignal,
 ): Promise<T> {
-  const session = await page.context().newCDPSession(page);
+  signal?.throwIfAborted();
+  const sessionTask = page.context().newCDPSession(page);
+  if (signal) {
+    void sessionTask
+      .then((session) => {
+        if (signal.aborted) {
+          void session.detach().catch(() => {});
+        }
+      })
+      .catch(() => {});
+  }
+  const session = await awaitWithAbort(sessionTask, signal);
+  let detachTask: Promise<void> | undefined;
+  const detach = () => {
+    detachTask ??= session.detach().catch(() => {});
+    return detachTask;
+  };
   try {
-    return await fn(session);
+    return await awaitWithAbort(fn(session), signal, () => {
+      void detach();
+    });
   } finally {
-    await session.detach().catch(() => {});
+    if (signal?.aborted) {
+      void detach();
+    } else {
+      await detach();
+    }
   }
 }
 
@@ -31,18 +100,17 @@ export async function withPageScopedCdpClient<T>(opts: {
   cdpUrl: string;
   page: Page;
   targetId?: string;
+  signal?: AbortSignal;
   fn: (send: PageCdpSend) => Promise<T>;
 }): Promise<T> {
-  return await withPlaywrightPageCdpSession(opts.page, async (session) => {
-    return await opts.fn((method, params) =>
-      (
-        session.send as unknown as (
-          method: string,
-          params?: Record<string, unknown>,
-        ) => Promise<unknown>
-      )(method, params),
-    );
-  });
+  return await withPlaywrightPageCdpSession(
+    opts.page,
+    async (session) =>
+      await opts.fn(
+        async (method, params) => await sendPageCdpCommand(session, method, params, opts.signal),
+      ),
+    opts.signal,
+  );
 }
 
 /** Read the browser-owned loader identity for a Playwright page's main frame. */
@@ -70,18 +138,6 @@ export async function markBackendDomRefsOnPage(opts: {
   signal?: AbortSignal;
 }): Promise<Set<string>> {
   opts.signal?.throwIfAborted();
-  await opts.page
-    .locator(`[${BROWSER_REF_MARKER_ATTRIBUTE}]`)
-    .evaluateAll((elements, attr) => {
-      for (const element of elements) {
-        if (element instanceof Element) {
-          element.removeAttribute(attr);
-        }
-      }
-    }, BROWSER_REF_MARKER_ATTRIBUTE)
-    .catch(() => {});
-  opts.signal?.throwIfAborted();
-
   const refs = opts.refs.filter(
     (entry) =>
       /^ax\d+$/.test(entry.ref) &&
@@ -89,58 +145,62 @@ export async function markBackendDomRefsOnPage(opts: {
       Math.floor(entry.backendDOMNodeId) > 0,
   );
   const marked = new Set<string>();
-  if (!refs.length) {
-    return marked;
-  }
+  return await withPlaywrightPageCdpSession(
+    opts.page,
+    async (session) => {
+      const send = async (method: string, params?: Record<string, unknown>) =>
+        await sendPageCdpCommand(session, method, params, opts.signal);
 
-  return await withPlaywrightPageCdpSession(opts.page, async (session) => {
-    const send = async (method: string, params?: Record<string, unknown>) =>
-      await (
-        session.send as unknown as (
-          method: string,
-          params?: Record<string, unknown>,
-        ) => Promise<unknown>
-      )(method, params);
-
-    opts.signal?.throwIfAborted();
-    await send("DOM.enable").catch(() => {});
-    opts.signal?.throwIfAborted();
-
-    const backendNodeIds = uniqueValues(refs.map((entry) => Math.floor(entry.backendDOMNodeId)));
-    const pushed = (await send("DOM.pushNodesByBackendIdsToFrontend", {
-      backendNodeIds,
-    }).catch(() => ({}))) as { nodeIds?: number[] };
-    opts.signal?.throwIfAborted();
-    const nodeIds = Array.isArray(pushed.nodeIds) ? pushed.nodeIds : [];
-    const nodeIdByBackendId = new Map<number, number>();
-    for (let index = 0; index < backendNodeIds.length; index += 1) {
-      const backendNodeId = backendNodeIds[index];
-      const nodeId = nodeIds[index];
-      if (backendNodeId && typeof nodeId === "number" && nodeId > 0) {
-        nodeIdByBackendId.set(backendNodeId, nodeId);
+      await send("Runtime.evaluate", {
+        expression: `document.querySelectorAll('[${BROWSER_REF_MARKER_ATTRIBUTE}]').forEach((element) => element.removeAttribute('${BROWSER_REF_MARKER_ATTRIBUTE}'))`,
+        returnByValue: true,
+      }).catch(() => {});
+      opts.signal?.throwIfAborted();
+      if (!refs.length) {
+        return marked;
       }
-    }
 
-    for (const entry of refs) {
-      const nodeId = nodeIdByBackendId.get(Math.floor(entry.backendDOMNodeId));
-      if (!nodeId) {
-        continue;
-      }
-      try {
-        opts.signal?.throwIfAborted();
-        await send("DOM.setAttributeValue", {
-          nodeId,
-          name: BROWSER_REF_MARKER_ATTRIBUTE,
-          value: entry.ref,
-        });
-        opts.signal?.throwIfAborted();
-        marked.add(entry.ref);
-      } catch {
-        opts.signal?.throwIfAborted();
-        // Best-effort marker write. Unmarked refs fall back to role metadata.
-      }
-    }
+      opts.signal?.throwIfAborted();
+      await send("DOM.enable").catch(() => {});
+      opts.signal?.throwIfAborted();
 
-    return marked;
-  });
+      const backendNodeIds = uniqueValues(refs.map((entry) => Math.floor(entry.backendDOMNodeId)));
+      const pushed = (await send("DOM.pushNodesByBackendIdsToFrontend", {
+        backendNodeIds,
+      }).catch(() => ({}))) as { nodeIds?: number[] };
+      opts.signal?.throwIfAborted();
+      const nodeIds = Array.isArray(pushed.nodeIds) ? pushed.nodeIds : [];
+      const nodeIdByBackendId = new Map<number, number>();
+      for (let index = 0; index < backendNodeIds.length; index += 1) {
+        const backendNodeId = backendNodeIds[index];
+        const nodeId = nodeIds[index];
+        if (backendNodeId && typeof nodeId === "number" && nodeId > 0) {
+          nodeIdByBackendId.set(backendNodeId, nodeId);
+        }
+      }
+
+      for (const entry of refs) {
+        const nodeId = nodeIdByBackendId.get(Math.floor(entry.backendDOMNodeId));
+        if (!nodeId) {
+          continue;
+        }
+        try {
+          opts.signal?.throwIfAborted();
+          await send("DOM.setAttributeValue", {
+            nodeId,
+            name: BROWSER_REF_MARKER_ATTRIBUTE,
+            value: entry.ref,
+          });
+          opts.signal?.throwIfAborted();
+          marked.add(entry.ref);
+        } catch {
+          opts.signal?.throwIfAborted();
+          // Best-effort marker write. Unmarked refs fall back to role metadata.
+        }
+      }
+
+      return marked;
+    },
+    opts.signal,
+  );
 }

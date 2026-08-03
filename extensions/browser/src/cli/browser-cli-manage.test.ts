@@ -621,6 +621,72 @@ describe("browser manage output", () => {
     expect(process.exitCode).toBe(1);
   });
 
+  it("does not report success when the canonical deep-doctor report is unsuccessful", async () => {
+    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
+      if (req.path === "/doctor") {
+        return {
+          ok: false,
+          profile: "chrome",
+          transport: "extension",
+          status: {
+            enabled: true,
+            profile: "chrome",
+            driver: "extension",
+            transport: "extension",
+            running: true,
+            cdpReady: true,
+          },
+          checks: [
+            {
+              id: "plugin-enabled",
+              label: "Browser plugin",
+              status: "pass",
+              summary: "enabled",
+            },
+            {
+              id: "profile",
+              label: "Profile",
+              status: "pass",
+              summary: "chrome via extension",
+            },
+            {
+              id: "extension-relay",
+              label: "Chrome extension relay",
+              status: "pass",
+              summary: "OpenClaw Chrome extension is connected",
+            },
+            {
+              id: "live-snapshot",
+              label: "Live snapshot",
+              status: "pass",
+              summary: "snapshot succeeded",
+            },
+          ],
+        };
+      }
+      if (req.path === "/profiles") {
+        return { profiles: [{ name: "chrome", running: true }] };
+      }
+      if (req.path === "/tabs") {
+        return {
+          running: true,
+          tabs: [{ targetId: "extension-target-1", title: "Example", url: "https://x.test" }],
+        };
+      }
+      return {};
+    });
+
+    const program = createBrowserManageProgram();
+    await program.parseAsync(["browser", "--browser-profile", "chrome", "doctor", "--deep"], {
+      from: "user",
+    });
+
+    expect(lastRuntimeLog()).toContain(
+      "FAIL canonical-doctor: browser server reported an unsuccessful diagnostic",
+    );
+    expect(process.exitCode).toBe(1);
+  });
+
   it("reports a stopped deep-doctor profile without probing tabs or snapshots", async () => {
     getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
       if (req.path === "/doctor") {

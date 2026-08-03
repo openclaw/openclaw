@@ -276,6 +276,7 @@ async function runBrowserLiveProbe(
         profileName: profileCtx.profile.name,
         profile: profileCtx.profile,
         targetId: tab.targetId,
+        timeoutMs: LIVE_SNAPSHOT_PROBE_TIMEOUT_MS,
         signal,
       });
       return {
