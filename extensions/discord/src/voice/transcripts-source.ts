@@ -3,7 +3,7 @@ import type {
   TranscriptSourceProvider,
   TranscriptStartRequest,
 } from "openclaw/plugin-sdk/transcripts";
-import { resolveDefaultDiscordAccountId } from "../accounts.js";
+import { listDiscordStartupAccountIds } from "../accounts.js";
 import type { DiscordVoiceManager } from "./manager.js";
 
 const managersByAccountId = new Map<string, DiscordVoiceManager>();
@@ -30,7 +30,7 @@ export function setDiscordTranscriptsVoiceManager(params: {
 
 const resolveDiscordTranscriptsAccountId: NonNullable<
   TranscriptSourceProvider["resolveAccountId"]
-> = ({ cfg, source }) => source.accountId?.trim() || resolveDefaultDiscordAccountId(cfg ?? {});
+> = ({ cfg, source }) => source.accountId?.trim() || listDiscordStartupAccountIds(cfg ?? {})[0];
 
 function resolveManager(request: TranscriptStartRequest): DiscordVoiceManager | undefined {
   const accountId = resolveDiscordTranscriptsAccountId({
