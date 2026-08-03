@@ -2636,6 +2636,141 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   });
 
   it.each([
+    {
+      label: "an earlier successful tool presentation",
+      attemptOverrides: {
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+      },
+      extraParams: { hasTerminalToolPresentation: true },
+    },
+    {
+      label: "a stale lifecycle activeCount after the exact result persisted",
+      attemptOverrides: {
+        itemLifecycle: { startedCount: 1, completedCount: 0, activeCount: 1 },
+      },
+      extraParams: {},
+    },
+  ])(
+    "finalizes an exact current failed terminal batch despite $label (#118489)",
+    ({ attemptOverrides, extraParams }) => {
+      const toolUseAssistant = {
+        role: "assistant",
+        stopReason: "toolUse",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: [{ type: "toolCall", id: "tool_1", name: "read", arguments: {} }],
+      } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+      const instruction = resolveSettledToolTerminalContinuationInstruction({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        modelApi: "openai-chatgpt-responses",
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        ...extraParams,
+        attempt: makeAttemptResult({
+          assistantTexts: [],
+          toolMetas: [{ toolName: "read", isError: true }],
+          messagesSnapshot: [
+            toolUseAssistant,
+            { role: "toolResult", toolCallId: "tool_1", toolName: "read", isError: true },
+          ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
+          lastAssistant: toolUseAssistant,
+          currentAttemptAssistant: toolUseAssistant,
+          lastToolError: { toolName: "read", error: "ENOENT" },
+          ...attemptOverrides,
+        }),
+      });
+
+      expect(instruction).toContain(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
+      expect(instruction).toContain(
+        "If any tool failed, state that failure plainly and do not claim it succeeded.",
+      );
+    },
+  );
+
+  it.each([
+    {
+      label: "an async tool is still active",
+      attemptOverrides: {
+        itemLifecycle: { startedCount: 1, completedCount: 0, activeCount: 1 },
+        toolMetas: [{ toolName: "read", isError: true, asyncStarted: true }],
+      },
+    },
+    {
+      label: "an accepted child session still owns the response",
+      attemptOverrides: {
+        itemLifecycle: { startedCount: 1, completedCount: 0, activeCount: 1 },
+        acceptedSessionSpawns: [
+          { runId: "run-child", childSessionKey: "agent:main:subagent:child" },
+        ],
+      },
+    },
+  ])("does not override stale lifecycle proof when $label (#118489)", ({ attemptOverrides }) => {
+    const toolUseAssistant = {
+      role: "assistant",
+      stopReason: "toolUse",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "toolCall", id: "tool_1", name: "read", arguments: {} }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    const instruction = resolveSettledToolTerminalContinuationInstruction({
+      provider: "openai",
+      modelId: "gpt-5.5",
+      modelApi: "openai-chatgpt-responses",
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "read", isError: true }],
+        messagesSnapshot: [
+          toolUseAssistant,
+          { role: "toolResult", toolCallId: "tool_1", toolName: "read", isError: true },
+        ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
+        lastAssistant: toolUseAssistant,
+        currentAttemptAssistant: toolUseAssistant,
+        lastToolError: { toolName: "read", error: "ENOENT" },
+        ...attemptOverrides,
+      }),
+    });
+
+    expect(instruction).toBeNull();
+  });
+
+  it("still suppresses continuation when the presentation belongs to a successful batch (#118489)", () => {
+    const toolUseAssistant = {
+      role: "assistant",
+      stopReason: "toolUse",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "toolCall", id: "tool_ok", name: "read", arguments: {} }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    const instruction = resolveSettledToolTerminalContinuationInstruction({
+      provider: "openai",
+      modelId: "gpt-5.5",
+      modelApi: "openai-chatgpt-responses",
+      payloadCount: 0,
+      hasTerminalToolPresentation: true,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "read" }],
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        messagesSnapshot: [
+          toolUseAssistant,
+          { role: "toolResult", toolCallId: "tool_ok", toolName: "read", isError: false },
+        ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
+        lastAssistant: toolUseAssistant,
+        currentAttemptAssistant: toolUseAssistant,
+      }),
+    });
+
+    expect(instruction).toBeNull();
+  });
+
+  it.each([
     { label: "background trigger", allowEmptyStopContinuation: false },
     {
       label: "active tool",

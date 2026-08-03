@@ -826,13 +826,26 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
         : [];
     }),
   );
-  const allToolsProvenSettled =
-    params.attempt.itemLifecycle?.activeCount === 0 &&
+  const allRequestedToolsHavePersistedResults =
     requestedToolCalls.length > 0 &&
     requestedToolCalls.every(
       ({ id, name }) =>
         id !== null && name !== null && settledToolResults.get(id)?.toolName === name,
     );
+  const hasPersistedTerminalFailure =
+    allRequestedToolsHavePersistedResults &&
+    requestedToolCalls.some(
+      ({ id }) => id !== null && settledToolResults.get(id)?.isError === true,
+    );
+  // Exact persisted results for every terminal call are durable settlement
+  // evidence even when a bridge error raced the stream lifecycle decrement;
+  // async tool activity and child sessions still fail closed.
+  const lifecycleIsSettled =
+    params.attempt.itemLifecycle?.activeCount === 0 ||
+    (hasPersistedTerminalFailure &&
+      !hasAsyncStartedToolActivity(params.attempt.toolMetas) &&
+      !hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns));
+  const allToolsProvenSettled = allRequestedToolsHavePersistedResults && lifecycleIsSettled;
   const failedTerminalToolNames = new Set(
     requestedToolCalls.flatMap(({ id, name }) =>
       id !== null && name !== null && settledToolResults.get(id)?.isError === true ? [name] : [],
@@ -849,7 +862,7 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
   );
   if (
     params.payloadCount !== 0 ||
-    params.hasTerminalToolPresentation ||
+    (params.hasTerminalToolPresentation && !hasPersistedTerminalFailure) ||
     params.aborted ||
     params.promptError != null ||
     params.timedOut ||
