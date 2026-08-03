@@ -199,4 +199,58 @@ describe("runLinkUnderstanding", () => {
       }),
     );
   });
+
+  it("cancels the unread response body when the HTTP status indicates an error", async () => {
+    const failedResponse = new Response("server error", { status: 500 });
+    const cancelSpy = vi.spyOn(failedResponse.body!, "cancel");
+    const release = vi.fn(async () => {});
+    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: failedResponse,
+      finalUrl: "https://example.com/final",
+      release,
+    });
+
+    const result = await runLinkUnderstanding({
+      cfg: cfg({ type: "cli", command: "summarize" }),
+      ctx: ctx("see https://example.com/page"),
+    });
+
+    expect(result.outputs).toEqual([]);
+    expect(cancelSpy).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+    expect(runCommandWithTimeout).not.toHaveBeenCalled();
+  });
+
+  it("releases the guard after cancelling the error response body", async () => {
+    const failedResponse = new Response("not found", { status: 404 });
+    const body = failedResponse.body!;
+    const originalCancel = body.cancel.bind(body);
+    let cancelSettled = false;
+    const cancelStarted = new Promise<void>((resolve) => {
+      vi.spyOn(body, "cancel").mockImplementation((reason) => {
+        const p = originalCancel(reason).finally(() => {
+          cancelSettled = true;
+        });
+        resolve();
+        return p;
+      });
+    });
+    const release = vi.fn(async () => {});
+    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: failedResponse,
+      finalUrl: "https://example.com/final",
+      release,
+    });
+
+    const result = await runLinkUnderstanding({
+      cfg: cfg({ type: "cli", command: "summarize" }),
+      ctx: ctx("see https://example.com/page"),
+    });
+
+    await cancelStarted;
+    expect(result.outputs).toEqual([]);
+    expect(release).toHaveBeenCalledOnce();
+    // Cancel was started (fire-and-forget) before release was called.
+    expect(cancelSettled).toBe(true);
+  });
 });
