@@ -4,7 +4,6 @@
  * Keeps bounded display tails in memory while spilling full output to private temp files when needed.
  */
 import type { WriteStream } from "node:fs";
-import { createWindowsOutputDecoder } from "../../../infra/windows-encoding.js";
 import { createPrivateTempWriteStream } from "./private-temp-file.js";
 import {
   DEFAULT_MAX_BYTES,
@@ -27,9 +26,18 @@ interface OutputAccumulatorOptions {
 
 type OutputStream = "stdout" | "stderr";
 
-interface OutputTextDecoder {
+export interface OutputTextDecoder {
   decode(chunk: Buffer | string): string;
   flush(): string;
+}
+
+function createUtf8TextDecoder(): OutputTextDecoder {
+  const decoder = new TextDecoder();
+  return {
+    decode: (chunk) =>
+      typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true }),
+    flush: () => decoder.decode(),
+  };
 }
 
 /** Per-stream decode state. Streams are independent pipes and must not share it. */
@@ -85,7 +93,7 @@ export class OutputAccumulator {
     this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
     this.maxRollingBytes = Math.max(this.maxBytes * 2, 1);
     this.tempFilePrefix = options.tempFilePrefix ?? "openclaw-output";
-    this.createTextDecoder = options.createTextDecoder ?? createWindowsOutputDecoder;
+    this.createTextDecoder = options.createTextDecoder ?? createUtf8TextDecoder;
     this.createTextTransform = options.createTextTransform;
   }
 

@@ -1,5 +1,6 @@
 import { isContextOverflow } from "@openclaw/ai/internal/runtime";
 import type { AssistantMessage } from "../../llm/types.js";
+import { createWindowsOutputDecoder } from "../../infra/windows-encoding.js";
 import { classifyRateLimitWindow } from "../../llm/utils/rate-limit-window.js";
 import { isRetryableAssistantError } from "../../llm/utils/retry.js";
 import { sleep } from "../utils/sleep.js";
@@ -150,6 +151,7 @@ export abstract class AgentSessionExecution extends AgentSessionExtensions {
         {
           onChunk,
           signal: this.bashAbortController.signal,
+          createTextDecoder: options?.operations ? undefined : createWindowsOutputDecoder,
         },
       );
 

@@ -1,6 +1,7 @@
 // Bash executor tests cover bounded UTF-8 output and private sanitized spills.
 import { readFile, rm, stat } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
+import { createWindowsOutputDecoder } from "../../infra/windows-encoding.js";
 import { executeBashWithOperations } from "./bash-executor.js";
 import type { BashOperations } from "./tools/bash-operations.js";
 import { DEFAULT_MAX_BYTES } from "./tools/truncate.js";
@@ -21,6 +22,23 @@ function operationsForChunks(chunks: readonly OutputChunk[]): BashOperations {
 }
 
 describe("executeBashWithOperations", () => {
+  it("keeps injected operation output UTF-8 unless the owner selects another decoder", async () => {
+    const cp936 = Buffer.from([
+      199, 253, 182, 175, 198, 247, 32, 67, 32, 214, 208, 181, 196, 190, 237, 202, 199, 32, 65,
+      99, 101, 114,
+    ]);
+    const operations = operationsForChunks([[cp936]]);
+
+    const utf8Result = await executeBashWithOperations("printf output", "/tmp", operations);
+    const windowsResult = await executeBashWithOperations("printf output", "/tmp", operations, {
+      createTextDecoder: () =>
+        createWindowsOutputDecoder({ platform: "win32", windowsEncoding: "gbk" }),
+    });
+
+    expect(utf8Result.output).toBe(new TextDecoder().decode(cp936));
+    expect(windowsResult.output).toBe("驱动器 C 中的卷是 Acer");
+  });
+
   it("stores truncated full output in an owner-only temp file", async () => {
     const sanitizedOutput = "secret output\n".repeat(9000);
     const operations: BashOperations = {

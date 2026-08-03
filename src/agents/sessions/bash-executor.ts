@@ -8,7 +8,7 @@
 
 import { createStreamingBinaryOutputSanitizer } from "../shell-utils.js";
 import type { BashOperations } from "./tools/bash-operations.js";
-import { OutputAccumulator } from "./tools/output-accumulator.js";
+import { OutputAccumulator, type OutputTextDecoder } from "./tools/output-accumulator.js";
 
 // ============================================================================
 // Types
@@ -19,6 +19,8 @@ export interface BashExecutorOptions {
   onChunk?: (chunk: string) => void;
   /** AbortSignal for cancellation */
   signal?: AbortSignal;
+  /** Decoder selected by the operation owner; defaults to UTF-8 for injected operations. */
+  createTextDecoder?: () => OutputTextDecoder;
 }
 
 export interface BashResult {
@@ -50,6 +52,7 @@ export async function executeBashWithOperations(
 ): Promise<BashResult> {
   const output = new OutputAccumulator({
     tempFilePrefix: "openclaw-bash",
+    createTextDecoder: options?.createTextDecoder,
     createTextTransform: () => {
       const sanitizeOutput = createStreamingBinaryOutputSanitizer();
       return (text) => sanitizeOutput(text).replace(/\r/g, "");

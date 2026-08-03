@@ -4,18 +4,6 @@ import { describe, expect, it } from "vitest";
 import { createWindowsOutputDecoder } from "../../../infra/windows-encoding.js";
 import { OutputAccumulator } from "./output-accumulator.js";
 
-function createUtf8TextDecoder(): {
-  decode(chunk: Buffer | string): string;
-  flush(): string;
-} {
-  const decoder = new TextDecoder();
-  return {
-    decode: (chunk) =>
-      typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true }),
-    flush: () => decoder.decode(),
-  };
-}
-
 describe("OutputAccumulator", () => {
   it("stores spilled full output in an owner-only temp file", async () => {
     const accumulator = new OutputAccumulator({
@@ -59,7 +47,7 @@ describe("OutputAccumulator", () => {
   it("flushes pending bytes held by every stream lane", () => {
     // Each lane decodes independently, so a truncated character left on one
     // pipe must not stop the other pipe's tail from being flushed.
-    const accumulator = new OutputAccumulator({ createTextDecoder: createUtf8TextDecoder });
+    const accumulator = new OutputAccumulator();
 
     accumulator.append(Buffer.from([0xe6, 0x97]), "stdout"); // leading bytes of 日
     accumulator.append(Buffer.from([0xe6, 0x97]), "stderr");
