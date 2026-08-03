@@ -144,8 +144,13 @@ function clearWorkspaceSearchTimer(workspace: SessionWorkspaceState | undefined)
   }
 }
 
-export function clearSessionWorkspaceTimers(state: SessionWorkspaceHost) {
-  clearWorkspaceSearchTimer(state.sessionWorkspaceState);
+function clearWorkspaceEffects(workspace: SessionWorkspaceState | undefined) {
+  workspace?.dockDragCancel?.();
+  clearWorkspaceSearchTimer(workspace);
+}
+
+export function clearSessionWorkspaceEffects(state: SessionWorkspaceHost) {
+  clearWorkspaceEffects(state.sessionWorkspaceState);
 }
 
 function getWorkspaceState(state: SessionWorkspaceHost): SessionWorkspaceState {
@@ -155,8 +160,7 @@ function getWorkspaceState(state: SessionWorkspaceHost): SessionWorkspaceState {
   if (current?.sessionKey === sessionKey && current.agentId === agentId) {
     return current;
   }
-  current?.dockDragCancel?.();
-  clearWorkspaceSearchTimer(current);
+  clearWorkspaceEffects(current);
   const next: SessionWorkspaceState = {
     activeId: null,
     agentId,
@@ -703,11 +707,19 @@ function startSessionWorkspaceDockDrag(state: SessionWorkspaceHost, event: Point
     dragGrip.removeEventListener("pointerup", handleUp);
     dragGrip.removeEventListener("pointercancel", handleCancel);
     dragGrip.removeEventListener("lostpointercapture", handleLostPointerCapture);
+    window.removeEventListener("blur", handleBlur);
     workspace.dockDragCancel = null;
     workspace.dockDragPointerId = null;
     const zone = workspace.dockDragZone;
     workspace.dockDragging = false;
     workspace.dockDragZone = null;
+    try {
+      if (dragGrip.hasPointerCapture(activePointerId)) {
+        dragGrip.releasePointerCapture(activePointerId);
+      }
+    } catch {
+      // Capture can already be gone when the grip is detached or the browser canceled it.
+    }
     if (apply && zone) {
       setSessionWorkspaceDock(state, zone);
       return;
@@ -723,12 +735,16 @@ function startSessionWorkspaceDockDrag(state: SessionWorkspaceHost, event: Point
   function handleLostPointerCapture(lost: PointerEvent) {
     finish(lost.pointerId, false);
   }
+  function handleBlur() {
+    finish(activePointerId, false);
+  }
 
   workspace.dockDragCancel = () => finish(activePointerId, false);
   dragGrip.addEventListener("pointermove", handleMove);
   dragGrip.addEventListener("pointerup", handleUp);
   dragGrip.addEventListener("pointercancel", handleCancel);
   dragGrip.addEventListener("lostpointercapture", handleLostPointerCapture);
+  window.addEventListener("blur", handleBlur);
 }
 
 export function revealSessionWorkspaceFile(state: SessionWorkspaceHost, path: string) {
