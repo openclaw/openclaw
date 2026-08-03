@@ -58,6 +58,11 @@ const WebSearchSchema = {
       items: { type: "string" },
       description: "Perplexity domain filter.",
     },
+    search_context_size: {
+      type: "string",
+      enum: ["low", "medium", "high"],
+      description: "Perplexity content extraction budget.",
+    },
     max_tokens: {
       type: "number",
       description: "Perplexity total token budget.",
