@@ -1,9 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  createFollowupRun,
   createMinimalRunAgentTurnParams,
   createMockReplyOperation,
+  getExecuteAgentTurnForTest,
   setupAgentRunnerExecutionTestState,
 } from "./agent-runner-execution.test-support.js";
+import type { EmbeddedAgentParams } from "./agent-runner-execution.test-support.js";
 
 const state = await setupAgentRunnerExecutionTestState();
 const { executeAgentTurn } = await import("./agent-runner-execution.js");
@@ -58,5 +61,67 @@ describe("executeAgentTurn contract", () => {
       reason: "user",
       compaction: { count: 1, durable: [] },
     });
+  });
+});
+
+describe("executeAgentTurn: cancellation retirement on freeze", () => {
+  it("retires queued cancellation ownership when execution freezes", async () => {
+    const { replyOperation } = createMockReplyOperation();
+    const onCancellationRetired = vi.fn();
+    const followupRun = createFollowupRun();
+    followupRun.turnAdoptionLifecycle = {
+      onAdopted: async () => {},
+      onCancellationRetired,
+    };
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      params.onExecutionPhase?.({ phase: "model_call_started" });
+      return { payloads: [{ text: "ok" }], meta: {} };
+    });
+
+    const execute = await getExecuteAgentTurnForTest();
+    await execute({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+      replyOperation,
+    });
+
+    expect(onCancellationRetired).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retire queued cancellation ownership on a pre-start failure that is retryable", async () => {
+    const { replyOperation } = createMockReplyOperation();
+    const onCancellationRetired = vi.fn();
+    const followupRun = createFollowupRun();
+    followupRun.turnAdoptionLifecycle = {
+      onAdopted: async () => {},
+      onCancellationRetired,
+    };
+    state.resolveCurrentTurnImagesMock.mockRejectedValueOnce(new Error("image resolution failed"));
+
+    const execute = await getExecuteAgentTurnForTest();
+    await expect(
+      execute(createMinimalRunAgentTurnParams({ followupRun, replyOperation })),
+    ).rejects.toThrow("image resolution failed");
+
+    expect(onCancellationRetired).not.toHaveBeenCalled();
+  });
+
+  it("retires queued cancellation ownership when a started execution throws", async () => {
+    const { replyOperation } = createMockReplyOperation();
+    const onCancellationRetired = vi.fn();
+    const followupRun = createFollowupRun();
+    followupRun.turnAdoptionLifecycle = {
+      onAdopted: async () => {},
+      onCancellationRetired,
+    };
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      params.onExecutionPhase?.({ phase: "model_call_started" });
+      throw new Error("model execution failed after start");
+    });
+
+    const execute = await getExecuteAgentTurnForTest();
+    const result = await execute(createMinimalRunAgentTurnParams({ followupRun, replyOperation }));
+
+    expect(result.kind).toBe("final");
+    expect(onCancellationRetired).toHaveBeenCalledTimes(1);
   });
 });
