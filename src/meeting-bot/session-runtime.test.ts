@@ -113,6 +113,7 @@ function createTestRuntime(params: {
     request: TestRequest,
     resolved: { agentId: string; mode: TestMode; transport: TestTransport; url: string },
   ): Promise<{ keepBrowserTab: boolean } | void>;
+  refreshBrowserHealth?(session: TestSession): Promise<boolean | void>;
   joinTransport(input: {
     request: TestRequest;
     session: TestSession;
@@ -203,7 +204,7 @@ function createTestRuntime(params: {
     },
     joinTransport: (input) => params.joinTransport(input),
     releaseBrowserTab: (session) => params.releaseBrowserTab(session),
-    refreshBrowserHealth: async () => {},
+    refreshBrowserHealth: async (session) => await params.refreshBrowserHealth?.(session),
     refreshStatus: async () => {},
     refreshReusableSession: async (session, request, resolved) =>
       await params.refreshReusableSession?.(session, request, resolved),
@@ -222,6 +223,64 @@ function createTestRuntime(params: {
   });
   return { createdSessions, runtime };
 }
+
+describe("MeetingSessionRuntime probe join health", () => {
+  it.each([
+    {
+      launched: true,
+      refreshResult: true,
+      reusedBrowserHealthChecked: true,
+      refreshCalls: 1,
+    },
+    {
+      launched: true,
+      refreshResult: false,
+      reusedBrowserHealthChecked: false,
+      refreshCalls: 1,
+    },
+    {
+      launched: true,
+      refreshResult: undefined,
+      reusedBrowserHealthChecked: false,
+      refreshCalls: 1,
+    },
+    {
+      launched: false,
+      refreshResult: true,
+      reusedBrowserHealthChecked: false,
+      refreshCalls: 0,
+    },
+  ])(
+    "reports browserHealthChecked=$reusedBrowserHealthChecked when launched=$launched and refresh returns $refreshResult",
+    async ({ launched, refreshResult, reusedBrowserHealthChecked, refreshCalls }) => {
+      const refreshBrowserHealth = vi.fn(async () => refreshResult);
+      const { runtime } = createTestRuntime({
+        refreshBrowserHealth,
+        releaseBrowserTab: async () => true,
+        joinTransport: async ({ session }) => {
+          session.browser = {
+            launched,
+            tab: { targetId: "probe-tab", openedByPlugin: launched },
+          };
+          return {};
+        },
+      });
+
+      const first = await runtime.joinForProbe({
+        url: "https://meeting.example/probe",
+        agentId: "main",
+      });
+      const reused = await runtime.joinForProbe({
+        url: "https://meeting.example/probe",
+        agentId: "main",
+      });
+
+      expect(first.browserHealthChecked).toBe(true);
+      expect(reused.browserHealthChecked).toBe(reusedBrowserHealthChecked);
+      expect(refreshBrowserHealth).toHaveBeenCalledTimes(refreshCalls);
+    },
+  );
+});
 
 const tempDirs: string[] = [];
 

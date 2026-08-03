@@ -283,16 +283,22 @@ export class GoogleMeetRuntime {
   }
 
   async testListen(request: GoogleMeetJoinRequest) {
-    return await testGoogleMeetListening(this.#probeContext(), request);
+    // Listening consumes probe-only freshness metadata; speech keeps the public join contract.
+    return await testGoogleMeetListening(
+      this.#probeContext(async (probeRequest) => await this.#sessions.joinForProbe(probeRequest)),
+      request,
+    );
   }
 
-  #probeContext(): GoogleMeetRuntimeProbeContext {
+  #probeContext(
+    join: GoogleMeetRuntimeProbeContext["join"] = async (request) => await this.join(request),
+  ): GoogleMeetRuntimeProbeContext {
     return {
       config: this.params.config,
       resolveAgentId: (request) =>
         normalizeAgentId(request.agentId ?? this.params.config.realtime.agentId ?? this.#agentId),
       list: () => this.list(),
-      join: async (request) => await this.join(request),
+      join,
       isReusable: (session, resolved) => this.#sessions.isReusableSession(session, resolved),
       hasHealthHandle: (sessionId) => this.#sessions.hasHealthHandle(sessionId),
       refreshHealth: (sessionId) => this.#sessions.refreshHealth(sessionId),
@@ -515,7 +521,7 @@ export class GoogleMeetRuntime {
   async #refreshBrowserHealth(
     session: GoogleMeetSession,
     options: { force?: boolean; readOnly?: boolean } = {},
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       const result =
         session.transport === "chrome-node"
@@ -548,15 +554,19 @@ export class GoogleMeetRuntime {
               result.targetId === currentTab?.targetId ? currentTab.openedByPlugin : false,
           };
         }
-        if (result.browser) {
-          session.chrome.health = { ...session.chrome.health, ...result.browser };
+        if (!result.browser) {
+          return false;
         }
+        session.chrome.health = { ...session.chrome.health, ...result.browser };
         session.updatedAt = nowIso();
+        return true;
       }
+      return false;
     } catch (error) {
       this.params.logger.debug?.(
         `[google-meet] browser readiness refresh ignored: ${formatErrorMessage(error)}`,
       );
+      return false;
     }
   }
 

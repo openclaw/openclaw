@@ -232,7 +232,7 @@ type MeetingRuntimeHooks<
   recordBrowserRecoveryFailure?(
     session: Session,
     failure: { kind: "missing" | "error"; message: string },
-  ): void;
+  ): "authoritative" | void;
   refreshReusableSession?(
     session: Session,
     request: Request,

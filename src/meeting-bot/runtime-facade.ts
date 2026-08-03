@@ -19,7 +19,7 @@ import type {
   MeetingRuntimeSession,
   MeetingRuntimeSpeechBlockedReason,
 } from "./runtime-facade-types.js";
-import type { MeetingProbeContext } from "./runtime-probes.js";
+import type { MeetingProbeContext, MeetingProbeRefreshOutcome } from "./runtime-probes.js";
 import { createMeetingSession } from "./session-factory.js";
 import {
   MeetingSessionRuntime,
@@ -119,7 +119,7 @@ export function createMeetingRuntimeFacade<
           await this.#joinTransport(request, session, context),
         releaseBrowserTab: async (session) => await this.#releaseBrowserTab(session),
         refreshBrowserHealth: async (session, refreshOptions) =>
-          await this.#refreshBrowserHealth(session, refreshOptions),
+          (await this.#refreshBrowserHealth(session, refreshOptions)).browserHealthChecked,
         refreshStatus: async (session) => await this.#refreshStatus(session),
         refreshReusableSession: async (session, request) =>
           await options.hooks?.refreshReusableSession?.(session, request, this.#hookContext()),
@@ -151,8 +151,18 @@ export function createMeetingRuntimeFacade<
     }
 
     async join(request: Request) {
+      return await this.#joinSession(
+        request,
+        async (normalized) => await this.#sessions.join(normalized),
+      );
+    }
+
+    async #joinSession<Result>(
+      request: Request,
+      join: (normalized: Request) => Promise<Result>,
+    ): Promise<Result> {
       try {
-        return await this.#sessions.join(
+        return await join(
           options.hooks?.normalizeJoinRequest?.(request, this.#hookContext()) ?? request,
         );
       } catch (error) {
@@ -239,7 +249,11 @@ export function createMeetingRuntimeFacade<
         config: this.params.config,
         resolveAgentId: (request) => normalizeAgentId(request.agentId ?? this.#defaultAgentId),
         list: () => this.list(),
-        join: async (request) => await this.join(request),
+        join: async (request) =>
+          await this.#joinSession(
+            request,
+            async (normalized) => await this.#sessions.joinForProbe(normalized),
+          ),
         isReusable: (session, resolved) => this.#sessions.isReusableSession(session, resolved),
         hasHealthHandle: (sessionId) => this.#sessions.hasHealthHandle(sessionId),
         refreshHealth: (sessionId) => this.#sessions.refreshHealth(sessionId),
@@ -383,7 +397,7 @@ export function createMeetingRuntimeFacade<
     async #refreshBrowserHealth(
       session: Session,
       refreshOptions: { readOnly?: boolean; timeoutMs?: number } = {},
-    ): Promise<void> {
+    ): Promise<MeetingProbeRefreshOutcome> {
       try {
         const result = await options.transport.recoverCurrentTab({
           runtime: this.params.runtime,
@@ -408,27 +422,36 @@ export function createMeetingRuntimeFacade<
                 result.tab.targetId === currentTab?.targetId ? currentTab.openedByPlugin : false,
             };
           }
-          if (result.browser) {
-            session.chrome.health = { ...session.chrome.health, ...result.browser };
+          if (!result.browser) {
+            return { browserHealthChecked: false, manualActionIsAuthoritative: false };
           }
+          session.chrome.health = { ...session.chrome.health, ...result.browser };
           session.updatedAt = nowIso();
+          return { browserHealthChecked: true, manualActionIsAuthoritative: true };
         } else if (session.chrome) {
-          options.hooks?.recordBrowserRecoveryFailure?.(session, {
-            kind: "missing",
-            message: result.message,
-          });
+          const manualActionIsAuthoritative =
+            options.hooks?.recordBrowserRecoveryFailure?.(session, {
+              kind: "missing",
+              message: result.message,
+            }) === "authoritative";
+          return { browserHealthChecked: false, manualActionIsAuthoritative };
         }
+        return { browserHealthChecked: false, manualActionIsAuthoritative: false };
       } catch (error) {
         const formattedError = formatErrorMessage(error);
         const message = options.messages.browserReadinessFailed?.(formattedError) ?? formattedError;
+        let manualActionIsAuthoritative = false;
         if (options.hooks?.recordBrowserRecoveryFailure) {
           this.params.logger.debug?.(`${options.platform.logScope} ${message}`);
-          options.hooks.recordBrowserRecoveryFailure(session, { kind: "error", message });
+          manualActionIsAuthoritative =
+            options.hooks.recordBrowserRecoveryFailure(session, { kind: "error", message }) ===
+            "authoritative";
         } else {
           this.params.logger.debug?.(
             `${options.platform.logScope} browser readiness refresh ignored: ${formatErrorMessage(error)}`,
           );
         }
+        return { browserHealthChecked: false, manualActionIsAuthoritative };
       }
     }
 

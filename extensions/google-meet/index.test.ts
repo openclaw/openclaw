@@ -12,6 +12,7 @@ import {
   createLocalMeetingRealtimeAudioTransport,
   createMeetingRealtimeEngineBindings,
   createNodeMeetingRealtimeAudioTransport,
+  MeetingSessionRuntime,
   startMeetingAgentRealtimeEngine,
   startMeetingRealtimeEngine,
   type MeetingRealtimeAudioTransport,
@@ -5394,7 +5395,11 @@ describe("google-meet plugin", () => {
       },
     });
     vi.spyOn(runtime, "list").mockReturnValue([oldSession]);
-    vi.spyOn(runtime, "join").mockResolvedValue({ session: newSession, spoken: false });
+    vi.spyOn(MeetingSessionRuntime.prototype, "joinForProbe").mockResolvedValue({
+      browserHealthChecked: true,
+      session: newSession,
+      spoken: false,
+    });
 
     const result = await runtime.testListen({
       url: MEET_URL,
@@ -5416,9 +5421,9 @@ describe("google-meet plugin", () => {
       },
     });
     vi.spyOn(runtime, "list").mockReturnValue([session]);
-    vi.spyOn(runtime, "join").mockImplementation(async () => {
+    vi.spyOn(MeetingSessionRuntime.prototype, "joinForProbe").mockImplementation(async () => {
       session.chrome!.health = { transcriptLines: 2, lastCaptionText: "fresh caption" };
-      return { session, spoken: false };
+      return { browserHealthChecked: true, session, spoken: false };
     });
 
     const result = await runtime.testListen({
@@ -5427,6 +5432,33 @@ describe("google-meet plugin", () => {
 
     expect(result.listenVerified).toBe(true);
     expect(result.listenTimedOut).toBe(false);
+  });
+
+  it("uses the lifecycle-owned browser health result for reused listening sessions", async () => {
+    const runtime = meetRuntime({}, noopLogger);
+    const session = meetSession({
+      mode: "transcribe",
+      chrome: {
+        audioBackend: "blackhole-2ch",
+        launched: true,
+        health: {
+          manualAction: {
+            reason: "meet-admission-required",
+            message: "This cached action must be rechecked.",
+          },
+        },
+      },
+    });
+    vi.spyOn(runtime, "list").mockReturnValue([session]);
+    const publicJoin = vi.spyOn(runtime, "join").mockResolvedValue({ session, spoken: false });
+    const joinForProbe = vi
+      .spyOn(MeetingSessionRuntime.prototype, "joinForProbe")
+      .mockResolvedValue({ browserHealthChecked: false, session, spoken: false });
+
+    await runtime.testListen({ url: MEET_URL, mode: "transcribe", timeoutMs: 1 });
+
+    expect(joinForProbe).toHaveBeenCalled();
+    expect(publicJoin).not.toHaveBeenCalled();
   });
 
   it("preserves plugin ownership from browser create through join and leave", async () => {

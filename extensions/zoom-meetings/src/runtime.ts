@@ -127,6 +127,7 @@ export const ZoomMeetingsRuntime = MeetingPlatformAdapter.createRuntimeFacade<
         ],
       };
       session.updatedAt = new Date().toISOString();
+      return "authoritative";
     },
   },
   messages: {

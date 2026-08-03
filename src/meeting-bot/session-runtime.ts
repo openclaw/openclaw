@@ -18,6 +18,7 @@ import { MeetingSessionTranscriptStore } from "./session-transcript-store.js";
 import type {
   MeetingBrowserHealth,
   MeetingBrowserTab,
+  MeetingPluginJoinResult,
   MeetingResolvedJoin,
   MeetingSessionRecord,
   MeetingTranscriptSnapshot,
@@ -86,10 +87,11 @@ export type MeetingSessionRuntimeOptions<
     context: MeetingSessionRuntimeJoinContext<TSession, TTransport, TMode, THealth, TTab>;
   }): Promise<{ delegatedSpoken?: boolean }>;
   releaseBrowserTab(session: TSession): Promise<boolean | undefined>;
+  /** Return true only when current browser health was inspected and applied. */
   refreshBrowserHealth(
     session: TSession,
     options?: { force?: boolean; readOnly?: boolean },
-  ): Promise<void>;
+  ): Promise<boolean | void>;
   refreshStatus(session: TSession): Promise<void>;
   refreshReusableSession(
     session: TSession,
@@ -115,6 +117,10 @@ export type MeetingSessionLeaveResult<TSession> = {
   found: boolean;
   session?: TSession;
   browserLeft?: boolean;
+};
+
+export type MeetingSessionProbeJoinResult<TSession> = MeetingPluginJoinResult<TSession> & {
+  browserHealthChecked: boolean;
 };
 
 const nowIso = () => new Date().toISOString();
@@ -225,7 +231,17 @@ export class MeetingSessionRuntime<
     );
   }
 
-  async join(request: TRequest): Promise<{ session: TSession; spoken?: boolean }> {
+  async join(request: TRequest): Promise<MeetingPluginJoinResult<TSession>> {
+    const { browserHealthChecked: _browserHealthChecked, ...result } =
+      await this.#joinForProbe(request);
+    return result;
+  }
+
+  async joinForProbe(request: TRequest): Promise<MeetingSessionProbeJoinResult<TSession>> {
+    return await this.#joinForProbe(request);
+  }
+
+  async #joinForProbe(request: TRequest): Promise<MeetingSessionProbeJoinResult<TSession>> {
     const resolved = this.options.resolveJoin(request);
     // Session publication follows async transport setup. Serialize every transport so
     // concurrent identical joins cannot both create an external participant.
@@ -354,9 +370,16 @@ export class MeetingSessionRuntime<
     session: TSession,
     options: { force?: boolean; readOnly?: boolean } = {},
   ): Promise<void> {
+    await this.#refreshBrowserHealth(session, options);
+  }
+
+  async #refreshBrowserHealth(
+    session: TSession,
+    options: { force?: boolean; readOnly?: boolean } = {},
+  ): Promise<boolean> {
     if (!this.#isManagedBrowserSession(session)) {
       this.refreshSpeechReadiness(session);
-      return;
+      return false;
     }
     if (
       !options.force &&
@@ -364,18 +387,19 @@ export class MeetingSessionRuntime<
       this.#evaluateSpeechReadiness(session).ready
     ) {
       this.refreshSpeechReadiness(session);
-      return;
+      return false;
     }
-    await this.options.refreshBrowserHealth(session, options);
+    const browserHealthChecked = await this.options.refreshBrowserHealth(session, options);
     this.refreshSpeechReadiness(session);
+    return browserHealthChecked === true;
   }
 
-  async refreshCaptionHealth(session: TSession): Promise<void> {
+  async refreshCaptionHealth(session: TSession): Promise<boolean> {
     if (!this.options.isTranscribeMode(session.mode)) {
       this.refreshSpeechReadiness(session);
-      return;
+      return false;
     }
-    await this.refreshBrowserHealth(session);
+    return await this.#refreshBrowserHealth(session);
   }
 
   refreshSpeechReadiness(session: TSession): {
@@ -409,7 +433,7 @@ export class MeetingSessionRuntime<
   async #joinUnlocked(
     request: TRequest,
     resolved: MeetingResolvedJoin<TTransport, TMode>,
-  ): Promise<{ session: TSession; spoken?: boolean }> {
+  ): Promise<MeetingSessionProbeJoinResult<TSession>> {
     const activeSessions = this.list().filter(
       (session) =>
         session.state === "active" &&
@@ -460,14 +484,14 @@ export class MeetingSessionRuntime<
     const speechInstructions = this.options.resolveSpeechInstructions(request);
     if (reusable) {
       await this.#durableTranscripts.start(reusable);
-      await this.refreshBrowserHealth(reusable);
+      const browserHealthChecked = await this.#refreshBrowserHealth(reusable);
       this.#noteSession(reusable, this.options.messages.reusedSessionNote);
       reusable.updatedAt = nowIso();
       const spoken =
         this.options.isTalkBackMode(resolved.mode) && speechInstructions
           ? await this.speakWhenReady(reusable, speechInstructions)
           : false;
-      return { session: reusable, spoken };
+      return { browserHealthChecked, session: reusable, spoken };
     }
 
     const session = this.options.createSession({ request, resolved, createdAt: nowIso() });
@@ -510,7 +534,7 @@ export class MeetingSessionRuntime<
       : this.options.isTalkBackMode(resolved.mode) && speechInstructions
         ? await this.speakWhenReady(session, speechInstructions)
         : false;
-    return { session, spoken };
+    return { browserHealthChecked: true, session, spoken };
   }
 
   async #leaveUnlocked(

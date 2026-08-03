@@ -24,7 +24,7 @@ export type GoogleMeetRuntimeProbeContext = {
   ): boolean;
   hasHealthHandle(sessionId: string): boolean;
   refreshHealth(sessionId: string): void;
-  refreshCaptionHealth(session: GoogleMeetSession): Promise<void>;
+  refreshCaptionHealth(session: GoogleMeetSession): Promise<boolean | void>;
 };
 
 function resolveProbeTimeoutMs(input: number | undefined, fallback: number): number {

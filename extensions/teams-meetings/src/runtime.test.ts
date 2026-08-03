@@ -17,11 +17,25 @@ const logger = {
 
 function runtimeHarness(options?: { tabOpen?: boolean }) {
   let tabOpen = options?.tabOpen ?? false;
+  let tabListFailures = 0;
+  let reopenAfterMissingTabLists = 0;
   let sessionConflict = false;
   let targetId = "teams-tab";
   let tabUrl = URL;
+  let captionText: string | undefined;
   const gatewayRequest = vi.fn(async (_method: string, params: Record<string, unknown>) => {
     if (params.path === "/tabs") {
+      if (tabListFailures > 0) {
+        tabListFailures -= 1;
+        throw new Error("browser node unavailable");
+      }
+      if (!tabOpen && reopenAfterMissingTabLists > 0) {
+        reopenAfterMissingTabLists -= 1;
+        if (reopenAfterMissingTabLists === 0) {
+          tabOpen = true;
+        }
+        return { tabs: [] };
+      }
       return {
         tabs: tabOpen ? [{ targetId, title: "Teams call", url: tabUrl }] : [],
       };
@@ -57,6 +71,7 @@ function runtimeHarness(options?: { tabOpen?: boolean }) {
           inCall: true,
           micMuted: true,
           cameraOff: true,
+          ...(captionText ? { lastCaptionText: captionText, transcriptLines: 1 } : {}),
           ...(sessionConflict && fn.includes("const allowSessionAdoption = false")
             ? {
                 manualAction: {
@@ -88,6 +103,18 @@ function runtimeHarness(options?: { tabOpen?: boolean }) {
   return {
     runtime,
     gatewayRequest,
+    closeTab() {
+      tabOpen = false;
+    },
+    failNextTabLists(count = 1) {
+      tabListFailures = count;
+    },
+    reopenTabAfterMissingLists(count: number) {
+      reopenAfterMissingTabLists = count;
+    },
+    setCaptionText(value: string) {
+      captionText = value;
+    },
     setSessionConflict(value: boolean) {
       sessionConflict = value;
     },
@@ -305,5 +332,66 @@ describe("Microsoft Teams meeting session flow", () => {
       }),
       expect.objectContaining({ scopes: ["operator.admin"] }),
     );
+  });
+
+  it("keeps retrying stale listening health until a missing tab recovers", async () => {
+    const harness = runtimeHarness();
+    const runtime = new TeamsMeetingsRuntime({
+      config: resolveTeamsMeetingsConfig({ defaultMode: "transcribe" }),
+      fullConfig: {},
+      runtime: harness.runtime,
+      logger,
+    });
+    const joined = await runtime.join({ url: URL, mode: "transcribe" });
+    const staleAction = {
+      reason: "teams-admission-required" as const,
+      message: "This cached action must be rechecked.",
+    };
+    joined.session.chrome!.health = { manualAction: staleAction };
+    harness.closeTab();
+    harness.reopenTabAfterMissingLists(2);
+    harness.setCaptionText("Recovered caption after transient tab loss");
+    harness.gatewayRequest.mockClear();
+
+    const result = await runtime.testListen({ url: URL, mode: "transcribe", timeoutMs: 1_000 });
+
+    const tabListCalls = harness.gatewayRequest.mock.calls.filter(
+      ([, params]) => params.path === "/tabs",
+    );
+    expect(tabListCalls).toHaveLength(3);
+    expect(result).toMatchObject({
+      listenTimedOut: false,
+      listenVerified: true,
+      manualAction: undefined,
+      lastCaptionText: "Recovered caption after transient tab loss",
+      transcriptLines: 1,
+    });
+  });
+
+  it("retries stale listening health after a thrown browser recovery", async () => {
+    const harness = runtimeHarness();
+    const runtime = new TeamsMeetingsRuntime({
+      config: resolveTeamsMeetingsConfig({ defaultMode: "transcribe" }),
+      fullConfig: {},
+      runtime: harness.runtime,
+      logger,
+    });
+    const joined = await runtime.join({ url: URL, mode: "transcribe" });
+    joined.session.chrome!.health = {
+      manualAction: {
+        reason: "teams-admission-required",
+        message: "This cached action must be rechecked after browser recovery resumes.",
+      },
+    };
+    harness.failNextTabLists();
+    harness.gatewayRequest.mockClear();
+
+    const result = await runtime.testListen({ url: URL, mode: "transcribe", timeoutMs: 10 });
+
+    const tabListCalls = harness.gatewayRequest.mock.calls.filter(
+      ([, params]) => params.path === "/tabs",
+    );
+    expect(tabListCalls.length).toBeGreaterThanOrEqual(2);
+    expect(result.manualAction).toBeUndefined();
   });
 });

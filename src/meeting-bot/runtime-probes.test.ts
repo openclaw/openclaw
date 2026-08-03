@@ -39,6 +39,7 @@ const cases = [
     session: { id: "google", chrome: { launched: true } } satisfies Session,
     shouldWaitForListening: (session: Session) => Boolean(session.chrome?.launched),
     waitsForListening: true,
+    waitsWithoutBrowserTarget: true,
   },
   {
     name: "Teams",
@@ -47,8 +48,10 @@ const cases = [
       id: "teams",
       chrome: { browserTab: { targetId: "teams-tab" }, launched: false },
     } satisfies Session,
-    shouldWaitForListening: (session: Session) => Boolean(session.chrome?.browserTab?.targetId),
+    shouldWaitForListening: (session: Session) =>
+      Boolean(session.chrome?.launched || session.chrome?.browserTab?.targetId),
     waitsForListening: true,
+    waitsWithoutBrowserTarget: true,
   },
   {
     name: "Zoom",
@@ -59,6 +62,7 @@ const cases = [
     } satisfies Session,
     shouldWaitForListening: (session: Session) => Boolean(session.chrome?.browserTab?.targetId),
     waitsForListening: true,
+    waitsWithoutBrowserTarget: false,
   },
 ] as const;
 
@@ -125,7 +129,7 @@ describe.each(cases)("$name meeting runtime probe parity", (testCase) => {
     }
   });
 
-  it("returns immediately when the joined session has no browser target", async () => {
+  it("preserves platform policy when the joined session has no browser target", async () => {
     const probes = createProbes();
     const refreshCaptionHealth = vi.fn(async () => undefined);
     const context = {
@@ -147,7 +151,161 @@ describe.each(cases)("$name meeting runtime probe parity", (testCase) => {
         mode: "transcribe",
         timeoutMs: 5,
       }),
-    ).resolves.toMatchObject({ listenTimedOut: false, listenVerified: false });
+    ).resolves.toMatchObject({
+      listenTimedOut: testCase.waitsWithoutBrowserTarget,
+      listenVerified: false,
+    });
+    if (testCase.waitsWithoutBrowserTarget) {
+      expect(refreshCaptionHealth).toHaveBeenCalled();
+    } else {
+      expect(refreshCaptionHealth).not.toHaveBeenCalled();
+    }
+  });
+
+  it("returns a fresh manual action without refreshing the new session", async () => {
+    const probes = createProbes();
+    const initialAction = {
+      reason: `${testCase.name.toLowerCase()}-fresh-action`,
+      message: "Complete the requested browser action.",
+    };
+    const session = {
+      id: `${testCase.name.toLowerCase()}-fresh-action`,
+      chrome: {
+        ...testCase.session.chrome,
+        health: { manualAction: initialAction },
+      },
+    } satisfies Session;
+    const refreshCaptionHealth = vi.fn(async () => {
+      session.chrome.health = {
+        manualAction: {
+          reason: `${testCase.name.toLowerCase()}-replacement-action`,
+          message: "This redundant refresh replaced the useful action.",
+        },
+      };
+    });
+    const context = {
+      config: { defaultMode: "agent" as const, chrome: { joinTimeoutMs: 5 }, chromeNode: {} },
+      resolveAgentId: () => "main",
+      list: () => [],
+      join: vi.fn(async () => ({ session })),
+      isReusable: () => false,
+      hasHealthHandle: () => false,
+      refreshHealth: vi.fn(),
+      refreshCaptionHealth,
+    };
+
+    await expect(
+      probes.testListening(context, {
+        url: "https://example.test/meeting",
+        mode: "transcribe",
+        timeoutMs: 5,
+      }),
+    ).resolves.toMatchObject({
+      createdSession: true,
+      listenTimedOut: false,
+      listenVerified: false,
+      manualAction: initialAction,
+    });
+    expect(refreshCaptionHealth).not.toHaveBeenCalled();
+  });
+
+  it("returns a fresh manual action discovered while reusing a checked session", async () => {
+    const probes = createProbes();
+    const freshAction = {
+      reason: `${testCase.name.toLowerCase()}-fresh-reused-action`,
+      message: "Complete the newly discovered browser action.",
+    };
+    const session = {
+      id: `${testCase.name.toLowerCase()}-fresh-reused-action`,
+      chrome: {
+        ...testCase.session.chrome,
+        health: {},
+      },
+    } satisfies Session;
+    const refreshCaptionHealth = vi.fn(async () => {
+      session.chrome.health = {
+        manualAction: {
+          reason: `${testCase.name.toLowerCase()}-replacement-action`,
+          message: "This redundant refresh replaced the fresh action.",
+        },
+      };
+    });
+    const context = {
+      config: { defaultMode: "agent" as const, chrome: { joinTimeoutMs: 5 }, chromeNode: {} },
+      resolveAgentId: () => "main",
+      list: () => [session],
+      join: vi.fn(async () => {
+        session.chrome.health = { manualAction: freshAction };
+        return { browserHealthChecked: true, session };
+      }),
+      isReusable: () => true,
+      hasHealthHandle: () => false,
+      refreshHealth: vi.fn(),
+      refreshCaptionHealth,
+    };
+
+    await expect(
+      probes.testListening(context, {
+        url: "https://example.test/meeting",
+        mode: "transcribe",
+        timeoutMs: 5,
+      }),
+    ).resolves.toMatchObject({
+      createdSession: false,
+      listenTimedOut: false,
+      listenVerified: false,
+      manualAction: freshAction,
+    });
+    expect(refreshCaptionHealth).not.toHaveBeenCalled();
+  });
+
+  it("preserves legacy join behavior when browser health metadata is omitted", async () => {
+    const probes = createProbes();
+    const freshAction = {
+      reason: `${testCase.name.toLowerCase()}-legacy-fresh-action`,
+      message: "Complete the newly discovered browser action.",
+    };
+    const session = {
+      id: `${testCase.name.toLowerCase()}-legacy-fresh-action`,
+      chrome: {
+        ...testCase.session.chrome,
+        health: {},
+      },
+    } satisfies Session;
+    const refreshCaptionHealth = vi.fn(async () => {
+      session.chrome.health = {
+        manualAction: {
+          reason: `${testCase.name.toLowerCase()}-legacy-replacement-action`,
+          message: "This compatibility-breaking refresh replaced the fresh action.",
+        },
+      };
+    });
+    const context = {
+      config: { defaultMode: "agent" as const, chrome: { joinTimeoutMs: 5 }, chromeNode: {} },
+      resolveAgentId: () => "main",
+      list: () => [session],
+      join: vi.fn(async () => {
+        session.chrome.health = { manualAction: freshAction };
+        return { session };
+      }),
+      isReusable: () => true,
+      hasHealthHandle: () => false,
+      refreshHealth: vi.fn(),
+      refreshCaptionHealth,
+    };
+
+    await expect(
+      probes.testListening(context, {
+        url: "https://example.test/meeting",
+        mode: "transcribe",
+        timeoutMs: 5,
+      }),
+    ).resolves.toMatchObject({
+      createdSession: false,
+      listenTimedOut: false,
+      listenVerified: false,
+      manualAction: freshAction,
+    });
     expect(refreshCaptionHealth).not.toHaveBeenCalled();
   });
 });

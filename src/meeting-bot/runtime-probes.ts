@@ -32,6 +32,13 @@ type MeetingProbeConfig<Mode extends string> = {
   chromeNode: { node?: string };
 };
 
+export type MeetingProbeRefreshOutcome = {
+  browserHealthChecked: boolean;
+  manualActionIsAuthoritative: boolean;
+};
+
+type MeetingProbeRefreshResult = MeetingProbeRefreshOutcome | boolean | void;
+
 export type MeetingProbeContext<
   Config extends MeetingProbeConfig<Mode>,
   Mode extends string,
@@ -43,14 +50,16 @@ export type MeetingProbeContext<
   config: Config;
   resolveAgentId(request: Request): string;
   list(): Session[];
-  join(request: Request): Promise<{ session: Session; spoken?: boolean }>;
+  join(
+    request: Request,
+  ): Promise<{ browserHealthChecked?: boolean; session: Session; spoken?: boolean }>;
   isReusable(
     session: Session,
     resolved: { url: string; transport: Transport; mode: Mode; agentId: string },
   ): boolean;
   hasHealthHandle(sessionId: string): boolean;
   refreshHealth(sessionId: string): void;
-  refreshCaptionHealth(session: Session, timeoutMs?: number): Promise<void>;
+  refreshCaptionHealth(session: Session, timeoutMs?: number): Promise<MeetingProbeRefreshResult>;
 };
 
 type MeetingRuntimeProbeOptions<
@@ -83,7 +92,7 @@ export function createMeetingRuntimeProbes<
       context: MeetingProbeContext<Config, Mode, Transport, Health, Session, Request>,
       session: Session,
       timeoutMs: number,
-    ): Promise<void>;
+    ): Promise<MeetingProbeRefreshResult>;
     speechModeError?: string;
     listeningModeError?: string;
   },
@@ -203,8 +212,13 @@ export function createMeetingRuntimeProbes<
       (health?.transcriptLines ?? 0) > (existing?.id === result.session.id ? start.lines : 0) ||
       Boolean(health?.lastCaptionAt && health.lastCaptionAt !== start.at) ||
       Boolean(health?.lastCaptionText && health.lastCaptionText !== start.text);
+    const reusedSession = existing?.id === result.session.id;
     const shouldWait =
-      health?.manualAction === undefined && options.shouldWaitForListening(result.session);
+      options.shouldWaitForListening(result.session) &&
+      (health?.manualAction === undefined ||
+        // Omitted metadata is a legacy/unknown result; only an explicit false opts into recovery.
+        (reusedSession && result.browserHealthChecked === false));
+    let manualActionIsAuthoritative = !shouldWait || result.browserHealthChecked !== false;
     let listenVerified = advanced();
     if (shouldWait && !listenVerified) {
       const deadline =
@@ -216,21 +230,38 @@ export function createMeetingRuntimeProbes<
           break;
         }
         let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
-        const deadlineReached = new Promise<boolean>((resolve) => {
-          deadlineTimer = setTimeout(() => resolve(false), remainingMs);
+        const deadlineReached = new Promise<{
+          browserHealthChecked: false;
+          completed: false;
+        }>((resolve) => {
+          deadlineTimer = setTimeout(
+            () => resolve({ browserHealthChecked: false, completed: false }),
+            remainingMs,
+          );
         });
-        const refreshed = await Promise.race([
+        const refreshOutcome = await Promise.race([
           (
             options.refreshCaptionHealth?.(context, result.session, remainingMs) ??
             context.refreshCaptionHealth(result.session, remainingMs)
-          ).then(() => true),
+          ).then((result) => {
+            const outcome =
+              typeof result === "object"
+                ? result
+                : {
+                    // Legacy contexts returned void after a successful refresh. Preserve that
+                    // contract, while allowing canonical owners to report a closed outcome.
+                    browserHealthChecked: result !== false,
+                    manualActionIsAuthoritative: result !== false,
+                  };
+            return { ...outcome, completed: true as const };
+          }),
           deadlineReached,
         ]).finally(() => {
           if (deadlineTimer !== undefined) {
             clearTimeout(deadlineTimer);
           }
         });
-        if (!refreshed) {
+        if (!refreshOutcome.completed) {
           break;
         }
         health = result.session.chrome?.health;
@@ -240,7 +271,10 @@ export function createMeetingRuntimeProbes<
         if (advanced()) {
           listenVerified = true;
         }
-        if (listenVerified || health?.manualAction) {
+        if (refreshOutcome.browserHealthChecked || refreshOutcome.manualActionIsAuthoritative) {
+          manualActionIsAuthoritative = true;
+        }
+        if (listenVerified || (manualActionIsAuthoritative && health?.manualAction)) {
           break;
         }
         const retryDelayMs = deadline - Date.now();
@@ -250,12 +284,13 @@ export function createMeetingRuntimeProbes<
         await sleep(Math.min(250, retryDelayMs));
       }
     }
+    const manualAction = manualActionIsAuthoritative ? health?.manualAction : undefined;
     return {
       createdSession: !before.has(result.session.id),
       inCall: health?.inCall,
-      manualAction: health?.manualAction,
+      manualAction,
       listenVerified,
-      listenTimedOut: shouldWait && !listenVerified && health?.manualAction === undefined,
+      listenTimedOut: shouldWait && !listenVerified && manualAction === undefined,
       captioning: health?.captioning,
       captionsEnabledAttempted: health?.captionsEnabledAttempted,
       transcriptLines: health?.transcriptLines,

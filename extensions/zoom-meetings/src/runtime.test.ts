@@ -286,6 +286,32 @@ describe("Zoom meeting session flow", () => {
     });
   });
 
+  it("returns an authoritative browser-control failure for a reused manual tab", async () => {
+    const harness = runtimeHarness({ tabOpen: true });
+    const runtime = new ZoomMeetingsRuntime({
+      config: resolveZoomMeetingsConfig({
+        defaultMode: "transcribe",
+        chrome: { launch: false, waitForInCallMs: 1 },
+      }),
+      fullConfig: {},
+      runtime: harness.runtime,
+      logger,
+    });
+    await runtime.join({ url: URL, mode: "transcribe" });
+    harness.state.tabListFailures = 10;
+
+    const result = await runtime.testListen({ url: URL, mode: "transcribe", timeoutMs: 20 });
+
+    expect(result).toMatchObject({
+      listenTimedOut: false,
+      listenVerified: false,
+      manualAction: {
+        reason: "browser-control-unavailable",
+        message: "Zoom browser readiness refresh failed: browser node unavailable",
+      },
+    });
+  });
+
   it("refreshes a recovered browser tab target", async () => {
     const { harness, runtime } = runtimeFixture();
     const joined = await joinMeeting(runtime);
