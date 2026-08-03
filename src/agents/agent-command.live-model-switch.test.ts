@@ -355,14 +355,16 @@ vi.mock("../infra/agent-events.js", () => ({
   assertAgentRunLifecycleGenerationCurrent: (...args: unknown[]) =>
     state.assertLifecycleCurrentMock(...args),
   captureAgentRunLifecycleGeneration: () => "test-generation",
-  clearAgentRunContext: (...args: unknown[]) => state.clearAgentRunContextMock(...args),
   emitAgentEvent: (...args: unknown[]) => state.emitAgentEventMock(...args),
   getAgentEventLifecycleGeneration: () => "test-generation",
   isAgentEventLifecycleGenerationCurrent: (generation: string) => generation === "test-generation",
   onAgentEvent: vi.fn(),
   registerAgentEventLifecycleRotationHandler: vi.fn(),
-  registerAgentRunContext: (...args: unknown[]) => state.registerAgentRunContextMock(...args),
   withAgentRunLifecycleGeneration: (_generation: string, run: () => unknown) => run(),
+}));
+vi.mock("../infra/agent-run-registry.js", () => ({
+  clearAgentRunContext: (...args: unknown[]) => state.clearAgentRunContextMock(...args),
+  registerAgentRunContext: (...args: unknown[]) => state.registerAgentRunContextMock(...args),
 }));
 
 vi.mock("../infra/outbound/session-context.js", () => ({
@@ -897,6 +899,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         },
         finalizeRaw: () => text,
         finalize: () => text,
+        finalizeReplySnapshot: () => ({ disposition: "visible" as const, text }),
       };
     });
     state.buildAcpResultMock.mockImplementation((params: { payloadText?: string }) => ({

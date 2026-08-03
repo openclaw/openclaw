@@ -17,6 +17,16 @@ import {
 import { runDoctorLintChecks } from "./doctor-lint-flow.js";
 import type { HealthCheck, HealthFinding } from "./health-checks.js";
 
+// This suite's SecretRef migration assertion uses a core model credential. Registry owner suites
+// cover plugin-derived targets, so avoid scanning every bundled plugin for this core-only fixture.
+vi.mock("../secrets/target-registry-data.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../secrets/target-registry-data.js")>();
+  return {
+    ...actual,
+    getSecretTargetRegistry: actual.getCoreSecretTargetRegistry,
+  };
+});
+
 const mocks = vi.hoisted(() => ({
   isDefaultInstallIdentity: vi.fn(() => true),
   maybeRunConfiguredPluginInstallReleaseStep: vi.fn(),
@@ -2326,6 +2336,7 @@ describe("doctor health contributions", () => {
     const status = {
       eventLoop: {
         degraded: true,
+        degradedSinceMs: 61_000,
         reasons: ["event_loop_delay"],
         intervalMs: 30_000,
         delayP99Ms: 42,

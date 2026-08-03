@@ -9,6 +9,7 @@ import {
 } from "../agents/auth-profiles/oauth-test-utils.js";
 import { upsertAuthProfileWithLock } from "../agents/auth-profiles/profiles.js";
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
+import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import {
   fingerprintAuthProfileCredential,
   fingerprintResolvedProviderAuth,
@@ -20,6 +21,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { withoutPluginInstallRecords } from "../plugins/installed-plugin-index-records.js";
 import { hasRetainedManagedNpmInstallMarker } from "../plugins/managed-npm-retention.js";
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
@@ -52,6 +54,10 @@ import {
   verifySetupInference as verifySetupInferenceImpl,
   verifySetupInferenceConfig as verifySetupInferenceConfigImpl,
 } from "./setup-inference.js";
+import {
+  installSystemAgentPluginMetadataTestSnapshot,
+  type SystemAgentPluginMetadataTestSnapshot,
+} from "./system-agent.test-helpers.js";
 import {
   createSystemAgentVerifiedInferenceBinding,
   type SystemAgentVerifiedInferenceBinding,
@@ -126,13 +132,49 @@ const testCodexRuntimeArtifact = {
 const suiteTempRootTracker = createSuiteTempRootTracker({
   prefix: "setup-inference-test-",
 });
+let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
 
 beforeAll(async () => {
+  pluginMetadataSnapshot = installSystemAgentPluginMetadataTestSnapshot(
+    materializedMainRuntimeConfig,
+  );
+  cliBackendsTesting.setDepsForTest({
+    resolvePluginSetupCliBackend: () => undefined,
+    resolvePluginSetupRegistry: () => ({ cliBackends: [] }) as never,
+    resolveRuntimeCliBackends: () => [
+      {
+        id: "claude-cli",
+        pluginId: "anthropic",
+        modelProvider: "anthropic",
+        bundleMcp: true,
+        bundleMcpMode: "claude-config-file",
+        config: { command: "claude" },
+        sideQuestionToolMode: "disabled",
+      },
+      {
+        id: "google-gemini-cli",
+        pluginId: "google",
+        modelProvider: "google",
+        bundleMcp: false,
+        config: { command: "gemini" },
+        nativeToolMode: "none",
+      },
+    ],
+  });
   await suiteTempRootTracker.setup();
 });
 
 afterAll(async () => {
-  await suiteTempRootTracker.cleanup();
+  try {
+    await suiteTempRootTracker.cleanup();
+  } finally {
+    cliBackendsTesting.resetDepsForTest();
+    pluginMetadataSnapshot?.restore();
+  }
+});
+
+beforeEach(() => {
+  pluginMetadataSnapshot?.rebindForCurrentEnv();
 });
 
 async function makeTempDir(): Promise<string> {
@@ -1349,10 +1391,12 @@ describe("activateSetupInference", () => {
     } satisfies OpenClawConfig;
     const configHarness = createConfigTransformHarness(initialConfig);
     const runCliAgent = vi.fn(successfulRunner("claude-cli", "claude-opus-5"));
+    const resolveRouteMetadata = vi.fn(resolvePluginMetadataSnapshot);
     const result = await activateSetupInference({
       kind: "claude-cli",
       deps: {
         readConfigFileSnapshot: mockConfigSnapshot(initialConfig),
+        resolvePluginMetadataSnapshot: resolveRouteMetadata,
         runCliAgent: runCliAgent as never,
         transformConfigWithPendingPluginInstalls: configHarness.transform as never,
       },
@@ -1383,6 +1427,7 @@ describe("activateSetupInference", () => {
       tools: { allow: ["exec"] },
     });
     expect(configHarness.transform).toHaveBeenCalledOnce();
+    expect(resolveRouteMetadata).toHaveBeenCalledOnce();
   });
 
   it("rejects an unattested successful candidate before persisting its model", async () => {
@@ -1554,6 +1599,38 @@ describe("activateSetupInference", () => {
     expect(persistedConfig.agents?.defaults?.model).toBe("claude-cli/claude-opus-5");
     expect(persistedConfig.agents?.defaults?.workspace).toBeUndefined();
     expect(persistedConfig.gateway).toBeUndefined();
+  });
+
+  it("exposes the locked authored config before committing the verified model", async () => {
+    const probedConfig: OpenClawConfig = {
+      wizard: { securityAcknowledgedAt: "2026-08-02T00:00:00.000Z" },
+    };
+    const lockedConfig: OpenClawConfig = {
+      wizard: { securityAcknowledgedAt: "2026-08-03T00:00:00.000Z" },
+    };
+    const configHarness = createConfigTransformHarness(lockedConfig);
+    const onCommitStarted = vi.fn((sourceConfig: OpenClawConfig) => {
+      expect(sourceConfig.wizard?.securityAcknowledgedAt).toBe("2026-08-03T00:00:00.000Z");
+      expect(configHarness.current().agents?.defaults?.model).toBeUndefined();
+    });
+
+    const result = await activateSetupInference({
+      kind: "claude-cli",
+      surface: "cli",
+      onCommitStarted,
+      deps: {
+        readConfigFileSnapshot: mockConfigSnapshot(probedConfig),
+        runCliAgent: vi.fn(successfulRunner("claude-cli", "claude-opus-5")) as never,
+        transformConfigWithPendingPluginInstalls: configHarness.transform as never,
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, modelRef: "claude-cli/claude-opus-5" });
+    expect(onCommitStarted).toHaveBeenCalledWith(lockedConfig);
+    expect(configHarness.current()).toMatchObject({
+      wizard: { securityAcknowledgedAt: "2026-08-03T00:00:00.000Z" },
+      agents: { defaults: { model: "claude-cli/claude-opus-5" } },
+    });
   });
 
   it("uses the materialized runtime roster when activating from a missing config file", async () => {
@@ -3790,6 +3867,12 @@ describe("activateSetupInference", () => {
     const ensureRegistryLoaded = vi.fn(() => {
       events.push("reload-active-registry");
     });
+    const resolveRouteMetadata = vi.fn(
+      (...args: Parameters<typeof resolvePluginMetadataSnapshot>) => {
+        events.push("resolve-route-metadata");
+        return resolvePluginMetadataSnapshot(...args);
+      },
+    );
     const result = await activateCodexSetup({
       workspace: "/tmp/openclaw-workspace",
       runtime: { log: runtimeLog, error: () => {}, exit: () => {} } as never,
@@ -3806,6 +3889,7 @@ describe("activateSetupInference", () => {
             runtimeConfig: config,
           };
         }) as never,
+        resolvePluginMetadataSnapshot: resolveRouteMetadata,
         runEmbeddedAgent: runEmbeddedAgent as never,
         ensureCodexRuntimePlugin: ensureCodex as never,
         markRetainedManagedNpmInstall: markRetainedInstall,
@@ -3865,10 +3949,15 @@ describe("activateSetupInference", () => {
       }),
     );
     expect(refreshPluginRegistry).toHaveBeenCalledTimes(2);
+    expect(resolveRouteMetadata).toHaveBeenCalledOnce();
+    expect(resolveRouteMetadata).toHaveBeenCalledWith(
+      expect.objectContaining({ allowCurrent: false }),
+    );
     expect(events).toEqual([
       "install-plugin",
       "retain-plugin-install",
       "refresh-plugin-registry",
+      "resolve-route-metadata",
       "live-test",
       "persist-plugin-config",
       "refresh-plugin-registry",
