@@ -328,7 +328,11 @@ function collectUnixProcessTree(rootPid: number): UnixProcessTree | undefined {
   const withinBounds = (depth: number): boolean =>
     Date.now() < deadline &&
     depth <= MAX_UNIX_PROCESS_TREE_DEPTH &&
-    seen.size <= MAX_UNIX_PROCESS_TREE_PIDS;
+    // Strict less-than: a child is about to be added to `seen`, so capacity
+    // must be checked before the add (and the identity probe that follows it),
+    // not after. This keeps the advertised 4,096-PID cap on discovery work, not
+    // only on admitted entries.
+    seen.size < MAX_UNIX_PROCESS_TREE_PIDS;
 
   const visit = (parentPid: number, parentIdentity: string, depth: number): void => {
     if (!withinBounds(depth)) {

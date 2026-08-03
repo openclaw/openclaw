@@ -708,6 +708,7 @@ describe("killProcessTree", () => {
     // The root reports 4,098 children so the 4,096-PID cap (which already
     // counts the root) is exceeded inside the child loop.
     const overCapChildren = Array.from({ length: 4098 }, (_, i) => 6000 + i).join(" ");
+    const probedChildStats = new Set<number>();
     let boundedChildrenRequested = false;
     readFileSyncMock.mockImplementation((filePath: string) => {
       if (filePath === "/proc/5999/task/5999/children") {
@@ -718,10 +719,11 @@ describe("killProcessTree", () => {
         return statLine(5999, "root", "100");
       }
       // Each child has no further descendants and reports the root as parent.
-      const match = filePath.match(/^\/proc\/(\d+)\/stat$/);
-      if (match) {
-        const pid = Number(match[1]);
+      const statMatch = filePath.match(/^\/proc\/(\d+)\/stat$/);
+      if (statMatch) {
+        const pid = Number(statMatch[1]);
         if (pid >= 6000) {
+          probedChildStats.add(pid);
           return statLine(pid, "child", String(pid), 5999);
         }
       }
@@ -735,8 +737,12 @@ describe("killProcessTree", () => {
       killProcessTree(5999, { graceMs: 10, detached: false });
       await vi.advanceTimersByTimeAsync(10);
 
-      // The PID cap is honored: at most 4,096 PIDs (root + up to 4,095
-      // children) are ever signaled. Children past the cap are never admitted.
+      // The PID cap is honored: at most 4,095 children (root fills the 4,096th
+      // slot) are ever probed or signaled. Children past the cap are never
+      // admitted AND never have their identity probed.
+      expect(probedChildStats.size).toBeLessThanOrEqual(4095);
+      // The first over-cap child (index 4095 -> PID 10095) must never be probed.
+      expect(probedChildStats.has(10095)).toBe(false);
       const signaledChildren = (
         killSpy.mock.calls as Array<[number, NodeJS.Signals | number | undefined]>
       )
@@ -744,7 +750,7 @@ describe("killProcessTree", () => {
         .map(([pid]) => pid);
       expect(new Set(signaledChildren).size).toBeLessThanOrEqual(4095);
       // The walker did read the root's children list, proving the loop ran but
-      // honored the cap once seen.size exceeded it.
+      // honored the cap once seen.size reached it.
       expect(boundedChildrenRequested).toBe(true);
     });
   });
