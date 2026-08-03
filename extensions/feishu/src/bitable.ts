@@ -22,6 +22,11 @@ type BitableRecordFields = NonNullable<NonNullable<BitableRecordCreatePayload["d
 type BitableRecordUpdateFields = NonNullable<
   NonNullable<BitableRecordUpdatePayload["data"]>["fields"]
 >;
+type BitableListPage<T> = { items?: T[]; has_more?: boolean; page_token?: string };
+type BitablePageParams = { page_size: number; page_token?: string };
+
+const BITABLE_LIST_PAGE_SIZE = 100;
+const MAX_BITABLE_LIST_PAGES = 100;
 
 class LarkApiError extends Error {
   readonly code: number;
@@ -44,6 +49,43 @@ function ensureLarkSuccess<T>(
   if (res.code !== 0) {
     throw new LarkApiError(res.code ?? -1, res.msg ?? "unknown error", api, context);
   }
+}
+
+async function listBitableItems<T>(
+  listPage: (params: BitablePageParams) => Promise<LarkResponse<BitableListPage<T>>>,
+  api: string,
+  context: Record<string, unknown>,
+): Promise<T[]> {
+  const items: T[] = [];
+  const seenPageTokens = new Set<string>();
+  let pageToken: string | undefined;
+
+  for (let page = 0; page < MAX_BITABLE_LIST_PAGES; page += 1) {
+    const response = await listPage({
+      page_size: BITABLE_LIST_PAGE_SIZE,
+      ...(pageToken ? { page_token: pageToken } : {}),
+    });
+    ensureLarkSuccess(response, api, context);
+    if (!response.data) {
+      throw new Error(`${api} returned missing response data`);
+    }
+    items.push(...(response.data.items ?? []));
+    if (response.data.has_more !== true) {
+      return items;
+    }
+
+    // Provider cursors are opaque: reject blank values without changing token identity.
+    const nextPageToken = response.data.page_token;
+    if (!nextPageToken?.trim() || seenPageTokens.has(nextPageToken)) {
+      throw new Error(
+        `${api} pagination returned a ${nextPageToken?.trim() ? "repeated" : "missing"} page token`,
+      );
+    }
+    seenPageTokens.add(nextPageToken);
+    pageToken = nextPageToken;
+  }
+
+  throw new Error(`${api} pagination exceeded ${MAX_BITABLE_LIST_PAGES} pages`);
 }
 
 /** Field type ID to human-readable name */
@@ -76,28 +118,16 @@ const FIELD_TYPE_NAMES: Record<number, string> = {
 /** Parse bitable URL and extract tokens */
 function parseBitableUrl(url: string): { token: string; tableId?: string; isWiki: boolean } | null {
   try {
-    const u = new URL(url);
-    const tableId = u.searchParams.get("table") ?? undefined;
-
-    // Wiki format: /wiki/XXXXX?table=YYY
-    const wikiMatch = u.pathname.match(/\/wiki\/([A-Za-z0-9]+)/);
-    if (wikiMatch) {
-      const wikiPathSegment = wikiMatch[1];
-      return wikiPathSegment === undefined
-        ? null
-        : { token: wikiPathSegment, tableId, isWiki: true };
-    }
-
-    // Base format: /base/XXXXX?table=YYY
-    const baseMatch = u.pathname.match(/\/base\/([A-Za-z0-9]+)/);
-    if (baseMatch) {
-      const basePathSegment = baseMatch[1];
-      return basePathSegment === undefined
-        ? null
-        : { token: basePathSegment, tableId, isWiki: false };
-    }
-
-    return null;
+    const parsed = new URL(url);
+    const match = parsed.pathname.match(/\/(wiki|base)\/([A-Za-z0-9]+)/);
+    const token = match?.[2];
+    return token
+      ? {
+          token,
+          tableId: parsed.searchParams.get("table") ?? undefined,
+          isWiki: match[1] === "wiki",
+        }
+      : null;
   } catch {
     return null;
   }
@@ -128,12 +158,7 @@ async function getBitableMeta(client: Lark.Client, url: string) {
     throw new Error("Invalid URL format. Expected /base/XXX or /wiki/XXX URL");
   }
 
-  let appToken: string;
-  if (parsed.isWiki) {
-    appToken = await getAppTokenFromWiki(client, parsed.token);
-  } else {
-    appToken = parsed.token;
-  }
+  const appToken = parsed.isWiki ? await getAppTokenFromWiki(client, parsed.token) : parsed.token;
 
   // Get bitable app info
   const res = await client.bitable.app.get({
@@ -142,18 +167,19 @@ async function getBitableMeta(client: Lark.Client, url: string) {
   ensureLarkSuccess(res, "bitable.app.get", { appToken });
 
   // List tables if no table_id specified
-  let tables: { table_id: string; name: string }[] = [];
-  if (!parsed.tableId) {
-    const tablesRes = await client.bitable.appTable.list({
-      path: { app_token: appToken },
-    });
-    if (tablesRes.code === 0) {
-      tables = (tablesRes.data?.items ?? []).map((t) => ({
-        table_id: t.table_id!,
-        name: t.name!,
-      }));
-    }
-  }
+  const tables = parsed.tableId
+    ? []
+    : (
+        await listBitableItems(
+          (params) =>
+            client.bitable.appTable.list({
+              path: { app_token: appToken },
+              params,
+            }),
+          "bitable.appTable.list",
+          { appToken },
+        )
+      ).map((table) => ({ table_id: table.table_id!, name: table.name! }));
 
   return {
     app_token: appToken,
@@ -168,12 +194,15 @@ async function getBitableMeta(client: Lark.Client, url: string) {
 }
 
 async function listFields(client: Lark.Client, appToken: string, tableId: string) {
-  const res = await client.bitable.appTableField.list({
-    path: { app_token: appToken, table_id: tableId },
-  });
-  ensureLarkSuccess(res, "bitable.appTableField.list", { appToken, tableId });
-
-  const fields = res.data?.items ?? [];
+  const fields = await listBitableItems(
+    (params) =>
+      client.bitable.appTableField.list({
+        path: { app_token: appToken, table_id: tableId },
+        params,
+      }),
+    "bitable.appTableField.list",
+    { appToken, tableId },
+  );
   return {
     fields: fields.map((f) => ({
       field_id: f.field_id,
@@ -494,18 +523,16 @@ const GetMetaSchema = Type.Object({
   }),
 });
 
-const ListFieldsSchema = Type.Object({
+const BitableTableSchema = {
   app_token: Type.String({
     description: "Bitable app token (use feishu_bitable_get_meta to get from URL)",
   }),
   table_id: Type.String({ description: "Table ID (from URL: ?table=YYY)" }),
-});
+};
 
+const ListFieldsSchema = Type.Object(BitableTableSchema);
 const ListRecordsSchema = Type.Object({
-  app_token: Type.String({
-    description: "Bitable app token (use feishu_bitable_get_meta to get from URL)",
-  }),
-  table_id: Type.String({ description: "Table ID (from URL: ?table=YYY)" }),
+  ...BitableTableSchema,
   page_size: optionalPositiveIntegerSchema({
     description: "Number of records per page (1-500, default 100)",
     maximum: 500,
@@ -516,10 +543,7 @@ const ListRecordsSchema = Type.Object({
 });
 
 const GetRecordSchema = Type.Object({
-  app_token: Type.String({
-    description: "Bitable app token (use feishu_bitable_get_meta to get from URL)",
-  }),
-  table_id: Type.String({ description: "Table ID (from URL: ?table=YYY)" }),
+  ...BitableTableSchema,
   record_id: Type.String({ description: "Record ID to retrieve" }),
 });
 
@@ -530,10 +554,7 @@ const BitableFieldValueSchema = Type.Unsafe<unknown>({
 });
 
 const CreateRecordSchema = Type.Object({
-  app_token: Type.String({
-    description: "Bitable app token (use feishu_bitable_get_meta to get from URL)",
-  }),
-  table_id: Type.String({ description: "Table ID (from URL: ?table=YYY)" }),
+  ...BitableTableSchema,
   fields: Type.Record(Type.String(), BitableFieldValueSchema, {
     description:
       "Field values keyed by field name. Format by type: Text='string', Number=123, SingleSelect='Option', MultiSelect=['A','B'], DateTime=timestamp_ms, User=[{id:'ou_xxx'}], URL={text:'Display',link:'https://...'}",
@@ -571,10 +592,7 @@ const CreateFieldSchema = Type.Object({
 });
 
 const UpdateRecordSchema = Type.Object({
-  app_token: Type.String({
-    description: "Bitable app token (use feishu_bitable_get_meta to get from URL)",
-  }),
-  table_id: Type.String({ description: "Table ID (from URL: ?table=YYY)" }),
+  ...BitableTableSchema,
   record_id: Type.String({ description: "Record ID to update" }),
   fields: Type.Record(Type.String(), BitableFieldValueSchema, {
     description: "Field values to update (same format as create_record)",
@@ -599,6 +617,7 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
   }
 
   type AccountAwareParams = { accountId?: string };
+  type BitableTableParams = AccountAwareParams & { app_token: string; table_id: string };
 
   const getClient = (params: AccountAwareParams | undefined, defaultAccountId?: string) => {
     const account = resolveFeishuToolAccount({ api, executeParams: params, defaultAccountId });
@@ -652,7 +671,7 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     },
   });
 
-  registerBitableTool<{ app_token: string; table_id: string; accountId?: string }>({
+  registerBitableTool<BitableTableParams>({
     name: "feishu_bitable_list_fields",
     label: "Feishu Bitable List Fields",
     description: "List all fields (columns) in a Bitable table with their types and properties",
@@ -662,13 +681,7 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     },
   });
 
-  registerBitableTool<{
-    app_token: string;
-    table_id: string;
-    page_size?: number;
-    page_token?: string;
-    accountId?: string;
-  }>({
+  registerBitableTool<BitableTableParams & { page_size?: number; page_token?: string }>({
     name: "feishu_bitable_list_records",
     label: "Feishu Bitable List Records",
     description: "List records (rows) from a Bitable table with pagination support",
@@ -684,12 +697,7 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     },
   });
 
-  registerBitableTool<{
-    app_token: string;
-    table_id: string;
-    record_id: string;
-    accountId?: string;
-  }>({
+  registerBitableTool<BitableTableParams & { record_id: string }>({
     name: "feishu_bitable_get_record",
     label: "Feishu Bitable Get Record",
     description: "Get a single record by ID from a Bitable table",
@@ -704,12 +712,7 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     },
   });
 
-  registerBitableTool<{
-    app_token: string;
-    table_id: string;
-    fields: BitableRecordFields;
-    accountId?: string;
-  }>({
+  registerBitableTool<BitableTableParams & { fields: BitableRecordFields }>({
     name: "feishu_bitable_create_record",
     label: "Feishu Bitable Create Record",
     description: "Create a new record (row) in a Bitable table",
@@ -724,13 +727,9 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     },
   });
 
-  registerBitableTool<{
-    app_token: string;
-    table_id: string;
-    record_id: string;
-    fields: BitableRecordUpdateFields;
-    accountId?: string;
-  }>({
+  registerBitableTool<
+    BitableTableParams & { record_id: string; fields: BitableRecordUpdateFields }
+  >({
     name: "feishu_bitable_update_record",
     label: "Feishu Bitable Update Record",
     description: "Update an existing record (row) in a Bitable table",
@@ -759,14 +758,13 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     },
   });
 
-  registerBitableTool<{
-    app_token: string;
-    table_id: string;
-    field_name: string;
-    field_type: number;
-    property?: Record<string, unknown>;
-    accountId?: string;
-  }>({
+  registerBitableTool<
+    BitableTableParams & {
+      field_name: string;
+      field_type: number;
+      property?: Record<string, unknown>;
+    }
+  >({
     name: "feishu_bitable_create_field",
     label: "Feishu Bitable Create Field",
     description: "Create a new field (column) in a Bitable table",
