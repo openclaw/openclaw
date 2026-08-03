@@ -46,12 +46,13 @@ function pointer(type: string, pointerId: number, clientX: number): PointerEvent
 function createResizer(controller: DockLayoutController<"right">) {
   const capturedPointers = new Set<number>();
   const resizer = document.createElement("div");
-  resizer.setPointerCapture = vi.fn((pointerId: number) => capturedPointers.add(pointerId));
+  const setPointerCapture = vi.fn((pointerId: number) => capturedPointers.add(pointerId));
+  resizer.setPointerCapture = setPointerCapture;
   resizer.hasPointerCapture = vi.fn((pointerId: number) => capturedPointers.has(pointerId));
   resizer.releasePointerCapture = vi.fn((pointerId: number) => capturedPointers.delete(pointerId));
   resizer.addEventListener("pointerdown", (event) => controller.startResize(event));
   document.body.append(resizer);
-  return { capturedPointers, resizer };
+  return { capturedPointers, resizer, setPointerCapture };
 }
 
 function createController(isAvailable: () => boolean = () => true) {
@@ -155,10 +156,10 @@ describe("DockLayoutController", () => {
 
   it("captures the owner pointer and cleans up when capture is lost", () => {
     const { controller, save } = createController();
-    const { capturedPointers, resizer } = createResizer(controller);
+    const { capturedPointers, resizer, setPointerCapture } = createResizer(controller);
 
     resizer.dispatchEvent(pointer("pointerdown", 7, 500));
-    expect(resizer.setPointerCapture).toHaveBeenCalledWith(7);
+    expect(setPointerCapture).toHaveBeenCalledWith(7);
     expect(capturedPointers.has(7)).toBe(true);
 
     window.dispatchEvent(pointer("pointermove", 7, 450));
@@ -172,7 +173,7 @@ describe("DockLayoutController", () => {
     expect(controller.width).toBe(550);
 
     resizer.dispatchEvent(pointer("pointerdown", 8, 450));
-    expect(resizer.setPointerCapture).toHaveBeenLastCalledWith(8);
+    expect(setPointerCapture).toHaveBeenLastCalledWith(8);
   });
 
   it("does not persist a temporary suppressed state when resize capture is lost", () => {

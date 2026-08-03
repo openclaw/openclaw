@@ -126,8 +126,9 @@ describe("Skill Workshop queue resize", () => {
     expect(resizer).not.toBeNull();
 
     const capturedPointers = new Set<number>();
+    const setPointerCapture = vi.fn((pointerId) => capturedPointers.add(pointerId));
     if (resizer) {
-      resizer.setPointerCapture = vi.fn((pointerId) => capturedPointers.add(pointerId));
+      resizer.setPointerCapture = setPointerCapture;
       resizer.hasPointerCapture = vi.fn((pointerId) => capturedPointers.has(pointerId));
       resizer.releasePointerCapture = vi.fn((pointerId) => capturedPointers.delete(pointerId));
     }
@@ -150,7 +151,7 @@ describe("Skill Workshop queue resize", () => {
     expect(props.onQueueWidthChange).toHaveBeenCalledOnce();
 
     resizer?.dispatchEvent(pointer("pointerdown", 8, 450));
-    expect(resizer?.setPointerCapture).toHaveBeenLastCalledWith(8);
+    expect(setPointerCapture).toHaveBeenLastCalledWith(8);
     window.dispatchEvent(pointer("pointerup", 8, 450));
     expect(document.body.style.cursor).toBe("");
     expect(document.body.style.userSelect).toBe("");

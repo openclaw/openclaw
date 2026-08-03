@@ -26,20 +26,6 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function pointer(type: string, pointerId: number, clientX: number): PointerEvent {
-  const event = new MouseEvent(type, {
-    bubbles: true,
-    button: 0,
-    cancelable: true,
-    clientX,
-  });
-  Object.defineProperties(event, {
-    pointerId: { value: pointerId },
-    pointerType: { value: "touch" },
-  });
-  return event as PointerEvent;
-}
-
 const TERMINAL_PANEL_ELEMENT_NAME = defineTestTerminalPanelElement(createGhosttyTerminalMock);
 
 async function startPanelWithPendingOpen() {
@@ -993,63 +979,6 @@ describe("OpenClawTerminalPanel", () => {
     expect(document.documentElement.style.getPropertyValue("--oc-terminal-reserve-right")).toBe(
       "0px",
     );
-  });
-
-  it("keeps terminal touch resizing owned by its initiating pointer", async () => {
-    localStorage.setItem(
-      "openclaw.terminal.panel.v1",
-      JSON.stringify({ open: true, dock: "right", height: 320, width: 520 }),
-    );
-    createGhosttyTerminalMock.mockResolvedValue(createTerminalController());
-    const client: TerminalGatewayClient = {
-      forceReconnect: () => {},
-      request: async <T>(method: string) =>
-        (method === "terminal.open" ? terminalOpenResult("session-1") : {}) as T,
-      addEventListener: () => () => {},
-    };
-    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
-    panel.client = client;
-    panel.available = true;
-    document.body.append(panel);
-    await panel.updateComplete;
-
-    const resizer = panel.renderRoot.querySelector<HTMLElement>(".tp-resizer");
-    expect(resizer).not.toBeNull();
-    if (!resizer) {
-      return;
-    }
-    const capturedPointers = new Set<number>();
-    resizer.setPointerCapture = vi.fn((pointerId) => capturedPointers.add(pointerId));
-    resizer.hasPointerCapture = vi.fn((pointerId) => capturedPointers.has(pointerId));
-    resizer.releasePointerCapture = vi.fn((pointerId) => capturedPointers.delete(pointerId));
-
-    const styleResults = Array.isArray(OpenClawTerminalPanel.styles)
-      ? OpenClawTerminalPanel.styles
-      : [OpenClawTerminalPanel.styles];
-    expect(styleResults.map((style) => style.cssText).join("\n")).toMatch(
-      /:is\(\.bp-resizer,\s*\.tp-resizer\)\s*\{[^}]*touch-action:\s*none/u,
-    );
-
-    resizer.dispatchEvent(pointer("pointerdown", 7, 760));
-    expect(resizer.setPointerCapture).toHaveBeenCalledWith(7);
-
-    window.dispatchEvent(pointer("pointermove", 8, 650));
-    window.dispatchEvent(pointer("pointerup", 8, 650));
-    window.dispatchEvent(pointer("pointercancel", 9, 650));
-    expect(document.documentElement.style.getPropertyValue("--oc-terminal-reserve-right")).toBe(
-      "520px",
-    );
-    expect(JSON.parse(localStorage.getItem("openclaw.terminal.panel.v1") ?? "{}").width).toBe(520);
-    expect(capturedPointers.has(7)).toBe(true);
-
-    window.dispatchEvent(pointer("pointermove", 7, 700));
-    expect(document.documentElement.style.getPropertyValue("--oc-terminal-reserve-right")).toBe(
-      "580px",
-    );
-    expect(JSON.parse(localStorage.getItem("openclaw.terminal.panel.v1") ?? "{}").width).toBe(520);
-    window.dispatchEvent(pointer("pointerup", 7, 700));
-    expect(JSON.parse(localStorage.getItem("openclaw.terminal.panel.v1") ?? "{}").width).toBe(580);
-    expect(capturedPointers.has(7)).toBe(false);
   });
 
   it("removes a tab host even when controller disposal throws", () => {

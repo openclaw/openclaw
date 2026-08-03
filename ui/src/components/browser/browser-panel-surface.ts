@@ -38,6 +38,48 @@ export type BrowserPanelView = {
   metrics: BrowserPageMetrics | null;
 };
 
+export type BrowserPanelDrawingGesture = {
+  pointerId: number;
+  captureTarget: HTMLElement;
+  stroke: AnnotationStroke;
+};
+
+export function beginBrowserPanelDrawingGesture(
+  event: PointerEvent,
+  point: { x: number; y: number },
+): BrowserPanelDrawingGesture | null {
+  const captureTarget =
+    event.currentTarget instanceof HTMLElement
+      ? event.currentTarget
+      : event.target instanceof HTMLElement
+        ? event.target
+        : null;
+  if (!captureTarget) {
+    return null;
+  }
+  event.preventDefault();
+  try {
+    captureTarget.setPointerCapture(event.pointerId);
+  } catch {
+    // Detached or synthetic targets may reject capture; owner filtering still applies.
+  }
+  return {
+    pointerId: event.pointerId,
+    captureTarget,
+    stroke: { points: [point] },
+  };
+}
+
+export function releaseBrowserPanelDrawingGesture(gesture: BrowserPanelDrawingGesture): void {
+  try {
+    if (gesture.captureTarget.hasPointerCapture(gesture.pointerId)) {
+      gesture.captureTarget.releasePointerCapture(gesture.pointerId);
+    }
+  } catch {
+    // Capture may already be gone because the canvas was detached.
+  }
+}
+
 export function loadBrowserPanelImage(dataUrl: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const image = new Image();

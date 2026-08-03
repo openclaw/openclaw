@@ -28,6 +28,7 @@ import {
 } from "./browser-panel-operation-ownership.ts";
 import { BrowserPanelPendingInput } from "./browser-panel-pending-input.ts";
 import {
+  beginBrowserPanelDrawingGesture,
   browserPanelInspectHighlightRegion,
   browserPanelNormalizedPoint,
   browserPanelRemotePoint,
@@ -35,19 +36,15 @@ import {
   dispatchCompositedBrowserAnnotation,
   loadBrowserPanelImage,
   paintBrowserPanelOverlay,
+  releaseBrowserPanelDrawingGesture,
+  type BrowserPanelDrawingGesture,
   type BrowserPanelView,
 } from "./browser-panel-surface.ts";
 import { normalizeBrowserUrlDraft } from "./browser-url.ts";
 
-const INSPECT_THROTTLE_MS = 120;
-const ACTION_REFRESH_DELAY_MS = 350;
+const BROWSER_PANEL_DELAY_MS = { inspectThrottle: 120, actionRefresh: 350 } as const;
 
 type BrowserPanelMode = "interact" | "annotate" | "inspect";
-type BrowserPanelDrawingGesture = {
-  pointerId: number;
-  captureTarget: HTMLElement;
-  stroke: AnnotationStroke;
-};
 
 export type { BrowserPanelControllerHost } from "./browser-panel-operation-ownership.ts";
 
@@ -259,7 +256,7 @@ export class BrowserPanelController implements ReactiveController {
       this.setState("errorText", null);
       await action(client);
       if (current() && refreshView) {
-        this.pendingInput.scheduleRefresh(ACTION_REFRESH_DELAY_MS, () => {
+        this.pendingInput.scheduleRefresh(BROWSER_PANEL_DELAY_MS.actionRefresh, () => {
           if (current() && this.activeTargetId) {
             void this.refreshView(this.activeTargetId, epoch);
           }
@@ -642,24 +639,15 @@ export class BrowserPanelController implements ReactiveController {
       return;
     }
     const point = browserPanelNormalizedPoint(this.stageElement(), event);
-    const captureTarget =
-      event.currentTarget instanceof HTMLElement
-        ? event.currentTarget
-        : event.target instanceof HTMLElement
-          ? event.target
-          : null;
-    if (!point || !captureTarget) {
+    if (!point) {
       return;
     }
-    event.preventDefault();
-    try {
-      captureTarget.setPointerCapture(event.pointerId);
-    } catch {
-      // Detached or synthetic targets may reject capture; owner filtering still applies.
+    const gesture = beginBrowserPanelDrawingGesture(event, point);
+    if (!gesture) {
+      return;
     }
-    const stroke: AnnotationStroke = { points: [point] };
-    this.drawingGesture = { pointerId: event.pointerId, captureTarget, stroke };
-    this.setState("strokes", [...this.strokes, stroke]);
+    this.drawingGesture = gesture;
+    this.setState("strokes", [...this.strokes, gesture.stroke]);
     this.paintOverlay();
   }
 
@@ -682,10 +670,9 @@ export class BrowserPanelController implements ReactiveController {
   }
 
   handleOverlayPointerUp(event: PointerEvent): void {
-    if (event.pointerId !== this.drawingGesture?.pointerId) {
-      return;
+    if (event.pointerId === this.drawingGesture?.pointerId) {
+      this.finishOverlayPointerGesture(false);
     }
-    this.finishOverlayPointerGesture(false);
   }
 
   cancelOverlayPointerGesture(): void {
@@ -694,19 +681,9 @@ export class BrowserPanelController implements ReactiveController {
 
   private finishOverlayPointerGesture(releasePointerCapture: boolean): void {
     const gesture = this.drawingGesture;
-    if (!gesture) {
-      return;
-    }
     this.drawingGesture = null;
-    if (!releasePointerCapture) {
-      return;
-    }
-    try {
-      if (gesture.captureTarget.hasPointerCapture(gesture.pointerId)) {
-        gesture.captureTarget.releasePointerCapture(gesture.pointerId);
-      }
-    } catch {
-      // Capture may already be gone because the canvas was detached.
+    if (gesture && releasePointerCapture) {
+      releaseBrowserPanelDrawingGesture(gesture);
     }
   }
 
@@ -726,7 +703,7 @@ export class BrowserPanelController implements ReactiveController {
         this.mode === "inspect",
     );
     this.setState("inspectPointer", stagePoint);
-    this.pendingInput.queueInspection(INSPECT_THROTTLE_MS, current, () => {
+    this.pendingInput.queueInspection(BROWSER_PANEL_DELAY_MS.inspectThrottle, current, () => {
       void inspectBrowserElementAt(client, { targetId, x: point.x, y: point.y })
         .then((node) => {
           if (current()) {

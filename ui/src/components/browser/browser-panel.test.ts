@@ -27,7 +27,8 @@ function attachAnnotationOverlay(panel: {
   const capturedPointers = new Set<number>();
   overlay.setPointerCapture = vi.fn((pointerId) => capturedPointers.add(pointerId));
   overlay.hasPointerCapture = vi.fn((pointerId) => capturedPointers.has(pointerId));
-  overlay.releasePointerCapture = vi.fn((pointerId) => capturedPointers.delete(pointerId));
+  const releasePointerCapture = vi.fn((pointerId) => capturedPointers.delete(pointerId));
+  overlay.releasePointerCapture = releasePointerCapture;
   overlay.addEventListener("pointerdown", (event) =>
     panel.browserPanelController.handleOverlayPointerDown(event as PointerEvent),
   );
@@ -42,7 +43,7 @@ function attachAnnotationOverlay(panel: {
     Object.defineProperty(event, "pointerId", { configurable: true, value: pointerId });
     overlay.dispatchEvent(event);
   };
-  return { capturedPointers, dispatchPointer, overlay };
+  return { capturedPointers, dispatchPointer, overlay, releasePointerCapture };
 }
 
 describe("normalizeBrowserUrlDraft", () => {
@@ -221,7 +222,8 @@ describe("normalizeBrowserUrlDraft", () => {
     document.body.append(panel);
     await panel.updateComplete;
 
-    const { capturedPointers, dispatchPointer, overlay } = attachAnnotationOverlay(panel);
+    const { capturedPointers, dispatchPointer, releasePointerCapture } =
+      attachAnnotationOverlay(panel);
 
     panel.browserPanelController.setMode("annotate");
     dispatchPointer("pointerdown", 7, 10, 20);
@@ -230,7 +232,7 @@ describe("normalizeBrowserUrlDraft", () => {
       new CustomEvent("openclaw:browser-toggle", { detail: { open: false } }),
     );
 
-    expect(overlay.releasePointerCapture).toHaveBeenCalledWith(7);
+    expect(releasePointerCapture).toHaveBeenCalledWith(7);
     expect(capturedPointers.has(7)).toBe(false);
     expect(panel.browserPanelController.mode).toBe("annotate");
     expect(panel.browserPanelController.strokes).toEqual([{ points: [{ x: 0.1, y: 0.2 }] }]);
@@ -255,7 +257,8 @@ describe("normalizeBrowserUrlDraft", () => {
     document.body.append(panel);
     await panel.updateComplete;
 
-    const { capturedPointers, dispatchPointer, overlay } = attachAnnotationOverlay(panel);
+    const { capturedPointers, dispatchPointer, releasePointerCapture } =
+      attachAnnotationOverlay(panel);
     panel.browserPanelController.setMode("annotate");
     dispatchPointer("pointerdown", 7, 10, 20);
     expect(capturedPointers.has(7)).toBe(true);
@@ -263,7 +266,7 @@ describe("normalizeBrowserUrlDraft", () => {
     panel.suppressed = true;
     await panel.updateComplete;
 
-    expect(overlay.releasePointerCapture).toHaveBeenCalledWith(7);
+    expect(releasePointerCapture).toHaveBeenCalledWith(7);
     expect(capturedPointers.has(7)).toBe(false);
     expect(panel.browserPanelController.mode).toBe("annotate");
     expect(panel.browserPanelController.strokes).toEqual([{ points: [{ x: 0.1, y: 0.2 }] }]);

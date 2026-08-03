@@ -19,7 +19,8 @@ function createOverlay(controller: BrowserPanelController) {
   const capturedPointers = new Set<number>();
   overlay.setPointerCapture = vi.fn((pointerId) => capturedPointers.add(pointerId));
   overlay.hasPointerCapture = vi.fn((pointerId) => capturedPointers.has(pointerId));
-  overlay.releasePointerCapture = vi.fn((pointerId) => capturedPointers.delete(pointerId));
+  const releasePointerCapture = vi.fn((pointerId) => capturedPointers.delete(pointerId));
+  overlay.releasePointerCapture = releasePointerCapture;
   overlay.addEventListener("pointerdown", (event) =>
     controller.handleOverlayPointerDown(event as PointerEvent),
   );
@@ -35,7 +36,7 @@ function createOverlay(controller: BrowserPanelController) {
   overlay.addEventListener("lostpointercapture", (event) =>
     controller.handleOverlayPointerUp(event as PointerEvent),
   );
-  return { overlay, capturedPointers };
+  return { overlay, capturedPointers, releasePointerCapture };
 }
 
 function createAnnotationController() {
@@ -121,12 +122,12 @@ describe("BrowserPanelController annotation pointer ownership", () => {
 
   it("does not leave an active owner after undo or clear", () => {
     const controller = createAnnotationController();
-    const { overlay, capturedPointers } = createOverlay(controller);
+    const { overlay, capturedPointers, releasePointerCapture } = createOverlay(controller);
 
     overlay.dispatchEvent(pointer("pointerdown", 7, 10, 20));
     controller.undoStroke();
 
-    expect(overlay.releasePointerCapture).toHaveBeenCalledWith(7);
+    expect(releasePointerCapture).toHaveBeenCalledWith(7);
     expect(capturedPointers.has(7)).toBe(false);
     overlay.dispatchEvent(pointer("pointermove", 7, 20, 30));
     expect(controller.strokes).toEqual([]);
@@ -134,7 +135,7 @@ describe("BrowserPanelController annotation pointer ownership", () => {
     overlay.dispatchEvent(pointer("pointerdown", 8, 30, 40));
     controller.clearStrokes();
 
-    expect(overlay.releasePointerCapture).toHaveBeenCalledWith(8);
+    expect(releasePointerCapture).toHaveBeenCalledWith(8);
     expect(capturedPointers.has(8)).toBe(false);
     overlay.dispatchEvent(pointer("pointermove", 8, 40, 50));
     expect(controller.strokes).toEqual([]);
@@ -142,13 +143,13 @@ describe("BrowserPanelController annotation pointer ownership", () => {
 
   it("releases the owner capture when annotation mode or the controller is torn down", () => {
     const controller = createAnnotationController();
-    const { overlay, capturedPointers } = createOverlay(controller);
+    const { overlay, capturedPointers, releasePointerCapture } = createOverlay(controller);
 
     overlay.dispatchEvent(pointer("pointerdown", 7, 10, 20));
     expect(capturedPointers.has(7)).toBe(true);
 
     controller.exitCaptureModes();
-    expect(overlay.releasePointerCapture).toHaveBeenCalledWith(7);
+    expect(releasePointerCapture).toHaveBeenCalledWith(7);
     expect(capturedPointers.has(7)).toBe(false);
     expect(controller.mode).toBe("interact");
     expect(controller.strokes).toEqual([]);
@@ -157,7 +158,7 @@ describe("BrowserPanelController annotation pointer ownership", () => {
     overlay.dispatchEvent(pointer("pointerdown", 8, 30, 40));
     controller.hostDisconnected();
 
-    expect(overlay.releasePointerCapture).toHaveBeenCalledWith(8);
+    expect(releasePointerCapture).toHaveBeenCalledWith(8);
     expect(capturedPointers.has(8)).toBe(false);
   });
 });

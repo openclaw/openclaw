@@ -92,7 +92,8 @@ describe("session workspace dock drag", () => {
       y: 0,
       toJSON: () => ({}),
     }));
-    grip.setPointerCapture = vi.fn();
+    const setPointerCapture = vi.fn();
+    grip.setPointerCapture = setPointerCapture;
     const onDockDragStart = createSessionWorkspaceProps(state).onDockDragStart;
     grip.addEventListener("pointerdown", onDockDragStart);
 
@@ -107,7 +108,7 @@ describe("session workspace dock drag", () => {
     expect(props.dockDragZone).toBeNull();
     expect(props.dock).toBe("bottom");
     expect(requestUpdate).not.toHaveBeenCalled();
-    expect(grip.setPointerCapture).toHaveBeenCalledTimes(1);
+    expect(setPointerCapture).toHaveBeenCalledTimes(1);
 
     grip.dispatchEvent(pointerEvent("pointermove", 11, 900, 100));
     props = createSessionWorkspaceProps(state);
@@ -154,7 +155,8 @@ describe("session workspace dock drag", () => {
       y: 0,
       toJSON: () => ({}),
     }));
-    grip.setPointerCapture = vi.fn();
+    const setPointerCapture = vi.fn();
+    grip.setPointerCapture = setPointerCapture;
     const onDockDragStart = createSessionWorkspaceProps(state).onDockDragStart;
     grip.addEventListener("pointerdown", onDockDragStart);
 
@@ -165,7 +167,7 @@ describe("session workspace dock drag", () => {
     grip.dispatchEvent(pointerEvent("pointermove", 22, 900, 100));
 
     const props = createSessionWorkspaceProps(state);
-    expect(grip.setPointerCapture).toHaveBeenCalledTimes(2);
+    expect(setPointerCapture).toHaveBeenCalledTimes(2);
     expect(props.dockDragging).toBe(true);
     expect(props.dockDragZone).toBe("right");
 
@@ -203,7 +205,8 @@ describe("session workspace dock drag", () => {
       y: 0,
       toJSON: () => ({}),
     }));
-    grip.setPointerCapture = vi.fn();
+    const setPointerCapture = vi.fn();
+    grip.setPointerCapture = setPointerCapture;
     const onDockDragStart = createSessionWorkspaceProps(state).onDockDragStart;
     grip.addEventListener("pointerdown", onDockDragStart);
 
@@ -211,7 +214,7 @@ describe("session workspace dock drag", () => {
     grip.dispatchEvent(pointerEvent("lostpointercapture", 11, 100, 100));
     grip.dispatchEvent(pointerEvent("pointerdown", 22, 100, 100));
 
-    expect(grip.setPointerCapture).toHaveBeenCalledTimes(2);
+    expect(setPointerCapture).toHaveBeenCalledTimes(2);
 
     grip.dispatchEvent(pointerEvent("pointercancel", 22, 100, 100));
     grip.removeEventListener("pointerdown", onDockDragStart);
