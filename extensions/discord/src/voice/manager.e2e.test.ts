@@ -5909,6 +5909,7 @@ describe("DiscordVoiceManager", () => {
     ).speakerContext;
 
     await segmentModule.processDiscordVoiceSegment({
+      accountId: "default",
       entry: {
         guildId: "g1",
         channelId: "1001",
