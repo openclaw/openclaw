@@ -453,6 +453,72 @@ describe("basic browser routes", () => {
     }
   });
 
+  it("gives attach-only live probe failures attach recovery guidance", async () => {
+    const state = createManagedProfileState(
+      { name: "attached", attachOnly: true },
+      { isHttpReachable: async () => true, isTransportAvailable: async () => true },
+    );
+    const profileCtx = {
+      ...(state.forProfile() as unknown as Record<string, unknown>),
+      ensureTabAvailable: vi.fn(async () => {
+        throw new Error("renderer stalled");
+      }),
+    };
+    const { app, getHandlers } = createBrowserRouteApp();
+    registerBrowserBasicRoutes(app, {
+      state: () => state,
+      forProfile: () => profileCtx,
+      mapTabError: vi.fn(() => null),
+    } as never);
+    const response = createBrowserRouteResponse();
+
+    await getHandlers.get("/doctor")?.(
+      { params: {}, query: { profile: "attached", deep: "true" } },
+      response.res,
+    );
+
+    const checks = responseBodyRecord(response).checks as Array<{
+      id?: string;
+      fixHint?: string;
+    }>;
+    const liveSnapshot = checks.find((check) => check.id === "live-snapshot");
+    expect(liveSnapshot?.fixHint).toContain("externally managed Chromium target");
+    expect(liveSnapshot?.fixHint).not.toContain("browser start");
+  });
+
+  it("does not suggest browser start for a running managed browser", async () => {
+    const state = createManagedProfileState(
+      {},
+      { isHttpReachable: async () => true, isTransportAvailable: async () => true },
+    );
+    const profileCtx = {
+      ...(state.forProfile() as unknown as Record<string, unknown>),
+      ensureTabAvailable: vi.fn(async () => {
+        throw new Error("renderer stalled");
+      }),
+    };
+    const { app, getHandlers } = createBrowserRouteApp();
+    registerBrowserBasicRoutes(app, {
+      state: () => state,
+      forProfile: () => profileCtx,
+      mapTabError: vi.fn(() => null),
+    } as never);
+    const response = createBrowserRouteResponse();
+
+    await getHandlers.get("/doctor")?.(
+      { params: {}, query: { profile: "openclaw", deep: "true" } },
+      response.res,
+    );
+
+    const checks = responseBodyRecord(response).checks as Array<{
+      id?: string;
+      fixHint?: string;
+    }>;
+    const liveSnapshot = checks.find((check) => check.id === "live-snapshot");
+    expect(liveSnapshot?.fixHint).toContain("Reload the stalled page");
+    expect(liveSnapshot?.fixHint).not.toMatch(/Run openclaw browser start/i);
+  });
+
   it("still probes an extension profile after the short status check misses", async () => {
     captureAriaSnapshotViaPlaywrightMock.mockResolvedValueOnce({
       nodes: [{ ref: "ax1", role: "document", name: "Example" }],

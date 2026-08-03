@@ -425,6 +425,9 @@ export async function connectBrowser(
         const wsUrl = await getChromeWebSocketUrl(normalized, timeout, ssrfPolicy).catch(
           () => null,
         );
+        if (connectionAttempt.cancelled) {
+          throw new Error("Playwright connection attempt was superseded.");
+        }
         const hasUrlCredentials = stripCdpUrlCredentials(normalized) !== normalized;
         if (!wsUrl && hasUrlCredentials && !isWebSocketUrl(normalized)) {
           // Playwright preserves explicit headers across HTTP discovery redirects.
@@ -446,6 +449,9 @@ export async function connectBrowser(
         try {
           browser = await connectEndpoint(endpoint);
         } catch (err) {
+          if (connectionAttempt.cancelled) {
+            throw err;
+          }
           if (!isWebSocketUrl(normalized) || endpoint === normalized) {
             throw err;
           }

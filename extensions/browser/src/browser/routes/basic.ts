@@ -69,16 +69,20 @@ async function awaitTaskWithAbort<T>(task: Promise<T>, signal: AbortSignal): Pro
   }
 }
 
-function liveProbeFailureFixHint(profileCtx: ProfileContext): string {
+function liveProbeFailureFixHint(profileCtx: ProfileContext, statusRunning: boolean): string {
   switch (getBrowserProfileCapabilities(profileCtx.profile).mode) {
     case "local-extension":
       return "Reload the shared Chrome tab or reconnect the OpenClaw Chrome extension, then retry with openclaw browser doctor --deep.";
+    case "local-attach-only":
+      return "Keep the externally managed Chromium target open and responsive, or reconnect the target, then retry with openclaw browser doctor --deep.";
     case "local-existing-session":
       return "Keep the attached Chromium target open and responsive, then retry with openclaw browser doctor --deep.";
     case "remote-cdp":
       return "Restore the remote CDP endpoint and selected page, then retry with openclaw browser doctor --deep.";
     case "local-managed":
-      return "Run openclaw browser start, then retry with openclaw browser doctor --deep.";
+      return statusRunning
+        ? "Reload the stalled page or stop and restart the managed browser, then retry with openclaw browser doctor --deep."
+        : "Run openclaw browser start, then retry with openclaw browser doctor --deep.";
   }
 }
 
@@ -339,6 +343,7 @@ async function runBrowserLiveProbe(
   ctx: BrowserRouteContext,
   profileCtx: ProfileContext,
   signal: AbortSignal,
+  statusRunning: boolean,
 ) {
   const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
   const deadlineAtMs = Date.now() + LIVE_SNAPSHOT_PROBE_TIMEOUT_MS;
@@ -429,7 +434,7 @@ async function runBrowserLiveProbe(
       label: "Live snapshot",
       status: "fail" as const,
       summary: String(err),
-      fixHint: liveProbeFailureFixHint(profileCtx),
+      fixHint: liveProbeFailureFixHint(profileCtx, statusRunning),
     };
   } finally {
     clearTimeout(deadlineTimer);
@@ -563,7 +568,10 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
         signal: req.signal,
         run: async (signal) => {
           const status = await buildBrowserStatus(ctx, profileCtx, signal);
-          const doctorReport = buildBrowserDoctorReport({ status });
+          const doctorReport = buildBrowserDoctorReport({
+            status,
+            mode: getBrowserProfileCapabilities(profileCtx.profile).mode,
+          });
           const liveRequested =
             toBoolean(req.query.deep) === true || toBoolean(req.query.live) === true;
           if (liveRequested) {
@@ -581,7 +589,7 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
                   fixHint:
                     "Run openclaw browser start, then retry with openclaw browser doctor --deep.",
                 }
-              : await runBrowserLiveProbe(ctx, profileCtx, signal);
+              : await runBrowserLiveProbe(ctx, profileCtx, signal, status.running);
             reconcileSuccessfulLiveProbe(doctorReport, liveProbe);
             doctorReport.checks.push(liveProbe);
             doctorReport.ok = doctorReport.checks.every((check) => check.status !== "fail");

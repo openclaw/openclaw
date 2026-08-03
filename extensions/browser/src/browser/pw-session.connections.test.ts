@@ -351,6 +351,41 @@ describe("pw-session connection scoping", () => {
     expect(message).not.toContain(token);
   });
 
+  it("does not start CDP after discovery is cancelled", async () => {
+    let resolveDiscovery!: (value: string | null) => void;
+    getChromeWebSocketUrlSpy.mockImplementationOnce(
+      async () => await new Promise<string | null>((resolve) => (resolveDiscovery = resolve)),
+    );
+    const controller = new AbortController();
+    const pending = getPageForTargetId({
+      cdpUrl: "http://127.0.0.1:9222",
+      signal: controller.signal,
+    });
+
+    await vi.waitFor(() => expect(getChromeWebSocketUrlSpy).toHaveBeenCalledOnce());
+    controller.abort(new Error("doctor deadline"));
+    resolveDiscovery("ws://127.0.0.1:9222/devtools/browser/discovered");
+
+    await expect(pending).rejects.toThrow("doctor deadline");
+    expect(connectOverCdpSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not start normalized fallback after the discovered handshake is cancelled", async () => {
+    const cdpUrl = "ws://127.0.0.1:9222/devtools/browser/original";
+    const discoveredUrl = "ws://127.0.0.1:9222/devtools/browser/discovered";
+    const controller = new AbortController();
+    getChromeWebSocketUrlSpy.mockResolvedValueOnce(discoveredUrl);
+    connectOverCdpSpy.mockImplementationOnce(async () => {
+      controller.abort(new Error("doctor deadline"));
+      throw new Error("stale discovered endpoint");
+    });
+
+    await expect(getPageForTargetId({ cdpUrl, signal: controller.signal })).rejects.toThrow(
+      "doctor deadline",
+    );
+    expect(connectOverCdpSpy).toHaveBeenCalledOnce();
+  });
+
   it("keeps credentialed HTTP discovery out of Playwright's redirect path", async () => {
     const cdpUrl = "https://browser-user:browser-password@browserless.example/cdp";
     getChromeWebSocketUrlSpy.mockResolvedValue(null);
