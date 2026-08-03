@@ -52,6 +52,8 @@ const copilotDeniedTabs = new Set();
 const copilotAccessRevisions = new Map();
 /** In-flight attach promises per tab id (coalesces concurrent attaches). */
 const attachingTabs = new Map();
+/** In-flight detach promises per tab id (serializes rapid detach/reattach). */
+const detachingTabs = new Map();
 /** Latest revocation task per tab; restoration waits for its exact epoch. */
 const copilotRevocations = new Map();
 /** Debounce handle for tab-list refreshes. */
@@ -215,6 +217,7 @@ async function syncTabsToRelay() {
 
 async function attachDebugger(tabId) {
   await copilotCustodyReady;
+  await detachingTabs.get(tabId);
   // Coalesce concurrent attaches for one tab. Two relay attach commands (or an
   // auto-attach racing an explicit share) would otherwise both call
   // chrome.debugger.attach and the second throws "Another debugger is already
@@ -250,7 +253,7 @@ async function attachDebugger(tabId) {
       try {
         assertAccess();
       } catch (error) {
-        await detachDebugger(tabId);
+        await detachDebuggerNow(tabId);
         throw error;
       }
       attachedTabs.add(tabId);
@@ -259,12 +262,12 @@ async function attachDebugger(tabId) {
     try {
       assertAccess();
     } catch (error) {
-      await detachDebugger(tabId);
+      await detachDebuggerNow(tabId);
       throw error;
     }
     const target = targets.find((candidate) => candidate.tabId === tabId && candidate.attached);
     if (!target?.id) {
-      await detachDebugger(tabId);
+      await detachDebuggerNow(tabId);
       throw new Error(`chrome.debugger did not confirm an attached target for tab ${tabId}`);
     }
     return { targetId: target.id };
@@ -277,7 +280,7 @@ async function attachDebugger(tabId) {
   }
 }
 
-async function detachDebugger(tabId) {
+async function detachDebuggerNow(tabId) {
   // Always call Chrome: an attach can complete before attachedTabs records it.
   // The unconditional detach closes that revocation race.
   attachedTabs.delete(tabId);
@@ -285,6 +288,25 @@ async function detachDebugger(tabId) {
     await chrome.debugger.detach({ tabId });
   } catch {
     // already detached or tab gone
+  }
+}
+
+async function detachDebugger(tabId) {
+  const inFlight = detachingTabs.get(tabId);
+  if (inFlight) {
+    return await inFlight;
+  }
+  const detaching = (async () => {
+    await Promise.allSettled([attachingTabs.get(tabId)]);
+    await detachDebuggerNow(tabId);
+  })();
+  detachingTabs.set(tabId, detaching);
+  try {
+    await detaching;
+  } finally {
+    if (detachingTabs.get(tabId) === detaching) {
+      detachingTabs.delete(tabId);
+    }
   }
 }
 

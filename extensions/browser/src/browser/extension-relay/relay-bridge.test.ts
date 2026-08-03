@@ -392,6 +392,11 @@ describe("ExtensionRelayBridge", () => {
       | undefined;
     expect(detach?.seq).toBeTypeOf("number");
 
+    handlers.onMessage(JSON.stringify({ type: "tabs", tabs: [] }));
+    handlers.onMessage(JSON.stringify({ type: "tabs", tabs: defaultTabs() }));
+    await flush();
+    expect(extSocket.frames().filter((frame) => frame.type === "attach")).toHaveLength(1);
+
     const retryClient = new FakeSocket();
     const retryCdp = bridge.attachCdpClientSocket(retryClient);
     retryCdp.onMessage(
@@ -407,6 +412,14 @@ describe("ExtensionRelayBridge", () => {
 
     expect(extSocket.frames().filter((frame) => frame.type === "attach")).toHaveLength(2);
     expect(retryClient.frames().find((frame) => frame.id === 1)?.result).toEqual({});
+    expect(
+      retryClient.frames().find((frame) => {
+        const params = frame.params as { targetInfo?: { targetId?: string } } | undefined;
+        return (
+          frame.method === "Target.attachedToTarget" && params?.targetInfo?.targetId === "target-1"
+        );
+      }),
+    ).toBeTruthy();
   });
 
   it("identifies an unanswered page CDP command when the relay deadline expires", async () => {

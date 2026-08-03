@@ -17,7 +17,11 @@ import {
   inspectChromeGraphicsDiagnostics,
 } from "../chrome.graphics.js";
 import { resolveManagedBrowserHeadlessMode } from "../config.js";
-import { buildBrowserDoctorReport } from "../doctor.js";
+import {
+  buildBrowserDoctorReport,
+  type BrowserDoctorCheck,
+  type BrowserDoctorReport,
+} from "../doctor.js";
 import { BrowserError, toBrowserErrorResponse } from "../errors.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import { createBrowserProfilesService } from "../profiles-service.js";
@@ -41,6 +45,47 @@ const STATUS_GRAPHICS_COMMAND_TIMEOUT_MS = 1_000;
 const STATUS_CHROME_MCP_TOTAL_TIMEOUT_MS = BROWSER_DEEP_DOCTOR_STATUS_TIMEOUT_MS;
 const STATUS_CHROME_MCP_TRANSPORT_TIMEOUT_MS = 5_000;
 const LIVE_SNAPSHOT_PROBE_TIMEOUT_MS = BROWSER_DEEP_DOCTOR_LIVE_PROBE_TIMEOUT_MS;
+
+function liveProbeFailureFixHint(profileCtx: ProfileContext): string {
+  switch (getBrowserProfileCapabilities(profileCtx.profile).mode) {
+    case "local-extension":
+      return "Reload the shared Chrome tab or reconnect the OpenClaw Chrome extension, then retry with openclaw browser doctor --deep.";
+    case "local-existing-session":
+      return "Keep the attached Chromium target open and responsive, then retry with openclaw browser doctor --deep.";
+    case "remote-cdp":
+      return "Restore the remote CDP endpoint and selected page, then retry with openclaw browser doctor --deep.";
+    case "local-managed":
+      return "Run openclaw browser start, then retry with openclaw browser doctor --deep.";
+  }
+}
+
+function reconcileSuccessfulLiveProbe(
+  report: BrowserDoctorReport,
+  liveProbe: BrowserDoctorCheck,
+): void {
+  if (liveProbe.status === "fail") {
+    return;
+  }
+  const transportCheckId =
+    report.transport === "extension"
+      ? "extension-relay"
+      : report.transport === "chrome-mcp"
+        ? "attach-target"
+        : null;
+  if (!transportCheckId) {
+    return;
+  }
+  const transportCheck = report.checks.find((check) => check.id === transportCheckId);
+  if (!transportCheck || transportCheck.status !== "fail") {
+    return;
+  }
+  transportCheck.status = "pass";
+  transportCheck.summary =
+    report.transport === "extension"
+      ? "OpenClaw Chrome extension transport validated by the live snapshot probe"
+      : "Chrome MCP target validated by the live snapshot probe";
+  delete transportCheck.fixHint;
+}
 
 function remainingChromeMcpStatusTimeoutMs(startedAtMs: number): number {
   return Math.max(1, STATUS_CHROME_MCP_TOTAL_TIMEOUT_MS - (Date.now() - startedAtMs));
@@ -355,7 +400,7 @@ async function runBrowserLiveProbe(
       label: "Live snapshot",
       status: "fail" as const,
       summary: String(err),
-      fixHint: "Run openclaw browser start, then retry with openclaw browser doctor --deep.",
+      fixHint: liveProbeFailureFixHint(profileCtx),
     };
   } finally {
     clearTimeout(deadlineTimer);
@@ -498,18 +543,18 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
               profileCtx,
               status,
             );
-            doctorReport.checks.push(
-              managedProfileStopped
-                ? {
-                    id: "live-snapshot",
-                    label: "Live snapshot",
-                    status: "fail",
-                    summary: "Live snapshot probe requires a running browser profile.",
-                    fixHint:
-                      "Start or connect the browser profile, then retry with openclaw browser doctor --deep.",
-                  }
-                : await runBrowserLiveProbe(ctx, profileCtx, signal),
-            );
+            const liveProbe = managedProfileStopped
+              ? {
+                  id: "live-snapshot",
+                  label: "Live snapshot",
+                  status: "fail" as const,
+                  summary: "Live snapshot probe requires a running browser profile.",
+                  fixHint:
+                    "Run openclaw browser start, then retry with openclaw browser doctor --deep.",
+                }
+              : await runBrowserLiveProbe(ctx, profileCtx, signal);
+            reconcileSuccessfulLiveProbe(doctorReport, liveProbe);
+            doctorReport.checks.push(liveProbe);
             doctorReport.ok = doctorReport.checks.every((check) => check.status !== "fail");
           }
           return doctorReport;

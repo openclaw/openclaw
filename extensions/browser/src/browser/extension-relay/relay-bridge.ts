@@ -60,8 +60,6 @@ type TabState = {
   /** Set while chrome.debugger is attached: real CDP targetId + synthetic root sessionId. */
   attached?: { targetId: string; sessionId: string };
   attaching?: Promise<{ targetId: string; sessionId: string }>;
-  /** Settles only after the extension's chrome.debugger.detach call settles. */
-  detaching?: Promise<void>;
 };
 
 type CdpClientState = {
@@ -103,6 +101,8 @@ export class ExtensionRelayBridge {
   private extension: { socket: BridgeSocket; identity: ExtensionIdentity } | null = null;
   private readonly clients = new Set<CdpClientState>();
   private readonly tabs = new Map<number, TabState>();
+  /** Detach ownership survives a TabState replacement during unshare/re-share. */
+  private readonly detachingTabs = new Map<number, Promise<void>>();
   /** Browser-level sessions created by Playwright for page-scoped CDP access. */
   private readonly browserSessions = new Map<string, CdpClientState>();
   /** Extra root-page sessions multiplexed over one chrome.debugger attachment. */
@@ -413,15 +413,13 @@ export class ExtensionRelayBridge {
   }
 
   private async ensureTabAttached(tabId: number): Promise<{ targetId: string; sessionId: string }> {
+    const detaching = this.detachingTabs.get(tabId);
+    if (detaching) {
+      await detaching;
+    }
     const tab = this.tabs.get(tabId);
     if (!tab) {
       throw new Error(`tab ${tabId} is not shared with OpenClaw`);
-    }
-    if (tab.detaching) {
-      await tab.detaching;
-      if (this.tabs.get(tabId) !== tab) {
-        throw new Error(`tab ${tabId} closed during detach`);
-      }
     }
     if (tab.attached) {
       return tab.attached;
@@ -460,8 +458,9 @@ export class ExtensionRelayBridge {
   }
 
   private detachTab(tabId: number, tab: TabState): Promise<void> {
-    if (tab.detaching) {
-      return tab.detaching;
+    const existing = this.detachingTabs.get(tabId);
+    if (existing) {
+      return existing;
     }
     const attached = tab.attached;
     if (attached) {
@@ -472,11 +471,11 @@ export class ExtensionRelayBridge {
       .then(() => undefined)
       .catch(() => undefined)
       .finally(() => {
-        if (tab.detaching === detaching) {
-          tab.detaching = undefined;
+        if (this.detachingTabs.get(tabId) === detaching) {
+          this.detachingTabs.delete(tabId);
         }
       });
-    tab.detaching = detaching;
+    this.detachingTabs.set(tabId, detaching);
     return detaching;
   }
 

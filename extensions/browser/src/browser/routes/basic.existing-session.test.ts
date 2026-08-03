@@ -440,10 +440,14 @@ describe("basic browser routes", () => {
       const checks = responseBodyRecord(response).checks as Array<{
         id?: string;
         summary?: string;
+        fixHint?: string;
       }>;
-      expect(checks.find((check) => check.id === "live-snapshot")?.summary).toContain(
+      const liveSnapshot = checks.find((check) => check.id === "live-snapshot");
+      expect(liveSnapshot?.summary).toContain(
         "targetId=extension-target-1, method=Accessibility.enable",
       );
+      expect(liveSnapshot?.fixHint).toContain("Reload the shared Chrome tab");
+      expect(liveSnapshot?.fixHint).not.toContain("browser start");
     } finally {
       vi.useRealTimers();
     }
@@ -496,9 +500,54 @@ describe("basic browser routes", () => {
       status?: string;
       summary?: string;
     }>;
+    expect(response.body).toMatchObject({ ok: true });
+    expect(checks.find((check) => check.id === "extension-relay")).toMatchObject({
+      status: "pass",
+      summary: expect.stringContaining("validated by the live snapshot probe"),
+    });
     expect(checks.find((check) => check.id === "live-snapshot")).toMatchObject({
       status: "pass",
       summary: expect.stringContaining("extension-target-1"),
+    });
+  });
+
+  it("reconciles a stale Chrome MCP attach failure after the live probe succeeds", async () => {
+    const state = createExistingSessionProfileState({
+      isHttpReachable: async () => false,
+      isTransportAvailable: async () => false,
+      isReachable: async () => false,
+    });
+    const profileCtx = {
+      ...(state.forProfile() as unknown as Record<string, unknown>),
+      ensureTabAvailable: vi.fn(async () => ({
+        targetId: "7",
+        title: "Example",
+        url: "https://example.com",
+        type: "page",
+      })),
+    };
+    const { app, getHandlers } = createBrowserRouteApp();
+    registerBrowserBasicRoutes(app, {
+      state: () => state,
+      forProfile: () => profileCtx,
+      mapTabError: vi.fn(() => null),
+    } as never);
+    const response = createBrowserRouteResponse();
+
+    await getHandlers.get("/doctor")?.(
+      { params: {}, query: { profile: "chrome-live", deep: "true" } },
+      response.res,
+    );
+
+    const body = responseBodyRecord(response);
+    const checks = body.checks as Array<{ id?: string; status?: string; summary?: string }>;
+    expect(body.ok).toBe(true);
+    expect(checks.find((check) => check.id === "attach-target")).toMatchObject({
+      status: "pass",
+      summary: expect.stringContaining("validated by the live snapshot probe"),
+    });
+    expect(checks.find((check) => check.id === "live-snapshot")).toMatchObject({
+      status: "pass",
     });
   });
 
