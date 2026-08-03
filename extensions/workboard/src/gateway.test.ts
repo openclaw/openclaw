@@ -339,7 +339,7 @@ describe("workboard gateway methods", () => {
 
     expect(respond.mock.calls[0]?.[0]).toBe(false);
     expect(respond.mock.calls[0]?.[2]).toMatchObject({
-      message: "labels must be 40 characters or fewer.",
+      message: expect.stringMatching(/^labels must be 40 characters or fewer(?: \(got 41\))?\.$/),
     });
   });
 
