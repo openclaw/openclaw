@@ -3,6 +3,7 @@
 // Kept apart from the active-events reader so cache validation stays a
 // dependency-light import for gateway callers.
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contract.js";
@@ -28,19 +29,28 @@ export function readSessionTranscriptWatermark(
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
   const db = getNodeSqliteKysely<WatermarkDatabase>(database.db);
-  const maxSeq = executeSqliteQueryTakeFirstSync(
+  return runSqliteDeferredTransactionSync(
     database.db,
-    db
-      .selectFrom("transcript_events")
-      .select((eb) => eb.fn.max<number>("seq").as("max_seq"))
-      .where("session_id", "=", resolved.sessionId),
-  )?.max_seq;
-  const generation = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db
-      .selectFrom("transcript_rewrite_watermarks")
-      .select("generation")
-      .where("session_id", "=", resolved.sessionId),
-  )?.generation;
-  return { generation: generation ?? null, maxSeq: maxSeq ?? null };
+    () => {
+      const maxSeq = executeSqliteQueryTakeFirstSync(
+        database.db,
+        db
+          .selectFrom("transcript_events")
+          .select((eb) => eb.fn.max<number>("seq").as("max_seq"))
+          .where("session_id", "=", resolved.sessionId),
+      )?.max_seq;
+      const generation = executeSqliteQueryTakeFirstSync(
+        database.db,
+        db
+          .selectFrom("transcript_rewrite_watermarks")
+          .select("generation")
+          .where("session_id", "=", resolved.sessionId),
+      )?.generation;
+      return { generation: generation ?? null, maxSeq: maxSeq ?? null };
+    },
+    {
+      databaseLabel: database.path,
+      operationLabel: "sessions.transcript.watermark.read",
+    },
+  );
 }
