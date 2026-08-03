@@ -4,7 +4,10 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { SANDBOX_PINNED_MUTATION_PYTHON } from "./fs-bridge-mutation-helper.js";
+import {
+  SANDBOX_CREATE_EXISTS_EXIT_CODE,
+  SANDBOX_PINNED_MUTATION_PYTHON,
+} from "./fs-bridge-mutation-helper.js";
 import { createSandbox } from "./fs-bridge.test-helpers.js";
 import {
   createRemoteShellSandboxFsBridge,
@@ -52,7 +55,8 @@ function createLocalRemoteRuntime(params: {
     remoteAgentWorkspaceDir: params.remoteAgentWorkspaceDir,
     runRemoteShellScript: async (command) => {
       calls.push(command);
-      const result = command.script.includes("python3 /dev/fd/3 \"$@\" 3<<'PY'")
+      const runsPinnedMutation = command.script.includes("python3 /dev/fd/3 \"$@\" 3<<'PY'");
+      const result = runsPinnedMutation
         ? spawnSync("python3", ["-c", SANDBOX_PINNED_MUTATION_PYTHON, ...(command.args ?? [])], {
             input: command.stdin,
             encoding: "buffer",
@@ -70,7 +74,17 @@ function createLocalRemoteRuntime(params: {
         ? result.stderr
         : Buffer.from(result.stderr ?? []);
       const code = result.status ?? (result.signal ? 128 : 1);
-      if (result.error) {
+      // Existing targets intentionally exit before reading stdin; their exit code remains authoritative.
+      const expectedCreatePipeClose =
+        runsPinnedMutation &&
+        command.args?.[0] === "create" &&
+        command.allowFailure === true &&
+        result.status === SANDBOX_CREATE_EXISTS_EXIT_CODE &&
+        result.signal === null &&
+        result.error &&
+        "code" in result.error &&
+        result.error.code === "EPIPE";
+      if (result.error && !expectedCreatePipeClose) {
         throw result.error;
       }
       if (code !== 0 && !command.allowFailure) {
@@ -164,6 +178,73 @@ describe("remote sandbox fs bridge", () => {
         await expect(fs.readFile(path.join(workspaceDir, "target.txt"), "utf8")).resolves.toBe(
           "keep",
         );
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "preserves exclusive-create collisions when the helper closes a large stdin early",
+    async () => {
+      await withTempDir("openclaw-remote-fs-create-epipe-", async (stateDir) => {
+        const workspaceDir = path.join(stateDir, "workspace");
+        await fs.mkdir(workspaceDir, { recursive: true });
+        await fs.writeFile(path.join(workspaceDir, "target.txt"), "keep", "utf8");
+        await fs.symlink("target.txt", path.join(workspaceDir, "link.txt"));
+        const { runtime } = createLocalRemoteRuntime({
+          remoteWorkspaceDir: workspaceDir,
+          remoteAgentWorkspaceDir: workspaceDir,
+        });
+        const bridge = createRemoteShellSandboxFsBridge({
+          sandbox: createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir }),
+          runtime,
+        });
+
+        for (const bytes of [16, 65_536, 1_048_576, 1_048_576]) {
+          await expect(
+            bridge.createFileExclusive?.({ filePath: "link.txt", data: Buffer.alloc(bytes) }),
+          ).resolves.toBe("exists");
+        }
+
+        await expect(fs.readFile(path.join(workspaceDir, "target.txt"), "utf8")).resolves.toBe(
+          "keep",
+        );
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "never suppresses broken pipes outside an allowed exclusive-create collision",
+    async () => {
+      await withTempDir("openclaw-remote-fs-unexpected-epipe-", async (stateDir) => {
+        const workspaceDir = path.join(stateDir, "workspace");
+        await fs.mkdir(workspaceDir, { recursive: true });
+        await fs.writeFile(path.join(workspaceDir, "existing.txt"), "keep", "utf8");
+        const { runtime } = createLocalRemoteRuntime({
+          remoteWorkspaceDir: workspaceDir,
+          remoteAgentWorkspaceDir: workspaceDir,
+        });
+        const pinnedScript = "python3 /dev/fd/3 \"$@\" 3<<'PY'";
+
+        for (const command of [
+          { script: "exit 17", args: ["create"], allowFailure: true },
+          {
+            script: pinnedScript,
+            args: ["create", workspaceDir, "", "existing.txt", "1"],
+            allowFailure: false,
+          },
+          {
+            script: pinnedScript,
+            args: ["read", workspaceDir, "", "missing.txt"],
+            allowFailure: true,
+          },
+        ]) {
+          await expect(
+            runtime.runRemoteShellScript({
+              ...command,
+              stdin: Buffer.alloc(1_048_576),
+            }),
+          ).rejects.toMatchObject({ code: "EPIPE" });
+        }
       });
     },
   );
