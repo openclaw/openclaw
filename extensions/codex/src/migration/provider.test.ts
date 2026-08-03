@@ -124,12 +124,12 @@ function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0
   return call[argIndex];
 }
 
-function targetAgentDir(fixture: { stateDir: string }): string {
-  return path.join(fixture.stateDir, "agents", "main", "agent");
+function targetAgentDir(fixture: { stateDir: string }, agentId = "main"): string {
+  return path.join(fixture.stateDir, "agents", agentId, "agent");
 }
 
-function loadTargetAuthStore(fixture: { stateDir: string }) {
-  return loadAuthProfileStoreForSecretsRuntime(targetAgentDir(fixture));
+function loadTargetAuthStore(fixture: { stateDir: string }, agentId = "main") {
+  return loadAuthProfileStoreForSecretsRuntime(targetAgentDir(fixture, agentId));
 }
 
 async function createCodexFixture(): Promise<{
@@ -556,6 +556,48 @@ describe("buildCodexMigrationProvider", () => {
     expect(sourceAppServerClientScope).toHaveBeenCalledTimes(1);
   });
 
+  it("discovers installed plugins from the API-key curated marketplace", async () => {
+    const fixture = await createCodexFixture();
+    appServerRequest.mockImplementation(async ({ method }: { method: string }) => {
+      if (method === "plugin/installed") {
+        return {
+          marketplaces: [
+            {
+              name: "openai-api-curated",
+              path: path.join(
+                fixture.codexHome,
+                ".tmp/plugins/.agents/plugins/api_marketplace.json",
+              ),
+              interface: null,
+              plugins: [
+                pluginSummary("google-calendar@openai-api-curated", {
+                  name: "google-calendar",
+                  installed: true,
+                  enabled: true,
+                }),
+              ],
+            },
+          ],
+          marketplaceLoadErrors: [],
+        } satisfies v2.PluginInstalledResponse;
+      }
+      throw new Error(`unexpected request ${method}`);
+    });
+
+    const source = await discoverCodexSource({ input: fixture.codexHome });
+
+    expect(source.pluginDiscoveryError).toBeUndefined();
+    expect(source.plugins).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginName: "google-calendar",
+          marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+          migratable: true,
+        }),
+      ]),
+    );
+  });
+
   it("ignores unrelated marketplace errors when no curated plugins are installed", async () => {
     const fixture = await createCodexFixture();
     appServerRequest.mockImplementation(async ({ method }: { method: string }) => {
@@ -757,7 +799,7 @@ describe("buildCodexMigrationProvider", () => {
     expect(sourceAppServerClientScope).toHaveBeenCalledTimes(1);
   });
 
-  it("imports Codex auth.json OAuth and seeds cached OpenAI Codex models", async () => {
+  it("imports Codex auth.json OAuth into the selected agent and seeds cached models", async () => {
     const fixture = await createCodexFixture();
     const reportDir = path.join(fixture.root, "report");
     const configState: MigrationProviderContext["config"] = {
@@ -766,6 +808,7 @@ describe("buildCodexMigrationProvider", () => {
           model: { fallbacks: [] },
           workspace: fixture.workspaceDir,
         },
+        list: [{ id: "main", default: true }, { id: "research" }],
       },
     } as MigrationProviderContext["config"];
     const accessToken = fakeJwt({
@@ -815,6 +858,7 @@ describe("buildCodexMigrationProvider", () => {
       runtime: createConfigRuntime(configState),
       reportDir,
       includeSecrets: true,
+      targetAgentId: "research",
     });
     const plan = await provider.plan(ctx);
     expectRecordFields(findItem(plan.items, "auth:openai"), {
@@ -826,7 +870,7 @@ describe("buildCodexMigrationProvider", () => {
     const result = await provider.apply(ctx, plan);
 
     expectRecordFields(findItem(result.items, "auth:openai"), { status: "migrated" });
-    const authStore = loadTargetAuthStore(fixture);
+    const authStore = loadTargetAuthStore(fixture, "research");
     expect(authStore.profiles?.["openai:account-acct_test"]).toEqual(
       expect.objectContaining({
         type: "oauth",
@@ -835,6 +879,7 @@ describe("buildCodexMigrationProvider", () => {
         refresh: "refresh-test-token",
       }),
     );
+    expect(loadTargetAuthStore(fixture).profiles?.["openai:account-acct_test"]).toBeUndefined();
     expect(configState.auth?.profiles?.["openai:account-acct_test"]).toEqual(
       expect.objectContaining({
         provider: "openai",

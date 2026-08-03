@@ -46,6 +46,7 @@ const CURRENT_TRAIN_METHODS = [
   "environments.destroy",
   "sessions.dispatch",
   "sessions.reclaim",
+  "sessions.viewers.set",
   "sessions.catalog.list",
   "sessions.catalog.read",
   "sessions.catalog.continue",
@@ -74,6 +75,7 @@ const CURRENT_TRAIN_METHODS = [
   "memory.search",
   "skills.proposals.evaluate",
   "skills.proposals.events.list",
+  "hooks.status",
 ] as const;
 
 describe("core gateway method release trains", () => {

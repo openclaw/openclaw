@@ -160,9 +160,6 @@ function activityAlignmentHtml() {
 function chatFooterActionsHtml() {
   return `
     <div class="chat-group-footer-actions">
-      <button class="chat-expand-btn" type="button" aria-label="Open in canvas">
-        <span class="chat-expand-btn__icon" aria-hidden="true">${iconSvg()}</span>
-      </button>
       <button class="chat-copy-btn" type="button" aria-label="Copy as markdown">
         <span class="chat-copy-btn__icon" aria-hidden="true">${iconSvg()}</span>
       </button>
@@ -557,6 +554,129 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     sharedBrowser = null;
   });
 
+  it(
+    "does not replay a consumed session rail open generation after round trips or remounts",
+    FULL_APP_TEST_OPTIONS,
+    async () => {
+      if (!realChatServer) {
+        throw new Error("Expected the Control UI server to be ready");
+      }
+      const page = await openBrowserPage(900, 700);
+      try {
+        await page.goto(realChatServer.baseUrl, {
+          waitUntil: "domcontentloaded",
+          timeout: APP_FIRST_RENDER_TIMEOUT_MS,
+        });
+        await page.evaluate(
+          () =>
+            new Promise<void>((resolve, reject) => {
+              const script = document.createElement("script");
+              script.type = "module";
+              script.src = "/src/pages/chat/components/chat-session-rail.ts";
+              script.addEventListener("load", () => resolve(), { once: true });
+              script.addEventListener(
+                "error",
+                () => reject(new Error("Session rail module failed")),
+                {
+                  once: true,
+                },
+              );
+              document.head.append(script);
+            }),
+        );
+        const result = await page.evaluate(async () => {
+          localStorage.setItem("openclaw.chat.observerHud.display", "pill");
+          type Rail = HTMLElement & {
+            companion: {
+              exchanges: [];
+              pendingQuestion: null;
+              failedQuestion: null;
+              hint: null;
+              draft: string;
+            };
+            connected: boolean;
+            consumedOpenRequest: number;
+            onOpenRequestConsumed: (openRequest: number) => void;
+            onVisibilityChange: (visible: boolean) => void;
+            openRequest: number;
+            sessionKey: string;
+            updateComplete: Promise<boolean>;
+          };
+          const createRail = () => document.createElement("openclaw-chat-session-rail") as Rail;
+          let rail = createRail();
+          let consumedOpenRequest = 0;
+          let visibleReports = 0;
+          const configureRail = (nextRail: Rail) => {
+            nextRail.companion = {
+              exchanges: [],
+              pendingQuestion: null,
+              failedQuestion: null,
+              hint: null,
+              draft: "What changed?",
+            };
+            nextRail.connected = true;
+            nextRail.consumedOpenRequest = consumedOpenRequest;
+            nextRail.onOpenRequestConsumed = (openRequest) => {
+              consumedOpenRequest = openRequest;
+            };
+            nextRail.onVisibilityChange = (visible) => {
+              if (visible) {
+                visibleReports += 1;
+              }
+            };
+          };
+          configureRail(rail);
+          rail.sessionKey = "agent:main:a";
+          document.body.replaceChildren(rail);
+          await rail.updateComplete;
+          const mode = () =>
+            rail.querySelector(".chat-session-rail--expanded") ? "expanded" : "pill";
+          const update = async (sessionKey: string, openRequest: number) => {
+            rail.sessionKey = sessionKey;
+            rail.openRequest = openRequest;
+            rail.consumedOpenRequest = consumedOpenRequest;
+            await rail.updateComplete;
+            return mode();
+          };
+
+          const sameElementModes = [
+            await update("agent:main:a", 1),
+            await update("agent:main:b", 0),
+            await update("agent:main:a", 1),
+            await update("agent:main:a", 2),
+          ];
+          rail.remove();
+          rail = createRail();
+          configureRail(rail);
+          rail.sessionKey = "agent:main:a";
+          rail.openRequest = 2;
+          document.body.append(rail);
+          await rail.updateComplete;
+          const remountMode = mode();
+          const nextGenerationMode = await update("agent:main:a", 3);
+
+          return {
+            sameElementModes,
+            remountMode,
+            nextGenerationMode,
+            storedPreference: localStorage.getItem("openclaw.chat.observerHud.display"),
+            visibleReports,
+          };
+        });
+
+        expect(result).toEqual({
+          sameElementModes: ["expanded", "pill", "pill", "expanded"],
+          remountMode: "pill",
+          nextGenerationMode: "expanded",
+          storedPreference: "pill",
+          visibleReports: 3,
+        });
+      } finally {
+        await closeBrowserPage(page);
+      }
+    },
+  );
+
   it.each([
     [320, 568],
     [1366, 900],
@@ -581,6 +701,53 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(spacing).not.toBeNull();
       expect(spacing?.paddingTop).toBeGreaterThanOrEqual(20);
       expect(spacing?.inset).toBeCloseTo(spacing?.paddingTop ?? 0, 0);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("keeps the native gateway picker as compact as sidebar menus", async () => {
+    const page = await openBrowserPage(800, 600);
+    try {
+      const splitViewCss = readStyleSheet("ui/src/styles/chat/split-view.css");
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}\n${splitViewCss}</style></head><body>
+          <wa-dropdown class="chat-pane__gateway-menu">
+            <template shadowrootmode="open"><div part="menu">Gateways</div></template>
+            <wa-dropdown-item class="chat-pane__gateway-menu-item">Local Gateway</wa-dropdown-item>
+          </wa-dropdown>
+        </body></html>`,
+      );
+
+      const styles = await page.evaluate(() => {
+        const dropdown = document.querySelector<HTMLElement>(".chat-pane__gateway-menu")!;
+        const menu = dropdown.shadowRoot!.querySelector<HTMLElement>('[part="menu"]')!;
+        const item = dropdown.querySelector<HTMLElement>(".chat-pane__gateway-menu-item")!;
+        const menuStyle = getComputedStyle(menu);
+        const itemStyle = getComputedStyle(item);
+        return {
+          menu: {
+            borderRadius: menuStyle.borderRadius,
+            padding: menuStyle.padding,
+          },
+          item: {
+            borderRadius: itemStyle.borderRadius,
+            fontSize: itemStyle.fontSize,
+            minHeight: itemStyle.minHeight,
+            padding: itemStyle.padding,
+          },
+        };
+      });
+
+      expect(styles).toEqual({
+        menu: { borderRadius: "8px", padding: "6px" },
+        item: {
+          borderRadius: "8px",
+          fontSize: "13px",
+          minHeight: "30px",
+          padding: "0px 8px",
+        },
+      });
     } finally {
       await closeBrowserPage(page);
     }

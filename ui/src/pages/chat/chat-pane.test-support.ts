@@ -18,6 +18,7 @@ import { createInitialUserMessageHandoff } from "../../app/initial-user-message-
 import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import "./chat-pane.ts";
+import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
@@ -35,6 +36,7 @@ export type TestChatPane = HTMLElement & {
   connectedCallback: () => void;
   connectionGeneration: number;
   createSession: () => Promise<boolean>;
+  restoreArchivedSession: (sessionKey: string) => Promise<void>;
   disconnectedCallback: () => void;
   acceptTaskSuggestion: (suggestion: TaskSuggestion) => Promise<void>;
   handleDocumentKeydown: (event: KeyboardEvent) => void;
@@ -107,7 +109,7 @@ export type TestChatPane = HTMLElement & {
   renderPaneHeader: (
     workspace: ReturnType<typeof createSessionWorkspaceProps>,
     tasks: ReturnType<typeof createBackgroundTasksProps>,
-    row: undefined,
+    row: GatewaySessionRow | undefined,
     catalog: boolean,
     agentWorkspace: undefined,
     workspaceGit: boolean,
@@ -119,6 +121,8 @@ export function createSessionContext(
   sessions: SessionCapability,
 ): ApplicationContext {
   const eventListeners = new Set<GatewayEventListener>();
+  const agentSelectionListeners = new Set<(state: { selectedId: string | null }) => void>();
+  const agentSelectionState = { selectedId: "main" as string | null };
   const snapshotListeners = new Set<
     (snapshot: ApplicationContext["gateway"]["snapshot"]) => void
   >();
@@ -129,7 +133,7 @@ export function createSessionContext(
         phase: "connected" as const,
         hello: {
           features: {
-            methods: ["taskSuggestions.list", "session.suggestions.list"],
+            methods: ["taskSuggestions.list", "session.suggestions.list", "sessions.patch"],
           },
         },
       },
@@ -155,6 +159,19 @@ export function createSessionContext(
       },
     },
     agents: { state: { agentsList: null } },
+    agentSelection: {
+      state: agentSelectionState,
+      set: (agentId: string | null) => {
+        agentSelectionState.selectedId = agentId;
+        for (const listener of agentSelectionListeners) {
+          listener(agentSelectionState);
+        }
+      },
+      subscribe: (listener: (state: { selectedId: string | null }) => void) => {
+        agentSelectionListeners.add(listener);
+        return () => agentSelectionListeners.delete(listener);
+      },
+    },
     config: {
       current: {
         assistantIdentity: { name: "Molty" },
@@ -201,14 +218,15 @@ export function createTestChatPane(params: {
     sidebarFocusPanelId: "",
     sidebarFocusVersion: 0,
     sidebarLayout: { columns: [] },
+    ...createInitialChatRealtimeState(),
     // Minimal scroll host so scheduleChatScroll is a no-op instead of throwing.
     chatScrollGeneration: 0,
     chatScrollCommitCleanup: null,
     handleChatScroll: vi.fn(),
-    realtimeTalkInputLevel: { set: vi.fn() },
     resetToolStream: vi.fn(),
     renderLifecycle: { afterCommit: () => () => {}, invalidate: () => {} },
   } as unknown as ChatPageHost;
+  attachChatRealtimeActions(state);
   state.updateSidebarLayout = (layout) => {
     state.sidebarLayout = layout;
   };

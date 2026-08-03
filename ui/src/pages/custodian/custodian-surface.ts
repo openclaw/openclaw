@@ -23,6 +23,7 @@ class CustodianSurface extends OpenClawLightDomElement {
   @property({ attribute: false }) store: CustodianSessionStore = custodianSessionStore;
   @property({ attribute: false }) onboarding = false;
   @property({ attribute: false }) newAgentIntent = false;
+  @property({ attribute: false }) showChannelOnboardingNudge = false;
   @property({ attribute: false }) compact = false;
   @property({ attribute: false }) historyContent: TemplateResult | typeof nothing = nothing;
 
@@ -139,6 +140,12 @@ class CustodianSurface extends OpenClawLightDomElement {
           : ""}"
       >
         <div class="custodian__messages" aria-live="polite">
+          ${this.showChannelOnboardingNudge
+            ? eventNudgeState.renderCustodianChannelOnboardingNudge({
+                onOpenChannels: () => store.openChannelsFromOnboarding(),
+                onDismiss: () => store.dismissChannelOnboardingNudge(),
+              })
+            : nothing}
           ${!this.onboarding && store.eventNudge && !store.eventNudgePending
             ? eventNudgeState.renderCustodianEventNudge({
                 nudge: store.eventNudge,
@@ -170,7 +177,7 @@ class CustodianSurface extends OpenClawLightDomElement {
           ${store.sending
             ? html`<div class="chat-group assistant custodian__thinking-row" role="status">
                 <div class="chat-avatar assistant custodian__mascot-avatar" aria-hidden="true">
-                  <openclaw-mascot mood="thinking" .size=${32}></openclaw-mascot>
+                  <openclaw-mascot mood="thinking" .size=${26}></openclaw-mascot>
                 </div>
                 <div class="chat-group-messages custodian__thinking">
                   <span></span><span></span><span></span>

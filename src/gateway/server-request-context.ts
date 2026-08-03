@@ -24,7 +24,7 @@ type GatewayRequestContextParams = {
   deps: GatewayRequestContext["deps"];
   runtimeState: Pick<
     GatewayServerLiveState,
-    "cronState" | "configReloader" | "controlUiSessionPullRequests"
+    "cronState" | "configReloader" | "controlUiSessionPullRequests" | "sessionViewerPresence"
   >;
   getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"];
   sessionCompanion: SessionCompanionService;
@@ -42,6 +42,7 @@ type GatewayRequestContextParams = {
   listSessionPendingApprovals: GatewayRequestContext["listSessionPendingApprovals"];
   loadGatewayModelCatalog: GatewayRequestContext["loadGatewayModelCatalog"];
   loadGatewayModelCatalogSnapshot: GatewayRequestContext["loadGatewayModelCatalogSnapshot"];
+  readPreparedGatewayModelCatalog?: GatewayRequestContext["readPreparedGatewayModelCatalog"];
   getHealthCache: GatewayRequestContext["getHealthCache"];
   refreshHealthSnapshot: GatewayRequestContext["refreshHealthSnapshot"];
   logHealth: GatewayRequestContext["logHealth"];
@@ -164,6 +165,7 @@ export function createGatewayRequestContext(
     },
     getRuntimeConfig: params.getRuntimeConfig,
     controlUiSessionPullRequests: params.runtimeState.controlUiSessionPullRequests,
+    sessionViewerPresence: params.runtimeState.sessionViewerPresence,
     sessionCompanion: params.sessionCompanion,
     sessionObserver: params.sessionObserver,
     notifyPluginMetadataChanged: () =>
@@ -183,6 +185,9 @@ export function createGatewayRequestContext(
     listSessionPendingApprovals: params.listSessionPendingApprovals,
     loadGatewayModelCatalog: params.loadGatewayModelCatalog,
     loadGatewayModelCatalogSnapshot: params.loadGatewayModelCatalogSnapshot,
+    ...(params.readPreparedGatewayModelCatalog
+      ? { readPreparedGatewayModelCatalog: params.readPreparedGatewayModelCatalog }
+      : {}),
     getHealthCache: params.getHealthCache,
     refreshHealthSnapshot: params.refreshHealthSnapshot,
     logHealth: params.logHealth,
@@ -323,6 +328,7 @@ export function createGatewayRequestContext(
       params.unsubscribeAllSessionEvents(connId);
       // PR replace-sets share this websocket cleanup boundary with session events.
       params.runtimeState.controlUiSessionPullRequests?.unsubscribe(connId);
+      params.runtimeState.sessionViewerPresence?.unsubscribe(connId);
     },
     getSessionEventSubscriberConnIds: params.getSessionEventSubscriberConnIds,
     registerToolEventRecipient: params.registerToolEventRecipient,

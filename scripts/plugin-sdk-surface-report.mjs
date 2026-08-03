@@ -158,7 +158,9 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: bounded archive extraction and single-entry reads.
       // +1: budgeted root-bounded directory walking.
       // +1: pinned secret reads and first-writer-wins creation.
-      146,
+      // +2: restore the documented session-catalog and tool-results plugin contracts.
+      // +1: focused inbound-event delivery correlation for channel plugins.
+      149,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -203,7 +205,12 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: inbound media-fact metadata projection for plugin-owned channel ingestion.
       // +2: shared ingress error factory through channel-outbound and channel-message.
       // +2: shared ingress retention defaults through channel-outbound and channel-message.
-      4773,
+      // +1: standard raw-event ingress profile replacing two channel-local shells.
+      // +1: collision-safe MCP server-name assignment for native harness catalogs.
+      // +45: restore typed session-catalog and tool-results exports promised to plugins.
+      // +1: forwarding-routed approver-restricted native approval capability factory.
+      // +1: shared inbound-event delivery correlation factory for channel plugins.
+      4822,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -240,7 +247,12 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: watched-sessions prompt block for plugin-owned harness runtimes.
       // +1: inbound media-fact metadata projection for plugin-owned channel ingestion.
       // +2: shared ingress error factory through channel-outbound and channel-message.
-      2881,
+      // +1: standard raw-event ingress profile replacing two channel-local shells.
+      // +1: collision-safe MCP server-name assignment for native harness catalogs.
+      // +14: restore callable session-catalog and tool-results helpers promised to plugins.
+      // +1: forwarding-routed approver-restricted native approval capability factory.
+      // +1: shared inbound-event delivery correlation factory for channel plugins.
+      2899,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -257,7 +269,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
-      82,
+      // -1: text-runtime now names its global-singleton exports explicitly.
+      81,
       env,
     ),
   };

@@ -16,19 +16,30 @@ import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { openLocalFileSafely, readLocalFileSafely } from "../infra/fs-safe.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { assertLocalMediaAllowed, resolveLocalMediaRoots } from "../media/local-media-access.js";
 import { resolveLocalMediaPath } from "../media/local-media-path.js";
+import { probePlaybackMediaFileDescriptor } from "../media/media-probe.js";
 import {
   createImageProcessor,
   getImageMetadata,
   readImageProbeFromHeader,
 } from "../media/media-services.js";
+import {
+  replacePlaybackFileExtension,
+  resolvePlaybackModeForSource,
+  resolvePlaybackTranscode,
+} from "../media/playback-transcode.js";
 import { getMediaDir, MEDIA_MAX_BYTES, saveMediaBuffer, saveMediaSource } from "../media/store.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { resolveByteResponse, writeByteHeaders } from "./http-byte-range.js";
+import {
+  createGatewayByteStream,
+  resolveByteResponse,
+  writeByteHeaders,
+} from "./http-byte-range.js";
 import { sendJson, sendMethodNotAllowed, sendMissingScopeForbidden } from "./http-common.js";
 import {
   authorizeGatewayHttpRequestOrReply,
@@ -676,7 +687,10 @@ function resolveManagedRecordKind(record: ManagedImageRecord): ManagedMediaKind 
   return kind === "image" || kind === "audio" || kind === "video" ? kind : null;
 }
 
-function buildManagedMediaBlock(record: ManagedImageRecord): ManagedMediaBlock {
+function buildManagedMediaBlock(
+  record: ManagedImageRecord,
+  playback?: "native" | "transcode",
+): ManagedMediaBlock {
   const kind = resolveManagedRecordKind(record);
   if (!kind) {
     throw new Error("Managed media record has an unsupported content type");
@@ -689,6 +703,7 @@ function buildManagedMediaBlock(record: ManagedImageRecord): ManagedMediaBlock {
     openUrl: fullUrl,
     ...(kind === "image" ? { alt: record.alt } : { fileName: record.original.filename }),
     mimeType: record.original.contentType,
+    ...(playback ? { playback } : {}),
     ...(kind === "image" ? { width: record.original.width, height: record.original.height } : {}),
     sizeBytes: record.original.sizeBytes,
   };
@@ -817,16 +832,10 @@ function setCachedSessionManagedOutgoingAttachmentIndex(
       index,
     },
   );
-  while (
-    sessionManagedOutgoingAttachmentIndexCache.size >
-    MAX_SESSION_MANAGED_OUTGOING_ATTACHMENT_INDEX_CACHE_ENTRIES
-  ) {
-    const oldestKey = sessionManagedOutgoingAttachmentIndexCache.keys().next().value;
-    if (!oldestKey) {
-      break;
-    }
-    sessionManagedOutgoingAttachmentIndexCache.delete(oldestKey);
-  }
+  pruneMapToMaxSize(
+    sessionManagedOutgoingAttachmentIndexCache,
+    MAX_SESSION_MANAGED_OUTGOING_ATTACHMENT_INDEX_CACHE_ENTRIES,
+  );
 }
 
 function sameManagedOutgoingAttachmentTranscriptStat(
@@ -1292,7 +1301,23 @@ export async function createManagedOutgoingMediaBlocks(params: {
         },
       };
       insertManagedImageRecord(record, stateDir);
-      const block = buildManagedMediaBlock(record);
+      let playback: "native" | "transcode" | undefined;
+      if (mediaKind === "audio" || mediaKind === "video") {
+        const opened = await openLocalFileSafely({ filePath: savedOriginal.path });
+        try {
+          const probe = await probePlaybackMediaFileDescriptor(opened.handle.fd, mediaKind);
+          playback = await resolvePlaybackModeForSource({
+            sourcePath: opened.realPath,
+            sourceStat: opened.stat,
+            mimeType: savedOriginalContentType,
+            kind: mediaKind,
+            probe,
+          });
+        } finally {
+          await opened.handle.close().catch(() => {});
+        }
+      }
+      const block = buildManagedMediaBlock(record, playback);
       const durationMs = asNonNegativeFiniteNumber(attachmentMetadata?.durationMs);
       const width = asNonNegativeFiniteNumber(attachmentMetadata?.width);
       const height = asNonNegativeFiniteNumber(attachmentMetadata?.height);
@@ -1433,16 +1458,46 @@ export async function handleManagedOutgoingMediaHttpRequest(
     sendStatus(res, 404, "not found");
     return true;
   }
+  const respondNotFound = () => sendStatus(res, 404, "not found");
+  let byteStream = createGatewayByteStream(res, opened.handle, respondNotFound);
 
-  let handleClosed = false;
-  const closeOpenedHandle = async () => {
-    if (handleClosed) {
-      return;
+  let responseContentType = record.original.contentType || "application/octet-stream";
+  let responseFilename = record.original.filename;
+  const mediaKind = resolveManagedRecordKind(record);
+  if (
+    requestUrl.searchParams.get("playback") === "1" &&
+    (mediaKind === "audio" || mediaKind === "video")
+  ) {
+    const playback = await resolvePlaybackTranscode({
+      sourcePath: opened.realPath,
+      sourceStat: opened.stat,
+      mimeType: responseContentType,
+      kind: mediaKind,
+    }).catch(async (error: unknown) => {
+      await byteStream.close();
+      throw error;
+    });
+    if (playback.kind === "preparing") {
+      await byteStream.close();
+      sendJson(res, 202, { status: "preparing" });
+      return true;
     }
-    handleClosed = true;
-    await opened.handle.close().catch(() => {});
-  };
-  res.setHeader("content-type", record.original.contentType || "application/octet-stream");
+    if (playback.kind === "transcoded") {
+      const transcoded = await openLocalFileSafely({ filePath: playback.path }).catch(() => null);
+      if (transcoded) {
+        await byteStream.close();
+        opened = transcoded;
+        byteStream = createGatewayByteStream(res, opened.handle, respondNotFound);
+        responseContentType = playback.contentType;
+        responseFilename = replacePlaybackFileExtension(
+          responseFilename ?? "generated-media",
+          playback.extension,
+        );
+      }
+    }
+  }
+
+  res.setHeader("content-type", responseContentType);
   res.setHeader("x-content-type-options", "nosniff");
   res.setHeader("referrer-policy", "no-referrer");
   res.setHeader(
@@ -1453,42 +1508,16 @@ export async function handleManagedOutgoingMediaHttpRequest(
   );
   res.setHeader(
     "content-disposition",
-    buildManagedMediaContentDisposition(record.original.filename, record.original.contentType),
+    buildManagedMediaContentDisposition(responseFilename, responseContentType),
   );
   const byteResponse = resolveByteResponse({
     file: opened.stat,
     method: req.method,
-    rangeHeader: req.headers.range,
-    ifRangeHeader: req.headers["if-range"],
+    request: req,
   });
   writeByteHeaders(res, byteResponse);
-  if (req.method === "HEAD" || byteResponse.kind === "unsatisfiable" || opened.stat.size === 0) {
-    await closeOpenedHandle();
-    res.end();
-    return true;
-  }
-
   // Stream from the verified descriptor so a path swap cannot bypass fs-safe after validation.
-  const stream = opened.handle.createReadStream({
-    start: byteResponse.kind === "partial" ? byteResponse.range.start : 0,
-    end: byteResponse.kind === "partial" ? byteResponse.range.end : opened.stat.size - 1,
-    autoClose: false,
-  });
-  const finishClose = () => {
-    void closeOpenedHandle();
-  };
-  stream.once("end", finishClose);
-  stream.once("close", finishClose);
-  stream.once("error", () => {
-    void closeOpenedHandle();
-    if (!res.headersSent) {
-      sendStatus(res, 404, "not found");
-    } else {
-      res.destroy();
-    }
-  });
-  res.once("close", finishClose);
-  stream.pipe(res);
+  await byteStream.pipe(byteResponse, req.method);
   return true;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

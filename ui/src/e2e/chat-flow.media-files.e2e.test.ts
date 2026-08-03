@@ -399,78 +399,101 @@ suite.define(() => {
     }
   });
 
-  it("renders a canonical inbound image through the ticketed media route", async () => {
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const requestedMediaUrls: URL[] = [];
-    await page.route("**/__openclaw__/assistant-media?**", async (route) => {
-      const request = route.request();
-      const url = new URL(request.url());
-      requestedMediaUrls.push(url);
-      expect(url.searchParams.get("source")).toBe("media://inbound/telegram-photo.png");
-      if (url.searchParams.get("meta") === "1") {
-        expect(request.headers().authorization).toBe("Bearer e2e-device-token");
-        await route.fulfill({
-          contentType: "application/json",
-          body: JSON.stringify({
-            available: true,
-            mediaTicket: "ticket-inbound",
-            mediaTicketExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
-          }),
-        });
-        return;
-      }
-      expect(url.searchParams.get("mediaTicket")).toBe("ticket-inbound");
-      await route.fulfill({
-        contentType: "image/png",
-        body: Buffer.from(
-          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=",
-          "base64",
-        ),
+  it.each([
+    {
+      name: "canonical inbound",
+      source: "media://inbound/telegram-photo.png",
+      workspaceDir: undefined,
+      screenshotName: "canonical-inbound-image",
+    },
+    {
+      name: "sandbox-staged inbound",
+      source: "/workspace/media/inbound/fabricated-sandbox.png",
+      workspaceDir: "/workspace",
+      screenshotName: "sandbox-inbound-image",
+    },
+  ] as const)(
+    "renders a $name image through the ticketed media route",
+    async ({ source, workspaceDir, screenshotName }) => {
+      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const context = await suite.newBrowserContext({
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
       });
-    });
-    await installMockGateway(page, {
-      historyMessages: [
-        {
-          id: "user-inbound-media-ref",
-          role: "user",
-          content: [{ type: "text", text: "🖼️ Attached image" }],
-          __openclaw: {
-            media: [{ path: "media://inbound/telegram-photo.png", contentType: "image/png" }],
-          },
-          timestamp: Date.now(),
-        },
-      ],
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await expect.poll(() => requestedMediaUrls.length, { timeout: 10_000 }).toBe(2);
-      const image = page.locator("img.chat-message-image");
-      await image.waitFor({ state: "visible", timeout: 10_000 });
-      await expect
-        .poll(() =>
-          image.evaluate((element) =>
-            element instanceof HTMLImageElement && element.complete ? element.naturalWidth : 0,
+      const page = await context.newPage();
+      const requestedMediaUrls: URL[] = [];
+      await page.route("**/__openclaw__/assistant-media?**", async (route) => {
+        const request = route.request();
+        const url = new URL(request.url());
+        requestedMediaUrls.push(url);
+        expect(url.searchParams.get("source")).toBe(source);
+        if (url.searchParams.get("meta") === "1") {
+          expect(request.headers().authorization).toBe("Bearer e2e-device-token");
+          await route.fulfill({
+            contentType: "application/json",
+            body: JSON.stringify({
+              available: true,
+              mediaTicket: "ticket-inbound",
+              mediaTicketExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+            }),
+          });
+          return;
+        }
+        expect(url.searchParams.get("mediaTicket")).toBe("ticket-inbound");
+        expect(request.headers().authorization).toBeUndefined();
+        await route.fulfill({
+          contentType: "image/png",
+          body: Buffer.from(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=",
+            "base64",
           ),
-        )
-        .toBe(1);
-      if (artifactDir) {
-        await mkdir(artifactDir, { recursive: true });
-        await page.screenshot({
-          fullPage: true,
-          path: `${artifactDir}/canonical-inbound-image.png`,
         });
+      });
+      await installMockGateway(page, {
+        historyMessages: [
+          {
+            id: "user-inbound-media-ref",
+            role: "user",
+            content: [{ type: "text", text: "🖼️ Attached image" }],
+            __openclaw: {
+              media: [
+                {
+                  path: source,
+                  contentType: "image/png",
+                  ...(workspaceDir ? { workspaceDir } : {}),
+                },
+              ],
+            },
+            timestamp: Date.now(),
+          },
+        ],
+      });
+
+      try {
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await expect.poll(() => requestedMediaUrls.length, { timeout: 10_000 }).toBe(2);
+        const image = page.locator("img.chat-message-image");
+        await image.waitFor({ state: "visible", timeout: 10_000 });
+        await expect
+          .poll(() =>
+            image.evaluate((element) =>
+              element instanceof HTMLImageElement && element.complete ? element.naturalWidth : 0,
+            ),
+          )
+          .toBe(1);
+        if (artifactDir) {
+          await mkdir(artifactDir, { recursive: true });
+          await page.screenshot({
+            fullPage: true,
+            path: `${artifactDir}/${screenshotName}.png`,
+          });
+        }
+      } finally {
+        await suite.closeBrowserContext(context);
       }
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
+    },
+  );
 
   it("evicts and refetches managed image Blob URLs after the cache reaches capacity", async () => {
     const context = await suite.newBrowserContext({
@@ -601,6 +624,13 @@ suite.define(() => {
             ),
         )
         .toBe(64);
+      const initialBlobUrls = await page
+        .locator("img.chat-message-image")
+        .evaluateAll((images) => images.map((image) => image.getAttribute("src")));
+      const retainedRecentBlobUrl = expectDefined(
+        initialBlobUrls[0],
+        "recent managed image Blob URL",
+      );
 
       await replaceHistory(
         historyFor([0], "Recently viewed managed image"),
@@ -611,26 +641,30 @@ suite.define(() => {
       await replaceHistory(historyFor([64], "Overflow managed image"), "Overflow managed image 65");
       await expect.poll(async () => (await readBlobProof()).created.length).toBe(65);
       const overflowProof = await readBlobProof();
-      const retainedRecentBlobUrl = expectDefined(
-        overflowProof.created[0],
-        "recent managed image Blob URL",
-      );
+      // Concurrent image fetches can resolve in any order. Find the real LRU
+      // rather than assuming that creation order matches transcript order.
       const evictedBlobUrl = expectDefined(
-        overflowProof.created[1],
+        overflowProof.created.find((blobUrl) => blobUrl !== retainedRecentBlobUrl),
         "evicted managed image Blob URL",
       );
+      const evictedImageIndex = initialBlobUrls.indexOf(evictedBlobUrl);
+      expect(evictedImageIndex).toBeGreaterThanOrEqual(0);
       expect(overflowProof.revoked).toContain(evictedBlobUrl);
       expect(overflowProof.revoked).not.toContain(retainedRecentBlobUrl);
 
       const evictedPath = new URL(
-        expectDefined(imageUrls[1], "evicted managed image URL"),
+        expectDefined(imageUrls[evictedImageIndex], "evicted managed image URL"),
         suite.server.baseUrl,
       ).pathname;
       const fetchesBeforeRevisit = fetchedMedia.filter(
         (request) => request.pathname === evictedPath,
       ).length;
-      await replaceHistory(historyFor([1], "Refetched managed image"), "Refetched managed image 2");
-      const revisitedImage = page.getByAltText("Refetched managed image 2");
+      const revisitedImageAlt = `Refetched managed image ${evictedImageIndex + 1}`;
+      await replaceHistory(
+        historyFor([evictedImageIndex], "Refetched managed image"),
+        revisitedImageAlt,
+      );
+      const revisitedImage = page.getByAltText(revisitedImageAlt);
       await expect
         .poll(() =>
           revisitedImage.evaluate((image) =>
@@ -655,7 +689,7 @@ suite.define(() => {
       const proofSummary = {
         cacheCapacity: 64,
         createdBlobUrls: finalProof.created.length,
-        evictedBlobIndex: 1,
+        evictedBlobIndex: evictedImageIndex,
         evictedImageFetches,
         refetchedImageNaturalWidth: await revisitedImage.evaluate(
           (image) => (image as HTMLImageElement).naturalWidth,

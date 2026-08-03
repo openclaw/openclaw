@@ -21,6 +21,7 @@ import type { GatewayRestartEmitter } from "../../infra/restart.js";
 import { flushLogger } from "../../logging/logger.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   findOpenClawAgentDatabaseMediaMigrationRequiredError,
@@ -616,7 +617,13 @@ export async function runGatewayLoop(params: {
               };
               let activeRestartSessionKeysAtDrainStart = new Set<string>();
               let activeRestartSessionIdsAtDrainStart = new Set<string>();
+              let hasMarkedActiveMainSessionsForRestart = false;
               const markActiveMainSessionsForRestart = async (reason: string) => {
+                // A second successful mark races recovery claims; failed or empty
+                // attempts must remain retryable at the forced-restart boundary.
+                if (hasMarkedActiveMainSessionsForRestart) {
+                  return;
+                }
                 const sessionKeys = new Set<string>([
                   ...activeRestartSessionKeysAtDrainStart,
                   ...collectActiveRestartSessionKeys(),
@@ -629,12 +636,15 @@ export async function runGatewayLoop(params: {
                   return;
                 }
                 try {
-                  await markRestartAbortedMainSessions({
+                  const result = await markRestartAbortedMainSessions({
                     cfg: getRuntimeConfig(),
                     sessionKeys,
                     sessionIds,
                     reason,
                   });
+                  if (result.marked > 0) {
+                    hasMarkedActiveMainSessionsForRestart = true;
+                  }
                 } catch (err) {
                   gatewayLog.warn(
                     `failed to mark interrupted main sessions for restart recovery: ${String(err)}`,
@@ -1034,6 +1044,13 @@ export async function runGatewayLoop(params: {
       resetAllLanes();
       clearRuntimeConfigSnapshot();
       resetGatewayRestartStateForInProcessRestart();
+      // Rent: a failed startup has no server close handle, and restart hooks can
+      // recreate shared slots after close. Reset the same lifecycle before boot.
+      try {
+        await drainGlobalSingletonLifecycleState("restart");
+      } catch (error) {
+        gatewayLog.warn(`failed to reset ambient runtime state: ${formatErrorMessage(error)}`);
+      }
       reloadTaskRuntimeStateFromStore();
       markGatewayRestartTrace("restart.next-start");
     });

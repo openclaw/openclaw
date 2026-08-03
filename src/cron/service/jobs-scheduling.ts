@@ -1,6 +1,7 @@
 /** Scheduling state and next-run computation for cron jobs. */
 import crypto from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { isCronJobActive } from "../active-jobs.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import {
@@ -11,9 +12,10 @@ import {
 import { resolveCronStaggerMs } from "../stagger.js";
 import { createCronStreamSourceIdentity, resolveCronStreamBatching } from "../stream-schedule.js";
 import type { CronJob, CronSchedule } from "../types.js";
+import { autoDisableCronJob } from "./auto-disable.js";
 import { normalizePayloadToSystemText } from "./normalize.js";
 import { isQueuedCronRun, isQueuedForceCronRun } from "./run-admission.js";
-import type { CronServiceState } from "./state.js";
+import type { CronServiceState, DeferredCronNotifications } from "./state.js";
 
 const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
 const STAGGER_OFFSET_CACHE_MAX = 4096;
@@ -98,14 +100,8 @@ function resolveStableCronOffsetMs(jobId: string, staggerMs: number) {
   }
   const digest = crypto.createHash("sha256").update(jobId).digest();
   const offset = digest.readUInt32BE(0) % staggerMs;
-  if (staggerOffsetCache.size >= STAGGER_OFFSET_CACHE_MAX) {
-    // The offset is deterministic, so the cache can evict oldest entries
-    // without changing scheduling semantics for future lookups.
-    const first = staggerOffsetCache.keys().next();
-    if (!first.done) {
-      staggerOffsetCache.delete(first.value);
-    }
-  }
+  // The offset is deterministic, so FIFO eviction does not change future scheduling semantics.
+  pruneMapToMaxSize(staggerOffsetCache, STAGGER_OFFSET_CACHE_MAX - 1);
   staggerOffsetCache.set(cacheKey, offset);
   return offset;
 }
@@ -341,15 +337,6 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
   return isFiniteTimestamp(next) ? next : undefined;
 }
 
-/** Computes the previous effective cron timestamp, including per-job staggering. */
-export function computeJobPreviousRunAtMs(job: CronJob, nowMs: number): number | undefined {
-  if (!isJobEnabled(job) || job.schedule.kind !== "cron") {
-    return undefined;
-  }
-  const previous = computeStaggeredCronPreviousRunAtMs(job, nowMs);
-  return isFiniteTimestamp(previous) ? previous : undefined;
-}
-
 /** Computes the latest effective cron timestamp at or before the supplied time. */
 export function computeJobPreviousRunAtOrBeforeMs(job: CronJob, nowMs: number): number | undefined {
   if (!isJobEnabled(job) || job.schedule.kind !== "cron") {
@@ -367,7 +354,7 @@ export function recordScheduleComputeError(params: {
   state: CronServiceState;
   job: CronJob;
   err: unknown;
-  deferredAutoDisableNotifications?: Array<() => void>;
+  deferredNotifications?: DeferredCronNotifications;
 }): boolean {
   const { state, job, err } = params;
   const errorCount = (job.state.scheduleErrorCount ?? 0) + 1;
@@ -378,33 +365,19 @@ export function recordScheduleComputeError(params: {
   job.state.lastError = `schedule error: ${errText}`;
 
   if (errorCount >= MAX_SCHEDULE_ERRORS) {
-    job.enabled = false;
+    autoDisableCronJob({
+      state,
+      job,
+      reason: "schedule-errors",
+      atMs: state.deps.nowMs(),
+      consecutiveErrors: errorCount,
+      error: errText,
+      deferredNotifications: params.deferredNotifications,
+    });
     state.deps.log.error(
       { jobId: job.id, name: job.name, errorCount, err: errText },
       "cron: auto-disabled job after repeated schedule errors",
     );
-
-    const notifyText = `⚠️ Cron job "${job.name}" has been auto-disabled after ${errorCount} consecutive schedule errors. Last error: ${errText}`;
-    const notify = () => {
-      state.deps.enqueueSystemEvent(notifyText, {
-        agentId: job.agentId,
-        sessionKey: job.sessionKey,
-        contextKey: `cron:${job.id}:auto-disabled`,
-      });
-      state.deps.requestHeartbeat({
-        source: "cron",
-        intent: "event",
-        reason: `cron:${job.id}:auto-disabled`,
-        agentId: job.agentId,
-        sessionKey: job.sessionKey,
-      });
-    };
-    if (params.deferredAutoDisableNotifications) {
-      params.deferredAutoDisableNotifications.push(notify);
-    } else {
-      // Notify the user so the auto-disable is not silent (#28861).
-      notify();
-    }
   } else {
     state.deps.log.warn(
       { jobId: job.id, name: job.name, errorCount, err: errText },
@@ -453,21 +426,16 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
   }
 
   if (!isJobEnabled(job)) {
-    if (job.state.startupCatchupAtMs !== undefined) {
-      job.state.startupCatchupAtMs = undefined;
-      changed = true;
-    }
-    if (job.state.pacedNextRunAtMs !== undefined) {
-      job.state.pacedNextRunAtMs = undefined;
-      changed = true;
-    }
-    if (job.state.forcePreservedNextRunAtMs !== undefined) {
-      job.state.forcePreservedNextRunAtMs = undefined;
-      changed = true;
-    }
-    if (job.state.nextRunAtMs !== undefined) {
-      job.state.nextRunAtMs = undefined;
-      changed = true;
+    for (const key of [
+      "startupCatchupAtMs",
+      "pacedNextRunAtMs",
+      "forcePreservedNextRunAtMs",
+      "nextRunAtMs",
+    ] as const) {
+      if (job.state[key] !== undefined) {
+        job.state[key] = undefined;
+        changed = true;
+      }
     }
     if (
       job.state.queuedAtMs !== undefined &&
@@ -566,7 +534,7 @@ function recomputeJobNextRunAtMs(params: {
   state: CronServiceState;
   job: CronJob;
   nowMs: number;
-  deferredAutoDisableNotifications?: Array<() => void>;
+  deferredNotifications?: DeferredCronNotifications;
 }) {
   let changed = false;
   try {
@@ -599,7 +567,7 @@ function recomputeJobNextRunAtMs(params: {
         state: params.state,
         job: params.job,
         err,
-        deferredAutoDisableNotifications: params.deferredAutoDisableNotifications,
+        deferredNotifications: params.deferredNotifications,
       })
     ) {
       changed = true;
@@ -611,7 +579,6 @@ function recomputeJobNextRunAtMs(params: {
 /** Recomputes missing, due, or repairable next-run timestamps for all schedulable jobs. */
 export function recomputeNextRuns(state: CronServiceState): boolean {
   return walkSchedulableJobs(state, ({ job, nowMs: now }) => {
-    let changed = false;
     // Only recompute if nextRunAtMs is missing or already past-due.
     // Preserving a still-future nextRunAtMs avoids accidentally advancing
     // a job that hasn't fired yet (e.g. during restart recovery).
@@ -621,15 +588,11 @@ export function recomputeNextRuns(state: CronServiceState): boolean {
       hasScheduledNextRunAtMs(nextRun) &&
       job.state.forcePreservedNextRunAtMs === nextRun;
     const isDueOrMissing = !hasScheduledNextRunAtMs(nextRun) || now >= nextRun;
-    if (
+    return (
       !hasForcePreservedNextRun &&
-      (isDueOrMissing || shouldRepairFutureCronNextRunAtMs({ state, job, nowMs: now }))
-    ) {
-      if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
-        changed = true;
-      }
-    }
-    return changed;
+      (isDueOrMissing || shouldRepairFutureCronNextRunAtMs({ state, job, nowMs: now })) &&
+      recomputeJobNextRunAtMs({ state, job, nowMs: now })
+    );
   });
 }
 
@@ -647,7 +610,7 @@ export function recomputeNextRunsForMaintenance(
     nowMs?: number;
     repairFutureCronNextRunAtMs?: boolean;
     preserveExpiredPacedNextRunJobId?: string;
-    deferredAutoDisableNotifications?: Array<() => void>;
+    deferredNotifications?: DeferredCronNotifications;
   },
 ): boolean {
   const recomputeExpired = opts?.recomputeExpired ?? false;
@@ -657,7 +620,7 @@ export function recomputeNextRunsForMaintenance(
       state,
       job,
       nowMs,
-      deferredAutoDisableNotifications: opts?.deferredAutoDisableNotifications,
+      deferredNotifications: opts?.deferredNotifications,
     });
   return walkSchedulableJobs(
     state,
@@ -693,9 +656,7 @@ export function recomputeNextRunsForMaintenance(
       }
 
       if (!hasScheduledNextRunAtMs(job.state.nextRunAtMs)) {
-        if (recomputeJob(job, now)) {
-          changed = true;
-        }
+        changed = recomputeJob(job, now) || changed;
       } else if (
         repairFutureCronNextRunAtMs &&
         !hasPendingStartupCatchup &&
@@ -703,9 +664,7 @@ export function recomputeNextRunsForMaintenance(
         !hasForcePreservedNextRun &&
         shouldRepairFutureCronNextRunAtMs({ state, job, nowMs: now })
       ) {
-        if (recomputeJob(job, now)) {
-          changed = true;
-        }
+        changed = recomputeJob(job, now) || changed;
       } else if (
         recomputeExpired &&
         !hasForcePreservedNextRun &&
@@ -727,9 +686,7 @@ export function recomputeNextRunsForMaintenance(
           now < backoffUntilMs &&
           job.state.nextRunAtMs < backoffUntilMs;
         if (alreadyExecutedSlot || isStaleBackoffSlot) {
-          if (recomputeJob(job, now)) {
-            changed = true;
-          }
+          changed = recomputeJob(job, now) || changed;
         }
       }
       return changed;
@@ -740,21 +697,14 @@ export function recomputeNextRunsForMaintenance(
 
 /** Returns the next enabled wake timestamp from the in-memory cron store. */
 export function nextWakeAtMs(state: CronServiceState) {
-  const jobs = state.store?.jobs ?? [];
-  const enabled = jobs.filter(
-    (j) => isJobEnabled(j) && hasScheduledNextRunAtMs(j.state.nextRunAtMs),
-  );
-  if (enabled.length === 0) {
-    return undefined;
+  let nextWake: number | undefined;
+  for (const job of state.store?.jobs ?? []) {
+    const nextRun = job.state.nextRunAtMs;
+    if (isJobEnabled(job) && hasScheduledNextRunAtMs(nextRun)) {
+      nextWake = nextWake === undefined ? nextRun : Math.min(nextWake, nextRun);
+    }
   }
-  const first = enabled[0]?.state.nextRunAtMs;
-  if (!hasScheduledNextRunAtMs(first)) {
-    return undefined;
-  }
-  return enabled.reduce((min, j) => {
-    const next = j.state.nextRunAtMs;
-    return hasScheduledNextRunAtMs(next) ? Math.min(min, next) : min;
-  }, first);
+  return nextWake;
 }
 
 /** Applies one canonical server-authored authority envelope to a tool-bearing job. */
