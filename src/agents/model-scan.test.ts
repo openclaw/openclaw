@@ -81,6 +81,33 @@ describe("scanOpenRouterModels", () => {
     expect(byPricing.image.skipped).toBe(true);
   });
 
+  it("rejects non-decimal pricing tokens instead of coercing them to free", async () => {
+    // OpenRouter pricing is a provider-controlled string. Number() silently
+    // coerces hex/binary/octal zero ("0x0" -> 0) into a valid price of 0, which
+    // would falsely mark a paid model free and surface it in the free list.
+    // parseStrictFiniteNumber rejects those forms so the malformed pricing is
+    // dropped and the model is not reported as free.
+    const fetchImpl = createFetchFixture({
+      data: [
+        {
+          id: "acme/hex-pricing",
+          name: "Hex Pricing",
+          context_length: 4_096,
+          supported_parameters: ["tools"],
+          modality: "text",
+          pricing: { prompt: "0x0", completion: "0x0" },
+        },
+      ],
+    });
+
+    const results = await scanOpenRouterModels({
+      fetchImpl,
+      probe: false,
+    });
+
+    expect(results.map((entry) => entry.id)).toEqual([]);
+  });
+
   it("drops out-of-range OpenRouter created_at timestamps", async () => {
     const fetchImpl = createFetchFixture({
       data: [
