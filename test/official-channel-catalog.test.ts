@@ -171,10 +171,10 @@ describe("buildOfficialChannelCatalog", () => {
         aliases: ["yuanbao", "yb", "tencent-yuanbao", "元宝"],
       },
       install: {
-        npmSpec: "openclaw-plugin-yuanbao@2.15.0",
+        npmSpec: "openclaw-plugin-yuanbao@2.17.0",
         defaultChoice: "npm",
         expectedIntegrity:
-          "sha512-3GD+mf3EjTSUTOAREjTHAyp/deXdpgqB+q+xE0b19Qtat4ADhUV1mHDwFkVCRqTCBY5ATFKtKcipoDejqFj/+w==",
+          "sha512-3MLXEQSH2997TJFrcUAO5DAadvWB300RGXg14i0yfX36m1QuR9QPV41ko3icSCe4r/vcOUq1g5Rvriyt+UE3SQ==",
       },
     });
     expect(
