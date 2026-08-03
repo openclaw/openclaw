@@ -264,7 +264,7 @@ function startQueueResize(event: PointerEvent, props: SkillWorkshopProps): void 
   event.preventDefault();
   event.stopPropagation();
   const resizer = event.currentTarget;
-  if (!(resizer instanceof Element) || queueResizeSessions.has(resizer)) {
+  if (!(resizer instanceof HTMLElement) || queueResizeSessions.has(resizer)) {
     return;
   }
 

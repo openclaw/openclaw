@@ -160,7 +160,7 @@ export class DockLayoutController<TDock extends DockPanelSide> implements Reacti
       return;
     }
     const activePointerId = event.pointerId;
-    const resizer = event.currentTarget instanceof Element ? event.currentTarget : null;
+    const resizer = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
     const startX = event.clientX;
     const startY = event.clientY;
     const startHeight = this.height;
