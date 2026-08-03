@@ -10,6 +10,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import {
   OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_APPROVAL_ARMED_ENV,
+  OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_OPERATOR_APPROVAL_ONLY_ENV,
   OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_PROPOSAL_ENV,
   OPENCLAW_TOOLS_MCP_TOOLS_ENV,
 } from "../../mcp/openclaw-tools-serve-config.js";
@@ -86,6 +87,7 @@ function canonicalizeSystemAgentTurnStateForResume(
     env: {
       ...server.env,
       [OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_APPROVAL_ARMED_ENV]: "<openclaw-turn-state>",
+      [OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_OPERATOR_APPROVAL_ONLY_ENV]: "<openclaw-turn-state>",
       [OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_PROPOSAL_ENV]: "<openclaw-turn-state>",
     },
   };
