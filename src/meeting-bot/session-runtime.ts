@@ -418,7 +418,13 @@ export class MeetingSessionRuntime<
     return refreshOutcome;
   }
 
-  async refreshCaptionHealth(session: TSession): Promise<MeetingBrowserHealthRefreshOutcome> {
+  async refreshCaptionHealth(session: TSession): Promise<void> {
+    await this.refreshCaptionHealthForProbe(session);
+  }
+
+  async refreshCaptionHealthForProbe(
+    session: TSession,
+  ): Promise<MeetingBrowserHealthRefreshOutcome> {
     if (!this.options.isTranscribeMode(session.mode)) {
       this.refreshSpeechReadiness(session);
       return { browserHealthChecked: false, manualActionIsAuthoritative: false };

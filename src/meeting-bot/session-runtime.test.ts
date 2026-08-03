@@ -310,6 +310,39 @@ describe("MeetingSessionRuntime probe join health", () => {
   );
 });
 
+describe("MeetingSessionRuntime caption health compatibility", () => {
+  it("keeps the legacy void method while exposing the probe refresh outcome", async () => {
+    const refreshOutcome = {
+      browserHealthChecked: false,
+      manualActionIsAuthoritative: true,
+    } as const;
+    const refreshBrowserHealth = vi.fn(async () => refreshOutcome);
+    const { runtime } = createTestRuntime({
+      transcribe: true,
+      refreshBrowserHealth,
+      releaseBrowserTab: async () => true,
+      joinTransport: async ({ session }) => {
+        session.browser = {
+          launched: true,
+          tab: { targetId: "caption-tab", openedByPlugin: true },
+        };
+        return {};
+      },
+    });
+    const { session } = await runtime.join({
+      url: "https://meeting.example/captions",
+      agentId: "main",
+    });
+    refreshBrowserHealth.mockClear();
+
+    const legacyRefresh: (session: TestSession) => Promise<void> =
+      runtime.refreshCaptionHealth.bind(runtime);
+    await expect(legacyRefresh(session)).resolves.toBeUndefined();
+    await expect(runtime.refreshCaptionHealthForProbe(session)).resolves.toEqual(refreshOutcome);
+    expect(refreshBrowserHealth).toHaveBeenCalledTimes(2);
+  });
+});
+
 const tempDirs: string[] = [];
 
 afterEach(async () => {

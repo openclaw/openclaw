@@ -214,8 +214,11 @@ export function createMeetingRuntimeProbes<
       Boolean(health?.lastCaptionAt && health.lastCaptionAt !== start.at) ||
       Boolean(health?.lastCaptionText && health.lastCaptionText !== start.text);
     const reusedSession = existing?.id === result.session.id;
+    const hasAuthoritativeManualAction =
+      result.manualActionIsAuthoritative === true && health?.manualAction !== undefined;
     const shouldWait =
       options.shouldWaitForListening(result.session) &&
+      !hasAuthoritativeManualAction &&
       (health?.manualAction === undefined ||
         // Omitted metadata is a legacy/unknown result; only an explicit false opts into recovery.
         (reusedSession && result.browserHealthChecked === false));

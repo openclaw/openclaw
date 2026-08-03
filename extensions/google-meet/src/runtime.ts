@@ -302,7 +302,8 @@ export class GoogleMeetRuntime {
       isReusable: (session, resolved) => this.#sessions.isReusableSession(session, resolved),
       hasHealthHandle: (sessionId) => this.#sessions.hasHealthHandle(sessionId),
       refreshHealth: (sessionId) => this.#sessions.refreshHealth(sessionId),
-      refreshCaptionHealth: async (session) => await this.#sessions.refreshCaptionHealth(session),
+      refreshCaptionHealth: async (session) =>
+        await this.#sessions.refreshCaptionHealthForProbe(session),
     };
   }
 

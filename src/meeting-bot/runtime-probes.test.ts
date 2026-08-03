@@ -308,4 +308,50 @@ describe.each(cases)("$name meeting runtime probe parity", (testCase) => {
     });
     expect(refreshCaptionHealth).not.toHaveBeenCalled();
   });
+
+  it("returns an authoritative reused-session action without another refresh", async () => {
+    const probes = createProbes();
+    const authoritativeAction = {
+      reason: `${testCase.name.toLowerCase()}-authoritative-action`,
+      message: "The lifecycle refresh already produced the actionable failure.",
+    };
+    const session = {
+      id: `${testCase.name.toLowerCase()}-authoritative-action`,
+      chrome: {
+        ...testCase.session.chrome,
+        health: { manualAction: authoritativeAction },
+      },
+    } satisfies Session;
+    const refreshCaptionHealth = vi.fn(async () => {
+      await new Promise<never>(() => {});
+    });
+    const context = {
+      config: { defaultMode: "agent" as const, chrome: { joinTimeoutMs: 5 }, chromeNode: {} },
+      resolveAgentId: () => "main",
+      list: () => [session],
+      join: vi.fn(async () => ({
+        browserHealthChecked: false,
+        manualActionIsAuthoritative: true,
+        session,
+      })),
+      isReusable: () => true,
+      hasHealthHandle: () => false,
+      refreshHealth: vi.fn(),
+      refreshCaptionHealth,
+    };
+
+    await expect(
+      probes.testListening(context, {
+        url: "https://example.test/meeting",
+        mode: "transcribe",
+        timeoutMs: 5,
+      }),
+    ).resolves.toMatchObject({
+      createdSession: false,
+      listenTimedOut: false,
+      listenVerified: false,
+      manualAction: authoritativeAction,
+    });
+    expect(refreshCaptionHealth).not.toHaveBeenCalled();
+  });
 });

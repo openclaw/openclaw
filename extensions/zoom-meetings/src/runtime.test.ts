@@ -320,7 +320,7 @@ describe("Zoom meeting session flow", () => {
     });
   });
 
-  it("preserves a launched-tab lifecycle failure when the probe refresh reaches its deadline", async () => {
+  it("returns a launched-tab lifecycle failure without starting a probe refresh", async () => {
     const { harness, runtime } = runtimeFixture();
     await joinMeeting(runtime);
     harness.state.tabListOutcomes.push("success", "failure", "pending");
@@ -335,7 +335,7 @@ describe("Zoom meeting session flow", () => {
         message: "Zoom browser readiness refresh failed: browser node unavailable",
       },
     });
-    expect(harness.state.tabListOutcomes).toEqual([]);
+    expect(harness.state.tabListOutcomes).toEqual(["pending"]);
   });
 
   it("refreshes a recovered browser tab target", async () => {
