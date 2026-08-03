@@ -394,6 +394,7 @@ export const ENUM_EXPECTATIONS: Record<string, string[]> = {
   "logging.consoleStyle": ['"pretty"', '"json"'],
   "update.channel": ['"stable"', '"extended-stable"', '"beta"', '"dev"'],
   "agents.defaults.compaction.mode": ['"default"', '"safeguard"'],
+  "agents.defaults.contextInjection": ['"always"', '"continuation-skip"', '"never"'],
   "agents.defaults.compaction.thinkingLevel": [
     '"off"',
     '"minimal"',
@@ -469,6 +470,8 @@ export const CHANNELS_AGENTS_TARGET_KEYS = [
   "memory.search.query.maxResults",
   "memory.search.query.minScore",
   "agents.defaults.workspace",
+  "agents.defaults.skipBootstrap",
+  "agents.defaults.contextInjection",
   "agents.entries.*.tools.alsoAllow",
   "agents.entries.*.tools.byProvider",
   "agents.entries.*.tools.message.crossContext.allowAcrossProviders",
