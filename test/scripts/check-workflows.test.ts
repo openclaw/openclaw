@@ -131,6 +131,67 @@ describe("check-workflows", () => {
     expect(result.stderr).toContain(".github/workflows/ci.yml");
   });
 
+  it.skipIf(process.platform === "win32")(
+    "keeps POSIX group escalation alive when the leader exits before its survivor",
+    async () => {
+      const tempDir = makeTempDir(tempDirs, "check-workflows-");
+      const binDir = path.join(tempDir, "bin");
+      const timeoutHookPath = writeTimeoutHook(tempDir);
+      const survivorMarker = path.join(tempDir, "survivor.pid");
+      mkdirSync(binDir);
+      writeFileSync(
+        path.join(binDir, "actionlint"),
+        [
+          `#!${process.execPath}`,
+          `import { spawn } from "node:child_process";`,
+          `if (process.argv[2] === "--version") process.exit(0);`,
+          `spawn(process.execPath, ["-e", "require('node:fs').writeFileSync(process.env.CHECK_WORKFLOWS_SURVIVOR_MARKER, String(process.pid)); process.on('SIGTERM', () => {}); setInterval(() => {}, 10_000);"], {`,
+          `  env: { ...process.env, CHECK_WORKFLOWS_SURVIVOR_MARKER: process.env.CHECK_WORKFLOWS_SURVIVOR_MARKER },`,
+          `  stdio: "ignore",`,
+          `});`,
+          `process.on("SIGTERM", () => process.exit(0));`,
+          `setInterval(() => {}, 10_000);`,
+          "",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+
+      const result = spawnSync(process.execPath, [scriptPath], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          NODE_OPTIONS: `--import=${pathToFileURL(timeoutHookPath).href}`,
+          CHECK_WORKFLOWS_SURVIVOR_MARKER: survivorMarker,
+          PATH: binDir,
+        },
+        timeout: 10_000,
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("[check-workflows] timed out after 300000ms: actionlint");
+      expect(existsSync(survivorMarker)).toBe(true);
+      const survivorPid = Number(readFileSync(survivorMarker, "utf8"));
+      expect(Number.isInteger(survivorPid) && survivorPid > 0).toBe(true);
+
+      // The checker must not settle on the leader's exit while its survivor is
+      // still running: escalation (SIGKILL after the grace period) must finish
+      // the group before the timed-out run resolves.
+      const deadline = Date.now() + 5_000;
+      let survivorGone = false;
+      while (Date.now() < deadline && !survivorGone) {
+        try {
+          process.kill(survivorPid, 0);
+        } catch {
+          survivorGone = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      expect(survivorGone).toBe(true);
+    },
+  );
+
   it("uses taskkill tree termination for Windows timeout escalation", () => {
     expect(windowsProcessTreeKillCommand(undefined)).toBeNull();
     expect(windowsProcessTreeKillCommand(1234)).toEqual({

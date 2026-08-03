@@ -12,6 +12,7 @@ const PRE_COMMIT_VERSION = "4.2.0";
 const WORKFLOW_DIR = ".github/workflows";
 const DEFAULT_COMMAND_TIMEOUT_MS = 5 * 60_000;
 const COMMAND_TIMEOUT_KILL_GRACE_MS = 1_000;
+const COMMAND_TIMEOUT_GROUP_PROBE_MS = 100;
 
 function commandLabel(command, args) {
   return [command, ...args].join(" ");
@@ -79,6 +80,16 @@ function killProcessTree(child, signal) {
   }
 }
 
+function processGroupAlive(pid) {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM still proves the group exists; only ESRCH confirms it is gone.
+    return error?.code !== "ESRCH";
+  }
+}
+
 function spawnCommand(command, args, options = {}) {
   return new Promise((finish) => {
     // Node's sync timeout waits for SIGTERM handlers to exit. Run POSIX tools in
@@ -89,7 +100,49 @@ function spawnCommand(command, args, options = {}) {
     });
     let settled = false;
     let timedOut = false;
+    let exitStatus = null;
+    let exitSignal = null;
     let killTimer;
+    let teardownTimer;
+    let teardownPending = false;
+
+    const clearEscalationTimers = () => {
+      clearTimeout(timeoutTimer);
+      clearTimeout(killTimer);
+      clearTimeout(teardownTimer);
+    };
+
+    const settle = (result) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearEscalationTimers();
+      finish(result);
+    };
+
+    const timeoutError = () => Object.assign(new Error("Command timed out"), { code: "ETIMEDOUT" });
+
+    function waitForGroupTeardown() {
+      if (settled || process.platform === "win32" || teardownPending) {
+        return;
+      }
+      if (!processGroupAlive(child.pid)) {
+        settle({
+          error: timedOut ? timeoutError() : null,
+          signal: exitSignal,
+          status: exitStatus,
+          timedOut,
+        });
+        return;
+      }
+      teardownPending = true;
+      teardownTimer = setTimeout(() => {
+        teardownPending = false;
+        waitForGroupTeardown();
+      }, COMMAND_TIMEOUT_GROUP_PROBE_MS);
+    }
+
     const timeoutTimer = setTimeout(() => {
       timedOut = true;
       if (process.platform === "win32") {
@@ -99,30 +152,33 @@ function spawnCommand(command, args, options = {}) {
       killProcessTree(child, "SIGTERM");
       killTimer = setTimeout(() => {
         killProcessTree(child, "SIGKILL");
+        waitForGroupTeardown();
       }, COMMAND_TIMEOUT_KILL_GRACE_MS);
     }, DEFAULT_COMMAND_TIMEOUT_MS);
 
     child.on("error", (error) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timeoutTimer);
-      clearTimeout(killTimer);
-      finish({ error, status: null, timedOut });
+      settle({ error, signal: null, status: null, timedOut });
     });
 
     child.on("exit", (status, signal) => {
       if (settled) {
         return;
       }
-      settled = true;
-      clearTimeout(timeoutTimer);
-      clearTimeout(killTimer);
-      const error = timedOut
-        ? Object.assign(new Error("Command timed out"), { code: "ETIMEDOUT" })
-        : null;
-      finish({ error, signal, status, timedOut });
+      exitStatus = status;
+      exitSignal = signal;
+      if (timedOut && process.platform !== "win32") {
+        // The group leader can exit on the initial SIGTERM while a descendant
+        // ignores it. Keep escalation pending until the group is confirmed
+        // gone instead of settling on the leader's exit.
+        waitForGroupTeardown();
+        return;
+      }
+      settle({
+        error: timedOut ? timeoutError() : null,
+        signal,
+        status,
+        timedOut,
+      });
     });
   });
 }
