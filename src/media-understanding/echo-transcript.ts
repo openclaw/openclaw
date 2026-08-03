@@ -24,14 +24,22 @@ function formatEchoTranscript(transcript: string, format: string): string {
   return format.replace("{transcript}", () => transcript);
 }
 
-/** Prefer the full provider message id when present (Telegram aliases, etc.). */
+/**
+ * Prefer the bare inbound message id for shared reply delivery.
+ * Prefixed full ids (e.g. `telegram:73299`) fail Telegram's strict integer
+ * reply-to normalizer; channel adapters expect the platform-native id.
+ */
 function resolveEchoReplyToId(ctx: MsgContext): string | undefined {
-  const candidates = [ctx.MessageSidFull, ctx.MessageSid, ctx.MessageSidFirst];
+  const candidates = [ctx.MessageSid, ctx.MessageSidFirst, ctx.MessageSidFull];
   for (const candidate of candidates) {
     if (typeof candidate === "string") {
       const trimmed = candidate.trim();
       if (trimmed) {
-        return trimmed;
+        // Strip a leading `channel:` prefix if a full id is the only candidate.
+        const bare = trimmed.includes(":") ? trimmed.split(":").pop()!.trim() : trimmed;
+        if (bare) {
+          return bare;
+        }
       }
     }
   }

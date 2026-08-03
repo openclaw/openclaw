@@ -123,11 +123,11 @@ describe("sendTranscriptEcho", () => {
       to: "telegram:42",
       accountId: "acc1",
       threadId: undefined,
-      replyToId: "telegram:73299",
+      replyToId: "73299",
       payloads: [
         {
           text: DEFAULT_ECHO_TRANSCRIPT_FORMAT.replace("{transcript}", "what the agent heard"),
-          replyToId: "telegram:73299",
+          replyToId: "73299",
         },
       ],
       bestEffort: true,
