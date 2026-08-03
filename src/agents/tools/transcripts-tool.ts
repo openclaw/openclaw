@@ -159,6 +159,7 @@ async function stopTranscripts(params: {
   ctx: TranscriptsRuntimeContext;
   store: TranscriptsStore;
   rawParams: Record<string, unknown>;
+  lifecycleOwnerVerified?: boolean;
 }) {
   const sessionSelector = readStringParam(params.rawParams, "sessionId", {
     required: true,
@@ -177,7 +178,7 @@ async function stopTranscripts(params: {
     sameSessionIdentity(activeCandidate.session, resolvedSession);
   const selectedActive = directActive ?? (activeMatchesResolved ? activeCandidate : undefined);
   const session = selectedActive?.session ?? resolvedSession;
-  if (!session || !ownsTranscriptSession(params.ctx, session)) {
+  if (!session || (!params.lifecycleOwnerVerified && !ownsTranscriptSession(params.ctx, session))) {
     throw new Error(`transcripts session not found: ${sessionSelector}`);
   }
   const sessionId = session.sessionId;
@@ -515,6 +516,10 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
           ctx,
           store,
           rawParams: { action: "stop", sessionId },
+          // This set records only sessions created by this service instance.
+          // Carry that ownership fact into shutdown so agent authorization does
+          // not strand an account-bound provider capture during gateway stop.
+          lifecycleOwnerVerified: true,
         }).catch((err: unknown) =>
           ctx.logger.warn(
             `transcripts autoStart stop failed session=${sessionId}: ${

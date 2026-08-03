@@ -755,6 +755,7 @@ describe("transcripts tool", () => {
     const stop = vi.fn(async () => ({ ok: true as const, sessionId: "standup" }));
     getTranscriptSourceProviderMock.mockReturnValue({
       id: "discord-voice",
+      accountBindingChannels: ["discord"],
       name: "Discord Voice",
       sourceKinds: ["live-audio"],
       start,
