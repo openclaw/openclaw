@@ -27,14 +27,18 @@ import {
   type MeetingSessionRuntimeHandles,
   type MeetingSessionRuntimeJoinContext,
 } from "./session-runtime.js";
-import type { MeetingBrowserTab, MeetingPluginChromeHealth } from "./session-types.js";
+import type {
+  MeetingBrowserHealth,
+  MeetingBrowserTab,
+  MeetingPluginChromeHealth,
+} from "./session-types.js";
 
 const nowIso = () => new Date().toISOString();
 
 function clearNonAuthoritativeManualAction<Health extends MeetingBrowserHealth>(
-  health: Health,
-): Health {
-  if (health.manualAction === undefined) {
+  health: Health | undefined,
+): Health | undefined {
+  if (!health || health.manualAction === undefined) {
     return health;
   }
   const { manualAction: _manualAction, ...rest } = health;
