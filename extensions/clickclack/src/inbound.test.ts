@@ -289,6 +289,39 @@ describe("handleClickClackInbound", () => {
     );
   });
 
+  it("suppresses repeated bot messages in direct model mode", async () => {
+    const runtime = createRuntime();
+    setClickClackRuntime(runtime);
+    const account = createAgentAccount({
+      accountId: "model-loop-account",
+      agentId: "service-bot",
+      replyMode: "model",
+      allowFrom: ["usr_model_sender"],
+      allowBots: true,
+      botUserId: "usr_model_receiver",
+      botLoopProtection: { maxEventsPerWindow: 1, windowSeconds: 60, cooldownSeconds: 60 },
+    });
+    const message = createMessage({
+      id: "msg_01arz3ndektsv4rrffq69g5fbx",
+      workspace_id: "wsp_model_loop",
+      channel_id: "chn_model_loop",
+      author_id: "usr_model_sender",
+      body: "hello from the other bot",
+      author: {
+        ...createMessage().author,
+        id: "usr_model_sender",
+        kind: "bot",
+        handle: "sender",
+      },
+    });
+
+    await handleClickClackInbound({ account, config: {}, message });
+    await handleClickClackInbound({ account, config: {}, message });
+
+    expect(runtime.llm.complete).toHaveBeenCalledTimes(1);
+    expect(sendClickClackTextMock).toHaveBeenCalledTimes(1);
+  });
+
   it("logs and skips delivery when model mode produces no sendable text", async () => {
     const runtime = createRuntime();
     vi.mocked(runtime.llm.complete).mockResolvedValue({

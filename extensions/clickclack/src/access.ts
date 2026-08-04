@@ -222,7 +222,10 @@ export async function resolveClickClackInboundAccess(params: {
   const botLoopProtection =
     isBotAuthor && params.message.author_id !== params.account.botUserId && params.account.botUserId
       ? {
-          scopeId: `${params.account.workspace}:${params.account.accountId}`,
+          // Keep reciprocal ClickClack accounts in one loop-guard namespace.
+          // The workspace is the shared boundary; account IDs would let the
+          // same conversation evade the budget by alternating receivers.
+          scopeId: params.account.workspace,
           conversationId: preparedRoute.isDirect
             ? (params.message.direct_conversation_id ?? params.message.author_id)
             : (params.message.channel_id ??
@@ -230,6 +233,9 @@ export async function resolveClickClackInboundAccess(params: {
               params.message.author_id),
           senderId: params.message.author_id,
           receiverId: params.account.botUserId,
+          ...(Number.isFinite(Date.parse(params.message.created_at))
+            ? { nowMs: Date.parse(params.message.created_at) }
+            : {}),
           config: effectiveBotPolicy.botLoopProtection,
           defaultsConfig: cfg.channels?.defaults?.botLoopProtection,
           defaultEnabled: true,

@@ -1,4 +1,7 @@
-import { createChannelInboundEnvelopeBuilder } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  createChannelInboundEnvelopeBuilder,
+  recordChannelBotPairLoopAndCheckSuppression,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { deriveDurableFinalDeliveryRequirements } from "openclaw/plugin-sdk/channel-outbound";
 /**
  * Converts authorized ClickClack messages into OpenClaw agent/model replies and
@@ -102,6 +105,20 @@ export async function handleClickClackInbound(params: {
   }
   const { discussionRoute, isDirect, route, target } = access.preparedRoute;
   if (params.account.replyMode === "model" && !discussionRoute) {
+    if (access.botLoopProtection) {
+      const loopResult = recordChannelBotPairLoopAndCheckSuppression(access.botLoopProtection);
+      if (loopResult.suppressed) {
+        runtime.logging
+          .getChildLogger({ plugin: "clickclack", feature: "bot-loop-protection" })
+          .warn(
+            `[${params.account.accountId}] ClickClack bot-pair loop suppressed for ${Math.max(
+              0,
+              Math.ceil((loopResult.cooldownUntilMs - Date.now()) / 1000),
+            )}s`,
+          );
+        return;
+      }
+    }
     await dispatchModelReply({
       account: params.account,
       cfg: params.config as OpenClawConfig,

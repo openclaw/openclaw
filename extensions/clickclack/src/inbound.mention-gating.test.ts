@@ -3,6 +3,7 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { buildAgentSessionKey, resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { describe, expect, it, vi } from "vitest";
+import { resolveClickClackInboundAccess } from "./access.js";
 import {
   getClickClackDiscussionBindingStore,
   type ClickClackDiscussionBinding,
@@ -256,13 +257,58 @@ describe("ClickClack inbound mention gating", () => {
     const dispatch = vi.mocked(runtime.channel.inbound.dispatch);
     expect(dispatch).toHaveBeenCalledTimes(1);
     expect(dispatch.mock.calls[0]?.[0].botLoopProtection).toMatchObject({
-      scopeId: "wsp_1:default",
+      scopeId: "wsp_1",
       conversationId: "chn_1",
       senderId: "usr_sender",
       receiverId: "usr_receiver",
       defaultsConfig: { maxEventsPerWindow: 7 },
       defaultEnabled: true,
     });
+  });
+
+  it("shares bot-loop scope across accounts and preserves ClickClack event time", async () => {
+    const runtime = createRuntime();
+    setClickClackRuntime(runtime);
+    const firstMessage = createMessage({
+      author_id: "usr_sender",
+      author: { ...createMessage().author, id: "usr_sender", kind: "bot", handle: "sender" },
+      created_at: "2026-05-09T12:00:00.000Z",
+    });
+
+    const accountA = await resolveClickClackInboundAccess({
+      account: createAgentAccount({
+        accountId: "account-a",
+        allowFrom: ["usr_sender"],
+        allowBots: true,
+      }),
+      config: {} satisfies CoreConfig,
+      message: firstMessage,
+    });
+    const accountB = await resolveClickClackInboundAccess({
+      account: createAgentAccount({
+        accountId: "account-b",
+        allowFrom: ["usr_sender"],
+        allowBots: true,
+      }),
+      config: {} satisfies CoreConfig,
+      message: firstMessage,
+    });
+    const delayedReplay = await resolveClickClackInboundAccess({
+      account: createAgentAccount({
+        accountId: "account-a",
+        allowFrom: ["usr_sender"],
+        allowBots: true,
+      }),
+      config: {} satisfies CoreConfig,
+      message: { ...firstMessage, created_at: "2026-05-09T12:02:00.000Z" },
+    });
+
+    expect(accountA.botLoopProtection).toMatchObject({
+      scopeId: "wsp_1",
+      nowMs: Date.parse("2026-05-09T12:00:00.000Z"),
+    });
+    expect(accountB.botLoopProtection?.scopeId).toBe(accountA.botLoopProtection?.scopeId);
+    expect(delayedReplay.botLoopProtection?.nowMs).toBe(Date.parse("2026-05-09T12:02:00.000Z"));
   });
 
   it("requires a mention for bot-authored group messages in mention mode", async () => {
