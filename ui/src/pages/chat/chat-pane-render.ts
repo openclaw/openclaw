@@ -245,8 +245,7 @@ export class ChatPane extends ChatPaneHeader {
       hasLocalRun: () => Boolean(state.chatRunId),
       sessionParticipationBlocked,
       onDenied: (reason) => this.publishHeaderError(reason),
-      onCompact: (submissionId) =>
-        void state.handleSendChat("/compact", { submissionId }),
+      onCompact: (submissionId) => void state.handleSendChat("/compact", { submissionId }),
       onAbort: () => void state.handleAbortChat({ preserveDraft: true }),
       onRewind: (entryId) => this.rewindToMessage(entryId),
       onFork: (entryId) => this.forkFromMessage(entryId),

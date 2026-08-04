@@ -195,11 +195,7 @@ async function sendDetachedCommandMessage(
   }
 }
 
-export function handleSendChat(
-  host: ChatHost,
-  messageOverride?: string,
-  opts?: ChatSendOptions,
-) {
+export function handleSendChat(host: ChatHost, messageOverride?: string, opts?: ChatSendOptions) {
   const submissionId = opts?.submissionId?.trim() || generateUUID();
   return withChatSubmissionGuard(host, submissionId, () =>
     handleSendChatSubmission(host, submissionId, messageOverride, opts),

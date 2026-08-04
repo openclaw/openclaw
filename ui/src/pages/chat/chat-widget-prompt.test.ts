@@ -5,8 +5,8 @@ import { submitChatWidgetPrompt } from "./chat-widget-prompt.ts";
 
 describe("submitChatWidgetPrompt", () => {
   it("submits a re-entered widget action once with a stable id", () => {
-    const handleSendChat = vi.fn(
-      (_message: string, _options: { submissionId: string }) => Promise.resolve(),
+    const handleSendChat = vi.fn((_message: string, _options: { submissionId: string }) =>
+      Promise.resolve(),
     );
     const host = { handleSendChat };
     const action = new CustomEvent("openclaw:widget-prompt", {
@@ -23,8 +23,8 @@ describe("submitChatWidgetPrompt", () => {
   });
 
   it("keeps independent widget actions distinct", () => {
-    const handleSendChat = vi.fn(
-      (_message: string, _options: { submissionId: string }) => Promise.resolve(),
+    const handleSendChat = vi.fn((_message: string, _options: { submissionId: string }) =>
+      Promise.resolve(),
     );
     const host = { handleSendChat };
 

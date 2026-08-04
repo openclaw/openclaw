@@ -4,11 +4,11 @@ import { icons } from "../../../components/icons.ts";
 import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
+import { claimChatSubmissionAction } from "../chat-submission-action.ts";
 import type { ComposerDictationController } from "../composer-dictation.ts";
 import type { RealtimeTalkInputDevice } from "../realtime-talk-input.ts";
 import type { RealtimeTalkLevelSignal } from "../realtime-talk-level.ts";
 import type { RealtimeTalkStatus } from "../realtime-talk.ts";
-import { claimChatSubmissionAction } from "../chat-submission-action.ts";
 import { renderMicrophoneActivity, voiceStatusLabel } from "./chat-voice-activity.ts";
 
 export type ChatRunControlsProps = {
