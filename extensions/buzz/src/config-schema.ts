@@ -1,7 +1,8 @@
 import {
-  buildChannelConfigSchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
+  ReplyToModeSchema,
+  buildChannelConfigSchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
 import { z } from "zod";
@@ -19,6 +20,7 @@ const RawBuzzConfigSchema = z
     name: z.string().optional(),
     enabled: z.boolean().optional(),
     configWrites: z.boolean().optional(),
+    replyToMode: ReplyToModeSchema.optional(),
     markdown: MarkdownConfigSchema,
     relayUrl: z
       .string()

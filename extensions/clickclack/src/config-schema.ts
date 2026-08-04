@@ -2,6 +2,7 @@
  * Zod-backed config schema for ClickClack channel accounts.
  */
 import {
+  ReplyToModeSchema,
   buildChannelConfigSchema,
   buildMultiAccountChannelSchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
@@ -13,6 +14,7 @@ const ClickClackAccountConfigSchema = z
     name: z.string().optional(),
     enabled: z.boolean().optional(),
     configWrites: z.boolean().optional(),
+    replyToMode: ReplyToModeSchema.optional(),
     baseUrl: z.string().url().optional(),
     apiBaseUrl: z.string().url().optional(),
     token: buildSecretInputSchema().optional(),
