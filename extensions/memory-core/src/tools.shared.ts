@@ -139,9 +139,7 @@ export function buildMemorySearchUnavailableResult(
 ) {
   const reason = (error ?? "memory search unavailable").trim() || "memory search unavailable";
   const normalizedReason = normalizeLowercaseStringOrEmpty(reason);
-  const canonicalMigrationGuidance = resolveMemorySearchCanonicalMigrationGuidance(
-    overrides?.code,
-  );
+  const canonicalMigrationGuidance = resolveMemorySearchCanonicalMigrationGuidance(overrides?.code);
   const isQuotaError = /insufficient_quota|quota|429/.test(normalizedReason);
   const isMissingNodeSqlite = /missing node:sqlite|no such built-?in module: node:sqlite/.test(
     normalizedReason,

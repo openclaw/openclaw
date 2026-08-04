@@ -601,10 +601,9 @@ export function createMemorySearchTool(options: {
               : null;
             const memory = memorySetup?.context ?? null;
             if (shouldQueryMemory && memory && "error" in memory && !shouldQuerySupplements) {
-              recordMemorySearchToolCooldown(
-                cooldownKey,
-                { error: memory.error ?? "memory search unavailable" },
-              );
+              recordMemorySearchToolCooldown(cooldownKey, {
+                error: memory.error ?? "memory search unavailable",
+              });
               return jsonResult(buildMemorySearchUnavailableResult(memory.error));
             }
 
