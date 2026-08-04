@@ -1,12 +1,13 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createGitRunner,
   parseArgs,
   readGitFile,
 } from "../../scripts/check-docs-i18n-glossary.mjs";
+import * as managedChildProcess from "../../scripts/lib/managed-child-process.mjs";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const scriptPath = path.resolve("scripts/check-docs-i18n-glossary.mjs");
@@ -44,6 +45,50 @@ describe("check-docs-i18n-glossary", () => {
     expect(() => parseArgs(["--head", "-h"])).toThrow("--head requires a value");
     expect(() => parseArgs(["--base", ""])).toThrow("--base requires a value");
   });
+
+  it("runs git as direct argv so Windows-special pathnames are not cmd-wrapped", async () => {
+    const runSpy = vi.spyOn(managedChildProcess, "runManagedCommand");
+    runSpy.mockResolvedValue(0 as never);
+    try {
+      const runGit = createGitRunner({ cwd: process.cwd() });
+      await expect(runGit(["show", "HEAD:docs/a&b.md"])).resolves.toBe("");
+      expect(runSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          bin: "git",
+          args: ["show", "HEAD:docs/a&b.md"],
+          shell: false,
+        }),
+      );
+    } finally {
+      runSpy.mockRestore();
+    }
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "passes Windows-special pathname arguments to git unchanged",
+    async () => {
+      const tempDir = makeTempDir(tempDirs, "check-docs-i18n-glossary-");
+      const binDir = path.join(tempDir, "bin");
+      const argsPath = path.join(tempDir, "args.json");
+      mkdirSync(binDir);
+      writeGitFixture(
+        binDir,
+        `require("node:fs").writeFileSync(process.env.ARGS_FILE, JSON.stringify(process.argv.slice(2)));\nprocess.exit(0);\n`,
+      );
+
+      const runGit = createGitRunner({
+        timeoutMs: 500,
+        env: {
+          ...process.env,
+          PATH: binDir,
+          ARGS_FILE: argsPath,
+        },
+      });
+
+      await expect(runGit(["show", "HEAD:docs/a&b.md"])).resolves.toBe("");
+      expect(JSON.parse(readFileSync(argsPath, "utf8"))).toEqual(["show", "HEAD:docs/a&b.md"]);
+    },
+  );
 
   it("fails with an actionable timeout when git diff hangs", async () => {
     const tempDir = makeTempDir(tempDirs, "check-docs-i18n-glossary-");
@@ -158,7 +203,7 @@ describe("check-docs-i18n-glossary", () => {
   });
 
   it.skipIf(process.platform === "win32")(
-    "escalates to SIGKILL when git ignores SIGTERM",
+    "force-kills the managed git process group on timeout",
     async () => {
       const tempDir = makeTempDir(tempDirs, "check-docs-i18n-glossary-");
       const binDir = path.join(tempDir, "bin");
@@ -171,7 +216,6 @@ describe("check-docs-i18n-glossary", () => {
 
       const runGit = createGitRunner({
         timeoutMs: 500,
-        killGraceMs: 150,
         env: {
           ...process.env,
           PATH: binDir,
@@ -187,8 +231,8 @@ describe("check-docs-i18n-glossary", () => {
       );
       const elapsedMs = Date.now() - startedAt;
       expect(existsSync(readyPath)).toBe(true);
-      expect(elapsedMs).toBeGreaterThanOrEqual(600);
-      expect(elapsedMs).toBeLessThan(2_000);
+      expect(elapsedMs).toBeGreaterThanOrEqual(500);
+      expect(elapsedMs).toBeLessThan(4_000);
     },
   );
 

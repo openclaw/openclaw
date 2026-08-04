@@ -13,7 +13,6 @@ const MAX_TITLE_WORDS = 8;
 const MAX_LABEL_WORDS = 6;
 const MAX_TERM_LENGTH = 80;
 const GIT_TIMEOUT_MS = 60_000;
-const GIT_KILL_GRACE_MS = 1_000;
 
 /**
  * @typedef {{
@@ -73,14 +72,12 @@ function createGitError(args, error, timeoutMs) {
  *
  * @param {{
  *   timeoutMs?: number;
- *   killGraceMs?: number;
  *   cwd?: string;
  *   env?: NodeJS.ProcessEnv;
  * }} [options]
  */
 export function createGitRunner(options = {}) {
   const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
-  const killGraceMs = options.killGraceMs ?? GIT_KILL_GRACE_MS;
   const cwd = options.cwd ?? ROOT;
   const env = options.env ?? process.env;
   return async (args) => {
@@ -94,9 +91,10 @@ export function createGitRunner(options = {}) {
         cwd,
         env,
         stdio: ["ignore", "pipe", "pipe"],
+        // Git takes its refs and paths as direct argv; cmd.exe wrapping would
+        // reject legal Windows documentation pathnames such as `docs/a&b.md`.
+        shell: false,
         timeoutMs,
-        timeoutSignal: "SIGTERM",
-        timeoutGraceMs: killGraceMs,
         onReady: (child) => {
           child.stdout?.setEncoding("utf8");
           child.stdout?.on("data", (chunk) => {

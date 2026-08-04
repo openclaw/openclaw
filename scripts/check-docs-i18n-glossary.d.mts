@@ -5,7 +5,6 @@ export function parseArgs(argv: unknown): {
 };
 export function createGitRunner(options?: {
   timeoutMs?: number;
-  killGraceMs?: number;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
 }): (args: string[]) => Promise<string>;
