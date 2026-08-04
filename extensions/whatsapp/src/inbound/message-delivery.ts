@@ -37,8 +37,9 @@ import {
 } from "./message-normalization.js";
 import { addWhatsAppOutboundMentionsToContent } from "./outbound-mentions.js";
 import {
-  extractWhatsAppPollUpdateMessage,
+  isWhatsAppPollCreationMessage,
   maybeEmitWhatsAppPollVoteReceivedHook,
+  rememberWhatsAppOwnPollCreation,
 } from "./poll-votes.js";
 import { normalizeWhatsAppSendResult } from "./send-result.js";
 import type { WhatsAppAttachedSocketSession } from "./socket-session.js";
@@ -488,26 +489,21 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
     }
     for (const msg of upsert.messages ?? []) {
       rememberBaileysMessage(msg.key?.remoteJid, msg.key?.id, msg.message);
-      // Ownership comes from an accepted OpenClaw send, not a fromMe echo;
-      // linked devices can create polls without passing through send.ts.
-      if (extractWhatsAppPollUpdateMessage(msg.message)) {
+      if (msg.key?.fromMe && isWhatsAppPollCreationMessage(msg.message)) {
+        rememberWhatsAppOwnPollCreation(msg.key.remoteJid, msg.key.id);
+      }
+
+      if (msg.message?.pollUpdateMessage) {
+        // Poll votes stay outside the normal message admission and reply path.
         if (msg.key) {
-          try {
-            maybeEmitWhatsAppPollVoteReceivedHook({
-              cfg: options.loadConfig?.() ?? options.cfg,
-              accountId: options.accountId,
-              message: msg.message,
-              key: msg.key,
-              getCachedMessage: getCachedBaileysMessage,
-              selfJid: self.jid,
-              selfLid: self.lid,
-            });
-          } catch (error) {
-            inboundLogger.error(
-              { error: formatError(error) },
-              "whatsapp poll_vote_received hook failed synchronously",
-            );
-          }
+          maybeEmitWhatsAppPollVoteReceivedHook({
+            cfg: options.loadConfig?.() ?? options.cfg,
+            accountId: options.accountId,
+            message: msg.message,
+            key: msg.key,
+            getCachedMessage: getCachedBaileysMessage,
+            selfJid: self.jid,
+          });
         }
         continue;
       }

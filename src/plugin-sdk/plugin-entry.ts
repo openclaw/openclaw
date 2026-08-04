@@ -183,6 +183,7 @@ export type {
   PluginHookMediaFact,
   PluginHookMessageReceivedEvent,
   PluginHookProviderUpdate,
+  PluginHookPollVoteReceivedEvent,
   PluginHookSkillArtifact,
   PluginHookSkillBundleFile,
   PluginHookSkillBundleSnapshot,
