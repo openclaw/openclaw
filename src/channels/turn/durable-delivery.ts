@@ -235,12 +235,9 @@ export async function deliverInboundReplyWithMessageSendContext(
     };
   }
 
-  // adapter_returned_no_identity means the adapter was invoked but the platform
-  // returned no identity — it may still have delivered. routeReply, the
-  // delivery queue, and outbound audit all treat this as potentially visible
-  // (ambiguous), so durable-delivery must too: marking it "explicitly not sent"
-  // would drop recovery state or trigger a duplicate fallback for a reply that
-  // may already be visible.
+  // adapter_returned_no_identity: adapter was invoked, platform may have delivered
+  // without returning an identity. Treat as potentially visible (ambiguous), matching
+  // routeReply/delivery-queue/audit — marking it "not sent" would drop recovery state.
   const adapterReturnedNoIdentity =
     send.status === "suppressed" && send.reason === "adapter_returned_no_identity";
   const receiptDelivery = createChannelDeliveryResultFromReceipt({
