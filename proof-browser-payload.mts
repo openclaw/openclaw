@@ -1,14 +1,14 @@
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer as createHttpServer } from "node:http";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 // Real-browser proof for the negotiated request-frame payload guard in the
 // Control UI Gateway browser client. Starts a real local Gateway, bundles the
 // actual GatewayBrowserClient module for Chromium, then records that an
 // oversized chat.send frame is rejected locally before socket.send while the
 // connection stays usable.
 import { build } from "esbuild";
-import { createServer as createHttpServer } from "node:http";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { createOpenClawTestInstance } from "./test/helpers/openclaw-test-instance.js";
 
@@ -20,11 +20,16 @@ import { GatewayBrowserClient } from ${JSON.stringify(path.join(scriptDir, "ui/s
   async (wsUrl, token) => {
     const results: Record<string, unknown> = {};
     let helloPolicy: unknown;
+    let resolveHello: (hello: unknown) => void = () => undefined;
+    const helloReady = new Promise<unknown>((resolve) => {
+      resolveHello = resolve;
+    });
     const client = new GatewayBrowserClient({
       url: wsUrl,
       token,
       onHello: (hello) => {
         helloPolicy = hello.policy;
+        resolveHello(hello);
       },
     });
     const deadline = Date.now() + 20_000;
@@ -35,6 +40,12 @@ import { GatewayBrowserClient } from ${JSON.stringify(path.join(scriptDir, "ui/s
     if (!client.connected) {
       throw new Error("browser gateway client did not connect");
     }
+    await Promise.race([
+      helloReady,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("gateway hello did not arrive")), 20_000),
+      ),
+    ]);
 
     const normal = await client.request<{ pending?: unknown[] }>("node.pair.list", {});
     results.normalRequest = { ok: true, pendingCount: normal?.pending?.length ?? 0 };
@@ -93,7 +104,7 @@ async function main() {
     const port = await new Promise<number>((resolve, reject) => {
       const httpServer = createHttpServer(async (request, response) => {
         try {
-          const urlPath = request.url === "/" ? "/index.html" : request.url ?? "/index.html";
+          const urlPath = request.url === "/" ? "/index.html" : (request.url ?? "/index.html");
           const filePath = path.join(tempDir, path.basename(urlPath));
           const body = await readFile(filePath);
           response.writeHead(200, {
@@ -126,10 +137,11 @@ async function main() {
       await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: "load" });
       const results = (await page.evaluate(
         ([wsUrl, authToken]) =>
-          (globalThis as unknown as { runProof: (u: string, t: string) => Promise<Record<string, unknown>> }).runProof(
-            wsUrl,
-            authToken,
-          ),
+          (
+            globalThis as unknown as {
+              runProof: (u: string, t: string) => Promise<Record<string, unknown>>;
+            }
+          ).runProof(wsUrl, authToken),
         [gatewayUrl, token],
       )) as Record<string, unknown>;
       console.log(`gateway=${gatewayUrl}`);

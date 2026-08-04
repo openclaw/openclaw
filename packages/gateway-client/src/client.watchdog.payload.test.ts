@@ -62,6 +62,30 @@ function handleGatewayMessage(client: GatewayClient, payload: Record<string, unk
 }
 
 describe("GatewayClient", () => {
+  test("rejects oversized pre-auth connect frames before sending", async () => {
+    const { client, send } = createOpenGatewayClient(25);
+    await expect(client.request("connect", { pathEnv: "x".repeat(70 * 1024) })).rejects.toThrow(
+      "gateway request connect exceeds pre-auth max payload",
+    );
+    expect(send).not.toHaveBeenCalled();
+    expect(getPendingCount(client)).toBe(0);
+
+    const request = client.request("connect", { pathEnv: "x".repeat(1024) });
+    const frame = JSON.parse(String(send.mock.calls[0]?.[0])) as {
+      id: string;
+      method: string;
+    };
+    expect(frame.method).toBe("connect");
+    handleGatewayMessage(client, {
+      type: "res",
+      id: frame.id,
+      ok: true,
+      payload: { type: "hello-ok", protocol: 4, auth: { role: "operator", scopes: [] } },
+    });
+    await expect(request).resolves.toMatchObject({ type: "hello-ok" });
+    client.stop();
+  });
+
   test("enforces the latest negotiated request payload before sending", async () => {
     const { client, send } = createOpenGatewayClient(25);
     const payloadHarness = client as unknown as {

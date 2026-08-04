@@ -366,6 +366,9 @@ const FORCE_STOP_TERMINATE_GRACE_MS = 250;
 const STOP_AND_WAIT_TIMEOUT_MS = 1_000;
 const MAX_SUPPRESSED_TRANSIENT_PRE_HELLO_CLEAN_CLOSES = 1;
 const DEFAULT_GATEWAY_MAX_PAYLOAD_BYTES = 25 * 1024 * 1024;
+// The Gateway receiver accepts only 64 KiB before authentication; mirror the
+// server-side MAX_PREAUTH_PAYLOAD_BYTES contract for pre-auth connect frames.
+const DEFAULT_GATEWAY_PREAUTH_MAX_PAYLOAD_BYTES = 64 * 1024;
 
 type PendingStop = {
   ws: WebSocket;
@@ -424,10 +427,12 @@ export class GatewayClient {
       createRequestAbortError: createGatewayRequestAbortError,
       validateRequestFrame: (frame, method) => {
         const frameBytes = Buffer.byteLength(frame, "utf8");
-        if (frameBytes > this.maxPayloadBytes) {
+        const isConnect = method === "connect";
+        const limit = isConnect ? DEFAULT_GATEWAY_PREAUTH_MAX_PAYLOAD_BYTES : this.maxPayloadBytes;
+        if (frameBytes > limit) {
           throw new RangeError(
-            `gateway request ${method} exceeds negotiated max payload ` +
-              `(${frameBytes} > ${this.maxPayloadBytes} bytes)`,
+            `gateway request ${method} exceeds ${isConnect ? "pre-auth" : "negotiated"} max payload ` +
+              `(${frameBytes} > ${limit} bytes)`,
           );
         }
       },

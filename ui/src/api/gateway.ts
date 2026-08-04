@@ -212,6 +212,9 @@ const BROWSER_WEBSOCKET_SECURITY_ERROR_CODE = "BROWSER_WEBSOCKET_SECURITY_ERROR"
 const DEFAULT_GATEWAY_TICK_INTERVAL_MS = 30_000;
 const MIN_GATEWAY_TICK_WATCH_INTERVAL_MS = 1_000;
 const DEFAULT_GATEWAY_MAX_PAYLOAD_BYTES = 25 * 1024 * 1024;
+// The Gateway receiver accepts only 64 KiB before authentication; mirror the
+// server-side MAX_PREAUTH_PAYLOAD_BYTES contract for pre-auth connect frames.
+const DEFAULT_GATEWAY_PREAUTH_MAX_PAYLOAD_BYTES = 64 * 1024;
 function toGatewayErrorInfo(error: GatewayRequestError): GatewayErrorInfo {
   const { gatewayCode: code, message, details, retryable, retryAfterMs } = error;
   return { code, message, details, retryable, retryAfterMs };
@@ -318,10 +321,12 @@ export class GatewayBrowserClient {
       createRequestId: generateUUID,
       validateRequestFrame: (frame, method) => {
         const frameBytes = new TextEncoder().encode(frame).byteLength;
-        if (frameBytes > this.maxPayloadBytes) {
+        const isConnect = method === "connect";
+        const limit = isConnect ? DEFAULT_GATEWAY_PREAUTH_MAX_PAYLOAD_BYTES : this.maxPayloadBytes;
+        if (frameBytes > limit) {
           throw new RangeError(
-            `gateway request ${method} exceeds negotiated max payload ` +
-              `(${frameBytes} > ${this.maxPayloadBytes} bytes)`,
+            `gateway request ${method} exceeds ${isConnect ? "pre-auth" : "negotiated"} max payload ` +
+              `(${frameBytes} > ${limit} bytes)`,
           );
         }
       },

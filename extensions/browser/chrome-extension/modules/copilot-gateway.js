@@ -161,10 +161,12 @@ export class CopilotGatewayClient {
       createRequestId: () => crypto.randomUUID(),
       validateRequestFrame: (frame, method) => {
         const frameBytes = new TextEncoder().encode(frame).byteLength;
-        if (frameBytes > this.maxPayloadBytes) {
+        const isConnect = method === "connect";
+        const limit = isConnect ? 64 * 1024 : this.maxPayloadBytes;
+        if (frameBytes > limit) {
           throw new RangeError(
-            `gateway request ${method} exceeds negotiated max payload ` +
-              `(${frameBytes} > ${this.maxPayloadBytes} bytes)`,
+            `gateway request ${method} exceeds ${isConnect ? "pre-auth" : "negotiated"} max payload ` +
+              `(${frameBytes} > ${limit} bytes)`,
           );
         }
       },

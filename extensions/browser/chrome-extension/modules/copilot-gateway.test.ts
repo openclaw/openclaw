@@ -474,4 +474,50 @@ describe("browser copilot Gateway custody", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("rejects oversized pre-auth connect frames before sending", async () => {
+    const storage = storageArea();
+    FakeWebSocket.instances = [];
+    FakeWebSocket.autoOpen = true;
+    vi.stubGlobal("chrome", { runtime: { getManifest: () => ({ version: "test" }) } });
+    vi.stubGlobal("navigator", { language: "en", userAgent: "copilot-test" });
+    const client = new CopilotGatewayClient({
+      storage,
+      WebSocketImpl: FakeWebSocket as never,
+    });
+
+    try {
+      const gatewayScope = "ws://127.0.0.1:28789/";
+      client.start(gatewayScope);
+      await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+      const ws = FakeWebSocket.instances[0];
+      ws?.message({
+        type: "event",
+        event: "connect.challenge",
+        payload: { nonce: "preauth-nonce", ts: 1_777_777_777_000 },
+      });
+      await vi.waitFor(() => expect(ws?.sent).toHaveLength(1));
+      const connect = ws?.sent[0] as { id?: string };
+      ws?.message({
+        type: "res",
+        id: connect.id,
+        ok: true,
+        payload: {
+          type: "hello-ok",
+          protocol: 4,
+          auth: { role: "operator", scopes: [] },
+        },
+      });
+      await vi.waitFor(() => expect(client.ready).toBe(true));
+      ws!.sent.length = 0;
+
+      await expect(client.request("connect", { pathEnv: "x".repeat(70 * 1024) })).rejects.toThrow(
+        "gateway request connect exceeds pre-auth max payload",
+      );
+      expect(ws!.sent).toHaveLength(0);
+    } finally {
+      client.stop();
+      vi.unstubAllGlobals();
+    }
+  });
 });
