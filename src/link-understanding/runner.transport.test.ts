@@ -52,20 +52,20 @@ function ctx(body: string): MsgContext {
 describe("link understanding guarded fetch transport", () => {
   it("cancels the error body before releasing the guard", async () => {
     const callOrder: string[] = [];
-    
+
     // Create a real 500 response with unread body
     const failedResponse = new Response("server error", { status: 500 });
-    
+
     // Spy on body.cancel to track call order
     const cancelSpy = vi.spyOn(failedResponse.body!, "cancel").mockImplementation(() => {
       callOrder.push("cancel");
       return Promise.resolve();
     });
-    
+
     const release = vi.fn(async () => {
       callOrder.push("release");
     });
-    
+
     // Mock fetchWithSsrFGuard to return the 500 response
     mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
       response: failedResponse,
@@ -93,7 +93,7 @@ describe("link understanding guarded fetch transport", () => {
 
     // Cancel should have been called before release.
     expect(callOrder).toEqual(["cancel", "release"]);
-    
+
     // Cancel and release should have been called once.
     expect(cancelSpy).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();

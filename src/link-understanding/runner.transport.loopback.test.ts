@@ -29,7 +29,11 @@ async function waitForSocketClose(closed: Promise<void> | undefined): Promise<vo
       closed,
       new Promise<never>((_resolve, reject) => {
         timeout = setTimeout(() => {
-          reject(new Error("Link understanding error-response body was not canceled before guarded release"));
+          reject(
+            new Error(
+              "Link understanding error-response body was not canceled before guarded release",
+            ),
+          );
         }, 5_000);
       }),
     ]);
@@ -130,26 +134,28 @@ function ctx(body: string): MsgContext {
 describe("link understanding guarded fetch transport", () => {
   it("cancels a stalled 500 error body before guarded release", async () => {
     // Set up fetchWithSsrFGuard mock to use the real loopback server
-    mocks.fetchWithSsrFGuard.mockImplementation(async (params: { url: string; timeoutMs: number }) => {
-      const response = await fetch(loopback.baseUrl, {
-        signal: AbortSignal.timeout(params.timeoutMs),
-      });
-      const guarded = { response, finalUrl: loopback.baseUrl };
-      const release = async () => {
-        let socketClosedBeforeGuardRelease = false;
-        try {
-          await waitForSocketClose(loopback.socketClosed);
-          socketClosedBeforeGuardRelease = true;
-        } finally {
-          loopback.releases.push({
-            bodyIsNull: guarded.response.body === null,
-            bodyUsed: guarded.response.bodyUsed,
-            socketClosedBeforeGuardRelease,
-          });
-        }
-      };
-      return { ...guarded, release };
-    });
+    mocks.fetchWithSsrFGuard.mockImplementation(
+      async (params: { url: string; timeoutMs: number }) => {
+        const response = await fetch(loopback.baseUrl, {
+          signal: AbortSignal.timeout(params.timeoutMs),
+        });
+        const guarded = { response, finalUrl: loopback.baseUrl };
+        const release = async () => {
+          let socketClosedBeforeGuardRelease = false;
+          try {
+            await waitForSocketClose(loopback.socketClosed);
+            socketClosedBeforeGuardRelease = true;
+          } finally {
+            loopback.releases.push({
+              bodyIsNull: guarded.response.body === null,
+              bodyUsed: guarded.response.bodyUsed,
+              socketClosedBeforeGuardRelease,
+            });
+          }
+        };
+        return { ...guarded, release };
+      },
+    );
 
     // Mock runCommandWithTimeout to return success
     mocks.runCommandWithTimeout.mockResolvedValue({
