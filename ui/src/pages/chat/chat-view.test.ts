@@ -4262,7 +4262,7 @@ describe("chat slash menu accessibility", () => {
     const onSend = vi.fn();
     let container = renderChatView({ draft, onDraftChange, onSend });
 
-    inputDraft(container, "/clear");
+    inputDraft(container, "/cle");
     container = renderChatView({ draft, onDraftChange, onSend });
     onDraftChange.mockClear();
     const option = container.querySelector<HTMLElement>('[role="option"]');
