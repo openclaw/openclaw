@@ -613,4 +613,57 @@ describe("owner-key lookup prefers an active flow over a terminal one", () => {
       expect(resolved?.flowId).toBe(olderRunning.flowId);
     });
   });
+
+  it("keeps a newest resumable blocked flow as the owner-key lookup target (#119130)", async () => {
+    await withFlowRegistryTempDir(async () => {
+      createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/owner-lookup-blocked",
+        goal: "Older running flow",
+        status: "running",
+        createdAt: 100,
+        updatedAt: 100,
+      });
+      // Blocked without an endedAt is resumable state (maintenance contract):
+      // it must remain the lookup target even though an older flow is running.
+      const newerBlocked = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/owner-lookup-blocked",
+        goal: "Newer resumable blocked flow",
+        status: "blocked",
+        blockedSummary: "Waiting on an external approval",
+        createdAt: 200,
+        updatedAt: 200,
+      });
+
+      const resolved = resolveTaskFlowForLookupToken("agent:main:main");
+      expect(resolved?.flowId).toBe(newerBlocked.flowId);
+    });
+  });
+
+  it("falls back past a terminal blocked flow (endedAt set) to an older running flow (#119130)", async () => {
+    await withFlowRegistryTempDir(async () => {
+      const olderRunning = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/owner-lookup-terminal-blocked",
+        goal: "Older running flow",
+        status: "running",
+        createdAt: 100,
+        updatedAt: 100,
+      });
+      createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/owner-lookup-terminal-blocked",
+        goal: "Newer terminal blocked flow",
+        status: "blocked",
+        blockedSummary: "Completed with a blocked result",
+        createdAt: 200,
+        updatedAt: 250,
+        endedAt: 250,
+      });
+
+      const resolved = resolveTaskFlowForLookupToken("agent:main:main");
+      expect(resolved?.flowId).toBe(olderRunning.flowId);
+    });
+  });
 });

@@ -780,6 +780,19 @@ export function findLatestTaskFlowForOwnerKey(ownerKey: string): TaskFlowRecord 
 }
 
 /**
+ * Whether a flow is terminal for owner-key lookup. Mirrors the maintenance
+ * terminal contract (task-flow-registry.maintenance.ts): a blocked flow is
+ * resumable state unless it carries an endedAt timestamp, so only terminal
+ * blocked flows are skipped. Other statuses use the plain terminal predicate.
+ */
+function isTerminalFlowForOwnerLookup(flow: TaskFlowRecord): boolean {
+  if (flow.status === "blocked") {
+    return flow.endedAt != null;
+  }
+  return isTerminalTaskFlowStatus(flow.status);
+}
+
+/**
  * Newest non-terminal flow for an owner key. `listTaskFlowsForOwnerKey` sorts by
  * createdAt descending, so this is the most recent flow still accepting work.
  * Used by owner-key lookups so `show`/`cancel <ownerKey>` target a live flow.
@@ -787,7 +800,7 @@ export function findLatestTaskFlowForOwnerKey(ownerKey: string): TaskFlowRecord 
 export function findNewestNonTerminalTaskFlowForOwnerKey(
   ownerKey: string,
 ): TaskFlowRecord | undefined {
-  return listTaskFlowsForOwnerKey(ownerKey).find((flow) => !isTerminalTaskFlowStatus(flow.status));
+  return listTaskFlowsForOwnerKey(ownerKey).find((flow) => !isTerminalFlowForOwnerLookup(flow));
 }
 
 export function resolveTaskFlowForLookupToken(token: string): TaskFlowRecord | undefined {
@@ -801,10 +814,11 @@ export function resolveTaskFlowForLookupToken(token: string): TaskFlowRecord | u
   }
   const latest = findLatestTaskFlowForOwnerKey(lookup);
   // #119129: an owner-key lookup must resolve to a live flow. When the newest
-  // flow for the owner is terminal/blocked but an older one is still running,
-  // fall back to the newest non-terminal flow so `show`/`cancel <ownerKey>` do
-  // not silently target a finished flow.
-  if (latest && isTerminalTaskFlowStatus(latest.status)) {
+  // flow for the owner is terminal but an older one is still running, fall back
+  // to the newest non-terminal flow so `show`/`cancel <ownerKey>` do not
+  // silently target a finished flow. A resumable blocked flow (no endedAt) is
+  // not terminal and stays the lookup target.
+  if (latest && isTerminalFlowForOwnerLookup(latest)) {
     return findNewestNonTerminalTaskFlowForOwnerKey(lookup) ?? latest;
   }
   return latest;

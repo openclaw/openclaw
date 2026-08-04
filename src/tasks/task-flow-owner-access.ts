@@ -50,8 +50,9 @@ export function resolveTaskFlowForLookupTokenForOwner(params: {
   }
   const latest = findLatestTaskFlowForOwner({ callerOwnerKey: normalizedCallerOwnerKey });
   // Mirror resolveTaskFlowForLookupToken (#119129): prefer the newest live flow
-  // when the newest overall is terminal/blocked, so owner-key lookups do not
-  // silently resolve to a finished flow.
+  // (including resumable blocked flows without an endedAt) when the newest
+  // overall is terminal, so owner-key lookups do not silently resolve to a
+  // finished flow.
   if (latest) {
     const active = findNewestNonTerminalTaskFlowForOwnerKey(normalizedCallerOwnerKey);
     return active ?? latest;
