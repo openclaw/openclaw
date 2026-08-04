@@ -134,6 +134,34 @@ describe("resolveReplyToMode", () => {
     expect(resolveReplyDeliveryAccountId(emptyCfg, "whatsapp")).toBe("work");
     expect(resolveReplyDeliveryAccountId(emptyCfg, "whatsapp", "personal")).toBe("personal");
   });
+
+  it("prefers account-scoped config when the channel registers no threading resolver", () => {
+    // irc has no threading adapter, so the generic config fallback owns account scope.
+    setActivePluginRegistry(createTestRegistry([]));
+    const cfg = {
+      channels: {
+        irc: {
+          replyToMode: "off",
+          replyToModeByChatType: { channel: "off" },
+          accounts: {
+            work: {
+              replyToMode: "all",
+              replyToModeByChatType: { channel: "first" },
+            },
+            sparse: {},
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    // Account wins for both the chat-type map and the plain mode.
+    expect(resolveReplyToMode(cfg, "irc", "work", "channel")).toBe("first");
+    expect(resolveReplyToMode(cfg, "irc", "work", "direct")).toBe("all");
+    // Root still applies for an account that sets nothing, an unknown account, or no account.
+    expect(resolveReplyToMode(cfg, "irc", "sparse", "channel")).toBe("off");
+    expect(resolveReplyToMode(cfg, "irc", "missing", "channel")).toBe("off");
+    expect(resolveReplyToMode(cfg, "irc", null, "channel")).toBe("off");
+  });
 });
 
 describe("createReplyToModeFilterForChannel", () => {

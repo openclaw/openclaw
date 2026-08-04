@@ -1,3 +1,4 @@
+import { ReplyToModeSchema } from "openclaw/plugin-sdk/channel-config-schema";
 import { z } from "zod";
 import type { ReefAutonomy } from "./friend-types.js";
 
@@ -14,6 +15,7 @@ export const ReefChannelConfigSchema = z
   .object({
     enabled: z.boolean().default(true),
     configWrites: z.boolean().optional(),
+    replyToMode: ReplyToModeSchema.optional(),
     relayUrl: RelayUrlSchema.default("https://reefwire.ai"),
     handle: HandleSchema.optional(),
     email: z.email().optional(),

@@ -1,6 +1,7 @@
 // Tlon helper module supports config schema behavior.
 import {
   ChannelImplicitMentionsSchema,
+  ReplyToModeSchema,
   buildChannelConfigSchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { createChannelConfigUiHints } from "openclaw/plugin-sdk/channel-core";
@@ -29,6 +30,7 @@ const tlonCommonConfigFields = {
   name: z.string().optional(),
   enabled: z.boolean().optional(),
   configWrites: z.boolean().optional(),
+  replyToMode: ReplyToModeSchema.optional(),
   ship: ShipSchema.optional(),
   url: z.string().optional(),
   code: z.string().optional(),
