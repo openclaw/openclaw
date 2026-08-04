@@ -564,6 +564,88 @@ describe("CodexAppServerEventProjector trailing silent-token shadowing", () => {
     expect(result.assistantTexts).toEqual(["here is the answer"]);
   });
 
+  it("selects the delivered answer, not the trailing silent token, as the Activity answer", async () => {
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      onAgentEvent,
+    });
+
+    await projector.handleNotification(
+      turnCompleted([
+        { type: "agentMessage", id: "msg-1", phase: "final_answer", text: "here is the answer" },
+        { type: "agentMessage", id: "msg-2", phase: "final_answer", text: "NO_REPLY" },
+      ]),
+    );
+
+    // Activity's "Selected answer" must agree with what delivery sent; selecting the
+    // newest item outright would show NO_REPLY as selected and supersede the real answer.
+    const selected = onAgentEvent.mock.calls
+      .map((call) => call[0])
+      .filter(
+        (event) =>
+          event.stream === "item" &&
+          event.data.kind === "answer_candidate" &&
+          event.data.status === "selected",
+      )
+      .map((event) => event.data.itemId);
+    expect(selected).toEqual(["msg-1"]);
+    expect(projector.buildResult(buildEmptyToolTelemetry()).assistantTexts).toEqual([
+      "here is the answer",
+    ]);
+  });
+
+  it("keeps the real answer when the late event is answered with a silent JSON envelope", async () => {
+    const { projector } = await createProjectorWithAssistantHooks();
+
+    // Delivery suppresses every form `isSilentReplyPayloadText` accepts (payloads.ts:933),
+    // which is a strict superset of the bare token. Selecting on the narrow predicate lets
+    // an envelope-form silent reply shadow the answer and recreate the zero-output bug.
+    await projector.handleNotification(
+      turnCompleted([
+        { type: "agentMessage", id: "msg-1", phase: "final_answer", text: "here is the answer" },
+        { type: "agentMessage", id: "msg-2", phase: "final_answer", text: '{"action":"NO_REPLY"}' },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.assistantTexts).toEqual(["here is the answer"]);
+  });
+
+  it("does not revive a pre-tool answer when native work runs before the silent token", async () => {
+    const { projector } = await createProjectorWithAssistantHooks();
+
+    const midTool = {
+      type: "commandExecution",
+      id: "mid-tool",
+      command: "/bin/bash -lc 'printf mid'",
+      cwd: "/workspace",
+      processId: null,
+      source: "agent",
+      status: "completed",
+      commandActions: [],
+      aggregatedOutput: "mid",
+      exitCode: 0,
+      durationMs: 1,
+    };
+
+    // Native tool work after the answer supersedes it, exactly as finalizeAnswerCandidate
+    // treats it. Reviving it here would deliver a stale pre-tool answer where main stayed
+    // silent, so the trailing silent token must still win.
+    await projector.handleNotification(
+      turnCompleted([
+        { type: "agentMessage", id: "msg-1", phase: "final_answer", text: "here is the answer" },
+        midTool,
+        { type: "agentMessage", id: "msg-2", phase: "final_answer", text: "NO_REPLY" },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.assistantTexts).toEqual(["NO_REPLY"]);
+  });
+
   it("stays silent when the only assistant item is NO_REPLY", async () => {
     const { projector } = await createProjectorWithAssistantHooks();
 
