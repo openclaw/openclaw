@@ -1,5 +1,4 @@
 // Codex plugin module implements event projector behavior.
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 import {
   classifyAgentHarnessTerminalOutcome,
   embeddedAgentLog,
@@ -456,8 +455,7 @@ export class CodexAppServerEventProjector {
         startedCount: this.activeItemIds.size + this.completedItemIds.size,
         completedCount: this.completedItemIds.size,
         activeCount: this.activeItemIds.size,
-        // Producer-owned active-item identity so the shared finalizer can tell
-        // whether the stale aggregate belongs to the failed terminal batch.
+        // Producer-owned active-item identity for the shared finalizer.
         activeItemIds: [...this.activeItemIds],
       },
       yieldDetected: options?.yieldDetected || false,
