@@ -24,6 +24,7 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import type { PersistedClawInstall } from "./provenance.js";
+import { deleteAdoptedWorkspaceRow } from "./workspace-origin.js";
 import type { PersistedClawWorkspaceFile } from "./workspace.js";
 
 type WorkspaceFileRow = {
@@ -392,5 +393,8 @@ export function releaseClawRemoveRows(
         .prepare("DELETE FROM claw_installs WHERE agent_id = ?")
         .run(agentId);
     }
+    // Drop the origin with the install it describes; a later agent reusing this id must not
+    // inherit an adopted-workspace claim from a Claw that no longer exists.
+    deleteAdoptedWorkspaceRow(db, agentId);
   }, options);
 }

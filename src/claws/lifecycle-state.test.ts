@@ -1,4 +1,4 @@
-import { link, readFile, rm, writeFile } from "node:fs/promises";
+import { link, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -20,6 +20,7 @@ import {
 } from "./provenance.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawSourceIdentity } from "./types.js";
+import { clawWorkspaceWasAdopted } from "./workspace-origin.js";
 
 afterEach(() => closeOpenClawStateDatabaseForTest());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -939,5 +940,117 @@ describe("Claw status and remove", () => {
         independentOwner: false,
       },
     ]);
+  });
+});
+
+describe("Claw remove with an adopted workspace", () => {
+  async function adoptedFixture() {
+    const root = tempDirs.make("openclaw-claw-adopt-remove-");
+    await writeFile(join(root, "SOUL.md"), "managed\n", "utf8");
+    const parsed = parseClawManifest({
+      schemaVersion: 1,
+      agent: { id: "worker", name: "Worker" },
+      workspace: { bootstrapFiles: { "SOUL.md": { source: "SOUL.md" } } },
+    });
+    if (!parsed.ok) {
+      throw new Error(JSON.stringify(parsed.diagnostics));
+    }
+    const source: ClawSourceIdentity = {
+      kind: "package",
+      name: "@acme/worker",
+      version: "1.0.0",
+      packageRoot: root,
+      manifestPath: join(root, "openclaw.claw.json"),
+      integrityKind: "artifact",
+      integrity: "sha256:manifest",
+      byteLength: 100,
+    };
+    // The operator's directory already holds the declared file, so after adoption every entry in
+    // it is Claw-managed and nothing distinguishes it from a workspace this install created.
+    const workspace = join(root, "existing-workspace");
+    await mkdir(workspace, { recursive: true });
+    await writeFile(join(workspace, "SOUL.md"), "managed\n", "utf8");
+    const plan = await buildClawAddPlan({
+      manifest: parsed.manifest,
+      source,
+      context: { workspace, adoptExistingWorkspace: true },
+    });
+    const env = { OPENCLAW_STATE_DIR: join(root, "state") };
+    let config: OpenClawConfig = {};
+    await applyClawAddPlan(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
+      env,
+      commitConfig: async (transform) => {
+        config = transform(config);
+      },
+    });
+    return { env, workspace, getConfig: () => config };
+  }
+
+  it("plans retention for an adopted workspace holding only declared files", async () => {
+    const current = await adoptedFixture();
+
+    const plan = await buildClawRemovePlan("worker", {
+      env: current.env,
+      config: current.getConfig(),
+    });
+
+    expect(plan.actions).toContainEqual(
+      expect.objectContaining({
+        kind: "workspace",
+        action: "retain",
+        reason: "Workspace existed before this Claw adopted it.",
+        details: expect.objectContaining({ retained: true }),
+      }),
+    );
+  });
+
+  it("never trashes an adopted workspace directory during removal", async () => {
+    const current = await adoptedFixture();
+
+    const plan = await buildClawRemovePlan("worker", {
+      env: current.env,
+      config: current.getConfig(),
+    });
+    const removed = await applyClawRemovePlan(plan, {
+      env: current.env,
+      config: current.getConfig(),
+      consentPlanIntegrity: plan.planIntegrity,
+      commitConfig: async (transform) => {
+        transform(current.getConfig());
+      },
+      purgeSessions: async () => undefined,
+      // Delete for real: a trash stub that only records calls cannot tell a retained directory
+      // from one the canonical path spelling hid from the assertion.
+      trashPath: async (target) => {
+        await rm(target, { recursive: true, force: true });
+        return true;
+      },
+    });
+
+    expect(removed).toMatchObject({ status: "complete" });
+    await expect(stat(current.workspace)).resolves.toMatchObject({});
+  });
+
+  it("drops the adopted-workspace origin once the install is removed", async () => {
+    const current = await adoptedFixture();
+    expect(clawWorkspaceWasAdopted("worker", { env: current.env })).toBe(true);
+
+    const plan = await buildClawRemovePlan("worker", {
+      env: current.env,
+      config: current.getConfig(),
+    });
+    await applyClawRemovePlan(plan, {
+      env: current.env,
+      config: current.getConfig(),
+      consentPlanIntegrity: plan.planIntegrity,
+      commitConfig: async (transform) => {
+        transform(current.getConfig());
+      },
+      purgeSessions: async () => undefined,
+      trashPath: async () => true,
+    });
+
+    expect(clawWorkspaceWasAdopted("worker", { env: current.env })).toBe(false);
   });
 });

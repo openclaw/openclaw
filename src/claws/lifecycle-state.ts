@@ -51,6 +51,7 @@ import {
 } from "./package-remove.js";
 import { updateClawInstallRecordStatus } from "./provenance.js";
 import { CLAW_OUTPUT_STABILITY } from "./types.js";
+import { clawWorkspaceWasAdopted } from "./workspace-origin.js";
 
 export { ClawRemoveError } from "./lifecycle-delete-support.js";
 export { CLAW_REMOVE_PLAN_SCHEMA_VERSION } from "./lifecycle-remove-contract.js";
@@ -164,6 +165,9 @@ export async function buildClawRemovePlan(
       record.install.workspace,
       record.workspaceFiles.map((file) => file.path),
     );
+    // An adopted directory predates the Claw. Once every declared file in it is managed it looks
+    // indistinguishable from one this install created, so origin decides retention, not contents.
+    const workspaceWasAdopted = clawWorkspaceWasAdopted(record.install.agentId, options);
     const attachedJobs = readAttachedCronJobs(record.install.agentId, options);
     const ownedSchedulerJobIds = new Set(
       record.cronJobs
@@ -218,23 +222,31 @@ export async function buildClawRemovePlan(
         kind: "workspace",
         id: record.install.agentId,
         action:
-          effects.workspaceRetained || workspaceHasModifiedFiles || workspaceHasUntrackedEntries
+          effects.workspaceRetained ||
+          workspaceWasAdopted ||
+          workspaceHasModifiedFiles ||
+          workspaceHasUntrackedEntries
             ? "retain"
             : "trash",
         target: effects.workspace,
         blocked: record.agentState === "modified",
         details: {
           retained:
-            effects.workspaceRetained || workspaceHasModifiedFiles || workspaceHasUntrackedEntries,
+            effects.workspaceRetained ||
+            workspaceWasAdopted ||
+            workspaceHasModifiedFiles ||
+            workspaceHasUntrackedEntries,
           sharedWith: effects.workspaceSharedWith,
         },
         ...(effects.workspaceRetained
           ? { reason: "Workspace overlaps another agent." }
-          : workspaceHasModifiedFiles
-            ? { reason: "Workspace contains locally modified Claw-managed files." }
-            : workspaceHasUntrackedEntries
-              ? { reason: "Workspace contains files or directories not managed by this Claw." }
-              : {}),
+          : workspaceWasAdopted
+            ? { reason: "Workspace existed before this Claw adopted it." }
+            : workspaceHasModifiedFiles
+              ? { reason: "Workspace contains locally modified Claw-managed files." }
+              : workspaceHasUntrackedEntries
+                ? { reason: "Workspace contains files or directories not managed by this Claw." }
+                : {}),
       });
     }
     if (effects.agentDir) {
@@ -430,6 +442,8 @@ export async function applyClawRemovePlan(
   if (typeof expectedRemovalSurfaceDigest !== "string") {
     throw new ClawRemoveError("remove_changed", "Claw remove plan is missing config state.");
   }
+  // Read before any owned row is dropped; the origin is deleted with the install record below.
+  const workspaceWasAdopted = clawWorkspaceWasAdopted(agentId, options);
   const current = await readClawStatus(plan.agentId, options);
   const record = current.records[0];
   if (
@@ -641,6 +655,7 @@ export async function applyClawRemovePlan(
         runtime: clawRemoveQuietRuntime,
         trashPath: options.trashPath,
         retainWorkspace:
+          workspaceWasAdopted ||
           workspaceHasRemainingEntries ||
           workspaceFiles.some((file) => file.action === "retainedModified"),
       })),
