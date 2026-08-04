@@ -67,6 +67,36 @@ describe("resolveMcpLoopbackScopedTools", () => {
       "memory_search",
       "memory_get",
     ]);
+    expect(resolveGatewayScopedTools.mock.calls[0]?.[0].sessionsSendToolPolicy).toEqual({
+      version: 1,
+      allow: ["memory_search", "memory_get"],
+      deny: [],
+    });
+  });
+
+  it("snapshots the complete exact CLI capability universe for handoffs", () => {
+    resolveMcpLoopbackScopedTools(
+      scopeParams({
+        toolsAllow: ["message"],
+        cliToolAvailability: { native: ["Read", "Bash"], openClaw: ["message"] },
+      }),
+    );
+
+    expect(resolveGatewayScopedTools.mock.calls[0]?.[0].sessionsSendToolPolicy).toEqual({
+      version: 1,
+      allow: ["read", "exec", "message"],
+      deny: [],
+    });
+  });
+
+  it("preserves an explicitly unrestricted CLI capability universe", () => {
+    resolveMcpLoopbackScopedTools(scopeParams({ cliToolAvailabilityUnrestricted: true }));
+
+    expect(resolveGatewayScopedTools.mock.calls[0]?.[0].sessionsSendToolPolicy).toEqual({
+      version: 1,
+      allow: ["*"],
+      deny: [],
+    });
   });
 
   it("keeps exact grant names exact instead of reinterpreting policy shorthand", () => {

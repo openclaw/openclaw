@@ -3,7 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { copyAgentToolMetadata } from "../agent-tool-metadata.js";
 import type { AnyAgentTool } from "./common.js";
 
-type GatewayToolCallerIdentity = {
+export type GatewayToolCallerIdentity = {
   agentId: string;
   sessionKey: string;
   /** Host-signed capability for the scheduled run's existing self-management surface. */

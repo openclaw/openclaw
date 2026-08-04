@@ -75,7 +75,6 @@ describe("agent runtime identity token", () => {
       sessionKey: "session-1",
       turnSourceAccountId: " Work ",
     });
-
     await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token)).resolves.toEqual({
       kind: "agentRuntime",
       agentId: "main",
@@ -99,7 +98,6 @@ describe("agent runtime identity token", () => {
         },
       },
     });
-
     await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token)).resolves.toMatchObject({
       kind: "agentRuntime",
       agentId: "main",
@@ -110,6 +108,45 @@ describe("agent runtime identity token", () => {
           version: 1,
           allow: ["read", "sessions_spawn"],
           deny: ["exec"],
+        },
+      },
+    });
+  });
+
+  it("round-trips a signed session handoff policy", async () => {
+    useTempHome();
+    const runtimeToken = await importRuntimeTokenModule();
+    const token = await runtimeToken.mintAgentRuntimeIdentityToken({
+      agentId: "main",
+      sessionKey: "agent:main:discord:direct:alice",
+      sessionHandoffContext: {
+        inheritedToolPolicy: {
+          version: 1,
+          allow: [" sessions_send ", "read"],
+          deny: ["message"],
+        },
+        requester: {
+          messageProvider: " discord ",
+          senderId: " alice ",
+        },
+      },
+    });
+
+    const [payload] = token.split(".");
+    expect(JSON.parse(Buffer.from(payload ?? "", "base64url").toString("utf8"))).toMatchObject({
+      kind: "agent-runtime-session-handoff",
+    });
+
+    await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token)).resolves.toMatchObject({
+      sessionHandoffContext: {
+        inheritedToolPolicy: {
+          version: 1,
+          allow: ["sessions_send", "read"],
+          deny: ["message"],
+        },
+        requester: {
+          messageProvider: "discord",
+          senderId: "alice",
         },
       },
     });

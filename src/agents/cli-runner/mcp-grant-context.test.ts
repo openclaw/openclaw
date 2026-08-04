@@ -33,6 +33,26 @@ describe("buildCliMcpGrantContext source-reply authority", () => {
     expect(buildGrant().sourceReplyOnly).toBe(true);
   });
 
+  it("retains trusted sessions_send requester facts in the loopback grant", () => {
+    expect(
+      buildGrant({
+        inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
+        trustedSessionHandoff: true,
+        sessionHandoffRequester: { messageProvider: "discord", senderId: "alice" },
+      }),
+    ).toMatchObject({
+      trustedSessionHandoff: true,
+      sessionHandoffRequester: { messageProvider: "discord", senderId: "alice" },
+      cliToolAvailability: { native: [], openClaw: ["message"] },
+    });
+  });
+
+  it("marks an unrestricted CLI capability universe explicitly", () => {
+    expect(buildGrant({ cliToolAvailability: undefined })).toMatchObject({
+      cliToolAvailabilityUnrestricted: true,
+    });
+  });
+
   it.each([
     { label: "the provider", overrides: { messageProvider: undefined } },
     { label: "the destination", overrides: { currentChannelId: undefined } },

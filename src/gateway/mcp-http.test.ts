@@ -1205,6 +1205,14 @@ describe("mcp loopback server", () => {
       sourceReplyDeliveryMode: "message_tool_only",
       sourceReplyOnly: true,
       toolsAllow: ["message"],
+      trustedSessionHandoff: true,
+      sessionHandoffRequester: {
+        messageProvider: "discord",
+        senderId: "bound-user",
+        senderName: "Bound Name",
+        senderUsername: "bound-user",
+      },
+      cliToolAvailability: { native: ["Read"], openClaw: ["message"] },
       taskSuggestionDeliveryMode: "gateway",
       requireExplicitMessageTarget: true,
       senderIsOwner: false,
@@ -1273,7 +1281,12 @@ describe("mcp loopback server", () => {
 
     expect((await sendWithCapture("capture-bound")).status).toBe(200);
     expect((await sendWithCapture("capture-bound", "call")).status).toBe(200);
-    const { runId: _runId, toolsAllow: _toolsAllow, ...resolvedContext } = boundContext;
+    const {
+      runId: _runId,
+      toolsAllow: _toolsAllow,
+      cliToolAvailability: _cliToolAvailability,
+      ...resolvedContext
+    } = boundContext;
     const expectedBoundContext = {
       ...resolvedContext,
       surface: "loopback",
@@ -1281,6 +1294,11 @@ describe("mcp loopback server", () => {
     expect(getScopedToolsCall(0)).toMatchObject(expectedBoundContext);
     expect(getScopedToolsCall(1)).toMatchObject(expectedBoundContext);
     expect(getScopedToolsCall(0).includeNodeExecTool).toBe(true);
+    expect(getScopedToolsCall(0).sessionsSendToolPolicy).toEqual({
+      version: 1,
+      allow: ["read", "message"],
+      deny: [],
+    });
     expect(Array.from(getScopedToolsCall(0).excludeToolNames ?? [])).not.toContain("exec");
     expect(getBeforeToolCallHookInput(0).ctx).toMatchObject({
       agentId: "main",

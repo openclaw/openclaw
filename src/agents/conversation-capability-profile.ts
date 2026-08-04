@@ -7,6 +7,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import type { ChatType } from "../channels/chat-type.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { AgentRuntimeSessionHandoffRequester } from "../gateway/agent-runtime-identity-token.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { SkillSnapshot } from "../skills/types.js";
@@ -23,6 +24,7 @@ import {
 } from "./requester-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
 import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
+import { resolveSessionHandoffTargetToolPolicies } from "./session-handoff-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "./subagent-announce-handoff.js";
 import type { PromptMode } from "./system-prompt.types.js";
 import {
@@ -85,6 +87,10 @@ export type ConversationCapabilityProfileParams = {
   inputProvenance?: InputProvenance;
   /** Consumed in-process completion capability; public callers cannot set this fact. */
   trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
+  /** Verified sessions_send authority; public callers cannot set this fact. */
+  trustedSessionHandoff?: boolean;
+  /** Signed requester facts used only to evaluate target-owned sender restrictions. */
+  sessionHandoffRequester?: AgentRuntimeSessionHandoffRequester;
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */
   scheduledToolPolicy?: ScheduledToolPolicyContext;
 };
@@ -213,7 +219,14 @@ export function resolveConversationCapabilityProfile(
     params.senderIsOwner === true &&
     normalizeMessageChannel(messageProvider ?? params.messageChannel) === INTERNAL_MESSAGE_CHANNEL;
   const subagentSessionKey = params.sandboxSessionKey ?? params.sessionKey;
-  const requesterPolicies = resolveRequesterToolPolicies({
+  const sessionHandoffPolicy =
+    params.trustedSessionHandoff === true &&
+    params.inputProvenance?.kind === "inter_session" &&
+    params.inputProvenance.sourceTool === "sessions_send" &&
+    params.runtimeToolAllowlist
+      ? { allow: params.runtimeToolAllowlist }
+      : undefined;
+  const resolvedRequesterPolicies = resolveRequesterToolPolicies({
     config: params.config,
     sessionKey: params.sessionKey,
     subagentSessionKey,
@@ -233,11 +246,34 @@ export function resolveConversationCapabilityProfile(
     sessionId: params.sessionId,
     modelProvider: params.modelProvider,
     modelId: params.modelId,
-    senderPolicyMode: params.scheduledToolPolicy || isOwnerInternalSession ? "never" : "always",
+    senderPolicyMode:
+      sessionHandoffPolicy || params.scheduledToolPolicy || isOwnerInternalSession
+        ? "never"
+        : "always",
     groupPolicySessionKey: params.scheduledToolPolicy?.ownerSessionKey,
     requireConfiguredGroupAccount: params.scheduledToolPolicy?.mode === "account",
   });
-  const { groupPolicy, senderPolicy, subagentPolicy, inheritedToolPolicy } = requesterPolicies;
+  const handoffRequester = sessionHandoffPolicy ? params.sessionHandoffRequester : undefined;
+  // The signed projection owns source restrictions. The target still evaluates
+  // its current agent and room sender policy from signed requester facts.
+  const handoffTargetPolicies = sessionHandoffPolicy
+    ? resolveSessionHandoffTargetToolPolicies({
+        config: params.config,
+        sessionKey: params.runSessionKey ?? params.sessionKey,
+        agentId: effective.agentId,
+        messageProvider,
+        accountId: params.agentAccountId,
+        groupId: trustedGroup.groupId,
+        groupChannel: trustedGroupChannel,
+        groupSpace: trustedGroupSpace,
+        spawnedBy: params.spawnedBy,
+        requester: handoffRequester,
+      })
+    : undefined;
+  const groupPolicy = handoffTargetPolicies?.groupPolicy ?? resolvedRequesterPolicies.groupPolicy;
+  const senderPolicy =
+    handoffTargetPolicies?.senderPolicy ?? resolvedRequesterPolicies.senderPolicy;
+  const { subagentPolicy, inheritedToolPolicy } = resolvedRequesterPolicies;
   const profilePolicy = resolveToolProfilePolicy(effective.profile);
   const providerProfilePolicy = resolveToolProfilePolicy(effective.providerProfile);
   const configuredOverridePolicies = [
@@ -249,6 +285,7 @@ export function resolveConversationCapabilityProfile(
     senderPolicy,
     params.sandboxToolPolicy,
     subagentPolicy,
+    sessionHandoffPolicy,
   ];
   const runtimeToolPolicy = params.runtimeToolAllowlist
     ? { allow: params.runtimeToolAllowlist }
@@ -268,6 +305,7 @@ export function resolveConversationCapabilityProfile(
     providerProfilePolicy,
     ...configuredOverridePolicies,
     inheritedToolPolicy,
+    sessionHandoffPolicy,
     runtimeToolPolicy,
   ];
   const inheritancePolicies = [
@@ -275,6 +313,7 @@ export function resolveConversationCapabilityProfile(
     providerProfilePolicy,
     ...configuredOverridePolicies,
     inheritedToolPolicy,
+    sessionHandoffPolicy,
     runtimeToolPolicyForInheritance,
   ];
 
@@ -370,8 +409,10 @@ export function resolveConversationCapabilityProfile(
       sandboxPolicy: params.sandboxToolPolicy,
       subagentPolicy,
       inheritedToolPolicy,
-      delegated: requesterPolicies.delegated,
-      requesterPolicySource: requesterPolicies.requesterPolicySource,
+      delegated: sessionHandoffPolicy ? true : resolvedRequesterPolicies.delegated,
+      requesterPolicySource: sessionHandoffPolicy
+        ? "session-handoff"
+        : resolvedRequesterPolicies.requesterPolicySource,
       runtimeToolPolicyForInheritance,
       inheritancePolicies,
       explicitToolAllowlist: collectExplicitAllowlist(explicitToolAllowlistPolicies),

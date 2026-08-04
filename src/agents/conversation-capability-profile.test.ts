@@ -6,6 +6,7 @@ import { createAccountListHelpers } from "../channels/plugins/account-helpers.js
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GroupToolPolicyBySenderConfig } from "../config/types.tools.js";
 import { createAccountCronScheduledToolPolicy } from "../cron/scheduled-tool-policy.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -293,6 +294,20 @@ describe("resolveConversationCapabilityProfile", () => {
       expect(profile.policy.explicitToolOverrideAllowlist).not.toContain("image_generate");
       expect(profile.policy.delegated).toBe(true);
       expect(profile.policy.requesterPolicySource).toBe("persisted-child");
+
+      const handoffProfile = resolveConversationCapabilityProfile({
+        config: { session: { store: storePath } },
+        sessionKey,
+        agentId: "main",
+        runtimeToolAllowlist: ["read", "sessions_send"],
+        trustedSessionHandoff: true,
+        inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
+      });
+      expect(handoffProfile.policy.requesterPolicySource).toBe("session-handoff");
+      expect(handoffProfile.policy.inheritedToolPolicy).toEqual({ allow: ["image_generate"] });
+      expect(handoffProfile.policy.explicitToolAllowlist).toEqual(
+        expect.arrayContaining(["image_generate", "read", "sessions_send"]),
+      );
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
@@ -324,6 +339,107 @@ describe("resolveConversationCapabilityProfile", () => {
     expect(inheritedRuntimeProfile.policy.inheritancePolicies).toContain(
       inheritedRuntimeProfile.policy.runtimeToolPolicyForInheritance,
     );
+  });
+
+  it("intersects a sessions_send projection with exact target agent sender policy", () => {
+    const profile = resolveConversationCapabilityProfile({
+      config: {
+        agents: {
+          list: [
+            {
+              id: "target",
+              tools: { toolsBySender: { "id:alice": { deny: ["exec"] } } },
+            },
+          ],
+        },
+      },
+      agentId: "target",
+      runtimeToolAllowlist: ["exec", "read", "sessions_send"],
+      trustedSessionHandoff: true,
+      sessionHandoffRequester: { messageProvider: "discord", senderId: "alice" },
+      inputProvenance: {
+        kind: "inter_session",
+        sourceTool: "sessions_send",
+      },
+    });
+
+    expect(profile.policy.requesterPolicySource).toBe("session-handoff");
+    expect(profile.policy.senderPolicy).toEqual({ deny: ["exec"] });
+    expect(profile.policy.groupPolicy).toBeUndefined();
+    expect(profile.policy.inheritedToolPolicy).toBeUndefined();
+    expect(profile.policy.explicitToolAllowlist).toContain("read");
+    expect(profile.policy.explicitToolDenylist).toContain("exec");
+  });
+
+  it.each([
+    {
+      label: "exact same-channel sender",
+      requester: { messageProvider: "whatsapp", senderId: "alice" },
+      messageProvider: INTERNAL_MESSAGE_CHANNEL,
+      toolsBySender: {
+        "id:alice": { deny: ["exec"] },
+      } as GroupToolPolicyBySenderConfig,
+    },
+    {
+      label: "wildcard for a cross-channel sender",
+      requester: { messageProvider: "discord", senderId: "alice" },
+      messageProvider: INTERNAL_MESSAGE_CHANNEL,
+      toolsBySender: {
+        "*": { deny: ["exec"] },
+      } as GroupToolPolicyBySenderConfig,
+    },
+  ])(
+    "layers target group $label policy onto a sessions_send projection",
+    ({ requester, messageProvider, toolsBySender }) => {
+      const profile = resolveConversationCapabilityProfile({
+        config: {
+          channels: {
+            whatsapp: { groups: { team: { toolsBySender } } },
+          },
+        },
+        sessionKey: "agent:main:whatsapp:group:team",
+        messageProvider,
+        groupId: "team",
+        runtimeToolAllowlist: ["exec", "read", "sessions_send"],
+        trustedSessionHandoff: true,
+        sessionHandoffRequester: requester,
+        inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
+      });
+
+      expect(profile.policy.senderPolicy).toBeUndefined();
+      expect(profile.policy.groupPolicy).toEqual({ deny: ["exec"] });
+      expect(profile.policy.explicitToolDenylist).toContain("exec");
+    },
+  );
+
+  it("uses the persisted target account for handoff room policy", () => {
+    const profile = resolveConversationCapabilityProfile({
+      config: {
+        channels: {
+          whatsapp: {
+            accounts: {
+              default: { groups: { team: {} } },
+              work: {
+                groups: {
+                  team: { toolsBySender: { "id:alice": { deny: ["exec"] } } },
+                },
+              },
+            },
+          },
+        },
+      },
+      sessionKey: "agent:main:whatsapp:group:team",
+      messageProvider: INTERNAL_MESSAGE_CHANNEL,
+      agentAccountId: "work",
+      groupId: "team",
+      runtimeToolAllowlist: ["exec", "read", "sessions_send"],
+      trustedSessionHandoff: true,
+      sessionHandoffRequester: { messageProvider: "whatsapp", senderId: "alice" },
+      inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
+    });
+
+    expect(profile.policy.groupPolicy).toEqual({ deny: ["exec"] });
+    expect(profile.policy.explicitToolDenylist).toContain("exec");
   });
 
   it("does not classify the conversation as shared from a dropped caller group id", () => {

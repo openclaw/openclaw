@@ -13,6 +13,7 @@ import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { AgentRouteBinding } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { AgentRuntimeSessionHandoffContext } from "../../gateway/agent-runtime-identity-token.js";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -49,6 +50,7 @@ import {
   formatEmbeddedAgentQueueFailureSummary,
   queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunSessionId,
+  resolveEmbeddedAgentQueueTerminalRejection,
 } from "../embedded-agent-runner/runs.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import {
@@ -63,11 +65,13 @@ import {
 } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNonNegativeIntegerParam, readStringParam } from "./common.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import {
   callInProcessGatewayToolWithCreation,
   hasInProcessGatewayToolContext,
 } from "./in-process-gateway.js";
 import { runWithScopedSessionAccess } from "./scoped-session-access.js";
+import { callSessionHandoffAgent } from "./session-handoff-agent-call.js";
 import {
   createSessionVisibilityGuard,
   createAgentToAgentPolicy,
@@ -338,6 +342,8 @@ function shouldFallbackCronRunScopedActiveDelivery(
 
 async function startAgentRun(params: {
   callGateway: GatewayCaller;
+  callAgent: GatewayCaller;
+  restrictiveHandoff: boolean;
   runId: string;
   sendParams: Record<string, unknown>;
   sessionKey: string;
@@ -373,11 +379,25 @@ async function startAgentRun(params: {
         waitForTranscriptCommit: true,
         ...(sourceReplyDeliveryMode ? { sourceReplyDeliveryMode } : {}),
       };
-      let queueOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
-        activeRunSessionId,
-        messageText,
-        queueOptions,
-      );
+      let queueOutcome = params.restrictiveHandoff
+        ? resolveEmbeddedAgentQueueTerminalRejection(activeRunSessionId)
+        : await queueEmbeddedAgentMessageWithOutcomeAsync(
+            activeRunSessionId,
+            messageText,
+            queueOptions,
+          );
+      if (!queueOutcome) {
+        const response = await params.callAgent<{ runId: string }>({
+          method: "agent",
+          params: params.sendParams,
+          timeoutMs: 10_000,
+        });
+        return {
+          ok: true,
+          runId:
+            typeof response?.runId === "string" && response.runId ? response.runId : params.runId,
+        };
+      }
       if (!queueOutcome.queued && queueOutcome.reason === "transcript_commit_wait_unsupported") {
         const bestEffortQueueOptions = { ...queueOptions };
         delete bestEffortQueueOptions.waitForTranscriptCommit;
@@ -392,7 +412,7 @@ async function startAgentRun(params: {
       }
       const fallbackSessionKey = resolveCronRunScopedFallbackSessionKey(params.sessionKey);
       if (fallbackSessionKey && shouldFallbackCronRunScopedActiveDelivery(queueOutcome)) {
-        const response = await params.callGateway<{ runId: string }>({
+        const response = await params.callAgent<{ runId: string }>({
           method: "agent",
           params: {
             ...params.sendParams,
@@ -413,7 +433,7 @@ async function startAgentRun(params: {
         formatEmbeddedAgentQueueFailureSummary(queueOutcome) ?? "active run queue rejected";
       throw new Error(queueSummary);
     }
-    const response = await params.callGateway<{ runId: string }>({
+    const response = await params.callAgent<{ runId: string }>({
       method: "agent",
       params: params.sendParams,
       timeoutMs: 10_000,
@@ -443,6 +463,12 @@ export function createSessionsSendTool(opts?: {
   sandboxed?: boolean;
   config?: OpenClawConfig;
   callGateway?: GatewayCaller;
+  toolPolicy?: AgentRuntimeSessionHandoffContext["inheritedToolPolicy"];
+  requester?: AgentRuntimeSessionHandoffContext["requester"];
+  callAgentWithHandoff?: (
+    request: Parameters<GatewayCaller>[0],
+    context: AgentRuntimeSessionHandoffContext,
+  ) => Promise<unknown>;
 }): AnyAgentTool {
   return {
     label: "Session Send",
@@ -455,6 +481,32 @@ export function createSessionsSendTool(opts?: {
     execute: async (_toolCallId, args) => {
       const params = normalizeSessionsSendArguments(args);
       const gatewayCall = opts?.callGateway ?? callGateway;
+      const authority = getGatewayToolCallerIdentity();
+      const handoffContext = opts?.toolPolicy
+        ? {
+            inheritedToolPolicy: {
+              version: 1 as const,
+              allow: [...opts.toolPolicy.allow],
+              deny: [...opts.toolPolicy.deny],
+            },
+            requester: { ...opts.requester },
+          }
+        : undefined;
+      const agentCall: GatewayCaller = handoffContext
+        ? async <T = Record<string, unknown>>(request: Parameters<GatewayCaller>[0]) => {
+            if (opts?.callAgentWithHandoff) {
+              return (await opts.callAgentWithHandoff(request, handoffContext)) as T;
+            }
+            if (!authority) {
+              throw new Error("sessions_send policy handoff requires trusted caller identity");
+            }
+            return await callSessionHandoffAgent<T>({
+              request,
+              authority,
+              context: handoffContext,
+            });
+          }
+        : gatewayCall;
       const message = readStringParam(params, "message", { required: true });
       const timeoutSeconds = readNonNegativeIntegerParam(params, "timeoutSeconds") ?? 30;
       const { cfg, mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
@@ -925,6 +977,8 @@ export function createSessionsSendTool(opts?: {
                 roundOneReply,
                 waitRunId,
                 notifyRequesterOnWaitFailure,
+                authority,
+                handoffContext,
               }),
             ).catch((err: unknown) => {
               log.warn("sessions_send announce flow admission failed", {
@@ -937,6 +991,8 @@ export function createSessionsSendTool(opts?: {
           if (timeoutSeconds === 0) {
             const start = await startAgentRun({
               callGateway: gatewayCall,
+              callAgent: agentCall,
+              restrictiveHandoff: Boolean(handoffContext),
               runId,
               sendParams,
               sessionKey: displayKey,
@@ -962,6 +1018,8 @@ export function createSessionsSendTool(opts?: {
 
           const start = await startAgentRun({
             callGateway: gatewayCall,
+            callAgent: agentCall,
+            restrictiveHandoff: Boolean(handoffContext),
             runId,
             sendParams,
             sessionKey: displayKey,

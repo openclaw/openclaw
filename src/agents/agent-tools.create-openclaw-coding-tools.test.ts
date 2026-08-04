@@ -1666,6 +1666,63 @@ describe("createOpenClawCodingTools", () => {
     expect(latestCreateOpenClawToolsOptions().agentChannel).toBe("discord");
   });
 
+  it("snapshots sender-scoped denies for sessions_send derived runs", () => {
+    vi.mocked(createOpenClawTools).mockClear();
+
+    const tools = createOpenClawCodingTools({
+      config: {
+        tools: {
+          toolsBySender: {
+            "channel:discord:speaker-1": { deny: ["message"] },
+          },
+        },
+      },
+      messageProvider: "discord",
+      senderId: "speaker-1",
+    });
+    const policy = latestCreateOpenClawToolsOptions().sessionsSendToolPolicy;
+
+    expect(tools.map((tool) => tool.name)).not.toContain("message");
+    expect(policy?.deny).toContain("message");
+    expect(policy?.allow).toContain("sessions_send");
+    expect(policy?.allow).not.toContain("message");
+  });
+
+  it("snapshots unrestricted sources so target-only sender policy can still apply", () => {
+    vi.mocked(createOpenClawTools).mockClear();
+
+    createOpenClawCodingTools({
+      messageProvider: "discord",
+      senderId: "alice",
+    });
+
+    const options = latestCreateOpenClawToolsOptions();
+    expect(options.sessionsSendToolPolicy?.allow).toEqual(
+      expect.arrayContaining(["message", "sessions_send"]),
+    );
+    expect(options.sessionsSendRequester).toEqual({
+      messageProvider: "discord",
+      senderId: "alice",
+    });
+  });
+
+  it("retains the verified requester across chained sessions_send handoffs", () => {
+    vi.mocked(createOpenClawTools).mockClear();
+
+    createOpenClawCodingTools({
+      messageProvider: "internal",
+      runtimeToolAllowlist: ["read", "sessions_send"],
+      trustedSessionHandoff: true,
+      sessionHandoffRequester: { messageProvider: "discord", senderId: "alice" },
+      inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
+    });
+
+    expect(latestCreateOpenClawToolsOptions().sessionsSendRequester).toEqual({
+      messageProvider: "discord",
+      senderId: "alice",
+    });
+  });
+
   it("filters session tools for sub-agent sessions by default", () => {
     const tools = createOpenClawCodingTools({
       sessionKey: "agent:main:subagent:test",
