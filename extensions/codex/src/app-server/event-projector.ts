@@ -1,4 +1,5 @@
 // Codex plugin module implements event projector behavior.
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 import {
   classifyAgentHarnessTerminalOutcome,
   embeddedAgentLog,
