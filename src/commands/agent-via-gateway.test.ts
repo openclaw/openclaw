@@ -1992,6 +1992,14 @@ describe("agentCliCommand", () => {
           message.includes("To extend the CLI deadline: --timeout"),
         ),
       ).toBe(true);
+      expect(
+        mockMessages(runtime.error).some(
+          (message) =>
+            message.includes("openclaw gateway status") &&
+            message.includes("session transcript") &&
+            message.includes("before retrying or rerunning with --local"),
+        ),
+      ).toBe(true);
     });
   });
 
@@ -2024,6 +2032,14 @@ describe("agentCliCommand", () => {
           message.includes(
             "Gateway agent connection closed after accepting run accepted-run-closed",
           ),
+        ),
+      ).toBe(true);
+      expect(
+        mockMessages(runtime.error).some(
+          (message) =>
+            message.includes("openclaw gateway status") &&
+            message.includes("session transcript") &&
+            message.includes("before retrying or rerunning with --local"),
         ),
       ).toBe(true);
     });

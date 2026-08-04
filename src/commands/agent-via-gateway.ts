@@ -1071,7 +1071,7 @@ export async function agentCliCommand(
             `Gateway agent ${reasonText} after accepting run ${err.acceptedRunId}. ` +
               `The run is still executing on the Gateway (default 48-hour deadline). ` +
               `To extend the CLI deadline: --timeout <seconds>. ` +
-              `To re-attach: --run-id ${err.acceptedRunId}`,
+              `Check \`openclaw gateway status\` and the session transcript before retrying or rerunning with --local, so the turn does not execute twice.`,
           );
         }
         return result;
