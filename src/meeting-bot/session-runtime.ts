@@ -9,6 +9,7 @@ import { MeetingSessionCleanupTracker } from "./session-cleanup-tracker.js";
 import { MeetingSessionDurableTranscripts } from "./session-durable-transcripts.js";
 import { MeetingSessionJoinLock } from "./session-join-lock.js";
 import {
+  getMeetingSessionRuntimeHealthRefresh,
   registerMeetingSessionRuntimeProbeAccess,
   type MeetingBrowserHealthRefreshOutcome,
   type MeetingSessionProbeJoinResult,
@@ -94,11 +95,10 @@ export type MeetingSessionRuntimeOptions<
     context: MeetingSessionRuntimeJoinContext<TSession, TTransport, TMode, THealth, TTab>;
   }): Promise<{ delegatedSpoken?: boolean }>;
   releaseBrowserTab(session: TSession): Promise<boolean | undefined>;
-  /** Return a closed outcome when browser recovery can establish manual-action freshness. */
   refreshBrowserHealth(
     session: TSession,
     options?: { force?: boolean; readOnly?: boolean },
-  ): Promise<MeetingBrowserHealthRefreshResult>;
+  ): Promise<void>;
   refreshStatus(session: TSession): Promise<void>;
   refreshReusableSession(
     session: TSession,
@@ -409,9 +409,14 @@ export class MeetingSessionRuntime<
       this.refreshSpeechReadiness(session);
       return { browserHealthChecked: false, manualActionIsAuthoritative: false };
     }
-    const refreshOutcome = normalizeBrowserHealthRefreshOutcome(
-      await this.options.refreshBrowserHealth(session, options),
-    );
+    const refreshOutcome = await (getMeetingSessionRuntimeHealthRefresh<TSession>(this)?.(
+      session,
+      options,
+    ) ??
+      (async () =>
+        normalizeBrowserHealthRefreshOutcome(
+          await this.options.refreshBrowserHealth(session, options),
+        ))());
     this.refreshSpeechReadiness(session);
     return refreshOutcome;
   }

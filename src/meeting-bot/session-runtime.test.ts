@@ -6,6 +6,7 @@ import { TranscriptsStore } from "../transcripts/store.js";
 import { createMeetingSession } from "./session-factory.js";
 import {
   getMeetingSessionRuntimeProbeAccess,
+  registerMeetingSessionRuntimeHealthRefresh,
   type MeetingBrowserHealthRefreshOutcome,
 } from "./session-runtime-probes.js";
 import { MeetingSessionRuntime, type MeetingSessionRuntimeJoinContext } from "./session-runtime.js";
@@ -210,7 +211,9 @@ function createTestRuntime(params: {
     },
     joinTransport: (input) => params.joinTransport(input),
     releaseBrowserTab: (session) => params.releaseBrowserTab(session),
-    refreshBrowserHealth: async (session) => await params.refreshBrowserHealth?.(session),
+    refreshBrowserHealth: async (session) => {
+      await params.refreshBrowserHealth?.(session);
+    },
     refreshStatus: async () => {},
     refreshReusableSession: async (session, request, resolved) =>
       await params.refreshReusableSession?.(session, request, resolved),
@@ -226,6 +229,17 @@ function createTestRuntime(params: {
           },
         }
       : {}),
+  });
+  registerMeetingSessionRuntimeHealthRefresh(runtime, async (session: TestSession) => {
+    const result = await params.refreshBrowserHealth?.(session);
+    if (result !== null && typeof result === "object") {
+      return result;
+    }
+    const browserHealthChecked = result === true;
+    return {
+      browserHealthChecked,
+      manualActionIsAuthoritative: browserHealthChecked,
+    };
   });
   return { createdSessions, runtime };
 }

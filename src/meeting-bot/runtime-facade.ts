@@ -22,7 +22,10 @@ import type {
 import type { MeetingProbeContext } from "./runtime-probes.js";
 import { createMeetingSession } from "./session-factory.js";
 import {
+  getMeetingSessionRuntimeRecoveryFailure,
   getMeetingSessionRuntimeProbeAccess,
+  registerMeetingSessionRuntimeRecoveryFailure,
+  registerMeetingSessionRuntimeHealthRefresh,
   type MeetingBrowserHealthRefreshOutcome,
 } from "./session-runtime-probes.js";
 import {
@@ -136,8 +139,9 @@ export function createMeetingRuntimeFacade<
         joinTransport: async ({ request, session, context }) =>
           await this.#joinTransport(request, session, context),
         releaseBrowserTab: async (session) => await this.#releaseBrowserTab(session),
-        refreshBrowserHealth: async (session, refreshOptions) =>
-          await this.#refreshBrowserHealth(session, refreshOptions),
+        refreshBrowserHealth: async (session, refreshOptions) => {
+          await this.#refreshBrowserHealth(session, refreshOptions);
+        },
         refreshStatus: async (session) => await this.#refreshStatus(session),
         refreshReusableSession: async (session, request) =>
           await options.hooks?.refreshReusableSession?.(session, request, this.#hookContext()),
@@ -150,6 +154,20 @@ export function createMeetingRuntimeFacade<
           ...options.messages.durableTranscripts,
         },
       });
+      registerMeetingSessionRuntimeHealthRefresh(
+        this.#sessions,
+        async (session, refreshOptions) =>
+          await this.#refreshBrowserHealth(session as Session, refreshOptions),
+      );
+      const recordBrowserRecoveryFailure = options.hooks?.recordBrowserRecoveryFailure as
+        | ((
+            session: Session,
+            failure: { kind: "missing" | "error"; message: string },
+          ) => "authoritative" | void)
+        | undefined;
+      if (recordBrowserRecoveryFailure) {
+        registerMeetingSessionRuntimeRecoveryFailure(this.#sessions, recordBrowserRecoveryFailure);
+      }
     }
 
     list(): Session[] {
@@ -457,7 +475,7 @@ export function createMeetingRuntimeFacade<
           return { browserHealthChecked: true, manualActionIsAuthoritative: true };
         } else if (session.chrome) {
           const manualActionIsAuthoritative =
-            options.hooks?.recordBrowserRecoveryFailure?.(session, {
+            getMeetingSessionRuntimeRecoveryFailure<Session>(this.#sessions)?.(session, {
               kind: "missing",
               message: result.message,
             }) === "authoritative";
@@ -471,11 +489,13 @@ export function createMeetingRuntimeFacade<
         const formattedError = formatErrorMessage(error);
         const message = options.messages.browserReadinessFailed?.(formattedError) ?? formattedError;
         let manualActionIsAuthoritative = false;
-        if (options.hooks?.recordBrowserRecoveryFailure) {
+        const recordBrowserRecoveryFailure = getMeetingSessionRuntimeRecoveryFailure<Session>(
+          this.#sessions,
+        );
+        if (recordBrowserRecoveryFailure) {
           this.params.logger.debug?.(`${options.platform.logScope} ${message}`);
           manualActionIsAuthoritative =
-            options.hooks.recordBrowserRecoveryFailure(session, { kind: "error", message }) ===
-            "authoritative";
+            recordBrowserRecoveryFailure(session, { kind: "error", message }) === "authoritative";
         } else {
           this.params.logger.debug?.(
             `${options.platform.logScope} browser readiness refresh ignored: ${formatErrorMessage(error)}`,
