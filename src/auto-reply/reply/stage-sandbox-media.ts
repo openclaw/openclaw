@@ -88,6 +88,9 @@ export async function stageSandboxMedia(params: {
     !sandbox && !ctx.MediaRemoteHost
       ? path.join("media", "inbound", `openclaw-staged-${crypto.randomUUID()}`)
       : undefined;
+  if (hostWorkspaceStagingDir) {
+    await pruneEmptyStagedMediaDirs(path.join(effectiveWorkspaceDir, "media", "inbound"));
+  }
 
   for (const entry of pathEntries) {
     const source = await resolveStageableMediaSource(entry.path);
@@ -229,6 +232,32 @@ function applyStagedMediaContext(ctx: MsgContext, media: MediaFact[]): void {
 
 function toPosixRelativePath(filePath: string): string {
   return filePath.split(path.sep).join(path.posix.sep);
+}
+
+// Host-mode staging dirs are one-shot temp artifacts: their files are consumed
+// during the run, but the UUID directory can outlive them. Prune empty leftovers
+// old enough that no in-flight run is still populating them.
+const STAGED_MEDIA_PRUNE_MIN_AGE_MS = 60 * 60 * 1000;
+
+async function pruneEmptyStagedMediaDirs(inboundMediaDir: string): Promise<void> {
+  const entries = await fs.readdir(inboundMediaDir, { withFileTypes: true }).catch(() => []);
+  const cutoffMs = Date.now() - STAGED_MEDIA_PRUNE_MIN_AGE_MS;
+  await Promise.all(
+    entries.map(async (entry) => {
+      if (!entry.isDirectory() || !/^openclaw-staged-[0-9a-f-]+$/.test(entry.name)) {
+        return;
+      }
+      const dirPath = path.join(inboundMediaDir, entry.name);
+      const stat = await fs.lstat(dirPath).catch(() => null);
+      if (!stat?.isDirectory() || stat.mtimeMs > cutoffMs) {
+        return;
+      }
+      const contents = await fs.readdir(dirPath).catch(() => null);
+      if (contents?.length === 0) {
+        await fs.rm(dirPath, { recursive: true, force: true }).catch(() => {});
+      }
+    }),
+  );
 }
 
 async function resolveStageableMediaSource(value: string): Promise<StageableMediaSource | null> {
