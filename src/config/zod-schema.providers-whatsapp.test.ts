@@ -21,4 +21,44 @@ describe("WhatsAppConfigSchema", () => {
       WhatsAppConfigSchema.parse({ pluginHooks: { messageReceived: false } }).pluginHooks,
     ).toEqual({ messageReceived: false });
   });
+
+  it("accepts channel-level pluginHooks.pollVoteReceived", () => {
+    const config = {
+      pluginHooks: {
+        pollVoteReceived: true,
+      },
+    };
+
+    const result = WhatsAppConfigSchema.safeParse(config);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.pluginHooks?.pollVoteReceived).toBe(true);
+    }
+  });
+
+  it("accepts account-level pluginHooks.pollVoteReceived", () => {
+    const config = {
+      accounts: {
+        work: {
+          pluginHooks: {
+            pollVoteReceived: true,
+          },
+        },
+      },
+    };
+
+    const result = WhatsAppConfigSchema.safeParse(config);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.accounts?.work?.pluginHooks?.pollVoteReceived).toBe(true);
+    }
+  });
+
+  it("defaults pluginHooks.pollVoteReceived to undefined (disabled) when omitted", () => {
+    const result = WhatsAppConfigSchema.safeParse({});
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.pluginHooks?.pollVoteReceived).toBeUndefined();
+    }
+  });
 });

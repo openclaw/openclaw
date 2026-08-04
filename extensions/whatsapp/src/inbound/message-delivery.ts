@@ -36,6 +36,10 @@ import {
   type WhatsAppNormalizedInboundMessage,
 } from "./message-normalization.js";
 import { addWhatsAppOutboundMentionsToContent } from "./outbound-mentions.js";
+import {
+  extractWhatsAppPollUpdateMessage,
+  maybeEmitWhatsAppPollVoteReceivedHook,
+} from "./poll-votes.js";
 import { normalizeWhatsAppSendResult } from "./send-result.js";
 import type { WhatsAppAttachedSocketSession } from "./socket-session.js";
 import type { WebInboundCallbackMessage } from "./types.js";
@@ -110,6 +114,7 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
     resolveInboundJid,
     resolveReactionTargetJids,
     rememberBaileysMessage,
+    getCachedBaileysMessage,
     assertCanSendToJid,
     sendTrackedMessage,
     socketOperations,
@@ -483,6 +488,29 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
     }
     for (const msg of upsert.messages ?? []) {
       rememberBaileysMessage(msg.key?.remoteJid, msg.key?.id, msg.message);
+      // Ownership comes from an accepted OpenClaw send, not a fromMe echo;
+      // linked devices can create polls without passing through send.ts.
+      if (extractWhatsAppPollUpdateMessage(msg.message)) {
+        if (msg.key) {
+          try {
+            maybeEmitWhatsAppPollVoteReceivedHook({
+              cfg: options.loadConfig?.() ?? options.cfg,
+              accountId: options.accountId,
+              message: msg.message,
+              key: msg.key,
+              getCachedMessage: getCachedBaileysMessage,
+              selfJid: self.jid,
+              selfLid: self.lid,
+            });
+          } catch (error) {
+            inboundLogger.error(
+              { error: formatError(error) },
+              "whatsapp poll_vote_received hook failed synchronously",
+            );
+          }
+        }
+        continue;
+      }
 
       const receiveOrder = nextReceiveOrder++;
       let approvalReactionResolved = false;
