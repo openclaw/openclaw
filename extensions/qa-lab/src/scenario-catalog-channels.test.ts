@@ -82,6 +82,29 @@ describe("qa scenario catalog channel contracts", () => {
     expect(flow).not.toContain('"call":"runAgentPrompt"');
   });
 
+  it("binds current-source thread receipt proof to the QA Gateway lane", () => {
+    const scenario = requireFlowScenario(
+      readQaScenarioById("thread-reply-current-source-delivery"),
+    );
+    const flow = JSON.stringify(scenario.execution.flow);
+
+    expect(scenario.execution.channel).toBe("qa-channel");
+    expect(scenario.gatewayConfigPatch).toMatchObject({
+      messages: { groupChat: { visibleReplies: "automatic" } },
+      tools: { alsoAllow: ["message"] },
+      agents: { entries: { qa: { tools: { alsoAllow: ["message"] } } } },
+    });
+    expect(scenario.execution.config).toMatchObject({ duplicateWindowMs: 2000 });
+    expect(flow).toContain("request.plannedToolArgs?.action === 'thread-reply'");
+    expect(flow).toContain("readSessionTranscriptSummary");
+    expect(flow).toContain("summary.currentSourceToolDeliveries?.find");
+    expect(flow).toContain("turnOutbound.length === 1");
+    expect(flow).toContain("divergentOutbound.length === 2");
+    expect(flow).toContain("return messages.length === 2 ? messages : undefined");
+    expect(flow).toContain("QA-THREAD-RECEIPT-TOOL-OK");
+    expect(flow).toContain("QA-THREAD-RECEIPT-FINAL-OK");
+  });
+
   it("marks live transport modules as live-driver-only", () => {
     for (const scenarioId of [
       "matrix-approval-exec-metadata-single-event",

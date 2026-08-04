@@ -187,6 +187,7 @@ function resolveRuntimeDiscordMessageActions() {
 }
 
 const discordMessageActions = {
+  messageActionTargetAliases: discordMessageActionsImpl.messageActionTargetAliases,
   resolveExecutionMode: (
     ctx: Parameters<NonNullable<ChannelMessageActionAdapter["resolveExecutionMode"]>>[0],
   ) =>

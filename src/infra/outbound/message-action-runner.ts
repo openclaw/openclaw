@@ -129,6 +129,7 @@ import {
   isCurrentSourceReplyActionName,
   isDeliveredCurrentSourceReply,
   isDeliveredCurrentSourceReplyAction,
+  isThreadPlacementSourceReplyActionName,
   reconcileTerminalSourceReplyDelivery,
 } from "./source-reply-mirror.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
@@ -296,12 +297,19 @@ function markDeliveredCurrentSourceReply<T extends MessageActionRunResult>(
 ): T {
   // Current-source identity comes from the authorized route and delivery receipt,
   // not the reply mode; automatic runs also use this marker to avoid false fallbacks.
-  // Reply-type actions and polls are visible source replies too: leaving them
-  // unmarked made dispatch send the no-visible-reply fallback after a delivered
-  // reply or poll.
-  const isReplyActionResult =
+  // Reply-type actions, thread replies, and polls are visible source replies too:
+  // leaving them unmarked made dispatch send the no-visible-reply fallback after a
+  // delivered reply, thread reply, or poll.
+  const isMessageIdReplyActionResult =
     result.kind === "action" && isCurrentSourceReplyActionName(result.action);
-  if (result.kind !== "send" && result.kind !== "poll" && !isReplyActionResult) {
+  const isThreadPlacementReplyActionResult =
+    result.kind === "action" && isThreadPlacementSourceReplyActionName(result.action);
+  if (
+    result.kind !== "send" &&
+    result.kind !== "poll" &&
+    !isMessageIdReplyActionResult &&
+    !isThreadPlacementReplyActionResult
+  ) {
     return result;
   }
   const authorization = params.input.messageActionAuthorization;
@@ -309,7 +317,12 @@ function markDeliveredCurrentSourceReply<T extends MessageActionRunResult>(
     return result;
   }
   const mirrorParams = {
-    action: isReplyActionResult ? result.action : result.kind === "poll" ? "poll" : "send",
+    action:
+      isMessageIdReplyActionResult || isThreadPlacementReplyActionResult
+        ? result.action
+        : result.kind === "poll"
+          ? "poll"
+          : "send",
     channel: params.channel,
     actionParams: params.actionParams,
     cfg: params.cfg,
@@ -323,7 +336,7 @@ function markDeliveredCurrentSourceReply<T extends MessageActionRunResult>(
     replyToIsExplicit: params.replyToIsExplicit,
   };
   if (
-    isReplyActionResult
+    isMessageIdReplyActionResult
       ? !isDeliveredCurrentSourceReplyAction(mirrorParams)
       : !isDeliveredCurrentSourceReply(mirrorParams)
   ) {

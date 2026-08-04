@@ -108,6 +108,7 @@ const mocks = vi.hoisted(() => ({
   isCurrentSourceReplyActionName: vi.fn(() => false),
   isDeliveredCurrentSourceReply: vi.fn(() => false),
   isDeliveredCurrentSourceReplyAction: vi.fn(() => false),
+  isThreadPlacementSourceReplyActionName: vi.fn(() => false),
   reconcileTerminalSourceReplyDelivery: vi.fn(),
 }));
 
@@ -136,6 +137,7 @@ vi.mock("./source-reply-mirror.js", () => ({
   isCurrentSourceReplyActionName: mocks.isCurrentSourceReplyActionName,
   isDeliveredCurrentSourceReply: mocks.isDeliveredCurrentSourceReply,
   isDeliveredCurrentSourceReplyAction: mocks.isDeliveredCurrentSourceReplyAction,
+  isThreadPlacementSourceReplyActionName: mocks.isThreadPlacementSourceReplyActionName,
   reconcileTerminalSourceReplyDelivery: mocks.reconcileTerminalSourceReplyDelivery,
 }));
 

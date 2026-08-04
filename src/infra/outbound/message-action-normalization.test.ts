@@ -423,4 +423,38 @@ describe("normalizeMessageActionInput", () => {
       }),
     ).toThrow(/conflicting target and delivery alias/);
   });
+
+  it.each([
+    { target: "channel:parent" },
+    { to: "channel:parent" },
+    { channelId: "channel:parent" },
+  ])("preserves a parent target when a thread alias defers to it", (args) => {
+    const normalized = normalizeMessageActionInput({
+      action: "thread-reply",
+      args: {
+        channel: "forum",
+        threadId: "thread-1",
+        ...args,
+      },
+      targetAliasSpec: {
+        aliases: ["threadId"],
+        deliveryTargetAliases: ["threadId"],
+        resolveDeliveryTarget: ({ args: actionArgs }) => {
+          if (actionArgs.target || actionArgs.to || actionArgs.channelId) {
+            return undefined;
+          }
+          return typeof actionArgs.threadId === "string"
+            ? `channel:${actionArgs.threadId}`
+            : undefined;
+        },
+      },
+    });
+
+    expect(normalized).toMatchObject({
+      channel: "forum",
+      target: "channel:parent",
+      to: "channel:parent",
+      threadId: "thread-1",
+    });
+  });
 });

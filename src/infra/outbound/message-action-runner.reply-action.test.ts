@@ -19,7 +19,38 @@ const testchatConfig = {
 
 const CITATION_MARKED_MESSAGE = "Ayutthaya Thai is my pick. citeturn2search9turn2search6";
 
-function createReplyActionPlugin(handleAction: ChannelActionHandler): ChannelPlugin {
+function createReplyActionPlugin(
+  handleAction: ChannelActionHandler,
+  options?: { threadAlias?: boolean },
+): ChannelPlugin {
+  const messageActionTargetAliases =
+    options?.threadAlias === false
+      ? undefined
+      : {
+          "thread-reply": {
+            aliases: ["threadId"],
+            deliveryTargetAliases: ["threadId"],
+            resolveDeliveryTarget: ({ args }: { args: Record<string, unknown> }) =>
+              typeof args.threadId === "string" && args.threadId.trim()
+                ? `channel:${args.threadId.trim()}`
+                : undefined,
+            matchesCurrentConversation: ({
+              args,
+              toolContext,
+            }: {
+              args: Record<string, unknown>;
+              toolContext: { currentChannelId?: string; currentMessagingTarget?: string };
+            }) => {
+              const threadId = typeof args.threadId === "string" ? args.threadId.trim() : "";
+              return (
+                Boolean(threadId) &&
+                [toolContext.currentChannelId, toolContext.currentMessagingTarget].some(
+                  (target) => target === threadId || target === `channel:${threadId}`,
+                )
+              );
+            },
+          },
+        };
   return {
     id: "testchat",
     meta: {
@@ -45,22 +76,35 @@ function createReplyActionPlugin(handleAction: ChannelActionHandler): ChannelPlu
       },
     },
     actions: {
-      describeMessageTool: () => ({ actions: ["reply", "poll"] }),
-      supportsAction: ({ action }) => action === "reply" || action === "poll",
+      describeMessageTool: () => ({ actions: ["reply", "poll", "thread-reply"] }),
+      supportsAction: ({ action }) =>
+        action === "reply" || action === "poll" || action === "thread-reply",
+      ...(messageActionTargetAliases ? { messageActionTargetAliases } : {}),
       handleAction,
     },
   };
 }
 
-function registerReplyPlugin() {
-  const payload = { ok: true, messageId: "m-reply-1", repliedTo: "platform-guid-1" };
+function registerReplyPlugin(
+  payload: Record<string, unknown> = {
+    ok: true,
+    messageId: "m-reply-1",
+    repliedTo: "platform-guid-1",
+  },
+  options?: { threadAlias?: boolean },
+) {
   const handleAction = vi.fn(async () => ({
     content: [{ type: "text" as const, text: JSON.stringify(payload) }],
     details: payload,
   }));
   setActivePluginRegistry(
     createTestRegistry([
-      { pluginId: "testchat", source: "test", plugin: createReplyActionPlugin(handleAction) },
+      {
+        pluginId: "testchat",
+        source: "test",
+        origin: "bundled",
+        plugin: createReplyActionPlugin(handleAction, options),
+      },
     ]),
   );
   return handleAction;
@@ -121,6 +165,34 @@ async function runPollAction(params: { to: string }) {
       pollQuestion: "Preferred default?",
       pollOption: ["Tell me right away", "Only important"],
     },
+    toolContext,
+    messageActionAuthorization: {
+      requesterAccountId: "default",
+      toolContext,
+    },
+    sessionKey: "agent:main:testchat:direct:user-1",
+    defaultAccountId: "default",
+    sourceReplyDeliveryMode: "message_tool_only",
+    dryRun: false,
+  });
+}
+
+async function runThreadReplyAction(params: {
+  actionParams: Record<string, unknown>;
+  currentChannelId?: string;
+  currentMessageId?: string;
+  currentThreadTs?: string;
+}) {
+  const toolContext = {
+    currentChannelProvider: "testchat" as const,
+    currentChannelId: params.currentChannelId ?? "direct:user-1",
+    ...(params.currentMessageId !== undefined ? { currentMessageId: params.currentMessageId } : {}),
+    ...(params.currentThreadTs !== undefined ? { currentThreadTs: params.currentThreadTs } : {}),
+  };
+  return await runMessageAction({
+    cfg: testchatConfig,
+    action: "thread-reply",
+    params: { channel: "testchat", ...params.actionParams },
     toolContext,
     messageActionAuthorization: {
       requesterAccountId: "default",
@@ -216,5 +288,80 @@ describe("runMessageAction reply-type plugin actions", () => {
     const result = await runPollAction({ to: "direct:someone-else" });
 
     expect((result.payload as { sourceReplyRoute?: unknown }).sourceReplyRoute).toBeUndefined();
+  });
+
+  it("marks a bundled owner-proven thread reply as a current-source delivery", async () => {
+    registerReplyPlugin();
+
+    const result = await runThreadReplyAction({
+      actionParams: { threadId: "1783", message: "visible thread reply" },
+      currentChannelId: "channel:1783",
+    });
+
+    expect(result.kind).toBe("action");
+    expect(result.payload).toMatchObject({ sourceReplyRoute: "current-source" });
+    const details = "toolResult" in result ? result.toolResult?.details : undefined;
+    expect(details).toMatchObject({ sourceReplyRoute: "current-source" });
+  });
+
+  it("leaves owner-rejected thread replies unmarked", async () => {
+    registerReplyPlugin();
+
+    const result = await runThreadReplyAction({
+      actionParams: { threadId: "999", message: "visible thread reply" },
+      currentChannelId: "channel:1783",
+    });
+
+    expect((result.payload as { sourceReplyRoute?: unknown }).sourceReplyRoute).toBeUndefined();
+  });
+
+  it("leaves owner-matched thread replies unmarked after an explicit delivery failure", async () => {
+    registerReplyPlugin({ ok: false, error: "delivery failed" });
+
+    const result = await runThreadReplyAction({
+      actionParams: { threadId: "1783", message: "visible thread reply" },
+      currentChannelId: "channel:1783",
+    });
+
+    expect((result.payload as { sourceReplyRoute?: unknown }).sourceReplyRoute).toBeUndefined();
+  });
+
+  it("trusts a contradictory delivery receipt over the planned owner target", async () => {
+    registerReplyPlugin({
+      ok: true,
+      messageId: "om_reply",
+      receipt: { threadId: "other-thread" },
+    });
+
+    const result = await runThreadReplyAction({
+      actionParams: { threadId: "1783", message: "visible thread reply" },
+      currentChannelId: "channel:1783",
+      currentThreadTs: "1783",
+    });
+
+    expect((result.payload as { sourceReplyRoute?: unknown }).sourceReplyRoute).toBeUndefined();
+  });
+
+  it("marks a receipt-proven message-thread reply as a current-source delivery", async () => {
+    registerReplyPlugin(
+      {
+        ok: true,
+        messageId: "om_reply",
+        receipt: { replyToId: "om_inbound" },
+      },
+      { threadAlias: false },
+    );
+
+    const result = await runThreadReplyAction({
+      actionParams: {
+        to: "direct:user-1",
+        messageId: "om_inbound",
+        message: "visible thread reply",
+      },
+      currentMessageId: "om_inbound",
+      currentThreadTs: "om_root",
+    });
+
+    expect(result.payload).toMatchObject({ sourceReplyRoute: "current-source" });
   });
 });

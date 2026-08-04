@@ -1,5 +1,6 @@
 // Qa Channel plugin module implements channel actions behavior.
 import { jsonResult, readStringParam } from "openclaw/plugin-sdk/channel-actions";
+import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { Type } from "typebox";
 import { resolveQaChannelAccount } from "./accounts.js";
@@ -16,6 +17,7 @@ import {
   sendQaBusMessage,
   type QaBusMessage,
 } from "./bus-client.js";
+import { QA_CHANNEL_ID } from "./channel-base.js";
 import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "./runtime-api.js";
 import type { CoreConfig } from "./types.js";
 
@@ -142,7 +144,7 @@ export const qaChannelMessageActions: ChannelMessageActionAdapter = {
     if (action === "sendMessage") {
       return extractToolSend(args, "sendMessage") ?? null;
     }
-    if (action === "threadReply") {
+    if (action === "thread-reply") {
       const channelId = typeof args.channelId === "string" ? args.channelId.trim() : "";
       const threadId = typeof args.threadId === "string" ? args.threadId.trim() : "";
       return channelId && threadId ? { to: `thread:${channelId}/${threadId}` } : null;
@@ -221,22 +223,33 @@ export const qaChannelMessageActions: ChannelMessageActionAdapter = {
         });
       }
       case "thread-reply": {
-        const channelId = readStringParam(params, "channelId");
-        const threadId = readStringParam(params, "threadId");
-        const text = readStringParam(params, "text");
-        if (!channelId || !threadId || !text) {
-          throw new Error("qa-channel thread-reply requires channelId, threadId, and text");
+        const target = readQaMessageTarget(params, action);
+        const threadId = target.threadId;
+        const text = readQaSendText(params);
+        if (!threadId || !text) {
+          throw new Error("qa-channel thread-reply requires a threaded target and message/text");
         }
         const { message } = await sendQaBusMessage({
           baseUrl,
           accountId: account.accountId,
-          to: `thread:${channelId}/${threadId}`,
+          to: buildQaTarget({
+            chatType: target.conversationKind,
+            conversationId: target.conversationId,
+            threadId,
+          }),
           text,
           senderId: account.botUserId,
           senderName: account.botDisplayName,
           threadId,
         });
-        return jsonResult({ message });
+        return jsonResult({
+          message,
+          receipt: createMessageReceiptFromOutboundResults({
+            results: [{ channel: QA_CHANNEL_ID, messageId: message.id }],
+            threadId,
+            kind: "text",
+          }),
+        });
       }
       case "react": {
         const messageId = readStringParam(params, "messageId");

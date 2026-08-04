@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  beginTerminalSourceReplyDelivery,
   isDeliveredCurrentSourceReply,
+  mirrorDeliveredSourceReplyToTranscript,
   reconcileTerminalSourceReplyDelivery,
 } from "./source-reply-mirror.js";
 
@@ -12,6 +14,9 @@ const channelPluginMocks = vi.hoisted(() => ({
   getChannelPlugin: vi.fn(),
   getLoadedChannelPlugin: vi.fn(),
 }));
+const sessionsMocks = vi.hoisted(() => ({
+  appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true })),
+}));
 
 vi.mock("../../config/sessions/restart-recovery-receipt.js", () => ({
   beginRestartRecoveryTerminalDelivery: vi.fn(),
@@ -19,6 +24,7 @@ vi.mock("../../config/sessions/restart-recovery-receipt.js", () => ({
   completeRestartRecoveryTerminalDelivery: receiptMocks.complete,
 }));
 vi.mock("../../channels/plugins/index.js", () => channelPluginMocks);
+vi.mock("../../config/sessions.js", () => sessionsMocks);
 
 describe("reconcileTerminalSourceReplyDelivery", () => {
   const receipt = {
@@ -99,5 +105,158 @@ describe("isDeliveredCurrentSourceReply", () => {
         deliveredPayload: { receipt: { threadId: "spaces/AAA" } },
       }),
     ).toBe(false);
+  });
+
+  it("matches a send receipt anchored to the current inbound thread message", () => {
+    expect(
+      isDeliveredCurrentSourceReply({
+        action: "send",
+        channel: "feishu",
+        actionParams: { target: "oc_group", message: "topic reply" },
+        cfg: {},
+        sessionKey: "agent:main:feishu:group:oc_group:topic:om_root",
+        toolContext: {
+          currentChannelProvider: "feishu",
+          currentChannelId: "oc_group",
+          currentThreadTs: "om_root",
+          currentMessageId: "om_inbound",
+        },
+        deliveredPayload: { receipt: { replyToId: "om_inbound" } },
+      }),
+    ).toBe(true);
+  });
+
+  it.each([
+    {
+      name: "current thread root",
+      receipt: { replyToId: "om_root" },
+      toolContext: {
+        currentChannelProvider: "testchat" as const,
+        currentChannelId: "oc_group",
+        currentThreadTs: "om_root",
+        currentMessageId: "om_inbound",
+      },
+      expected: true,
+    },
+    {
+      name: "current inbound message",
+      receipt: { replyToId: "om_inbound" },
+      toolContext: {
+        currentChannelProvider: "testchat" as const,
+        currentChannelId: "oc_group",
+        currentThreadTs: "om_root",
+        currentMessageId: "om_inbound",
+      },
+      expected: true,
+    },
+    {
+      name: "another message",
+      receipt: { replyToId: "om_other" },
+      toolContext: {
+        currentChannelProvider: "testchat" as const,
+        currentChannelId: "oc_group",
+        currentThreadTs: "om_root",
+        currentMessageId: "om_inbound",
+      },
+      expected: false,
+    },
+    {
+      name: "conflicting native thread",
+      receipt: { threadId: "other-thread", replyToId: "om_inbound" },
+      toolContext: {
+        currentChannelProvider: "testchat" as const,
+        currentChannelId: "oc_group",
+        currentThreadTs: "om_root",
+        currentMessageId: "om_inbound",
+      },
+      expected: false,
+    },
+  ])(
+    "uses a canonical thread-reply receipt for the $name",
+    ({ receipt, toolContext, expected }) => {
+      expect(
+        isDeliveredCurrentSourceReply({
+          action: "thread-reply",
+          channel: "testchat",
+          actionParams: {
+            to: "oc_group",
+            messageId: "om_inbound",
+            message: "visible thread reply",
+          },
+          cfg: {},
+          sessionKey: "agent:main:testchat:group:oc_group",
+          toolContext,
+          deliveredPayload: { receipt },
+        }),
+      ).toBe(expected);
+    },
+  );
+
+  it("fails closed when a thread-reply has neither owner proof nor a canonical receipt", () => {
+    expect(
+      isDeliveredCurrentSourceReply({
+        action: "thread-reply",
+        channel: "testchat",
+        actionParams: { to: "direct:user-1", message: "visible thread reply" },
+        cfg: {},
+        sessionKey: "agent:main:testchat:direct:user-1",
+        toolContext: {
+          currentChannelProvider: "testchat",
+          currentChannelId: "direct:user-1",
+        },
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("mirrorDeliveredSourceReplyToTranscript", () => {
+  beforeEach(() => {
+    sessionsMocks.appendAssistantMessageToSessionTranscript.mockClear();
+  });
+
+  // Regression for the scope violation flagged in review: widening the marker-only
+  // `isDeliveredCurrentSourceReply` target match to include `thread-reply` must not
+  // also widen this shared `isCurrentSourceConversation` gate, since thread-reply's
+  // `message` param does carry mirrorable text (see handle-action.guild-admin.ts).
+  it("does not mirror a thread-reply delivery, even to the current conversation", async () => {
+    const mirrored = await mirrorDeliveredSourceReplyToTranscript({
+      action: "thread-reply",
+      channel: "testchat",
+      actionParams: { to: "direct:user-1", message: "visible thread reply" },
+      cfg: {},
+      sessionKey: "agent:main:testchat:direct:user-1",
+      toolContext: {
+        currentChannelProvider: "testchat",
+        currentChannelId: "direct:user-1",
+      },
+      deliveredPayload: { ok: true },
+    });
+
+    expect(mirrored).toBe(false);
+    expect(sessionsMocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+  });
+});
+
+describe("beginTerminalSourceReplyDelivery", () => {
+  // Same scope-containment regression as above: the restart-recovery fail-closed
+  // receipt must not arm for thread-reply just because the marker-only match widened.
+  it("does not arm a terminal delivery receipt for thread-reply, even to the current conversation", async () => {
+    const receipt = await beginTerminalSourceReplyDelivery({
+      action: "thread-reply",
+      channel: "testchat",
+      actionParams: { to: "direct:user-1", message: "visible thread reply" },
+      cfg: {},
+      sessionKey: "agent:main:testchat:direct:user-1",
+      sessionId: "session-1",
+      sourceReplyFinal: true,
+      toolCallId: "call-1",
+      toolContext: {
+        currentChannelProvider: "testchat",
+        currentChannelId: "direct:user-1",
+        currentSourceTurnId: "source-turn-1",
+      },
+    });
+
+    expect(receipt).toBeUndefined();
   });
 });

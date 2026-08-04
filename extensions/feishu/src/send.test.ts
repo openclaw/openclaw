@@ -168,10 +168,8 @@ describe("getMessageFeishu", () => {
               chatId: "oc_send",
               conversationId: "oc_send",
             },
-            threadId: "oc_send",
           },
         ],
-        threadId: "oc_send",
         sentAt: result.receipt.sentAt,
         raw: [
           {
@@ -291,10 +289,8 @@ describe("getMessageFeishu", () => {
               chatId: "oc_send",
               conversationId: "oc_send",
             },
-            threadId: "oc_send",
           },
         ],
-        threadId: "oc_send",
         sentAt: result.receipt.sentAt,
         raw: [
           {
