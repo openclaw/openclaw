@@ -1,5 +1,5 @@
 // Declarative CLI command catalog for startup policy and fast-path routing.
-import { hasFlag } from "./argv.js";
+import { getCommandPositionalsWithRootOptions, hasFlag } from "./argv.js";
 
 export type CliCommandPluginLoadPolicy =
   | "never"
@@ -67,6 +67,29 @@ function hasCliOption(argv: readonly string[], name: string): boolean {
   return false;
 }
 
+const UPDATE_BOOLEAN_FLAGS = [
+  "--acknowledge-clawhub-risk",
+  "--dry-run",
+  "--json",
+  "--no-restart",
+  "--update",
+  "--yes",
+] as const;
+const UPDATE_VALUE_FLAGS = ["--channel", "--tag", "--timeout"] as const;
+
+function isRootUpdateDryRun(argv: string[], commandPath: string[]): boolean {
+  if (commandPath.length !== 1 || !hasFlag(argv, "--dry-run")) {
+    return false;
+  }
+  const usesRootShorthand = hasFlag(argv, "--update");
+  const positionals = getCommandPositionalsWithRootOptions(argv, {
+    commandPath: usesRootShorthand ? [] : ["update"],
+    booleanFlags: UPDATE_BOOLEAN_FLAGS,
+    valueFlags: UPDATE_VALUE_FLAGS,
+  });
+  return positionals?.length === 0;
+}
+
 /** Command path registry used before Commander registration has loaded all plugins. */
 export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
@@ -127,7 +150,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["agents", "bindings"],
     exact: true,
-    policy: { loadPlugins: "never" },
+    policy: { configGuard: "skip", loadPlugins: "never" },
   },
   {
     commandPath: ["agents", "unbind"],
@@ -147,11 +170,6 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   { commandPath: ["configure"], policy: { configGuard: "skip", loadPlugins: "never" } },
   {
     commandPath: ["config"],
-    exact: true,
-    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
-  },
-  {
-    commandPath: ["config", "models"],
     exact: true,
     policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
   },
@@ -201,7 +219,6 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   { commandPath: ["gateway", "call"], exact: true, policy: { networkProxy: "bypass" } },
   { commandPath: ["gateway", "diagnostics"], exact: true, policy: { networkProxy: "bypass" } },
   { commandPath: ["gateway", "discover"], exact: true, policy: { networkProxy: "bypass" } },
-  { commandPath: ["gateway", "export"], exact: true, policy: { networkProxy: "bypass" } },
   {
     commandPath: ["gateway", "health"],
     exact: true,
@@ -213,11 +230,19 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   { commandPath: ["gateway", "install"], exact: true, policy: { networkProxy: "bypass" } },
   { commandPath: ["gateway", "probe"], exact: true, policy: { networkProxy: "bypass" } },
   { commandPath: ["gateway", "restart"], exact: true, policy: { networkProxy: "bypass" } },
-  { commandPath: ["gateway", "stability"], exact: true, policy: { networkProxy: "bypass" } },
+  {
+    commandPath: ["gateway", "stability"],
+    exact: true,
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+  },
   { commandPath: ["gateway", "start"], exact: true, policy: { networkProxy: "bypass" } },
   { commandPath: ["gateway", "stop"], exact: true, policy: { networkProxy: "bypass" } },
   { commandPath: ["gateway", "uninstall"], exact: true, policy: { networkProxy: "bypass" } },
-  { commandPath: ["gateway", "usage-cost"], exact: true, policy: { networkProxy: "bypass" } },
+  {
+    commandPath: ["gateway", "usage-cost"],
+    exact: true,
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+  },
   {
     commandPath: ["sessions"],
     exact: true,
@@ -232,6 +257,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["commitments"],
     policy: {
+      configGuard: "skip",
       ensureCliPath: false,
       loadPlugins: "never",
       networkProxy: "bypass",
@@ -284,6 +310,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: {
       ensureCliPath: false,
       configGuard: "skip",
+      loadPlugins: "never",
       networkProxy: ({ argv }) => (hasFlag(argv, "--probe") ? "default" : "bypass"),
     },
     route: { id: "models-status" },
@@ -321,10 +348,14 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     route: { id: "tasks-list" },
   },
   {
+    // This unregistered root is reserved so plugin registration cannot claim it;
+    // the catalog entry preserves its startup policy.
     commandPath: ["tool"],
     policy: { loadPlugins: "never", ensureCliPath: false, networkProxy: "bypass" },
   },
   {
+    // This unregistered root is reserved so plugin registration cannot claim it;
+    // the catalog entry preserves its startup policy.
     commandPath: ["tools"],
     policy: { loadPlugins: "never", ensureCliPath: false, networkProxy: "bypass" },
   },
@@ -335,6 +366,11 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { ownsProtocolStdout: true },
   },
   { commandPath: ["approvals"], policy: { networkProxy: "bypass" } },
+  {
+    commandPath: ["approvals", "pending"],
+    exact: true,
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+  },
   // automations is a commander alias for cron; argv-derived command paths keep the typed token.
   {
     commandPath: ["automations"],
@@ -368,6 +404,26 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   { commandPath: ["exec-approvals"], policy: { networkProxy: "bypass" } },
   { commandPath: ["exec-policy"], policy: { networkProxy: "bypass" } },
   { commandPath: ["hooks"], policy: { networkProxy: "bypass" } },
+  {
+    commandPath: ["hooks"],
+    exact: true,
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+  },
+  {
+    commandPath: ["hooks", "list"],
+    exact: true,
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+  },
+  {
+    commandPath: ["hooks", "info"],
+    exact: true,
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+  },
+  {
+    commandPath: ["hooks", "check"],
+    exact: true,
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+  },
   { commandPath: ["logs"], policy: { networkProxy: "bypass" } },
   { commandPath: ["mcp"], policy: { networkProxy: "bypass" } },
   {
@@ -406,6 +462,11 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     },
   },
   { commandPath: ["nodes"], policy: { networkProxy: "bypass" } },
+  // Both bodies are pure gateway RPC reads, so they skip the config guard like
+  // `channels status`. Bare `openclaw nodes` keeps it because it still resolves
+  // plugin-provided node subcommands from validated config.
+  { commandPath: ["nodes", "status"], exact: true, policy: { configGuard: "skip" } },
+  { commandPath: ["nodes", "list"], exact: true, policy: { configGuard: "skip" } },
   { commandPath: ["pairing"], policy: { networkProxy: "bypass" } },
   { commandPath: ["proxy"], policy: { networkProxy: "bypass" } },
   { commandPath: ["qr"], policy: { networkProxy: "bypass" } },
@@ -424,7 +485,14 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   { commandPath: ["terminal"], policy: { networkProxy: "bypass" } },
   { commandPath: ["tui"], policy: { networkProxy: "bypass" } },
   { commandPath: ["uninstall"], policy: { networkProxy: "bypass" } },
-  { commandPath: ["update"], policy: { hideBanner: true } },
+  {
+    commandPath: ["update"],
+    policy: {
+      configGuard: ({ argv, commandPath }) =>
+        isRootUpdateDryRun(argv, commandPath) ? "skip" : "run",
+      hideBanner: true,
+    },
+  },
   {
     commandPath: ["config", "validate"],
     exact: true,
@@ -513,12 +581,46 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
     route: { id: "channels-list" },
   },
-  { commandPath: ["skills"], exact: true, policy: { networkProxy: "bypass" } },
-  { commandPath: ["skills", "check"], exact: true, policy: { networkProxy: "bypass" } },
-  { commandPath: ["skills", "info"], exact: true, policy: { networkProxy: "bypass" } },
+  {
+    commandPath: ["skills"],
+    exact: true,
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+  },
+  {
+    commandPath: ["skills", "check"],
+    exact: true,
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+  },
+  {
+    commandPath: ["skills", "info"],
+    exact: true,
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+  },
   { commandPath: ["skills", "install"], exact: true },
-  { commandPath: ["skills", "list"], exact: true, policy: { networkProxy: "bypass" } },
-  { commandPath: ["skills", "search"], exact: true },
+  {
+    commandPath: ["skills", "list"],
+    exact: true,
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+  },
+  {
+    commandPath: ["skills", "search"],
+    exact: true,
+    policy: { configGuard: "skip", loadPlugins: "never" },
+  },
+  {
+    commandPath: ["memory", "search"],
+    exact: true,
+    policy: { configGuard: "skip", loadPlugins: "never" },
+  },
+  {
+    commandPath: ["memory", "status"],
+    exact: true,
+    policy: {
+      configGuard: ({ argv }) =>
+        hasFlag(argv, "--index") || hasFlag(argv, "--fix") ? "run" : "skip",
+      loadPlugins: "never",
+    },
+  },
   { commandPath: ["skills", "update"], exact: true },
   { commandPath: ["skills", "verify"], exact: true },
 ];

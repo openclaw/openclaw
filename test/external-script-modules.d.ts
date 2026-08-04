@@ -85,11 +85,6 @@ declare module "*openclaw-changelog-update/scripts/verify-release-notes.mjs" {
     legacyIssues: Map<number, unknown>;
     pullRequests: Map<number, ContributionRecord>;
   };
-  export function contributionRecordTarget(section: { source: string }): string | undefined;
-  export function pullRequestTitleFromCommitSubject(
-    subject: string,
-    number: number,
-  ): string | undefined;
   export function recoverUnavailablePullRequests(params: {
     numbers: Iterable<number>;
     nodes: Map<number, unknown>;
@@ -161,9 +156,6 @@ declare module "*openclaw-changelog-update/scripts/verify-release-notes.mjs" {
     associatedPullRequests: number[],
     hasProvenanceOverride: boolean,
   ): number[];
-  export function recoverUnavailablePullRequests(
-    params: Record<string, unknown>,
-  ): Map<number, Record<string, unknown>>;
   export function validateReleaseProvenanceOverrides(
     provenanceOverrides: Map<string, number[]>,
     nodes: Map<number, unknown>,
@@ -197,6 +189,15 @@ declare module "*openclaw-live-updater/scripts/update-main.mjs" {
     release?: () => void;
   };
   export function originMatches(remoteUrl: string): boolean;
+  export function formatUpdateFailure(error: unknown): {
+    schemaVersion: 1;
+    ok: false;
+    error: {
+      code: string;
+      message: string;
+      diagnostics: Record<string, unknown>;
+    };
+  };
   export function isOwnedGatewayEntrypoint(
     checkout: string,
     home: string,
