@@ -2,10 +2,10 @@
 // Runs local workflow sanity checks.
 // Uses installed tools when present, otherwise falls back to pinned hooks where
 // possible, then runs repo-specific workflow guards.
-import { spawn } from "node:child_process";
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve, win32 as win32Path } from "node:path";
+import { join, resolve } from "node:path";
+import { runManagedCommand } from "./lib/managed-child-process.mjs";
 
 const ACTIONLINT_VERSION = "1.7.12";
 const PRE_COMMIT_VERSION = "4.2.0";
@@ -17,235 +17,31 @@ const DEFAULT_COMMAND_TIMEOUT_MS = 5 * 60_000;
 // prevent indefinite hangs, but with its own longer budget so healthy slow
 // downloads are not treated as stalled scans.
 const BOOTSTRAP_COMMAND_TIMEOUT_MS = 15 * 60_000;
-const COMMAND_TIMEOUT_KILL_GRACE_MS = 1_000;
-const COMMAND_TIMEOUT_GROUP_PROBE_MS = 100;
-const WINDOWS_TASKKILL_TIMEOUT_MS = 5_000;
 
 function commandLabel(command, args) {
   return [command, ...args].join(" ");
 }
 
-export function windowsProcessTreeKillCommand(pid) {
-  if (!pid) {
-    return null;
-  }
-  return {
-    command: "taskkill",
-    args: ["/pid", String(pid), "/T", "/F"],
-  };
-}
-
-export function resolveWindowsTaskkillPath(env = process.env) {
-  const systemRoot = env.SystemRoot ?? env.SYSTEMROOT ?? env.WINDIR ?? "C:\\Windows";
-  return win32Path.join(systemRoot, "System32", "taskkill.exe");
-}
-
-export function timeoutTerminationPlan(platform, pid) {
-  if (platform === "win32") {
-    const treeKill = windowsProcessTreeKillCommand(pid);
-    return treeKill
-      ? [{ type: "taskkill", ...treeKill }]
-      : [{ type: "child-kill", signal: "SIGKILL" }];
-  }
-  return [
-    { type: "process-group", signal: "SIGTERM" },
-    { type: "process-group", signal: "SIGKILL", delayMs: COMMAND_TIMEOUT_KILL_GRACE_MS },
-  ];
-}
-
-function killChild(child, signal) {
+async function spawnCommand(command, args, options = {}) {
+  // Delegate the timeout, process-tree teardown, Windows shell normalization,
+  // and validated System32 taskkill resolution to the repository's canonical
+  // managed child-process runner.
+  const { timeoutMs = DEFAULT_COMMAND_TIMEOUT_MS, stdio = "inherit" } = options;
   try {
-    child.kill(signal);
+    const status = await runManagedCommand({ bin: command, args, stdio, timeoutMs });
+    return { error: null, signal: null, status, timedOut: false, timeoutMs };
   } catch (error) {
-    if (error?.code !== "ESRCH") {
-      throw error;
+    if (error?.code === "ETIMEDOUT") {
+      error.timeoutMs = timeoutMs;
     }
-  }
-}
-
-function killWindowsProcessTree(child) {
-  const treeKill = windowsProcessTreeKillCommand(child.pid);
-  if (!treeKill) {
-    killChild(child, "SIGKILL");
-    return Promise.resolve();
-  }
-  // Resolve taskkill through System32 instead of trusting PATH, and run it
-  // asynchronously with an independent bound so a blocked terminator cannot
-  // defeat the command deadline.
-  const taskkillPath = resolveWindowsTaskkillPath();
-  return new Promise((resolveTeardown) => {
-    let taskkill;
-    try {
-      taskkill = spawn(taskkillPath, treeKill.args, {
-        stdio: "ignore",
-        windowsHide: true,
-      });
-    } catch {
-      killChild(child, "SIGKILL");
-      resolveTeardown("fallback");
-      return;
-    }
-    let finished = false;
-    const boundTimer = setTimeout(() => {
-      try {
-        taskkill.kill("SIGKILL");
-      } catch {
-        // already closed
-      }
-      killChild(child, "SIGKILL");
-      finish("bound");
-    }, WINDOWS_TASKKILL_TIMEOUT_MS);
-    const finish = (result) => {
-      if (finished) {
-        return;
-      }
-      finished = true;
-      clearTimeout(boundTimer);
-      resolveTeardown(result);
+    return {
+      error,
+      signal: null,
+      status: null,
+      timedOut: error?.code === "ETIMEDOUT",
+      timeoutMs,
     };
-    taskkill.once("error", () => {
-      killChild(child, "SIGKILL");
-      finish("fallback");
-    });
-    taskkill.once("close", (code) => {
-      if (code !== 0) {
-        killChild(child, "SIGKILL");
-      }
-      finish(code === 0 ? "taskkill" : "fallback");
-    });
-  });
-}
-
-function killProcessTree(child, signal) {
-  try {
-    process.kill(-child.pid, signal);
-  } catch (error) {
-    if (error?.code !== "ESRCH") {
-      killChild(child, signal);
-    }
   }
-}
-
-function processGroupAlive(pid) {
-  try {
-    process.kill(-pid, 0);
-    return true;
-  } catch (error) {
-    // EPERM still proves the group exists; only ESRCH confirms it is gone.
-    return error?.code !== "ESRCH";
-  }
-}
-
-function spawnCommand(command, args, options = {}) {
-  return new Promise((finish) => {
-    // Node's sync timeout waits for SIGTERM handlers to exit. Run POSIX tools in
-    // a process group so timeout escalation can terminate non-cooperative scans.
-    const { timeoutMs = DEFAULT_COMMAND_TIMEOUT_MS, ...spawnOptions } = options;
-    const child = spawn(command, args, {
-      ...spawnOptions,
-      detached: process.platform !== "win32",
-    });
-    let settled = false;
-    let timedOut = false;
-    let exitStatus = null;
-    let exitSignal = null;
-    let killTimer;
-    let teardownTimer;
-    let teardownPending = false;
-    let windowsTeardown = Promise.resolve();
-
-    const clearEscalationTimers = () => {
-      clearTimeout(timeoutTimer);
-      clearTimeout(killTimer);
-      clearTimeout(teardownTimer);
-    };
-
-    const settle = (result) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearEscalationTimers();
-      finish(result);
-    };
-
-    const timeoutError = () =>
-      Object.assign(new Error("Command timed out"), { code: "ETIMEDOUT", timeoutMs });
-
-    function waitForGroupTeardown() {
-      if (settled || process.platform === "win32" || teardownPending) {
-        return;
-      }
-      if (!processGroupAlive(child.pid)) {
-        settle({
-          error: timedOut ? timeoutError() : null,
-          signal: exitSignal,
-          status: exitStatus,
-          timedOut,
-          timeoutMs,
-        });
-        return;
-      }
-      teardownPending = true;
-      teardownTimer = setTimeout(() => {
-        teardownPending = false;
-        waitForGroupTeardown();
-      }, COMMAND_TIMEOUT_GROUP_PROBE_MS);
-    }
-
-    const timeoutTimer = setTimeout(() => {
-      timedOut = true;
-      if (process.platform === "win32") {
-        windowsTeardown = killWindowsProcessTree(child);
-        return;
-      }
-      killProcessTree(child, "SIGTERM");
-      killTimer = setTimeout(() => {
-        killProcessTree(child, "SIGKILL");
-        waitForGroupTeardown();
-      }, COMMAND_TIMEOUT_KILL_GRACE_MS);
-    }, timeoutMs);
-
-    child.on("error", (error) => {
-      settle({ error, signal: null, status: null, timedOut, timeoutMs });
-    });
-
-    child.on("exit", (status, signal) => {
-      if (settled) {
-        return;
-      }
-      exitStatus = status;
-      exitSignal = signal;
-      if (timedOut && process.platform !== "win32") {
-        // The group leader can exit on the initial SIGTERM while a descendant
-        // ignores it. Keep escalation pending until the group is confirmed
-        // gone instead of settling on the leader's exit.
-        waitForGroupTeardown();
-        return;
-      }
-      if (timedOut && process.platform === "win32") {
-        // Wait for the bounded System32 taskkill teardown before settling so
-        // the tree cleanup completes or its bound expires first.
-        void windowsTeardown.then(() => {
-          settle({
-            error: timeoutError(),
-            signal,
-            status,
-            timedOut,
-            timeoutMs,
-          });
-        });
-        return;
-      }
-      settle({
-        error: timedOut ? timeoutError() : null,
-        signal,
-        status,
-        timedOut,
-        timeoutMs,
-      });
-    });
-  });
 }
 
 async function main() {
