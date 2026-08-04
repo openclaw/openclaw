@@ -49,6 +49,10 @@ function resolveRoomKindFromType(type: number | undefined): NextcloudTalkRoomKin
   return "group";
 }
 
+function isTransientRoomInfoStatus(status: number): boolean {
+  return status === 408 || status === 429 || (status >= 500 && status <= 599);
+}
+
 export async function resolveNextcloudTalkRoomKindResult(params: {
   account: ResolvedNextcloudTalkAccount;
   roomToken: string;
@@ -106,12 +110,18 @@ export async function resolveNextcloudTalkRoomKindResult(params: {
         runtime?.log?.(
           `nextcloud-talk: room lookup failed (${response.status}) token=${roomToken}`,
         );
-        return { source: "failed" };
+        return { source: isTransientRoomInfoStatus(response.status) ? "failed" : "unknown" };
       }
 
-      const payload = await readProviderJsonResponse<{
-        ocs?: { data?: { type?: number | string } };
-      }>(response, "Nextcloud Talk room info failed");
+      let payload: { ocs?: { data?: { type?: number | string } } };
+      try {
+        payload = await readProviderJsonResponse<{
+          ocs?: { data?: { type?: number | string } };
+        }>(response, "Nextcloud Talk room info failed");
+      } catch (err) {
+        runtime?.error?.(`nextcloud-talk: room lookup error: ${String(err)}`);
+        return { source: "unknown" };
+      }
       const type = coerceRoomType(payload.ocs?.data?.type);
       const kind = resolveRoomKindFromType(type);
       if (!kind) {

@@ -316,6 +316,49 @@ describe("nextcloud-talk inbound behavior", () => {
     );
   });
 
+  it("keeps permanent room lookup failures on the webhook group fallback path", async () => {
+    installRuntime({
+      buildMentionRegexes: vi.fn(() => [/@openclaw/i]),
+      matchesMentionPatterns: vi.fn(() => false),
+    });
+    createChannelPairingControllerMock.mockReturnValue({
+      readStoreForDmPolicy: vi.fn(),
+      issueChallenge: vi.fn(),
+    });
+    resolveNextcloudTalkRoomKindResultMock.mockResolvedValue({ source: "unknown" });
+    const runtime = createRuntimeEnv();
+
+    await expect(
+      handleNextcloudTalkInbound({
+        message: createMessage({
+          roomToken: "room-auth-denied",
+          roomName: "Auth Denied",
+          isGroupChat: true,
+        }),
+        account: createAccount({
+          config: {
+            dmPolicy: "pairing",
+            allowFrom: [],
+            groupPolicy: "allowlist",
+            groupAllowFrom: ["user-1"],
+            apiUser: "bot",
+            apiPassword: "secret",
+          },
+        }),
+        config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
+        runtime,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(sendMessageNextcloudTalkMock).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      "nextcloud-talk: drop room room-auth-denied (no mention)",
+    );
+    expect(runtime.log).not.toHaveBeenCalledWith(
+      "nextcloud-talk: retry room room-auth-denied after room lookup failure",
+    );
+  });
+
   it("blocks unauthorized group text control commands even when room sender access allows chat", async () => {
     const buildMentionRegexes = vi.fn(() => [/@openclaw/i]);
     const coreRuntime = installRuntime({
