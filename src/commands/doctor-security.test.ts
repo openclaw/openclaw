@@ -776,8 +776,8 @@ describe("noteSecurityWarnings gateway exposure", () => {
       const lines: string[] = [];
       await runSecurityHealth({
         runtime: {
-          log: (...args) => lines.push(args.map(String).join(" ")),
-          error: (...args) => lines.push(args.map(String).join(" ")),
+          log: (...args: unknown[]) => lines.push(args.map(String).join(" ")),
+          error: (...args: unknown[]) => lines.push(args.map(String).join(" ")),
           exit() {},
         },
         options: {},
@@ -814,8 +814,8 @@ describe("noteSecurityWarnings gateway exposure", () => {
       const lines: string[] = [];
       await runSecurityHealth({
         runtime: {
-          log: (...args) => lines.push(args.map(String).join(" ")),
-          error: (...args) => lines.push(args.map(String).join(" ")),
+          log: (...args: unknown[]) => lines.push(args.map(String).join(" ")),
+          error: (...args: unknown[]) => lines.push(args.map(String).join(" ")),
           exit() {},
         },
         options: { repair: true },
