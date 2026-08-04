@@ -40,6 +40,7 @@ import {
 import {
   buildTelegramPlainFallbackPlan,
   isTelegramHtmlParseError,
+  selectTelegramSingleMessagePlainFallback,
   splitTelegramPlainTextChunks,
   warnTelegramRichBlocksDegradations,
 } from "./rich-plain-fallback.js";
@@ -402,12 +403,18 @@ export function createTelegramDraftStream(params: {
         if (!fallbackPlan) {
           throw err;
         }
+        const fallbackText = selectTelegramSingleMessagePlainFallback(
+          fallbackPlan,
+          inputRichBlocksToPlainText(page.richMessage.blocks, {
+            preserveLinkTargets: false,
+          }),
+        );
         return {
-          message: await params.api.sendMessage(chatId, fallbackPlan.plainText, {
+          message: await params.api.sendMessage(chatId, fallbackText, {
             ...sendMessageParams,
             ...linkPreviewParams,
           }),
-          snapshot: fallbackSnapshot(fallbackPlan.plainText),
+          snapshot: fallbackSnapshot(fallbackText),
         };
       }
     }
@@ -472,8 +479,14 @@ export function createTelegramDraftStream(params: {
           if (!fallbackPlan) {
             throw err;
           }
-          await editMessageTextWithPreview(targetMessageId, fallbackPlan.plainText);
-          acceptedSnapshot = fallbackSnapshot(fallbackPlan.plainText);
+          const fallbackText = selectTelegramSingleMessagePlainFallback(
+            fallbackPlan,
+            inputRichBlocksToPlainText(page.richMessage.blocks, {
+              preserveLinkTargets: false,
+            }),
+          );
+          await editMessageTextWithPreview(targetMessageId, fallbackText);
+          acceptedSnapshot = fallbackSnapshot(fallbackText);
         }
       } else if (page.sourceTextMode === "html") {
         try {

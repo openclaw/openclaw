@@ -1282,6 +1282,52 @@ describe("sendMessageTelegram", () => {
     expect(result).toEqual({ messageId: "46", chatId: "123" });
   });
 
+  it("preserves the opening text when an early-link rich reply falls back", async () => {
+    const text = [
+      "Вот что я бы ему рекомендовал, если задача именно понять, есть ли превышения.",
+      "",
+      "**[Narda AMS-8061](https://www.narda-sts.com/en/products/emf-monitors/ams-8061/)** или **[Wavecontrol MonitEM-IoT](https://wavecontrol.cn/en/products/monitem-iot/)**.",
+    ].join("\n");
+    botRawApi.sendRichMessage.mockRejectedValueOnce(createHtmlParseError("sendRichMessage"));
+    botApi.sendMessage.mockResolvedValueOnce({ message_id: 62, chat: { id: "-100123" } });
+
+    const result = await sendMessageTelegram("-100123", text, {
+      cfg: { channels: { telegram: { richMessages: true, linkPreview: false } } },
+      token: "tok",
+      replyToMessageId: 100,
+      quoteText: "quoted opening",
+      messageThreadId: 42,
+      silent: true,
+      buttons: [[{ text: "Open", url: "https://example.com" }]],
+    });
+
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
+    expect(botApi.sendMessage).toHaveBeenCalledTimes(1);
+    const [, sentText, sentOptions] = botApi.sendMessage.mock.calls[0] ?? [];
+    expect(String(sentText)).toBe(
+      [
+        "Вот что я бы ему рекомендовал, если задача именно понять, есть ли превышения.",
+        "Narda AMS-8061 (https://www.narda-sts.com/en/products/emf-monitors/ams-8061/) или Wavecontrol MonitEM-IoT (https://wavecontrol.cn/en/products/monitem-iot/).",
+      ].join("\n"),
+    );
+    expect(String(sentText).startsWith("Вот что")).toBe(true);
+    expect(sentOptions).toMatchObject({
+      link_preview_options: { is_disabled: true },
+      disable_notification: true,
+      message_thread_id: 42,
+      reply_parameters: {
+        message_id: 100,
+        quote: "quoted opening",
+        allow_sending_without_reply: true,
+      },
+      reply_markup: {
+        inline_keyboard: [[{ text: "Open", url: "https://example.com" }]],
+      },
+    });
+    expect(sentOptions).not.toHaveProperty("parse_mode");
+    expect(result).toEqual({ messageId: "62", chatId: "-100123" });
+  });
+
   it("falls back to plain text when durable rich sends require nonempty content", async () => {
     const text = "still visible after rich content rejection";
     botRawApi.sendRichMessage.mockRejectedValueOnce(createRichContentRequiredError());
@@ -4743,6 +4789,30 @@ describe("editMessageTelegram", () => {
 
     expect(botRawApi.editMessageText).toHaveBeenCalledTimes(1);
     expect(botApi.editMessageText).toHaveBeenCalledWith("123", 1, text);
+  });
+
+  it("keeps rich edit fallback within the plain-text limit after expanding links", async () => {
+    const links = Array.from({ length: 50 }, (_, index) => ({
+      label: `link-${index}`,
+      url: `https://example.com/${"a".repeat(100)}-${index}`,
+    }));
+    const text = links.map(({ label, url }) => `[${label}](${url})`).join(" ");
+    const compactText = links.map(({ label }) => label).join(" ");
+    const expandedText = links.map(({ label, url }) => `${label} (${url})`).join(" ");
+    botRawApi.editMessageText.mockRejectedValueOnce(
+      createRichEntityInvalidError("URL", "editMessageText"),
+    );
+    botApi.editMessageText.mockResolvedValueOnce({ message_id: 1, chat: { id: "123" } });
+
+    await editMessageTelegram("123", 1, text, {
+      token: "tok",
+      cfg: { channels: { telegram: { richMessages: true } } },
+    });
+
+    expect(botRawApi.editMessageText).toHaveBeenCalledTimes(1);
+    expect(botApi.editMessageText).toHaveBeenCalledWith("123", 1, compactText);
+    expect(expandedText.length).toBeGreaterThan(4000);
+    expect(compactText.length).toBeLessThanOrEqual(4000);
   });
 
   it("retries editMessageTelegram on Telegram 5xx errors", async () => {

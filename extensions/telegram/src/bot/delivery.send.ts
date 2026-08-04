@@ -13,7 +13,10 @@ import {
   isTelegramQuoteParamError,
 } from "../reply-parameters.js";
 import { TELEGRAM_OUTBOUND_RETRY_AFTER_CAP_MS } from "../retry-after.js";
-import type { TelegramRichBlocksDegradationReason } from "../rich-block-model.js";
+import {
+  inputRichBlocksToPlainText,
+  type TelegramRichBlocksDegradationReason,
+} from "../rich-block-model.js";
 import {
   buildTelegramRichMarkdownPlan,
   getTelegramRichRawApi,
@@ -25,6 +28,7 @@ import {
 import {
   buildTelegramPlainFallbackPlan,
   isTelegramHtmlParseError,
+  selectTelegramSingleMessagePlainFallback,
   warnTelegramRichBlocksDegradations,
 } from "../rich-plain-fallback.js";
 import { withTelegramNativeQuoteFallback } from "../send-context.js";
@@ -92,7 +96,7 @@ export async function sendTelegramText(
     silent?: boolean;
     replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
   },
-): Promise<number> {
+): Promise<{ messageId: number; deliveredText: string }> {
   const baseParams = buildTelegramSendParams({
     replyToMessageId: opts?.replyToMessageId,
     replyQuoteMessageId: opts?.replyQuoteMessageId,
@@ -122,7 +126,7 @@ export async function sendTelegramText(
         }),
     });
     runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${res.message_id} (plain)`);
-    return res.message_id;
+    return { messageId: res.message_id, deliveredText: plainText };
   };
 
   // Caller-authored HTML keeps legacy parse_mode HTML semantics (literal
@@ -167,7 +171,7 @@ export async function sendTelegramText(
           }),
       });
       runtime.log?.(`telegram sendRichMessage ok chat=${chatId} message=${res.message_id}`);
-      return res.message_id;
+      return { messageId: res.message_id, deliveredText: fallbackText };
     } catch (err) {
       const fallbackPlan = buildTelegramPlainFallbackPlan({
         plainText: richPlan.plainText || fallbackText,
@@ -178,7 +182,14 @@ export async function sendTelegramText(
       if (!fallbackPlan || !hasFallbackText) {
         throw err;
       }
-      return await sendPlainFallback(fallbackPlan.plainText);
+      return await sendPlainFallback(
+        selectTelegramSingleMessagePlainFallback(
+          fallbackPlan,
+          inputRichBlocksToPlainText(richPlan.richMessage.blocks, {
+            preserveLinkTargets: false,
+          }),
+        ),
+      );
     }
   }
 
@@ -207,7 +218,7 @@ export async function sendTelegramText(
         }),
     });
     runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${res.message_id}`);
-    return res.message_id;
+    return { messageId: res.message_id, deliveredText: fallbackText };
   } catch (err) {
     const errText = formatErrorMessage(err);
     if (isTelegramHtmlParseError(err) || EMPTY_TEXT_ERR_RE.test(errText)) {

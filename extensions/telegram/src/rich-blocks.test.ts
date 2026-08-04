@@ -400,6 +400,15 @@ describe("markdownToTelegramRichBlocks", () => {
     expect(plainText).not.toContain("**");
   });
 
+  it("preserves link destinations in the plain fallback without duplicating autolinks", () => {
+    const { plainText } = markdownToTelegramRichBlocks(
+      "**[docs](https://example.com/docs)** and example.com and https://example.com/plain and [http://example.com](https://example.com)",
+    );
+    expect(plainText).toBe(
+      "docs (https://example.com/docs) and example.com and https://example.com/plain and http://example.com (https://example.com)",
+    );
+  });
+
   it("keeps table content in plainText for the plain fallback", () => {
     const { plainText } = markdownToTelegramRichBlocks(
       "before\n\n| colA | colB |\n| - | - |\n| cell1 | cell2 |\n\nafter",
