@@ -2,6 +2,7 @@
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import { SsrFBlockedError } from "openclaw/plugin-sdk/ssrf-runtime";
 import { ssrfPolicyFromPrivateNetworkOptIn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { fetchWithSsrFGuard, type RuntimeEnv } from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
@@ -155,6 +156,14 @@ export async function resolveNextcloudTalkRoomKindResult(params: {
       await releaseNextcloudTalkGuardedResponse({ response, release });
     }
   } catch (err) {
+    if (err instanceof SsrFBlockedError) {
+      runtime?.error?.(`nextcloud-talk: room lookup policy blocked: ${String(err)}`);
+      cacheRoomInfo(key, {
+        fetchedAt: Date.now(),
+        error: "ssrf-blocked",
+      });
+      return { source: "unknown" };
+    }
     runtime?.error?.(`nextcloud-talk: room lookup error: ${String(err)}`);
     return { source: "failed" };
   }

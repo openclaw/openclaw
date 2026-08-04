@@ -101,7 +101,7 @@ function installRuntime(dispatches: { count: number }): void {
   } as never);
 }
 
-function createAccount(baseUrl: string): ResolvedNextcloudTalkAccount {
+function createAccount(baseUrl: string, allowPrivateNetwork = true): ResolvedNextcloudTalkAccount {
   return {
     accountId: "proof",
     enabled: true,
@@ -115,7 +115,7 @@ function createAccount(baseUrl: string): ResolvedNextcloudTalkAccount {
       allowFrom: ["user-1"],
       groupPolicy: "allowlist",
       groupAllowFrom: [],
-      network: { dangerouslyAllowPrivateNetwork: true },
+      network: { dangerouslyAllowPrivateNetwork: allowPrivateNetwork },
     },
   };
 }
@@ -139,6 +139,7 @@ function startSpool(params: {
   queue: NextcloudTalkIngressQueue;
   serverBaseUrl: string;
   runtime: RuntimeEnv;
+  allowPrivateNetwork?: boolean;
 }) {
   return createNextcloudTalkWebhookSpool({
     accountId: "proof",
@@ -146,7 +147,7 @@ function startSpool(params: {
     deliver: async (message, lifecycle) =>
       await handleNextcloudTalkInbound({
         message,
-        account: createAccount(params.serverBaseUrl),
+        account: createAccount(params.serverBaseUrl, params.allowPrivateNetwork ?? true),
         config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
         runtime: params.runtime,
         turnAdoptionLifecycle: lifecycle,
@@ -200,5 +201,44 @@ describe("nextcloud-talk inbound room-kind lookup retry", () => {
     expect(logs).toContain(
       "nextcloud-talk: retry room room-durable-direct after room lookup failure",
     );
+  });
+
+  it("keeps guarded-fetch policy blocks on the fallback path instead of durable retry", async () => {
+    const server = await startRoomInfoServer();
+    const dispatches = { count: 0 };
+    const logs: string[] = [];
+    installRuntime(dispatches);
+    const runtime: RuntimeEnv = {
+      error: (messageValue: unknown) => logs.push(String(messageValue)),
+      exit: () => {},
+      log: (messageValue: unknown) => logs.push(String(messageValue)),
+    };
+
+    await withTempDir("openclaw-nextcloud-talk-room-info-policy-", async (stateDir) => {
+      const queue = createChannelIngressQueueForTests<NextcloudTalkIngressPayload>({
+        channelId: "nextcloud-talk",
+        accountId: "proof",
+        stateDir,
+      });
+      const spool = startSpool({
+        queue,
+        serverBaseUrl: server.baseUrl,
+        runtime,
+        allowPrivateNetwork: false,
+      });
+      try {
+        await spool.receive(createRawWebhookEvent({ roomToken: "room-policy-blocked" }));
+        await spool.waitForIdle();
+
+        expect(server.requests).toEqual([]);
+        expect(await queue.listPending({ limit: "all" })).toEqual([]);
+        expect(await queue.listClaims()).toEqual([]);
+        expect(logs).not.toContain(
+          "nextcloud-talk: retry room room-policy-blocked after room lookup failure",
+        );
+      } finally {
+        await spool.stop();
+      }
+    });
   });
 });

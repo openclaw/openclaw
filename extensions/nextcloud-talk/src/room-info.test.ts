@@ -2,6 +2,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { SsrFBlockedError } from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveNextcloudTalkRoomKindResult } from "./room-info.js";
 
@@ -363,6 +364,37 @@ describe("nextcloud talk room info", () => {
       resolveNextcloudTalkRoomKindResult({ account, roomToken: "room-permanent-cache" }),
     ).resolves.toEqual({ source: "unknown" });
 
+    expect(fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
+  });
+
+  it("classifies guarded-fetch policy blocks as permanent fallback", async () => {
+    const error = vi.fn();
+    fetchWithSsrFGuard.mockRejectedValue(new SsrFBlockedError("blocked private network"));
+    const account = {
+      accountId: "acct-policy-block",
+      baseUrl: "http://127.0.0.1:9000",
+      config: {
+        apiUser: "bot",
+        apiPassword: "secret",
+      },
+    } as never;
+
+    await expect(
+      resolveNextcloudTalkRoomKindResult({
+        account,
+        roomToken: "room-policy-block",
+        runtime: { error } as never,
+      }),
+    ).resolves.toEqual({ source: "unknown" });
+    await expect(
+      resolveNextcloudTalkRoomKindResult({
+        account,
+        roomToken: "room-policy-block",
+        runtime: { error } as never,
+      }),
+    ).resolves.toEqual({ source: "unknown" });
+
+    expect(error).toHaveBeenCalledTimes(1);
     expect(fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
   });
 
