@@ -2,6 +2,8 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { runSecurityHealth } from "../flows/doctor-health-contribution-runners.gateway.js";
+import type { DoctorHealthFlowContext } from "../flows/doctor-health-contribution-types.js";
 import type { ExecApprovalsFile } from "../infra/exec-approvals-core.js";
 import {
   loadExecApprovals,
@@ -771,14 +773,67 @@ describe("noteSecurityWarnings gateway exposure", () => {
 
     await withExecApprovalsFile(approvals, async () => {
       const beforeHash = readExecApprovalsSnapshot().hash;
-      await noteSecurityWarnings({} as OpenClawConfig);
+      const lines: string[] = [];
+      await runSecurityHealth({
+        runtime: {
+          log: (...args) => lines.push(args.map(String).join(" ")),
+          error: (...args) => lines.push(args.map(String).join(" ")),
+          exit() {},
+        },
+        options: {},
+        prompter: { shouldRepair: false },
+        configResult: { cfg: {} },
+        cfg: {},
+        cfgForPersistence: {},
+        sourceConfigValid: true,
+        configPath: path.join(process.cwd(), "openclaw.json"),
+      } as unknown as DoctorHealthFlowContext);
 
-      const message = lastMessage();
-      expect(message).toContain("2 persisted exec approval argPattern(s)");
+      const message = lines.join("\n");
       expect(message).toContain("unsafe-nested-repetition");
       expect(message).toContain("invalid-regex");
-      expect(message).toContain("openclaw doctor --fix");
+      expect(message).toContain("Remove the rejected entry");
       expect(readExecApprovalsSnapshot().hash).toBe(beforeHash);
+    });
+  });
+
+  it("runs rejected argPattern repair through the Doctor security contribution", async () => {
+    const approvals = {
+      version: 1,
+      agents: {
+        main: {
+          allowlist: [
+            { pattern: "/bin/unsafe", argPattern: "(a+)+$" },
+            { pattern: "/bin/safe", argPattern: "^safe$" },
+          ],
+        },
+      },
+    } satisfies ExecApprovalsFile;
+
+    await withExecApprovalsFile(approvals, async () => {
+      const lines: string[] = [];
+      await runSecurityHealth({
+        runtime: {
+          log: (...args) => lines.push(args.map(String).join(" ")),
+          error: (...args) => lines.push(args.map(String).join(" ")),
+          exit() {},
+        },
+        options: { repair: true },
+        prompter: { shouldRepair: true },
+        configResult: { cfg: {} },
+        cfg: {},
+        cfgForPersistence: {},
+        sourceConfigValid: true,
+        configPath: path.join(process.cwd(), "openclaw.json"),
+      } as unknown as DoctorHealthFlowContext);
+
+      expect(note).toHaveBeenCalledWith(
+        expect.stringContaining("Removed 1 rejected exec approval entry"),
+        "Doctor changes",
+      );
+      expect(loadExecApprovals().agents?.main?.allowlist).toEqual([
+        expect.objectContaining({ pattern: "/bin/safe", argPattern: "^safe$" }),
+      ]);
     });
   });
 

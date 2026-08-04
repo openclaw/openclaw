@@ -266,31 +266,6 @@ function collectExecPolicyConflictWarnings(cfg: OpenClawConfig): string[] {
   return warnings;
 }
 
-function collectDurableExecApprovalWarnings(): string[] {
-  const findings = collectRejectedExecArgPatterns();
-  if (findings.length === 0) {
-    return [];
-  }
-  const preview = (value: string) => (value.length > 80 ? `${value.slice(0, 77)}...` : value);
-  const lines = [
-    `- WARNING: ${findings.length} persisted exec approval argPattern(s) are rejected by the runtime safety guard and will never match.`,
-    `  State: ${resolveExecApprovalsDisplayPath()}`,
-  ];
-  for (const finding of findings.slice(0, 8)) {
-    lines.push(
-      `  - ${finding.scope}: pattern=${JSON.stringify(preview(finding.pattern))} argPattern=${JSON.stringify(preview(finding.argPattern))} (${finding.reason})`,
-    );
-  }
-  if (findings.length > 8) {
-    lines.push(`  - ...and ${findings.length - 8} more`);
-  }
-  lines.push(
-    `  Fix: ${formatCliCommand("openclaw doctor --fix")} removes only those rejected approval entries.`,
-    "  Re-approve any still-needed command through the normal allow-always flow.",
-  );
-  return [lines.join("\n")];
-}
-
 function collectExecFilesystemPolicyWarnings(cfg: OpenClawConfig): string[] {
   return collectExecFilesystemPolicyDriftHits(cfg).map((hit) =>
     [
@@ -549,7 +524,6 @@ export async function collectSecurityWarnings(
 /** Emits security warnings plus the deep audit follow-up command. */
 export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   const warnings = await collectSecurityWarnings(cfg);
-  warnings.push(...collectDurableExecApprovalWarnings());
   if (warnings.length > 0) {
     warnings.push(`- Run: ${formatCliCommand("openclaw security audit --deep")}`);
     note(warnings.join("\n"), "Security");
