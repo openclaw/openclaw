@@ -2,12 +2,17 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
-import type { ConnectParams, ErrorShape } from "../../../../packages/gateway-protocol/src/index.js";
+import type {
+  ConnectParams,
+  ErrorShape,
+  SystemAgentChatParams,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
   validateRequestFrame,
+  validateSystemAgentChatParams,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import {
   createChildDiagnosticTraceContext,
@@ -15,6 +20,8 @@ import {
   runWithDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
 import { createLazyPromise } from "../../../shared/lazy-runtime.js";
+import { admitSystemAgentOwnerExecution } from "../../server-methods/system-agent-execution-lifecycle.js";
+import { resolveSystemAgentSessionOwnerKey } from "../../server-methods/system-agent-session-ownership.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
@@ -30,6 +37,12 @@ const DEVICE_CREDENTIAL_INVALIDATING_METHODS = new Set([
   "device.token.revoke",
   "node.pair.remove",
 ]);
+
+function readValidatedSystemAgentDelegation(params: unknown): SystemAgentChatParams["delegation"] {
+  return validateSystemAgentChatParams(params)
+    ? (params as SystemAgentChatParams).delegation
+    : undefined;
+}
 
 export function createGatewayAuthenticatedRequestDispatcher(params: {
   handler: GatewayWsMessageHandlerParams;
@@ -152,6 +165,18 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
     };
 
     const executeRequest = async () => {
+      const systemAgentRequestContext =
+        req.method === "openclaw.chat" ? buildRequestContext() : undefined;
+      const systemAgentOwnerKey =
+        req.method === "openclaw.chat"
+          ? resolveSystemAgentSessionOwnerKey({
+              delegation: readValidatedSystemAgentDelegation(req.params),
+              client,
+            })
+          : undefined;
+      // Admit before lazy method loading. Socket cleanup can then retire this
+      // owner and reject a frame that was dispatched but has not entered its handler.
+      let systemAgentOwnerAdmission: ReturnType<typeof admitSystemAgentOwnerExecution> | undefined;
       // One-shot CLI clients cancel by closing their authenticated socket;
       // leave long-lived SDK/UI invocations independent of connection teardown.
       const nodeInvocationController =
@@ -165,7 +190,14 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
         client.socket.once("close", cancelNodeInvocation);
       }
       try {
+        if (systemAgentRequestContext && systemAgentOwnerKey) {
+          systemAgentOwnerAdmission = admitSystemAgentOwnerExecution(
+            systemAgentRequestContext.systemAgentSessions,
+            systemAgentOwnerKey,
+          );
+        }
         const { handleGatewayRequest } = await loadGatewayServerMethods();
+        systemAgentOwnerAdmission?.assertActive();
         await handleGatewayRequest({
           req,
           respond,
@@ -173,7 +205,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
           isWebchatConnect: params.isWebchatConnect,
           extraHandlers,
           methodRegistry: getMethodRegistry?.(),
-          context: buildRequestContext(),
+          context: systemAgentRequestContext ?? buildRequestContext(),
           ...(nodeInvocationController ? { signal: nodeInvocationController.signal } : {}),
         });
       } catch (err) {
@@ -181,6 +213,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
         logGateway.error(`request handler failed: ${formatForLog(err)}`);
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
       } finally {
+        systemAgentOwnerAdmission?.release();
         if (nodeInvocationController) {
           client.socket.off("close", cancelNodeInvocation);
         }

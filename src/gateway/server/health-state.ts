@@ -12,6 +12,7 @@ import { resolveGatewayAuth } from "../auth.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import { collectGatewayHealthSnapshot } from "../health/collector.js";
 import type { HealthSummary } from "../health/types.js";
+import { getGatewayProcessInstanceId } from "../process-instance.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import type { GatewayEventLoopHealth } from "./event-loop-health.js";
 
@@ -61,6 +62,7 @@ export function buildGatewaySnapshot(opts?: { includeSensitive?: boolean }): Sna
     health: emptyHealth,
     stateVersion: { presence: presenceVersion, health: healthVersion },
     uptimeMs,
+    processInstanceId: getGatewayProcessInstanceId(),
     appliedConfigHash: getRuntimeConfigAppliedHash(),
     sessionDefaults: {
       defaultAgentId,

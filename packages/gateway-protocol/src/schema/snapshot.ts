@@ -204,6 +204,8 @@ export const SnapshotSchema = closedObject({
   health: HealthSnapshotSchema,
   stateVersion: StateVersionSchema,
   uptimeMs: Type.Integer({ minimum: 0 }),
+  /** Stable for one Gateway process; changes across every restart. */
+  processInstanceId: Type.Optional(NonEmptyString),
   /** Resolved source-config revision accepted by the active Gateway runtime. */
   appliedConfigHash: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   configPath: Type.Optional(NonEmptyString),

@@ -29,6 +29,15 @@ describe("SnapshotSchema", () => {
     expect(Value.Check(SnapshotSchema, snapshotWithPresence({ ts: 1 }))).toBe(true);
   });
 
+  it("accepts an optional Gateway process identity", () => {
+    expect(
+      Value.Check(SnapshotSchema, {
+        ...snapshotWithPresence({ ts: 1 }),
+        processInstanceId: "gateway-process-1",
+      }),
+    ).toBe(true);
+  });
+
   it("accepts optional watched session keys", () => {
     expect(
       Value.Check(

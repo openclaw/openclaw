@@ -161,10 +161,18 @@ the Gateway clock with their own. Acknowledge it with
 `wizardAnswer: { "stepId": "setup-qr" }`.
 
 Keep the QR visible only while that step remains unresolved and for at most
-`step.expiresInMs` after receipt. At the deadline, remove both the image and
-acknowledgement action. Discard the image bytes after a confirmed or
-delivery-uncertain acknowledgement. Clients that do not advertise the
-capability retain the prose fallback and never receive a QR step.
+`step.expiresInMs` after receipt. While it is visible, a client may poll
+`openclaw.chat` with the same `sessionId` and `pollStepId` set to `step.id`; this
+observes owner completion without answering the step. At the deadline, remove
+both the image and acknowledgement action. Discard the image bytes after a
+confirmed or delivery-uncertain acknowledgement. Clients that do not advertise
+the capability retain the prose fallback and never receive a QR step.
+
+The negotiated QR capability is part of an in-memory system-agent session.
+Reconnects may reuse the session only while that capability and the Gateway
+`snapshot.processInstanceId` are unchanged. If the capability changes, the
+process ID changes, or an older Gateway omits the process ID, discard pending QR
+state and call `openclaw.chat` with `reset: true` before continuing.
 
 ## Recover state after reconnect
 

@@ -126,6 +126,7 @@ function makeWizardContext() {
   return {
     wizardSessions,
     context: {
+      systemAgentSessions: new Map<string, SystemAgentChatSession>(),
       wizardSessions,
       findRunningWizard: () => undefined,
       purgeWizardSession: (id: string) => wizardSessions.delete(id),
@@ -214,6 +215,7 @@ function seededSession(overrides?: Partial<SystemAgentChatSession>): SystemAgent
     welcome: "welcome text",
     lastUsedAt: 1,
     ownerKey: "device:device-test",
+    supportsQrCode: false,
     ...overrides,
   };
 }
@@ -570,7 +572,11 @@ describe("openclaw.chat", () => {
     setupInferenceMocks.verifySetupInference.mockResolvedValueOnce(result);
     const { calls, respond } = makeRespond();
 
-    await systemAgentHandler("openclaw.setup.verify")({ params: {}, respond } as never);
+    await systemAgentHandler("openclaw.setup.verify")({
+      params: {},
+      respond,
+      context: makeContext(new Map()),
+    } as never);
 
     expect(setupInferenceMocks.verifySetupInference).toHaveBeenCalledWith({
       runtime: defaultRuntime,
@@ -619,6 +625,7 @@ describe("openclaw.chat", () => {
         activeAtResponse.push(systemAgentLane().activeCount);
         respond(ok, payload, error);
       },
+      context: makeContext(new Map()),
     } as never);
 
     await started.promise;
@@ -1044,7 +1051,6 @@ describe("openclaw.chat", () => {
     expect(sessions.size).toBe(8);
     expect([sessions.has("new-1"), sessions.has("new-2")]).toEqual([true, true]);
   });
-
   it("resets a session on request", async () => {
     stubEngineOverview();
     transcriptStoreMocks.readTranscriptTail.mockReturnValue([]);

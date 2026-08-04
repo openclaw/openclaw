@@ -48,6 +48,7 @@ const HTTP_CLOSE_FORCE_WAIT_MS = 5_000;
 const MCP_RUNTIME_CLOSE_GRACE_MS = 5_000;
 const LSP_RUNTIME_CLOSE_GRACE_MS = 5_000;
 const EMBEDDING_PROVIDER_CLOSE_GRACE_MS = 5_000;
+const SYSTEM_AGENT_SESSION_CLOSE_GRACE_MS = 5_000;
 const RESTART_REPLY_DRAIN_POLL_MS = 100;
 const RESTART_REPLY_POST_ABORT_DRAIN_TIMEOUT_MS = 1_000;
 const RESTART_REPLY_POST_ABORT_DRAIN_POLL_MS = 50;
@@ -698,6 +699,7 @@ export function createGatewayCloseHandler(
     transcriptUnsub: (() => void) | null;
     lifecycleUnsub: (() => void) | null;
     taskUnsub: (() => void) | null;
+    disposeSystemAgentSessions?: () => Promise<void>;
     getPendingReplyCount?: () => number;
     clients: Set<{
       connectionKind?: "gateway" | "worker";
@@ -726,6 +728,16 @@ export function createGatewayCloseHandler(
       typeof opts?.restartExpectedMs === "number" && Number.isFinite(opts.restartExpectedMs)
         ? Math.max(0, Math.floor(opts.restartExpectedMs))
         : null;
+    const restartDrainTimeoutMs =
+      restartExpectedMs !== null &&
+      typeof opts?.drainTimeoutMs === "number" &&
+      Number.isFinite(opts.drainTimeoutMs)
+        ? Math.max(0, Math.floor(opts.drainTimeoutMs))
+        : null;
+    const systemAgentCleanupBudgetMs =
+      restartDrainTimeoutMs === null
+        ? SYSTEM_AGENT_SESSION_CLOSE_GRACE_MS
+        : Math.min(SYSTEM_AGENT_SESSION_CLOSE_GRACE_MS, restartDrainTimeoutMs);
     const measureCloseStep = <T>(name: string, run: () => Promise<T> | T) =>
       measureGatewayRestartTrace(`restart.close.${name}`, run, [["reason", reason]]);
     try {
@@ -792,10 +804,6 @@ export function createGatewayCloseHandler(
         );
       }
       if (restartExpectedMs !== null && params.getPendingReplyCount) {
-        const drainTimeoutMs =
-          typeof opts?.drainTimeoutMs === "number" && Number.isFinite(opts.drainTimeoutMs)
-            ? Math.max(0, Math.floor(opts.drainTimeoutMs))
-            : 0;
         await measureCloseStep("reply-drain", () =>
           shutdownStep(
             "restart-reply-drain",
@@ -812,7 +820,7 @@ export function createGatewayCloseHandler(
                 nodeSendToSession: params.nodeSendToSession,
                 markMainSessionsAbortedForRestart: params.markMainSessionsAbortedForRestart,
                 resolveActiveSessionIdForKey: params.resolveActiveSessionIdForKey,
-                timeoutMs: drainTimeoutMs,
+                timeoutMs: restartDrainTimeoutMs ?? 0,
                 warnings,
               }),
             warnings,
@@ -841,6 +849,39 @@ export function createGatewayCloseHandler(
           ),
         );
       }
+      await shutdownStep(
+        "system-agent-sessions",
+        async () => {
+          const disposal = params.disposeSystemAgentSessions?.();
+          if (!disposal) {
+            return;
+          }
+          if (restartExpectedMs === null) {
+            // A cancellation-locked setup has crossed its durable commit
+            // boundary. Keep the outer stop watchdog armed until it settles.
+            await disposal;
+            return;
+          }
+          // Disposal fences every engine before its first await. If an admitted
+          // turn outlives the restart budget, let its cleanup finish detached
+          // rather than defeating the in-process restart deadline.
+          const timeout = createTimeoutRace(systemAgentCleanupBudgetMs, () => false as const);
+          try {
+            const completed = await Promise.race([
+              disposal.then(() => true as const),
+              timeout.promise,
+            ]);
+            if (!completed) {
+              throw new Error(
+                `system-agent session cleanup still pending after shutdown budget (${systemAgentCleanupBudgetMs}ms)`,
+              );
+            }
+          } finally {
+            timeout.clear();
+          }
+        },
+        warnings,
+      );
       if (params.bonjourStop) {
         await shutdownStep("bonjour", () => params.bonjourStop!(), warnings);
       }

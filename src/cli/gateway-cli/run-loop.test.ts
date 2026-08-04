@@ -94,6 +94,13 @@ const waitForActiveCronJobs = vi.fn(async (_timeoutMs?: number) => ({
 }));
 const reloadTaskRuntimeStateFromStore = vi.fn();
 const rotateAgentEventLifecycleGeneration = vi.fn();
+let fakeGatewayProcessInstanceId = "gateway-process-0";
+let fakeGatewayProcessInstanceSequence = 0;
+const rotateGatewayProcessInstanceId = vi.fn(() => {
+  fakeGatewayProcessInstanceSequence += 1;
+  fakeGatewayProcessInstanceId = `gateway-process-${fakeGatewayProcessInstanceSequence}`;
+  return fakeGatewayProcessInstanceId;
+});
 const clearRuntimeConfigSnapshot = vi.fn();
 const restartGatewayProcessWithFreshPid = vi.fn<
   (_opts?: { env?: NodeJS.ProcessEnv }) => {
@@ -127,6 +134,7 @@ const markRestartAbortedMainSessions = vi.fn(async (_params: unknown) => ({
   skipped: 0,
 }));
 const waitForActiveEmbeddedRuns = vi.fn(async (_timeoutMs?: number) => ({ drained: true }));
+const waitForRetiredSystemAgentMutationSettlement = vi.fn(async () => {});
 const DRAIN_TIMEOUT_LOG = "drain timeout reached; proceeding with restart";
 const ACTIVE_RUN_DRAIN_TIMEOUT_LOG =
   "active embedded run drain timeout reached; aborting active run(s) before restart";
@@ -223,6 +231,14 @@ vi.mock("../../infra/agent-events.js", () => ({
   isAgentEventLifecycleGenerationCurrent: (generation: string) => generation === "test-generation",
   registerAgentEventLifecycleRotationHandler: vi.fn(),
   rotateAgentEventLifecycleGeneration: () => rotateAgentEventLifecycleGeneration(),
+}));
+
+vi.mock("../../gateway/process-instance.js", () => ({
+  rotateGatewayProcessInstanceId: () => rotateGatewayProcessInstanceId(),
+}));
+
+vi.mock("../../gateway/server-methods/system-agent-execution-lifecycle.js", () => ({
+  waitForRetiredSystemAgentMutationSettlement: () => waitForRetiredSystemAgentMutationSettlement(),
 }));
 
 vi.mock("../../config/runtime-snapshot.js", () => ({
@@ -1027,6 +1043,8 @@ describe("runGatewayLoop", () => {
 
   it("restarts after SIGUSR1 even when drain times out, and resets runtime state for the new iteration", async () => {
     vi.clearAllMocks();
+    fakeGatewayProcessInstanceId = "gateway-process-0";
+    fakeGatewayProcessInstanceSequence = 0;
     peekGatewaySigusr1RestartReason.mockReturnValue(undefined);
     respawnGatewayProcessForUpdate.mockReturnValue({
       mode: "disabled",
@@ -1054,6 +1072,7 @@ describe("runGatewayLoop", () => {
         Symbol("run-loop-lifecycle-slot"),
         (state) => state.clear(),
       );
+      const startedProcessInstanceIds: string[] = [];
 
       const start = vi.fn<StartServer>();
       let resolveFirst: (() => void) | null = null;
@@ -1061,6 +1080,7 @@ describe("runGatewayLoop", () => {
         resolveFirst = resolve;
       });
       start.mockImplementationOnce(async () => {
+        startedProcessInstanceIds.push(fakeGatewayProcessInstanceId);
         resolveFirst?.();
         return { close: closeFirst };
       });
@@ -1071,6 +1091,7 @@ describe("runGatewayLoop", () => {
       });
       start.mockImplementationOnce(async () => {
         expect(lifecycleSlot.size).toBe(0);
+        startedProcessInstanceIds.push(fakeGatewayProcessInstanceId);
         resolveSecond?.();
         return { close: closeSecond };
       });
@@ -1081,6 +1102,7 @@ describe("runGatewayLoop", () => {
       });
       start.mockImplementationOnce(async () => {
         expect(lifecycleSlot.size).toBe(0);
+        startedProcessInstanceIds.push(fakeGatewayProcessInstanceId);
         resolveThird?.();
         return { close: closeThird };
       });
@@ -1186,6 +1208,11 @@ describe("runGatewayLoop", () => {
       expect(resetGatewaySuspendCoordinatorForLifecycleRestart).toHaveBeenCalledTimes(2);
       expect(resetGatewayRestartStateForInProcessRestart).toHaveBeenCalledTimes(2);
       expect(rotateAgentEventLifecycleGeneration).toHaveBeenCalledTimes(2);
+      expect(startedProcessInstanceIds).toEqual([
+        "gateway-process-0",
+        "gateway-process-1",
+        "gateway-process-2",
+      ]);
       expect(reloadTaskRuntimeStateFromStore).toHaveBeenCalledTimes(2);
       expect(acquireGatewayLock).toHaveBeenCalledTimes(3);
 
@@ -1195,6 +1222,50 @@ describe("runGatewayLoop", () => {
         reason: "gateway stopping",
         restartExpectedMs: null,
       });
+    });
+  });
+
+  it("waits for retired system-agent mutations before starting the replacement Gateway", async () => {
+    vi.clearAllMocks();
+    restartGatewayProcessWithFreshPid.mockReturnValue({ mode: "disabled" });
+    const releaseLock = vi.fn(async () => undefined);
+    acquireGatewayLock.mockResolvedValueOnce({ release: releaseLock });
+    let releaseSettlement: (() => void) | undefined;
+    const settlement = new Promise<void>((resolve) => {
+      releaseSettlement = resolve;
+    });
+    waitForRetiredSystemAgentMutationSettlement.mockImplementationOnce(async () => {
+      await settlement;
+    });
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { start, exited } = await createSignaledLoopHarness();
+      const sigusr1 = captureSignal("SIGUSR1");
+      const sigterm = captureSignal("SIGTERM");
+
+      sigusr1();
+      await waitForLoopCondition(
+        () => waitForRetiredSystemAgentMutationSettlement.mock.calls.length === 1,
+        "expected restart to wait for retired system-agent mutations",
+      );
+      expect(start).toHaveBeenCalledOnce();
+      expect(acquireGatewayLock).toHaveBeenCalledOnce();
+      expect(releaseLock).not.toHaveBeenCalled();
+
+      releaseSettlement?.();
+      await waitForLoopCondition(
+        () => start.mock.calls.length === 2,
+        "expected replacement Gateway to start after retired mutations settled",
+      );
+      expect(releaseLock).toHaveBeenCalledOnce();
+      expect(releaseLock.mock.invocationCallOrder[0]).toBeLessThan(
+        acquireGatewayLock.mock.invocationCallOrder[1] ?? Number.POSITIVE_INFINITY,
+      );
+      expect(acquireGatewayLock.mock.invocationCallOrder[1]).toBeLessThan(
+        start.mock.invocationCallOrder[1] ?? Number.POSITIVE_INFINITY,
+      );
+      sigterm();
+      await expect(exited).resolves.toBe(0);
     });
   });
 

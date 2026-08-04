@@ -8,10 +8,12 @@ import {
 function makeEngine() {
   const handle = vi.fn();
   const answerWizard = vi.fn();
+  const pollStep = vi.fn();
   return {
     answerWizard,
     handle,
-    engine: { answerWizard, handle },
+    pollStep,
+    engine: { answerWizard, handle, pollStep },
   };
 }
 
@@ -23,7 +25,7 @@ describe("system-agent chat input", () => {
         message: "5",
         wizardAnswer: { stepId: "channel", value: "twitch" },
       },
-      error: "Send either message or wizardAnswer, not both.",
+      error: "Send exactly one of message, wizardAnswer, or pollStepId.",
     },
     {
       input: {
@@ -31,7 +33,7 @@ describe("system-agent chat input", () => {
         wizardAnswer: { stepId: "secret", value: "not-forwarded" },
         delegation: { agentId: "main", sessionKey: "agent:main:main" },
       },
-      error: "Delegated OpenClaw sessions cannot submit structured wizard answers.",
+      error: "Delegated OpenClaw sessions cannot answer or poll structured wizard steps.",
     },
     {
       input: {
@@ -39,7 +41,31 @@ describe("system-agent chat input", () => {
         wizardAnswer: { stepId: "channel", value: "twitch" },
         reset: true,
       },
-      error: "A wizard answer cannot reset its OpenClaw chat session.",
+      error: "A wizard answer or poll cannot reset its OpenClaw chat session.",
+    },
+    {
+      input: { sessionId: "s1", pollStepId: "qr", message: "continue" },
+      error: "Send exactly one of message, wizardAnswer, or pollStepId.",
+    },
+    {
+      input: {
+        sessionId: "s1",
+        pollStepId: "qr",
+        delegation: { agentId: "main", sessionKey: "agent:main:main" },
+      },
+      error: "Delegated OpenClaw sessions cannot answer or poll structured wizard steps.",
+    },
+    {
+      input: { sessionId: "s1", pollStepId: "qr", reset: true },
+      error: "A wizard answer or poll cannot reset its OpenClaw chat session.",
+    },
+    {
+      input: { sessionId: "s1", pollStepId: "qr", welcomeVariant: "onboarding" as const },
+      error: "A wizard poll cannot include welcome or UI context.",
+    },
+    {
+      input: { sessionId: "s1", pollStepId: "qr", context: { page: "channels" } },
+      error: "A wizard poll cannot include welcome or UI context.",
     },
   ])("rejects invalid mixed input: $error", ({ input, error }) => {
     expect(getSystemAgentChatInputError(input)).toBe(error);
@@ -60,6 +86,18 @@ describe("system-agent chat input", () => {
     ).resolves.toEqual({ text: "Next step.", action: "none" });
 
     expect(answerWizard).toHaveBeenCalledWith({ stepId: "channel", value: "twitch" });
+    expect(handle).not.toHaveBeenCalled();
+  });
+
+  it("polls a structured wizard step without answering it", async () => {
+    const { engine, pollStep, handle } = makeEngine();
+    pollStep.mockResolvedValue({ text: "Still waiting.", action: "none" });
+
+    await expect(
+      runSystemAgentChatInput({ engine, input: { sessionId: "s1", pollStepId: "qr" } }),
+    ).resolves.toEqual({ text: "Still waiting.", action: "none" });
+
+    expect(pollStep).toHaveBeenCalledWith("qr");
     expect(handle).not.toHaveBeenCalled();
   });
 

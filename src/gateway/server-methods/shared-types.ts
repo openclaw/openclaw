@@ -2,6 +2,7 @@ import type {
   SessionApprovalReplay,
   SystemAgentChatQuestion,
   WizardAnswer,
+  WizardStep,
 } from "../../../packages/gateway-protocol/src/index.js";
 // Shared server-method types define the client, context, response, and handler
 // contracts used by every gateway RPC method module.
@@ -129,26 +130,28 @@ type SystemAgentHistoryTurn = {
   text: string;
 };
 
+type GatewaySystemAgentChatReply = {
+  text: string;
+  action: "none" | "exit" | "open-tui" | "open-setup";
+  sensitive?: boolean;
+  wizardInputPending?: boolean;
+  question?: SystemAgentChatQuestion;
+  step?: WizardStep;
+};
+
 type GatewaySystemAgentSession = {
   engine: {
     handle: (
       message: string,
       options?: { uiContext?: { page: string } },
-    ) => Promise<{
-      text: string;
-      action: "none" | "exit" | "open-tui" | "open-setup";
-      sensitive?: boolean;
-      question?: SystemAgentChatQuestion;
-    }>;
-    answerWizard: (answer: WizardAnswer) => Promise<{
-      text: string;
-      action: "none" | "exit" | "open-tui" | "open-setup";
-      sensitive?: boolean;
-      question?: SystemAgentChatQuestion;
-    }>;
+    ) => Promise<GatewaySystemAgentChatReply>;
+    answerWizard: (answer: WizardAnswer) => Promise<GatewaySystemAgentChatReply>;
+    pollStep: (stepId: string) => Promise<GatewaySystemAgentChatReply>;
     seedHistory: (turns: readonly SystemAgentHistoryTurn[]) => void;
     historyLength: () => number;
     historySince: (index: number) => SystemAgentHistoryTurn[];
+    hasPendingQrCode: () => boolean;
+    getPersistentApplySettlement: () => Promise<void> | null;
     getPendingOperatorProposal: () => { operation: SystemAgentOperation; hash: string } | null;
     resolveOperatorApproval: (
       decision: "allow-once" | "allow-always" | "deny" | null,
@@ -162,6 +165,8 @@ type GatewaySystemAgentSession = {
   welcomeAuditSequence?: number;
   lastUsedAt: number;
   ownerKey: string;
+  /** QR presentation support negotiated when the session was created. */
+  supportsQrCode: boolean;
   pendingApproval?: { id: string; proposalHash: string };
 };
 

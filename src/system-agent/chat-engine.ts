@@ -87,6 +87,8 @@ export type SystemAgentChatEngineOptions = {
   executeOperation?: typeof executeSystemAgentOperation;
   /** Test seam for best-effort audit persistence. */
   appendAuditEntry?: typeof import("./audit.js").appendSystemAgentAuditEntry;
+  /** Persist turns committed after an externally owned wizard resumes without a client request. */
+  persistBackgroundHistory?: (turns: readonly SystemAgentAssistantTurn[]) => void | Promise<void>;
   /** Where side effects run; the gateway surface never manages its own daemon. */
   surface?: "cli" | "gateway";
   /** The current chat client can render QR images. */
@@ -853,6 +855,57 @@ export class SystemAgentChatEngine {
     return await turn;
   }
 
+  /** Observe one active wizard step without acknowledging it. */
+  async pollStep(stepId: string): Promise<SystemAgentChatReply> {
+    this.assertActive();
+    const poll = this.turnQueue.then(async () => {
+      this.assertActive();
+      this.expireActiveWizardQrIfNeeded();
+      const bridge = this.wizardBridge;
+      if (!bridge) {
+        if (this.retainedQrTerminalReply?.stepId === stepId) {
+          return { ...this.retainedQrTerminalReply.reply };
+        }
+        return { text: "Setup is no longer active.", action: "none" } as const;
+      }
+      if (bridge.step?.id === stepId) {
+        return this.projectWizardReply({
+          text: renderWizardStep(bridge.step),
+          action: "none",
+        });
+      }
+      if (bridge.dismissedQrStepId === stepId && bridge.session.hasExternalQrPresentationOwner()) {
+        // Observation must stay nonblocking while the dependency-owned runner settles.
+        // Waiting here would hold the Gateway-wide system-agent queue behind this poll.
+        return this.projectWizardReply({
+          text: "Setup is still finishing the QR attempt.",
+          action: "none",
+        });
+      }
+      const text = await this.pumpWizardBridge();
+      // Disposal can cancel the awaited wizard and wake this poll. Do not let
+      // that retired continuation publish or persist a reply after its owner left.
+      this.assertActive();
+      const reply = this.projectWizardReply({ text, action: "none" });
+      if (reply.text) {
+        this.history.push({ role: "assistant", text: reply.text });
+      }
+      if (
+        reply.wizardInputPending !== true &&
+        bridge.dismissedQrStepId === stepId &&
+        !bridge.qrExpired
+      ) {
+        this.retainedQrTerminalReply = { stepId, reply: { ...reply } };
+      }
+      return reply;
+    });
+    this.turnQueue = poll.then(
+      () => undefined,
+      () => undefined,
+    );
+    return await poll;
+  }
+
   private async handleSerialized(
     text: string,
     options?: SystemAgentChatTurnOptions,
@@ -881,23 +934,22 @@ export class SystemAgentChatEngine {
     // Owner completion retires the presentation before the browser's retained Continue arrives.
     // Keep routing that one acknowledgement so WizardSession can settle its pending qrCode call.
     const staleQrAcknowledgement =
-      bridge !== null &&
-      step === null &&
-      !bridge.qrExpired &&
-      bridge.dismissedQrStepId === answer.stepId;
+      bridge !== null && !bridge.qrExpired && bridge.dismissedQrStepId === answer.stepId;
+    const dismissedQrCancellation =
+      bridge !== null && bridge.dismissedQrStepId === answer.stepId && answer.value === false;
     if (!bridge) {
       if (this.retainedQrTerminalReply?.stepId === answer.stepId) {
         return { ...this.retainedQrTerminalReply.reply };
       }
       throw new SystemAgentWizardAnswerError("No hosted wizard is awaiting an answer.");
     }
-    if (!step && !staleQrAcknowledgement) {
+    if (!step && !staleQrAcknowledgement && !dismissedQrCancellation) {
       throw new SystemAgentWizardAnswerError("No hosted wizard is awaiting an answer.");
     }
-    if (step && answer.stepId !== step.id) {
+    if (step && answer.stepId !== step.id && !staleQrAcknowledgement) {
       throw new SystemAgentWizardAnswerError("The hosted wizard answer targets a stale step.");
     }
-    if (step?.type === "qr" && answer.value === false) {
+    if ((step?.type === "qr" && answer.value === false) || dismissedQrCancellation) {
       bridge.session.cancel();
       // Cancellation releases the QR prompt before dependency-owned cleanup finishes.
       // Keep this turn fenced until the runner can no longer touch external setup state.
@@ -910,6 +962,11 @@ export class SystemAgentChatEngine {
       return completedReply;
     }
     const validationError = await bridge.session.answer(answer.stepId, answer.value);
+    if (!validationError && staleQrAcknowledgement && step) {
+      // A poll may already have projected the next prompt. The late QR acknowledgement
+      // confirms only the retired step; it must not consume or duplicate the newer one.
+      return this.projectWizardReply({ text: renderWizardStep(step), action: "none" });
+    }
     const text = validationError
       ? [validationError, ...(step ? [renderWizardStep(step)] : [])].join("\n\n")
       : await this.pumpWizardBridge();
@@ -1891,7 +1948,35 @@ export class SystemAgentChatEngine {
       if (this.wizardBridge === bridge && bridge.qrExpiresAtMs === expiresAtMs) {
         this.clearWizardExpiry(bridge);
       }
+      this.enqueueSettledWizardFinalization(bridge, stepId);
     });
+  }
+
+  private enqueueSettledWizardFinalization(bridge: ActiveWizardBridge, stepId: string): void {
+    const finalization = this.turnQueue.then(async () => {
+      if (this.disposed || this.wizardBridge !== bridge || bridge.dismissedQrStepId !== stepId) {
+        return;
+      }
+      const text = await this.pumpWizardBridge();
+      this.assertActive();
+      const reply = this.projectWizardReply({ text, action: "none" });
+      if (reply.wizardInputPending === true) {
+        return;
+      }
+      const turns: SystemAgentAssistantTurn[] = reply.text
+        ? [{ role: "assistant", text: reply.text }]
+        : [];
+      this.history.push(...turns);
+      this.retainedQrTerminalReply = { stepId, reply: { ...reply } };
+      if (turns.length > 0) {
+        try {
+          await this.opts.persistBackgroundHistory?.(turns);
+        } catch (error) {
+          log.warn(`Could not persist background wizard completion: ${formatErrorMessage(error)}`);
+        }
+      }
+    });
+    this.turnQueue = finalization.catch(() => undefined);
   }
 
   private expireWizardQr(
@@ -1917,6 +2002,9 @@ export class SystemAgentChatEngine {
       // the credential presentation; the external owner keeps durable post-scan work alive.
       bridge.qrExpired = bridge.session.expireOwnedQrPresentation(stepId);
       bridge.step = null;
+      if (bridge.qrExpired) {
+        bridge.dismissedQrStepId = stepId;
+      }
       this.armWizardRunnerExpiry(bridge, stepId);
       return;
     }

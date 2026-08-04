@@ -27,6 +27,7 @@ import { createLazyGatewayCronState } from "./server-cron-lazy.js";
 import { createGatewayCronReconciliation } from "./server-cron-reconciled.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayServerLiveState } from "./server-live-state.js";
+import { disposeSystemAgentSessions } from "./server-methods/system-agent-session-disposal.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
   type GatewayCloseOptions,
@@ -416,6 +417,8 @@ export async function prepareGatewayLifecycle(params: {
       transcriptUnsub: runtimeState.transcriptUnsub,
       lifecycleUnsub: runtimeState.lifecycleUnsub,
       taskUnsub: runtimeState.taskUnsub,
+      disposeSystemAgentSessions: () =>
+        disposeSystemAgentSessions(runtime.systemAgentSessions, runtime.wizardSessions),
       chatRunState,
       chatAbortControllers,
       chatQueuedTurns,
