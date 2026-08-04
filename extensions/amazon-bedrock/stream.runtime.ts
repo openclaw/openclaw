@@ -119,10 +119,10 @@ function normalizeAdaptiveClaudeToolChoice(
 }
 
 // OpenClaw synthesizes these caps when the provider's real output limit is unknown.
-// Keep them out of Bedrock adaptive requests so Bedrock can use its native default.
+// Keep them out of Bedrock requests so Bedrock can use its native default.
 const OPENCLAW_FALLBACK_MODEL_MAX_TOKENS = new Set([4096, 8192, 16_384]);
 
-function resolveAdaptiveBedrockMaxTokens(
+function resolveBedrockMaxTokens(
   model: Model<"bedrock-converse-stream">,
   baseMaxTokens: number | undefined,
 ): number | undefined {
@@ -444,7 +444,7 @@ function resolveSimpleBedrockOptions(
   if (requiresMandatoryAdaptiveThinking(model)) {
     return {
       ...base,
-      maxTokens: resolveAdaptiveBedrockMaxTokens(model, base.maxTokens),
+      maxTokens: resolveBedrockMaxTokens(model, base.maxTokens),
       reasoning: options?.reasoning === "off" ? "low" : (options?.reasoning ?? "high"),
       thinkingBudgets: options?.thinkingBudgets,
     } satisfies BedrockOptions;
@@ -458,21 +458,27 @@ function resolveSimpleBedrockOptions(
     return {
       ...base,
       ...(reasoning !== undefined
-        ? { maxTokens: resolveAdaptiveBedrockMaxTokens(model, base.maxTokens) }
+        ? { maxTokens: resolveBedrockMaxTokens(model, base.maxTokens) }
         : {}),
       reasoning,
     } satisfies BedrockOptions;
   }
 
   if (options.reasoning === "off") {
-    return { ...base, reasoning: "off" } satisfies BedrockOptions;
+    return {
+      ...base,
+      ...(supportsAdaptiveThinking(model)
+        ? { maxTokens: resolveBedrockMaxTokens(model, base.maxTokens) }
+        : {}),
+      reasoning: "off",
+    } satisfies BedrockOptions;
   }
 
   if (isAnthropicClaudeModel(model)) {
     if (supportsAdaptiveThinking(model)) {
       return {
         ...base,
-        maxTokens: resolveAdaptiveBedrockMaxTokens(model, base.maxTokens),
+        maxTokens: resolveBedrockMaxTokens(model, base.maxTokens),
         reasoning: options.reasoning,
         thinkingBudgets: options.thinkingBudgets,
       } satisfies BedrockOptions;

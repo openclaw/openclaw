@@ -461,7 +461,7 @@ describe("Bedrock stop reasons", () => {
 describe("Bedrock thinking effort mapping", () => {
   it.each([
     { reasoning: undefined, expected: "high", maxTokens: 128_000, fields: true },
-    { reasoning: "off" as const, expected: "off", maxTokens: undefined, fields: false },
+    { reasoning: "off" as const, expected: "off", maxTokens: 128_000, fields: false },
   ])(
     "uses the Opus 5 default for reasoning=$reasoning",
     ({ reasoning, expected, maxTokens, fields }) => {
@@ -486,6 +486,34 @@ describe("Bedrock thinking effort mapping", () => {
       );
     },
   );
+
+  it("sends the configured model maxTokens when Opus 5 reasoning is off", async () => {
+    const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+      $metadata: { httpStatusCode: 200 },
+      stream: streamEvents([
+        { messageStart: { role: ConversationRole.ASSISTANT } },
+        { messageStop: { stopReason: BedrockStopReason.END_TURN } },
+      ]),
+    } as never);
+    const model = bedrockModel({
+      id: "global.anthropic.claude-opus-5",
+      name: "Claude Opus 5",
+      contextWindow: 1_000_000,
+      maxTokens: 32_000,
+    });
+
+    await streamBedrockForTest(
+      model,
+      { messages: [{ role: "user", content: "Reply briefly.", timestamp: 0 }] } as never,
+      { reasoning: "off" },
+    ).result();
+
+    const command = send.mock.calls[0]?.[0] as { input?: Record<string, unknown> };
+    expect(command.input).toMatchObject({
+      inferenceConfig: { maxTokens: 32_000 },
+    });
+    expect(command.input?.additionalModelRequestFields).toBeUndefined();
+  });
 
   it.each([
     { reasoning: undefined, expected: "high" },
@@ -560,19 +588,26 @@ describe("Bedrock thinking effort mapping", () => {
     });
   });
 
-  it.each([4096, 8192, 16_384])(
-    "does not turn fallback maxTokens %s into an adaptive cap",
-    (maxTokens) => {
+  it.each([
+    { reasoning: "high" as const, maxTokens: 4096 },
+    { reasoning: "high" as const, maxTokens: 8192 },
+    { reasoning: "high" as const, maxTokens: 16_384 },
+    { reasoning: "off" as const, maxTokens: 4096 },
+    { reasoning: "off" as const, maxTokens: 8192 },
+    { reasoning: "off" as const, maxTokens: 16_384 },
+  ])(
+    "does not turn fallback maxTokens $maxTokens into a cap for reasoning=$reasoning",
+    ({ reasoning, maxTokens }) => {
       const model = bedrockModel({
         id: "us.anthropic.claude-opus-4-8",
         name: "Claude Opus 4.8",
         reasoning: true,
         maxTokens,
       });
-      const options = testing.resolveSimpleBedrockOptions(model, { reasoning: "high" });
+      const options = testing.resolveSimpleBedrockOptions(model, { reasoning });
 
       expect(options.maxTokens).toBeUndefined();
-      expect(options.reasoning).toBe("high");
+      expect(options.reasoning).toBe(reasoning);
     },
   );
 
