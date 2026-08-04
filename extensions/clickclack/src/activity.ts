@@ -16,6 +16,7 @@
  *   frame, and PATCH it when a later frame carries a strictly longer body.
  */
 import { buildChannelProgressDraftLine } from "openclaw/plugin-sdk/channel-outbound";
+import { isClickClackAmbiguousWriteError } from "./http-client.js";
 import type { ClickClackMessage, ClickClackMessageProvenance } from "./types.js";
 
 /** Debounce window for PATCHing streaming commentary snapshots. */
@@ -166,11 +167,32 @@ export function createClickClackActivityPublisher(params: {
   let provenance: ClickClackMessageProvenance | undefined;
   // Single promise chain so POST/PATCH ordering matches frame arrival order.
   let chain: Promise<void> = Promise.resolve();
+  let activityAbandoned = false;
 
   const enqueue = (work: () => Promise<void>): Promise<void> => {
-    chain = chain.then(work).catch((error: unknown) => {
-      params.onError?.(error);
-    });
+    if (activityAbandoned) {
+      return chain;
+    }
+    chain = chain
+      .then(async () => {
+        // A previous write may have committed before failing ambiguously. Stop the whole
+        // best-effort publisher so queued rows cannot add duplicate or serial waits.
+        if (!activityAbandoned) {
+          await work();
+        }
+      })
+      .catch((error: unknown) => {
+        if (isClickClackAmbiguousWriteError(error)) {
+          activityAbandoned = true;
+          for (const segment of commentaryByItem.values()) {
+            if (segment.timer) {
+              clearTimeout(segment.timer);
+              segment.timer = undefined;
+            }
+          }
+        }
+        params.onError?.(error);
+      });
     return chain;
   };
 
@@ -193,7 +215,7 @@ export function createClickClackActivityPublisher(params: {
       clearTimeout(segment.timer);
       segment.timer = undefined;
     }
-    if (!segment.dirty || !segment.body.trim()) {
+    if (activityAbandoned || !segment.dirty || !segment.body.trim()) {
       return Promise.resolve();
     }
     segment.dirty = false;
@@ -214,6 +236,9 @@ export function createClickClackActivityPublisher(params: {
   };
 
   const handleCommentary = (payload: ClickClackItemEventPayload): void => {
+    if (activityAbandoned) {
+      return;
+    }
     const body = commentaryBody(payload);
     if (!body.trim()) {
       return;
@@ -255,6 +280,9 @@ export function createClickClackActivityPublisher(params: {
   };
 
   const handleDiscreteItem = (payload: ClickClackItemEventPayload): void => {
+    if (activityAbandoned) {
+      return;
+    }
     const body = activityBody(payload);
     if (!body) {
       return;

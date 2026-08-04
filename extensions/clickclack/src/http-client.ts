@@ -2,11 +2,18 @@
  * Thin ClickClack REST/websocket client used by gateway, resolver, and outbound
  * delivery code.
  */
+import {
+  collectErrorGraphCandidates,
+  extractErrorCode,
+  readErrorName,
+} from "openclaw/plugin-sdk/error-runtime";
 import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import {
+  fetchWithTimeout,
   readProviderJsonResponse,
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
+import { classifyTransientNetworkErrorCode } from "openclaw/plugin-sdk/retry-runtime";
 import { WebSocket } from "ws";
 import type {
   ClickClackBotCommand,
@@ -58,10 +65,17 @@ type ClientOptions = {
   fetch?: typeof fetch;
 };
 
+type RequestPolicy = {
+  timeoutRecoverySafe?: true;
+};
+
 const CLICKCLACK_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const CLICKCLACK_CORRELATION_ID_MAX_LENGTH = 128;
 const CLICKCLACK_CORRELATION_ID_PATTERN = /^[A-Za-z0-9._:-]+$/u;
 const CLICKCLACK_CORRELATION_ID_HEADER = "X-Correlation-ID";
+// Bound retry-safe reads and audited owner-recoverable writes before response
+// headers. Ambiguous or potentially large writes retain transport/proxy policy.
+const CLICKCLACK_RESPONSE_HEADERS_TIMEOUT_MS = 30_000;
 // Keep REST and websocket JSON under the same bounded response budget. ClickClack
 // accepts 1 MiB request bodies, then wraps and re-encodes them as events, so a
 // valid frame can exceed 1 MiB before ws hands it to the event parser.
@@ -73,6 +87,63 @@ const CLICKCLACK_WEBSOCKET_HANDSHAKE_TIMEOUT_MS = 30_000;
 const CLICKCLACK_MESSAGE_PAGE_LIMIT = 200;
 const CLICKCLACK_DISCUSSION_ROOT_PAGE_LIMIT = 8;
 const CLICKCLACK_DISCUSSION_THREAD_REQUEST_LIMIT = 24;
+
+function isClickClackTimeoutError(error: unknown): boolean {
+  return error instanceof Error && error.name === "TimeoutError";
+}
+
+export function isClickClackAmbiguousWriteError(error: unknown): boolean {
+  return (
+    isClickClackTimeoutError(error) ||
+    (error instanceof Error && error.name === "ClickClackAmbiguousWriteError")
+  );
+}
+
+function createClickClackTimeoutError(message: string): Error {
+  const error = new Error(message);
+  error.name = "TimeoutError";
+  return error;
+}
+
+function createClickClackAmbiguousWriteError(cause: unknown): Error {
+  const error = new Error(
+    cause instanceof Error ? cause.message : "ClickClack write outcome is ambiguous",
+    { cause },
+  );
+  error.name = "ClickClackAmbiguousWriteError";
+  return error;
+}
+
+function isAmbiguousClickClackTransportError(error: unknown): boolean {
+  const candidates = collectErrorGraphCandidates(error, (current) => [
+    current.cause,
+    current.error,
+  ]);
+  if (
+    candidates.some(
+      (candidate) =>
+        readErrorName(candidate) === "AbortError" ||
+        classifyTransientNetworkErrorCode(extractErrorCode(candidate)) === "ambiguous",
+    )
+  ) {
+    return true;
+  }
+  if (
+    candidates.some(
+      (candidate) =>
+        classifyTransientNetworkErrorCode(extractErrorCode(candidate)) === "pre-connect",
+    )
+  ) {
+    return false;
+  }
+  // Once Fetch has been invoked, an unclassified rejection cannot prove that
+  // the request stayed local. Fail closed for writes that require reconciliation.
+  return true;
+}
+
+function isAmbiguousClickClackHttpStatus(status: number): boolean {
+  return status === 408 || status === 425 || status === 429 || status >= 500;
+}
 
 type ClickClackMessagePage = {
   messages: ClickClackMessage[];
@@ -139,7 +210,12 @@ export function createClickClackClient(options: ClientOptions) {
     Accept: "application/json",
   };
 
-  async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  async function request<T>(
+    path: string,
+    init: RequestInit = {},
+    policy: RequestPolicy = {},
+  ): Promise<T> {
+    const url = `${baseUrl}${path}`;
     const requestHeaders = new Headers(init.headers);
     for (const [key, value] of Object.entries(headers)) {
       requestHeaders.set(key, value);
@@ -147,23 +223,81 @@ export function createClickClackClient(options: ClientOptions) {
     if (correlationId) {
       requestHeaders.set(CLICKCLACK_CORRELATION_ID_HEADER, correlationId);
     }
-    if (init.body && !(init.body instanceof FormData)) {
+    const isUpload = init.body instanceof FormData;
+    if (init.body && !isUpload) {
       requestHeaders.set("Content-Type", "application/json");
     }
-    const response = await fetcher(`${baseUrl}${path}`, { ...init, headers: requestHeaders });
+    const method = init.method?.toUpperCase() ?? "GET";
+    // A write can time out after the server commits it, and Fetch cannot tell
+    // whether its request body is still making progress. Reads and explicitly
+    // audited retry-safe writes use the fixed pre-header deadline; multipart
+    // uploads retain the existing transport/proxy policy.
+    const timeoutRecoverySafe = !isUpload && policy.timeoutRecoverySafe === true;
+    // Redirects can commit the write on the first hop before a later hop fails.
+    // Surface that as an ambiguous outcome instead of following the redirect
+    // and potentially classifying the redirected transport failure as pre-connect.
+    const requestInit = {
+      ...init,
+      headers: requestHeaders,
+      ...(timeoutRecoverySafe ? { redirect: "error" as const } : {}),
+    };
+    const useResponseHeaderDeadline =
+      !isUpload && (method === "GET" || method === "HEAD" || timeoutRecoverySafe);
+    let response: Response;
+    try {
+      response = useResponseHeaderDeadline
+        ? await fetchWithTimeout(url, requestInit, CLICKCLACK_RESPONSE_HEADERS_TIMEOUT_MS, fetcher)
+        : await fetcher(url, requestInit);
+    } catch (error) {
+      if (
+        timeoutRecoverySafe &&
+        !isClickClackTimeoutError(error) &&
+        isAmbiguousClickClackTransportError(error)
+      ) {
+        throw createClickClackAmbiguousWriteError(error);
+      }
+      throw error;
+    }
     if (!response.ok) {
-      const detail = await readResponseTextLimited(response, CLICKCLACK_ERROR_BODY_LIMIT_BYTES);
+      let detail: string;
+      try {
+        detail = await readResponseTextLimited(response, CLICKCLACK_ERROR_BODY_LIMIT_BYTES);
+      } catch (error) {
+        if (timeoutRecoverySafe && isAmbiguousClickClackHttpStatus(response.status)) {
+          throw createClickClackAmbiguousWriteError(error);
+        }
+        throw error;
+      }
       // Remote error bodies are untrusted output; redact them even when the
       // operator disables log redaction or overrides log-only patterns.
-      throw new ClickClackHttpError(
+      const httpError = new ClickClackHttpError(
         response.status,
         redactToolPayloadText(detail),
         new Headers(response.headers),
       );
+      if (timeoutRecoverySafe && isAmbiguousClickClackHttpStatus(response.status)) {
+        throw createClickClackAmbiguousWriteError(httpError);
+      }
+      throw httpError;
     }
-    return await readProviderJsonResponse<T>(response, "ClickClack response", {
-      maxBytes: CLICKCLACK_INBOUND_JSON_LIMIT_BYTES,
-    });
+    try {
+      return await readProviderJsonResponse<T>(response, "ClickClack response", {
+        maxBytes: CLICKCLACK_INBOUND_JSON_LIMIT_BYTES,
+        // A recoverable write may have committed before its successful response
+        // body stalls. Preserve that ambiguity for the owner reconciliation path.
+        onIdleTimeout: timeoutRecoverySafe
+          ? ({ chunkTimeoutMs }) =>
+              createClickClackTimeoutError(
+                `ClickClack response body stalled for ${chunkTimeoutMs}ms`,
+              )
+          : undefined,
+      });
+    } catch (error) {
+      if (timeoutRecoverySafe && !isClickClackTimeoutError(error)) {
+        throw createClickClackAmbiguousWriteError(error);
+      }
+      throw error;
+    }
   }
 
   async function fetchEventPage(
@@ -207,6 +341,7 @@ export function createClickClackClient(options: ClientOptions) {
           method: "PUT",
           body: JSON.stringify({ commands }),
         },
+        { timeoutRecoverySafe: true },
       );
       return data.bot_commands;
     },
@@ -235,6 +370,7 @@ export function createClickClackClient(options: ClientOptions) {
       const data = await request<{ channel: ClickClackChannel }>(
         `/api/workspaces/${encodeURIComponent(workspaceId)}/channels`,
         { method: "POST", body: JSON.stringify(channel) },
+        { timeoutRecoverySafe: true },
       );
       return data.channel;
     },
@@ -253,6 +389,7 @@ export function createClickClackClient(options: ClientOptions) {
       const data = await request<{ channel: ClickClackChannel }>(
         `/api/channels/${encodeURIComponent(channelId)}`,
         { method: "PATCH", body: JSON.stringify(patch) },
+        { timeoutRecoverySafe: true },
       );
       return data.channel;
     },
@@ -407,6 +544,7 @@ export function createClickClackClient(options: ClientOptions) {
             ...provenanceFields(opts?.provenance),
           }),
         },
+        opts?.nonce ? { timeoutRecoverySafe: true } : undefined,
       );
       return data.message;
     },
@@ -425,6 +563,7 @@ export function createClickClackClient(options: ClientOptions) {
             ...provenanceFields(opts?.provenance),
           }),
         },
+        opts?.nonce ? { timeoutRecoverySafe: true } : undefined,
       );
       return data.message;
     },
@@ -432,10 +571,16 @@ export function createClickClackClient(options: ClientOptions) {
       workspaceId: string,
       memberIds: string[],
     ): Promise<{ id: string }> => {
-      const data = await request<{ conversation: { id: string } }>("/api/dms", {
-        method: "POST",
-        body: JSON.stringify({ workspace_id: workspaceId, member_ids: memberIds }),
-      });
+      // The endpoint is create-or-reuse for a stable workspace/member set, so
+      // an unknown result can be retried without creating a second conversation.
+      const data = await request<{ conversation: { id: string } }>(
+        "/api/dms",
+        {
+          method: "POST",
+          body: JSON.stringify({ workspace_id: workspaceId, member_ids: memberIds }),
+        },
+        { timeoutRecoverySafe: true },
+      );
       return data.conversation;
     },
     createUpload: async (params: {
@@ -484,10 +629,14 @@ export function createClickClackClient(options: ClientOptions) {
       }
     },
     attachUpload: async (messageId: string, uploadId: string): Promise<void> => {
-      await request<{ ok: true }>(`/api/messages/${encodeURIComponent(messageId)}/attachments`, {
-        method: "POST",
-        body: JSON.stringify({ upload_id: uploadId }),
-      });
+      await request<{ ok: true }>(
+        `/api/messages/${encodeURIComponent(messageId)}/attachments`,
+        {
+          method: "POST",
+          body: JSON.stringify({ upload_id: uploadId }),
+        },
+        { timeoutRecoverySafe: true },
+      );
     },
     /**
      * POSTs a durable agent activity row (agent_commentary / agent_tool)
@@ -508,15 +657,19 @@ export function createClickClackClient(options: ClientOptions) {
       const path = params.channelId
         ? `/api/channels/${encodeURIComponent(params.channelId)}/messages`
         : `/api/dms/${encodeURIComponent(params.conversationId ?? "")}/messages`;
-      const data = await request<{ message: ClickClackMessage }>(path, {
-        method: "POST",
-        body: JSON.stringify({
-          body: params.body,
-          kind: params.kind,
-          turn_id: params.turnId,
-          ...provenanceFields(params.provenance),
-        }),
-      });
+      const data = await request<{ message: ClickClackMessage }>(
+        path,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            body: params.body,
+            kind: params.kind,
+            turn_id: params.turnId,
+            ...provenanceFields(params.provenance),
+          }),
+        },
+        { timeoutRecoverySafe: true },
+      );
       return data.message;
     },
     /** PATCHes the body of an existing message (activity row coalescing). */
@@ -524,6 +677,7 @@ export function createClickClackClient(options: ClientOptions) {
       const data = await request<{ message: ClickClackMessage }>(
         `/api/messages/${encodeURIComponent(messageId)}`,
         { method: "PATCH", body: JSON.stringify({ body }) },
+        { timeoutRecoverySafe: true },
       );
       return data.message;
     },
@@ -542,6 +696,7 @@ export function createClickClackClient(options: ClientOptions) {
             ...(opts?.nonce ? { nonce: opts.nonce } : {}),
           }),
         },
+        opts?.nonce ? { timeoutRecoverySafe: true } : undefined,
       );
       return data.message;
     },

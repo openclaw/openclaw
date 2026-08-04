@@ -3,6 +3,7 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   ClickClackHttpError,
+  isClickClackAmbiguousWriteError,
   isClickClackChannelNameConflict,
   type ClickClackClient,
 } from "../http-client.js";
@@ -123,6 +124,56 @@ export function assertChannelPatch(
       throw new Error(`ClickClack channel update did not apply ${key}`);
     }
   }
+}
+
+/**
+ * Applies a setter-style managed-channel patch with bounded ambiguous-result
+ * recovery. An ambiguous request is verified by authoritative relist; one retry
+ * is allowed only after that relist proves the desired patch is absent.
+ */
+export async function updateChannelWithReconciliation(params: {
+  client: ClickClackClient;
+  workspaceId: string;
+  channelId: string;
+  patch: Parameters<ClickClackClient["updateChannel"]>[1];
+}): Promise<Awaited<ReturnType<ClickClackClient["updateChannel"]>>> {
+  const applyPatch = () => params.client.updateChannel(params.channelId, params.patch);
+
+  let ambiguousError: unknown;
+  try {
+    return await applyPatch();
+  } catch (error) {
+    if (!isClickClackAmbiguousWriteError(error)) {
+      throw error;
+    }
+    ambiguousError = error;
+  }
+
+  for (let relistAttempt = 0; relistAttempt < 2; relistAttempt += 1) {
+    const channels = await params.client.channels(params.workspaceId);
+    assertManagedChannelListContract(channels);
+    const channel = channels.find((candidate) => candidate.id === params.channelId);
+    if (!channel) {
+      throw ambiguousError;
+    }
+    try {
+      assertChannelPatch(channel, params.patch);
+      return channel;
+    } catch {
+      if (relistAttempt > 0) {
+        throw ambiguousError;
+      }
+    }
+    try {
+      return await applyPatch();
+    } catch (error) {
+      if (!isClickClackAmbiguousWriteError(error)) {
+        throw error;
+      }
+      ambiguousError = error;
+    }
+  }
+  throw ambiguousError;
 }
 
 function assertManagedChannelContract(
@@ -304,7 +355,12 @@ export async function openClickClackDiscussionBinding(
             serverBaseUrl,
             channelId: adopted.id,
           });
-          resolved = await client.updateChannel(adopted.id, { ...managedFields, archived });
+          resolved = await updateChannelWithReconciliation({
+            client,
+            workspaceId: workspace.id,
+            channelId: adopted.id,
+            patch: { ...managedFields, archived },
+          });
         } else {
           resolved = await client.createChannel(workspace.id, { ...managedFields, kind: "public" });
           markClickClackDiscussionChannelIdentityRevoked({
@@ -323,6 +379,11 @@ export async function openClickClackDiscussionBinding(
           assertManagedChannelListContract(channels);
           continue;
         }
+        // Only a create can have produced a new external_ref channel to adopt.
+        // An already adopted PATCH has exhausted its own bounded recovery here.
+        if (adopted) {
+          throw error;
+        }
         const definitiveNoCreate = isDefinitiveNoCreateHttpError(error);
         try {
           const relisted = await client.channels(workspace.id);
@@ -339,7 +400,12 @@ export async function openClickClackDiscussionBinding(
               serverBaseUrl,
               channelId: recovered.id,
             });
-            resolved = await client.updateChannel(recovered.id, { ...managedFields, archived });
+            resolved = await updateChannelWithReconciliation({
+              client,
+              workspaceId: workspace.id,
+              channelId: recovered.id,
+              patch: { ...managedFields, archived },
+            });
             break;
           }
           if (definitiveNoCreate) {
@@ -378,7 +444,12 @@ export async function openClickClackDiscussionBinding(
       }
     } catch (error) {
       try {
-        const updated = await client.updateChannel(resolved.id, { archived: true });
+        const updated = await updateChannelWithReconciliation({
+          client,
+          workspaceId: workspace.id,
+          channelId: resolved.id,
+          patch: { archived: true },
+        });
         assertChannelPatch(updated, { archived: true });
         clearDiscussionBindingGeneration({
           runtime,
@@ -394,7 +465,12 @@ export async function openClickClackDiscussionBinding(
     }
     if (!resolved.route_id) {
       try {
-        const updated = await client.updateChannel(resolved.id, { archived: true });
+        const updated = await updateChannelWithReconciliation({
+          client,
+          workspaceId: workspace.id,
+          channelId: resolved.id,
+          patch: { archived: true },
+        });
         assertChannelPatch(updated, { archived: true });
         clearDiscussionBindingGeneration({
           runtime,
@@ -410,7 +486,12 @@ export async function openClickClackDiscussionBinding(
     }
     let channel = resolved;
     if (!adopted && archived) {
-      channel = await client.updateChannel(resolved.id, { archived: true });
+      channel = await updateChannelWithReconciliation({
+        client,
+        workspaceId: workspace.id,
+        channelId: resolved.id,
+        patch: { archived: true },
+      });
       assertChannelPatch(channel, { archived: true });
     }
     const nextBinding: ClickClackDiscussionBinding = {
@@ -437,7 +518,12 @@ export async function openClickClackDiscussionBinding(
     });
     if (!currentEntry || currentEntry.sessionId !== entry.sessionId) {
       try {
-        const updated = await client.updateChannel(channel.id, { archived: true });
+        const updated = await updateChannelWithReconciliation({
+          client,
+          workspaceId: workspace.id,
+          channelId: channel.id,
+          patch: { archived: true },
+        });
         assertChannelPatch(updated, { archived: true });
         clearDiscussionBindingGeneration({
           runtime,
@@ -455,7 +541,12 @@ export async function openClickClackDiscussionBinding(
       store.set(sessionKey, nextBinding);
     } catch (error) {
       try {
-        const updated = await client.updateChannel(channel.id, { archived: true });
+        const updated = await updateChannelWithReconciliation({
+          client,
+          workspaceId: workspace.id,
+          channelId: channel.id,
+          patch: { archived: true },
+        });
         assertChannelPatch(updated, { archived: true });
         clearDiscussionBindingGeneration({
           runtime,

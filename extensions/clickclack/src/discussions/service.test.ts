@@ -649,7 +649,7 @@ describe("ClickClack discussion service", () => {
     expect(harness.generationStore.lookup(sessionKey)).toEqual(pendingBeforeRotation);
   });
 
-  it("adopts a created channel when the create response is lost", async () => {
+  it("adopts a created channel when its response-header timeout hides success", async () => {
     const harness = createHarness({ label: "Lost response" });
     const sessionKey = "agent:main:lost-response";
     const general = await harness.channels().then((channels) => channels[0]!);
@@ -674,7 +674,9 @@ describe("ClickClack discussion service", () => {
           },
         ];
       });
-    vi.mocked(harness.createChannel).mockRejectedValueOnce(new Error("connection lost"));
+    vi.mocked(harness.createChannel).mockRejectedValueOnce(
+      Object.assign(new Error("request timed out"), { name: "TimeoutError" }),
+    );
     vi.mocked(harness.updateChannel).mockImplementationOnce(async (_channelId, patch) => ({
       id: "chn_lost_response",
       route_id: "lost-response-route",
@@ -804,6 +806,35 @@ describe("ClickClack discussion service", () => {
       pending: expect.objectContaining({ externalRef }),
     });
     expect(harness.revokedStore.entries()).toHaveLength(1);
+  });
+
+  it("runs one bounded PATCH recovery for a pre-existing adopted channel", async () => {
+    const harness = createHarness({ label: "Bounded adoption" });
+    const sessionKey = "agent:main:bounded-adoption";
+    const externalRef = testExternalRef(sessionKey);
+    const adopted = {
+      id: "chn_bounded_adoption",
+      route_id: "bounded-adoption-route",
+      workspace_id: "wsp_team",
+      name: "stale-name",
+      kind: "public" as const,
+      external_managed: true,
+      external_ref: externalRef,
+      external_url: "",
+      sidebar_section: "Sessions",
+      archived: false,
+      created_at: "2026-07-19T00:00:00.000Z",
+    };
+    const timeout = Object.assign(new Error("request timed out"), { name: "TimeoutError" });
+    vi.mocked(harness.channels).mockResolvedValue([adopted]);
+    vi.mocked(harness.updateChannel).mockRejectedValue(timeout);
+
+    await expect(harness.service.open(sessionKey)).rejects.toThrow("request timed out");
+
+    expect(harness.updateChannel).toHaveBeenCalledTimes(2);
+    expect(harness.generationStore.lookup(sessionKey)).toMatchObject({
+      pending: expect.objectContaining({ externalRef }),
+    });
   });
 
   it("retains an adopted channel reservation when conflict relisting fails", async () => {
