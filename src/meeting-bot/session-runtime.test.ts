@@ -5,13 +5,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { TranscriptsStore } from "../transcripts/store.js";
 import { createMeetingSession } from "./session-factory.js";
 import {
-  MeetingSessionRuntime,
-  type MeetingSessionRuntimeJoinContext,
-} from "./session-runtime.js";
-import {
   getMeetingSessionRuntimeProbeAccess,
   type MeetingBrowserHealthRefreshOutcome,
 } from "./session-runtime-probes.js";
+import { MeetingSessionRuntime, type MeetingSessionRuntimeJoinContext } from "./session-runtime.js";
 import type {
   MeetingBrowserHealth,
   MeetingBrowserTab,
