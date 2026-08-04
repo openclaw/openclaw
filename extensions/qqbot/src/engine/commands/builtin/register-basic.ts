@@ -1,4 +1,5 @@
 // Qqbot plugin module implements register basic behavior.
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SlashCommandRegistry } from "../slash-commands.js";
 import { getPluginVersionString, resolveRuntimeServiceVersion } from "./state.js";
 
@@ -90,7 +91,17 @@ export function registerBasicBotCommands(registry: SlashCommandRegistry): void {
     description: "查看 QQBot 升级指引",
     c2cOnly: true,
     usage: [`/bot-upgrade`, ``, `查看 QQBot 升级说明。`].join("\n"),
-    handler: () =>
-      [`📘 QQBot 升级指引：`, `[点击查看升级说明](${QQBOT_UPGRADE_GUIDE_URL})`].join("\n"),
+    // channels.qqbot.upgradeUrl documents itself as the URL this command returns,
+    // so an operator-configured guide wins over the bundled default.
+    handler: (ctx) => {
+      const configuredUrl =
+        typeof ctx.accountConfig?.upgradeUrl === "string"
+          ? normalizeOptionalString(ctx.accountConfig.upgradeUrl)
+          : undefined;
+      return [
+        `📘 QQBot 升级指引：`,
+        `[点击查看升级说明](${configuredUrl ?? QQBOT_UPGRADE_GUIDE_URL})`,
+      ].join("\n");
+    },
   });
 }
