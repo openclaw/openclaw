@@ -413,6 +413,81 @@ describe("pw-tools-core aria snapshot storage", () => {
     );
   });
 
+  it("keeps newer AI refs when an older queued raw publication aborts", async () => {
+    const mainFrame = { id: "main-frame" };
+    const page = {
+      ariaSnapshot: vi.fn(async () => '- button "AI" [ref=e2]'),
+      mainFrame: () => mainFrame,
+      on: vi.fn(),
+      off: vi.fn(),
+    };
+    let releaseFirstMarker!: () => void;
+    const firstMarker = new Promise<void>((resolve) => {
+      releaseFirstMarker = resolve;
+    });
+    let rejectSecondMarker!: (reason: unknown) => void;
+    const secondMarker = new Promise<Set<string>>((_resolve, reject) => {
+      rejectSecondMarker = reject;
+    });
+    let markerCall = 0;
+    let publishedRefs: Record<string, unknown> | undefined;
+    getPageForTargetId.mockResolvedValue(page);
+    withPageScopedCdpClient.mockResolvedValue({ nodes: [{ snapshot: "raw" }] });
+    formatAriaSnapshot.mockReturnValue([{ ref: "ax-raw", role: "button", name: "raw" }]);
+    markBackendDomRefsOnPage
+      .mockImplementationOnce(async () => {
+        markerCall += 1;
+        await firstMarker;
+        return new Set();
+      })
+      .mockImplementationOnce(async (opts: { signal?: AbortSignal }) => {
+        markerCall += 1;
+        return await Promise.race([
+          secondMarker,
+          new Promise<never>((_resolve, reject) => {
+            opts.signal?.addEventListener(
+              "abort",
+              () => reject(opts.signal?.reason ?? new Error("aborted")),
+              { once: true },
+            );
+          }),
+        ]);
+      });
+    invalidateRoleRefsForTarget.mockImplementation(() => {
+      publishedRefs = undefined;
+    });
+    storeRoleRefsForTarget.mockImplementation((opts: { refs: Record<string, unknown> }) => {
+      publishedRefs = opts.refs;
+    });
+
+    const controller = new AbortController();
+    const mod = await import("./pw-tools-core.snapshot.js");
+    const first = mod.snapshotAriaViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+    });
+    await vi.waitFor(() => expect(markerCall).toBe(1));
+    const second = mod.snapshotAriaViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(withPageScopedCdpClient).toHaveBeenCalledTimes(2));
+
+    const ai = mod.snapshotAiViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+    });
+
+    releaseFirstMarker();
+    await vi.waitFor(() => expect(markerCall).toBe(2));
+    controller.abort(new Error("queued raw publication timed out"));
+    await expect(second).rejects.toThrow("queued raw publication timed out");
+    await expect(first).resolves.toBeDefined();
+    await expect(ai).resolves.toMatchObject({ refs: { e2: { role: "button", name: "AI" } } });
+    expect(publishedRefs).toEqual({ e2: { role: "button", name: "AI" } });
+  });
+
   it("does not wedge a retry when an aborted marker write never returns", async () => {
     const page = { id: "page-1" };
     const controller = new AbortController();

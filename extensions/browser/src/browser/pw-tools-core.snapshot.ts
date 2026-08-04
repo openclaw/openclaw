@@ -144,7 +144,7 @@ function buildStoredAriaRefs(
 type AriaRefPublication = { settled: Promise<void> };
 const activeAriaRefPublications = new Map<string, AriaRefPublication>();
 
-async function publishAriaRefsInOrder<T>(opts: {
+async function publishRefsInOrder<T>(opts: {
   key: string;
   signal?: AbortSignal;
   run: () => Promise<T>;
@@ -191,7 +191,7 @@ export async function storeAriaSnapshotRefsViaPlaywright(opts: {
       signal: opts.signal,
     }));
   opts.signal?.throwIfAborted();
-  await publishAriaRefsInOrder({
+  await publishRefsInOrder({
     key: `${normalizeCdpUrl(opts.cdpUrl)}::${opts.targetId ?? "current"}`,
     signal: opts.signal,
     run: async () => {
@@ -393,12 +393,17 @@ export async function snapshotAiViaPlaywright(opts: {
         delta: opts.delta,
       });
       assertSnapshotFrameCurrent(isFrameCurrent);
-      storeRoleRefsForTarget({
-        page,
-        cdpUrl: opts.cdpUrl,
-        targetId: opts.targetId,
-        refs: finalized.refs,
-        mode: "aria",
+      await publishRefsInOrder({
+        key: `${normalizeCdpUrl(opts.cdpUrl)}::${opts.targetId ?? "current"}`,
+        run: async () => {
+          storeRoleRefsForTarget({
+            page,
+            cdpUrl: opts.cdpUrl,
+            targetId: opts.targetId,
+            refs: finalized.refs,
+            mode: "aria",
+          });
+        },
       });
       return finalized;
     },
@@ -464,14 +469,19 @@ async function finalizeRoleSnapshotViaPlaywright(params: {
     maxChars: params.maxChars,
     delta: params.delta,
   });
-  storeRoleRefsForTarget({
-    page: params.page,
-    cdpUrl: params.cdpUrl,
-    targetId: params.targetId,
-    refs: finalized.refs,
-    ...(params.frameSelector ? { frameSelector: params.frameSelector } : {}),
-    ...(params.frame ? { frame: params.frame } : {}),
-    mode: params.mode,
+  await publishRefsInOrder({
+    key: `${normalizeCdpUrl(params.cdpUrl)}::${params.targetId ?? "current"}`,
+    run: async () => {
+      storeRoleRefsForTarget({
+        page: params.page,
+        cdpUrl: params.cdpUrl,
+        targetId: params.targetId,
+        refs: finalized.refs,
+        ...(params.frameSelector ? { frameSelector: params.frameSelector } : {}),
+        ...(params.frame ? { frame: params.frame } : {}),
+        mode: params.mode,
+      });
+    },
   });
   return finalized;
 }
