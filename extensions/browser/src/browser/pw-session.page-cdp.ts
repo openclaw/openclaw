@@ -131,6 +131,7 @@ export async function withPageScopedCdpClient<T>(opts: {
 /** Read the browser-owned loader identity for a Playwright page's main frame. */
 export async function readMainFrameDocumentIdentityForPage(
   page: Page,
+  signal?: AbortSignal,
 ): Promise<string | undefined> {
   return await withPlaywrightPageCdpSession(
     page,
@@ -143,6 +144,7 @@ export async function readMainFrameDocumentIdentityForPage(
           ) => Promise<unknown>
         )(method, params),
       ),
+    signal,
   );
 }
 

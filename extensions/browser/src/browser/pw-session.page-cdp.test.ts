@@ -59,6 +59,27 @@ describe("pw-session page-scoped CDP client", () => {
     expect(sessionDetach).toHaveBeenCalledTimes(1);
   });
 
+  it("aborts a stalled main-frame identity read and detaches its page session", async () => {
+    const controller = new AbortController();
+    const sessionSend = vi.fn(async () => await new Promise<never>(() => {}));
+    const sessionDetach = vi.fn(async () => {});
+    const page = {
+      context: () => ({
+        newCDPSession: vi.fn(async () => ({ send: sessionSend, detach: sessionDetach })),
+      }),
+    };
+
+    const pending = readMainFrameDocumentIdentityForPage(page as never, controller.signal);
+    await vi.waitFor(() =>
+      expect(sessionSend).toHaveBeenCalledWith("Page.getFrameTree", undefined),
+    );
+
+    controller.abort(new Error("identity deadline expired"));
+
+    await expect(pending).rejects.toThrow("identity deadline expired");
+    await vi.waitFor(() => expect(sessionDetach).toHaveBeenCalledOnce());
+  });
+
   it("marks backend DOM refs on the page", async () => {
     const sessionSend = vi.fn(async (method: string, params?: Record<string, unknown>) => {
       if (method === "DOM.pushNodesByBackendIdsToFrontend") {

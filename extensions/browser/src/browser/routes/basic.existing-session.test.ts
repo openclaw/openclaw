@@ -447,6 +447,9 @@ describe("basic browser routes", () => {
         "targetId=extension-target-1, method=Accessibility.enable",
       );
       expect(liveSnapshot?.fixHint).toContain("Reload the shared Chrome tab");
+      expect(liveSnapshot?.fixHint).toContain(
+        "openclaw browser --browser-profile chrome doctor --deep",
+      );
       expect(liveSnapshot?.fixHint).not.toContain("browser start");
     } finally {
       vi.useRealTimers();
@@ -483,6 +486,9 @@ describe("basic browser routes", () => {
     }>;
     const liveSnapshot = checks.find((check) => check.id === "live-snapshot");
     expect(liveSnapshot?.fixHint).toContain("externally managed Chromium target");
+    expect(liveSnapshot?.fixHint).toContain(
+      "openclaw browser --browser-profile attached doctor --deep",
+    );
     expect(liveSnapshot?.fixHint).not.toContain("browser start");
   });
 
@@ -567,6 +573,9 @@ describe("basic browser routes", () => {
       summary?: string;
     }>;
     expect(response.body).toMatchObject({ ok: true });
+    expect(response.body).toMatchObject({
+      status: { running: true, cdpReady: true, pageReady: true },
+    });
     expect(checks.find((check) => check.id === "extension-relay")).toMatchObject({
       status: "pass",
       summary: expect.stringContaining("validated by the live snapshot probe"),
@@ -608,6 +617,7 @@ describe("basic browser routes", () => {
     const body = responseBodyRecord(response);
     const checks = body.checks as Array<{ id?: string; status?: string; summary?: string }>;
     expect(body.ok).toBe(true);
+    expect(body.status).toMatchObject({ running: true, cdpReady: true, pageReady: true });
     expect(checks.find((check) => check.id === "attach-target")).toMatchObject({
       status: "pass",
       summary: expect.stringContaining("validated by the live snapshot probe"),
@@ -799,7 +809,7 @@ describe("basic browser routes", () => {
     const ensureTabAvailable = vi.fn(async () => {
       throw new Error("deep doctor must not create a tab while stopped");
     });
-    const state = createManagedProfileState();
+    const state = createManagedProfileState({ name: "work profile" });
     const profileCtx = {
       ...(state.forProfile() as unknown as Record<string, unknown>),
       ensureBrowserAvailable,
@@ -814,7 +824,7 @@ describe("basic browser routes", () => {
     const response = createBrowserRouteResponse();
 
     await getHandlers.get("/doctor")?.(
-      { params: {}, query: { profile: "openclaw", deep: "true" } },
+      { params: {}, query: { profile: "work profile", deep: "true" } },
       response.res,
     );
 
@@ -824,6 +834,12 @@ describe("basic browser routes", () => {
     expect(body.ok).toBe(false);
     expect(body.checks).toEqual(
       expect.arrayContaining([expect.objectContaining({ id: "live-snapshot", status: "fail" })]),
+    );
+    const liveSnapshot = (body.checks as Array<{ id?: string; fixHint?: string }>).find(
+      (check) => check.id === "live-snapshot",
+    );
+    expect(liveSnapshot?.fixHint).toBe(
+      "Run openclaw browser --browser-profile 'work profile' start, then retry with openclaw browser --browser-profile 'work profile' doctor --deep.",
     );
     expect(ensureBrowserAvailable).not.toHaveBeenCalled();
     expect(ensureTabAvailable).not.toHaveBeenCalled();

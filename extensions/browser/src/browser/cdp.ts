@@ -38,11 +38,12 @@ export { type CdpActionTimeouts, waitForCdpCommittedNavigationUrl } from "./cdp-
 export async function getMainFrameDocumentIdentityViaCdp(opts: {
   wsUrl: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<string | undefined> {
   return await withCdpSocket(
     opts.wsUrl,
     async (send) => await readCdpMainFrameDocumentIdentity(send),
-    { commandTimeoutMs: opts.timeoutMs ?? 5000 },
+    { commandTimeoutMs: opts.timeoutMs ?? 5000, signal: opts.signal },
   );
 }
 
@@ -952,6 +953,7 @@ export async function snapshotRoleViaCdp(opts: {
   options?: CdpRoleSnapshotOptions;
   urls?: boolean;
   timeoutMs?: number;
+  signal?: AbortSignal;
   maxChars?: number;
   delta?: { mode: RoleSnapshotIdentityMode; previousKeys?: ReadonlySet<string> };
 }): Promise<{
@@ -982,7 +984,7 @@ export async function snapshotRoleViaCdp(opts: {
         delta: opts.delta,
       });
     },
-    { commandTimeoutMs: opts.timeoutMs ?? 5000 },
+    { commandTimeoutMs: opts.timeoutMs ?? 5000, signal: opts.signal },
   );
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

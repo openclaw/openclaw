@@ -46,6 +46,14 @@ const STATUS_CHROME_MCP_TOTAL_TIMEOUT_MS = BROWSER_DEEP_DOCTOR_STATUS_TIMEOUT_MS
 const STATUS_CHROME_MCP_TRANSPORT_TIMEOUT_MS = 5_000;
 const LIVE_SNAPSHOT_PROBE_TIMEOUT_MS = BROWSER_DEEP_DOCTOR_LIVE_PROBE_TIMEOUT_MS;
 
+function quoteBrowserProfileCliArg(value: string): string {
+  return /^[A-Za-z0-9_/:=.,@%+-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function browserProfileCommand(profileCtx: ProfileContext, command: string): string {
+  return `openclaw browser --browser-profile ${quoteBrowserProfileCliArg(profileCtx.profile.name)} ${command}`;
+}
+
 async function awaitTaskWithAbort<T>(task: Promise<T>, signal: AbortSignal): Promise<T> {
   // Some underlying libraries do not accept AbortSignal. Observe late failure
   // before racing so returning at the caller deadline cannot create an
@@ -70,19 +78,20 @@ async function awaitTaskWithAbort<T>(task: Promise<T>, signal: AbortSignal): Pro
 }
 
 function liveProbeFailureFixHint(profileCtx: ProfileContext, statusRunning: boolean): string {
+  const retryCommand = browserProfileCommand(profileCtx, "doctor --deep");
   switch (getBrowserProfileCapabilities(profileCtx.profile).mode) {
     case "local-extension":
-      return "Reload the shared Chrome tab or reconnect the OpenClaw Chrome extension, then retry with openclaw browser doctor --deep.";
+      return `Reload the shared Chrome tab or reconnect the OpenClaw Chrome extension, then retry with ${retryCommand}.`;
     case "local-attach-only":
-      return "Keep the externally managed Chromium target open and responsive, or reconnect the target, then retry with openclaw browser doctor --deep.";
+      return `Keep the externally managed Chromium target open and responsive, or reconnect the target, then retry with ${retryCommand}.`;
     case "local-existing-session":
-      return "Keep the attached Chromium target open and responsive, then retry with openclaw browser doctor --deep.";
+      return `Keep the attached Chromium target open and responsive, then retry with ${retryCommand}.`;
     case "remote-cdp":
-      return "Restore the remote CDP endpoint and selected page, then retry with openclaw browser doctor --deep.";
+      return `Restore the remote CDP endpoint and selected page, then retry with ${retryCommand}.`;
     case "local-managed":
       return statusRunning
-        ? "Reload the stalled page or stop and restart the managed browser, then retry with openclaw browser doctor --deep."
-        : "Run openclaw browser start, then retry with openclaw browser doctor --deep.";
+        ? `Reload the stalled page or stop and restart the managed browser, then retry with ${retryCommand}.`
+        : `Run ${browserProfileCommand(profileCtx, "start")}, then retry with ${retryCommand}.`;
   }
 }
 
@@ -112,6 +121,9 @@ function reconcileSuccessfulLiveProbe(
       ? "OpenClaw Chrome extension transport validated by the live snapshot probe"
       : "Chrome MCP target validated by the live snapshot probe";
   delete transportCheck.fixHint;
+  report.status.running = true;
+  report.status.cdpReady = true;
+  report.status.pageReady = true;
 }
 
 function remainingChromeMcpStatusTimeoutMs(startedAtMs: number): number {
@@ -586,8 +598,7 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
                   label: "Live snapshot",
                   status: "fail" as const,
                   summary: "Live snapshot probe requires a running browser profile.",
-                  fixHint:
-                    "Run openclaw browser start, then retry with openclaw browser doctor --deep.",
+                  fixHint: `Run ${browserProfileCommand(profileCtx, "start")}, then retry with ${browserProfileCommand(profileCtx, "doctor --deep")}.`,
                 }
               : await runBrowserLiveProbe(ctx, profileCtx, signal, status.running);
             reconcileSuccessfulLiveProbe(doctorReport, liveProbe);

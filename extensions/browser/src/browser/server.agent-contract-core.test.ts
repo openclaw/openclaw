@@ -459,13 +459,19 @@ describe("browser control server", () => {
     )) as { ok: boolean; format?: string };
     expect(snapAria.ok).toBe(true);
     expect(snapAria.format).toBe("aria");
-    expect(cdpMocks.snapshotAria).toHaveBeenCalledWith({
-      wsUrl: "ws://127.0.0.1/devtools/page/abcd1234",
-      targetId: "abcd1234",
-      limit: 1,
-      timeoutMs: 5_000,
-      signal: expect.any(AbortSignal),
-    });
+    expect(cdpMocks.snapshotAria).toHaveBeenCalledWith(
+      expect.objectContaining({
+        wsUrl: "ws://127.0.0.1/devtools/page/abcd1234",
+        targetId: "abcd1234",
+        limit: 1,
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    const snapshotTimeoutMs = (
+      cdpMocks.snapshotAria.mock.calls[0]?.[0] as { timeoutMs?: number } | undefined
+    )?.timeoutMs;
+    expect(snapshotTimeoutMs).toBeGreaterThan(0);
+    expect(snapshotTimeoutMs).toBeLessThanOrEqual(5_000);
     expect(requirePwMock("storeAriaSnapshotRefsViaPlaywright")).toHaveBeenCalledWith({
       cdpUrl: state.cdpBaseUrl,
       targetId: "abcd1234",
@@ -480,15 +486,17 @@ describe("browser control server", () => {
     };
     expect(snapAi.ok).toBe(true);
     expect(snapAi.format).toBe("ai");
-    expect(requirePwMock("snapshotAiViaPlaywright")).toHaveBeenCalledWith({
-      cdpUrl: state.cdpBaseUrl,
-      targetId: "abcd1234",
-      maxChars: DEFAULT_AI_SNAPSHOT_MAX_CHARS,
-      signal: expect.any(AbortSignal),
-      ssrfPolicy: {
-        dangerouslyAllowPrivateNetwork: true,
-      },
-    });
+    expect(requirePwMock("snapshotAiViaPlaywright")).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cdpUrl: state.cdpBaseUrl,
+        targetId: "abcd1234",
+        maxChars: DEFAULT_AI_SNAPSHOT_MAX_CHARS,
+        signal: expect.any(AbortSignal),
+        ssrfPolicy: {
+          dangerouslyAllowPrivateNetwork: true,
+        },
+      }),
+    );
 
     const snapAiZero = (await realFetch(`${base}/snapshot?format=ai&maxChars=0`).then((r) =>
       r.json(),
@@ -496,14 +504,16 @@ describe("browser control server", () => {
     expect(snapAiZero.ok).toBe(true);
     expect(snapAiZero.format).toBe("ai");
     const [lastCall] = requirePwMock("snapshotAiViaPlaywright").mock.calls.at(-1) ?? [];
-    expect(lastCall).toEqual({
-      cdpUrl: state.cdpBaseUrl,
-      targetId: "abcd1234",
-      signal: expect.any(AbortSignal),
-      ssrfPolicy: {
-        dangerouslyAllowPrivateNetwork: true,
-      },
-    });
+    expect(lastCall).toEqual(
+      expect.objectContaining({
+        cdpUrl: state.cdpBaseUrl,
+        targetId: "abcd1234",
+        signal: expect.any(AbortSignal),
+        ssrfPolicy: {
+          dangerouslyAllowPrivateNetwork: true,
+        },
+      }),
+    );
 
     requirePwMock("snapshotRoleViaPlaywright").mockRejectedValueOnce(
       new Error("playwright stale page"),
@@ -517,17 +527,24 @@ describe("browser control server", () => {
     expect(requirePwMock("snapshotRoleViaPlaywright")).toHaveBeenCalledWith(
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
-    expect(cdpMocks.snapshotRoleViaCdp).toHaveBeenCalledWith({
-      wsUrl: "ws://127.0.0.1/devtools/page/abcd1234",
-      urls: undefined,
-      maxChars: DEFAULT_AI_SNAPSHOT_MAX_CHARS,
-      timeoutMs: undefined,
-      options: {
-        interactive: true,
-        compact: undefined,
-        maxDepth: undefined,
-      },
-    });
+    expect(cdpMocks.snapshotRoleViaCdp).toHaveBeenCalledWith(
+      expect.objectContaining({
+        wsUrl: "ws://127.0.0.1/devtools/page/abcd1234",
+        urls: undefined,
+        maxChars: DEFAULT_AI_SNAPSHOT_MAX_CHARS,
+        signal: expect.any(AbortSignal),
+        options: {
+          interactive: true,
+          compact: undefined,
+          maxDepth: undefined,
+        },
+      }),
+    );
+    const fallbackTimeoutMs = (
+      cdpMocks.snapshotRoleViaCdp.mock.calls.at(-1)?.[0] as { timeoutMs?: number } | undefined
+    )?.timeoutMs;
+    expect(fallbackTimeoutMs).toBeGreaterThan(0);
+    expect(fallbackTimeoutMs).toBeLessThanOrEqual(5_000);
   });
 
   it("agent contract: snapshot surfaces pending dialog state without reading the blocked page", async () => {

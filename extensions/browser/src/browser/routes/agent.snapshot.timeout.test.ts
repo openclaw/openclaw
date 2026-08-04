@@ -5,6 +5,11 @@ import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helper
 type SnapshotAriaViaPlaywright = (opts: unknown) => Promise<{ nodes: never[] }>;
 type SnapshotAriaViaCdp = (opts: { signal?: AbortSignal }) => Promise<{ nodes: never[] }>;
 type StoreAriaSnapshotRefsViaPlaywright = (opts: { signal?: AbortSignal }) => Promise<void>;
+type SnapshotRoleViaPlaywright = (opts: { signal?: AbortSignal }) => Promise<{
+  snapshot: string;
+  refs: Record<string, never>;
+  stats: { lines: number; chars: number; refs: number; interactive: number };
+}>;
 
 const cdpMocks = vi.hoisted(() => ({
   captureScreenshot: vi.fn(),
@@ -21,16 +26,29 @@ const pwMocks = vi.hoisted(() => ({
   getModule: vi.fn(
     async () =>
       null as null | {
-        getObservedBrowserStateViaPlaywright: () => Promise<undefined>;
-        snapshotAriaViaPlaywright: SnapshotAriaViaPlaywright;
-        storeAriaSnapshotRefsViaPlaywright: StoreAriaSnapshotRefsViaPlaywright;
+        getObservedBrowserStateViaPlaywright: (opts: {
+          signal?: AbortSignal;
+        }) => Promise<undefined>;
+        getMainFrameDocumentIdentityViaPlaywright?: (opts: {
+          signal?: AbortSignal;
+        }) => Promise<string | undefined>;
+        snapshotAiViaPlaywright?: SnapshotRoleViaPlaywright;
+        snapshotAriaViaPlaywright?: SnapshotAriaViaPlaywright;
+        snapshotRoleViaPlaywright?: SnapshotRoleViaPlaywright;
+        storeAriaSnapshotRefsViaPlaywright?: StoreAriaSnapshotRefsViaPlaywright;
       },
   ),
   getObservedBrowserStateViaPlaywright: vi.fn(async () => undefined),
+  getMainFrameDocumentIdentityViaPlaywright: vi.fn(async () => "pw:test-document"),
   requireModule: vi.fn(
     async () => null as null | { snapshotAriaViaPlaywright: SnapshotAriaViaPlaywright },
   ),
   snapshotAriaViaPlaywright: vi.fn(async () => ({ nodes: [] })),
+  snapshotRoleViaPlaywright: vi.fn<SnapshotRoleViaPlaywright>(async () => ({
+    snapshot: "button Continue",
+    refs: {},
+    stats: { lines: 1, chars: 15, refs: 0, interactive: 0 },
+  })),
   storeAriaSnapshotRefsViaPlaywright: vi.fn<StoreAriaSnapshotRefsViaPlaywright>(async () => {}),
 }));
 
@@ -149,9 +167,17 @@ describe("browser agent snapshot timeout routing", () => {
     profileContext.ensureTabAvailable.mockClear();
     pwMocks.getModule.mockReset();
     pwMocks.getModule.mockResolvedValue(null);
+    pwMocks.getMainFrameDocumentIdentityViaPlaywright.mockReset();
+    pwMocks.getMainFrameDocumentIdentityViaPlaywright.mockResolvedValue("pw:test-document");
     pwMocks.requireModule.mockReset();
     pwMocks.requireModule.mockResolvedValue(null);
     pwMocks.snapshotAriaViaPlaywright.mockClear();
+    pwMocks.snapshotRoleViaPlaywright.mockReset();
+    pwMocks.snapshotRoleViaPlaywright.mockResolvedValue({
+      snapshot: "button Continue",
+      refs: {},
+      stats: { lines: 1, chars: 15, refs: 0, interactive: 0 },
+    });
     pwMocks.storeAriaSnapshotRefsViaPlaywright.mockReset();
     pwMocks.storeAriaSnapshotRefsViaPlaywright.mockResolvedValue(undefined);
   });
@@ -175,14 +201,20 @@ describe("browser agent snapshot timeout routing", () => {
       expect.objectContaining({
         wsUrl: "ws://127.0.0.1:18800/devtools/page/tab-1",
         targetId: "tab-1",
-        timeoutMs: 4321,
-        signal: controller.signal,
+        signal: expect.any(AbortSignal),
       }),
     );
     const snapshotSignal = (
       cdpMocks.snapshotAria.mock.calls[0]?.[0] as { signal?: AbortSignal } | undefined
     )?.signal;
-    expect(snapshotSignal).toBe(controller.signal);
+    const snapshotTimeoutMs = (
+      cdpMocks.snapshotAria.mock.calls[0]?.[0] as { timeoutMs?: number } | undefined
+    )?.timeoutMs;
+    expect(snapshotTimeoutMs).toBeGreaterThan(0);
+    expect(snapshotTimeoutMs).toBeLessThanOrEqual(4321);
+    expect(snapshotSignal).not.toBe(controller.signal);
+    controller.abort(new Error("cancelled after capture"));
+    expect(snapshotSignal?.aborted).toBe(true);
   });
 
   it("keeps direct CDP capture and ref publication under one deadline", async () => {
@@ -224,17 +256,103 @@ describe("browser agent snapshot timeout routing", () => {
           | { signal?: AbortSignal }
           | undefined
       )?.signal;
-      expect(storeSignal).not.toBe(snapshotSignal);
+      expect(storeSignal).toBe(snapshotSignal);
 
       await vi.advanceTimersByTimeAsync(4321);
 
       await expect(pending).rejects.toThrow(
-        "Aria snapshot ref publication timed out after 4321ms (targetId=tab-1, method=ref storage)",
+        "Browser snapshot timed out after 4321ms (targetId=tab-1, method=ref storage)",
       );
       expect(storeSignal?.aborted).toBe(true);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("bounds Playwright document identity reads with the route snapshot deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      pwMocks.getMainFrameDocumentIdentityViaPlaywright.mockImplementationOnce(
+        async (opts: { signal?: AbortSignal }) =>
+          await new Promise<string | undefined>((_resolve, reject) => {
+            opts.signal?.addEventListener(
+              "abort",
+              () => reject(opts.signal?.reason ?? new Error("aborted")),
+              { once: true },
+            );
+          }),
+      );
+      pwMocks.getModule.mockResolvedValueOnce({
+        getObservedBrowserStateViaPlaywright: pwMocks.getObservedBrowserStateViaPlaywright,
+        getMainFrameDocumentIdentityViaPlaywright:
+          pwMocks.getMainFrameDocumentIdentityViaPlaywright,
+        snapshotAriaViaPlaywright: pwMocks.snapshotAriaViaPlaywright,
+        storeAriaSnapshotRefsViaPlaywright: pwMocks.storeAriaSnapshotRefsViaPlaywright,
+      });
+      const handler = getSnapshotHandler();
+      const response = createBrowserRouteResponse();
+
+      const pending = handler?.(
+        { params: {}, query: { format: "aria", timeoutMs: "1000" } },
+        response.res,
+      );
+      void pending?.catch(() => {});
+      await vi.waitFor(() =>
+        expect(pwMocks.getMainFrameDocumentIdentityViaPlaywright).toHaveBeenCalledOnce(),
+      );
+
+      await vi.advanceTimersByTimeAsync(1000);
+
+      await expect(pending).rejects.toThrow(
+        "Browser snapshot timed out after 1000ms (targetId=tab-1, method=Page.getFrameTree)",
+      );
+      const identitySignal = (
+        pwMocks.getMainFrameDocumentIdentityViaPlaywright.mock.calls[0]?.[0] as
+          | { signal?: AbortSignal }
+          | undefined
+      )?.signal;
+      expect(identitySignal?.aborted).toBe(true);
+      expect(cdpMocks.snapshotAria).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not restart an aborted Playwright role snapshot through CDP fallback", async () => {
+    pwMocks.snapshotRoleViaPlaywright.mockImplementationOnce(
+      async (opts: { signal?: AbortSignal }) =>
+        await new Promise<never>((_resolve, reject) => {
+          opts.signal?.addEventListener(
+            "abort",
+            () => reject(opts.signal?.reason ?? new Error("aborted")),
+            { once: true },
+          );
+        }),
+    );
+    pwMocks.getModule.mockResolvedValue({
+      getObservedBrowserStateViaPlaywright: pwMocks.getObservedBrowserStateViaPlaywright,
+      getMainFrameDocumentIdentityViaPlaywright: pwMocks.getMainFrameDocumentIdentityViaPlaywright,
+      snapshotRoleViaPlaywright: pwMocks.snapshotRoleViaPlaywright,
+    });
+    const handler = getSnapshotHandler();
+    const response = createBrowserRouteResponse();
+    const controller = new AbortController();
+
+    const pending = handler?.(
+      {
+        params: {},
+        query: { format: "ai", interactive: "true", timeoutMs: "4321" },
+        signal: controller.signal,
+      },
+      response.res,
+    );
+    void pending?.catch(() => {});
+    await vi.waitFor(() => expect(pwMocks.snapshotRoleViaPlaywright).toHaveBeenCalledOnce());
+
+    controller.abort(new Error("request cancelled"));
+
+    await expect(pending).rejects.toThrow("request cancelled");
+    expect(cdpMocks.snapshotRoleViaCdp).not.toHaveBeenCalled();
   });
 
   it("passes route cancellation to Playwright aria snapshots", async () => {
@@ -269,9 +387,15 @@ describe("browser agent snapshot timeout routing", () => {
       expect.objectContaining({
         targetId: "tab-1",
         timeoutMs: 4321,
-        signal: controller.signal,
+        signal: expect.any(AbortSignal),
       }),
     );
+    const snapshotSignal = (
+      pwMocks.snapshotAriaViaPlaywright.mock.calls[0]?.[0] as { signal?: AbortSignal } | undefined
+    )?.signal;
+    expect(snapshotSignal).not.toBe(controller.signal);
+    controller.abort(new Error("cancelled after capture"));
+    expect(snapshotSignal?.aborted).toBe(true);
   });
 
   it("passes timeoutMs to direct CDP role snapshots", async () => {
@@ -284,9 +408,14 @@ describe("browser agent snapshot timeout routing", () => {
     expect(cdpMocks.snapshotRoleViaCdp).toHaveBeenCalledWith(
       expect.objectContaining({
         wsUrl: "ws://127.0.0.1:18800/devtools/page/tab-1",
-        timeoutMs: 9876,
+        signal: expect.any(AbortSignal),
       }),
     );
+    const timeoutMs = (
+      cdpMocks.snapshotRoleViaCdp.mock.calls[0]?.[0] as { timeoutMs?: number } | undefined
+    )?.timeoutMs;
+    expect(timeoutMs).toBeGreaterThan(0);
+    expect(timeoutMs).toBeLessThanOrEqual(9876);
   });
 
   it("caps screenshot timeoutMs before dispatching to CDP", async () => {

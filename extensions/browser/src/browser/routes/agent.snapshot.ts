@@ -71,6 +71,47 @@ import type { BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import { jsonError, runProfileRouteOperation, toBoolean, toStringOrEmpty } from "./utils.js";
 
 const CHROME_MCP_OVERLAY_ATTR = "data-openclaw-mcp-overlay";
+const DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS = 5_000;
+
+function createRouteSnapshotDeadline(opts: {
+  timeoutMs?: number;
+  signal: AbortSignal;
+  targetId: string;
+}) {
+  const timeoutMs = normalizeBrowserTimerDelayMs(
+    opts.timeoutMs ?? DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS,
+  );
+  const deadlineAtMs = Date.now() + timeoutMs;
+  const timeoutController = new AbortController();
+  let method = "snapshot setup";
+  const timeoutError = () =>
+    new Error(
+      `Browser snapshot timed out after ${timeoutMs}ms ` +
+        `(targetId=${opts.targetId}, method=${method}).`,
+    );
+  const timer = setTimeout(() => timeoutController.abort(timeoutError()), timeoutMs);
+  timer.unref?.();
+  const signal = AbortSignal.any([opts.signal, timeoutController.signal]);
+  return {
+    signal,
+    setMethod: (nextMethod: string) => {
+      method = nextMethod;
+      signal.throwIfAborted();
+    },
+    remainingTimeoutMs: () => {
+      signal.throwIfAborted();
+      const remaining = deadlineAtMs - Date.now();
+      if (remaining <= 0) {
+        if (!timeoutController.signal.aborted) {
+          timeoutController.abort(timeoutError());
+        }
+        signal.throwIfAborted();
+      }
+      return Math.max(1, remaining);
+    },
+    cleanup: () => clearTimeout(timer),
+  };
+}
 
 type ChromeMcpSnapshotOperation = ChromeMcpOperationOptions & {
   profileName: string;
@@ -761,86 +802,82 @@ export function registerBrowserAgentSnapshotRoutes(
               ...finalized,
             });
           }
-          const readPlaywrightDocumentIdentity =
-            pwModule?.getMainFrameDocumentIdentityViaPlaywright;
-          let observedBrowserState: unknown;
-          if (pwModule) {
-            observedBrowserState = await pwModule
-              .getObservedBrowserStateViaPlaywright({
-                cdpUrl: profileCtx.profile.cdpUrl,
-                targetId: tab.targetId,
-                ssrfPolicy: ctx.state().resolved.ssrfPolicy,
-              })
-              .catch(() => undefined);
-          }
-          if (hasPendingDialogs(observedBrowserState)) {
-            return res.json({
-              ok: true,
-              format: plan.format,
-              targetId: tab.targetId,
-              url: tab.url,
-              blockedByDialog: true,
-              ...browserStateResponseFields(observedBrowserState),
-              ...(plan.format === "aria" ? { nodes: [] } : { snapshot: "", refs: {} }),
-            });
-          }
-          const readDocumentIdentity = async (): Promise<string | undefined> => {
-            const playwrightIdentity = readPlaywrightDocumentIdentity
-              ? await readPlaywrightDocumentIdentity({
+          const snapshotDeadline = createRouteSnapshotDeadline({
+            timeoutMs: plan.timeoutMs,
+            signal,
+            targetId: tab.targetId,
+          });
+          try {
+            const readPlaywrightDocumentIdentity =
+              pwModule?.getMainFrameDocumentIdentityViaPlaywright;
+            let observedBrowserState: unknown;
+            if (pwModule) {
+              snapshotDeadline.setMethod("browser state");
+              observedBrowserState = await pwModule
+                .getObservedBrowserStateViaPlaywright({
                   cdpUrl: profileCtx.profile.cdpUrl,
                   targetId: tab.targetId,
-                }).catch(() => undefined)
-              : undefined;
-            if (playwrightIdentity || !tab.wsUrl) {
-              return playwrightIdentity;
+                  signal: snapshotDeadline.signal,
+                  ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+                })
+                .catch(() => undefined);
             }
-            return await getMainFrameDocumentIdentityViaCdp({
-              wsUrl: tab.wsUrl,
-              timeoutMs: plan.timeoutMs,
-            }).catch(() => undefined);
-          };
-          const initialDocumentIdentity = await readDocumentIdentity();
-          const deltaState = createDeltaState(initialDocumentIdentity);
-          const isDocumentIdentityCurrent = async () =>
-            !initialDocumentIdentity || (await readDocumentIdentity()) === initialDocumentIdentity;
-          const assertDocumentIdentityUnchanged = async () => {
-            if (!(await isDocumentIdentityCurrent())) {
-              throw new Error(
-                "Frame changed while its browser snapshot was being captured; retry.",
-              );
+            if (hasPendingDialogs(observedBrowserState)) {
+              return res.json({
+                ok: true,
+                format: plan.format,
+                targetId: tab.targetId,
+                url: tab.url,
+                blockedByDialog: true,
+                ...browserStateResponseFields(observedBrowserState),
+                ...(plan.format === "aria" ? { nodes: [] } : { snapshot: "", refs: {} }),
+              });
             }
-          };
-          if (plan.format === "ai") {
-            const roleSnapshotArgs = {
-              cdpUrl: profileCtx.profile.cdpUrl,
-              targetId: tab.targetId,
-              selector: plan.selectorValue,
-              frameSelector: plan.frameSelectorValue,
-              refsMode: plan.refsMode,
-              signal,
-              ssrfPolicy: ctx.state().resolved.ssrfPolicy,
-              urls: plan.urls,
-              timeoutMs: plan.timeoutMs,
-              maxChars: plan.resolvedMaxChars,
-              options: {
-                interactive: plan.interactive ?? undefined,
-                compact: plan.compact ?? undefined,
-                maxDepth: plan.depth ?? undefined,
-              },
-              delta: deltaState.delta,
-            };
-
-            const cdpRoleSnapshot = async () => {
-              if (!tab.wsUrl) {
-                return null;
+            const readDocumentIdentity = async (): Promise<string | undefined> => {
+              snapshotDeadline.setMethod("Page.getFrameTree");
+              const playwrightIdentity = readPlaywrightDocumentIdentity
+                ? await readPlaywrightDocumentIdentity({
+                    cdpUrl: profileCtx.profile.cdpUrl,
+                    targetId: tab.targetId,
+                    signal: snapshotDeadline.signal,
+                    ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+                  }).catch(() => undefined)
+                : undefined;
+              snapshotDeadline.signal.throwIfAborted();
+              if (playwrightIdentity || !tab.wsUrl) {
+                return playwrightIdentity;
               }
-              if (plan.selectorValue || plan.frameSelectorValue) {
-                return null;
-              }
-              return await snapshotRoleViaCdp({
+              const cdpIdentity = await getMainFrameDocumentIdentityViaCdp({
                 wsUrl: tab.wsUrl,
+                timeoutMs: snapshotDeadline.remainingTimeoutMs(),
+                signal: snapshotDeadline.signal,
+              }).catch(() => undefined);
+              snapshotDeadline.signal.throwIfAborted();
+              return cdpIdentity;
+            };
+            const initialDocumentIdentity = await readDocumentIdentity();
+            const deltaState = createDeltaState(initialDocumentIdentity);
+            const isDocumentIdentityCurrent = async () =>
+              !initialDocumentIdentity ||
+              (await readDocumentIdentity()) === initialDocumentIdentity;
+            const assertDocumentIdentityUnchanged = async () => {
+              if (!(await isDocumentIdentityCurrent())) {
+                throw new Error(
+                  "Frame changed while its browser snapshot was being captured; retry.",
+                );
+              }
+            };
+            if (plan.format === "ai") {
+              const roleSnapshotArgs = {
+                cdpUrl: profileCtx.profile.cdpUrl,
+                targetId: tab.targetId,
+                selector: plan.selectorValue,
+                frameSelector: plan.frameSelectorValue,
+                refsMode: plan.refsMode,
+                signal: snapshotDeadline.signal,
+                ssrfPolicy: ctx.state().resolved.ssrfPolicy,
                 urls: plan.urls,
-                timeoutMs: plan.timeoutMs,
+                timeoutMs: snapshotDeadline.remainingTimeoutMs(),
                 maxChars: plan.resolvedMaxChars,
                 options: {
                   interactive: plan.interactive ?? undefined,
@@ -848,71 +885,119 @@ export function registerBrowserAgentSnapshotRoutes(
                   maxDepth: plan.depth ?? undefined,
                 },
                 delta: deltaState.delta,
-              });
-            };
+              };
 
-            const pw = await getPwAiModule();
-            const snap = plan.wantsRoleSnapshot
-              ? pw
-                ? await pw
-                    .snapshotRoleViaPlaywright(roleSnapshotArgs)
-                    .catch(async (err: unknown) => {
+              const cdpRoleSnapshot = async () => {
+                snapshotDeadline.setMethod("CDP role snapshot");
+                if (!tab.wsUrl) {
+                  return null;
+                }
+                if (plan.selectorValue || plan.frameSelectorValue) {
+                  return null;
+                }
+                return await snapshotRoleViaCdp({
+                  wsUrl: tab.wsUrl,
+                  urls: plan.urls,
+                  timeoutMs: snapshotDeadline.remainingTimeoutMs(),
+                  signal: snapshotDeadline.signal,
+                  maxChars: plan.resolvedMaxChars,
+                  options: {
+                    interactive: plan.interactive ?? undefined,
+                    compact: plan.compact ?? undefined,
+                    maxDepth: plan.depth ?? undefined,
+                  },
+                  delta: deltaState.delta,
+                });
+              };
+
+              const pw = await getPwAiModule();
+              const snap = plan.wantsRoleSnapshot
+                ? pw
+                  ? await (async () => {
+                      snapshotDeadline.setMethod("Playwright role snapshot");
+                      return await pw.snapshotRoleViaPlaywright(roleSnapshotArgs);
+                    })().catch(async (err: unknown) => {
+                      snapshotDeadline.signal.throwIfAborted();
                       const fallback = await cdpRoleSnapshot();
                       if (fallback) {
                         return fallback;
                       }
                       throw err;
                     })
-                : await cdpRoleSnapshot()
-              : pw
-                ? await pw.snapshotAiViaPlaywright({
-                    cdpUrl: profileCtx.profile.cdpUrl,
-                    targetId: tab.targetId,
-                    signal,
-                    ssrfPolicy: ctx.state().resolved.ssrfPolicy,
-                    urls: plan.urls,
-                    timeoutMs: plan.timeoutMs,
-                    ...(typeof plan.resolvedMaxChars === "number"
-                      ? { maxChars: plan.resolvedMaxChars }
-                      : {}),
-                    delta: deltaState.delta,
-                  })
-                : await cdpRoleSnapshot();
-            if (!snap) {
-              await requirePwAi(res, "ai snapshot");
-              return;
-            }
-            if (plan.labels) {
-              if (!pw) {
-                return jsonError(res, 501, "Snapshot labels require Playwright.");
+                  : await cdpRoleSnapshot()
+                : pw
+                  ? await (async () => {
+                      snapshotDeadline.setMethod("Playwright AI snapshot");
+                      return await pw.snapshotAiViaPlaywright({
+                        cdpUrl: profileCtx.profile.cdpUrl,
+                        targetId: tab.targetId,
+                        signal: snapshotDeadline.signal,
+                        ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+                        urls: plan.urls,
+                        timeoutMs: snapshotDeadline.remainingTimeoutMs(),
+                        ...(typeof plan.resolvedMaxChars === "number"
+                          ? { maxChars: plan.resolvedMaxChars }
+                          : {}),
+                        delta: deltaState.delta,
+                      });
+                    })()
+                  : await cdpRoleSnapshot();
+              if (!snap) {
+                await requirePwAi(res, "ai snapshot");
+                return;
               }
-              const labeled = await pw.screenshotWithLabelsViaPlaywright({
-                cdpUrl: profileCtx.profile.cdpUrl,
-                targetId: tab.targetId,
-                refs: "refs" in snap ? snap.refs : {},
-                type: "png",
-                timeoutMs: plan.timeoutMs,
-              });
-              const originalMeta = labeled.annotations.length
-                ? ((await getImageMetadata(labeled.buffer)) ?? undefined)
-                : undefined;
-              const normalized = await normalizeBrowserScreenshot(labeled.buffer, {
-                maxSide: DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
-                maxBytes: DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
-              });
-              const scaledAnnotations = await rescaleAnnotationsForNormalization({
-                annotations: labeled.annotations,
-                originalMeta,
-                normalizedBuffer: normalized.buffer,
-              });
-              await ensureMediaDir();
-              const saved = await saveMediaBuffer(
-                normalized.buffer,
-                normalized.contentType ?? "image/png",
-                "browser",
-                DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
-              );
-              const imageType = normalized.contentType?.includes("jpeg") ? "jpeg" : "png";
+              if (plan.labels) {
+                if (!pw) {
+                  return jsonError(res, 501, "Snapshot labels require Playwright.");
+                }
+                snapshotDeadline.setMethod("snapshot labels");
+                const labeled = await pw.screenshotWithLabelsViaPlaywright({
+                  cdpUrl: profileCtx.profile.cdpUrl,
+                  targetId: tab.targetId,
+                  refs: "refs" in snap ? snap.refs : {},
+                  type: "png",
+                  timeoutMs: snapshotDeadline.remainingTimeoutMs(),
+                });
+                const originalMeta = labeled.annotations.length
+                  ? ((await getImageMetadata(labeled.buffer)) ?? undefined)
+                  : undefined;
+                const normalized = await normalizeBrowserScreenshot(labeled.buffer, {
+                  maxSide: DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
+                  maxBytes: DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
+                });
+                const scaledAnnotations = await rescaleAnnotationsForNormalization({
+                  annotations: labeled.annotations,
+                  originalMeta,
+                  normalizedBuffer: normalized.buffer,
+                });
+                await ensureMediaDir();
+                const saved = await saveMediaBuffer(
+                  normalized.buffer,
+                  normalized.contentType ?? "image/png",
+                  "browser",
+                  DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
+                );
+                const imageType = normalized.contentType?.includes("jpeg") ? "jpeg" : "png";
+                await assertDocumentIdentityUnchanged();
+                deltaState.record(snap.refs ?? {});
+                return res.json({
+                  ok: true,
+                  format: plan.format,
+                  targetId: tab.targetId,
+                  url: tab.url,
+                  ...browserStateResponseFields(observedBrowserState),
+                  labels: true,
+                  labelsCount: labeled.labels,
+                  labelsSkipped: labeled.skipped,
+                  ...(scaledAnnotations && scaledAnnotations.length > 0
+                    ? { annotations: scaledAnnotations }
+                    : {}),
+                  imagePath: path.resolve(saved.path),
+                  imageType,
+                  ...snap,
+                });
+              }
+
               await assertDocumentIdentityUnchanged();
               deltaState.record(snap.refs ?? {});
               return res.json({
@@ -921,107 +1006,71 @@ export function registerBrowserAgentSnapshotRoutes(
                 targetId: tab.targetId,
                 url: tab.url,
                 ...browserStateResponseFields(observedBrowserState),
-                labels: true,
-                labelsCount: labeled.labels,
-                labelsSkipped: labeled.skipped,
-                ...(scaledAnnotations && scaledAnnotations.length > 0
-                  ? { annotations: scaledAnnotations }
-                  : {}),
-                imagePath: path.resolve(saved.path),
-                imageType,
                 ...snap,
               });
             }
 
-            await assertDocumentIdentityUnchanged();
-            deltaState.record(snap.refs ?? {});
+            const usePlaywrightAriaSnapshot = shouldUsePlaywrightForAriaSnapshot({
+              profile: profileCtx.profile,
+              wsUrl: tab.wsUrl,
+            });
+            const directSnapshotTimeoutMs = snapshotDeadline.remainingTimeoutMs();
+            const snap = usePlaywrightAriaSnapshot
+              ? (() => {
+                  snapshotDeadline.setMethod("Playwright aria snapshot");
+                  // Extension relay doesn't expose per-page WS URLs; run AX snapshot via Playwright CDP session.
+                  // Also covers cases where wsUrl is missing/unusable.
+                  return requirePwAi(res, "aria snapshot").then(async (pw) => {
+                    if (!pw) {
+                      return null;
+                    }
+                    return await pw.snapshotAriaViaPlaywright({
+                      cdpUrl: profileCtx.profile.cdpUrl,
+                      targetId: tab.targetId,
+                      limit: plan.limit,
+                      timeoutMs: snapshotDeadline.remainingTimeoutMs(),
+                      signal: snapshotDeadline.signal,
+                      ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+                    });
+                  });
+                })()
+              : (() => {
+                  snapshotDeadline.setMethod("CDP aria snapshot");
+                  return snapshotAria({
+                    wsUrl: tab.wsUrl ?? "",
+                    targetId: tab.targetId,
+                    limit: plan.limit,
+                    timeoutMs: directSnapshotTimeoutMs,
+                    signal: snapshotDeadline.signal,
+                  });
+                })();
+
+            const resolved = await Promise.resolve(snap);
+            if (!resolved) {
+              return;
+            }
+            const storeAriaRefs = pwModule?.storeAriaSnapshotRefsViaPlaywright;
+            if (!usePlaywrightAriaSnapshot && storeAriaRefs) {
+              snapshotDeadline.setMethod("ref storage");
+              await storeAriaRefs({
+                cdpUrl: profileCtx.profile.cdpUrl,
+                targetId: tab.targetId,
+                nodes: resolved.nodes,
+                signal: snapshotDeadline.signal,
+                isDocumentCurrent: isDocumentIdentityCurrent,
+              });
+            }
             return res.json({
               ok: true,
               format: plan.format,
               targetId: tab.targetId,
               url: tab.url,
               ...browserStateResponseFields(observedBrowserState),
-              ...snap,
+              ...resolved,
             });
+          } finally {
+            snapshotDeadline.cleanup();
           }
-
-          const usePlaywrightAriaSnapshot = shouldUsePlaywrightForAriaSnapshot({
-            profile: profileCtx.profile,
-            wsUrl: tab.wsUrl,
-          });
-          const directSnapshotTimeoutMs = normalizeBrowserTimerDelayMs(plan.timeoutMs ?? 5_000);
-          const directSnapshotDeadlineAtMs = usePlaywrightAriaSnapshot
-            ? undefined
-            : Date.now() + directSnapshotTimeoutMs;
-          const snap = usePlaywrightAriaSnapshot
-            ? (() => {
-                // Extension relay doesn't expose per-page WS URLs; run AX snapshot via Playwright CDP session.
-                // Also covers cases where wsUrl is missing/unusable.
-                return requirePwAi(res, "aria snapshot").then(async (pw) => {
-                  if (!pw) {
-                    return null;
-                  }
-                  return await pw.snapshotAriaViaPlaywright({
-                    cdpUrl: profileCtx.profile.cdpUrl,
-                    targetId: tab.targetId,
-                    limit: plan.limit,
-                    timeoutMs: plan.timeoutMs,
-                    signal,
-                    ssrfPolicy: ctx.state().resolved.ssrfPolicy,
-                  });
-                });
-              })()
-            : snapshotAria({
-                wsUrl: tab.wsUrl ?? "",
-                targetId: tab.targetId,
-                limit: plan.limit,
-                timeoutMs: directSnapshotTimeoutMs,
-                signal,
-              });
-
-          const resolved = await Promise.resolve(snap);
-          if (!resolved) {
-            return;
-          }
-          const storeAriaRefs = pwModule?.storeAriaSnapshotRefsViaPlaywright;
-          if (!usePlaywrightAriaSnapshot && storeAriaRefs && directSnapshotDeadlineAtMs) {
-            const remainingTimeoutMs = directSnapshotDeadlineAtMs - Date.now();
-            if (remainingTimeoutMs <= 0) {
-              throw new Error(
-                `Aria snapshot ref publication timed out after ${directSnapshotTimeoutMs}ms ` +
-                  `(targetId=${tab.targetId}, method=ref storage).`,
-              );
-            }
-            const refPublicationDeadline = new AbortController();
-            const refPublicationTimer = setTimeout(() => {
-              refPublicationDeadline.abort(
-                new Error(
-                  `Aria snapshot ref publication timed out after ${directSnapshotTimeoutMs}ms ` +
-                    `(targetId=${tab.targetId}, method=ref storage).`,
-                ),
-              );
-            }, remainingTimeoutMs);
-            refPublicationTimer.unref?.();
-            try {
-              await storeAriaRefs({
-                cdpUrl: profileCtx.profile.cdpUrl,
-                targetId: tab.targetId,
-                nodes: resolved.nodes,
-                signal: AbortSignal.any([signal, refPublicationDeadline.signal]),
-                isDocumentCurrent: isDocumentIdentityCurrent,
-              });
-            } finally {
-              clearTimeout(refPublicationTimer);
-            }
-          }
-          return res.json({
-            ok: true,
-            format: plan.format,
-            targetId: tab.targetId,
-            url: tab.url,
-            ...browserStateResponseFields(observedBrowserState),
-            ...resolved,
-          });
         },
       });
     } catch (err) {
