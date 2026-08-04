@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveNextcloudTalkRoomKind } from "./room-info.js";
+import { resolveNextcloudTalkRoomKindResult } from "./room-info.js";
 
 const fetchWithSsrFGuard = vi.hoisted(() => vi.fn());
 const tempDirs: string[] = [];
@@ -36,6 +36,12 @@ function requireFirstFetchParams(): RoomInfoFetchParams {
     throw new Error("expected Nextcloud Talk room info fetch call");
   }
   return fetchParams as RoomInfoFetchParams;
+}
+
+async function resolveNextcloudTalkRoomKind(
+  params: Parameters<typeof resolveNextcloudTalkRoomKindResult>[0],
+) {
+  return (await resolveNextcloudTalkRoomKindResult(params)).kind;
 }
 
 function jsonResponse(payload: unknown, init?: ResponseInit): Response {

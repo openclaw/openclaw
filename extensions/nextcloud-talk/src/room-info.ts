@@ -13,7 +13,7 @@ const ROOM_CACHE_MAX_ENTRIES = 1000;
 const NEXTCLOUD_TALK_ROOM_INFO_TIMEOUT_MS = 30_000;
 
 type NextcloudTalkRoomKind = "direct" | "group";
-export type NextcloudTalkRoomKindResult = {
+type NextcloudTalkRoomKindResult = {
   kind?: NextcloudTalkRoomKind;
   source: "cache" | "resolved" | "unconfigured" | "unknown" | "failed";
 };
@@ -126,13 +126,4 @@ export async function resolveNextcloudTalkRoomKindResult(params: {
     runtime?.error?.(`nextcloud-talk: room lookup error: ${String(err)}`);
     return { source: "failed" };
   }
-}
-
-export async function resolveNextcloudTalkRoomKind(params: {
-  account: ResolvedNextcloudTalkAccount;
-  roomToken: string;
-  runtime?: RuntimeEnv;
-  timeoutMs?: number;
-}): Promise<NextcloudTalkRoomKind | undefined> {
-  return (await resolveNextcloudTalkRoomKindResult(params)).kind;
 }

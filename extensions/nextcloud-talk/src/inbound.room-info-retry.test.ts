@@ -27,7 +27,9 @@ async function startRoomInfoServer(): Promise<ProofServer> {
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ ocs: { data: { type: 1 } } }));
   });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("expected loopback listener address");
@@ -37,7 +39,13 @@ async function startRoomInfoServer(): Promise<ProofServer> {
     requests,
     stop: async () =>
       await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
+        server.close((error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve();
+        });
       }),
   };
   servers.push(proofServer);
@@ -124,9 +132,10 @@ describe("nextcloud-talk inbound room-kind lookup retry", () => {
       onAbandoned: async () => {},
     };
     const runtime: RuntimeEnv = {
-      log: (messageValue) => logs.push(messageValue),
-      error: (messageValue) => logs.push(messageValue),
-    } as RuntimeEnv;
+      error: (messageValue: unknown) => logs.push(String(messageValue)),
+      exit: () => {},
+      log: (messageValue: unknown) => logs.push(String(messageValue)),
+    };
 
     await handleNextcloudTalkInbound({
       message: createMessage(),
