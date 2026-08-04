@@ -8,6 +8,14 @@ scenario:
     secondary: [channels.qa-channel-final-reply, agent-runtime.failure-recovery-retry-policy]
   regressionRefs:
     - openclaw/openclaw#118489
+  gatewayConfigPatch:
+    tools:
+      web:
+        fetch:
+          # The presentation probe fetches the local mock server; private
+          # loopback must be allowed for this isolated QA scenario.
+          ssrfPolicy:
+            dangerouslyAllowPrivateNetwork: true
   objective: Verify a failed terminal batch still receives one failure-honest finalization when a later tool outcome recorded a terminal presentation.
   successCriteria:
     - The failing read and the presentation-producing web_fetch are dispatched exactly once.
@@ -65,7 +73,7 @@ flow:
             senderId: qa-driver
             senderName: QA Driver
             text:
-              expr: "`@openclaw Failed tool terminal recovery with presentation QA check: read the missing workspace file, then call web_fetch on https://example.com, then respond with exact marker: \\`QA-FAILED-TOOL-PRESENTATION-FINALIZED-OK\\`.`"
+              expr: "`@openclaw Failed tool terminal recovery with presentation QA check: read the missing workspace file, then call web_fetch on ${env.mock.baseUrl}/debug/request-cursor, then respond with exact marker: \\`QA-FAILED-TOOL-PRESENTATION-FINALIZED-OK\\`.`"
         - waitForOutbound:
             conversation:
               id:

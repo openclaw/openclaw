@@ -8205,7 +8205,7 @@ Update and merge these partial structured summaries.`,
     const server = await startMockServer();
     const prompt =
       "Failed tool terminal recovery with presentation QA check: read the missing workspace file, " +
-      "then call web_fetch on https://example.com, then respond with exact marker: " +
+      "then call web_fetch on web_fetch url: http://127.0.0.1:8123/health, then respond with exact marker: " +
       "`QA-FAILED-TOOL-PRESENTATION-FINALIZED-OK`.";
 
     const toolPlan = await postStreamingResponses(server, {
@@ -8216,7 +8216,7 @@ Update and merge these partial structured summaries.`,
     expect(plannedResponse).toContain('"name":"read"');
     expect(plannedResponse).toContain('"name":"web_fetch"');
     expect(plannedResponse).toContain("qa-failed-terminal-missing-file.txt");
-    expect(plannedResponse).toContain("https://example.com");
+    expect(plannedResponse).toContain("http://127.0.0.1:8123/health");
 
     const failedToolOutput = makeToolOutputWithCallId(
       "call-read-presentation",

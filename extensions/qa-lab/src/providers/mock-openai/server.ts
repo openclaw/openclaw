@@ -290,6 +290,8 @@ const QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE = /failed tool terminal recover
 const QA_REPEATED_REQUEST_RESPONSE_PAUSE_MS = 110_000;
 const QA_FAILED_TOOL_PRESENTATION_RECOVERY_PROMPT_RE =
   /failed tool terminal recovery with presentation qa check/i;
+const QA_FAILED_TOOL_PRESENTATION_FETCH_URL_RE =
+  /(?:web_fetch url:|call web_fetch on) (https?:\/\/[^\s`",]+)/i;
 
 function isStreamingToolProgressContinuationText(text: string) {
   const trimmed = text.trim();
@@ -1293,9 +1295,11 @@ async function buildResponsesPayload(
       return buildAssistantEvents(`The requested file could not be read: ENOENT. ${marker}`);
     }
     if (!hasCompletedToolOutput) {
+      const fetchUrl =
+        QA_FAILED_TOOL_PRESENTATION_FETCH_URL_RE.exec(prompt)?.[1] ?? "https://example.com";
       return buildToolCallBatchEvents([
         { name: "read", args: { path: "qa-failed-terminal-missing-file.txt" } },
-        { name: "web_fetch", args: { url: "https://example.com" } },
+        { name: "web_fetch", args: { url: fetchUrl } },
       ]);
     }
     return buildAssistantEvents("FAILED-TOOL-PRESENTATION-WAS-REPLAYED");
