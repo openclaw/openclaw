@@ -1,3 +1,4 @@
+import { getInternalCompactionUsage } from "../../../context-engine/internal-compaction-usage.js";
 import type { resolveContextEngine } from "../../../context-engine/registry.js";
 import type { buildContextEngineRuntimeSettings } from "../../../context-engine/runtime-settings.js";
 import {
@@ -6,6 +7,7 @@ import {
 } from "../../../context-engine/types.js";
 import { resolveProcessToolScopeKey } from "../../agent-tools.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
+import { normalizeUsage } from "../../usage.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import {
   compactContextEngineWithSafetyTimeout,
@@ -13,6 +15,7 @@ import {
 } from "../compaction-safety-timeout.js";
 import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
 import { log } from "../logger.js";
+import { mergeUsageIntoAccumulator, type UsageAccumulator } from "../usage-accumulator.js";
 import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
@@ -31,6 +34,7 @@ export type EmbeddedRunCompactionRecoveryInput = {
   contextTokenBudget?: number;
   genericCompactionRecoveryAllowed: boolean;
   attempt: EmbeddedRunAttemptResult;
+  usageAccumulator: UsageAccumulator;
   runtimeAuthPlan: Parameters<typeof buildEmbeddedCompactionRuntimeContext>[0]["runtimeAuthPlan"];
   resolvedSessionKey: string;
   sessionAgentId: string;
@@ -170,6 +174,12 @@ export async function compactEmbeddedRunForRecovery(
     resolveCompactionTimeoutMs(runParams.config),
     runParams.abortSignal,
   );
+  if (result.ok && result.compacted) {
+    mergeUsageIntoAccumulator(
+      input.usageAccumulator,
+      normalizeUsage(getInternalCompactionUsage(result)),
+    );
+  }
   return { result, runtimeContext, runtimeSettings };
 }
 

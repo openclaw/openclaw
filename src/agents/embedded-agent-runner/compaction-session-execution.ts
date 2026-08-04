@@ -1,3 +1,4 @@
+import { getInternalAgentCoreUsage } from "../../../packages/agent-core/src/internal-compaction-usage.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import { acquireOwnedSessionTranscriptWriteLock } from "../../config/sessions/transcript-write-context.js";
 /**
@@ -521,6 +522,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               tokensBefore: observedTokenCount ?? result.tokensBefore,
               tokensAfter,
               details: result.details,
+              usage: getInternalAgentCoreUsage(result),
               sessionId: undefined,
               sessionFile: undefined,
             },

@@ -1,3 +1,4 @@
+import { getInternalAgentCoreUsage } from "../../../packages/agent-core/src/internal-compaction-usage.js";
 import {
   collectEntriesForBranchSummaryFromBranches,
   generateBranchSummary,
@@ -125,23 +126,28 @@ export abstract class AgentSessionTree extends AgentSessionExecution {
         const model = this.model!;
         const { apiKey, headers } = await this.getRequiredRequestAuth(model);
         const branchSummarySettings = this.settingsManager.getBranchSummarySettings();
-        const result = normalizeBranchSummaryResult(
-          await generateBranchSummary(entriesToSummarize, {
-            model,
-            apiKey,
-            headers,
-            signal: this.branchSummaryAbortController.signal,
-            customInstructions,
-            replaceInstructions,
-            reserveTokens: branchSummarySettings.reserveTokens,
-            streamFn: this.agent.streamFn,
-          }),
-        );
+        const branchSummaryResult = await generateBranchSummary(entriesToSummarize, {
+          model,
+          apiKey,
+          headers,
+          signal: this.branchSummaryAbortController.signal,
+          customInstructions,
+          replaceInstructions,
+          reserveTokens: branchSummarySettings.reserveTokens,
+          streamFn: this.agent.streamFn,
+        });
+        const summaryUsage = branchSummaryResult.ok
+          ? getInternalAgentCoreUsage(branchSummaryResult.value)
+          : undefined;
+        const result = normalizeBranchSummaryResult(branchSummaryResult);
         if (result.aborted) {
           return { cancelled: true, aborted: true };
         }
         if (result.error) {
           throw new Error(result.error);
+        }
+        if (summaryUsage) {
+          this.emit({ type: "context_usage", source: "branch_summary", usage: summaryUsage });
         }
         summaryText = result.summary;
         summaryDetails = {

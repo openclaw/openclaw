@@ -176,6 +176,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     contextTokenBudget: runtime.contextTokenBudget,
     genericCompactionRecoveryAllowed: preparedRuntime.genericCompactionRecoveryAllowed,
     attempt,
+    usageAccumulator: input.usageAccumulator,
     toolResultPromptProjectionState: getEmbeddedSessionPromptState(params.sessionId).toolResults,
     runtimeAuthPlan: runtimePlan.auth,
     resolvedSessionKey: runInput.resolvedSessionKey,

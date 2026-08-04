@@ -266,6 +266,7 @@ export type EmbeddedAgentSubscribeContext = {
   maybeResolveCompactionWait: () => void;
   recordAssistantUsage: (usage: unknown) => void;
   commitAssistantUsage: () => void;
+  recordContextUsage: (usage: unknown) => void;
   incrementCompactionCount: () => void;
   noteCompactionTokensAfter: (value: unknown) => void;
   getUsageTotals: () => NormalizedUsage | undefined;
