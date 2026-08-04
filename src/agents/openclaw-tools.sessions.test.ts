@@ -1395,6 +1395,12 @@ describe("sessions tools", () => {
     const tool = getSessionTool("sessions_send", {
       agentSessionKey: requesterKey,
       agentChannel: "discord",
+      config: {
+        ...TEST_CONFIG,
+        agents: {
+          list: [{ id: "main", default: true, identity: { name: "Stevo" } }],
+        },
+      } as OpenClawConfig,
     });
 
     const waited = await tool.execute("call7", {
