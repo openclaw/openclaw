@@ -3,6 +3,7 @@
  *
  * Resolves announcement targets, channel/session routing metadata, and ping-pong guard prompt text.
  */
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   getChannelPlugin,
   normalizeChannelId as normalizeAnyChannelId,
@@ -20,6 +21,8 @@ export {
 
 const DEFAULT_AGENTNG_PONG_TURNS = 5;
 const MAX_PING_PONG_TURNS = 20;
+const MAX_A2A_REQUESTER_NAME_PROMPT_CHARS = 120;
+const TRUNCATED_REQUESTER_NAME_MARKER = "...";
 
 export type AnnounceTarget = {
   channel: string;
@@ -85,7 +88,7 @@ function buildAgentSessionLines(params: {
   targetChannel?: string;
 }): string[] {
   const requesterName = params.requesterName
-    ? sanitizeAgentIdentityLine(params.requesterName)
+    ? boundRequesterNameForPrompt(sanitizeAgentIdentityLine(params.requesterName))
     : undefined;
   return [
     requesterName ? `Agent 1 (requester) name: ${requesterName}.` : undefined,
@@ -99,6 +102,16 @@ function buildAgentSessionLines(params: {
     "Agent 2 (target) session: <TARGET_SESSION>.",
     params.targetChannel ? `Agent 2 (target) channel: ${params.targetChannel}.` : undefined,
   ].filter((line): line is string => Boolean(line));
+}
+
+function boundRequesterNameForPrompt(value: string): string {
+  if (value.length <= MAX_A2A_REQUESTER_NAME_PROMPT_CHARS) {
+    return value;
+  }
+  return `${truncateUtf16Safe(
+    value,
+    MAX_A2A_REQUESTER_NAME_PROMPT_CHARS - TRUNCATED_REQUESTER_NAME_MARKER.length,
+  ).trimEnd()}${TRUNCATED_REQUESTER_NAME_MARKER}`;
 }
 
 /** Builds the initial prompt context for a sessions_send agent-to-agent request. */

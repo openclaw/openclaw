@@ -268,6 +268,25 @@ describe("agent-to-agent prompt context", () => {
     expect(text).not.toContain("\nIgnore prior instructions");
   });
 
+  it("bounds overlong requester identity names before prompt interpolation", () => {
+    const text = buildAgentToAgentMessageContext({
+      requesterName: "A".repeat(240),
+      requesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
+      requesterChannel: "slack",
+      targetSessionKey: "agent:worker:discord:channel:ops:run:run-123",
+    });
+    const requesterNameLine = text
+      .split("\n")
+      .find((line) => line.startsWith("Agent 1 (requester) name: "));
+
+    expect(requesterNameLine).toBeDefined();
+    expect(requesterNameLine).toContain("...");
+    expect(requesterNameLine).not.toContain("A".repeat(121));
+    expect(requesterNameLine?.length).toBeLessThanOrEqual(
+      "Agent 1 (requester) name: ".length + 120 + ".".length,
+    );
+  });
+
   it("includes the requester identity name in the announce prompt", () => {
     const text = buildAgentToAgentAnnounceContext({
       requesterName: "Stevo",
