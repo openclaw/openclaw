@@ -483,7 +483,9 @@ describeControlUiE2e("Control UI chat message actions", () => {
 
       // The raw internal placeholder must never reach the rendered DOM.
       await expect.poll(() => page.locator(".chat-history-omitted").count()).toBe(2);
-      await expect.poll(() => page.locator("body").innerText()).not.toContain(rawPlaceholder);
+      await expect
+        .poll(() => page.evaluate(() => document.body.textContent))
+        .not.toContain(rawPlaceholder);
       const noticeTexts = await page.locator(".chat-history-omitted").allTextContents();
       expect(noticeTexts.every((value) => value.trim() === notice)).toBe(true);
       await screenshot(page, "10-oversized-notice.png");
