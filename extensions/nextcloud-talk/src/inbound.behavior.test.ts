@@ -22,7 +22,7 @@ const {
 });
 
 const sendMessageNextcloudTalkMock = vi.hoisted(() => vi.fn());
-const resolveNextcloudTalkRoomKindMock = vi.hoisted(() => vi.fn());
+const resolveNextcloudTalkRoomKindResultMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../runtime-api.js", async () => {
   const actual = await vi.importActual<typeof import("../runtime-api.js")>("../runtime-api.js");
@@ -43,7 +43,7 @@ vi.mock("./room-info.js", async () => {
   const actual = await vi.importActual<typeof import("./room-info.js")>("./room-info.js");
   return {
     ...actual,
-    resolveNextcloudTalkRoomKind: resolveNextcloudTalkRoomKindMock,
+    resolveNextcloudTalkRoomKindResult: resolveNextcloudTalkRoomKindResultMock,
   };
 });
 
@@ -141,7 +141,10 @@ describe("nextcloud-talk inbound behavior", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     installRuntime();
-    resolveNextcloudTalkRoomKindMock.mockResolvedValue("direct");
+    resolveNextcloudTalkRoomKindResultMock.mockResolvedValue({
+      kind: "direct",
+      source: "resolved",
+    });
     resolveDefaultGroupPolicyMock.mockReturnValue("allowlist");
     resolveAllowlistProviderRuntimeGroupPolicyMock.mockReturnValue({
       groupPolicy: "allowlist",
@@ -208,7 +211,7 @@ describe("nextcloud-talk inbound behavior", () => {
       readStoreForDmPolicy: vi.fn(),
       issueChallenge: vi.fn(),
     });
-    resolveNextcloudTalkRoomKindMock.mockResolvedValue("group");
+    resolveNextcloudTalkRoomKindResultMock.mockResolvedValue({ kind: "group", source: "resolved" });
     const runtime = createRuntimeEnv();
 
     await handleNextcloudTalkInbound({
@@ -233,6 +236,55 @@ describe("nextcloud-talk inbound behavior", () => {
     expect(runtime.log).toHaveBeenCalledWith("nextcloud-talk: drop room room-group (no mention)");
   });
 
+  it("defers messages when configured room lookup fails instead of applying group fallback", async () => {
+    installRuntime({
+      buildMentionRegexes: vi.fn(() => [/@openclaw/i]),
+      matchesMentionPatterns: vi.fn(() => false),
+    });
+    const issueChallenge = vi.fn();
+    createChannelPairingControllerMock.mockReturnValue({
+      readStoreForDmPolicy: vi.fn(),
+      issueChallenge,
+    });
+    resolveNextcloudTalkRoomKindResultMock.mockResolvedValue({ source: "failed" });
+    const runtime = createRuntimeEnv();
+    const lifecycle = {
+      abortSignal: new AbortController().signal,
+      onAdopted: vi.fn(async () => {}),
+      onDeferred: vi.fn(),
+      onAdoptionFinalizing: vi.fn(),
+      onAbandoned: vi.fn(async () => {}),
+    };
+
+    await handleNextcloudTalkInbound({
+      message: createMessage({
+        roomToken: "room-lookup-down",
+        roomName: "Lookup Down",
+        isGroupChat: true,
+      }),
+      account: createAccount({
+        config: {
+          dmPolicy: "pairing",
+          allowFrom: [],
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["user-1"],
+          apiUser: "bot",
+          apiPassword: "secret",
+        },
+      }),
+      config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
+      runtime,
+      turnAdoptionLifecycle: lifecycle,
+    });
+
+    expect(lifecycle.onDeferred).toHaveBeenCalledTimes(1);
+    expect(sendMessageNextcloudTalkMock).not.toHaveBeenCalled();
+    expect(issueChallenge).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      "nextcloud-talk: defer room room-lookup-down until room lookup recovers",
+    );
+  });
+
   it("blocks unauthorized group text control commands even when room sender access allows chat", async () => {
     const buildMentionRegexes = vi.fn(() => [/@openclaw/i]);
     const coreRuntime = installRuntime({
@@ -244,7 +296,7 @@ describe("nextcloud-talk inbound behavior", () => {
       readStoreForDmPolicy: vi.fn(),
       issueChallenge: vi.fn(),
     });
-    resolveNextcloudTalkRoomKindMock.mockResolvedValue("group");
+    resolveNextcloudTalkRoomKindResultMock.mockResolvedValue({ kind: "group", source: "resolved" });
     const runtime = createRuntimeEnv();
 
     await handleNextcloudTalkInbound({

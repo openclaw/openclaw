@@ -243,6 +243,85 @@ describe("nextcloud talk room info", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("does not cache transient lookup failures before a successful retry", async () => {
+    fetchWithSsrFGuard
+      .mockResolvedValueOnce({
+        response: new Response("temporary outage", { status: 503 }),
+        release: vi.fn(async () => {}),
+      })
+      .mockResolvedValueOnce({
+        response: jsonResponse({
+          ocs: {
+            data: {
+              type: 1,
+            },
+          },
+        }),
+        release: vi.fn(async () => {}),
+      });
+    const account = {
+      accountId: "acct-retry",
+      baseUrl: "https://nc.example.com",
+      config: {
+        apiUser: "bot",
+        apiPassword: "secret",
+      },
+    } as never;
+
+    await expect(
+      resolveNextcloudTalkRoomKind({ account, roomToken: "room-retry" }),
+    ).resolves.toBeUndefined();
+    await expect(resolveNextcloudTalkRoomKind({ account, roomToken: "room-retry" })).resolves.toBe(
+      "direct",
+    );
+
+    expect(fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries malformed room info JSON instead of serving a negative cache", async () => {
+    fetchWithSsrFGuard
+      .mockResolvedValueOnce({
+        response: new Response("{ nope", {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+        release: vi.fn(async () => {}),
+      })
+      .mockResolvedValueOnce({
+        response: jsonResponse({
+          ocs: {
+            data: {
+              type: 2,
+            },
+          },
+        }),
+        release: vi.fn(async () => {}),
+      });
+    const error = vi.fn();
+    const account = {
+      accountId: "acct-malformed-retry",
+      baseUrl: "https://nc.example.com",
+      config: {
+        apiUser: "bot",
+        apiPassword: "secret",
+      },
+    } as never;
+
+    await expect(
+      resolveNextcloudTalkRoomKind({
+        account,
+        roomToken: "room-malformed-retry",
+        runtime: { error } as never,
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      resolveNextcloudTalkRoomKind({ account, roomToken: "room-malformed-retry" }),
+    ).resolves.toBe("group");
+
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
+  });
+
   it("cancels failed room info response bodies before releasing their guard", async () => {
     const cancelBody = vi.fn();
     const release = vi.fn(async () => {});
