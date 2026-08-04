@@ -37,14 +37,20 @@ describe("channel contextVisibility contract", () => {
   it.each(CONTEXT_VISIBILITY_CHANNELS)(
     "%s accepts channels.<id>.contextVisibility",
     (channelId) => {
-      expect(rejectsKey(schemaFor(channelId), "contextVisibility")).toBe(false);
+      const schema = schemaFor(channelId);
+      // A missing entry would make rejectsKey() return false and pass silently,
+      // so require the generated schema to exist before asserting on it.
+      expect(schema).toBeDefined();
+      expect(rejectsKey(schema, "contextVisibility")).toBe(false);
     },
   );
 
   it.each(CONTEXT_VISIBILITY_CHANNELS)(
     "%s accepts channels.<id>.accounts.<account>.contextVisibility",
     (channelId) => {
-      const accounts = asSchema(schemaFor(channelId)?.properties?.accounts);
+      const schema = schemaFor(channelId);
+      expect(schema).toBeDefined();
+      const accounts = asSchema(schema?.properties?.accounts);
       expect(rejectsKey(asSchema(accounts?.additionalProperties), "contextVisibility")).toBe(false);
     },
   );
