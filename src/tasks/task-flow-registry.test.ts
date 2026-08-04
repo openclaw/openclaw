@@ -11,6 +11,7 @@ import {
   listTaskFlowRecords,
   requestFlowCancel,
   reloadTaskFlowRegistryFromStore,
+  resolveTaskFlowForLookupToken,
   resumeFlow,
   setFlowWaiting,
   syncFlowFromTaskResult,
@@ -581,6 +582,35 @@ describe("task-flow-registry", () => {
       }
       expect(resumed.flow.flowId).toBe(created.flowId);
       expect(resumed.flow.stateJson).toBeNull();
+    });
+  });
+});
+
+describe("owner-key lookup prefers an active flow over a terminal one", () => {
+  it("resolves owner-key token to the newest non-terminal flow when the newest is terminal", async () => {
+    await withFlowRegistryTempDir(async () => {
+      const olderRunning = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/owner-lookup-active",
+        goal: "Older running flow",
+        status: "running",
+        createdAt: 100,
+        updatedAt: 100,
+      });
+      const newerTerminal = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/owner-lookup-active",
+        goal: "Newer finished flow",
+        status: "running",
+        createdAt: 200,
+        updatedAt: 200,
+      });
+      failFlow({ flowId: newerTerminal.flowId, expectedRevision: newerTerminal.revision });
+
+      // An owner-key lookup must not point `cancel`/`show` at the terminal flow
+      // while an older flow is still running — it would silently miss the active flow.
+      const resolved = resolveTaskFlowForLookupToken("agent:main:main");
+      expect(resolved?.flowId).toBe(olderRunning.flowId);
     });
   });
 });
