@@ -41,6 +41,7 @@ import { resolveNextcloudTalkRoomKindResult } from "./room-info.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import { sendMessageNextcloudTalk } from "./send.js";
 import type { CoreConfig, NextcloudTalkInboundMessage, NextcloudTalkRoomConfig } from "./types.js";
+import { NextcloudTalkRetryableWebhookError } from "./webhook-spool.js";
 
 const CHANNEL_ID = "nextcloud-talk" as const;
 
@@ -49,13 +50,6 @@ type NextcloudTalkIngressDispatchResult =
   | { kind: "completed" }
   | { kind: "deferred" }
   | { kind: "failed-retryable"; error: unknown };
-
-class NextcloudTalkRetryableWebhookError extends Error {
-  constructor(roomToken: string) {
-    super(`Nextcloud Talk room lookup failed for ${roomToken}; retry webhook delivery`);
-    this.name = "NextcloudTalkRetryableWebhookError";
-  }
-}
 
 function hasAllowEntries(entries: string[]): boolean {
   return normalizeNextcloudTalkAllowlist(entries).length > 0;
@@ -164,7 +158,9 @@ export async function handleNextcloudTalkInbound(params: {
       params.turnAdoptionLifecycle.onDeferred();
       return { kind: "deferred" };
     }
-    throw new NextcloudTalkRetryableWebhookError(message.roomToken);
+    throw new NextcloudTalkRetryableWebhookError(
+      `Nextcloud Talk room lookup failed for ${message.roomToken}; retry webhook delivery`,
+    );
   }
   const roomKind = roomKindResult.kind;
   const isGroup = roomKind === "direct" ? false : roomKind === "group" ? true : message.isGroupChat;

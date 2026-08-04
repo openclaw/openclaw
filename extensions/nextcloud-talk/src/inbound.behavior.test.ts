@@ -6,6 +6,7 @@ import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
 import { setNextcloudTalkRuntime } from "./runtime.js";
 import type { CoreConfig, NextcloudTalkInboundMessage } from "./types.js";
+import { NextcloudTalkRetryableWebhookError } from "./webhook-spool.js";
 
 const {
   createChannelPairingControllerMock,
@@ -276,7 +277,7 @@ describe("nextcloud-talk inbound behavior", () => {
         config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
         runtime,
       }),
-    ).rejects.toThrow(/room lookup failed/);
+    ).rejects.toBeInstanceOf(NextcloudTalkRetryableWebhookError);
 
     await expect(
       handleNextcloudTalkInbound({
