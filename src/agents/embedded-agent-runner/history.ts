@@ -89,14 +89,24 @@ export function limitHistoryTurns(
   return messages;
 }
 
+/** Raw channel-config fields this resolver reads, at channel root or under `accounts.<id>`. */
+type HistoryLimitChannelConfig = {
+  historyLimit?: number;
+  dmHistoryLimit?: number;
+  dms?: Record<string, { historyLimit?: number }>;
+  accounts?: Record<string, HistoryLimitChannelConfig | undefined>;
+};
+
 /**
  * Extract provider + user ID from a session key and look up dmHistoryLimit.
  * Supports per-DM overrides and provider defaults.
  * For channel/group sessions, uses historyLimit from provider config.
+ * Account-scoped values override the channel root for that account.
  */
 export function getHistoryLimitFromSessionKey(
   sessionKey: string | undefined,
   config: OpenClawConfig | undefined,
+  accountId?: string | null,
 ): number | undefined {
   if (!sessionKey || !config) {
     return undefined;
@@ -117,13 +127,7 @@ export function getHistoryLimitFromSessionKey(
   const resolveProviderConfig = (
     cfg: OpenClawConfig | undefined,
     providerId: string,
-  ):
-    | {
-        historyLimit?: number;
-        dmHistoryLimit?: number;
-        dms?: Record<string, { historyLimit?: number }>;
-      }
-    | undefined => {
+  ): HistoryLimitChannelConfig | undefined => {
     const channels = cfg?.channels;
     if (!channels || typeof channels !== "object") {
       return undefined;
@@ -137,11 +141,7 @@ export function getHistoryLimitFromSessionKey(
       if (!value || typeof value !== "object" || Array.isArray(value)) {
         return undefined;
       }
-      return value as {
-        historyLimit?: number;
-        dmHistoryLimit?: number;
-        dms?: Record<string, { historyLimit?: number }>;
-      };
+      return value as HistoryLimitChannelConfig;
     }
     return undefined;
   };
@@ -151,19 +151,29 @@ export function getHistoryLimitFromSessionKey(
     return undefined;
   }
 
+  // Channel schemas accept these keys at the channel root and under `accounts.<id>`,
+  // so an account value must win for that account or it validates and is silently
+  // ignored. Exact-key lookup matches resolveChannelAccountMediaMaxMb.
+  const trimmedAccountId = accountId?.trim();
+  const accountConfig = trimmedAccountId ? providerConfig.accounts?.[trimmedAccountId] : undefined;
+
   // For DM sessions: per-DM override -> dmHistoryLimit.
   // Accept both "direct" (new) and "dm" (legacy) for backward compat.
   if (kind === "dm" || kind === "direct") {
-    if (userId && providerConfig.dms?.[userId]?.historyLimit !== undefined) {
-      return providerConfig.dms[userId].historyLimit;
+    if (userId) {
+      const perDmLimit =
+        accountConfig?.dms?.[userId]?.historyLimit ?? providerConfig.dms?.[userId]?.historyLimit;
+      if (perDmLimit !== undefined) {
+        return perDmLimit;
+      }
     }
-    return providerConfig.dmHistoryLimit;
+    return accountConfig?.dmHistoryLimit ?? providerConfig.dmHistoryLimit;
   }
 
   // For channel/group sessions: use historyLimit from provider config
   // This prevents context overflow in long-running channel sessions
   if (kind === "channel" || kind === "group") {
-    return providerConfig.historyLimit;
+    return accountConfig?.historyLimit ?? providerConfig.historyLimit;
   }
 
   return undefined;

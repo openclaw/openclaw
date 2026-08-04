@@ -156,4 +156,61 @@ describe("getHistoryLimitFromSessionKey", () => {
       expect(getHistoryLimitFromSessionKey(`agent:main:${provider}:channel:456`, config)).toBe(12);
     }
   });
+
+  it("prefers account-scoped limits over the channel root for that account", () => {
+    const config = {
+      channels: {
+        telegram: {
+          historyLimit: 10,
+          dmHistoryLimit: 15,
+          dms: { "123": { historyLimit: 7 } },
+          accounts: {
+            work: {
+              historyLimit: 40,
+              dmHistoryLimit: 41,
+              dms: { "123": { historyLimit: 42 } },
+            },
+            sparse: { historyLimit: 50 },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const cases: Array<[string, string | undefined, number | undefined]> = [
+      // Account values win for every scope the resolver supports.
+      ["telegram:channel:c1", "work", 40],
+      ["telegram:group:g1", "work", 40],
+      ["telegram:dm:999", "work", 41],
+      ["telegram:dm:123", "work", 42],
+      // Without an account id, or for an account that omits the key, the root still applies.
+      ["telegram:channel:c1", undefined, 10],
+      ["telegram:dm:999", undefined, 15],
+      ["telegram:dm:123", undefined, 7],
+      ["telegram:dm:999", "sparse", 15],
+      ["telegram:dm:123", "sparse", 7],
+      ["telegram:channel:c1", "missing-account", 10],
+    ];
+
+    for (const [sessionKey, accountId, expected] of cases) {
+      expect(
+        getHistoryLimitFromSessionKey(sessionKey, config, accountId),
+        `${sessionKey}/${accountId}`,
+      ).toBe(expected);
+    }
+  });
+
+  it("treats an explicit account limit of 0 as a real override", () => {
+    const config = {
+      channels: {
+        slack: {
+          historyLimit: 25,
+          dmHistoryLimit: 30,
+          accounts: { off: { historyLimit: 0, dmHistoryLimit: 0 } },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(getHistoryLimitFromSessionKey("slack:channel:c1", config, "off")).toBe(0);
+    expect(getHistoryLimitFromSessionKey("slack:dm:u1", config, "off")).toBe(0);
+  });
 });

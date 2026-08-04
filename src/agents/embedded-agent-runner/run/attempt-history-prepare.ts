@@ -182,7 +182,7 @@ export async function prepareEmbeddedAttemptHistory(input: {
       );
       const truncated = limitHistoryTurns(
         heartbeatFiltered,
-        getHistoryLimitFromSessionKey(attempt.sessionKey, attempt.config),
+        getHistoryLimitFromSessionKey(attempt.sessionKey, attempt.config, attempt.agentAccountId),
       );
       // Truncation can orphan tool_result blocks by removing the assistant message
       // that contained the matching tool_use, so repair the pairs once more.
