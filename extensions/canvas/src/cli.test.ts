@@ -1,5 +1,5 @@
 // Canvas tests cover cli plugin behavior.
-import { truncate, writeFile } from "node:fs/promises";
+import { symlink, truncate, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { Command } from "commander";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
@@ -11,6 +11,23 @@ import {
 } from "./cli.js";
 
 const FILE_BYTE_LIMIT = 16 * 1024 * 1024;
+
+const VALID_A2UI_V08_JSONL = [
+  JSON.stringify({
+    surfaceUpdate: {
+      surfaceId: "main",
+      components: [
+        {
+          id: "root",
+          component: {
+            Text: { text: { literalString: "Canvas symlink proof" }, usageHint: "body" },
+          },
+        },
+      ],
+    },
+  }),
+  JSON.stringify({ beginRendering: { surfaceId: "main", root: "root" } }),
+].join("\n");
 
 function createCanvasCliDeps() {
   const writtenFiles: Array<{ filePath: string; base64: string }> = [];
@@ -559,4 +576,36 @@ describe("canvas CLI", () => {
       expect(deps.callGatewayCli).not.toHaveBeenCalled();
     });
   });
+
+  it.skipIf(process.platform === "win32")(
+    "follows a final symlink for --jsonl payload paths",
+    async () => {
+      await withTempDir("openclaw-canvas-cli-", async (tempRoot) => {
+        const targetPath = path.join(tempRoot, "events.jsonl");
+        const linkPath = path.join(tempRoot, "events-link.jsonl");
+        await writeFile(targetPath, VALID_A2UI_V08_JSONL);
+        await symlink(targetPath, linkPath);
+        const program = new Command();
+        program.exitOverride();
+        const nodes = program.command("nodes");
+        const { deps } = createCanvasCliDeps();
+        registerNodesCanvasCommands(nodes, deps);
+
+        await program.parseAsync(
+          ["nodes", "canvas", "a2ui", "push", "--node", "ios-node", "--jsonl", linkPath],
+          { from: "user" },
+        );
+
+        expect(deps.callGatewayCli).toHaveBeenCalledWith(
+          "node.invoke",
+          expect.any(Object),
+          expect.objectContaining({
+            command: "canvas.a2ui.pushJSONL",
+            params: { jsonl: VALID_A2UI_V08_JSONL },
+          }),
+          expect.any(Object),
+        );
+      });
+    },
+  );
 });

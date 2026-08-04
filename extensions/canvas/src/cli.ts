@@ -461,7 +461,7 @@ export function registerNodesCanvasCommands(nodes: Command, deps: CanvasCliDepen
 
           const jsonl = hasText
             ? buildA2UITextJsonl(opts.text ?? "")
-            : await readA2UIJsonlFile(String(opts.jsonl));
+            : await readA2UIJsonlFile(await fs.realpath(String(opts.jsonl)));
           const { messageCount } = validateSupportedA2UIJsonl(jsonl);
           const result = await invokeCanvas(deps, opts, "canvas.a2ui.pushJSONL", { jsonl });
           writeCanvasInvokeResult(
