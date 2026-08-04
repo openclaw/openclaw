@@ -9,6 +9,7 @@ import { resolveNextcloudTalkApiCredentials } from "./api-credentials.js";
 import { releaseNextcloudTalkGuardedResponse } from "./guarded-response.js";
 
 const ROOM_CACHE_TTL_MS = 5 * 60 * 1000;
+const ROOM_CACHE_ERROR_TTL_MS = 30 * 1000;
 const ROOM_CACHE_MAX_ENTRIES = 1000;
 const NEXTCLOUD_TALK_ROOM_INFO_TIMEOUT_MS = 30_000;
 
@@ -18,7 +19,10 @@ type NextcloudTalkRoomKindResult = {
   source: "cache" | "resolved" | "unconfigured" | "unknown" | "failed";
 };
 
-const roomCache = new Map<string, { kind: NextcloudTalkRoomKind; fetchedAt: number }>();
+const roomCache = new Map<
+  string,
+  { kind?: NextcloudTalkRoomKind; fetchedAt: number; error?: string }
+>();
 
 function resolveRoomCacheKey(params: { accountId: string; roomToken: string }) {
   return `${params.accountId}:${params.roomToken}`;
@@ -26,7 +30,7 @@ function resolveRoomCacheKey(params: { accountId: string; roomToken: string }) {
 
 function cacheRoomInfo(
   key: string,
-  value: { kind: NextcloudTalkRoomKind; fetchedAt: number },
+  value: { kind?: NextcloudTalkRoomKind; fetchedAt: number; error?: string },
 ): void {
   roomCache.set(key, value);
   pruneMapToMaxSize(roomCache, ROOM_CACHE_MAX_ENTRIES);
@@ -64,8 +68,11 @@ export async function resolveNextcloudTalkRoomKindResult(params: {
   const cached = roomCache.get(key);
   if (cached) {
     const age = Date.now() - cached.fetchedAt;
-    if (age < ROOM_CACHE_TTL_MS) {
+    if (cached.kind && age < ROOM_CACHE_TTL_MS) {
       return { kind: cached.kind, source: "cache" };
+    }
+    if (cached.error && age < ROOM_CACHE_ERROR_TTL_MS) {
+      return { source: "unknown" };
     }
     roomCache.delete(key);
   }
@@ -110,7 +117,14 @@ export async function resolveNextcloudTalkRoomKindResult(params: {
         runtime?.log?.(
           `nextcloud-talk: room lookup failed (${response.status}) token=${roomToken}`,
         );
-        return { source: isTransientRoomInfoStatus(response.status) ? "failed" : "unknown" };
+        if (isTransientRoomInfoStatus(response.status)) {
+          return { source: "failed" };
+        }
+        cacheRoomInfo(key, {
+          fetchedAt: Date.now(),
+          error: `status:${response.status}`,
+        });
+        return { source: "unknown" };
       }
 
       let payload: { ocs?: { data?: { type?: number | string } } };
@@ -120,11 +134,19 @@ export async function resolveNextcloudTalkRoomKindResult(params: {
         }>(response, "Nextcloud Talk room info failed");
       } catch (err) {
         runtime?.error?.(`nextcloud-talk: room lookup error: ${String(err)}`);
+        cacheRoomInfo(key, {
+          fetchedAt: Date.now(),
+          error: "malformed",
+        });
         return { source: "unknown" };
       }
       const type = coerceRoomType(payload.ocs?.data?.type);
       const kind = resolveRoomKindFromType(type);
       if (!kind) {
+        cacheRoomInfo(key, {
+          fetchedAt: Date.now(),
+          error: "unrecognized-room-kind",
+        });
         return { source: "unknown" };
       }
       cacheRoomInfo(key, { fetchedAt: Date.now(), kind });
