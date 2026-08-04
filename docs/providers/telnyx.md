@@ -6,23 +6,23 @@ read_when:
   - You want one OpenAI-compatible API for Telnyx AI inference
 ---
 
-[Telnyx AI inference](https://developers.telnyx.com/docs/inference/getting-started) provides hosted, OpenAI-compatible access to open-weight models plus proxied frontier routes. The official external plugin uses authenticated discovery, so OpenClaw follows the complete model set enabled for your Telnyx account. Its offline fallback contains the models available when this OpenClaw release was built.
+[Telnyx AI inference](https://developers.telnyx.com/docs/inference/getting-started) provides hosted, OpenAI-compatible access to open-weight models plus proxied frontier routes. The vendor-maintained external [`@telnyx/openclaw-provider`](https://github.com/team-telnyx/openclaw-telnyx-provider) plugin supplies the runtime; OpenClaw carries its catalog and onboarding metadata. Authenticated discovery follows the complete model set enabled for your Telnyx account, while the offline fallback contains the models available when that plugin release was built.
 
-| Property        | Value                                                   |
-| --------------- | ------------------------------------------------------- |
-| Provider id     | `telnyx`                                                |
-| Plugin          | official external package (`@openclaw/telnyx-provider`) |
-| Auth env var    | `TELNYX_API_KEY`                                        |
-| Onboarding flag | `--auth-choice telnyx-api-key`                          |
-| Direct CLI flag | `--telnyx-api-key <key>`                                |
-| API             | OpenAI-compatible (`openai-completions`)                |
-| Base URL        | `https://api.telnyx.com/v2/ai/openai`                   |
-| Default model   | `telnyx/moonshotai/Kimi-K3`                             |
+| Property        | Value                                                            |
+| --------------- | ---------------------------------------------------------------- |
+| Provider id     | `telnyx`                                                         |
+| Plugin          | vendor-maintained external package (`@telnyx/openclaw-provider`) |
+| Auth env var    | `TELNYX_API_KEY`                                                 |
+| Onboarding flag | `--auth-choice telnyx-api-key`                                   |
+| Direct CLI flag | `--telnyx-api-key <key>`                                         |
+| API             | OpenAI-compatible (`openai-completions`)                         |
+| Base URL        | `https://api.telnyx.com/v2/ai/openai`                            |
+| Default model   | `telnyx/moonshotai/Kimi-K3`                                      |
 
 ## Install plugin
 
 ```bash
-openclaw plugins install @openclaw/telnyx-provider
+openclaw plugins install @telnyx/openclaw-provider
 openclaw gateway restart
 ```
 
@@ -82,7 +82,7 @@ Use `/model telnyx/moonshotai/Kimi-K3` to switch an existing chat.
 
 ## Live model discovery
 
-The plugin fetches the authenticated `/models` endpoint and caches the result for five minutes, then merges those rows over the bundled catalog. Newly launched Telnyx models appear automatically without an OpenClaw release, including proxied frontier routes such as `telnyx/openai/gpt-5.x`, `telnyx/anthropic/claude-haiku-4-5`, and `telnyx/google/gemini-2.5-flash`.
+The plugin fetches the authenticated `/models` endpoint and caches the result for five minutes, then merges those rows over the bundled catalog. Newly launched Telnyx models appear automatically without waiting for a plugin release, including proxied frontier routes such as `telnyx/openai/gpt-5.x`, `telnyx/anthropic/claude-haiku-4-5`, and `telnyx/google/gemini-2.5-flash`.
 
 ## Bundled fallback catalog
 
@@ -108,7 +108,7 @@ The authenticated live catalog is authoritative. These rows keep setup and model
 All bundled models support tool calling and reasoning. The `openai/*` and `anthropic/*` ids are Telnyx-proxied frontier routes; the rest are Telnyx-hosted open-weight models. Streaming usage is reported on the final chunk.
 
 <Note>
-Telnyx can add, remove, or change hosted models independently of OpenClaw releases. The plugin refreshes model ids, context limits, output limits, and pricing from the authenticated API while retaining model-specific OpenClaw transport policy.
+Telnyx can add, remove, or change hosted models independently of plugin releases. The plugin refreshes model ids, context limits, output limits, and pricing from the authenticated API while retaining model-specific transport policy.
 </Note>
 
 ## Manual config
