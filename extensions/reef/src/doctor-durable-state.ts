@@ -13,6 +13,11 @@ import {
   type SignedReceipt,
 } from "../protocol/index.js";
 import {
+  createReefAuditRetention,
+  pushReefAuditRetention,
+  reefAuditRetentionEntries,
+} from "./audit-retention.js";
+import {
   legacyReefFileExists,
   REEF_DURABLE_LEGACY_FILENAMES,
   resolveLegacyReefStateDir,
@@ -60,18 +65,13 @@ const REEF_RUNTIME_LEGACY_FILENAMES = ["replay.jsonl", "reviews.json", "delivere
 // instead of an aggregate cap that can reject individually storable entries.
 const REEF_LEGACY_AUDIT_RECORD_MAX_BYTES = 65_536;
 const REEF_LEGACY_REPLAY_VALUE_MAX_BYTES = 65_536;
-// Compact the in-memory audit window promptly instead of delaying the slice
-// until a full window of stale entries has accumulated, so the retained buffer
-// stays at the canonical window plus one small batch rather than twice it.
-const REEF_AUDIT_RETAIN_COMPACT_BATCH = 1_024;
 
 type ReefAuditMigrationRecord = { pending: true; expectedEntries?: number };
 
 async function readLegacyReefAudit(
   filePath: string,
 ): Promise<{ entries: AuditEntry[]; totalEntries: number }> {
-  let retained: AuditEntry[] = [];
-  let retainedStart = 0;
+  const retention = createReefAuditRetention();
   let totalEntries = 0;
   let previousHash = "";
   let previousSeq = 0;
@@ -94,16 +94,9 @@ async function readLegacyReefAudit(
     previousHash = entry.entryHash;
     previousSeq = entry.event.seq;
     totalEntries += 1;
-    retained.push(entry);
-    if (retained.length - retainedStart > REEF_AUDIT_MAX_ENTRIES) {
-      retainedStart += 1;
-      if (retainedStart >= REEF_AUDIT_RETAIN_COMPACT_BATCH) {
-        retained = retained.slice(retainedStart);
-        retainedStart = 0;
-      }
-    }
+    pushReefAuditRetention(retention, entry);
   });
-  return { entries: retained.slice(retainedStart), totalEntries };
+  return { entries: reefAuditRetentionEntries(retention), totalEntries };
 }
 
 async function readStoredReefAudit(

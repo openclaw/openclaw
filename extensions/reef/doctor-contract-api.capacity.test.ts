@@ -12,11 +12,18 @@ import type {
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
-import { MemoryAuditStore } from "./protocol/index.js";
+import { MemoryAuditStore, type AuditEntry } from "./protocol/index.js";
+import {
+  createReefAuditRetention,
+  pushReefAuditRetention,
+  reefAuditRetentionEntries,
+  REEF_AUDIT_RETAIN_COMPACT_BATCH,
+} from "./src/audit-retention.js";
 import {
   REEF_AUDIT_HEAD_KEY,
   REEF_AUDIT_HEAD_MAX_ENTRIES,
   REEF_AUDIT_HEAD_NAMESPACE,
+  REEF_AUDIT_MAX_ENTRIES,
   REEF_AUDIT_NAMESPACE,
   REEF_AUDIT_STORE_MAX_ENTRIES,
   REEF_REPLAY_MAX_ENTRIES,
@@ -115,6 +122,26 @@ describe("Reef doctor journal capacity", () => {
     });
   });
 
+  it("keeps the audit retention buffer within the window plus one compact batch", () => {
+    const retention = createReefAuditRetention();
+    const entries: AuditEntry[] = [];
+    let maxBuffered = 0;
+    for (let index = 0; index < 60_000; index += 1) {
+      const entry = {
+        entryHash: `hash-${index}`,
+        prevHash: index === 0 ? "" : `hash-${index - 1}`,
+        event: { seq: index + 1, ts: 1, type: "one", payload: {} },
+      } as unknown as AuditEntry;
+      entries.push(entry);
+      pushReefAuditRetention(retention, entry);
+      maxBuffered = Math.max(maxBuffered, retention.entries.length);
+    }
+    expect(maxBuffered).toBeLessThanOrEqual(
+      REEF_AUDIT_MAX_ENTRIES + REEF_AUDIT_RETAIN_COMPACT_BATCH,
+    );
+    expect(reefAuditRetentionEntries(retention)).toEqual(entries.slice(-REEF_AUDIT_MAX_ENTRIES));
+  });
+
   it("migrates aggregate audit state beyond 64 MiB within the canonical window", async () => {
     await withTempDir("openclaw-reef-doctor-audit-", async (stateDir) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
@@ -125,9 +152,10 @@ describe("Reef doctor journal capacity", () => {
       // 2,000 valid chain entries with ~40 KiB event bodies exceed the former
       // 64 MiB aggregate budget while every record stays under the 65,536-byte
       // plugin-state value limit and the 30,000-entry audit window.
+      const entryCount = 2_000;
       const audit = new MemoryAuditStore(new Uint8Array(32).fill(1));
       const body = { payload: "c".repeat(40 * 1024) };
-      for (let index = 0; index < 2_000; index += 1) {
+      for (let index = 0; index < entryCount; index += 1) {
         await audit.appendEvent("one", body, 10 + index);
       }
       const entries = await audit.entries();
@@ -147,7 +175,7 @@ describe("Reef doctor journal capacity", () => {
 
       expect(result.warnings).toEqual([]);
       expect(result.changes).toEqual([
-        "Migrated 2000 Reef audit entries -> plugin state",
+        `Migrated ${entryCount} Reef audit entries -> plugin state`,
         expect.stringContaining("Archived Reef audit trail legacy source"),
       ]);
       const headStore = context.openPluginStateKeyedStore<ReefAuditHeadRecord>({
@@ -157,7 +185,7 @@ describe("Reef doctor journal capacity", () => {
       });
       await expect(headStore.lookup(REEF_AUDIT_HEAD_KEY)).resolves.toMatchObject({
         hash: entries.at(-1)!.entryHash,
-        seq: 2_000,
+        seq: entryCount,
       });
       const store = context.openPluginStateKeyedStore<ReefAuditStateRecord>({
         namespace: REEF_AUDIT_NAMESPACE,
