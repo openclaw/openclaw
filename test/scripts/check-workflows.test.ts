@@ -20,7 +20,7 @@ function writeTimeoutHook(tempDir: string): string {
     [
       "const nativeSetTimeout = globalThis.setTimeout;",
       "globalThis.setTimeout = (callback, delay, ...args) =>",
-      "  nativeSetTimeout(callback, delay === 300_000 ? 500 : delay, ...args);",
+      "  nativeSetTimeout(callback, delay === 300_000 ? 500 : delay === 900_000 ? 2_000 : delay, ...args);",
       "",
     ].join("\n"),
   );
@@ -96,6 +96,74 @@ describe("check-workflows", () => {
     expect(preCommitArgs).toContain("run --config .pre-commit-config.yaml zizmor --files");
     expect(preCommitArgs).toContain(".github/workflows/ci.yml");
     expect(preCommitArgs).toContain(".github/workflows/windows-testbox-probe.yml");
+  });
+
+  it("lets a slow healthy Go bootstrap exceed the linter budget", () => {
+    const tempDir = makeTempDir(tempDirs, "check-workflows-");
+    const binDir = path.join(tempDir, "bin");
+    const timeoutHookPath = writeTimeoutHook(tempDir);
+    mkdirSync(binDir);
+    writeFileSync(
+      path.join(binDir, "go"),
+      [
+        "#!/bin/sh",
+        'if [ "$1" = "version" ]; then exit 0; fi',
+        'if [ "$1" = "run" ]; then sleep 1.2; exit 0; fi',
+        "exit 1",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    for (const command of ["pre-commit", "python3", "node"]) {
+      writeFileSync(path.join(binDir, command), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    }
+
+    const result = spawnSync(process.execPath, [scriptPath], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        NODE_OPTIONS: `--import=${pathToFileURL(timeoutHookPath).href}`,
+        PATH: binDir,
+      },
+      timeout: 10_000,
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+  });
+
+  it("applies the bootstrap budget to a non-cooperative Go fallback", () => {
+    const tempDir = makeTempDir(tempDirs, "check-workflows-");
+    const binDir = path.join(tempDir, "bin");
+    const timeoutHookPath = writeTimeoutHook(tempDir);
+    mkdirSync(binDir);
+    writeFileSync(
+      path.join(binDir, "go"),
+      [
+        `#!${process.execPath}`,
+        'if (process.argv[2] === "version") process.exit(0);',
+        'process.on("SIGTERM", () => {});',
+        "setInterval(() => {}, 10_000);",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+
+    const result = spawnSync(process.execPath, [scriptPath], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        NODE_OPTIONS: `--import=${pathToFileURL(timeoutHookPath).href}`,
+        PATH: binDir,
+      },
+      timeout: 10_000,
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "[check-workflows] timed out after 900000ms: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12",
+    );
   });
 
   it("fails with an actionable timeout when a workflow command ignores SIGTERM", () => {

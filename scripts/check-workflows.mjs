@@ -11,6 +11,12 @@ const ACTIONLINT_VERSION = "1.7.12";
 const PRE_COMMIT_VERSION = "4.2.0";
 const WORKFLOW_DIR = ".github/workflows";
 const DEFAULT_COMMAND_TIMEOUT_MS = 5 * 60_000;
+// Dependency bootstrap (Go module fetch, temporary-venv pip install, and
+// pre-commit hook-environment setup) is network- and disk-bound and can
+// legitimately exceed the linter budget on a slow network. Keep it bounded to
+// prevent indefinite hangs, but with its own longer budget so healthy slow
+// downloads are not treated as stalled scans.
+const BOOTSTRAP_COMMAND_TIMEOUT_MS = 15 * 60_000;
 const COMMAND_TIMEOUT_KILL_GRACE_MS = 1_000;
 const COMMAND_TIMEOUT_GROUP_PROBE_MS = 100;
 
@@ -94,8 +100,9 @@ function spawnCommand(command, args, options = {}) {
   return new Promise((finish) => {
     // Node's sync timeout waits for SIGTERM handlers to exit. Run POSIX tools in
     // a process group so timeout escalation can terminate non-cooperative scans.
+    const { timeoutMs = DEFAULT_COMMAND_TIMEOUT_MS, ...spawnOptions } = options;
     const child = spawn(command, args, {
-      ...options,
+      ...spawnOptions,
       detached: process.platform !== "win32",
     });
     let settled = false;
@@ -121,7 +128,8 @@ function spawnCommand(command, args, options = {}) {
       finish(result);
     };
 
-    const timeoutError = () => Object.assign(new Error("Command timed out"), { code: "ETIMEDOUT" });
+    const timeoutError = () =>
+      Object.assign(new Error("Command timed out"), { code: "ETIMEDOUT", timeoutMs });
 
     function waitForGroupTeardown() {
       if (settled || process.platform === "win32" || teardownPending) {
@@ -133,6 +141,7 @@ function spawnCommand(command, args, options = {}) {
           signal: exitSignal,
           status: exitStatus,
           timedOut,
+          timeoutMs,
         });
         return;
       }
@@ -154,10 +163,10 @@ function spawnCommand(command, args, options = {}) {
         killProcessTree(child, "SIGKILL");
         waitForGroupTeardown();
       }, COMMAND_TIMEOUT_KILL_GRACE_MS);
-    }, DEFAULT_COMMAND_TIMEOUT_MS);
+    }, timeoutMs);
 
     child.on("error", (error) => {
-      settle({ error, signal: null, status: null, timedOut });
+      settle({ error, signal: null, status: null, timedOut, timeoutMs });
     });
 
     child.on("exit", (status, signal) => {
@@ -178,6 +187,7 @@ function spawnCommand(command, args, options = {}) {
         signal,
         status,
         timedOut,
+        timeoutMs,
       });
     });
   });
@@ -189,7 +199,9 @@ async function main() {
   if (await commandExists("actionlint")) {
     await run("actionlint", workflows);
   } else if (await commandExists("go", ["version"])) {
-    await run("go", ["run", `github.com/rhysd/actionlint/cmd/actionlint@v${ACTIONLINT_VERSION}`]);
+    await run("go", ["run", `github.com/rhysd/actionlint/cmd/actionlint@v${ACTIONLINT_VERSION}`], {
+      timeoutMs: BOOTSTRAP_COMMAND_TIMEOUT_MS,
+    });
   } else if (
     (await commandExists("pre-commit")) ||
     (await commandExists("python3", ["-m", "pre_commit", "--version"])) ||
@@ -211,7 +223,7 @@ async function main() {
 
 function commandFailureMessage(command, args, error) {
   if (error?.code === "ETIMEDOUT") {
-    return `[check-workflows] timed out after ${DEFAULT_COMMAND_TIMEOUT_MS}ms: ${commandLabel(command, args)}`;
+    return `[check-workflows] timed out after ${error.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS}ms: ${commandLabel(command, args)}`;
   }
   return `[check-workflows] failed to run ${command}: ${error?.message ?? "unknown error"}`;
 }
@@ -221,8 +233,8 @@ async function commandExists(command, args = ["--version"]) {
   return !result.error && result.status === 0;
 }
 
-async function run(command, args) {
-  const result = await spawnCommand(command, args, { stdio: "inherit" });
+async function run(command, args, options = {}) {
+  const result = await spawnCommand(command, args, { stdio: "inherit", ...options });
   if (result.error) {
     console.error(commandFailureMessage(command, args, result.error));
     process.exit(1);
@@ -232,8 +244,8 @@ async function run(command, args) {
   }
 }
 
-async function runChecked(command, args) {
-  const result = await spawnCommand(command, args, { stdio: "inherit" });
+async function runChecked(command, args, options = {}) {
+  const result = await spawnCommand(command, args, { stdio: "inherit", ...options });
   if (result.error) {
     return {
       message: commandFailureMessage(command, args, result.error),
@@ -264,21 +276,23 @@ async function runPreCommitFromTempVenv(hook, hookArgs) {
   const python = join(venvDir, process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
   let postVenvFailure;
   try {
-    const venvFailure = await runChecked("python3", ["-m", "venv", venvDir]);
+    const venvFailure = await runChecked("python3", ["-m", "venv", venvDir], {
+      timeoutMs: BOOTSTRAP_COMMAND_TIMEOUT_MS,
+    });
     if (venvFailure) {
       return false;
     }
-    postVenvFailure = await runChecked(python, [
-      "-m",
-      "pip",
-      "install",
-      "--disable-pip-version-check",
-      `pre-commit==${PRE_COMMIT_VERSION}`,
-    ]);
+    postVenvFailure = await runChecked(
+      python,
+      ["-m", "pip", "install", "--disable-pip-version-check", `pre-commit==${PRE_COMMIT_VERSION}`],
+      { timeoutMs: BOOTSTRAP_COMMAND_TIMEOUT_MS },
+    );
     if (postVenvFailure) {
       return false;
     }
-    postVenvFailure = await runChecked(python, ["-m", "pre_commit", ...hookArgs]);
+    postVenvFailure = await runChecked(python, ["-m", "pre_commit", ...hookArgs], {
+      timeoutMs: BOOTSTRAP_COMMAND_TIMEOUT_MS,
+    });
     if (postVenvFailure) {
       return false;
     }
@@ -301,11 +315,13 @@ function workflowFiles() {
 async function runPreCommitHook(hook, files) {
   const hookArgs = ["run", "--config", ".pre-commit-config.yaml", hook, "--files", ...files];
   if (await commandExists("pre-commit")) {
-    await run("pre-commit", hookArgs);
+    await run("pre-commit", hookArgs, { timeoutMs: BOOTSTRAP_COMMAND_TIMEOUT_MS });
     return;
   }
   if (await commandExists("python3", ["-m", "pre_commit", "--version"])) {
-    await run("python3", ["-m", "pre_commit", ...hookArgs]);
+    await run("python3", ["-m", "pre_commit", ...hookArgs], {
+      timeoutMs: BOOTSTRAP_COMMAND_TIMEOUT_MS,
+    });
     return;
   }
   if (await runPreCommitFromTempVenv(hook, hookArgs)) {
