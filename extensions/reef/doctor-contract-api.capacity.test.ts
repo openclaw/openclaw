@@ -12,11 +12,20 @@ import type {
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
+import { MemoryAuditStore } from "./protocol/index.js";
 import {
+  REEF_AUDIT_HEAD_KEY,
+  REEF_AUDIT_HEAD_MAX_ENTRIES,
+  REEF_AUDIT_HEAD_NAMESPACE,
+  REEF_AUDIT_NAMESPACE,
+  REEF_AUDIT_STORE_MAX_ENTRIES,
   REEF_REPLAY_MAX_ENTRIES,
   REEF_REPLAY_NAMESPACE,
   REEF_REPLAY_TTL_MS,
+  reefAuditEntryKey,
   reefReplayStoreKey,
+  type ReefAuditHeadRecord,
+  type ReefAuditStateRecord,
   type ReefReplayRecord,
 } from "./src/state.js";
 
@@ -39,7 +48,7 @@ function migrationById(id: string) {
   return migration;
 }
 
-describe("Reef doctor replay capacity", () => {
+describe("Reef doctor journal capacity", () => {
   beforeEach(() => {
     resetPluginStateStoreForTests();
   });
@@ -103,6 +112,61 @@ describe("Reef doctor replay capacity", () => {
         envelopeHash,
         state: "available",
       });
+    });
+  });
+
+  it("migrates aggregate audit state beyond 64 MiB within the canonical window", async () => {
+    await withTempDir("openclaw-reef-doctor-audit-", async (stateDir) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      vi.spyOn(os, "homedir").mockReturnValue(stateDir);
+      const legacyDir = path.join(stateDir, ".openclaw", "data", "reef");
+      const auditPath = path.join(legacyDir, "audit.jsonl");
+      fs.mkdirSync(legacyDir, { recursive: true });
+      // 2,000 valid chain entries with ~40 KiB event bodies exceed the former
+      // 64 MiB aggregate budget while every record stays under the 65,536-byte
+      // plugin-state value limit and the 30,000-entry audit window.
+      const audit = new MemoryAuditStore(new Uint8Array(32).fill(1));
+      const body = { payload: "c".repeat(40 * 1024) };
+      for (let index = 0; index < 2_000; index += 1) {
+        await audit.appendEvent("one", body, 10 + index);
+      }
+      const entries = await audit.entries();
+      fs.writeFileSync(auditPath, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+      const context = createDoctorContext(env);
+      const params = {
+        config: {},
+        env,
+        stateDir,
+        oauthDir: path.join(stateDir, "oauth"),
+        context,
+      };
+
+      const result = await migrationById("reef-audit-jsonl-to-plugin-state").migrateLegacyState(
+        params,
+      );
+
+      expect(result.warnings).toEqual([]);
+      expect(result.changes).toEqual([
+        "Migrated 2000 Reef audit entries -> plugin state",
+        expect.stringContaining("Archived Reef audit trail legacy source"),
+      ]);
+      const headStore = context.openPluginStateKeyedStore<ReefAuditHeadRecord>({
+        namespace: REEF_AUDIT_HEAD_NAMESPACE,
+        maxEntries: REEF_AUDIT_HEAD_MAX_ENTRIES,
+        overflowPolicy: "reject-new",
+      });
+      await expect(headStore.lookup(REEF_AUDIT_HEAD_KEY)).resolves.toMatchObject({
+        hash: entries.at(-1)!.entryHash,
+        seq: 2_000,
+      });
+      const store = context.openPluginStateKeyedStore<ReefAuditStateRecord>({
+        namespace: REEF_AUDIT_NAMESPACE,
+        maxEntries: REEF_AUDIT_STORE_MAX_ENTRIES,
+        overflowPolicy: "reject-new",
+      });
+      await expect(
+        store.lookup(reefAuditEntryKey(entries.at(-1)!.entryHash)),
+      ).resolves.toMatchObject({ kind: "entry", entry: entries.at(-1)! });
     });
   });
 });
