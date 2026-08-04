@@ -15,9 +15,10 @@ import {
   parseComfyJsonBody,
 } from "./test-helpers.js";
 import { setComfyFetchGuardForTesting } from "./test-support.js";
-import { DEFAULT_COMFY_WORKFLOW_FILE_MAX_BYTES } from "./workflow-runtime.js";
 
 const PREVIOUS_COMFY_WORKFLOW_FILE_MAX_BYTES = 16 * 1024 * 1024;
+// Matches ComfyUI's default --max-upload-size; used as the opt-in cap fixture.
+const DEFAULT_COMFY_WORKFLOW_FILE_MAX_BYTES = 100 * 1024 * 1024;
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),

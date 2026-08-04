@@ -45,10 +45,6 @@ const DEFAULT_POLL_INTERVAL_MS = 1_500;
 const DEFAULT_TIMEOUT_MS = 5 * 60_000;
 
 export const DEFAULT_COMFY_MODEL = "workflow";
-// Matches ComfyUI's default --max-upload-size. The cap is opt-in: operators
-// that want a bounded local read set workflowFileMaxBytes explicitly, while
-// unconfigured workflowPath files keep the previous unbounded behavior.
-export const DEFAULT_COMFY_WORKFLOW_FILE_MAX_BYTES = 100 * 1024 * 1024;
 
 type ComfyMode = "local" | "cloud";
 type ComfyCapability = "image" | "music" | "video";
