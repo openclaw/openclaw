@@ -557,9 +557,10 @@ export function createMemorySearchTool(options: {
           const shouldQueryMemory = requestedCorpus !== "wiki" && !cooldown;
           if (cooldown && !shouldQuerySupplements) {
             return jsonResult(
-              buildMemorySearchUnavailableResult(cooldown.error, {
-                ...(cooldown.code ? { code: cooldown.code } : {}),
-              }),
+              buildMemorySearchUnavailableResult(
+                cooldown.error,
+                cooldown.code ? { code: cooldown.code } : undefined,
+              ),
             );
           }
           const memoryManagerPurpose = options.oneShotCliRun ? "cli" : undefined;
@@ -916,9 +917,7 @@ export function createMemorySearchTool(options: {
             });
           }
           return jsonResult(
-            buildMemorySearchUnavailableResult(message, {
-              ...(code ? { code } : {}),
-            }),
+            buildMemorySearchUnavailableResult(message, code ? { code } : undefined),
           );
         }
       },
