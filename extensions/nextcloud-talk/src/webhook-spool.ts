@@ -51,6 +51,10 @@ const NextcloudTalkWebhookPayloadSchema: z.ZodType<NextcloudTalkWebhookPayload> 
 });
 
 export type NextcloudTalkIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
+type NextcloudTalkIngressDispatchResult =
+  | { kind: "completed" }
+  | { kind: "deferred" }
+  | { kind: "failed-retryable"; error: unknown };
 
 type NextcloudTalkIngressMonitor = {
   receive: (rawEvent: string) => Promise<"accepted" | "ignored">;
@@ -117,7 +121,7 @@ export function createNextcloudTalkWebhookSpool(options: {
   deliver: (
     message: NextcloudTalkInboundMessage,
     lifecycle: NextcloudTalkIngressLifecycle,
-  ) => Promise<void>;
+  ) => Promise<NextcloudTalkIngressDispatchResult | void>;
   runtime: Pick<RuntimeEnv, "error" | "log">;
   pollIntervalMs?: number;
   adoptionStallTimeoutMs?: number;
@@ -176,7 +180,7 @@ export function createNextcloudTalkWebhookSpool(options: {
       const message = parseClaimedMessage(claim.payload, claim.id, claim.laneKey);
       // The shared monitor translates these lifecycle callbacks into terminal or deferred
       // drain outcomes, including successful no-dispatch policy gates.
-      await options.deliver(message, lifecycle);
+      return await options.deliver(message, lifecycle);
     },
     pollIntervalMs: options.pollIntervalMs ?? NEXTCLOUD_TALK_INGRESS_POLL_INTERVAL_MS,
     retention: {

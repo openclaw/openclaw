@@ -45,6 +45,17 @@ import type { CoreConfig, NextcloudTalkInboundMessage, NextcloudTalkRoomConfig }
 const CHANNEL_ID = "nextcloud-talk" as const;
 
 type NextcloudTalkRoomMatch = ReturnType<typeof resolveNextcloudTalkRoomMatch>;
+type NextcloudTalkIngressDispatchResult =
+  | { kind: "completed" }
+  | { kind: "deferred" }
+  | { kind: "failed-retryable"; error: unknown };
+
+class NextcloudTalkRetryableWebhookError extends Error {
+  constructor(roomToken: string) {
+    super(`Nextcloud Talk room lookup failed for ${roomToken}; retry webhook delivery`);
+    this.name = "NextcloudTalkRetryableWebhookError";
+  }
+}
 
 function hasAllowEntries(entries: string[]): boolean {
   return normalizeNextcloudTalkAllowlist(entries).length > 0;
@@ -128,7 +139,7 @@ export async function handleNextcloudTalkInbound(params: {
   runtime: RuntimeEnv;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
   turnAdoptionLifecycle?: Parameters<typeof bindIngressLifecycleToReplyOptions>[0];
-}): Promise<void> {
+}): Promise<NextcloudTalkIngressDispatchResult | void> {
   const { message, account, config, runtime, statusSink } = params;
   const core = getNextcloudTalkRuntime();
   const pairing = createChannelPairingController({
@@ -149,8 +160,11 @@ export async function handleNextcloudTalkInbound(params: {
   });
   if (roomKindResult.source === "failed") {
     runtime.log?.(`nextcloud-talk: defer room ${message.roomToken} until room lookup recovers`);
-    params.turnAdoptionLifecycle?.onDeferred();
-    return;
+    if (params.turnAdoptionLifecycle) {
+      params.turnAdoptionLifecycle.onDeferred();
+      return { kind: "deferred" };
+    }
+    throw new NextcloudTalkRetryableWebhookError(message.roomToken);
   }
   const roomKind = roomKindResult.kind;
   const isGroup = roomKind === "direct" ? false : roomKind === "group" ? true : message.isGroupChat;

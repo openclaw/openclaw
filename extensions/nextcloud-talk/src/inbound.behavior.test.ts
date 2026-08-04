@@ -256,26 +256,50 @@ describe("nextcloud-talk inbound behavior", () => {
       onAbandoned: vi.fn(async () => {}),
     };
 
-    await handleNextcloudTalkInbound({
-      message: createMessage({
-        roomToken: "room-lookup-down",
-        roomName: "Lookup Down",
-        isGroupChat: true,
+    await expect(
+      handleNextcloudTalkInbound({
+        message: createMessage({
+          roomToken: "room-lookup-down",
+          roomName: "Lookup Down",
+          isGroupChat: true,
+        }),
+        account: createAccount({
+          config: {
+            dmPolicy: "pairing",
+            allowFrom: [],
+            groupPolicy: "allowlist",
+            groupAllowFrom: ["user-1"],
+            apiUser: "bot",
+            apiPassword: "secret",
+          },
+        }),
+        config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
+        runtime,
       }),
-      account: createAccount({
-        config: {
-          dmPolicy: "pairing",
-          allowFrom: [],
-          groupPolicy: "allowlist",
-          groupAllowFrom: ["user-1"],
-          apiUser: "bot",
-          apiPassword: "secret",
-        },
+    ).rejects.toThrow(/room lookup failed/);
+
+    await expect(
+      handleNextcloudTalkInbound({
+        message: createMessage({
+          roomToken: "room-lookup-down",
+          roomName: "Lookup Down",
+          isGroupChat: true,
+        }),
+        account: createAccount({
+          config: {
+            dmPolicy: "pairing",
+            allowFrom: [],
+            groupPolicy: "allowlist",
+            groupAllowFrom: ["user-1"],
+            apiUser: "bot",
+            apiPassword: "secret",
+          },
+        }),
+        config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
+        runtime,
+        turnAdoptionLifecycle: lifecycle,
       }),
-      config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
-      runtime,
-      turnAdoptionLifecycle: lifecycle,
-    });
+    ).resolves.toEqual({ kind: "deferred" });
 
     expect(lifecycle.onDeferred).toHaveBeenCalledTimes(1);
     expect(sendMessageNextcloudTalkMock).not.toHaveBeenCalled();
