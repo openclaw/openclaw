@@ -1054,6 +1054,56 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
   });
 
+  it("records routed trusted block media so an identical final is deduplicated", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    mocks.routeReply.mockResolvedValue({
+      ok: true,
+      delivered: true,
+      messageId: "trusted-media-block-1",
+    });
+    const dispatcher = createDispatcher();
+    const trustedMedia = {
+      mediaUrl: "https://example.com/tts.opus",
+      audioAsVoice: true,
+      trustedLocalMedia: true,
+    } satisfies ReplyPayload;
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onBlockReply?.(trustedMedia);
+      return trustedMedia;
+    });
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        ChatType: "group",
+        Surface: "slack",
+        Provider: "slack",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:999",
+        SessionKey: "agent:main:slack:group:oc_group",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { sourceReplyDeliveryMode: "message_tool_only" },
+    });
+
+    expect(mocks.routeReply).toHaveBeenCalledTimes(1);
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyKind: "block",
+        payload: expect.objectContaining({
+          mediaUrl: trustedMedia.mediaUrl,
+          trustedLocalMedia: true,
+        }),
+      }),
+    );
+  });
+
   it("does not deliver no-visible fallback after streamed blocks invisible to dispatcher counts", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();

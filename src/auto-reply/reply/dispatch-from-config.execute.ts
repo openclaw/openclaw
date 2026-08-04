@@ -417,17 +417,18 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                         }
                         const mediaOnlyPayload = toTrustedMediaOnlyPayload(normalizedPayload);
                         if (shouldRouteToOriginating) {
-                          await sendPayloadAsync(
+                          const result = await sendPayloadAsync(
                             mediaOnlyPayload,
                             context?.abortSignal,
                             false,
                             "block",
                           );
+                          state.recordRoutedBlockReplyDelivery(mediaOnlyPayload, result);
                         } else {
                           markInboundDedupeReplayUnsafe();
                           const delivered = dispatcher.sendBlockReply(mediaOnlyPayload);
                           if (delivered) {
-                            state.hasPendingDirectBlockReplyDelivery = true;
+                            state.progressState.hasPendingDirectBlockReplyDelivery = true;
                           }
                         }
                         return true;
