@@ -74,14 +74,15 @@ describe("registerSlackChannelEvents", () => {
     await createdHandler({
       event: {
         channel: { id: "C1", name: "general" },
+        event_ts: "123.456",
       },
-      body: {},
+      body: { event_id: "Ev-channel-1" },
     });
 
     expect(trackEvent).toHaveBeenCalledTimes(1);
     expect(enqueueSystemEventMock).toHaveBeenCalledWith("Slack channel created: #general.", {
       sessionKey: "agent:main:main",
-      contextKey: "slack:channel:created:C1",
+      contextKey: "slack:channel:created:C1:Ev-channel-1",
     });
   });
 });

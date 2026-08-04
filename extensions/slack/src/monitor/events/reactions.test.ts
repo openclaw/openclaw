@@ -226,11 +226,11 @@ describe("registerSlackReactionEvents", () => {
   });
 
   it("marks queued reaction events as untrusted external content", async () => {
-    await executeReactionCase();
+    await executeReactionCase({ body: { event_id: "Ev-reaction-1" } });
 
     expect(reactionQueueMock).toHaveBeenCalledWith(expect.any(String), {
       sessionKey: "agent:main:main",
-      contextKey: "slack:reaction:added:D1:123.456:U1:thumbsup",
+      contextKey: "slack:reaction:added:D1:123.456:U1:thumbsup:Ev-reaction-1",
     });
   });
 

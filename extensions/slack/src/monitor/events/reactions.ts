@@ -1,12 +1,14 @@
 // Slack plugin module implements reactions behavior.
-import type { SlackEventMiddlewareArgs } from "@slack/bolt";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { danger } from "openclaw/plugin-sdk/runtime-env";
+import type { AllMiddlewareArgs, SlackEventMiddlewareArgs } from "@slack/bolt";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { allowListMatches, normalizeAllowListLower } from "../allow-list.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackReactionEvent } from "../types.js";
-import { authorizeAndResolveSlackSystemEventContext } from "./system-event-context.js";
+import {
+  authorizeAndResolveSlackSystemEventContext,
+  handleSlackSystemEventFailure,
+  resolveSlackSystemEventOccurrenceId,
+} from "./system-event-context.js";
 
 function shouldEmitSlackReactionNotification(params: {
   ctx: SlackMonitorContext;
@@ -41,8 +43,14 @@ export function registerSlackReactionEvents(params: {
 }) {
   const { ctx, trackEvent } = params;
 
-  const handleReactionEvent = async (event: SlackReactionEvent, action: string) => {
+  const handleReactionEvent = async (paramsLocal: {
+    event: SlackReactionEvent;
+    action: "added" | "removed";
+    body: unknown;
+    context: unknown;
+  }) => {
     try {
+      const { event, action } = paramsLocal;
       const item = event.item;
       if (!item || item.type !== "message") {
         return;
@@ -86,32 +94,59 @@ export function registerSlackReactionEvents(params: {
       const authorLabel = authorInfo?.name ?? event.item_user;
       const baseText = `Slack reaction ${action}: :${emojiLabel}: by ${actorLabel} in ${ingressContext.channelLabel} msg ${item.ts}`;
       const text = authorLabel ? `${baseText} from ${authorLabel}` : baseText;
+      const occurrenceId = resolveSlackSystemEventOccurrenceId({
+        body: paramsLocal.body,
+        eventTs: event.event_ts,
+      });
       enqueueSystemEvent(text, {
         sessionKey: ingressContext.sessionKey,
-        contextKey: `slack:reaction:${action}:${item.channel}:${item.ts}:${event.user}:${emojiLabel}`,
+        contextKey: `slack:reaction:${action}:${item.channel}:${item.ts}:${event.user}:${emojiLabel}:${occurrenceId}`,
       });
     } catch (err) {
-      ctx.runtime.error?.(danger(`slack reaction handler failed: ${formatErrorMessage(err)}`));
+      handleSlackSystemEventFailure({
+        ctx,
+        context: paramsLocal.context,
+        error: err,
+        label: "reaction",
+      });
     }
   };
 
   ctx.app.event(
     "reaction_added",
-    async ({ event, body }: SlackEventMiddlewareArgs<"reaction_added">) => {
+    async ({
+      event,
+      body,
+      context,
+    }: SlackEventMiddlewareArgs<"reaction_added"> & AllMiddlewareArgs) => {
       if (ctx.shouldDropMismatchedSlackEvent(body)) {
         return;
       }
-      await handleReactionEvent(event as SlackReactionEvent, "added");
+      await handleReactionEvent({
+        event: event as SlackReactionEvent,
+        action: "added",
+        body,
+        context,
+      });
     },
   );
 
   ctx.app.event(
     "reaction_removed",
-    async ({ event, body }: SlackEventMiddlewareArgs<"reaction_removed">) => {
+    async ({
+      event,
+      body,
+      context,
+    }: SlackEventMiddlewareArgs<"reaction_removed"> & AllMiddlewareArgs) => {
       if (ctx.shouldDropMismatchedSlackEvent(body)) {
         return;
       }
-      await handleReactionEvent(event as SlackReactionEvent, "removed");
+      await handleReactionEvent({
+        event: event as SlackReactionEvent,
+        action: "removed",
+        body,
+        context,
+      });
     },
   );
 }

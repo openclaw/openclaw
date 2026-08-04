@@ -1,12 +1,12 @@
 // Slack plugin module handles Agent View lifecycle events.
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackAppContextChangedEvent } from "../types.js";
+import { handleSlackSystemEventFailure } from "./system-event-context.js";
 
 type SlackAgentEventHandler = (args: {
   event: SlackAppContextChangedEvent;
   body: unknown;
+  context?: unknown;
 }) => Promise<void>;
 
 type SlackAgentEventRegistrar = (
@@ -21,7 +21,7 @@ export function registerSlackAgentEvents(params: {
   const { ctx, trackEvent } = params;
   const slackApp = ctx.app as unknown as { event: SlackAgentEventRegistrar };
 
-  slackApp.event("app_context_changed", async ({ body }) => {
+  slackApp.event("app_context_changed", async ({ body, context }) => {
     try {
       if (ctx.shouldDropMismatchedSlackEvent(body)) {
         return;
@@ -29,9 +29,12 @@ export function registerSlackAgentEvents(params: {
       trackEvent?.();
       await ctx.recordSlackAgentView();
     } catch (error) {
-      ctx.runtime.error?.(
-        danger(`slack app_context_changed handler failed: ${formatErrorMessage(error)}`),
-      );
+      handleSlackSystemEventFailure({
+        ctx,
+        context,
+        error,
+        label: "app_context_changed",
+      });
     }
   });
 }

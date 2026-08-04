@@ -145,4 +145,13 @@ describe("registerSlackPinEvents", () => {
 
     expect(trackEvent).toHaveBeenCalledTimes(1);
   });
+
+  it("includes the envelope event id in the logical occurrence key", async () => {
+    await runPinCase({ body: { event_id: "Ev-pin-1" } });
+
+    expect(pinEnqueueMock).toHaveBeenCalledWith("Slack: alice pinned a message in #direct.", {
+      sessionKey: "agent:main:main",
+      contextKey: "slack:pin:added:D1:123.456:Ev-pin-1",
+    });
+  });
 });

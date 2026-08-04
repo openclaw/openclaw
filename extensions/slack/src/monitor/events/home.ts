@@ -1,10 +1,9 @@
 // Slack plugin module implements home behavior.
-import type { SlackEventMiddlewareArgs } from "@slack/bolt";
+import type { AllMiddlewareArgs, SlackEventMiddlewareArgs } from "@slack/bolt";
 import type { HomeView } from "@slack/types";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { danger } from "openclaw/plugin-sdk/runtime-env";
 import { DEFAULT_SLACK_SUGGESTED_PROMPTS, type SlackMonitorContext } from "../context.js";
 import type { SlackAppHomeOpenedEvent } from "../types.js";
+import { handleSlackSystemEventFailure } from "./system-event-context.js";
 
 function buildSlackHomeView(slashCommandName?: string): HomeView {
   const startSessionText = slashCommandName
@@ -50,7 +49,11 @@ export function registerSlackHomeEvents(params: {
 
   ctx.app.event(
     "app_home_opened",
-    async ({ event, body }: SlackEventMiddlewareArgs<"app_home_opened">) => {
+    async ({
+      event,
+      body,
+      context,
+    }: SlackEventMiddlewareArgs<"app_home_opened"> & AllMiddlewareArgs) => {
       try {
         if (ctx.shouldDropMismatchedSlackEvent(body)) {
           return;
@@ -85,7 +88,7 @@ export function registerSlackHomeEvents(params: {
           view: buildSlackHomeView(slashCommandName),
         });
       } catch (err) {
-        ctx.runtime.error?.(danger(`slack app home handler failed: ${formatErrorMessage(err)}`));
+        handleSlackSystemEventFailure({ ctx, context, error: err, label: "app home" });
       }
     },
   );

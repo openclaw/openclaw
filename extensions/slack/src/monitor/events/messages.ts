@@ -20,7 +20,10 @@ import { resolveSlackIngressTurnLifecycle } from "../ingress.js";
 import type { SlackMessageHandler } from "../message-handler.js";
 import type { SlackMessageChangedEvent } from "../types.js";
 import { resolveSlackMessageSubtypeHandler } from "./message-subtype-handlers.js";
-import { authorizeAndResolveSlackSystemEventContext } from "./system-event-context.js";
+import {
+  authorizeAndResolveSlackSystemEventContext,
+  resolveSlackSystemEventOccurrenceId,
+} from "./system-event-context.js";
 
 // Mirrors the Telegram `[telegram]` inbound logger so cross-channel journal-grep
 // workflows are uniform; the `gateway/channels/slack` subsystem renders as `[slack]`.
@@ -287,7 +290,10 @@ export function registerSlackMessageEvents(params: {
         }
         enqueueSystemEvent(subtypeHandler.describe(ingressContext.channelLabel), {
           sessionKey: ingressContext.sessionKey,
-          contextKey: subtypeHandler.contextKey(message),
+          contextKey: `${subtypeHandler.contextKey(message)}:${resolveSlackSystemEventOccurrenceId({
+            body,
+            eventTs: message.event_ts,
+          })}`,
         });
         return;
       }

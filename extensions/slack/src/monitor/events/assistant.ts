@@ -1,9 +1,9 @@
 // Slack plugin module implements assistant behavior.
 import type { Block, KnownBlock } from "@slack/web-api";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { buildSlackAssistantThreadMetadata, DEFAULT_SLACK_SUGGESTED_PROMPTS } from "../context.js";
 import type { SlackMonitorContext, SlackAssistantThreadContext } from "../context.js";
+import { handleSlackSystemEventFailure } from "./system-event-context.js";
 
 type SlackAssistantThreadPayload = {
   user_id?: string;
@@ -32,7 +32,11 @@ type SlackAssistantThreadContextChangedEvent = {
   event_ts?: string;
 };
 
-type SlackAssistantEventHandler<TEvent> = (args: { event: TEvent; body: unknown }) => Promise<void>;
+type SlackAssistantEventHandler<TEvent> = (args: {
+  event: TEvent;
+  body: unknown;
+  context?: unknown;
+}) => Promise<void>;
 
 type SlackAssistantEventRegistrar = {
   (
@@ -93,42 +97,36 @@ async function persistAssistantThreadMetadata(params: {
   assistantThread: Omit<SlackAssistantThreadContext, "updatedAt">;
 }) {
   const { ctx, assistantThread } = params;
-  try {
-    const response = (await ctx.app.client.conversations.replies({
-      token: ctx.botToken,
-      channel: assistantThread.assistantChannelId,
-      ts: assistantThread.threadTs,
-      oldest: assistantThread.threadTs,
-      include_all_metadata: true,
-      limit: 4,
-    })) as {
-      messages?: Array<{
-        subtype?: string;
-        user?: string;
-        ts?: string;
-        text?: string;
-        blocks?: (Block | KnownBlock)[];
-      }>;
-    };
-    const initialMessage = (response.messages ?? []).find(
-      (message) => !message.subtype && message.user === ctx.botUserId && message.ts,
-    );
-    if (!initialMessage?.ts) {
-      return;
-    }
-    await ctx.app.client.chat.update({
-      token: ctx.botToken,
-      channel: assistantThread.assistantChannelId,
-      ts: initialMessage.ts,
-      text: initialMessage.text ?? "",
-      blocks: Array.isArray(initialMessage.blocks) ? initialMessage.blocks : [],
-      metadata: buildSlackAssistantThreadMetadata(assistantThread),
-    });
-  } catch (err) {
-    logVerbose(
-      `slack assistant thread metadata persist failed for channel ${assistantThread.assistantChannelId}: ${formatErrorMessage(err)}`,
-    );
+  const response = (await ctx.app.client.conversations.replies({
+    token: ctx.botToken,
+    channel: assistantThread.assistantChannelId,
+    ts: assistantThread.threadTs,
+    oldest: assistantThread.threadTs,
+    include_all_metadata: true,
+    limit: 4,
+  })) as {
+    messages?: Array<{
+      subtype?: string;
+      user?: string;
+      ts?: string;
+      text?: string;
+      blocks?: (Block | KnownBlock)[];
+    }>;
+  };
+  const initialMessage = (response.messages ?? []).find(
+    (message) => !message.subtype && message.user === ctx.botUserId && message.ts,
+  );
+  if (!initialMessage?.ts) {
+    return;
   }
+  await ctx.app.client.chat.update({
+    token: ctx.botToken,
+    channel: assistantThread.assistantChannelId,
+    ts: initialMessage.ts,
+    text: initialMessage.text ?? "",
+    blocks: Array.isArray(initialMessage.blocks) ? initialMessage.blocks : [],
+    metadata: buildSlackAssistantThreadMetadata(assistantThread),
+  });
 }
 
 export function registerSlackAssistantEvents(params: {
@@ -139,7 +137,7 @@ export function registerSlackAssistantEvents(params: {
   const { ctx, trackEvent } = params;
   const slackApp = ctx.app as unknown as { event: SlackAssistantEventRegistrar };
 
-  slackApp.event("assistant_thread_started", async ({ event, body }) => {
+  slackApp.event("assistant_thread_started", async ({ event, body, context }) => {
     try {
       if (ctx.shouldDropMismatchedSlackEvent(body)) {
         return;
@@ -160,13 +158,16 @@ export function registerSlackAssistantEvents(params: {
         prompts: DEFAULT_SLACK_SUGGESTED_PROMPTS,
       });
     } catch (err) {
-      ctx.runtime.error?.(
-        danger(`slack assistant_thread_started handler failed: ${formatErrorMessage(err)}`),
-      );
+      handleSlackSystemEventFailure({
+        ctx,
+        context,
+        error: err,
+        label: "assistant_thread_started",
+      });
     }
   });
 
-  slackApp.event("assistant_thread_context_changed", async ({ event, body }) => {
+  slackApp.event("assistant_thread_context_changed", async ({ event, body, context }) => {
     try {
       if (ctx.shouldDropMismatchedSlackEvent(body)) {
         return;
@@ -182,9 +183,12 @@ export function registerSlackAssistantEvents(params: {
       ctx.saveSlackAssistantThreadContext(assistantThread);
       await persistAssistantThreadMetadata({ ctx, assistantThread });
     } catch (err) {
-      ctx.runtime.error?.(
-        danger(`slack assistant_thread_context_changed handler failed: ${formatErrorMessage(err)}`),
-      );
+      handleSlackSystemEventFailure({
+        ctx,
+        context,
+        error: err,
+        label: "assistant_thread_context_changed",
+      });
     }
   });
 }

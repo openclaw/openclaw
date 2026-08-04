@@ -14,7 +14,11 @@ vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
 vi.mock("openclaw/plugin-sdk/system-event-runtime.js", () => ({
   enqueueSystemEvent: (...args: unknown[]) => memberMocks.enqueue(...args),
 }));
-type MemberHandler = (args: { event: Record<string, unknown>; body: unknown }) => Promise<void>;
+type MemberHandler = (args: {
+  event: Record<string, unknown>;
+  body: unknown;
+  context: Record<string, unknown>;
+}) => Promise<void>;
 
 type MemberCaseArgs = {
   event?: Record<string, unknown>;
@@ -65,6 +69,7 @@ async function runMemberCase(args: MemberCaseArgs = {}): Promise<void> {
   await handler({
     event: (args.event ?? makeMemberEvent()) as Record<string, unknown>,
     body: args.body ?? {},
+    context: {},
   });
 }
 
@@ -141,5 +146,16 @@ describe("registerSlackMemberEvents", () => {
     await runMemberCase({ trackEvent });
 
     expect(trackEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("includes the envelope event id in the logical occurrence key", async () => {
+    await runMemberCase({ body: { event_id: "Ev-join-2" } });
+
+    expect(memberMocks.enqueue).toHaveBeenCalledWith(
+      "Slack: alice joined #direct.",
+      expect.objectContaining({
+        contextKey: "slack:member:joined:D1:U1:Ev-join-2",
+      }),
+    );
   });
 });
