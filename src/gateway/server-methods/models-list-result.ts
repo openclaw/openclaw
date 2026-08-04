@@ -52,13 +52,10 @@ import { resolveManifestProviderAuthChoices } from "../../plugins/provider-auth-
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { GatewayAgentRuntime } from "../../shared/session-types.js";
 import { createModelsListAuthResolver } from "./models-list-auth-resolver.js";
+import { buildPublicModelProjection, type ModelsListEntry } from "./models-list-public-entry.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type ModelsListView = ModelCatalogBrowseView;
-type ModelsListEntry = Pick<
-  ModelCatalogEntry,
-  "alias" | "contextWindow" | "id" | "input" | "name" | "provider" | "reasoning"
-> & { available?: boolean; supportsTools?: boolean };
 type ModelsListEntryWithCapabilities = ModelsListEntry & {
   agentRuntime?: GatewayAgentRuntime;
   apiKeySupported?: boolean;
@@ -75,27 +72,6 @@ let loggedSlowModelsListCatalog = false;
 function resolveModelsListView(params: Record<string, unknown>): ModelsListView {
   const view = params.view;
   return view === "configured" || view === "provider-config" || view === "all" ? view : "default";
-}
-
-function resolvePositiveSafeInteger(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
-}
-
-// Project explicitly onto the public protocol shape. Concrete route, base URL,
-// auth, and cost facts stay private; runtime intent is attached separately.
-function buildPublicModelProjection(entry: ModelCatalogEntry): ModelsListEntry {
-  const contextWindow = resolvePositiveSafeInteger(entry.contextWindow);
-  return {
-    id: entry.id,
-    name: entry.name,
-    provider: entry.provider,
-    ...(entry.alias ? { alias: entry.alias } : {}),
-    ...(contextWindow ? { contextWindow } : {}),
-    ...(typeof entry.reasoning === "boolean" ? { reasoning: entry.reasoning } : {}),
-    ...(typeof entry.compat?.supportsTools === "boolean"
-      ? { supportsTools: entry.compat.supportsTools }
-      : {}),
-  };
 }
 
 function resolveModelChoiceAgentRuntime(params: {
@@ -462,6 +438,7 @@ function apiKeyProviderCapabilities(params: {
   }
   return { providers: capabilities, resolveProvider };
 }
+
 type BuildModelsListResultParams = {
   context: GatewayRequestContext;
   agentId?: string;
