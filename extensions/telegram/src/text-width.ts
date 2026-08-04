@@ -14,6 +14,15 @@ const WIDE_CODE_POINT_PATTERN =
 // that are otherwise narrow, e.g. U+2764 U+FE0F.
 const EMOJI_PRESENTATION_SELECTOR = "\uFE0F";
 
+// U+20E3 turns a digit/#/* base into a keycap emoji (two cells) even without
+// VS16, so it widens the cluster on its own.
+const KEYCAP_COMBINING_MARK = "\u20E3";
+
+// Digits, # and * are emoji-capable only as keycap bases: with a bare VS16 and
+// no U+20E3 they keep text presentation (one cell), so VS16 must not widen them.
+const KEYCAP_BASE_PATTERN = /^[0-9#*]$/u;
+const EMOJI_CAPABLE_BASE_PATTERN = /\p{Emoji}/u;
+
 const graphemeSegmenter =
   typeof Intl.Segmenter === "function"
     ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
@@ -21,6 +30,25 @@ const graphemeSegmenter =
 
 function codePointWidth(codePoint: string): number {
   return WIDE_CODE_POINT_PATTERN.test(codePoint) ? 2 : 1;
+}
+
+function graphemeClusterWidth(cluster: string): number {
+  let hasEmojiSelector = false;
+  let hasKeycapMark = false;
+  let hasEmojiCapableBase = false;
+  for (const codePoint of cluster) {
+    if (codePointWidth(codePoint) === 2) {
+      return 2;
+    }
+    if (codePoint === EMOJI_PRESENTATION_SELECTOR) {
+      hasEmojiSelector = true;
+    } else if (codePoint === KEYCAP_COMBINING_MARK) {
+      hasKeycapMark = true;
+    } else if (!KEYCAP_BASE_PATTERN.test(codePoint) && EMOJI_CAPABLE_BASE_PATTERN.test(codePoint)) {
+      hasEmojiCapableBase = true;
+    }
+  }
+  return hasKeycapMark || (hasEmojiSelector && hasEmojiCapableBase) ? 2 : 1;
 }
 
 export function telegramMonospaceWidth(text: string): number {
@@ -33,14 +61,7 @@ export function telegramMonospaceWidth(text: string): number {
   }
   let width = 0;
   for (const { segment } of graphemeSegmenter.segment(text)) {
-    let clusterWidth = 1;
-    for (const codePoint of segment) {
-      if (codePoint === EMOJI_PRESENTATION_SELECTOR || codePointWidth(codePoint) === 2) {
-        clusterWidth = 2;
-        break;
-      }
-    }
-    width += clusterWidth;
+    width += graphemeClusterWidth(segment);
   }
   return width;
 }

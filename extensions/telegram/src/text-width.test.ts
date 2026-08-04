@@ -31,6 +31,16 @@ describe("telegramMonospaceWidth", () => {
     expect(telegramMonospaceWidth("❤️")).toBe(2);
     expect(telegramMonospaceWidth("1️⃣")).toBe(2);
   });
+
+  it("counts a bare keycap cluster without VS16 as two cells", () => {
+    expect(telegramMonospaceWidth("1⃣")).toBe(2);
+    expect(telegramMonospaceWidth("#⃣")).toBe(2);
+  });
+
+  it("keeps a bare variation selector on a digit base at one cell", () => {
+    expect(telegramMonospaceWidth("1️")).toBe(1);
+    expect(telegramMonospaceWidth("#️")).toBe(1);
+  });
 });
 
 describe("padEndTelegramMonospace", () => {
