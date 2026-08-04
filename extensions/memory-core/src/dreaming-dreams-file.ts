@@ -155,8 +155,11 @@ async function replaceManagedMarkdownBlockStreaming(
     output = await fs.open(tempPath, "wx", mode);
     await output.chmod(mode);
     const managedBlock = buildManagedMarkdownBlock(params);
+    // Mirror the shared SDK heading separator contract: one or more
+    // whitespace-and-line-ending groups (including whitespace-only blank
+    // lines) may separate the heading from the start marker.
     const headingSuffixPattern = new RegExp(
-      `${params.heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \t]*(?:\r\n|\n|\r)+[ \t]*$`,
+      `${params.heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:[ \t]*(?:\r\n|\n|\r))+[ \t]*$`,
     );
     const rollingWindowBytes =
       Math.max(params.heading.length + params.startMarker.length, params.endMarker.length) + 4096;
