@@ -25,13 +25,6 @@ profiles:
       - plugins.activation-lifecycle
       - session-memory.memory-files-dreaming
       - telegram.built-in-commands
-  - id: qa-channel
-    description: Deterministic channel and isolated-cron delivery proof with the in-process
-      qa-channel driver and mock model providers.
-    evidenceMode: slim
-    channelDriver: qa-channel
-    coverageIds:
-      - agent-runtime.failure-recovery-empty-response-recovery
   - id: personal-agent
     description: Local personal-assistant reliability proof selected by semantic coverage targets.
     coverageIds:
