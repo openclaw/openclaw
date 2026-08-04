@@ -166,6 +166,40 @@ describe("check-workflows", () => {
     );
   });
 
+  it("preserves the venv bootstrap timeout diagnostic", () => {
+    const tempDir = makeTempDir(tempDirs, "check-workflows-");
+    const binDir = path.join(tempDir, "bin");
+    const timeoutHookPath = writeTimeoutHook(tempDir);
+    mkdirSync(binDir);
+    writeFileSync(
+      path.join(binDir, "python3"),
+      [
+        `#!${process.execPath}`,
+        'if (process.argv[2] === "--version") process.exit(0);',
+        'if (process.argv[2] === "-m" && process.argv[3] === "pre_commit") process.exit(1);',
+        'process.on("SIGTERM", () => {});',
+        "setInterval(() => {}, 10_000);",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+
+    const result = spawnSync(process.execPath, [scriptPath], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        NODE_OPTIONS: `--import=${pathToFileURL(timeoutHookPath).href}`,
+        PATH: binDir,
+      },
+      timeout: 10_000,
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("[check-workflows] timed out after 900000ms: python3 -m venv");
+    expect(result.stderr).not.toContain("missing pre-commit runtime");
+  });
+
   it("fails with an actionable timeout when a workflow command ignores SIGTERM", () => {
     const tempDir = makeTempDir(tempDirs, "check-workflows-");
     const binDir = path.join(tempDir, "bin");

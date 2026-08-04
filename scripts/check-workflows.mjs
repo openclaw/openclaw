@@ -280,6 +280,12 @@ async function runPreCommitFromTempVenv(hook, hookArgs) {
       timeoutMs: BOOTSTRAP_COMMAND_TIMEOUT_MS,
     });
     if (venvFailure) {
+      // Preserve spawn/timeout diagnostics from the bounded venv bootstrap
+      // instead of falling back to the generic missing-runtime message.
+      // Ordinary nonzero venv exits keep the existing fallback behavior.
+      if (venvFailure.message) {
+        postVenvFailure = venvFailure;
+      }
       return false;
     }
     postVenvFailure = await runChecked(
