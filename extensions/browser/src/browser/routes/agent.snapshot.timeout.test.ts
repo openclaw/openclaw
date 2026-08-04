@@ -10,6 +10,12 @@ type SnapshotRoleViaPlaywright = (opts: { signal?: AbortSignal }) => Promise<{
   refs: Record<string, never>;
   stats: { lines: number; chars: number; refs: number; interactive: number };
 }>;
+type ScreenshotWithLabelsViaPlaywright = (opts: { signal?: AbortSignal }) => Promise<{
+  buffer: Buffer;
+  labels: number;
+  skipped: number;
+  annotations: never[];
+}>;
 
 const cdpMocks = vi.hoisted(() => ({
   captureScreenshot: vi.fn(),
@@ -35,6 +41,7 @@ const pwMocks = vi.hoisted(() => ({
         snapshotAiViaPlaywright?: SnapshotRoleViaPlaywright;
         snapshotAriaViaPlaywright?: SnapshotAriaViaPlaywright;
         snapshotRoleViaPlaywright?: SnapshotRoleViaPlaywright;
+        screenshotWithLabelsViaPlaywright?: ScreenshotWithLabelsViaPlaywright;
         storeAriaSnapshotRefsViaPlaywright?: StoreAriaSnapshotRefsViaPlaywright;
       },
   ),
@@ -49,7 +56,25 @@ const pwMocks = vi.hoisted(() => ({
     refs: {},
     stats: { lines: 1, chars: 15, refs: 0, interactive: 0 },
   })),
+  screenshotWithLabelsViaPlaywright: vi.fn<ScreenshotWithLabelsViaPlaywright>(async () => ({
+    buffer: Buffer.from("png"),
+    labels: 0,
+    skipped: 0,
+    annotations: [],
+  })),
   storeAriaSnapshotRefsViaPlaywright: vi.fn<StoreAriaSnapshotRefsViaPlaywright>(async () => {}),
+}));
+
+const screenshotMocks = vi.hoisted(() => ({
+  normalizeBrowserScreenshot: vi.fn(async (buffer: Buffer) => ({
+    buffer,
+    contentType: "image/png",
+  })),
+}));
+
+const mediaMocks = vi.hoisted(() => ({
+  ensureMediaDir: vi.fn(async () => {}),
+  saveMediaBuffer: vi.fn(async () => ({ path: "/tmp/fake.png" })),
 }));
 
 const profileContext = vi.hoisted(() => ({
@@ -96,15 +121,12 @@ vi.mock("../navigation-guard.js", () => ({
 vi.mock("../screenshot.js", () => ({
   DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES: 128,
   DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE: 64,
-  normalizeBrowserScreenshot: vi.fn(async (buffer: Buffer) => ({
-    buffer,
-    contentType: "image/png",
-  })),
+  normalizeBrowserScreenshot: screenshotMocks.normalizeBrowserScreenshot,
 }));
 
 vi.mock("../../media/store.js", () => ({
-  ensureMediaDir: vi.fn(async () => {}),
-  saveMediaBuffer: vi.fn(async () => ({ path: "/tmp/fake.png" })),
+  ensureMediaDir: mediaMocks.ensureMediaDir,
+  saveMediaBuffer: mediaMocks.saveMediaBuffer,
 }));
 
 vi.mock("./agent.shared.js", () => ({
@@ -178,8 +200,18 @@ describe("browser agent snapshot timeout routing", () => {
       refs: {},
       stats: { lines: 1, chars: 15, refs: 0, interactive: 0 },
     });
+    pwMocks.screenshotWithLabelsViaPlaywright.mockReset();
+    pwMocks.screenshotWithLabelsViaPlaywright.mockResolvedValue({
+      buffer: Buffer.from("png"),
+      labels: 0,
+      skipped: 0,
+      annotations: [],
+    });
     pwMocks.storeAriaSnapshotRefsViaPlaywright.mockReset();
     pwMocks.storeAriaSnapshotRefsViaPlaywright.mockResolvedValue(undefined);
+    screenshotMocks.normalizeBrowserScreenshot.mockClear();
+    mediaMocks.ensureMediaDir.mockClear();
+    mediaMocks.saveMediaBuffer.mockClear();
   });
 
   it("passes timeoutMs to direct CDP aria snapshots", async () => {
@@ -355,6 +387,56 @@ describe("browser agent snapshot timeout routing", () => {
     expect(cdpMocks.snapshotRoleViaCdp).not.toHaveBeenCalled();
   });
 
+  it("cancels labeled snapshots before normalization or media persistence", async () => {
+    pwMocks.screenshotWithLabelsViaPlaywright.mockImplementationOnce(
+      async (opts: { signal?: AbortSignal }) =>
+        await new Promise<never>((_resolve, reject) => {
+          opts.signal?.addEventListener(
+            "abort",
+            () => reject(opts.signal?.reason ?? new Error("aborted")),
+            { once: true },
+          );
+        }),
+    );
+    pwMocks.getModule.mockResolvedValue({
+      getObservedBrowserStateViaPlaywright: pwMocks.getObservedBrowserStateViaPlaywright,
+      getMainFrameDocumentIdentityViaPlaywright: pwMocks.getMainFrameDocumentIdentityViaPlaywright,
+      snapshotRoleViaPlaywright: pwMocks.snapshotRoleViaPlaywright,
+      screenshotWithLabelsViaPlaywright: pwMocks.screenshotWithLabelsViaPlaywright,
+    });
+    const handler = getSnapshotHandler();
+    const response = createBrowserRouteResponse();
+    const controller = new AbortController();
+    const cancellation = new Error("labeled snapshot cancelled");
+
+    const pending = handler?.(
+      {
+        params: {},
+        query: { format: "ai", interactive: "true", labels: "true", timeoutMs: "4321" },
+        signal: controller.signal,
+      },
+      response.res,
+    );
+    void pending?.catch(() => {});
+    await vi.waitFor(() =>
+      expect(pwMocks.screenshotWithLabelsViaPlaywright).toHaveBeenCalledOnce(),
+    );
+
+    controller.abort(cancellation);
+
+    await expect(
+      Promise.race([
+        pending,
+        new Promise<never>((_resolve, reject) => {
+          setTimeout(() => reject(new Error("labeled snapshot cancellation did not settle")), 100);
+        }),
+      ]),
+    ).rejects.toBe(cancellation);
+    expect(screenshotMocks.normalizeBrowserScreenshot).not.toHaveBeenCalled();
+    expect(mediaMocks.ensureMediaDir).not.toHaveBeenCalled();
+    expect(mediaMocks.saveMediaBuffer).not.toHaveBeenCalled();
+  });
+
   it("passes route cancellation to Playwright aria snapshots", async () => {
     pwMocks.getModule.mockResolvedValueOnce({
       getObservedBrowserStateViaPlaywright: pwMocks.getObservedBrowserStateViaPlaywright,
@@ -386,10 +468,14 @@ describe("browser agent snapshot timeout routing", () => {
     expect(pwMocks.snapshotAriaViaPlaywright).toHaveBeenCalledWith(
       expect.objectContaining({
         targetId: "tab-1",
-        timeoutMs: 4321,
         signal: expect.any(AbortSignal),
       }),
     );
+    const snapshotTimeoutMs = (
+      pwMocks.snapshotAriaViaPlaywright.mock.calls[0]?.[0] as { timeoutMs?: number } | undefined
+    )?.timeoutMs;
+    expect(snapshotTimeoutMs).toBeGreaterThan(0);
+    expect(snapshotTimeoutMs).toBeLessThanOrEqual(4321);
     const snapshotSignal = (
       pwMocks.snapshotAriaViaPlaywright.mock.calls[0]?.[0] as { signal?: AbortSignal } | undefined
     )?.signal;

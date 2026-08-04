@@ -631,6 +631,38 @@ describe("cdp.helpers internal", () => {
         }),
       ).rejects.toThrow(/callback boom/);
     });
+
+    it("rejects with the exact abort reason when the callback finishes after cancellation", async () => {
+      const server = await startWsServer();
+      wss = server.wss;
+      const controller = new AbortController();
+      const cancellation = new Error("role snapshot cancelled during enrichment");
+      let releaseCallback!: () => void;
+      const callbackRelease = new Promise<void>((resolve) => {
+        releaseCallback = resolve;
+      });
+      let markCallbackStarted!: () => void;
+      const callbackStarted = new Promise<void>((resolve) => {
+        markCallbackStarted = resolve;
+      });
+
+      const pending = withCdpSocket(
+        server.url,
+        async () => {
+          markCallbackStarted();
+          await callbackRelease;
+          return { partial: true };
+        },
+        { signal: controller.signal },
+      );
+      void pending.catch(() => {});
+      await callbackStarted;
+
+      controller.abort(cancellation);
+      releaseCallback();
+
+      await expect(pending).rejects.toBe(cancellation);
+    });
   });
 
   describe("createCdpSender error/close event forwarding", () => {

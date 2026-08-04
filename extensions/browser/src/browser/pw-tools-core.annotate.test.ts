@@ -105,6 +105,37 @@ describe("screenshotWithLabelsViaPlaywright (viewport)", () => {
     expect(result.annotations).toHaveLength(1);
     expect(result.annotations[0]?.ref).toBe("e1");
   });
+
+  it("aborts a pending bounding-box read before taking a screenshot", async () => {
+    const evaluate = evaluateMockReturning({ x: 0, y: 0 });
+    const screenshot = vi.fn(async () => Buffer.from("PNG"));
+    const boundingBox = vi.fn(async () => await new Promise<never>(() => {}));
+    setPwToolsCoreCurrentPage({ evaluate, screenshot });
+    setPwToolsCoreCurrentRefLocator({ boundingBox });
+    const controller = new AbortController();
+    const cancellation = new Error("snapshot labels cancelled");
+
+    const pending = mod.screenshotWithLabelsViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      refs: { e1: { role: "button" } },
+      signal: controller.signal,
+    });
+    void pending.catch(() => {});
+    await vi.waitFor(() => expect(boundingBox).toHaveBeenCalledOnce());
+
+    controller.abort(cancellation);
+
+    await expect(
+      Promise.race([
+        pending,
+        new Promise<never>((_resolve, reject) => {
+          setTimeout(() => reject(new Error("bounding-box cancellation did not settle")), 100);
+        }),
+      ]),
+    ).rejects.toBe(cancellation);
+    expect(screenshot).not.toHaveBeenCalled();
+  });
 });
 
 describe("screenshotWithLabelsViaPlaywright (fullpage)", () => {

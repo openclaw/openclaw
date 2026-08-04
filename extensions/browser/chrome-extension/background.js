@@ -50,10 +50,8 @@ const attachedTabs = new Set();
 const copilotDeniedTabs = new Set();
 /** Monotonic revocation epochs invalidate attaches already in flight. */
 const copilotAccessRevisions = new Map();
-/** In-flight attach promises per tab id (coalesces concurrent attaches). */
-const attachingTabs = new Map();
-/** In-flight detach promises per tab id (serializes rapid detach/reattach). */
-const detachingTabs = new Map();
+/** Per-tab debugger operations, including startup custody and target confirmation. */
+const debuggerOperations = new Map();
 /** Latest revocation task per tab; restoration waits for its exact epoch. */
 const copilotRevocations = new Map();
 /** Debounce handle for tab-list refreshes. */
@@ -216,26 +214,17 @@ async function syncTabsToRelay() {
 // ---------------------------------------------------------------------------
 
 async function attachDebugger(tabId) {
-  await copilotCustodyReady;
-  await detachingTabs.get(tabId);
-  // Coalesce concurrent attaches for one tab. Two relay attach commands (or an
-  // auto-attach racing an explicit share) would otherwise both call
-  // chrome.debugger.attach and the second throws "Another debugger is already
-  // attached". The bridge and this worker can also disagree after an MV3 restart.
-  const inFlight = attachingTabs.get(tabId);
-  if (inFlight) {
-    return await inFlight;
-  }
-  const accessRevision = copilotAccessRevisions.get(tabId) ?? 0;
-  const assertAccess = () => {
-    if (
-      copilotDeniedTabs.has(tabId) ||
-      (copilotAccessRevisions.get(tabId) ?? 0) !== accessRevision
-    ) {
-      throw new Error(`tab ${tabId} is blocked until its copilot run stops`);
-    }
-  };
-  const attach = (async () => {
+  return await enqueueDebuggerOperation(tabId, async () => {
+    await copilotCustodyReady;
+    const accessRevision = copilotAccessRevisions.get(tabId) ?? 0;
+    const assertAccess = () => {
+      if (
+        copilotDeniedTabs.has(tabId) ||
+        (copilotAccessRevisions.get(tabId) ?? 0) !== accessRevision
+      ) {
+        throw new Error(`tab ${tabId} is blocked until its copilot run stops`);
+      }
+    };
     assertAccess();
     if (!(await isTabShared(tabId))) {
       throw new Error(`tab ${tabId} is not in the ${OPENCLAW_TAB_GROUP_TITLE} tab group`);
@@ -271,13 +260,7 @@ async function attachDebugger(tabId) {
       throw new Error(`chrome.debugger did not confirm an attached target for tab ${tabId}`);
     }
     return { targetId: target.id };
-  })();
-  attachingTabs.set(tabId, attach);
-  try {
-    return await attach;
-  } finally {
-    attachingTabs.delete(tabId);
-  }
+  });
 }
 
 async function detachDebuggerNow(tabId) {
@@ -292,22 +275,22 @@ async function detachDebuggerNow(tabId) {
 }
 
 async function detachDebugger(tabId) {
-  const inFlight = detachingTabs.get(tabId);
-  if (inFlight) {
-    return await inFlight;
-  }
-  const detaching = (async () => {
-    await Promise.allSettled([attachingTabs.get(tabId)]);
+  return await enqueueDebuggerOperation(tabId, async () => {
     await detachDebuggerNow(tabId);
-  })();
-  detachingTabs.set(tabId, detaching);
-  try {
-    await detaching;
-  } finally {
-    if (detachingTabs.get(tabId) === detaching) {
-      detachingTabs.delete(tabId);
+  });
+}
+
+function enqueueDebuggerOperation(tabId, operation) {
+  const previous = debuggerOperations.get(tabId) ?? Promise.resolve();
+  const result = previous.catch(() => undefined).then(operation);
+  const tail = result.catch(() => undefined);
+  debuggerOperations.set(tabId, tail);
+  void tail.then(() => {
+    if (debuggerOperations.get(tabId) === tail) {
+      debuggerOperations.delete(tabId);
     }
-  }
+  });
+  return result;
 }
 
 async function revokeCopilotDebugger(tabId) {
@@ -317,7 +300,6 @@ async function revokeCopilotDebugger(tabId) {
   const revocation = previous
     .catch(() => undefined)
     .then(async () => {
-      await Promise.allSettled([attachingTabs.get(tabId)]);
       await detachDebugger(tabId);
     });
   copilotRevocations.set(tabId, revocation);

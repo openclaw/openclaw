@@ -826,7 +826,9 @@ export async function withCdpSocket<T>(
 
     try {
       opts?.signal?.throwIfAborted();
-      return await fn(send);
+      const result = await fn(send);
+      opts?.signal?.throwIfAborted();
+      return result;
     } catch (err) {
       closeWithError(err instanceof Error ? err : new Error(String(err)));
       throw err;

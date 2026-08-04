@@ -861,11 +861,13 @@ export function registerBrowserAgentSnapshotRoutes(
               !initialDocumentIdentity ||
               (await readDocumentIdentity()) === initialDocumentIdentity;
             const assertDocumentIdentityUnchanged = async () => {
+              snapshotDeadline.signal.throwIfAborted();
               if (!(await isDocumentIdentityCurrent())) {
                 throw new Error(
                   "Frame changed while its browser snapshot was being captured; retry.",
                 );
               }
+              snapshotDeadline.signal.throwIfAborted();
             };
             if (plan.format === "ai") {
               const roleSnapshotArgs = {
@@ -957,20 +959,26 @@ export function registerBrowserAgentSnapshotRoutes(
                   refs: "refs" in snap ? snap.refs : {},
                   type: "png",
                   timeoutMs: snapshotDeadline.remainingTimeoutMs(),
+                  signal: snapshotDeadline.signal,
                 });
+                await assertDocumentIdentityUnchanged();
                 const originalMeta = labeled.annotations.length
                   ? ((await getImageMetadata(labeled.buffer)) ?? undefined)
                   : undefined;
+                snapshotDeadline.signal.throwIfAborted();
                 const normalized = await normalizeBrowserScreenshot(labeled.buffer, {
                   maxSide: DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
                   maxBytes: DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
                 });
+                await assertDocumentIdentityUnchanged();
                 const scaledAnnotations = await rescaleAnnotationsForNormalization({
                   annotations: labeled.annotations,
                   originalMeta,
                   normalizedBuffer: normalized.buffer,
                 });
+                await assertDocumentIdentityUnchanged();
                 await ensureMediaDir();
+                snapshotDeadline.signal.throwIfAborted();
                 const saved = await saveMediaBuffer(
                   normalized.buffer,
                   normalized.contentType ?? "image/png",
