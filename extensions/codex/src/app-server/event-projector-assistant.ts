@@ -357,7 +357,8 @@ export class CodexAssistantProjection {
     // items only and cannot see interleaved native items — without this it would
     // revive a pre-tool answer that this method treats as invalidated.
     const lastClearingIndex = turnItems.findLastIndex(shouldClearTerminalPresentationForNativeItem);
-    for (const item of turnItems.slice(0, Math.max(lastClearingIndex, 0))) {
+    const supersededItems = lastClearingIndex >= 0 ? turnItems.slice(0, lastClearingIndex) : [];
+    for (const item of supersededItems) {
       if (item.type === "agentMessage" && item.id) {
         this.invalidatedAssistantItemIds.add(item.id);
       }
@@ -408,6 +409,12 @@ export class CodexAssistantProjection {
     return false;
   }
 
+  /**
+   * The newest terminal assistant item verbatim — deliberately NOT silence-aware, and
+   * allowed to diverge from the delivered answer (see the empty-final case in
+   * event-projector.commentary.test.ts). The mirrored transcript is built from
+   * `lastAssistant`, so do not "fix" this to match deliverable selection.
+   */
   createCurrentAttemptAssistantMessage(
     options: AssistantMessageOptions,
   ): AssistantMessage | undefined {
@@ -584,7 +591,12 @@ export class CodexAssistantProjection {
       // prefixed). A narrower test here selects such a payload as the answer, delivery
       // then drops it, and the turn goes silent again — the bug this PR fixes.
       if (isSilentReplyPayloadText(text)) {
-        trailingSilent ??= { itemId, text };
+        // Invalidation applies to silent items too: a silent token superseded by later
+        // native work is not the turn's terminal output either, and letting it stand
+        // would keep recovery state disagreeing with Activity on the snapshot path.
+        if (!this.invalidatedAssistantItemIds.has(itemId)) {
+          trailingSilent ??= { itemId, text };
+        }
         continue;
       }
       // Superseded by later native tool work: it is no longer the turn's terminal

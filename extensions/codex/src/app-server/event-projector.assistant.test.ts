@@ -590,27 +590,76 @@ describe("CodexAppServerEventProjector trailing silent-token shadowing", () => {
       )
       .map((event) => event.data.itemId);
     expect(selected).toEqual(["msg-1"]);
-    expect(projector.buildResult(buildEmptyToolTelemetry()).assistantTexts).toEqual([
-      "here is the answer",
-    ]);
   });
 
-  it("keeps the real answer when the late event is answered with a silent JSON envelope", async () => {
+  it.each([
+    ['{"action":"NO_REPLY"}', "json envelope"],
+    ['"NO_REPLY"', "quoted json string"],
+    ["<think>weighing it up</think>\nNO_REPLY", "reasoning-prefixed"],
+  ])("keeps the real answer when the late event answers with %s (%s)", async (silentText) => {
     const { projector } = await createProjectorWithAssistantHooks();
 
-    // Delivery suppresses every form `isSilentReplyPayloadText` accepts (payloads.ts:933),
-    // which is a strict superset of the bare token. Selecting on the narrow predicate lets
-    // an envelope-form silent reply shadow the answer and recreate the zero-output bug.
+    // Selection must recognize every encoding the delivery layer suppresses; a narrower
+    // test would pick the payload as the answer and the turn would go silent again.
     await projector.handleNotification(
       turnCompleted([
         { type: "agentMessage", id: "msg-1", phase: "final_answer", text: "here is the answer" },
-        { type: "agentMessage", id: "msg-2", phase: "final_answer", text: '{"action":"NO_REPLY"}' },
+        { type: "agentMessage", id: "msg-2", phase: "final_answer", text: silentText },
       ]),
     );
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
     expect(result.assistantTexts).toEqual(["here is the answer"]);
+  });
+
+  it("delivers substantive text that merely ends with the silent token", async () => {
+    const { projector } = await createProjectorWithAssistantHooks();
+    const text = "Here is the answer.\n\nNO_REPLY";
+
+    // Negative control for the widened predicate: only token-only payloads are silence.
+    await projector.handleNotification(
+      turnCompleted([{ type: "agentMessage", id: "msg-1", phase: "final_answer", text }]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.assistantTexts).toEqual([text]);
+  });
+
+  it("does not treat a silent token superseded by later native work as terminal output", async () => {
+    const { projector } = await createProjectorWithAssistantHooks();
+
+    const laterTool = {
+      type: "commandExecution",
+      id: "cmd-1",
+      command: "/bin/bash -lc 'printf done'",
+      cwd: "/workspace",
+      processId: null,
+      source: "agent",
+      status: "completed",
+      commandActions: [],
+      aggregatedOutput: "done",
+      exitCode: 0,
+      durationMs: 1,
+    };
+
+    // The silent item completes on the wire, so it becomes the latest completed item;
+    // the tool only appears in the turn snapshot. That is the ordering where the
+    // streaming guard cannot help, so invalidation must reach the silent branch itself.
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: { type: "agentMessage", id: "msg-1", phase: "final_answer", text: "NO_REPLY" },
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([
+        { type: "agentMessage", id: "msg-1", phase: "final_answer", text: "NO_REPLY" },
+        laterTool,
+      ]),
+    );
+
+    expect(projector.hasCompletedTerminalAssistantText()).toBe(false);
   });
 
   it("does not revive a pre-tool answer when native work runs before the silent token", async () => {
