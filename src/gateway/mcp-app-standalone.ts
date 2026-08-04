@@ -317,8 +317,19 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
     }
     return resolved;
   };
+  // Bound standalone host fetches so a hung gateway response cannot pin the
+  // MCP App UI indefinitely. Responses are same-origin and gateway-constructed
+  // (operation results, view payloads), so no streaming byte cap is added here;
+  // the gateway already bounds request bodies via MCP_APP_OPERATION_MAX_BODY_BYTES
+  // and constructs every response payload.
+  const MCP_APP_FETCH_TIMEOUT_MS = 30_000;
+  const fetchWithDeadline = (input: string, init?: RequestInit): Promise<Response> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), MCP_APP_FETCH_TIMEOUT_MS);
+    return fetch(input, { ...init, signal: controller.signal }).finally(() => clearTimeout(timer));
+  };
   const request = async (method: string, params: unknown): Promise<unknown> => {
-    const response = await fetch(config.viewPath, {
+    const response = await fetchWithDeadline(config.viewPath, {
       method: "POST",
       headers: {
         Authorization: `MCP-App ${ticket}`,
@@ -485,7 +496,7 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
     fail("MCP App ticket is missing");
     return;
   }
-  void fetch(config.viewPath, {
+  void fetchWithDeadline(config.viewPath, {
     headers: { Authorization: `MCP-App ${ticket}` },
     cache: "no-store",
     credentials: "omit",
