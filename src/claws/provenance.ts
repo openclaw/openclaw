@@ -258,6 +258,10 @@ export function persistClawInstallRecord(
         workspace: plan.agent.workspace,
         nowMs,
       });
+    } else {
+      // A stale row can outlive its install through a downgrade; a created workspace must never
+      // inherit the adoption claim of whatever previously held this agent id.
+      deleteAdoptedWorkspaceRow(db, plan.agent.finalId);
     }
     return {
       schemaVersion: CLAW_INSTALL_RECORD_SCHEMA_VERSION,

@@ -167,7 +167,11 @@ export async function buildClawRemovePlan(
     );
     // An adopted directory predates the Claw. Once every declared file in it is managed it looks
     // indistinguishable from one this install created, so origin decides retention, not contents.
-    const workspaceWasAdopted = clawWorkspaceWasAdopted(record.install.agentId, options);
+    const workspaceWasAdopted = clawWorkspaceWasAdopted(
+      record.install.agentId,
+      record.install.workspace,
+      options,
+    );
     const attachedJobs = readAttachedCronJobs(record.install.agentId, options);
     const ownedSchedulerJobIds = new Set(
       record.cronJobs
@@ -442,8 +446,6 @@ export async function applyClawRemovePlan(
   if (typeof expectedRemovalSurfaceDigest !== "string") {
     throw new ClawRemoveError("remove_changed", "Claw remove plan is missing config state.");
   }
-  // Read before any owned row is dropped; the origin is deleted with the install record below.
-  const workspaceWasAdopted = clawWorkspaceWasAdopted(agentId, options);
   const current = await readClawStatus(plan.agentId, options);
   const record = current.records[0];
   if (
@@ -454,6 +456,8 @@ export async function applyClawRemovePlan(
   ) {
     throw new ClawRemoveError("remove_changed", "Claw-owned state changed after remove planning.");
   }
+  // Read while the install record still exists; releaseClawRemoveRows drops the origin with it.
+  const workspaceWasAdopted = clawWorkspaceWasAdopted(agentId, record.install.workspace, options);
   const packageDecisions = await planClawPackageRemovals(record.install, record.packages, {
     ...options,
     deps: options.packageDeps,
