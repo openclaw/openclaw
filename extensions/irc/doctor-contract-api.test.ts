@@ -84,12 +84,14 @@ describe("irc retired mentionPatterns migration", () => {
     const result = normalizeCompatibilityConfig({ cfg });
     const irc = expectDefined(
       (result.config.channels as Record<string, Record<string, unknown>> | undefined)?.irc,
+      "channels.irc",
     );
     expect(irc.mentionPatterns).toBeUndefined();
     expect(irc.host).toBe("irc.libera.chat");
-    const accounts = irc.accounts as Record<string, Record<string, unknown>>;
-    expect(accounts.work.mentionPatterns).toBeUndefined();
-    expect(accounts.work.nick).toBe("openclaw-ops");
+    const accounts = irc.accounts as Record<string, Record<string, unknown> | undefined>;
+    const workAccount = expectDefined(accounts.work, "channels.irc.accounts.work");
+    expect(workAccount.mentionPatterns).toBeUndefined();
+    expect(workAccount.nick).toBe("openclaw-ops");
     expect(result.changes.some((change) => change.includes("mentionPatterns"))).toBe(true);
   });
 
