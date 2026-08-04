@@ -163,22 +163,20 @@ async function onAdmittedTimer(state: CronServiceState) {
     state.deps.log.warn({}, "cron: timer tick skipped - restart recovery pending");
     return;
   }
-  if (state.running) {
-    // Re-arm the timer so the scheduler keeps ticking even when a job is
-    // still executing.  Without this, a long-running job (e.g. an agentTurn
-    // exceeding MAX_TIMER_DELAY_MS) causes the clamped 60 s timer to fire
-    // while `running` is true.  The early return then leaves no timer set,
-    // silently killing the scheduler until the next gateway restart.
-    //
-    // We use MAX_TIMER_DELAY_MS as a fixed re-check interval to avoid a
-    // zero-delay hot-loop when past-due jobs are waiting for the current
-    // execution to finish.
-    // See: https://github.com/openclaw/openclaw/issues/12025
+  if (state.running && state.activeTimerTicks === 0) {
+    // Restore from a state where running was set externally (e.g. test
+    // harness) but no actual tick is active.  This path is never hit during
+    // normal runtime; if activeTimerTicks > 0 a prior tick is already
+    // collecting and executing with its own watchdog.
+    // Re-arm so the scheduler keeps ticking; without this a long-running
+    // job causes the timer to fire while `running` is externally true and
+    // silently kills scheduling (#12025).
     armRunningRecheckTimer(state);
     return;
   }
   let sessionReaperDefaultAgentId: string | undefined;
   state.running = true;
+  state.activeTimerTicks += 1;
   // Keep a watchdog timer armed while a tick is executing. If execution hangs
   // (for example in a provider call), the scheduler still wakes to re-check.
   armRunningRecheckTimer(state);
@@ -642,8 +640,11 @@ async function onAdmittedTimer(state: CronServiceState) {
     } catch (err) {
       state.deps.log.warn({ err: String(err) }, "cron: session reaper preparation failed");
     } finally {
-      state.running = false;
-      armTimer(state);
+      state.activeTimerTicks = Math.max(0, state.activeTimerTicks - 1);
+      if (state.activeTimerTicks === 0) {
+        state.running = false;
+        armTimer(state);
+      }
     }
   }
 }
