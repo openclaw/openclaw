@@ -78,6 +78,11 @@ export const sessionCompactImpl = vi.fn(async () => ({
   tokensBefore: 120,
   details: { ok: true },
 }));
+// Exposed so compaction-path tests can assert the account id reaches the history resolver.
+export const getHistoryLimitFromSessionKeyMock = vi.fn(
+  (_sessionKey?: string, _config?: unknown, _accountId?: string | null): number | undefined =>
+    undefined,
+);
 export const sessionManualCompactionMock = vi.fn();
 export const sessionAutomaticCompactionMock = vi.fn();
 export const triggerInternalHook: Mock<(event?: unknown) => void> = vi.fn();
@@ -969,7 +974,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("./history.js", () => ({
-    getHistoryLimitFromSessionKey: vi.fn(() => undefined),
+    getHistoryLimitFromSessionKey: getHistoryLimitFromSessionKeyMock,
     limitHistoryTurns: vi.fn((msgs: unknown[]) => msgs.slice(0, 2)),
   }));
 

@@ -340,7 +340,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           const originalMessages = session.messages.slice();
           const truncated = limitHistoryTurns(
             session.messages,
-            getHistoryLimitFromSessionKey(params.sessionKey, params.config),
+            getHistoryLimitFromSessionKey(params.sessionKey, params.config, params.agentAccountId),
           );
           // Re-run tool_use/tool_result pairing repair after truncation, since
           // limitHistoryTurns can orphan tool_result blocks by removing the
