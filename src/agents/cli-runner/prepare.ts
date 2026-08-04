@@ -67,6 +67,7 @@ import {
 import {
   makeBootstrapWarn as makeBootstrapWarnImpl,
   resolveBootstrapContextForRun as resolveBootstrapContextForRunImpl,
+  resolveContextInjectionMode,
 } from "../bootstrap-files.js";
 import { isPrimaryBootstrapRun, resolveWorkspaceBootstrapRouting } from "../bootstrap-routing.js";
 import {
@@ -821,22 +822,24 @@ export async function prepareCliRunContext(
     : undefined;
 
   const sessionLabel = params.sessionKey ?? params.sessionId;
-  const { bootstrapFiles, contextFiles: resolvedContextFiles } = isSideQuestion
-    ? { bootstrapFiles: [], contextFiles: [] }
-    : await prepareDeps.resolveBootstrapContextForRun({
-        workspaceDir,
-        config: params.config,
-        sessionKey: params.sessionKey,
-        sessionId: params.sessionId,
-        agentId: sessionAgentId,
-        contextMode: params.bootstrapContextMode,
-        runKind: params.bootstrapContextRunKind,
-        warn: prepareDeps.makeBootstrapWarn({
-          sessionLabel,
+  const contextInjectionMode = resolveContextInjectionMode(params.config, sessionAgentId);
+  const { bootstrapFiles, contextFiles: resolvedContextFiles } =
+    isSideQuestion || contextInjectionMode === "never"
+      ? { bootstrapFiles: [], contextFiles: [] }
+      : await prepareDeps.resolveBootstrapContextForRun({
           workspaceDir,
-          warn: (message) => cliBackendLog.warn(message),
-        }),
-      });
+          config: params.config,
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+          agentId: sessionAgentId,
+          contextMode: params.bootstrapContextMode,
+          runKind: params.bootstrapContextRunKind,
+          warn: prepareDeps.makeBootstrapWarn({
+            sessionLabel,
+            workspaceDir,
+            warn: (message) => cliBackendLog.warn(message),
+          }),
+        });
   // Mirror the embedded runner's bootstrap routing for backends that transport
   // OpenClaw's system prompt. Only a declared native-tool backend can complete
   // the file-based ritual; other backends receive limited guidance.
