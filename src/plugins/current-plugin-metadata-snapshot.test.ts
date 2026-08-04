@@ -2,7 +2,19 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+const normalizationRecordsSpy = vi.hoisted(() => vi.fn());
+vi.mock("@openclaw/model-catalog-core/provider-model-id-normalization", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@openclaw/model-catalog-core/provider-model-id-normalization")
+    >();
+  return {
+    ...actual,
+    setCurrentManifestModelIdNormalizationRecords: normalizationRecordsSpy,
+  };
+});
 import {
   captureCurrentPluginMetadataSnapshotState,
   getCurrentPluginMetadataSnapshot,
@@ -108,6 +120,48 @@ describe("current plugin metadata snapshot", () => {
     ).toBe(snapshot);
   });
 
+  it("serves every configured agent workspace listed as compatible", () => {
+    const config = { plugins: { allow: ["demo"] } };
+    const snapshot = createSnapshot({ config, workspaceDir: "/workspace/gateway" });
+    setCurrentPluginMetadataSnapshot(snapshot, {
+      config,
+      compatibleWorkspaceDirs: ["/workspace/agent-a", "/workspace/agent-b"],
+    });
+
+    expect(getCurrentPluginMetadataSnapshot({ config, workspaceDir: "/workspace/gateway" })).toBe(
+      snapshot,
+    );
+    expect(getCurrentPluginMetadataSnapshot({ config, workspaceDir: "/workspace/agent-a" })).toBe(
+      snapshot,
+    );
+    expect(getCurrentPluginMetadataSnapshot({ config, workspaceDir: "/workspace/agent-b" })).toBe(
+      snapshot,
+    );
+    expect(
+      getCurrentPluginMetadataSnapshot({ config, workspaceDir: "/workspace/unconfigured" }),
+    ).toBeUndefined();
+  });
+
+  it("keeps compatible workspace dirs across a capture/restore round trip", () => {
+    const config = { plugins: { allow: ["demo"] } };
+    const snapshot = createSnapshot({ config, workspaceDir: "/workspace/gateway" });
+    setCurrentPluginMetadataSnapshot(snapshot, {
+      config,
+      compatibleWorkspaceDirs: ["/workspace/agent-a"],
+    });
+
+    const captured = captureCurrentPluginMetadataSnapshotState();
+    clearCurrentPluginMetadataSnapshot();
+    expect(
+      getCurrentPluginMetadataSnapshot({ config, workspaceDir: "/workspace/agent-a" }),
+    ).toBeUndefined();
+
+    restoreCurrentPluginMetadataSnapshotState(captured);
+    expect(getCurrentPluginMetadataSnapshot({ config, workspaceDir: "/workspace/agent-a" })).toBe(
+      snapshot,
+    );
+  });
+
   it("rejects a current snapshot when plugin load paths change", () => {
     const config = { plugins: { load: { paths: ["/plugins/one"] } } };
     const snapshot = createSnapshot({ config });
@@ -121,7 +175,12 @@ describe("current plugin metadata snapshot", () => {
     ).toBeUndefined();
   });
 
-  it("rejects configless default-discovery reuse for snapshots created with load paths", () => {
+  it("serves load-path snapshots to process-full-context callers", () => {
+    // The published full snapshot IS the process's plugin set. The old
+    // single gate required a literal-{} fingerprint, permanently unmatchable
+    // for operators with plugins.load.paths: every configless lookup paid a
+    // ~50ms rescan returning a snapshot MISSING the load-path plugins, and
+    // manifest model-id normalization was silently disabled.
     const config = { plugins: { allow: ["demo"], load: { paths: ["/plugins/one"] } } };
     const snapshot = createSnapshot({ config });
     setCurrentPluginMetadataSnapshot(snapshot, { config });
@@ -129,9 +188,65 @@ describe("current plugin metadata snapshot", () => {
     expect(
       getCurrentPluginMetadataSnapshot({
         allowWorkspaceScopedSnapshot: true,
+        requireProcessFullContext: true,
+      }),
+    ).toBe(snapshot);
+  });
+
+  it("still rejects load-path snapshots for discovery-EQUIVALENCE callers", () => {
+    // Foreign-config consumers (plugin auto-enable writes plugins.allow from
+    // this registry) need "would a default-load-path config discover exactly
+    // this?" — a load-path snapshot must stay invisible to them.
+    const config = { plugins: { allow: ["demo"], load: { paths: ["/plugins/one"] } } };
+    setCurrentPluginMetadataSnapshot(createSnapshot({ config }), { config });
+
+    expect(
+      getCurrentPluginMetadataSnapshot({
+        allowWorkspaceScopedSnapshot: true,
         requireDefaultDiscoveryContext: true,
       }),
     ).toBeUndefined();
+  });
+
+  it("publishes normalization records for full snapshots and clears them for scoped ones", () => {
+    const config = { plugins: { allow: ["demo"], load: { paths: ["/plugins/one"] } } };
+    const fullSnapshot = createSnapshot({ config });
+    normalizationRecordsSpy.mockClear();
+    setCurrentPluginMetadataSnapshot(fullSnapshot, { config });
+    expect(normalizationRecordsSpy).toHaveBeenLastCalledWith(fullSnapshot.plugins);
+
+    setCurrentPluginMetadataSnapshot(createSnapshot({ config, pluginIds: ["demo"] }), { config });
+    expect(normalizationRecordsSpy).toHaveBeenLastCalledWith(undefined);
+  });
+
+  it("round-trips the default-discovery flag through capture/restore", () => {
+    const config = { plugins: { allow: ["demo"], load: { paths: ["/plugins/one"] } } };
+    const fullSnapshot = createSnapshot({ config });
+    setCurrentPluginMetadataSnapshot(fullSnapshot, { config });
+    const captured = captureCurrentPluginMetadataSnapshotState();
+
+    // A temporary scoped publish flips the flag off (list/status flows do this).
+    const scopedConfig = { plugins: { allow: ["demo"] } };
+    setCurrentPluginMetadataSnapshot(
+      createSnapshot({ config: scopedConfig, pluginIds: ["demo"] }),
+      {
+        config: scopedConfig,
+      },
+    );
+    expect(
+      getCurrentPluginMetadataSnapshot({
+        allowWorkspaceScopedSnapshot: true,
+        requireProcessFullContext: true,
+      }),
+    ).toBeUndefined();
+
+    restoreCurrentPluginMetadataSnapshotState(captured);
+    expect(
+      getCurrentPluginMetadataSnapshot({
+        allowWorkspaceScopedSnapshot: true,
+        requireProcessFullContext: true,
+      }),
+    ).toBe(fullSnapshot);
   });
 
   it("accepts configless default-discovery reuse for snapshots created without load paths", () => {

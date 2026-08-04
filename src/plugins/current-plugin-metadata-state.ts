@@ -6,6 +6,8 @@ let currentPluginMetadataSnapshot: unknown;
 let currentPluginMetadataSnapshotConfigFingerprint: string | undefined;
 let currentPluginMetadataSnapshotCompatiblePolicyHashes: readonly string[] | undefined;
 let currentPluginMetadataSnapshotCompatibleConfigFingerprints: readonly string[] | undefined;
+let currentPluginMetadataSnapshotCompatibleWorkspaceDirs: readonly string[] | undefined;
+let currentPluginMetadataSnapshotDefaultDiscoveryCompatible = false;
 let currentPluginMetadataConfigIdentities = new WeakSet<OpenClawConfig>();
 
 /** Owns config identity reuse for the current immutable metadata snapshot. */
@@ -33,6 +35,8 @@ export function setCurrentPluginMetadataSnapshotState(
   configFingerprint: string | undefined,
   compatiblePolicyHashes?: readonly string[],
   compatibleConfigFingerprints?: readonly string[],
+  compatibleWorkspaceDirs?: readonly string[],
+  defaultDiscoveryCompatible?: boolean,
 ): void {
   currentPluginMetadataSnapshot = snapshot;
   currentPluginMetadataSnapshotConfigFingerprint = snapshot ? configFingerprint : undefined;
@@ -42,6 +46,12 @@ export function setCurrentPluginMetadataSnapshotState(
   currentPluginMetadataSnapshotCompatibleConfigFingerprints = snapshot
     ? compatibleConfigFingerprints
     : undefined;
+  currentPluginMetadataSnapshotCompatibleWorkspaceDirs = snapshot
+    ? compatibleWorkspaceDirs
+    : undefined;
+  currentPluginMetadataSnapshotDefaultDiscoveryCompatible = snapshot
+    ? (defaultDiscoveryCompatible ?? false)
+    : false;
 }
 
 /** Clears the process-current plugin metadata snapshot. */
@@ -50,6 +60,8 @@ function clearCurrentPluginMetadataSnapshotState(): void {
   currentPluginMetadataSnapshotConfigFingerprint = undefined;
   currentPluginMetadataSnapshotCompatiblePolicyHashes = undefined;
   currentPluginMetadataSnapshotCompatibleConfigFingerprints = undefined;
+  currentPluginMetadataSnapshotCompatibleWorkspaceDirs = undefined;
+  currentPluginMetadataSnapshotDefaultDiscoveryCompatible = false;
 }
 
 /** Clears the snapshot, its identity cache, and process-wide model normalization. */
@@ -65,11 +77,15 @@ export function getCurrentPluginMetadataSnapshotState(): {
   configFingerprint: string | undefined;
   compatiblePolicyHashes: readonly string[] | undefined;
   compatibleConfigFingerprints: readonly string[] | undefined;
+  compatibleWorkspaceDirs: readonly string[] | undefined;
+  defaultDiscoveryCompatible: boolean;
 } {
   return {
     snapshot: currentPluginMetadataSnapshot,
     configFingerprint: currentPluginMetadataSnapshotConfigFingerprint,
     compatiblePolicyHashes: currentPluginMetadataSnapshotCompatiblePolicyHashes,
     compatibleConfigFingerprints: currentPluginMetadataSnapshotCompatibleConfigFingerprints,
+    compatibleWorkspaceDirs: currentPluginMetadataSnapshotCompatibleWorkspaceDirs,
+    defaultDiscoveryCompatible: currentPluginMetadataSnapshotDefaultDiscoveryCompatible,
   };
 }
