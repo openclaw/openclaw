@@ -236,7 +236,7 @@ defaults collide with local state. For disposable profiles and parallel validati
 pass an explicit `--workspace`; `OPENCLAW_STATE_DIR` relocates runtime state but
 does not change the default workspace location.
 
-Adding a Claw creates the new agent and workspace configuration, writes declared
+Adding a Claw creates the agent and its workspace configuration, writes declared
 workspace files, installs or reuses declared skill and plugin artifacts, and
 records package, MCP, and cron provenance. Existing files are not overwritten,
 and retries fail closed when owned content drifted.
@@ -385,7 +385,7 @@ credentials, sessions, and unowned local state are excluded.
 | Command                             | Purpose                                             |
 | ----------------------------------- | --------------------------------------------------- |
 | `claws inspect <source>`            | Validate a package directory or grouped manifest.   |
-| `claws add <source>`                | Preview or create one new agent and workspace.      |
+| `claws add <source>`                | Preview or create one agent and its workspace.      |
 | `claws status [claw-or-agent]`      | Report installed state, ownership, and drift.       |
 | `claws update <claw-or-agent>`      | Preview or apply changes from the selected source.  |
 | `claws remove <claw-or-agent>`      | Preview or remove the agent and eligible resources. |
