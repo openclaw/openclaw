@@ -81,15 +81,15 @@ describe("Telegram inbound context contract", () => {
         from: { id: 99, first_name: "Ada" },
         reply_to_message: {
           chat: { id: 42, type: "group", title: "Ops" },
-          text: "the complete earlier message",
+          text: "the selected clause in the complete earlier message",
           date: 1_736_380_700,
           message_id: 1,
           from: { id: 98, first_name: "Grace" },
         },
         quote: {
-          text: " selected clause\n",
+          text: "selected clause",
           position: 4,
-          entities: [{ type: "bold", offset: 1, length: 8 }],
+          entities: [{ type: "bold", offset: 0, length: 8 }],
         },
       },
     });
@@ -104,8 +104,11 @@ describe("Telegram inbound context contract", () => {
     expect(payload.ReplyToBody).toBe("selected clause");
     expect(payload.ReplyToSender).toBe("Grace");
     expect(payload.ReplyToIsQuote).toBe(true);
-    expect(payload.ReplyToQuoteText).toBe(" selected clause\n");
+    expect(payload.ReplyToQuoteText).toBe("selected clause");
     expect(payload.ReplyToQuotePosition).toBe(4);
-    expect(payload.ReplyToQuoteSourceText).toBe("the complete earlier message");
+    expect(payload.ReplyToQuoteEntities).toEqual([{ type: "bold", offset: 0, length: 8 }]);
+    expect(payload.ReplyToQuoteSourceText).toBe(
+      "the selected clause in the complete earlier message",
+    );
   });
 });
