@@ -463,12 +463,12 @@ describe("browser copilot Gateway custody", () => {
         },
       });
       await vi.waitFor(() => expect(client.ready).toBe(true));
-      ws.sent.length = 0;
+      ws!.sent.length = 0;
 
       await expect(client.request("chat.send", { text: "x".repeat(256) })).rejects.toThrow(
         "gateway request chat.send exceeds negotiated max payload",
       );
-      expect(ws.sent).toHaveLength(0);
+      expect(ws!.sent).toHaveLength(0);
     } finally {
       client.stop();
       vi.unstubAllGlobals();
