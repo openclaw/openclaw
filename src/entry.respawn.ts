@@ -1,6 +1,7 @@
 // Respawns the CLI with adjusted process flags when startup requires it.
 import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveNodeStartupTlsEnvironment } from "./bootstrap/node-startup-env.js";
 import {
   isTerminalInteractiveRespawnArgv,
@@ -129,7 +130,9 @@ export function buildCliRespawnPlan(
   if (
     autoNodeExtraCaCerts &&
     !isTruthyEnvValue(env[OPENCLAW_NODE_EXTRA_CA_CERTS_READY]) &&
-    !env.NODE_EXTRA_CA_CERTS
+    // Match the resolver's blankness policy: a whitespace-only inherited value
+    // is not a usable override, so replace it with the resolved CA path.
+    !normalizeOptionalString(env.NODE_EXTRA_CA_CERTS)
   ) {
     childEnv.NODE_EXTRA_CA_CERTS = autoNodeExtraCaCerts;
     childEnv[OPENCLAW_NODE_EXTRA_CA_CERTS_READY] = "1";

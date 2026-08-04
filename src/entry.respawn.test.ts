@@ -176,6 +176,20 @@ describe("buildCliRespawnPlan", () => {
     expect(respawnPlan.env.NODE_EXTRA_CA_CERTS).toBe("/custom/ca.pem");
   });
 
+  it("replaces a whitespace-only NODE_EXTRA_CA_CERTS value with the resolved CA path", () => {
+    const plan = buildCliRespawnPlan({
+      argv: ["node", "openclaw", "status"],
+      env: { NODE_EXTRA_CA_CERTS: "   " },
+      execArgv: [],
+      autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
+      platform: "linux",
+    });
+
+    const respawnPlan = expectCliRespawnPlan(plan);
+    expect(respawnPlan.env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/certs/ca-certificates.crt");
+    expect(respawnPlan.env[OPENCLAW_NODE_EXTRA_CA_CERTS_READY]).toBe("1");
+  });
+
   it("returns null when both respawn guards are already satisfied", () => {
     expect(
       buildCliRespawnPlan({
