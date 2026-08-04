@@ -20,6 +20,7 @@ import { isSingleUseReplyToMode } from "./reply-reference.js";
 type ReplyToModeChannelConfig = {
   replyToMode?: ReplyToMode;
   replyToModeByChatType?: Partial<Record<"direct" | "group" | "channel", ReplyToMode>>;
+  accounts?: Record<string, ReplyToModeChannelConfig | undefined>;
 };
 
 function normalizeReplyToModeChatType(
@@ -35,6 +36,7 @@ function resolveConfiguredReplyToMode(
   cfg: OpenClawConfig,
   channel?: OriginatingChannelType,
   chatType?: string | null,
+  accountId?: string | null,
 ): ReplyToMode {
   const provider = normalizeAnyChannelId(channel) ?? normalizeOptionalLowercaseString(channel);
   if (!provider) {
@@ -43,14 +45,21 @@ function resolveConfiguredReplyToMode(
   const channelConfig = (cfg.channels as Record<string, ReplyToModeChannelConfig> | undefined)?.[
     provider
   ];
+  // Channels that register a threading adapter resolve account scope themselves;
+  // this generic fallback serves the rest, which still accept accounts.<id> in
+  // their schema, so the account value must win here or it is silently ignored.
+  const trimmedAccountId = accountId?.trim();
+  const accountConfig = trimmedAccountId ? channelConfig?.accounts?.[trimmedAccountId] : undefined;
   const normalizedChatType = normalizeReplyToModeChatType(chatType);
   if (normalizedChatType) {
-    const scopedMode = channelConfig?.replyToModeByChatType?.[normalizedChatType];
+    const scopedMode =
+      accountConfig?.replyToModeByChatType?.[normalizedChatType] ??
+      channelConfig?.replyToModeByChatType?.[normalizedChatType];
     if (scopedMode !== undefined) {
       return scopedMode;
     }
   }
-  return channelConfig?.replyToMode ?? "all";
+  return accountConfig?.replyToMode ?? channelConfig?.replyToMode ?? "all";
 }
 
 /** Resolve reply-to mode using channel threading adapter override when present. */
@@ -68,7 +77,9 @@ function resolveReplyToModeWithThreading(
     accountId: params.accountId,
     chatType: params.chatType,
   });
-  return resolved ?? resolveConfiguredReplyToMode(cfg, params.channel, params.chatType);
+  return (
+    resolved ?? resolveConfiguredReplyToMode(cfg, params.channel, params.chatType, params.accountId)
+  );
 }
 
 /** Resolve effective reply-to mode for a channel/account/chat tuple. */
