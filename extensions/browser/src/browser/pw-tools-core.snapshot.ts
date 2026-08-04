@@ -59,6 +59,53 @@ function resolveSnapshotTimeoutMs(timeoutMs: number | undefined): number {
   return resolveBoundedTimeoutMs(timeoutMs, 5_000, 500, 60_000);
 }
 
+function resolveNavigationTimeoutMs(timeoutMs: number | undefined): number {
+  return resolveBoundedTimeoutMs(timeoutMs, 20_000, 1000, 120_000);
+}
+
+async function awaitSnapshotTask<T>(task: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) {
+    return await task;
+  }
+  // The underlying Playwright operation cannot be cancelled directly. Race it
+  // so the route returns at its deadline, then let the session cleanup observe
+  // the same signal without leaking a rejection from the abandoned task.
+  void task.catch(() => {});
+  const { abortPromise, cleanup } = createAbortPromiseWithListener(signal);
+  try {
+    return abortPromise ? await Promise.race([task, abortPromise]) : await task;
+  } finally {
+    cleanup();
+  }
+}
+
+function createSnapshotDeadline(opts: {
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  targetId?: string;
+  operation: string;
+}): { signal: AbortSignal; timeoutMs: number; cleanup: () => void } {
+  const timeoutMs = resolveSnapshotTimeoutMs(opts.timeoutMs);
+  const timeoutController = new AbortController();
+  const timer = setTimeout(() => {
+    timeoutController.abort(
+      new Error(
+        `${opts.operation} via Playwright timed out after ${timeoutMs}ms ` +
+          `(targetId=${opts.targetId ?? "current"}).`,
+      ),
+    );
+  }, timeoutMs);
+  timer.unref?.();
+  const signal = opts.signal
+    ? AbortSignal.any([opts.signal, timeoutController.signal])
+    : timeoutController.signal;
+  return {
+    signal,
+    timeoutMs,
+    cleanup: () => clearTimeout(timer),
+  };
+}
+
 function resolveViewportDimension(value: unknown, label: "width" | "height"): number {
   const dimension = resolveIntegerOption(value, 1, { min: 1 });
   if (dimension > ACT_MAX_VIEWPORT_DIMENSION) {
@@ -67,36 +114,40 @@ function resolveViewportDimension(value: unknown, label: "width" | "height"): nu
   return dimension;
 }
 
-async function collectSnapshotUrls(page: Page): Promise<SnapshotUrlEntry[]> {
-  const urls = await page
-    .evaluate(() => {
-      const seen = new Set<string>();
-      const out: SnapshotUrlEntry[] = [];
-      for (const anchor of Array.from(document.querySelectorAll("a[href]"))) {
-        const href = anchor instanceof HTMLAnchorElement ? anchor.href : "";
-        if (!href || seen.has(href)) {
-          continue;
+async function collectSnapshotUrls(page: Page, signal?: AbortSignal): Promise<SnapshotUrlEntry[]> {
+  let urls: SnapshotUrlEntry[] = [];
+  try {
+    urls = await awaitSnapshotTask(
+      page.evaluate(() => {
+        const seen = new Set<string>();
+        const out: SnapshotUrlEntry[] = [];
+        for (const anchor of Array.from(document.querySelectorAll("a[href]"))) {
+          const href = anchor instanceof HTMLAnchorElement ? anchor.href : "";
+          if (!href || seen.has(href)) {
+            continue;
+          }
+          const text =
+            (anchor.textContent || anchor.getAttribute("aria-label") || "")
+              .replace(/\s+/g, " ")
+              .trim()
+              .slice(0, 121) || href;
+          seen.add(href);
+          out.push({ text, url: href });
+          if (out.length >= 100) {
+            break;
+          }
         }
-        const text =
-          (anchor.textContent || anchor.getAttribute("aria-label") || "")
-            .replace(/\s+/g, " ")
-            .trim()
-            .slice(0, 121) || href;
-        seen.add(href);
-        out.push({ text, url: href });
-        if (out.length >= 100) {
-          break;
-        }
-      }
-      return out;
-    })
-    .catch(() => []);
-  return Array.isArray(urls)
-    ? urls.map((entry) => {
-        entry.text = truncateUtf16Safe(entry.text, 120) || entry.url;
-        return entry;
-      })
-    : [];
+        return out;
+      }),
+      signal,
+    );
+  } catch {
+    signal?.throwIfAborted();
+  }
+  return urls.map((entry) => {
+    entry.text = truncateUtf16Safe(entry.text, 120) || entry.url;
+    return entry;
+  });
 }
 
 function buildStoredAriaRefs(
@@ -151,14 +202,15 @@ async function publishRefsInOrder<T>(opts: {
 }): Promise<T> {
   const previous = activeAriaRefPublications.get(opts.key);
   const execution = Promise.resolve().then(async () => {
-    await previous?.settled;
+    if (previous) {
+      await awaitSnapshotTask(previous.settled, opts.signal);
+    }
     opts.signal?.throwIfAborted();
     return await opts.run();
   });
-  const settled = execution.then(
-    () => {},
-    () => {},
-  );
+  // Keep a cancelled entry as a barrier until its predecessor settles, so a
+  // later snapshot cannot overlap an older publication that is still writing.
+  const settled = Promise.allSettled([previous?.settled, execution]).then(() => {});
   const active = { settled };
   activeAriaRefPublications.set(opts.key, active);
   void settled.then(() => {
@@ -181,6 +233,7 @@ export async function storeAriaSnapshotRefsViaPlaywright(opts: {
   nodes: AriaSnapshotNode[];
   page?: Page;
   signal?: AbortSignal;
+  isDocumentCurrent?: () => boolean | Promise<boolean>;
 }): Promise<void> {
   opts.signal?.throwIfAborted();
   const page =
@@ -196,6 +249,9 @@ export async function storeAriaSnapshotRefsViaPlaywright(opts: {
     signal: opts.signal,
     run: async () => {
       opts.signal?.throwIfAborted();
+      if (opts.isDocumentCurrent && !(await opts.isDocumentCurrent())) {
+        throw new Error("Frame changed while its browser snapshot was being captured; retry.");
+      }
       ensurePageState(page);
       invalidateRoleRefsForTarget({
         page,
@@ -213,6 +269,9 @@ export async function storeAriaSnapshotRefsViaPlaywright(opts: {
         ),
       });
       opts.signal?.throwIfAborted();
+      if (opts.isDocumentCurrent && !(await opts.isDocumentCurrent())) {
+        throw new Error("Frame changed while its browser snapshot was being captured; retry.");
+      }
       storeRoleRefsForTarget({
         page,
         cdpUrl: opts.cdpUrl,
@@ -287,50 +346,54 @@ async function collectAriaSnapshotViaPlaywright(
       : (opts.signal ?? timeoutController?.signal);
   const { abortPromise, cleanup } = createAbortPromiseWithListener(signal);
 
-  const collectSnapshot = async () => {
-    signal?.throwIfAborted();
+  try {
     const page = await prepareSnapshotPageViaPlaywright({
       cdpUrl: opts.cdpUrl,
       targetId: opts.targetId,
       signal,
       ssrfPolicy: opts.ssrfPolicy,
     });
-    signal?.throwIfAborted();
-    const res = (await withPageScopedCdpClient({
-      cdpUrl: opts.cdpUrl,
-      page,
-      targetId: opts.targetId,
-      signal,
-      fn: async (send) => {
-        activeMethod = "Accessibility.enable";
-        await send("Accessibility.enable").catch(() => {});
-        signal?.throwIfAborted();
-        activeMethod = "Accessibility.getFullAXTree";
-        const result = (await send("Accessibility.getFullAXTree")) as {
-          nodes?: RawAXNode[];
-        };
-        signal?.throwIfAborted();
-        return result;
-      },
-    })) as { nodes?: RawAXNode[] };
-    const nodes = Array.isArray(res?.nodes) ? res.nodes : [];
-    const formatted = formatAriaSnapshot(nodes, limit);
-    if (publishRefs) {
-      activeMethod = "snapshot ref storage";
-      await storeAriaSnapshotRefsViaPlaywright({
-        cdpUrl: opts.cdpUrl,
-        targetId: opts.targetId,
-        nodes: formatted,
-        page,
-        signal,
-      });
+    const collectSnapshot = async (isDocumentCurrent?: () => boolean) => {
       signal?.throwIfAborted();
-    }
-    return { nodes: formatted };
-  };
-
-  try {
-    const snapshot = collectSnapshot();
+      const res = (await withPageScopedCdpClient({
+        cdpUrl: opts.cdpUrl,
+        page,
+        targetId: opts.targetId,
+        signal,
+        fn: async (send) => {
+          activeMethod = "Accessibility.enable";
+          await send("Accessibility.enable").catch(() => {});
+          signal?.throwIfAborted();
+          activeMethod = "Accessibility.getFullAXTree";
+          const result = (await send("Accessibility.getFullAXTree")) as {
+            nodes?: RawAXNode[];
+          };
+          signal?.throwIfAborted();
+          return result;
+        },
+      })) as { nodes?: RawAXNode[] };
+      const nodes = Array.isArray(res?.nodes) ? res.nodes : [];
+      const formatted = formatAriaSnapshot(nodes, limit);
+      if (publishRefs) {
+        activeMethod = "snapshot ref storage";
+        await storeAriaSnapshotRefsViaPlaywright({
+          cdpUrl: opts.cdpUrl,
+          targetId: opts.targetId,
+          nodes: formatted,
+          page,
+          signal,
+          ...(isDocumentCurrent ? { isDocumentCurrent: () => isDocumentCurrent() } : {}),
+        });
+        signal?.throwIfAborted();
+      }
+      return { nodes: formatted };
+    };
+    const snapshot = publishRefs
+      ? withSnapshotFrameGuard({
+          page,
+          run: async (isDocumentCurrent) => await collectSnapshot(isDocumentCurrent),
+        })
+      : collectSnapshot();
     return abortPromise ? await Promise.race([snapshot, abortPromise]) : await snapshot;
   } finally {
     if (timer) {
@@ -359,6 +422,7 @@ export async function snapshotAiViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
   maxChars?: number;
   urls?: boolean;
   ssrfPolicy?: SsrFPolicy;
@@ -369,45 +433,58 @@ export async function snapshotAiViaPlaywright(opts: {
   refs: RoleRefMap;
   newElements?: number;
 }> {
-  const page = await prepareSnapshotPageViaPlaywright({
-    cdpUrl: opts.cdpUrl,
+  const deadline = createSnapshotDeadline({
+    timeoutMs: opts.timeoutMs,
+    signal: opts.signal,
     targetId: opts.targetId,
-    ssrfPolicy: opts.ssrfPolicy,
+    operation: "AI snapshot",
   });
+  try {
+    const page = await prepareSnapshotPageViaPlaywright({
+      cdpUrl: opts.cdpUrl,
+      targetId: opts.targetId,
+      signal: deadline.signal,
+      ssrfPolicy: opts.ssrfPolicy,
+    });
 
-  return await withSnapshotFrameGuard({
-    page,
-    run: async (isFrameCurrent) => {
-      let snapshot = await page.ariaSnapshot({
-        mode: "ai",
-        timeout: resolveSnapshotTimeoutMs(opts.timeoutMs),
-      });
-      if (opts.urls) {
-        snapshot = appendSnapshotUrls(snapshot, await collectSnapshotUrls(page));
-      }
-      const built = buildRoleSnapshotFromAiSnapshot(snapshot);
-      const finalized = finalizeRoleSnapshot({
-        snapshot,
-        refs: built.refs,
-        maxChars: opts.maxChars,
-        delta: opts.delta,
-      });
-      assertSnapshotFrameCurrent(isFrameCurrent);
-      await publishRefsInOrder({
-        key: `${normalizeCdpUrl(opts.cdpUrl)}::${opts.targetId ?? "current"}`,
-        run: async () => {
-          storeRoleRefsForTarget({
-            page,
-            cdpUrl: opts.cdpUrl,
-            targetId: opts.targetId,
-            refs: finalized.refs,
-            mode: "aria",
-          });
-        },
-      });
-      return finalized;
-    },
-  });
+    return await withSnapshotFrameGuard({
+      page,
+      run: async (isFrameCurrent) => {
+        let snapshot = await awaitSnapshotTask(
+          page.ariaSnapshot({ mode: "ai", timeout: deadline.timeoutMs }),
+          deadline.signal,
+        );
+        if (opts.urls) {
+          snapshot = appendSnapshotUrls(snapshot, await collectSnapshotUrls(page, deadline.signal));
+        }
+        const built = buildRoleSnapshotFromAiSnapshot(snapshot);
+        const finalized = finalizeRoleSnapshot({
+          snapshot,
+          refs: built.refs,
+          maxChars: opts.maxChars,
+          delta: opts.delta,
+        });
+        assertSnapshotFrameCurrent(isFrameCurrent);
+        await publishRefsInOrder({
+          key: `${normalizeCdpUrl(opts.cdpUrl)}::${opts.targetId ?? "current"}`,
+          signal: deadline.signal,
+          run: async () => {
+            assertSnapshotFrameCurrent(isFrameCurrent);
+            storeRoleRefsForTarget({
+              page,
+              cdpUrl: opts.cdpUrl,
+              targetId: opts.targetId,
+              refs: finalized.refs,
+              mode: "aria",
+            });
+          },
+        });
+        return finalized;
+      },
+    });
+  } finally {
+    deadline.cleanup();
+  }
 }
 
 function assertSnapshotFrameCurrent(isFrameCurrent: () => boolean): void {
@@ -445,6 +522,7 @@ async function finalizeRoleSnapshotViaPlaywright(params: {
   frameSelector?: string;
   frame?: Frame;
   isFrameCurrent?: () => boolean;
+  signal?: AbortSignal;
   mode: "aria" | "role";
   built: { snapshot: string; refs: RoleRefMap };
   urls?: boolean;
@@ -458,7 +536,10 @@ async function finalizeRoleSnapshotViaPlaywright(params: {
   newElements?: number;
 }> {
   const snapshot = params.urls
-    ? appendSnapshotUrls(params.built.snapshot, await collectSnapshotUrls(params.page))
+    ? appendSnapshotUrls(
+        params.built.snapshot,
+        await collectSnapshotUrls(params.page, params.signal),
+      )
     : params.built.snapshot;
   if (params.isFrameCurrent) {
     assertSnapshotFrameCurrent(params.isFrameCurrent);
@@ -471,7 +552,11 @@ async function finalizeRoleSnapshotViaPlaywright(params: {
   });
   await publishRefsInOrder({
     key: `${normalizeCdpUrl(params.cdpUrl)}::${params.targetId ?? "current"}`,
+    signal: params.signal,
     run: async () => {
+      if (params.isFrameCurrent) {
+        assertSnapshotFrameCurrent(params.isFrameCurrent);
+      }
       storeRoleRefsForTarget({
         page: params.page,
         cdpUrl: params.cdpUrl,
@@ -497,6 +582,7 @@ export async function snapshotRoleViaPlaywright(opts: {
   urls?: boolean;
   maxChars?: number;
   timeoutMs?: number;
+  signal?: AbortSignal;
   ssrfPolicy?: SsrFPolicy;
   delta?: { mode: RoleSnapshotIdentityMode; previousKeys?: ReadonlySet<string> };
 }): Promise<{
@@ -506,85 +592,105 @@ export async function snapshotRoleViaPlaywright(opts: {
   stats: { lines: number; chars: number; refs: number; interactive: number };
   newElements?: number;
 }> {
-  const page = await prepareSnapshotPageViaPlaywright({
-    cdpUrl: opts.cdpUrl,
+  const deadline = createSnapshotDeadline({
+    timeoutMs: opts.timeoutMs,
+    signal: opts.signal,
     targetId: opts.targetId,
-    ssrfPolicy: opts.ssrfPolicy,
+    operation: "Role snapshot",
   });
+  try {
+    const page = await prepareSnapshotPageViaPlaywright({
+      cdpUrl: opts.cdpUrl,
+      targetId: opts.targetId,
+      signal: deadline.signal,
+      ssrfPolicy: opts.ssrfPolicy,
+    });
 
-  const ariaSnapshotTimeout = resolveSnapshotTimeoutMs(opts.timeoutMs);
+    const ariaSnapshotTimeout = deadline.timeoutMs;
 
-  if (opts.refsMode === "aria") {
-    if (normalizeOptionalString(opts.selector) || normalizeOptionalString(opts.frameSelector)) {
-      throw new Error("refs=aria does not support selector/frame snapshots yet.");
+    if (opts.refsMode === "aria") {
+      if (normalizeOptionalString(opts.selector) || normalizeOptionalString(opts.frameSelector)) {
+        throw new Error("refs=aria does not support selector/frame snapshots yet.");
+      }
+      return await withSnapshotFrameGuard({
+        page,
+        run: async (isFrameCurrent) => {
+          const snapshot = await awaitSnapshotTask(
+            page.ariaSnapshot({ mode: "ai", timeout: ariaSnapshotTimeout }),
+            deadline.signal,
+          );
+          const built = buildRoleSnapshotFromAiSnapshot(snapshot, opts.options);
+          return await finalizeRoleSnapshotViaPlaywright({
+            page,
+            cdpUrl: opts.cdpUrl,
+            targetId: opts.targetId,
+            isFrameCurrent,
+            signal: deadline.signal,
+            built,
+            mode: "aria",
+            urls: opts.urls,
+            maxChars: opts.maxChars,
+            delta: opts.delta,
+          });
+        },
+      });
+    }
+
+    const frameSelector = normalizeOptionalString(opts.frameSelector) ?? "";
+    const selector = normalizeOptionalString(opts.selector) ?? "";
+    const frameElement = frameSelector
+      ? await awaitSnapshotTask(
+          page.locator(frameSelector).elementHandle({ timeout: ariaSnapshotTimeout }),
+          deadline.signal,
+        )
+      : undefined;
+    let frame: Frame | undefined;
+    if (frameElement) {
+      try {
+        frame =
+          (await awaitSnapshotTask(frameElement.contentFrame(), deadline.signal)) ?? undefined;
+      } finally {
+        await frameElement.dispose();
+      }
+    }
+    if (frameSelector && !frame) {
+      throw new Error("Frame was unavailable while its browser snapshot was being captured.");
     }
     return await withSnapshotFrameGuard({
       page,
+      frame: frame ?? page.mainFrame(),
       run: async (isFrameCurrent) => {
-        const snapshot = await page.ariaSnapshot({
-          mode: "ai",
-          timeout: ariaSnapshotTimeout,
-        });
-        const built = buildRoleSnapshotFromAiSnapshot(snapshot, opts.options);
+        const locator = frame
+          ? selector
+            ? frame.locator(selector)
+            : frame.locator(":root")
+          : selector
+            ? page.locator(selector)
+            : page.locator(":root");
+        const ariaSnapshot = await awaitSnapshotTask(
+          locator.ariaSnapshot({ timeout: ariaSnapshotTimeout }),
+          deadline.signal,
+        );
+        const built = buildRoleSnapshotFromAriaSnapshot(ariaSnapshot ?? "", opts.options);
         return await finalizeRoleSnapshotViaPlaywright({
           page,
           cdpUrl: opts.cdpUrl,
           targetId: opts.targetId,
+          frameSelector: frameSelector || undefined,
+          frame: frame ?? undefined,
           isFrameCurrent,
+          signal: deadline.signal,
           built,
-          mode: "aria",
+          mode: "role",
           urls: opts.urls,
           maxChars: opts.maxChars,
           delta: opts.delta,
         });
       },
     });
+  } finally {
+    deadline.cleanup();
   }
-
-  const frameSelector = normalizeOptionalString(opts.frameSelector) ?? "";
-  const selector = normalizeOptionalString(opts.selector) ?? "";
-  const frameElement = frameSelector
-    ? await page.locator(frameSelector).elementHandle({ timeout: ariaSnapshotTimeout })
-    : undefined;
-  let frame: Frame | undefined;
-  if (frameElement) {
-    try {
-      frame = (await frameElement.contentFrame()) ?? undefined;
-    } finally {
-      await frameElement.dispose();
-    }
-  }
-  if (frameSelector && !frame) {
-    throw new Error("Frame was unavailable while its browser snapshot was being captured.");
-  }
-  return await withSnapshotFrameGuard({
-    page,
-    frame: frame ?? page.mainFrame(),
-    run: async (isFrameCurrent) => {
-      const locator = frame
-        ? selector
-          ? frame.locator(selector)
-          : frame.locator(":root")
-        : selector
-          ? page.locator(selector)
-          : page.locator(":root");
-      const ariaSnapshot = await locator.ariaSnapshot({ timeout: ariaSnapshotTimeout });
-      const built = buildRoleSnapshotFromAriaSnapshot(ariaSnapshot ?? "", opts.options);
-      return await finalizeRoleSnapshotViaPlaywright({
-        page,
-        cdpUrl: opts.cdpUrl,
-        targetId: opts.targetId,
-        frameSelector: frameSelector || undefined,
-        frame: frame ?? undefined,
-        isFrameCurrent,
-        built,
-        mode: "role",
-        urls: opts.urls,
-        maxChars: opts.maxChars,
-        delta: opts.delta,
-      });
-    },
-  });
 }
 
 /** Navigates the target page while enforcing browser SSRF policy before and after load. */

@@ -269,6 +269,80 @@ describe("ExtensionRelayBridge", () => {
     expect(extSocket.frames().some((frame) => frame.type === "detach")).toBe(false);
   });
 
+  it("keeps auxiliary-session detach independent of a stalled renderer preflight", async () => {
+    const bridge = new ExtensionRelayBridge();
+    const { socket: extSocket, handlers } = wireExtension(bridge, {
+      answerCdp: false,
+    });
+    sendHello(handlers);
+
+    const client = new FakeSocket();
+    const cdp = bridge.attachCdpClientSocket(client);
+    cdp.onMessage(
+      JSON.stringify({ id: 1, method: "Target.setAutoAttach", params: { autoAttach: true } }),
+    );
+    await flush();
+    cdp.onMessage(JSON.stringify({ id: 2, method: "Target.attachToBrowserTarget" }));
+    await flush();
+    const browserSessionId = (
+      client.frames().find((frame) => frame.id === 2)?.result as { sessionId?: string }
+    )?.sessionId;
+    cdp.onMessage(
+      JSON.stringify({
+        id: 3,
+        sessionId: browserSessionId,
+        method: "Target.attachToTarget",
+        params: { targetId: "target-1", flatten: true },
+      }),
+    );
+    await flush();
+    const pageSessionId = (
+      client.frames().find((frame) => frame.id === 3)?.result as { sessionId?: string }
+    )?.sessionId;
+    expect(pageSessionId).toBeTruthy();
+
+    cdp.onMessage(
+      JSON.stringify({ id: 4, sessionId: pageSessionId, method: "Accessibility.enable" }),
+    );
+    cdp.onMessage(
+      JSON.stringify({
+        id: 5,
+        sessionId: pageSessionId,
+        method: "Runtime.runIfWaitingForDebugger",
+      }),
+    );
+    await flush();
+
+    expect(client.frames().find((frame) => frame.id === 4)).toBeUndefined();
+    expect(client.frames().find((frame) => frame.id === 5)?.result).toEqual({});
+    expect(
+      extSocket
+        .frames()
+        .some(
+          (frame) => frame.type === "cdp" && frame.method === "Runtime.runIfWaitingForDebugger",
+        ),
+    ).toBe(false);
+
+    cdp.onMessage(
+      JSON.stringify({
+        id: 6,
+        sessionId: browserSessionId,
+        method: "Target.detachFromTarget",
+        params: { sessionId: pageSessionId },
+      }),
+    );
+    await flush();
+    await flush();
+
+    expect(extSocket.frames()).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "detach", tabId: 1 })]),
+    );
+    expect(client.frames().find((frame) => frame.id === 4)?.error).toMatchObject({
+      message: expect.stringMatching(/session detached/i),
+    });
+    expect(client.frames().find((frame) => frame.id === 6)?.result).toEqual({});
+  });
+
   it("retires an in-flight auxiliary tab command while leaving sibling tabs usable", async () => {
     const bridge = new ExtensionRelayBridge();
     const { socket: extSocket, handlers } = wireExtension(bridge, {

@@ -471,6 +471,7 @@ describe("browser control server", () => {
       targetId: "abcd1234",
       nodes: [{ ref: "1", role: "link", name: "x", depth: 0 }],
       signal: expect.any(AbortSignal),
+      isDocumentCurrent: expect.any(Function),
     });
 
     const snapAi = (await realFetch(`${base}/snapshot?format=ai`).then((r) => r.json())) as {
@@ -483,6 +484,7 @@ describe("browser control server", () => {
       cdpUrl: state.cdpBaseUrl,
       targetId: "abcd1234",
       maxChars: DEFAULT_AI_SNAPSHOT_MAX_CHARS,
+      signal: expect.any(AbortSignal),
       ssrfPolicy: {
         dangerouslyAllowPrivateNetwork: true,
       },
@@ -497,6 +499,7 @@ describe("browser control server", () => {
     expect(lastCall).toEqual({
       cdpUrl: state.cdpBaseUrl,
       targetId: "abcd1234",
+      signal: expect.any(AbortSignal),
       ssrfPolicy: {
         dangerouslyAllowPrivateNetwork: true,
       },
@@ -511,6 +514,9 @@ describe("browser control server", () => {
     expect(fallback.ok).toBe(true);
     expect(fallback.format).toBe("ai");
     expect(fallback.snapshot).toContain("Fallback");
+    expect(requirePwMock("snapshotRoleViaPlaywright")).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
     expect(cdpMocks.snapshotRoleViaCdp).toHaveBeenCalledWith({
       wsUrl: "ws://127.0.0.1/devtools/page/abcd1234",
       urls: undefined,

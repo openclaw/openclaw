@@ -75,13 +75,21 @@ function makeAriaSnapshotPage(ariaSnapshot: ReturnType<typeof vi.fn>) {
   };
 }
 
+function makeSnapshotPage(id = "page-1") {
+  return {
+    id,
+    on: vi.fn(),
+    off: vi.fn(),
+  };
+}
+
 describe("pw-tools-core aria snapshot storage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   it("reuses the resolved page when storing aria refs", async () => {
-    const page = { id: "page-1" };
+    const page = makeSnapshotPage();
     const rawNodes = [{ backendDOMNodeId: 42 }];
     const formattedNodes = [{ ref: "ax1", role: "button", name: "OK", backendDOMNodeId: 42 }];
 
@@ -132,7 +140,7 @@ describe("pw-tools-core aria snapshot storage", () => {
   });
 
   it("captures aria nodes without publishing refs or DOM markers", async () => {
-    const page = { id: "page-1" };
+    const page = makeSnapshotPage();
     const rawNodes = [{ backendDOMNodeId: 42 }];
     const formattedNodes = [{ ref: "ax1", role: "button", name: "OK", backendDOMNodeId: 42 }];
 
@@ -155,7 +163,7 @@ describe("pw-tools-core aria snapshot storage", () => {
   it("cancels a capture-only diagnostic without disconnecting the shared browser", async () => {
     vi.useFakeTimers();
     try {
-      const page = { id: "page-1" };
+      const page = makeSnapshotPage();
       let rejectEnable!: (reason: unknown) => void;
       const send = vi.fn<ScopedCdpSend>(
         async () =>
@@ -194,7 +202,7 @@ describe("pw-tools-core aria snapshot storage", () => {
   it("honors a capture-only diagnostic budget below the normal 500ms floor", async () => {
     vi.useFakeTimers();
     try {
-      const page = { id: "page-1" };
+      const page = makeSnapshotPage();
       const send = vi.fn<ScopedCdpSend>(async () => await new Promise<never>(() => {}));
       getPageForTargetId.mockResolvedValue(page);
       withPageScopedCdpClient.mockImplementation(
@@ -236,7 +244,7 @@ describe("pw-tools-core aria snapshot storage", () => {
   it("races snapshotAriaViaPlaywright against an explicit timeoutMs without disconnecting siblings", async () => {
     vi.useFakeTimers();
     try {
-      const page = { id: "page-1" };
+      const page = makeSnapshotPage();
       let rejectEnable!: (reason: unknown) => void;
       const send = vi.fn<ScopedCdpSend>(
         async () =>
@@ -275,7 +283,7 @@ describe("pw-tools-core aria snapshot storage", () => {
   });
 
   it("cancels an in-flight aria snapshot without disconnecting the shared browser", async () => {
-    const page = { id: "page-1" };
+    const page = makeSnapshotPage();
     let rejectEnable!: (reason: unknown) => void;
     const send = vi.fn<ScopedCdpSend>(
       async () =>
@@ -311,8 +319,8 @@ describe("pw-tools-core aria snapshot storage", () => {
     const controller = new AbortController();
     const cancellation = new Error("tab-1 snapshot cancelled");
     const pages = new Map([
-      ["tab-1", { id: "page-1" }],
-      ["tab-2", { id: "page-2" }],
+      ["tab-1", makeSnapshotPage()],
+      ["tab-2", makeSnapshotPage("page-2")],
     ]);
     getPageForTargetId.mockImplementation(async ({ targetId }: { targetId: string }) =>
       pages.get(targetId),
@@ -360,7 +368,7 @@ describe("pw-tools-core aria snapshot storage", () => {
   });
 
   it("does not publish a timed-out raw snapshot after a newer retry succeeds", async () => {
-    const page = { id: "page-1" };
+    const page = makeSnapshotPage();
     const controller = new AbortController();
     let releaseFirstRaw!: () => void;
     const firstRaw = new Promise<void>((resolve) => {
@@ -488,8 +496,161 @@ describe("pw-tools-core aria snapshot storage", () => {
     expect(publishedRefs).toEqual({ e2: { role: "button", name: "AI" } });
   });
 
+  it.each(["ai", "role"] as const)(
+    "bounds queued %s ref publication by the snapshot deadline",
+    async (kind) => {
+      vi.useFakeTimers();
+      try {
+        const page = makeAriaSnapshotPage(vi.fn(async () => '- button "Queued" [ref=e2]'));
+        let releaseMarker!: () => void;
+        const markerGate = new Promise<void>((resolve) => {
+          releaseMarker = resolve;
+        });
+        getPageForTargetId.mockResolvedValue(page);
+        markBackendDomRefsOnPage.mockImplementationOnce(async () => {
+          await markerGate;
+          return new Set();
+        });
+
+        const mod = await import("./pw-tools-core.snapshot.js");
+        const blocker = mod.storeAriaSnapshotRefsViaPlaywright({
+          cdpUrl: "http://127.0.0.1:9222",
+          targetId: "tab-1",
+          page: page as never,
+          nodes: [{ ref: "ax1", role: "button", name: "raw", depth: 0 }],
+        });
+        await vi.waitFor(() => expect(markBackendDomRefsOnPage).toHaveBeenCalledOnce());
+
+        const pending =
+          kind === "ai"
+            ? mod.snapshotAiViaPlaywright({
+                cdpUrl: "http://127.0.0.1:9222",
+                targetId: "tab-1",
+                timeoutMs: 500,
+              })
+            : mod.snapshotRoleViaPlaywright({
+                cdpUrl: "http://127.0.0.1:9222",
+                targetId: "tab-1",
+                refsMode: "aria",
+                timeoutMs: 500,
+              });
+        void pending.catch(() => {});
+        await vi.waitFor(() => expect(page.ariaSnapshot).toHaveBeenCalledOnce());
+
+        await vi.advanceTimersByTimeAsync(500);
+
+        await expect(pending).rejects.toThrow(
+          new RegExp(`${kind === "ai" ? "AI" : "Role"} snapshot.*timed out after 500ms`),
+        );
+        releaseMarker();
+        await blocker;
+        await Promise.resolve();
+        expect(storeRoleRefsForTarget).toHaveBeenCalledTimes(1);
+        expect(storeRoleRefsForTarget).toHaveBeenLastCalledWith(
+          expect.objectContaining({ refs: { ax1: { role: "button", name: "raw" } } }),
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each(["ai", "role"] as const)(
+    "rejects queued %s refs after their document navigates",
+    async (kind) => {
+      const mainFrame = { id: "main-frame" };
+      const handlers = new Map<string, (frame: unknown) => void>();
+      const page = {
+        ariaSnapshot: vi.fn(async () => '- button "Queued" [ref=e2]'),
+        mainFrame: () => mainFrame,
+        on: vi.fn((event: string, handler: (frame: unknown) => void) => {
+          handlers.set(event, handler);
+        }),
+        off: vi.fn(),
+      };
+      let releaseMarker!: () => void;
+      const markerGate = new Promise<void>((resolve) => {
+        releaseMarker = resolve;
+      });
+      getPageForTargetId.mockResolvedValue(page);
+      markBackendDomRefsOnPage.mockImplementationOnce(async () => {
+        await markerGate;
+        return new Set();
+      });
+
+      const mod = await import("./pw-tools-core.snapshot.js");
+      const blocker = mod.storeAriaSnapshotRefsViaPlaywright({
+        cdpUrl: "http://127.0.0.1:9222",
+        targetId: "tab-1",
+        page: page as never,
+        nodes: [{ ref: "ax1", role: "button", name: "raw", depth: 0 }],
+      });
+      await vi.waitFor(() => expect(markBackendDomRefsOnPage).toHaveBeenCalledOnce());
+
+      const pending =
+        kind === "ai"
+          ? mod.snapshotAiViaPlaywright({
+              cdpUrl: "http://127.0.0.1:9222",
+              targetId: "tab-1",
+            })
+          : mod.snapshotRoleViaPlaywright({
+              cdpUrl: "http://127.0.0.1:9222",
+              targetId: "tab-1",
+              refsMode: "aria",
+            });
+      await vi.waitFor(() => expect(page.ariaSnapshot).toHaveBeenCalledOnce());
+      handlers.get("framenavigated")?.(mainFrame);
+      releaseMarker();
+      await blocker;
+
+      await expect(pending).rejects.toThrow(
+        "Frame changed while its browser snapshot was being captured",
+      );
+      expect(storeRoleRefsForTarget).toHaveBeenCalledTimes(1);
+      expect(storeRoleRefsForTarget).toHaveBeenLastCalledWith(
+        expect.objectContaining({ refs: { ax1: { role: "button", name: "raw" } } }),
+      );
+    },
+  );
+
+  it("rejects raw refs when navigation occurs during marker publication", async () => {
+    const mainFrame = { id: "main-frame" };
+    const handlers = new Map<string, (frame: unknown) => void>();
+    const page = {
+      on: vi.fn((event: string, handler: (frame: unknown) => void) => {
+        handlers.set(event, handler);
+      }),
+      off: vi.fn(),
+    };
+    let releaseMarker!: () => void;
+    const markerGate = new Promise<void>((resolve) => {
+      releaseMarker = resolve;
+    });
+    getPageForTargetId.mockResolvedValue(page);
+    withPageScopedCdpClient.mockResolvedValue({ nodes: [{ snapshot: "raw" }] });
+    formatAriaSnapshot.mockReturnValue([{ ref: "ax1", role: "button", name: "raw" }]);
+    markBackendDomRefsOnPage.mockImplementationOnce(async () => {
+      await markerGate;
+      return new Set();
+    });
+
+    const mod = await import("./pw-tools-core.snapshot.js");
+    const pending = mod.snapshotAriaViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+    });
+    await vi.waitFor(() => expect(markBackendDomRefsOnPage).toHaveBeenCalledOnce());
+    handlers.get("framenavigated")?.(mainFrame);
+    releaseMarker();
+
+    await expect(pending).rejects.toThrow(
+      "Frame changed while its browser snapshot was being captured",
+    );
+    expect(storeRoleRefsForTarget).not.toHaveBeenCalled();
+  });
+
   it("does not wedge a retry when an aborted marker write never returns", async () => {
-    const page = { id: "page-1" };
+    const page = makeSnapshotPage();
     const controller = new AbortController();
     let collectCount = 0;
     withPageScopedCdpClient.mockImplementation(async () => ({
@@ -545,7 +706,7 @@ describe("pw-tools-core aria snapshot storage", () => {
   });
 
   it("invalidates old refs before a partially written marker publication aborts", async () => {
-    const page = { id: "page-1" };
+    const page = makeSnapshotPage();
     const controller = new AbortController();
     getPageForTargetId.mockResolvedValue(page);
     markBackendDomRefsOnPage.mockImplementationOnce(async () => {
@@ -610,7 +771,7 @@ describe("pw-tools-core aria snapshot storage", () => {
   });
 
   it("uses the default aria node limit for non-finite limits", async () => {
-    const page = { id: "page-1" };
+    const page = makeSnapshotPage();
     const rawNodes = [{ nodeId: "1" }];
     const formattedNodes = [{ ref: "ax1", role: "document", name: "", depth: 0 }];
 
@@ -884,7 +1045,7 @@ describe("pw-tools-core aria snapshot storage", () => {
   });
 
   it("stores role fallback metadata when backend markers are unavailable", async () => {
-    const page = { id: "page-1" };
+    const page = makeSnapshotPage();
     const mod = await import("./pw-tools-core.snapshot.js");
 
     getPageForTargetId.mockResolvedValue(page);

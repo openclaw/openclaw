@@ -764,6 +764,13 @@ export class ExtensionRelayBridge {
       this.respondError(client, request, `Session not found: ${sessionId}`, -32001);
       return;
     }
+    if (auxiliary && request.method === "Runtime.runIfWaitingForDebugger") {
+      // Playwright sends this best-effort preflight before Target.detachFromTarget.
+      // The relay owns the auxiliary session, so a stalled renderer must not
+      // prevent cancellation from reaching the real chrome.debugger attachment.
+      this.respond(client, request, {});
+      return;
+    }
     const route = this.tabBySessionId(sessionId);
     if (!route) {
       this.respondError(client, request, `Session not found: ${sessionId}`, -32001);

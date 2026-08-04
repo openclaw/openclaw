@@ -1098,6 +1098,8 @@ describe("pw-tools-core browser SSRF guards", () => {
 
   it("re-checks current page URL before aria snapshots", async () => {
     pageState.page = {
+      on: vi.fn(),
+      off: vi.fn(),
       url: vi.fn(() => "https://example.com"),
     };
 

@@ -526,6 +526,8 @@ export function registerBrowserAgentSnapshotRoutes(
             const snap = await pw.snapshotRoleViaPlaywright({
               cdpUrl,
               targetId: tab.targetId,
+              timeoutMs,
+              signal,
               ssrfPolicy: ctx.state().resolved.ssrfPolicy,
             });
             const labeled = await pw.screenshotWithLabelsViaPlaywright({
@@ -783,9 +785,6 @@ export function registerBrowserAgentSnapshotRoutes(
             });
           }
           const readDocumentIdentity = async (): Promise<string | undefined> => {
-            if (!deltaFamily) {
-              return undefined;
-            }
             const playwrightIdentity = readPlaywrightDocumentIdentity
               ? await readPlaywrightDocumentIdentity({
                   cdpUrl: profileCtx.profile.cdpUrl,
@@ -802,12 +801,10 @@ export function registerBrowserAgentSnapshotRoutes(
           };
           const initialDocumentIdentity = await readDocumentIdentity();
           const deltaState = createDeltaState(initialDocumentIdentity);
+          const isDocumentIdentityCurrent = async () =>
+            !initialDocumentIdentity || (await readDocumentIdentity()) === initialDocumentIdentity;
           const assertDocumentIdentityUnchanged = async () => {
-            if (!initialDocumentIdentity) {
-              return;
-            }
-            const finalDocumentIdentity = await readDocumentIdentity();
-            if (finalDocumentIdentity !== initialDocumentIdentity) {
+            if (!(await isDocumentIdentityCurrent())) {
               throw new Error(
                 "Frame changed while its browser snapshot was being captured; retry.",
               );
@@ -820,6 +817,7 @@ export function registerBrowserAgentSnapshotRoutes(
               selector: plan.selectorValue,
               frameSelector: plan.frameSelectorValue,
               refsMode: plan.refsMode,
+              signal,
               ssrfPolicy: ctx.state().resolved.ssrfPolicy,
               urls: plan.urls,
               timeoutMs: plan.timeoutMs,
@@ -870,6 +868,7 @@ export function registerBrowserAgentSnapshotRoutes(
                 ? await pw.snapshotAiViaPlaywright({
                     cdpUrl: profileCtx.profile.cdpUrl,
                     targetId: tab.targetId,
+                    signal,
                     ssrfPolicy: ctx.state().resolved.ssrfPolicy,
                     urls: plan.urls,
                     timeoutMs: plan.timeoutMs,
@@ -1009,6 +1008,7 @@ export function registerBrowserAgentSnapshotRoutes(
                 targetId: tab.targetId,
                 nodes: resolved.nodes,
                 signal: AbortSignal.any([signal, refPublicationDeadline.signal]),
+                isDocumentCurrent: isDocumentIdentityCurrent,
               });
             } finally {
               clearTimeout(refPublicationTimer);
