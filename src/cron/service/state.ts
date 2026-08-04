@@ -251,6 +251,8 @@ type CronServiceDepsInternal = Omit<CronServiceDeps, "nowMs"> & {
 type CronRunAdmission = {
   active: number;
   waiters: Array<(release: (() => void) | null) => void>;
+  /** One bounded wake-up for scheduled work that found the pool saturated. */
+  capacityListener: (() => void) | null;
 };
 
 type QueuedCronRunReservation = {
@@ -269,6 +271,8 @@ export type CronServiceState = {
   durableNextRunAtMsByJobId: Map<string, number | undefined>;
   timer: NodeJS.Timeout | null;
   running: boolean;
+  /** Number of timer batches currently executing admitted scheduled work. */
+  activeTimerTicks: number;
   stopped: boolean;
   schedulingPaused: boolean;
   schedulerStarted: boolean;
@@ -304,13 +308,14 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     durableNextRunAtMsByJobId: new Map<string, number | undefined>(),
     timer: null,
     running: false,
+    activeTimerTicks: 0,
     stopped: false,
     schedulingPaused: false,
     schedulerStarted: false,
     restartRecoveryPending: false,
     activeManualRunJobIds: new Set<string>(),
     manualSetupTimeoutNotified: false,
-    runAdmission: { active: 0, waiters: [] },
+    runAdmission: { active: 0, waiters: [], capacityListener: null },
     queuedRunReservationsByJobId: new Map<string, QueuedCronRunReservation>(),
     op: Promise.resolve(),
     warnedDisabled: false,

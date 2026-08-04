@@ -195,7 +195,7 @@ describe("cron service run admission", () => {
         await realSave(storePath, nextStore, opts);
         if (
           !reservationsPersisted &&
-          nextStore.jobs.every((job) => job.state.queuedAtMs === dueAt)
+          nextStore.jobs.filter((job) => job.state.queuedAtMs === dueAt).length === 2
         ) {
           reservationsPersisted = true;
           now = dueAt + 1;
@@ -998,7 +998,7 @@ describe("cron service run admission", () => {
     await activeRun;
   });
 
-  it("skips a scheduled reservation rescheduled while it waits for admission", async () => {
+  it("leaves saturated scheduled work unreserved so it can be rescheduled", async () => {
     const store = opsRegressionFixtures.makeStorePath();
     const dueAt = Date.parse("2026-02-06T10:05:08.000Z");
     const activeJob = createDueIsolatedJob({
@@ -1035,18 +1035,17 @@ describe("cron service run admission", () => {
 
     const activeRun = run(state, activeJob.id, "force");
     await activeStarted.promise;
-    const timerRun = onTimer(state);
-    await vi.waitFor(() => {
-      expect(state.store?.jobs.find((job) => job.id === scheduledJob.id)?.state.queuedAtMs).toBe(
-        dueAt,
-      );
-    });
+    await onTimer(state);
+    expect(
+      state.store?.jobs.find((job) => job.id === scheduledJob.id)?.state.queuedAtMs,
+    ).toBeUndefined();
+    expect(state.runAdmission.waiters).toHaveLength(0);
     await update(state, scheduledJob.id, {
       schedule: { kind: "at", at: new Date(dueAt + 3_600_000).toISOString() },
     });
 
     releaseActive.resolve({ status: "ok", summary: "active" });
-    await Promise.all([activeRun, timerRun]);
+    await activeRun;
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
     expect(
       state.store?.jobs.find((job) => job.id === scheduledJob.id)?.state.runningAtMs,
