@@ -102,7 +102,12 @@ const GATEWAY_ACTIONS = ["config.get", "config.schema.lookup"] as const;
 const GatewayToolSchema = Type.Object({
   action: stringEnum(GATEWAY_ACTIONS),
   ...gatewayCallOptionSchemaProperties(),
-  path: Type.Optional(Type.String()),
+  path: Type.Optional(
+    Type.String({
+      description:
+        "Required for config.schema.lookup. Optional for config.get to request a narrower subtree.",
+    }),
+  ),
 });
 
 export function createGatewayTool(): AnyAgentTool {
