@@ -218,6 +218,53 @@ describe("dreaming markdown storage", () => {
     expect(content.endsWith("<!-- openclaw:dreaming:light:end -->\n")).toBe(true);
   });
 
+  it("preserves bare managed markers without the heading in oversized files", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
+    const inlinePath = path.join(workspaceDir, "memory", "2026-04-05.md");
+    await fs.mkdir(path.dirname(inlinePath), { recursive: true });
+    await fs.writeFile(
+      inlinePath,
+      [
+        "# Daily Memory",
+        "",
+        "A".repeat(MEMORY_DREAMING_MARKDOWN_MAX_BYTES),
+        "",
+        "<!-- openclaw:dreaming:light:start -->",
+        "- User-owned bare block.",
+        "<!-- openclaw:dreaming:light:end -->",
+        "",
+        "## Light Sleep",
+        "<!-- openclaw:dreaming:light:start -->",
+        "- Old candidate",
+        "<!-- openclaw:dreaming:light:end -->",
+        "",
+        "Tail stays.",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    await writeDailyDreamingPhaseBlock({
+      workspaceDir,
+      phase: "light",
+      bodyLines: ["- Candidate: bare marker parity update"],
+      nowMs,
+      timezone,
+      storage: {
+        mode: "inline",
+        separateReports: false,
+      },
+    });
+
+    const content = await fs.readFile(inlinePath, "utf-8");
+    expect(content).toContain("- User-owned bare block.");
+    expect(content).toContain("Tail stays.");
+    expect(content).toContain("- Candidate: bare marker parity update");
+    expect(content).not.toContain("- Old candidate");
+    expect(content.match(/<!-- openclaw:dreaming:light:start -->/g)).toHaveLength(2);
+    expect(content.match(/<!-- openclaw:dreaming:light:end -->/g)).toHaveLength(2);
+  });
+
   it("appends a daily block after an oversized dangling start marker", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
     const inlinePath = path.join(workspaceDir, "memory", "2026-04-05.md");
@@ -256,6 +303,37 @@ describe("dreaming markdown storage", () => {
     expect(content.match(/<!-- openclaw:dreaming:light:start -->/g)).toHaveLength(2);
     expect(content.match(/<!-- openclaw:dreaming:light:end -->/g)).toHaveLength(1);
     expect(content.endsWith("<!-- openclaw:dreaming:light:end -->\n")).toBe(true);
+  });
+
+  it("keeps generic diary writers working for oversized DREAMS.md files", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
+    const dreamsPath = path.join(workspaceDir, "DREAMS.md");
+    await fs.writeFile(
+      dreamsPath,
+      [
+        "# Dream Diary",
+        "",
+        "C".repeat(MEMORY_DREAMING_MARKDOWN_MAX_BYTES),
+        "",
+        "Existing diary entry.",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const result = await updateDreamsFile({
+      workspaceDir,
+      updater: async (existing) => ({
+        content: `${existing}\n\nGeneric writer entry stays.`,
+        result: { written: 1 },
+      }),
+    });
+
+    const content = await fs.readFile(dreamsPath, "utf-8");
+    expect(result.written).toBe(1);
+    expect(content).toContain("C".repeat(1024));
+    expect(content).toContain("Existing diary entry.");
+    expect(content).toContain("Generic writer entry stays.");
   });
 
   it("rejects an oversized daily file swapped to a symlink before streaming", async () => {

@@ -39,17 +39,6 @@ type ManagedMarkdownUpdateParams = {
 
 const dreamsFileLocks = resolveGlobalMap<string, DreamsFileLockEntry>(DREAMS_FILE_LOCKS_KEY);
 
-function rethrowDreamingMarkdownReadError(err: unknown, filePath: string): never {
-  if (extractErrorCode(err) === "too-large") {
-    throw new Error(
-      `Dreaming left ${filePath} unchanged because it exceeds ${MEMORY_DREAMING_MARKDOWN_MAX_BYTES} bytes. ` +
-        "Archive or split the file below 16 MiB, then retry.",
-      { cause: err },
-    );
-  }
-  throw err;
-}
-
 export async function resolveDreamsPath(workspaceDir: string): Promise<string> {
   for (const name of DREAMS_FILENAMES) {
     const target = path.join(workspaceDir, name);
@@ -83,17 +72,12 @@ function isEmptyDreamsReadError(err: unknown): boolean {
 
 export async function readDreamsFile(dreamsPath: string): Promise<string> {
   try {
-    return (
-      await readRegularFile({
-        filePath: dreamsPath,
-        maxBytes: MEMORY_DREAMING_MARKDOWN_MAX_BYTES,
-      })
-    ).buffer.toString("utf-8");
+    return (await readRegularFile({ filePath: dreamsPath })).buffer.toString("utf-8");
   } catch (err) {
     if (isEmptyDreamsReadError(err)) {
       return "";
     }
-    return rethrowDreamingMarkdownReadError(err, dreamsPath);
+    throw err;
   }
 }
 
@@ -274,6 +258,16 @@ async function replaceManagedMarkdownBlockStreaming(
         }
 
         const prefix = current.slice(0, startIndex);
+        if (!headingSuffixPattern.test(prefix)) {
+          // The shared SDK helper only replaces a managed block when the
+          // configured heading directly precedes the start marker. A bare
+          // marker pair is user content, so stream it through verbatim and
+          // keep scanning for a heading-anchored block.
+          const bareEnd = startIndex + params.startMarker.length;
+          await writeChunk(current.slice(0, bareEnd));
+          current = current.slice(bareEnd);
+          continue;
+        }
         const trimmedPrefix = prefix.replace(headingSuffixPattern, "");
         withheldHeadingSuffix = prefix.slice(trimmedPrefix.length);
         await writeChunk(trimmedPrefix);
