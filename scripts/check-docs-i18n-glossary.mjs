@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 // Validates docs i18n glossary terms against configured usage rules.
-import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { runManagedCommand } from "./lib/managed-child-process.mjs";
 
 const ROOT = process.cwd();
 const GLOSSARY_PATH = path.join(ROOT, "docs", ".i18n", "glossary.zh-CN.json");
@@ -83,83 +83,46 @@ export function createGitRunner(options = {}) {
   const killGraceMs = options.killGraceMs ?? GIT_KILL_GRACE_MS;
   const cwd = options.cwd ?? ROOT;
   const env = options.env ?? process.env;
-  return (args) =>
-    new Promise((resolve, reject) => {
-      const child = spawn("git", args, {
+  return async (args) => {
+    let stdout = "";
+    let stderr = "";
+    let status;
+    try {
+      status = await runManagedCommand({
+        bin: "git",
+        args,
         cwd,
         env,
         stdio: ["ignore", "pipe", "pipe"],
+        timeoutMs,
+        timeoutSignal: "SIGTERM",
+        timeoutGraceMs: killGraceMs,
+        onReady: (child) => {
+          child.stdout?.setEncoding("utf8");
+          child.stdout?.on("data", (chunk) => {
+            stdout += chunk;
+          });
+          child.stderr?.setEncoding("utf8");
+          child.stderr?.on("data", (chunk) => {
+            stderr += chunk;
+          });
+        },
       });
-      let stdout = "";
-      let stderr = "";
-      let timedOut = false;
-      let settled = false;
-      let killTimer;
-
-      child.stdout.setEncoding("utf8");
-      child.stdout.on("data", (chunk) => {
-        stdout += chunk;
-      });
-      child.stderr.setEncoding("utf8");
-      child.stderr.on("data", (chunk) => {
-        stderr += chunk;
-      });
-
-      const timeoutTimer = setTimeout(() => {
-        timedOut = true;
-        child.kill("SIGTERM");
-        killTimer = setTimeout(() => {
-          child.kill("SIGKILL");
-        }, killGraceMs);
-      }, timeoutMs);
-
-      const finish = (callback) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        clearTimeout(timeoutTimer);
-        clearTimeout(killTimer);
-        callback();
-      };
-
-      child.once("error", (error) => {
-        finish(() => reject(createGitError(args, error, timeoutMs)));
-      });
-      child.once("close", (code, signal) => {
-        finish(() => {
-          if (timedOut) {
-            reject(
-              createGitError(
-                args,
-                Object.assign(new Error("git timed out"), {
-                  code: "ETIMEDOUT",
-                  signal,
-                  stderr,
-                }),
-                timeoutMs,
-              ),
-            );
-            return;
-          }
-          if (code !== 0) {
-            reject(
-              createGitError(
-                args,
-                Object.assign(new Error(`git exited with code ${code}`), {
-                  code,
-                  signal,
-                  stderr,
-                }),
-                timeoutMs,
-              ),
-            );
-            return;
-          }
-          resolve(stdout.trim());
-        });
-      });
-    });
+    } catch (error) {
+      throw createGitError(args, error, timeoutMs);
+    }
+    if (status !== 0) {
+      throw createGitError(
+        args,
+        Object.assign(new Error(`git exited with code ${status}`), {
+          code: status,
+          stderr,
+        }),
+        timeoutMs,
+      );
+    }
+    return stdout.trim();
+  };
 }
 
 const runGit = createGitRunner();
