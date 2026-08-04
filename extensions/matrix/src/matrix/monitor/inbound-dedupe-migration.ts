@@ -25,6 +25,7 @@ import {
   runSqliteImmediateTransactionSync,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { isRecord } from "../../record-shared.js";
+import { classifyMatrixStateRootDirectory } from "../../storage-paths.js";
 import { normalizeMatrixStorageMetadata } from "../client/storage.js";
 import {
   buildMatrixInboundDedupeEventKey,
@@ -38,6 +39,7 @@ const LEGACY_MARKERS_NAMESPACE = "inbound-dedupe-migrations";
 const LEGACY_JSON_VERSION = 1;
 const MATRIX_PLUGIN_ID = "matrix";
 const MIGRATION_COMPLETION_NAMESPACE = "inbound-dedupe-migration-state";
+const MATRIX_SERVER_USER_DIRECTORY_PATTERN = /^.+__.+$/u;
 const MIGRATION_COMPLETION_KEY = "sqlite-json-to-claimable-v1";
 const STATE_DATABASE_RELATIVE_PATH = path.join("state", "openclaw.sqlite");
 const STORAGE_META_FILENAME = "storage-meta.json";
@@ -137,7 +139,7 @@ export async function collectMatrixInboundDedupeSources(
   const sqliteRoots = new Set<string>();
   const jsonRoots = new Set<string>();
   const warnings: string[] = [];
-  async function visit(dir: string, allowMissing = false): Promise<void> {
+  async function visit(dir: string, depth: number, allowMissing = false): Promise<void> {
     let entries: Dirent[];
     try {
       entries = await fs.readdir(dir, { withFileTypes: true });
@@ -148,23 +150,42 @@ export async function collectMatrixInboundDedupeSources(
       warnings.push(`Failed scanning Matrix inbound dedupe sources under ${dir}: ${String(err)}`);
       return;
     }
+    const isStorageRoot = depth === 0 || depth === 2 || depth === 4;
     for (const entry of entries) {
       const entryPath = path.join(dir, entry.name);
       if (entry.isFile()) {
-        // Legacy per-root dedupe rows live in `<storageRoot>/state/openclaw.sqlite`.
-        if (entry.name === "openclaw.sqlite" && path.basename(dir) === "state") {
-          sqliteRoots.add(path.dirname(dir));
-        } else if (entry.name === MATRIX_LEGACY_INBOUND_DEDUPE_FILENAME) {
+        if (isStorageRoot && entry.name === MATRIX_LEGACY_INBOUND_DEDUPE_FILENAME) {
           jsonRoots.add(dir);
+        } else if (depth === 5 && entry.name === "openclaw.sqlite") {
+          sqliteRoots.add(path.dirname(dir));
         }
         continue;
       }
-      if (entry.isDirectory()) {
-        await visit(entryPath);
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      const directoryKind = classifyMatrixStateRootDirectory(entry.name);
+      if (directoryKind === "archive") {
+        continue;
+      }
+      if (isStorageRoot && entry.name === "state") {
+        await visit(entryPath, 5);
+        continue;
+      }
+      // The source census is deliberately bounded to current canonical roots
+      // and the two flat legacy levels that shipped migrations still consume.
+      if (depth === 0 && entry.name === "accounts") {
+        await visit(entryPath, 1);
+      } else if (depth === 1) {
+        await visit(entryPath, 2);
+      } else if (depth === 2 && MATRIX_SERVER_USER_DIRECTORY_PATTERN.test(entry.name)) {
+        await visit(entryPath, 3);
+      } else if (depth === 3 && directoryKind === "active-token") {
+        await visit(entryPath, 4);
       }
     }
   }
-  await visit(matrixRoot, true);
+  await visit(matrixRoot, 0, true);
   const matrixRootResolved = path.resolve(matrixRoot);
   const isAccountRoot = (root: string) => path.resolve(root) !== matrixRootResolved;
   const roots = {
