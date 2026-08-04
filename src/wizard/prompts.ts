@@ -57,12 +57,24 @@ type WizardDeviceCodeParams = {
   message?: string;
 };
 
+export type WizardQrCodeParams = {
+  title: string;
+  message: string;
+  text: string;
+  /** Absolute Unix-millisecond deadline supplied by the QR credential owner. */
+  expiresAtMs?: number;
+  /** Owner lifecycle that dismisses the QR after the underlying operation settles. */
+  dismissed?: Promise<unknown>;
+};
+
 export type WizardPrompter = {
   intro: (title: string) => Promise<void>;
   outro: (message: string) => Promise<void>;
   note: (message: string, title?: string) => Promise<void>;
   /** Present a browser device code as structured UI when the client supports it. */
   deviceCode?: (params: WizardDeviceCodeParams) => Promise<void>;
+  /** Optional owner-controlled QR presentation; core only transports declared payloads. */
+  qrCode?: (params: WizardQrCodeParams) => Promise<boolean>;
   plain?: (message: string) => Promise<void>;
   select: <T>(params: WizardSelectParams<T>) => Promise<T>;
   multiselect: <T>(params: WizardMultiSelectParams<T>) => Promise<T[]>;

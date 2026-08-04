@@ -87,6 +87,38 @@ struct SystemAgentChatQuestionTests {
         }
     }
 
+    @Test
+    func `valid QR wizard step decodes and round trips`() throws {
+        let json =
+            """
+            {
+              "sessionId": "test-session",
+              "reply": "Scan the code.",
+              "action": "none",
+              "step": {
+                "id": "setup-qr",
+                "type": "qr",
+                "title": "Scan QR code",
+                "message": "Scan, then continue.",
+                "qrDataUrl": "data:image/png;base64,AAAA",
+                "expiresInMs": 1,
+                "executor": "client"
+              }
+            }
+            """
+        let decoded = try JSONDecoder().decode(SystemAgentChatResult.self, from: Data(json.utf8))
+        let step = try #require(decoded.step)
+
+        #expect(step.id == "setup-qr")
+        #expect(step.qrdataurl == "data:image/png;base64,AAAA")
+        #expect(step.expiresinms == 1)
+
+        let roundTripped = try JSONDecoder().decode(
+            SystemAgentChatResult.self,
+            from: JSONEncoder().encode(decoded))
+        #expect(roundTripped.step?.qrdataurl == step.qrdataurl)
+    }
+
     private static func parse(_ questionJSON: String) throws -> SystemAgentChatQuestion? {
         let result = try JSONDecoder().decode(
             SystemAgentChatResult.self,
