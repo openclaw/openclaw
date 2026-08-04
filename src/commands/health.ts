@@ -525,5 +525,5 @@ export async function healthCommand(
 
 async function readBestEffortHealthConfig(): Promise<OpenClawConfig> {
   const { readBestEffortConfig } = await loadConfigRuntime();
-  return await readBestEffortConfig();
+  return await readBestEffortConfig({ observe: false });
 }

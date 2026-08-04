@@ -360,6 +360,7 @@ export async function modelsStatusCommand(
   const configPath = createConfigIO().configPath;
   const cfg = await loadModelsConfig({
     commandName: "models status",
+    observe: false,
     runtime,
     skipPluginValidation: opts.probe !== true,
   });

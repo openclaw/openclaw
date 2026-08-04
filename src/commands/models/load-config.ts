@@ -19,12 +19,14 @@ type LoadedModelsConfig = {
 /** Loads config, resolves model command secrets, and preserves the source snapshot. */
 export async function loadModelsConfigWithSource(params: {
   commandName: string;
+  observe?: boolean;
   runtime?: RuntimeEnv;
   skipPluginValidation?: boolean;
 }): Promise<LoadedModelsConfig> {
-  const runtimeConfig = getRuntimeConfig(
-    params.skipPluginValidation ? { skipPluginValidation: true } : undefined,
-  );
+  const runtimeConfig = getRuntimeConfig({
+    ...(params.observe === false ? { observe: false } : {}),
+    ...(params.skipPluginValidation ? { skipPluginValidation: true } : {}),
+  });
   const pinnedSourceConfig = getRuntimeConfigSourceSnapshot();
   const sourceConfig = pinnedSourceConfig ?? runtimeConfig;
   const { resolvedConfig, diagnostics } = await resolveCommandConfigWithSecrets({
@@ -46,6 +48,7 @@ export async function loadModelsConfigWithSource(params: {
 /** Loads the resolved model command config when callers do not need source metadata. */
 export async function loadModelsConfig(params: {
   commandName: string;
+  observe?: boolean;
   runtime?: RuntimeEnv;
   skipPluginValidation?: boolean;
 }): Promise<OpenClawConfig> {

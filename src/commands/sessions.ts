@@ -333,7 +333,7 @@ export async function sessionsCommand(
   runtime: RuntimeEnv,
 ) {
   const aggregateAgents = opts.allAgents === true;
-  const cfg = getRuntimeConfig();
+  const cfg = getRuntimeConfig({ observe: false });
   const displayDefaults = resolveSessionDisplayDefaults(cfg);
   const configuredContextTokens = cfg.agents?.defaults?.contextTokens;
   const configContextTokens =

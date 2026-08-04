@@ -19,7 +19,7 @@ export async function requireValidConfigFileSnapshot(runtime: RuntimeEnv) {
 /** Load the current runtime config and return null after reporting validation failures. */
 export async function requireValidConfig(
   runtime: RuntimeEnv,
-  opts?: { skipPluginValidation?: boolean },
+  opts?: { observe?: boolean; skipPluginValidation?: boolean },
 ): Promise<OpenClawConfig | null> {
   return await requireValidConfigSnapshot(runtime, opts);
 }

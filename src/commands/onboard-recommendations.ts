@@ -28,7 +28,7 @@ type BootstrapRecommendation = {
 };
 
 function createDefaultOnboardingRecommendationsStore(): OnboardingRecommendationsStore {
-  const cfg = getRuntimeConfig();
+  const cfg = getRuntimeConfig({ observe: false });
   const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
   return createOnboardingRecommendationsStore({ workspaceDir });
 }

@@ -181,7 +181,10 @@ describe("channels list", () => {
     expect(mocks.listReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(config, {
       metadataSnapshot: mocks.metadataSnapshot,
     });
-    expect(mocks.readConfigFileSnapshot).toHaveBeenCalledWith({ skipPluginValidation: true });
+    expect(mocks.readConfigFileSnapshot).toHaveBeenCalledWith({
+      observe: false,
+      skipPluginValidation: true,
+    });
     const payload = JSON.parse(loggedText(runtime)) as {
       chat?: Record<string, { accounts: string[]; installed: boolean; origin: string }>;
     };

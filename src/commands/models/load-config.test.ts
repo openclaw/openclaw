@@ -97,6 +97,15 @@ describe("models load-config", () => {
     expect(mocks.getRuntimeConfig).toHaveBeenCalledWith({ skipPluginValidation: true });
   });
 
+  it("forwards read-only observation mode to runtime config loading", async () => {
+    const sourceConfig = { models: { providers: {} } };
+    mockResolvedConfigFlow({ sourceConfig, diagnostics: [] });
+
+    await loadModelsConfig({ commandName: "models list", observe: false });
+
+    expect(mocks.getRuntimeConfig).toHaveBeenCalledWith({ observe: false });
+  });
+
   it("does not reread config when no source snapshot is pinned", async () => {
     mocks.getRuntimeConfig.mockReturnValue(runtimeConfig);
     mocks.getRuntimeConfigSourceSnapshot.mockReturnValue(null);

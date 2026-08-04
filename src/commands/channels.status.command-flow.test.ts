@@ -10,7 +10,7 @@ const resolveDefaultAccountId = () => DEFAULT_ACCOUNT_ID;
 const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
   resolveCommandConfigWithSecrets: vi.fn(),
-  readConfigFileSnapshot: vi.fn(async () => ({ path: "/tmp/openclaw.json" })),
+  readConfigFileSnapshot: vi.fn(async (_options?: unknown) => ({ path: "/tmp/openclaw.json" })),
   requireValidConfigSnapshot: vi.fn(),
   listChannelPlugins: vi.fn(),
   listConfiguredAnnounceChannelIdsForConfig: vi.fn((_params: unknown) => ["discord"]),
@@ -35,7 +35,7 @@ vi.mock("../cli/command-config-resolution.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
-  readConfigFileSnapshot: () => mocks.readConfigFileSnapshot(),
+  readConfigFileSnapshot: (options?: unknown) => mocks.readConfigFileSnapshot(options),
 }));
 
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
@@ -62,7 +62,8 @@ vi.mock("../plugins/official-external-plugin-repair-hints.js", () => ({
 }));
 
 vi.mock("./channels/shared.js", () => ({
-  requireValidConfigSnapshot: (runtime: unknown) => mocks.requireValidConfigSnapshot(runtime),
+  requireValidConfigSnapshot: (runtime: unknown, options?: unknown) =>
+    mocks.requireValidConfigSnapshot(runtime, options),
   formatChannelAccountLabel: ({
     channel,
     accountId,
@@ -255,6 +256,8 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     await channelsStatusCommand({ probe: false }, runtime as never);
 
     expect(errors.join("\n")).toContain("Gateway not reachable");
+    expect(mocks.requireValidConfigSnapshot).toHaveBeenCalledWith(runtime, { observe: false });
+    expect(mocks.readConfigFileSnapshot).toHaveBeenCalledWith({ observe: false });
     expect(mocks.resolveCommandConfigWithSecrets).toHaveBeenCalledOnce();
     const configResolutionRequest = mocks.resolveCommandConfigWithSecrets.mock.calls[0]?.[0];
     expect(configResolutionRequest?.commandName).toBe("channels status");

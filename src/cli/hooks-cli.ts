@@ -75,7 +75,7 @@ function buildHooksReport(config: OpenClawConfig): HookStatusReport {
 }
 
 async function loadHooksReport(): Promise<HookStatusReport> {
-  const config = getRuntimeConfig({ skipPluginValidation: true });
+  const config = getRuntimeConfig({ observe: false, skipPluginValidation: true });
   try {
     const { callGateway } = await import("../gateway/call.js");
     return await callGateway<HookStatusReport>({

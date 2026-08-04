@@ -148,7 +148,10 @@ export async function channelsListCommand(
   opts: ChannelsListOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const cfg = await requireValidConfig(runtime, { skipPluginValidation: true });
+  const cfg = await requireValidConfig(runtime, {
+    observe: false,
+    skipPluginValidation: true,
+  });
   if (!cfg) {
     return;
   }

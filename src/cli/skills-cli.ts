@@ -137,7 +137,9 @@ function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions): {
 } {
   // Prefer explicit --agent, then infer from cwd, then fall back to configured default agent.
   const config = getRuntimeConfig(
-    options?.skipPluginValidation ? { skipPluginValidation: true } : undefined,
+    options?.skipPluginValidation
+      ? { observe: false, skipPluginValidation: true }
+      : { observe: false },
   );
   const explicitAgentId = normalizeOptionalString(options?.agentId);
   const inferredAgentId = explicitAgentId
@@ -229,7 +231,7 @@ function resolveClawHubTargetWorkspace(
     return undefined;
   }
   if (opts.global) {
-    return { config: getRuntimeConfig(), workspaceDir: CONFIG_DIR };
+    return { config: getRuntimeConfig({ observe: false }), workspaceDir: CONFIG_DIR };
   }
   return resolveSkillsWorkspace({ agentId });
 }
@@ -404,7 +406,7 @@ async function loadGatewaySkillCuratorStatus(
 }
 
 async function loadSkillCuratorStatus(): Promise<SkillCuratorStatus> {
-  const config = getRuntimeConfig();
+  const config = getRuntimeConfig({ observe: false });
   return (await loadGatewaySkillCuratorStatus(config)) ?? getSkillCuratorStatus();
 }
 

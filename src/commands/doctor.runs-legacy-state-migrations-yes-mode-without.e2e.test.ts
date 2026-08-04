@@ -76,6 +76,23 @@ describe("doctor command", () => {
     expect(confirm).not.toHaveBeenCalled();
   }, 30_000);
 
+  it("does not run legacy state migrations in inspection mode", async () => {
+    const {
+      doctorCommand: doctorCommandLocal,
+      runtime,
+      runLegacyStateMigrations,
+    } = await arrangeLegacyStateMigrationTest();
+
+    await (
+      doctorCommandLocal as (runtime: unknown, opts: Record<string, unknown>) => Promise<void>
+    )(runtime, {});
+
+    expect(runLegacyStateMigrations).not.toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Migrate detected legacy state now?" }),
+    );
+  }, 30_000);
+
   it("refuses doctor repair mode in Nix before repair side effects", async () => {
     const previous = process.env.OPENCLAW_NIX_MODE;
     process.env.OPENCLAW_NIX_MODE = "1";
