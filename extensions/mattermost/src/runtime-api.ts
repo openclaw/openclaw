@@ -17,6 +17,7 @@ export {
   type ChatType,
   chunkTextForOutbound,
   clearHistoryEntriesIfEnabled,
+  type ContextVisibilityMode,
   createChannelHistoryWindow,
   createAccountStatusSink,
   createChannelPairingController,
