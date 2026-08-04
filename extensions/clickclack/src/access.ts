@@ -205,6 +205,12 @@ export async function resolveClickClackInboundAccess(params: {
     channelId: params.message.channel_id,
   });
   const isBotAuthor = params.message.author?.kind === "bot";
+  // The account's default allowFrom is wildcarded for human traffic. Bot
+  // admission is a separate opt-in boundary, so wildcard authorization must
+  // not implicitly trust every bot in the workspace.
+  const ingressAllowFrom = isBotAuthor
+    ? params.account.allowFrom.filter((entry) => normalizeClickClackUserId(entry) !== "*")
+    : params.account.allowFrom;
   const botMentionAllowed =
     !isBotAuthor ||
     effectiveBotPolicy.allowBots === true ||
@@ -261,7 +267,7 @@ export async function resolveClickClackInboundAccess(params: {
         ? (params.message.direct_conversation_id ?? params.message.author_id)
         : (params.message.channel_id ?? params.message.thread_root_id),
     },
-    allowFrom: params.account.allowFrom,
+    allowFrom: ingressAllowFrom,
     dmPolicy: "allowlist",
     groupPolicy: "allowlist",
     mentionFacts,

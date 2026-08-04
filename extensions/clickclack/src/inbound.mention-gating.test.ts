@@ -266,6 +266,22 @@ describe("ClickClack inbound mention gating", () => {
     });
   });
 
+  it("does not let bot opt-in bypass the wildcard human allowFrom default", async () => {
+    const runtime = createRuntime();
+    setClickClackRuntime(runtime);
+
+    await handleClickClackInbound({
+      account: createAgentAccount({ allowFrom: ["*"], allowBots: true }),
+      config: {} satisfies CoreConfig,
+      message: createMessage({
+        author_id: "usr_sender",
+        author: { ...createMessage().author, id: "usr_sender", kind: "bot", handle: "sender" },
+      }),
+    });
+
+    expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
+  });
+
   it("shares bot-loop scope across accounts and preserves ClickClack event time", async () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);

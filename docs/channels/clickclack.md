@@ -451,8 +451,10 @@ ClickClack ignores bot-authored messages by default. To opt in, set
 `allowBots: true` on the account. Set `allowBots: "mentions"` to admit bot
 messages in group channels only when they mention this bot; direct messages
 remain eligible without a mention. Bot messages still pass through
-`allowFrom`, so the sending bot must be explicitly allowed (or match `"*"`).
-Self-authored messages are always ignored.
+`allowFrom`, but bot authors must be explicitly listed by ID; the wildcard
+`allowFrom: ["*"]` default does not authorize bot-authored messages. The
+wildcard remains available for human traffic. Self-authored messages are
+always ignored.
 
 Accepted bot messages also pass through OpenClaw's shared bot-pair loop guard.
 Use `botLoopProtection` on the account or `channels.defaults.botLoopProtection`
@@ -530,6 +532,6 @@ OpenClaw only needs current `bot:write` for normal agent chat and command-menu s
 
 - `ClickClack is not configured for account "<id>"`: set `baseUrl`, `token` (for example via `CLICKCLACK_BOT_TOKEN`), and `workspace` for that account.
 - `ClickClack workspace not found: <value>`: set `workspace` to the workspace id, slug, or name returned by ClickClack.
-- No inbound replies: confirm the token has realtime read access and note that the bot ignores its own messages and messages from other bots.
+- No inbound replies: confirm the token has realtime read access. The bot always ignores its own messages; other bot messages are denied by default, and when `allowBots` is enabled the sender bot ID must also be listed explicitly in `allowFrom`.
 - Channel sends fail: verify the bot is a member of the workspace and has `bot:write`.
 - No command menu: confirm `commandMenu` is not `false`, the ClickClack server supports `PUT /api/bots/self/commands`, and the token has `commands:write`.
