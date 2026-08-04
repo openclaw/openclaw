@@ -49,7 +49,9 @@ export type MeetingSessionRuntimeMessages<TSpeechBlockedReason extends string> =
 };
 
 export type MeetingBrowserHealthRefreshOutcome = {
+  /** True when the current browser health was inspected and applied. */
   browserHealthChecked: boolean;
+  /** Whether the resulting manual action is fresh enough to expose to the caller. */
   manualActionIsAuthoritative: boolean;
 };
 

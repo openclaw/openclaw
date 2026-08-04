@@ -354,4 +354,98 @@ describe.each(cases)("$name meeting runtime probe parity", (testCase) => {
     });
     expect(refreshCaptionHealth).not.toHaveBeenCalled();
   });
+
+  it("refreshes a checked reused session when its manual action is explicitly non-authoritative", async () => {
+    const probes = createProbes();
+    const staleAction = {
+      reason: `${testCase.name.toLowerCase()}-stale-checked-action`,
+      message: "This cached action must not bypass caption verification.",
+    };
+    const session: Session = {
+      id: `${testCase.name.toLowerCase()}-stale-checked-action`,
+      chrome: {
+        ...testCase.session.chrome,
+        health: { manualAction: staleAction, transcriptLines: 0 },
+      },
+    };
+    const refreshCaptionHealth = vi.fn(async () => {
+      session.chrome!.health = { transcriptLines: 1 };
+      return { browserHealthChecked: true, manualActionIsAuthoritative: true };
+    });
+    const context = {
+      config: { defaultMode: "agent" as const, chrome: { joinTimeoutMs: 5 }, chromeNode: {} },
+      resolveAgentId: () => "main",
+      list: () => [session],
+      join: vi.fn(async () => ({
+        browserHealthChecked: true,
+        manualActionIsAuthoritative: false,
+        session,
+      })),
+      isReusable: () => true,
+      hasHealthHandle: () => false,
+      refreshHealth: vi.fn(),
+      refreshCaptionHealth,
+    };
+
+    await expect(
+      probes.testListening(context, {
+        url: "https://example.test/meeting",
+        mode: "transcribe",
+        timeoutMs: 5,
+      }),
+    ).resolves.toMatchObject({
+      createdSession: false,
+      listenTimedOut: false,
+      listenVerified: true,
+      manualAction: undefined,
+    });
+    expect(refreshCaptionHealth).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not promote an explicitly non-authoritative refresh action", async () => {
+    const probes = createProbes();
+    const staleAction = {
+      reason: `${testCase.name.toLowerCase()}-stale-refresh-action`,
+      message: "This action is still awaiting an authoritative refresh.",
+    };
+    const session = {
+      id: `${testCase.name.toLowerCase()}-stale-refresh-action`,
+      chrome: {
+        ...testCase.session.chrome,
+        health: { manualAction: staleAction },
+      },
+    } satisfies Session;
+    const refreshCaptionHealth = vi.fn(async () => ({
+      browserHealthChecked: true,
+      manualActionIsAuthoritative: false,
+    }));
+    const context = {
+      config: { defaultMode: "agent" as const, chrome: { joinTimeoutMs: 5 }, chromeNode: {} },
+      resolveAgentId: () => "main",
+      list: () => [session],
+      join: vi.fn(async () => ({
+        browserHealthChecked: false,
+        manualActionIsAuthoritative: false,
+        session,
+      })),
+      isReusable: () => true,
+      hasHealthHandle: () => false,
+      refreshHealth: vi.fn(),
+      refreshCaptionHealth,
+    };
+
+    await expect(
+      probes.testListening(context, {
+        url: "https://example.test/meeting",
+        mode: "transcribe",
+        timeoutMs: 5,
+      }),
+    ).resolves.toMatchObject({
+      createdSession: false,
+      listenTimedOut: true,
+      listenVerified: false,
+      manualAction: undefined,
+    });
+    expect(refreshCaptionHealth).toHaveBeenCalled();
+  });
 });

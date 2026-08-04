@@ -216,14 +216,19 @@ export function createMeetingRuntimeProbes<
     const reusedSession = existing?.id === result.session.id;
     const hasAuthoritativeManualAction =
       result.manualActionIsAuthoritative === true && health?.manualAction !== undefined;
+    const manualActionRequiresRecovery =
+      result.manualActionIsAuthoritative === false ||
+      (result.manualActionIsAuthoritative === undefined &&
+        reusedSession &&
+        result.browserHealthChecked === false);
     const shouldWait =
       options.shouldWaitForListening(result.session) &&
       !hasAuthoritativeManualAction &&
-      (health?.manualAction === undefined ||
-        // Omitted metadata is a legacy/unknown result; only an explicit false opts into recovery.
-        (reusedSession && result.browserHealthChecked === false));
+      (health?.manualAction === undefined || manualActionRequiresRecovery);
     let manualActionIsAuthoritative =
-      !shouldWait || (result.manualActionIsAuthoritative ?? result.browserHealthChecked !== false);
+      result.manualActionIsAuthoritative ??
+      // Omitted metadata preserves the legacy join contract. Explicit false is never promoted.
+      (!shouldWait || result.browserHealthChecked !== false);
     let listenVerified = advanced();
     if (shouldWait && !listenVerified) {
       const deadline =
@@ -276,9 +281,10 @@ export function createMeetingRuntimeProbes<
         if (advanced()) {
           listenVerified = true;
         }
-        if (refreshOutcome.browserHealthChecked || refreshOutcome.manualActionIsAuthoritative) {
-          manualActionIsAuthoritative = true;
-        }
+        manualActionIsAuthoritative =
+          refreshOutcome.manualActionIsAuthoritative ??
+          // Compatibility inference applies only when older refresh implementations omit it.
+          (refreshOutcome.browserHealthChecked ? true : manualActionIsAuthoritative);
         if (listenVerified || (manualActionIsAuthoritative && health?.manualAction)) {
           break;
         }
