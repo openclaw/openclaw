@@ -12,18 +12,15 @@ import type {
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
-import { MemoryAuditStore, type AuditEntry } from "./protocol/index.js";
+import { MemoryAuditStore } from "./protocol/index.js";
 import {
-  createReefAuditRetention,
-  pushReefAuditRetention,
-  reefAuditRetentionEntries,
-  REEF_AUDIT_RETAIN_COMPACT_BATCH,
-} from "./src/audit-retention.js";
+  countStoredReefAuditWindow,
+  streamLegacyReefAuditWindow,
+} from "./src/legacy-audit-import.js";
 import {
   REEF_AUDIT_HEAD_KEY,
   REEF_AUDIT_HEAD_MAX_ENTRIES,
   REEF_AUDIT_HEAD_NAMESPACE,
-  REEF_AUDIT_MAX_ENTRIES,
   REEF_AUDIT_NAMESPACE,
   REEF_AUDIT_STORE_MAX_ENTRIES,
   REEF_REPLAY_MAX_ENTRIES,
@@ -122,26 +119,6 @@ describe("Reef doctor journal capacity", () => {
     });
   });
 
-  it("keeps the audit retention buffer within the window plus one compact batch", () => {
-    const retention = createReefAuditRetention();
-    const entries: AuditEntry[] = [];
-    let maxBuffered = 0;
-    for (let index = 0; index < 60_000; index += 1) {
-      const entry = {
-        entryHash: `hash-${index}`,
-        prevHash: index === 0 ? "" : `hash-${index - 1}`,
-        event: { seq: index + 1, ts: 1, type: "one", payload: {} },
-      } as unknown as AuditEntry;
-      entries.push(entry);
-      pushReefAuditRetention(retention, entry);
-      maxBuffered = Math.max(maxBuffered, retention.entries.length);
-    }
-    expect(maxBuffered).toBeLessThanOrEqual(
-      REEF_AUDIT_MAX_ENTRIES + REEF_AUDIT_RETAIN_COMPACT_BATCH,
-    );
-    expect(reefAuditRetentionEntries(retention)).toEqual(entries.slice(-REEF_AUDIT_MAX_ENTRIES));
-  });
-
   it("migrates aggregate audit state beyond 64 MiB within the canonical window", async () => {
     await withTempDir("openclaw-reef-doctor-audit-", async (stateDir) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
@@ -186,6 +163,7 @@ describe("Reef doctor journal capacity", () => {
       await expect(headStore.lookup(REEF_AUDIT_HEAD_KEY)).resolves.toMatchObject({
         hash: entries.at(-1)!.entryHash,
         seq: entryCount,
+        oldestHash: entries[0]!.entryHash,
       });
       const store = context.openPluginStateKeyedStore<ReefAuditStateRecord>({
         namespace: REEF_AUDIT_NAMESPACE,
@@ -195,6 +173,62 @@ describe("Reef doctor journal capacity", () => {
       await expect(
         store.lookup(reefAuditEntryKey(entries.at(-1)!.entryHash)),
       ).resolves.toMatchObject({ kind: "entry", entry: entries.at(-1)! });
+    });
+  });
+
+  it("streams near-limit audit entries with bounded memory and window retention", async () => {
+    await withTempDir("openclaw-reef-doctor-audit-near-limit-", async (stateDir) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      vi.spyOn(os, "homedir").mockReturnValue(stateDir);
+      const legacyDir = path.join(stateDir, ".openclaw", "data", "reef");
+      const auditPath = path.join(legacyDir, "audit.jsonl");
+      fs.mkdirSync(legacyDir, { recursive: true });
+      // 2,500 valid chain entries with ~60 KiB event bodies exceed the former
+      // 64 MiB aggregate budget and the streaming window, while every record
+      // stays under the 65,536-byte plugin-state value limit.
+      const windowSize = 2_000;
+      const entryCount = 2_500;
+      const audit = new MemoryAuditStore(new Uint8Array(32).fill(1));
+      const body = { payload: "c".repeat(60 * 1024) };
+      for (let index = 0; index < entryCount; index += 1) {
+        await audit.appendEvent("one", body, 10 + index);
+      }
+      const entries = await audit.entries();
+      fs.writeFileSync(auditPath, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+      const context = createDoctorContext(env);
+      const store = context.openPluginStateKeyedStore<ReefAuditStateRecord>({
+        namespace: REEF_AUDIT_NAMESPACE,
+        maxEntries: REEF_AUDIT_STORE_MAX_ENTRIES,
+        overflowPolicy: "reject-new",
+      });
+      const headStore = context.openPluginStateKeyedStore<ReefAuditHeadRecord>({
+        namespace: REEF_AUDIT_HEAD_NAMESPACE,
+        maxEntries: REEF_AUDIT_HEAD_MAX_ENTRIES,
+        overflowPolicy: "reject-new",
+      });
+
+      const imported = await streamLegacyReefAuditWindow(
+        auditPath,
+        entryCount,
+        store,
+        headStore,
+        windowSize,
+      );
+
+      expect(imported.persistedCount).toBe(windowSize);
+      expect(imported.oldestHash).toBe(entries[entryCount - windowSize]!.entryHash);
+      await expect(countStoredReefAuditWindow(store, headStore, windowSize)).resolves.toBe(
+        windowSize,
+      );
+      await expect(store.lookup(reefAuditEntryKey(entries[0]!.entryHash))).resolves.toBeUndefined();
+      await expect(
+        store.lookup(reefAuditEntryKey(entries.at(-1)!.entryHash)),
+      ).resolves.toMatchObject({ kind: "entry", entry: entries.at(-1)! });
+      await expect(headStore.lookup(REEF_AUDIT_HEAD_KEY)).resolves.toMatchObject({
+        hash: entries.at(-1)!.entryHash,
+        seq: entryCount,
+        oldestHash: entries[entryCount - windowSize]!.entryHash,
+      });
     });
   });
 });

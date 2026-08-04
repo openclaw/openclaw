@@ -1,33 +1,27 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   archiveLegacyStateSource,
   type PluginDoctorStateMigration,
 } from "openclaw/plugin-sdk/runtime-doctor";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  verifyChainSegment,
-  type AuditEntry,
-  type ReviewRequest,
-  type SignedReceipt,
-} from "../protocol/index.js";
-import {
-  createReefAuditRetention,
-  pushReefAuditRetention,
-  reefAuditRetentionEntries,
-} from "./audit-retention.js";
+import type { ReviewRequest, SignedReceipt } from "../protocol/index.js";
 import {
   legacyReefFileExists,
   REEF_DURABLE_LEGACY_FILENAMES,
   resolveLegacyReefStateDir,
 } from "./doctor-state-paths.js";
+import {
+  countStoredReefAuditWindow,
+  streamLegacyReefAuditWindow,
+  validateLegacyReefAuditJournal,
+  type LegacyReefAuditJournalSummary,
+} from "./legacy-audit-import.js";
 import { forEachLegacyReefJsonlRecord } from "./legacy-jsonl.js";
 import {
   REEF_AUDIT_HEAD_KEY,
   REEF_AUDIT_HEAD_MAX_ENTRIES,
   REEF_AUDIT_HEAD_NAMESPACE,
-  REEF_AUDIT_MAX_ENTRIES,
   REEF_AUDIT_MIGRATION_KEY,
   REEF_AUDIT_MIGRATION_MAX_ENTRIES,
   REEF_AUDIT_MIGRATION_NAMESPACE,
@@ -45,7 +39,6 @@ import {
   REEF_REVIEWS_MAX_ENTRIES,
   REEF_REVIEWS_NAMESPACE,
   parseReefAuditHead,
-  reefAuditEntryKey,
   reefReplayStoreKey,
   type ReefAuditHeadRecord,
   type ReefAuditStateRecord,
@@ -59,86 +52,9 @@ import {
 } from "./state.js";
 
 const REEF_RUNTIME_LEGACY_FILENAMES = ["replay.jsonl", "reviews.json", "delivered.json"];
-// The canonical plugin-state store caps each persisted value at 65,536 bytes
-// (MAX_PLUGIN_STATE_VALUE_BYTES). Migration must accept every journal the
-// runtime store can hold, so per-record bounds mirror that per-value contract
-// instead of an aggregate cap that can reject individually storable entries.
-const REEF_LEGACY_AUDIT_RECORD_MAX_BYTES = 65_536;
 const REEF_LEGACY_REPLAY_VALUE_MAX_BYTES = 65_536;
 
 type ReefAuditMigrationRecord = { pending: true; expectedEntries?: number };
-
-async function readLegacyReefAudit(
-  filePath: string,
-): Promise<{ entries: AuditEntry[]; totalEntries: number }> {
-  const retention = createReefAuditRetention();
-  let totalEntries = 0;
-  let previousHash = "";
-  let previousSeq = 0;
-  await forEachLegacyReefJsonlRecord(filePath, "reject-torn", (value, recordBytes) => {
-    if (recordBytes > REEF_LEGACY_AUDIT_RECORD_MAX_BYTES) {
-      throw new Error(
-        `Reef legacy JSONL audit record exceeds ${REEF_LEGACY_AUDIT_RECORD_MAX_BYTES} byte plugin-state value limit`,
-      );
-    }
-    const entry = value as AuditEntry;
-    if (
-      !verifyChainSegment([entry], {
-        previousHash,
-        previousSeq,
-        head: entry.entryHash,
-      })
-    ) {
-      throw new Error("invalid Reef audit chain");
-    }
-    previousHash = entry.entryHash;
-    previousSeq = entry.event.seq;
-    totalEntries += 1;
-    pushReefAuditRetention(retention, entry);
-  });
-  return { entries: reefAuditRetentionEntries(retention), totalEntries };
-}
-
-async function readStoredReefAudit(
-  store: PluginStateKeyedStore<ReefAuditStateRecord>,
-  headStore: PluginStateKeyedStore<ReefAuditHeadRecord>,
-): Promise<AuditEntry[]> {
-  const headValue = await headStore.lookup(REEF_AUDIT_HEAD_KEY);
-  if (!headValue) {
-    return [];
-  }
-  const head = parseReefAuditHead(headValue);
-  const reversed: AuditEntry[] = [];
-  let hash = head.hash;
-  for (let seq = head.seq; seq > 0 && reversed.length < REEF_AUDIT_MAX_ENTRIES; seq--) {
-    const record = await store.lookup(reefAuditEntryKey(hash));
-    if (!record) {
-      break;
-    }
-    if (record.entry.entryHash !== hash || record.entry.event.seq !== seq) {
-      throw new Error("invalid Reef audit chain state");
-    }
-    reversed.push(record.entry);
-    hash = record.entry.prevHash;
-  }
-  const expectedEntries = Math.min(head.seq, REEF_AUDIT_MAX_ENTRIES);
-  if (reversed.length !== expectedEntries) {
-    throw new Error("Reef audit chain is shorter than its committed retention window");
-  }
-  const entries = reversed.toReversed();
-  const first = entries[0];
-  if (
-    !first ||
-    !verifyChainSegment(entries, {
-      previousHash: first.prevHash,
-      previousSeq: first.event.seq - 1,
-      head: head.hash,
-    })
-  ) {
-    throw new Error("invalid Reef audit chain state");
-  }
-  return entries;
-}
 
 type LegacyReefReplayLogRecord =
   | { op: "claim"; peer: string; id: string; envelopeHash: string }
@@ -340,11 +256,11 @@ export const reefAuditStateMigration: PluginDoctorStateMigration = {
         return { changes, warnings };
       }
       try {
-        const canonical = await readStoredReefAudit(store, headStore);
+        const persisted = await countStoredReefAuditWindow(store, headStore);
         if (
           pending.expectedEntries === undefined
-            ? canonical.length === 0
-            : canonical.length !== pending.expectedEntries
+            ? persisted === 0
+            : persisted !== pending.expectedEntries
         ) {
           throw new Error("canonical audit trail does not match the verified import");
         }
@@ -358,12 +274,9 @@ export const reefAuditStateMigration: PluginDoctorStateMigration = {
       return { changes, warnings };
     }
     await migrationStore.register(REEF_AUDIT_MIGRATION_KEY, { pending: true });
-    let legacy: AuditEntry[];
-    let legacyEntryCount: number;
+    let journalSummary: LegacyReefAuditJournalSummary;
     try {
-      const legacyAudit = await readLegacyReefAudit(filePath);
-      legacy = legacyAudit.entries;
-      legacyEntryCount = legacyAudit.totalEntries;
+      journalSummary = await validateLegacyReefAuditJournal(filePath);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         return { changes, warnings };
@@ -371,58 +284,34 @@ export const reefAuditStateMigration: PluginDoctorStateMigration = {
       warnings.push(`Failed importing Reef audit trail: ${String(error)}; left source in place`);
       return { changes, warnings };
     }
-    let canonical: AuditEntry[];
+    const legacyEntryCount = journalSummary.totalEntries;
+    let persistedCount: number;
     try {
-      canonical = await readStoredReefAudit(store, headStore);
-    } catch (error) {
-      warnings.push(
-        `Failed reading canonical Reef audit trail: ${String(error)}; left legacy source in place`,
-      );
-      return { changes, warnings };
-    }
-    if (
-      canonical.length > 0 &&
-      JSON.stringify(canonical) !== JSON.stringify(legacy.slice(-canonical.length))
-    ) {
-      warnings.push("Kept existing Reef audit trail; left differing legacy source in place");
-      return { changes, warnings };
-    }
-    const retained = legacy;
-    if (canonical.length === 0 && retained.length > 0) {
-      try {
-        for (const [index, entry] of retained.entries()) {
-          const key = reefAuditEntryKey(entry.entryHash);
-          const nextHash = retained[index + 1]?.entryHash;
-          const record: ReefAuditStateRecord = {
-            kind: "entry",
-            entry,
-            ...(nextHash ? { nextHash } : {}),
-          };
-          const existing = await store.lookup(key);
-          if (existing && JSON.stringify(existing) !== JSON.stringify(record)) {
-            throw new Error(`conflicting audit entry ${entry.entryHash}`);
-          }
-          await store.registerIfAbsent(key, record);
+      const headValue = await headStore.lookup(REEF_AUDIT_HEAD_KEY);
+      const head = headValue ? parseReefAuditHead(headValue) : undefined;
+      if (head && head.seq > 0) {
+        if (head.hash !== journalSummary.lastHash || head.seq !== journalSummary.lastSeq) {
+          warnings.push("Kept existing Reef audit trail; left differing legacy source in place");
+          return { changes, warnings };
         }
-        const last = retained.at(-1)!;
-        const first = retained[0]!;
-        if (
-          !(await headStore.registerIfAbsent(REEF_AUDIT_HEAD_KEY, {
-            kind: "head",
-            hash: last.entryHash,
-            seq: last.event.seq,
-            oldestHash: first.entryHash,
-          }))
-        ) {
-          throw new Error("audit head appeared during import");
-        }
-      } catch (error) {
-        warnings.push(`Failed importing Reef audit trail: ${String(error)}; left source in place`);
-        return { changes, warnings };
+        persistedCount = await countStoredReefAuditWindow(store, headStore);
+      } else {
+        persistedCount = (
+          await streamLegacyReefAuditWindow(filePath, legacyEntryCount, store, headStore)
+        ).persistedCount;
       }
+    } catch (error) {
+      warnings.push(`Failed importing Reef audit trail: ${String(error)}; left source in place`);
+      return { changes, warnings };
     }
-    const persisted = await readStoredReefAudit(store, headStore);
-    if (JSON.stringify(persisted) !== JSON.stringify(retained)) {
+    let persisted: number;
+    try {
+      persisted = await countStoredReefAuditWindow(store, headStore);
+    } catch {
+      warnings.push("Failed verifying Reef audit trail after import; left source in place");
+      return { changes, warnings };
+    }
+    if (persisted !== persistedCount) {
       warnings.push("Failed verifying Reef audit trail after import; left source in place");
       return { changes, warnings };
     }
@@ -433,7 +322,7 @@ export const reefAuditStateMigration: PluginDoctorStateMigration = {
     // distinguish an interrupted empty import from a missing legacy source.
     await migrationStore.register(REEF_AUDIT_MIGRATION_KEY, {
       pending: true,
-      expectedEntries: persisted.length,
+      expectedEntries: persisted,
     });
     const warningCount = warnings.length;
     await archiveLegacyStateSource({
@@ -442,9 +331,9 @@ export const reefAuditStateMigration: PluginDoctorStateMigration = {
       changes,
       warnings,
     });
-    if (persisted.length < legacyEntryCount && warnings.length === warningCount) {
+    if (persisted < legacyEntryCount && warnings.length === warningCount) {
       changes.push(
-        `Retained the newest ${persisted.length} Reef audit entries in SQLite; preserved the complete ${legacyEntryCount}-entry chain in the archived legacy source`,
+        `Retained the newest ${persisted} Reef audit entries in SQLite; preserved the complete ${legacyEntryCount}-entry chain in the archived legacy source`,
       );
     }
     if (warnings.length === warningCount) {

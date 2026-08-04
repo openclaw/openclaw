@@ -9,7 +9,7 @@ const REEF_LEGACY_JSONL_READ_CHUNK_BYTES = 64 * 1024;
 export async function forEachLegacyReefJsonlRecord(
   filePath: string,
   finalRecord: "reject-torn" | "ignore-torn",
-  visit: (value: unknown, recordBytes: number) => void,
+  visit: (value: unknown, recordBytes: number) => void | Promise<void>,
 ): Promise<void> {
   const handle = await fs.open(filePath, "r");
   let pendingChunks: Buffer[] = [];
@@ -43,7 +43,7 @@ export async function forEachLegacyReefJsonlRecord(
             pendingChunks.length === 0
               ? segment
               : Buffer.concat([...pendingChunks, segment], recordBytes);
-          visit(JSON.parse(line.toString("utf8")) as unknown, recordBytes);
+          await visit(JSON.parse(line.toString("utf8")) as unknown, recordBytes);
         }
         pendingChunks = [];
         pendingBytes = 0;
@@ -78,5 +78,5 @@ export async function forEachLegacyReefJsonlRecord(
     }
     return;
   }
-  visit(value, pendingBytes);
+  await visit(value, pendingBytes);
 }
