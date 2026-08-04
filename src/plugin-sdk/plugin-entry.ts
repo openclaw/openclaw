@@ -288,6 +288,7 @@ export type {
   PluginHookInboundMessageMetadata,
   PluginHookMediaFact,
   PluginHookMessageReceivedEvent,
+  PluginHookPollVoteReceivedEvent,
   PluginHookSkillArtifact,
   PluginHookSkillBundleFile,
   PluginHookSkillBundleSnapshot,
