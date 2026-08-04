@@ -83,6 +83,7 @@ import {
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { resolveContextTokensForModel } from "../context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
+import { waitForDeferredTurnMaintenanceForSession } from "../embedded-agent-runner/context-engine-maintenance.js";
 import {
   applyEmbeddedAttemptToolsAllow,
   mergeForcedEmbeddedAttemptToolsAllow,
@@ -128,6 +129,7 @@ import {
   loadCliSessionHistoryMessages,
   loadCliSessionReseedMessages,
   resolveAutoCliSessionReseedHistoryChars,
+  resolveCliSessionHistoryExcludedMessageIdempotencyKey,
 } from "./session-history.js";
 import { buildCliBackendToolAvailability } from "./tool-policy.js";
 import type {
@@ -183,6 +185,7 @@ const prepareDeps = {
   getClaudeLiveSessionGenerationForOwner,
   readExternalCliBootstrapCredential,
   resolveApiKeyForProfile,
+  waitForDeferredTurnMaintenanceForSession,
 };
 
 function resolveReusableCliSessionId(reusableCliSession: CliReusableSession): string | undefined {
@@ -710,15 +713,25 @@ export async function prepareCliRunContext(
     params.provider;
   const normalizedModel = normalizeCliModel(modelId, backendResolved.config);
   const modelDisplay = `${params.provider}/${modelId}`;
+  const excludeMessageIdempotencyKey =
+    resolveCliSessionHistoryExcludedMessageIdempotencyKey(params);
   let openClawHistoryMessages: unknown[] | undefined;
   const loadOpenClawHistoryMessages = async () => {
-    openClawHistoryMessages ??= await loadCliSessionHistoryMessages({
-      sessionId: params.sessionId,
-      sessionFile: params.sessionFile,
-      sessionKey: params.sessionKey,
-      agentId: params.agentId,
-      config: params.config,
-    });
+    if (openClawHistoryMessages === undefined) {
+      await prepareDeps.waitForDeferredTurnMaintenanceForSession(
+        params.sessionKey ?? params.sessionId,
+      );
+      openClawHistoryMessages = await loadCliSessionHistoryMessages({
+        sessionId: params.sessionId,
+        sessionFile: params.sessionFile,
+        sessionKey: params.sessionKey,
+        sessionTarget: params.sessionTarget,
+        agentId: params.agentId,
+        config: params.config,
+        ...(params.storePath ? { storePath: params.storePath } : {}),
+        ...(excludeMessageIdempotencyKey ? { excludeMessageIdempotencyKey } : {}),
+      });
+    }
     return openClawHistoryMessages;
   };
   const promptBuildHookResult = await (async () => {
@@ -1510,8 +1523,11 @@ export async function prepareCliRunContext(
             sessionId: params.sessionId,
             sessionFile: params.sessionFile,
             sessionKey: params.sessionKey,
+            sessionTarget: params.sessionTarget,
             agentId: params.agentId,
             config: params.config,
+            ...(params.storePath ? { storePath: params.storePath } : {}),
+            ...(excludeMessageIdempotencyKey ? { excludeMessageIdempotencyKey } : {}),
             allowRawTranscriptReseed,
             rawTranscriptReseedReason,
           }),
@@ -1634,8 +1650,10 @@ export async function prepareCliRunContext(
       sessionId: params.sessionId,
       sessionFile: params.sessionFile,
       sessionKey: params.sessionKey,
+      sessionTarget: params.sessionTarget,
       agentId: params.agentId,
       config: contextEngineConfig,
+      ...(params.storePath ? { storePath: params.storePath } : {}),
     });
     const contextEngineTurnPrompt = params.transcriptPrompt ?? params.prompt;
     const preparedParams: RunCliAgentParams = {

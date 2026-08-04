@@ -13,6 +13,9 @@ const resolveCliRuntimeExecutionProvider = vi.hoisted(() => vi.fn());
 const runCliAgent = vi.hoisted(() => vi.fn());
 const retireSessionMcpRuntime = vi.hoisted(() => vi.fn());
 const retireSessionMcpRuntimeForSessionKey = vi.hoisted(() => vi.fn());
+const userTurnTranscriptRecorder = vi.hoisted(() => ({
+  persistApproved: vi.fn(),
+}));
 
 vi.mock("../model-auth.js", () => ({
   ensureAuthProfileStore,
@@ -33,6 +36,8 @@ vi.mock("../agent-bundle-mcp-tools.js", () => ({
   retireSessionMcpRuntimeForSessionKey,
 }));
 const transcriptRecorder = vi.hoisted(() => ({
+  userMessageIdempotencyKey: "run-cli-dispatch-test:user",
+  userTurnTranscriptRecorder,
   noteToolEvent: vi.fn(),
   noteAssistantText: vi.fn(),
   flushAssistantSnapshot: vi.fn(),
@@ -353,6 +358,8 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
       disableCliLiveSession: true,
       cleanupCliLiveSessionOnRunEnd: true,
       requireExplicitMessageTarget: true,
+      excludeMessageIdempotencyKey: "run-cli-dispatch-test:user",
+      userTurnTranscriptRecorder,
       cliToolAvailability: {
         native: [],
         openClaw: ["memory_search", "memory_get", "notes_retrieve_context"],
@@ -360,6 +367,25 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
     });
     // Embedded toolsAllow must never reach the CLI runner: it fails closed.
     expect(cliParams).not.toHaveProperty("toolsAllow");
+  });
+
+  it("preserves the canonical session store through CLI dispatch", async () => {
+    const storePath = "/tmp/recall/current/agents/main/sessions/sessions.json";
+    await runEmbeddedAgentViaCliBackendIfEligible(
+      baseRunParams({
+        sessionTarget: {
+          agentId: "main",
+          sessionId: "recall-session",
+          sessionKey: "agent:main:recall",
+          storePath,
+        },
+      }),
+    );
+
+    expect(runCliAgent).toHaveBeenCalledWith(expect.objectContaining({ storePath }));
+    expect(createCliDispatchTranscriptRecorder).toHaveBeenCalledWith(
+      expect.objectContaining({ storePath }),
+    );
   });
 
   // Fail-closed tool policy: only a non-empty named allowlist is expressible

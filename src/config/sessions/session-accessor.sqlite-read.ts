@@ -34,6 +34,14 @@ export type SqliteTranscriptStorageRow = SqliteTranscriptSnapshotRow & {
   createdAt: number;
 };
 
+const MAX_PREPENDED_TRANSCRIPT_ENVELOPE_BYTES = 64 * 1024;
+
+function sqliteTranscriptEventJsonByteSize() {
+  return /* kysely-allow-raw: BLOB length matches the UTF-8 byte budget used by JSONL readers. */ sql<number>`LENGTH(CAST(event_json AS BLOB))`.as(
+    "event_bytes",
+  );
+}
+
 /** Loads raw transcript events from the additive SQLite transcript store. */
 export async function loadSqliteTranscriptEvents(
   scope: SessionTranscriptReadScope,
@@ -90,6 +98,112 @@ export function loadSqliteTranscriptTailEventsSync(
   )
     .rows.toReversed()
     .map((row) => JSON.parse(row.event_json) as TranscriptEvent);
+}
+
+/** Checks for at least one transcript row without aggregating the full session. */
+export function hasSqliteTranscriptEventsSync(scope: SessionTranscriptReadScope): boolean {
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  const db = getSessionKysely(database.db);
+  return Boolean(
+    executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("transcript_events")
+        .select("seq")
+        .where("session_id", "=", resolved.sessionId)
+        .limit(1),
+    ),
+  );
+}
+
+/** Loads the newest complete JSONL-sized transcript rows without materializing older history. */
+export function loadSqliteTranscriptTailEventsByJsonlBytesSync(
+  scope: SessionTranscriptReadScope,
+  maxBytes: number,
+): { events: TranscriptEvent[]; truncated: boolean } {
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  const db = getSessionKysely(database.db);
+  const rows = iterateSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("transcript_events")
+      .select(["seq", sqliteTranscriptEventJsonByteSize()])
+      .where("session_id", "=", resolved.sessionId)
+      .orderBy("seq", "desc"),
+  );
+  const boundedMaxBytes = Number.isFinite(maxBytes) ? Math.max(0, Math.floor(maxBytes)) : 0;
+  const selectedRows: Array<{ bytes: number; seq: number }> = [];
+  let selectedBytes = 0;
+  let truncated = false;
+  for (const row of rows) {
+    const rowBytes = normalizeSqliteNumber(row.event_bytes) + 1;
+    if (selectedBytes + rowBytes > boundedMaxBytes) {
+      truncated = true;
+      break;
+    }
+    const seq = normalizeSqliteNumber(row.seq);
+    selectedRows.push({ bytes: rowBytes, seq });
+    selectedBytes += rowBytes;
+  }
+
+  // JSONL readers prepend the session envelope after tail truncation so version
+  // migration and branch selection never reinterpret a bounded tail as v1. Its
+  // serialized line shares the same hard cap, so trim oldest selected rows
+  // until the complete returned JSONL remains bounded.
+  let prependedEvent: TranscriptEvent;
+  if (truncated) {
+    const firstRow = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("transcript_events")
+        .select(["event_json", sqliteTranscriptEventJsonByteSize()])
+        .where("session_id", "=", resolved.sessionId)
+        .orderBy("seq", "asc")
+        .limit(1),
+    );
+    const firstRowJsonBytes = firstRow ? normalizeSqliteNumber(firstRow.event_bytes) : 0;
+    const firstRowJsonlBytes = firstRowJsonBytes + 1;
+    const firstEvent =
+      firstRow &&
+      firstRowJsonBytes <= MAX_PREPENDED_TRANSCRIPT_ENVELOPE_BYTES &&
+      firstRowJsonlBytes <= boundedMaxBytes
+        ? (JSON.parse(firstRow.event_json) as TranscriptEvent)
+        : undefined;
+    if (
+      firstEvent &&
+      typeof firstEvent === "object" &&
+      !Array.isArray(firstEvent) &&
+      (firstEvent as { type?: unknown }).type === "session"
+    ) {
+      prependedEvent = firstEvent;
+      while (selectedRows.length > 0 && selectedBytes + firstRowJsonlBytes > boundedMaxBytes) {
+        const removed = selectedRows.pop();
+        selectedBytes -= removed?.bytes ?? 0;
+      }
+    }
+  }
+
+  const selectedNewestSeq = selectedRows[0]?.seq;
+  const selectedOldestSeq = selectedRows.at(-1)?.seq;
+  const events =
+    selectedOldestSeq === undefined || selectedNewestSeq === undefined
+      ? []
+      : executeSqliteQuerySync(
+          database.db,
+          db
+            .selectFrom("transcript_events")
+            .select("event_json")
+            .where("session_id", "=", resolved.sessionId)
+            .where("seq", ">=", selectedOldestSeq)
+            .where("seq", "<=", selectedNewestSeq)
+            .orderBy("seq", "asc"),
+        ).rows.map((row) => JSON.parse(row.event_json) as TranscriptEvent);
+  return {
+    events: prependedEvent ? [prependedEvent, ...events] : events,
+    truncated,
+  };
 }
 
 /** Loads additive transcript rows after one durable sequence checkpoint. */

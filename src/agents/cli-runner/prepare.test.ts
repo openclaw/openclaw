@@ -21,6 +21,8 @@ import {
 import { createPluginRegistry } from "../../plugins/registry.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -49,6 +51,7 @@ import {
 } from "../cli-runner.test-helpers.js";
 import { hashCliSessionText } from "../cli-session.js";
 import { resetContextWindowCacheForTest } from "../context.js";
+import { waitForDeferredTurnMaintenanceForSession } from "../embedded-agent-runner/context-engine-maintenance.js";
 import { buildActiveImageGenerationTaskPromptContextForSession } from "../image-generation-task-status.js";
 import { buildActiveMusicGenerationTaskPromptContextForSession } from "../music-generation-task-status.js";
 import type { SandboxWorkspaceInfo } from "../sandbox/types.js";
@@ -360,6 +363,7 @@ describe("prepareCliRunContext", () => {
       getClaudeLiveSessionGenerationForOwner: vi.fn(() => undefined),
       readExternalCliBootstrapCredential: readExternalCliBootstrapCredentialImpl,
       resolveApiKeyForProfile: resolveApiKeyForProfileImpl,
+      waitForDeferredTurnMaintenanceForSession,
     });
     mockGetGlobalHookRunner.mockReturnValue(null);
     getRuntimeConfigMock.mockReturnValue({});
@@ -1436,6 +1440,7 @@ describe("prepareCliRunContext", () => {
       cleanup: vi.fn(async () => undefined),
     }));
     const prepareExecution = vi.fn(async () => undefined);
+    const waitForDeferredMaintenance = vi.fn(async () => undefined);
     setRawCliBackendForPrepareTest({
       id: "test-cli",
       pluginId: "test",
@@ -1474,6 +1479,7 @@ describe("prepareCliRunContext", () => {
         ],
       })),
       resolveOpenClawReferencePaths: vi.fn(async () => ({ docsPath: "docs", sourcePath: "src" })),
+      waitForDeferredTurnMaintenanceForSession: waitForDeferredMaintenance,
     });
 
     const context = await fixture.prepare({
@@ -1491,6 +1497,7 @@ describe("prepareCliRunContext", () => {
     expect(ensureMcpLoopbackServer).not.toHaveBeenCalled();
     expect(prepareClaudeCliSkillsPlugin).not.toHaveBeenCalled();
     expect(mockGetGlobalHookRunner).not.toHaveBeenCalled();
+    expect(waitForDeferredMaintenance).not.toHaveBeenCalled();
     expect(prepareExecution).toHaveBeenCalledWith(
       expect.objectContaining({ executionMode: "side-question" }),
     );
@@ -3946,6 +3953,163 @@ describe("prepareCliRunContext", () => {
     });
     expect(context.openClawHistoryPrompt).toContain("prior claude-cli ask");
     expect(context.openClawHistoryPrompt).toContain("latest ask");
+  });
+
+  it("does not duplicate a persisted retry turn in raw-transcript reseed history", async () => {
+    const { dir, sessionFile } = fixture.session;
+    fixture.appendTranscript({
+      id: "msg-prior",
+      parentId: null,
+      timestamp: new Date(1).toISOString(),
+      message: {
+        role: "user",
+        content: "prior claude-cli ask",
+        timestamp: 1,
+        idempotencyKey: "cli-user:prior",
+      },
+    });
+    const persistedMessage = {
+      role: "user" as const,
+      content: "latest ask",
+      timestamp: 2,
+      idempotencyKey: "cli-user:current-turn",
+    };
+    fixture.appendTranscript({
+      id: "msg-current",
+      parentId: "msg-prior",
+      timestamp: new Date(2).toISOString(),
+      message: persistedMessage,
+    });
+    const userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
+      message: persistedMessage,
+      target: createTestUserTurnTranscriptTarget({
+        sessionId: "session-test",
+        sessionKey: "agent:main:telegram:direct:peer",
+        cwd: dir,
+      }),
+    });
+    userTurnTranscriptRecorder.markRuntimePersisted(persistedMessage);
+
+    try {
+      setCliBackendForPrepareTest({
+        reseedFromRawTranscriptWhenUncompacted: true,
+      });
+      setCliRunnerPrepareTestDeps({
+        claudeCliSessionTranscriptHasContent: vi.fn(async () => false),
+        claudeCliSessionTranscriptHasOrphanedToolUse: vi.fn(async () => false),
+      });
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:telegram:direct:peer",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "claude-cli",
+        model: "opus",
+        timeoutMs: 1_000,
+        runId: "run-persisted-turn-reseed",
+        cliSessionBinding: { sessionId: "stale-claude-sid" },
+        cliSessionId: "stale-claude-sid",
+        config: createCliBackendConfig(),
+        userTurnTranscriptRecorder,
+        suppressNextUserMessagePersistence: true,
+      });
+
+      expect(context.openClawHistoryPrompt).toContain("prior claude-cli ask");
+      expect(context.openClawHistoryPrompt?.match(/latest ask/g)).toHaveLength(1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps an unpersisted current turn out of fresh-session detection", async () => {
+    const { dir } = fixture.session;
+    const currentTurnKey = "run-cli-dispatch-fresh:user";
+    const sessionKey = "agent:main:telegram:direct:peer";
+    const storePath = path.join(dir, "fresh-sessions.json");
+    const userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
+      input: {
+        text: "latest ask",
+        idempotencyKey: currentTurnKey,
+      },
+      target: createTestUserTurnTranscriptTarget({
+        sessionId: "session-test",
+        sessionKey,
+        storePath,
+        cwd: dir,
+      }),
+    });
+
+    const context = await fixture.prepare({
+      sessionId: "session-test",
+      sessionKey,
+      sessionFile: sessionKey,
+      sessionTarget: {
+        agentId: "main",
+        sessionId: "session-test",
+        sessionKey,
+        storePath,
+      },
+      userTurnTranscriptRecorder,
+      excludeMessageIdempotencyKey: currentTurnKey,
+    });
+
+    expect(context.hadSessionFile).toBe(false);
+    expect(userTurnTranscriptRecorder.hasPersisted()).toBe(false);
+  });
+
+  it("waits for deferred transcript maintenance before preparing history", async () => {
+    fixture.appendTranscript({
+      id: "msg-before-maintenance",
+      parentId: null,
+      timestamp: new Date(1).toISOString(),
+      message: { role: "user", content: "history before maintenance", timestamp: 1 },
+    });
+    setCliBackendForPrepareTest({ reseedFromRawTranscriptWhenUncompacted: true });
+    let releaseMaintenance: (() => void) | undefined;
+    const maintenance = new Promise<void>((resolve) => {
+      releaseMaintenance = resolve;
+    });
+    const waitForDeferredMaintenance = vi.fn(() => maintenance);
+    setCliRunnerPrepareTestDeps({
+      claudeCliSessionTranscriptHasContent: vi.fn(async () => false),
+      claudeCliSessionTranscriptHasOrphanedToolUse: vi.fn(async () => false),
+      waitForDeferredTurnMaintenanceForSession: waitForDeferredMaintenance,
+    });
+
+    const preparation = fixture.prepare({
+      sessionKey: "agent:main:telegram:direct:peer",
+      prompt: "latest ask",
+      provider: "claude-cli",
+      model: "opus",
+      cliSessionBinding: { sessionId: "stale-claude-sid" },
+      cliSessionId: "stale-claude-sid",
+    });
+    try {
+      await vi.waitFor(() =>
+        expect(waitForDeferredMaintenance).toHaveBeenCalledWith("agent:main:telegram:direct:peer"),
+      );
+      let prepared = false;
+      void preparation.then(() => {
+        prepared = true;
+      });
+      await Promise.resolve();
+      expect(prepared).toBe(false);
+      fixture.appendTranscript({
+        id: "msg-after-maintenance",
+        parentId: "msg-before-maintenance",
+        timestamp: new Date(2).toISOString(),
+        message: { role: "user", content: "history after maintenance", timestamp: 2 },
+      });
+
+      releaseMaintenance?.();
+      const context = await preparation;
+      expect(context.openClawHistoryPrompt).toContain("history after maintenance");
+    } finally {
+      releaseMaintenance?.();
+      await preparation.catch(() => undefined);
+    }
   });
 
   it("prepares node-placed Claude resumes without Gateway MCP, skills, or transcript checks", async () => {

@@ -16,6 +16,7 @@ import {
   loadCliSessionHistoryMessages,
   loadCliSessionReseedMessages,
   resolveAutoCliSessionReseedHistoryChars,
+  resolveCliSessionHistoryExcludedMessageIdempotencyKey,
 } from "./session-history.js";
 
 const MAX_CLI_SESSION_HISTORY_FILE_BYTES = 5 * 1024 * 1024;
@@ -23,6 +24,15 @@ const MAX_CLI_SESSION_HISTORY_MESSAGES = MAX_AGENT_HOOK_HISTORY_MESSAGES;
 const MAX_CLI_SESSION_RESEED_HISTORY_CHARS = 12 * 1024;
 const MAX_AUTO_CLI_SESSION_RESEED_HISTORY_CHARS = 256 * 1024;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it("uses a caller-owned current-turn key before recorder persistence settles", () => {
+  const idempotencyKey = " run-cli-dispatch-test:user ";
+  expect(
+    resolveCliSessionHistoryExcludedMessageIdempotencyKey({
+      excludeMessageIdempotencyKey: idempotencyKey,
+    }),
+  ).toBe(idempotencyKey);
+});
 
 function createSessionTranscript(params: {
   rootDir: string;
