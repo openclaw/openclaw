@@ -1,9 +1,8 @@
 // Signal plugin module implements daemon behavior.
 import { spawn } from "node:child_process";
-import os from "node:os";
-import path from "node:path";
 import { createInterface } from "node:readline";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { resolveSignalCliConfigPath } from "./signal-cli-config-path.js";
 
 type SignalDaemonOpts = {
   cliPath: string;
@@ -80,17 +79,6 @@ function bindSignalCliOutput(params: {
       params.error(`signal-cli: ${line.trim()}`);
     }
   });
-}
-
-function resolveSignalCliConfigPath(raw: string): string {
-  const value = raw.trim();
-  if (value === "~") {
-    return os.homedir();
-  }
-  if (value.startsWith("~/") || value.startsWith("~\\")) {
-    return path.join(os.homedir(), value.slice(2));
-  }
-  return value;
 }
 
 function buildDaemonArgs(opts: SignalDaemonOpts): string[] {
