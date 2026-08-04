@@ -366,6 +366,7 @@ describe("Microsoft Teams meeting session flow", () => {
       lastCaptionText: "Recovered caption after transient tab loss",
       transcriptLines: 1,
     });
+    expect(result.session?.chrome?.health?.manualAction).toBeUndefined();
   });
 
   it("retries stale listening health after a thrown browser recovery", async () => {
@@ -393,5 +394,6 @@ describe("Microsoft Teams meeting session flow", () => {
     );
     expect(tabListCalls.length).toBeGreaterThanOrEqual(2);
     expect(result.manualAction).toBeUndefined();
+    expect(result.session?.chrome?.health?.manualAction).toBeUndefined();
   });
 });

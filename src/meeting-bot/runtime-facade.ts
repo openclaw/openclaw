@@ -31,6 +31,16 @@ import type { MeetingBrowserTab, MeetingPluginChromeHealth } from "./session-typ
 
 const nowIso = () => new Date().toISOString();
 
+function clearNonAuthoritativeManualAction<Health extends MeetingBrowserHealth>(
+  health: Health,
+): Health {
+  if (health.manualAction === undefined) {
+    return health;
+  }
+  const { manualAction: _manualAction, ...rest } = health;
+  return rest as Health;
+}
+
 export function createMeetingRuntimeFacade<
   Config extends MeetingPluginConfig & { defaultMode: Mode },
   Transport extends "chrome" | "chrome-node",
@@ -424,9 +434,15 @@ export function createMeetingRuntimeFacade<
             };
           }
           if (!result.browser) {
+            session.chrome.health = clearNonAuthoritativeManualAction(session.chrome.health);
             return { browserHealthChecked: false, manualActionIsAuthoritative: false };
           }
-          session.chrome.health = { ...session.chrome.health, ...result.browser };
+          const refreshedHealth = { ...session.chrome.health, ...result.browser };
+          if (!Object.prototype.hasOwnProperty.call(result.browser, "manualAction")) {
+            session.chrome.health = clearNonAuthoritativeManualAction(refreshedHealth);
+          } else {
+            session.chrome.health = refreshedHealth;
+          }
           session.updatedAt = nowIso();
           return { browserHealthChecked: true, manualActionIsAuthoritative: true };
         } else if (session.chrome) {
@@ -435,6 +451,9 @@ export function createMeetingRuntimeFacade<
               kind: "missing",
               message: result.message,
             }) === "authoritative";
+          if (!manualActionIsAuthoritative) {
+            session.chrome.health = clearNonAuthoritativeManualAction(session.chrome.health);
+          }
           return { browserHealthChecked: false, manualActionIsAuthoritative };
         }
         return { browserHealthChecked: false, manualActionIsAuthoritative: false };
@@ -451,6 +470,9 @@ export function createMeetingRuntimeFacade<
           this.params.logger.debug?.(
             `${options.platform.logScope} browser readiness refresh ignored: ${formatErrorMessage(error)}`,
           );
+        }
+        if (!manualActionIsAuthoritative && session.chrome) {
+          session.chrome.health = clearNonAuthoritativeManualAction(session.chrome.health);
         }
         return { browserHealthChecked: false, manualActionIsAuthoritative };
       }
