@@ -225,11 +225,7 @@ async function replaceManagedMarkdownBlockStreaming(
     };
     const writeManagedBlock = async (trailingText: string): Promise<void> => {
       await output?.write(managedBlock);
-      if (
-        trailingText.length > 0 &&
-        !trailingText.startsWith("\n") &&
-        !trailingText.startsWith("\r")
-      ) {
+      if (!trailingText.startsWith("\n") && !trailingText.startsWith("\r")) {
         await output?.write("\n");
       }
       wroteManagedBlock = true;

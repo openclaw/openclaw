@@ -181,6 +181,43 @@ describe("dreaming markdown storage", () => {
     expect(content).not.toContain("- Old candidate");
   });
 
+  it("keeps a trailing newline when an oversized managed block ends at EOF", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
+    const inlinePath = path.join(workspaceDir, "memory", "2026-04-05.md");
+    await fs.mkdir(path.dirname(inlinePath), { recursive: true });
+    await fs.writeFile(
+      inlinePath,
+      [
+        "# Daily Memory",
+        "",
+        "A".repeat(MEMORY_DREAMING_MARKDOWN_MAX_BYTES),
+        "",
+        "## Light Sleep",
+        "<!-- openclaw:dreaming:light:start -->",
+        "- Old candidate",
+        "<!-- openclaw:dreaming:light:end -->",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    await writeDailyDreamingPhaseBlock({
+      workspaceDir,
+      phase: "light",
+      bodyLines: ["- Candidate: EOF newline update"],
+      nowMs,
+      timezone,
+      storage: {
+        mode: "inline",
+        separateReports: false,
+      },
+    });
+
+    const content = await fs.readFile(inlinePath, "utf-8");
+    expect(content).toContain("- Candidate: EOF newline update");
+    expect(content).not.toContain("- Old candidate");
+    expect(content.endsWith("<!-- openclaw:dreaming:light:end -->\n")).toBe(true);
+  });
+
   it("appends a daily block after an oversized dangling start marker", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
     const inlinePath = path.join(workspaceDir, "memory", "2026-04-05.md");
