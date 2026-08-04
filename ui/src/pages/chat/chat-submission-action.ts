@@ -20,3 +20,13 @@ export function claimChatSubmissionAction(action: Event): {
   }
   return { submissionId, firstUse };
 }
+
+export function runClaimedChatSubmissionAction(
+  action: Event,
+  run: (submissionId: string) => void,
+): void {
+  const claim = claimChatSubmissionAction(action);
+  if (claim.firstUse) {
+    run(claim.submissionId);
+  }
+}

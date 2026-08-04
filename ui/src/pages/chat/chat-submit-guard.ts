@@ -23,7 +23,9 @@ function runAsPromise<T>(run: () => Promise<T>): Promise<T> {
   try {
     return Promise.resolve(run());
   } catch (error) {
-    return Promise.reject(error);
+    return Promise.reject(
+      error instanceof Error ? error : new Error("Chat submission failed.", { cause: error }),
+    );
   }
 }
 

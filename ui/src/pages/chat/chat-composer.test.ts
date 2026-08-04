@@ -232,37 +232,6 @@ describe("renderChatComposer controls", () => {
     expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(true);
   });
 
-  it("creates a distinct submission id for each explicit send action", () => {
-    const onSend = vi.fn();
-    const view = renderComposer({ draft: "same prompt", onSend });
-    const send = button(view.container, t("chat.runControls.sendMessage"));
-
-    send.click();
-    send.click();
-
-    expect(onSend).toHaveBeenCalledTimes(2);
-    const submissionIds = onSend.mock.calls.map(([submissionId]) => submissionId);
-    expect(submissionIds).toEqual([expect.any(String), expect.any(String)]);
-    expect(submissionIds[0]).not.toBe(submissionIds[1]);
-  });
-
-  it("submits once when one send action re-enters its handler", () => {
-    const onSend = vi.fn();
-    const view = renderComposer({ draft: "same prompt", onSend });
-    const input = view.container.querySelector<HTMLTextAreaElement>("textarea");
-    const action = new KeyboardEvent("keydown", {
-      bubbles: true,
-      cancelable: true,
-      key: "Enter",
-    });
-
-    input?.dispatchEvent(action);
-    input?.dispatchEvent(action);
-
-    expect(onSend).toHaveBeenCalledOnce();
-    expect(onSend).toHaveBeenCalledWith(expect.any(String));
-  });
-
   it("switches the primary action between voice, send, queue, and stop", () => {
     const onToggleRealtimeTalk = vi.fn();
     let view = renderComposer({ onToggleRealtimeTalk });

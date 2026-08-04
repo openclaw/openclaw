@@ -5,7 +5,7 @@ import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 import { ComposerDictationController, insertComposerDictation } from "../composer-dictation.ts";
-import { claimChatSubmissionAction } from "../chat-submission-action.ts";
+import { runClaimedChatSubmissionAction } from "../chat-submission-action.ts";
 import { discoverRealtimeTalkInputs } from "../realtime-talk-input.ts";
 import { isLargePastedTextAttachment } from "./chat-attachments.ts";
 import { renderContextNotice } from "./chat-composer-context.ts";
@@ -343,13 +343,12 @@ export function renderChatComposer(props: ChatComposerProps) {
           props.paneId,
           requestUpdate,
           (arg, submit) => {
-            if (!submit) {
+            if (submit) {
+              runClaimedChatSubmissionAction(event, (submissionId) =>
+                selectSlashArg(arg, props, requestUpdate, true, submissionId),
+              );
+            } else {
               selectSlashArg(arg, props, requestUpdate, false);
-              return;
-            }
-            const claim = claimChatSubmissionAction(event);
-            if (claim.firstUse) {
-              selectSlashArg(arg, props, requestUpdate, true, claim.submissionId);
             }
           },
           scrollActiveSlashMenuOptionIntoView,
@@ -368,13 +367,12 @@ export function renderChatComposer(props: ChatComposerProps) {
           props.paneId,
           requestUpdate,
           (command, submit) => {
-            if (!submit) {
+            if (submit) {
+              runClaimedChatSubmissionAction(event, (submissionId) =>
+                selectSlashCommand(command, props, requestUpdate, submissionId),
+              );
+            } else {
               tabCompleteSlashCommand(command, props, requestUpdate);
-              return;
-            }
-            const claim = claimChatSubmissionAction(event);
-            if (claim.firstUse) {
-              selectSlashCommand(command, props, requestUpdate, claim.submissionId);
             }
           },
           scrollActiveSlashMenuOptionIntoView,
@@ -419,14 +417,12 @@ export function renderChatComposer(props: ChatComposerProps) {
         return;
       }
       event.preventDefault();
-      const claim = claimChatSubmissionAction(event);
-      if (!claim.firstUse) {
-        return;
-      }
-      const target = event.target as HTMLTextAreaElement;
-      commitComposerDraft(props, target.value);
-      props.onSend(claim.submissionId);
-      syncComposerDraftAfterSend(target);
+      runClaimedChatSubmissionAction(event, (submissionId) => {
+        const target = event.target as HTMLTextAreaElement;
+        commitComposerDraft(props, target.value);
+        props.onSend(submissionId);
+        syncComposerDraftAfterSend(target);
+      });
     }
   };
 
@@ -516,19 +512,12 @@ export function renderChatComposer(props: ChatComposerProps) {
     syncComposerDraftAfterSend(state.composerTextarea);
   };
   const handleVoicePrimaryAction = (action: Event) => {
-    if (props.realtimeTalkActive) {
+    const liveDraft = state.composerTextarea?.value ?? visibleDraft;
+    if (props.realtimeTalkActive || (!liveDraft.trim() && !props.attachments?.length)) {
       props.onToggleRealtimeTalk?.();
       return;
     }
-    const liveDraft = state.composerTextarea?.value ?? visibleDraft;
-    if (liveDraft.trim() || props.attachments?.length) {
-      const claim = claimChatSubmissionAction(action);
-      if (claim.firstUse) {
-        handleSend(claim.submissionId);
-      }
-      return;
-    }
-    props.onToggleRealtimeTalk?.();
+    runClaimedChatSubmissionAction(action, handleSend);
   };
   const openMicrophonePicker = () => {
     if (state.microphonePickerOpen) {
