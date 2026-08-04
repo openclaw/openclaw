@@ -249,6 +249,52 @@ describe("remote workspace quiescence scripts", () => {
     }
   }, 30_000);
 
+  it("reaches terminal recovery within one global deadline across persistent probe batches", async () => {
+    const input = await fixture();
+    const children = Array.from({ length: 24 }, () => spawn("sleep", ["30"], { stdio: "ignore" }));
+    const childPids = children.map((child) => child.pid!);
+    let nonce = "";
+
+    try {
+      await fs.writeFile(input.extraProcessPath, `${childPids.join("\n")}\n`);
+      nonce = await quiesce(input, 30_000, 20_000);
+      await Promise.all(childPids.map(async (pid) => await expectProcessState(pid, true)));
+      await fs.writeFile(input.stalledProcessProbeTargetPath, `${childPids.join("\n")}\n`);
+
+      const startedAt = Date.now();
+      const result = await runCommandWithTimeout(
+        [process.execPath, "-e", REMOTE_WORKSPACE_RESUME_JS, input.workspace, nonce],
+        { timeoutMs: 10_000, baseEnv: input.env },
+      );
+
+      expect(result.code).not.toBe(0);
+      expect(Date.now() - startedAt).toBeLessThan(8_000);
+      const terminal = JSON.parse(
+        await fs.readFile(leasePath(input.home, input.workspace, nonce), "utf8"),
+      ) as {
+        watchdog: unknown;
+        processes: Array<{ pid: number }>;
+        recovery?: { state: string };
+      };
+      expect(terminal.watchdog).toBeNull();
+      expect(terminal.processes.map((entry) => entry.pid)).toEqual(childPids);
+      expect(terminal.recovery?.state).toBe("probe-timeout");
+
+      await fs.rm(input.stalledProcessProbeTargetPath, { force: true });
+      await resume(input, nonce);
+      await Promise.all(childPids.map(async (pid) => await expectProcessState(pid, false)));
+    } finally {
+      await fs.rm(input.extraProcessPath, { force: true });
+      await fs.rm(input.stalledProcessProbeTargetPath, { force: true });
+      if (nonce) {
+        try {
+          await resume(input, nonce);
+        } catch {}
+      }
+      await Promise.all(children.map(async (child) => await terminate(child)));
+    }
+  }, 35_000);
+
   it("reports when failed quiescence recovery retains a terminal lease", async () => {
     const input = await fixture();
     const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {

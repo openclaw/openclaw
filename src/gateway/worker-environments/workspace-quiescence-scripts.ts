@@ -53,10 +53,11 @@ function probeProcessIdentity(pid, timeoutMs = ${REMOTE_WATCHDOG_PROCESS_PROBE_T
   });
 }
 function processSignalDeadlineMs(referenceCount) {
-  // One full probe timeout per concurrency batch still fits the caller's
-  // ten-minute command ceiling at the supported 4,096-process maximum.
-  const batches = Math.max(1, Math.ceil(referenceCount / ${REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY}));
-  return Date.now() + ${REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS} + batches * ${REMOTE_WATCHDOG_PROCESS_PROBE_TIMEOUT_MS};
+  // This is one strict wall-clock ceiling for the whole recovery pass. Probe
+  // batches run concurrently within it; the deadline must not scale with the
+  // number of retained process references.
+  void referenceCount;
+  return Date.now() + ${REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS};
 }
 async function signalProcessReferences(references, concurrency = ${REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY}, deadlineMs = Date.now() + ${REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS}) {
   // Keep identity confirmation adjacent to its signal so a slow sibling probe cannot stale it.
