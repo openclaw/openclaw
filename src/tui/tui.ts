@@ -7,7 +7,6 @@ import { fileURLToPath } from "node:url";
 import {
   CombinedAutocompleteProvider,
   Container,
-  Key,
   Loader,
   matchesKey,
   ProcessTerminal,
@@ -41,10 +40,15 @@ import { ChatLog } from "./components/chat-log.js";
 import { CustomEditor } from "./components/custom-editor.js";
 import { resolveLocalRunShutdownGraceMs } from "./local-run-shutdown.js";
 import { editorTheme, theme } from "./theme/theme.js";
+import { sanitizeAutocompleteProvider } from "./tui-autocomplete.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
-import { formatTuiFooter, formatTuiErrorMessage } from "./tui-formatters.js";
+import {
+  formatTuiErrorMessage,
+  formatTuiFooter,
+  sanitizeRenderableLine,
+} from "./tui-formatters.js";
 import {
   buildTuiLastSessionScopeKey,
   readTuiLastSessionKey,
@@ -259,18 +263,21 @@ export function resolveGatewayDisconnectState(reason?: string): {
 export function createBackspaceDeduper(params?: { dedupeWindowMs?: number; now?: () => number }) {
   const dedupeWindowMs = Math.max(0, Math.floor(params?.dedupeWindowMs ?? 8));
   const now = params?.now ?? (() => Date.now());
-  let lastBackspaceAt = -1;
+  let previousBackspace: { data: string; at: number } | undefined;
 
   return (data: string): string => {
-    if (data !== "\x08" && !matchesKey(data, Key.backspace)) {
+    if ((data !== "\x08" && data !== "\x7f") || !matchesKey(data, "backspace")) {
+      previousBackspace = undefined;
       return data;
     }
-    const ts = now();
-    if (lastBackspaceAt >= 0 && ts - lastBackspaceAt <= dedupeWindowMs) {
-      return "";
-    }
-    lastBackspaceAt = ts;
-    return data;
+    const at = now();
+    // SSH can emit both legacy encodings for one press; matching bytes are real repeats.
+    const isDuplicate =
+      previousBackspace !== undefined &&
+      previousBackspace.data !== data &&
+      at - previousBackspace.at <= dedupeWindowMs;
+    previousBackspace = isDuplicate ? undefined : { data, at };
+    return isDuplicate ? "" : data;
   };
 }
 
@@ -785,7 +792,9 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     editor.shouldSubmitAutocomplete = (text) =>
       shouldSubmitExactArgumentCompletion(text, slashCommands);
     editor.setAutocompleteProvider(
-      new CombinedAutocompleteProvider(slashCommands, resolveUsableCwd()),
+      sanitizeAutocompleteProvider(
+        new CombinedAutocompleteProvider(slashCommands, resolveUsableCwd()),
+      ),
     );
   };
 
@@ -961,11 +970,8 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     const sessionLabel = formatSessionKey(currentSessionKey);
     const agentLabel = formatAgentLabel(state.currentAgentId);
     const title = opts.title ?? "openclaw tui";
-    header.setText(
-      theme.header(
-        `${title} - ${client.connection.url} - agent ${agentLabel} - session ${sessionLabel}`,
-      ),
-    );
+    const text = `${title} - ${client.connection.url} - agent ${agentLabel} - session ${sessionLabel}`;
+    header.setText(theme.header(sanitizeRenderableLine(text)));
   };
 
   let statusText: Text | null = null;
@@ -1133,7 +1139,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   };
 
   const setConnectionStatus = (text: string, ttlMs?: number) => {
-    state.connectionStatus = text;
+    state.connectionStatus = sanitizeRenderableLine(text);
     renderStatus();
     if (state.statusTimeout) {
       stopStatusTimeout();
@@ -1280,6 +1286,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     updateFooter,
     updateAutocompleteProvider,
     setActivityStatus,
+    invalidateRunOwnership: () => invalidateSessionRunOwnership(),
     clearLocalRunIds: localRunIds.clear,
     rememberSessionKey: rememberCurrentSessionKey,
   });
