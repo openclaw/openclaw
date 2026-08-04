@@ -1064,6 +1064,49 @@ describe("session accessor seam", () => {
     );
   });
 
+  it("rejects a transcript turn when the session id rotates mid-append", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "old-rotate-session",
+      sessionKey: "agent:main:turn-rotate",
+      storePath,
+    };
+    await replaceSessionEntry(
+      { sessionKey: scope.sessionKey, storePath },
+      { sessionId: scope.sessionId, updatedAt: Date.now() },
+    );
+
+    const result = await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          message: { role: "user", content: "rotate-hello", timestamp: Date.now() },
+          shouldAppend: async () => {
+            // Simulate a concurrent reset rotating the session id between target
+            // resolution and the transcript append.
+            await replaceSessionEntry(
+              { sessionKey: scope.sessionKey, storePath },
+              { sessionId: "new-rotate-session", updatedAt: Date.now() },
+            );
+            return true;
+          },
+        },
+      ],
+      touchSessionEntry: true,
+      updateMode: "none",
+    });
+
+    expect(result.rejectedReason).toBe("session-rebound");
+    // The message must not be silently written into the stale session transcript.
+    await expect(
+      loadTranscriptEvents({ ...scope, sessionId: "old-rotate-session" }),
+    ).resolves.not.toContainEqual(
+      expect.objectContaining({
+        type: "message",
+        message: expect.objectContaining({ content: "rotate-hello" }),
+      }),
+    );
+  });
+
   it("appends SQLite turns to the active transcript leaf", async () => {
     const scope = {
       agentId: "main",
