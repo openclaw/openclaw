@@ -1,5 +1,37 @@
 import { describe, expect, it } from "vitest";
-import { resolveClickClackGroupPolicy } from "./group-policy.js";
+import { resolveClickClackBotPolicy, resolveClickClackGroupPolicy } from "./group-policy.js";
+
+describe("resolveClickClackBotPolicy", () => {
+  it("keeps bot-authored dispatch disabled by default", () => {
+    expect(resolveClickClackBotPolicy({ account: {}, channelId: "chn_unknown" })).toEqual({
+      allowBots: false,
+      botLoopProtection: undefined,
+    });
+  });
+
+  it("resolves exact, wildcard, and account bot policies independently", () => {
+    expect(
+      resolveClickClackBotPolicy({
+        account: {
+          allowBots: false,
+          botLoopProtection: { maxEventsPerWindow: 20, cooldownSeconds: 90 },
+          groups: {
+            "*": { allowBots: "mentions", botLoopProtection: { windowSeconds: 30 } },
+            chn_exact: { botLoopProtection: { maxEventsPerWindow: 5 } },
+          },
+        },
+        channelId: " chn_exact ",
+      }),
+    ).toEqual({
+      allowBots: "mentions",
+      botLoopProtection: {
+        maxEventsPerWindow: 5,
+        windowSeconds: 30,
+        cooldownSeconds: 90,
+      },
+    });
+  });
+});
 
 describe("resolveClickClackGroupPolicy", () => {
   it("returns requireMention: false when no policy is configured", () => {

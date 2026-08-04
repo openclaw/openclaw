@@ -1,3 +1,4 @@
+import type { ChannelBotLoopProtectionFacts } from "openclaw/plugin-sdk/channel-inbound";
 /**
  * Maps ClickClack senders and conversations onto the shared channel ingress
  * allowlist/command authorization contract.
@@ -13,7 +14,7 @@ import {
   type RoutePeer,
 } from "openclaw/plugin-sdk/routing";
 import { resolveClickClackDiscussionRoute } from "./discussions/routing.js";
-import { resolveClickClackGroupPolicy } from "./group-policy.js";
+import { resolveClickClackBotPolicy, resolveClickClackGroupPolicy } from "./group-policy.js";
 import { resolveClickClackMentionFacts } from "./mention-facts.js";
 import { getClickClackRuntime } from "./runtime.js";
 import { buildClickClackTarget } from "./target.js";
@@ -164,6 +165,7 @@ export type ClickClackInboundAccess = {
     wasMentioned: boolean;
     hasAnyMention?: boolean;
   };
+  botLoopProtection?: ChannelBotLoopProtectionFacts;
   preparedRoute: ClickClackPreparedInboundRoute;
 };
 
@@ -198,6 +200,41 @@ export async function resolveClickClackInboundAccess(params: {
     agentId: preparedRoute.route.agentId,
     channelId: params.message.channel_id,
   });
+  const effectiveBotPolicy = resolveClickClackBotPolicy({
+    account: params.account,
+    channelId: params.message.channel_id,
+  });
+  const isBotAuthor = params.message.author?.kind === "bot";
+  const botMentionAllowed =
+    !isBotAuthor ||
+    effectiveBotPolicy.allowBots === true ||
+    (effectiveBotPolicy.allowBots === "mentions" &&
+      (preparedRoute.isDirect || mentionFacts.wasMentioned));
+  if (!botMentionAllowed) {
+    return {
+      shouldDispatch: false,
+      commandAuthorized: false,
+      requireMention: effectiveGroupPolicy.requireMention,
+      mentionFacts,
+      preparedRoute,
+    };
+  }
+  const botLoopProtection =
+    isBotAuthor && params.message.author_id !== params.account.botUserId && params.account.botUserId
+      ? {
+          scopeId: `${params.account.workspace}:${params.account.accountId}`,
+          conversationId: preparedRoute.isDirect
+            ? (params.message.direct_conversation_id ?? params.message.author_id)
+            : (params.message.channel_id ??
+              params.message.thread_root_id ??
+              params.message.author_id),
+          senderId: params.message.author_id,
+          receiverId: params.account.botUserId,
+          config: effectiveBotPolicy.botLoopProtection,
+          defaultsConfig: cfg.channels?.defaults?.botLoopProtection,
+          defaultEnabled: true,
+        }
+      : undefined;
   const allowTextCommands =
     params.account.replyMode === "agent" &&
     runtime.channel.commands.shouldHandleTextCommands({
@@ -243,6 +280,7 @@ export async function resolveClickClackInboundAccess(params: {
       : resolved.senderAccess.allowed,
     requireMention: effectiveGroupPolicy.requireMention,
     mentionFacts,
+    botLoopProtection,
     preparedRoute,
   };
 }

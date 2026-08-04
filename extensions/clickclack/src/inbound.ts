@@ -213,6 +213,7 @@ export async function handleClickClackInbound(params: {
     accountId: params.account.accountId,
     route: { agentId: route.agentId, dmScope: route.dmScope, sessionKey: route.sessionKey },
     ctxPayload,
+    botLoopProtection: access.botLoopProtection,
     toolsAllow: params.account.toolsAllow,
     // Provenance stamping shares the agentActivity opt-in: with the flag off
     // the extension's wire payloads stay byte-identical to pre-activity

@@ -4,6 +4,9 @@
  * Pure helper – no side effects, no runtime imports.
  */
 
+import type { ChannelBotLoopProtectionConfig } from "openclaw/plugin-sdk/config-contracts";
+import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
+
 type ClickClackGroupPolicy = {
   requireMention: boolean;
   mentionPatterns: string[];
@@ -14,6 +17,47 @@ type ClickClackAccountGroupPolicyParams = {
   mentionPatterns?: string[];
   groups?: Record<string, { requireMention?: boolean; mentionPatterns?: string[] }>;
 };
+
+export type ClickClackBotPolicy = {
+  allowBots: boolean | "mentions";
+  botLoopProtection?: ChannelBotLoopProtectionConfig;
+};
+
+type ClickClackBotPolicyParams = {
+  allowBots?: boolean | "mentions";
+  botLoopProtection?: ChannelBotLoopProtectionConfig;
+  groups?: Record<
+    string,
+    {
+      allowBots?: boolean | "mentions";
+      botLoopProtection?: ChannelBotLoopProtectionConfig;
+    }
+  >;
+};
+
+/**
+ * Resolves bot-authored message policy using the same exact, wildcard, and
+ * account-level precedence as mention gating.
+ */
+export function resolveClickClackBotPolicy(params: {
+  account: ClickClackBotPolicyParams;
+  channelId?: string;
+}): ClickClackBotPolicy {
+  const { account, channelId } = params;
+  const wildcard = account.groups?.["*"];
+  const channelKey = channelId?.trim();
+  const exact = channelKey
+    ? Object.entries(account.groups ?? {}).find(([key]) => key.trim() === channelKey)?.[1]
+    : undefined;
+  return {
+    allowBots: exact?.allowBots ?? wildcard?.allowBots ?? account.allowBots ?? false,
+    botLoopProtection: mergePairLoopGuardConfig(
+      account.botLoopProtection,
+      wildcard?.botLoopProtection,
+      exact?.botLoopProtection,
+    ),
+  };
+}
 
 /**
  * Resolves the effective group policy for a ClickClack channel.

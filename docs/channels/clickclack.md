@@ -120,6 +120,8 @@ id (`wsp_...`), slug, or name; the gateway resolves it to the id at startup.
 | `replyMode`             | `"agent"`           | `"agent"` runs the full agent pipeline; `"model"` sends short direct model completions.                               |
 | `defaultTo`             | `"channel:general"` | Target used when an outbound path gives no target.                                                                    |
 | `allowFrom`             | `["*"]`             | User-id allowlist for inbound DMs and channel messages.                                                               |
+| `allowBots`             | `false`             | Admit messages authored by other ClickClack bots: `true` for all allowed bot messages or `"mentions"` in groups only. |
+| `botLoopProtection`     | built-in defaults   | Sliding-window bot-pair loop guard applied to admitted bot messages.                                                  |
 | `botUserId`             | auto-detected       | Resolved from the bot token identity at startup.                                                                      |
 | `agentId`               | route default       | Pin this account's inbound messages to one agent.                                                                     |
 | `toolsAllow`            | none                | Tool allowlist for agent replies from this account.                                                                   |
@@ -443,6 +445,21 @@ ClickClack mentions are detected when:
 
 Plain display names (e.g. `Blackbird`) are **not** treated as mentions unless they are explicitly configured as a pattern.
 
+### Bot-to-bot messages
+
+ClickClack ignores bot-authored messages by default. To opt in, set
+`allowBots: true` on the account. Set `allowBots: "mentions"` to admit bot
+messages in group channels only when they mention this bot; direct messages
+remain eligible without a mention. Bot messages still pass through
+`allowFrom`, so the sending bot must be explicitly allowed (or match `"*"`).
+Self-authored messages are always ignored.
+
+Accepted bot messages also pass through OpenClaw's shared bot-pair loop guard.
+Use `botLoopProtection` on the account or `channels.defaults.botLoopProtection`
+to tune its window, budget, cooldown, or enabled state. Group-level `allowBots`
+and `botLoopProtection` values follow the same exact-channel, wildcard, then
+account-level precedence as the other group policies.
+
 ### Configuration example
 
 ```json5
@@ -454,8 +471,10 @@ Plain display names (e.g. `Blackbird`) are **not** treated as mentions unless th
       workspace: "default",
       requireMention: true,
       mentionPatterns: ["\\bBlackbird\\b"],
+      allowBots: "mentions",
+      botLoopProtection: { maxEventsPerWindow: 12, windowSeconds: 60 },
       groups: {
-        "*": { requireMention: true },
+        "*": { requireMention: true, allowBots: "mentions" },
         chn_command_and_control: { requireMention: false },
       },
     },

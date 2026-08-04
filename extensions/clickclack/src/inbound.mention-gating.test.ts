@@ -108,6 +108,9 @@ function createAgentAccount(
     toolsAllow: [],
     defaultTo: "channel:general",
     allowFrom: ["*"],
+    botUserId: "usr_receiver",
+    botHandle: "blackbird",
+    allowBots: false,
     reconnectMs: 1_500,
     agentActivity: false,
     commandMenu: true,
@@ -217,6 +220,102 @@ describe("ClickClack inbound mention gating", () => {
     expect(logger?.warn).toHaveBeenCalledWith(
       "discussion attachment refresh failed for channel chn_1: Error: SQLITE_FULL",
     );
+  });
+
+  it("ignores bot-authored messages by default", async () => {
+    const runtime = createRuntime();
+    setClickClackRuntime(runtime);
+
+    await handleClickClackInbound({
+      account: createAgentAccount({ allowFrom: ["usr_sender"] }),
+      config: {} satisfies CoreConfig,
+      message: createMessage({
+        author_id: "usr_sender",
+        author: { ...createMessage().author, id: "usr_sender", kind: "bot", handle: "sender" },
+      }),
+    });
+
+    expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("dispatches an allowed bot-authored message through the shared loop guard", async () => {
+    const runtime = createRuntime();
+    setClickClackRuntime(runtime);
+
+    await handleClickClackInbound({
+      account: createAgentAccount({ allowFrom: ["usr_sender"], allowBots: true }),
+      config: {
+        channels: { defaults: { botLoopProtection: { maxEventsPerWindow: 7 } } },
+      } satisfies CoreConfig,
+      message: createMessage({
+        author_id: "usr_sender",
+        author: { ...createMessage().author, id: "usr_sender", kind: "bot", handle: "sender" },
+      }),
+    });
+
+    const dispatch = vi.mocked(runtime.channel.inbound.dispatch);
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch.mock.calls[0]?.[0].botLoopProtection).toMatchObject({
+      scopeId: "wsp_1:default",
+      conversationId: "chn_1",
+      senderId: "usr_sender",
+      receiverId: "usr_receiver",
+      defaultsConfig: { maxEventsPerWindow: 7 },
+      defaultEnabled: true,
+    });
+  });
+
+  it("requires a mention for bot-authored group messages in mention mode", async () => {
+    const runtime = createRuntime();
+    setClickClackRuntime(runtime);
+
+    await handleClickClackInbound({
+      account: createAgentAccount({ allowFrom: ["usr_sender"], allowBots: "mentions" }),
+      config: {} satisfies CoreConfig,
+      message: createMessage({
+        author_id: "usr_sender",
+        body: "hello from another agent",
+        author: { ...createMessage().author, id: "usr_sender", kind: "bot", handle: "sender" },
+      }),
+    });
+
+    expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("allows mentioned bot-authored group messages in mention mode", async () => {
+    const runtime = createRuntime();
+    setClickClackRuntime(runtime);
+
+    await handleClickClackInbound({
+      account: createAgentAccount({ allowFrom: ["usr_sender"], allowBots: "mentions" }),
+      config: {} satisfies CoreConfig,
+      message: createMessage({
+        author_id: "usr_sender",
+        body: "@blackbird please coordinate",
+        author: { ...createMessage().author, id: "usr_sender", kind: "bot", handle: "sender" },
+      }),
+    });
+
+    expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows bot-authored direct messages in mention mode without a mention", async () => {
+    const runtime = createRuntime();
+    setClickClackRuntime(runtime);
+
+    await handleClickClackInbound({
+      account: createAgentAccount({ allowFrom: ["usr_sender"], allowBots: "mentions" }),
+      config: {} satisfies CoreConfig,
+      message: createMessage({
+        author_id: "usr_sender",
+        channel_id: undefined,
+        direct_conversation_id: "dm_1",
+        body: "hello directly",
+        author: { ...createMessage().author, id: "usr_sender", kind: "bot", handle: "sender" },
+      }),
+    });
+
+    expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(1);
   });
 
   it("rejects an unmentioned group message when mention gating is enabled", async () => {
