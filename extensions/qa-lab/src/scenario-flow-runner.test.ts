@@ -355,6 +355,46 @@ describe("scenario-flow-runner", () => {
     expect(result.status).toBe("pass");
   });
 
+  it("skips a step when the skip condition is met", async () => {
+    await expect(
+      runLoadedScenarioFlow("qa-channel-failed-tool-terminal-finalization", {
+        flow: {
+          steps: [
+            {
+              name: "skips on condition",
+              actions: [
+                {
+                  skip: {
+                    expr: "env.condition === true",
+                    message: "known-harness-gap openclaw-runtime: test skip",
+                  },
+                },
+              ],
+            },
+          ],
+        },
+        api: { env: { condition: true } },
+      }),
+    ).rejects.toThrow(QaSuiteScenarioSkipError);
+  });
+
+  it("continues when the skip condition is not met", async () => {
+    await runLoadedScenarioFlow("qa-channel-failed-tool-terminal-finalization", {
+      flow: {
+        steps: [
+          {
+            name: "does not skip",
+            actions: [
+              { skip: { expr: "env.condition === true", message: "should not skip" } },
+              { set: "marker", value: "continued" },
+            ],
+          },
+        ],
+      },
+      api: { env: { condition: false } },
+    });
+  });
+
   it("keeps live goal followthrough inside the active-goal context limit", async () => {
     const state = createQaBusState();
     const artifactFile = "goal-continuance-live-00000000.txt";

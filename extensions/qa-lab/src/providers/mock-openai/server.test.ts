@@ -8267,7 +8267,7 @@ Update and merge these partial structured summaries.`,
       model: "gpt-5.6-luna",
       input: [makeUserInput(prompt), failedToolOutput, webFetchOutput],
     });
-    expect(outputText(replayed)).toBe("FAILED-TOOL-PRESENTATION-WAS-REPLAYED");
+    expect(outputText(replayed)).toBe("");
   });
 });
 

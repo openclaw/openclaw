@@ -1302,7 +1302,10 @@ async function buildResponsesPayload(
         { name: "web_fetch", args: { url: fetchUrl } },
       ]);
     }
-    return buildAssistantEvents("FAILED-TOOL-PRESENTATION-WAS-REPLAYED");
+    // After the tools have output, end the turn with no assistant message so
+    // the runtime's terminal assistant stays the toolUse batch (the residual
+    // shape); a replay or plain text would mask the finalization decision.
+    return buildAssistantEvents("");
   }
   if (isActiveFailedToolTerminalRecovery) {
     if (allInputText.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE)) {
