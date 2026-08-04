@@ -153,14 +153,11 @@ export async function handleNextcloudTalkInbound(params: {
     runtime,
   });
   if (roomKindResult.source === "failed") {
-    runtime.log?.(`nextcloud-talk: defer room ${message.roomToken} until room lookup recovers`);
-    if (params.turnAdoptionLifecycle) {
-      params.turnAdoptionLifecycle.onDeferred();
-      return { kind: "deferred" };
-    }
-    throw new NextcloudTalkRetryableWebhookError(
+    const error = new NextcloudTalkRetryableWebhookError(
       `Nextcloud Talk room lookup failed for ${message.roomToken}; retry webhook delivery`,
     );
+    runtime.log?.(`nextcloud-talk: retry room ${message.roomToken} after room lookup failure`);
+    return { kind: "failed-retryable", error };
   }
   const roomKind = roomKindResult.kind;
   const isGroup = roomKind === "direct" ? false : roomKind === "group" ? true : message.isGroupChat;

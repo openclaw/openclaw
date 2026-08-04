@@ -237,7 +237,7 @@ describe("nextcloud-talk inbound behavior", () => {
     expect(runtime.log).toHaveBeenCalledWith("nextcloud-talk: drop room room-group (no mention)");
   });
 
-  it("defers messages when configured room lookup fails instead of applying group fallback", async () => {
+  it("marks configured room lookup failure retryable instead of applying group fallback", async () => {
     installRuntime({
       buildMentionRegexes: vi.fn(() => [/@openclaw/i]),
       matchesMentionPatterns: vi.fn(() => false),
@@ -277,7 +277,10 @@ describe("nextcloud-talk inbound behavior", () => {
         config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
         runtime,
       }),
-    ).rejects.toBeInstanceOf(NextcloudTalkRetryableWebhookError);
+    ).resolves.toMatchObject({
+      kind: "failed-retryable",
+      error: expect.any(NextcloudTalkRetryableWebhookError),
+    });
 
     await expect(
       handleNextcloudTalkInbound({
@@ -300,13 +303,16 @@ describe("nextcloud-talk inbound behavior", () => {
         runtime,
         turnAdoptionLifecycle: lifecycle,
       }),
-    ).resolves.toEqual({ kind: "deferred" });
+    ).resolves.toMatchObject({
+      kind: "failed-retryable",
+      error: expect.any(NextcloudTalkRetryableWebhookError),
+    });
 
-    expect(lifecycle.onDeferred).toHaveBeenCalledTimes(1);
+    expect(lifecycle.onDeferred).not.toHaveBeenCalled();
     expect(sendMessageNextcloudTalkMock).not.toHaveBeenCalled();
     expect(issueChallenge).not.toHaveBeenCalled();
     expect(runtime.log).toHaveBeenCalledWith(
-      "nextcloud-talk: defer room room-lookup-down until room lookup recovers",
+      "nextcloud-talk: retry room room-lookup-down after room lookup failure",
     );
   });
 

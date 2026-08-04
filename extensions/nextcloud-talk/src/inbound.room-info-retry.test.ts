@@ -26,6 +26,18 @@ type ProofServer = {
 
 const servers: ProofServer[] = [];
 
+async function waitForRetryPump(condition: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (condition()) {
+      return;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 25);
+    });
+  }
+  throw new Error("timed out waiting for room lookup retry pump");
+}
+
 async function startRoomInfoServer(): Promise<ProofServer> {
   const requests: string[] = [];
   const server = http.createServer((req, res) => {
@@ -140,7 +152,7 @@ function startSpool(params: {
         turnAdoptionLifecycle: lifecycle,
       }),
     runtime: params.runtime,
-    pollIntervalMs: 60_000,
+    pollIntervalMs: 10,
     adoptionStallTimeoutMs: 5_000,
     legacyReplayStore: null,
   });
@@ -153,7 +165,7 @@ afterEach(async () => {
 });
 
 describe("nextcloud-talk inbound room-kind lookup retry", () => {
-  it("keeps a failed room lookup claimed until durable replay recovers and dispatches once", async () => {
+  it("retries a failed room lookup in the same running spool and dispatches once", async () => {
     const server = await startRoomInfoServer();
     const dispatches = { count: 0 };
     const logs: string[] = [];
@@ -170,29 +182,23 @@ describe("nextcloud-talk inbound room-kind lookup retry", () => {
         accountId: "proof",
         stateDir,
       });
-      const interrupted = startSpool({ queue, serverBaseUrl: server.baseUrl, runtime });
-      await interrupted.receive(createRawWebhookEvent({ roomToken: "room-durable-direct" }));
-      await interrupted.waitForIdle();
-
-      expect(dispatches.count).toBe(0);
-      expect(server.requests).toHaveLength(1);
-      expect((await queue.listClaims()).map((claim) => claim.id)).toEqual(["msg-proof"]);
-
-      await interrupted.stop();
-
-      const recovered = startSpool({ queue, serverBaseUrl: server.baseUrl, runtime });
+      const spool = startSpool({ queue, serverBaseUrl: server.baseUrl, runtime });
       try {
-        await recovered.waitForIdle();
+        await spool.receive(createRawWebhookEvent({ roomToken: "room-durable-direct" }));
+        await spool.waitForIdle();
+        await waitForRetryPump(() => dispatches.count === 1);
+        await spool.waitForIdle();
+
         expect(dispatches.count).toBe(1);
         expect(server.requests).toHaveLength(2);
         expect(await queue.listClaims()).toEqual([]);
       } finally {
-        await recovered.stop();
+        await spool.stop();
       }
     });
 
     expect(logs).toContain(
-      "nextcloud-talk: defer room room-durable-direct until room lookup recovers",
+      "nextcloud-talk: retry room room-durable-direct after room lookup failure",
     );
   });
 });
