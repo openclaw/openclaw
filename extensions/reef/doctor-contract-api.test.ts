@@ -607,7 +607,7 @@ describe("Reef doctor contract", () => {
     expect(fs.existsSync(`${replayPath}.migrated`)).toBe(false);
   });
 
-  it("leaves excessive retained legacy replay state blocked and unarchived", async () => {
+  it("rejects a legacy replay record that exceeds the plugin-state value limit", async () => {
     const legacyDir = path.join(stateDir, ".openclaw", "data", "reef");
     const replayPath = path.join(legacyDir, "replay.jsonl");
     fs.mkdirSync(legacyDir, { recursive: true });
@@ -636,7 +636,9 @@ describe("Reef doctor contract", () => {
 
     expect(result.changes).toEqual([]);
     expect(result.warnings).toEqual([
-      expect.stringContaining("Reef legacy JSONL retained state exceeds 67108864 bytes"),
+      expect.stringContaining(
+        "Reef legacy JSONL replay record exceeds 65536 byte plugin-state value limit",
+      ),
       expect.stringContaining("Reef durable state migration is incomplete"),
     ]);
     expect(fs.existsSync(replayPath)).toBe(true);

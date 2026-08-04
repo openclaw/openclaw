@@ -54,20 +54,29 @@ import {
 } from "./state.js";
 
 const REEF_RUNTIME_LEGACY_FILENAMES = ["replay.jsonl", "reviews.json", "delivered.json"];
-const REEF_LEGACY_JSONL_RETAINED_MAX_BYTES = 64 * 1024 * 1024;
+// The canonical plugin-state store caps each persisted value at 65,536 bytes
+// (MAX_PLUGIN_STATE_VALUE_BYTES). Migration must accept every journal the
+// runtime store can hold, so per-record bounds mirror that per-value contract
+// instead of an aggregate cap that can reject individually storable entries.
+const REEF_LEGACY_AUDIT_RECORD_MAX_BYTES = 65_536;
+const REEF_LEGACY_REPLAY_VALUE_MAX_BYTES = 65_536;
 
 type ReefAuditMigrationRecord = { pending: true; expectedEntries?: number };
 
 async function readLegacyReefAudit(
   filePath: string,
 ): Promise<{ entries: AuditEntry[]; totalEntries: number }> {
-  let retained: Array<{ entry: AuditEntry; bytes: number }> = [];
+  let retained: AuditEntry[] = [];
   let retainedStart = 0;
-  let retainedBytes = 0;
   let totalEntries = 0;
   let previousHash = "";
   let previousSeq = 0;
   await forEachLegacyReefJsonlRecord(filePath, "reject-torn", (value, recordBytes) => {
+    if (recordBytes > REEF_LEGACY_AUDIT_RECORD_MAX_BYTES) {
+      throw new Error(
+        `Reef legacy JSONL audit record exceeds ${REEF_LEGACY_AUDIT_RECORD_MAX_BYTES} byte plugin-state value limit`,
+      );
+    }
     const entry = value as AuditEntry;
     if (
       !verifyChainSegment([entry], {
@@ -81,23 +90,16 @@ async function readLegacyReefAudit(
     previousHash = entry.entryHash;
     previousSeq = entry.event.seq;
     totalEntries += 1;
-    retained.push({ entry, bytes: recordBytes });
-    retainedBytes += recordBytes;
+    retained.push(entry);
     if (retained.length - retainedStart > REEF_AUDIT_MAX_ENTRIES) {
-      retainedBytes -= retained[retainedStart]!.bytes;
       retainedStart += 1;
       if (retainedStart === REEF_AUDIT_MAX_ENTRIES) {
         retained = retained.slice(retainedStart);
         retainedStart = 0;
       }
     }
-    if (retainedBytes > REEF_LEGACY_JSONL_RETAINED_MAX_BYTES) {
-      throw new Error(
-        `Reef legacy JSONL retained state exceeds ${REEF_LEGACY_JSONL_RETAINED_MAX_BYTES} bytes`,
-      );
-    }
   });
-  return { entries: retained.slice(retainedStart).map(({ entry }) => entry), totalEntries };
+  return { entries: retained.slice(retainedStart), totalEntries };
 }
 
 async function readStoredReefAudit(
@@ -196,8 +198,6 @@ function parseLegacyReefReplayLine(value: unknown): LegacyReefReplayLogRecord {
 
 async function readLegacyReefReplay(filePath: string): Promise<ReefReplayRecord[]> {
   const records = new Map<string, ReefReplayRecord>();
-  const recordBytes = new Map<string, number>();
-  let retainedBytes = 0;
   await forEachLegacyReefJsonlRecord(filePath, "ignore-torn", (value) => {
     const log = parseLegacyReefReplayLine(value);
     const key = reefReplayStoreKey(log.peer, log.id);
@@ -239,16 +239,13 @@ async function readLegacyReefReplay(filePath: string): Promise<ReefReplayRecord[
       }
     }
     const nextBytes = Buffer.byteLength(JSON.stringify(next));
-    const previousBytes = recordBytes.get(key) ?? 0;
-    if (retainedBytes - previousBytes + nextBytes > REEF_LEGACY_JSONL_RETAINED_MAX_BYTES) {
+    if (nextBytes > REEF_LEGACY_REPLAY_VALUE_MAX_BYTES) {
       throw new Error(
-        `Reef legacy JSONL retained state exceeds ${REEF_LEGACY_JSONL_RETAINED_MAX_BYTES} bytes`,
+        `Reef legacy JSONL replay record exceeds ${REEF_LEGACY_REPLAY_VALUE_MAX_BYTES} byte plugin-state value limit`,
       );
     }
     records.delete(key);
     records.set(key, next);
-    recordBytes.set(key, nextBytes);
-    retainedBytes += nextBytes - previousBytes;
   });
   return [...records.values()];
 }
