@@ -1975,8 +1975,8 @@ describe("agentCliCommand", () => {
 
       expect(callGateway).toHaveBeenCalledTimes(1);
       // After the Gateway has accepted the run, the CLI must not launch an
-      // embedded fallback because the original Gateway-owned turn is still
-      // executing and could duplicate mutating work.
+      // embedded fallback because the accepted turn may still be running and
+      // an embedded run could duplicate mutating work.
       expect(agentCommand).not.toHaveBeenCalled();
       expect(result).toMatchObject({
         status: "accepted_timeout",
@@ -2000,6 +2000,14 @@ describe("agentCliCommand", () => {
             message.includes("before retrying or rerunning with --local"),
         ),
       ).toBe(true);
+      expect(
+        mockMessages(runtime.error).some((message) => message.includes("may still be running")),
+      ).toBe(true);
+      expect(
+        mockMessages(runtime.error).some(
+          (message) => message.includes("still executing") || message.includes("48-hour deadline"),
+        ),
+      ).toBe(false);
     });
   });
 
@@ -2042,6 +2050,14 @@ describe("agentCliCommand", () => {
             message.includes("before retrying or rerunning with --local"),
         ),
       ).toBe(true);
+      expect(
+        mockMessages(runtime.error).some((message) => message.includes("may still be running")),
+      ).toBe(true);
+      expect(
+        mockMessages(runtime.error).some(
+          (message) => message.includes("still executing") || message.includes("48-hour deadline"),
+        ),
+      ).toBe(false);
     });
   });
 

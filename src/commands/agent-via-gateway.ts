@@ -1056,9 +1056,9 @@ export async function agentCliCommand(
         }
         throw err;
       }
-      // Gateway accepted the run before the transport error — the turn is
-      // still executing (default 48-hour Gateway deadline).  The embedded
-      // fallback must not re-run the prompt because that would duplicate
+      // Gateway accepted the run before the transport error. The client cannot
+      // tell whether the turn is still executing; it may still be running. The
+      // embedded fallback must not re-run the prompt because that would duplicate
       // mutating work and may switch provider/model.
       if (err instanceof GatewayAcceptedRunTransportError) {
         const reasonText =
@@ -1069,7 +1069,7 @@ export async function agentCliCommand(
         } else {
           runtime.error?.(
             `Gateway agent ${reasonText} after accepting run ${err.acceptedRunId}. ` +
-              `The run is still executing on the Gateway (default 48-hour deadline). ` +
+              `The Gateway accepted the turn before transport was lost; it may still be running. ` +
               `To extend the CLI deadline: --timeout <seconds>. ` +
               `Check \`openclaw gateway status\` and the session transcript before retrying or rerunning with --local, so the turn does not execute twice.`,
           );
