@@ -4,10 +4,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveCronSessionRetentionMs } from "../../cron/session-retention.js";
 import { getLogger } from "../../logging/logger.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
+import {
+  sweepTombstonedCronRunRemnants,
+  type SessionTombstoneSweepResult,
+} from "./cleanup-tombstones.js";
 import {
   pruneUnreferencedSessionArtifacts,
   resolveSessionArtifactCanonicalPathsForEntry,
@@ -46,21 +51,17 @@ import type { SessionEntry } from "./types.js";
 
 export type SessionsCleanupOptions = SessionStoreSelectionOptions & {
   dryRun?: boolean;
+  /**
+   * Also reap aged cron-run rows whose entry_json is not a parseable canonical
+   * placeholder. Unsafe by default-off: see sweepTombstonedCronRunRemnants.
+   */
+  sweepUnidentifiedCronRemnants?: boolean;
   enforce?: boolean;
   activeKey?: string;
   json?: boolean;
   fixMissing?: boolean;
   fixDmScope?: boolean;
 };
-
-type SessionCleanupAction =
-  | "keep"
-  | "prune-missing"
-  | "prune-model-run"
-  | "prune-stale"
-  | "cap-overflow"
-  | "evict-budget"
-  | "retire-dm-scope";
 
 export type SessionCleanupSummary = {
   agentId: string;
@@ -75,6 +76,7 @@ export type SessionCleanupSummary = {
   pruned: number;
   capped: number;
   unreferencedArtifacts: SessionUnreferencedArtifactSweepResult;
+  tombstoneRemnants: SessionTombstoneSweepResult | null;
   diskBudget: SessionDiskBudgetSweepResult | null;
   wouldMutate: boolean;
   applied?: true;
@@ -168,37 +170,6 @@ function sqliteTranscriptHasMessageRecords(params: {
   }
 }
 
-/** Resolves the action label for one session key from cleanup key sets. */
-export function resolveSessionCleanupAction(params: {
-  key: string;
-  missingKeys: Set<string>;
-  modelRunPrunedKeys: Set<string>;
-  staleKeys: Set<string>;
-  cappedKeys: Set<string>;
-  budgetEvictedKeys: Set<string>;
-  dmScopeRetiredKeys: Set<string>;
-}): SessionCleanupAction {
-  if (params.dmScopeRetiredKeys.has(params.key)) {
-    return "retire-dm-scope";
-  }
-  if (params.missingKeys.has(params.key)) {
-    return "prune-missing";
-  }
-  if (params.modelRunPrunedKeys.has(params.key)) {
-    return "prune-model-run";
-  }
-  if (params.staleKeys.has(params.key)) {
-    return "prune-stale";
-  }
-  if (params.cappedKeys.has(params.key)) {
-    return "cap-overflow";
-  }
-  if (params.budgetEvictedKeys.has(params.key)) {
-    return "evict-budget";
-  }
-  return "keep";
-}
-
 function isMainScopeStaleDirectSessionKey(params: {
   cfg: OpenClawConfig;
   targetAgentId: string;
@@ -258,22 +229,6 @@ function retireMainScopeDirectSessionEntries(params: {
     }
   }
   return retired;
-}
-
-export function serializeSessionCleanupResult(params: {
-  mode: ResolvedSessionMaintenanceConfig["mode"];
-  dryRun: boolean;
-  summaries: SessionCleanupSummary[];
-}): SessionsCleanupResult {
-  if (params.summaries.length === 1) {
-    return params.summaries[0] ?? ({} as SessionCleanupSummary);
-  }
-  return {
-    allAgents: true,
-    mode: params.mode,
-    dryRun: params.dryRun,
-    stores: params.summaries,
-  };
 }
 
 function pruneMissingTranscriptEntries(params: {
@@ -355,6 +310,7 @@ async function previewStoreCleanup(params: {
   activeKey?: string;
   fixMissing?: boolean;
   fixDmScope?: boolean;
+  sweepUnidentifiedCronRemnants?: boolean;
 }) {
   const beforeStore = loadCleanupSessionStore(params.target, {
     createIfMissing: !params.dryRun,
@@ -448,6 +404,18 @@ async function previewStoreCleanup(params: {
     storePath: params.target.storePath,
     keys: dmScopeRetiredKeys,
   });
+  const cronSessionRetentionMs = resolveCronSessionRetentionMs(params.cfg.cron);
+  const tombstoneRemnants =
+    cronSessionRetentionMs != null && fs.existsSync(resolveCleanupSqlitePath(params.target))
+      ? await sweepTombstonedCronRunRemnants({
+          agentId: params.target.agentId,
+          storePath: params.target.storePath,
+          sqlitePath: resolveCleanupSqlitePath(params.target),
+          olderThanMs: cronSessionRetentionMs,
+          dryRun: true,
+          includeUnidentifiedPlaceholders: params.sweepUnidentifiedCronRemnants === true,
+        })
+      : null;
   const diskBudgetPreview = fs.existsSync(resolveCleanupSqlitePath(params.target))
     ? await inspectSqliteSessionHistoryDiskBudget({
         agentId: params.target.agentId,
@@ -474,6 +442,7 @@ async function previewStoreCleanup(params: {
     pruned > 0 ||
     capped > 0 ||
     unreferencedArtifacts.removedFiles > 0 ||
+    (tombstoneRemnants?.candidates ?? 0) > 0 ||
     (diskBudget?.removedEntries ?? 0) > 0 ||
     (diskBudget?.removedFiles ?? 0) > 0 ||
     diskBudgetPreview.wouldMutate;
@@ -491,6 +460,7 @@ async function previewStoreCleanup(params: {
     pruned,
     capped,
     unreferencedArtifacts,
+    tombstoneRemnants,
     diskBudget,
     wouldMutate,
   };
@@ -535,6 +505,7 @@ export async function runSessionsCleanup(params: {
       activeKey: opts.activeKey,
       fixMissing: Boolean(opts.fixMissing),
       fixDmScope: Boolean(opts.fixDmScope),
+      sweepUnidentifiedCronRemnants: Boolean(opts.sweepUnidentifiedCronRemnants),
     });
     previewResults.push(result);
   }
@@ -617,6 +588,20 @@ export async function runSessionsCleanup(params: {
               freedBytes: 0,
               olderThanMs: maintenance.pruneAfterMs,
             });
+      const cronSessionRetentionMs = resolveCronSessionRetentionMs(cfg.cron);
+      const appliedTombstoneRemnants =
+        mode === "warn" ||
+        cronSessionRetentionMs == null ||
+        !fs.existsSync(resolveCleanupSqlitePath(target))
+          ? null
+          : await sweepTombstonedCronRunRemnants({
+              agentId: target.agentId,
+              storePath: target.storePath,
+              sqlitePath: resolveCleanupSqlitePath(target),
+              olderThanMs: cronSessionRetentionMs,
+              dryRun: false,
+              includeUnidentifiedPlaceholders: opts.sweepUnidentifiedCronRemnants === true,
+            });
       const appliedDiskBudget = await enforceSqliteSessionHistoryDiskBudget({
         agentId: target.agentId,
         storePath: target.storePath,
@@ -648,10 +633,12 @@ export async function runSessionsCleanup(params: {
               }),
               dryRun: false,
               unreferencedArtifacts,
+              tombstoneRemnants: appliedTombstoneRemnants,
               diskBudget: appliedDiskBudget,
               wouldMutate:
                 removedSessionKeys.size > 0 ||
                 unreferencedArtifacts.removedFiles > 0 ||
+                (appliedTombstoneRemnants?.removedNodes ?? 0) > 0 ||
                 (appliedDiskBudget?.removedEntries ?? 0) > 0 ||
                 (appliedDiskBudget?.removedFiles ?? 0) > 0 ||
                 // Checkpoint/incremental-vacuum reclamation mutates the store
@@ -674,9 +661,11 @@ export async function runSessionsCleanup(params: {
               pruned: appliedReport.pruned,
               capped: appliedReport.capped,
               unreferencedArtifacts,
+              tombstoneRemnants: appliedTombstoneRemnants,
               diskBudget: appliedDiskBudget,
               wouldMutate:
                 missingApplied > 0 ||
+                (appliedTombstoneRemnants?.removedNodes ?? 0) > 0 ||
                 dmScopeRetiredApplied > 0 ||
                 appliedReport.modelRunPruned > 0 ||
                 appliedReport.pruned > 0 ||
