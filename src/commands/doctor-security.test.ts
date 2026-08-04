@@ -3,7 +3,11 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ExecApprovalsFile } from "../infra/exec-approvals-core.js";
-import { saveExecApprovals } from "../infra/exec-approvals-store.js";
+import {
+  loadExecApprovals,
+  readExecApprovalsSnapshot,
+  saveExecApprovals,
+} from "../infra/exec-approvals-store.js";
 import { testing as execApprovalsStoreTesting } from "../infra/exec-approvals-store.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
@@ -746,5 +750,106 @@ describe("noteSecurityWarnings gateway exposure", () => {
     const message = lastMessage();
     expect(message).not.toContain("Heartbeat defaults");
     expect(message).not.toContain('Heartbeat agent "ops"');
+  });
+
+  it("diagnoses rejected exec argPatterns without mutating persisted approvals", async () => {
+    const approvals = {
+      version: 1,
+      agents: {
+        main: {
+          allowlist: [
+            { pattern: "/usr/bin/python3", argPattern: "(a+)+$" },
+            { pattern: "/usr/bin/node", argPattern: "[invalid" },
+            { pattern: "/bin/echo", argPattern: "^safe$" },
+            { pattern: "/bin/blank", argPattern: "" },
+            { pattern: "/bin/space", argPattern: " " },
+            { pattern: "/bin/path-only" },
+          ],
+        },
+      },
+    } satisfies ExecApprovalsFile;
+
+    await withExecApprovalsFile(approvals, async () => {
+      const beforeHash = readExecApprovalsSnapshot().hash;
+      await noteSecurityWarnings({} as OpenClawConfig);
+
+      const message = lastMessage();
+      expect(message).toContain("2 persisted exec approval argPattern(s)");
+      expect(message).toContain("unsafe-nested-repetition");
+      expect(message).toContain("invalid-regex");
+      expect(message).toContain("openclaw doctor --fix");
+      expect(readExecApprovalsSnapshot().hash).toBe(beforeHash);
+    });
+  });
+
+  it("repairs rejected exec argPatterns through the structured security health check", async () => {
+    const collisionSafe = { pattern: "/bin/tool\0(a+)+$", argPattern: "safe" };
+    const approvals = {
+      version: 1,
+      agents: {
+        main: {
+          allowlist: [
+            { pattern: "/bin/tool", argPattern: "(a+)+$\0safe" },
+            { pattern: "/bin/invalid", argPattern: "[invalid" },
+            { pattern: "/bin/duplicate", argPattern: "(a+)+$" },
+            { pattern: "/bin/duplicate", argPattern: "(a+)+$" },
+            collisionSafe,
+            { pattern: "/bin/echo", argPattern: "^safe$" },
+            { pattern: "/bin/blank", argPattern: "" },
+            { pattern: "/bin/space", argPattern: " " },
+            { pattern: "/bin/path-only" },
+          ],
+        },
+      },
+    } satisfies ExecApprovalsFile;
+
+    await withExecApprovalsFile(approvals, async () => {
+      const { CORE_HEALTH_CHECKS } = await import("../flows/doctor-core-checks.js");
+      const check = CORE_HEALTH_CHECKS.find(
+        (candidate) => candidate.id === "core/doctor/exec-approval-arg-patterns",
+      );
+      expect(check).toBeDefined();
+      const context = {
+        mode: "fix" as const,
+        runtime: { log() {}, error() {}, exit() {} },
+        cfg: {} as OpenClawConfig,
+      };
+      const findings = await check!.detect(context);
+      expect(findings).toHaveLength(4);
+      const beforeHash = readExecApprovalsSnapshot().hash;
+
+      const preview = await check!.repair?.({ ...context, dryRun: true }, findings);
+      expect(preview?.changes).toEqual([
+        expect.stringContaining("Would remove 4 rejected exec approval entries"),
+      ]);
+      expect(preview?.effects).toEqual([
+        expect.objectContaining({
+          kind: "state",
+          action: "remove 4 rejected exec approval entries",
+        }),
+      ]);
+      expect(readExecApprovalsSnapshot().hash).toBe(beforeHash);
+
+      const repaired = await check!.repair?.(context, findings);
+      expect(repaired?.changes).toEqual([
+        expect.stringContaining("Removed 4 rejected exec approval entries"),
+      ]);
+      expect(repaired?.effects).toEqual([
+        expect.objectContaining({
+          kind: "state",
+          action: "remove 4 rejected exec approval entries",
+        }),
+      ]);
+      expect(await check!.detect(context)).toEqual([]);
+
+      const remaining = loadExecApprovals().agents?.main?.allowlist ?? [];
+      expect(remaining.map(({ pattern, argPattern }) => ({ pattern, argPattern }))).toEqual([
+        collisionSafe,
+        { pattern: "/bin/echo", argPattern: "^safe$" },
+        { pattern: "/bin/blank", argPattern: "" },
+        { pattern: "/bin/space", argPattern: " " },
+        { pattern: "/bin/path-only" },
+      ]);
+    });
   });
 });

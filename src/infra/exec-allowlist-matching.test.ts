@@ -152,6 +152,30 @@ describe("exec allowlist matching", () => {
       expect(matchAllowlist(entries, resolution, ["python3", "a.py"])).toBeNull();
     });
 
+    it("rejects nested-repetition patterns before they can authorize a matching command", () => {
+      const argPattern = "(a+)+$";
+      const unsafe = { pattern: "/usr/bin/python3", argPattern };
+
+      expect(new RegExp(argPattern).test("aaaa")).toBe(true);
+      expect(matchAllowlist([unsafe], resolution, ["python3", "aaaa"])).toBeNull();
+    });
+
+    it("falls back to an explicit path-only sibling when an argPattern is rejected", () => {
+      const unsafe = { pattern: "/usr/bin/python3", argPattern: "(a+)+$" };
+      const pathOnly = { pattern: "/usr/bin/python3" };
+
+      expect(matchAllowlist([unsafe, pathOnly], resolution, ["python3", "aaaa"])).toBe(pathOnly);
+    });
+
+    it("preserves blank and whitespace-sensitive legacy argPattern semantics", () => {
+      const blank = { pattern: "/usr/bin/python3", argPattern: "" };
+      const whitespace = { pattern: "/usr/bin/python3", argPattern: "^ a $" };
+
+      expect(matchAllowlist([blank], resolution, ["python3", "anything"])).toBe(blank);
+      expect(matchAllowlist([whitespace], resolution, ["python3", " a "])).toBe(whitespace);
+      expect(matchAllowlist([whitespace], resolution, ["python3", "a"])).toBeNull();
+    });
+
     it("rejects split-arg bypasses against single-arg auto-generated argPattern", () => {
       const entry = { pattern: "/usr/bin/python3", argPattern: "^hello world\x00$" };
       const entries: ExecAllowlistEntry[] = [entry];
