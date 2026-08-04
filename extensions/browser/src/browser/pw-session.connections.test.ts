@@ -354,7 +354,10 @@ describe("pw-session connection scoping", () => {
   it("does not start CDP after discovery is cancelled", async () => {
     let resolveDiscovery!: (value: string | null) => void;
     getChromeWebSocketUrlSpy.mockImplementationOnce(
-      async () => await new Promise<string | null>((resolve) => (resolveDiscovery = resolve)),
+      async () =>
+        await new Promise<string | null>((resolve) => {
+          resolveDiscovery = resolve;
+        }),
     );
     const controller = new AbortController();
     const pending = getPageForTargetId({

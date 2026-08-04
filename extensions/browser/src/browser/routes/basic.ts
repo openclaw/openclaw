@@ -63,7 +63,11 @@ async function awaitTaskWithAbort<T>(task: Promise<T>, signal: AbortSignal): Pro
   let abortListener: (() => void) | undefined;
   const aborted = new Promise<never>((_resolve, reject) => {
     abortListener = () => {
-      reject(signal.reason ?? new Error("aborted"));
+      reject(
+        signal.reason instanceof Error
+          ? signal.reason
+          : new Error(String(signal.reason ?? "aborted")),
+      );
     };
     signal.addEventListener("abort", abortListener, { once: true });
   });
@@ -92,6 +96,8 @@ function liveProbeFailureFixHint(profileCtx: ProfileContext, statusRunning: bool
       return statusRunning
         ? `Reload the stalled page or stop and restart the managed browser, then retry with ${retryCommand}.`
         : `Run ${browserProfileCommand(profileCtx, "start")}, then retry with ${retryCommand}.`;
+    default:
+      throw new Error("Unsupported browser profile capability mode");
   }
 }
 

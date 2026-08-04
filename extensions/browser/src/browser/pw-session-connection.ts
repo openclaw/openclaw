@@ -1,10 +1,9 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { Browser, BrowserContext, CDPSession, Page } from "playwright-core";
+import type { Browser, BrowserContext, Page } from "playwright-core";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { withManagedProxyForCdpUrl, withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
-import { PLAYWRIGHT_TARGET_INFO_TIMEOUT_MS } from "./cdp-timeouts.js";
 import {
   assertCdpEndpointAllowed,
   getHeadersWithAuth,
@@ -31,6 +30,7 @@ import {
   type PendingBrowserConnection,
   type PlaywrightConnectionRetirement,
 } from "./pw-session-contracts.js";
+import { readPageTargetInfo } from "./pw-session-page-target-info.js";
 import {
   bindRoleRefsTarget,
   ensurePageState,
@@ -562,7 +562,11 @@ async function waitForPendingBrowserConnection(
         // must retire the producer even though the other finally blocks have
         // not run yet.
         removeWaiter(true);
-        reject(signal.reason ?? new Error("Playwright connection aborted."));
+        reject(
+          signal.reason instanceof Error
+            ? signal.reason
+            : new Error(String(signal.reason ?? "Playwright connection aborted.")),
+        );
       };
       signal.addEventListener("abort", abortListener, { once: true });
     });
@@ -632,76 +636,6 @@ type PageTargetInfo = { targetId: string; title: string };
 // A Page owns one bounded target-info read at a time so concurrent enumerations share its
 // temporary CDP session. Settled reads evict themselves so later calls observe fresh metadata.
 const targetInfoReads = new WeakMap<Page, Promise<PageTargetInfo | null>>();
-
-async function readPageTargetInfo(
-  page: Page,
-  signal?: AbortSignal,
-): Promise<PageTargetInfo | null> {
-  signal?.throwIfAborted();
-  let session: CDPSession | undefined;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let timedOut = false;
-  let detachStarted = false;
-  const detach = () => {
-    if (!session || detachStarted) {
-      return;
-    }
-    detachStarted = true;
-    void session.detach().catch(() => {});
-  };
-  const timeout = new Promise<null>((resolve) => {
-    timer = setTimeout(() => {
-      timedOut = true;
-      detach();
-      resolve(null);
-    }, PLAYWRIGHT_TARGET_INFO_TIMEOUT_MS);
-    timer.unref?.();
-  });
-  let abortListener: (() => void) | undefined;
-  const aborted = signal
-    ? new Promise<never>((_resolve, reject) => {
-        abortListener = () => {
-          detach();
-          reject(signal.reason ?? new Error("Page target lookup aborted."));
-        };
-        signal.addEventListener("abort", abortListener, { once: true });
-      })
-    : undefined;
-  const read = (async () => {
-    session = await page.context().newCDPSession(page);
-    if (signal?.aborted) {
-      detach();
-      throw signal.reason ?? new Error("Page target lookup aborted.");
-    }
-    if (timedOut) {
-      detach();
-      return null;
-    }
-    try {
-      const { targetInfo } = await session.send("Target.getTargetInfo");
-      signal?.throwIfAborted();
-      const targetId = normalizeOptionalString(targetInfo.targetId) ?? "";
-      if (!targetId) {
-        return null;
-      }
-      return { targetId, title: targetInfo.title };
-    } finally {
-      detach();
-    }
-  })();
-  void read.catch(() => {});
-  void aborted?.catch(() => {});
-  try {
-    return await Promise.race([read, timeout, ...(aborted ? [aborted] : [])]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-    if (signal && abortListener) {
-      signal.removeEventListener("abort", abortListener);
-    }
-  }
-}
 
 export function pageTargetInfo(page: Page, signal?: AbortSignal): Promise<PageTargetInfo | null> {
   if (signal) {

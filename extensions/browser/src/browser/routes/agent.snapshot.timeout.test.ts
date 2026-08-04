@@ -4,8 +4,19 @@ import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helper
 
 type SnapshotAriaViaPlaywright = (opts: unknown) => Promise<{ nodes: never[] }>;
 type SnapshotAriaViaCdp = (opts: { signal?: AbortSignal }) => Promise<{ nodes: never[] }>;
+type MainFrameDocumentIdentityViaPlaywright = (opts: {
+  cdpUrl: string;
+  targetId?: string;
+  signal?: AbortSignal;
+  ssrfPolicy?: unknown;
+}) => Promise<string | undefined>;
 type StoreAriaSnapshotRefsViaPlaywright = (opts: { signal?: AbortSignal }) => Promise<void>;
 type SnapshotRoleViaPlaywright = (opts: { signal?: AbortSignal }) => Promise<{
+  snapshot: string;
+  refs: Record<string, never>;
+  stats: { lines: number; chars: number; refs: number; interactive: number };
+}>;
+type SnapshotRoleViaCdp = (opts: { signal?: AbortSignal; timeoutMs?: number }) => Promise<{
   snapshot: string;
   refs: Record<string, never>;
   stats: { lines: number; chars: number; refs: number; interactive: number };
@@ -21,7 +32,7 @@ const cdpMocks = vi.hoisted(() => ({
   captureScreenshot: vi.fn(),
   getMainFrameDocumentIdentityViaCdp: vi.fn(async () => "cdp:test-document"),
   snapshotAria: vi.fn<SnapshotAriaViaCdp>(async () => ({ nodes: [] })),
-  snapshotRoleViaCdp: vi.fn(async () => ({
+  snapshotRoleViaCdp: vi.fn<SnapshotRoleViaCdp>(async () => ({
     snapshot: "button Continue",
     refs: {},
     stats: { lines: 1, chars: 15, refs: 0, interactive: 0 },
@@ -35,9 +46,7 @@ const pwMocks = vi.hoisted(() => ({
         getObservedBrowserStateViaPlaywright: (opts: {
           signal?: AbortSignal;
         }) => Promise<undefined>;
-        getMainFrameDocumentIdentityViaPlaywright?: (opts: {
-          signal?: AbortSignal;
-        }) => Promise<string | undefined>;
+        getMainFrameDocumentIdentityViaPlaywright?: MainFrameDocumentIdentityViaPlaywright;
         snapshotAiViaPlaywright?: SnapshotRoleViaPlaywright;
         snapshotAriaViaPlaywright?: SnapshotAriaViaPlaywright;
         snapshotRoleViaPlaywright?: SnapshotRoleViaPlaywright;
@@ -46,11 +55,18 @@ const pwMocks = vi.hoisted(() => ({
       },
   ),
   getObservedBrowserStateViaPlaywright: vi.fn(async () => undefined),
-  getMainFrameDocumentIdentityViaPlaywright: vi.fn(async () => "pw:test-document"),
-  requireModule: vi.fn(
-    async () => null as null | { snapshotAriaViaPlaywright: SnapshotAriaViaPlaywright },
+  getMainFrameDocumentIdentityViaPlaywright: vi.fn<MainFrameDocumentIdentityViaPlaywright>(
+    async () => "pw:test-document",
   ),
-  snapshotAriaViaPlaywright: vi.fn(async () => ({ nodes: [] })),
+  requireModule: vi.fn(
+    async () =>
+      null as null | {
+        snapshotAriaViaPlaywright?: SnapshotAriaViaPlaywright;
+        snapshotRoleViaPlaywright?: SnapshotRoleViaPlaywright;
+        screenshotWithLabelsViaPlaywright?: ScreenshotWithLabelsViaPlaywright;
+      },
+  ),
+  snapshotAriaViaPlaywright: vi.fn<SnapshotAriaViaPlaywright>(async () => ({ nodes: [] })),
   snapshotRoleViaPlaywright: vi.fn<SnapshotRoleViaPlaywright>(async () => ({
     snapshot: "button Continue",
     refs: {},
@@ -266,7 +282,12 @@ describe("browser agent snapshot timeout routing", () => {
           await new Promise<void>((_resolve, reject) => {
             opts.signal?.addEventListener(
               "abort",
-              () => reject(opts.signal?.reason ?? new Error("aborted")),
+              () =>
+                reject(
+                  opts.signal?.reason instanceof Error
+                    ? opts.signal.reason
+                    : new Error(String(opts.signal?.reason ?? "aborted")),
+                ),
               { once: true },
             );
           }),
@@ -312,7 +333,12 @@ describe("browser agent snapshot timeout routing", () => {
           await new Promise<string | undefined>((_resolve, reject) => {
             opts.signal?.addEventListener(
               "abort",
-              () => reject(opts.signal?.reason ?? new Error("aborted")),
+              () =>
+                reject(
+                  opts.signal?.reason instanceof Error
+                    ? opts.signal.reason
+                    : new Error(String(opts.signal?.reason ?? "aborted")),
+                ),
               { once: true },
             );
           }),
@@ -359,7 +385,12 @@ describe("browser agent snapshot timeout routing", () => {
         await new Promise<never>((_resolve, reject) => {
           opts.signal?.addEventListener(
             "abort",
-            () => reject(opts.signal?.reason ?? new Error("aborted")),
+            () =>
+              reject(
+                opts.signal?.reason instanceof Error
+                  ? opts.signal.reason
+                  : new Error(String(opts.signal?.reason ?? "aborted")),
+              ),
             { once: true },
           );
         }),
@@ -396,7 +427,12 @@ describe("browser agent snapshot timeout routing", () => {
         await new Promise<never>((_resolve, reject) => {
           opts.signal?.addEventListener(
             "abort",
-            () => reject(opts.signal?.reason ?? new Error("aborted")),
+            () =>
+              reject(
+                opts.signal?.reason instanceof Error
+                  ? opts.signal.reason
+                  : new Error(String(opts.signal?.reason ?? "aborted")),
+              ),
             { once: true },
           );
         }),
@@ -450,7 +486,12 @@ describe("browser agent snapshot timeout routing", () => {
         await new Promise<never>((_resolve, reject) => {
           opts.signal?.addEventListener(
             "abort",
-            () => reject(opts.signal?.reason ?? new Error("aborted")),
+            () =>
+              reject(
+                opts.signal?.reason instanceof Error
+                  ? opts.signal.reason
+                  : new Error(String(opts.signal?.reason ?? "aborted")),
+              ),
             { once: true },
           );
         }),

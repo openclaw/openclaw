@@ -46,7 +46,11 @@ async function awaitWithAbort<T>(
   const aborted = new Promise<never>((_resolve, reject) => {
     abortListener = () => {
       onAbort?.();
-      reject(signal.reason ?? new Error("aborted"));
+      reject(
+        signal.reason instanceof Error
+          ? signal.reason
+          : new Error(String(signal.reason ?? "aborted")),
+      );
     };
     signal.addEventListener("abort", abortListener, { once: true });
   });

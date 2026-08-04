@@ -626,7 +626,9 @@ describe("browser manage output", () => {
     try {
       getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
         if (req.path === "/doctor") {
-          await new Promise<void>((resolve) => setTimeout(resolve, 5_000));
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 5_000);
+          });
           return {
             ok: true,
             status: {
@@ -648,7 +650,9 @@ describe("browser manage output", () => {
           };
         }
         if (req.path === "/profiles") {
-          await new Promise<void>((resolve) => setTimeout(resolve, 4_000));
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 4_000);
+          });
           return { profiles: [{ name: "chrome", running: true }] };
         }
         if (req.path === "/tabs") {
