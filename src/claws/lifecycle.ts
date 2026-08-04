@@ -209,9 +209,7 @@ export async function buildClawAddPlan(params: {
   const packageRoot = await realpath(params.source.packageRoot).catch(
     () => params.source.packageRoot,
   );
-  const manifestPath = await realpath(params.source.manifestPath).catch(
-    () => params.source.manifestPath,
-  );
+  const manifestPath = resolvePathViaExistingAncestorSync(resolve(params.source.manifestPath));
   const source = { ...params.source, packageRoot, manifestPath };
   const sourceRoot = await fsSafeRoot(packageRoot);
   const blockers: ClawDiagnostic[] = [];
