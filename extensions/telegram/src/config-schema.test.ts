@@ -580,4 +580,49 @@ describe("telegram webhook schema", () => {
       "accounts.ops.webhookSecret",
     );
   });
+
+  it("rejects webhookPath that collides with /healthz", () => {
+    expectTelegramConfigIssue(
+      {
+        webhookUrl: "https://example.com/telegram-webhook",
+        webhookSecret: "secret",
+        webhookPath: "/healthz",
+      },
+      "webhookPath",
+    );
+  });
+
+  it("rejects account webhookPath that collides with /healthz", () => {
+    expectTelegramConfigIssue(
+      {
+        accounts: {
+          ops: {
+            webhookUrl: "https://example.com/telegram-webhook",
+            webhookSecret: "secret",
+            webhookPath: "/healthz",
+          },
+        },
+      },
+      "accounts.ops.webhookPath",
+    );
+  });
+
+  it("rejects webhookPath without a leading slash", () => {
+    expectTelegramConfigIssue(
+      {
+        webhookUrl: "https://example.com/telegram-webhook",
+        webhookSecret: "secret",
+        webhookPath: "mybot",
+      },
+      "webhookPath",
+    );
+  });
+
+  it("accepts webhookPath with a leading slash", () => {
+    expectTelegramConfigValid({
+      webhookUrl: "https://example.com/telegram-webhook",
+      webhookSecret: "secret",
+      webhookPath: "/mybot",
+    });
+  });
 });
