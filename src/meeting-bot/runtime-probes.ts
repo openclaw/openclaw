@@ -33,7 +33,7 @@ type MeetingProbeConfig<Mode extends string> = {
   chromeNode: { node?: string };
 };
 
-export type MeetingProbeRefreshOutcome = MeetingBrowserHealthRefreshOutcome;
+type MeetingProbeRefreshOutcome = MeetingBrowserHealthRefreshOutcome;
 
 type MeetingProbeRefreshResult = MeetingProbeRefreshOutcome | boolean | void;
 
