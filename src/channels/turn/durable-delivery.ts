@@ -235,11 +235,19 @@ export async function deliverInboundReplyWithMessageSendContext(
     };
   }
 
+  // adapter_returned_no_identity means the adapter was invoked but the platform
+  // returned no identity — it may still have delivered. routeReply, the
+  // delivery queue, and outbound audit all treat this as potentially visible
+  // (ambiguous), so durable-delivery must too: marking it "explicitly not sent"
+  // would drop recovery state or trigger a duplicate fallback for a reply that
+  // may already be visible.
+  const adapterReturnedNoIdentity =
+    send.status === "suppressed" && send.reason === "adapter_returned_no_identity";
   const receiptDelivery = createChannelDeliveryResultFromReceipt({
     receipt: send.receipt,
     threadId: stringifyThreadId(threadId),
     ...(replyToId ? { replyToId } : {}),
-    visibleReplySent: send.status === "sent",
+    visibleReplySent: send.status === "sent" || adapterReturnedNoIdentity,
     ...(send.deliveryIntent ? { deliveryIntent: toDeliveryIntent(send.deliveryIntent) } : {}),
   });
   const delivery: ChannelDeliveryResult =
@@ -247,7 +255,9 @@ export async function deliverInboundReplyWithMessageSendContext(
       ? { ...receiptDelivery, suppression: resolveDurableSuppression(send) }
       : receiptDelivery;
   if (send.status === "suppressed") {
-    return { status: "handled_no_send", reason: "no_visible_result", delivery };
+    return adapterReturnedNoIdentity
+      ? { status: "handled_visible", delivery }
+      : { status: "handled_no_send", reason: "no_visible_result", delivery };
   }
   return { status: "handled_visible", delivery };
 }
