@@ -22,8 +22,11 @@ import type {
 import type { MeetingProbeContext } from "./runtime-probes.js";
 import { createMeetingSession } from "./session-factory.js";
 import {
-  MeetingSessionRuntime,
+  getMeetingSessionRuntimeProbeAccess,
   type MeetingBrowserHealthRefreshOutcome,
+} from "./session-runtime-probes.js";
+import {
+  MeetingSessionRuntime,
   type MeetingSessionRuntimeHandles,
   type MeetingSessionRuntimeJoinContext,
 } from "./session-runtime.js";
@@ -267,7 +270,10 @@ export function createMeetingRuntimeFacade<
         join: async (request) =>
           await this.#joinSession(
             request,
-            async (normalized) => await this.#sessions.joinForProbe(normalized),
+            async (normalized) =>
+              await getMeetingSessionRuntimeProbeAccess<Session, Request>(
+                this.#sessions,
+              ).joinForProbe(normalized),
           ),
         isReusable: (session, resolved) => this.#sessions.isReusableSession(session, resolved),
         hasHealthHandle: (sessionId) => this.#sessions.hasHealthHandle(sessionId),

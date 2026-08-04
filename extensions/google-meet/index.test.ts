@@ -12,11 +12,11 @@ import {
   createLocalMeetingRealtimeAudioTransport,
   createMeetingRealtimeEngineBindings,
   createNodeMeetingRealtimeAudioTransport,
-  MeetingSessionRuntime,
   startMeetingAgentRealtimeEngine,
   startMeetingRealtimeEngine,
   type MeetingRealtimeAudioTransport,
 } from "openclaw/plugin-sdk/meeting-runtime";
+import * as meetingRuntimeProbes from "openclaw/plugin-sdk/meeting-runtime-probes";
 import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
 import type {
   RealtimeVoiceBridge,
@@ -5395,7 +5395,7 @@ describe("google-meet plugin", () => {
       },
     });
     vi.spyOn(runtime, "list").mockReturnValue([oldSession]);
-    vi.spyOn(MeetingSessionRuntime.prototype, "joinForProbe").mockResolvedValue({
+    vi.spyOn(meetingRuntimeProbes, "joinMeetingSessionForProbe").mockResolvedValue({
       browserHealthChecked: true,
       manualActionIsAuthoritative: true,
       session: newSession,
@@ -5422,7 +5422,7 @@ describe("google-meet plugin", () => {
       },
     });
     vi.spyOn(runtime, "list").mockReturnValue([session]);
-    vi.spyOn(MeetingSessionRuntime.prototype, "joinForProbe").mockImplementation(async () => {
+    vi.spyOn(meetingRuntimeProbes, "joinMeetingSessionForProbe").mockImplementation(async () => {
       session.chrome!.health = { transcriptLines: 2, lastCaptionText: "fresh caption" };
       return {
         browserHealthChecked: true,
@@ -5458,7 +5458,7 @@ describe("google-meet plugin", () => {
     vi.spyOn(runtime, "list").mockReturnValue([session]);
     const publicJoin = vi.spyOn(runtime, "join").mockResolvedValue({ session, spoken: false });
     const joinForProbe = vi
-      .spyOn(MeetingSessionRuntime.prototype, "joinForProbe")
+      .spyOn(meetingRuntimeProbes, "joinMeetingSessionForProbe")
       .mockResolvedValue({
         browserHealthChecked: false,
         manualActionIsAuthoritative: false,
@@ -6001,6 +6001,65 @@ describe("google-meet plugin", () => {
       expect(leaveChromeMeet).toHaveBeenCalledOnce();
     } finally {
       leaveChromeMeet.mockRestore();
+      launchChromeMeet.mockRestore();
+    }
+  });
+
+  it.each([
+    {
+      label: "a successful health refresh without manual action",
+      recovery: {
+        transport: "chrome" as const,
+        found: true,
+        targetId: "meet-tab",
+        message: "Meet tab refreshed.",
+        browser: { inCall: true },
+      },
+    },
+    {
+      label: "a missing tab result",
+      recovery: {
+        transport: "chrome" as const,
+        found: false,
+        message: "Meet tab is missing.",
+      },
+    },
+    {
+      label: "a thrown recovery error",
+      recovery: new Error("browser recovery failed"),
+    },
+  ])("clears stale manual actions after $label", async ({ recovery }) => {
+    const staleManualAction = {
+      reason: "meet-admission-required" as const,
+      message: "Admit the OpenClaw browser participant in Google Meet.",
+    };
+    const { launch: launchChromeMeet } = mockChromeMeetLifecycle({
+      launches: [
+        {
+          launched: true,
+          tab: { targetId: "meet-tab", openedByPlugin: true },
+          browser: { inCall: false, manualAction: staleManualAction },
+        },
+      ],
+    });
+    const recoverCurrentMeetTab = vi
+      .spyOn(chromeTransport, "recoverCurrentMeetTab")
+      .mockImplementation(async () => {
+        if (recovery instanceof Error) {
+          throw recovery;
+        }
+        return recovery;
+      });
+    try {
+      const runtime = createChromeLifecycleRuntime({ defaultMode: "transcribe" });
+      const joined = await runtime.join({ url: MEET_URL, mode: "transcribe" });
+      expect(joined.session.chrome?.health?.manualAction).toEqual(staleManualAction);
+
+      const status = await runtime.status(joined.session.id);
+
+      expect(status.session?.chrome?.health?.manualAction).toBeUndefined();
+    } finally {
+      recoverCurrentMeetTab.mockRestore();
       launchChromeMeet.mockRestore();
     }
   });

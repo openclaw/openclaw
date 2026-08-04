@@ -5,10 +5,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { TranscriptsStore } from "../transcripts/store.js";
 import { createMeetingSession } from "./session-factory.js";
 import {
-  type MeetingBrowserHealthRefreshOutcome,
   MeetingSessionRuntime,
   type MeetingSessionRuntimeJoinContext,
 } from "./session-runtime.js";
+import {
+  getMeetingSessionRuntimeProbeAccess,
+  type MeetingBrowserHealthRefreshOutcome,
+} from "./session-runtime-probes.js";
 import type {
   MeetingBrowserHealth,
   MeetingBrowserTab,
@@ -292,11 +295,12 @@ describe("MeetingSessionRuntime probe join health", () => {
         },
       });
 
-      const first = await runtime.joinForProbe({
+      const probeAccess = getMeetingSessionRuntimeProbeAccess<TestSession, TestRequest>(runtime);
+      const first = await probeAccess.joinForProbe({
         url: "https://meeting.example/probe",
         agentId: "main",
       });
-      const reused = await runtime.joinForProbe({
+      const reused = await probeAccess.joinForProbe({
         url: "https://meeting.example/probe",
         agentId: "main",
       });
@@ -338,7 +342,11 @@ describe("MeetingSessionRuntime caption health compatibility", () => {
     const legacyRefresh: (session: TestSession) => Promise<void> =
       runtime.refreshCaptionHealth.bind(runtime);
     await expect(legacyRefresh(session)).resolves.toBeUndefined();
-    await expect(runtime.refreshCaptionHealthForProbe(session)).resolves.toEqual(refreshOutcome);
+    await expect(
+      getMeetingSessionRuntimeProbeAccess<TestSession, TestRequest>(
+        runtime,
+      ).refreshCaptionHealthForProbe(session),
+    ).resolves.toEqual(refreshOutcome);
     expect(refreshBrowserHealth).toHaveBeenCalledTimes(2);
   });
 });

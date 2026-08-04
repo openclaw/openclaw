@@ -10,6 +10,10 @@ import {
   type MeetingSessionRuntimeHandles,
   type MeetingSessionRuntimeJoinContext,
 } from "openclaw/plugin-sdk/meeting-runtime";
+import {
+  joinMeetingSessionForProbe,
+  refreshMeetingCaptionHealthForProbe,
+} from "openclaw/plugin-sdk/meeting-runtime-probes";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -88,6 +92,16 @@ type GoogleMeetJoinContext = MeetingSessionRuntimeJoinContext<
 >;
 
 const nowIso = () => new Date().toISOString();
+
+function clearNonAuthoritativeManualAction(
+  health: GoogleMeetChromeHealth | undefined,
+): GoogleMeetChromeHealth | undefined {
+  if (!health || health.manualAction === undefined) {
+    return health;
+  }
+  const { manualAction: _manualAction, ...rest } = health;
+  return rest;
+}
 
 export class GoogleMeetRuntime {
   readonly #createdBrowserTabs = new Map<string, string>();
@@ -285,7 +299,13 @@ export class GoogleMeetRuntime {
   async testListen(request: GoogleMeetJoinRequest) {
     // Listening consumes probe-only freshness metadata; speech keeps the public join contract.
     return await testGoogleMeetListening(
-      this.#probeContext(async (probeRequest) => await this.#sessions.joinForProbe(probeRequest)),
+      this.#probeContext(
+        async (probeRequest) =>
+          await joinMeetingSessionForProbe<GoogleMeetSession, GoogleMeetJoinRequest>(
+            this.#sessions,
+            probeRequest,
+          ),
+      ),
       request,
     );
   }
@@ -303,7 +323,7 @@ export class GoogleMeetRuntime {
       hasHealthHandle: (sessionId) => this.#sessions.hasHealthHandle(sessionId),
       refreshHealth: (sessionId) => this.#sessions.refreshHealth(sessionId),
       refreshCaptionHealth: async (session) =>
-        await this.#sessions.refreshCaptionHealthForProbe(session),
+        await refreshMeetingCaptionHealthForProbe(this.#sessions, session),
     };
   }
 
@@ -523,6 +543,7 @@ export class GoogleMeetRuntime {
     session: GoogleMeetSession,
     options: { force?: boolean; readOnly?: boolean } = {},
   ): Promise<boolean> {
+    const clearStaleManualActionOnFailure = options.force === true || options.readOnly === true;
     try {
       const result =
         session.transport === "chrome-node"
@@ -556,17 +577,33 @@ export class GoogleMeetRuntime {
           };
         }
         if (!result.browser) {
+          if (clearStaleManualActionOnFailure) {
+            session.chrome.health = clearNonAuthoritativeManualAction(session.chrome.health);
+          }
           return false;
         }
-        session.chrome.health = { ...session.chrome.health, ...result.browser };
+        const refreshedHealth = { ...session.chrome.health, ...result.browser };
+        session.chrome.health = Object.prototype.hasOwnProperty.call(result.browser, "manualAction")
+          ? refreshedHealth
+          : clearNonAuthoritativeManualAction(refreshedHealth);
         session.updatedAt = nowIso();
         return true;
+      }
+      if (session.chrome) {
+        if (clearStaleManualActionOnFailure) {
+          session.chrome.health = clearNonAuthoritativeManualAction(session.chrome.health);
+        }
       }
       return false;
     } catch (error) {
       this.params.logger.debug?.(
         `[google-meet] browser readiness refresh ignored: ${formatErrorMessage(error)}`,
       );
+      if (session.chrome) {
+        if (clearStaleManualActionOnFailure) {
+          session.chrome.health = clearNonAuthoritativeManualAction(session.chrome.health);
+        }
+      }
       return false;
     }
   }

@@ -918,11 +918,11 @@ not stay active after leave.
 ### Meeting browser-health freshness
 
 `openclaw/plugin-sdk/meeting-runtime` keeps browser-health freshness at the
-shared session-runtime boundary. Meeting plugins that implement listening
-probes should use `MeetingSessionRuntime.joinForProbe(...)` and
-`refreshCaptionHealthForProbe(...)` rather than bypassing the lifecycle through
-the public `join(...)` or `refreshCaptionHealth(...)` facades. These probe-only
-results include two independent flags:
+shared session-runtime boundary. Bundled listening probes reach the
+lifecycle-only metadata through the private-local
+`openclaw/plugin-sdk/meeting-runtime-probes` seam; the public
+`MeetingSessionRuntime.join(...)` and `refreshCaptionHealth(...)` contracts stay
+unchanged. The private probe results include two independent flags:
 
 - `browserHealthChecked` is true only when the current browser health was
   inspected and applied to the canonical session.
@@ -930,11 +930,14 @@ results include two independent flags:
   `health.manualAction` is fresh enough to return immediately to an operator.
 
 An explicit `false` is preserved and is never inferred to be true merely because
-browser inspection succeeded. Older plugin callbacks that return `void`, a
-boolean, or omit the metadata retain their legacy successful-completion
-behavior through compatibility inference. Failed, missing, or thrown browser
-recovery clears non-authoritative cached manual actions from the canonical
-session, so serialized session state cannot disagree with the probe result.
+browser inspection succeeded. At the lifecycle boundary, a legacy `void`
+callback (or a bare boolean result) does not itself provide freshness or
+authority. The probe compatibility layer may infer successful completion for
+older callbacks that omit the structured outcome, but that fallback does not
+promote a cached manual action when the lifecycle owner reported an explicit
+failure. Failed, missing, or thrown browser recovery clears non-authoritative
+cached manual actions from the canonical session, so serialized session state
+cannot disagree with the probe result.
 
 All bundled surfaces run on the shared controller: browser relay,
 managed-room handoff, voice-call realtime, voice-call streaming STT, Google

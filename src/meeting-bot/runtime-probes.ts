@@ -1,5 +1,5 @@
 import { sleep } from "../utils/sleep.js";
-import type { MeetingBrowserHealthRefreshOutcome } from "./session-runtime.js";
+import type { MeetingBrowserHealthRefreshOutcome } from "./session-runtime-probes.js";
 import type { MeetingPluginJoinRequest, MeetingPluginProbeHealth } from "./session-types.js";
 
 export function resolveMeetingProbeTimeoutMs(

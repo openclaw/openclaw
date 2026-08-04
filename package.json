@@ -1137,6 +1137,9 @@
       "types": "./dist/plugin-sdk/meeting-runtime.d.ts",
       "default": "./dist/plugin-sdk/meeting-runtime.js"
     },
+    "./plugin-sdk/meeting-runtime-probes": {
+      "default": "./dist/plugin-sdk/meeting-runtime-probes.js"
+    },
     "./plugin-sdk/transcripts": {
       "default": "./dist/plugin-sdk/transcripts.js"
     },

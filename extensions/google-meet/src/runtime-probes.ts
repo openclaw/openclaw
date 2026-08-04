@@ -1,7 +1,5 @@
-import {
-  type MeetingBrowserHealthRefreshOutcome,
-  MeetingPlatformAdapter,
-} from "openclaw/plugin-sdk/meeting-runtime";
+import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
+import type { MeetingBrowserHealthRefreshOutcome } from "openclaw/plugin-sdk/meeting-runtime-probes";
 import type { GoogleMeetConfig, GoogleMeetMode, GoogleMeetTransport } from "./config.js";
 import { normalizeMeetUrl } from "./meet-url.js";
 import type {

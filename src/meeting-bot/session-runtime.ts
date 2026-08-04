@@ -8,6 +8,11 @@ import type {
 import { MeetingSessionCleanupTracker } from "./session-cleanup-tracker.js";
 import { MeetingSessionDurableTranscripts } from "./session-durable-transcripts.js";
 import { MeetingSessionJoinLock } from "./session-join-lock.js";
+import {
+  registerMeetingSessionRuntimeProbeAccess,
+  type MeetingBrowserHealthRefreshOutcome,
+  type MeetingSessionProbeJoinResult,
+} from "./session-runtime-probes.js";
 import type {
   MeetingBrowserSessionView,
   MeetingSessionRuntimeHandles,
@@ -46,13 +51,6 @@ export type MeetingSessionRuntimeMessages<TSpeechBlockedReason extends string> =
     browserUnverifiedReason: TSpeechBlockedReason;
     audioBridgeUnavailableReason: TSpeechBlockedReason;
   };
-};
-
-export type MeetingBrowserHealthRefreshOutcome = {
-  /** True when the current browser health was inspected and applied. */
-  browserHealthChecked: boolean;
-  /** Whether the resulting manual action is fresh enough to expose to the caller. */
-  manualActionIsAuthoritative: boolean;
 };
 
 type MeetingBrowserHealthRefreshResult = MeetingBrowserHealthRefreshOutcome | boolean | void;
@@ -128,9 +126,6 @@ export type MeetingSessionLeaveResult<TSession> = {
   browserLeft?: boolean;
 };
 
-export type MeetingSessionProbeJoinResult<TSession> = MeetingPluginJoinResult<TSession> &
-  MeetingBrowserHealthRefreshOutcome;
-
 const nowIso = () => new Date().toISOString();
 
 function normalizeBrowserHealthRefreshOutcome(
@@ -199,6 +194,11 @@ export class MeetingSessionRuntime<
       sameMeetingUrl: (left, right) => options.sameMeetingUrl(left, right),
       transcriptStore: this.#transcriptStore,
     });
+    registerMeetingSessionRuntimeProbeAccess<TSession, TRequest>(this, {
+      joinForProbe: async (request) => await this.#joinForProbe(request),
+      refreshCaptionHealthForProbe: async (session) =>
+        await this.#refreshCaptionHealthForProbe(session),
+    });
   }
 
   list(): TSession[] {
@@ -259,10 +259,6 @@ export class MeetingSessionRuntime<
       ...result
     } = await this.#joinForProbe(request);
     return result;
-  }
-
-  async joinForProbe(request: TRequest): Promise<MeetingSessionProbeJoinResult<TSession>> {
-    return await this.#joinForProbe(request);
   }
 
   async #joinForProbe(request: TRequest): Promise<MeetingSessionProbeJoinResult<TSession>> {
@@ -421,17 +417,17 @@ export class MeetingSessionRuntime<
   }
 
   async refreshCaptionHealth(session: TSession): Promise<void> {
-    await this.refreshCaptionHealthForProbe(session);
+    await this.#refreshCaptionHealthForProbe(session);
   }
 
-  async refreshCaptionHealthForProbe(
+  async #refreshCaptionHealthForProbe(
     session: TSession,
   ): Promise<MeetingBrowserHealthRefreshOutcome> {
     if (!this.options.isTranscribeMode(session.mode)) {
       this.refreshSpeechReadiness(session);
       return { browserHealthChecked: false, manualActionIsAuthoritative: false };
     }
-    return await this.#refreshBrowserHealth(session);
+    return await this.#refreshBrowserHealth(session, { force: true, readOnly: true });
   }
 
   refreshSpeechReadiness(session: TSession): {

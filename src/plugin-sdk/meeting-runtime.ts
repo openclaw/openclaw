@@ -26,10 +26,8 @@ export {
 } from "../meeting-bot/realtime-audio-format.js";
 export {
   MeetingSessionRuntime,
-  type MeetingBrowserHealthRefreshOutcome,
   type MeetingBrowserSessionView,
   type MeetingSessionLeaveResult,
-  type MeetingSessionProbeJoinResult,
   type MeetingSessionRuntimeHandles,
   type MeetingSessionRuntimeJoinContext,
   type MeetingSessionRuntimeMessages,
