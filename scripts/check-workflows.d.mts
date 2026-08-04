@@ -2,6 +2,8 @@ export function windowsProcessTreeKillCommand(
   pid: number | undefined,
 ): { command: "taskkill"; args: string[] } | null;
 
+export function resolveWindowsTaskkillPath(env?: Record<string, string | undefined>): string;
+
 export function timeoutTerminationPlan(
   platform: string,
   pid: number | undefined,

@@ -5,6 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  resolveWindowsTaskkillPath,
   timeoutTerminationPlan,
   windowsProcessTreeKillCommand,
 } from "../../scripts/check-workflows.mjs";
@@ -300,6 +301,53 @@ describe("check-workflows", () => {
       command: "taskkill",
       args: ["/pid", "1234", "/T", "/F"],
     });
+  });
+
+  it("resolves Windows taskkill through System32", () => {
+    expect(resolveWindowsTaskkillPath({ SystemRoot: "C:\\Windows" })).toBe(
+      "C:\\Windows\\System32\\taskkill.exe",
+    );
+    expect(resolveWindowsTaskkillPath({ SYSTEMROOT: "D:\\Windows" })).toBe(
+      "D:\\Windows\\System32\\taskkill.exe",
+    );
+    expect(resolveWindowsTaskkillPath({ WINDIR: "C:\\Windows" })).toBe(
+      "C:\\Windows\\System32\\taskkill.exe",
+    );
+    expect(resolveWindowsTaskkillPath({})).toBe("C:\\Windows\\System32\\taskkill.exe");
+  });
+
+  it("surfaces a timed-out discovery probe instead of silently falling back", () => {
+    const tempDir = makeTempDir(tempDirs, "check-workflows-");
+    const binDir = path.join(tempDir, "bin");
+    const timeoutHookPath = writeTimeoutHook(tempDir);
+    mkdirSync(binDir);
+    writeFileSync(
+      path.join(binDir, "actionlint"),
+      [
+        `#!${process.execPath}`,
+        'process.on("SIGTERM", () => {});',
+        "setInterval(() => {}, 10_000);",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+
+    const result = spawnSync(process.execPath, [scriptPath], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        NODE_OPTIONS: `--import=${pathToFileURL(timeoutHookPath).href}`,
+        PATH: binDir,
+      },
+      timeout: 10_000,
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "[check-workflows] timed out after 300000ms: actionlint --version",
+    );
+    expect(result.stderr).not.toContain("missing workflow linter");
   });
 
   it("terminates the Windows process tree before signaling the root", () => {
