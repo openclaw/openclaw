@@ -19,7 +19,7 @@ export interface BashExecutorOptions {
   onChunk?: (chunk: string) => void;
   /** AbortSignal for cancellation */
   signal?: AbortSignal;
-  /** Decoder selected by the operation owner; defaults to UTF-8 for injected operations. */
+  /** Explicit decoder override; otherwise use the operation owner's decoder or UTF-8. */
   createTextDecoder?: () => OutputTextDecoder;
 }
 
@@ -52,7 +52,7 @@ export async function executeBashWithOperations(
 ): Promise<BashResult> {
   const output = new OutputAccumulator({
     tempFilePrefix: "openclaw-bash",
-    createTextDecoder: options?.createTextDecoder,
+    createTextDecoder: options?.createTextDecoder ?? operations.createTextDecoder,
     createTextTransform: () => {
       const sanitizeOutput = createStreamingBinaryOutputSanitizer();
       return (text) => sanitizeOutput(text).replace(/\r/g, "");

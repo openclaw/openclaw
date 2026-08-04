@@ -10,8 +10,12 @@ type OutputChunk = readonly [data: Buffer, stream?: "stdout" | "stderr"];
 
 const ESC = String.fromCharCode(27);
 
-function operationsForChunks(chunks: readonly OutputChunk[]): BashOperations {
+function operationsForChunks(
+  chunks: readonly OutputChunk[],
+  createTextDecoder?: BashOperations["createTextDecoder"],
+): BashOperations {
   return {
+    ...(createTextDecoder ? { createTextDecoder } : {}),
     exec: async (_command, _cwd, options) => {
       for (const [data, stream] of chunks) {
         options.onData(data, stream);
@@ -22,21 +26,26 @@ function operationsForChunks(chunks: readonly OutputChunk[]): BashOperations {
 }
 
 describe("executeBashWithOperations", () => {
-  it("keeps injected operation output UTF-8 unless the owner selects another decoder", async () => {
+  it("uses the operation owner's decoder while defaulting injected output to UTF-8", async () => {
     const cp936 = Buffer.from([
       199, 253, 182, 175, 198, 247, 32, 67, 32, 214, 208, 181, 196, 190, 237, 202, 199, 32, 65,
       99, 101, 114,
     ]);
-    const operations = operationsForChunks([[cp936]]);
+    const injectedOperations = operationsForChunks([[cp936]]);
+    const localOperations = operationsForChunks([[cp936]], () =>
+      createWindowsOutputDecoder({ platform: "win32", windowsEncoding: "gbk" }),
+    );
 
-    const utf8Result = await executeBashWithOperations("printf output", "/tmp", operations);
-    const windowsResult = await executeBashWithOperations("printf output", "/tmp", operations, {
+    const utf8Result = await executeBashWithOperations("printf output", "/tmp", injectedOperations);
+    const windowsResult = await executeBashWithOperations("printf output", "/tmp", localOperations);
+    const explicitResult = await executeBashWithOperations("printf output", "/tmp", injectedOperations, {
       createTextDecoder: () =>
         createWindowsOutputDecoder({ platform: "win32", windowsEncoding: "gbk" }),
     });
 
     expect(utf8Result.output).toBe(new TextDecoder().decode(cp936));
     expect(windowsResult.output).toBe("驱动器 C 中的卷是 Acer");
+    expect(explicitResult.output).toBe("驱动器 C 中的卷是 Acer");
   });
 
   it("stores truncated full output in an owner-only temp file", async () => {

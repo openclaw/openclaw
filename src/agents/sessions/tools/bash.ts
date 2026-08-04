@@ -62,6 +62,7 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
  */
 export function createLocalBashOperations(options?: { shellPath?: string }): BashOperations {
   return {
+    createTextDecoder: createWindowsOutputDecoder,
     exec: (command, cwd, { onData, signal, timeout, env }) => {
       return new Promise((resolve, reject) => {
         const shellConfig = getBashShellConfig(options?.shellPath);
@@ -328,7 +329,7 @@ export function createBashToolDefinition(
       const spawnContext = resolveSpawnContext(resolvedCommand, cwd, spawnHook, options?.shellPath);
       const output = new OutputAccumulator({
         tempFilePrefix: "openclaw-bash",
-        createTextDecoder: options?.operations ? undefined : createWindowsOutputDecoder,
+        createTextDecoder: ops.createTextDecoder,
       });
       let acceptingOutput = true;
       let updateTimer: NodeJS.Timeout | undefined;
