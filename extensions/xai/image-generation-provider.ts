@@ -120,7 +120,8 @@ export function buildXaiImageGenerationProvider(): ImageGenerationProvider {
     },
     defaultBaseUrl: XAI_BASE_URL,
     resolveBaseUrl: ({ req }) => resolveXaiImageBaseUrl(req),
-    resolveAllowPrivateNetwork: () => false,
+    resolveAllowPrivateNetwork: () => undefined,
+    useConfiguredRequest: true,
     defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
     buildGenerateRequest: ({ req, inputImages, model, count }) => ({
       kind: "json",
