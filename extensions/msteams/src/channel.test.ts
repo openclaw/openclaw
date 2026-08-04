@@ -102,7 +102,8 @@ describe("msteamsPlugin", () => {
         policyPath: "channels.msteams.dmPolicy",
         allowFromPath: "channels.msteams.",
       });
-      expect(result?.normalizeEntry?.("msteams:user:OWNER")).toBe("owner");
+      expect(result?.normalizeEntry?.(" OWNER ")).toBe("owner");
+      expect(result?.normalizeEntry?.(" msteams:user:OWNER ")).toBe("msteams:user:owner");
     }
     expect(msteamsSetupPlugin.security?.resolveDmPolicy).toBe(
       msteamsPlugin.security?.resolveDmPolicy,
