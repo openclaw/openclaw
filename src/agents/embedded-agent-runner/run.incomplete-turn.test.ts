@@ -2807,7 +2807,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams: unknown) => {
       // The earlier successful tool already recorded a terminal presentation;
-      // the current batch's failed result is persisted exactly.
+      // the current batch's failed result is persisted exactly. This models the
+      // #118489 residual at the owner boundary: a presentation observation with
+      // no delivered payload (payloadCount 0) plus an exact failed batch.
       (
         attemptParams as {
           onToolOutcome?: (observation: {

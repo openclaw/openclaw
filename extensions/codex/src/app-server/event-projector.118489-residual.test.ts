@@ -46,7 +46,11 @@ describe("CodexAppServerEventProjector #118489 residual failed-tool shapes", () 
       contentItems: [{ type: "inputText", text: "ENOENT: no such file or directory" }],
     });
     // Bridge failure: the turn snapshot carries the exact failed result, but
-    // item/completed for the failing tool is never processed.
+    // item/completed for the failing tool is never processed. The Codex
+    // app-server contract maps dynamic tool items by call id
+    // (openai/codex codex-rs/app-server-protocol/src/protocol/event_mapping.rs:
+    // ThreadItem::DynamicToolCall { id: response.call_id }), so the active item
+    // id below is the same id the finalizer matches against the requested call.
     await projector.handleNotification(
       turnCompleted([
         {
