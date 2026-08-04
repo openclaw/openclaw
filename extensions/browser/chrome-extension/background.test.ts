@@ -345,7 +345,7 @@ describe("relay CDP cancellation", () => {
     });
   });
 
-  it("orders startup attach, detach, and reattach behind custody initialization", async () => {
+  it("lets startup revocation drain while custody gates attach and reattach", async () => {
     const harness = await loadBackground({ deferCustodyInitialization: true });
     harness.tabGroupsQuery.mockResolvedValue([{ id: 3, windowId: 1 }]);
     harness.tabsQuery.mockResolvedValue([
@@ -369,11 +369,11 @@ describe("relay CDP cancellation", () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(operations).toEqual([]);
+    expect(operations).toEqual(["detach"]);
 
     harness.releaseCustodyInitialization?.();
 
-    await vi.waitFor(() => expect(operations).toEqual(["attach", "detach", "attach"]));
+    await vi.waitFor(() => expect(operations).toEqual(["detach", "attach"]));
     await vi.waitFor(() => {
       const frames = socket?.send.mock.calls.map(([raw]) => JSON.parse(raw as string)) ?? [];
       expect(frames).toEqual(

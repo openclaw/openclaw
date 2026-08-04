@@ -577,6 +577,7 @@ export function registerBrowserAgentSnapshotRoutes(
               refs: snap.refs,
               type,
               timeoutMs,
+              signal,
               fullPage,
               ref,
               element,

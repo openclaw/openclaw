@@ -214,8 +214,12 @@ async function syncTabsToRelay() {
 // ---------------------------------------------------------------------------
 
 async function attachDebugger(tabId) {
+  // Wait for durable custody reconstruction before entering the per-tab
+  // debugger queue. Custody initialization may revoke a persisted active
+  // binding through that same queue; waiting inside the queued operation would
+  // create an attach -> custody -> queued detach cycle during worker startup.
+  await copilotCustodyReady;
   return await enqueueDebuggerOperation(tabId, async () => {
-    await copilotCustodyReady;
     const accessRevision = copilotAccessRevisions.get(tabId) ?? 0;
     const assertAccess = () => {
       if (

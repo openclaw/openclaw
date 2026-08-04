@@ -141,10 +141,12 @@ vi.mock("./agent.shared.js", () => ({
   withPlaywrightRouteContext: vi.fn(),
   withRouteTabContext: vi.fn(
     async (params: {
+      req?: { signal?: AbortSignal };
       run: (ctx: {
         profileCtx: typeof profileContext;
         tab: { targetId: string; url: string; wsUrl: string };
         cdpUrl: string;
+        signal: AbortSignal;
       }) => Promise<void>;
     }) =>
       await params.run({
@@ -155,6 +157,7 @@ vi.mock("./agent.shared.js", () => ({
           wsUrl: "ws://127.0.0.1:18800/devtools/page/tab-1",
         },
         cdpUrl: "http://127.0.0.1:18800",
+        signal: params.req?.signal ?? new AbortController().signal,
       }),
   ),
 }));
@@ -429,6 +432,60 @@ describe("browser agent snapshot timeout routing", () => {
         pending,
         new Promise<never>((_resolve, reject) => {
           setTimeout(() => reject(new Error("labeled snapshot cancellation did not settle")), 100);
+        }),
+      ]),
+    ).rejects.toBe(cancellation);
+    expect(screenshotMocks.normalizeBrowserScreenshot).not.toHaveBeenCalled();
+    expect(mediaMocks.ensureMediaDir).not.toHaveBeenCalled();
+    expect(mediaMocks.saveMediaBuffer).not.toHaveBeenCalled();
+  });
+
+  it("passes route cancellation through POST labeled screenshots", async () => {
+    pwMocks.requireModule.mockResolvedValue({
+      snapshotRoleViaPlaywright: pwMocks.snapshotRoleViaPlaywright,
+      screenshotWithLabelsViaPlaywright: pwMocks.screenshotWithLabelsViaPlaywright,
+    });
+    pwMocks.screenshotWithLabelsViaPlaywright.mockImplementationOnce(
+      async (opts: { signal?: AbortSignal }) =>
+        await new Promise<never>((_resolve, reject) => {
+          opts.signal?.addEventListener(
+            "abort",
+            () => reject(opts.signal?.reason ?? new Error("aborted")),
+            { once: true },
+          );
+        }),
+    );
+    const handler = getScreenshotHandler();
+    const response = createBrowserRouteResponse();
+    const controller = new AbortController();
+    const cancellation = new Error("labeled screenshot cancelled");
+
+    const pending = handler?.(
+      {
+        params: {},
+        query: {},
+        body: { labels: true, timeoutMs: "4321" },
+        signal: controller.signal,
+      },
+      response.res,
+    );
+    void pending?.catch(() => {});
+    await vi.waitFor(() =>
+      expect(pwMocks.screenshotWithLabelsViaPlaywright).toHaveBeenCalledOnce(),
+    );
+
+    const screenshotOptions = pwMocks.screenshotWithLabelsViaPlaywright.mock.calls[0]?.[0];
+    expect(screenshotOptions?.signal).toBe(controller.signal);
+    controller.abort(cancellation);
+
+    await expect(
+      Promise.race([
+        pending,
+        new Promise<never>((_resolve, reject) => {
+          setTimeout(
+            () => reject(new Error("labeled screenshot cancellation did not settle")),
+            100,
+          );
         }),
       ]),
     ).rejects.toBe(cancellation);

@@ -567,6 +567,9 @@ describe("basic browser routes", () => {
 
     expect(ensureTabAvailable).toHaveBeenCalledOnce();
     expect(captureAriaSnapshotViaPlaywrightMock).toHaveBeenCalledOnce();
+    expect(response.body).toMatchObject({
+      status: { running: true, cdpReady: true, pageReady: true },
+    });
     const checks = responseBodyRecord(response).checks as Array<{
       id?: string;
       status?: string;
@@ -671,6 +674,10 @@ describe("basic browser routes", () => {
     expect(checks.find((check) => check.id === "live-snapshot")).toMatchObject({
       status: "pass",
       summary: expect.stringContaining("attached-target-1"),
+    });
+    expect(checks.find((check) => check.id === "cdp-websocket")).toMatchObject({
+      status: "pass",
+      summary: expect.stringContaining("validated by the live snapshot probe"),
     });
   });
 

@@ -107,20 +107,24 @@ function reconcileSuccessfulLiveProbe(
       ? "extension-relay"
       : report.transport === "chrome-mcp"
         ? "attach-target"
-        : null;
+        : "cdp-websocket";
   if (!transportCheckId) {
     return;
   }
   const transportCheck = report.checks.find((check) => check.id === transportCheckId);
-  if (!transportCheck || transportCheck.status !== "fail") {
+  if (!transportCheck) {
     return;
   }
-  transportCheck.status = "pass";
-  transportCheck.summary =
-    report.transport === "extension"
-      ? "OpenClaw Chrome extension transport validated by the live snapshot probe"
-      : "Chrome MCP target validated by the live snapshot probe";
-  delete transportCheck.fixHint;
+  if (transportCheck.status !== "pass") {
+    transportCheck.status = "pass";
+    transportCheck.summary =
+      report.transport === "extension"
+        ? "OpenClaw Chrome extension transport validated by the live snapshot probe"
+        : report.transport === "chrome-mcp"
+          ? "Chrome MCP target validated by the live snapshot probe"
+          : "CDP WebSocket validated by the live snapshot probe";
+    delete transportCheck.fixHint;
+  }
   report.status.running = true;
   report.status.cdpReady = true;
   report.status.pageReady = true;
