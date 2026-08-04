@@ -51,6 +51,7 @@ async function waitForTelegramTestState<T>(assertion: () => T | Promise<T>): Pro
 const runMock = vi.hoisted(() => vi.fn());
 const createTelegramBotMock = vi.hoisted(() => vi.fn());
 const isRecoverableTelegramNetworkErrorMock = vi.hoisted(() => vi.fn(() => true));
+const isTelegramAuthenticationErrorMock = vi.hoisted(() => vi.fn(() => false));
 const computeBackoffMock = vi.hoisted(() =>
   vi.fn((_policy: { initialMs: number }, _attempt: number) => 0),
 );
@@ -67,6 +68,7 @@ vi.mock("./bot.js", () => ({
 
 vi.mock("./network-errors.js", () => ({
   isRecoverableTelegramNetworkError: isRecoverableTelegramNetworkErrorMock,
+  isTelegramAuthenticationError: isTelegramAuthenticationErrorMock,
 }));
 
 vi.mock("openclaw/plugin-sdk/delivery-queue-runtime", () => ({
@@ -321,6 +323,7 @@ function makeIsolatedBot(params?: {
 }
 
 function installPollingStallWatchdogHarness(dateNowSequence: readonly number[] = [0, 0]) {
+  let monotonicNow = dateNowSequence[0] ?? 0;
   let watchdog: (() => void) | undefined;
   let resolveWatchdog: ((fn: () => void) => void) | undefined;
   const watchdogReady = new Promise<() => void>((resolve) => {
@@ -362,6 +365,7 @@ function installPollingStallWatchdogHarness(dateNowSequence: readonly number[] =
     realClearTimeout(timeoutId);
   });
   const dateNowSpy = vi.spyOn(Date, "now");
+  const performanceNowSpy = vi.spyOn(performance, "now").mockImplementation(() => monotonicNow);
   for (const value of dateNowSequence) {
     dateNowSpy.mockImplementationOnce(() => value);
   }
@@ -401,6 +405,7 @@ function installPollingStallWatchdogHarness(dateNowSequence: readonly number[] =
       });
     },
     setNow(now: number) {
+      monotonicNow = now;
       dateNowSpy.mockReset();
       dateNowSpy.mockImplementation(() => now);
     },
@@ -410,6 +415,7 @@ function installPollingStallWatchdogHarness(dateNowSequence: readonly number[] =
       setTimeoutSpy.mockRestore();
       clearTimeoutSpy.mockRestore();
       dateNowSpy.mockRestore();
+      performanceNowSpy.mockRestore();
     },
   };
 }
@@ -858,6 +864,7 @@ describe("TelegramPollingSession", () => {
     runMock.mockReset();
     createTelegramBotMock.mockReset();
     isRecoverableTelegramNetworkErrorMock.mockReset().mockReturnValue(true);
+    isTelegramAuthenticationErrorMock.mockReset().mockReturnValue(false);
     computeBackoffMock.mockReset().mockReturnValue(0);
     sleepWithAbortMock.mockReset().mockResolvedValue(undefined);
     drainPendingDeliveriesMock.mockReset().mockResolvedValue(undefined);
@@ -876,6 +883,7 @@ describe("TelegramPollingSession", () => {
   it("uses backoff helpers for recoverable polling retries", async () => {
     const abort = new AbortController();
     const recoverableError = new Error("recoverable polling error");
+    const setStatus = vi.fn();
     const botStop = vi.fn(async () => undefined);
     const runnerStop = vi.fn(async () => undefined);
     const bot = {
@@ -921,6 +929,7 @@ describe("TelegramPollingSession", () => {
       persistUpdateId: async () => undefined,
       log: () => undefined,
       telegramTransport: undefined,
+      setStatus,
     });
 
     await session.runUntilAbort();
@@ -940,6 +949,7 @@ describe("TelegramPollingSession", () => {
       1,
     );
     expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
+    expect(statusPatches(setStatus)).toContainEqual({ lifecycle: "recovering" });
   });
 
   it("resets restart backoff after a healthy polling cycle", () => {
@@ -3610,6 +3620,7 @@ describe("TelegramPollingSession", () => {
         listener?.({
           type: "poll-error",
           message: "Unauthorized",
+          errorCode: 401,
           finishedAt: Date.now(),
         });
         throw new Error("Telegram ingress worker exited with code 1");
@@ -3635,7 +3646,10 @@ describe("TelegramPollingSession", () => {
       expectLogExcludes(log, "isolated polling ingress failed");
       expect(
         statusPatches(setStatus).some(
-          (patch) => patch.connected === false && patch.lastError === "Unauthorized",
+          (patch) =>
+            patch.connected === false &&
+            patch.lifecycle === "blocked" &&
+            patch.lastError === "Unauthorized",
         ),
       ).toBe(true);
     } finally {
@@ -4233,6 +4247,7 @@ describe("TelegramPollingSession", () => {
     expect(connectedPatch?.lastConnectedAt).toBeTypeOf("number");
     expect(connectedPatch?.lastEventAt).toBeTypeOf("number");
     expect(connectedPatch?.lastTransportActivityAt).toBeTypeOf("number");
+    expect(connectedPatch?.lifecycle).toBe("ready");
     expect(connectedPatch?.lastError).toBeNull();
     expect(connectedPatch?.lastConnectedAt).toBe(connectedPatch?.lastEventAt);
     expect(connectedPatch?.lastTransportActivityAt).toBe(connectedPatch?.lastEventAt);
@@ -4415,6 +4430,7 @@ describe("TelegramPollingSession", () => {
 
     expect(runMock).toHaveBeenCalledTimes(2);
     expectPollingConnectedPatch(statusPatches(setStatus).find((patch) => patch.connected === true));
+    expect(statusPatches(setStatus)).toContainEqual({ lifecycle: "recovering" });
     const disconnectedPatches = statusPatches(setStatus).filter(
       (patch) => patch.connected === false,
     );
@@ -4480,7 +4496,9 @@ describe("TelegramPollingSession", () => {
       expect(
         statusPatches(setStatus).some(
           (patch) =>
-            patch.connected === false && String(patch.lastError).includes("Polling stall detected"),
+            patch.connected === false &&
+            patch.lifecycle === "recovering" &&
+            String(patch.lastError).includes("Polling stall detected"),
         ),
       ).toBe(true);
     } finally {
@@ -4516,7 +4534,9 @@ describe("TelegramPollingSession", () => {
     expect(
       statusPatches(setStatus).some(
         (patch) =>
-          patch.connected === false && String(patch.lastError).includes("Another OpenClaw gateway"),
+          patch.connected === false &&
+          patch.lifecycle === "recovering" &&
+          String(patch.lastError).includes("Another OpenClaw gateway"),
       ),
     ).toBe(true);
   });

@@ -4,8 +4,12 @@ export const COLD_READ_COMMAND_PATHS: string[][] = [
   ["skills", "info"],
   ["skills", "search"],
   ["hooks"],
+  ["hooks", "list"],
+  ["hooks", "info"],
+  ["hooks", "check"],
   ["memory", "status"],
   ["memory", "search"],
+  ["update", "--dry-run"],
 ];
 
 export function registerColdReadCommandFixtures(program: Command, skills: Command): void {
@@ -16,8 +20,21 @@ export function registerColdReadCommandFixtures(program: Command, skills: Comman
       .option("--json")
       .action(() => {});
   }
-  program
+  const hooks = program
     .command("hooks")
+    .option("--json")
+    .action(() => {});
+  hooks
+    .command("list")
+    .option("--json")
+    .action(() => {});
+  hooks
+    .command("info")
+    .argument("[name]")
+    .option("--json")
+    .action(() => {});
+  hooks
+    .command("check")
     .option("--json")
     .action(() => {});
   const memory = program.command("memory");
