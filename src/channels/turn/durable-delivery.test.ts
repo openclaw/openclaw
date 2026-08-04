@@ -216,7 +216,9 @@ describe("durable inbound reply delivery", () => {
       }),
     });
 
-    expect(result.status).toBe("handled_visible");
+    if (result.status !== "handled_visible") {
+      throw new Error(`expected handled_visible, got ${result.status}`);
+    }
     expect(result.delivery.visibleReplySent).toBe(true);
   });
 });
