@@ -127,6 +127,7 @@ const BOT_PUBLIC_KEY = getPublicKey(Uint8Array.from(Buffer.from(PRIVATE_KEY, "he
 const SENDER_PUBLIC_KEY = getPublicKey(Uint8Array.from(Buffer.from(SENDER_PRIVATE_KEY, "hex")));
 const SENDER_SECRET_KEY = Uint8Array.from(Buffer.from(SENDER_PRIVATE_KEY, "hex"));
 const RELAY_PUBLIC_KEY = "f".repeat(64);
+const BUZZ_RELAY_INFO_MAX_BYTES = 16 * 1024 * 1024;
 const tempDirs = new Set<string>();
 let previousStateDir: string | undefined;
 let stateDir: string;
@@ -209,13 +210,16 @@ describe("Buzz bus lifecycle", () => {
     relayMocks.stallRoomEoseChannelId = undefined;
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => ({
-        ok: true,
-        json: async () => ({
-          self: RELAY_PUBLIC_KEY,
-          software: "https://github.com/block/buzz",
-        }),
-      })),
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              self: RELAY_PUBLIC_KEY,
+              software: "https://github.com/block/buzz",
+            }),
+            { headers: { "Content-Type": "application/nostr+json" } },
+          ),
+      ),
     );
   });
 
@@ -289,6 +293,40 @@ describe("Buzz bus lifecycle", () => {
     expect(fetchSignal?.aborted).toBe(true);
     expect(relayMocks.close).toHaveBeenCalledOnce();
     vi.useRealTimers();
+  });
+
+  it("rejects oversized NIP-11 relay information", async () => {
+    relayMocks.auth.mockResolvedValue("ok");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(
+        async () =>
+          new Response(
+            JSON.stringify({
+              self: RELAY_PUBLIC_KEY,
+              description: "x".repeat(BUZZ_RELAY_INFO_MAX_BYTES),
+            }),
+          ),
+      ),
+    );
+
+    await expect(startTestBus()).rejects.toThrow(
+      `Buzz relay information: JSON response exceeds ${BUZZ_RELAY_INFO_MAX_BYTES} bytes`,
+    );
+
+    expect(relayMocks.close).toHaveBeenCalledOnce();
+  });
+
+  it("rejects malformed NIP-11 relay information", async () => {
+    relayMocks.auth.mockResolvedValue("ok");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => new Response('{"self":', { status: 200 })),
+    );
+
+    await expect(startTestBus()).rejects.toThrow("Buzz relay information: malformed JSON response");
+
+    expect(relayMocks.close).toHaveBeenCalledOnce();
   });
 
   it("publishes and closes a standalone authenticated send", async () => {
