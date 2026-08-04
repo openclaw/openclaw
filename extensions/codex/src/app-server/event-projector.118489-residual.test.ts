@@ -63,7 +63,12 @@ describe("CodexAppServerEventProjector #118489 residual failed-tool shapes", () 
     );
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
-    expect(result.itemLifecycle).toEqual({ startedCount: 1, completedCount: 0, activeCount: 1 });
+    expect(result.itemLifecycle).toEqual({
+      startedCount: 1,
+      completedCount: 0,
+      activeCount: 1,
+      activeItemIds: ["call-fail"],
+    });
     expect(result.messagesSnapshot).toContainEqual(
       expect.objectContaining({
         role: "toolResult",

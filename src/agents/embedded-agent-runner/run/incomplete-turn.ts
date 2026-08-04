@@ -838,11 +838,29 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
       ({ id }) => id !== null && settledToolResults.get(id)?.isError === true,
     );
   // Exact persisted results for every terminal call are durable settlement
-  // evidence even when a bridge error raced the stream lifecycle decrement;
-  // async tool activity and child sessions still fail closed.
+  // evidence even when a bridge error raced the stream lifecycle decrement.
+  // The aggregate count may be overridden only when the producer recorded that
+  // every still-active item belongs to this batch's calls; async tool activity
+  // and child sessions still fail closed.
+  const activeItemIds = params.attempt.itemLifecycle?.activeItemIds;
+  const everyActiveItemBelongsToSettledBatch =
+    Array.isArray(activeItemIds) &&
+    activeItemIds.length === (params.attempt.itemLifecycle?.activeCount ?? 0) &&
+    activeItemIds.every((itemId) =>
+      requestedToolCalls.some(
+        ({ id }) =>
+          id !== null &&
+          (itemId === id ||
+            itemId === `tool:${id}` ||
+            itemId === `command:${id}` ||
+            itemId === `patch:${id}`) &&
+          settledToolResults.get(id) !== undefined,
+      ),
+    );
   const lifecycleIsSettled =
     params.attempt.itemLifecycle?.activeCount === 0 ||
     (hasPersistedTerminalFailure &&
+      everyActiveItemBelongsToSettledBatch &&
       !hasAsyncStartedToolActivity(params.attempt.toolMetas) &&
       !hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns));
   const allToolsProvenSettled = allRequestedToolsHavePersistedResults && lifecycleIsSettled;

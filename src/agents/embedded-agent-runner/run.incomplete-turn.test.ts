@@ -2646,7 +2646,12 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     {
       label: "a stale lifecycle activeCount after the exact result persisted",
       attemptOverrides: {
-        itemLifecycle: { startedCount: 1, completedCount: 0, activeCount: 1 },
+        itemLifecycle: {
+          startedCount: 1,
+          completedCount: 0,
+          activeCount: 1,
+          activeItemIds: ["tool_1"],
+        },
       },
       extraParams: {},
     },
@@ -2693,17 +2698,38 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     {
       label: "an async tool is still active",
       attemptOverrides: {
-        itemLifecycle: { startedCount: 1, completedCount: 0, activeCount: 1 },
+        itemLifecycle: {
+          startedCount: 1,
+          completedCount: 0,
+          activeCount: 1,
+          activeItemIds: ["tool_1"],
+        },
         toolMetas: [{ toolName: "read", isError: true, asyncStarted: true }],
       },
     },
     {
       label: "an accepted child session still owns the response",
       attemptOverrides: {
-        itemLifecycle: { startedCount: 1, completedCount: 0, activeCount: 1 },
+        itemLifecycle: {
+          startedCount: 1,
+          completedCount: 0,
+          activeCount: 1,
+          activeItemIds: ["tool_1"],
+        },
         acceptedSessionSpawns: [
           { runId: "run-child", childSessionKey: "agent:main:subagent:child" },
         ],
+      },
+    },
+    {
+      label: "an unrelated active item remains",
+      attemptOverrides: {
+        itemLifecycle: {
+          startedCount: 1,
+          completedCount: 0,
+          activeCount: 1,
+          activeItemIds: ["tool_unrelated"],
+        },
       },
     },
   ])("does not override stale lifecycle proof when $label (#118489)", ({ attemptOverrides }) => {
@@ -2859,8 +2885,14 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         assistantTexts: [],
         toolMetas: [{ toolName: "exec", isError: true }],
         // The bridge persisted the exact failed result before the lifecycle
-        // decrement, leaving the aggregate count stale.
-        itemLifecycle: { startedCount: 1, completedCount: 0, activeCount: 1 },
+        // decrement; the producer recorded the failed call's item as the only
+        // still-active item.
+        itemLifecycle: {
+          startedCount: 1,
+          completedCount: 0,
+          activeCount: 1,
+          activeItemIds: ["tool_exec"],
+        },
         messagesSnapshot: [
           toolUseAssistant,
           { role: "toolResult", toolCallId: "tool_exec", toolName: "exec", isError: true },
@@ -2921,7 +2953,12 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       makeAttemptResult({
         assistantTexts: [],
         toolMetas: [{ toolName: "read", isError: true, asyncStarted: true }],
-        itemLifecycle: { startedCount: 1, completedCount: 0, activeCount: 1 },
+        itemLifecycle: {
+          startedCount: 1,
+          completedCount: 0,
+          activeCount: 1,
+          activeItemIds: ["tool_1"],
+        },
         messagesSnapshot: [
           toolUseAssistant,
           { role: "toolResult", toolCallId: "tool_1", toolName: "read", isError: true },
