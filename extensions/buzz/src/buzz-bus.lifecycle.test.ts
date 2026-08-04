@@ -329,6 +329,18 @@ describe("Buzz bus lifecycle", () => {
     expect(relayMocks.close).toHaveBeenCalledOnce();
   });
 
+  it("rejects non-object NIP-11 relay information", async () => {
+    relayMocks.auth.mockResolvedValue("ok");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => new Response("null")),
+    );
+
+    await expect(startTestBus()).rejects.toThrow("Buzz relay information: malformed JSON response");
+
+    expect(relayMocks.close).toHaveBeenCalledOnce();
+  });
+
   it("publishes and closes a standalone authenticated send", async () => {
     relayMocks.auth.mockResolvedValue("ok");
 
