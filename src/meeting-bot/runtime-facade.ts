@@ -462,7 +462,6 @@ export function createMeetingRuntimeFacade<
             };
           }
           if (!result.browser) {
-            session.chrome.health = clearNonAuthoritativeManualAction(session.chrome.health);
             return { browserHealthChecked: false, manualActionIsAuthoritative: false };
           }
           const refreshedHealth = { ...session.chrome.health, ...result.browser };
@@ -479,9 +478,6 @@ export function createMeetingRuntimeFacade<
               kind: "missing",
               message: result.message,
             }) === "authoritative";
-          if (!manualActionIsAuthoritative) {
-            session.chrome.health = clearNonAuthoritativeManualAction(session.chrome.health);
-          }
           return { browserHealthChecked: false, manualActionIsAuthoritative };
         }
         return { browserHealthChecked: false, manualActionIsAuthoritative: false };
@@ -500,9 +496,6 @@ export function createMeetingRuntimeFacade<
           this.params.logger.debug?.(
             `${options.platform.logScope} browser readiness refresh ignored: ${formatErrorMessage(error)}`,
           );
-        }
-        if (!manualActionIsAuthoritative && session.chrome) {
-          session.chrome.health = clearNonAuthoritativeManualAction(session.chrome.health);
         }
         return { browserHealthChecked: false, manualActionIsAuthoritative };
       }

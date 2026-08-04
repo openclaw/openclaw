@@ -120,6 +120,7 @@ function createTestRuntime(params: {
   ): Promise<{ keepBrowserTab: boolean } | void>;
   refreshBrowserHealth?(
     session: TestSession,
+    options?: { force?: boolean; readOnly?: boolean },
   ): Promise<MeetingBrowserHealthRefreshOutcome | boolean | void>;
   joinTransport(input: {
     request: TestRequest;
@@ -211,8 +212,8 @@ function createTestRuntime(params: {
     },
     joinTransport: (input) => params.joinTransport(input),
     releaseBrowserTab: (session) => params.releaseBrowserTab(session),
-    refreshBrowserHealth: async (session) => {
-      await params.refreshBrowserHealth?.(session);
+    refreshBrowserHealth: async (session, options) => {
+      await params.refreshBrowserHealth?.(session, options);
     },
     refreshStatus: async () => {},
     refreshReusableSession: async (session, request, resolved) =>
@@ -230,8 +231,8 @@ function createTestRuntime(params: {
         }
       : {}),
   });
-  registerMeetingSessionRuntimeHealthRefresh(runtime, async (session: TestSession) => {
-    const result = await params.refreshBrowserHealth?.(session);
+  registerMeetingSessionRuntimeHealthRefresh(runtime, async (session: TestSession, options) => {
+    const result = await params.refreshBrowserHealth?.(session, options);
     if (result !== null && typeof result === "object") {
       return result;
     }
@@ -331,7 +332,10 @@ describe("MeetingSessionRuntime caption health compatibility", () => {
       browserHealthChecked: false,
       manualActionIsAuthoritative: true,
     } as const;
-    const refreshBrowserHealth = vi.fn(async () => refreshOutcome);
+    const refreshBrowserHealth = vi.fn(
+      async (_session: TestSession, _options?: { force?: boolean; readOnly?: boolean }) =>
+        refreshOutcome,
+    );
     const { runtime } = createTestRuntime({
       transcribe: true,
       refreshBrowserHealth,
@@ -359,6 +363,8 @@ describe("MeetingSessionRuntime caption health compatibility", () => {
       ).refreshCaptionHealthForProbe(session),
     ).resolves.toEqual(refreshOutcome);
     expect(refreshBrowserHealth).toHaveBeenCalledTimes(2);
+    expect(refreshBrowserHealth.mock.calls[0]?.[1]).toEqual({});
+    expect(refreshBrowserHealth.mock.calls[1]?.[1]).toEqual({ force: true });
   });
 });
 

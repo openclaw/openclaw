@@ -6015,6 +6015,7 @@ describe("google-meet plugin", () => {
         message: "Meet tab refreshed.",
         browser: { inCall: true },
       },
+      preserveManualAction: false,
     },
     {
       label: "a missing tab result",
@@ -6023,12 +6024,14 @@ describe("google-meet plugin", () => {
         found: false,
         message: "Meet tab is missing.",
       },
+      preserveManualAction: true,
     },
     {
       label: "a thrown recovery error",
       recovery: new Error("browser recovery failed"),
+      preserveManualAction: true,
     },
-  ])("clears stale manual actions after $label", async ({ recovery }) => {
+  ])("handles stale manual actions after $label", async ({ recovery, preserveManualAction }) => {
     const staleManualAction = {
       reason: "meet-admission-required" as const,
       message: "Admit the OpenClaw browser participant in Google Meet.",
@@ -6057,7 +6060,9 @@ describe("google-meet plugin", () => {
 
       const status = await runtime.status(joined.session.id);
 
-      expect(status.session?.chrome?.health?.manualAction).toBeUndefined();
+      expect(status.session?.chrome?.health?.manualAction).toEqual(
+        preserveManualAction ? staleManualAction : undefined,
+      );
     } finally {
       recoverCurrentMeetTab.mockRestore();
       launchChromeMeet.mockRestore();

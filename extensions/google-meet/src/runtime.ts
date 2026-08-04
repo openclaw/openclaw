@@ -543,7 +543,6 @@ export class GoogleMeetRuntime {
     session: GoogleMeetSession,
     options: { force?: boolean; readOnly?: boolean } = {},
   ): Promise<boolean> {
-    const clearStaleManualActionOnFailure = options.force === true || options.readOnly === true;
     try {
       const result =
         session.transport === "chrome-node"
@@ -577,9 +576,6 @@ export class GoogleMeetRuntime {
           };
         }
         if (!result.browser) {
-          if (clearStaleManualActionOnFailure) {
-            session.chrome.health = clearNonAuthoritativeManualAction(session.chrome.health);
-          }
           return false;
         }
         const refreshedHealth = { ...session.chrome.health, ...result.browser };
@@ -589,21 +585,11 @@ export class GoogleMeetRuntime {
         session.updatedAt = nowIso();
         return true;
       }
-      if (session.chrome) {
-        if (clearStaleManualActionOnFailure) {
-          session.chrome.health = clearNonAuthoritativeManualAction(session.chrome.health);
-        }
-      }
       return false;
     } catch (error) {
       this.params.logger.debug?.(
         `[google-meet] browser readiness refresh ignored: ${formatErrorMessage(error)}`,
       );
-      if (session.chrome) {
-        if (clearStaleManualActionOnFailure) {
-          session.chrome.health = clearNonAuthoritativeManualAction(session.chrome.health);
-        }
-      }
       return false;
     }
   }

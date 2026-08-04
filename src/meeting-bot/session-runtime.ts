@@ -422,7 +422,11 @@ export class MeetingSessionRuntime<
   }
 
   async refreshCaptionHealth(session: TSession): Promise<void> {
-    await this.#refreshCaptionHealthForProbe(session);
+    if (!this.options.isTranscribeMode(session.mode)) {
+      this.refreshSpeechReadiness(session);
+      return;
+    }
+    await this.#refreshBrowserHealth(session);
   }
 
   async #refreshCaptionHealthForProbe(
@@ -432,7 +436,7 @@ export class MeetingSessionRuntime<
       this.refreshSpeechReadiness(session);
       return { browserHealthChecked: false, manualActionIsAuthoritative: false };
     }
-    return await this.#refreshBrowserHealth(session, { force: true, readOnly: true });
+    return await this.#refreshBrowserHealth(session, { force: true });
   }
 
   refreshSpeechReadiness(session: TSession): {
