@@ -28,7 +28,11 @@ import {
 } from "../../daemon/schtasks.js";
 import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
-import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
+import {
+  readGatewayServiceState,
+  resolveGatewayService,
+  startGatewayServiceAfterFailedUpdate,
+} from "../../daemon/service.js";
 import { assertGatewayServiceMutationAllowed } from "../../infra/gateway-supervision.js";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { getSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
@@ -584,11 +588,29 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
       defaultRuntime.log(theme.muted("Restarted managed gateway service after failed update."));
     }
   } catch (err) {
-    const message = `Failed to restart managed gateway service after failed update: ${String(err)}`;
-    if (params.jsonMode) {
-      defaultRuntime.error(message);
-    } else {
-      defaultRuntime.log(theme.warn(message));
+    // A completed package swap leaves this process older than the config it now
+    // reads, so the version guard refuses the restart and the service stays
+    // stopped with only a warning. Recover the way the detached update handoff
+    // does: start the unit that is already installed.
+    try {
+      await startGatewayServiceAfterFailedUpdate({
+        env: params.preManagedServiceStop.serviceEnv,
+        stdout: serviceControlStdoutForMode(params.jsonMode),
+      });
+      if (!params.jsonMode) {
+        defaultRuntime.log(
+          theme.muted("Started managed gateway service after failed update recovery restart."),
+        );
+      }
+    } catch (recoveryErr) {
+      const message =
+        `Failed to restart managed gateway service after failed update: ${String(err)}; ` +
+        `recovery start also failed: ${String(recoveryErr)}`;
+      if (params.jsonMode) {
+        defaultRuntime.error(message);
+      } else {
+        defaultRuntime.log(theme.warn(message));
+      }
     }
   }
 }
