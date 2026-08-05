@@ -23,7 +23,26 @@ import { resolveConfigDir, shortenHomePath } from "../utils.js";
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 const DATA_URL_RE = /^data:/i;
 const SANDBOX_CONTAINER_WORKDIR = "/workspace";
+const TRAILING_SLASH_RE = /\/+$/u;
 const MANAGED_MEDIA_SUBDIRS = new Set(["outbound"]);
+
+/**
+ * Resolves the active container working directory for sandbox media mapping.
+ *
+ * Defaults to {@link SANDBOX_CONTAINER_WORKDIR} ("/workspace") so the canonical
+ * Docker sandbox layout keeps working. Plugin sandboxes (e.g. OpenShell) expose a
+ * different `containerWorkdir` (such as "/sandbox" or "/agent"); trailing slashes
+ * are stripped so "/sandbox/" and "/sandbox" match the same prefix.
+ */
+function normalizeContainerWorkdir(containerWorkdir?: string): string {
+  const trimmed = containerWorkdir?.trim();
+  if (!trimmed) {
+    return SANDBOX_CONTAINER_WORKDIR;
+  }
+  // A root-only value like "/" strips to "" — fall back to the default rather
+  // than producing an empty prefix that would match every absolute path inward.
+  return trimmed.replace(TRAILING_SLASH_RE, "") || SANDBOX_CONTAINER_WORKDIR;
+}
 
 function normalizeUnicodeSpaces(str: string): string {
   return str.replace(UNICODE_SPACES, " ");
@@ -232,6 +251,7 @@ export async function resolveAllowedManagedMediaPath(
 export async function resolveSandboxedMediaSource(params: {
   media: string;
   sandboxRoot: string;
+  containerWorkdir?: string;
 }): Promise<string> {
   const raw = params.media.trim();
   if (!raw) {
@@ -245,6 +265,7 @@ export async function resolveSandboxedMediaSource(params: {
     const workspaceMappedFromUrl = mapContainerWorkspaceFileUrl({
       fileUrl: candidate,
       sandboxRoot: params.sandboxRoot,
+      containerWorkdir: params.containerWorkdir,
     });
     if (workspaceMappedFromUrl) {
       candidate = workspaceMappedFromUrl;
@@ -261,6 +282,7 @@ export async function resolveSandboxedMediaSource(params: {
   const containerWorkspaceMapped = mapContainerWorkspacePath({
     candidate,
     sandboxRoot: params.sandboxRoot,
+    containerWorkdir: params.containerWorkdir,
   });
   if (containerWorkspaceMapped) {
     candidate = containerWorkspaceMapped;
@@ -299,6 +321,7 @@ async function assertNoManagedMediaAliasEscape(params: {
 function mapContainerWorkspaceFileUrl(params: {
   fileUrl: string;
   sandboxRoot: string;
+  containerWorkdir?: string;
 }): string | undefined {
   let parsed: URL;
   try {
@@ -324,27 +347,28 @@ function mapContainerWorkspaceFileUrl(params: {
   } catch {
     return undefined;
   }
-  if (
-    normalizedPathname !== SANDBOX_CONTAINER_WORKDIR &&
-    !normalizedPathname.startsWith(`${SANDBOX_CONTAINER_WORKDIR}/`)
-  ) {
+  const workdir = normalizeContainerWorkdir(params.containerWorkdir);
+  if (normalizedPathname !== workdir && !normalizedPathname.startsWith(`${workdir}/`)) {
     return undefined;
   }
   return mapContainerWorkspacePath({
     candidate: normalizedPathname,
     sandboxRoot: params.sandboxRoot,
+    containerWorkdir: params.containerWorkdir,
   });
 }
 
 function mapContainerWorkspacePath(params: {
   candidate: string;
   sandboxRoot: string;
+  containerWorkdir?: string;
 }): string | undefined {
+  const workdir = normalizeContainerWorkdir(params.containerWorkdir);
   const normalized = params.candidate.replace(/\\/g, "/");
-  if (normalized === SANDBOX_CONTAINER_WORKDIR) {
+  if (normalized === workdir) {
     return path.resolve(params.sandboxRoot);
   }
-  const prefix = `${SANDBOX_CONTAINER_WORKDIR}/`;
+  const prefix = `${workdir}/`;
   if (!normalized.startsWith(prefix)) {
     return undefined;
   }
