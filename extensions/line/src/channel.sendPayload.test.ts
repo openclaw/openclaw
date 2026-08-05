@@ -546,10 +546,7 @@ describe("line outbound sendPayload", () => {
 
   it("sends the textual fallback when the template payload is undeliverable", async () => {
     const { runtime, mocks } = createRuntime();
-    mocks.buildTemplateMessageFromPayload.mockReturnValueOnce({
-      type: "text",
-      text: "Continue?",
-    });
+    mocks.buildTemplateMessageFromPayload.mockReturnValueOnce({ type: "text", text: "Continue?" });
     setLineRuntime(runtime);
     const cfg = { channels: { line: {} } } as OpenClawConfig;
 
