@@ -74,6 +74,7 @@ type SlackTestState = {
   resolveSlackUserAllowlistMock: Mock<
     (params: { entries: string[] }) => Promise<Array<{ input: string; resolved: boolean }>>
   >;
+  settleProvisionalParentForkMock: Mock<(...args: unknown[]) => Promise<unknown>>;
   socketModeLogger?: { error: (...args: unknown[]) => void };
   createSlackStartupAuthClientMock: Mock<SlackStartupAuthClientFactory>;
   createSlackStartupAuthClientActual?: SlackStartupAuthClientFactory;
@@ -100,6 +101,7 @@ const slackTestState: SlackTestState = vi.hoisted(() => {
     readAllowFromStoreMock: vi.fn(),
     upsertPairingRequestMock: vi.fn(),
     resolveSlackUserAllowlistMock: vi.fn(),
+    settleProvisionalParentForkMock: vi.fn(),
     socketModeLogger: undefined,
     createSlackStartupAuthClientMock: vi.fn(),
   } as SlackTestState;
@@ -361,6 +363,12 @@ export function resetSlackTestState(config: Record<string, unknown> = defaultSla
     .mockImplementation(async ({ entries }) =>
       entries.map((input) => ({ input, resolved: false })),
     );
+  slackTestState.settleProvisionalParentForkMock
+    .mockReset()
+    .mockImplementation(async (...args: unknown[]) => {
+      const params = args[0] as { outcome?: string };
+      return params.outcome === "confirm" ? "confirmed" : "retired";
+    });
   slackTestState.createSlackStartupAuthClientMock
     .mockReset()
     .mockReturnValue(getSlackClient() as unknown as ReturnType<SlackStartupAuthClientFactory>);
@@ -408,6 +416,15 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
     ...actual,
     dispatchChannelInboundTurn: (params: DispatchParams) =>
       actual.dispatchChannelInboundTurn({ ...params, replyResolver }),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/session-store-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/session-store-runtime")>();
+  return {
+    ...actual,
+    settleProvisionalParentFork: (...args: unknown[]) =>
+      slackTestState.settleProvisionalParentForkMock(...args),
   };
 });
 

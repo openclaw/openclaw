@@ -619,6 +619,23 @@ async function patchSqliteSessionEntrySnapshot<TSnapshot>(
 
 /** Forks one parent SQLite transcript into a new child transcript. */
 
+function buildProvisionalParentForkCreationPatch(
+  ctx: MsgContext | undefined,
+): Partial<SessionEntry> {
+  const provisionalParentForkId = ctx?.ProvisionalParentForkId?.trim();
+  const parentSessionKey = ctx?.ParentSessionKey?.trim();
+  if (!provisionalParentForkId || !parentSessionKey) {
+    return {};
+  }
+  return {
+    provisionalParentFork: {
+      id: provisionalParentForkId,
+      parentSessionKey,
+      createdAt: Date.now(),
+    },
+  };
+}
+
 export async function recordSqliteInboundSessionMeta(params: {
   storePath: string;
   sessionKey: string;
@@ -647,6 +664,7 @@ export async function recordSqliteInboundSessionMeta(params: {
             actor: { type: "human", ...(senderId ? { id: senderId } : {}) },
           },
         ),
+        ...buildProvisionalParentForkCreationPatch(params.ctx),
         ...metadataPatch,
       };
     },
@@ -702,6 +720,7 @@ export async function updateSqliteSessionLastRoute(params: {
               : {}),
           },
         ),
+        ...buildProvisionalParentForkCreationPatch(params.ctx),
         ...routePatch,
       };
     },
