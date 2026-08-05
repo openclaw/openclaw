@@ -257,6 +257,12 @@ async function resolveActiveRecall(
 
   let terminalMemorySearchWatch: TerminalMemorySearchWatch | undefined;
   let recallInFlight = false;
+  // Declared outside the try block so the catch block can read whether an
+  // earlier race result already established usable memory evidence. Without
+  // this, a timeout-partial recovery path that references this flag would hit
+  // a ReferenceError because `let` is block-scoped to the try body.
+  let fallbackSearchDebug: ActiveMemorySearchDebug | undefined;
+  let fallbackHasUsableMemoryResult = false;
   try {
     recallInFlight = true;
     const subagentPromise = runRecallSubagent({
@@ -285,8 +291,6 @@ async function resolveActiveRecall(
       terminalMemorySearchWatch.promise,
     ]);
     terminalMemorySearchWatch.stop();
-    let fallbackSearchDebug: ActiveMemorySearchDebug | undefined;
-    let fallbackHasUsableMemoryResult = false;
     if (
       raceResult !== TIMEOUT_SENTINEL &&
       "status" in raceResult &&
@@ -423,6 +427,8 @@ async function resolveActiveRecall(
         searchDebug: partialTimeoutData.searchDebug,
         hasUnavailableMemorySearchResult: partialTimeoutData.hasUnavailableMemorySearchResult,
         toolsAllow: params.config.toolsAllow,
+        fallbackHasUsableMemoryResult:
+          fallbackHasUsableMemoryResult || partialTimeoutData.hasUsableMemoryResult === true,
       });
       if (params.config.logging) {
         params.api.logger.info?.(

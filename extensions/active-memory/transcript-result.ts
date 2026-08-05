@@ -132,6 +132,7 @@ function attachPartialTimeoutData(
   partialReply: string | null,
   searchDebug: ActiveMemorySearchDebug | undefined,
   hasUnavailableMemorySearchResult: boolean,
+  hasUsableMemoryResult: boolean,
 ): void {
   if (!error || typeof error !== "object") {
     return;
@@ -146,11 +147,15 @@ function attachPartialTimeoutData(
   if (hasUnavailableMemorySearchResult) {
     target.activeMemoryUnavailableMemorySearch = true;
   }
+  if (hasUsableMemoryResult) {
+    target.activeMemoryHasUsableMemoryResult = true;
+  }
 }
 
 function readPartialTimeoutData(error: unknown): {
   rawReply?: string;
   searchDebug?: ActiveMemorySearchDebug;
+  hasUsableMemoryResult?: boolean;
   hasUnavailableMemorySearchResult?: boolean;
 } {
   if (!error || typeof error !== "object") {
@@ -160,6 +165,7 @@ function readPartialTimeoutData(error: unknown): {
   return {
     rawReply: normalizeOptionalString(source.activeMemoryPartialReply),
     searchDebug: source.activeMemorySearchDebug,
+    hasUsableMemoryResult: source.activeMemoryHasUsableMemoryResult === true,
     hasUnavailableMemorySearchResult: source.activeMemoryUnavailableMemorySearch,
   };
 }
@@ -169,6 +175,7 @@ async function waitForSubagentPartialTimeoutData(
 ): Promise<{
   rawReply?: string;
   searchDebug?: ActiveMemorySearchDebug;
+  hasUsableMemoryResult?: boolean;
   hasUnavailableMemorySearchResult?: boolean;
   settled: boolean;
 }> {
@@ -183,7 +190,10 @@ async function waitForSubagentPartialTimeoutData(
   try {
     return await Promise.race([
       subagentPromise.then(
-        () => ({ settled: true as const }),
+        (result: RecallSubagentResult) => ({
+          settled: true as const,
+          hasUsableMemoryResult: result.hasUsableMemoryResult === true,
+        }),
         (error: unknown) => ({ ...readPartialTimeoutData(error), settled: true as const }),
       ),
       timeoutPromise,
@@ -204,6 +214,7 @@ async function buildTimeoutRecallResult(params: {
   hasUnavailableMemorySearchResult?: boolean;
   subagentPromise?: Promise<RecallSubagentResult>;
   toolsAllow: readonly string[];
+  fallbackHasUsableMemoryResult?: boolean;
 }): Promise<ActiveRecallResult> {
   const subagentPartialData = params.rawReply
     ? { settled: true as const }
@@ -225,8 +236,22 @@ async function buildTimeoutRecallResult(params: {
       : undefined;
   const searchDebug =
     params.searchDebug ?? subagentPartialData.searchDebug ?? transcriptState?.searchDebug;
+  // Evidence gate: timeout-partial summaries are only admitted when there is
+  // at least one usable memory-tool result, matching the completed-recall
+  // invariant (canUseSummary = hasUsableMemoryResult in buildSubagentRecallResult).
+  // Evidence can arrive through three channels: the transcript (mirrored tool
+  // results), the settled subagent result (callback-only evidence not yet
+  // mirrored, or carried through the abort error payload), or the fallback from
+  // an earlier race result. Without this gate, any nonempty assistant reply —
+  // including ungrounded chitchat not caught by the wording filter — would be
+  // injected into main-agent session context (#84034).
+  const hasUsableMemoryResult =
+    transcriptState?.hasUsableMemoryResult === true ||
+    subagentPartialData.hasUsableMemoryResult === true ||
+    params.fallbackHasUsableMemoryResult === true;
   const cannotUsePartial =
     summary.length === 0 ||
+    !hasUsableMemoryResult ||
     isUnavailableMemorySearchDebug(searchDebug) ||
     !subagentPartialData.settled ||
     params.hasUnavailableMemorySearchResult ||
