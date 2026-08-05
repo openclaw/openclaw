@@ -1081,6 +1081,56 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
   });
 
+  it("records routed trusted block media so an identical final is deduplicated", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    mocks.routeReply.mockResolvedValue({
+      ok: true,
+      delivered: true,
+      messageId: "trusted-media-block-1",
+    });
+    const dispatcher = createDispatcher();
+    const trustedMedia = {
+      mediaUrl: "https://example.com/tts.opus",
+      audioAsVoice: true,
+      trustedLocalMedia: true,
+    } satisfies ReplyPayload;
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onBlockReply?.(trustedMedia);
+      return trustedMedia;
+    });
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        ChatType: "group",
+        Surface: "slack",
+        Provider: "slack",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:999",
+        SessionKey: "agent:main:slack:group:oc_group",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { sourceReplyDeliveryMode: "message_tool_only" },
+    });
+
+    expect(mocks.routeReply).toHaveBeenCalledTimes(1);
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyKind: "block",
+        payload: expect.objectContaining({
+          mediaUrl: trustedMedia.mediaUrl,
+          trustedLocalMedia: true,
+        }),
+      }),
+    );
+  });
+
   it("does not deliver no-visible fallback after streamed blocks invisible to dispatcher counts", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();
@@ -1425,6 +1475,43 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     // Trigger a block reply — delivery should be suppressed
     await requireBlockReplyHandler(capturedOnBlockReply)({ text: "streaming chunk" });
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("suppresses trusted local block media when sendPolicy is deny", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "deny",
+    };
+    const dispatcher = createDispatcher();
+    let capturedOnBlockReply:
+      | ((payload: ReplyPayload, context?: unknown) => Promise<void>)
+      | undefined;
+    const replyResolver = vi.fn(
+      async (_ctx: MsgContext, opts?: GetReplyOptions, _cfg?: OpenClawConfig) => {
+        capturedOnBlockReply = opts?.onBlockReply as
+          | ((payload: ReplyPayload, context?: unknown) => Promise<void>)
+          | undefined;
+        return [] as ReplyPayload[];
+      },
+    );
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ SessionKey: "test:session" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { sourceReplyDeliveryMode: "message_tool_only" },
+    });
+
+    await requireBlockReplyHandler(capturedOnBlockReply)({
+      mediaUrl: "https://example.com/tts.opus",
+      audioAsVoice: true,
+      trustedLocalMedia: true,
+    });
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(mocks.routeReply).not.toHaveBeenCalled();
   });
 
   it("delivers replies normally when sendPolicy is allow", async () => {

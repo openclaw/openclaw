@@ -14,6 +14,7 @@ import {
   createFinalDispatchPayloadDedupeKey,
   formatSuppressedReplyPayloadForLog,
   NO_VISIBLE_REPLY_FALLBACK_TEXT,
+  toTrustedMediaOnlyPayload,
 } from "./dispatch-from-config.payloads.js";
 import {
   clearPendingFinalDeliveryAfterSuccess,
@@ -86,15 +87,31 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   let allQueuedFinalsObserved = true;
   // Explicit command turns (native or authorized text-slash like /compact) are
   // user-initiated, so a marked terminal reply for the command bypasses
-  // room_event suppression. Ambient marked notices (no CommandTurn) stay
-  // suppressed in room_event. sendPolicy: deny still suppresses everything.
-  // Uses the same helper as the source-reply visibility policy so the bypass
-  // and the policy stay aligned.
-  const shouldDeliverDespiteSourceReplySuppression = (reply: ReplyPayload) =>
-    state.suppressAutomaticSourceDelivery &&
-    !sendPolicyDenied &&
-    getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true &&
-    (ctx.InboundEventKind !== "room_event" || state.explicitCommandTurnCtx);
+  // room_event suppression as-is. Ambient marked notices (no CommandTurn) stay
+  // suppressed in room_event. Trusted local TTS media can bypass
+  // message_tool_only suppression only after stripping private text.
+  type SourceReplySuppressionBypass = "none" | "deliver-as-is" | "trusted-media-only";
+  const resolveSourceReplySuppressionBypass = (
+    reply: ReplyPayload,
+  ): SourceReplySuppressionBypass => {
+    if (!state.suppressAutomaticSourceDelivery || sendPolicyDenied) {
+      return "none";
+    }
+    if (
+      getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true &&
+      (ctx.InboundEventKind !== "room_event" || state.explicitCommandTurnCtx)
+    ) {
+      return "deliver-as-is";
+    }
+    if (
+      state.sourceReplyDeliveryMode === "message_tool_only" &&
+      reply.trustedLocalMedia === true &&
+      hasOutboundReplyContent(toTrustedMediaOnlyPayload(reply), { trimText: true })
+    ) {
+      return "trusted-media-only";
+    }
+    return "none";
+  };
   const sentFinalPayloadDedupeKeys = new Set<string>();
   for (const [replyIndex, reply] of replies.entries()) {
     throwIfDispatchOperationAborted();
@@ -106,7 +123,8 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     if (reply.isCommentary === true && !state.commentaryPayloadsEnabled) {
       continue;
     }
-    if (suppressDelivery && !shouldDeliverDespiteSourceReplySuppression(reply)) {
+    const sourceReplySuppressionBypass = resolveSourceReplySuppressionBypass(reply);
+    if (suppressDelivery && sourceReplySuppressionBypass === "none") {
       if (hasOutboundReplyContent(reply, { trimText: true })) {
         logVerbose(
           [
@@ -123,12 +141,18 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       }
       continue;
     }
+    const deliveryReply =
+      sourceReplySuppressionBypass === "trusted-media-only"
+        ? toTrustedMediaOnlyPayload(reply)
+        : reply;
     const finalPayloadDedupeKey = createFinalDispatchPayloadDedupeKey(reply);
     if (sentFinalPayloadDedupeKeys.has(finalPayloadDedupeKey)) {
       continue;
     }
     sentFinalPayloadDedupeKeys.add(finalPayloadDedupeKey);
-    const finalReply = await state.sendFinalPayload(reply, { deliveryId: String(replyIndex) });
+    const finalReply = await state.sendFinalPayload(deliveryReply, {
+      deliveryId: String(replyIndex),
+    });
     if (finalReply.dedupedAgainstBlock) {
       // The delivering block already settled into the turn ledger.
       continue;
