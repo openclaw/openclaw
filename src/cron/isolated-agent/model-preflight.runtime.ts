@@ -5,7 +5,11 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isLocalProviderBaseUrl } from "../../agents/model-provider-local.js";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
+import {
+  fetchWithSsrFGuard,
+  withTrustedEnvProxyGuardedFetchMode,
+} from "../../infra/net/fetch-guard.js";
+import { shouldUseEnvHttpProxyForUrl } from "../../infra/net/proxy-env.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 
@@ -202,13 +206,23 @@ async function probeLocalProviderEndpoint(params: {
   api: PreflightApi;
   baseUrl: string;
 }): Promise<void> {
-  const { response, release } = await fetchWithSsrFGuard({
-    url: buildProbeUrl(params.api, params.baseUrl),
+  // Mirror the model runner's proxy selection (provider-transport-fetch) so
+  // the preflight predicts the same reachability. Env proxy resolves
+  // proxy-routed local vhosts (e.g. `inference.local`) that STRICT DNS pinning
+  // cannot; without it the preflight false-negatives and skips every run.
+  // The hostname allowlist + allowPrivateNetwork policy still apply.
+  const url = buildProbeUrl(params.api, params.baseUrl);
+  const useEnvProxy = shouldUseEnvHttpProxyForUrl(url);
+  const baseOptions = {
+    url,
     init: { method: "GET" },
     policy: buildLocalProviderSsrFPolicy(params.baseUrl),
     timeoutMs: PREFLIGHT_TIMEOUT_MS,
     auditContext: "cron-model-provider-preflight",
-  });
+  };
+  const { response, release } = await fetchWithSsrFGuard(
+    useEnvProxy ? withTrustedEnvProxyGuardedFetchMode(baseOptions) : baseOptions,
+  );
   try {
     // Any HTTP response means the local endpoint is alive. Auth/model errors
     // still belong to the normal model runner where fallback and diagnostics
