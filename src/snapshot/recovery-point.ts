@@ -121,7 +121,7 @@ type RecoveryPointObligation = z.infer<typeof obligationSchema>;
 type RecoveryPointComponent = z.infer<typeof recoveryPointComponentSchema>;
 export type RecoveryPointManifest = z.infer<typeof recoveryPointManifestSchema>;
 export type RecoveryPointAcceptance = z.infer<typeof recoveryPointAcceptanceSchema>;
-export type RecoveryPointOwnerInventory = z.input<typeof recoveryPointOwnerInventorySchema>;
+type RecoveryPointOwnerInventory = z.input<typeof recoveryPointOwnerInventorySchema>;
 
 export type RecoveryPointSqliteSnapshot = {
   readonly provider: SqliteSnapshotProvider;

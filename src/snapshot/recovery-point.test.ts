@@ -3,16 +3,17 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, type Mock, vi } from "vitest";
+import type { z } from "zod";
 import { stableStringify } from "../agents/stable-stringify.js";
 import {
   createRecoveryPointAcceptance,
+  recoveryPointOwnerInventorySchema,
   createRecoveryPointManifest,
   verifyRecoveryPoint,
   verifyRecoveryPointManifest,
   verifyRecoveryPointOwnerInventory,
   type RecoveryPointAcceptance,
   type RecoveryPointManifest,
-  type RecoveryPointOwnerInventory,
   type RecoveryPointSqliteSnapshot,
 } from "./recovery-point.js";
 import type { SnapshotManifest, SnapshotRef, SqliteSnapshotProvider } from "./snapshot-provider.js";
@@ -254,7 +255,7 @@ describe("recovery point composition", () => {
         ownerInventory: {
           ...stateOwnerInventory(["main"]),
           owner: "host",
-        } as unknown as RecoveryPointOwnerInventory,
+        } as unknown as TestRecoveryPointOwnerInventory,
       }),
     ).rejects.toThrow();
 
@@ -372,7 +373,7 @@ describe("recovery point composition", () => {
 function stateOwnerInventory(
   agentIds: string[],
   overrides: { sourceRuntimeGeneration?: string; revision?: string } = {},
-): RecoveryPointOwnerInventory {
+): TestRecoveryPointOwnerInventory {
   return {
     version: "openclaw-runtime-sqlite-inventory/v1",
     owner: "openclaw-state",
@@ -381,6 +382,8 @@ function stateOwnerInventory(
     agentIds,
   };
 }
+
+type TestRecoveryPointOwnerInventory = z.input<typeof recoveryPointOwnerInventorySchema>;
 
 type SnapshotFixtureOptions =
   | { role: "global"; userVersion: number; byte: string }
