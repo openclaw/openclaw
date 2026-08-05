@@ -10,6 +10,31 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { deriveConceptTags } from "./concept-vocabulary.js";
 import { isPromotionOriginBlocked } from "./dreaming-consolidation-candidates.js";
 
+const fsSafeTestState = vi.hoisted(() => ({
+  beforeRename: undefined as undefined | ((params: { tempPath: string }) => Promise<void> | void),
+}));
+
+vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
+  return {
+    ...actual,
+    replaceFileAtomic: (
+      params: Parameters<typeof actual.replaceFileAtomic>[0],
+    ): ReturnType<typeof actual.replaceFileAtomic> => {
+      const originalBeforeRename = params.beforeRename;
+      return actual.replaceFileAtomic({
+        ...params,
+        beforeRename: fsSafeTestState.beforeRename
+          ? async (context) => {
+              await originalBeforeRename?.(context);
+              await fsSafeTestState.beforeRename?.(context);
+            }
+          : originalBeforeRename,
+      });
+    },
+  };
+});
+
 vi.mock("openclaw/plugin-sdk/memory-host-events", () => ({
   appendMemoryHostEvent: vi.fn(async () => {}),
 }));
@@ -59,6 +84,7 @@ describe("short-term promotion", () => {
   });
 
   afterEach(() => {
+    fsSafeTestState.beforeRename = undefined;
     vi.restoreAllMocks();
   });
 
@@ -4211,24 +4237,21 @@ describe("short-term promotion", () => {
         });
 
         const truncateAt = 51_200;
-        const originalWriteFile = fs.writeFile.bind(fs);
-        vi.spyOn(fs, "writeFile").mockImplementation((async (
-          target: Parameters<typeof fs.writeFile>[0],
-          data: Parameters<typeof fs.writeFile>[1],
-          options?: Parameters<typeof fs.writeFile>[2],
-        ) => {
-          const targetPath =
-            typeof target === "string" ? target : target instanceof URL ? target.pathname : "";
-          if (targetPath && path.basename(targetPath).startsWith("MEMORY.md")) {
-            const text =
-              typeof data === "string" ? data : Buffer.from(data as Uint8Array).toString();
-            await originalWriteFile(target, text.slice(0, truncateAt), options);
-            throw Object.assign(new Error("EFBIG: file too large, write"), {
-              code: "EFBIG",
-            });
+        fsSafeTestState.beforeRename = async ({ tempPath }) => {
+          if (!path.basename(tempPath).startsWith("MEMORY.md.promotion")) {
+            return;
           }
-          return originalWriteFile(target, data, options);
-        }) as typeof fs.writeFile);
+          const handle = await fs.open(tempPath, "r+");
+          try {
+            await handle.truncate(truncateAt);
+            await handle.sync();
+          } finally {
+            await handle.close();
+          }
+          throw Object.assign(new Error("EFBIG: file too large, write"), {
+            code: "EFBIG",
+          });
+        };
 
         await expect(
           applyShortTermPromotions({
@@ -4253,9 +4276,7 @@ describe("short-term promotion", () => {
           }),
         ).resolves.toHaveLength(1);
         expect(
-          (await fs.readdir(workspaceDir)).filter((entry) =>
-            entry.startsWith("MEMORY.md.promotion"),
-          ),
+          (await fs.readdir(workspaceDir)).filter((entry) => entry.includes("MEMORY.md.promotion")),
         ).toEqual([]);
       });
     });
