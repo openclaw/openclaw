@@ -166,7 +166,8 @@ async function replaceManagedMarkdownBlockStreaming(
     let pending = "";
     let skipping = false;
     let wroteManagedBlock = false;
-    let withheldHeadingSuffix = "";
+    let withholdingHeadingSeparator = false;
+    let withheldHeadingHasLineEnding = false;
     let wroteAnyContent = false;
     let outputBytes = 0;
     let outputEndsWithLf = false;
@@ -269,15 +270,60 @@ async function replaceManagedMarkdownBlockStreaming(
           }
           const afterEndIndex = endIndex + params.endMarker.length;
           await completeManagedBlock();
-          withheldHeadingSuffix = "";
           await clearWithheld();
           skipping = false;
           current = current.slice(afterEndIndex);
           continue;
         }
 
+        if (withholdingHeadingSeparator) {
+          const separatorEnd = current.search(/[^\t \r\n]/);
+          const separator = separatorEnd < 0 ? current : current.slice(0, separatorEnd);
+          if (separator.length > 0) {
+            await writeWithheld(separator);
+            withheldHeadingHasLineEnding ||= /[\r\n]/.test(separator);
+            current = current.slice(separator.length);
+          }
+          if (current.length === 0) {
+            continue;
+          }
+          if (!withheldHeadingHasLineEnding) {
+            await replayWithheld();
+            withholdingHeadingSeparator = false;
+            continue;
+          }
+          if (current.startsWith(params.startMarker)) {
+            await writeWithheld(params.startMarker);
+            shouldDropDuplicateGap = wroteManagedBlock && duplicateGapIsWhitespace;
+            withholdingHeadingSeparator = false;
+            skipping = true;
+            current = current.slice(params.startMarker.length);
+            continue;
+          }
+          if (params.startMarker.startsWith(current)) {
+            pending = current;
+            current = "";
+            continue;
+          }
+          await replayWithheld();
+          withholdingHeadingSeparator = false;
+          continue;
+        }
+
         const startIndex = current.indexOf(params.startMarker);
         if (startIndex < 0) {
+          const headingIndex = current.lastIndexOf(params.heading);
+          if (headingIndex >= 0) {
+            const headingSuffix = current.slice(headingIndex + params.heading.length);
+            if (isLineWhitespace(headingSuffix)) {
+              await writeChunk(current.slice(0, headingIndex));
+              await writeWithheld(current.slice(headingIndex));
+              withholdingHeadingSeparator = true;
+              withheldHeadingHasLineEnding = /[\r\n]/.test(headingSuffix);
+              current = "";
+              continue;
+            }
+          }
           const keep = Math.max(0, current.length - rollingWindowBytes);
           await writeChunk(current.slice(0, keep));
           pending = current.slice(keep);
@@ -297,31 +343,20 @@ async function replaceManagedMarkdownBlockStreaming(
           continue;
         }
         const trimmedPrefix = prefix.replace(headingSuffixPattern, "");
-        withheldHeadingSuffix = prefix.slice(trimmedPrefix.length);
         await writeChunk(trimmedPrefix);
+        await writeWithheld(prefix.slice(trimmedPrefix.length));
+        await writeWithheld(params.startMarker);
         shouldDropDuplicateGap = wroteManagedBlock && duplicateGapIsWhitespace;
         skipping = true;
-        current = current.slice(startIndex);
-        const endIndex = current.indexOf(params.endMarker);
-        if (endIndex < 0) {
-          const keep = Math.max(0, current.length - (params.endMarker.length - 1));
-          await writeWithheld(current.slice(0, keep));
-          pending = current.slice(keep);
-          current = "";
-          continue;
-        }
-        const afterEndIndex = endIndex + params.endMarker.length;
-        await completeManagedBlock();
-        withheldHeadingSuffix = "";
-        await clearWithheld();
-        skipping = false;
-        current = current.slice(afterEndIndex);
+        current = current.slice(startIndex + params.startMarker.length);
       }
     }
     await input.close();
     input = undefined;
+    if (withholdingHeadingSeparator) {
+      await replayWithheld();
+    }
     if (skipping) {
-      await writeChunk(withheldHeadingSuffix);
       await replayWithheld();
       await writeChunk(pending);
       pending = "";

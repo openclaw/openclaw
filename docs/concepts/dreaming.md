@@ -28,7 +28,7 @@ and a bounded `<!-- importance: N -->` value from 1 to 10. Consolidation keeps
 existing annotated entries byte-for-byte unless it explicitly merges or
 supersedes them.
 
-Dreaming's managed-block update reads at most 16 MiB from a daily inline memory file or `DREAMS.md`. If either file is larger, that managed-block update uses a bounded streaming replacement so existing large notes and diary text can stay in place without blocking the sweep. Other diary transforms (narrative entries, backfill, and consolidation) keep their existing full-diary read behavior. Existing daily-memory symlinks remain supported and are updated through their resolved file target; `DREAMS.md` symlinks remain rejected.
+Dreaming's managed-block update buffers up to 16 MiB from a daily inline memory file or `DREAMS.md`. If either file is larger, that managed-block update uses a bounded streaming replacement so existing large notes and diary text can stay in place without blocking the sweep. Other diary transforms (narrative entries, backfill, and consolidation) keep their existing full-diary read behavior. Existing daily-memory symlinks remain supported and are updated through their resolved file target; `DREAMS.md` symlinks remain rejected.
 
 ## Phase model
 

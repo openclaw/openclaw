@@ -193,6 +193,56 @@ describe("dreaming markdown storage", () => {
     expect(content).not.toContain("- Old candidate");
   });
 
+  it("preserves canonical replacement with an unbounded heading separator", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
+    const inlinePath = path.join(workspaceDir, "memory", "2026-04-05.md");
+    const startMarker = "<!-- openclaw:dreaming:light:start -->";
+    const endMarker = "<!-- openclaw:dreaming:light:end -->";
+    const body = "- Candidate: long heading separator update";
+    const headingSeparator = `${" ".repeat(128 * 1_024)}\r\n${"\t\n".repeat(8_192)}${"\t".repeat(128 * 1_024)}`;
+    await fs.mkdir(path.dirname(inlinePath), { recursive: true });
+    const original = [
+      "# Daily Memory",
+      "",
+      "A".repeat(MEMORY_DREAMING_MARKDOWN_MAX_BYTES),
+      "",
+      `## Light Sleep${headingSeparator}${startMarker}`,
+      "- Old candidate",
+      endMarker,
+      "Tail stays.",
+    ].join("\n");
+    await fs.writeFile(inlinePath, original, "utf-8");
+
+    await writeDailyDreamingPhaseBlock({
+      workspaceDir,
+      phase: "light",
+      bodyLines: [body],
+      nowMs,
+      timezone,
+      storage: {
+        mode: "inline",
+        separateReports: false,
+      },
+    });
+
+    const content = await fs.readFile(inlinePath, "utf-8");
+    expect(content).toBe(
+      withTrailingNewline(
+        replaceManagedMarkdownBlock({
+          original,
+          heading: "## Light Sleep",
+          startMarker,
+          endMarker,
+          body,
+        }),
+      ),
+    );
+    expect(content).toContain("Tail stays.");
+    expect(content).toContain(body);
+    expect(content).not.toContain("- Old candidate");
+    expect(content.match(new RegExp(startMarker, "g"))).toHaveLength(1);
+  });
+
   it("keeps a trailing newline when an oversized managed block ends at EOF", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
     const inlinePath = path.join(workspaceDir, "memory", "2026-04-05.md");
