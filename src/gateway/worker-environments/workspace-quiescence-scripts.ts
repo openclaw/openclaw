@@ -53,8 +53,7 @@ function probeProcessIdentity(pid, timeoutMs = ${REMOTE_WATCHDOG_PROCESS_PROBE_T
   });
 }
 function processEnrollmentDeadlineMs(referenceCount) {
-  // Enrollment allows one probe-timeout budget per concurrency batch, plus one
-  // final batch of scheduling headroom; recovery keeps its strict five-second ceiling.
+  // Enrollment budgets each concurrency batch plus scheduling headroom; recovery remains five seconds.
   const probeBatches = Math.ceil(referenceCount / ${REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY});
   return Date.now() + Math.max(
     ${REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS},
@@ -494,7 +493,9 @@ if (input.recovery !== undefined) {
   const failure = input.recovery.state === "recovery-failed" ? "failed" : "timed out";
   throw new Error("workspace quiescence recovery " + failure + "; lease retained for operator recovery");
 }
-if (input.watchdog === null || input.expiresAtMs - Date.now() < 5000) {
+const existingReferences = input.processes.map((entry) => ({ ...entry, signal: 0 }));
+const existingValidationDeadlineMs = processEnrollmentDeadlineMs(existingReferences.length);
+if (input.watchdog === null || input.expiresAtMs < existingValidationDeadlineMs + ${REMOTE_WATCHDOG_PROCESS_PROBE_TIMEOUT_MS}) {
   throw new Error("workspace quiescence lease is no longer active");
 }
 function writeLease(processes, expiresAtMs) {
@@ -541,11 +542,10 @@ async function rollbackLateProcesses(references, priorProcesses, error) {
   ]);
   throw error;
 }
-const existingReferences = input.processes.map((entry) => ({ ...entry, signal: 0 }));
 const existing = await recoverProcessReferences(
   existingReferences,
   ${REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY},
-  processEnrollmentDeadlineMs(existingReferences.length),
+  existingValidationDeadlineMs,
 );
 if (existing.remaining.length > 0) throw new Error(existing.failed ? "workspace quiescence process identity probe failed" : "workspace quiescence process identity probe timed out");
 for (const reference of existingReferences) {

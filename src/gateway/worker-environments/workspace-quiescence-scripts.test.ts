@@ -75,6 +75,13 @@ async function fixture() {
   };
 }
 
+async function useBatchedDelayedProcessFixture(input: Awaited<ReturnType<typeof fixture>>) {
+  await fs.writeFile(
+    path.join(input.bin, "ps"),
+    '#!/bin/sh\ncase "$*" in\n  *"pid=,ppid=,uid=,stat=,lstart="*) printf "%s %s %s S Tue Jul 15 08:00:00 2026\\n" "$$" "$PPID" "$(id -u)"; if [ -s "$OPENCLAW_TEST_PS_EXTRA" ]; then pids=$(paste -sd, "$OPENCLAW_TEST_PS_EXTRA"); /bin/ps -o pid=,ppid=,uid=,stat=,lstart= -p "$pids"; fi ;;\n  *"stat=,lstart= -p"*|*"lstart= -p"*) target=""; for argument in "$@"; do target=$argument; done; if [ -f "$OPENCLAW_TEST_PS_DELAY_TARGET" ] && grep -qx "$target" "$OPENCLAW_TEST_PS_DELAY_TARGET"; then /bin/sleep 0.7; fi; exec /bin/ps "$@" ;;\nesac\n',
+  );
+}
+
 async function quiesce(
   input: Awaited<ReturnType<typeof fixture>>,
   watchdogTimeoutMs = 10_000,
@@ -427,10 +434,7 @@ describe("remote workspace quiescence scripts", () => {
 
   it("allows healthy high-cardinality enrollment to use a bounded count-aware deadline", async () => {
     const input = await fixture();
-    await fs.writeFile(
-      path.join(input.bin, "ps"),
-      '#!/bin/sh\ncase "$*" in\n  *"pid=,ppid=,uid=,stat=,lstart="*) printf "%s %s %s S Tue Jul 15 08:00:00 2026\\n" "$$" "$PPID" "$(id -u)"; if [ -s "$OPENCLAW_TEST_PS_EXTRA" ]; then pids=$(paste -sd, "$OPENCLAW_TEST_PS_EXTRA"); /bin/ps -o pid=,ppid=,uid=,stat=,lstart= -p "$pids"; fi ;;\n  *"stat=,lstart= -p"*|*"lstart= -p"*) target=""; for argument in "$@"; do target=$argument; done; if [ -f "$OPENCLAW_TEST_PS_DELAY_TARGET" ] && grep -qx "$target" "$OPENCLAW_TEST_PS_DELAY_TARGET"; then /bin/sleep 0.7; fi; exec /bin/ps "$@" ;;\nesac\n',
-    );
+    await useBatchedDelayedProcessFixture(input);
     const children = Array.from({ length: 64 }, () => spawn("sleep", ["30"], { stdio: "ignore" }));
     const childPids = children.map((child) => child.pid!);
     let nonce = "";
@@ -442,6 +446,62 @@ describe("remote workspace quiescence scripts", () => {
       nonce = await quiesce(input, 30_000, 30_000);
       await Promise.all(childPids.map(async (pid) => await expectProcessState(pid, true)));
       await renew(input, nonce, 30_000);
+    } finally {
+      await fs.rm(input.delayedProcessProbeTargetPath, { force: true });
+      await fs.rm(input.extraProcessPath, { force: true });
+      if (nonce) {
+        try {
+          await resume(input, nonce);
+        } catch {}
+      }
+      await Promise.all(children.map(async (child) => await terminate(child)));
+    }
+  }, 60_000);
+
+  it("rejects renewal before high-cardinality validation can outlive the lease", async () => {
+    const input = await fixture();
+    await useBatchedDelayedProcessFixture(input);
+    const children = Array.from({ length: 64 }, () => spawn("sleep", ["30"], { stdio: "ignore" }));
+    const childPids = children.map((child) => child.pid!);
+    let nonce = "";
+
+    try {
+      await fs.writeFile(input.extraProcessPath, `${childPids.join("\n")}\n`);
+      nonce = await quiesce(input, 15_000, 30_000);
+      await Promise.all(childPids.map(async (pid) => await expectProcessState(pid, true)));
+      const leaseFile = leasePath(input.home, input.workspace, nonce);
+      const before = JSON.parse(await fs.readFile(leaseFile, "utf8")) as {
+        expiresAtMs: number;
+      };
+      const waitMs = before.expiresAtMs - Date.now() - 6_000;
+      if (waitMs > 0) {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, waitMs);
+        });
+      }
+      await fs.writeFile(input.delayedProcessProbeTargetPath, `${childPids.join("\n")}\n`);
+
+      const startedAt = Date.now();
+      const result = await runCommandWithTimeout(
+        [
+          process.execPath,
+          "-e",
+          REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
+          input.workspace,
+          nonce,
+          "20000",
+        ],
+        { timeoutMs: 10_000, baseEnv: input.env },
+      );
+
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain("workspace quiescence lease is no longer active");
+      expect(Date.now() - startedAt).toBeLessThan(3_000);
+      const after = JSON.parse(await fs.readFile(leaseFile, "utf8")) as {
+        expiresAtMs: number;
+      };
+      expect(after.expiresAtMs).toBe(before.expiresAtMs);
+      await Promise.all(childPids.map(async (pid) => await expectProcessState(pid, true)));
     } finally {
       await fs.rm(input.delayedProcessProbeTargetPath, { force: true });
       await fs.rm(input.extraProcessPath, { force: true });
