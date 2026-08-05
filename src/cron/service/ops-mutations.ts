@@ -5,6 +5,7 @@ import {
   AgentDeletionCommitUncertainError,
 } from "../../agents/agent-lifecycle-registry.js";
 import {
+  type CronActiveJobMarker,
   isCronJobActive,
   noteActiveCronJobRemoval,
   noteActiveCronJobScheduleMutation,
@@ -437,7 +438,7 @@ export async function remove(
   opts?: { systemOwned?: boolean },
 ) {
   let sessionCleanup:
-    | { agentId: string; sessionStorePath: string; waitForActiveRun: boolean }
+    | { activeMarker: CronActiveJobMarker | undefined; agentId: string; sessionStorePath: string }
     | undefined;
   const result = await locked(state, async () => {
     warnIfDisabled(state, "remove");
@@ -469,6 +470,7 @@ export async function remove(
       suppressScheduledJobId: id,
     });
     if (removed && removedJob) {
+      const activeMarker = noteActiveCronJobRemoval(id);
       const agentId = resolveEffectiveJobAgentId(removedJob, resolveCurrentDefaultAgentId(state));
       const sessionStorePath =
         state.deps.resolveSessionStorePath?.(agentId) ?? state.deps.sessionStorePath;
@@ -477,12 +479,11 @@ export async function remove(
         (removedJob.sessionTarget === "isolated" || removedJob.sessionTarget === "current")
       ) {
         sessionCleanup = {
+          activeMarker,
           agentId,
           sessionStorePath,
-          waitForActiveRun: isCronJobActive(id),
         };
       }
-      noteActiveCronJobRemoval(id);
       try {
         deleteCronJobScratch(state.deps.storePath, id);
       } catch (error) {
@@ -500,22 +501,25 @@ export async function remove(
   if (!sessionCleanup) {
     return result;
   }
-  const { agentId, sessionStorePath, waitForActiveRun } = sessionCleanup;
+  const { activeMarker, agentId, sessionStorePath } = sessionCleanup;
   const cleanup = async () => {
     try {
       await removeCronJobBaseSession({
         agentId,
         jobId: id,
         sessionStorePath,
+        // Re-check after the session snapshot is loaded. A same-id replacement
+        // keeps its row, while expectedEntry protects writes racing this delete.
+        shouldRemove: () => !state.store?.jobs.some((job) => job.id === id),
       });
     } catch (error) {
       state.deps.log.warn({ jobId: id, err: String(error) }, "cron: session cleanup failed");
     }
   };
-  await cleanup();
-  if (waitForActiveRun) {
-    onCronJobInactive(id, () => void cleanup());
+  if (activeMarker) {
+    onCronJobInactive(activeMarker, () => void cleanup());
   }
+  await cleanup();
   return result;
 }
 
