@@ -1,7 +1,7 @@
 // Coverage for resolving channel and DM history limits from session keys.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { getHistoryLimitFromSessionKey } from "./history.js";
+import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
 
 describe("getHistoryLimitFromSessionKey", () => {
   it("does not match channel history limits across provider id variants", () => {
@@ -241,5 +241,58 @@ describe("getHistoryLimitFromSessionKey", () => {
 
     expect(getHistoryLimitFromSessionKey("slack:channel:c1", config, "off")).toBe(0);
     expect(getHistoryLimitFromSessionKey("slack:dm:u1", config, "off")).toBe(0);
+  });
+});
+
+describe("account-scoped limits change the retained transcript", () => {
+  // The resolver returning a different number is not the user-visible effect;
+  // what matters is that the transcript actually keeps fewer turns. This drives
+  // the real resolver and the real trimmer together, no mocks.
+  function transcript(userTurns: number) {
+    return Array.from({ length: userTurns * 2 }, (_, i) =>
+      i % 2 === 0
+        ? { role: "user" as const, content: `q${i / 2}` }
+        : { role: "assistant" as const, content: `a${(i - 1) / 2}` },
+    );
+  }
+
+  function countUserTurns(messages: ReturnType<typeof transcript>) {
+    return messages.filter((message) => message.role === "user").length;
+  }
+
+  const cfg = {
+    channels: {
+      telegram: {
+        historyLimit: 20,
+        accounts: { "Work Team": { historyLimit: 2 } },
+      },
+    },
+  } as unknown as OpenClawConfig;
+
+  const sessionKey = "agent:main:telegram:channel:c1";
+  const messages = transcript(40);
+
+  it("trims to the account limit for that account", () => {
+    const limited = limitHistoryTurns(
+      messages,
+      getHistoryLimitFromSessionKey(sessionKey, cfg, "work-team"),
+    );
+    // limit 2 with the documented 1.5x eviction cushion keeps far fewer turns
+    // than the root limit of 20, and strictly fewer than the input.
+    expect(countUserTurns(limited)).toBeLessThan(countUserTurns(messages));
+    expect(countUserTurns(limited)).toBeLessThanOrEqual(3);
+  });
+
+  it("trims to the channel root when the account does not override", () => {
+    const rootLimited = limitHistoryTurns(
+      messages,
+      getHistoryLimitFromSessionKey(sessionKey, cfg, "other-account"),
+    );
+    const accountLimited = limitHistoryTurns(
+      messages,
+      getHistoryLimitFromSessionKey(sessionKey, cfg, "work-team"),
+    );
+    expect(countUserTurns(rootLimited)).toBeGreaterThan(countUserTurns(accountLimited));
+    expect(countUserTurns(rootLimited)).toBeLessThanOrEqual(30);
   });
 });
