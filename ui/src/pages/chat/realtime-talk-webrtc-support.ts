@@ -3,7 +3,7 @@ import type { RealtimeTalkWebRtcSdpSessionResult } from "./realtime-talk-shared.
 import type { RealtimeTalkVideoFrame } from "./realtime-talk-video.ts";
 
 const REALTIME_WEBRTC_OFFER_TIMEOUT_MS = 30_000;
-export const REALTIME_WEBRTC_SDP_ANSWER_MAX_BYTES = 256 * 1024;
+const REALTIME_WEBRTC_SDP_ANSWER_MAX_BYTES = 256 * 1024;
 const REALTIME_TALK_DEFAULT_MAX_MESSAGE_SIZE = 64 * 1024;
 const OPENAI_REALTIME_CALLS_URL = "https://api.openai.com/v1/realtime/calls";
 
@@ -61,16 +61,14 @@ function resolveRealtimeTalkOfferUrl(offerUrl: string | undefined, gatewayUrl: s
 async function readResponseTextWithLimit(
   response: Response,
   label: string,
-  maxBytes: number,
+  maxBytes?: number,
 ): Promise<string> {
-  const responseBodyTooLargeError = () =>
-    new Error(`${label}: text response exceeds ${maxBytes} bytes`);
   const rawContentLength = response.headers.get("content-length");
-  if (rawContentLength && /^\d+$/u.test(rawContentLength)) {
+  if (maxBytes !== undefined && rawContentLength && /^\d+$/u.test(rawContentLength)) {
     const contentLength = Number(rawContentLength);
     if (!Number.isSafeInteger(contentLength) || contentLength > maxBytes) {
       void response.body?.cancel().catch(() => undefined);
-      throw responseBodyTooLargeError();
+      throw new Error(`${label}: text response exceeds ${maxBytes} bytes`);
     }
   }
   if (!response.body) {
@@ -93,10 +91,10 @@ async function readResponseTextWithLimit(
         break;
       }
       totalBytes += value.byteLength;
-      if (totalBytes > maxBytes) {
+      if (maxBytes !== undefined && totalBytes > maxBytes) {
         canceled = true;
         void reader.cancel().catch(() => undefined);
-        throw responseBodyTooLargeError();
+        throw new Error(`${label}: text response exceeds ${maxBytes} bytes`);
       }
       chunks.push(decoder.decode(value, { stream: true }));
     }
@@ -153,7 +151,7 @@ export class RealtimeTalkWebRtcOfferExchange {
         answer = await readResponseTextWithLimit(
           response,
           "Realtime WebRTC SDP answer",
-          REALTIME_WEBRTC_SDP_ANSWER_MAX_BYTES,
+          params.session.provider === "openai" ? REALTIME_WEBRTC_SDP_ANSWER_MAX_BYTES : undefined,
         );
       } catch (error) {
         if (!params.isCurrent()) {
