@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
-import { withOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
+import {
+  withOpenClawAgentDatabaseReadOnly,
+  withOpenClawAgentDatabaseReadOnlyAsync,
+} from "./openclaw-agent-db-readonly.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   IncognitoAgentDatabasePathCollisionError,
@@ -40,6 +43,26 @@ describe("incognito agent database", () => {
     ).toEqual({ found: false, reason: "database-missing" });
     expect(listOpenIncognitoAgentDatabases()).toEqual(before);
     expect(fs.existsSync(sentinel)).toBe(false);
+  });
+
+  it("rejects async reads that would retain the shared in-memory writer handle", async () => {
+    const stateDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "openclaw-incognito-async-read-")),
+    );
+    tempDirs.push(stateDir);
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const sentinel = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
+    openOpenClawAgentDatabase({ agentId: "main", env, path: sentinel });
+
+    await expect(
+      withOpenClawAgentDatabaseReadOnlyAsync(async () => "unreachable", {
+        agentId: "main",
+        env,
+        path: sentinel,
+      }),
+    ).rejects.toThrow(
+      "Asynchronous read-only operations are not supported for incognito databases",
+    );
   });
 
   it("refuses a file at the reserved sentinel path before opening in memory", () => {
