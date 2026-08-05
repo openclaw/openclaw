@@ -1,68 +1,56 @@
-/**
- * Core-private shared implementation for the spawned-session ownership lookup.
- *
- * This module is deliberately NOT part of the public plugin-sdk surface: it is
- * not listed in `scripts/lib/plugin-sdk-entrypoints.json`, so the three-state
- * result type and helper below are not published to plugins. The public
- * `openclaw/plugin-sdk/session-visibility` entrypoint keeps the legacy
- * Set-returning `listSpawnedSessionKeys` contract unchanged; the visibility
- * guard and the sandboxed session resolver import the discriminated variant
- * from here. See issue #114653.
- */
+/** Core-private spawned-session ownership lookup; not a published plugin SDK subpath. */
 import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
 import {
   GatewayCredentialsRequiredError,
   GatewayExplicitAuthRequiredError,
-  GatewayLocalBackendSharedAuthUnavailableError,
-  GatewayStoredDeviceAuthUnavailableError,
   isGatewayTransportError,
   callGateway as defaultCallGateway,
 } from "../gateway/call.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
+import { GatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
 
 type GatewayCaller = typeof defaultCallGateway;
 
-/**
- * Classify a spawned-session ownership lookup failure for caller guidance.
- *
- * Only known temporary failures prescribe retry. Credential guidance is
- * reserved for the explicit pre-connect auth errors; all other failures remain
- * fail-closed with generic diagnostics instead of guessing at their cause.
- */
 export type LookupFailureKind = "transient" | "credentials" | "unknown";
 
 export function classifyLookupFailure(error: unknown): LookupFailureKind {
-  if (isGatewayTransportError(error)) {
+  if (error instanceof GatewayClientRequestError && error.retryable) {
     return "transient";
   }
-  if (error instanceof GatewayClientRequestError && error.retryable) {
+  if (
+    isGatewayTransportError(error) &&
+    (error.kind === "timeout" || error.code === 1006 || error.code === 1013)
+  ) {
     return "transient";
   }
   if (
     error instanceof GatewayCredentialsRequiredError ||
     error instanceof GatewayExplicitAuthRequiredError ||
-    error instanceof GatewayStoredDeviceAuthUnavailableError ||
-    error instanceof GatewayLocalBackendSharedAuthUnavailableError
+    error instanceof GatewaySecretRefUnavailableError
   ) {
     return "credentials";
   }
   return "unknown";
 }
 
-/**
- * Shared denial suffix for a failed ownership lookup so direct and sandboxed
- * guards render the same cause-appropriate recovery guidance.
- */
 export function lookupFailedDenialSuffix(kind: LookupFailureKind): string {
   if (kind === "transient") {
     return "spawned-session ownership lookup failed (transient); retry the operation.";
   }
   if (kind === "credentials") {
-    return "spawned-session ownership lookup failed; check gateway configuration and credentials.";
+    return "spawned-session ownership lookup failed; ask the operator to check gateway configuration and credentials.";
   }
-  return "spawned-session ownership lookup failed; check gateway logs for the reported error.";
+  return "spawned-session ownership lookup failed; ask the operator to inspect OpenClaw logs.";
+}
+
+export function lookupFailedDenialMessage(
+  action: "history" | "send" | "status" | "list",
+  kind: LookupFailureKind,
+): string {
+  const label = action === "list" ? "Session list" : `Session ${action}`;
+  return `${label} denied because ${lookupFailedDenialSuffix(kind)}`;
 }
 
 let callGatewayForListSpawned: GatewayCaller = defaultCallGateway;
@@ -74,15 +62,9 @@ export const sessionVisibilityGatewayTesting = {
   },
 };
 
-/**
- * Result of listing spawned-session keys. Distinguishes a successful (possibly
- * empty) lookup from a failed one so the visibility guard can tell a genuine
- * policy denial apart from a lookup failure. The failure kind preserves only
- * guidance supported by the caught error; unknown failures remain generic.
- */
 export type SpawnedSessionKeysResult =
   | { ok: true; keys: Set<string> }
-  | { ok: false; error: unknown; failureKind: LookupFailureKind };
+  | { ok: false; failureKind: LookupFailureKind };
 
 /** List sessions spawned by the requester through the gateway session list method. */
 export async function listSpawnedSessionKeysWithResult(params: {
@@ -107,15 +89,9 @@ export async function listSpawnedSessionKeysWithResult(params: {
     const keys = normalizeTrimmedStringList(sessions.map((entry) => entry?.key));
     return { ok: true, keys: new Set(keys) };
   } catch (error) {
-    // Fail closed and stay observable: a failed ownership lookup must not
-    // collapse into a genuine policy denial (issue #114653). Retry behavior is
-    // intentionally not added here — retrying transient lookup failures is a
-    // maintainer product decision (see the issue's maintainer-review labels),
-    // so this path only classifies and logs the failure. Keep unknown causes
-    // distinct from confirmed auth failures so recovery text never guesses.
     logWarn(
       `session-visibility: listSpawnedSessionKeys failed for requester=${params.requesterSessionKey}: ${formatErrorMessage(error)}`,
     );
-    return { ok: false, error, failureKind: classifyLookupFailure(error) };
+    return { ok: false, failureKind: classifyLookupFailure(error) };
   }
 }

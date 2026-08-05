@@ -4,20 +4,15 @@ import {
   normalizeOptionalString,
 } from "../../packages/normalization-core/src/string-coerce.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { formatErrorMessage } from "../infra/errors.js";
-import { logWarn } from "../logger.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { listAmbientGroupWatchTargets } from "../sessions/session-state-events.js";
 import {
   listSpawnedSessionKeysWithResult,
-  lookupFailedDenialSuffix,
+  lookupFailedDenialMessage,
   type SpawnedSessionKeysResult,
 } from "./session-visibility-internal.js";
 
-// Legacy public export preserved for upgrade compatibility: main publishes
-// `sessionVisibilityGatewayTesting` from this SDK subpath, so the name must
-// stay reachable here even though the implementation lives in the core-private
-// module. The richer lookup result helper stays internal-only.
+// Keep the shipped test hook on its public SDK subpath; richer results stay core-private.
 export { sessionVisibilityGatewayTesting } from "./session-visibility-internal.js";
 
 /** Configured visibility mode for session tools and session-related commands. */
@@ -67,11 +62,8 @@ function resolveScopedSessionAccess(
       if (expectedSessionId) {
         return { expectedSessionId };
       }
-    } catch (error) {
+    } catch {
       // Access providers fail closed; normal visibility evaluation still runs.
-      logWarn(
-        `session-visibility: scoped access provider threw for requester=${request.requesterSessionKey} target=${request.targetSessionKey} action=${request.action}: ${formatErrorMessage(error)}`,
-      );
     }
   }
   return undefined;
@@ -86,17 +78,7 @@ export type SessionVisibilityRow = {
   parentSessionKey?: string;
 };
 
-/**
- * List sessions spawned by the requester through the gateway session list
- * method.
- *
- * Public plugin-SDK contract: always resolves to a `Set<string>` so existing
- * plugin callers that use `.has()` keep working. A failed lookup collapses to
- * an empty set (fail-closed) exactly like previous releases; the failure is
- * still logged. The visibility guard uses
- * {@link listSpawnedSessionKeysWithResult} (core-private) so it can
- * distinguish a failed lookup from a genuine policy denial (issue #114653).
- */
+/** Public compatibility wrapper; direct guards use the richer private result. */
 export async function listSpawnedSessionKeys(params: {
   requesterSessionKey: string;
   limit?: number;
@@ -345,16 +327,7 @@ function createSessionVisibilityCheckerWithResult(
       spawnedBy: isSpawnedSession ? params.requesterSessionKey : undefined,
     });
     if (!result.allowed) {
-      // A failed ownership lookup fail-closes as a denial under tree visibility,
-      // where direct-key targets rely on the spawned-session set to prove
-      // ownership. It is marked distinct from a policy denial so callers can
-      // tell a transient lookup failure apart from a genuine authorization
-      // refusal. The row checker still runs first so durable watched same-agent
-      // group reads (and self/current targets) keep their existing allowance:
-      // those grants do not depend on the spawned-session set. Under "all"
-      // visibility this override does not apply — cross-agent targets are
-      // evaluated by the agent-to-agent policy regardless of spawned ownership.
-      // See issue #114653.
+      // Preserve grants that do not depend on spawned ownership; otherwise fail closed with cause.
       const lookupFailed =
         spawnedKeys !== null &&
         !spawnedKeys.ok &&
@@ -362,14 +335,10 @@ function createSessionVisibilityCheckerWithResult(
         targetSessionKey !== params.requesterSessionKey &&
         targetSessionKey !== "current";
       if (lookupFailed) {
-        // The denial text carries the lookup's retryability so a transient
-        // transport failure (retry) is distinguishable from a permanent
-        // credential/configuration failure (do not retry). Both still fail
-        // closed. See issue #114653 (review P1: classify before prescribing retry).
         return {
           allowed: false,
           status: "forbidden",
-          error: `${actionPrefix(params.action)} denied because ${lookupFailedDenialSuffix(spawnedKeys.failureKind)}`,
+          error: lookupFailedDenialMessage(params.action, spawnedKeys.failureKind),
         };
       }
     }

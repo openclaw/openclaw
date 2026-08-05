@@ -617,7 +617,7 @@ describe("createSessionVisibilityGuard", () => {
         allowed: false,
         status: "forbidden",
         error:
-          "Session history denied because spawned-session ownership lookup failed; check gateway configuration and credentials.",
+          "Session history denied because spawned-session ownership lookup failed; ask the operator to check gateway configuration and credentials.",
       });
       // A permanent failure must never tell the caller to retry.
       expect(result.allowed ? "" : result.error).not.toMatch(/retry/i);
@@ -645,7 +645,7 @@ describe("createSessionVisibilityGuard", () => {
         allowed: false,
         status: "forbidden",
         error:
-          "Session history denied because spawned-session ownership lookup failed; check gateway logs for the reported error.",
+          "Session history denied because spawned-session ownership lookup failed; ask the operator to inspect OpenClaw logs.",
       });
       expect(result.allowed ? "" : result.error).not.toMatch(/credentials|retry/i);
     } finally {

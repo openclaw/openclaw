@@ -201,6 +201,21 @@ describe("classifyLookupFailure", () => {
     expect(classifyLookupFailure(error)).toBe("transient");
   });
 
+  it.each([
+    { kind: "timeout", code: undefined, expected: "transient" },
+    { kind: "closed", code: 1006, expected: "transient" },
+    { kind: "closed", code: 1013, expected: "transient" },
+    { kind: "closed", code: 1008, expected: "unknown" },
+  ] as const)("classifies gateway transport $kind/$code as $expected", ({ kind, code, expected }) => {
+    const error = Object.assign(new Error("gateway transport failed"), {
+      name: "GatewayTransportError",
+      kind,
+      connectionDetails: {},
+      ...(code === undefined ? {} : { code }),
+    });
+    expect(classifyLookupFailure(error)).toBe(expected);
+  });
+
   it("classifies an explicit pre-connect auth failure as credentials", () => {
     const error = new GatewayCredentialsRequiredError({
       method: "sessions.list",
@@ -226,7 +241,7 @@ describe("classifyLookupFailure", () => {
     expect(lookupFailedDenialSuffix("credentials")).toMatch(
       /check gateway configuration and credentials/i,
     );
-    expect(lookupFailedDenialSuffix("unknown")).toMatch(/check gateway logs/i);
+    expect(lookupFailedDenialSuffix("unknown")).toMatch(/inspect OpenClaw logs/i);
     expect(lookupFailedDenialSuffix("unknown")).not.toMatch(/credentials|retry/i);
   });
 });

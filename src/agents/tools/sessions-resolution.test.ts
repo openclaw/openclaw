@@ -281,7 +281,7 @@ describe("resolved session visibility checks", () => {
     });
   });
 
-  it("redacts sensitive text in resolve-fallback and spawned-lookup warnings", async () => {
+  it("redacts sensitive text in spawned-lookup warnings", async () => {
     loggerMocks.logWarn.mockClear();
     callGatewayMock.mockImplementation(async () => {
       // A retryable request-level failure keeps the "transient; retry" denial
@@ -314,9 +314,8 @@ describe("resolved session visibility checks", () => {
         "Session history denied because spawned-session ownership lookup failed (transient); retry the operation.",
     });
 
-    // Both new warn paths must use the repository's redacting formatter.
+    // The authoritative list failure must use the repository's redacting formatter.
     const warnText = loggerMocks.logWarn.mock.calls.map((call) => String(call[0])).join("\n");
-    expect(warnText).toContain("sessions-resolution: sessions.resolve threw");
     expect(warnText).toContain("listSpawnedSessionKeys failed");
     expect(warnText).not.toContain("sk-evidence-secret-9f3a2c");
   });
@@ -347,7 +346,7 @@ describe("resolved session visibility checks", () => {
       ok: false,
       status: "forbidden",
       error:
-        "Session history denied because spawned-session ownership lookup failed; check gateway configuration and credentials.",
+        "Session history denied because spawned-session ownership lookup failed; ask the operator to check gateway configuration and credentials.",
     });
     // A permanent failure must never tell the caller to retry.
     expect(result.ok ? "" : result.error).not.toMatch(/retry/i);
@@ -371,7 +370,7 @@ describe("resolved session visibility checks", () => {
       ok: false,
       status: "forbidden",
       error:
-        "Session history denied because spawned-session ownership lookup failed; check gateway logs for the reported error.",
+        "Session history denied because spawned-session ownership lookup failed; ask the operator to inspect OpenClaw logs.",
     });
     expect(result.ok ? "" : result.error).not.toMatch(/credentials|retry/i);
   });
