@@ -5,7 +5,9 @@
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { getRuntimeConfig } from "../config/config.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { resolveApprovalCommandAuthorization } from "../infra/channel-approval-auth.js";
 import { describeInterpreterInlineEval } from "../infra/command-analysis/inline-eval.js";
 import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
 import { emitTrustedSecurityEvent } from "../infra/diagnostic-events.js";
@@ -118,6 +120,7 @@ type ProcessGatewayAllowlistParams = {
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
+  turnSourceSenderId?: string;
   scopeKey?: string;
   approvalFollowupText?: string;
   approvalFollowup?: ExecApprovalFollowupFactory;
@@ -416,6 +419,9 @@ function buildGatewayExecApprovalFollowupSummary(params: {
 
 function shouldAwaitGatewayApprovalInline(params: {
   turnSourceChannel?: string;
+  turnSourceAccountId?: string;
+  turnSourceTo?: string;
+  turnSourceSenderId?: string;
   approvalFollowupMode?: "agent" | "direct";
 }): boolean {
   if (params.approvalFollowupMode !== undefined) {
@@ -427,7 +433,29 @@ function shouldAwaitGatewayApprovalInline(params: {
   // mirrors the webchat path that PR #85239 fixed; without it the agent run
   // terminates on the "approval-pending" tool result and the operator must
   // send a follow-up chat message to recover the turn (issue #93918).
-  return isNativeApprovalChannel(normalizeMessageChannel(params.turnSourceChannel));
+  if (!isNativeApprovalChannel(normalizeMessageChannel(params.turnSourceChannel))) {
+    return false;
+  }
+  // The channel being approval-capable is not enough: the turn's own sender
+  // must be the one who can resolve it. A counterpart conversation (the agent
+  // serving someone other than an approver) can still have approvers
+  // configured for the channel/account as a whole -- delivery just routes the
+  // prompt to a different person's DM, or on a guild/group surface to the
+  // whole channel/group rather than one user. `turnSourceTo` is that delivery
+  // route (a channel/group id on guild/group surfaces, the peer id on 1:1
+  // DMs) and must not stand in for the sender: use `turnSourceSenderId`, the
+  // real per-message sender id, instead. Waiting inline on the wrong identity
+  // blocks this turn on a decision nobody watching it can make, past this
+  // turn's own liveness watchdog, long before the approval timeout elapses.
+  // Fall through to the async pending/follow-up path instead, exactly as
+  // already happens when the channel has no native approval UI at all.
+  return resolveApprovalCommandAuthorization({
+    cfg: getRuntimeConfig(),
+    channel: params.turnSourceChannel,
+    accountId: params.turnSourceAccountId,
+    senderId: params.turnSourceSenderId,
+    kind: "exec",
+  }).authorized;
 }
 
 function buildGatewayExecApprovalDeniedToolResult(params: {

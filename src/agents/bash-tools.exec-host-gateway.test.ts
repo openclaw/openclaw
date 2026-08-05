@@ -34,6 +34,7 @@ import {
   resolvePolicyTargetCandidatePath,
 } from "../infra/exec-command-resolution.js";
 import { createSafeGatewayRestartPreflight } from "../infra/restart-coordinator.js";
+import { createResolvedApproverActionAuthAdapter } from "../plugin-sdk/approval-auth-helpers.js";
 import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
@@ -197,6 +198,18 @@ const detectInterpreterInlineEvalArgvMock = vi.hoisted(() =>
     } | null => null,
   ),
 );
+const resolveApprovalCommandAuthorizationMock = vi.hoisted(() =>
+  vi.fn(
+    (
+      _params: Parameters<
+        typeof import("../infra/channel-approval-auth.js").resolveApprovalCommandAuthorization
+      >[0],
+    ): { authorized: boolean; reason?: string; explicit: boolean } => ({
+      authorized: true,
+      explicit: false,
+    }),
+  ),
+);
 
 vi.mock("../infra/exec-approvals.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/exec-approvals.js")>()),
@@ -254,6 +267,20 @@ vi.mock("../infra/command-analysis/inline-eval.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/command-analysis/inline-eval.js")>()),
   describeInterpreterInlineEval: vi.fn(() => "python -c"),
   detectInterpreterInlineEvalArgv: detectInterpreterInlineEvalArgvMock,
+}));
+
+vi.mock("../infra/channel-approval-auth.js", () => ({
+  resolveApprovalCommandAuthorization: resolveApprovalCommandAuthorizationMock,
+}));
+
+const getChannelPluginMock = vi.hoisted(() => vi.fn());
+vi.mock("../channels/plugins/index.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../channels/plugins/index.js")>()),
+  getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
+}));
+
+vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: vi.fn(() => ({})),
 }));
 
 let processGatewayAllowlist: typeof import("./bash-tools.exec-host-gateway.js").processGatewayAllowlist;
@@ -375,6 +402,9 @@ describe("processGatewayAllowlist", () => {
     }));
     detectInterpreterInlineEvalArgvMock.mockReset();
     detectInterpreterInlineEvalArgvMock.mockReturnValue(null);
+    resolveApprovalCommandAuthorizationMock.mockReset();
+    resolveApprovalCommandAuthorizationMock.mockReturnValue({ authorized: true, explicit: false });
+    getChannelPluginMock.mockReset();
     resolveExecApprovalUnavailableDecisionsMock.mockClear();
     buildExecApprovalPendingToolResultMock.mockReturnValue({
       details: { status: "approval-pending" },
@@ -442,6 +472,20 @@ describe("processGatewayAllowlist", () => {
     );
     shouldResolveExecApprovalUnavailableInlineMock.mockImplementation(
       actualShared.shouldResolveExecApprovalUnavailableInline,
+    );
+  }
+
+  /** Wires the real sender-authorization gate (real resolveApprovalCommandAuthorization
+   *  plus the real createResolvedApproverActionAuthAdapter every channel plugin's
+   *  authorizeActorAction delegates to), instead of the file-level stub. Proves the
+   *  inline-wait decision against the actual approver-resolution contract, not a mock
+   *  that always answers `authorized: true`. */
+  async function useRealApprovalCommandAuthorization() {
+    const actualAuth = await vi.importActual<typeof import("../infra/channel-approval-auth.js")>(
+      "../infra/channel-approval-auth.js",
+    );
+    resolveApprovalCommandAuthorizationMock.mockImplementation(
+      actualAuth.resolveApprovalCommandAuthorization,
     );
   }
 
@@ -2329,6 +2373,174 @@ EOF`,
       expect(sendExecApprovalFollowupResultMock).not.toHaveBeenCalled();
     },
   );
+
+  it.each([["telegram"], ["discord"], ["whatsapp"], ["signal"], ["imessage"]])(
+    "falls back to the pending/follow-up path on native channel (%s) when the turn's own sender cannot approve",
+    async (turnSourceChannel) => {
+      // The channel/account can have approvers configured overall (e.g. the
+      // operator, reachable via DM) while the specific person this turn is
+      // replying to is not one of them -- a counterpart conversation being
+      // served by the agent, not the operator approving their own command.
+      resolveApprovalCommandAuthorizationMock.mockReturnValue({
+        authorized: false,
+        reason: "not an approver",
+        explicit: true,
+      });
+      resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
+      createExecApprovalDecisionStateMock.mockReturnValue({
+        baseDecision: { timedOut: false },
+        approvedByAsk: true,
+        deniedReason: null,
+      });
+      runExecProcessMock.mockResolvedValue({
+        session: { id: "sess-counterpart" },
+        promise: Promise.resolve({
+          status: "completed",
+          exitCode: 0,
+          timedOut: false,
+          aggregated: "done",
+        }),
+      });
+      buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
+
+      const result = await runGatewayAllowlist({
+        command: "find . -maxdepth 1",
+        turnSourceChannel,
+        turnSourceAccountId: "bot-account",
+        // The delivery route (a channel/group id on guild/group surfaces, or
+        // the peer id on 1:1 DMs) must not be mistaken for the real sender.
+        turnSourceTo: "route-abc",
+        turnSourceSenderId: "counterpart-123",
+      });
+
+      // Must NOT block this turn waiting for a decision only a different,
+      // unwatched surface can resolve -- the async pending/follow-up path
+      // is the same one already used for channels with no native approval UI.
+      expect(result.pendingResult?.details.status).toBe("approval-pending");
+      await vi.waitFor(() => {
+        expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledTimes(1);
+      });
+      expect(runExecProcessMock).toHaveBeenCalledTimes(1);
+      expect(resolveApprovalCommandAuthorizationMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channel: turnSourceChannel,
+          accountId: "bot-account",
+          senderId: "counterpart-123",
+          kind: "exec",
+        }),
+      );
+    },
+  );
+
+  it("falls back to the pending/follow-up path against the real approval-auth gate on a guild/group channel whose configured approvers exclude the turn's sender", async () => {
+    await useRealApprovalCommandAuthorization();
+    getChannelPluginMock.mockReturnValue({
+      approvalCapability: createResolvedApproverActionAuthAdapter({
+        channelLabel: "TestGuild",
+        resolveApprovers: () => ["operator-user-id"],
+      }),
+    });
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+    runExecProcessMock.mockResolvedValue({
+      session: { id: "sess-guild" },
+      promise: Promise.resolve({
+        status: "completed",
+        exitCode: 0,
+        timedOut: false,
+        aggregated: "done",
+      }),
+    });
+    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
+
+    const result = await runGatewayAllowlist({
+      command: "find . -maxdepth 1",
+      turnSourceChannel: "discord",
+      turnSourceAccountId: "bot-account",
+      turnSourceTo: "guild-channel-456",
+      turnSourceSenderId: "counterpart-999",
+    });
+
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    await vi.waitFor(() => {
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledTimes(1);
+    });
+    expect(runExecProcessMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to the pending/follow-up path against the real approval-auth gate when the turn has no sender at all (cron/subagent turn)", async () => {
+    await useRealApprovalCommandAuthorization();
+    getChannelPluginMock.mockReturnValue({
+      approvalCapability: createResolvedApproverActionAuthAdapter({
+        channelLabel: "TestGuild",
+        resolveApprovers: () => ["operator-user-id"],
+      }),
+    });
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+    runExecProcessMock.mockResolvedValue({
+      session: { id: "sess-no-sender" },
+      promise: Promise.resolve({
+        status: "completed",
+        exitCode: 0,
+        timedOut: false,
+        aggregated: "done",
+      }),
+    });
+    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
+
+    const result = await runGatewayAllowlist({
+      command: "find . -maxdepth 1",
+      turnSourceChannel: "discord",
+      turnSourceAccountId: "bot-account",
+      turnSourceTo: "guild-channel-456",
+      turnSourceSenderId: undefined,
+    });
+
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    await vi.waitFor(() => {
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("waits inline against the real approval-auth gate on a 1:1 DM channel with no approvers configured", async () => {
+    await useRealApprovalCommandAuthorization();
+    getChannelPluginMock.mockReturnValue({
+      approvalCapability: createResolvedApproverActionAuthAdapter({
+        channelLabel: "TestDM",
+        resolveApprovers: () => [],
+      }),
+    });
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+
+    const result = await runGatewayAllowlist({
+      command: "find . -maxdepth 1",
+      turnSourceChannel: "whatsapp",
+      turnSourceAccountId: "bot-account",
+      turnSourceTo: "peer-123",
+      turnSourceSenderId: "peer-123",
+    });
+
+    expect(result).toEqual({
+      execCommandOverride: undefined,
+      allowWithoutEnforcedCommand: true,
+    });
+    expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
+    expect(sendExecApprovalFollowupResultMock).not.toHaveBeenCalled();
+  });
 
   it("waits outside admission, then atomically hands an approved process to the registry", async () => {
     let resolveApproval: (decision: ExecApprovalDecision) => void = () => {};

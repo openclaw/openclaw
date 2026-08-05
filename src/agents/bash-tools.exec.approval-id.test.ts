@@ -124,6 +124,17 @@ vi.mock("../infra/shell-env.js", () => ({
   resolveShellEnvFallbackTimeoutMs: vi.fn(() => 0),
 }));
 
+// This file doesn't exercise the turn-sender authorization gate itself, only
+// the gateway approval-id plumbing around it. Stub it out so the inline-wait
+// check doesn't fall through to a real config load, which this file's fixture
+// environment doesn't set up.
+vi.mock("../infra/channel-approval-auth.js", () => ({
+  resolveApprovalCommandAuthorization: () => ({ authorized: true, explicit: false }),
+}));
+vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: () => ({}),
+}));
+
 vi.mock("../process/supervisor/index.js", () => {
   const stdoutFor = (command: string) => {
     if (
