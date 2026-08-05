@@ -148,6 +148,25 @@ function setCronTimer(state: CronServiceState, delayMs: number): void {
   }, delayMs);
 }
 
+/** Consume a released slot without routing overdue work through the refire floor. */
+function requestImmediateCronRecheck(state: CronServiceState): void {
+  if (
+    state.stopped ||
+    state.schedulingPaused ||
+    state.restartRecoveryPending ||
+    !state.deps.cronEnabled
+  ) {
+    return;
+  }
+  if (state.timer) {
+    clearTimeout(state.timer);
+    state.timer = null;
+  }
+  void onTimer(state).catch((err: unknown) => {
+    state.deps.log.error({ err: String(err) }, "cron: immediate capacity recheck failed");
+  });
+}
+
 /** Handles one cron timer tick under the process-wide root work admission. */
 export async function onTimer(state: CronServiceState) {
   let admission;
@@ -238,12 +257,10 @@ async function onAdmittedTimer(state: CronServiceState) {
 
       const admissionReleases = tryAcquireCronRunSlots(state, due.length);
       const admittedDue = due.slice(0, admissionReleases.length);
-      if (admittedDue.length < due.length) {
+      if (admittedDue.length === 0) {
         // A single replaceable listener keeps saturated timer ticks bounded:
         // no Gateway root, Promise waiter, or durable reservation is retained.
-        setCronRunCapacityListener(state, () => armTimer(state));
-      }
-      if (admittedDue.length === 0) {
+        setCronRunCapacityListener(state, () => requestImmediateCronRecheck(state));
         return [];
       }
 
@@ -265,7 +282,7 @@ async function onAdmittedTimer(state: CronServiceState) {
         job,
         reservedAtMs: now,
         reservationIdentity: reserveQueuedCronRun(state, job.id, now),
-        releaseAdmission: admissionReleases[index],
+        releaseAdmission: admissionReleases[index]!,
       }));
       if (state.stopped) {
         const cleanup = async () => {

@@ -160,19 +160,19 @@ describe("cron service cross-tick bounded admission", () => {
     expect(
       saturatedStore.jobs.find((job) => job.id === jobC.id)?.state.runningAtMs,
     ).toBeUndefined();
-
+    const releasedAt = performance.now();
     releaseA.resolve({ status: "ok", summary: "a done" });
-    await vi.waitFor(() => expect(active).toBe(1));
-    await Promise.resolve();
-    expect(state.runAdmission.capacityListener).toBeNull();
-
-    const laterTick = onTimer(state);
     await cStarted.promise;
-    await laterTick;
+    const capacityWakeDelayMs = performance.now() - releasedAt;
+    // The capacity listener itself must start overdue work; a direct onTimer
+    // call here would hide regressions back to the 2s past-due refire floor.
+    expect(capacityWakeDelayMs).toBeLessThan(1_000);
+    expect(state.runAdmission.capacityListener).toBeNull();
     expect(peakActive).toBe(2);
 
     releaseB.resolve({ status: "ok", summary: "b done" });
     await firstTick;
+    await vi.waitFor(() => expect(state.activeTimerTicks).toBe(0));
     expect(state.activeTimerTicks).toBe(0);
     expect(state.queuedRunReservationsByJobId.size).toBe(0);
   });
