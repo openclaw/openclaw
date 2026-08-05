@@ -24,6 +24,7 @@ import type {
   GoogleMeetModeInput,
   GoogleMeetTransport,
 } from "./config.js";
+import { refreshGoogleMeetBrowserHealth } from "./runtime-browser-health.js";
 import {
   testGoogleMeetListening,
   testGoogleMeetSpeech,
@@ -93,16 +94,6 @@ type GoogleMeetJoinContext = MeetingSessionRuntimeJoinContext<
 >;
 
 const nowIso = () => new Date().toISOString();
-
-function clearNonAuthoritativeManualAction(
-  health: GoogleMeetChromeHealth | undefined,
-): GoogleMeetChromeHealth | undefined {
-  if (!health || health.manualAction === undefined) {
-    return health;
-  }
-  const { manualAction: _manualAction, ...rest } = health;
-  return rest;
-}
 
 export class GoogleMeetRuntime {
   readonly #createdBrowserTabs = new Map<string, string>();
@@ -555,62 +546,7 @@ export class GoogleMeetRuntime {
     session: GoogleMeetSession,
     options: { force?: boolean; readOnly?: boolean } = {},
   ): Promise<boolean> {
-    try {
-      const result =
-        session.transport === "chrome-node"
-          ? await recoverCurrentMeetTabOnNode({
-              runtime: this.params.runtime,
-              config: this.params.config,
-              fullConfig: this.params.fullConfig,
-              mode: session.mode,
-              readOnly: options.readOnly,
-              trackedMeetingUrl: session.url,
-              trackedTargetId: session.chrome?.browserTab?.targetId,
-              url: session.url,
-            })
-          : await recoverCurrentMeetTab({
-              runtime: this.params.runtime,
-              config: this.params.config,
-              fullConfig: this.params.fullConfig,
-              mode: session.mode,
-              readOnly: options.readOnly,
-              trackedMeetingUrl: session.url,
-              trackedTargetId: session.chrome?.browserTab?.targetId,
-              url: session.url,
-            });
-      if (result.found && session.chrome) {
-        if (result.targetId) {
-          const currentTab = session.chrome.browserTab;
-          session.chrome.browserTab = {
-            targetId: result.targetId,
-            openedByPlugin:
-              result.targetId === currentTab?.targetId ? currentTab.openedByPlugin : false,
-          };
-        }
-        if (!result.browser) {
-          session.chrome.health = clearNonAuthoritativeManualAction(session.chrome.health);
-          return false;
-        }
-        const refreshedHealth = { ...session.chrome.health, ...result.browser };
-        session.chrome.health = Object.prototype.hasOwnProperty.call(result.browser, "manualAction")
-          ? refreshedHealth
-          : clearNonAuthoritativeManualAction(refreshedHealth);
-        session.updatedAt = nowIso();
-        return true;
-      }
-      if (session.chrome) {
-        session.chrome.health = clearNonAuthoritativeManualAction(session.chrome.health);
-      }
-      return false;
-    } catch (error) {
-      this.params.logger.debug?.(
-        `[google-meet] browser readiness refresh ignored: ${formatErrorMessage(error)}`,
-      );
-      if (session.chrome) {
-        session.chrome.health = clearNonAuthoritativeManualAction(session.chrome.health);
-      }
-      return false;
-    }
+    return await refreshGoogleMeetBrowserHealth({ ...this.params, options, session });
   }
 
   async #refreshStatus(session: GoogleMeetSession): Promise<void> {

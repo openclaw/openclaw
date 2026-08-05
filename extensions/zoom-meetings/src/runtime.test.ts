@@ -44,7 +44,9 @@ function runtimeHarness(options?: RuntimeHarnessOptions) {
         throw new Error("browser node unavailable");
       }
       if (outcome === "pending") {
-        await new Promise<void>((resolve) => setTimeout(resolve, 50));
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 50);
+        });
       }
       if (state.tabListFailures > 0) {
         state.tabListFailures -= 1;

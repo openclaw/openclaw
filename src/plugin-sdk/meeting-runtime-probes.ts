@@ -9,15 +9,27 @@ import {
 
 export type { MeetingBrowserHealthRefreshOutcome, MeetingSessionProbeJoinResult };
 
+type MeetingSessionJoinRuntimeForProbe<TSession, TRequest> = {
+  join(request: TRequest): Promise<{ session: TSession }>;
+};
+
+type MeetingSessionHealthRuntimeForProbe<TSession> = {
+  refreshBrowserHealth(
+    session: TSession,
+    options?: { force?: boolean; readOnly?: boolean },
+  ): Promise<void>;
+  refreshCaptionHealth(session: TSession): Promise<void>;
+};
+
 export function joinMeetingSessionForProbe<TSession, TRequest>(
-  runtime: object,
+  runtime: MeetingSessionJoinRuntimeForProbe<TSession, TRequest>,
   request: TRequest,
 ): Promise<MeetingSessionProbeJoinResult<TSession>> {
   return getMeetingSessionRuntimeProbeAccess<TSession, TRequest>(runtime).joinForProbe(request);
 }
 
 export function refreshMeetingCaptionHealthForProbe<TSession>(
-  runtime: object,
+  runtime: MeetingSessionHealthRuntimeForProbe<TSession>,
   session: TSession,
 ): Promise<MeetingBrowserHealthRefreshOutcome> {
   return getMeetingSessionRuntimeProbeAccess<TSession, unknown>(
@@ -26,7 +38,7 @@ export function refreshMeetingCaptionHealthForProbe<TSession>(
 }
 
 export function registerMeetingSessionRuntimeHealthRefreshForProbe<TSession>(
-  runtime: object,
+  runtime: MeetingSessionHealthRuntimeForProbe<TSession>,
   refresh: (
     session: TSession,
     options?: { force?: boolean; readOnly?: boolean },

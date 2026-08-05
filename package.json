@@ -106,6 +106,7 @@
     "!dist/plugin-sdk/llm.d.ts",
     "!dist/plugin-sdk/markdown-table-runtime.d.ts",
     "!dist/plugin-sdk/media-generation-runtime.d.ts",
+    "!dist/plugin-sdk/meeting-runtime-probes.d.ts",
     "!dist/plugin-sdk/memory-core-host-embedding-registry.d.ts",
     "!dist/plugin-sdk/memory-core-host-engine-embeddings.d.ts",
     "!dist/plugin-sdk/memory-core-host-engine-qmd.d.ts",

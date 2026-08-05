@@ -5,11 +5,18 @@ import type {
   TranscriptStopRequest,
   TranscriptsStopResult,
 } from "../transcripts/provider-types.js";
+import {
+  inheritMeetingBrowserTabOwnership,
+  settleRetainedMeetingBrowserTabs,
+  settleRetainedMeetingBrowserTabsAfterFailure,
+  type MeetingRetainedBrowserTab,
+} from "./session-browser-tab-reassignment.js";
 import { MeetingSessionCleanupTracker } from "./session-cleanup-tracker.js";
 import { MeetingSessionDurableTranscripts } from "./session-durable-transcripts.js";
 import { MeetingSessionJoinLock } from "./session-join-lock.js";
 import {
   getMeetingSessionRuntimeHealthRefresh,
+  normalizeMeetingBrowserHealthRefreshOutcome,
   registerMeetingSessionRuntimeProbeAccess,
   type MeetingBrowserHealthRefreshOutcome,
   type MeetingSessionProbeJoinResult,
@@ -53,8 +60,6 @@ export type MeetingSessionRuntimeMessages<TSpeechBlockedReason extends string> =
     audioBridgeUnavailableReason: TSpeechBlockedReason;
   };
 };
-
-type MeetingBrowserHealthRefreshResult = MeetingBrowserHealthRefreshOutcome | boolean | void;
 
 export type MeetingSessionRuntimeOptions<
   TSession extends MeetingSessionRecord<TTransport, TMode>,
@@ -127,19 +132,6 @@ export type MeetingSessionLeaveResult<TSession> = {
 };
 
 const nowIso = () => new Date().toISOString();
-
-function normalizeBrowserHealthRefreshOutcome(
-  result: MeetingBrowserHealthRefreshResult,
-): MeetingBrowserHealthRefreshOutcome {
-  if (result !== null && typeof result === "object") {
-    return result;
-  }
-  const browserHealthChecked = result === true;
-  return {
-    browserHealthChecked,
-    manualActionIsAuthoritative: browserHealthChecked,
-  };
-}
 
 /** Shared lifecycle owner; platform strategies perform transport-specific I/O only. */
 export class MeetingSessionRuntime<
@@ -414,7 +406,7 @@ export class MeetingSessionRuntime<
       options,
     ) ??
       (async () =>
-        normalizeBrowserHealthRefreshOutcome(
+        normalizeMeetingBrowserHealthRefreshOutcome(
           await this.options.refreshBrowserHealth(session, options),
         ))());
     this.refreshSpeechReadiness(session);
@@ -477,7 +469,7 @@ export class MeetingSessionRuntime<
         this.options.sameMeetingUrl(session.url, resolved.url) &&
         session.transport === resolved.transport,
     );
-    const retained: Array<{ session: TSession; tab: TTab }> = [];
+    const retained: Array<MeetingRetainedBrowserTab<TSession, TTab>> = [];
     if (this.options.isBrowserTransport(resolved.transport)) {
       // A reused browser tab has one lifecycle owner. End every incompatible record
       // before adoption so leaving an older session cannot tear down the new one.
@@ -539,7 +531,16 @@ export class MeetingSessionRuntime<
         session,
         context: {
           attachRuntimeHandles: (target, handles) => this.#attachRuntimeHandles(target, handles),
-          inheritedBrowserTab: (params) => this.#inheritBrowserTabOwnership(params),
+          inheritedBrowserTab: (params) =>
+            inheritMeetingBrowserTabOwnership({
+              getBrowser: (candidate) => this.options.getBrowser(candidate),
+              meetingUrl: params.meetingUrl,
+              nodeId: params.nodeId,
+              sameMeetingUrl: (left, right) => this.options.sameMeetingUrl(left, right),
+              sessions: this.#sessions.values(),
+              tab: params.tab,
+              transport: params.transport,
+            }),
         },
       });
       delegatedSpoken = result.delegatedSpoken === true;
@@ -671,65 +672,20 @@ export class MeetingSessionRuntime<
   }
 
   #meetingKey(transport: TTransport, url: string): string {
-    const meeting = this.options.normalizeMeetingUrlForReuse(url) ?? url;
-    return `${transport}:${meeting}`;
-  }
-
-  #inheritBrowserTabOwnership(params: {
-    session: TSession;
-    transport: TTransport;
-    nodeId?: string;
-    meetingUrl: string;
-    tab?: TTab;
-  }): TTab | undefined {
-    if (!params.tab) {
-      return undefined;
-    }
-    const inherited = [...this.#sessions.values()].some((session) => {
-      const browser = this.options.getBrowser(session);
-      const browserTab = browser?.tab;
-      return (
-        session.transport === params.transport &&
-        this.options.sameMeetingUrl(session.url, params.meetingUrl) &&
-        browser?.nodeId === params.nodeId &&
-        browserTab?.targetId === params.tab?.targetId &&
-        browserTab?.openedByPlugin === true
-      );
-    });
-    return inherited ? { ...params.tab, openedByPlugin: true } : params.tab;
+    return `${transport}:${this.options.normalizeMeetingUrlForReuse(url) ?? url}`;
   }
 
   async #settleRetainedBrowserTabs(
-    retained: Array<{ session: TSession; tab: TTab }>,
+    retained: Array<MeetingRetainedBrowserTab<TSession, TTab>>,
     adopted?: { transport: TTransport; nodeId?: string; tab: TTab },
   ): Promise<boolean> {
-    let settled = true;
-    for (let index = 0; index < retained.length;) {
-      const retainedTab = retained[index];
-      if (!retainedTab) {
-        break;
-      }
-      const { session, tab } = retainedTab;
-      const browser = this.options.getBrowser(session);
-      const adoptedThisTab =
-        adopted?.transport === session.transport &&
-        adopted.nodeId === browser?.nodeId &&
-        adopted.tab.targetId === tab.targetId;
-      if (adoptedThisTab) {
-        this.options.setBrowserTab(session, undefined);
-        retained.splice(index, 1);
-        continue;
-      }
-      if ((await this.options.releaseBrowserTab(session)) === false) {
-        settled = false;
-        index += 1;
-        continue;
-      }
-      // Consume only after settlement succeeds. A rejection leaves this entry and the
-      // remaining tail available to the failed-join rollback path for another attempt.
-      retained.splice(index, 1);
-    }
-    return settled;
+    return await settleRetainedMeetingBrowserTabs({
+      adopted,
+      retained,
+      getBrowser: (session) => this.options.getBrowser(session),
+      releaseBrowserTab: async (session) => await this.options.releaseBrowserTab(session),
+      setBrowserTab: (session, tab) => this.options.setBrowserTab(session, tab),
+    });
   }
 
   async #rollbackFailedJoinSession(session: TSession): Promise<void> {
@@ -747,26 +703,14 @@ export class MeetingSessionRuntime<
   }
 
   async #settleRetainedBrowserTabsAfterFailure(
-    retained: Array<{ session: TSession; tab: TTab }>,
+    retained: Array<MeetingRetainedBrowserTab<TSession, TTab>>,
   ): Promise<void> {
-    // Failed reassignment has no future owner for retained tabs. Try twice while
-    // preserving entries between attempts, but never replace the original join error.
-    for (let attempt = 0; attempt < 2 && retained.length > 0; attempt += 1) {
-      try {
-        if (await this.#settleRetainedBrowserTabs(retained)) {
-          return;
-        }
-      } catch (error) {
-        this.options.logger.warn(
-          `${this.options.logScope} retained browser cleanup failed: ${this.options.formatError(error)}`,
-        );
-      }
-    }
-    if (retained.length > 0) {
-      this.options.logger.warn(
-        `${this.options.logScope} retained browser cleanup incomplete after failed join`,
-      );
-    }
+    await settleRetainedMeetingBrowserTabsAfterFailure({
+      retained,
+      settle: async () => await this.#settleRetainedBrowserTabs(retained),
+      formatError: (error) => this.options.formatError(error),
+      warn: (message) => this.options.logger.warn(`${this.options.logScope} ${message}`),
+    });
   }
 
   #attachRuntimeHandles(session: TSession, handles: MeetingSessionRuntimeHandles<THealth>): void {

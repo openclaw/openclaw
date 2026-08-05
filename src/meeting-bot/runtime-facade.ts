@@ -159,14 +159,10 @@ export function createMeetingRuntimeFacade<
         async (session, refreshOptions) =>
           await this.#refreshBrowserHealth(session as Session, refreshOptions),
       );
-      const recordBrowserRecoveryFailure = options.hooks?.recordBrowserRecoveryFailure as
-        | ((
-            session: Session,
-            failure: { kind: "missing" | "error"; message: string },
-          ) => "authoritative" | void)
-        | undefined;
-      if (recordBrowserRecoveryFailure) {
-        registerMeetingSessionRuntimeRecoveryFailure(this.#sessions, recordBrowserRecoveryFailure);
+      if (options.hooks?.recordBrowserRecoveryFailure) {
+        registerMeetingSessionRuntimeRecoveryFailure(this.#sessions, (session: Session, failure) =>
+          options.hooks?.recordBrowserRecoveryFailure?.(session, failure),
+        );
       }
     }
 
@@ -297,7 +293,7 @@ export function createMeetingRuntimeFacade<
         hasHealthHandle: (sessionId) => this.#sessions.hasHealthHandle(sessionId),
         refreshHealth: (sessionId) => this.#sessions.refreshHealth(sessionId),
         refreshCaptionHealth: async (session, timeoutMs) =>
-          await this.#refreshBrowserHealth(session, { timeoutMs }),
+          await this.#refreshBrowserHealth(session, { force: true, timeoutMs }),
       };
     }
 
@@ -435,7 +431,7 @@ export function createMeetingRuntimeFacade<
 
     async #refreshBrowserHealth(
       session: Session,
-      refreshOptions: { readOnly?: boolean; timeoutMs?: number } = {},
+      refreshOptions: { force?: boolean; readOnly?: boolean; timeoutMs?: number } = {},
     ): Promise<MeetingBrowserHealthRefreshOutcome> {
       try {
         const result = await options.transport.recoverCurrentTab({
@@ -462,11 +458,13 @@ export function createMeetingRuntimeFacade<
             };
           }
           if (!result.browser) {
-            session.chrome.health = clearNonAuthoritativeManualAction(session.chrome.health);
+            if (refreshOptions.force) {
+              session.chrome.health = clearNonAuthoritativeManualAction(session.chrome.health);
+            }
             return { browserHealthChecked: false, manualActionIsAuthoritative: false };
           }
           const refreshedHealth = { ...session.chrome.health, ...result.browser };
-          if (!Object.prototype.hasOwnProperty.call(result.browser, "manualAction")) {
+          if (!Object.hasOwn(result.browser, "manualAction")) {
             session.chrome.health = clearNonAuthoritativeManualAction(refreshedHealth);
           } else {
             session.chrome.health = refreshedHealth;
@@ -479,7 +477,7 @@ export function createMeetingRuntimeFacade<
               kind: "missing",
               message: result.message,
             }) === "authoritative";
-          if (!manualActionIsAuthoritative) {
+          if (!manualActionIsAuthoritative && refreshOptions.force) {
             session.chrome.health = clearNonAuthoritativeManualAction(session.chrome.health);
           }
           return { browserHealthChecked: false, manualActionIsAuthoritative };
@@ -501,7 +499,7 @@ export function createMeetingRuntimeFacade<
             `${options.platform.logScope} browser readiness refresh ignored: ${formatErrorMessage(error)}`,
           );
         }
-        if (!manualActionIsAuthoritative && session.chrome) {
+        if (!manualActionIsAuthoritative && refreshOptions.force && session.chrome) {
           session.chrome.health = clearNonAuthoritativeManualAction(session.chrome.health);
         }
         return { browserHealthChecked: false, manualActionIsAuthoritative };

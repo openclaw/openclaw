@@ -106,7 +106,7 @@ export const ZoomMeetingsRuntime = MeetingPlatformAdapter.createRuntimeFacade<
     // recording it prevents a dead tab from being reported or reused as active.
     recordBrowserRecoveryFailure: (session, failure) => {
       if (!session.chrome) {
-        return;
+        return undefined;
       }
       if (failure.kind === "missing") {
         session.chrome.browserTab = undefined;

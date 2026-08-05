@@ -253,15 +253,15 @@ export function createMeetingRuntimeProbes<
           (
             options.refreshCaptionHealth?.(context, result.session, remainingMs) ??
             context.refreshCaptionHealth(result.session, remainingMs)
-          ).then((result) => {
+          ).then((refreshResult) => {
             const outcome =
-              typeof result === "object"
-                ? result
+              typeof refreshResult === "object"
+                ? refreshResult
                 : {
                     // Legacy contexts returned void after a successful refresh. Preserve that
                     // contract, while allowing canonical owners to report a closed outcome.
-                    browserHealthChecked: result !== false,
-                    manualActionIsAuthoritative: result !== false,
+                    browserHealthChecked: refreshResult !== false,
+                    manualActionIsAuthoritative: refreshResult !== false,
                   };
             return { ...outcome, completed: true as const };
           }),

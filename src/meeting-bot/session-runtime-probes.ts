@@ -7,6 +7,19 @@ export type MeetingBrowserHealthRefreshOutcome = {
   manualActionIsAuthoritative: boolean;
 };
 
+export function normalizeMeetingBrowserHealthRefreshOutcome(
+  result: MeetingBrowserHealthRefreshOutcome | boolean | void,
+): MeetingBrowserHealthRefreshOutcome {
+  if (result !== null && typeof result === "object") {
+    return result;
+  }
+  const browserHealthChecked = result === true;
+  return {
+    browserHealthChecked,
+    manualActionIsAuthoritative: browserHealthChecked,
+  };
+}
+
 export type MeetingSessionProbeJoinResult<TSession> = MeetingPluginJoinResult<TSession> &
   MeetingBrowserHealthRefreshOutcome;
 
