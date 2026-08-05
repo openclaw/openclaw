@@ -27,7 +27,7 @@ async function fixture() {
   await Promise.all([fs.mkdir(home), fs.mkdir(workspace), fs.mkdir(bin)]);
   await fs.writeFile(
     path.join(bin, "ps"),
-    '#!/bin/sh\nstall() { trap "" TERM; exec sleep 30; }\ntarget=""; for argument in "$@"; do target=$argument; done\ncase "$*" in *"stat=,lstart= -p"*|*"lstart= -p"*) if [ -f "$OPENCLAW_TEST_PS_STALL_TARGET" ] && grep -qx "$target" "$OPENCLAW_TEST_PS_STALL_TARGET"; then stall; fi ;; esac\nexec /bin/ps "$@"\n',
+    '#!/bin/sh\nstall() { trap "" TERM; exec sleep 30; }\ntarget=""; for argument in "$@"; do target=$argument; done\ncase "$*" in *"stat=,lstart= -p"*|*"lstart= -p"*) if [ -f "$OPENCLAW_TEST_PS_STALL_TARGET" ] && { grep -qx "*" "$OPENCLAW_TEST_PS_STALL_TARGET" || grep -qx "$target" "$OPENCLAW_TEST_PS_STALL_TARGET"; }; then stall; fi ;; esac\nexec /bin/ps "$@"\n',
   );
   await fs.chmod(path.join(bin, "ps"), 0o755);
   return {
@@ -86,6 +86,30 @@ async function writeLease(
       nonce,
       processes,
       watchdog: null,
+      expiresAtMs: Date.now() + 30_000,
+    })}\n`,
+  );
+  return file;
+}
+
+async function writeSyntheticLease(
+  input: Awaited<ReturnType<typeof fixture>>,
+  nonce: string,
+  firstPid: number,
+) {
+  const file = leasePath(input.home, input.workspace, nonce);
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  const processes = Array.from({ length: 4_096 }, (_, index) => ({
+    pid: firstPid + index,
+    start: `synthetic-${firstPid + index}`,
+  }));
+  await fs.writeFile(
+    file,
+    `${JSON.stringify({
+      version: 1,
+      nonce,
+      processes,
+      watchdog: { pid: firstPid + processes.length, start: `synthetic-watchdog-${firstPid}` },
       expiresAtMs: Date.now() + 30_000,
     })}\n`,
   );
@@ -206,4 +230,54 @@ describe("workspace quiescence recovery fairness", () => {
       );
     }
   }, 30_000);
+
+  it("partitions maximum orphan recovery without linear membership scans", async () => {
+    const input = await fixture();
+    const leaseFiles = await Promise.all(
+      Array.from(
+        { length: 16 },
+        async (_, index) =>
+          await writeSyntheticLease(
+            input,
+            index.toString(16).padStart(32, "0"),
+            10_000 + index * 5_000,
+          ),
+      ),
+    );
+    await fs.writeFile(input.stalledProcessProbeTargetPath, "*\n");
+    const instrumentedScript = `
+const originalArrayIncludes = Array.prototype.includes;
+Array.prototype.includes = function (...args) {
+  const first = this[0];
+  const value = args[0];
+  if (first && typeof first === "object" && "signal" in first && value && typeof value === "object" && "signal" in value) {
+    throw new Error("quadratic orphan reference membership scan");
+  }
+  return Reflect.apply(originalArrayIncludes, this, args);
+};
+${REMOTE_WORKSPACE_QUIESCE_JS}`;
+
+    const result = await runCommandWithTimeout(
+      [process.execPath, "-e", instrumentedScript, input.workspace, "10000"],
+      { timeoutMs: 12_000, baseEnv: input.env },
+    );
+
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).not.toContain("quadratic orphan reference membership scan");
+    expect(result.stderr).toContain("workspace quiescence orphan recovery timed out");
+    const retained = await Promise.all(
+      leaseFiles.map(
+        async (file) =>
+          JSON.parse(await fs.readFile(file, "utf8")) as {
+            processes: Array<{ pid: number }>;
+            watchdog: { pid: number } | null;
+            recovery?: { state: string };
+          },
+      ),
+    );
+    expect(retained).toHaveLength(16);
+    expect(retained.every((lease) => lease.processes.length === 4_096)).toBe(true);
+    expect(retained.every((lease) => lease.watchdog !== null)).toBe(true);
+    expect(retained.every((lease) => lease.recovery?.state === "probe-timeout")).toBe(true);
+  }, 20_000);
 });

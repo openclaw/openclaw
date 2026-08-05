@@ -1,7 +1,5 @@
 const REMOTE_WATCHDOG_PROCESS_PROBE_TIMEOUT_MS = 1_000;
-// This wall-clock ceiling covers the whole recovery pass, not each process.
-// Exhaustion is expected to be rare and leaves an operator-visible terminal lease.
-const REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS = 5_000;
+const REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS = 5_000; // Whole pass; exhaustion retains operator-visible lease state.
 const REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY = 8;
 
 const REMOTE_QUIESCENCE_PS_JS = String.raw`function processes() {
@@ -230,17 +228,19 @@ async function recoverOrphanLeases(orphanNames) {
       ...(lease.watchdog === null ? [] : [{ ...lease.watchdog, signal: "SIGTERM" }]),
       ...lease.processes.map((entry) => ({ ...entry, signal: "SIGCONT" })),
     ];
-    orphans.push({ orphanPath, lease, references });
+    orphans.push({ orphanPath, lease, references, remaining: [] });
   }
+  const ownerByReference = new Map();
+  for (const orphan of orphans) for (const reference of orphan.references) ownerByReference.set(reference, orphan);
   const recovery = await recoverProcessReferences(
     roundRobinProcessReferences(orphans.map((orphan) => orphan.references)),
     ${REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY},
     Date.now() + ${REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS},
   );
+  for (const reference of recovery.remaining) ownerByReference.get(reference).remaining.push(reference);
   let retained = false;
   let failed = false;
-  for (const { orphanPath, lease, references } of orphans) {
-    const unresolved = recovery.remaining.filter((reference) => references.includes(reference));
+  for (const { orphanPath, lease, remaining: unresolved } of orphans) {
     if (unresolved.length === 0) { fs.unlinkSync(orphanPath); continue; }
     retained = true;
     const leaseFailed = unresolved.some((reference) => recovery.failedReferences.has(reference));
