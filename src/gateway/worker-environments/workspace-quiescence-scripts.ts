@@ -52,11 +52,14 @@ function probeProcessIdentity(pid, timeoutMs = ${REMOTE_WATCHDOG_PROCESS_PROBE_T
     }, timeoutMs);
   });
 }
-function processSignalDeadlineMs(referenceCount) {
-  // This is one strict wall-clock ceiling for the whole recovery pass. Probe
-  // batches run concurrently within it; the deadline must not scale with the
-  // number of retained process references.
-  return Date.now() + ${REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS};
+function processEnrollmentDeadlineMs(referenceCount) {
+  // Enrollment allows one probe-timeout budget per concurrency batch, plus one
+  // final batch of scheduling headroom; recovery keeps its strict five-second ceiling.
+  const probeBatches = Math.ceil(referenceCount / ${REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY});
+  return Date.now() + Math.max(
+    ${REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS},
+    (probeBatches + 1) * ${REMOTE_WATCHDOG_PROCESS_PROBE_TIMEOUT_MS},
+  );
 }
 async function signalProcessReferences(references, concurrency = ${REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY}, deadlineMs = Date.now() + ${REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS}) {
   // Keep identity confirmation adjacent to its signal so a slow sibling probe cannot stale it.
@@ -341,7 +344,7 @@ try {
       const stopped = await recoverProcessReferences(
         candidates.map(([pid, row]) => ({ pid, start: row.start, signal: "SIGSTOP" })),
         ${REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY},
-        processSignalDeadlineMs(candidates.length),
+        processEnrollmentDeadlineMs(candidates.length),
       );
       if (stopped.remaining.length > 0) {
         throw new Error(
@@ -517,7 +520,7 @@ async function assertWatchdogActive() {
   if (checked.failed) throw new Error("workspace quiescence watchdog identity probe failed");
   const outcome = checked.settled.get(reference);
   if (outcome?.kind !== "signaled") throw new Error("workspace quiescence watchdog identity changed unexpectedly");
-  if (outcome.state.startsWith("Z") || outcome.state.startsWith("X")) {
+  if (/^[TtXZ]/u.test(outcome.state)) {
     throw new Error("workspace quiescence watchdog is not active");
   }
 }
@@ -542,7 +545,7 @@ const existingReferences = input.processes.map((entry) => ({ ...entry, signal: 0
 const existing = await recoverProcessReferences(
   existingReferences,
   ${REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY},
-  processSignalDeadlineMs(existingReferences.length),
+  processEnrollmentDeadlineMs(existingReferences.length),
 );
 if (existing.remaining.length > 0) throw new Error(existing.failed ? "workspace quiescence process identity probe failed" : "workspace quiescence process identity probe timed out");
 for (const reference of existingReferences) {
@@ -575,7 +578,7 @@ if (validationMode === "final") {
       const stopped = await recoverProcessReferences(
         references.map((entry) => ({ ...entry, signal: "SIGSTOP" })),
         ${REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY},
-        processSignalDeadlineMs(references.length),
+        processEnrollmentDeadlineMs(references.length),
       );
       if (stopped.remaining.length > 0) {
         await rollbackLateProcesses(

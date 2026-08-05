@@ -29,6 +29,7 @@ async function fixture() {
   const stalledProcessProbePidPath = path.join(root, "stall-process-probe.pid");
   const stalledProcessProbeTargetPath = path.join(root, "stall-process-probe.target");
   const stalledProcessProbeOnceTargetPath = path.join(root, "stall-process-probe-once.target");
+  const delayedProcessProbeTargetPath = path.join(root, "delay-process-probe.target");
   const failedProcessProbeTargetPath = path.join(root, "fail-process-probe.target");
   const zombieProcessProbeTargetPath = path.join(root, "zombie-process-probe.target");
   const failedProcessScanPath = path.join(root, "fail-process-scan");
@@ -39,10 +40,11 @@ async function fixture() {
   await fs.mkdir(bin);
   await fs.writeFile(
     path.join(bin, "ps"),
-    '#!/bin/sh\nstall() { printf "%s\\n" "$$" >> "$OPENCLAW_TEST_PS_STALL_PID"; trap "" TERM; exec sleep 30; }\nif [ -f "$OPENCLAW_TEST_PS_STALL" ]; then rm -f "$OPENCLAW_TEST_PS_STALL"; stall; fi\nif [ -f "$OPENCLAW_TEST_PS_STALL_ONCE_TARGET" ]; then target=""; for argument in "$@"; do target=$argument; done; case "$*" in *"stat=,lstart= -p"*|*"lstart= -p"*) if grep -qx "$target" "$OPENCLAW_TEST_PS_STALL_ONCE_TARGET"; then rm -f "$OPENCLAW_TEST_PS_STALL_ONCE_TARGET"; stall; fi ;; esac; fi\nif [ -f "$OPENCLAW_TEST_PS_STALL_TARGET" ]; then target=""; for argument in "$@"; do target=$argument; done; case "$*" in *"stat=,lstart= -p"*|*"lstart= -p"*) if grep -qx "$target" "$OPENCLAW_TEST_PS_STALL_TARGET"; then stall; fi ;; esac; fi\nif [ -f "$OPENCLAW_TEST_PS_FAIL_TARGET" ]; then target=""; for argument in "$@"; do target=$argument; done; case "$*" in *"stat=,lstart= -p"*|*"lstart= -p"*) if grep -qx "$target" "$OPENCLAW_TEST_PS_FAIL_TARGET"; then exit 2; fi ;; esac; fi\nif [ -f "$OPENCLAW_TEST_PS_ZOMBIE_TARGET" ]; then target=""; for argument in "$@"; do target=$argument; done; case "$*" in *"stat=,lstart= -p"*) if grep -qx "$target" "$OPENCLAW_TEST_PS_ZOMBIE_TARGET"; then start=$(/bin/ps -o lstart= -p "$target"); if [ -n "$start" ]; then printf "Z %s\\n" "$start"; exit 0; fi; fi ;; esac; fi\ncase "$*" in *"pid=,ppid=,uid=,stat=,lstart="*) if [ -f "$OPENCLAW_TEST_PS_FAIL_SCAN.seen" ]; then extra_pid=$(head -n 1 "$OPENCLAW_TEST_PS_EXTRA"); /bin/ps -o stat= -p "$extra_pid" > "$OPENCLAW_TEST_PS_FAIL_SCAN_STATE"; exit 2; fi ;; esac\ncase "$*" in\n  *"stat=,lstart= -p"*|*"lstart= -p"*) exec /bin/ps "$@" ;;\n  *) printf "%s %s %s S Tue Jul 15 08:00:00 2026\\n" "$$" "$PPID" "$(id -u)"; if [ -f "$OPENCLAW_TEST_PS_EXTRA" ]; then while IFS= read -r extra_pid; do [ -n "$extra_pid" ] && /bin/ps -o pid=,ppid=,uid=,stat=,lstart= -p "$extra_pid"; done < "$OPENCLAW_TEST_PS_EXTRA"; fi; if [ -f "$OPENCLAW_TEST_PS_FAIL_SCAN" ]; then touch "$OPENCLAW_TEST_PS_FAIL_SCAN.seen"; fi ;;\nesac\n',
+    '#!/bin/sh\nstall() { printf "%s\\n" "$$" >> "$OPENCLAW_TEST_PS_STALL_PID"; trap "" TERM; exec sleep 30; }\nif [ -f "$OPENCLAW_TEST_PS_STALL" ]; then rm -f "$OPENCLAW_TEST_PS_STALL"; stall; fi\nif [ -f "$OPENCLAW_TEST_PS_STALL_ONCE_TARGET" ]; then target=""; for argument in "$@"; do target=$argument; done; case "$*" in *"stat=,lstart= -p"*|*"lstart= -p"*) if grep -qx "$target" "$OPENCLAW_TEST_PS_STALL_ONCE_TARGET"; then rm -f "$OPENCLAW_TEST_PS_STALL_ONCE_TARGET"; stall; fi ;; esac; fi\nif [ -f "$OPENCLAW_TEST_PS_STALL_TARGET" ]; then target=""; for argument in "$@"; do target=$argument; done; case "$*" in *"stat=,lstart= -p"*|*"lstart= -p"*) if grep -qx "$target" "$OPENCLAW_TEST_PS_STALL_TARGET"; then stall; fi ;; esac; fi\nif [ -f "$OPENCLAW_TEST_PS_DELAY_TARGET" ]; then target=""; for argument in "$@"; do target=$argument; done; case "$*" in *"stat=,lstart= -p"*|*"lstart= -p"*) if grep -qx "$target" "$OPENCLAW_TEST_PS_DELAY_TARGET"; then sleep 0.9; fi ;; esac; fi\nif [ -f "$OPENCLAW_TEST_PS_FAIL_TARGET" ]; then target=""; for argument in "$@"; do target=$argument; done; case "$*" in *"stat=,lstart= -p"*|*"lstart= -p"*) if grep -qx "$target" "$OPENCLAW_TEST_PS_FAIL_TARGET"; then exit 2; fi ;; esac; fi\nif [ -f "$OPENCLAW_TEST_PS_ZOMBIE_TARGET" ]; then target=""; for argument in "$@"; do target=$argument; done; case "$*" in *"stat=,lstart= -p"*) if grep -qx "$target" "$OPENCLAW_TEST_PS_ZOMBIE_TARGET"; then start=$(/bin/ps -o lstart= -p "$target"); if [ -n "$start" ]; then printf "Z %s\\n" "$start"; exit 0; fi; fi ;; esac; fi\ncase "$*" in *"pid=,ppid=,uid=,stat=,lstart="*) if [ -f "$OPENCLAW_TEST_PS_FAIL_SCAN.seen" ]; then extra_pid=$(head -n 1 "$OPENCLAW_TEST_PS_EXTRA"); /bin/ps -o stat= -p "$extra_pid" > "$OPENCLAW_TEST_PS_FAIL_SCAN_STATE"; exit 2; fi ;; esac\ncase "$*" in\n  *"stat=,lstart= -p"*|*"lstart= -p"*) exec /bin/ps "$@" ;;\n  *) printf "%s %s %s S Tue Jul 15 08:00:00 2026\\n" "$$" "$PPID" "$(id -u)"; if [ -f "$OPENCLAW_TEST_PS_EXTRA" ]; then while IFS= read -r extra_pid; do [ -n "$extra_pid" ] && /bin/ps -o pid=,ppid=,uid=,stat=,lstart= -p "$extra_pid"; done < "$OPENCLAW_TEST_PS_EXTRA"; fi; if [ -f "$OPENCLAW_TEST_PS_FAIL_SCAN" ]; then touch "$OPENCLAW_TEST_PS_FAIL_SCAN.seen"; fi ;;\nesac\n',
   );
   await fs.chmod(path.join(bin, "ps"), 0o755);
   return {
+    bin,
     home,
     workspace,
     extraProcessPath,
@@ -50,6 +52,7 @@ async function fixture() {
     stalledProcessProbePidPath,
     stalledProcessProbeTargetPath,
     stalledProcessProbeOnceTargetPath,
+    delayedProcessProbeTargetPath,
     failedProcessProbeTargetPath,
     zombieProcessProbeTargetPath,
     failedProcessScanPath,
@@ -62,6 +65,7 @@ async function fixture() {
       OPENCLAW_TEST_PS_STALL_PID: stalledProcessProbePidPath,
       OPENCLAW_TEST_PS_STALL_TARGET: stalledProcessProbeTargetPath,
       OPENCLAW_TEST_PS_STALL_ONCE_TARGET: stalledProcessProbeOnceTargetPath,
+      OPENCLAW_TEST_PS_DELAY_TARGET: delayedProcessProbeTargetPath,
       OPENCLAW_TEST_PS_FAIL_TARGET: failedProcessProbeTargetPath,
       OPENCLAW_TEST_PS_ZOMBIE_TARGET: zombieProcessProbeTargetPath,
       OPENCLAW_TEST_PS_FAIL_SCAN: failedProcessScanPath,
@@ -86,7 +90,7 @@ async function quiesce(
     ],
     { timeoutMs: commandTimeoutMs, baseEnv: input.env },
   );
-  expect(result.code).toBe(0);
+  expect(result.code, result.stderr).toBe(0);
   const match = /^quiesced ([a-f0-9]{32})\n$/u.exec(result.stdout);
   expect(match).not.toBeNull();
   return match![1]!;
@@ -101,7 +105,7 @@ async function processStart(pid: number) {
   const result = await runCommandWithTimeout(["ps", "-o", "lstart=", "-p", String(pid)], {
     timeoutMs: 2_000,
   });
-  expect(result.code).toBe(0);
+  expect(result.code, result.stderr).toBe(0);
   return result.stdout.trim();
 }
 
@@ -150,10 +154,14 @@ async function resume(input: Awaited<ReturnType<typeof fixture>>, nonce: string)
   expect(result.code).toBe(0);
 }
 
-async function renew(input: Awaited<ReturnType<typeof fixture>>, nonce: string) {
+async function renew(
+  input: Awaited<ReturnType<typeof fixture>>,
+  nonce: string,
+  commandTimeoutMs = 10_000,
+) {
   const result = await runCommandWithTimeout(
     [process.execPath, "-e", REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS, input.workspace, nonce, "20000"],
-    { timeoutMs: 10_000, baseEnv: input.env },
+    { timeoutMs: commandTimeoutMs, baseEnv: input.env },
   );
   expect(result.code).toBe(0);
   expect(result.stdout).toBe(`renewed ${nonce}\n`);
@@ -378,6 +386,73 @@ describe("remote workspace quiescence scripts", () => {
       await resume(input, nonce);
     }
   });
+
+  it("rejects renewal when the watchdog is stopped", async () => {
+    const input = await fixture();
+    const nonce = await quiesce(input, 30_000);
+    const leaseFile = leasePath(input.home, input.workspace, nonce);
+    const before = JSON.parse(await fs.readFile(leaseFile, "utf8")) as {
+      expiresAtMs: number;
+      watchdog: { pid: number };
+    };
+
+    try {
+      process.kill(before.watchdog.pid, "SIGSTOP");
+      await expectProcessState(before.watchdog.pid, true);
+      const result = await runCommandWithTimeout(
+        [
+          process.execPath,
+          "-e",
+          REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
+          input.workspace,
+          nonce,
+          "60000",
+        ],
+        { timeoutMs: 10_000, baseEnv: input.env },
+      );
+
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain("workspace quiescence watchdog is not active");
+      const after = JSON.parse(await fs.readFile(leaseFile, "utf8")) as {
+        expiresAtMs: number;
+      };
+      expect(after.expiresAtMs).toBe(before.expiresAtMs);
+    } finally {
+      try {
+        process.kill(before.watchdog.pid, "SIGCONT");
+      } catch {}
+      await resume(input, nonce);
+    }
+  });
+
+  it("allows healthy high-cardinality enrollment to use a bounded count-aware deadline", async () => {
+    const input = await fixture();
+    await fs.writeFile(
+      path.join(input.bin, "ps"),
+      '#!/bin/sh\ncase "$*" in\n  *"pid=,ppid=,uid=,stat=,lstart="*) printf "%s %s %s S Tue Jul 15 08:00:00 2026\\n" "$$" "$PPID" "$(id -u)"; if [ -s "$OPENCLAW_TEST_PS_EXTRA" ]; then pids=$(paste -sd, "$OPENCLAW_TEST_PS_EXTRA"); /bin/ps -o pid=,ppid=,uid=,stat=,lstart= -p "$pids"; fi ;;\n  *"stat=,lstart= -p"*|*"lstart= -p"*) target=""; for argument in "$@"; do target=$argument; done; if [ -f "$OPENCLAW_TEST_PS_DELAY_TARGET" ] && grep -qx "$target" "$OPENCLAW_TEST_PS_DELAY_TARGET"; then /bin/sleep 0.7; fi; exec /bin/ps "$@" ;;\nesac\n',
+    );
+    const children = Array.from({ length: 64 }, () => spawn("sleep", ["30"], { stdio: "ignore" }));
+    const childPids = children.map((child) => child.pid!);
+    let nonce = "";
+
+    try {
+      await fs.writeFile(input.extraProcessPath, `${childPids.join("\n")}\n`);
+      await fs.writeFile(input.delayedProcessProbeTargetPath, `${childPids.join("\n")}\n`);
+
+      nonce = await quiesce(input, 30_000, 30_000);
+      await Promise.all(childPids.map(async (pid) => await expectProcessState(pid, true)));
+      await renew(input, nonce, 30_000);
+    } finally {
+      await fs.rm(input.delayedProcessProbeTargetPath, { force: true });
+      await fs.rm(input.extraProcessPath, { force: true });
+      if (nonce) {
+        try {
+          await resume(input, nonce);
+        } catch {}
+      }
+      await Promise.all(children.map(async (child) => await terminate(child)));
+    }
+  }, 60_000);
 
   it("stops a writable process that appeared after the workspace was quiesced", async () => {
     const input = await fixture();
