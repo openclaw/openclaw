@@ -70,6 +70,54 @@ describe("media-understanding provider registry", () => {
     expect(provider.defaultModels?.image).toBe("glm-4.6v");
     expect(provider.describeImage).toBeTypeOf("function");
     expect(provider.describeImages).toBeTypeOf("function");
+    expect(provider.extractStructured).toBeTypeOf("function");
+  });
+
+  it("hydrates structured extraction for providers that ship only image hooks", () => {
+    const describeImage = vi.fn();
+    const describeImages = vi.fn();
+    resolvePluginCapabilityProvidersMock.mockReturnValue([
+      createMediaProvider({
+        id: "anthropic",
+        capabilities: ["image"],
+        describeImage,
+        describeImages,
+      }),
+    ]);
+
+    const registry = buildMediaUnderstandingRegistry();
+    const provider = requireMediaProvider(registry, "anthropic");
+
+    // The provider's own image hooks are preserved...
+    expect(provider.describeImage).toBe(describeImage);
+    expect(provider.describeImages).toBe(describeImages);
+    // ...and structured extraction still falls back to the shared model runtime.
+    expect(provider.extractStructured).toBeTypeOf("function");
+  });
+
+  it("keeps a provider's bespoke structured extraction implementation", () => {
+    const extractStructured = vi.fn();
+    resolvePluginCapabilityProvidersMock.mockReturnValue([
+      createMediaProvider({
+        id: "codex",
+        capabilities: ["image"],
+        extractStructured,
+      }),
+    ]);
+
+    const registry = buildMediaUnderstandingRegistry();
+
+    expect(requireMediaProvider(registry, "codex").extractStructured).toBe(extractStructured);
+  });
+
+  it("does not hydrate structured extraction for providers without image capability", () => {
+    resolvePluginCapabilityProvidersMock.mockReturnValue([
+      createMediaProvider({ id: "deepgram", capabilities: ["audio"] }),
+    ]);
+
+    const registry = buildMediaUnderstandingRegistry();
+
+    expect(requireMediaProvider(registry, "deepgram").extractStructured).toBeUndefined();
   });
 
   it("keeps provider id normalization behavior for capability providers", () => {

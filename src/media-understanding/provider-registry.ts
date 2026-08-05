@@ -3,6 +3,7 @@ import { resolvePluginCapabilityProviders } from "../plugins/capability-provider
 import { resolveImageCapableConfigProviderIds } from "./config-provider-models.js";
 import { describeImageWithModel, describeImagesWithModel } from "./image-runtime.js";
 import { normalizeMediaProviderId } from "./provider-id.js";
+import { extractStructuredWithImageModel } from "./structured-extraction-runtime.js";
 import type { MediaUnderstandingProvider } from "./types.js";
 
 function mergeProviderIntoRegistry(
@@ -34,13 +35,14 @@ function hydrateModelBackedMediaProvider(
   if (!provider.capabilities?.includes("image")) {
     return provider;
   }
-  if (provider.describeImage && provider.describeImages) {
+  if (provider.describeImage && provider.describeImages && provider.extractStructured) {
     return provider;
   }
   return {
     ...provider,
     describeImage: provider.describeImage ?? describeImageWithModel,
     describeImages: provider.describeImages ?? describeImagesWithModel,
+    extractStructured: provider.extractStructured ?? extractStructuredWithImageModel,
   };
 }
 
