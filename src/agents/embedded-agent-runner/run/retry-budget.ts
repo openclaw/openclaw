@@ -11,7 +11,11 @@ export function createRunRetryBudget(maxAttempts: number): RunRetryBudget {
 }
 
 export function isRunRetryBudgetExhausted(budget: RunRetryBudget): boolean {
-  return budget.attemptsCounted >= budget.maxAttempts;
+  // attemptsDispatched is incremented on every beginRunAttempt and never
+  // refunded, so it is the hard wall on billed model calls. attemptsCounted
+  // stays diagnostic-only: progress_continuation refunds it, which would
+  // otherwise let a no-op recovery route loop forever (#119313).
+  return budget.attemptsDispatched >= budget.maxAttempts;
 }
 
 export function beginRunAttempt(budget: RunRetryBudget): void {
