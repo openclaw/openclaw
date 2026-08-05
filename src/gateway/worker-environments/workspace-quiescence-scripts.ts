@@ -113,24 +113,24 @@ function remainingProcessReferences(references, outcomes) {
 }
 async function recoverProcessReferences(references, concurrency = ${REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY}, deadlineMs = Date.now() + ${REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS}) {
   let remaining = references;
-  let failed = false;
+  const failedReferences = new Set();
   const settled = new Map();
   while (remaining.length > 0 && Date.now() < deadlineMs) {
     const outcomes = await signalProcessReferences(remaining, concurrency, deadlineMs);
-    failed = outcomes.some((outcome) => outcome.kind === "failed") || failed;
     outcomes.forEach((outcome, index) => {
+      if (outcome.kind === "failed") failedReferences.add(remaining[index]);
       if (outcome.kind !== "deferred" && outcome.kind !== "timeout" && outcome.kind !== "failed") {
         settled.set(remaining[index], outcome);
       }
     });
     remaining = remainingProcessReferences(remaining, outcomes);
-    if (failed || remaining.length === 0 || Date.now() >= deadlineMs) break;
+    if (failedReferences.size > 0 || remaining.length === 0 || Date.now() >= deadlineMs) break;
     await new Promise((resolve) => setTimeout(
       resolve,
       Math.min(${REMOTE_WATCHDOG_PROCESS_PROBE_TIMEOUT_MS}, deadlineMs - Date.now()),
     ));
   }
-  return { remaining, failed, settled };
+  return { remaining, failed: failedReferences.size > 0, failedReferences, settled };
 }
 function quiescenceCandidates(rows, expectedUid, excludedPids, frozen) {
   const preserved = ancestors(rows);
@@ -214,69 +214,57 @@ function writeLease(expiresAtMs = Date.now() + watchdogTimeoutMs) {
     expiresAtMs,
   });
 }
-async function recoverOrphanLease(orphanPath, expectedNonce) {
-  let raw;
-  try {
-    raw = fs.readFileSync(orphanPath, "utf8");
-  } catch (error) {
-    if (error && error.code === "ENOENT") return;
-    throw error;
+async function recoverOrphanLeases(orphanNames) {
+  const orphans = [];
+  for (const name of orphanNames) {
+    const match = name.match(/^[a-f0-9]{64}\.([a-f0-9]{32})\.json$/);
+    if (!match) continue;
+    const orphanPath = path.join(leaseDirectory, name);
+    let raw;
+    try { raw = fs.readFileSync(orphanPath, "utf8"); }
+    catch (error) { if (error && error.code === "ENOENT") continue; throw error; }
+    const lease = parseLease(raw, match[1]);
+    const references = [
+      ...(lease.watchdog === null ? [] : [{ ...lease.watchdog, signal: "SIGTERM" }]),
+      ...lease.processes.map((entry) => ({ ...entry, signal: "SIGCONT" })),
+    ];
+    orphans.push({ orphanPath, lease, references });
   }
-  const lease = parseLease(raw, expectedNonce);
-  const references = [
-    ...(lease.watchdog === null ? [] : [{ ...lease.watchdog, signal: "SIGTERM" }]),
-    ...lease.processes.map((entry) => ({ ...entry, signal: "SIGCONT" })),
-  ];
-  const recovery = await recoverProcessReferences(references);
-  if (recovery.remaining.length === 0) {
-    fs.unlinkSync(orphanPath);
-    return;
-  }
-  const watchdog = recovery.remaining.find((entry) => entry.signal === "SIGTERM") ?? null;
-  const processes = recovery.remaining
-    .filter((entry) => entry.signal === "SIGCONT")
-    .map(({ pid, start }) => ({ pid, start }));
-  persistLease(
-    orphanPath,
-    {
+  const recovery = await recoverProcessReferences(
+    orphans.flatMap((orphan) => orphan.references),
+    ${REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY},
+    Date.now() + ${REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS},
+  );
+  const remaining = new Set(recovery.remaining);
+  let retained = false;
+  let failed = false;
+  for (const { orphanPath, lease, references } of orphans) {
+    const unresolved = references.filter((reference) => remaining.has(reference));
+    if (unresolved.length === 0) { fs.unlinkSync(orphanPath); continue; }
+    retained = true;
+    const leaseFailed = unresolved.some((reference) => recovery.failedReferences.has(reference));
+    failed = failed || leaseFailed;
+    const watchdog = unresolved.find((entry) => entry.signal === "SIGTERM") ?? null;
+    const processes = unresolved.filter((entry) => entry.signal === "SIGCONT").map(({ pid, start }) => ({ pid, start }));
+    persistLease(orphanPath, {
       ...lease,
       processes,
       watchdog: watchdog === null ? null : { pid: watchdog.pid, start: watchdog.start },
-      recovery: {
-        state: recovery.failed ? "recovery-failed" : "probe-timeout",
-        failedAtMs: Date.now(),
-      },
-    },
-    (current) => {
-      if (
-        current.nonce !== lease.nonce ||
-        current.expiresAtMs !== lease.expiresAtMs ||
-        current.watchdog?.pid !== lease.watchdog?.pid ||
-        current.watchdog?.start !== lease.watchdog?.start ||
-        !sameProcessReferences(current.processes, lease.processes)
-      ) {
+      recovery: { state: leaseFailed ? "recovery-failed" : "probe-timeout", failedAtMs: Date.now() },
+    }, (current) => {
+      if (current.nonce !== lease.nonce || current.expiresAtMs !== lease.expiresAtMs || current.watchdog?.pid !== lease.watchdog?.pid || current.watchdog?.start !== lease.watchdog?.start || !sameProcessReferences(current.processes, lease.processes)) {
         throw new Error("workspace quiescence lease changed during orphan recovery");
       }
-    },
-  );
-  const failure = recovery.failed ? "failed" : "timed out";
-  throw new Error(
-    "workspace quiescence orphan recovery " +
-      failure +
-      "; lease retained for operator recovery",
-  );
+    });
+  }
+  if (retained) throw new Error("workspace quiescence orphan recovery " + (failed ? "failed" : "timed out") + "; lease retained for operator recovery");
 }
 async function quiesce() {
 const orphanNames = fs.readdirSync(leaseDirectory).filter((name) =>
   name.startsWith(workspaceKey + ".") && name.endsWith(".json"),
 );
 if (orphanNames.length > 16) throw new Error("too many workspace quiescence leases");
-for (const name of orphanNames) {
-  const match = name.match(/^[a-f0-9]{64}\.([a-f0-9]{32})\.json$/);
-  if (!match) continue;
-  const orphanPath = path.join(leaseDirectory, name);
-  await recoverOrphanLease(orphanPath, match[1]);
-}
+await recoverOrphanLeases(orphanNames);
 writeLease();
 const watchdogSource = [
   'const childProcess = require("node:child_process");',
@@ -305,14 +293,15 @@ if (!Number.isSafeInteger(watchdog.pid) || watchdog.pid < 1) {
 }
 let watchdogStart = null;
 let watchdogProbeFailed = false;
-for (let attempt = 0; attempt < 100 && !watchdogStart; attempt += 1) {
-  const observed = await probeProcessIdentity(watchdog.pid);
+const watchdogProbeDeadlineMs = Date.now() + ${REMOTE_WATCHDOG_PROCESS_PROBE_TIMEOUT_MS};
+for (let attempt = 0; attempt < 100 && !watchdogStart && Date.now() < watchdogProbeDeadlineMs; attempt += 1) {
+  const observed = await probeProcessIdentity(watchdog.pid, Math.max(1, watchdogProbeDeadlineMs - Date.now()));
   if (observed.kind === "failed") {
     watchdogProbeFailed = true;
     break;
   }
   watchdogStart = observed.kind === "identity" ? observed.start : null;
-  if (!watchdogStart) Atomics.wait(sleeper, 0, 0, 10);
+  if (!watchdogStart && Date.now() < watchdogProbeDeadlineMs) Atomics.wait(sleeper, 0, 0, Math.min(10, watchdogProbeDeadlineMs - Date.now()));
 }
 if (!watchdogStart) {
   try { process.kill(watchdog.pid, "SIGTERM"); } catch {}
@@ -555,7 +544,10 @@ for (const reference of existingReferences) {
     throw new Error("workspace quiescence process resumed unexpectedly");
   }
 }
-await refreshLease(input.processes, renewalDeadlineMs);
+await refreshLease(
+  input.processes,
+  Math.min(renewalDeadlineMs, Date.now() + ${REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS}),
+);
 if (validationMode === "final") {
   const frozen = new Map(input.processes.map((entry) => [entry.pid, entry.start]));
   let quietScans = 0;
