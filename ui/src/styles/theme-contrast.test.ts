@@ -147,4 +147,17 @@ describe("Control UI theme contrast", () => {
       expect(contrastRatio(slashArgsFg, background)).toBeGreaterThanOrEqual(4.5);
     }
   });
+
+  it("limits the white assistant message surface override to light-mode non-tool bubbles", () => {
+    expect(groupedCss).toContain(
+      ':root[data-theme-mode="light"][data-assistant-message-surface="white"]',
+    );
+    expect(groupedCss).toContain(".chat-bubble:not(.chat-bubble--tool-shell)");
+    expect(groupedCss).toMatch(
+      /data-assistant-message-surface="white"[^{}]*\{[^{}]*background:\s*#fff;/u,
+    );
+    expect(groupedCss).not.toContain(
+      ':root[data-theme-mode="dark"][data-assistant-message-surface="white"]',
+    );
+  });
 });

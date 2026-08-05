@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import type { ServerUiPrefProvenance } from "../../app/server-prefs.ts";
 import {
+  normalizeAssistantMessageSurface,
   normalizeCatalogOpenTarget,
   normalizeChatFollowUpMode,
   normalizeChatSendShortcut,
@@ -201,6 +202,11 @@ export function renderChatPreferencesSection(
     overridden: props.chatSendShortcutOverridden,
     onReset: props.resetChatSendShortcut,
   });
+  const assistantSurfaceDefaultState = renderSettingsDefaultState({
+    value: t("configView.chatPrefs.assistantMessageSurfaceThemeDefault"),
+    overridden: props.assistantMessageSurface !== UI_APPEARANCE_DEFAULTS.assistantMessageSurface,
+    onReset: () => props.setAssistantMessageSurface(UI_APPEARANCE_DEFAULTS.assistantMessageSurface),
+  });
   const sendShortcutProvenance = serverUiPrefProvenanceHint(props.chatSendShortcutProvenance);
   const followUpProvenance = serverUiPrefProvenanceHint(props.chatFollowUpModeProvenance);
   const catalogTargetDefaultState = renderSettingsDefaultState({
@@ -226,6 +232,23 @@ export function renderChatPreferencesSection(
           description: html`${t("configView.chatPrefs.messageWidthHint")}<br />
             ${messageWidthDefaultState.description} ${t("quickSettings.personal.browserOnly")}`,
           control: html` ${messageWidthDefaultState.action} ${messageWidthInput} `,
+        })}
+        ${renderSettingsSelectRow({
+          title: t("configView.chatPrefs.assistantMessageSurface"),
+          value: props.assistantMessageSurface,
+          setting: "assistant-message-surface",
+          description: html`${assistantSurfaceDefaultState.description}
+          ${t("quickSettings.personal.browserOnly")}`,
+          actions: assistantSurfaceDefaultState.action,
+          options: [
+            {
+              value: "theme-default",
+              label: t("configView.chatPrefs.assistantMessageSurfaceThemeDefault"),
+            },
+            { value: "white", label: t("configView.chatPrefs.assistantMessageSurfaceWhite") },
+          ],
+          onChange: (value) =>
+            props.setAssistantMessageSurface(normalizeAssistantMessageSurface(value)),
         })}
         ${renderSettingsSelectRow({
           title: t("chat.sendShortcut"),

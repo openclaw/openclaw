@@ -776,6 +776,12 @@ img.chat-avatar {
   box-shadow: none;
 }
 
+:root[data-theme-mode="light"][data-assistant-message-surface="white"]
+  .chat-group.assistant
+  .chat-bubble:not(.chat-bubble--tool-shell) {
+  background: #fff;
+}
+
 /* Per-user bubble tint: --chat-sender-hue is the sender's stable identity hue
    (same seed as their avatar initials). Only hue varies per user; saturation/
    lightness/alpha are fixed per theme mode so bubble text keeps contrast for
