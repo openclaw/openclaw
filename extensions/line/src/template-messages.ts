@@ -279,6 +279,21 @@ export function createCarouselColumn(params: {
   };
 }
 
+// A degraded column must keep every user-visible part: title, text, and the
+// labels of the actions the recipient can no longer tap.
+function describeCarouselColumn(column: CarouselColumn): string {
+  const text = column.text.trim();
+  const heading = column.title ? (text ? `${column.title}: ${text}` : column.title) : text;
+  const labels = column.actions
+    .map((action) => action.label?.trim())
+    .filter((label): label is string => Boolean(label));
+  if (labels.length === 0) {
+    return heading;
+  }
+  const rendered = `(${labels.join(" / ")})`;
+  return heading ? `${heading} ${rendered}` : rendered;
+}
+
 // A template that lost every button still carries user-visible content; LINE
 // defines altText as exactly that textual representation, so deliver it as a
 // plain text message instead of dropping the reply. A payload with nothing
@@ -304,7 +319,9 @@ export function buildTemplateMessageFromPayload(
       // Confirm templates require two labeled actions and body text; a blank
       // value in any of them makes LINE reject the whole message.
       if (!payload.confirmLabel || !payload.cancelLabel || !payload.text.trim()) {
-        return templateTextFallback(truncateTemplateText(payload.altText || payload.text, 400));
+        return templateTextFallback(
+          truncateTemplateText(payload.altText || payload.text, TEMPLATE_ALT_TEXT_LIMIT),
+        );
       }
 
       // Empty data means "tap sends the label", matching buildTemplatePayloadAction.
@@ -335,7 +352,9 @@ export function buildTemplateMessageFromPayload(
       const bodyText = payload.text.trim() ? payload.text : undefined;
       const text = bodyText ?? title;
       if (!text) {
-        return templateTextFallback(truncateTemplateText(payload.altText ?? "", 400));
+        return templateTextFallback(
+          truncateTemplateText(payload.altText ?? "", TEMPLATE_ALT_TEXT_LIMIT),
+        );
       }
       // Only an actual fold drops the title slot; an authored title that
       // happens to match the text stays.
@@ -349,7 +368,7 @@ export function buildTemplateMessageFromPayload(
         return templateTextFallback(
           truncateTemplateText(
             payload.altText || (foldedTitle ? `${foldedTitle}: ${text}` : text),
-            400,
+            TEMPLATE_ALT_TEXT_LIMIT,
           ),
         );
       }
@@ -374,17 +393,8 @@ export function buildTemplateMessageFromPayload(
       if (message.template.type === "carousel" && message.template.columns.length === 0) {
         return templateTextFallback(
           payload.altText
-            ? truncateTemplateText(payload.altText, 400)
-            : columns
-                .map((col) => {
-                  const text = col.text.trim();
-                  if (!col.title) {
-                    return text;
-                  }
-                  return text ? `${col.title}: ${text}` : col.title;
-                })
-                .filter(Boolean)
-                .join("\n"),
+            ? truncateTemplateText(payload.altText, TEMPLATE_ALT_TEXT_LIMIT)
+            : columns.map(describeCarouselColumn).filter(Boolean).join("\n"),
         );
       }
       return message;

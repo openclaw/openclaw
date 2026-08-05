@@ -235,7 +235,7 @@ describe("template payload textual fallback", () => {
       ],
     });
 
-    expect(message).toEqual({ type: "text", text: "First: A\nB" });
+    expect(message).toEqual({ type: "text", text: "First: A (One / Two)\nB (Three)" });
   });
 
   it("delivers carousel content as text when a textual column loses its actions", () => {
@@ -247,7 +247,7 @@ describe("template payload textual fallback", () => {
       ],
     });
 
-    expect(message).toEqual({ type: "text", text: "A\nB" });
+    expect(message).toEqual({ type: "text", text: "A\nB (OK)" });
   });
 
   it("drops a carousel column whose text is blank", () => {
@@ -265,6 +265,37 @@ describe("template payload textual fallback", () => {
     }
     expect(template.template.columns).toHaveLength(1);
     expect(template.template.columns[0]?.text).toBe("Keep");
+  });
+
+  it("preserves a provider-valid alternative text through the fallback", () => {
+    // The template path keeps altText up to LINE's 1500-character limit, so
+    // degrading to text must not clip the same authored content any earlier.
+    const altText = "a".repeat(1200);
+    const message = buildTemplateMessageFromPayload({
+      type: "confirm",
+      text: "Continue?",
+      confirmLabel: "",
+      confirmData: "yes",
+      cancelLabel: "No",
+      cancelData: "no",
+      altText,
+    });
+
+    expect(message).toEqual({ type: "text", text: altText });
+  });
+
+  it("truncates a fallback alternative text at the provider limit", () => {
+    const message = buildTemplateMessageFromPayload({
+      type: "confirm",
+      text: "Continue?",
+      confirmLabel: "",
+      confirmData: "yes",
+      cancelLabel: "No",
+      cancelData: "no",
+      altText: "a".repeat(1600),
+    });
+
+    expect(message).toEqual({ type: "text", text: "a".repeat(1500) });
   });
 
   it("fails loudly when a template payload has nothing deliverable", () => {
