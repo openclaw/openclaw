@@ -523,42 +523,37 @@ describe("remote workspace quiescence scripts", () => {
       probePath: "stalledProcessProbeTargetPath" as const,
       recoveryState: "probe-timeout",
       message: "workspace quiescence recovery timed out",
+      healthyCount: 1,
     },
     {
       probePath: "failedProcessProbeTargetPath" as const,
       recoveryState: "recovery-failed",
       message: "workspace quiescence recovery failed",
+      healthyCount: 9,
     },
   ])(
     "records $recoveryState without blocking identity-matched processes",
-    async ({ probePath, recoveryState, message }) => {
+    async ({ probePath, recoveryState, message, healthyCount }) => {
       const input = await fixture();
-      const nonce = await quiesce(input, 1_000);
+      const nonce = await quiesce(input, 30_000);
       const leaseFile = leasePath(input.home, input.workspace, nonce);
       const lease = JSON.parse(await fs.readFile(leaseFile, "utf8")) as {
         watchdog: { pid: number; start: string };
       };
-      const stalled = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
-        stdio: "ignore",
-      });
-      const healthy = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
-        stdio: "ignore",
-      });
-      const stalledPid = stalled.pid!;
-      const healthyPid = healthy.pid!;
+      const children = Array.from({ length: healthyCount + 1 }, () =>
+        spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" }),
+      );
+      const childPids = children.map((child) => child.pid!);
+      const stalledPid = childPids[0]!;
+      const healthyPids = childPids.slice(1);
       const targetPath = input[probePath];
 
       try {
-        const entries = [
-          { pid: stalledPid, start: await processStart(stalledPid) },
-          { pid: healthyPid, start: await processStart(healthyPid) },
-        ];
-        process.kill(stalledPid, "SIGSTOP");
-        process.kill(healthyPid, "SIGSTOP");
-        await Promise.all([
-          expectProcessState(stalledPid, true),
-          expectProcessState(healthyPid, true),
-        ]);
+        const entries = await Promise.all(
+          childPids.map(async (pid) => ({ pid, start: await processStart(pid) })),
+        );
+        childPids.forEach((pid) => process.kill(pid, "SIGSTOP"));
+        await Promise.all(childPids.map(async (pid) => await expectProcessState(pid, true)));
         await fs.writeFile(
           leaseFile,
           JSON.stringify({
@@ -569,7 +564,15 @@ describe("remote workspace quiescence scripts", () => {
         );
         await fs.writeFile(targetPath, `${stalledPid}\n`);
 
-        await expectProcessState(healthyPid, false, 8_000);
+        const recoveryResult = await runCommandWithTimeout(
+          [process.execPath, "-e", REMOTE_WORKSPACE_RESUME_JS, input.workspace, nonce],
+          { timeoutMs: 10_000, baseEnv: input.env },
+        );
+        expect(recoveryResult.code).not.toBe(0);
+        expect(recoveryResult.stderr).toContain(message);
+        await Promise.all(
+          healthyPids.map(async (pid) => await expectProcessState(pid, false, 8_000)),
+        );
         await vi.waitFor(
           async () => {
             const terminal = JSON.parse(await fs.readFile(leaseFile, "utf8")) as {
@@ -622,7 +625,7 @@ describe("remote workspace quiescence scripts", () => {
         try {
           process.kill(lease.watchdog.pid, "SIGKILL");
         } catch {}
-        await Promise.all([terminate(stalled), terminate(healthy)]);
+        await Promise.all(children.map(async (child) => await terminate(child)));
       }
     },
     20_000,

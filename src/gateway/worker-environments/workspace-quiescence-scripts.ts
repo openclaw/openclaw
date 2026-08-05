@@ -62,12 +62,11 @@ async function signalProcessReferences(references, concurrency = ${REMOTE_QUIESC
   // Keep identity confirmation adjacent to its signal so a slow sibling probe cannot stale it.
   const results = new Array(references.length);
   let nextIndex = 0;
-  let stopped = false;
   const worker = async () => {
     while (true) {
       const index = nextIndex++;
       if (index >= references.length) return;
-      if (stopped || Date.now() >= deadlineMs) {
+      if (Date.now() >= deadlineMs) {
         results[index] = { kind: "deferred" };
         continue;
       }
@@ -82,7 +81,6 @@ async function signalProcessReferences(references, concurrency = ${REMOTE_QUIESC
       }
       if (observed.kind === "failed") {
         results[index] = observed;
-        stopped = true;
         continue;
       }
       if (observed.kind !== "identity" || observed.start !== reference.start) {
@@ -96,7 +94,6 @@ async function signalProcessReferences(references, concurrency = ${REMOTE_QUIESC
         if (error && error.code === "ESRCH") results[index] = { kind: "missing" };
         else {
           results[index] = { kind: "failed" };
-          stopped = true;
         }
       }
     }
