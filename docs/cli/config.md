@@ -103,12 +103,24 @@ machine-output spelling and keeps stdout reserved for the schema document.
 
 ### `config validate`
 
-Validates the current config against the active schema without starting the gateway.
+Validates the current config against the active schema without starting the
+gateway. After schema validation passes, `config validate` also runs the same
+non-executing exec-provider command-path trust checks (absolute path, symlink,
+trusted-directory, permission, ownership, and Windows ACL) that gateway
+startup activation applies, so a symlinked, missing, or unsafe `exec` command
+cannot pass validation and then fail on the next restart.
 
 ```bash
 openclaw config validate
 openclaw config validate --json
 ```
+
+<Note>
+The exec-provider checks inspect the filesystem of the host where the CLI
+runs. Run `config validate` on the gateway host itself (or on a host with
+matching command paths, ownership, and ACLs) before relying on the result for
+restart safety.
+</Note>
 
 <Note>
 If validation is already failing, start with `openclaw configure` or `openclaw doctor --fix`. `openclaw chat` does not bypass the invalid-config guard.

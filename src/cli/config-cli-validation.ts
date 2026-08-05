@@ -14,6 +14,7 @@ import {
 import { validateConfigObjectRawWithPlugins } from "../config/validation.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { type RuntimeEnv, defaultRuntime, writeRuntimeJson } from "../runtime.js";
+import { assertSecureExecCommandPath } from "../secrets/exec-provider-path-validation.js";
 import {
   isPluginIntegrationSecretProviderConfig,
   resolveSecretProviderIntegrationConfig,
@@ -24,6 +25,8 @@ import {
   secretRefKey,
 } from "../secrets/ref-contract.js";
 import { resolveSecretRefValue } from "../secrets/resolve.js";
+import { collectConfigAssignments } from "../secrets/runtime-config-collectors.js";
+import { createResolverContext } from "../secrets/runtime-shared.js";
 import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
@@ -94,6 +97,73 @@ function collectSecretRefsFromUnknown(value: unknown): SecretRef[] {
   };
   visit(value);
   return refs;
+}
+
+/**
+ * Discovers every active SecretRef a config would resolve at startup, by reusing
+ * the runtime secret-assignment collector walk — the same code path
+ * {@link prepareSecretsRuntimeSnapshot} uses to decide which refs to materialize.
+ * Collectors drop refs on inactive surfaces (disabled model providers, disabled
+ * channels/accounts, non-ssh sandbox backends, disabled plugins, inactive gateway
+ * auth surfaces, etc.) via {@link collectRuntimeSecretInputAssignment}'s `active`
+ * gate, so a ref that startup would skip is not returned here. This keeps the
+ * exec-provider preflight selector aligned with startup's ref-driven resolution
+ * instead of the static target registry (which lists every configured surface
+ * regardless of activity) — see ClawSweeper P1 review on #117128.
+ *
+ * Non-executing and side-effect free: collection only populates
+ * `context.assignments` with {@link SecretAssignment} objects; it never resolves
+ * refs or spawns providers. The config is cloned because collectors capture
+ * `apply` closures that write resolved values back into the config object, and
+ * preflight must not mutate the caller's config.
+ */
+export function discoverActiveSecretRefs(
+  config: OpenClawConfig,
+  options?: { env?: NodeJS.ProcessEnv },
+): SecretRef[] {
+  const resolvedConfig = structuredClone(config);
+  const context = createResolverContext({
+    sourceConfig: config,
+    env: options?.env ?? process.env,
+  });
+  collectConfigAssignments({ config: resolvedConfig, context });
+  const refsByKey = new Map<string, SecretRef>();
+  for (const assignment of context.assignments) {
+    refsByKey.set(secretRefKey(assignment.ref), assignment.ref);
+  }
+  return [...refsByKey.values()];
+}
+
+/**
+ * Active provider aliases startup will resolve, derived from the resulting
+ * config's active SecretRefs. On the write path, refs a write explicitly
+ * assigns (`operation.assignedRef` and refs embedded in `operation.value`) are
+ * folded in so a write that points a SecretRef at a provider prefights that
+ * provider even when the target path is not yet a registry-known secret target
+ * (matching {@link collectDryRunRefs}'s assigned-ref handling). This keeps the
+ * preflight selector aligned with startup's ref-driven resolution while still
+ * catching unsafe commands an operator is actively wiring up
+ * (see ClawSweeper P1 review on #117128).
+ */
+export function collectActiveSecretRefProviders(params: {
+  config: OpenClawConfig;
+  operations?: ConfigSetOperation[];
+}): Set<string> {
+  const aliases = new Set<string>();
+  for (const ref of discoverActiveSecretRefs(params.config)) {
+    aliases.add(ref.provider);
+  }
+  if (params.operations) {
+    for (const operation of params.operations) {
+      if (operation.assignedRef) {
+        aliases.add(operation.assignedRef.provider);
+      }
+      for (const ref of collectSecretRefsFromUnknown(operation.value)) {
+        aliases.add(ref.provider);
+      }
+    }
+  }
+  return aliases;
 }
 
 export function collectDryRunRefs(params: {
@@ -232,56 +302,49 @@ export function collectDryRunSchemaErrors(config: OpenClawConfig): ConfigSetDryR
   }));
 }
 
-function touchesSecretProviderCollection(path: readonly string[]): boolean {
-  return (
-    (path.length === 1 && path[0] === "secrets") ||
-    (path.length === 2 && path[0] === "secrets" && path[1] === "providers")
-  );
-}
-
-export function collectPluginIntegrationProviderErrors(params: {
+/**
+ * Runs the same non-executing command-path trust checks over materialized
+ * plugin-integration providers that startup applies, scoped to the providers
+ * the resulting configuration's active SecretRefs will resolve. See
+ * {@link collectManualExecProviderCommandPathErrors} for the active-ref
+ * derivation rationale (ClawSweeper P1 review on #117128).
+ */
+export async function collectPluginIntegrationProviderErrors(params: {
   config: OpenClawConfig;
-  operations: ConfigSetOperation[];
-}): ConfigSetDryRunError[] {
+  operations?: ConfigSetOperation[];
+}): Promise<{ errors: ConfigSetDryRunError[]; preflightRan: boolean }> {
   const providers = params.config.secrets?.providers ?? {};
-  let validateAllProviders = false;
-  const touchedProviderAliases = new Set<string>();
-  for (const operation of params.operations) {
-    if (operation.touchedProviderAlias) {
-      touchedProviderAliases.add(operation.touchedProviderAlias);
-    }
-    if (operation.assignedRef) {
-      touchedProviderAliases.add(operation.assignedRef.provider);
-    }
-    for (const ref of collectSecretRefsFromUnknown(operation.value)) {
-      touchedProviderAliases.add(ref.provider);
-    }
-    validateAllProviders ||= touchesSecretProviderCollection(operation.setPath);
-  }
-  if (!validateAllProviders && touchedProviderAliases.size === 0) {
-    return [];
+  const activeProviderAliases = collectActiveSecretRefProviders({
+    config: params.config,
+    operations: params.operations,
+  });
+  if (activeProviderAliases.size === 0) {
+    return { errors: [], preflightRan: false };
   }
   const integrationProviders: Array<{
     alias: string;
     provider: PluginIntegrationSecretProviderConfig;
   }> = [];
   for (const [alias, provider] of Object.entries(providers)) {
-    if (
-      (validateAllProviders || touchedProviderAliases.has(alias)) &&
-      isPluginIntegrationSecretProviderConfig(provider)
-    ) {
+    if (activeProviderAliases.has(alias) && isPluginIntegrationSecretProviderConfig(provider)) {
       integrationProviders.push({ alias, provider });
     }
   }
   if (integrationProviders.length === 0) {
-    return [];
+    return { errors: [], preflightRan: false };
   }
   const manifestRegistry = loadPluginMetadataSnapshot({
     config: params.config,
     env: process.env,
   }).manifestRegistry;
   const errors: ConfigSetDryRunError[] = [];
+  let preflightRan = false;
   for (const { alias, provider } of integrationProviders) {
+    // Any integration selected for preflight counts as "ran" regardless of
+    // whether materialization succeeds or the command-path check fails, so
+    // checks.schema reflects that the plugin-integration preflight executed
+    // (see ClawSweeper review on #117128).
+    preflightRan = true;
     const resolved = resolveSecretProviderIntegrationConfig({
       manifestRegistry,
       providerAlias: alias,
@@ -291,9 +354,92 @@ export function collectPluginIntegrationProviderErrors(params: {
     });
     if (!resolved.ok) {
       errors.push({ kind: "schema", message: `secrets.providers.${alias}: ${resolved.reason}` });
+      continue;
+    }
+    // The integration materialized into a manual exec provider; run the same
+    // non-executing command-path trust checks that startup applies so a config
+    // cannot pass validation/write and then fail cold start when the
+    // materialized command is spawned (see ClawSweeper review on #117128).
+    try {
+      await assertSecureExecCommandPath({
+        command: resolved.providerConfig.command,
+        label: `secrets.providers.${alias}.command`,
+        ...(resolved.providerConfig.trustedDirs
+          ? { trustedDirs: resolved.providerConfig.trustedDirs }
+          : {}),
+      });
+    } catch (err) {
+      errors.push({
+        kind: "schema",
+        message: `secrets.providers.${alias}: ${String(err)}`,
+      });
     }
   }
-  return errors;
+  return { errors, preflightRan };
+}
+
+/**
+ * Runs the non-executing exec-provider command-path trust checks (the same
+ * rules startup activation applies) over the providers that the resulting
+ * configuration's active SecretRefs will actually resolve at cold start. A
+ * candidate that passes here is structurally equivalent to what cold start will
+ * accept, closing the validate/write/startup mismatch (see #117051).
+ *
+ * Targets are derived from the active SecretRef assignments of `config` (the
+ * post-mutation `nextConfig` on the write path, the loaded config on validate),
+ * not from every configured provider nor only the aliases a write touched. This
+ * matches startup, which resolves providers only after grouping active
+ * SecretRefs: an unused integration is not falsely rejected, and a write that
+ * disables a plugin or changes `secrets.defaults.exec` can no longer persist an
+ * active ref that fails only at startup (see ClawSweeper P1 review on #117128).
+ */
+export async function collectManualExecProviderCommandPathErrors(params: {
+  config: OpenClawConfig;
+  operations?: ConfigSetOperation[];
+}): Promise<{ errors: ConfigSetDryRunError[]; preflightRan: boolean }> {
+  const providers = params.config.secrets?.providers ?? {};
+  const activeProviderAliases = collectActiveSecretRefProviders({
+    config: params.config,
+    operations: params.operations,
+  });
+  if (activeProviderAliases.size === 0) {
+    return { errors: [], preflightRan: false };
+  }
+
+  const errors: ConfigSetDryRunError[] = [];
+  let preflightRan = false;
+  for (const [alias, provider] of Object.entries(providers)) {
+    if (!activeProviderAliases.has(alias)) {
+      continue;
+    }
+    if (isPluginIntegrationSecretProviderConfig(provider)) {
+      continue;
+    }
+    // A value-mode write can set a provider to `null` or a primitive without
+    // triggering full schema validation; guard the `in` check so malformed
+    // provider values fall through to the normal config error path instead of
+    // throwing a raw TypeError (see ClawSweeper review on #117128).
+    if (provider === null || typeof provider !== "object") {
+      continue;
+    }
+    if (!("command" in provider)) {
+      continue;
+    }
+    preflightRan = true;
+    try {
+      await assertSecureExecCommandPath({
+        command: provider.command,
+        label: `secrets.providers.${alias}.command`,
+        trustedDirs: provider.trustedDirs,
+      });
+    } catch (err) {
+      errors.push({
+        kind: "schema",
+        message: `secrets.providers.${alias}: ${String(err)}`,
+      });
+    }
+  }
+  return { errors, preflightRan };
 }
 
 export function dedupeDryRunErrors(errors: ConfigSetDryRunError[]): ConfigSetDryRunError[] {

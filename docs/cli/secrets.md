@@ -117,7 +117,7 @@ Notes:
 
 ### Exec provider safety
 
-Package managers often expose symlinked command paths. Resolve the real binary path (for example with `realpath "$(command -v vault)"`) and configure that absolute, non-symlink path; use `trustedDirs` to restrict executables to approved directories. On Windows, provider paths fail closed when ACL verification is unavailable, with no provider-level bypass.
+Homebrew installs often expose symlinked binaries under `/opt/homebrew/bin/*`. Symlinked command paths are rejected — point `command` at the regular target file instead (for example `python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' /opt/homebrew/bin/vault`; re-resolve after each `brew upgrade`), paired with `trustedDirs` (for example `["/opt/homebrew"]`) so only package-manager paths qualify. On Windows, if ACL verification is unavailable for a provider path, OpenClaw fails closed.
 
 ## Apply a saved plan
 

@@ -818,7 +818,7 @@ describe("secret ref resolver", () => {
   it("fails closed on Windows when exec provider ACL source is unknown", async () => {
     await withMockedWindowsPlatform(async () => {
       await expect(resolveExecSecret(execProtocolV1ScriptPath)).rejects.toThrow(
-        /Move the command to a path whose ACLs OpenClaw can verify; there is no provider-level bypass/,
+        /ACL verification is unavailable on Windows/,
       );
     });
   });
