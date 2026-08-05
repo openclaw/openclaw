@@ -1,5 +1,6 @@
 /** Resolves synthetic and external auth provider refs from active runtime state or persisted manifests. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry.js";
 import type { LoadPluginRegistryParams, PluginRegistrySnapshot } from "./plugin-registry.js";
 import { getPluginRegistryState } from "./runtime-state.js";
@@ -19,6 +20,26 @@ function uniqueProviderRefs(values: readonly string[]): string[] {
   return next;
 }
 
+/** Returns synthetic-auth refs only when the metadata registry is authoritative. */
+export function resolveValidatedSyntheticAuthProviderRefState(
+  snapshot: Pick<PluginMetadataSnapshot, "index" | "registryDiagnostics" | "registrySource">,
+): { refs: string[]; complete: boolean } {
+  const complete =
+    snapshot.registryDiagnostics.length === 0 &&
+    (snapshot.registrySource === "persisted" || snapshot.registrySource === "provided");
+  if (!complete) {
+    return { refs: [], complete: false };
+  }
+  return {
+    refs: uniqueProviderRefs(
+      snapshot.index.plugins
+        .filter((plugin) => plugin.enabled)
+        .flatMap((plugin) => plugin.syntheticAuthRefs ?? []),
+    ),
+    complete: true,
+  };
+}
+
 function resolveManifestSyntheticAuthProviderRefState(
   params: SyntheticAuthProviderRefParams = {},
 ): { refs: string[]; complete: boolean } {
@@ -35,6 +56,32 @@ function resolveManifestSyntheticAuthProviderRefState(
     ),
     complete: true,
   };
+}
+
+/** Lists positive synthetic-auth candidates without treating derived absence as authoritative. */
+function resolveRuntimeSyntheticAuthCandidateRefs(
+  params: SyntheticAuthProviderRefParams = {},
+): string[] {
+  const registry = getPluginRegistryState()?.activeRegistry;
+  const runtimeRefs = registry ? resolveRuntimeSyntheticAuthProviderRefState(params).refs : [];
+  if (params.index && (params.registryDiagnostics?.length ?? 0) > 0) {
+    return runtimeRefs;
+  }
+  const result = loadPluginRegistrySnapshotWithMetadata(params);
+  return uniqueProviderRefs([
+    ...runtimeRefs,
+    ...result.snapshot.plugins.flatMap((plugin) => plugin.syntheticAuthRefs ?? []),
+  ]);
+}
+
+/** Returns whether runtime or manifest metadata names one requested synthetic-auth ref. */
+export function hasRuntimeSyntheticAuthCandidateRef(
+  params: SyntheticAuthProviderRefParams & { providerRefs: readonly string[] },
+): boolean {
+  const candidates = new Set(
+    resolveRuntimeSyntheticAuthCandidateRefs(params).map((ref) => normalizeProviderId(ref)),
+  );
+  return params.providerRefs.some((ref) => candidates.has(normalizeProviderId(ref)));
 }
 
 type SyntheticAuthProviderRefParams = LoadPluginRegistryParams & {
