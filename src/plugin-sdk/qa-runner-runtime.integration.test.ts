@@ -4,14 +4,21 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setTestEnvValue } from "../test-utils/env.js";
 import * as activationCheckRuntime from "./facade-activation-check.runtime.js";
 import {
   testing as facadeRuntimeTesting,
   resetFacadeRuntimeStateForTest,
 } from "./facade-runtime.js";
+import { makePrivateQaSourceRoot } from "./qa-runtime.test-helpers.js";
 import { listQaRunnerCliContributions } from "./qa-runner-runtime.js";
+
+const resolveOpenClawPackageRootSync = vi.hoisted(() => vi.fn());
+
+vi.mock("../infra/openclaw-root.js", () => ({
+  resolveOpenClawPackageRootSync,
+}));
 
 const ORIGINAL_ENV = {
   OPENCLAW_ENABLE_PRIVATE_QA_CLI: process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI,
@@ -37,6 +44,7 @@ function resetQaRunnerRuntimeState() {
 describe("plugin-sdk qa-runner-runtime linked plugin smoke", () => {
   beforeEach(() => {
     resetQaRunnerRuntimeState();
+    resolveOpenClawPackageRootSync.mockReset().mockReturnValue(null);
     process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
     process.env.OPENCLAW_TEST_FAST = "1";
   });
@@ -144,18 +152,20 @@ describe("plugin-sdk qa-runner-runtime linked plugin smoke", () => {
   });
 
   it("ignores operator runner metadata and state during private QA discovery", () => {
+    const sourceRoot = makePrivateQaSourceRoot(tempDirs, "openclaw-private-qa-source-root-");
     const stateDir = makeTempDir("openclaw-private-qa-operator-state-");
-    const pluginDir = path.join(stateDir, "extensions", "operator-runner");
+    const pluginDir = path.join(sourceRoot, "extensions", "qa-linked");
     const stateDatabasePath = path.join(stateDir, "openclaw.sqlite");
     const stateDatabaseSentinel = "operator-state-must-remain-unopened";
 
+    resolveOpenClawPackageRootSync.mockReturnValue(sourceRoot);
     fs.mkdirSync(pluginDir, { recursive: true });
     fs.writeFileSync(stateDatabasePath, stateDatabaseSentinel, "utf8");
     fs.writeFileSync(
       path.join(pluginDir, "openclaw.plugin.json"),
       JSON.stringify({
-        id: "operator-runner",
-        qaRunners: [{ commandName: "operator-sentinel" }],
+        id: "qa-linked",
+        qaRunners: [{ commandName: "linked" }],
         configSchema: {
           type: "object",
           additionalProperties: false,
@@ -167,13 +177,25 @@ describe("plugin-sdk qa-runner-runtime linked plugin smoke", () => {
     fs.writeFileSync(
       path.join(pluginDir, "package.json"),
       JSON.stringify({
-        name: "@openclaw/operator-runner",
+        name: "@openclaw/qa-linked",
         type: "module",
         openclaw: { extensions: ["./index.js"] },
       }),
       "utf8",
     );
     fs.writeFileSync(path.join(pluginDir, "index.js"), "export default {};\n", "utf8");
+    fs.writeFileSync(
+      path.join(pluginDir, "runtime-api.js"),
+      [
+        "export const qaRunnerCliRegistrations = [",
+        "  {",
+        '    commandName: "linked",',
+        '    register() {}',
+        "  }",
+        "];",
+      ].join("\n"),
+      "utf8",
+    );
 
     process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = "1";
     process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "0";
@@ -182,6 +204,17 @@ describe("plugin-sdk qa-runner-runtime linked plugin smoke", () => {
 
     const contributions = listQaRunnerCliContributions();
 
+    expect(contributions).toEqual([
+      {
+        pluginId: "qa-linked",
+        commandName: "linked",
+        status: "available",
+        registration: {
+          commandName: "linked",
+          register: expect.any(Function),
+        },
+      },
+    ]);
     expect(contributions.some((runner) => runner.pluginId === "operator-runner")).toBe(false);
     expect(fs.readFileSync(stateDatabasePath, "utf8")).toBe(stateDatabaseSentinel);
   });
