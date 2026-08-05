@@ -81,6 +81,21 @@ function resolveSystemdServiceName(env: GatewayServiceEnv): string {
   return resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
 }
 
+/**
+ * Unit-base names to probe for an installed gateway (or node/custom) service.
+ *
+ * When OPENCLAW_SYSTEMD_UNIT is set, only that explicit identity is used so
+ * Node (`openclaw-node`) and operator-custom units keep working. Without an
+ * override, use gateway profile candidates (current + legacy openclaw-<profile>).
+ */
+function resolveInstalledSystemdServiceNameCandidates(env: GatewayServiceEnv): string[] {
+  const override = env.OPENCLAW_SYSTEMD_UNIT?.trim();
+  if (override) {
+    return [override.endsWith(".service") ? override.slice(0, -".service".length) : override];
+  }
+  return resolveGatewaySystemdServiceNameCandidates(env.OPENCLAW_PROFILE);
+}
+
 function resolveSystemdUnitPath(env: GatewayServiceEnv): string {
   return resolveSystemdUnitPathForName(env, resolveSystemdServiceName(env));
 }
@@ -98,7 +113,7 @@ const SYSTEM_SYSTEMD_UNIT_DIRS = [
 async function findSystemSystemdUnitPath(
   env: GatewayServiceEnv,
 ): Promise<{ unitName: string; unitPath: string } | null> {
-  const candidates = resolveGatewaySystemdServiceNameCandidates(env.OPENCLAW_PROFILE);
+  const candidates = resolveInstalledSystemdServiceNameCandidates(env);
   for (const name of candidates) {
     const serviceFile = `${name}.service`;
     for (const dir of SYSTEM_SYSTEMD_UNIT_DIRS) {
@@ -130,11 +145,14 @@ async function findMarkerOwnedSystemSystemdUnit(env: GatewayServiceEnv): Promise
 } | null> {
   // System-scope installs may use non-canonical names for the *default*
   // profile (e.g. openclaw.service). Profile-scoped installs must never adopt
-  // an unrelated agent's unit via this scan (issue #119648).
+  // an unrelated agent's unit via this scan (issue #119648). Explicit
+  // OPENCLAW_SYSTEMD_UNIT (Node / custom) is always an allowed match.
+  const hasExplicitUnit = Boolean(env.OPENCLAW_SYSTEMD_UNIT?.trim());
   const profile = env.OPENCLAW_PROFILE?.trim();
   const profileScoped = Boolean(profile && profile.toLowerCase() !== "default");
+  const restrictToCandidates = hasExplicitUnit || profileScoped;
   const allowedNames = new Set(
-    resolveGatewaySystemdServiceNameCandidates(env.OPENCLAW_PROFILE).map((name) =>
+    resolveInstalledSystemdServiceNameCandidates(env).map((name) =>
       normalizeLowercaseStringOrEmpty(name),
     ),
   );
@@ -156,9 +174,9 @@ async function findMarkerOwnedSystemSystemdUnit(env: GatewayServiceEnv): Promise
       continue;
     }
     const base = normalizeLowercaseStringOrEmpty(unitBaseName(svc.label));
-    if (profileScoped && !allowedNames.has(base)) {
+    if (restrictToCandidates && !allowedNames.has(base)) {
       // Refuse to treat another profile's (or arbitrary custom) unit as this
-      // profile's gateway. Fall through until a matching candidate is found.
+      // identity. Fall through until a matching candidate is found.
       continue;
     }
     const match = /^unit:\s*(.+)$/.exec(svc.detail.trim());
@@ -193,7 +211,7 @@ type SystemdGatewayInstallation =
 async function findUserSystemdGatewayScope(
   env: GatewayServiceEnv,
 ): Promise<InstalledSystemdGatewayScope | null> {
-  const candidates = resolveGatewaySystemdServiceNameCandidates(env.OPENCLAW_PROFILE);
+  const candidates = resolveInstalledSystemdServiceNameCandidates(env);
   for (const name of candidates) {
     let userPath: string;
     try {
