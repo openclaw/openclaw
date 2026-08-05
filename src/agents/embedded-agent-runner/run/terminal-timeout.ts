@@ -10,6 +10,20 @@ import {
 import { copyAttemptDeliveryState } from "./terminal-resolution.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
+function buildPromptTimeoutPayloads(params: {
+  hasPartialAssistantTextAfterPromptTimeout: boolean;
+  payloadsWithToolMedia: EmbeddedAgentRunResult["payloads"];
+  timeoutText: string;
+}): EmbeddedAgentRunResult["payloads"] {
+  const preservedPayloads = params.hasPartialAssistantTextAfterPromptTimeout
+    ? []
+    : (params.payloadsWithToolMedia ?? []).filter((payload) => payload.isError !== true);
+  return [...preservedPayloads, { text: params.timeoutText, isError: true }];
+}
+
+const testing = { buildPromptTimeoutPayloads };
+export { testing as __testing };
+
 export function resolveEmbeddedRunTerminalTimeout(input: {
   timedOutDuringPrompt: boolean;
   hasSuccessfulFinalAssistantAfterPromptTimeout: boolean;
@@ -69,10 +83,11 @@ export function resolveEmbeddedRunTerminalTimeout(input: {
   };
   input.setTerminalLifecycleMeta({ replayInvalid, livenessState, ...timeoutAttribution });
   return {
-    payloads: [
-      ...(input.hasPartialAssistantTextAfterPromptTimeout ? [] : input.payloadsWithToolMedia || []),
-      { text: timeoutText, isError: true },
-    ],
+    payloads: buildPromptTimeoutPayloads({
+      hasPartialAssistantTextAfterPromptTimeout: input.hasPartialAssistantTextAfterPromptTimeout,
+      payloadsWithToolMedia: input.payloadsWithToolMedia,
+      timeoutText,
+    }),
     meta: {
       durationMs: Date.now() - input.startedAtMs,
       agentMeta: input.agentMeta,
