@@ -31,7 +31,13 @@ data class GatewayClawHubSkillSummary(
   val displayName: String,
   val summary: String?,
   val version: String?,
-)
+  val ownerHandle: String? = null,
+  val installRef: String? = null,
+  val trustState: String? = null,
+) {
+  val installReference: String
+    get() = installRef ?: canonicalClawHubSkillReference(slug, ownerHandle) ?: slug
+}
 
 data class GatewayClawHubInstallReview(
   val slug: String,
@@ -60,6 +66,9 @@ internal fun parseClawHubSearchResults(
       val displayName = value.string("displayName") ?: return@mapNotNull null
       GatewayClawHubSkillSummary(
         slug = slug,
+        ownerHandle = value.string("ownerHandle"),
+        installRef = value.string("installRef"),
+        trustState = value.string("trustState"),
         displayName = displayName,
         summary = value.string("summary"),
         version = value.string("version"),
@@ -135,7 +144,11 @@ internal fun clawHubSearchParams(query: String): String =
     put("limit", JsonPrimitive(25))
   }.toString()
 
-internal fun clawHubDetailParams(slug: String): String = buildJsonObject { put("slug", JsonPrimitive(slug)) }.toString()
+internal fun clawHubDetailParams(skill: GatewayClawHubSkillSummary): String =
+  buildJsonObject {
+    put("slug", JsonPrimitive(skill.slug))
+    skill.ownerHandle?.let { put("ownerHandle", JsonPrimitive(it)) }
+  }.toString()
 
 internal fun clawHubInstallParams(
   slug: String,

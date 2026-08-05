@@ -20,10 +20,14 @@ extension GatewayConnection {
         return result.results
     }
 
-    func skillsDetail(slug: String, on route: Route) async throws -> ClawHubSkillDetail {
-        try await self.requestDecoded(
+    func skillsDetail(_ skill: ClawHubSkillSummary, on route: Route) async throws -> ClawHubSkillDetail {
+        var params: [String: AnyCodable] = ["slug": AnyCodable(skill.slug)]
+        if let ownerHandle = skill.ownerHandle {
+            params["ownerHandle"] = AnyCodable(ownerHandle)
+        }
+        return try await self.requestDecoded(
             method: .skillsDetail,
-            params: ["slug": AnyCodable(slug)],
+            params: params,
             ifCurrentRoute: route)
     }
 

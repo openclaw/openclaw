@@ -306,6 +306,7 @@ async function resolveTrackedUpdateTarget(params: {
 export async function installSkillFromClawHub(params: {
   workspaceDir: string;
   slug: string;
+  ownerHandle?: string;
   version?: string;
   expectedIntegrity?: string;
   baseUrl?: string;
@@ -321,8 +322,9 @@ export async function installSkillFromClawHub(params: {
   if (params.clawManaged) {
     return await installRequestedSkillFromClawHub(params);
   }
+  const ref = params.ownerHandle ? `@${params.ownerHandle}/${params.slug}` : params.slug;
   return await withClawPackageLifecycleLease(
-    { kind: "skill", source: "clawhub", ref: params.slug, workspace: params.workspaceDir },
+    { kind: "skill", source: "clawhub", ref, workspace: params.workspaceDir },
     () => installRequestedSkillFromClawHub(params),
   );
 }

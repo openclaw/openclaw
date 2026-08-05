@@ -96,7 +96,7 @@ function createProps(overrides: Partial<SkillsProps> = {}): SkillsProps {
     clawhubSearchLoading: false,
     clawhubSearchError: null,
     clawhubDetail: null,
-    clawhubDetailSlug: null,
+    clawhubDetailRef: null,
     clawhubDetailLoading: false,
     clawhubDetailError: null,
     clawhubInstallMessage: null,
@@ -704,6 +704,8 @@ describe("renderSkills", () => {
             {
               score: 0.95,
               slug: "github",
+              ownerHandle: "openclaw",
+              installRef: "@openclaw/github",
               displayName: "GitHub",
               summary: "GitHub integration for OpenClaw",
               icon: `https://clawhub.ai/api/v1/skill-icons/${"a".repeat(64)}`,
@@ -728,7 +730,7 @@ describe("renderSkills", () => {
     expect(detailButton?.contains(installButton)).toBe(false);
     expect(resultItem?.querySelector(".settings-row__title")?.textContent?.trim()).toBe("GitHub");
     expect(resultItem?.querySelector(".settings-row__desc")?.textContent?.trim()).toBe(
-      "GitHub integration for OpenClaw",
+      "GitHub integration for OpenClaw · @openclaw/github",
     );
     expect(resultItem?.querySelector(".settings-row__value")?.textContent?.trim()).toBe("v1.2.3");
     expect(resultItem?.querySelector<HTMLImageElement>(".clawhub-skill-icon")?.src).toBe(
@@ -739,9 +741,14 @@ describe("renderSkills", () => {
     installButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onClawHubDetailOpen).toHaveBeenCalledTimes(1);
-    expect(onClawHubDetailOpen).toHaveBeenCalledWith("github");
+    const githubRef = {
+      slug: "github",
+      ownerHandle: "openclaw",
+      installRef: "@openclaw/github",
+    };
+    expect(onClawHubDetailOpen).toHaveBeenCalledWith(githubRef);
     expect(onClawHubInstall).toHaveBeenCalledTimes(1);
-    expect(onClawHubInstall).toHaveBeenCalledWith("github");
+    expect(onClawHubInstall).toHaveBeenCalledWith(githubRef);
 
     onClawHubInstall.mockClear();
     showModal.mockClear();
@@ -751,7 +758,7 @@ describe("renderSkills", () => {
         createProps({
           clawhubSearchError: "rate limited",
           clawhubInstallMessage: { kind: "success", text: "Installed github" },
-          clawhubDetailSlug: "github",
+          clawhubDetailRef: githubRef,
           clawhubDetail: {
             skill: {
               slug: "github",
@@ -800,7 +807,7 @@ describe("renderSkills", () => {
     detailInstallButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onClawHubInstall).toHaveBeenCalledTimes(1);
-    expect(onClawHubInstall).toHaveBeenCalledWith("github");
+    expect(onClawHubInstall).toHaveBeenCalledWith(githubRef);
   });
 
   it("renders ClawHub acknowledgement retry actions", async () => {
@@ -815,7 +822,7 @@ describe("renderSkills", () => {
           clawhubInstallMessage: {
             kind: "error",
             text: "REVIEW REQUIRED - ClawHub found suspicious behavior.",
-            acknowledgeSlug: "github",
+            acknowledgeRef: { slug: "github", ownerHandle: "openclaw" },
             acknowledgeVersion: "1.2.3",
           },
           onClawHubInstall,
@@ -832,7 +839,11 @@ describe("renderSkills", () => {
     retryButton!.click();
 
     expect(onClawHubInstall).toHaveBeenCalledTimes(1);
-    expect(onClawHubInstall).toHaveBeenCalledWith("github", true, "1.2.3");
+    expect(onClawHubInstall).toHaveBeenCalledWith(
+      { slug: "github", ownerHandle: "openclaw" },
+      true,
+      "1.2.3",
+    );
   });
 
   it("renders installed ClawHub verdicts and the local Skill Card tab", async () => {

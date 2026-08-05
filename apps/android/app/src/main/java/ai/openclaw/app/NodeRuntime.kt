@@ -6311,7 +6311,7 @@ class NodeRuntime private constructor(
     publishGatewayData(gatewayScope) {
       _clawHubSkillSearchState.value =
         _clawHubSkillSearchState.value.copy(
-          reviewingSlug = skill.slug,
+          reviewingSlug = skill.installReference,
           installReview = null,
           acknowledgeSlug = null,
           acknowledgeVersion = null,
@@ -6320,7 +6320,7 @@ class NodeRuntime private constructor(
         )
     }
     try {
-      val response = requestGatewayData(gatewayScope, "skills.detail", clawHubDetailParams(skill.slug))
+      val response = requestGatewayData(gatewayScope, "skills.detail", clawHubDetailParams(skill))
       val review = parseClawHubInstallReview(response, skill, json)
       publishGatewayData(gatewayScope) {
         if (clawHubSkillReviewSeq.get() == reviewSeq) {

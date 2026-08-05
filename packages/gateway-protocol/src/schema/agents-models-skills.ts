@@ -356,6 +356,7 @@ export const SkillsInstallParamsSchema = Type.Union([
     agentId: Type.Optional(NonEmptyString),
     source: Type.Literal("clawhub"),
     slug: NonEmptyString,
+    ownerHandle: Type.Optional(NonEmptyString),
     version: Type.Optional(NonEmptyString),
     force: Type.Optional(Type.Boolean()),
     acknowledgeClawHubRisk: Type.Optional(Type.Boolean()),
@@ -401,17 +402,22 @@ export const SkillsSearchResultSchema = closedObject({
     closedObject({
       score: Type.Number(),
       slug: NonEmptyString,
+      ownerHandle: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+      installRef: Type.Optional(NonEmptyString),
+      trustState: Type.Optional(Type.Literal("not-scanned-by-clawhub")),
       displayName: NonEmptyString,
       summary: Type.Optional(Type.String()),
+      icon: Type.Optional(Type.Union([Type.String(), Type.Null()])),
       version: Type.Optional(NonEmptyString),
       updatedAt: Type.Optional(Type.Integer()),
     }),
   ),
 });
 
-/** Reads registry detail for one skill slug. */
+/** Reads registry detail for one publisher-scoped skill. */
 export const SkillsDetailParamsSchema = closedObject({
   slug: NonEmptyString,
+  ownerHandle: Type.Optional(NonEmptyString),
 });
 
 /** Reads current security verdicts for configured skills. */

@@ -263,9 +263,26 @@ struct ClawHubSearchResponseLite: Decodable {
 
 struct ClawHubSearchResultLite: Decodable {
     let slug: String
+    let ownerHandle: String?
+    let installRef: String?
+    let trustState: String?
     let displayName: String
     let summary: String?
     let version: String?
+
+    var installReference: String {
+        if let installRef = self.installRef?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !installRef.isEmpty
+        {
+            return installRef
+        }
+        if let ownerHandle = self.ownerHandle?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !ownerHandle.isEmpty
+        {
+            return "@\(ownerHandle.lowercased())/\(self.slug)"
+        }
+        return self.slug
+    }
 }
 
 struct ClawHubInstallParams: Encodable {

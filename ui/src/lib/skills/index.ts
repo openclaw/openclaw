@@ -11,7 +11,13 @@ import type {
   SkillStatusReport,
 } from "../../api/types.ts";
 import { redactToolDetail } from "../browser-redact.ts";
-import type { ClawHubSearchResult } from "./clawhub-search.ts";
+import {
+  clawHubDetailParams,
+  clawHubInstallParams,
+  clawHubSkillIdentityKey,
+  type ClawHubSearchResult,
+  type ClawHubSkillIdentity,
+} from "./clawhub-search.ts";
 import {
   normalizeSkillApiKeyReplacement,
   runSkillConfigMutation,
@@ -91,13 +97,13 @@ type SkillsState = {
   clawhubSearchLoading: boolean;
   clawhubSearchError: string | null;
   clawhubDetail: ClawHubSkillDetail | null;
-  clawhubDetailSlug: string | null;
+  clawhubDetailRef: ClawHubSkillIdentity | null;
   clawhubDetailLoading: boolean;
   clawhubDetailError: string | null;
   clawhubInstallMessage: {
     kind: "success" | "error";
     text: string;
-    acknowledgeSlug?: string;
+    acknowledgeRef?: ClawHubSkillIdentity;
     acknowledgeVersion?: string;
     acknowledgeLabel?: string;
   } | null;
@@ -113,7 +119,7 @@ type SkillsState = {
 export type SkillOperation =
   | { kind: "refresh" }
   | { kind: "skill"; skillKey: string }
-  | { kind: "clawhub"; slug: string }
+  | { kind: "clawhub"; ref: string }
   | null;
 
 type ActiveSkillOperation = Exclude<SkillOperation, null>;
@@ -149,21 +155,13 @@ function setSkillMessage(state: SkillsState, key: string, message: SkillMessage)
 }
 
 function getClawHubTrustDetailsFromError(err: unknown) {
-  if (!err || typeof err !== "object" || !("details" in err)) {
-    return undefined;
-  }
-  return readClawHubTrustErrorDetails((err as { details?: unknown }).details);
+  return err && typeof err === "object" && "details" in err
+    ? readClawHubTrustErrorDetails((err as { details?: unknown }).details)
+    : undefined;
 }
 
 const formatClawHubInstallMessage = (message: string, warning?: string): string =>
   warning ? `${message}\n\n${warning}` : message;
-
-function formatClawHubAcknowledgementMessage(warning?: string): string {
-  return formatClawHubInstallMessage(
-    "Review the ClawHub warning before installing this skill.",
-    warning,
-  );
-}
 
 export function clawhubVerdictKey(target: {
   registry: string;
@@ -635,13 +633,14 @@ export async function installSkill(
   });
 }
 
-export async function loadClawHubDetail(state: SkillsState, slug: string) {
+export async function loadClawHubDetail(state: SkillsState, ref: ClawHubSkillIdentity) {
   if (!state.client || !state.connected) {
     return;
   }
   const client = state.client;
   const agentScope = captureSkillsAgentScope(state);
-  state.clawhubDetailSlug = slug;
+  const refKey = clawHubSkillIdentityKey(ref);
+  state.clawhubDetailRef = ref;
   state.clawhubDetailLoading = true;
   state.clawhubDetailError = null;
   state.clawhubDetail = null;
@@ -649,9 +648,9 @@ export async function loadClawHubDetail(state: SkillsState, slug: string) {
     () =>
       state.connected &&
       state.client === client &&
-      slug === state.clawhubDetailSlug &&
+      refKey === (state.clawhubDetailRef && clawHubSkillIdentityKey(state.clawhubDetailRef)) &&
       isSkillsAgentScopeCurrent(state, agentScope),
-    () => client.request<ClawHubSkillDetail>("skills.detail", { slug }),
+    () => client.request<ClawHubSkillDetail>("skills.detail", clawHubDetailParams(ref)),
     (res) => {
       state.clawhubDetail = res ?? null;
     },
@@ -665,7 +664,7 @@ export async function loadClawHubDetail(state: SkillsState, slug: string) {
 }
 
 export function closeClawHubDetail(state: SkillsState) {
-  state.clawhubDetailSlug = null;
+  state.clawhubDetailRef = null;
   state.clawhubDetail = null;
   state.clawhubDetailError = null;
   state.clawhubDetailLoading = false;
@@ -673,7 +672,7 @@ export function closeClawHubDetail(state: SkillsState) {
 
 export async function installFromClawHub(
   state: SkillsState,
-  slug: string,
+  ref: ClawHubSkillIdentity,
   acknowledgeClawHubRisk = false,
   version?: string,
 ) {
@@ -682,14 +681,15 @@ export async function installFromClawHub(
     return;
   }
   const agentScope = captureSkillsAgentScope(state);
-  const operation = { kind: "clawhub", slug } as const;
+  const refKey = clawHubSkillIdentityKey(ref);
+  const operation = { kind: "clawhub", ref: refKey } as const;
   state.skillOperation = operation;
   state.clawhubInstallMessage = null;
   try {
     const result = await client.request<{ message?: string; warning?: string }>("skills.install", {
       ...stateSkillsAgentParams(state),
       source: "clawhub",
-      slug,
+      ...clawHubInstallParams(ref),
       ...(version ? { version } : {}),
       ...(acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
     });
@@ -708,7 +708,7 @@ export async function installFromClawHub(
     }
     state.clawhubInstallMessage = {
       kind: "success",
-      text: formatClawHubInstallMessage(result?.message ?? `Installed ${slug}`, result?.warning),
+      text: formatClawHubInstallMessage(result?.message ?? `Installed ${refKey}`, result?.warning),
     };
   } catch (err) {
     if (
@@ -721,12 +721,15 @@ export async function installFromClawHub(
       state.clawhubInstallMessage = {
         kind: "error",
         text: needsAcknowledgement
-          ? formatClawHubAcknowledgementMessage(trustDetails?.warning)
+          ? formatClawHubInstallMessage(
+              "Review the ClawHub warning before installing this skill.",
+              trustDetails?.warning,
+            )
           : formatClawHubInstallMessage(
               formatErrorMessage(err, { redact: redactToolDetail }),
               trustDetails?.warning,
             ),
-        ...(needsAcknowledgement ? { acknowledgeSlug: slug } : {}),
+        ...(needsAcknowledgement ? { acknowledgeRef: ref } : {}),
         ...(needsAcknowledgement && trustDetails?.version
           ? { acknowledgeVersion: trustDetails.version }
           : {}),

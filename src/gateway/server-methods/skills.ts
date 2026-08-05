@@ -88,6 +88,7 @@ function installClawHubSkillDeduped(params: ClawHubInstallParams): Promise<ClawH
   const key = JSON.stringify([
     params.workspaceDir,
     params.slug,
+    params.ownerHandle ?? null,
     params.version ?? null,
     params.force ?? false,
     params.acknowledgeClawHubRisk ?? false,
@@ -302,8 +303,10 @@ export const skillsHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      const detailParams = params as { slug: string; ownerHandle?: string };
       const detail = await fetchClawHubSkillDetail({
-        slug: (params as { slug: string }).slug,
+        slug: detailParams.slug,
+        ...(detailParams.ownerHandle ? { ownerHandle: detailParams.ownerHandle } : {}),
       });
       respond(true, detail, undefined);
     } catch (err) {
@@ -648,6 +651,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
       const p = params as {
         source: "clawhub";
         slug: string;
+        ownerHandle?: string;
         version?: string;
         force?: boolean;
         acknowledgeClawHubRisk?: boolean;
@@ -655,6 +659,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
       const result = await installClawHubSkillDeduped({
         workspaceDir: workspaceDirRaw,
         slug: p.slug,
+        ...(p.ownerHandle ? { ownerHandle: p.ownerHandle } : {}),
         version: p.version,
         force: Boolean(p.force),
         ...(p.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),

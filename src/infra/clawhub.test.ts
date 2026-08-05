@@ -447,6 +447,45 @@ describe("clawhub helpers", () => {
     ]);
   });
 
+  it("normalizes canonical owner and source install references", async () => {
+    const fetchImpl: typeof fetch = async () =>
+      new Response(
+        JSON.stringify({
+          results: [
+            {
+              score: 1,
+              source: "clawhub",
+              slug: "weather",
+              ownerHandle: "alice",
+              install: { reference: "alice/weather" },
+              displayName: "Alice Weather",
+            },
+            {
+              score: 0.9,
+              source: "skills-sh",
+              slug: "weather",
+              install: { reference: "skills-sh:bob/tools/weather" },
+              displayName: "Bob Weather",
+            },
+          ],
+        }),
+        { headers: { "content-type": "application/json" } },
+      );
+
+    await expect(searchClawHubSkills({ query: "weather", fetchImpl })).resolves.toMatchObject([
+      {
+        slug: "weather",
+        ownerHandle: "alice",
+        installRef: "@alice/weather",
+      },
+      {
+        slug: "weather",
+        installRef: "skills-sh:bob/tools/weather",
+        trustState: "not-scanned-by-clawhub",
+      },
+    ]);
+  });
+
   it("rejects skill icons outside the configured hosted-icon route", async () => {
     const fetchImpl: typeof fetch = async () =>
       new Response(
