@@ -7,6 +7,7 @@ import {
   errorShape,
   validateDevicePairSetupCodeParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { QR_PNG_DATA_URL_MAX_LENGTH } from "../../../packages/gateway-protocol/src/schema/qr.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { renderQrPngDataUrl } from "../../media/qr-image.js";
 import { encodePairingSetupCode, resolvePairingSetupFromConfig } from "../../pairing/setup-code.js";
@@ -23,8 +24,6 @@ import { assertValidParams } from "./validation.js";
 // publicUrl can produce a setup code whose QR PNG data URL exceeds the limit; in
 // that case we omit the QR (the client can still render one from setupCode)
 // rather than return a response that violates the protocol schema.
-const MAX_QR_DATA_URL_LENGTH = 16_384;
-
 function readConfiguredDevicePairPublicUrl(config: OpenClawConfig): string | undefined {
   const value = config.plugins?.entries?.["device-pair"]?.config?.["publicUrl"];
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
@@ -77,7 +76,7 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
         ? await renderQrPngDataUrl(setupCode).catch(() => undefined)
         : undefined;
       const qrDataUrl =
-        renderedQr && renderedQr.length <= MAX_QR_DATA_URL_LENGTH ? renderedQr : undefined;
+        renderedQr && renderedQr.length <= QR_PNG_DATA_URL_MAX_LENGTH ? renderedQr : undefined;
       respond(
         true,
         {
