@@ -2225,6 +2225,8 @@ export const en: TranslationMap = {
     sensitiveReply: "Sensitive reply sent",
     send: "Send",
     thinking: "OpenClaw is thinking",
+    setupQrCodeAlt: "QR code for setup",
+    setupQrCodeExpired: "This QR code expired. Waiting for the setup result…",
     earlier: "Earlier",
     requestFailed: "OpenClaw could not reply. Try again.",
     connectionChanged: "The Gateway connection changed. Retry to continue this setup.",
