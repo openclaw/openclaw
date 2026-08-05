@@ -66,6 +66,57 @@ describe("carousel column consistency", () => {
     expect(columns[0]?.actions).toHaveLength(1);
   });
 
+  it("returns no columns when a blank-text column keeps labeled actions", () => {
+    // The dropped column's labeled action would vanish from the carousel
+    // while the textual fallback can still render it, so the whole carousel
+    // degrades instead of delivering without it.
+    const template = createTemplateCarousel([
+      createCarouselColumn({ text: " ", actions: [messageAction("OK")] }),
+      column({ actions: 1 }),
+    ]);
+
+    expect(getColumns(template)).toHaveLength(0);
+  });
+
+  it("drops thumbnails when title folding would overflow the image-column cap", () => {
+    // Folding a 40-character title into a 60-character body yields 102
+    // characters; with thumbnails kept the image cap (60) would cut authored
+    // text, so the decoration is dropped and the 120 cap applies instead.
+    const template = createTemplateCarousel([
+      createCarouselColumn({
+        title: "T".repeat(40),
+        text: "x".repeat(60),
+        thumbnailImageUrl: "https://example.com/a.jpg",
+        actions: [messageAction("OK")],
+      }),
+      column({ thumbnailImageUrl: "https://example.com/b.jpg" }),
+    ]);
+
+    const columns = getColumns(template);
+    expect(columns.map((col) => col.thumbnailImageUrl)).toEqual([undefined, undefined]);
+    expect(columns[0]?.text).toBe(`${"T".repeat(40)}: ${"x".repeat(60)}`);
+    expect(columns[0]?.text.length).toBe(102);
+  });
+
+  it("keeps thumbnails when a folded title still fits the image cap", () => {
+    const template = createTemplateCarousel([
+      createCarouselColumn({
+        title: "Short",
+        text: "Body",
+        thumbnailImageUrl: "https://example.com/a.jpg",
+        actions: [messageAction("OK")],
+      }),
+      column({ thumbnailImageUrl: "https://example.com/b.jpg" }),
+    ]);
+
+    const columns = getColumns(template);
+    expect(columns.map((col) => col.thumbnailImageUrl)).toEqual([
+      "https://example.com/a.jpg",
+      "https://example.com/b.jpg",
+    ]);
+    expect(columns[0]?.text).toBe("Short: Body");
+  });
+
   it("keeps an unavailable-action fallback as a labeled action", () => {
     const template = createTemplateCarousel([
       createCarouselColumn({

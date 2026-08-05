@@ -16,14 +16,16 @@ describe("template payload textual fallback", () => {
     expect(message).toEqual({ type: "text", text: "First: A\nB" });
   });
 
-  it("prefers the carousel altText for the fallback when provided", () => {
+  it("keeps column content alongside the carousel altText in the fallback", () => {
+    // The altText is an authored summary, not a substitute: "Two options"
+    // alone would silently discard the columns' text and action labels.
     const message = buildTemplateMessageFromPayload({
       type: "carousel",
       columns: [{ text: "A", actions: [] }],
       altText: "Two options",
     });
 
-    expect(message).toEqual({ type: "text", text: "Two options" });
+    expect(message).toEqual({ type: "text", text: "Two options\nA" });
   });
 
   it("drops blank-label buttons actions and keeps the labeled rest", () => {
@@ -250,7 +252,9 @@ describe("template payload textual fallback", () => {
     expect(message).toEqual({ type: "text", text: "A\nB (OK)" });
   });
 
-  it("drops a carousel column whose text is blank", () => {
+  it("degrades to text when a blank-text column still has labeled actions", () => {
+    // Dropping the column would silently discard its labeled action; the
+    // fallback can render the label, so the whole carousel degrades instead.
     const message = buildTemplateMessageFromPayload({
       type: "carousel",
       columns: [
@@ -259,12 +263,7 @@ describe("template payload textual fallback", () => {
       ],
     });
 
-    const template = expectDefined(message, "carousel template message");
-    if (template.type !== "template" || template.template.type !== "carousel") {
-      throw new Error("expected a carousel template");
-    }
-    expect(template.template.columns).toHaveLength(1);
-    expect(template.template.columns[0]?.text).toBe("Keep");
+    expect(message).toEqual({ type: "text", text: "(A)\nKeep (B)" });
   });
 
   it("preserves a provider-valid alternative text through the fallback", () => {

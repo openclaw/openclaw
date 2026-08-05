@@ -117,33 +117,41 @@ function normalizeCarouselColumns(columns: CarouselColumn[]): CarouselColumn[] {
     }
     return result;
   });
-  const deliverable = normalized.filter(
-    (column) => column.actions.length > 0 && column.text.trim() !== "",
-  );
-  // A blank-text column drops even when its actions are labeled: LINE cannot
-  // render a text-less column and the textual fallback could not carry its
-  // actions either, so omitting it keeps the sibling columns' working
-  // controls. A textual column, by contrast, survives in the fallback.
+  const isDeliverable = (column: CarouselColumn) =>
+    column.actions.length > 0 && column.text.trim() !== "";
+  const deliverable = normalized.filter(isDeliverable);
+  // A column LINE cannot render still counts as content when it carries text
+  // or a labeled action — the textual fallback can represent either — so
+  // dropping it is lossy. Only a column with neither is omitted losslessly.
   const dropsContent =
-    normalized.some((column) => column.actions.length === 0 && column.text.trim() !== "") ||
-    new Set(deliverable.map((column) => column.actions.length)).size > 1;
+    normalized.some(
+      (column) =>
+        !isDeliverable(column) && (column.text.trim() !== "" || column.actions.length > 0),
+    ) || new Set(deliverable.map((column) => column.actions.length)).size > 1;
   if (deliverable.length === 0 || dropsContent) {
     return [];
   }
   const foldTitles = deliverable.some((column) => column.title === undefined);
-  const dropThumbnails = deliverable.some((column) => column.thumbnailImageUrl === undefined);
+  // A title dropped for cross-column consistency is folded into the text so
+  // its content still reaches the user; the text limit is re-resolved because
+  // it depends on title and thumbnail presence.
+  const foldedText = (column: CarouselColumn): string =>
+    foldTitles && column.title !== undefined ? `${column.title}: ${column.text}` : column.text;
+  // Folding can push a thumbnail column's text past the 60-character image
+  // cap; thumbnails are decoration with no textual form, so they are dropped
+  // before any authored text is cut. The folded text always fits the
+  // titleless, imageless 120 cap (title <= 40 + ": " + titled text <= 60).
+  const dropThumbnails =
+    deliverable.some((column) => column.thumbnailImageUrl === undefined) ||
+    (foldTitles &&
+      deliverable.some((column) => foldedText(column).length > COMPACT_TEMPLATE_TEXT_LIMIT));
   return deliverable.map((column) => {
     const title = foldTitles ? undefined : column.title;
     const thumbnailImageUrl = dropThumbnails ? undefined : column.thumbnailImageUrl;
-    // A title dropped for cross-column consistency is folded into the text so
-    // its content still reaches the user; the text limit is re-resolved because
-    // it depends on title and thumbnail presence.
-    const text =
-      foldTitles && column.title !== undefined ? `${column.title}: ${column.text}` : column.text;
     return Object.assign(column, {
       title,
       text: truncateTemplateText(
-        text,
+        foldedText(column),
         resolveTemplateTextLimit({ title, thumbnailImageUrl, textOnlyLimit: 120 }),
       ),
       thumbnailImageUrl,
@@ -222,7 +230,15 @@ export function createButtonTemplate(
 }
 
 /**
- * Create a carousel template with multiple columns
+ * Create a carousel template with multiple columns.
+ *
+ * Columns are normalized to LINE's cross-column consistency rules with
+ * lossless repairs only. When the input cannot be repaired without
+ * discarding authored content, the result carries no columns — LINE rejects
+ * an empty carousel exactly as it rejects the inconsistent input, so direct
+ * callers keep provider-rejection semantics while
+ * `buildTemplateMessageFromPayload` detects the empty template and degrades
+ * to a content-complete text message instead.
  */
 export function createTemplateCarousel(
   columns: CarouselColumn[],
@@ -391,11 +407,14 @@ export function buildTemplateMessageFromPayload(
 
       const message = createTemplateCarousel(columns, { altText: payload.altText });
       if (message.template.type === "carousel" && message.template.columns.length === 0) {
-        return templateTextFallback(
-          payload.altText
-            ? truncateTemplateText(payload.altText, TEMPLATE_ALT_TEXT_LIMIT)
-            : columns.map(describeCarouselColumn).filter(Boolean).join("\n"),
-        );
+        // The altText is an authored summary, not a substitute for the column
+        // content — an arbitrary "Two options" must not replace the columns'
+        // text and action labels, so both are delivered.
+        const lines = columns.map(describeCarouselColumn).filter(Boolean);
+        if (payload.altText) {
+          lines.unshift(truncateTemplateText(payload.altText, TEMPLATE_ALT_TEXT_LIMIT));
+        }
+        return templateTextFallback(lines.join("\n"));
       }
       return message;
     }
