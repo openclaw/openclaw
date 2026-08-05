@@ -1,6 +1,7 @@
 // Coverage for resolving channel and DM history limits from session keys.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { AgentMessage } from "../runtime/index.js";
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
 
 describe("getHistoryLimitFromSessionKey", () => {
@@ -248,15 +249,17 @@ describe("account-scoped limits change the retained transcript", () => {
   // The resolver returning a different number is not the user-visible effect;
   // what matters is that the transcript actually keeps fewer turns. This drives
   // the real resolver and the real trimmer together, no mocks.
-  function transcript(userTurns: number) {
-    return Array.from({ length: userTurns * 2 }, (_, i) =>
-      i % 2 === 0
-        ? { role: "user" as const, content: `q${i / 2}` }
-        : { role: "assistant" as const, content: `a${(i - 1) / 2}` },
+  function transcript(userTurns: number): AgentMessage[] {
+    return Array.from(
+      { length: userTurns * 2 },
+      (_, i) =>
+        (i % 2 === 0
+          ? { role: "user", content: `q${i / 2}` }
+          : { role: "assistant", content: `a${(i - 1) / 2}` }) as AgentMessage,
     );
   }
 
-  function countUserTurns(messages: ReturnType<typeof transcript>) {
+  function countUserTurns(messages: AgentMessage[]) {
     return messages.filter((message) => message.role === "user").length;
   }
 
