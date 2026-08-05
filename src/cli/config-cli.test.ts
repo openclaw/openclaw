@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -30,6 +31,9 @@ const mockWriteConfigFile = vi.fn<
   ) => Promise<void>
 >(async () => {});
 const mockResolveSecretRefValue = vi.fn();
+const mockLoadAuthProfileStoreForSecretsRuntime = vi.hoisted(() =>
+  vi.fn<() => AuthProfileStore>(() => ({ version: 1, profiles: {} })),
+);
 const mockCheckTouchedTextModelRefs = vi.fn();
 const mockReadBestEffortRuntimeConfigSchema = vi.fn();
 const mockLoadPluginMetadataSnapshot = vi.fn((_configForTest: unknown) =>
@@ -82,8 +86,14 @@ vi.mock("../config/config.js", () => ({
   }) => mockWriteConfigFile(params.nextConfig, params.writeOptions),
 }));
 
-vi.mock("../secrets/resolve.js", () => ({
+vi.mock("../secrets/resolve.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../secrets/resolve.js")>()),
   resolveSecretRefValue: (...args: unknown[]) => mockResolveSecretRefValue(...args),
+}));
+
+vi.mock("../agents/auth-profiles.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/auth-profiles.js")>()),
+  loadAuthProfileStoreForSecretsRuntime: () => mockLoadAuthProfileStoreForSecretsRuntime(),
 }));
 
 vi.mock("../config/runtime-schema.js", () => ({
@@ -570,6 +580,8 @@ describe("config cli", () => {
     mockReadConfigFileSnapshot.mockResolvedValue(buildSnapshot({ resolved: {}, config: {} }));
     resetRuntimeCapture();
     mockLoadPluginMetadataSnapshot.mockReturnValue(createPluginMetadataSnapshot());
+    mockLoadAuthProfileStoreForSecretsRuntime.mockReset();
+    mockLoadAuthProfileStoreForSecretsRuntime.mockReturnValue({ version: 1, profiles: {} });
     // Default: use the real assertSecureExecCommandPath (manual-provider
     // tests depend on its filesystem checks). Plugin-integration tests
     // override this to a pass-through because process.execPath is not
@@ -1902,6 +1914,77 @@ describe("config cli", () => {
         }
       },
     );
+
+    it.skipIf(process.platform === "win32").each([
+      { type: "api_key" as const, refField: "keyRef" as const },
+      { type: "token" as const, refField: "tokenRef" as const },
+    ])("preflights eligible auth-profile $refField refs", async ({ type, refField }) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-auth-profile-ref-"));
+      const symlinkPath = path.join(root, "node-link");
+      fs.symlinkSync(process.execPath, symlinkPath);
+      try {
+        mockLoadAuthProfileStoreForSecretsRuntime.mockReturnValue({
+          version: 1,
+          profiles: {
+            "openai:default": {
+              type,
+              provider: "openai",
+              [refField]: {
+                source: "exec",
+                provider: "execmain",
+                id: `auth-profile-${refField}`,
+              },
+            },
+          },
+        } as AuthProfileStore);
+        setGatewaySnapshot({
+          providers: { execmain: { source: "exec", command: symlinkPath } },
+        });
+
+        await expect(runConfigCommand(["config", "validate"])).rejects.toThrow(ExitError);
+
+        expectErrorIncludes("secrets.providers.execmain");
+        expectErrorIncludes("must not be a symlink");
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it.skipIf(process.platform === "win32")(
+      "ignores an ineligible auth-profile SecretRef",
+      async () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-expired-auth-ref-"));
+        const symlinkPath = path.join(root, "node-link");
+        fs.symlinkSync(process.execPath, symlinkPath);
+        try {
+          mockLoadAuthProfileStoreForSecretsRuntime.mockReturnValue({
+            version: 1,
+            profiles: {
+              "openai:expired": {
+                type: "token",
+                provider: "openai",
+                expires: 1,
+                tokenRef: {
+                  source: "exec",
+                  provider: "execmain",
+                  id: "expired-auth-profile-token",
+                },
+              },
+            },
+          });
+          setGatewaySnapshot({
+            providers: { execmain: { source: "exec", command: symlinkPath } },
+          });
+
+          await runConfigCommand(["config", "validate", "--json"]);
+
+          expect(mockExit).not.toHaveBeenCalled();
+          expect(mockAssertSecureExecCommandPath).not.toHaveBeenCalled();
+        } finally {
+          fs.rmSync(root, { recursive: true, force: true });
+        }
+      },
+    );
   });
 
   describe("config schema", () => {
@@ -2328,6 +2411,82 @@ describe("config cli", () => {
       },
     );
 
+    it.skipIf(process.platform === "win32").each([
+      { label: "write", extraArgs: [] },
+      { label: "dry-run", extraArgs: ["--dry-run"] },
+    ])("allows a $label that adds an exec ref to a disabled owner", async ({ extraArgs }) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-disabled-write-"));
+      const symlinkPath = path.join(root, "node-link");
+      fs.symlinkSync(process.execPath, symlinkPath);
+      try {
+        const resolved = {
+          models: { providers: { disabledone: { enabled: false } } },
+          secrets: {
+            providers: { execmain: { source: "exec", command: symlinkPath } },
+          },
+        } as unknown as OpenClawConfig;
+        setSnapshot(resolved, resolved);
+
+        await runConfigCommand([
+          "config",
+          "set",
+          "models.providers.disabledone.apiKey",
+          '{"source":"exec","provider":"execmain","id":"disabled-api-key"}',
+          "--strict-json",
+          ...extraArgs,
+        ]);
+
+        expect(mockAssertSecureExecCommandPath).not.toHaveBeenCalled();
+        expect(mockWriteConfigFile).toHaveBeenCalledTimes(extraArgs.length === 0 ? 1 : 0);
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it.skipIf(process.platform === "win32")(
+      "rejects enabling an owner whose exec ref uses an unsafe provider",
+      async () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-enable-owner-"));
+        const symlinkPath = path.join(root, "node-link");
+        fs.symlinkSync(process.execPath, symlinkPath);
+        try {
+          const resolved = {
+            models: {
+              providers: {
+                disabledone: {
+                  enabled: false,
+                  apiKey: {
+                    source: "exec",
+                    provider: "execmain",
+                    id: "disabled-api-key",
+                  },
+                },
+              },
+            },
+            secrets: {
+              providers: { execmain: { source: "exec", command: symlinkPath } },
+            },
+          } as unknown as OpenClawConfig;
+          setSnapshot(resolved, resolved);
+
+          await expect(
+            runConfigCommand([
+              "config",
+              "set",
+              "models.providers.disabledone.enabled",
+              "true",
+              "--strict-json",
+            ]),
+          ).rejects.toThrow("exec SecretRef provider command path is unsafe");
+
+          expect(mockWriteConfigFile).not.toHaveBeenCalled();
+          expectErrorIncludes("must not be a symlink");
+        } finally {
+          fs.rmSync(root, { recursive: true, force: true });
+        }
+      },
+    );
+
     it("requires schema validation in JSON dry-run mode", async () => {
       setGatewaySnapshot();
 
@@ -2354,18 +2513,9 @@ describe("config cli", () => {
       // review on #117128).
       setGatewaySnapshot();
 
-      // The command may succeed (value mode skips schema validation) or fail
-      // (later schema/policy check); either is acceptable as long as no raw
-      // TypeError leaks out of the preflight.
-      let thrown: unknown;
-      try {
-        await runConfigCommand(["config", "set", "secrets.providers.ghost", "null", "--dry-run"]);
-      } catch (err) {
-        thrown = err;
-      }
-      const message = thrown instanceof Error ? thrown.message : String(thrown ?? "");
-      expect(message).not.toMatch(/Cannot use 'in' operator/i);
-      expect(message).not.toMatch(/^TypeError/u);
+      await runConfigCommand(["config", "set", "secrets.providers.ghost", "null", "--dry-run"]);
+
+      expect(mockExit).not.toHaveBeenCalled();
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
     });
 

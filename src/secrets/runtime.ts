@@ -21,12 +21,13 @@ import {
   type RuntimeConfigSnapshotRefreshParams,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { coerceSecretRef } from "../config/types.secrets.js";
+import { coerceSecretRef, type SecretRef } from "../config/types.secrets.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { isRecord, resolveUserPath } from "../utils.js";
+import { secretRefKey } from "./ref-contract.js";
 import { resolveAuthProfileSecretOwnerId } from "./runtime-auth-profile-owner.js";
 import type { DegradedSecretOwner } from "./runtime-degraded-state.js";
 import {
@@ -175,6 +176,122 @@ function loadAuthStoresWithMigrationIsolation(params: {
   return { authStores, degradedOwners };
 }
 
+async function buildSecretsRuntimeAssignmentPlan(params: {
+  sourceConfig: OpenClawConfig;
+  resolvedConfig: OpenClawConfig;
+  runtimeEnv: NodeJS.ProcessEnv;
+  candidateDirs: readonly string[];
+  includeConfigRefs: boolean;
+  includeAuthStoreRefs: boolean;
+  loadAuthStore?: (agentDir?: string) => AuthProfileStore;
+  preloadedAuthStores?: Array<{ agentDir: string; store: AuthProfileStore }>;
+  preloadedMigrationDegradedOwners?: DegradedSecretOwner[];
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins" | "manifestRegistry">;
+  allowUnavailableSecretOwners?: boolean;
+  loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
+}) {
+  const { collectAuthStoreAssignments, collectConfigAssignments, createResolverContext } =
+    await loadRuntimePrepareHelpers();
+  const manifestRegistry =
+    params.manifestRegistry ?? params.pluginMetadataSnapshot?.manifestRegistry;
+  const loadablePluginOrigins =
+    params.loadablePluginOrigins ??
+    (shouldLoadPluginMetadataForSecrets(params.sourceConfig)
+      ? await resolveLoadablePluginOrigins({
+          config: params.sourceConfig,
+          env: params.runtimeEnv,
+          pluginMetadataSnapshot:
+            params.pluginMetadataSnapshot ??
+            (manifestRegistry ? { plugins: manifestRegistry.plugins } : undefined),
+        })
+      : new Map<string, PluginOrigin>());
+  const context = createResolverContext({
+    sourceConfig: params.sourceConfig,
+    env: params.runtimeEnv,
+    ...(manifestRegistry ? { manifestRegistry } : {}),
+  });
+
+  if (params.includeConfigRefs) {
+    collectConfigAssignments({
+      config: params.resolvedConfig,
+      context,
+      loadablePluginOrigins,
+    });
+  }
+
+  let authStores: Array<{ agentDir: string; store: AuthProfileStore }> = [];
+  let migrationDegradedOwners: DegradedSecretOwner[] = [];
+  if (params.includeAuthStoreRefs) {
+    if (params.preloadedAuthStores) {
+      authStores = params.preloadedAuthStores;
+      migrationDegradedOwners = params.preloadedMigrationDegradedOwners ?? [];
+    } else {
+      const loaded = loadAuthStoresWithMigrationIsolation({
+        agentDirs: params.candidateDirs,
+        loadAuthStore: params.loadAuthStore ?? loadAuthProfileStoreForSecretsRuntime,
+        allowUnavailable: params.allowUnavailableSecretOwners === true,
+      });
+      authStores = loaded.authStores;
+      migrationDegradedOwners = loaded.degradedOwners;
+    }
+    for (const entry of authStores) {
+      collectAuthStoreAssignments({
+        store: entry.store,
+        context,
+        agentDir: entry.agentDir,
+      });
+    }
+  }
+
+  return {
+    authStores,
+    context,
+    loadablePluginOrigins,
+    manifestRegistry,
+    migrationDegradedOwners,
+  };
+}
+
+/** Collects the exact SecretRefs a cold start would select, without resolving providers. */
+export async function collectActiveSecretsRuntimeRefs(params: {
+  config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  agentDirs?: string[];
+  loadAuthStore?: (agentDir?: string) => AuthProfileStore;
+}): Promise<SecretRef[]> {
+  const runtimeEnv = mergeSecretsRuntimeEnv(params.env);
+  const sourceConfig = structuredClone(params.config);
+  const resolvedConfig = structuredClone(params.config);
+  const candidateDirs = params.agentDirs?.length
+    ? uniqueStrings(params.agentDirs.map((entry) => resolveUserPath(entry, runtimeEnv)))
+    : collectCandidateAgentDirs(resolvedConfig, runtimeEnv);
+  const plan = await buildSecretsRuntimeAssignmentPlan({
+    sourceConfig,
+    resolvedConfig,
+    runtimeEnv,
+    candidateDirs,
+    includeConfigRefs: true,
+    includeAuthStoreRefs: true,
+    ...(params.loadAuthStore ? { loadAuthStore: params.loadAuthStore } : {}),
+  });
+  const refsByKey = new Map<string, SecretRef>();
+  for (const assignment of plan.context.assignments) {
+    refsByKey.set(secretRefKey(assignment.ref), assignment.ref);
+  }
+  const { resolveRuntimeWebTools } = await loadRuntimePrepareHelpers();
+  await resolveRuntimeWebTools({
+    sourceConfig,
+    resolvedConfig,
+    context: plan.context,
+    inspectSecretRef: (ref) => {
+      refsByKey.set(secretRefKey(ref), ref);
+      return "openclaw-secret-preflight";
+    },
+  });
+  return [...refsByKey.values()];
+}
+
 /** Prepares a secrets runtime snapshot and records refresh context for later activation. */
 export async function prepareSecretsRuntimeSnapshot(params: {
   config: OpenClawConfig;
@@ -245,60 +362,37 @@ export async function prepareSecretsRuntimeSnapshot(params: {
     return snapshot;
   }
 
-  const {
-    collectAuthStoreAssignments,
-    collectConfigAssignments,
-    createResolverContext,
-    resolveRuntimeWebTools,
-  } = await loadRuntimePrepareHelpers();
+  const { resolveRuntimeWebTools } = await loadRuntimePrepareHelpers();
   const { listSecretAssignmentOwners, resolveAndApplySecretAssignments } =
     await loadRuntimeOwnerAssignmentHelpers();
-  const manifestRegistry =
-    params.manifestRegistry ?? params.pluginMetadataSnapshot?.manifestRegistry;
-  const loadablePluginOrigins =
-    params.loadablePluginOrigins ??
-    (shouldLoadPluginMetadataForSecrets(sourceConfig)
-      ? await resolveLoadablePluginOrigins({
-          config: sourceConfig,
-          env: runtimeEnv,
-          pluginMetadataSnapshot:
-            params.pluginMetadataSnapshot ??
-            (manifestRegistry ? { plugins: manifestRegistry.plugins } : undefined),
-        })
-      : new Map<string, PluginOrigin>());
-  const context = createResolverContext({
+  const plan = await buildSecretsRuntimeAssignmentPlan({
     sourceConfig,
-    env: runtimeEnv,
-    ...(manifestRegistry ? { manifestRegistry } : {}),
+    resolvedConfig,
+    runtimeEnv,
+    candidateDirs,
+    includeConfigRefs,
+    includeAuthStoreRefs,
+    ...(params.loadAuthStore ? { loadAuthStore: params.loadAuthStore } : {}),
+    ...(params.loadAuthStore
+      ? {
+          preloadedAuthStores: authStores,
+          preloadedMigrationDegradedOwners: migrationDegradedOwners,
+        }
+      : {}),
+    ...(params.manifestRegistry ? { manifestRegistry: params.manifestRegistry } : {}),
+    ...(params.pluginMetadataSnapshot
+      ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
+      : {}),
+    ...(params.allowUnavailableSecretOwners !== undefined
+      ? { allowUnavailableSecretOwners: params.allowUnavailableSecretOwners }
+      : {}),
+    ...(params.loadablePluginOrigins
+      ? { loadablePluginOrigins: params.loadablePluginOrigins }
+      : {}),
   });
-
-  if (includeConfigRefs) {
-    collectConfigAssignments({
-      config: resolvedConfig,
-      context,
-      loadablePluginOrigins,
-    });
-  }
-
-  if (includeAuthStoreRefs) {
-    const loadAuthStore = params.loadAuthStore ?? loadAuthProfileStoreForSecretsRuntime;
-    if (!params.loadAuthStore) {
-      const loaded = loadAuthStoresWithMigrationIsolation({
-        agentDirs: candidateDirs,
-        loadAuthStore,
-        allowUnavailable: params.allowUnavailableSecretOwners === true,
-      });
-      authStores = loaded.authStores;
-      migrationDegradedOwners = loaded.degradedOwners;
-    }
-    for (const entry of authStores) {
-      collectAuthStoreAssignments({
-        store: entry.store,
-        context,
-        agentDir: entry.agentDir,
-      });
-    }
-  }
+  authStores = plan.authStores;
+  migrationDegradedOwners = plan.migrationDegradedOwners;
+  const { context, loadablePluginOrigins, manifestRegistry } = plan;
 
   const assignmentResolution =
     context.assignments.length > 0

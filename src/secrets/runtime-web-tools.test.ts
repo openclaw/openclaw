@@ -269,6 +269,7 @@ async function runRuntimeWebTools(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   allowUnavailableSecretOwners?: boolean;
+  inspectSecretRef?: Parameters<typeof resolveRuntimeWebTools>[0]["inspectSecretRef"];
 }) {
   const sourceConfig = structuredClone(params.config);
   const resolvedConfig = structuredClone(params.config);
@@ -281,6 +282,7 @@ async function runRuntimeWebTools(params: {
     resolvedConfig,
     context,
     allowUnavailableSecretOwners: params.allowUnavailableSecretOwners,
+    ...(params.inspectSecretRef ? { inspectSecretRef: params.inspectSecretRef } : {}),
   });
   return { ...result, resolvedConfig, context };
 }
@@ -593,6 +595,24 @@ describe("runtime web tools resolution", () => {
     expect(resolveBundledExplicitWebFetchProvidersFromPublicArtifactsMock).toHaveBeenCalledWith({
       onlyPluginIds: ["firecrawl"],
     });
+  });
+
+  it("reports the selected web credential ref without resolving its provider", async () => {
+    const refs: unknown[] = [];
+    const resolveSpy = vi.spyOn(secretResolve, "resolveSecretRefValues");
+    restoreResolveSecretRefValuesSpy = () => resolveSpy.mockRestore();
+
+    const { metadata } = await runRuntimeWebTools({
+      config: createProviderSecretRefConfig("brave", "BRAVE_PROVIDER_REF"),
+      inspectSecretRef: (ref) => {
+        refs.push(ref);
+        return "preflight-placeholder";
+      },
+    });
+
+    expect(metadata.search.selectedProvider).toBe("brave");
+    expect(refs).toEqual([{ source: "env", provider: "default", id: "BRAVE_PROVIDER_REF" }]);
+    expect(resolveSpy).not.toHaveBeenCalled();
   });
 
   it("selects the configured keyless Firecrawl fetch provider without an API key", async () => {

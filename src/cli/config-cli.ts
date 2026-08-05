@@ -43,8 +43,7 @@ import {
   runConfigOperations,
 } from "./config-cli-runner.js";
 import {
-  collectManualExecProviderCommandPathErrors,
-  collectPluginIntegrationProviderErrors,
+  collectExecProviderCommandPathErrors,
   formatInvalidConfigRepairHint,
   loadValidConfig,
 } from "./config-cli-validation.js";
@@ -360,14 +359,7 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
       return;
     }
     const warnings = normalizeConfigIssues(snapshot.warnings);
-    // Run the same non-executing exec-provider command-path trust checks that
-    // startup activation applies, scoped to the providers the loaded config's
-    // active SecretRefs will resolve, so a symlinked, missing, or unsafe command
-    // cannot pass validation and then crash the gateway on the next restart
-    // (see #117051). Active-ref derivation matches startup's ref-driven
-    // resolution, so an unused provider is not falsely rejected (see ClawSweeper
-    // P1 review on #117128).
-    const execProviderCommandPathPreflight = await collectManualExecProviderCommandPathErrors({
+    const execProviderCommandPathPreflight = await collectExecProviderCommandPathErrors({
       config: snapshot.runtimeConfig,
     });
     const execProviderCommandPathErrors = execProviderCommandPathPreflight.errors;
@@ -385,39 +377,6 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
       } else {
         runtime.error(danger(`OpenClaw config is invalid: ${shortPath}`));
         for (const error of execProviderCommandPathErrors) {
-          runtime.error(`  ${error.message}`);
-        }
-        runtime.error(
-          formatInvalidConfigRepairHint(snapshot, "to repair, or fix the keys above manually."),
-        );
-      }
-      runtime.exit(1);
-      return;
-    }
-    // Run the same command-path trust checks over materialized plugin
-    // integration providers that startup applies, scoped to the providers the
-    // loaded config's active SecretRefs will resolve, so an integration whose
-    // materialized command would fail cold start cannot pass validation
-    // (see ClawSweeper review on #117128). Active-ref derivation matches
-    // startup, so an unused integration is not falsely rejected.
-    const pluginIntegrationPreflight = await collectPluginIntegrationProviderErrors({
-      config: snapshot.runtimeConfig,
-    });
-    const pluginIntegrationErrors = pluginIntegrationPreflight.errors;
-    if (pluginIntegrationErrors.length > 0) {
-      if (opts.json) {
-        writeRuntimeJson(
-          runtime,
-          {
-            valid: false,
-            path: outputPath,
-            issues: pluginIntegrationErrors.map((error) => error.message),
-          },
-          0,
-        );
-      } else {
-        runtime.error(danger(`OpenClaw config is invalid: ${shortPath}`));
-        for (const error of pluginIntegrationErrors) {
           runtime.error(`  ${error.message}`);
         }
         runtime.error(

@@ -173,6 +173,47 @@ function resolveConfiguredProvider(params: {
   return providerConfig;
 }
 
+/** Validates active exec provider command paths without invoking the providers. */
+export async function preflightExecSecretProviderCommandPaths(params: {
+  refs: readonly SecretRef[];
+  config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+}): Promise<string[]> {
+  const env = params.env ?? process.env;
+  const refsByProvider = new Map<string, SecretRef>();
+  for (const ref of params.refs) {
+    if (ref.source === "exec") {
+      refsByProvider.set(ref.provider, ref);
+    }
+  }
+  const errors: string[] = [];
+  for (const [providerName, ref] of refsByProvider) {
+    try {
+      const providerConfig = resolveConfiguredProvider({
+        ref,
+        config: params.config,
+        env,
+        ...(params.manifestRegistry ? { manifestRegistry: params.manifestRegistry } : {}),
+      });
+      if (
+        providerConfig.source !== "exec" ||
+        isPluginIntegrationSecretProviderConfig(providerConfig)
+      ) {
+        continue;
+      }
+      await assertSecureExecCommandPath({
+        command: providerConfig.command,
+        label: `secrets.providers.${providerName}.command`,
+        trustedDirs: providerConfig.trustedDirs,
+      });
+    } catch (error) {
+      errors.push(`secrets.providers.${providerName}: ${formatErrorMessage(error)}`);
+    }
+  }
+  return errors;
+}
+
 async function readFileProviderPayload(params: {
   providerName: string;
   providerConfig: FileSecretProviderConfig;
