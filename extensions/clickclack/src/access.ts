@@ -204,7 +204,17 @@ export async function resolveClickClackInboundAccess(params: {
     account: params.account,
     channelId: params.message.channel_id,
   });
-  const isBotAuthor = params.message.author?.kind === "bot";
+  const authorKind = params.message.author?.kind;
+  if (authorKind !== "human" && authorKind !== "bot") {
+    return {
+      shouldDispatch: false,
+      commandAuthorized: false,
+      requireMention: effectiveGroupPolicy.requireMention,
+      mentionFacts,
+      preparedRoute,
+    };
+  }
+  const isBotAuthor = authorKind === "bot";
   // The account's default allowFrom is wildcarded for human traffic. Bot
   // admission is a separate opt-in boundary, so wildcard authorization must
   // not implicitly trust every bot in the workspace.
