@@ -654,30 +654,26 @@ async function resume() {
   }
   const input = parseLease(raw, nonce);
   const recoveryDeadlineMs = Date.now() + ${REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS};
-  if (input.watchdog !== null) {
-    const watchdogRecovery = await recoverProcessReferences(
-      [{ ...input.watchdog, signal: "SIGTERM" }],
-      1,
-      recoveryDeadlineMs,
-    );
-    if (watchdogRecovery.remaining.length > 0) {
-      const failure = watchdogRecovery.failed ? "failed" : "timed out";
-      throw new Error("workspace quiescence recovery " + failure + "; lease retained for operator recovery");
-    }
-  }
+  const references = [
+    ...(input.watchdog === null ? [] : [{ ...input.watchdog, signal: "SIGTERM" }]),
+    ...input.processes.map((entry) => ({ ...entry, signal: "SIGCONT" })),
+  ];
   const recovery = await recoverProcessReferences(
-    input.processes.map((entry) => ({ ...entry, signal: "SIGCONT" })),
+    references,
     ${REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY},
     recoveryDeadlineMs,
   );
-  const remainingReferences = recovery.remaining.map(({ pid, start }) => ({ pid, start }));
-  if (remainingReferences.length > 0) {
+  if (recovery.remaining.length > 0) {
+    const watchdog = recovery.remaining.find((entry) => entry.signal === "SIGTERM") ?? null;
+    const processes = recovery.remaining
+      .filter((entry) => entry.signal === "SIGCONT")
+      .map(({ pid, start }) => ({ pid, start }));
     persistLease(
       leasePath,
       {
         ...input,
-        processes: remainingReferences,
-        watchdog: null,
+        processes,
+        watchdog: watchdog === null ? null : { pid: watchdog.pid, start: watchdog.start },
         recovery: {
           state: recovery.failed ? "recovery-failed" : "probe-timeout",
           failedAtMs: Date.now(),

@@ -422,6 +422,58 @@ describe("remote workspace quiescence scripts", () => {
     }
   }, 15_000);
 
+  it("records a watchdog probe timeout while resuming healthy processes", async () => {
+    const input = await fixture();
+    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      stdio: "ignore",
+    });
+    const childPid = child.pid!;
+    let nonce = "";
+
+    try {
+      await fs.writeFile(input.extraProcessPath, `${childPid}\n`);
+      nonce = await quiesce(input, 30_000, 20_000);
+      await expectProcessState(childPid, true);
+      const leaseFile = leasePath(input.home, input.workspace, nonce);
+      const lease = JSON.parse(await fs.readFile(leaseFile, "utf8")) as {
+        watchdog: { pid: number; start: string };
+      };
+      await fs.writeFile(input.stalledProcessProbeTargetPath, `${lease.watchdog.pid}\n`);
+
+      const startedAt = Date.now();
+      const result = await runCommandWithTimeout(
+        [process.execPath, "-e", REMOTE_WORKSPACE_RESUME_JS, input.workspace, nonce],
+        { timeoutMs: 10_000, baseEnv: input.env },
+      );
+
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain("workspace quiescence recovery timed out");
+      expect(Date.now() - startedAt).toBeLessThan(8_000);
+      await expectProcessState(childPid, false);
+      const terminal = JSON.parse(await fs.readFile(leaseFile, "utf8")) as {
+        watchdog: { pid: number; start: string };
+        processes: Array<{ pid: number }>;
+        recovery?: { state: string };
+      };
+      expect(terminal.watchdog).toEqual(lease.watchdog);
+      expect(terminal.processes).toEqual([]);
+      expect(terminal.recovery?.state).toBe("probe-timeout");
+
+      await fs.rm(input.stalledProcessProbeTargetPath, { force: true });
+      await resume(input, nonce);
+      await expect(fs.access(leaseFile)).rejects.toThrow();
+    } finally {
+      await fs.rm(input.extraProcessPath, { force: true });
+      await fs.rm(input.stalledProcessProbeTargetPath, { force: true });
+      if (nonce) {
+        try {
+          await resume(input, nonce);
+        } catch {}
+      }
+      await terminate(child);
+    }
+  }, 15_000);
+
   it("retries a signal-resistant stalled watchdog process probe before releasing the lease", async () => {
     const input = await fixture();
     const nonce = await quiesce(input, 1_000);
