@@ -301,7 +301,7 @@ function buildCatalogEntryFromManifest(params: {
       detailLabel: channel.detailLabel?.trim(),
       ...(systemImage ? { systemImage } : {}),
       arrayFieldMode: "defined",
-      selectionDocsPrefixMode: "truthy",
+      selectionDocsPrefixMode: "defined",
     }),
     install,
     installSource: describePluginInstallSource(install, {
