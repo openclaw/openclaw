@@ -817,10 +817,11 @@ function applyObjectPropertyDefaults(
   const patternMatchedKeys = new Set<string>();
   if (isRecord(schema.patternProperties)) {
     for (const [pattern, propertySchema] of Object.entries(schema.patternProperties)) {
-      // compileSafeRegex rejects nested-repetition patterns (ReDoS risk) and
-      // returns null for invalid sources. Skip unsafe/invalid keys so plugin
-      // configSchema cannot hang defaults application during load/validation.
-      const regex = compileSafeRegex(pattern);
+      // Safe compile with exact schema sources: preserveExactSource keeps
+      // leading/trailing whitespace (JSON Schema contract). Nested-repetition
+      // and invalid patterns return null so plugin configSchema cannot hang
+      // defaults during load/validation.
+      const regex = compileSafeRegex(pattern, "", { preserveExactSource: true });
       if (!regex) {
         continue;
       }

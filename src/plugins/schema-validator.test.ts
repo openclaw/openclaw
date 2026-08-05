@@ -1775,6 +1775,81 @@ describe("schema validator", () => {
     });
   });
 
+  it("preserves whitespace-significant patternProperties through plugin validation", () => {
+    expectSuccessfulValidationValue({
+      input: {
+        cacheKey: "schema-validator.test.defaults.pattern-properties-space",
+        schema: {
+          type: "object",
+          patternProperties: {
+            "^x ": {
+              type: "object",
+              properties: {
+                mode: {
+                  type: "string",
+                  default: "space",
+                },
+              },
+              additionalProperties: false,
+            },
+          },
+          additionalProperties: {
+            type: "object",
+            properties: {
+              mode: {
+                type: "string",
+                default: "other",
+              },
+            },
+            additionalProperties: false,
+          },
+        },
+        value: {
+          "x y": {},
+          xy: {},
+        },
+        applyDefaults: true,
+      },
+      expectedValue: {
+        "x y": { mode: "space" },
+        // Trimmed "^x" would have injected "space" here.
+        xy: { mode: "other" },
+      },
+    });
+  });
+
+  it("skips nested-repetition patternProperties during plugin default application", () => {
+    const value = { aaaaaaaaaaaaaaaaaaaaX: {} };
+    const started = Date.now();
+    const result = validateJsonSchemaValue({
+      cacheKey: "schema-validator.test.defaults.pattern-properties-redos",
+      schema: {
+        type: "object",
+        patternProperties: {
+          "(a+)+$": {
+            type: "object",
+            properties: {
+              mode: { type: "string", default: "applied" },
+            },
+            additionalProperties: true,
+          },
+        },
+        additionalProperties: true,
+      },
+      value,
+      applyDefaults: true,
+    });
+    const elapsedMs = Date.now() - started;
+    expect(elapsedMs).toBeLessThan(250);
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error("expected validation success");
+    }
+    expect(
+      (result.value as { aaaaaaaaaaaaaaaaaaaaX?: { mode?: string } }).aaaaaaaaaaaaaaaaaaaaX?.mode,
+    ).toBeUndefined();
+  });
+
   it("does not clone values when default application has no defaults to inject", () => {
     const value = { mode: "manual" };
     const result = validateJsonSchemaValue({

@@ -325,17 +325,34 @@ function hasNestedRepetition(source: string): boolean {
   return analyzeTokensForNestedRepetition(tokenizePattern(source));
 }
 
-export function compileSafeRegexDetailed(source: string, flags = ""): SafeRegexCompileResult {
-  const trimmed = source.trim();
-  if (!trimmed) {
-    return { regex: null, source: trimmed, flags, reason: "empty" };
+export type CompileSafeRegexOptions = {
+  /**
+   * Keep the exact schema/source string for analysis and RegExp construction.
+   * Default false trims (config/model patterns treat blank as empty). JSON Schema
+   * patternProperties must use true so sources like " " or "^x " keep semantics.
+   */
+  preserveExactSource?: boolean;
+};
+
+export function compileSafeRegexDetailed(
+  source: string,
+  flags = "",
+  options?: CompileSafeRegexOptions,
+): SafeRegexCompileResult {
+  const preserveExactSource = options?.preserveExactSource === true;
+  // Trim only for the default contract used by config/model pattern callers.
+  // JSON Schema patternProperties pass preserveExactSource so whitespace is
+  // significant in both safety analysis and RegExp construction.
+  const compileSource = preserveExactSource ? source : source.trim();
+  if (!compileSource) {
+    return { regex: null, source: compileSource, flags, reason: "empty" };
   }
-  const cacheKey = `${flags}::${trimmed}`;
+  const cacheKey = `${preserveExactSource ? "exact" : "trim"}::${flags}::${compileSource}`;
   if (safeRegexCache.has(cacheKey)) {
     return (
       safeRegexCache.get(cacheKey) ?? {
         regex: null,
-        source: trimmed,
+        source: compileSource,
         flags,
         reason: "invalid-regex",
       }
@@ -343,13 +360,18 @@ export function compileSafeRegexDetailed(source: string, flags = ""): SafeRegexC
   }
 
   let result: SafeRegexCompileResult;
-  if (hasNestedRepetition(trimmed)) {
-    result = { regex: null, source: trimmed, flags, reason: "unsafe-nested-repetition" };
+  if (hasNestedRepetition(compileSource)) {
+    result = { regex: null, source: compileSource, flags, reason: "unsafe-nested-repetition" };
   } else {
     try {
-      result = { regex: new RegExp(trimmed, flags), source: trimmed, flags, reason: null };
+      result = {
+        regex: new RegExp(compileSource, flags),
+        source: compileSource,
+        flags,
+        reason: null,
+      };
     } catch {
-      result = { regex: null, source: trimmed, flags, reason: "invalid-regex" };
+      result = { regex: null, source: compileSource, flags, reason: "invalid-regex" };
     }
   }
 
@@ -358,6 +380,10 @@ export function compileSafeRegexDetailed(source: string, flags = ""): SafeRegexC
   return result;
 }
 
-export function compileSafeRegex(source: string, flags = ""): RegExp | null {
-  return compileSafeRegexDetailed(source, flags).regex;
+export function compileSafeRegex(
+  source: string,
+  flags = "",
+  options?: CompileSafeRegexOptions,
+): RegExp | null {
+  return compileSafeRegexDetailed(source, flags, options).regex;
 }
