@@ -6,6 +6,7 @@ import {
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Compile } from "typebox/compile";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { compileSafeRegex } from "../security/safe-regex.js";
 
 type LocalRefResolution =
   | {
@@ -816,10 +817,11 @@ function applyObjectPropertyDefaults(
   const patternMatchedKeys = new Set<string>();
   if (isRecord(schema.patternProperties)) {
     for (const [pattern, propertySchema] of Object.entries(schema.patternProperties)) {
-      let regex: RegExp;
-      try {
-        regex = new RegExp(pattern);
-      } catch {
+      // compileSafeRegex rejects nested-repetition patterns (ReDoS risk) and
+      // returns null for invalid sources. Skip unsafe/invalid keys so plugin
+      // configSchema cannot hang defaults application during load/validation.
+      const regex = compileSafeRegex(pattern);
+      if (!regex) {
         continue;
       }
       for (const key of Object.keys(value)) {
