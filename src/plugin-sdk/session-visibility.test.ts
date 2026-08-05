@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { GatewayCredentialsRequiredError } from "../gateway/call.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
 import {
-  classifyLookupRetryable,
+  classifyLookupFailure,
   lookupFailedDenialSuffix,
 } from "./session-visibility-internal.js";
 import {
@@ -190,38 +191,42 @@ describe("scoped session access providers", () => {
   });
 });
 
-describe("classifyLookupRetryable", () => {
-  // Locks the retryability classification contract so a future refactor cannot
-  // silently collapse permanent credential/config failures into a retryable
-  // "transient" denial (review P1: classify before prescribing retry).
-  it("treats a retryable gateway request error as retryable", () => {
+describe("classifyLookupFailure", () => {
+  it("classifies a retryable gateway request error as transient", () => {
     const error = new GatewayClientRequestError({
       code: "UNAVAILABLE",
       message: "transport timeout",
       retryable: true,
     });
-    expect(classifyLookupRetryable(error)).toBe(true);
+    expect(classifyLookupFailure(error)).toBe("transient");
   });
 
-  it("treats a non-retryable gateway request error as non-retryable", () => {
-    const error = new GatewayClientRequestError({
-      code: "PERMISSION_DENIED",
-      message: "requires credentials before opening a websocket",
+  it("classifies an explicit pre-connect auth failure as credentials", () => {
+    const error = new GatewayCredentialsRequiredError({
+      method: "sessions.list",
+      configPath: "/tmp/openclaw.json",
+    });
+    expect(classifyLookupFailure(error)).toBe("credentials");
+  });
+
+  it("keeps unknown and non-retryable request failures generic", () => {
+    const requestError = new GatewayClientRequestError({
+      code: "INTERNAL_ERROR",
+      message: "failed to decode session row",
       retryable: false,
     });
-    expect(classifyLookupRetryable(error)).toBe(false);
+    expect(classifyLookupFailure(requestError)).toBe("unknown");
+    expect(classifyLookupFailure(new Error("something else"))).toBe("unknown");
+    expect(classifyLookupFailure(null)).toBe("unknown");
+    expect(classifyLookupFailure(undefined)).toBe("unknown");
   });
 
-  it("treats an unknown error as non-retryable", () => {
-    expect(classifyLookupRetryable(new Error("something else"))).toBe(false);
-    expect(classifyLookupRetryable(null)).toBe(false);
-    expect(classifyLookupRetryable(undefined)).toBe(false);
-  });
-
-  it("renders distinct denial suffixes per retryability", () => {
-    expect(lookupFailedDenialSuffix(true)).toMatch(/transient\); retry/i);
-    expect(lookupFailedDenialSuffix(false)).toMatch(/check gateway configuration and credentials/i);
-    // A permanent failure must never prescribe retry.
-    expect(lookupFailedDenialSuffix(false)).not.toMatch(/retry/i);
+  it("renders cause-appropriate denial suffixes", () => {
+    expect(lookupFailedDenialSuffix("transient")).toMatch(/transient\); retry/i);
+    expect(lookupFailedDenialSuffix("credentials")).toMatch(
+      /check gateway configuration and credentials/i,
+    );
+    expect(lookupFailedDenialSuffix("unknown")).toMatch(/check gateway logs/i);
+    expect(lookupFailedDenialSuffix("unknown")).not.toMatch(/credentials|retry/i);
   });
 });

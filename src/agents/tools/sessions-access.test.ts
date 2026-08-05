@@ -3,6 +3,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { GatewayCredentialsRequiredError } from "../../gateway/call.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
 import {
   createAgentToAgentPolicy,
@@ -597,10 +598,9 @@ describe("createSessionVisibilityGuard", () => {
     // fail-closes.
     sessionsResolutionTesting.setDepsForTest({
       callGateway: vi.fn(async () => {
-        throw new GatewayClientRequestError({
-          code: "PERMISSION_DENIED",
-          message: "gateway sessions.list requires credentials before opening a websocket",
-          retryable: false,
+        throw new GatewayCredentialsRequiredError({
+          method: "sessions.list",
+          configPath: "/tmp/openclaw.json",
         });
       }) as never,
     });
@@ -621,6 +621,33 @@ describe("createSessionVisibilityGuard", () => {
       });
       // A permanent failure must never tell the caller to retry.
       expect(result.allowed ? "" : result.error).not.toMatch(/retry/i);
+    } finally {
+      sessionsResolutionTesting.setDepsForTest();
+    }
+  });
+
+  it("keeps unknown lookup failures generic under tree visibility", async () => {
+    sessionsResolutionTesting.setDepsForTest({
+      callGateway: vi.fn(async () => {
+        throw new Error("failed to decode session row");
+      }) as never,
+    });
+    try {
+      const guard = await createSessionVisibilityGuard({
+        action: "history",
+        requesterSessionKey: "agent:main:main",
+        visibility: "tree",
+        a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+      });
+
+      const result = guard.check("agent:main:subagent:child-1");
+      expect(result).toEqual({
+        allowed: false,
+        status: "forbidden",
+        error:
+          "Session history denied because spawned-session ownership lookup failed; check gateway logs for the reported error.",
+      });
+      expect(result.allowed ? "" : result.error).not.toMatch(/credentials|retry/i);
     } finally {
       sessionsResolutionTesting.setDepsForTest();
     }

@@ -10,7 +10,14 @@
  * from here. See issue #114653.
  */
 import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
-import { isGatewayTransportError, callGateway as defaultCallGateway } from "../gateway/call.js";
+import {
+  GatewayCredentialsRequiredError,
+  GatewayExplicitAuthRequiredError,
+  GatewayLocalBackendSharedAuthUnavailableError,
+  GatewayStoredDeviceAuthUnavailableError,
+  isGatewayTransportError,
+  callGateway as defaultCallGateway,
+} from "../gateway/call.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
@@ -18,34 +25,44 @@ import { logWarn } from "../logger.js";
 type GatewayCaller = typeof defaultCallGateway;
 
 /**
- * Classify whether a spawned-session ownership lookup failure is worth retrying.
+ * Classify a spawned-session ownership lookup failure for caller guidance.
  *
- * Only known temporary failures are retryable: transport-level closes/timeouts,
- * and request-level errors the gateway itself marked `retryable`. Credential,
- * auth, and configuration failures surface before a socket is opened and will
- * not recover through retry, so they are non-retryable. Unknown errors are
- * treated as non-retryable so callers are not told to retry a failure that may
- * be permanent (review P1: classify before prescribing retry). See issue #114653.
+ * Only known temporary failures prescribe retry. Credential guidance is
+ * reserved for the explicit pre-connect auth errors; all other failures remain
+ * fail-closed with generic diagnostics instead of guessing at their cause.
  */
-export function classifyLookupRetryable(error: unknown): boolean {
+export type LookupFailureKind = "transient" | "credentials" | "unknown";
+
+export function classifyLookupFailure(error: unknown): LookupFailureKind {
   if (isGatewayTransportError(error)) {
-    return true;
+    return "transient";
   }
-  if (error instanceof GatewayClientRequestError) {
-    return (error as { retryable?: unknown }).retryable === true;
+  if (error instanceof GatewayClientRequestError && error.retryable) {
+    return "transient";
   }
-  return false;
+  if (
+    error instanceof GatewayCredentialsRequiredError ||
+    error instanceof GatewayExplicitAuthRequiredError ||
+    error instanceof GatewayStoredDeviceAuthUnavailableError ||
+    error instanceof GatewayLocalBackendSharedAuthUnavailableError
+  ) {
+    return "credentials";
+  }
+  return "unknown";
 }
 
 /**
- * Shared denial suffix for a failed ownership lookup, parameterized by
- * retryability so the direct guard and the sandboxed resolver render the same
- * distinct text. See issue #114653.
+ * Shared denial suffix for a failed ownership lookup so direct and sandboxed
+ * guards render the same cause-appropriate recovery guidance.
  */
-export function lookupFailedDenialSuffix(retryable: boolean): string {
-  return retryable
-    ? "spawned-session ownership lookup failed (transient); retry the operation."
-    : "spawned-session ownership lookup failed; check gateway configuration and credentials.";
+export function lookupFailedDenialSuffix(kind: LookupFailureKind): string {
+  if (kind === "transient") {
+    return "spawned-session ownership lookup failed (transient); retry the operation.";
+  }
+  if (kind === "credentials") {
+    return "spawned-session ownership lookup failed; check gateway configuration and credentials.";
+  }
+  return "spawned-session ownership lookup failed; check gateway logs for the reported error.";
 }
 
 let callGatewayForListSpawned: GatewayCaller = defaultCallGateway;
@@ -60,14 +77,12 @@ export const sessionVisibilityGatewayTesting = {
 /**
  * Result of listing spawned-session keys. Distinguishes a successful (possibly
  * empty) lookup from a failed one so the visibility guard can tell a genuine
- * policy denial apart from a lookup failure. The `retryable` flag on a failed
- * lookup carries the classification from {@link classifyLookupRetryable} so the
- * denial text can tell transient transport failures (retry) apart from
- * permanent credential/configuration failures (do not retry). See issue #114653.
+ * policy denial apart from a lookup failure. The failure kind preserves only
+ * guidance supported by the caught error; unknown failures remain generic.
  */
 export type SpawnedSessionKeysResult =
   | { ok: true; keys: Set<string> }
-  | { ok: false; error: unknown; retryable: boolean };
+  | { ok: false; error: unknown; failureKind: LookupFailureKind };
 
 /** List sessions spawned by the requester through the gateway session list method. */
 export async function listSpawnedSessionKeysWithResult(params: {
@@ -96,13 +111,11 @@ export async function listSpawnedSessionKeysWithResult(params: {
     // collapse into a genuine policy denial (issue #114653). Retry behavior is
     // intentionally not added here — retrying transient lookup failures is a
     // maintainer product decision (see the issue's maintainer-review labels),
-    // so this PR only classifies and logs the failure. The retryable flag
-    // distinguishes temporary transport failures from permanent credential /
-    // configuration failures so callers are not told to retry a non-retryable
-    // access failure (review P1).
+    // so this path only classifies and logs the failure. Keep unknown causes
+    // distinct from confirmed auth failures so recovery text never guesses.
     logWarn(
       `session-visibility: listSpawnedSessionKeys failed for requester=${params.requesterSessionKey}: ${formatErrorMessage(error)}`,
     );
-    return { ok: false, error, retryable: classifyLookupRetryable(error) };
+    return { ok: false, error, failureKind: classifyLookupFailure(error) };
   }
 }

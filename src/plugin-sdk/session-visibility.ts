@@ -369,7 +369,7 @@ function createSessionVisibilityCheckerWithResult(
         return {
           allowed: false,
           status: "forbidden",
-          error: `${actionPrefix(params.action)} denied because ${lookupFailedDenialSuffix(spawnedKeys.retryable)}`,
+          error: `${actionPrefix(params.action)} denied because ${lookupFailedDenialSuffix(spawnedKeys.failureKind)}`,
         };
       }
     }

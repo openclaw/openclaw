@@ -2,6 +2,7 @@
 // verification, and requester-spawned access checks.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { GatewayCredentialsRequiredError } from "../../gateway/call.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
 import { looksLikeSessionId } from "../../sessions/session-id.js";
 const callGatewayMock = vi.fn();
@@ -325,10 +326,9 @@ describe("resolved session visibility checks", () => {
     // not recover through retry, so the resolver must NOT prescribe retry
     // (review P1: classify before prescribing retry).
     callGatewayMock.mockImplementation(async () => {
-      throw new GatewayClientRequestError({
-        code: "PERMISSION_DENIED",
-        message: "gateway sessions.list requires credentials before opening a websocket",
-        retryable: false,
+      throw new GatewayCredentialsRequiredError({
+        method: "sessions.list",
+        configPath: "/tmp/openclaw.json",
       });
     });
     const result = await resolveVisibleSessionReference({
@@ -351,6 +351,29 @@ describe("resolved session visibility checks", () => {
     });
     // A permanent failure must never tell the caller to retry.
     expect(result.ok ? "" : result.error).not.toMatch(/retry/i);
+  });
+
+  it("keeps unknown lookup failures generic through the sandboxed resolver", async () => {
+    callGatewayMock.mockRejectedValue(new Error("failed to decode session row"));
+    const result = await resolveVisibleSessionReference({
+      action: "history",
+      resolvedSession: {
+        ok: true,
+        key: "agent:main:worker",
+        displayKey: "agent:main:worker",
+        resolvedViaSessionId: false,
+      },
+      requesterSessionKey: "agent:main:main",
+      restrictToSpawned: true,
+      visibilitySessionKey: "agent:main:worker",
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      status: "forbidden",
+      error:
+        "Session history denied because spawned-session ownership lookup failed; check gateway logs for the reported error.",
+    });
+    expect(result.ok ? "" : result.error).not.toMatch(/credentials|retry/i);
   });
 
   it("does not warn on an ordinary non-owned target miss from the speculative resolve probe", async () => {
