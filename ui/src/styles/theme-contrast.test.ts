@@ -152,8 +152,9 @@ describe("Control UI theme contrast", () => {
     expect(groupedCss).toContain(
       ':root[data-theme-mode="light"][data-assistant-message-surface="white"]',
     );
-    expect(groupedCss).toContain(
-      ".chat-bubble:not(.chat-bubble--tool-shell):not(.chat-reading-indicator)",
+    expect(groupedCss).toContain(".chat-bubble--assistant-surface");
+    expect(groupedCss).not.toMatch(
+      /data-assistant-message-surface="white"[^{}]*\.chat-bubble:not/u,
     );
     expect(groupedCss).toMatch(
       /data-assistant-message-surface="white"[^{}]*\{[^{}]*background:\s*#fff;/u,
