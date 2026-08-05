@@ -745,6 +745,32 @@ describe("readRemoteMediaBuffer", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  it("aborts retry backoff when caller signal fires during sleep", async () => {
+    const transientError = Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
+    const fetchImpl = vi.fn().mockRejectedValueOnce(transientError);
+    const controller = new AbortController();
+
+    const promise = readRemoteMediaBuffer({
+      url: "https://example.com/file.bin",
+      fetchImpl,
+      lookupFn: makeLookupFn(),
+      maxBytes: 1024,
+      retry: { attempts: 3, minDelayMs: 10_000, maxDelayMs: 10_000, jitter: 0 },
+      requestInit: { signal: controller.signal },
+    });
+
+    // Let the first fetch attempt fail and enter the retry backoff sleep.
+    await new Promise<void>((resolve) => {
+      setTimeout(() => resolve(), 50);
+    });
+    controller.abort();
+
+    await expect(promise).rejects.toThrow();
+    // Without signal-aware sleep the backoff would block for 10s and retry;
+    // with the fix the abort interrupts the sleep immediately.
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it("does not retry SSRF guard blocks", async () => {
     const fetchImpl = vi.fn();
 

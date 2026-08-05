@@ -5,6 +5,7 @@ import { basenameFromAnyPath, extnameFromAnyPath } from "@openclaw/media-core/fi
 import { detectMime, extensionForMime } from "@openclaw/media-core/mime";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isAbortError } from "../infra/abort-signal.js";
+import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   readChunkWithIdleTimeout,
@@ -637,12 +638,12 @@ async function withMediaFetchRetry<T>(
   if (!retry) {
     return await fn();
   }
-  const callerShouldRetry = retry.shouldRetry;
   return await retryAsync(fn, {
     label: "media:fetch",
     ...retry,
     shouldRetry: (err, attempt) =>
-      callerShouldRetry ? callerShouldRetry(err, attempt) : shouldRetryMediaFetch(err),
+      retry.shouldRetry ? retry.shouldRetry(err, attempt) : shouldRetryMediaFetch(err),
+    sleep: retry.sleep ?? ((ms) => sleepWithAbort(ms, options.requestInit?.signal ?? undefined)),
   });
 }
 
