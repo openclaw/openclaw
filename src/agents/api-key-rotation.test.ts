@@ -313,7 +313,7 @@ describe("executeWithApiKeyRotation", () => {
     );
   });
 
-  it("passes apiKeyIndex and attemptNumber to rotation callbacks", async () => {
+  it("passes apiKeyIndex and attempt to rotation callbacks", async () => {
     const shouldRetry = vi.fn(() => true);
     const onRetry = vi.fn();
     const execute = vi
@@ -331,30 +331,27 @@ describe("executeWithApiKeyRotation", () => {
       }),
     ).resolves.toBe("ok");
 
-    // shouldRetry receives apiKeyIndex (0) and attemptNumber (1); attempt is now
-    // the canonical one-based retry count (= attemptNumber), not the key index.
+    // shouldRetry receives apiKeyIndex (0) and attempt (1, canonical retry count).
     expect(shouldRetry).toHaveBeenCalledWith(
       expect.objectContaining({
         attempt: 1,
         apiKeyIndex: 0,
-        attemptNumber: 1,
       }),
     );
 
-    // onRetry receives apiKeyIndex (0) and attemptNumber (1)
+    // onRetry receives apiKeyIndex (0) and attempt (1).
     expect(onRetry).toHaveBeenCalledWith(
       expect.objectContaining({
         attempt: 1,
         apiKeyIndex: 0,
-        attemptNumber: 1,
       }),
     );
   });
 
   it("diverges attempt (retry count) from apiKeyIndex (key position) across keys and retries", async () => {
-    // Two keys, transient retry on key-1 (attemptNumber 1→2), then rotate to
-    // key-2 (attemptNumber 1). attempt must track attemptNumber, not apiKeyIndex.
-    const calls: Array<{ attempt: number; apiKeyIndex: number; attemptNumber: number }> = [];
+    // Two keys, transient retry on key-1 (attempt 1→2), then rotate to
+    // key-2 (attempt 1). attempt must track the retry count, not apiKeyIndex.
+    const calls: Array<{ attempt: number; apiKeyIndex: number }> = [];
     const cause = Object.assign(new Error("socket closed"), { code: "ECONNRESET" });
     const execute = vi.fn(async () => {
       throw cause;
@@ -369,7 +366,6 @@ describe("executeWithApiKeyRotation", () => {
           calls.push({
             attempt: params.attempt,
             apiKeyIndex: params.apiKeyIndex,
-            attemptNumber: params.attemptNumber,
           });
           shouldRetryCallCount += 1;
           // First call: don't rotate (let transient retry run).
@@ -381,13 +377,13 @@ describe("executeWithApiKeyRotation", () => {
       }),
     ).rejects.toThrow("socket closed");
 
-    // key-1: attemptNumber 1 (no rotate), then 2 (rotate to key-2)
-    // key-2: attemptNumber 1 (no rotate), then 2 (last key, break)
+    // key-1: attempt 1 (no rotate), then 2 (rotate to key-2)
+    // key-2: attempt 1 (no rotate), then 2 (last key, break)
     expect(calls).toEqual([
-      { attempt: 1, apiKeyIndex: 0, attemptNumber: 1 },
-      { attempt: 2, apiKeyIndex: 0, attemptNumber: 2 },
-      { attempt: 1, apiKeyIndex: 1, attemptNumber: 1 },
-      { attempt: 2, apiKeyIndex: 1, attemptNumber: 2 },
+      { attempt: 1, apiKeyIndex: 0 },
+      { attempt: 2, apiKeyIndex: 0 },
+      { attempt: 1, apiKeyIndex: 1 },
+      { attempt: 2, apiKeyIndex: 1 },
     ]);
   });
 });

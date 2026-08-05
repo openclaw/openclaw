@@ -18,12 +18,10 @@ import { collectProviderApiKeys, isApiKeyRateLimitError } from "./live-auth-keys
 type ApiKeyRetryParams = {
   apiKey: string;
   error: unknown;
-  /** One-based retry count for the current key (same as attemptNumber; canonical name). */
+  /** One-based retry count for the current key (resets to 1 when rotating to a new key). */
   attempt: number;
   /** Zero-based index of the current key in the rotation array. */
   apiKeyIndex: number;
-  /** One-based attempt count for the current key (resets to 1 when rotating to a new key). */
-  attemptNumber: number;
 };
 
 type ExecuteWithApiKeyRotationOptions<T> = {
@@ -75,7 +73,6 @@ export async function executeWithApiKeyRotation<T>(
               error,
               attempt: attemptNumber,
               apiKeyIndex,
-              attemptNumber,
               message,
             })
           : isApiKeyRateLimitError(message);
@@ -91,7 +88,6 @@ export async function executeWithApiKeyRotation<T>(
             error,
             attempt: attemptNumber,
             apiKeyIndex,
-            attemptNumber,
             message,
           });
           break;
