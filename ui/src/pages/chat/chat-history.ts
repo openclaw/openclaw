@@ -71,6 +71,7 @@ import { scheduleChatScroll } from "./scroll.ts";
 import {
   cacheChatSessionSnapshot,
   clearChatMessagesFromCache,
+  readChatSessionSnapshot,
   type ChatMessageCache,
 } from "./session-message-cache.ts";
 import { retireHistoryProvenSteeredChips } from "./steer-lifecycle.ts";
@@ -172,6 +173,7 @@ function resetChatHistoryProjection(state: ChatState, agentId?: string): void {
   requests.historyVersion += 1;
   requests.inFlightHistory = undefined;
   state.chatLoading = false;
+  state.chatHistoryAnchorActive = false;
   const scope = readChatSessionProjectionScope(state, { agentId });
   // Destructive operations keep the public session key, so only an explicit
   // reducer reset can prevent old live or pending rows from crossing epochs.
@@ -275,6 +277,8 @@ export type ChatState = {
   chatHistoryPagination?: ChatHistoryPagination;
   chatMessages: unknown[];
   chatMessagesBySession?: ChatMessageCache;
+  /** True while the pane renders a one-shot historical window instead of its canonical tail. */
+  chatHistoryAnchorActive?: boolean;
   /** Active leaf of the history snapshot currently rendered by this pane. */
   chatDisplayedLeafEntryId?: string | null;
   chatThinkingLevel: string | null;
@@ -1565,7 +1569,14 @@ async function loadChatHistoryUncached(
     requestAgentId,
   );
   const startedAtMs = controlUiNowMs();
-  const previousMessages = state.chatMessages;
+  const cachedSnapshot =
+    state.chatHistoryAnchorActive && state.chatMessagesBySession
+      ? readChatSessionSnapshot(state.chatMessagesBySession, state, {
+          sessionKey,
+          agentId: requestAgentId,
+        })
+      : undefined;
+  const previousMessages = cachedSnapshot?.messages ?? state.chatMessages;
   const previousRunProjections = getChatSessionProjection(
     state,
     previousMessages,
@@ -1574,9 +1585,10 @@ async function loadChatHistoryUncached(
       ...(requestAgentId ? { agentId: requestAgentId } : {}),
     }),
   ).runs;
-  const previousPagination = state.chatHistoryPagination;
-  const previousSessionId = state.currentSessionId ?? null;
-  const previousDisplayedLeafEntryId = state.chatDisplayedLeafEntryId;
+  const previousPagination = cachedSnapshot?.pagination ?? state.chatHistoryPagination;
+  const previousSessionId = cachedSnapshot?.sessionId ?? state.currentSessionId ?? null;
+  const previousDisplayedLeafEntryId =
+    cachedSnapshot?.displayedLeafEntryId ?? state.chatDisplayedLeafEntryId;
   const previousRunId = state.chatRunId;
   recordChatHistoryTiming(state, "start", startedAtMs, {
     requestSessionKey: sessionKey,
@@ -1611,9 +1623,12 @@ async function loadChatHistoryUncached(
     }
     // Fence concurrent run lifecycle before applying the response. A remount
     // may replace the map itself, so compare its canonical run entries.
+    const messagesBeforeApply = state.chatHistoryAnchorActive
+      ? previousMessages
+      : state.chatMessages;
     const runProjectionsBeforeApply = getChatSessionProjection(
       state,
-      state.chatMessages,
+      messagesBeforeApply,
       readChatSessionProjectionScope(state, {
         sessionKey,
         ...(requestAgentId ? { agentId: requestAgentId } : {}),
@@ -1670,9 +1685,10 @@ async function loadChatHistoryUncached(
       },
       {
         scope,
-        messages: !historyAnchor && retainsTranscriptIdentity ? state.chatMessages : [],
+        messages: !historyAnchor && retainsTranscriptIdentity ? messagesBeforeApply : [],
       },
     );
+    state.chatHistoryAnchorActive = Boolean(historyAnchor);
     if (Object.hasOwn(res.sessionInfo ?? {}, "activeLeafEntryId")) {
       state.chatDisplayedLeafEntryId = res.sessionInfo?.activeLeafEntryId?.trim() || null;
     }
