@@ -31,6 +31,7 @@ import { asRecord } from "./dreaming-shared.js";
 import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
 import {
   DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
+  isMemorySearchTimeoutError,
   MEMORY_SEARCH_DEADLINE_CONTROL,
   resolveMemorySearchAbortError,
   runMemorySearchWithDeadline,
@@ -68,6 +69,9 @@ type MemoryManagerSearchOptions = NonNullable<
 type QmdRuntimeDebug = NonNullable<MemorySearchRuntimeDebug["qmd"]>;
 
 const MEMORY_SEARCH_TOOL_COOLDOWN_MS = 60_000;
+const MEMORY_SEARCH_TIMEOUT_WARNING = "Memory search timed out before it could complete.";
+const MEMORY_SEARCH_TIMEOUT_ACTION =
+  "Retry memory_search. If timeouts continue, run openclaw memory status --deep and check for indexing or maintenance delays.";
 
 const memorySearchToolCooldowns = new Map<string, { until: number; error: string }>();
 
@@ -881,10 +885,21 @@ export function createMemorySearchTool(options: {
             requestedCorpus !== "wiki" &&
             (requestedCorpus !== "all" || unavailablePhase === "memory");
           const message = formatErrorMessage(error);
-          if (shouldRecordCooldown) {
+          const timedOut = isMemorySearchTimeoutError(error);
+          if (shouldRecordCooldown && !timedOut) {
             recordMemorySearchToolCooldown(cooldownKey, message);
           }
-          return jsonResult(buildMemorySearchUnavailableResult(message));
+          return jsonResult(
+            buildMemorySearchUnavailableResult(
+              message,
+              timedOut
+                ? {
+                    warning: MEMORY_SEARCH_TIMEOUT_WARNING,
+                    action: MEMORY_SEARCH_TIMEOUT_ACTION,
+                  }
+                : undefined,
+            ),
+          );
         }
       },
   });

@@ -70,8 +70,9 @@ function createQmdTimeoutSearchTool(options?: { oneShotCliRun?: boolean }) {
 function expectMemorySearchTimeout(details: unknown, seconds: number): void {
   expectUnavailableMemorySearchDetails(details, {
     error: `memory_search timed out after ${seconds}s`,
-    warning: "Memory search is unavailable due to an embedding/provider error.",
-    action: "Check embedding provider configuration and retry memory_search.",
+    warning: "Memory search timed out before it could complete.",
+    action:
+      "Retry memory_search. If timeouts continue, run openclaw memory status --deep and check for indexing or maintenance delays.",
   });
 }
 
@@ -355,7 +356,9 @@ describe("memory_search unavailable payloads", () => {
   });
 
   it("returns explicit unavailable metadata for non-quota failures", async () => {
+    let searchCalls = 0;
     setMemorySearchImpl(async () => {
+      searchCalls += 1;
       throw new Error("embedding provider timeout");
     });
 
@@ -366,6 +369,13 @@ describe("memory_search unavailable payloads", () => {
       warning: "Memory search is unavailable due to an embedding/provider error.",
       action: "Check embedding provider configuration and retry memory_search.",
     });
+    const cooldownResult = await tool.execute("generic-cooldown", { query: "hello again" });
+    expectUnavailableMemorySearchDetails(cooldownResult.details, {
+      error: "embedding provider timeout",
+      warning: "Memory search is unavailable due to an embedding/provider error.",
+      action: "Check embedding provider configuration and retry memory_search.",
+    });
+    expect(searchCalls).toBe(1);
   });
 
   it("keeps qmd setup on the default deadline and closes a late one-shot manager", async () => {
@@ -398,15 +408,27 @@ describe("memory_search unavailable payloads", () => {
     }
   });
 
-  it("returns unavailable metadata when memory search does not settle", async () => {
+  it("returns timeout metadata without entering provider cooldown", async () => {
     vi.useFakeTimers();
     try {
       let searchCalls = 0;
       let searchSignal: AbortSignal | undefined;
       setMemorySearchImpl(async (opts) => {
         searchCalls += 1;
-        searchSignal = opts?.signal;
-        return await new Promise(() => {});
+        if (searchCalls === 1) {
+          searchSignal = opts?.signal;
+          return await new Promise(() => {});
+        }
+        return [
+          {
+            path: "MEMORY.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.9,
+            snippet: "retry after timeout",
+            source: "memory" as const,
+          },
+        ];
       });
       const tool = createMemorySearchToolOrThrow();
 
@@ -416,18 +438,16 @@ describe("memory_search unavailable payloads", () => {
       const result = await resultPromise;
       expectUnavailableMemorySearchDetails(result.details, {
         error: "memory_search timed out after 15s",
-        warning: "Memory search is unavailable due to an embedding/provider error.",
-        action: "Check embedding provider configuration and retry memory_search.",
+        warning: "Memory search timed out before it could complete.",
+        action:
+          "Retry memory_search. If timeouts continue, run openclaw memory status --deep and check for indexing or maintenance delays.",
       });
       // The deadline must abort the orphaned search, not just race past it.
       expect(searchSignal?.aborted).toBe(true);
-      const cooldownResult = await tool.execute("search-cooldown", { query: "hello again" });
-      expectUnavailableMemorySearchDetails(cooldownResult.details, {
-        error: "memory_search timed out after 15s",
-        warning: "Memory search is unavailable due to an embedding/provider error.",
-        action: "Check embedding provider configuration and retry memory_search.",
-      });
-      expect(searchCalls).toBe(1);
+      const retryResult = await tool.execute("search-retry", { query: "hello again" });
+      const retryDetails = retryResult.details as { results: Array<{ path: string }> };
+      expect(retryDetails.results.map((entry) => entry.path)).toEqual(["MEMORY.md"]);
+      expect(searchCalls).toBe(2);
     } finally {
       vi.useRealTimers();
     }
@@ -454,8 +474,9 @@ describe("memory_search unavailable payloads", () => {
       const result = await resultPromise;
       expectUnavailableMemorySearchDetails(result.details, {
         error: "memory_search timed out after 15s",
-        warning: "Memory search is unavailable due to an embedding/provider error.",
-        action: "Check embedding provider configuration and retry memory_search.",
+        warning: "Memory search timed out before it could complete.",
+        action:
+          "Retry memory_search. If timeouts continue, run openclaw memory status --deep and check for indexing or maintenance delays.",
       });
     } finally {
       vi.useRealTimers();
