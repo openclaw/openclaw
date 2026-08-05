@@ -7,6 +7,7 @@ import * as os from "node:os";
 import { isAbsolute, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pathExistsSync } from "../../../infra/fs-safe.js";
+import { normalizeWindowsPosixDrivePath } from "./windows-posix-path.js";
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 const NARROW_NO_BREAK_SPACE = "\u202F";
@@ -63,8 +64,12 @@ export function resolveToCwd(filePath: string, cwd: string): string {
   return resolvePath(cwd, expanded);
 }
 
+export function resolveLocalToolPath(filePath: string, cwd: string): string {
+  return resolveToCwd(normalizeWindowsPosixDrivePath(filePath), cwd);
+}
+
 export function resolveReadPath(filePath: string, cwd: string): string {
-  const resolved = resolveToCwd(filePath, cwd);
+  const resolved = resolveLocalToolPath(filePath, cwd);
 
   if (pathExistsSync(resolved)) {
     return resolved;

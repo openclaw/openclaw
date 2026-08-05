@@ -49,6 +49,7 @@ import {
   type ReadToolDetails,
   type ReadToolTruncationDetails,
 } from "./sessions/index.js";
+import { resolveLocalToolPath, resolveToCwd } from "./sessions/tools/path-utils.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
 // NOTE(steipete): Upstream read now does file-magic MIME detection; we keep the wrapper
@@ -1055,6 +1056,7 @@ function createSandboxReadOperations(params: SandboxToolParams) {
 function createSandboxWriteOperations(params: SandboxToolParams) {
   return withMemoryWriteProvenance(
     {
+      resolvePath: (filePath: string) => resolveSandboxMutationPath(params, filePath),
       mkdir: async (dir: string) => {
         await params.bridge.mkdirp({ filePath: dir, cwd: params.root });
       },
@@ -1067,12 +1069,14 @@ function createSandboxWriteOperations(params: SandboxToolParams) {
         params.bridge.stat({ filePath: absolutePath, cwd: params.root }),
     } as const,
     params.memoryWriteProvenance,
+    (backendPath) => resolveSandboxObservedPath(params, backendPath),
   );
 }
 
 function createSandboxEditOperations(params: SandboxToolParams) {
   return withMemoryWriteProvenance(
     {
+      resolvePath: (filePath: string) => resolveSandboxMutationPath(params, filePath),
       readFile: (absolutePath: string) =>
         params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
       writeFile: (absolutePath: string, content: string) =>
@@ -1082,7 +1086,19 @@ function createSandboxEditOperations(params: SandboxToolParams) {
       access: (absolutePath: string) => assertSandboxFileExists(params, absolutePath),
     } as const,
     params.memoryWriteProvenance,
+    (backendPath) => resolveSandboxObservedPath(params, backendPath),
   );
+}
+
+function resolveSandboxMutationPath(params: SandboxToolParams, filePath: string): string {
+  const candidate = resolveContainerPathCandidate(filePath) ?? filePath;
+  // Queue aliases by the sandbox backend identity while leaving container-absolute paths intact.
+  return resolveToCwd(candidate, params.root);
+}
+
+function resolveSandboxObservedPath(params: SandboxToolParams, backendPath: string): string {
+  const resolved = params.bridge.resolvePath({ filePath: backendPath, cwd: params.root });
+  return resolved.hostPath ?? path.resolve(params.root, resolved.relativePath);
 }
 
 async function assertSandboxFileExists(params: SandboxToolParams, absolutePath: string) {
@@ -1165,6 +1181,7 @@ function createHostWriteOperations(
     // When workspaceOnly is false, allow writes anywhere on the host
     return withMemoryWriteProvenance(
       {
+        resolvePath: resolveLocalToolPath,
         mkdir: async (dir: string) => {
           const resolved = resolveHostPath(dir);
           await fs.mkdir(resolved, { recursive: true });
@@ -1187,6 +1204,7 @@ function createHostWriteOperations(
   const getRoot = () => (rootPromise ??= fsRoot(root));
   return withMemoryWriteProvenance(
     {
+      resolvePath: resolveLocalToolPath,
       mkdir: async (dir: string) => {
         const relative = toRelativeWorkspacePath(root, dir, { allowRoot: true });
         const resolved = relative ? path.resolve(root, relative) : path.resolve(root);
@@ -1224,6 +1242,7 @@ function createHostEditOperations(
     // When workspaceOnly is false, allow edits anywhere on the host
     return withMemoryWriteProvenance(
       {
+        resolvePath: resolveLocalToolPath,
         readFile: async (absolutePath: string) => {
           return await fs.readFile(resolveHostPath(absolutePath));
         },
@@ -1245,6 +1264,7 @@ function createHostEditOperations(
   const getRoot = () => (rootPromise ??= fsRoot(root));
   return withMemoryWriteProvenance(
     {
+      resolvePath: resolveLocalToolPath,
       readFile: async (absolutePath: string) => {
         // Canonicalize symlink parents like the write path: fs-safe 0.5.2
         // rejects intermediate symlinks by default, but in-workspace symlink
