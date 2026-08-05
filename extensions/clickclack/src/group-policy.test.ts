@@ -31,6 +31,17 @@ describe("resolveClickClackBotPolicy", () => {
       },
     });
   });
+
+  it("does not apply group bot policy to direct messages", () => {
+    expect(
+      resolveClickClackBotPolicy({
+        account: {
+          allowBots: false,
+          groups: { "*": { allowBots: "mentions" } },
+        },
+      }),
+    ).toEqual({ allowBots: false, botLoopProtection: undefined });
+  });
 });
 
 describe("resolveClickClackGroupPolicy", () => {
@@ -157,5 +168,16 @@ describe("resolveClickClackGroupPolicy", () => {
       channelId: " chn_exact ",
     });
     expect(result.requireMention).toBe(true);
+  });
+
+  it("does not apply group policy to direct messages", () => {
+    const result = resolveClickClackGroupPolicy({
+      account: {
+        requireMention: false,
+        mentionPatterns: ["@account"],
+        groups: { "*": { requireMention: true, mentionPatterns: ["@group"] } },
+      },
+    });
+    expect(result).toEqual({ requireMention: false, mentionPatterns: ["@account"] });
   });
 });

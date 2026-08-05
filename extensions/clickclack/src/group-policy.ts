@@ -44,10 +44,14 @@ export function resolveClickClackBotPolicy(params: {
   channelId?: string;
 }): ClickClackBotPolicy {
   const { account, channelId } = params;
-  const wildcard = account.groups?.["*"];
   const channelKey = channelId?.trim();
+  // Group-scoped policy must not affect direct messages, which have no
+  // channel ID. In particular, groups["*"] is a channel fallback, not an
+  // account-wide override.
+  const groups = channelKey ? account.groups : undefined;
+  const wildcard = groups?.["*"];
   const exact = channelKey
-    ? Object.entries(account.groups ?? {}).find(([key]) => key.trim() === channelKey)?.[1]
+    ? Object.entries(groups ?? {}).find(([key]) => key.trim() === channelKey)?.[1]
     : undefined;
   return {
     allowBots: exact?.allowBots ?? wildcard?.allowBots ?? account.allowBots ?? false,
@@ -77,9 +81,13 @@ export function resolveClickClackGroupPolicy(params: {
     requireMention: account.requireMention === true,
     mentionPatterns: account.mentionPatterns ?? [],
   };
-  const wildcard = account.groups?.["*"];
   const channelKey = channelId?.trim();
-  const exact = channelKey ? account.groups?.[channelKey] : undefined;
+  // Group-scoped policy must not affect direct messages, which have no
+  // channel ID. In particular, groups["*"] is a channel fallback, not an
+  // account-wide override.
+  const groups = channelKey ? account.groups : undefined;
+  const wildcard = groups?.["*"];
+  const exact = channelKey ? groups?.[channelKey] : undefined;
   // Channel rules are partial overrides. Resolve each field independently so
   // an exact channel rule can inherit unspecified fields from the wildcard
   // rule before falling back to the account-level policy.

@@ -380,6 +380,29 @@ describe("ClickClack inbound mention gating", () => {
     expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(1);
   });
 
+  it("does not let wildcard group bot policy authorize direct messages", async () => {
+    const runtime = createRuntime();
+    setClickClackRuntime(runtime);
+
+    await handleClickClackInbound({
+      account: createAgentAccount({
+        allowFrom: ["usr_sender"],
+        allowBots: false,
+        groups: { "*": { allowBots: "mentions" } },
+      }),
+      config: {} satisfies CoreConfig,
+      message: createMessage({
+        author_id: "usr_sender",
+        channel_id: undefined,
+        direct_conversation_id: "dm_1",
+        body: "hello directly",
+        author: { ...createMessage().author, id: "usr_sender", kind: "bot", handle: "sender" },
+      }),
+    });
+
+    expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
+  });
+
   it("rejects an unmentioned group message when mention gating is enabled", async () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
