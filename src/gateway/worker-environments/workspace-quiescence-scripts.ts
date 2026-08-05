@@ -515,7 +515,11 @@ async function assertWatchdogActive() {
   const checked = await recoverProcessReferences([reference]);
   if (checked.remaining.length > 0 && !checked.failed) throw new Error("workspace quiescence watchdog identity probe timed out");
   if (checked.failed) throw new Error("workspace quiescence watchdog identity probe failed");
-  if (checked.settled.get(reference)?.kind !== "signaled") throw new Error("workspace quiescence watchdog identity changed unexpectedly");
+  const outcome = checked.settled.get(reference);
+  if (outcome?.kind !== "signaled") throw new Error("workspace quiescence watchdog identity changed unexpectedly");
+  if (outcome.state.startsWith("Z") || outcome.state.startsWith("X")) {
+    throw new Error("workspace quiescence watchdog is not active");
+  }
 }
 async function refreshLease(processes) {
   await assertWatchdogActive();
