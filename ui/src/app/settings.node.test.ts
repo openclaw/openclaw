@@ -6,7 +6,6 @@ import { createStorageMock } from "../test-helpers/storage.ts";
 import {
   loadLocalUserIdentity,
   loadSettings,
-  normalizeAssistantMessageSurface,
   normalizeChatMessageMaxWidth,
   persistSessionToken,
   resolvePageGatewaySettings,
@@ -598,27 +597,6 @@ describe("loadSettings default gateway URL derivation", () => {
     saveSettings({ ...loadSettings(), chatMessageMaxWidth: undefined });
     expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).not.toHaveProperty(
       "chatMessageMaxWidth",
-    );
-  });
-
-  it("defaults, normalizes, persists, and resets the assistant message surface", () => {
-    setTestLocation({ protocol: "https:", host: "gateway.example:8443", pathname: "/" });
-    const gwUrl = expectedGatewayUrl("");
-    const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
-
-    expect(loadSettings().assistantMessageSurface).toBe("theme-default");
-    expect(normalizeAssistantMessageSurface("white")).toBe("white");
-    expect(normalizeAssistantMessageSurface("invalid")).toBe("theme-default");
-
-    saveSettings({ ...loadSettings(), assistantMessageSurface: "white" });
-    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}").assistantMessageSurface).toBe(
-      "white",
-    );
-    expect(loadSettings().assistantMessageSurface).toBe("white");
-
-    saveSettings({ ...loadSettings(), assistantMessageSurface: "theme-default" });
-    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).not.toHaveProperty(
-      "assistantMessageSurface",
     );
   });
 
