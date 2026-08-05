@@ -104,11 +104,8 @@ async function signalProcessReferences(references, concurrency = ${REMOTE_QUIESC
   return results;
 }
 function remainingProcessReferences(references, outcomes) {
-  return references.filter(
-    (_reference, index) =>
-      outcomes[index].kind === "deferred" ||
-      outcomes[index].kind === "timeout" ||
-      outcomes[index].kind === "failed",
+  return ["deferred", "timeout", "failed"].flatMap((kind) =>
+    references.filter((_reference, index) => outcomes[index].kind === kind),
   );
 }
 async function recoverProcessReferences(references, concurrency = ${REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY}, deadlineMs = Date.now() + ${REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS}) {
@@ -214,6 +211,11 @@ function writeLease(expiresAtMs = Date.now() + watchdogTimeoutMs) {
     expiresAtMs,
   });
 }
+function roundRobinProcessReferences(groups) {
+  const references = [];
+  for (let index = 0; groups.some((group) => index < group.length); index += 1) for (const group of groups) if (group[index]) references.push(group[index]);
+  return references;
+}
 async function recoverOrphanLeases(orphanNames) {
   const orphans = [];
   for (const name of orphanNames) {
@@ -231,15 +233,14 @@ async function recoverOrphanLeases(orphanNames) {
     orphans.push({ orphanPath, lease, references });
   }
   const recovery = await recoverProcessReferences(
-    orphans.flatMap((orphan) => orphan.references),
+    roundRobinProcessReferences(orphans.map((orphan) => orphan.references)),
     ${REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY},
     Date.now() + ${REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS},
   );
-  const remaining = new Set(recovery.remaining);
   let retained = false;
   let failed = false;
   for (const { orphanPath, lease, references } of orphans) {
-    const unresolved = references.filter((reference) => remaining.has(reference));
+    const unresolved = recovery.remaining.filter((reference) => references.includes(reference));
     if (unresolved.length === 0) { fs.unlinkSync(orphanPath); continue; }
     retained = true;
     const leaseFailed = unresolved.some((reference) => recovery.failedReferences.has(reference));

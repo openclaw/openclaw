@@ -386,7 +386,10 @@ describe("remote workspace quiescence scripts", () => {
         recovery?: { state: string };
       };
       expect(terminal.watchdog).toBeNull();
-      expect(terminal.processes.map((entry) => entry.pid)).toEqual(childPids);
+      expect(terminal.processes).toHaveLength(childPids.length);
+      expect(terminal.processes.map((entry) => entry.pid)).toEqual(
+        expect.arrayContaining(childPids),
+      );
       expect(terminal.recovery?.state).toBe("probe-timeout");
 
       await fs.rm(input.stalledProcessProbeTargetPath, { force: true });
