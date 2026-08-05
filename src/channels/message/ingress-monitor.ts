@@ -16,7 +16,7 @@ import { ChannelIngressUnavailableError } from "./ingress-unavailable.js";
 const DEFAULT_APPEND_RETRY_DELAYS_MS = [0, 100, 300] as const;
 
 /** Stable identity and serialization lane extracted before durable admission. */
-type ChannelIngressMonitorFacts = { eventId: string; laneKey: string };
+export type ChannelIngressMonitorFacts = { eventId: string; laneKey: string };
 
 /** Versioned body presented to a channel's persisted-payload encoder. */
 type ChannelIngressPayloadEnvelope<TBody> = { version: number; body: TBody };
@@ -48,7 +48,7 @@ type ChannelIngressMonitorInspectionContext =
 
 type ChannelIngressMonitorClaimErrorKind = "invalid-version" | "identity-mismatch";
 
-type ChannelIngressMonitorPayloadCodec<TRaw, TBody, TStoredPayload, TMetadata> = {
+export type ChannelIngressMonitorPayloadCodec<TRaw, TBody, TStoredPayload, TMetadata> = {
   version: number;
   serialize: (
     raw: TRaw,
@@ -93,12 +93,12 @@ export const CHANNEL_INGRESS_RETENTION_DEFAULTS = Object.freeze({
   failedMaxEntries: 20_000,
 } satisfies ChannelIngressMonitorRetention);
 
-type ChannelIngressMonitorDrainOptions<TStoredPayload, TMetadata> = Omit<
+export type ChannelIngressMonitorDrainOptions<TStoredPayload, TMetadata> = Omit<
   CreateChannelIngressDrainOptions<TStoredPayload, TMetadata>,
   "queue" | "dispatchClaimedEvent" | "abortSignal" | "now" | "ownerId" | "claimLeaseMs"
 >;
 
-type CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMetadata> = {
+export type CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMetadata> = {
   queue:
     | ChannelIngressQueue<TStoredPayload, TMetadata>
     | (() => ChannelIngressQueue<TStoredPayload, TMetadata>);
@@ -149,7 +149,6 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
   options: CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMetadata>,
 ) {
   const now = options.now ?? Date.now;
-  const appendRetryDelaysMs = options.appendRetryDelaysMs ?? DEFAULT_APPEND_RETRY_DELAYS_MS;
   const waitForDeliveryIdleBeforeRepump = options.waitForDeliveryIdleBeforeRepump ?? false;
   const retention =
     options.retention === "standard"
@@ -555,7 +554,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     receivedAt: number;
   }): Promise<Awaited<ReturnType<Queue["enqueue"]>>> => {
     let lastError: unknown;
-    for (const delayMs of appendRetryDelaysMs) {
+    for (const delayMs of options.appendRetryDelaysMs ?? DEFAULT_APPEND_RETRY_DELAYS_MS) {
       if (delayMs > 0) {
         await sleep(delayMs);
       }
