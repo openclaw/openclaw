@@ -1,5 +1,6 @@
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { resolveCronScheduledAgentRuntime } from "../../cron/scheduled-native-policy.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -276,11 +277,14 @@ export async function runEmbeddedAgentAttempt(params: {
           sessionKey,
           preparation: { kind: "direct" },
           resolveRuntimeOverride: (candidateProvider) =>
-            resolveSessionRuntimeOverrideForProvider({
-              provider: candidateProvider,
-              entry: sessionEntryForAttempt,
-              cfg,
-            }),
+            resolveCronScheduledAgentRuntime(
+              params.opts.scheduledNativePolicy,
+              resolveSessionRuntimeOverrideForProvider({
+                provider: candidateProvider,
+                entry: sessionEntryForAttempt,
+                cfg,
+              }),
+            ),
         },
         behavior: {
           kind: "command-rpc",
@@ -360,19 +364,25 @@ export async function runEmbeddedAgentAttempt(params: {
             providerOverride === defaultProvider && modelOverride === defaultModel
               ? configuredDefaultAuthProfileId
               : undefined;
-          const agentHarnessRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
-            provider: providerOverride,
-            entry: attemptSessionEntry,
-            cfg,
-          });
-          const candidateRuntime = resolveEffectiveAgentRuntime({
-            cfg,
-            provider: providerOverride,
-            modelId: modelOverride,
-            agentId: sessionAgentId,
-            sessionKey,
-            sessionEntry: attemptSessionEntry,
-          });
+          const agentHarnessRuntimeOverride = resolveCronScheduledAgentRuntime(
+            params.opts.scheduledNativePolicy,
+            resolveSessionRuntimeOverrideForProvider({
+              provider: providerOverride,
+              entry: attemptSessionEntry,
+              cfg,
+            }),
+          );
+          const candidateRuntime = resolveCronScheduledAgentRuntime(
+            params.opts.scheduledNativePolicy,
+            resolveEffectiveAgentRuntime({
+              cfg,
+              provider: providerOverride,
+              modelId: modelOverride,
+              agentId: sessionAgentId,
+              sessionKey,
+              sessionEntry: attemptSessionEntry,
+            }),
+          );
           const candidateConfiguredThinkLevel =
             immutableThinkLevel ??
             resolveConfiguredThinkingDefault({

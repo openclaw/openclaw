@@ -36,6 +36,7 @@ import {
   backendGatewayClient,
   cronContinuationGatewayClient,
   cronMediaCompletionEvent,
+  makeCronRunContinuationFixture,
   setupCronContinuationReleaseFixture,
   invokeGatewaySuspendPrepare,
   operatorWriteGatewayClient,
@@ -1426,17 +1427,15 @@ describe("gateway agent handler", () => {
       cliSessionBindings: {
         "claude-cli": { sessionId: "native-claude-session" },
       },
-      cronRunContinuation: {
-        lifecycleRevision: "revision-1",
-        phase: "ready" as const,
-        basePersisted: true,
+      cronRunContinuation: makeCronRunContinuationFixture({
         toolsAllow: ["image_generate", "write"],
         toolsAllowIsDefault: true,
+        scheduledNativePolicy: { version: 1, mode: "disabled" },
         cliSessionBindingFacts: {
           sourceReplyDeliveryMode: "automatic" as const,
           requireExplicitMessageTarget: true,
         },
-      },
+      }),
     };
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
@@ -1555,15 +1554,14 @@ describe("gateway agent handler", () => {
       updatedAt: Date.now(),
       modelProvider: "openai",
       model: "gpt-5.4",
-      cronRunContinuation: {
-        lifecycleRevision: "revision-1",
+      cronRunContinuation: makeCronRunContinuationFixture({
         phase: testCase.phase,
         basePersisted:
           "basePersisted" in testCase ? testCase.basePersisted : testCase.phase === "ready",
         ...("ownerLifecycleGeneration" in testCase
           ? { ownerLifecycleGeneration: testCase.ownerLifecycleGeneration }
           : {}),
-      },
+      }),
     };
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
@@ -1611,11 +1609,7 @@ describe("gateway agent handler", () => {
       lifecycleRevision: "revision-1",
       modelProvider: "openai",
       model: "gpt-5.4",
-      cronRunContinuation: {
-        lifecycleRevision: "revision-1",
-        phase: "ready" as const,
-        basePersisted: true,
-      },
+      cronRunContinuation: makeCronRunContinuationFixture(),
     };
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
@@ -1689,11 +1683,7 @@ describe("gateway agent handler", () => {
     await waitForAssertion(() => {
       expect(
         expectDefined(store[sessionKey], "store[sessionKey] test invariant").cronRunContinuation,
-      ).toEqual({
-        lifecycleRevision: "revision-1",
-        phase: "ready",
-        basePersisted: true,
-      });
+      ).toEqual(makeCronRunContinuationFixture());
     });
     expect(first).toHaveBeenCalledWith(true, expect.objectContaining({ status: "ok" }), undefined, {
       runId: "cron-media-first",
@@ -1709,11 +1699,7 @@ describe("gateway agent handler", () => {
       lifecycleRevision: "revision-1",
       modelProvider: "openai",
       model: "gpt-5.4",
-      cronRunContinuation: {
-        lifecycleRevision: "revision-1",
-        phase: "ready",
-        basePersisted: true,
-      },
+      cronRunContinuation: makeCronRunContinuationFixture(),
     };
     const store: Record<string, SessionEntry> = { [sessionKey]: structuredClone(entry) };
     mocks.loadSessionEntry.mockReturnValue({
@@ -1736,11 +1722,7 @@ describe("gateway agent handler", () => {
         { reqId, client: cronContinuationGatewayClient() },
       );
       await waitForAssertion(() => {
-        expect(store[sessionKey]?.cronRunContinuation).toEqual({
-          lifecycleRevision: "revision-1",
-          phase: "ready",
-          basePersisted: true,
-        });
+        expect(store[sessionKey]?.cronRunContinuation).toEqual(makeCronRunContinuationFixture());
       });
     }
     expect(mocks.agentCommand).toHaveBeenCalledTimes(2);
@@ -1756,11 +1738,7 @@ describe("gateway agent handler", () => {
       lifecycleRevision: "revision-1",
       modelProvider: "openai",
       model: "gpt-5.4",
-      cronRunContinuation: {
-        lifecycleRevision: "revision-1",
-        phase: "ready" as const,
-        basePersisted: true,
-      },
+      cronRunContinuation: makeCronRunContinuationFixture(),
     };
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
@@ -1828,11 +1806,7 @@ describe("gateway agent handler", () => {
       contextTokens: 128_000,
       agentHarnessId: "openclaw",
       cliSessionBindings: { "openai-cli": { sessionId: "native-a" } },
-      cronRunContinuation: {
-        lifecycleRevision: "revision-1",
-        phase: "ready" as const,
-        basePersisted: true,
-      },
+      cronRunContinuation: makeCronRunContinuationFixture(),
     };
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
@@ -1973,11 +1947,7 @@ describe("gateway agent handler", () => {
       expect(releaseAttempts).toBe(4);
       expect(
         expectDefined(store[sessionKey], "store[sessionKey] test invariant").cronRunContinuation,
-      ).toEqual({
-        lifecycleRevision: "revision-1",
-        phase: "ready",
-        basePersisted: true,
-      });
+      ).toEqual(makeCronRunContinuationFixture());
       await expect(waitForActiveGatewayRootWork()).resolves.toEqual({ drained: true, active: 0 });
       const readyPrepare = await invokeGatewaySuspendPrepare(
         context,

@@ -25,6 +25,7 @@ import { acquireOwnedSessionTranscriptWriteLock } from "../../config/sessions/tr
 import { readTailAssistantTextFromSessionTranscript } from "../../config/sessions/transcript.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveCronScheduledAgentRuntime } from "../../cron/scheduled-native-policy.js";
 import {
   injectTimestamp,
   timestampOptsFromConfig,
@@ -690,7 +691,12 @@ export function runAgentAttempt(params: {
   const bootstrapPromptWarningSignature =
     bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
   const requestedAgentHarnessId = isRawModelRun ? "openclaw" : undefined;
-  const sessionRuntimeOverride = isRawModelRun ? undefined : params.agentHarnessRuntimeOverride;
+  const sessionRuntimeOverride = isRawModelRun
+    ? undefined
+    : resolveCronScheduledAgentRuntime(
+        params.opts.scheduledNativePolicy,
+        params.agentHarnessRuntimeOverride,
+      );
   const locksSessionRuntimeOverride =
     sessionRuntimeOverride !== undefined && params.sessionEntry?.modelSelectionLocked === true;
   const sessionCliRuntime =
@@ -712,9 +718,11 @@ export function runAgentAttempt(params: {
   const cliExecutionProvider = isRawModelRun
     ? params.providerOverride
     : (sessionCliRuntime ?? configuredCliRuntime ?? params.providerOverride);
-  const isCliExecutionProvider = sessionRuntimeOverride
-    ? sessionCliRuntime !== undefined
-    : isCliProvider(cliExecutionProvider, params.cfg);
+  const isCliExecutionProvider =
+    params.opts.scheduledNativePolicy?.mode !== "disabled" &&
+    (sessionRuntimeOverride
+      ? sessionCliRuntime !== undefined
+      : isCliProvider(cliExecutionProvider, params.cfg));
   const completionRetainsRequesterTools =
     trustedSubagentAnnounceHandoff &&
     !isRawModelRun &&
@@ -1207,6 +1215,7 @@ export function runAgentAttempt(params: {
       ? params.opts.trustedInternalHandoff
       : undefined,
     scheduledToolPolicy: params.opts.scheduledToolPolicy,
+    scheduledNativePolicy: params.opts.scheduledNativePolicy,
     internalEvents: params.opts.internalEvents,
     inputProvenance: params.opts.inputProvenance,
     sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,

@@ -27,6 +27,7 @@ import { resolveCronDeliveryPreviews } from "../../cron/delivery-preview.js";
 import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import { toPublicCronJob } from "../../cron/public-job.js";
+import type { CronScheduledNativePolicy } from "../../cron/scheduled-native-policy.js";
 import { CRON_JOB_SCRATCH_MAX_BYTES } from "../../cron/scratch-contract.js";
 import { applyJobPatch } from "../../cron/service/jobs.js";
 import {
@@ -60,6 +61,7 @@ import {
   cronJobMatchesCallerScope,
   cronPatchSessionRefsMatchCaller,
   readCronCallerScope,
+  resolveCronScheduledNativePolicyForCaller,
   resolveCronScheduledToolPolicyForCaller,
   type CronCallerScope,
 } from "./cron-caller-scope.js";
@@ -684,6 +686,18 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    let scheduledNativePolicy: CronScheduledNativePolicy | undefined;
+    if (cronJobUsesToolRuntime(jobCreate)) {
+      try {
+        scheduledNativePolicy = resolveCronScheduledNativePolicyForCaller({
+          callerScope,
+          toolsAllow: jobCreate.payload.toolsAllow,
+        });
+      } catch (err) {
+        respondInvalidCronParams(respond, "cron.add", formatErrorMessage(err));
+        return;
+      }
+    }
     const timestampValidation = validateScheduleTimestamp(jobCreate.schedule);
     if (!timestampValidation.ok) {
       respond(
@@ -718,7 +732,10 @@ export const cronHandlers: GatewayRequestHandlers = {
             defaultAgentId: context.cron.getDefaultAgentId(),
           }),
         ...(cronJobUsesToolRuntime(jobCreate)
-          ? { scheduledToolPolicy: resolveCronScheduledToolPolicyForCaller(callerScope) }
+          ? {
+              scheduledToolPolicy: resolveCronScheduledToolPolicyForCaller(callerScope),
+              scheduledNativePolicy,
+            }
           : {}),
       });
     } catch (err) {
@@ -830,6 +847,29 @@ export const cronHandlers: GatewayRequestHandlers = {
       respondInvalidCronParams(respond, "cron.update", "session target outside caller scope");
       return;
     }
+    const explicitlyMutatesToolsAllow =
+      patch.payload !== undefined && Object.hasOwn(patch.payload, "toolsAllow");
+    const entersAgentTurn =
+      patch.payload?.kind === "agentTurn" && currentJob.payload.kind !== "agentTurn";
+    const reauthorizesNativePolicy = explicitlyMutatesToolsAllow || entersAgentTurn;
+    let scheduledNativePolicy: CronScheduledNativePolicy | undefined;
+    if (reauthorizesNativePolicy) {
+      try {
+        const prospective = await assertValidCronUpdatePatch({
+          cfg,
+          defaultAgentId: context.cron.getDefaultAgentId(),
+          currentJob,
+          patch,
+        });
+        scheduledNativePolicy = resolveCronScheduledNativePolicyForCaller({
+          callerScope,
+          toolsAllow: prospective.payload.toolsAllow,
+        });
+      } catch (err) {
+        respondInvalidCronParams(respond, "cron.update", formatErrorMessage(err));
+        return;
+      }
+    }
     if (patch.schedule) {
       const timestampValidation = validateScheduleTimestamp(patch.schedule);
       if (!timestampValidation.ok) {
@@ -905,7 +945,10 @@ export const cronHandlers: GatewayRequestHandlers = {
           }
         },
         cronPatchTouchesToolRuntime(patch)
-          ? { scheduledToolPolicy: resolveCronScheduledToolPolicyForCaller(callerScope) }
+          ? {
+              scheduledToolPolicy: resolveCronScheduledToolPolicyForCaller(callerScope),
+              ...(reauthorizesNativePolicy ? { scheduledNativePolicy } : {}),
+            }
           : undefined,
       );
     } catch (err) {

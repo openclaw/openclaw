@@ -1,9 +1,12 @@
 import {
   embeddedAgentLog,
+  getPluginToolMeta,
   isHostScopedAgentToolActive,
-  materializeRequesterScopedMcpToolsForHarnessRun,
+  materializeConfiguredMcpToolsForHarnessRun,
   resolveAgentDir,
+  supportsModelTools,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveCodexMcpToolOverridesForAgent } from "openclaw/plugin-sdk/codex-mcp-projection";
 import {
   buildDynamicTools,
   formatCodexDynamicToolBuildStageSummary,
@@ -22,7 +25,6 @@ import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
 export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   const {
     connection,
-    bundleMcpThreadConfig,
     runtimeParams,
     effectiveRuntimeModelId,
     nativeToolSurfaceEnabled,
@@ -56,7 +58,6 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         stages: preDynamicSummary.stages,
         hasStartupBinding: Boolean(mutable.startupBinding?.threadId),
         startupAuthProfileId: startupAuthProfileId ?? null,
-        bundleMcpDiagnosticCount: bundleMcpThreadConfig.diagnostics.length,
         nativeToolSurfaceEnabled,
       },
     );
@@ -108,6 +109,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     frameToolCallId?: string;
     frameImageIdentity?: string;
   } = { value: 0 };
+  const cronCreatorToolAllowlist: Array<string | { name: string; pluginId?: string }> = [];
   const commonToolParams = {
     params: dynamicToolParams,
     resolvedWorkspace,
@@ -131,6 +133,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   };
   const tools = await buildDynamicTools({
     ...commonToolParams,
+    cronCreatorToolAllowlistRef: cronCreatorToolAllowlist,
     onPersistentWebSearchPolicyResolved: (allowed) => {
       toolState.persistentWebSearchAllowed = allowed;
     },
@@ -144,9 +147,11 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     ignoreDisableMessageTool: true,
     ignoreRuntimePlan: true,
   });
-  // Requester-scoped MCP: dynamic tools on a shared thread (never harness-native MCP).
-  // Specs come from the session advertised-catalog cache so fingerprints stay stable.
-  const scopedMcpTools = await materializeRequesterScopedMcpToolsForHarnessRun({
+  // OpenClaw-configured MCP is always a dynamic tool surface. Codex-native MCP
+  // remains owned by Codex, while this bridge keeps credentials inside OpenClaw.
+  const mcpToolsEnabled =
+    supportsModelTools(params.model) && params.modelRun !== true && params.promptMode !== "none";
+  const configuredMcpTools = await materializeConfiguredMcpToolsForHarnessRun({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     workspaceDir: effectiveWorkspace,
@@ -155,6 +160,12 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     requesterSenderId: params.senderId,
     agentAccountId: params.agentAccountId,
     messageChannel: params.messageChannel ?? params.messageProvider,
+    toolOverrides: resolveCodexMcpToolOverridesForAgent(params.config, {
+      agentId: sessionAgentId,
+      toolOverrides: params.toolOverrides,
+    }),
+    toolsEnabled: mcpToolsEnabled,
+    disableTools: params.disableTools,
     reservedToolNames: [
       ...tools.map((tool) => tool.name),
       ...registeredTools.map((tool) => tool.name),
@@ -172,6 +183,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       agentId: sessionAgentId,
       agentDir: agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId),
       agentAccountId: params.agentAccountId,
+      scheduledToolPolicy: params.scheduledToolPolicy,
       messageProvider: params.messageProvider ?? params.messageChannel,
       messageChannel: params.messageChannel,
       chatType: params.chatType,
@@ -202,66 +214,88 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     },
     warn: (message) => embeddedAgentLog.warn(message),
   });
-  // Restricted dynamic-tool profiles (private QA, exclusion lists) gate scoped
-  // MCP tools exactly like every other dynamic tool. Filter both lists with the
-  // same rule so execution and advertised specs stay name-aligned.
-  const scopedExecutable = scopedMcpTools
-    ? filterCodexDynamicTools(scopedMcpTools.tools, pluginConfig)
-    : [];
-  const scopedAdvertised = scopedMcpTools
-    ? filterCodexDynamicTools(scopedMcpTools.advertisedTools, pluginConfig)
-    : [];
-  const toolsWithScopedMcp = scopedExecutable.length > 0 ? [...tools, ...scopedExecutable] : tools;
-  const registeredWithScopedMcp =
-    scopedAdvertised.length > 0 ? [...registeredTools, ...scopedAdvertised] : registeredTools;
-  const toolBridge = createCodexDynamicToolBridge({
-    tools: toolsWithScopedMcp,
-    registeredTools: registeredWithScopedMcp,
-    signal: runAbortController.signal,
-    computerContextEpoch,
-    loading: resolveCodexDynamicToolsLoadingForRuntime(pluginConfig, effectiveRuntimeModelId, {
-      connectionClass: connection.appServer.connectionClass,
-    }),
-    directToolNames: resolveCodexDynamicToolDirectNames(
-      params,
-      isHostScopedAgentToolActive("openclaw"),
-    ),
-    hookContext: {
-      agentId: sessionAgentId,
-      config: params.config,
-      contextWindowTokens: params.contextTokenBudget ?? params.model.contextWindow,
-      workspaceDir: effectiveWorkspace,
-      remoteWorkspaceRoot: connection.appServer.remoteWorkspaceRoot,
-      remoteWorkspaceRequestTimeoutMs: connection.appServer.requestTimeoutMs,
-      sessionId: params.sessionId,
-      sessionKey: sandboxSessionKey,
-      runId: params.runId,
-      channelId: hookChannelId,
-      currentChannelProvider: resolveCodexMessageToolProvider(params),
-      currentChannelId: params.currentChannelId,
-      currentMessagingTarget: params.currentMessagingTarget,
-      currentMessageId: params.currentMessageId,
-      currentThreadId: params.currentThreadTs,
-      replyToMode: params.replyToMode,
-      hasRepliedRef: params.hasRepliedRef,
-      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-      onToolOutcome: onCodexToolOutcome,
-      allocateToolOutcomeOrdinal: allocateCodexToolOutcomeOrdinal,
-    },
-  });
-  return {
-    tools: toolsWithScopedMcp,
-    registeredTools: registeredWithScopedMcp,
-    scopedMcpTools,
-    dynamicToolParams,
-    computerContextEpoch,
-    toolBridge,
-    toolState,
-    toolOutcomeOrdinals,
-    suppressedDynamicToolOutcomeOrdinals,
-    onCodexToolOutcome,
-    allocateCodexToolOutcomeOrdinal,
-  };
+  try {
+    // Restricted dynamic-tool profiles (private QA, exclusion lists) gate scoped
+    // MCP tools exactly like every other dynamic tool. Filter both lists with the
+    // same rule so execution and advertised specs stay name-aligned.
+    const configuredMcpExecutable = configuredMcpTools
+      ? filterCodexDynamicTools(configuredMcpTools.tools, pluginConfig)
+      : [];
+    const configuredMcpAdvertised = configuredMcpTools
+      ? filterCodexDynamicTools(configuredMcpTools.advertisedTools, pluginConfig)
+      : [];
+    const configuredMcpAppTools = configuredMcpTools
+      ? filterCodexDynamicTools(configuredMcpTools.appTools, pluginConfig)
+      : [];
+    configuredMcpTools?.restrictAppTools?.(configuredMcpAppTools);
+    const creatorToolNames = new Set(
+      cronCreatorToolAllowlist.map((entry) => (typeof entry === "string" ? entry : entry.name)),
+    );
+    for (const tool of configuredMcpExecutable) {
+      if (!creatorToolNames.has(tool.name)) {
+        const pluginId = getPluginToolMeta(tool)?.pluginId;
+        cronCreatorToolAllowlist.push(pluginId ? { name: tool.name, pluginId } : tool.name);
+        creatorToolNames.add(tool.name);
+      }
+    }
+    const toolsWithConfiguredMcp =
+      configuredMcpExecutable.length > 0 ? [...tools, ...configuredMcpExecutable] : tools;
+    const registeredWithConfiguredMcp =
+      configuredMcpAdvertised.length > 0
+        ? [...registeredTools, ...configuredMcpAdvertised]
+        : registeredTools;
+    const toolBridge = createCodexDynamicToolBridge({
+      tools: toolsWithConfiguredMcp,
+      registeredTools: registeredWithConfiguredMcp,
+      signal: runAbortController.signal,
+      computerContextEpoch,
+      loading: resolveCodexDynamicToolsLoadingForRuntime(pluginConfig, effectiveRuntimeModelId, {
+        connectionClass: connection.appServer.connectionClass,
+      }),
+      directToolNames: resolveCodexDynamicToolDirectNames(
+        params,
+        isHostScopedAgentToolActive("openclaw"),
+      ),
+      hookContext: {
+        agentId: sessionAgentId,
+        config: params.config,
+        contextWindowTokens: params.contextTokenBudget ?? params.model.contextWindow,
+        workspaceDir: effectiveWorkspace,
+        remoteWorkspaceRoot: connection.appServer.remoteWorkspaceRoot,
+        remoteWorkspaceRequestTimeoutMs: connection.appServer.requestTimeoutMs,
+        sessionId: params.sessionId,
+        sessionKey: sandboxSessionKey,
+        runId: params.runId,
+        channelId: hookChannelId,
+        currentChannelProvider: resolveCodexMessageToolProvider(params),
+        currentChannelId: params.currentChannelId,
+        currentMessagingTarget: params.currentMessagingTarget,
+        currentMessageId: params.currentMessageId,
+        currentThreadId: params.currentThreadTs,
+        replyToMode: params.replyToMode,
+        hasRepliedRef: params.hasRepliedRef,
+        sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+        onToolOutcome: onCodexToolOutcome,
+        allocateToolOutcomeOrdinal: allocateCodexToolOutcomeOrdinal,
+      },
+    });
+    return {
+      tools: toolsWithConfiguredMcp,
+      registeredTools: registeredWithConfiguredMcp,
+      configuredMcpTools,
+      dynamicToolParams,
+      computerContextEpoch,
+      toolBridge,
+      toolState,
+      toolOutcomeOrdinals,
+      suppressedDynamicToolOutcomeOrdinals,
+      onCodexToolOutcome,
+      allocateCodexToolOutcomeOrdinal,
+    };
+  } catch (error) {
+    await configuredMcpTools?.dispose();
+    throw error;
+  }
 }
 
 export type CodexAttemptTools = Awaited<ReturnType<typeof prepareCodexAttemptTools>>;

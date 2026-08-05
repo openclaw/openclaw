@@ -19,6 +19,7 @@ import {
 import {
   formatLegacyIssuePreview,
   formatScheduledToolPolicyAdvisory,
+  formatScheduledNativePolicyAdvisory,
   formatUnresolvedCommandPromptAdvisory,
   formatUnresolvedShellPromptAdvisory,
 } from "./repair-plan.js";
@@ -262,6 +263,16 @@ export async function collectLegacyCronStoreHealthFindings(params: {
       "cron-scheduled-authority-valid",
       "have invalid scheduled authority provenance",
     ],
+    [
+      normalized.legacyScheduledNativePolicyJobs,
+      "cron-scheduled-native-authority-reauthorization",
+      "require explicit native authority reauthorization",
+    ],
+    [
+      normalized.invalidScheduledNativePolicyJobs,
+      "cron-scheduled-native-authority-valid",
+      "have invalid native authority provenance",
+    ],
   ] as const) {
     if (names.length > 0) {
       findings.push(
@@ -484,6 +495,13 @@ export async function maybeRepairLegacyCronStore(params: {
   });
   if (scheduledToolPolicyAdvisory) {
     note(scheduledToolPolicyAdvisory, "Cron");
+  }
+  const scheduledNativePolicyAdvisory = formatScheduledNativePolicyAdvisory({
+    legacyJobs: normalized.legacyScheduledNativePolicyJobs,
+    invalidJobs: normalized.invalidScheduledNativePolicyJobs,
+  });
+  if (scheduledNativePolicyAdvisory) {
+    note(scheduledNativePolicyAdvisory, "Cron");
   }
   const previewLines = formatLegacyIssuePreview(normalized.issues);
   if (legacyStoreDetected) {

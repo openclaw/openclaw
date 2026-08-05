@@ -26,54 +26,71 @@ export async function runCodexAppServerAttempt(
 ): Promise<EmbeddedRunAttemptResult> {
   const connection = await prepareCodexAttemptConnection({ params, options });
   const runtime = await prepareCodexAttemptRuntime(connection);
-  const attemptTools = await prepareCodexAttemptTools(runtime);
-  const attemptContext = await prepareCodexAttemptContext(runtime, attemptTools);
-  const attemptPrompt = await prepareCodexAttemptPrompt(attemptContext);
-  const resources = prepareCodexAttemptResources(attemptPrompt);
-  await startCodexAttemptRuntime(resources);
-
-  const turnRuntime = createCodexAttemptTurnState(resources);
-  const lifecycle = createCodexAttemptLifecycleController(resources, turnRuntime);
-  const notifications = createCodexAttemptNotificationController(resources, turnRuntime, lifecycle);
-  const serverRequests = createCodexAttemptServerRequestController(
-    resources,
-    turnRuntime,
-    lifecycle,
-  );
-  const { ensureCurrentThreadRoute } = await prepareCodexAttemptRoute(
-    resources,
-    turnRuntime,
-    notifications,
-    serverRequests.handleServerRequest,
-  );
-  const turnRequest = await prepareCodexAttemptTurnRequest(
-    resources,
-    turnRuntime,
-    ensureCurrentThreadRoute,
-    notifications.waitForActiveNativeTurnCompletion,
-  );
-  const turnStart = await startCodexAttemptTurn(resources, turnRuntime, notifications, turnRequest);
-  if ("result" in turnStart) {
-    return turnStart.result;
-  }
-  const activeTurn = await activateCodexAttemptTurn(
-    resources,
-    turnRuntime,
-    lifecycle,
-    notifications,
-    turnStart.turn,
-  );
-
+  let configuredMcpTools: Awaited<
+    ReturnType<typeof prepareCodexAttemptTools>
+  >["configuredMcpTools"];
   try {
-    return await finalizeCodexAttempt(
+    const attemptTools = await prepareCodexAttemptTools(runtime);
+    configuredMcpTools = attemptTools.configuredMcpTools;
+    const attemptContext = await prepareCodexAttemptContext(runtime, attemptTools);
+    const attemptPrompt = await prepareCodexAttemptPrompt(attemptContext);
+    const resources = prepareCodexAttemptResources(attemptPrompt);
+    await startCodexAttemptRuntime(resources);
+
+    const turnRuntime = createCodexAttemptTurnState(resources);
+    const lifecycle = createCodexAttemptLifecycleController(resources, turnRuntime);
+    const notifications = createCodexAttemptNotificationController(
+      resources,
+      turnRuntime,
+      lifecycle,
+    );
+    const serverRequests = createCodexAttemptServerRequestController(
+      resources,
+      turnRuntime,
+      lifecycle,
+    );
+    const { ensureCurrentThreadRoute } = await prepareCodexAttemptRoute(
+      resources,
+      turnRuntime,
+      notifications,
+      serverRequests.handleServerRequest,
+    );
+    const turnRequest = await prepareCodexAttemptTurnRequest(
+      resources,
+      turnRuntime,
+      ensureCurrentThreadRoute,
+      notifications.waitForActiveNativeTurnCompletion,
+    );
+    const turnStart = await startCodexAttemptTurn(
+      resources,
+      turnRuntime,
+      notifications,
+      turnRequest,
+    );
+    if ("result" in turnStart) {
+      return turnStart.result;
+    }
+    const activeTurn = await activateCodexAttemptTurn(
       resources,
       turnRuntime,
       lifecycle,
       notifications,
-      turnRequest,
-      activeTurn,
+      turnStart.turn,
     );
+
+    try {
+      return await finalizeCodexAttempt(
+        resources,
+        turnRuntime,
+        lifecycle,
+        notifications,
+        turnRequest,
+        activeTurn,
+      );
+    } finally {
+      await cleanupCodexAttempt(resources, turnRuntime, lifecycle, turnRequest, activeTurn);
+    }
   } finally {
-    await cleanupCodexAttempt(resources, turnRuntime, lifecycle, turnRequest, activeTurn);
+    await configuredMcpTools?.dispose();
   }
 }

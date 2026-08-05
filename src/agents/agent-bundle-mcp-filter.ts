@@ -1,3 +1,5 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+
 /** Match the documented MCP tool-filter glob syntax: exact text plus `*`. */
 export function matchesMcpToolFilterPattern(pattern: string, value: string): boolean {
   const trimmed = pattern.trim();
@@ -34,4 +36,20 @@ export function matchesMcpToolFilterPattern(pattern: string, value: string): boo
     cursor = index + part.length;
   }
   return true;
+}
+
+/** True only for patterns that match every possible MCP tool or utility name. */
+function isUniversalMcpToolFilterPattern(pattern: string): boolean {
+  const trimmed = pattern.trim();
+  return /^\*+$/u.test(trimmed);
+}
+
+/** Proves that a raw MCP tool filter excludes the server's entire callable surface. */
+export function mcpToolFilterExcludesAll(value: unknown): boolean {
+  if (!isRecord(value) || !Array.isArray(value.exclude)) {
+    return false;
+  }
+  return value.exclude.some(
+    (pattern) => typeof pattern === "string" && isUniversalMcpToolFilterPattern(pattern),
+  );
 }

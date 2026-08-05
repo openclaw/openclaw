@@ -299,9 +299,11 @@ Contract notes:
   other session-shared MCP projection). Harnesses deliver them as run-scoped
   tools instead:
   - Embedded runner: session MCP runtime + bundle tools (static + scoped).
-  - Codex app-server: dynamic tools via
-    `materializeRequesterScopedMcpToolsForHarnessRun` (scoped-only; static
-    servers stay on Codex's native MCP client).
+  - Codex app-server: static and requester-scoped servers can be projected as
+    dynamic tools through `materializeConfiguredMcpToolsForHarnessRun`.
+  - Existing harness plugins can temporarily retain the deprecated
+    `materializeRequesterScopedMcpToolsForHarnessRun` adapter. It remains
+    requester-only, so static servers stay on the harness-native MCP client.
 - Scoped tool **specs** are session-stable after the first successful resolve in
   that session, so shared-thread harnesses (Codex) do not rotate threads when
   senders change. Before any requester resolves, no scoped specs are advertised.

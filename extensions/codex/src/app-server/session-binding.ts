@@ -249,8 +249,6 @@ const threadBindingSchema = z
     dynamicToolsContainDeferred: optionalBooleanSchema,
     webSearchThreadConfigFingerprint: optionalStringSchema,
     nativeSkillIsolationFingerprint: optionalStringSchema,
-    userMcpServersFingerprint: optionalStringSchema,
-    mcpServersFingerprint: optionalStringSchema,
     ringZeroConfigFingerprint: optionalStringSchema,
     ringZeroClientInstanceId: optionalStringSchema,
     nativeHookRelayGeneration: optionalNonBlankStringSchema,
@@ -450,7 +448,7 @@ function normalizeLegacyBindingFingerprints(
   // Shipped sidecars can contain unbounded canonical JSON fingerprints. Bound
   // them at the legacy encoder so plugin-state registration cannot reject the row.
   let normalized = record;
-  for (const key of ["dynamicToolsFingerprint", "userMcpServersFingerprint"] as const) {
+  for (const key of ["dynamicToolsFingerprint"] as const) {
     const value = record[key];
     const next = normalizeLegacyBindingFingerprint(value);
     if (next === value) {

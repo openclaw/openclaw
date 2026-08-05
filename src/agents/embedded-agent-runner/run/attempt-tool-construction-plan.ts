@@ -40,9 +40,28 @@ function cloneCodingToolConstructionPlan(
   return { ...plan };
 }
 
-function isBundleMcpAllowlistName(normalized: string): boolean {
+function isBundleMcpAllowlistName(
+  normalized: string,
+  toolNamePrefixes?: readonly string[],
+): boolean {
   // Bundle MCP tools use the synthetic bundle name or `bundle__tool` separator form.
-  return normalized === "bundle-mcp" || normalized.includes(TOOL_NAME_SEPARATOR);
+  if (normalized === "bundle-mcp") {
+    return true;
+  }
+  if (toolNamePrefixes === undefined) {
+    return normalized.includes(TOOL_NAME_SEPARATOR);
+  }
+  return toolNamePrefixes.some((rawPrefix) => {
+    const prefix = normalizeToolName(rawPrefix);
+    if (!prefix) {
+      return false;
+    }
+    if (normalized.length > prefix.length && normalized.startsWith(prefix)) {
+      return true;
+    }
+    const wildcardIndex = normalized.indexOf("*");
+    return wildcardIndex >= 0 && prefix.startsWith(normalized.slice(0, wildcardIndex));
+  });
 }
 
 function isPluginGroupAllowlistName(normalized: string): boolean {
@@ -244,9 +263,14 @@ export function shouldCreateBundleMcpRuntimeForAttempt(params: {
   toolsEnabled: boolean;
   disableTools?: boolean;
   toolsAllow?: string[];
+  /** Exact configured MCP namespaces when the caller has already prepared them. */
+  toolNamePrefixes?: readonly string[];
 }): boolean {
   return shouldCreateBundleRuntimeForAttempt(params, (normalized) => {
-    return isBundleMcpAllowlistName(normalized) || isPluginGroupAllowlistName(normalized);
+    return (
+      isBundleMcpAllowlistName(normalized, params.toolNamePrefixes) ||
+      isPluginGroupAllowlistName(normalized)
+    );
   });
 }
 

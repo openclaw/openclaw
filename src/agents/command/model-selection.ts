@@ -9,6 +9,7 @@ import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { resolveSessionModelOverrideRouteResolution } from "../../config/sessions/model-override-provenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveCronScheduledAgentRuntime } from "../../cron/scheduled-native-policy.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { isValidAgentHarnessSessionStoreEntry } from "../../sessions/agent-harness-session-key.js";
@@ -402,11 +403,14 @@ export async function resolveEmbeddedModelSelection(params: {
   }
   const providerForAuthProfileValidation = provider;
   let sessionEntryForAttempt = autoFallbackPrimaryProbeSessionEntry ?? sessionEntry;
-  const initialAgentHarnessRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
-    provider,
-    entry: sessionEntryForAttempt,
-    cfg: params.cfg,
-  });
+  const initialAgentHarnessRuntimeOverride = resolveCronScheduledAgentRuntime(
+    params.opts.scheduledNativePolicy,
+    resolveSessionRuntimeOverrideForProvider({
+      provider,
+      entry: sessionEntryForAttempt,
+      cfg: params.cfg,
+    }),
+  );
   await ensureSelectedAgentHarnessPlugin({
     config: params.cfg,
     provider,
@@ -431,7 +435,10 @@ export async function resolveEmbeddedModelSelection(params: {
     });
     const acceptedAuthProviders = listOpenAIAuthProfileProvidersForAgentRuntime({
       provider: providerForAuthProfileValidation,
-      harnessRuntime: validationHarnessPolicy.runtime,
+      harnessRuntime: resolveCronScheduledAgentRuntime(
+        params.opts.scheduledNativePolicy,
+        validationHarnessPolicy.runtime,
+      ),
       config: params.cfg,
     }).map((candidateProvider) =>
       params.pluginsEnabled
@@ -543,14 +550,17 @@ export async function resolveEmbeddedModelSelection(params: {
     }
   }
   const thinkingCatalog = catalogForThinking.length > 0 ? catalogForThinking : undefined;
-  const thinkingRuntime = resolveEffectiveAgentRuntime({
-    cfg: params.cfg,
-    provider,
-    modelId: model,
-    agentId: params.sessionAgentId,
-    sessionKey: params.sessionKey,
-    sessionEntry: sessionEntryForAttempt,
-  });
+  const thinkingRuntime = resolveCronScheduledAgentRuntime(
+    params.opts.scheduledNativePolicy,
+    resolveEffectiveAgentRuntime({
+      cfg: params.cfg,
+      provider,
+      modelId: model,
+      agentId: params.sessionAgentId,
+      sessionKey: params.sessionKey,
+      sessionEntry: sessionEntryForAttempt,
+    }),
+  );
   const primaryThinkLevel =
     primaryConfiguredThinkLevel ??
     resolveThinkingDefault({

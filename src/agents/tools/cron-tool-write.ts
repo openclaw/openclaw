@@ -3,6 +3,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { isRecord } from "../../utils.js";
 import { planCronJobUpdatePatch } from "./cron-tool-creator-cap.js";
 import type { CronCreatorToolAllowlistEntry, GatewayToolCaller } from "./cron-tool.types.js";
+import { withGatewayCronCreatorToolCap } from "./gateway-caller-context.js";
 import type { GatewayCallOptions } from "./gateway.js";
 
 export function assertNoCronShellExecution(value: unknown): void {
@@ -85,13 +86,18 @@ export async function updateCronJobFromAgentTool(params: {
       assertNoCronShellExecution(prepared.patch);
     }
     try {
-      return await params.callGateway("cron.update", params.gatewayOpts, {
-        id: params.id,
-        patch: prepared.patch,
-        ...(prepared.expectedConfigRevision
-          ? { expectedConfigRevision: prepared.expectedConfigRevision }
-          : {}),
-      });
+      const preparedPayload = isRecord(prepared.patch.payload) ? prepared.patch.payload : undefined;
+      return await withGatewayCronCreatorToolCap(
+        preparedPayload?.toolsAllowIsDefault === true,
+        async () =>
+          await params.callGateway("cron.update", params.gatewayOpts, {
+            id: params.id,
+            patch: prepared.patch,
+            ...(prepared.expectedConfigRevision
+              ? { expectedConfigRevision: prepared.expectedConfigRevision }
+              : {}),
+          }),
+      );
     } catch (error) {
       if (attempt === 0 && isCronJobConfigRevisionConflict(error)) {
         continue;

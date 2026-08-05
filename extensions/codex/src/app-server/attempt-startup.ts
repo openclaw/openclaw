@@ -7,7 +7,6 @@ import {
   embeddedAgentLog,
   formatErrorMessage,
   type AgentHarnessRuntimeArtifactBinding,
-  type CodexBundleMcpThreadConfig,
   type EmbeddedRunAttemptParams,
   type resolveSandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -60,7 +59,6 @@ import type {
   CodexDynamicToolSpec,
   CodexSandboxPolicy,
   CodexTurnEnvironmentParams,
-  JsonObject,
 } from "./protocol.js";
 import {
   ensureCodexSandboxExecServerEnvironment,
@@ -154,7 +152,6 @@ export async function startCodexAttemptThread(params: {
   finalConfigPatch?: Parameters<typeof startOrResumeThread>[0]["finalConfigPatch"];
   buildFinalConfigPatch?: Parameters<typeof startOrResumeThread>[0]["buildFinalConfigPatch"];
   nativeHookRelayGeneration?: string;
-  bundleMcpThreadConfig: CodexBundleMcpThreadConfig;
   nativeToolSurfaceEnabled: boolean;
   nativeProviderWebSearchSupport: CodexNativeWebSearchSupport;
   sandboxExecServerEnabled: boolean;
@@ -194,9 +191,7 @@ export async function startCodexAttemptThread(params: {
         startupClientForAbandonedRequestCleanup = undefined;
       },
       operation: async () => {
-        const threadConfig = mergeCodexThreadConfigs(
-          params.bundleMcpThreadConfig?.configPatch as JsonObject | undefined,
-        );
+        const threadConfig = mergeCodexThreadConfigs();
         const pluginStartupPolicy = resolveCodexPluginThreadConfigStartupPolicy({
           pluginConfig: params.pluginConfig,
           nativeToolSurfaceEnabled: params.nativeToolSurfaceEnabled,
@@ -471,9 +466,6 @@ export async function startCodexAttemptThread(params: {
                 nativeCodeModeEnabled: params.nativeToolSurfaceEnabled,
                 nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
                 nativeCodeModeOnlyEnabled: params.appServer.codeModeOnly,
-                userMcpServersEnabled: params.nativeToolSurfaceEnabled,
-                mcpServersFingerprint: params.bundleMcpThreadConfig.fingerprint,
-                mcpServersFingerprintEvaluated: params.bundleMcpThreadConfig.evaluated,
                 environmentSelection: startupEnvironmentSelection,
                 appServerRuntimeFingerprint,
                 contextEngineProjection: params.contextEngineProjection,

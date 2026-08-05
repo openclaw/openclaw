@@ -1611,9 +1611,10 @@ describe("maybeRepairLegacyCronStore", () => {
       prompter,
     });
 
-    // The advisory is informational only: doctor --fix cannot rewrite a working
-    // isolated agentTurn job, so the misleading repair note must stay absent.
-    expectNoNoteContaining("Cron store issues detected", "Cron");
+    // The shell-shape advisory remains informational; the separate native-authority
+    // migration is actionable and may still produce a repair note.
+    expectNoteContaining("Cron store issues detected", "Cron");
+    expectNoteContaining("2 bounded jobs", "Cron");
     expectNoteContaining(
       "3 isolated automations drive shell/process tools from the agent prompt and keep running as-is: `Shell prompt job 1`, `Shell prompt job 2`, `Shell prompt job 3`.",
       "Cron",
@@ -1622,22 +1623,31 @@ describe("maybeRepairLegacyCronStore", () => {
     expectNoteContaining("Shell prompt job 1", "Cron");
     expectNoteContaining("Shell prompt job 2", "Cron");
     expectNoteContaining("Shell prompt job 3", "Cron");
-    expectNoNoteContaining("openclaw doctor --fix", "Cron");
     expectNoNoteContaining("jobs.json", "Cron");
-    expect(prompter.confirm).not.toHaveBeenCalled();
+    expect(prompter.confirm).toHaveBeenCalledOnce();
 
-    // No churn: the advisory does not rewrite the still-working jobs.
+    // The advisory does not rewrite the task shape; only native authority is migrated.
     const persistedJobs = await readPersistedJobs(storePath);
-    expect(persistedJobs).toEqual(shellPromptJobs);
+    expect(persistedJobs).toEqual([
+      { ...shellPromptJobs[0], scheduledNativePolicy: { version: 1, mode: "inherit" } },
+      { ...shellPromptJobs[1], scheduledNativePolicy: { version: 1, mode: "disabled" } },
+      { ...shellPromptJobs[2], scheduledNativePolicy: { version: 1, mode: "disabled" } },
+    ]);
     const job = requirePersistedJob(persistedJobs, 0);
-    expect(job).toEqual(shellPromptJob);
+    expect(job).toEqual({
+      ...shellPromptJob,
+      scheduledNativePolicy: { version: 1, mode: "inherit" },
+    });
     const reloaded = await loadCronJobsStoreWithConfigJobs(storePath);
     expect(reloaded.configJobIndexes).toEqual([0, 1, 2]);
     expect(reloaded.invalidConfigRows).toEqual([]);
     const configJob = requirePersistedJob(reloaded.configJobs, 0);
-    expect(configJob).toEqual(
-      Object.fromEntries(Object.entries(shellPromptJob).filter(([key]) => key !== "updatedAtMs")),
-    );
+    expect(configJob).toEqual({
+      ...Object.fromEntries(
+        Object.entries(shellPromptJob).filter(([key]) => key !== "updatedAtMs"),
+      ),
+      scheduledNativePolicy: { version: 1, mode: "inherit" },
+    });
     expect(reloaded.configJobRuntimeEntries[0]).toEqual({
       updatedAtMs: shellPromptJob.updatedAtMs,
       state: {},
@@ -1680,7 +1690,8 @@ describe("maybeRepairLegacyCronStore", () => {
       prompter,
     });
 
-    expectNoNoteContaining("Cron store issues detected", "Cron");
+    expectNoteContaining("Cron store issues detected", "Cron");
+    expectNoteContaining("1 bounded job", "Cron");
     expectNoteContaining(
       "1 isolated automation describes a shell command in the agent prompt but lacks shell/process tool access: `Restricted command prompt`.",
       "Cron",
@@ -1689,8 +1700,7 @@ describe("maybeRepairLegacyCronStore", () => {
     expectNoteContaining("Recreate it as a command automation", "Cron");
     expectNoNoteContaining("informational only", "Cron");
     expectNoNoteContaining("keep running as-is", "Cron");
-    expectNoNoteContaining("openclaw doctor --fix", "Cron");
-    expect(prompter.confirm).not.toHaveBeenCalled();
+    expect(prompter.confirm).toHaveBeenCalledOnce();
 
     const job = requirePersistedJob(await readPersistedJobs(storePath), 0);
     const payload = requireRecord(job.payload, "cron payload");

@@ -3,6 +3,7 @@ import type { FailoverReason } from "../agents/embedded-agent-helpers/types.js";
 import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runner/execution-phase.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { HookExternalContentSource } from "../security/external-content.js";
+import type { CronScheduledNativePolicy } from "./scheduled-native-policy.js";
 import type { CronScheduledToolPolicy } from "./scheduled-tool-policy.js";
 import type { CronJobBase, CronPacing } from "./types-shared.js";
 
@@ -482,6 +483,8 @@ export type CronJob = CronJobBase<
   };
   /** Server-authored provenance for requester-scoped scheduled tool authority. */
   scheduledToolPolicy?: CronScheduledToolPolicy;
+  /** Internal creator-derived ceiling for runtime-native capabilities. */
+  scheduledNativePolicy?: CronScheduledNativePolicy;
   trigger?: CronTrigger;
   state: CronJobState;
 };
@@ -499,7 +502,7 @@ type CronJobStateInput = Partial<
 /** Create input accepted by cron APIs before id/timestamps/state are assigned. */
 export type CronJobCreate = Omit<
   CronJob,
-  "id" | "createdAtMs" | "updatedAtMs" | "state" | "scheduledToolPolicy"
+  "id" | "createdAtMs" | "updatedAtMs" | "state" | "scheduledToolPolicy" | "scheduledNativePolicy"
 > & {
   /** Internal callers can reserve a durable id before creation; public cron.add omits this. */
   id?: string;
@@ -520,6 +523,7 @@ export type CronJobPatch = Partial<
     | "displayName"
     | "owner"
     | "scheduledToolPolicy"
+    | "scheduledNativePolicy"
     | "pacing"
   >
 > & {

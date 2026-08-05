@@ -1266,7 +1266,12 @@ describe("plugin-sdk subpath exports", () => {
     expectSourceMentions("setup-tools", ["formatCliCommand", "detectBinary", "formatDocsLink"]);
     expectSourceMentions("lazy-runtime", ["createLazyRuntimeSurface", "createLazyRuntimeModule"]);
     expectSourceMentions("agent-harness", ["./agent-harness-runtime.js"]);
-    expectSourceMentions("agent-harness-runtime", ["AgentHarness", "EmbeddedPiCompactResult"]);
+    expectSourceMentions("agent-harness-runtime", [
+      "AgentHarness",
+      "EmbeddedPiCompactResult",
+      "materializeConfiguredMcpToolsForHarnessRun",
+      "materializeRequesterScopedMcpToolsForHarnessRun",
+    ]);
     expectSourceOmitsSnippet("agent-runtime", "./sglang.js");
     expectSourceOmitsSnippet("agent-runtime", "./vllm.js");
     expectSourceOmitsSnippet("agent-runtime", "../../extensions/");

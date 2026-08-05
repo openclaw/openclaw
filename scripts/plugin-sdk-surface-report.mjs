@@ -123,7 +123,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "text-runtime": 192,
   "agent-runtime": 2,
   "channel-secret-runtime": 23,
-  "agent-harness-runtime": 4,
+  // +1: shipped requester-scoped MCP helper retained through its deprecation window.
+  "agent-harness-runtime": 5,
   "agent-config-primitives": 2,
   "command-auth": 78,
   discord: 47,
@@ -220,7 +221,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +3: canonical ready, blocked, and stopped channel lifecycle patch factories.
       // +1: bounded external-content sanitizer for plugin-owned untrusted projections.
       // +1: auth-profile preservation decision for native model pickers.
-      4831,
+      // +1: requester-scoped MCP harness compatibility adapter.
+      4832,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -268,7 +270,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +3: canonical ready, blocked, and stopped channel lifecycle patch factories.
       // +1: bounded external-content sanitizer for plugin-owned untrusted projections.
       // +1: auth-profile preservation decision for native model pickers.
-      2908,
+      // +1: requester-scoped MCP harness compatibility adapter.
+      2909,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -280,7 +283,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: flushLogger projected through the deprecated text-runtime barrel.
       // +1: shared ingress error factory projected through channel-message.
       // +1: shared ingress retention defaults projected through channel-message.
-      1703,
+      // +1: requester-scoped MCP harness compatibility adapter.
+      1704,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

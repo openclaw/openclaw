@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import {
   AgentHarnessPreflightError,
-  type CodexBundleMcpThreadConfig,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -82,13 +81,6 @@ const pluginConfig: CodexPluginConfig = {
   appServer: { command: "codex" },
 };
 
-const bundleMcpThreadConfig = {
-  configPatch: undefined,
-  diagnostics: [],
-  evaluated: false,
-  fingerprint: undefined,
-} satisfies CodexBundleMcpThreadConfig;
-
 const HARNESS_REQUEST_TIMEOUT_MS = 15_000;
 
 function readHarnessMessages(
@@ -147,7 +139,6 @@ function startThreadWithHarness(
     webSearchAllowed: false,
     developerInstructions: undefined,
     finalConfigPatch: undefined,
-    bundleMcpThreadConfig,
     nativeToolSurfaceEnabled: true,
     nativeProviderWebSearchSupport: "supported",
     sandboxExecServerEnabled: false,

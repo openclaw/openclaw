@@ -389,10 +389,12 @@ change ACP sessions, generic Codex harness config, or other runtime adapters.
 Use non-empty `codex.agents` to project a server only into specific OpenClaw
 agent ids. Empty, blank, or invalid agent lists are rejected by config
 validation and omitted by the runtime projection path instead of becoming
-global. Use `codex.defaultToolsApprovalMode` (`auto`, `prompt`, or `approve`)
-to emit Codex's native `default_tools_approval_mode` for a trusted server.
-OpenClaw strips the `codex` metadata before handing the native `mcp_servers`
-config to Codex.
+global. `codex.defaultToolsApprovalMode` (`auto`, `prompt`, or `approve`)
+controls Codex-native MCP projection, including the Codex CLI adapter. Codex
+app-server exposes OpenClaw-configured MCP through OpenClaw's dynamic tool
+bridge instead, so OpenClaw tool policy governs that surface and this native
+approval setting does not apply. OpenClaw strips the `codex` metadata before
+handing native `mcp_servers` config to Codex.
 
 ### Saved MCP server definitions
 

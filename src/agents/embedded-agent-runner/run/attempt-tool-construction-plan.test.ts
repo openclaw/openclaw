@@ -549,6 +549,34 @@ describe("shouldCreateBundleMcpRuntimeForAttempt", () => {
         toolsAllow: ["strict__strict_probe"],
       }),
     ).toBe(true);
+    expect(
+      shouldCreateBundleMcpRuntimeForAttempt({
+        toolsEnabled: true,
+        toolsAllow: ["other__probe"],
+        toolNamePrefixes: ["strict__"],
+      }),
+    ).toBe(false);
+    expect(
+      shouldCreateBundleMcpRuntimeForAttempt({
+        toolsEnabled: true,
+        toolsAllow: ["strict__strict_probe"],
+        toolNamePrefixes: ["strict__"],
+      }),
+    ).toBe(true);
+    expect(
+      shouldCreateBundleMcpRuntimeForAttempt({
+        toolsEnabled: true,
+        toolsAllow: ["*__strict_probe"],
+        toolNamePrefixes: ["strict__"],
+      }),
+    ).toBe(true);
+    expect(
+      shouldCreateBundleMcpRuntimeForAttempt({
+        toolsEnabled: true,
+        toolsAllow: ["other__*"],
+        toolNamePrefixes: ["strict__"],
+      }),
+    ).toBe(false);
   });
 });
 

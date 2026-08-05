@@ -48,6 +48,7 @@ import {
   backendGatewayClient,
   cronContinuationGatewayClient,
   cronMediaCompletionEvent,
+  makeCronRunContinuationFixture,
   setupCronContinuationReleaseFixture,
   invokeGatewaySuspendPrepare,
   operatorWriteCliClient,
@@ -149,11 +150,7 @@ describe("gateway agent handler", () => {
       model: "gpt-5.4",
       channel: "slack",
       to: "channel:C123",
-      cronRunContinuation: {
-        lifecycleRevision: "revision-1",
-        phase: "ready" as const,
-        basePersisted: true,
-      },
+      cronRunContinuation: makeCronRunContinuationFixture(),
     };
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
@@ -189,11 +186,7 @@ describe("gateway agent handler", () => {
       message: "send blocked by session policy",
     });
     expect(mocks.agentCommand).not.toHaveBeenCalled();
-    expect(store[sessionKey].cronRunContinuation).toEqual({
-      lifecycleRevision: "revision-1",
-      phase: "ready",
-      basePersisted: true,
-    });
+    expect(store[sessionKey].cronRunContinuation).toEqual(makeCronRunContinuationFixture());
   });
 
   it("does not let public provenance suppress visible session accounting", async () => {

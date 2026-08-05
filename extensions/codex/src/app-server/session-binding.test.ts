@@ -386,9 +386,6 @@ describe("Codex app-server binding store", () => {
 
   it("normalizes legacy fingerprints without rehashing canonical values", () => {
     const rawDynamicToolsFingerprint = JSON.stringify([{ name: "legacy_tool" }]);
-    const rawUserMcpServersFingerprint = JSON.stringify({
-      mcp_servers: { legacy: { command: "node" } },
-    });
     const nativeSkillIsolationFingerprint = `sha256:${"b".repeat(64)}`;
     const imported = createStoredCodexAppServerBinding({
       schemaVersion: 2,
@@ -397,26 +394,21 @@ describe("Codex app-server binding store", () => {
       updatedAt: "2026-01-01T00:00:00.000Z",
       dynamicToolsFingerprint: rawDynamicToolsFingerprint,
       nativeSkillIsolationFingerprint,
-      userMcpServersFingerprint: rawUserMcpServersFingerprint,
     });
     expect(imported?.binding).toMatchObject({
       dynamicToolsFingerprint: hashCodexAppServerBindingFingerprint(rawDynamicToolsFingerprint),
       nativeSkillIsolationFingerprint,
-      userMcpServersFingerprint: hashCodexAppServerBindingFingerprint(rawUserMcpServersFingerprint),
     });
 
-    const existingHash = `sha256:${"a".repeat(64)}`;
     const canonical = createStoredCodexAppServerBinding({
       schemaVersion: 2,
       threadId: "thread-canonical-fingerprints",
       cwd: "/repo",
       updatedAt: "2026-01-01T00:00:00.000Z",
       dynamicToolsFingerprint: "[]",
-      userMcpServersFingerprint: existingHash,
     });
     expect(canonical?.binding).toMatchObject({
       dynamicToolsFingerprint: "[]",
-      userMcpServersFingerprint: existingHash,
     });
   });
 

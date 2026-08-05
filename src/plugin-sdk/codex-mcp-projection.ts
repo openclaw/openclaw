@@ -6,4 +6,5 @@
 export {
   buildCodexUserMcpServersThreadConfigPatch,
   buildCodexUserMcpServersThreadConfigPatchForRuntime,
+  resolveCodexMcpToolOverridesForAgent,
 } from "../agents/cli-runner/bundle-mcp-codex.js";

@@ -9,6 +9,8 @@ import {
   deliverAgentHarnessUserInputPrompt,
   formatAgentHarnessUserInputPrompt,
   getModelProviderRequestTransport,
+  materializeConfiguredMcpToolsForHarnessRun,
+  materializeRequesterScopedMcpToolsForHarnessRun,
   type AgentHarnessSupportContext,
   type AgentHarnessTerminalOutcomeClassification,
 } from "./agent-harness-runtime.js";
@@ -180,6 +182,11 @@ describe("agent harness runtime SDK facade", () => {
     expectTypeOf<
       NonNullable<AgentHarnessSupportContext["modelProvider"]>["runtimePolicy"]
     >().toEqualTypeOf<ProviderModelRouteRuntimePolicy | undefined>();
+  });
+
+  it("keeps the requester-scoped MCP helper as a typed compatibility export", () => {
+    expectTypeOf(materializeRequesterScopedMcpToolsForHarnessRun).toBeFunction();
+    expectTypeOf(materializeConfiguredMcpToolsForHarnessRun).toBeFunction();
   });
 });
 

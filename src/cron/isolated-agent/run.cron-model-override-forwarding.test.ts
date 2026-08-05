@@ -34,17 +34,27 @@ const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 // ---------- helpers ----------
 
 function makeJob(overrides?: Record<string, unknown>) {
+  const payload = {
+    kind: "agentTurn",
+    message: "summarize",
+    model: "google/gemini-2.0-flash",
+    toolsAllow: ["*"],
+    toolsAllowIsDefault: true,
+  };
   return {
     id: "model-fwd-job",
     name: "Model Forward Test",
     schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
     sessionTarget: "isolated",
-    payload: {
-      kind: "agentTurn",
-      message: "summarize",
-      model: "google/gemini-2.0-flash",
-    },
+    scheduledNativePolicy: { version: 1, mode: "inherit" },
     ...overrides,
+    payload: overrides?.payload
+      ? {
+          toolsAllow: ["*"],
+          toolsAllowIsDefault: true,
+          ...(overrides.payload as Record<string, unknown>),
+        }
+      : payload,
   } as never;
 }
 
@@ -79,7 +89,13 @@ function makeSuccessfulRunResult(provider = "google", model = "gemini-2.0-flash"
 
 function makeJobWithoutModel(overrides?: Record<string, unknown>) {
   return makeJob({
-    payload: { kind: "agentTurn", message: "summarize" },
+    payload: {
+      kind: "agentTurn",
+      message: "summarize",
+      model: undefined,
+      toolsAllow: ["*"],
+      toolsAllowIsDefault: true,
+    },
     ...overrides,
   });
 }
@@ -361,6 +377,35 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
         phase: "model_call_started",
       }),
     ).toBe(true);
+  });
+
+  it("keeps creator-disabled native authority on OpenClaw across every fallback", async () => {
+    isCliProviderMock.mockReturnValue(true);
+    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
+      await run(provider, model);
+      const result = await run("anthropic", "claude-sonnet-4-6");
+      return {
+        result,
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        attempts: [],
+      };
+    });
+
+    const result = await runCronIsolatedAgentTurn(
+      makeParams({
+        job: makeJob({
+          scheduledNativePolicy: { version: 1, mode: "disabled" },
+        }),
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(runCliAgentMock).not.toHaveBeenCalled();
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+    expect(
+      runEmbeddedAgentMock.mock.calls.map((call) => call[0].agentHarnessRuntimeOverride),
+    ).toEqual(["openclaw", "openclaw"]);
   });
 
   it("clears stale CLI bindings when cron CLI replacement is unflushed", async () => {

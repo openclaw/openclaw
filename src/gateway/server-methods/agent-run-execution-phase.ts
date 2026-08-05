@@ -413,6 +413,7 @@ export function startAgentRunExecution(params: {
                 scheduledToolPolicy: params.restoredCronContinuation.scheduledToolPolicy,
               })
             : undefined,
+          scheduledNativePolicy: params.restoredCronContinuation?.scheduledNativePolicy,
           requireExplicitMessageTarget:
             params.restoredCronContinuation?.cliSessionBindingFacts?.requireExplicitMessageTarget,
           cliSessionBindingFacts: params.restoredCronContinuation?.cliSessionBindingFacts,
@@ -456,6 +457,7 @@ export function startAgentRunExecution(params: {
             resolvedSessionKey: params.resolvedSessionKey,
             lifecycleStorePath: prepared.lifecycleStorePath,
             activeSessionAgentId: params.activeSessionAgentId,
+            scheduledNativePolicy: params.restoredCronContinuation?.scheduledNativePolicy,
             trustedInternalHandoff: prepared.trustedInternalHandoff,
           }),
           onSessionIdChanged: (sessionId) => {

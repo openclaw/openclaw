@@ -2178,6 +2178,77 @@ describe("worker turn launcher", () => {
     expect(placements.get(SESSION_ID)).toMatchObject({ state: "reclaimed", turnClaim: null });
   });
 
+  it.each([
+    ["active", "native"],
+    ["reclaimed", "native"],
+    ["active", "mcp"],
+    ["reclaimed", "mcp"],
+  ] as const)(
+    "rejects unsupported scheduled authority before %s worker admission side effects (%s)",
+    async (placementState, authorityKind) => {
+      if (placementState === "active") {
+        seedActivePlacement();
+      } else {
+        seedReclaimedPlacement();
+      }
+      const redispatchReclaimed = vi.fn(async () => {
+        throw new Error("unexpected redispatch");
+      });
+      const resolveWorkspacePath = vi.fn(async () => root);
+      const claimTurn = vi.spyOn(placements, "claimTurn");
+      const onAdmitted = vi.fn();
+      const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
+      const environments = unusedEnvironments();
+      const provider = createWorkerSessionTurnPlacementProvider({
+        environments,
+        placements,
+        redispatchReclaimed,
+        resolveWorkspacePath,
+      });
+
+      const runId = `run-${placementState}-${authorityKind}-unsupported`;
+      const candidateTurn = {
+        ...turn(runId),
+        scheduledNativePolicy: {
+          version: 1 as const,
+          mode: authorityKind === "native" ? ("inherit" as const) : ("disabled" as const),
+        },
+        ...(authorityKind === "mcp"
+          ? {
+              config: { mcp: { servers: { docs: { command: "docs" } } } },
+              toolsAllow: ["*"],
+            }
+          : {}),
+      };
+
+      await expect(
+        provider.executeTurn(
+          {
+            sessionId: SESSION_ID,
+            sessionKey: SESSION_KEY,
+            agentId: "main",
+            runId,
+          },
+          candidateTurn,
+          runLocal,
+          onAdmitted,
+        ),
+      ).rejects.toThrow(
+        authorityKind === "native"
+          ? /cannot preserve.*inherited native tool authority.*reauthorize.*explicit finite tool cap.*automations edit.*--tools.*sessions\.reclaim.*retry locally/is
+          : /cannot currently preserve.*MCP tool authority/is,
+      );
+
+      expect(redispatchReclaimed).not.toHaveBeenCalled();
+      expect(resolveWorkspacePath).not.toHaveBeenCalled();
+      expect(claimTurn).not.toHaveBeenCalled();
+      expect(onAdmitted).not.toHaveBeenCalled();
+      expect(environments.get).not.toHaveBeenCalled();
+      expect(environments.startTunnel).not.toHaveBeenCalled();
+      expect(runLocal).not.toHaveBeenCalled();
+    },
+  );
+
   it("does not fall back locally when reclaimed redispatch fails", async () => {
     seedReclaimedPlacement();
     const provider = createWorkerSessionTurnPlacementProvider({

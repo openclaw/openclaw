@@ -153,6 +153,7 @@ describe("createPersistCronSessionEntry", () => {
         ownerSessionKey: "agent:main:discord:group:ops",
         ownerAccountId: "work",
       },
+      scheduledNativePolicy: { version: 1, mode: "inherit" },
       persistSessionEntry,
     });
 
@@ -184,6 +185,7 @@ describe("createPersistCronSessionEntry", () => {
           ownerSessionKey: "agent:main:discord:group:ops",
           ownerAccountId: "work",
         },
+        scheduledNativePolicy: { version: 1, mode: "inherit" },
       },
     });
 

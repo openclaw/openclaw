@@ -310,6 +310,8 @@ type OpenClawCodingToolsOptions = {
   inheritedToolAllowlistRef?: string[];
   /** Mutable cron creator cap ref for callers that append final runtime tools later. */
   cronCreatorToolAllowlistRef?: CronCreatorToolAllowlistEntry[];
+  /** Host-derived native authority captured by the cron tool's signed identity. */
+  cronCreatorPolicy?: import("../gateway/agent-runtime-identity-token.js").AgentRuntimeCronCreatorPolicy;
   /** If true, the model has native vision capability */
   modelHasVision?: boolean;
   /** Mutable model-context generation used to expire screenshot coordinate frames. */
@@ -776,6 +778,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             pluginToolAllowlist,
             pluginToolDenylist,
             cronCreatorToolAllowlist,
+            cronCreatorPolicy: options?.cronCreatorPolicy,
             currentChannelId: options?.currentChannelId,
             currentChatType: options?.chatType,
             currentMessagingTarget: options?.currentMessagingTarget,

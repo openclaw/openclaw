@@ -414,6 +414,13 @@ function buildOpenClawCodingToolsOptions(
     abortSignal: input.abortSignal,
     modelProvider: input.modelProvider,
     modelId: input.modelId,
+    // Copilot has no Codex-native app/MCP surface. Declare that at the harness
+    // boundary so cron mutations never depend on an omitted provenance field.
+    cronCreatorPolicy: {
+      version: 1,
+      codexNativeSurface: "disabled",
+      openClawToolsCap: "explicit",
+    },
     includeCoreTools: toolPlan.includeCoreTools,
     includeToolSearchControls: toolSurfaceRuntime?.includeToolSearchControls,
     toolSearchCatalogRef: toolSurfaceRuntime?.toolSearchCatalogRef,

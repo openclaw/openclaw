@@ -18,6 +18,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeCronScheduledNativePolicy } from "../../cron/scheduled-native-policy.js";
 import { normalizeCronScheduledToolPolicy } from "../../cron/scheduled-tool-policy.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -201,9 +202,25 @@ export async function persistAgentSessionPhase(params: {
               const marker = freshEntry?.cronRunContinuation;
               const provider = normalizeOptionalString(freshEntry?.modelProvider);
               const model = normalizeOptionalString(freshEntry?.model);
+              const scheduledNativePolicy = normalizeCronScheduledNativePolicy(
+                marker?.scheduledNativePolicy,
+              );
+              const toolsAllow =
+                Array.isArray(marker?.toolsAllow) &&
+                marker.toolsAllow.every((toolName) => typeof toolName === "string")
+                  ? [...marker.toolsAllow]
+                  : undefined;
+              const scheduledToolPolicy = normalizeCronScheduledToolPolicy(
+                marker?.scheduledToolPolicy,
+              );
+              const scheduledToolPolicyValid =
+                marker?.scheduledToolPolicy === undefined || scheduledToolPolicy !== undefined;
               const identityMatches =
                 marker?.phase === "ready" &&
                 marker.basePersisted === true &&
+                toolsAllow !== undefined &&
+                scheduledToolPolicyValid &&
+                scheduledNativePolicy !== undefined &&
                 marker.lifecycleRevision ===
                   params.restoredCronContinuationIdentity.lifecycleRevision &&
                 freshEntry?.sessionId === params.restoredCronContinuationIdentity.sessionId;
@@ -218,6 +235,7 @@ export async function persistAgentSessionPhase(params: {
                   agentId: params.sessionAgentId,
                   provider,
                   model,
+                  scheduledNativePolicy,
                 })
               ) {
                 restoredCronContinuationError =
@@ -229,15 +247,10 @@ export async function persistAgentSessionPhase(params: {
                 provider,
                 model,
                 ...(freshEntry.thinkingLevel ? { thinking: freshEntry.thinkingLevel } : {}),
-                ...(marker.toolsAllow !== undefined ? { toolsAllow: [...marker.toolsAllow] } : {}),
+                toolsAllow,
                 ...(marker.toolsAllowIsDefault === true ? { toolsAllowIsDefault: true } : {}),
-                ...(normalizeCronScheduledToolPolicy(marker.scheduledToolPolicy)
-                  ? {
-                      scheduledToolPolicy: normalizeCronScheduledToolPolicy(
-                        marker.scheduledToolPolicy,
-                      ),
-                    }
-                  : {}),
+                ...(scheduledToolPolicy ? { scheduledToolPolicy } : {}),
+                scheduledNativePolicy,
                 ...(marker.cliSessionBindingFacts
                   ? { cliSessionBindingFacts: { ...marker.cliSessionBindingFacts } }
                   : {}),

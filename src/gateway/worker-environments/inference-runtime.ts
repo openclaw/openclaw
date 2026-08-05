@@ -7,6 +7,7 @@ import type {
   WorkerInferenceStartParams,
   WorkerInferenceTerminalOutcome,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { OPENCLAW_AGENT_RUNTIME_ID } from "../../agents/agent-runtime-id.js";
 import {
   resolveAgentConfig,
   resolveAgentDir,
@@ -22,7 +23,6 @@ import { resolveModelAsync } from "../../agents/embedded-agent-runner/model.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "../../agents/embedded-agent-runner/run/attempt.model-diagnostic-events.js";
 import { resolveEmbeddedAgentStreamFn } from "../../agents/embedded-agent-runner/stream-resolution.js";
 import { mapThinkingLevel } from "../../agents/embedded-agent-runner/utils.js";
-import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { modelCatalogLogicalKey } from "../../agents/model-selection-shared.js";
@@ -477,24 +477,15 @@ async function resolveApprovedModel(params: {
             resolveAgentEffectiveModelPrimary(lifecycleConfig, target.agentId) ?? "",
           ).profile
         : undefined;
-    const harnessPolicy = resolveAgentHarnessPolicy({
-      provider: resolved.ref.provider,
-      modelId: resolved.ref.model,
-      config: lifecycleConfig,
-      agentId: target.agentId,
-      sessionKey: target.sessionKey,
-    });
-    const agentRuntimeId =
-      harnessPolicy.runtimeSource !== "implicit" ||
-      lifecycleConfig.plugins?.entries?.codex?.enabled === true
-        ? harnessPolicy.runtime
-        : undefined;
+    // Worker-v2 owns an OpenClaw-only inference boundary. Runtime config drift
+    // must not reintroduce a native harness after Gateway admission.
+    const agentRuntimeId = OPENCLAW_AGENT_RUNTIME_ID;
     const sessionProfileId = await dependencies.resolveSessionAuthProfile({
       cfg: lifecycleConfig,
       provider: resolved.ref.provider,
       acceptedProviderIds: listOpenAIAuthProfileProvidersForAgentRuntime({
         provider: resolved.ref.provider,
-        harnessRuntime: harnessPolicy.runtime,
+        harnessRuntime: OPENCLAW_AGENT_RUNTIME_ID,
         config: lifecycleConfig,
       }),
       agentDir,
@@ -553,7 +544,7 @@ async function resolveApprovedModel(params: {
           authStorage: preparedStores.authStorage,
           modelRegistry: preparedStores.modelRegistry,
           preparedModelRuntime: runtimeSnapshot,
-          ...(agentRuntimeId ? { agentRuntimeId } : {}),
+          agentRuntimeId,
           workspaceDir,
         }),
       workspaceDir,

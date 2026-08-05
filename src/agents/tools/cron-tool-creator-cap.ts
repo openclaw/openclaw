@@ -165,6 +165,7 @@ export function planCronJobUpdatePatch(params: {
   }
 
   const existingPayload = params.currentJob.payload;
+  const existingPayloadKind = readCronPayloadKind(existingPayload);
   const payloadKind = explicitPayloadKind ?? readCronPayloadKind(existingPayload);
   if (payload && payloadKind !== undefined) {
     payload.kind = payloadKind;
@@ -176,6 +177,18 @@ export function planCronJobUpdatePatch(params: {
 
   const trigger = Object.hasOwn(patch, "trigger") ? patch.trigger : params.currentJob.trigger;
   const writesToolsAllow = payload !== undefined && Object.hasOwn(payload, "toolsAllow");
+  const entersToolPayload =
+    payloadKind !== existingPayloadKind &&
+    (payloadKind === "agentTurn" || payloadKind === "script");
+  const enablesTriggerScript =
+    Object.hasOwn(patch, "trigger") &&
+    hasCronTriggerScript(trigger) &&
+    !hasCronTriggerScript(params.currentJob.trigger);
+  if (!writesToolsAllow && !entersToolPayload && !enablesTriggerScript) {
+    // Same-kind message/model edits retain the stored cap and native policy.
+    // Synthesizing toolsAllow here would misclassify a routine edit as reauthorization.
+    return { kind: "ready", patch };
+  }
   if (
     payloadKind !== "agentTurn" &&
     payloadKind !== "script" &&

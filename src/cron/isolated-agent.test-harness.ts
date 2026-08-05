@@ -58,6 +58,15 @@ export function makeCfg(
 
 export function makeJob(payload: CronJob["payload"]): CronJob {
   const now = Date.now();
+  const authorizedAgentPayload =
+    payload.kind === "agentTurn"
+      ? {
+          ...payload,
+          toolsAllow: payload.toolsAllow ?? ["*"],
+          ...(payload.toolsAllow === undefined ? { toolsAllowIsDefault: true } : {}),
+        }
+      : undefined;
+  const authorizedPayload = authorizedAgentPayload ?? payload;
   return {
     id: "job-1",
     name: "job-1",
@@ -67,7 +76,16 @@ export function makeJob(payload: CronJob["payload"]): CronJob {
     schedule: { kind: "every", everyMs: 60_000 },
     sessionTarget: "isolated",
     wakeMode: "now",
-    payload,
+    payload: authorizedPayload,
+    ...(payload.kind === "agentTurn"
+      ? {
+          scheduledToolPolicy: { version: 1, mode: "trusted" },
+          scheduledNativePolicy: {
+            version: 1,
+            mode: authorizedAgentPayload?.toolsAllow.includes("*") ? "inherit" : "disabled",
+          },
+        }
+      : {}),
     state: {},
   };
 }

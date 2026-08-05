@@ -3,11 +3,13 @@ import {
   WORKER_INFERENCE_MAX_CONTEXT_MESSAGES,
   WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { resolveSessionMcpConfigSummary } from "../../agents/agent-bundle-mcp-runtime-config.js";
 import {
   isDefaultAgentRuntimeId,
   normalizeOptionalAgentRuntimeId,
   OPENCLAW_AGENT_RUNTIME_ID,
 } from "../../agents/agent-runtime-id.js";
+import { shouldCreateBundleMcpRuntimeForAttempt } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import {
   buildUsageAgentMetaFields,
   resolveReportedModelRef,
@@ -174,6 +176,34 @@ export function assertSupportedTurn(params: SessionPlacementTurnParams): {
   }
   if (params.clientTools?.length) {
     throw new Error("Cloud worker turns do not support client-provided tools");
+  }
+  if (params.scheduledNativePolicy?.mode === "inherit") {
+    throw new Error(
+      'Cloud workers cannot preserve this scheduled turn\'s inherited native tool authority. If native access is no longer needed, reauthorize the automation with an explicit finite tool cap using `openclaw automations edit <id> --tools <tool,...>`. Otherwise, reclaim the session with `openclaw gateway call sessions.reclaim --params \'{"key":"<session-key>"}\'` and retry locally.',
+    );
+  }
+  if (params.scheduledNativePolicy !== undefined) {
+    const mcpConfig = resolveSessionMcpConfigSummary({
+      workspaceDir: params.workspaceDir,
+      cfg: params.config,
+      toolOverrides: params.toolOverrides,
+    });
+    // Cron caps already contain the final creator-visible names. Match those
+    // against static MCP namespaces; requester-scoped and unrelated plugin tools
+    // cannot become callable merely because some MCP server is configured.
+    if (
+      mcpConfig.staticToolNamePrefixes.length > 0 &&
+      shouldCreateBundleMcpRuntimeForAttempt({
+        toolsEnabled: params.modelRun !== true && params.promptMode !== "none",
+        disableTools: params.disableTools,
+        toolsAllow: params.toolsAllow,
+        toolNamePrefixes: mcpConfig.staticToolNamePrefixes,
+      })
+    ) {
+      throw new Error(
+        "Cloud workers cannot currently preserve this scheduled turn's stored MCP tool authority safely. If those MCP tools were intentionally removed or filtered, reauthorize the automation's tool cap with `openclaw automations edit <id> --tools <tool,...>` before retrying. Otherwise, reclaim the session with `openclaw gateway call sessions.reclaim --params '{\"key\":\"<session-key>\"}'` and retry locally.",
+      );
+    }
   }
   const modelRef = resolveTurnModelRef(params);
   const explicitRuntime =

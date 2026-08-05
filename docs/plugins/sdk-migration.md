@@ -110,6 +110,19 @@ The dated compatibility registry also tracks shipped annotations that do not
 belong to one legacy subpath. These records use 2026-10-01 as the earliest
 review date; removal still requires the reader condition in the final column.
 
+### Requester-scoped MCP harness helper
+
+Harness plugins should replace
+`materializeRequesterScopedMcpToolsForHarnessRun(...)` with
+`materializeConfiguredMcpToolsForHarnessRun(...)`. The replacement projects
+both static OpenClaw MCP servers and requester-scoped servers through the
+harness tool bridge.
+
+The old helper remains available as a deprecated requester-only adapter through
+at least 2026-10-01. It deliberately does not open static MCP transports, so
+existing harnesses that keep static MCP native do not create duplicate clients.
+Removal also requires a published-plugin reader sweep with no remaining calls.
+
 | Compatibility code                        | Replacement                                                                                    | Removal condition                                                                            |
 | ----------------------------------------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
 | `plugin-sdk-broad-runtime-barrels`        | Focused capability subpaths                                                                    | No bundled or published imports of the seven enumerated broad barrels remain.                |

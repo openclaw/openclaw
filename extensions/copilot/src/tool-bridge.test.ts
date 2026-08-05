@@ -194,6 +194,11 @@ describe("createCopilotToolBridge", () => {
         agentDir: "/agent",
         agentId: "agent-1",
         computerContextEpoch,
+        cronCreatorPolicy: {
+          version: 1,
+          codexNativeSurface: "disabled",
+          openClawToolsCap: "explicit",
+        },
         cwd: "/workspace/task",
         modelId: "gpt-4o",
         modelProvider: "github-copilot",

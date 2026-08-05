@@ -726,6 +726,20 @@ export function cronMediaCompletionEvent(): AgentInternalEvent {
   };
 }
 
+export function makeCronRunContinuationFixture(
+  overrides: Partial<NonNullable<SessionEntry["cronRunContinuation"]>> = {},
+): NonNullable<SessionEntry["cronRunContinuation"]> {
+  return {
+    lifecycleRevision: "revision-1",
+    phase: "ready",
+    basePersisted: true,
+    toolsAllow: ["*"],
+    toolsAllowIsDefault: true,
+    scheduledNativePolicy: { version: 1, mode: "inherit" },
+    ...overrides,
+  };
+}
+
 export function setupCronContinuationReleaseFixture() {
   const sessionKey = "agent:main:cron:job-1:run:run-1";
   const entry: SessionEntry = {
@@ -734,11 +748,7 @@ export function setupCronContinuationReleaseFixture() {
     lifecycleRevision: "revision-1",
     modelProvider: "openai",
     model: "gpt-5.4",
-    cronRunContinuation: {
-      lifecycleRevision: "revision-1",
-      phase: "ready",
-      basePersisted: true,
-    },
+    cronRunContinuation: makeCronRunContinuationFixture(),
   };
   mocks.loadSessionEntry.mockReturnValue({
     cfg: {},

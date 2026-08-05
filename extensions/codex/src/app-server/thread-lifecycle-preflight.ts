@@ -1,9 +1,4 @@
-import {
-  embeddedAgentLog,
-  formatErrorMessage,
-  isHostScopedAgentToolActive,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
-import { buildCodexUserMcpServersThreadConfigPatchForRuntime } from "openclaw/plugin-sdk/codex-mcp-projection";
+import { isHostScopedAgentToolActive } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { getCodexAppServerClientInstanceId } from "./client.js";
 import {
   isMessageOnlyCodexSourceReply,
@@ -18,8 +13,6 @@ import {
   codexLegacyDynamicToolsFingerprint as legacyFingerprintDynamicTools,
   fingerprintEnvironmentSelection,
   fingerprintJsonObject,
-  fingerprintUserMcpServersConfigPatch,
-  legacyFingerprintUserMcpServersConfigPatch,
 } from "./thread-fingerprints.js";
 import { createCodexThreadLifecycleTimingTracker } from "./thread-lifecycle-timing.js";
 import type { CodexStartOrResumeThreadParams } from "./thread-lifecycle-types.js";
@@ -62,20 +55,6 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
   const contextEngineBinding = lifecycleTiming.measureSync("context-engine-binding", () =>
     buildContextEngineBinding(params.params, params.contextEngineProjection),
   );
-  const userMcpServersConfigPatch =
-    params.userMcpServersEnabled === false
-      ? undefined
-      : await buildCodexUserMcpServersThreadConfigPatchForRuntime(params.params.config, {
-          agentId: params.agentId ?? params.params.agentId,
-          agentDir: params.params.agentDir,
-          allowLiteralOAuthProjection: params.appServer.connectionClass !== "remote",
-          toolOverrides: params.params.toolOverrides,
-          onServerUnavailable: (serverName, error) =>
-            embeddedAgentLog.warn("skipping unavailable MCP OAuth server", {
-              serverName,
-              error: formatErrorMessage(error),
-            }),
-        });
   const nativeSkillIsolation = await lifecycleTiming.measure("native-skill-isolation", () =>
     resolveCodexNativeSkillIsolation({
       client: params.client,
@@ -92,9 +71,6 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
         disabledUserSkillPaths: nativeSkillIsolation.disabledUserSkillPaths,
       })
     : undefined;
-  const legacyUserMcpServersFingerprint =
-    legacyFingerprintUserMcpServersConfigPatch(userMcpServersConfigPatch);
-  const userMcpServersFingerprint = fingerprintUserMcpServersConfigPatch(userMcpServersConfigPatch);
   const environmentSelectionFingerprint = fingerprintEnvironmentSelection(
     params.environmentSelection,
   );
@@ -138,7 +114,6 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
     environmentSelectionFingerprint,
     hostSystemAgentActive,
     legacyDynamicToolsFingerprint,
-    legacyUserMcpServersFingerprint,
     lifecycleTiming,
     nativeSkillIsolation,
     nativeSkillIsolationFingerprint,
@@ -147,8 +122,6 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
     ringZeroClientInstanceId,
     ringZeroConfigFingerprint,
     ringZeroInheritedMcpServerNames,
-    userMcpServersConfigPatch,
-    userMcpServersFingerprint,
     webSearchThreadConfigFingerprint,
   };
 }

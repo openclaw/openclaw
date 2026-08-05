@@ -16,7 +16,7 @@ export const SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS = 60 * 1000;
 // far above concurrent-run parallelism, so active requesters never evict.
 export const SESSION_MCP_MAX_IDLE_REQUESTER_RUNTIMES = 64;
 
-/** Checks whether harness-scoped MCP can affect a turn without loading its runtime graph. */
+/** Checks whether the deprecated requester-only harness bridge can affect this turn. */
 export function shouldLoadRequesterScopedMcpHarnessRuntime(params: {
   sessionId: string;
   requesterSenderId?: string | null;

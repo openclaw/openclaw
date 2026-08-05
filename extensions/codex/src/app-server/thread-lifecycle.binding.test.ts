@@ -304,7 +304,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
       cwd: workspaceDir,
       dynamicTools: [],
       appServer: createThreadLifecycleAppServerOptions(),
-      userMcpServersEnabled: false,
     };
 
     const started = await startOrResumeThread(common);
@@ -358,7 +357,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
       cwd: workspaceDir,
       dynamicTools: [],
       appServer: createThreadLifecycleAppServerOptions(),
-      userMcpServersEnabled: false,
       buildFinalConfigPatch,
     };
 
@@ -443,7 +441,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
       cwd: workspaceDir,
       dynamicTools: [],
       appServer: createThreadLifecycleAppServerOptions(),
-      userMcpServersEnabled: false,
     };
 
     const started = await startOrResumeThread(common);
@@ -496,7 +493,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
       cwd: workspaceDir,
       dynamicTools: [],
       appServer: createThreadLifecycleAppServerOptions(),
-      userMcpServersEnabled: false,
     };
     const started = await startOrResumeThread(common);
     await retainCodexAppServerLiveThread(
@@ -557,7 +553,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
       cwd: workspaceDir,
       dynamicTools: [],
       appServer: createThreadLifecycleAppServerOptions(),
-      userMcpServersEnabled: false,
     };
     const started = await startOrResumeThread(common);
     await expect(
@@ -615,7 +610,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
       cwd: workspaceDir,
       dynamicTools: [],
       appServer: createThreadLifecycleAppServerOptions(),
-      userMcpServersEnabled: false,
     };
     const started = await startOrResumeThread({
       ...common,
@@ -672,7 +666,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
       cwd: workspaceDir,
       dynamicTools: [],
       appServer: createThreadLifecycleAppServerOptions(),
-      userMcpServersEnabled: false,
     };
     const started = await startOrResumeThread(common);
     await retainCodexAppServerLiveThread(
@@ -724,7 +717,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
       cwd: workspaceDir,
       dynamicTools: [],
       appServer: createThreadLifecycleAppServerOptions(),
-      userMcpServersEnabled: false,
     };
     const started = await startOrResumeThread(common);
     await retainCodexAppServerLiveThread(
@@ -777,7 +769,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
       cwd: workspaceDir,
       dynamicTools: [],
       appServer,
-      userMcpServersEnabled: false,
     };
     const started = await startOrResumeThread(common);
     await retainCodexAppServerLiveThread(
@@ -831,7 +822,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
       cwd: workspaceDir,
       dynamicTools: [],
       appServer: createThreadLifecycleAppServerOptions(),
-      userMcpServersEnabled: false,
     };
     const started = await startOrResumeThread(common);
     await expect(
@@ -881,7 +871,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
       cwd: workspaceDir,
       dynamicTools: [],
       appServer: createThreadLifecycleAppServerOptions(),
-      userMcpServersEnabled: false,
     };
 
     const first = await startOrResumeThread(common);
@@ -947,7 +936,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
       dynamicTools: [createNamedDynamicTool("openclaw")],
       appServer: createThreadLifecycleAppServerOptions(),
       nativeCodeModeEnabled: false,
-      userMcpServersEnabled: false,
       hostSystemAgentActive: true,
     };
 
@@ -1054,7 +1042,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
       },
       appServer: createThreadLifecycleAppServerOptions(),
       nativeCodeModeEnabled: false,
-      userMcpServersEnabled: false,
       hostSystemAgentActive: false,
     };
 
@@ -1173,7 +1160,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
       dynamicTools: [createNamedDynamicTool("openclaw")],
       appServer: createThreadLifecycleAppServerOptions(),
       nativeCodeModeEnabled: false,
-      userMcpServersEnabled: false,
       hostSystemAgentActive: true,
     };
 
@@ -1226,7 +1212,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
       dynamicTools: [createNamedDynamicTool("openclaw")],
       appServer: createThreadLifecycleAppServerOptions(),
       nativeCodeModeEnabled: false,
-      userMcpServersEnabled: false,
       hostSystemAgentActive: true,
     };
 
@@ -1277,7 +1262,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
         dynamicTools: [createNamedDynamicTool("openclaw")],
         appServer: createThreadLifecycleAppServerOptions(),
         nativeCodeModeEnabled: false,
-        userMcpServersEnabled: false,
         hostSystemAgentActive: true,
       }),
     ).rejects.toThrow("config unavailable");
@@ -1310,7 +1294,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
         dynamicTools: [createNamedDynamicTool("openclaw")],
         appServer: createThreadLifecycleAppServerOptions(),
         nativeCodeModeEnabled: false,
-        userMcpServersEnabled: false,
         hostSystemAgentActive: true,
       }),
     ).rejects.toThrow(/config layer|config layers/u);
@@ -1348,7 +1331,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
           dynamicTools: [createNamedDynamicTool("openclaw")],
           appServer: createThreadLifecycleAppServerOptions(),
           nativeCodeModeEnabled: false,
-          userMcpServersEnabled: false,
           hostSystemAgentActive: true,
         }),
       ).rejects.toThrow("cannot override managed hooks");
@@ -1382,7 +1364,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
         dynamicTools: [createNamedDynamicTool("openclaw")],
         appServer: createThreadLifecycleAppServerOptions(),
         nativeCodeModeEnabled: false,
-        userMcpServersEnabled: false,
         hostSystemAgentActive: true,
       }),
     ).rejects.toThrow("cannot override required feature hooks");
@@ -1437,7 +1418,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
         dynamicTools: [createNamedDynamicTool("openclaw")],
         appServer: createThreadLifecycleAppServerOptions(),
         nativeCodeModeEnabled: false,
-        userMcpServersEnabled: false,
         hostSystemAgentActive: true,
       }),
     ).rejects.toThrow();

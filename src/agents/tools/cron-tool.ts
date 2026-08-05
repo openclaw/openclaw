@@ -52,7 +52,10 @@ import type {
   CronToolDeps,
   CronToolOptions,
 } from "./cron-tool.types.js";
-import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import {
+  withGatewayCronCreatorToolCap,
+  withGatewayToolCallerIdentity,
+} from "./gateway-caller-context.js";
 import { callGatewayTool, readGatewayCallOptions, type GatewayCallOptions } from "./gateway.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
 
@@ -333,6 +336,11 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation
               agentId: callerScope.agentId,
               sessionKey: opts.agentSessionKey.trim(),
               turnSourceAccountId: opts.agentAccountId,
+              cronCreatorPolicy: opts.cronCreatorPolicy ?? {
+                version: 1,
+                codexNativeSurface: "disabled" as const,
+                openClawToolsCap: "explicit" as const,
+              },
               ...(readCronSelfRemoveOnlyJobId(opts)
                 ? { cronSelfManagementJobId: readCronSelfRemoveOnlyJobId(opts) }
                 : {}),
@@ -558,9 +566,13 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation
               }
             }
             return jsonResult(
-              await callGateway("cron.add", gatewayOpts, {
-                ...job,
-              }),
+              await withGatewayCronCreatorToolCap(
+                isRecord(job.payload) && job.payload.toolsAllowIsDefault === true,
+                async () =>
+                  await callGateway("cron.add", gatewayOpts, {
+                    ...job,
+                  }),
+              ),
             );
           }
           case "update": {

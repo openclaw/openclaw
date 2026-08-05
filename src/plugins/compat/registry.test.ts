@@ -127,6 +127,11 @@ describe("plugin compatibility registry", () => {
       "openclaw/plugin-sdk/agent-harness",
       "openclaw/plugin-sdk/agent-harness-runtime",
     ]);
+    expect(records.get("requester-scoped-mcp-harness-helper")).toMatchObject({
+      status: "deprecated",
+      removeAfter: "2026-10-01",
+      replacement: "materializeConfiguredMcpToolsForHarnessRun",
+    });
   });
 
   it("tracks the deprecation-marking families through the approved window", () => {

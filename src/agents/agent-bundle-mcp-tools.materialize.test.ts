@@ -565,6 +565,33 @@ describe("createBundleMcpToolRuntime", () => {
     });
 
     expect(runtime.tools.map((tool) => tool.name)).toEqual(["knowledge__resources_list"]);
+
+    const excludedRuntime = await materializeBundleMcpToolsForRun({
+      runtime: {
+        ...base,
+        getCatalog: async () => ({
+          version: 1,
+          generatedAt: 0,
+          servers: {
+            knowledge: {
+              serverName: "knowledge",
+              safeServerName: "knowledge",
+              launchSummary: "knowledge",
+              toolCount: 0,
+              resources: { listChanged: false },
+              prompts: { listChanged: false },
+              toolFilter: { exclude: ["*"] },
+            },
+          },
+          tools: [],
+        }),
+        listResources: async () => [],
+        readResource: async () => ({ contents: [] }),
+        listPrompts: async () => [],
+        getPrompt: async () => ({ messages: [] }),
+      },
+    });
+    expect(excludedRuntime.tools).toEqual([]);
   });
 
   it("projects resource and prompt utility tools for inventory-only catalogs", async () => {

@@ -978,7 +978,6 @@ describe("session MCP runtime", () => {
         },
       },
     });
-
     try {
       const catalog = await runtime.getCatalog();
 
@@ -1306,6 +1305,7 @@ describe("session MCP runtime", () => {
     await writeListToolsMcpServer({
       filePath: serverPath,
       logPath,
+      capabilities: { tools: {}, resources: {}, prompts: {} },
       tools: [
         { name: "search_docs", inputSchema: { type: "object", properties: {} } },
         { name: "read_docs", inputSchema: { type: "object", properties: {} } },
@@ -1332,6 +1332,22 @@ describe("session MCP runtime", () => {
         },
       },
     });
+    const excludedRuntime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-tool-filter-excluded",
+      sessionKey: "agent:test:session-tool-filter-excluded",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            docs: {
+              command: process.execPath,
+              args: [serverPath],
+              toolFilter: { exclude: ["*"] },
+            },
+          },
+        },
+      },
+    });
 
     try {
       const catalog = await runtime.getCatalog();
@@ -1342,8 +1358,17 @@ describe("session MCP runtime", () => {
       ]);
       expect(catalog.servers.docs?.toolCount).toBe(2);
       expect(catalog.servers.docs?.tools?.filteredCount).toBe(1);
+
+      const excludedCatalog = await excludedRuntime.getCatalog();
+      expect(excludedCatalog.tools).toEqual([]);
+      expect(excludedCatalog.servers.docs?.toolCount).toBe(0);
+      expect(excludedCatalog.servers.docs?.tools?.filteredCount).toBe(3);
+      const materialized = await materializeBundleMcpToolsForRun({ runtime: excludedRuntime });
+      expect(materialized.tools).toEqual([]);
+      expect(materialized.appTools ?? []).toEqual([]);
     } finally {
       await runtime.dispose();
+      await excludedRuntime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
@@ -3221,6 +3246,7 @@ describe("requester-scoped MCP connection resolution", () => {
       toolOverrides,
     });
     expect(overriddenSummary.serverNames).toEqual(["user-mail"]);
+    expect(overriddenSummary.staticToolNamePrefixes).toEqual(["user-mail__"]);
     expect(overriddenSummary.fingerprint).toBe(overriddenRuntime.configFingerprint);
 
     // With a resolver registered, tools.effective peeks the bare static-partition
@@ -3235,9 +3261,41 @@ describe("requester-scoped MCP connection resolution", () => {
       requesterSenderId: "sender-a",
     });
     const peeked = manager.peekSession({ sessionId: "session-parity-scoped" });
-    expect(peeked?.configFingerprint).toBe(
-      resolveSessionMcpConfigSummary({ workspaceDir: "/workspace", cfg: cfg as never }).fingerprint,
-    );
+    const scopedSummary = resolveSessionMcpConfigSummary({
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+    });
+    expect(peeked?.configFingerprint).toBe(scopedSummary.fingerprint);
+    expect(scopedSummary.serverNames).toEqual(["shared", "user-mail"]);
+    expect(scopedSummary.staticToolNamePrefixes).toEqual(["shared__"]);
+
+    const collisionSummary = resolveSessionMcpConfigSummary({
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            "user-mail": { command: "true" },
+            "user mail": { command: "true" },
+          },
+        },
+      } as never,
+    });
+    expect(collisionSummary.staticToolNamePrefixes).toEqual(["user-mail-2__"]);
+
+    const filteredSummary = resolveSessionMcpConfigSummary({
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            disabled: { command: "true", toolFilter: { exclude: ["*"] } },
+            exact: { command: "true", toolFilter: { exclude: ["read_docs"] } },
+            shared: { command: "true" },
+          },
+        },
+      } as never,
+    });
+    expect(filteredSummary.serverNames).toEqual(["disabled", "exact", "shared"]);
+    expect(filteredSummary.staticToolNamePrefixes).toEqual(["exact__", "shared__"]);
 
     await manager.disposeAll();
   });

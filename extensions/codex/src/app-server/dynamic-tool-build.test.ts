@@ -375,6 +375,27 @@ describe("Codex app-server dynamic tool build", () => {
     expect(tools).toEqual([]);
   });
 
+  it("captures only the final executable Codex tool surface for cron creation", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.toolsAllow = ["message"];
+    const creatorAllowlist: Array<string | { name: string; pluginId?: string }> = [];
+    setOpenClawCodingToolsFactoryForTests((options) => {
+      options?.cronCreatorToolAllowlistRef?.push({ name: "message" }, { name: "hidden_tool" });
+      return [createRuntimeDynamicTool("message"), createRuntimeDynamicTool("hidden_tool")];
+    });
+
+    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      cronCreatorToolAllowlistRef: creatorAllowlist,
+      pluginConfig: { codexDynamicToolsExclude: ["hidden_tool"] },
+    });
+
+    expect(tools.map((tool) => tool.name)).toEqual(["message"]);
+    expect(creatorAllowlist).toEqual([{ name: "message" }]);
+  });
+
   it("shares the computer context epoch with dynamic tool assembly", async () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);

@@ -48,7 +48,6 @@ type CodexWarmThreadReuseParams = {
   startModelProvider?: string;
   startModelSelection: ReturnType<typeof resolveCodexAppServerThreadModelSelection>;
   throwIfAborted: () => void;
-  userMcpServersConfigPatch?: JsonObject;
 };
 
 type CodexWarmThreadReuseResult = {
@@ -132,7 +131,6 @@ export async function tryReuseCodexLiveThread(
     startModelProvider,
     startModelSelection,
     throwIfAborted,
-    userMcpServersConfigPatch,
   } = options;
 
   if (
@@ -160,7 +158,6 @@ export async function tryReuseCodexLiveThread(
   const resumeAuthProfileId = params.params.authProfileId ?? binding.authProfileId;
   const resumeConfig = mergeCodexThreadConfigs(
     params.config,
-    userMcpServersConfigPatch,
     pluginAppsConfigPatch,
     prebuiltFinalConfigPatch.configPatch,
   );

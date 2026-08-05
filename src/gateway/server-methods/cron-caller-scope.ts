@@ -1,5 +1,11 @@
 import { resolveCronJobEffectiveAgentId } from "../../cron/agent-id.js";
 import {
+  constrainCronScheduledNativePolicy,
+  createCronScheduledNativePolicy,
+  deriveCronScheduledNativePolicy,
+  type CronScheduledNativePolicy,
+} from "../../cron/scheduled-native-policy.js";
+import {
   createAccountCronScheduledToolPolicy,
   createTrustedCronScheduledToolPolicy,
   type CronScheduledToolPolicy,
@@ -8,6 +14,7 @@ import type { CronJob, CronJobCreate, CronJobPatch } from "../../cron/types.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import type { AgentRuntimeCronCreatorPolicy } from "../agent-runtime-identity-token.js";
 import type { GatewayClient } from "./types.js";
 
 export type CronCallerScope = {
@@ -16,6 +23,7 @@ export type CronCallerScope = {
   sessionKey?: string;
   accountId: string;
   currentJobId?: string;
+  cronCreatorPolicy?: AgentRuntimeCronCreatorPolicy;
 };
 
 export function readCronCallerScope(
@@ -36,6 +44,7 @@ export function readCronCallerScope(
     sessionKey: identity.sessionKey?.trim() || undefined,
     accountId: normalizeAccountId(identity.turnSourceAccountId),
     currentJobId,
+    ...(identity.cronCreatorPolicy ? { cronCreatorPolicy: identity.cronCreatorPolicy } : {}),
   };
 }
 
@@ -58,6 +67,27 @@ export function resolveCronScheduledToolPolicyForCaller(
     throw new TypeError("agent-runtime cron mutations require an authenticated session identity");
   }
   return policy;
+}
+
+/** Derives native authority only from trusted operator input or signed creator provenance. */
+export function resolveCronScheduledNativePolicyForCaller(params: {
+  callerScope: CronCallerScope | undefined;
+  toolsAllow: readonly string[] | undefined;
+}): CronScheduledNativePolicy | undefined {
+  if (params.callerScope) {
+    const creatorPolicy = params.callerScope.cronCreatorPolicy;
+    if (!creatorPolicy) {
+      throw new TypeError(
+        "agent-runtime cron authority changes require signed native creator provenance",
+      );
+    }
+    return constrainCronScheduledNativePolicy({
+      scheduledNativePolicy: createCronScheduledNativePolicy(creatorPolicy.codexNativeSurface),
+      toolsAllow: params.toolsAllow,
+      toolsAllowIsDefault: creatorPolicy.openClawToolsCap === "creator-default",
+    });
+  }
+  return deriveCronScheduledNativePolicy(params.toolsAllow);
 }
 function parseAgentIdFromSessionRef(value: string | undefined | null): string | undefined {
   const trimmed = value?.trim();

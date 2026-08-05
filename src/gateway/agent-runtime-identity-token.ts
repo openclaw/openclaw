@@ -21,6 +21,12 @@ type AgentRuntimeCronSelfManagementContext = {
   expiresAtMs: number;
 };
 
+export type AgentRuntimeCronCreatorPolicy = {
+  version: 1;
+  codexNativeSurface: "inherit" | "disabled";
+  openClawToolsCap: "creator-default" | "explicit";
+};
+
 export type AgentRuntimeIdentity = {
   kind: "agentRuntime";
   agentId: string;
@@ -28,6 +34,7 @@ export type AgentRuntimeIdentity = {
   turnSourceAccountId?: string;
   messageActionContext?: AgentRuntimeMessageActionContext;
   cronSelfManagementContext?: AgentRuntimeCronSelfManagementContext;
+  cronCreatorPolicy?: AgentRuntimeCronCreatorPolicy;
   sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
 };
 
@@ -47,6 +54,7 @@ type AgentRuntimeIdentityTokenPayload = {
   turnSourceAccountId?: string;
   messageActionContext?: AgentRuntimeMessageActionContext;
   cronSelfManagementContext?: AgentRuntimeCronSelfManagementContext;
+  cronCreatorPolicy?: AgentRuntimeCronCreatorPolicy;
   sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
 };
 
@@ -74,6 +82,25 @@ function decodeSessionSpawnContext(value: unknown): AgentRuntimeSessionSpawnCont
   return {
     ...(completionOwnerSessionKey ? { completionOwnerSessionKey } : {}),
     inheritedToolPolicy: { version: 1, allow, deny },
+  };
+}
+
+function decodeCronCreatorPolicy(value: unknown): AgentRuntimeCronCreatorPolicy | undefined {
+  if (
+    !isRecord(value) ||
+    value.version !== 1 ||
+    (value.codexNativeSurface !== "inherit" && value.codexNativeSurface !== "disabled") ||
+    (value.openClawToolsCap !== "creator-default" && value.openClawToolsCap !== "explicit") ||
+    Object.keys(value).some(
+      (key) => key !== "version" && key !== "codexNativeSurface" && key !== "openClawToolsCap",
+    )
+  ) {
+    return undefined;
+  }
+  return {
+    version: 1,
+    codexNativeSurface: value.codexNativeSurface,
+    openClawToolsCap: value.openClawToolsCap,
   };
 }
 
@@ -213,6 +240,7 @@ function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenP
       turnSourceAccountId?: unknown;
       messageActionContext?: unknown;
       cronSelfManagementContext?: unknown;
+      cronCreatorPolicy?: unknown;
       sessionSpawnContext?: unknown;
     };
     if (
@@ -258,6 +286,13 @@ function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenP
     if (rawCronSelfManagement !== undefined && !cronSelfManagementContext) {
       return undefined;
     }
+    const cronCreatorPolicy =
+      raw.cronCreatorPolicy === undefined
+        ? undefined
+        : decodeCronCreatorPolicy(raw.cronCreatorPolicy);
+    if (raw.cronCreatorPolicy !== undefined && !cronCreatorPolicy) {
+      return undefined;
+    }
     const sessionSpawnContext =
       raw.sessionSpawnContext === undefined
         ? undefined
@@ -272,6 +307,7 @@ function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenP
       ...(turnSourceAccountId ? { turnSourceAccountId } : {}),
       ...(messageActionContext ? { messageActionContext } : {}),
       ...(cronSelfManagementContext ? { cronSelfManagementContext } : {}),
+      ...(cronCreatorPolicy ? { cronCreatorPolicy } : {}),
       ...(sessionSpawnContext ? { sessionSpawnContext } : {}),
     };
   } catch {
@@ -286,6 +322,7 @@ export async function mintAgentRuntimeIdentityToken(params: {
   turnSourceAccountId?: string;
   messageActionContext?: AgentRuntimeMessageActionContext;
   cronSelfManagementJobId?: string;
+  cronCreatorPolicy?: AgentRuntimeCronCreatorPolicy;
   sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
 }): Promise<string> {
   if (
@@ -313,6 +350,12 @@ export async function mintAgentRuntimeIdentityToken(params: {
         expiresAtMs: Date.now() + CRON_SELF_MANAGEMENT_TOKEN_TTL_MS,
       }
     : undefined;
+  const cronCreatorPolicy = params.cronCreatorPolicy
+    ? decodeCronCreatorPolicy(params.cronCreatorPolicy)
+    : undefined;
+  if (params.cronCreatorPolicy && !cronCreatorPolicy) {
+    throw new Error("invalid cron creator policy");
+  }
   const payload = encodePayload({
     kind: AGENT_RUNTIME_IDENTITY_TOKEN_KIND,
     agentId: normalizeAgentId(params.agentId),
@@ -320,6 +363,7 @@ export async function mintAgentRuntimeIdentityToken(params: {
     ...(turnSourceAccountId ? { turnSourceAccountId } : {}),
     ...(messageActionContext ? { messageActionContext } : {}),
     ...(cronSelfManagementContext ? { cronSelfManagementContext } : {}),
+    ...(cronCreatorPolicy ? { cronCreatorPolicy } : {}),
     ...(params.sessionSpawnContext ? { sessionSpawnContext: params.sessionSpawnContext } : {}),
   });
   const signature = signPayload(await requireSharedAgentRuntimeIdentitySecret(), payload);
@@ -356,6 +400,7 @@ export async function verifyAgentRuntimeIdentityToken(
     ...(payload.cronSelfManagementContext
       ? { cronSelfManagementContext: payload.cronSelfManagementContext }
       : {}),
+    ...(payload.cronCreatorPolicy ? { cronCreatorPolicy: payload.cronCreatorPolicy } : {}),
     ...(payload.sessionSpawnContext ? { sessionSpawnContext: payload.sessionSpawnContext } : {}),
   };
 }

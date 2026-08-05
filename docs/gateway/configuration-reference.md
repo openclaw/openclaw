@@ -170,10 +170,12 @@ target server during config edits.
   Empty, blank, or invalid scoped agent lists are rejected by config validation
   and omitted by the runtime projection path instead of becoming global.
   `codex.defaultToolsApprovalMode` emits Codex's native
-  `default_tools_approval_mode` for that server. OpenClaw strips the `codex`
-  block before passing native `mcp_servers` config to Codex. Omit the block to
-  keep the server projected for every Codex app-server agent with Codex's
-  default MCP approval behavior.
+  `default_tools_approval_mode` for Codex-native MCP projection, including the
+  Codex CLI adapter. Codex app-server exposes OpenClaw-configured MCP through
+  OpenClaw's dynamic tool bridge, where OpenClaw tool policy applies instead.
+  OpenClaw strips the `codex` block before passing native `mcp_servers` config
+  to Codex. Omit `codex.agents` to expose the server to every Codex app-server
+  agent.
 - Session-scoped bundled MCP runtimes use a built-in 10-minute idle TTL.
   One-shot embedded runs request run-end cleanup; the TTL is the backstop for long-lived sessions and future callers.
 - Changes under `mcp.*` hot-apply by disposing cached session MCP runtimes.

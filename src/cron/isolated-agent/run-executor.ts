@@ -273,6 +273,7 @@ function createCronPromptExecutor(params: {
     scheduledToolPolicy: params.job.scheduledToolPolicy,
     owner: params.job.owner,
   });
+  const nativeSurfaceDisabled = params.job.scheduledNativePolicy?.mode === "disabled";
   const { sourceDelivery } = params;
   const sourceReplyDeliveryMode = sourceDelivery.sourceReplyDeliveryMode;
   const messageChannel = sourceDelivery.target.channel ?? params.resolvedDelivery.channel;
@@ -352,11 +353,13 @@ function createCronPromptExecutor(params: {
       sessionKey: params.runSessionKey,
       abortSignal: params.abortSignal,
       resolveAgentHarnessRuntimeOverride: (provider) =>
-        resolveSessionRuntimeOverrideForProvider({
-          provider,
-          entry: params.cronSession.sessionEntry,
-          cfg: params.cfgWithAgentDefaults,
-        }),
+        nativeSurfaceDisabled
+          ? "openclaw"
+          : resolveSessionRuntimeOverrideForProvider({
+              provider,
+              entry: params.cronSession.sessionEntry,
+              cfg: params.cfgWithAgentDefaults,
+            }),
       prepareAgentHarnessRuntime: async ({ provider, model, agentHarnessRuntimeOverride }) => {
         await ensureSelectedAgentHarnessPlugin({
           config: params.cfgWithAgentDefaults,
@@ -390,19 +393,23 @@ function createCronPromptExecutor(params: {
         params.cronSession.sessionEntry.modelProvider = providerOverride;
         params.cronSession.sessionEntry.model = modelOverride;
         await params.persistRunContinuationSession?.();
-        const sessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
-          provider: providerOverride,
-          entry: params.cronSession.sessionEntry,
-          cfg: params.cfgWithAgentDefaults,
-        });
-        const candidateRuntime = resolveEffectiveAgentRuntime({
-          cfg: params.cfgWithAgentDefaults,
-          provider: providerOverride,
-          modelId: modelOverride,
-          agentId: params.agentId,
-          sessionKey: params.runSessionKey,
-          sessionEntry: params.cronSession.sessionEntry,
-        });
+        const sessionRuntimeOverride = nativeSurfaceDisabled
+          ? "openclaw"
+          : resolveSessionRuntimeOverrideForProvider({
+              provider: providerOverride,
+              entry: params.cronSession.sessionEntry,
+              cfg: params.cfgWithAgentDefaults,
+            });
+        const candidateRuntime = nativeSurfaceDisabled
+          ? "openclaw"
+          : resolveEffectiveAgentRuntime({
+              cfg: params.cfgWithAgentDefaults,
+              provider: providerOverride,
+              modelId: modelOverride,
+              agentId: params.agentId,
+              sessionKey: params.runSessionKey,
+              sessionEntry: params.cronSession.sessionEntry,
+            });
         const candidateConfiguredThinkLevel =
           params.immutableThinkLevel ??
           resolveConfiguredThinkingDefault({
@@ -445,20 +452,24 @@ function createCronPromptExecutor(params: {
           sessionEntry: params.cronSession.sessionEntry,
           agentRuntime: candidateRuntime,
         });
-        const executionProvider =
-          (sessionRuntimeOverride &&
-          isCliProvider(sessionRuntimeOverride, params.cfgWithAgentDefaults)
-            ? sessionRuntimeOverride
-            : undefined) ??
-          (sessionRuntimeOverride
-            ? providerOverride
-            : (resolveCliRuntimeExecutionProvider({
-                provider: providerOverride,
-                cfg: params.cfgWithAgentDefaults,
-                agentId: params.agentId,
-                modelId: modelOverride,
-              }) ?? providerOverride));
-        const cliExecution = isCliProvider(executionProvider, params.cfgWithAgentDefaults);
+        const executionProvider = nativeSurfaceDisabled
+          ? providerOverride
+          : ((sessionRuntimeOverride &&
+            isCliProvider(sessionRuntimeOverride, params.cfgWithAgentDefaults)
+              ? sessionRuntimeOverride
+              : undefined) ??
+            (sessionRuntimeOverride
+              ? providerOverride
+              : (resolveCliRuntimeExecutionProvider({
+                  provider: providerOverride,
+                  cfg: params.cfgWithAgentDefaults,
+                  agentId: params.agentId,
+                  modelId: modelOverride,
+                }) ?? providerOverride)));
+        // A creator-disabled native surface is invariant across every fallback.
+        // Provider aliases must not route a later candidate back into a CLI harness.
+        const cliExecution =
+          !nativeSurfaceDisabled && isCliProvider(executionProvider, params.cfgWithAgentDefaults);
         await params.setRunContinuationCliExecutionProvider?.(
           cliExecution ? executionProvider : undefined,
         );
@@ -622,6 +633,7 @@ function createCronPromptExecutor(params: {
           bootstrapContextRunKind: "cron",
           toolsAllow: params.agentPayload?.toolsAllow,
           scheduledToolPolicy,
+          scheduledNativePolicy: params.job.scheduledNativePolicy,
           execOverrides: params.suppressExecNotifyOnExit
             ? {
                 notifyOnExit: false,

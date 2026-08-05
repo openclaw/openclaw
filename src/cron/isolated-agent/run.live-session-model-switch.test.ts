@@ -22,18 +22,28 @@ const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 // ---------- helpers ----------
 
 function makeJob(overrides?: Record<string, unknown>) {
+  const payload = {
+    kind: "agentTurn",
+    message: "run task",
+    // Cron requests sonnet; agent primary is opus
+    model: "anthropic/claude-sonnet-4-6",
+    toolsAllow: ["*"],
+    toolsAllowIsDefault: true,
+  };
   return {
     id: "cron-model-switch-job",
     name: "Model Switch Test",
     schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
     sessionTarget: "isolated",
-    payload: {
-      kind: "agentTurn",
-      message: "run task",
-      // Cron requests sonnet; agent primary is opus
-      model: "anthropic/claude-sonnet-4-6",
-    },
+    scheduledNativePolicy: { version: 1, mode: "inherit" },
     ...overrides,
+    payload: overrides?.payload
+      ? {
+          toolsAllow: ["*"],
+          toolsAllowIsDefault: true,
+          ...(overrides.payload as Record<string, unknown>),
+        }
+      : payload,
   } as never;
 }
 

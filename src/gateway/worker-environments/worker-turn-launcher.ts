@@ -176,9 +176,10 @@ async function executeWorkerTurn(params: {
   turn: SessionPlacementTurnParams;
   turnClaim: WorkerSessionTurnClaim;
   localWorkspaceDir: string;
+  modelRef: { provider: string; model: string };
 }) {
   const { placement, turn } = params;
-  const modelRef = assertSupportedTurn(turn);
+  const { modelRef } = params;
   const environment = params.environments.get(placement.environmentId);
   if (
     !environment ||
@@ -584,6 +585,9 @@ export function createWorkerSessionTurnPlacementProvider(
       if (!current || current.state === "local") {
         return await executeLocalTurn({ claim, placements: options.placements, runLocal });
       }
+      // Capability rejection must precede redispatch, workspace resolution, and
+      // claim admission or an unsupported turn mutates remote placement state.
+      const modelRef = assertSupportedTurn(turn);
       let routablePlacement = current;
       if (routablePlacement.state === "reclaimed") {
         if (!options.redispatchReclaimed) {
@@ -626,6 +630,7 @@ export function createWorkerSessionTurnPlacementProvider(
           workspaceOperations,
           turn,
           turnClaim,
+          modelRef,
         });
         return result;
       } catch (error) {

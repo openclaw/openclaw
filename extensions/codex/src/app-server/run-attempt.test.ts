@@ -113,7 +113,9 @@ import {
 
 const agentHarnessRuntimeMocks = vi.hoisted(() => ({
   forceModelToolsUnsupported: false,
-  skipRequesterScopedMcpMaterialization: false,
+  skipConfiguredMcpMaterialization: true,
+  configuredMcpTools: undefined as unknown,
+  materializeConfiguredMcpCalls: [] as unknown[],
 }));
 
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
@@ -124,13 +126,19 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
       agentHarnessRuntimeMocks.forceModelToolsUnsupported
         ? false
         : actual.supportsModelTools(...args),
-    materializeRequesterScopedMcpToolsForHarnessRun: async (
-      ...args: Parameters<typeof actual.materializeRequesterScopedMcpToolsForHarnessRun>
+    materializeConfiguredMcpToolsForHarnessRun: async (
+      ...args: Parameters<typeof actual.materializeConfiguredMcpToolsForHarnessRun>
     ) => {
-      if (agentHarnessRuntimeMocks.skipRequesterScopedMcpMaterialization) {
+      agentHarnessRuntimeMocks.materializeConfiguredMcpCalls.push(args[0]);
+      if (agentHarnessRuntimeMocks.configuredMcpTools) {
+        return agentHarnessRuntimeMocks.configuredMcpTools as Awaited<
+          ReturnType<typeof actual.materializeConfiguredMcpToolsForHarnessRun>
+        >;
+      }
+      if (agentHarnessRuntimeMocks.skipConfiguredMcpMaterialization) {
         return undefined;
       }
-      return await actual.materializeRequesterScopedMcpToolsForHarnessRun(...args);
+      return await actual.materializeConfiguredMcpToolsForHarnessRun(...args);
     },
   };
 });
@@ -535,7 +543,6 @@ async function startThreadWithDisabledNativeSurfaceForTest(
     developerInstructions: options.developerInstructions,
     nativeCodeModeEnabled: nativeToolSurfaceEnabled,
     nativeCodeModeOnlyEnabled: false,
-    userMcpServersEnabled: false,
     environmentSelection: [],
     pluginThreadConfig: {
       enabled: true,
@@ -1033,7 +1040,9 @@ setupRunAttemptTestHooks();
 
 beforeEach(() => {
   agentHarnessRuntimeMocks.forceModelToolsUnsupported = false;
-  agentHarnessRuntimeMocks.skipRequesterScopedMcpMaterialization = false;
+  agentHarnessRuntimeMocks.skipConfiguredMcpMaterialization = true;
+  agentHarnessRuntimeMocks.configuredMcpTools = undefined;
+  agentHarnessRuntimeMocks.materializeConfiguredMcpCalls = [];
 });
 
 describe("runCodexAppServerAttempt", () => {
@@ -1145,7 +1154,6 @@ describe("runCodexAppServerAttempt", () => {
       appServer: createThreadLifecycleAppServerOptions(),
       nativeCodeModeEnabled: nativeToolSurfaceEnabled,
       nativeCodeModeOnlyEnabled: false,
-      userMcpServersEnabled: nativeToolSurfaceEnabled,
       environmentSelection: [],
     });
     const startRequest = request.mock.calls.find(([method]) => method === "thread/start");
@@ -1256,7 +1264,6 @@ describe("runCodexAppServerAttempt", () => {
         appServer,
         nativeCodeModeEnabled: nativeToolSurfaceEnabled,
         nativeCodeModeOnlyEnabled: false,
-        userMcpServersEnabled: nativeToolSurfaceEnabled,
         environmentSelection,
       });
       const turnParams = buildTurnStartParams(params, {
@@ -1330,7 +1337,6 @@ describe("runCodexAppServerAttempt", () => {
         appServer: appServer as never,
         nativeCodeModeEnabled: true,
         nativeCodeModeOnlyEnabled: false,
-        userMcpServersEnabled: false,
         environmentSelection,
       });
       const turnParams = buildTurnStartParams(params, {
@@ -1377,7 +1383,6 @@ describe("runCodexAppServerAttempt", () => {
           appServer: appServer as never,
           nativeCodeModeEnabled: true,
           nativeCodeModeOnlyEnabled: false,
-          userMcpServersEnabled: false,
           environmentSelection,
         }).catch(async (error: unknown) => {
           await releaseCodexSandboxExecServerEnvironment(sandbox);
@@ -1476,72 +1481,6 @@ describe("runCodexAppServerAttempt", () => {
       expect(dynamicToolNames).not.toContain(toolName);
     }
   });
-  it("passes MCP server config through to Codex thread/start", async () => {
-    const { sessionFile, workspaceDir } = createRunPaths();
-    const request = vi.fn(async (method: string, _params: unknown) => {
-      if (method === "thread/start") {
-        return threadStartResult();
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-    await startOrResumeThread({
-      client: { request } as never,
-      params: createParams(sessionFile, workspaceDir),
-      cwd: workspaceDir,
-      dynamicTools: [],
-      appServer: createThreadLifecycleAppServerOptions(),
-      config: {
-        mcp_servers: {
-          search: {
-            url: "https://mcp.example.com/mcp",
-          },
-        },
-      },
-      mcpServersFingerprint: "mcp-v1",
-      mcpServersFingerprintEvaluated: true,
-    });
-    const startRequest = request.mock.calls.find(([method]) => method === "thread/start");
-    expect((startRequest?.[1] as { config?: unknown } | undefined)?.config).toMatchObject({
-      mcp_servers: {
-        search: {
-          url: "https://mcp.example.com/mcp",
-        },
-      },
-      "features.code_mode": true,
-      "features.code_mode_only": false,
-      "features.apply_patch_streaming_events": true,
-    });
-    const binding = await readCodexAppServerBinding(sessionFile);
-    expect(binding?.mcpServersFingerprint).toBe("mcp-v1");
-  });
-
-  it("starts a new Codex thread when the MCP server fingerprint changes", async () => {
-    const { sessionFile, workspaceDir } = createRunPaths();
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "old-thread",
-      cwd: workspaceDir,
-      dynamicToolsFingerprint: JSON.stringify([]),
-      mcpServersFingerprint: "mcp-v1",
-    });
-    const request = vi.fn(async (method: string, _params: unknown) => {
-      if (method === "thread/start") {
-        return threadStartResult("new-thread");
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-    const binding = await startOrResumeThread({
-      client: { request } as never,
-      params: createParams(sessionFile, workspaceDir),
-      cwd: workspaceDir,
-      dynamicTools: [],
-      appServer: createThreadLifecycleAppServerOptions(),
-      mcpServersFingerprint: "mcp-v2",
-      mcpServersFingerprintEvaluated: true,
-    });
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
-    expect(binding.threadId).toBe("new-thread");
-    expect(binding.mcpServersFingerprint).toBe("mcp-v2");
-  });
   it("uses task cwd for Codex app-server requests while keeping bootstrap workspace separate", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     const taskCwd = path.join(tempDir, "task-repo");
@@ -1579,33 +1518,293 @@ describe("runCodexAppServerAttempt", () => {
     expect(turnStart.cwd).toBe(taskCwd);
   });
 
-  it("starts a no-MCP Codex thread when MCP config is evaluated empty", async () => {
+  it("bridges configured MCP as dynamic tools and adds it to the cron creator cap", async () => {
+    const configuredTool = createRuntimeDynamicTool("project-tracker__list");
+    const dispose = vi.fn(async () => undefined);
+    agentHarnessRuntimeMocks.configuredMcpTools = {
+      tools: [configuredTool],
+      advertisedTools: [configuredTool],
+      appTools: [],
+      restrictAppTools: vi.fn(),
+      dispose,
+    };
+    const toolFactory = vi.fn(
+      (
+        _options: Parameters<
+          NonNullable<typeof dynamicToolBuildState.openClawCodingToolsFactory>
+        >[0],
+      ) => {
+        return [];
+      },
+    );
+    testing.setOpenClawCodingToolsFactoryForTests(toolFactory);
     const { sessionFile, workspaceDir } = createRunPaths();
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "old-thread",
-      cwd: workspaceDir,
-      dynamicToolsFingerprint: JSON.stringify([]),
-      mcpServersFingerprint: "mcp-v1",
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.config = {
+      ...params.config,
+      mcp: {
+        servers: {
+          mainOnly: {
+            url: "https://main.example.test/mcp",
+            codex: { agents: ["main"] },
+          },
+          otherOnly: {
+            url: "https://other.example.test/mcp",
+            codex: { agents: ["other"] },
+          },
+        },
+      },
+    } as typeof params.config;
+    params.toolOverrides = { mcpServers: { mainOnly: true, otherOnly: true } };
+    setCodexTestModelSupportsTools(params, true);
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("thread/start");
+    const threadStart = harness.requests.find((request) => request.method === "thread/start");
+    const dynamicTools =
+      (threadStart?.params as { dynamicTools?: CodexDynamicToolSpec[] } | undefined)
+        ?.dynamicTools ?? [];
+    expect(flattenCodexDynamicToolFunctions(dynamicTools).map((tool) => tool.name)).toContain(
+      "project-tracker__list",
+    );
+    expect(
+      (threadStart?.params as { config?: { mcp_servers?: unknown } } | undefined)?.config
+        ?.mcp_servers,
+    ).toBeUndefined();
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    expect(toolFactory).toHaveBeenCalled();
+    expect(agentHarnessRuntimeMocks.materializeConfiguredMcpCalls[0]).toMatchObject({
+      toolOverrides: { mcpServers: { mainOnly: true, otherOnly: false } },
+      policyContext: { agentId: "main" },
     });
-    const request = vi.fn(async (method: string, _params: unknown) => {
-      if (method === "thread/start") {
-        return threadStartResult("new-thread");
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-    const binding = await startOrResumeThread({
-      client: { request } as never,
-      params: createParams(sessionFile, workspaceDir),
-      cwd: workspaceDir,
-      dynamicTools: [],
-      appServer: createThreadLifecycleAppServerOptions(),
-      mcpServersFingerprintEvaluated: true,
-    });
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
-    expect(binding.threadId).toBe("new-thread");
-    expect(binding.mcpServersFingerprint).toBeUndefined();
-    expect((await readCodexAppServerBinding(sessionFile))?.mcpServersFingerprint).toBeUndefined();
+    const creatorAllowlist = toolFactory.mock.calls[0]?.[0]?.cronCreatorToolAllowlistRef;
+    expect(creatorAllowlist).toContain("project-tracker__list");
+    expect(toolFactory.mock.calls[1]?.[0]?.cronCreatorToolAllowlistRef).toBeUndefined();
+    expect(dispose).toHaveBeenCalled();
   });
+
+  it("bridges configured MCP for an exact finite MCP-only cap", async () => {
+    const configuredTool = createRuntimeDynamicTool("project-tracker__list");
+    const dispose = vi.fn(async () => undefined);
+    agentHarnessRuntimeMocks.configuredMcpTools = {
+      tools: [configuredTool],
+      advertisedTools: [configuredTool],
+      appTools: [],
+      restrictAppTools: vi.fn(),
+      dispose,
+    };
+    const { sessionFile, workspaceDir } = createRunPaths();
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.toolsAllow = ["project-tracker__list"];
+    setCodexTestModelSupportsTools(params, true);
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("thread/start");
+    const threadStart = harness.requests.find((request) => request.method === "thread/start");
+    const dynamicTools =
+      (threadStart?.params as { dynamicTools?: CodexDynamicToolSpec[] } | undefined)
+        ?.dynamicTools ?? [];
+    expect(flattenCodexDynamicToolFunctions(dynamicTools).map((tool) => tool.name)).toContain(
+      "project-tracker__list",
+    );
+    expect(agentHarnessRuntimeMocks.materializeConfiguredMcpCalls[0]).toMatchObject({
+      toolsAllow: ["project-tracker__list"],
+    });
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+    expect(dispose).toHaveBeenCalled();
+  });
+
+  it("disposes configured MCP when Codex startup fails before the turn becomes active", async () => {
+    const configuredTool = createRuntimeDynamicTool("project-tracker__list");
+    const dispose = vi.fn(async () => undefined);
+    agentHarnessRuntimeMocks.configuredMcpTools = {
+      tools: [configuredTool],
+      advertisedTools: [configuredTool],
+      appTools: [],
+      restrictAppTools: vi.fn(),
+      dispose,
+    };
+    const { sessionFile, workspaceDir } = createRunPaths();
+    const harness = createAppServerHarness(async (method) => {
+      if (method === "thread/start") {
+        throw new Error("thread startup failed");
+      }
+      return {};
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    setCodexTestModelSupportsTools(params, true);
+
+    await expect(runCodexAppServerAttempt(params)).rejects.toThrow("thread startup failed");
+    expect(harness.requests.map((request) => request.method)).toContain("thread/start");
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("disposes configured MCP when post-materialization tool setup fails", async () => {
+    const configuredTool = createRuntimeDynamicTool("project-tracker__list");
+    const dispose = vi.fn(async () => undefined);
+    agentHarnessRuntimeMocks.configuredMcpTools = {
+      tools: [configuredTool],
+      advertisedTools: [configuredTool],
+      appTools: [configuredTool],
+      restrictAppTools: vi.fn(() => {
+        throw new Error("app policy setup failed");
+      }),
+      dispose,
+    };
+    createStartedThreadHarness();
+    const { sessionFile, workspaceDir } = createRunPaths();
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    setCodexTestModelSupportsTools(params, true);
+
+    await expect(runCodexAppServerAttempt(params)).rejects.toThrow("app policy setup failed");
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      name: "tools are disabled",
+      disableTools: true,
+      modelToolsUnsupported: false,
+      rawRun: false,
+    },
+    {
+      name: "the model has no tool support",
+      disableTools: false,
+      modelToolsUnsupported: true,
+      rawRun: false,
+    },
+    {
+      name: "the allowlist cannot reach MCP",
+      disableTools: false,
+      modelToolsUnsupported: false,
+      rawRun: false,
+    },
+    {
+      name: "the attempt is a raw model run",
+      disableTools: false,
+      modelToolsUnsupported: false,
+      rawRun: true,
+    },
+  ])("does not materialize configured MCP when $name", async (testCase) => {
+    agentHarnessRuntimeMocks.forceModelToolsUnsupported = testCase.modelToolsUnsupported;
+    const { sessionFile, workspaceDir } = createRunPaths();
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = testCase.disableTools;
+    params.modelRun = testCase.rawRun;
+    params.toolsAllow = testCase.name === "the allowlist cannot reach MCP" ? ["read"] : undefined;
+    if (!testCase.modelToolsUnsupported) {
+      setCodexTestModelSupportsTools(params, true);
+    }
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("thread/start");
+    const threadStart = harness.requests.find((request) => request.method === "thread/start");
+    const dynamicTools =
+      (threadStart?.params as { dynamicTools?: CodexDynamicToolSpec[] } | undefined)
+        ?.dynamicTools ?? [];
+    expect(flattenCodexDynamicToolFunctions(dynamicTools).map((tool) => tool.name)).not.toContain(
+      "project-tracker__list",
+    );
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+  });
+
+  it("resumes unchanged configured MCP schemas with the current execution closure", async () => {
+    const { sessionFile, workspaceDir } = createRunPaths();
+    const firstTool = createRuntimeDynamicTool("project-tracker__list");
+    const firstExecute = vi.mocked(firstTool.execute);
+    const firstDispose = vi.fn(async () => undefined);
+    agentHarnessRuntimeMocks.configuredMcpTools = {
+      tools: [firstTool],
+      advertisedTools: [firstTool],
+      appTools: [],
+      restrictAppTools: vi.fn(),
+      dispose: firstDispose,
+    };
+    const firstHarness = createStartedThreadHarness();
+    const firstParams = createParams(sessionFile, workspaceDir);
+    firstParams.disableTools = false;
+    setCodexTestModelSupportsTools(firstParams, true);
+
+    const firstRun = runCodexAppServerAttempt(firstParams);
+    await firstHarness.waitForMethod("turn/start");
+    await firstHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await firstRun;
+
+    const secondTool = createRuntimeDynamicTool("project-tracker__list");
+    const secondExecute = vi.mocked(secondTool.execute);
+    const secondDispose = vi.fn(async () => undefined);
+    agentHarnessRuntimeMocks.configuredMcpTools = {
+      tools: [secondTool],
+      advertisedTools: [secondTool],
+      appTools: [],
+      restrictAppTools: vi.fn(),
+      dispose: secondDispose,
+    };
+    const secondHarness = createResumeHarness();
+    const secondParams = createParams(sessionFile, workspaceDir);
+    secondParams.disableTools = false;
+    setCodexTestModelSupportsTools(secondParams, true);
+
+    const secondRun = runCodexAppServerAttempt(secondParams);
+    await secondHarness.waitForMethod("turn/start");
+    expect(secondHarness.requests.map((request) => request.method)).toContain("thread/resume");
+    const toolResult = await secondHarness.handleServerRequest({
+      id: "request-configured-mcp",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-configured-mcp",
+        namespace: "openclaw",
+        tool: "project-tracker__list",
+        arguments: {},
+      },
+    });
+    expect(toolResult).toMatchObject({ success: true });
+    expect(firstExecute).not.toHaveBeenCalled();
+    expect(secondExecute).toHaveBeenCalledOnce();
+    await secondHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await secondRun;
+
+    const changedTool = createRuntimeDynamicTool("project-tracker__list");
+    changedTool.parameters = {
+      type: "object",
+      properties: { project: { type: "string" } },
+      additionalProperties: false,
+    };
+    agentHarnessRuntimeMocks.configuredMcpTools = {
+      tools: [changedTool],
+      advertisedTools: [changedTool],
+      appTools: [],
+      restrictAppTools: vi.fn(),
+      dispose: vi.fn(async () => undefined),
+    };
+    const changedHarness = createStartedThreadHarness();
+    const changedParams = createParams(sessionFile, workspaceDir);
+    changedParams.disableTools = false;
+    setCodexTestModelSupportsTools(changedParams, true);
+
+    const changedRun = runCodexAppServerAttempt(changedParams);
+    await changedHarness.waitForMethod("turn/start");
+    expect(changedHarness.requests.map((request) => request.method)).toContain("thread/start");
+    expect(changedHarness.requests.map((request) => request.method)).not.toContain("thread/resume");
+    await changedHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await changedRun;
+    expect(firstDispose).toHaveBeenCalled();
+    expect(secondDispose).toHaveBeenCalled();
+  });
+
   it("scopes Codex developer reply instructions to message-tool-only delivery", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
@@ -5359,7 +5558,7 @@ describe("runCodexAppServerAttempt", () => {
     testing.setOpenClawCodingToolsFactoryForTests(() => []);
     // This test owns review-policy projection, not requester-scoped MCP discovery.
     agentHarnessRuntimeMocks.forceModelToolsUnsupported = true;
-    agentHarnessRuntimeMocks.skipRequesterScopedMcpMaterialization = true;
+    agentHarnessRuntimeMocks.skipConfiguredMcpMaterialization = true;
     const params = createParams(sessionFile, workspaceDir);
     params.provider = "anthropic";
     params.modelId = "claude-opus-4-6";

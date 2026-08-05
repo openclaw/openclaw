@@ -467,6 +467,30 @@ export const PLUGIN_COMPAT_RECORDS = [
     tests: ["src/plugins/contracts/plugin-sdk-subpaths.test.ts"],
   },
   {
+    code: "requester-scoped-mcp-harness-helper",
+    status: "deprecated",
+    owner: "agent-runtime",
+    introduced: "2026-07-14",
+    deprecated: "2026-08-05",
+    warningStarts: "2026-08-05",
+    removeAfter: "2026-10-01",
+    replacement: "materializeConfiguredMcpToolsForHarnessRun",
+    docsPath: "/plugins/sdk-migration#requester-scoped-mcp-harness-helper",
+    surfaces: [
+      "openclaw/plugin-sdk/agent-harness-runtime materializeRequesterScopedMcpToolsForHarnessRun",
+    ],
+    diagnostics: [
+      "TypeScript @deprecated annotation and plugin compatibility registry; no per-turn warning",
+    ],
+    tests: [
+      "src/agents/agent-bundle-mcp-harness.test.ts",
+      "src/agents/agent-bundle-mcp-runtime-shared.test.ts",
+      "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
+    ],
+    releaseNote:
+      "The requester-scoped MCP harness helper remains as a deprecated compatibility adapter while harness plugins adopt configured MCP materialization.",
+  },
+  {
     code: "embedded-pi-agent-sdk-aliases",
     status: "deprecated",
     owner: "agent-runtime",

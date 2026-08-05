@@ -5,6 +5,7 @@ import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import { LEGACY_IMPLICIT_AGENT_ID } from "../../routing/session-key.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
+import type { CronScheduledNativePolicy } from "../scheduled-native-policy.js";
 import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import type { QuarantinedCronConfigJob } from "../store.js";
 import type {
@@ -385,12 +386,16 @@ export type CronAddOptions = {
   systemOwned?: boolean;
   /** Authenticated caller provenance stamped by the service, never public input. */
   scheduledToolPolicy?: CronScheduledToolPolicy;
+  /** Creator-derived native authority stamped by the Gateway. */
+  scheduledNativePolicy?: CronScheduledNativePolicy;
 };
 /** Normalized patch input accepted by cron service updates. */
 export type CronUpdateInput = CronJobPatch;
 /** Authenticated caller provenance used only when a tool policy is explicitly adopted. */
 export type CronUpdateOptions = {
   scheduledToolPolicy?: CronScheduledToolPolicy;
+  /** Present only when this mutation explicitly reauthorizes tools. */
+  scheduledNativePolicy?: CronScheduledNativePolicy;
 };
 /** Cron-store-locked guard evaluated against the current job before an update applies. */
 export type CronUpdatePrecondition = (job: CronJob, nowMs: number) => void | Promise<void>;

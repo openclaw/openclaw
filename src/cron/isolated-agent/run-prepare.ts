@@ -1,9 +1,6 @@
 /** Session identity and context preparation for isolated cron runs. */
 import { isDeepStrictEqual } from "node:util";
-import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-check.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
-import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
-import { loadAgentRuntimePluginRegistryHandle } from "../../agents/runtime-plugins.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
@@ -25,7 +22,6 @@ import { resolveCronSkillsSnapshot } from "../../skills/runtime/cron-snapshot.js
 import type { SkillSnapshot } from "../../skills/types.js";
 import type { CronDeliveryPlan } from "../delivery-plan.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
-import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { isDetachedCronSessionTarget } from "../session-target.js";
 import type { CronJob, CronRunDiagnostics } from "../types.js";
 import {
@@ -33,6 +29,7 @@ import {
   resolveCronModelSelectionOwner,
   resolveCronThinkingSelection,
 } from "./model-selection.js";
+import { resolveCronAuthProfileSelection } from "./run-auth-selection.js";
 import { buildCronAgentDefaultsConfig, resolveCronActiveRuntimeConfig } from "./run-config.js";
 import { buildCurrentConversationContextBlock } from "./run-current-context.js";
 import {
@@ -41,10 +38,9 @@ import {
   resolveCronDeliveryContext,
 } from "./run-delivery-trace.js";
 import { resolveCronPreflightCandidates } from "./run-fallback-policy.js";
+import { resolveCronRuntimePluginRegistry } from "./run-plugin-registry.js";
 import {
   appendCronUnattendedRunPreamble,
-  hasConfiguredAuthProfiles,
-  loadCronAuthProfileRuntime,
   loadCronExternalContentRuntime,
   loadCronModelPreflightRuntime,
   loadSessionAccessorRuntime,
@@ -53,6 +49,7 @@ import {
   type RunCronAgentTurnParams,
   type WithRunSession,
 } from "./run-prepare-runtime.js";
+import { resolveScheduledCronAuthority } from "./run-scheduled-authority.js";
 import {
   CronSessionLifecycleClaimError,
   createCronRunContinuationSession,
@@ -319,6 +316,20 @@ export async function prepareCronRunContext(params: {
       sessionId: currentRunSessionId(),
       sessionKey: runSessionKey,
     });
+    const scheduledAuthority = resolveScheduledCronAuthority(input.job);
+    if (!scheduledAuthority.ok) {
+      const { error } = scheduledAuthority;
+      sessionWorkAdmission.release();
+      return {
+        ok: false,
+        result: withRunSession({
+          status: "error",
+          error,
+          diagnostics: createCronRunDiagnosticsFromError("cron-preflight", error),
+        }),
+      };
+    }
+    const { scheduledNativePolicy, scheduledToolPolicy } = scheduledAuthority;
     if (!cronSession.sessionEntry.label?.trim() && baseSessionKey.startsWith("cron:")) {
       const labelSuffix =
         typeof input.job.name === "string" && input.job.name.trim()
@@ -441,14 +452,17 @@ export async function prepareCronRunContext(params: {
       hookThinking: isGmailHook ? runtimeCfg.hooks?.gmail?.thinking : undefined,
       sessionThinking: cronSession.sessionEntry.thinkingLevel,
     });
-    const effectiveAgentRuntime = resolveEffectiveAgentRuntime({
-      cfg: cfgWithAgentDefaults,
-      provider,
-      modelId: model,
-      agentId: modelOwner.agentId,
-      sessionKey: agentSessionKey,
-      sessionEntry: cronSession.sessionEntry,
-    });
+    const effectiveAgentRuntime =
+      scheduledNativePolicy?.mode === "disabled"
+        ? "openclaw"
+        : resolveEffectiveAgentRuntime({
+            cfg: cfgWithAgentDefaults,
+            provider,
+            modelId: model,
+            agentId: modelOwner.agentId,
+            sessionKey: agentSessionKey,
+            sessionEntry: cronSession.sessionEntry,
+          });
     let requestedThinkLevel = thinkingSelection.requestedThinkLevel;
     if (!requestedThinkLevel) {
       requestedThinkLevel = resolveThinkingDefault({
@@ -603,33 +617,29 @@ export async function prepareCronRunContext(params: {
       job: input.job,
       cronSession,
     });
-    const hasSessionAuthProfileOverride = Boolean(
-      cronSession.sessionEntry.authProfileOverride?.trim(),
-    );
-    const authProfileId =
-      !hasSessionAuthProfileOverride &&
-      !hasConfiguredAuthProfiles(cfgWithAgentDefaults) &&
-      !hasAnyAuthProfileStoreSource(agentDir)
-        ? undefined
-        : await (
-            await loadCronAuthProfileRuntime()
-          ).resolveSessionAuthProfileOverride({
-            // Auth profile resolution can mutate session state; pass the same
-            // store and key that persistence will later write.
-            cfg: cfgWithAgentDefaults,
-            provider,
-            acceptedProviderIds: listOpenAIAuthProfileProvidersForAgentRuntime({
-              provider,
-              harnessRuntime: effectiveAgentRuntime,
-              config: cfgWithAgentDefaults,
-            }),
-            agentDir,
-            sessionEntry: cronSession.sessionEntry,
-            sessionStore: cronSession.store,
-            sessionKey: agentSessionKey,
-            storePath: cronSession.storePath,
-            isNewSession: cronSession.isNewSession && input.job.sessionTarget !== "isolated",
-          });
+    const { authProfileId, authPortabilityError } = await resolveCronAuthProfileSelection({
+      cfg: cfgWithAgentDefaults,
+      provider,
+      effectiveAgentRuntime,
+      agentDir,
+      agentSessionKey,
+      sessionTarget: input.job.sessionTarget,
+      cronSession,
+      scheduledNativePolicy,
+    });
+    if (authPortabilityError) {
+      sessionWorkAdmission.release();
+      return {
+        ok: false,
+        result: withRunSession({
+          status: "error",
+          error: authPortabilityError,
+          diagnostics: createCronRunDiagnosticsFromError("model-preflight", authPortabilityError),
+          provider,
+          model,
+        }),
+      };
+    }
     const liveSelection: CronLiveSelection = {
       provider,
       model,
@@ -643,24 +653,14 @@ export async function prepareCronRunContext(params: {
         ? cronSession.sessionEntry.authProfileOverrideSource
         : undefined,
     };
-    const runtimePluginCandidates =
-      selectedPreflightCandidateIndex >= 0
-        ? preflightCandidates.slice(selectedPreflightCandidateIndex)
-        : preflightCandidates;
-    const pluginRegistry = loadAgentRuntimePluginRegistryHandle({
+    const pluginRegistry = resolveCronRuntimePluginRegistry({
       config: cfgWithAgentDefaults,
       workspaceDir,
-      allowGatewaySubagentBinding: true,
-      selections: runtimePluginCandidates.map((candidate) => {
-        const runtime = resolveSessionRuntimeOverrideForProvider({
-          provider: candidate.provider,
-          entry: cronSession.sessionEntry,
-          cfg: cfgWithAgentDefaults,
-        });
-        return runtime
-          ? { provider: candidate.provider, modelId: candidate.model, runtime, agentId }
-          : { provider: candidate.provider, modelId: candidate.model, agentId };
-      }),
+      candidates: preflightCandidates,
+      selectedCandidateIndex: selectedPreflightCandidateIndex,
+      scheduledNativePolicy,
+      sessionEntry: cronSession.sessionEntry,
+      agentId,
     });
     const runContinuationSession = usesExactRunSession
       ? createCronRunContinuationSession({
@@ -669,11 +669,8 @@ export async function prepareCronRunContext(params: {
           thinkingLevel: requestedThinkLevel,
           toolsAllow: agentPayload?.toolsAllow,
           toolsAllowIsDefault: agentPayload?.toolsAllowIsDefault,
-          scheduledToolPolicy: resolveCronScheduledToolPolicy({
-            toolsAllow: agentPayload?.toolsAllow,
-            scheduledToolPolicy: input.job.scheduledToolPolicy,
-            owner: input.job.owner,
-          }),
+          scheduledToolPolicy,
+          scheduledNativePolicy,
           cliSessionBindingFacts: {
             sourceReplyDeliveryMode: sourceDelivery.sourceReplyDeliveryMode,
             requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,

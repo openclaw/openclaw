@@ -3,6 +3,7 @@ import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { CronScheduledNativePolicy } from "../../cron/scheduled-native-policy.js";
 import { updateChatRunProvider } from "../chat-abort.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -16,6 +17,7 @@ export function createAgentRunModelSelectionHandler(params: {
   lifecycleStorePath: string;
   activeSessionAgentId: string;
   trustedInternalHandoff?: { provider: string; model: string };
+  scheduledNativePolicy?: CronScheduledNativePolicy;
 }): (selection: { provider: string; model: string }) => Promise<void> {
   return async ({ provider, model }) => {
     if (params.trustedInternalHandoff) {
@@ -60,7 +62,10 @@ export function createAgentRunModelSelectionHandler(params: {
             modelId: model,
           }) ?? provider;
         const cronRunContinuation = { ...marker };
-        if (isCliProvider(executionProvider, params.cfgForAgent ?? params.cfg)) {
+        if (
+          params.scheduledNativePolicy?.mode !== "disabled" &&
+          isCliProvider(executionProvider, params.cfgForAgent ?? params.cfg)
+        ) {
           cronRunContinuation.cliExecutionProvider = executionProvider;
         } else {
           delete cronRunContinuation.cliExecutionProvider;

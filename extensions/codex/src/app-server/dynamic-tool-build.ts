@@ -8,6 +8,7 @@ import {
   buildEmbeddedAttemptToolRunContext,
   embeddedAgentLog,
   filterProviderNormalizableTools,
+  getPluginToolMeta,
   isHostScopedAgentToolActive,
   isSubagentSessionKey,
   normalizeAgentRuntimeTools,
@@ -98,6 +99,10 @@ type DynamicToolBuildParams = {
   forceHeartbeatTool?: boolean;
   ignoreDisableMessageTool?: boolean;
   ignoreRuntimePlan?: boolean;
+  /** Mutable creator cap refreshed after configured MCP tools materialize. */
+  cronCreatorToolAllowlistRef?: NonNullable<
+    OpenClawCodingToolsOptions["cronCreatorToolAllowlistRef"]
+  >;
   /** Host fact resolver; injectable only for focused plugin contract tests. */
   isHostScopedToolActive?: (toolName: string) => boolean;
   onYieldDetected: () => void;
@@ -110,6 +115,28 @@ type DynamicToolBuildParams = {
     frameImageIdentity?: string;
   };
 };
+
+function refreshCronCreatorToolAllowlist(
+  target: NonNullable<DynamicToolBuildParams["cronCreatorToolAllowlistRef"]>,
+  tools: readonly OpenClawDynamicTool[],
+): void {
+  const previousPluginIds = new Map(
+    target.flatMap((entry) =>
+      typeof entry === "string" || !entry.pluginId ? [] : [[entry.name, entry.pluginId] as const],
+    ),
+  );
+  target.length = 0;
+  const seen = new Set<string>();
+  for (const tool of tools) {
+    const name = tool.name.trim();
+    if (!name || seen.has(name)) {
+      continue;
+    }
+    seen.add(name);
+    const pluginId = getPluginToolMeta(tool)?.pluginId ?? previousPluginIds.get(name);
+    target.push(pluginId ? { name, pluginId } : { name });
+  }
+}
 /** Splits sandbox and run session keys so tool calls can bind to both scopes when needed. */
 function resolveOpenClawCodingToolsSessionKeys(
   params: EmbeddedRunAttemptParams,
@@ -317,6 +344,12 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     hasRepliedRef: params.hasRepliedRef,
     modelHasVision,
     computerContextEpoch: input.computerContextEpoch,
+    cronCreatorToolAllowlistRef: input.cronCreatorToolAllowlistRef,
+    cronCreatorPolicy: {
+      version: 1,
+      codexNativeSurface: input.nativeToolSurfaceEnabled ? "inherit" : "disabled",
+      openClawToolsCap: "explicit",
+    },
     requireExplicitMessageTarget:
       params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
@@ -445,6 +478,11 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   const exposedTools = webSearchPlan.suppressManagedWebSearch
     ? normalizedTools.filter((tool) => tool.name !== "web_search")
     : normalizedTools;
+  if (input.cronCreatorToolAllowlistRef) {
+    // Cron authority captures only the final executable turn surface. Earlier
+    // policy/schema stages and the registered superset may contain hidden tools.
+    refreshCronCreatorToolAllowlist(input.cronCreatorToolAllowlistRef, exposedTools);
+  }
   if (preNormalizationDiagnostics.length > 0) {
     embeddedAgentLog.warn(
       `codex app-server quarantined ${preNormalizationDiagnostics.length} unsupported runtime tool schema${preNormalizationDiagnostics.length === 1 ? "" : "s"} before dynamic tool registration`,
@@ -520,6 +558,12 @@ export function shouldEnableCodexAppServerNativeToolSurface(
   }
   if (params.disableTools) {
     return false;
+  }
+  if (params.scheduledNativePolicy?.mode === "disabled") {
+    return false;
+  }
+  if (params.scheduledNativePolicy?.mode === "inherit") {
+    return canCodexAppServerNativeToolSurfaceHonorSandbox(sandbox, options);
   }
   const toolsAllow = includeForcedCodexDynamicToolAllow(params.toolsAllow, params);
   if (toolsAllow === undefined) {

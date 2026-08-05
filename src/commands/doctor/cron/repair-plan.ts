@@ -79,6 +79,32 @@ export function formatScheduledToolPolicyAdvisory(params: {
   return lines.join("\n");
 }
 
+/** Advisory for scheduled turns whose native authority cannot be migrated safely. */
+export function formatScheduledNativePolicyAdvisory(params: {
+  legacyJobs: string[];
+  invalidJobs: string[];
+}): string | null {
+  const lines: string[] = [];
+  if (params.legacyJobs.length > 0) {
+    lines.push(
+      `${pluralize(params.legacyJobs.length, "scheduled agent turn")} ${params.legacyJobs.length === 1 ? "has" : "have"} no durable tool cap from which to recover native authority${formatJobNameList(params.legacyJobs)}.`,
+    );
+  }
+  if (params.invalidJobs.length > 0) {
+    lines.push(
+      `${pluralize(params.invalidJobs.length, "scheduled agent turn")} ${params.invalidJobs.length === 1 ? "has" : "have"} malformed native authority${formatJobNameList(params.invalidJobs)}.`,
+    );
+  }
+  if (lines.length === 0) {
+    return null;
+  }
+  lines.push(
+    "- These jobs stop before execution because their native capability ceiling is ambiguous.",
+    "- Reauthorize with `openclaw cron edit <id> --tools <tool,...>`, or use `--clear-tools` to adopt the current default cap.",
+  );
+  return lines.join("\n");
+}
+
 /** Convert legacy cron issue counts into doctor preview lines. */
 export function formatLegacyIssuePreview(issues: CronLegacyIssueCounts): string[] {
   const lines: string[] = [];
@@ -135,6 +161,16 @@ export function formatLegacyIssuePreview(issues: CronLegacyIssueCounts): string[
   if (issues.migratedScheduledToolPolicy) {
     lines.push(
       `- ${pluralize(issues.migratedScheduledToolPolicy, "job")} can recover scheduled account authority from persisted owner identity`,
+    );
+  }
+  if (issues.migratedScheduledNativePolicy) {
+    lines.push(
+      `- ${pluralize(issues.migratedScheduledNativePolicy, "job")} can record explicit scheduled native authority from its persisted tool cap`,
+    );
+  }
+  if (issues.migratedScheduledNativePolicyDisabled) {
+    lines.push(
+      `- ${pluralize(issues.migratedScheduledNativePolicyDisabled, "bounded job")} will use OpenClaw tools without native Codex apps until its tools are reauthorized from an authenticated Codex session`,
     );
   }
   if (issues.invalidSchedule) {
@@ -222,6 +258,7 @@ export function needsSqliteProjectionBackfill(params: {
     "payload",
     "schedule",
     "scheduledToolPolicy",
+    "scheduledNativePolicy",
     "sessionKey",
     "sessionTarget",
     "wakeMode",

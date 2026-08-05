@@ -8,7 +8,8 @@ import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { PluginLruCache } from "../plugins/plugin-cache-primitives.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { assignSafeServerNames } from "./agent-bundle-mcp-names.js";
+import { mcpToolFilterExcludesAll } from "./agent-bundle-mcp-filter.js";
+import { assignSafeServerNames, TOOL_NAME_SEPARATOR } from "./agent-bundle-mcp-names.js";
 import { loadEmbeddedAgentMcpConfig } from "./embedded-agent-mcp.js";
 import {
   partitionMcpServersByConnectionScope,
@@ -293,7 +294,7 @@ export function resolveSessionMcpConfigSummary(params: {
   cfg?: OpenClawConfig;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
-}): { fingerprint: string; serverNames: string[] } {
+}): { fingerprint: string; serverNames: string[]; staticToolNamePrefixes: string[] } {
   const { loaded, fingerprint } = loadSessionMcpConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
@@ -303,13 +304,27 @@ export function resolveSessionMcpConfigSummary(params: {
   });
   const serverNames = Object.keys(loaded.mcpServers).toSorted((a, b) => a.localeCompare(b));
   if (serverNames.length === 0) {
-    return { fingerprint, serverNames };
+    return { fingerprint, serverNames, staticToolNamePrefixes: [] };
   }
   // Mirror getOrCreate: the bare-keyed runtime folds full-set safe names into
   // its fingerprint and excludes requester-scoped servers from its partition.
   // Compare apples-to-apples or tools.effective reports stale-config forever.
   const safeServerNamesByServer = assignSafeServerNames(Object.keys(loaded.mcpServers));
-  const { requesterScopedServerNames } = partitionMcpServersByConnectionScope(loaded.mcpServers);
+  const { staticServers, requesterScopedServerNames } = partitionMcpServersByConnectionScope(
+    loaded.mcpServers,
+  );
+  // Requester-independent callers can reach only the static partition. Keep
+  // prefixes from the full declaration-order assignment or colliding server
+  // names could be attributed to the wrong namespace.
+  const staticToolNamePrefixes = Object.entries(staticServers)
+    // A universal exclude also hides resources/prompts utilities. Exact filters
+    // and session denials cannot be inverted from sanitized model-facing names,
+    // so same-namespace cases stay conservative.
+    .filter(([, server]) => !mcpToolFilterExcludesAll(server.toolFilter))
+    .map(
+      ([serverName]) =>
+        `${safeServerNamesByServer.get(serverName) ?? serverName}${TOOL_NAME_SEPARATOR}`,
+    );
   const { fingerprint: bareRuntimeFingerprint } = loadSessionMcpConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
@@ -321,5 +336,5 @@ export function resolveSessionMcpConfigSummary(params: {
       : {}),
     safeServerNamesByServer,
   });
-  return { fingerprint: bareRuntimeFingerprint, serverNames };
+  return { fingerprint: bareRuntimeFingerprint, serverNames, staticToolNamePrefixes };
 }

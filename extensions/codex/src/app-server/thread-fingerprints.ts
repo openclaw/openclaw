@@ -1,4 +1,3 @@
-import * as crypto from "node:crypto";
 import {
   isJsonObject,
   type CodexDynamicToolSpec,
@@ -32,53 +31,6 @@ function legacyFingerprintDynamicTools(dynamicTools: CodexDynamicToolSpec[]): st
   return JSON.stringify(
     dynamicTools.map(fingerprintDynamicToolSpec).toSorted(compareJsonFingerprint),
   );
-}
-
-export function legacyFingerprintUserMcpServersConfigPatch(
-  configPatch: JsonObject | undefined,
-): string | undefined {
-  return configPatch ? JSON.stringify(stabilizeJsonValue(configPatch)) : undefined;
-}
-
-export function fingerprintUserMcpServersConfigPatch(
-  configPatch: JsonObject | undefined,
-): string | undefined {
-  return configPatch
-    ? hashCodexAppServerBindingFingerprint(
-        JSON.stringify(stabilizeJsonValue(redactUserMcpServersFingerprintSecrets(configPatch))),
-      )
-    : undefined;
-}
-
-function redactUserMcpServersFingerprintSecrets(value: JsonValue): JsonValue {
-  if (Array.isArray(value)) {
-    return value.map(redactUserMcpServersFingerprintSecrets);
-  }
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-  const next: JsonObject = {};
-  for (const [key, entry] of Object.entries(value)) {
-    if (key === "http_headers" && entry && typeof entry === "object" && !Array.isArray(entry)) {
-      next[key] = Object.fromEntries(
-        Object.entries(entry).map(([header, headerValue]) => [
-          header,
-          header.toLowerCase() === "authorization"
-            ? fingerprintUserMcpServersAuthorizationHeader(headerValue)
-            : headerValue,
-        ]),
-      ) as JsonObject;
-      continue;
-    }
-    next[key] = redactUserMcpServersFingerprintSecrets(entry);
-  }
-  return next;
-}
-
-function fingerprintUserMcpServersAuthorizationHeader(value: unknown): string {
-  return typeof value === "string" && value.length > 0
-    ? `<redacted:sha256:${crypto.createHash("sha256").update(value).digest("hex")}>`
-    : "<redacted>";
 }
 
 export function fingerprintJsonObject(value: JsonObject): string {
@@ -173,21 +125,6 @@ export function areDynamicToolFingerprintsCompatible(
   nextLegacy?: string,
 ): boolean {
   return !previous || previous === next || previous === nextLegacy;
-}
-
-export function areUserMcpServersFingerprintsCompatible(params: {
-  previous?: string;
-  next?: string;
-  nextLegacy?: string;
-}): boolean {
-  // Beta 5 stored raw stabilized JSON, while doctor hashes those exact bytes.
-  // A successful resume rewrites either legacy form to the current redacted hash.
-  return (
-    params.previous === params.next ||
-    params.previous === params.nextLegacy ||
-    (params.nextLegacy !== undefined &&
-      params.previous === hashCodexAppServerBindingFingerprint(params.nextLegacy))
-  );
 }
 
 export function shouldStartTransientNoToolThread(params: {

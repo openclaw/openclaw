@@ -50,6 +50,7 @@ describe("scheduled tool policy provenance", () => {
 
     const trusted = await add(state, { ...base, name: "trusted" });
     expect(trusted.scheduledToolPolicy).toEqual({ version: 1, mode: "trusted" });
+    expect(trusted.scheduledNativePolicy).toEqual({ version: 1, mode: "disabled" });
 
     const account = await add(
       state,
@@ -69,6 +70,7 @@ describe("scheduled tool policy provenance", () => {
           ownerSessionKey: "agent:main:discord:group:ops",
           ownerAccountId: "work",
         },
+        scheduledNativePolicy: { version: 1, mode: "inherit" },
       },
     );
     expect(account.scheduledToolPolicy).toEqual({
@@ -77,6 +79,7 @@ describe("scheduled tool policy provenance", () => {
       ownerSessionKey: "agent:main:discord:group:ops",
       ownerAccountId: "work",
     });
+    expect(account.scheduledNativePolicy).toEqual({ version: 1, mode: "disabled" });
     if (state.timer) {
       clearTimeout(state.timer);
     }
@@ -100,9 +103,25 @@ describe("scheduled tool policy provenance", () => {
       payload: { kind: "agentTurn", message: "run", toolsAllow: ["write"] },
     });
     delete created.scheduledToolPolicy;
+    delete created.scheduledNativePolicy;
 
     const routine = await update(state, created.id, { description: "routine" });
     expect(routine.scheduledToolPolicy).toBeUndefined();
+    expect(routine.scheduledNativePolicy).toBeUndefined();
+
+    const policyJob = await add(state, {
+      name: "routine-policy",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "run", toolsAllow: ["write"] },
+    });
+    const messageEdit = await update(state, policyJob.id, {
+      payload: { kind: "agentTurn", message: "routine message edit" },
+    });
+    expect(messageEdit.scheduledToolPolicy).toEqual({ version: 1, mode: "trusted" });
+    expect(messageEdit.scheduledNativePolicy).toEqual({ version: 1, mode: "disabled" });
 
     const reauthorized = await update(
       state,
@@ -115,9 +134,39 @@ describe("scheduled tool policy provenance", () => {
           ownerSessionKey: "agent:main:discord:group:ops",
           ownerAccountId: "work",
         },
+        scheduledNativePolicy: { version: 1, mode: "disabled" },
       },
     );
     expect(reauthorized.scheduledToolPolicy?.mode).toBe("account");
+    expect(reauthorized.scheduledNativePolicy?.mode).toBe("disabled");
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+  });
+
+  it("stamps native authority when a tool-bearing job enters agent-turn execution", async () => {
+    const { storePath } = await makeStorePath();
+    const state = createOkIsolatedCronState({
+      storePath,
+      now: Date.parse("2026-07-23T12:00:00.000Z"),
+      cronConfig: { triggers: { enabled: true } },
+    });
+    const created = await add(state, {
+      name: "script-to-agent",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "script", script: "return true", toolsAllow: ["read"] },
+    });
+    expect(created.scheduledNativePolicy).toBeUndefined();
+
+    const updated = await update(state, created.id, {
+      payload: { kind: "agentTurn", message: "continue", toolsAllow: ["read"] },
+    });
+
+    expect(updated.scheduledToolPolicy).toEqual({ version: 1, mode: "trusted" });
+    expect(updated.scheduledNativePolicy).toEqual({ version: 1, mode: "disabled" });
     if (state.timer) {
       clearTimeout(state.timer);
     }
@@ -156,10 +205,12 @@ function createOkIsolatedCronState(params: {
   now: number;
   summary?: string;
   onEvent?: (event: CronEvent) => void;
+  cronConfig?: { triggers?: { enabled?: boolean } };
 }) {
   return createCronServiceState({
     storePath: params.storePath,
     cronEnabled: true,
+    cronConfig: params.cronConfig,
     log: logger,
     nowMs: () => params.now,
     enqueueSystemEvent: vi.fn(),
