@@ -182,6 +182,7 @@ async function handleGatewayProbeRequest(
   resolvedAuth: ResolvedGatewayAuth,
   trustedProxies: string[],
   allowRealIpFallback: boolean,
+  rateLimiter?: AuthRateLimiter,
   getReadiness?: ReadinessChecker,
 ): Promise<boolean> {
   const status = classifyGatewayProbePath(requestPath);
@@ -217,6 +218,7 @@ async function handleGatewayProbeRequest(
           req,
           trustedProxies,
           allowRealIpFallback,
+          rateLimiter,
           browserOriginPolicy: resolveHttpBrowserOriginPolicy(req),
         })
       ).ok;
@@ -404,6 +406,7 @@ export function createGatewayHttpServer(opts: {
           getResolvedAuth(),
           [],
           false,
+          rateLimiter,
           getReadiness,
         );
         return;
@@ -455,6 +458,7 @@ export function createGatewayHttpServer(opts: {
               resolvedAuthValue,
               trustedProxies,
               allowRealIpFallback,
+              rateLimiter,
               getReadiness,
             ),
         },

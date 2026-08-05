@@ -43,6 +43,7 @@ import { buildAssistantMediaContentDisposition } from "./assistant-media-content
 import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+  resolveAuthRateLimitClientIp,
   type AuthRateLimiter,
 } from "./auth-rate-limit.js";
 import { authorizeHttpGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
@@ -90,7 +91,8 @@ import {
   setControlUiPluginAuthCookieForRequest as setPluginAuthCookie,
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
-import { resolveRequestClientIp } from "./net.js";
+import { hasForwardedRequestHeaders, isLocalDirectRequest, resolveRequestClientIp } from "./net.js";
+import { withSerializedCredentialFallbackAttempt } from "./rate-limit-attempt-serialization.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { isTerminalConfigEnabled } from "./terminal/enabled.js";
 
@@ -291,30 +293,72 @@ function resolveControlUiReadAuthToken(
   return resolveAssistantMediaAuthToken(req);
 }
 
+type ControlUiReadAuthOptions = {
+  auth?: ResolvedGatewayAuth;
+  trustedProxies?: string[];
+  allowRealIpFallback?: boolean;
+  rateLimiter?: AuthRateLimiter;
+  allowQueryToken?: boolean;
+  requiredOperatorMethod?: string;
+  onPluginFrameGrants?: (grants: readonly ControlUiPluginFrameGrantAck[]) => void;
+};
+
 async function authorizeControlUiReadRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  opts?: {
-    auth?: ResolvedGatewayAuth;
-    trustedProxies?: string[];
-    allowRealIpFallback?: boolean;
-    rateLimiter?: AuthRateLimiter;
-    allowQueryToken?: boolean;
-    requiredOperatorMethod?: string;
-    onPluginFrameGrants?: (grants: readonly ControlUiPluginFrameGrantAck[]) => void;
-  },
+  opts?: ControlUiReadAuthOptions,
 ): Promise<boolean> {
   if (!opts?.auth) {
     opts?.onPluginFrameGrants?.([]);
     return true;
   }
+  const authOpts = { ...opts, auth: opts.auth };
 
-  const token = resolveControlUiReadAuthToken(req, {
-    allowQueryToken: opts.allowQueryToken,
-  });
-  const clientIp =
+  const queryTokenPolicy = opts.allowQueryToken;
+  const token = resolveControlUiReadAuthToken(req, { allowQueryToken: queryTokenPolicy });
+  const resolvedClientIp =
     resolveRequestClientIp(req, opts.trustedProxies, opts.allowRealIpFallback === true) ??
     req.socket?.remoteAddress;
+  const clientIp = resolveAuthRateLimitClientIp({
+    clientIp: resolvedClientIp,
+    hasProxyHeaders: hasForwardedRequestHeaders(req),
+    isLocalClient: isLocalDirectRequest(
+      req,
+      opts.trustedProxies,
+      opts.allowRealIpFallback === true,
+    ),
+  });
+  const canUseDeviceTokenFallback =
+    Boolean(token) && authOpts.auth.mode !== "trusted-proxy" && authOpts.auth.mode !== "none";
+  const run = async () =>
+    await authorizeControlUiReadRequestCore(req, res, authOpts, {
+      token,
+      clientIp,
+      canUseDeviceTokenFallback,
+    });
+  if (!canUseDeviceTokenFallback || !authOpts.rateLimiter) {
+    return await run();
+  }
+  // Shared and device credentials form one terminal auth attempt. Keep their
+  // async checks together so concurrent fallbacks cannot outrun either bucket.
+  return await withSerializedCredentialFallbackAttempt({
+    limiter: authOpts.rateLimiter,
+    ip: clientIp,
+    run,
+  });
+}
+
+async function authorizeControlUiReadRequestCore(
+  req: IncomingMessage,
+  res: ServerResponse,
+  opts: ControlUiReadAuthOptions & { auth: ResolvedGatewayAuth },
+  prepared: {
+    token: string | undefined;
+    clientIp: string | undefined;
+    canUseDeviceTokenFallback: boolean;
+  },
+): Promise<boolean> {
+  const { token, clientIp, canUseDeviceTokenFallback } = prepared;
   const authResult = await authorizeHttpGatewayConnect({
     auth: opts.auth,
     connectAuth: token ? { token, password: token } : null,
@@ -325,6 +369,7 @@ async function authorizeControlUiReadRequest(
     rateLimiter: token ? opts.rateLimiter : undefined,
     clientIp,
     rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+    deferRateLimitFailure: canUseDeviceTokenFallback,
   });
   const sharedAuthGeneration = resolveSharedGatewaySessionGeneration(
     opts.auth,
@@ -332,14 +377,18 @@ async function authorizeControlUiReadRequest(
   );
   let resolvedAuthResult = authResult;
   let verifiedDeviceScopes: string[] | undefined;
-  if (
-    !resolvedAuthResult.ok &&
-    token &&
-    opts.auth.mode !== "trusted-proxy" &&
-    opts.auth.mode !== "none"
-  ) {
+  if (!resolvedAuthResult.ok && canUseDeviceTokenFallback && token) {
+    const recordDeferredSharedSecretFailure = async () => {
+      if (authResult.reason === "token_mismatch" || authResult.reason === "password_mismatch") {
+        await opts.rateLimiter?.recordFailureAndDelay(
+          clientIp,
+          AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+        );
+      }
+    };
     const deviceRateCheck = opts.rateLimiter?.check(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
     if (deviceRateCheck && !deviceRateCheck.allowed) {
+      await recordDeferredSharedSecretFailure();
       resolvedAuthResult = {
         ok: false,
         reason: "rate_limited",
@@ -357,6 +406,7 @@ async function authorizeControlUiReadRequest(
         opts.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
         resolvedAuthResult = { ok: true, method: "device-token" };
       } else {
+        await recordDeferredSharedSecretFailure();
         await opts.rateLimiter?.recordFailureAndDelay(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
       }
     }

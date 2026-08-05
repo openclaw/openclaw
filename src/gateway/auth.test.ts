@@ -178,6 +178,8 @@ describe("gateway auth", () => {
     { name: "X-Forwarded-Host", headers: { "x-forwarded-host": "gateway.example" } },
     { name: "X-Forwarded-User", headers: { "x-forwarded-user": "nick@example.com" } },
     { name: "X-Real-IP", headers: { "x-real-ip": "203.0.113.10" } },
+    { name: "empty Forwarded", headers: { forwarded: "" } },
+    { name: "empty X-Real-IP", headers: { "x-real-ip": "" } },
   ])("treats $name as forwarded request evidence", ({ headers }) => {
     const req = {
       socket: { remoteAddress: "127.0.0.1" },
@@ -515,8 +517,47 @@ describe("gateway auth", () => {
     });
 
     expect(res).toMatchObject({ ok: true, method: "tailscale", user: "peter" });
-    expect(limiter.check).toHaveBeenCalledWith("127.0.0.1", "shared-secret");
-    expect(limiter.reset).toHaveBeenCalledWith("127.0.0.1", "shared-secret");
+    expect(limiter.check).not.toHaveBeenCalled();
+    expect(limiter.reset).toHaveBeenCalledWith(
+      "identity:forwarded-loopback:127.0.0.1",
+      "shared-secret",
+    );
+  });
+
+  it("keeps verified Tailscale avatars outside a locked shared proxy bucket", async () => {
+    const limiter = createAuthRateLimiter({
+      maxAttempts: 1,
+      windowMs: 60_000,
+      lockoutMs: 60_000,
+      pruneIntervalMs: 0,
+    });
+    const proxyIdentity = "identity:forwarded-loopback:127.0.0.1";
+    limiter.recordFailure(proxyIdentity, "shared-secret");
+    const req = createTailscaleForwardedReq();
+
+    try {
+      const verified = await authorizeUserProfileAvatarHttpGatewayConnect({
+        auth: { mode: "token", token: "secret", allowTailscale: true },
+        connectAuth: null,
+        tailscaleWhois: createTailscaleWhois(),
+        req,
+        rateLimiter: limiter,
+        browserOriginPolicy: createAvatarBrowserOriginPolicy(req),
+      });
+      expect(verified).toMatchObject({ ok: true, method: "tailscale", user: "peter" });
+
+      const rejected = await authorizeUserProfileAvatarHttpGatewayConnect({
+        auth: { mode: "token", token: "secret", allowTailscale: true },
+        connectAuth: null,
+        tailscaleWhois: async () => ({ login: "mallory", name: "Mallory" }),
+        req,
+        rateLimiter: limiter,
+        browserOriginPolicy: createAvatarBrowserOriginPolicy(req),
+      });
+      expect(rejected).toMatchObject({ ok: false, reason: "rate_limited" });
+    } finally {
+      limiter.dispose();
+    }
   });
 
   it("rejects a cross-origin page before verifying Tailscale avatar identity", async () => {
@@ -735,12 +776,111 @@ describe("gateway auth", () => {
     expect(limiter.recordFailure).toHaveBeenCalledWith("203.0.113.10", "shared-secret");
   });
 
-  it("ignores X-Real-IP fallback by default for rate-limit checks", async () => {
+  it("rate-limits forwarded requests that collapse to a loopback socket", async () => {
+    const limiter = createAuthRateLimiter({
+      maxAttempts: 2,
+      windowMs: 60_000,
+      lockoutMs: 60_000,
+    });
+    const params = {
+      auth: { mode: "password" as const, password: "secret", allowTailscale: false },
+      connectAuth: { password: "wrong" },
+      req: {
+        socket: { remoteAddress: "127.0.0.1" },
+        headers: { "x-forwarded-for": "203.0.113.10" },
+      } as never,
+      trustedProxies: [],
+      rateLimiter: limiter,
+    };
+
+    await expect(authorizeHttpGatewayConnect(params)).resolves.toMatchObject({
+      ok: false,
+      reason: "password_mismatch",
+    });
+    await expect(authorizeHttpGatewayConnect(params)).resolves.toMatchObject({
+      ok: false,
+      reason: "password_mismatch",
+    });
+    await expect(authorizeHttpGatewayConnect(params)).resolves.toMatchObject({
+      ok: false,
+      reason: "rate_limited",
+      rateLimited: true,
+    });
+  });
+
+  it("keeps forwarded-loopback failures across a successful authentication", async () => {
+    const limiter = createAuthRateLimiter({
+      maxAttempts: 2,
+      windowMs: 60_000,
+      lockoutMs: 60_000,
+    });
+    const params = {
+      auth: { mode: "password" as const, password: "secret", allowTailscale: false },
+      connectAuth: { password: "wrong" },
+      req: {
+        socket: { remoteAddress: "127.0.0.1" },
+        headers: { "x-forwarded-for": "203.0.113.10" },
+      } as never,
+      trustedProxies: [],
+      rateLimiter: limiter,
+    };
+
+    await expect(authorizeHttpGatewayConnect(params)).resolves.toMatchObject({
+      ok: false,
+      reason: "password_mismatch",
+    });
+    params.connectAuth.password = "secret";
+    await expect(authorizeHttpGatewayConnect(params)).resolves.toMatchObject({ ok: true });
+    params.connectAuth.password = "wrong";
+    await expect(authorizeHttpGatewayConnect(params)).resolves.toMatchObject({
+      ok: false,
+      reason: "password_mismatch",
+    });
+    await expect(authorizeHttpGatewayConnect(params)).resolves.toMatchObject({
+      ok: false,
+      reason: "rate_limited",
+      rateLimited: true,
+    });
+  });
+
+  it("keeps genuinely direct loopback requests exempt from lockout", async () => {
+    const limiter = createAuthRateLimiter({
+      maxAttempts: 1,
+      windowMs: 60_000,
+      lockoutMs: 60_000,
+    });
+    const params = {
+      auth: { mode: "password" as const, password: "secret", allowTailscale: false },
+      connectAuth: { password: "wrong" },
+      req: {
+        socket: { remoteAddress: "127.0.0.1" },
+        headers: { host: "127.0.0.1:18789" },
+      } as never,
+      rateLimiter: limiter,
+    };
+
+    await expect(authorizeHttpGatewayConnect(params)).resolves.toMatchObject({
+      ok: false,
+      reason: "password_mismatch",
+    });
+    await expect(authorizeHttpGatewayConnect(params)).resolves.toMatchObject({
+      ok: false,
+      reason: "password_mismatch",
+    });
+  });
+
+  it("does not trust X-Real-IP by default but still rate-limits the forwarded request", async () => {
     const limiter = await expectTokenMismatchWithLimiter({
       reqHeaders: { "x-real-ip": "203.0.113.77" },
     });
-    expect(limiter.check).toHaveBeenCalledWith("127.0.0.1", "shared-secret");
-    expect(limiter.recordFailure).toHaveBeenCalledWith("127.0.0.1", "shared-secret");
+    expect(limiter.check).toHaveBeenCalledWith(
+      "identity:forwarded-loopback:127.0.0.1",
+      "shared-secret",
+    );
+    expect(limiter.recordFailure).toHaveBeenCalledWith(
+      "identity:forwarded-loopback:127.0.0.1",
+      "shared-secret",
+    );
   });
 
   it("uses X-Real-IP when fallback is explicitly enabled", async () => {

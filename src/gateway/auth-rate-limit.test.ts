@@ -8,6 +8,7 @@ import {
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
   buildRateLimitIdentityKey,
   createAuthRateLimiter,
+  isAuthRateLimitClientExempt,
   type AuthRateLimiter,
 } from "./auth-rate-limit.js";
 
@@ -417,6 +418,21 @@ describe("auth rate limiter", () => {
     expect(limiter.check("127.0.0.1").allowed).toBe(false);
   });
 
+  it("reports the authoritative exemption policy for fallback serialization", () => {
+    limiter = createAuthRateLimiter();
+    expect(isAuthRateLimitClientExempt(limiter, "127.0.0.1")).toBe(true);
+    expect(
+      isAuthRateLimitClientExempt(
+        limiter,
+        buildRateLimitIdentityKey("forwarded-loopback", "127.0.0.1"),
+      ),
+    ).toBe(false);
+    limiter.dispose();
+
+    limiter = createAuthRateLimiter({ exemptLoopback: false });
+    expect(isAuthRateLimitClientExempt(limiter, "127.0.0.1")).toBe(false);
+  });
+
   it("does not exempt opaque identity keys", () => {
     limiter = createAuthRateLimiter({ maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000 });
     const key = buildRateLimitIdentityKey("node", "node-1");
@@ -447,6 +463,17 @@ describe("auth rate limiter", () => {
     limiter.reset("10.0.0.21", AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
     expect(limiter.check("10.0.0.21", AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET).allowed).toBe(true);
     expect(limiter.check("10.0.0.21", AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN).allowed).toBe(false);
+  });
+
+  it("does not reset the shared forwarded-loopback failure history", () => {
+    limiter = createAuthRateLimiter({ maxAttempts: 2, windowMs: 60_000, lockoutMs: 60_000 });
+    const key = buildRateLimitIdentityKey("forwarded-loopback", "127.0.0.1");
+
+    limiter.recordFailure(key, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
+    limiter.reset(key, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
+    limiter.recordFailure(key, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
+
+    expect(limiter.check(key, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET).allowed).toBe(false);
   });
 
   // ---------- prune ----------

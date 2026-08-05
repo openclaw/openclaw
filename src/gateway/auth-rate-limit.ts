@@ -62,6 +62,7 @@ export const AUTH_RATE_LIMIT_SCOPE_WATCH_CHALLENGE = "watch-challenge";
 export const AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH = "hook-auth";
 const BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX = "browser-origin:";
 const IDENTITY_RATE_LIMIT_KEY_PREFIX = "identity:";
+const FORWARDED_LOOPBACK_RATE_LIMIT_KEY_PREFIX = `${IDENTITY_RATE_LIMIT_KEY_PREFIX}forwarded-loopback:`;
 
 interface RateLimitEntry {
   /** Timestamps (epoch ms) of recent failed attempts inside the window. */
@@ -104,6 +105,19 @@ export interface AuthRateLimiter {
   dispose(): void;
 }
 
+const authRateLimiterExemptionChecks = new WeakMap<
+  AuthRateLimiter,
+  (ip: string | undefined) => boolean
+>();
+
+/** Whether a limiter created by this module exempts the prepared client identity. */
+export function isAuthRateLimitClientExempt(
+  limiter: AuthRateLimiter,
+  ip: string | undefined,
+): boolean {
+  return authRateLimiterExemptionChecks.get(limiter)?.(ip) ?? false;
+}
+
 // ---------------------------------------------------------------------------
 // Defaults
 // ---------------------------------------------------------------------------
@@ -140,6 +154,28 @@ export function normalizeRateLimitClientIp(ip: string | undefined): string {
 /** Build an opaque limiter identity that is not subject to loopback IP exemptions. */
 export function buildRateLimitIdentityKey(namespace: string, identity: string): string {
   return `${IDENTITY_RATE_LIMIT_KEY_PREFIX}${namespace}:${identity}`;
+}
+
+/**
+ * Preserve the prepared client identity for every pre-auth scope.
+ * Proxy-shaped loopback traffic is remote but has no trustworthy per-client IP,
+ * so it shares one non-exempt fail-safe bucket until proxy trust is configured.
+ */
+export function resolveAuthRateLimitClientIp(params: {
+  clientIp: string | undefined;
+  hasProxyHeaders: boolean;
+  isLocalClient: boolean;
+}): string | undefined {
+  const clientIp = params.clientIp;
+  if (
+    clientIp !== undefined &&
+    params.hasProxyHeaders &&
+    !params.isLocalClient &&
+    isLoopbackAddress(clientIp)
+  ) {
+    return buildRateLimitIdentityKey("forwarded-loopback", clientIp);
+  }
+  return clientIp;
 }
 
 function resolvePruneIntervalMs(value: number | undefined): number {
@@ -345,7 +381,12 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
   }
 
   function reset(rawIp: string | undefined, rawScope?: string): void {
-    const { key } = resolveKey(rawIp, rawScope);
+    const { key, ip } = resolveKey(rawIp, rawScope);
+    // This identity combines untrusted clients when proxy trust cannot resolve them.
+    // One client's successful auth must not erase the aggregate's failure history.
+    if (ip.startsWith(FORWARDED_LOOPBACK_RATE_LIMIT_KEY_PREFIX)) {
+      return;
+    }
     entries.delete(key);
     loopbackPenaltyUntil.delete(key);
   }
@@ -430,5 +471,9 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
     }
   }
 
-  return { check, recordFailure, recordFailureAndDelay, reset, size, prune, dispose };
+  const limiter = { check, recordFailure, recordFailureAndDelay, reset, size, prune, dispose };
+  // Credential-fallback owners use the exact limiter policy to avoid holding
+  // exempt loopback penalty delays inside a per-identity serialization queue.
+  authRateLimiterExemptionChecks.set(limiter, (rawIp) => isExempt(normalizeIp(rawIp)));
+  return limiter;
 }

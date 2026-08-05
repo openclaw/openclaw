@@ -151,6 +151,8 @@ describe("handshake auth helpers", () => {
     const resolved = resolveHandshakeBrowserSecurityContext({
       requestOrigin: "https://app.example",
       clientIp: "127.0.0.1",
+      hasProxyHeaders: false,
+      isLocalClient: true,
       rateLimiter,
       browserRateLimiter,
     });
@@ -167,13 +169,36 @@ describe("handshake auth helpers", () => {
     const resolved = resolveHandshakeBrowserSecurityContext({
       requestOrigin: "not a url",
       clientIp: "127.0.0.1",
+      hasProxyHeaders: false,
+      isLocalClient: true,
     });
     expect(resolved.rateLimitClientIp).toBe("198.18.0.1");
   });
 
+  it("carries one non-exempt identity across proxied loopback auth scopes", () => {
+    const resolved = resolveHandshakeBrowserSecurityContext({
+      clientIp: "127.0.0.1",
+      hasProxyHeaders: true,
+      isLocalClient: false,
+    });
+
+    expect(resolved.rateLimitClientIp).toBe("identity:forwarded-loopback:127.0.0.1");
+  });
+
+  it("uses the socket fallback when a trusted proxy chain has no client identity", () => {
+    const resolved = resolveHandshakeBrowserSecurityContext({
+      clientIp: undefined,
+      fallbackClientIp: "127.0.0.1",
+      hasProxyHeaders: true,
+      isLocalClient: false,
+    });
+
+    expect(resolved.rateLimitClientIp).toBe("identity:forwarded-loopback:127.0.0.1");
+  });
+
   it("recommends device-token retry only for shared-token mismatch with device identity", () => {
     const resolved = resolveUnauthorizedHandshakeContext({
-      connectAuth: { token: "shared-token" },
+      connectAuth: { token: "shared" },
       failedAuth: { ok: false, reason: "token_mismatch" },
       hasDeviceIdentity: true,
     });

@@ -10,11 +10,13 @@ import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infr
 import { safeEqualSecret } from "../security/secret-equal.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+  resolveAuthRateLimitClientIp,
   type AuthRateLimiter,
   type RateLimitCheckResult,
 } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth-resolve.js";
 import {
+  hasForwardedRequestHeaders,
   isLocalDirectRequest,
   isLoopbackAddress,
   resolveLocalInterfaceAddressMatch,
@@ -78,6 +80,8 @@ type AuthorizeGatewayConnectParams = {
   clientIp?: string;
   /** Optional limiter scope; defaults to shared-secret auth scope. */
   rateLimitScope?: string;
+  /** Let an owner with credential fallbacks record the shared-secret failure after all fallbacks fail. */
+  deferRateLimitFailure?: boolean;
   /** Trust X-Real-IP only when explicitly enabled. */
   allowRealIpFallback?: boolean;
   /** Optional browser-origin policy for HTTP requests that require Origin checks. */
@@ -111,17 +115,27 @@ function resolveGatewayAuthRequestContext(
 ): GatewayAuthRequestContext {
   const { req, trustedProxies } = params;
   const authSurface = params.authSurface ?? "http";
-  const ip =
+  const resolvedIp =
     params.clientIp ??
     resolveRequestClientIp(req, trustedProxies, params.allowRealIpFallback === true) ??
     req?.socket?.remoteAddress;
+  const localDirect = isLocalDirectRequest(
+    req,
+    trustedProxies,
+    params.allowRealIpFallback === true,
+  );
+  const ip = resolveAuthRateLimitClientIp({
+    clientIp: resolvedIp,
+    hasProxyHeaders: hasForwardedRequestHeaders(req),
+    isLocalClient: localDirect,
+  });
 
   return {
     authSurface,
     limiter: params.rateLimiter,
     ip,
     rateLimitScope: params.rateLimitScope ?? AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
-    localDirect: isLocalDirectRequest(req, trustedProxies, params.allowRealIpFallback === true),
+    localDirect,
   };
 }
 
@@ -383,6 +397,7 @@ async function authorizeTokenAuth(params: {
   limiter?: AuthRateLimiter;
   ip?: string;
   rateLimitScope: string;
+  deferRateLimitFailure?: boolean;
 }): Promise<GatewayAuthResult> {
   if (!params.authToken) {
     return { ok: false, reason: "token_missing_config" };
@@ -394,7 +409,9 @@ async function authorizeTokenAuth(params: {
     return { ok: false, reason: "token_missing" };
   }
   if (!safeEqualSecret(params.connectToken, params.authToken)) {
-    await params.limiter?.recordFailureAndDelay(params.ip, params.rateLimitScope);
+    if (!params.deferRateLimitFailure) {
+      await params.limiter?.recordFailureAndDelay(params.ip, params.rateLimitScope);
+    }
     return { ok: false, reason: "token_mismatch" };
   }
   params.limiter?.reset(params.ip, params.rateLimitScope);
@@ -407,6 +424,7 @@ async function authorizePasswordAuth(params: {
   limiter?: AuthRateLimiter;
   ip?: string;
   rateLimitScope: string;
+  deferRateLimitFailure?: boolean;
 }): Promise<GatewayAuthResult> {
   if (!params.authPassword) {
     return { ok: false, reason: "password_missing_config" };
@@ -416,7 +434,9 @@ async function authorizePasswordAuth(params: {
     return { ok: false, reason: "password_missing" };
   }
   if (!safeEqualSecret(params.connectPassword, params.authPassword)) {
-    await params.limiter?.recordFailureAndDelay(params.ip, params.rateLimitScope);
+    if (!params.deferRateLimitFailure) {
+      await params.limiter?.recordFailureAndDelay(params.ip, params.rateLimitScope);
+    }
     return { ok: false, reason: "password_mismatch" };
   }
   params.limiter?.reset(params.ip, params.rateLimitScope);
@@ -516,6 +536,7 @@ async function authorizeGatewayConnectCore(
         limiter,
         ip,
         rateLimitScope,
+        deferRateLimitFailure: params.deferRateLimitFailure,
       });
     }
     return { ok: false, reason: result.reason };
@@ -534,17 +555,22 @@ async function authorizeGatewayConnectCore(
     return { ok: true, method: "none" };
   }
 
-  const rateLimitResult = rejectIfRateLimited({ limiter, ip, rateLimitScope });
-  if (rateLimitResult) {
-    return rateLimitResult;
-  }
-
-  if (
+  const canAttemptTailscaleHeaderAuth =
     allowTailscaleHeaderAuth &&
     auth.allowTailscale &&
     !localDirect &&
-    !hasExplicitSharedSecretAuth(connectAuth)
-  ) {
+    !hasExplicitSharedSecretAuth(connectAuth);
+  const verifyAvatarIdentityBeforeSharedLimit =
+    authSurface === "http-user-profile-avatar" && canAttemptTailscaleHeaderAuth;
+
+  if (!verifyAvatarIdentityBeforeSharedLimit) {
+    const rateLimitResult = rejectIfRateLimited({ limiter, ip, rateLimitScope });
+    if (rateLimitResult) {
+      return rateLimitResult;
+    }
+  }
+
+  if (canAttemptTailscaleHeaderAuth) {
     if (authSurface === "http-user-profile-avatar") {
       // Same-origin <img> loads may omit Origin, but Fetch Metadata still identifies
       // their source. Ambient identity accepts that omission only for same-origin loads,
@@ -575,6 +601,15 @@ async function authorizeGatewayConnectCore(
     }
   }
 
+  if (verifyAvatarIdentityBeforeSharedLimit) {
+    // Verified avatar identity is independent of the aggregate shared-secret
+    // bucket. A failed identity check still falls through to that bucket.
+    const rateLimitResult = rejectIfRateLimited({ limiter, ip, rateLimitScope });
+    if (rateLimitResult) {
+      return rateLimitResult;
+    }
+  }
+
   if (auth.mode === "token") {
     return await authorizeTokenAuth({
       authToken: auth.token,
@@ -582,6 +617,7 @@ async function authorizeGatewayConnectCore(
       limiter,
       ip,
       rateLimitScope,
+      deferRateLimitFailure: params.deferRateLimitFailure,
     });
   }
 
@@ -592,6 +628,7 @@ async function authorizeGatewayConnectCore(
       limiter,
       ip,
       rateLimitScope,
+      deferRateLimitFailure: params.deferRateLimitFailure,
     });
   }
 
