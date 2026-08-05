@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { GatewayCredentialsRequiredError } from "../gateway/call.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
-import {
-  classifyLookupFailure,
-  lookupFailedDenialSuffix,
-} from "./session-visibility-internal.js";
+import { classifyLookupFailure, lookupFailedDenialSuffix } from "./session-visibility-internal.js";
 import {
   createAgentToAgentPolicy,
   createSessionVisibilityChecker,
@@ -206,15 +203,18 @@ describe("classifyLookupFailure", () => {
     { kind: "closed", code: 1006, expected: "transient" },
     { kind: "closed", code: 1013, expected: "transient" },
     { kind: "closed", code: 1008, expected: "unknown" },
-  ] as const)("classifies gateway transport $kind/$code as $expected", ({ kind, code, expected }) => {
-    const error = Object.assign(new Error("gateway transport failed"), {
-      name: "GatewayTransportError",
-      kind,
-      connectionDetails: {},
-      ...(code === undefined ? {} : { code }),
-    });
-    expect(classifyLookupFailure(error)).toBe(expected);
-  });
+  ] as const)(
+    "classifies gateway transport $kind/$code as $expected",
+    ({ kind, code, expected }) => {
+      const error = Object.assign(new Error("gateway transport failed"), {
+        name: "GatewayTransportError",
+        kind,
+        connectionDetails: {},
+        ...(code === undefined ? {} : { code }),
+      });
+      expect(classifyLookupFailure(error)).toBe(expected);
+    },
+  );
 
   it("classifies an explicit pre-connect auth failure as credentials", () => {
     const error = new GatewayCredentialsRequiredError({
