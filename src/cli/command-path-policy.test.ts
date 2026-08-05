@@ -360,7 +360,7 @@ describe("command-path-policy", () => {
     for (const [command, writeFlag] of [
       ["inspect", "--runtime"],
       ["registry", "--refresh"],
-    ]) {
+    ] as const) {
       const commandPath = ["plugins", command];
       const policy = resolveCliCommandPathPolicy(commandPath);
       expectConfigGuardResolver(policy);

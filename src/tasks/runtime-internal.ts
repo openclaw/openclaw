@@ -4,11 +4,11 @@ import {
   ensureTaskFlowRegistryReadyForInspection,
   reloadTaskFlowRegistryFromStore,
 } from "./task-flow-runtime-internal.js";
+import { ensureTaskRegistryReadyForInspection } from "./task-registry-state.js";
 import {
   ensureTaskRegistryReady as ensureTaskRegistryReadyInternal,
-  ensureTaskRegistryReadyForInspection,
   reloadTaskRegistryFromStore as reloadTaskRegistryFromStoreInternal,
-} from "./task-registry-state.js";
+} from "./task-registry.js";
 
 export function ensureTaskRuntimeStateReady(): void {
   ensureTaskFlowRegistryReady();
