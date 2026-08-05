@@ -324,6 +324,11 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
       return;
     }
     messages ??= ensureRecord(raw, "messages");
+    // A partly-set destination must not read as a clean move: existing messages
+    // keys win (same contract as moveKey above), but every legacy half they
+    // shadow is named in the change line so the dropped intent stays recoverable.
+    const applied: string[] = [];
+    const kept: string[] = [];
     if (messages.ackReaction === undefined) {
       const legacyAgents = getRecord(raw.agents)?.list;
       const agentEntries = Array.isArray(legacyAgents)
@@ -340,28 +345,40 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
           : typeof identityEmoji === "string"
             ? identityEmoji
             : "👀";
+      if (typeof ack.emoji === "string") {
+        applied.push(`applied legacy emoji "${ack.emoji}" to messages.ackReaction`);
+      }
+    } else if (typeof ack.emoji === "string" && ack.emoji !== messages.ackReaction) {
+      kept.push(`kept existing messages.ackReaction over legacy emoji "${ack.emoji}"`);
     }
+    const direct = ack.direct !== false;
+    const group = ack.group ?? "mentions";
+    const scope =
+      direct && group === "always"
+        ? "all"
+        : direct && group === "never"
+          ? "direct"
+          : !direct && group === "always"
+            ? "group-all"
+            : !direct && group === "mentions"
+              ? "group-mentions"
+              : !direct && group === "never"
+                ? "off"
+                : undefined;
     if (messages.ackReactionScope === undefined) {
-      const direct = ack.direct !== false;
-      const group = ack.group ?? "mentions";
-      const scope =
-        direct && group === "always"
-          ? "all"
-          : direct && group === "never"
-            ? "direct"
-            : !direct && group === "always"
-              ? "group-all"
-              : !direct && group === "mentions"
-                ? "group-mentions"
-                : !direct && group === "never"
-                  ? "off"
-                  : undefined;
       if (scope) {
         messages.ackReactionScope = scope;
+        applied.push(`applied legacy scope "${scope}" to messages.ackReactionScope`);
       }
+    } else if (scope !== undefined && scope !== messages.ackReactionScope) {
+      kept.push(`kept existing messages.ackReactionScope over legacy scope "${scope}"`);
     }
     delete entry.ackReaction;
-    changes.push(`Moved translatable ${path}.ackReaction settings to messages ack settings.`);
+    changes.push(
+      kept.length === 0
+        ? `Moved translatable ${path}.ackReaction settings to messages ack settings.`
+        : `Removed ${path}.ackReaction; ${[...applied, ...kept].join("; ")}.`,
+    );
   });
 
   visitChannelEntries(raw, "slack", (entry, path) => {
