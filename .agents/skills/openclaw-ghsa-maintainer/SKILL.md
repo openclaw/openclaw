@@ -39,17 +39,21 @@ The PR list must be empty before publish.
 
 - Write advisory Markdown via heredoc to a temp file. Do not use escaped `\n` strings.
 - Build PATCH payload JSON with `jq`, not hand-escaped shell JSON.
+- Always create a dedicated temp directory with `mktemp -d` and register a cleanup trap. Never use fixed `/tmp/ghsa.*` paths: they are predictable and world-readable on shared runners, and advisory drafts are sensitive until published.
 
 Example pattern:
 
 ```bash
-cat > /tmp/ghsa.desc.md <<'EOF'
+WORK_DIR=$(mktemp -d)
+trap 'rm -rf "$WORK_DIR"' EXIT
+
+cat > "$WORK_DIR/ghsa.desc.md" <<'EOF'
 <markdown description>
 EOF
 
-jq -n --rawfile desc /tmp/ghsa.desc.md \
+jq -n --rawfile desc "$WORK_DIR/ghsa.desc.md" \
   '{summary,severity,description:$desc,vulnerabilities:[...]}' \
-  > /tmp/ghsa.patch.json
+  > "$WORK_DIR/ghsa.patch.json"
 ```
 
 ## Apply PATCH calls in the correct sequence
@@ -62,7 +66,7 @@ Example shape:
 
 ```bash
 gh api -X PATCH /repos/openclaw/openclaw/security-advisories/<GHSA> \
-  --input /tmp/ghsa.patch.json
+  --input "$WORK_DIR/ghsa.patch.json"
 ```
 
 ## Publish and verify success
@@ -71,13 +75,21 @@ After publish, re-fetch the advisory and confirm:
 
 - `state=published`
 - `published_at` is set
-- the description does not contain literal escaped `\\n`
+- the description does not contain a literal escaped `\n` (backslash + `n` as two characters)
 
 Verification pattern:
 
 ```bash
-gh api /repos/openclaw/openclaw/security-advisories/<GHSA>
-jq -r .description < /tmp/ghsa.refetch.json | rg '\\\\n'
+advisory=$(gh api /repos/openclaw/openclaw/security-advisories/<GHSA>)
+# printf, not echo: zsh/dash echo rewrites backslash escapes and can hide the
+# very \n this check exists to catch. rg exits 0 on match, so gate explicitly:
+# a bare rg would make the bad state look like the passing path.
+printf '%s' "$advisory" | jq '{state,published_at}'
+if printf '%s' "$advisory" | jq -r .description | rg -q '\\n'; then
+  printf 'FAIL: description contains a literal escaped \\n\n'
+else
+  printf 'PASS: description clean\n'
+fi
 ```
 
 ## Common GHSA footguns

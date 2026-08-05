@@ -31,6 +31,8 @@ env:
   DOCKERHUB_REGISTRY: docker.io
   DOCKERHUB_IMAGE_NAME: openclaw/openclaw
 
+permissions: {}
+
 jobs:
   validate_release_identity:
     runs-on: ubuntu-24.04

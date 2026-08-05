@@ -163,7 +163,52 @@ Request purge of issue/PR #{NUMBER} userContentEdits.
 
 ### Commits
 
-Cannot clean. Notify author to delete branch or force-push (for unmerged PRs).
+Cannot clean server-side. Before notifying, analyze the commit context and include concrete remediation steps tailored to the situation.
+
+**Step A — gather context:**
+
+```bash
+# Determine if the commit is on an open PR branch (unmerged)
+gh pr list --state open --json number,headRefName,commits \
+  | jq --arg sha "<COMMIT_SHA>" '.[] | select(.commits[].oid == $sha)'
+```
+
+**Step B — choose the right remediation template:**
+
+| Situation                                 | Guidance to include in notification                                                           |
+| ----------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Open PR, secret is the **latest** commit  | `git commit --amend` + `git push --force-with-lease`                                          |
+| Open PR, secret is an **older** commit    | `git rebase -i` to edit that commit, then `git push --force-with-lease`                       |
+| Merged to default branch                  | Escalate to maintainer — author cannot self-remediate; do not include force-push instructions |
+| Direct push to non-default branch (no PR) | Same as "Open PR" cases above                                                                 |
+
+**Template commands to include per case:**
+
+_Latest commit on branch:_
+
+```bash
+# Remove the secret from the file, then:
+git add <file>
+git commit --amend --no-edit
+git push --force-with-lease origin <branch-name>
+```
+
+_Older commit on branch:_
+
+```bash
+# Find the parent of the offending commit:
+git rebase -i <COMMIT_SHA>^
+# In the editor: change 'pick' to 'edit' on the offending line, save and quit.
+# Remove the secret from the file, then:
+git add <file>
+git commit --amend --no-edit
+git rebase --continue
+git push --force-with-lease origin <branch-name>
+```
+
+_Merged to default branch (escalate, do not send author self-remediation steps):_
+
+Notify the author that the secret is leaked and must be **rotated immediately**. Maintainers will handle history rewrite separately. Do not ask the author to force-push the default branch.
 
 ## Step 5: Notify
 
@@ -198,10 +243,13 @@ Resolution is `revoked` by default. As maintainers we cannot control whether use
 
 ## Step 7: Summary
 
-After processing, create a JSON results file and pass it to the summary command:
+After processing, create a JSON results file and pass it to the summary command. Use a `mktemp -d` work dir (per the temp-file rule above), never a fixed predictable `/tmp` path:
 
 ```bash
-node secret-scanning.mjs summary /tmp/results.json
+WORK_DIR=$(mktemp -d)
+trap 'rm -rf "$WORK_DIR"' EXIT
+# ... write the results JSON to "$WORK_DIR/results.json", then:
+node secret-scanning.mjs summary "$WORK_DIR/results.json"
 ```
 
 The script outputs a block delimited by `---BEGIN SUMMARY---` and `---END SUMMARY---`. **You MUST output the content between these markers verbatim to the user. Do NOT rephrase, reformat, abbreviate, or create your own summary.** The script already includes full URLs for every alert and location.
