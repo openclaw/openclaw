@@ -28,6 +28,7 @@ import { chunkFeishuPostMarkdown, materializeFeishuPostMarkdownSoftBreaks } from
 import { buildFeishuMediaFallbackText } from "./media-fallback.js";
 import { sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } from "./media.js";
 import type { MentionTarget } from "./mention-target.types.js";
+import { buildFeishuPayloadCard } from "./outbound.js";
 import {
   createFeishuPartialReplyDeliveryError,
   createFeishuReplyDeliveryResult,
@@ -46,7 +47,12 @@ import {
 } from "./reply-dispatcher-runtime-api.js";
 import { streamingStartBackoffUntilByAccount } from "./reply-dispatcher-state.js";
 import { getFeishuRuntime } from "./runtime.js";
-import { sendMessageFeishu, sendStructuredCardFeishu, type CardHeaderConfig } from "./send.js";
+import {
+  sendCardFeishu,
+  sendMessageFeishu,
+  sendStructuredCardFeishu,
+  type CardHeaderConfig,
+} from "./send.js";
 import {
   FeishuStreamingFinalizationError,
   FeishuStreamingSession,
@@ -1285,20 +1291,35 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         );
       const finalTextExceedsStreamingLimit =
         info?.kind === "final" && hasText && text.length > textChunkLimit;
+      // Interactive / presentation blocks (buttons, approval cards) require the
+      // presentation-aware card path. Plain text + markdown card heuristics alone
+      // drop buttons (issue #119616).
+      const interactiveCard =
+        info?.kind === "final"
+          ? buildFeishuPayloadCard({
+              payload,
+              text: text ?? payload.text,
+              identity,
+            })
+          : undefined;
+      const hasInteractiveCard = Boolean(interactiveCard);
       const useStaticCard =
-        hasText &&
-        (renderMode === "card" ||
+        (hasText || hasInteractiveCard) &&
+        (hasInteractiveCard ||
+          renderMode === "card" ||
           (info?.kind === "block" && coreBlockStreamingEnabled && renderMode !== "raw") ||
-          (renderMode === "auto" && shouldUseCard(text)));
+          (renderMode === "auto" && shouldUseCard(text ?? "")));
       const useStreamingCard =
         hasText &&
+        !hasInteractiveCard &&
         streamingEnabled &&
         !finalTextExceedsStreamingLimit &&
         (info?.kind === "final" || useStaticCard);
       const useCard = useStaticCard || useStreamingCard;
       const skipTextForDuplicateFinal =
         info?.kind === "final" && hasText && deliveredFinalTexts.has(text);
-      const shouldDeliverText = hasText && !hasVoiceMedia && !skipTextForDuplicateFinal;
+      const shouldDeliverText =
+        (hasText || hasInteractiveCard) && !hasVoiceMedia && !skipTextForDuplicateFinal;
       const shouldDiscardStreamingPreview =
         info?.kind === "final" &&
         (finalTextExceedsStreamingLimit ||
@@ -1442,29 +1463,54 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         }
 
         if (useCard) {
-          const cardHeader = resolveCardHeader(agentId, identity);
-          const cardNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
-          deliveredResults.push(
-            await sendChunkedTextReply({
-              text,
-              useCard: true,
-              infoKind: info?.kind,
-              chunkMentions: requiredMentionTargets,
-              sendChunk: async ({ chunk, mentions }) =>
-                await sendStructuredCardFeishu({
-                  cfg,
-                  to: sendTarget,
-                  text: chunk,
-                  replyToMessageId: sendReplyToMessageId,
-                  replyInThread: effectiveReplyInThread,
-                  allowTopLevelReplyFallback,
-                  accountId,
-                  header: cardHeader,
-                  note: cardNote,
-                  ...(mentions ? { mentions } : {}),
-                }),
-            }),
-          );
+          if (interactiveCard) {
+            // Route interactive final replies through the same card builder as
+            // outbound sendPayload so buttons survive delivery.
+            const cardResult = await sendCardFeishu({
+              cfg,
+              to: sendTarget,
+              card: interactiveCard,
+              replyToMessageId: sendReplyToMessageId,
+              replyInThread: effectiveReplyInThread,
+              allowTopLevelReplyFallback,
+              accountId,
+            });
+            deliveredResults.push(
+              createFeishuReplyDeliveryResult({
+                results: [cardResult],
+                visibleReplySent: true,
+                content: text ?? payload.text ?? "",
+                kind: "card",
+              }),
+            );
+            if (info?.kind === "final" && text) {
+              deliveredFinalTexts.add(text);
+            }
+          } else {
+            const cardHeader = resolveCardHeader(agentId, identity);
+            const cardNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
+            deliveredResults.push(
+              await sendChunkedTextReply({
+                text,
+                useCard: true,
+                infoKind: info?.kind,
+                chunkMentions: requiredMentionTargets,
+                sendChunk: async ({ chunk, mentions }) =>
+                  await sendStructuredCardFeishu({
+                    cfg,
+                    to: sendTarget,
+                    text: chunk,
+                    replyToMessageId: sendReplyToMessageId,
+                    replyInThread: effectiveReplyInThread,
+                    allowTopLevelReplyFallback,
+                    accountId,
+                    header: cardHeader,
+                    note: cardNote,
+                    ...(mentions ? { mentions } : {}),
+                  }),
+              }),
+            );
+          }
         } else {
           const firstChunkMentions =
             info?.kind === "final" && mentionTargets?.length ? mentionTargets : undefined;

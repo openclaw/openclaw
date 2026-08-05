@@ -185,7 +185,8 @@ function consumeFeishuPresentationFallbackMarker(payload: FeishuOutboundPayload)
   };
 }
 
-function buildFeishuPayloadCard(params: {
+/** Build a native Feishu interactive card for a reply/outbound payload, if any. */
+export function buildFeishuPayloadCard(params: {
   payload: Parameters<NonNullable<ChannelOutboundAdapter["sendPayload"]>>[0]["payload"];
   text?: string;
   identity?: Parameters<NonNullable<ChannelOutboundAdapter["sendPayload"]>>[0]["identity"];

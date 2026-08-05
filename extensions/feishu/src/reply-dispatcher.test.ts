@@ -90,10 +90,12 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return { ...actual, getGlobalHookRunner: getGlobalHookRunnerMock };
 });
+const sendCardFeishuMock = vi.hoisted(() => vi.fn());
 vi.mock("./send.js", () => ({
   sendMessageFeishu: sendMessageFeishuMock,
   sendMarkdownCardFeishu: sendMarkdownCardFeishuMock,
   sendStructuredCardFeishu: sendStructuredCardFeishuMock,
+  sendCardFeishu: sendCardFeishuMock,
 }));
 vi.mock("./media.js", () => ({
   sendMediaFeishu: sendMediaFeishuMock,
@@ -187,6 +189,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     streamingInstances.length = 0;
     sendMediaFeishuMock.mockResolvedValue(undefined);
     sendStructuredCardFeishuMock.mockResolvedValue(undefined);
+    sendCardFeishuMock.mockResolvedValue({ messageId: "om_interactive" });
     getGlobalHookRunnerMock.mockReturnValue(null);
 
     resolveFeishuAccountMock.mockReturnValue({
@@ -764,6 +767,52 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(firstMockArg(sendStructuredCardFeishuMock, "structured card params")).not.toHaveProperty(
       "mentions",
     );
+  });
+
+  it("delivers interactive button payloads as native Feishu cards on the reply path", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: { mode: "off" },
+      },
+    });
+
+    const { options } = createDispatcherHarness({
+      replyToMessageId: "om_msg",
+    });
+    await options.deliver(
+      {
+        text: "Plugin bind approval required",
+        interactive: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                { label: "Allow once", value: "allow-once", style: "success" },
+                { label: "Always allow", value: "always-allow", style: "primary" },
+                { label: "Deny", value: "deny", style: "danger" },
+              ],
+            },
+          ],
+        },
+      },
+      { kind: "final" },
+    );
+
+    expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    const cardArg = firstMockArg(sendCardFeishuMock, "interactive card params") as {
+      card?: Record<string, unknown>;
+    };
+    expect(cardArg.card).toBeTruthy();
+    const cardJson = JSON.stringify(cardArg.card);
+    expect(cardJson).toMatch(/Allow once|allow-once/i);
+    expect(cardJson).toMatch(/Deny|deny/i);
   });
 
   it("suppresses internal block payload delivery", async () => {
