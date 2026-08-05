@@ -260,6 +260,7 @@ vi.mock("../config/config.js", () => ({
     }
   },
   getRuntimeConfig: (...args: Parameters<typeof loadConfig>) => loadConfig(...args),
+  getRuntimeConfigForInspection: (...args: Parameters<typeof loadConfig>) => loadConfig(...args),
   loadConfig: (...args: Parameters<typeof loadConfig>) => loadConfig(...args),
   readConfigFileSnapshot: ((
     ...args: Parameters<(typeof import("../config/config.js"))["readConfigFileSnapshot"]>

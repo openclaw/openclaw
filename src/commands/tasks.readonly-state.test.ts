@@ -13,7 +13,12 @@ import {
   resetTaskRegistryForTests,
 } from "../tasks/task-runtime.test-helpers.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { tasksAuditCommand, tasksListCommand, tasksNotifyCommand } from "./tasks.js";
+import {
+  tasksAuditCommand,
+  tasksListCommand,
+  tasksMaintenanceCommand,
+  tasksNotifyCommand,
+} from "./tasks.js";
 
 function setStateSchemaVersion(databasePath: string, version: number): void {
   const database = new DatabaseSync(databasePath);
@@ -38,7 +43,7 @@ function readStateSchemaVersion(databasePath: string): number {
 }
 
 describe("task inspection shared-state access", () => {
-  it("lists and audits an absent registry without creating the shared database", async () => {
+  it("lists, audits, and previews maintenance without creating the shared database", async () => {
     await withOpenClawTestState(
       { label: "tasks-readonly-state", layout: "state-only", scenario: "minimal" },
       async (state) => {
@@ -56,9 +61,10 @@ describe("task inspection shared-state access", () => {
         expect(fs.existsSync(databasePath)).toBe(false);
         await tasksListCommand({ json: true }, runtime);
         await tasksAuditCommand({ json: true }, runtime);
+        await tasksMaintenanceCommand({ json: true, apply: false }, runtime);
 
         expect(fs.existsSync(databasePath)).toBe(false);
-        expect(runtime.writeJson).toHaveBeenCalledTimes(2);
+        expect(runtime.writeJson).toHaveBeenCalledTimes(3);
         resetTaskRegistryForTests({ persist: false });
         resetTaskFlowRegistryForTests({ persist: false });
       },
@@ -99,6 +105,15 @@ describe("task inspection shared-state access", () => {
         };
 
         await expect(tasksListCommand({ json: true }, runtime)).rejects.toThrow(
+          new RegExp(
+            `older schema version ${oldVersion}.*will not migrate it.*openclaw doctor --fix`,
+            "u",
+          ),
+        );
+        expect(readStateSchemaVersion(databasePath)).toBe(oldVersion);
+        await expect(
+          tasksMaintenanceCommand({ json: true, apply: false }, runtime),
+        ).rejects.toThrow(
           new RegExp(
             `older schema version ${oldVersion}.*will not migrate it.*openclaw doctor --fix`,
             "u",

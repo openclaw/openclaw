@@ -11,7 +11,11 @@ import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { getRuntimeConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
+import {
+  getRuntimeConfigForInspection,
+  readConfigFileSnapshot,
+  replaceConfigFile,
+} from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildWorkspaceHookStatus,
@@ -75,7 +79,7 @@ function buildHooksReport(config: OpenClawConfig): HookStatusReport {
 }
 
 async function loadHooksReport(): Promise<HookStatusReport> {
-  const config = getRuntimeConfig({ observe: false, skipPluginValidation: true });
+  const config = getRuntimeConfigForInspection({ skipPluginValidation: true });
   try {
     const { callGateway } = await import("../gateway/call.js");
     return await callGateway<HookStatusReport>({

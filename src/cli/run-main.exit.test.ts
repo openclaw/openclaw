@@ -12,11 +12,16 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withSecureTestNodeExecPath } from "../secrets/test-node-command.test-support.js";
 import type { LocalOnboardingState } from "../state/local-onboarding-state.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
+import { cliCommandCatalog } from "./command-catalog.js";
 import { getGatewayRunRuntimeHooks } from "./gateway-cli/runtime-hooks.js";
 import type { RootHelpRenderOptions } from "./program/root-help.js";
 import { registerSignalExitBarrier } from "./signal-exit-barrier.js";
 
 type RunMainModule = typeof import("./run-main.js");
+
+const inferInspectionCatalogCases = cliCommandCatalog
+  .filter((entry) => entry.commandPath[0] === "infer" && entry.policy?.configGuard === "skip")
+  .map((entry) => [entry.commandPath.join(" "), [...entry.commandPath]] as const);
 
 let runCli: RunMainModule["runCli"];
 let shouldStartProxyForCli: RunMainModule["shouldStartProxyForCli"];
@@ -2361,6 +2366,20 @@ describe("runCli exit behavior", () => {
     });
     expect(startProxyMock).toHaveBeenCalledWith({ selected: "dry-run" });
   });
+
+  it.each(inferInspectionCatalogCases)(
+    "reads proxy config without observation for catalog inspection %s",
+    async (_name, commandPath) => {
+      tryRouteCliMock.mockResolvedValueOnce(true);
+
+      await runCli(["node", "openclaw", ...commandPath]);
+
+      expect(loadConfigMock).toHaveBeenCalledWith({
+        observe: false,
+        skipPluginValidation: true,
+      });
+    },
+  );
 
   it("keeps observed proxy config reads for mutable updates", async () => {
     tryRouteCliMock.mockResolvedValueOnce(true);

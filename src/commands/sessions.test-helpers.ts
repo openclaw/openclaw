@@ -24,6 +24,7 @@ const defaultSessionsConfigLoader = sessionsConfigState.loadConfig;
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => sessionsConfigState.loadConfig(),
+  getRuntimeConfigForInspection: () => sessionsConfigState.loadConfig(),
   loadConfig: () => sessionsConfigState.loadConfig(),
 }));
 

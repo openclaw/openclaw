@@ -250,6 +250,8 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfigSourceSnapshot:
     mocks.getRuntimeConfigSourceSnapshot as typeof import("../config/config.js").getRuntimeConfigSourceSnapshot,
   getRuntimeConfig: mocks.loadConfig as typeof import("../config/config.js").getRuntimeConfig,
+  getRuntimeConfigForInspection:
+    mocks.loadConfig as typeof import("../config/config.js").getRuntimeConfigForInspection,
   loadConfig: mocks.loadConfig as typeof import("../config/config.js").loadConfig,
   setRuntimeConfigSnapshot:
     mocks.setRuntimeConfigSnapshot as typeof import("../config/config.js").setRuntimeConfigSnapshot,

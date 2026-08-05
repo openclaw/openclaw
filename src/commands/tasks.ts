@@ -8,16 +8,17 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatLookupMiss } from "../cli/error-format.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { getRuntimeConfig, getRuntimeConfigForInspection } from "../config/config.js";
 import {
   resolveAllAgentSessionStoreTargetsSync,
   runSessionRegistryMaintenanceForStore,
 } from "../config/sessions.js";
 import { normalizeCronLaneSegment } from "../cron/service/task-runs.js";
-import { loadCronJobsStoreSync, resolveCronJobsStorePath } from "../cron/store.js";
+import * as cronStore from "../cron/store.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import {
   ensureTaskRuntimeStateReady,
+  ensureTaskRuntimeStateReadyForInspection,
   getTaskById,
   updateTaskNotifyPolicyById,
 } from "../tasks/runtime-internal.js";
@@ -148,12 +149,15 @@ function resolveExplicitCronSessionSegment(sessionKey: string | undefined): stri
   return match?.[1]?.toLowerCase();
 }
 
-function readRunningCronJobIds(): { ids: Set<string>; count: number } {
+async function readRunningCronJobIds(params: {
+  readOnly: boolean;
+}): Promise<{ ids: Set<string>; count: number }> {
   try {
-    const cronStorePath = resolveCronJobsStorePath();
-    const runningJobs = loadCronJobsStoreSync(cronStorePath).jobs.filter(
-      (job) => typeof job.state?.runningAtMs === "number",
-    );
+    const cronStorePath = cronStore.resolveCronJobsStorePath();
+    const store = params.readOnly
+      ? (await cronStore.loadCronJobsStoreWithConfigJobsReadOnly(cronStorePath)).store
+      : cronStore.loadCronJobsStoreSync(cronStorePath);
+    const runningJobs = store.jobs.filter((job) => typeof job.state?.runningAtMs === "number");
     return {
       // A running job may have been retargeted after its session was created. Keep both historical
       // shapes; the registry has no producer metadata, so retaining an ambiguous alias is safer
@@ -179,8 +183,8 @@ function readRunningCronJobIds(): { ids: Set<string>; count: number } {
 async function runSessionRegistryMaintenance(params: {
   apply: boolean;
 }): Promise<SessionRegistryMaintenanceSummary> {
-  const cfg = getRuntimeConfig();
-  const runningCronJobs = readRunningCronJobIds();
+  const cfg = params.apply ? getRuntimeConfig() : getRuntimeConfigForInspection();
+  const runningCronJobs = await readRunningCronJobIds({ readOnly: !params.apply });
   const stores: SessionRegistryMaintenanceStoreSummary[] = [];
   for (const target of resolveAllAgentSessionStoreTargetsSync(cfg)) {
     const result = await runSessionRegistryMaintenanceForStore({
@@ -662,38 +666,40 @@ export async function tasksMaintenanceCommand(
   runtime: RuntimeEnv,
 ) {
   configureTaskMaintenanceFromConfig();
-  if (opts.apply) {
-    try {
+  const apply = Boolean(opts.apply);
+  try {
+    if (apply) {
       ensureTaskRuntimeStateReady();
-    } catch (error) {
-      // Preserve the maintenance-specific refusal for a flow restore failure.
-      assertTaskFlowRegistryMaintenanceReady();
-      throw error;
+    } else {
+      ensureTaskRuntimeStateReadyForInspection();
     }
+  } catch (error) {
+    // Preserve the maintenance-specific refusal for a flow restore failure.
+    assertTaskFlowRegistryMaintenanceReady();
+    throw error;
   }
   assertTaskFlowRegistryMaintenanceReady();
   const auditBefore = getInspectableTaskAuditSummary();
   const flowAuditBefore = getInspectableTaskFlowAuditSummary();
-  const taskMaintenance = opts.apply
+  const taskMaintenance = apply
     ? await runTaskRegistryMaintenance()
     : previewTaskRegistryMaintenance();
-  // JSON diagnostics explain the task-maintenance decision above, before the
-  // separate session-registry sweep can prune backing session rows.
+  // JSON diagnostics explain the task decision before the separate session-registry sweep.
   const diagnostics = opts.json ? getTaskRegistryMaintenanceDiagnostics() : undefined;
-  const flowMaintenance = opts.apply
+  const flowMaintenance = apply
     ? await runTaskFlowRegistryMaintenance()
     : previewTaskFlowRegistryMaintenance();
-  const sessionMaintenance = await runSessionRegistryMaintenance({ apply: Boolean(opts.apply) });
+  const sessionMaintenance = await runSessionRegistryMaintenance({ apply });
   const summary = getInspectableTaskRegistrySummary();
-  const auditAfter = opts.apply ? getInspectableTaskAuditSummary() : auditBefore;
-  const flowAuditAfter = opts.apply ? getInspectableTaskFlowAuditSummary() : flowAuditBefore;
+  const auditAfter = apply ? getInspectableTaskAuditSummary() : auditBefore;
+  const flowAuditAfter = apply ? getInspectableTaskFlowAuditSummary() : flowAuditBefore;
   const retainedLostAfter = summarizeRetainedLostTaskAuditFindings(
     listTaskAuditFindings({ tasks: reconcileInspectableTasks() }),
   );
 
   if (opts.json) {
     writeRuntimeJson(runtime, {
-      mode: opts.apply ? "apply" : "preview",
+      mode: apply ? "apply" : "preview",
       maintenance: {
         tasks: taskMaintenance,
         taskFlows: flowMaintenance,

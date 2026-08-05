@@ -10,7 +10,7 @@ import {
   assertOkOrThrowHttpError,
   assertProviderBinaryResponseContent,
 } from "../../agents/provider-http-errors.js";
-import { getRuntimeConfig } from "../../config/config.js";
+import { getRuntimeConfigForInspection } from "../../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readResponseWithLimit } from "../../infra/http-body.js";
@@ -313,7 +313,7 @@ export function registerVideoCapabilityCommands(capability: Command): void {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const cfg = getRuntimeConfig();
+        const cfg = getRuntimeConfigForInspection();
         const selectedGenerationProvider = resolveSelectedProviderFromModelRef(
           resolveAgentModelPrimaryValue(cfg.agents?.defaults?.mediaModels?.video),
         );

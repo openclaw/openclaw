@@ -25,6 +25,7 @@ import {
   normalizeRootLogLevelArgv,
   normalizeRootNoColorArgv,
 } from "./argv.js";
+import { resolveCliCatalogCommandPath } from "./command-path-policy.js";
 import {
   isReservedNonPluginCommandRoot,
   shouldRegisterPrimaryCommandOnly,
@@ -1209,7 +1210,7 @@ async function runCliWithPreparedOutputMode(
   const isolateProxyConfigEnv = isGatewayRunInvocation;
   const skipBestEffortConfigObservation = resolveCliStartupPolicyForArgv({
     argv: normalizedArgv,
-    commandPath: normalizedInvocation.commandPath,
+    commandPath: resolveCliCatalogCommandPath(normalizedArgv),
     jsonOutputMode: options.builtInMachineOutput || hasJsonOutputFlag(normalizedArgv),
     env: process.env,
   }).skipConfigGuard;

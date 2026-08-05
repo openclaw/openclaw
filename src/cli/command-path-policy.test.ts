@@ -2,7 +2,9 @@
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CliCommandCatalogEntry, CliCommandPathPolicy } from "./command-catalog.js";
+import { cliCommandCatalog } from "./command-catalog.js";
 import {
+  resolveCliCatalogCommandPath,
   resolveCliCommandPathPolicy,
   resolveCliNetworkProxyPolicy,
 } from "./command-path-policy.js";
@@ -72,6 +74,41 @@ describe("command-path-policy", () => {
       ensureCliPath: false,
       networkProxy: "bypass",
     });
+  });
+
+  it("classifies the complete infer inspection surface as non-observing", () => {
+    const inspectionPaths = cliCommandCatalog
+      .filter((entry) => entry.commandPath[0] === "infer" && entry.policy?.configGuard === "skip")
+      .map((entry) => entry.commandPath.join(" "));
+
+    expect(inspectionPaths).toEqual([
+      "infer list",
+      "infer inspect",
+      "infer model list",
+      "infer model inspect",
+      "infer model providers",
+      "infer model auth status",
+      "infer audio providers",
+      "infer embedding providers",
+      "infer image providers",
+      "infer video providers",
+      "infer web providers",
+      "infer tts voices",
+      "infer tts providers",
+      "infer tts personas",
+      "infer tts status",
+    ]);
+    for (const commandPath of inspectionPaths) {
+      expect(resolveCliCommandPathPolicy(commandPath.split(" ")).configGuard).toBe("skip");
+    }
+    expect(resolveCliCommandPathPolicy(["infer", "model", "run"]).configGuard).toBe("run");
+    expect(resolveCliCommandPathPolicy(["infer", "web", "search"]).configGuard).toBe("run");
+  });
+
+  it("canonicalizes the capability alias before exact catalog matching", () => {
+    expect(
+      resolveCliCatalogCommandPath(["node", "openclaw", "capability", "tts", "providers"]),
+    ).toEqual(["infer", "tts", "providers"]);
   });
 
   it("keeps RPC-only nodes reads off the config guard", () => {

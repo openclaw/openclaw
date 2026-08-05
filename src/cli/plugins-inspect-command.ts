@@ -1,7 +1,7 @@
 // `openclaw plugins inspect`: renders plugin registry shape, capabilities, policy, diagnostics, and install records.
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { getRuntimeConfig, getRuntimeConfigForInspection } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
   tracePluginLifecyclePhase,
@@ -124,7 +124,7 @@ export async function runPluginsInspectCommand(
     () =>
       runtimeInspect
         ? getRuntimeConfig()
-        : getRuntimeConfig({ observe: false, skipPluginValidation: true }),
+        : getRuntimeConfigForInspection({ skipPluginValidation: true }),
     { command: "inspect" },
   );
   const installRecords = await tracePluginLifecyclePhaseAsync(

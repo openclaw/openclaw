@@ -90,6 +90,24 @@ function isRootUpdateDryRun(argv: string[], commandPath: string[]): boolean {
   return positionals?.length === 0;
 }
 
+const INFER_INSPECTION_COMMAND_PATHS = [
+  ["infer", "list"],
+  ["infer", "inspect"],
+  ["infer", "model", "list"],
+  ["infer", "model", "inspect"],
+  ["infer", "model", "providers"],
+  ["infer", "model", "auth", "status"],
+  ["infer", "audio", "providers"],
+  ["infer", "embedding", "providers"],
+  ["infer", "image", "providers"],
+  ["infer", "video", "providers"],
+  ["infer", "web", "providers"],
+  ["infer", "tts", "voices"],
+  ["infer", "tts", "providers"],
+  ["infer", "tts", "personas"],
+  ["infer", "tts", "status"],
+] as const;
+
 /** Command path registry used before Commander registration has loaded all plugins. */
 export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
@@ -533,6 +551,13 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
       configGuard: ({ argv }) => (hasFlag(argv, "--refresh") ? "run" : "skip"),
     },
   },
+  ...INFER_INSPECTION_COMMAND_PATHS.map(
+    (commandPath): CliCommandCatalogEntry => ({
+      commandPath,
+      exact: true,
+      policy: { configGuard: "skip" },
+    }),
+  ),
   {
     commandPath: ["onboard"],
     exact: true,

@@ -2,6 +2,7 @@
 export { getModelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
 export {
   getRuntimeConfig,
+  getRuntimeConfigForInspection,
   getRuntimeConfigSourceSnapshot,
   setRuntimeConfigSnapshot,
   type OpenClawConfig,

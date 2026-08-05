@@ -205,6 +205,7 @@ vi.mock("../utils.js", async (importOriginal) => ({
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: (...args: unknown[]) => mocks.loadConfigMock(...args),
+  getRuntimeConfigForInspection: (...args: unknown[]) => mocks.loadConfigMock(...args),
   loadConfig: () => mocks.loadConfigMock(),
 }));
 
@@ -1453,7 +1454,6 @@ describe("skills cli commands", () => {
     await runCommand(["skills", "list"]);
 
     expect(loadConfigMock).toHaveBeenCalledWith({
-      observe: false,
       skipPluginValidation: true,
     });
     expect(defaultRuntime.writeStdout).toHaveBeenCalledTimes(1);

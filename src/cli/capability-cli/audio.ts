@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { Command } from "commander";
-import { getRuntimeConfig } from "../../config/config.js";
+import { getRuntimeConfigForInspection } from "../../config/config.js";
 import { inspectLocalAudioSelection } from "../../media-understanding/local-audio.js";
 import { buildMediaUnderstandingRegistry } from "../../media-understanding/provider-registry.js";
 import { transcribeAudioFile } from "../../media-understanding/runtime.js";
@@ -83,7 +83,7 @@ export function registerAudioCapabilityCommands(capability: Command): void {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const cfg = getRuntimeConfig();
+        const cfg = getRuntimeConfigForInspection();
         const remoteProviders = [...buildMediaUnderstandingRegistry(undefined, cfg).values()]
           .filter((provider) => provider.capabilities?.includes("audio"))
           .map((provider) => ({

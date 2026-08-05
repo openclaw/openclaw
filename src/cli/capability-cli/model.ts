@@ -26,7 +26,7 @@ import {
   prepareSimpleCompletionModelForAgent,
 } from "../../agents/simple-completion-runtime.js";
 import { normalizeThinkLevel, type ThinkLevel } from "../../auto-reply/thinking.js";
-import { getRuntimeConfig } from "../../config/config.js";
+import { getRuntimeConfig, getRuntimeConfigForInspection } from "../../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway, randomIdempotencyKey } from "../../gateway/call.js";
@@ -343,7 +343,7 @@ async function runModelRun(params: {
 }
 
 async function buildModelProviders() {
-  const cfg = getRuntimeConfig();
+  const cfg = getRuntimeConfigForInspection();
   const catalog = await loadModelCatalogForInspection(cfg);
   const selectedProvider = resolveSelectedProviderFromModelRef(
     resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model),
@@ -482,7 +482,7 @@ export function registerModelCapabilityCommands(capability: Command): void {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const result = await loadModelCatalogForInspection(getRuntimeConfig());
+        const result = await loadModelCatalogForInspection(getRuntimeConfigForInspection());
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, providerSummaryText);
       });
     });
@@ -495,7 +495,7 @@ export function registerModelCapabilityCommands(capability: Command): void {
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const target = normalizeStringifiedOptionalString(opts.model) ?? "";
-        const catalog = await loadModelCatalogForInspection(getRuntimeConfig());
+        const catalog = await loadModelCatalogForInspection(getRuntimeConfigForInspection());
         const entry =
           catalog.find((candidate) => `${candidate.provider}/${candidate.id}` === target) ??
           catalog.find((candidate) => candidate.id === target);
