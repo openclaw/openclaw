@@ -12,6 +12,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDiscordIngressMonitor, type DiscordIngressLifecycle } from "./ingress.js";
+import type { DiscordMessageEvent } from "./listeners.js";
 
 type DiscordIngressPayload = {
   version: 1;
@@ -259,11 +260,13 @@ describe("Discord durable ingress", () => {
     await withQueue(async (queue) => {
       const dispatched: string[] = [];
       const lifecycles = new Map<string, DiscordIngressLifecycle>();
-      const dispatch = vi.fn(async (event: { id: string }, lifecycle: DiscordIngressLifecycle) => {
-        dispatched.push(event.id);
-        lifecycles.set(event.id, lifecycle);
-        return { kind: "deferred" as const };
-      });
+      const dispatch = vi.fn(
+        async (event: DiscordMessageEvent, lifecycle: DiscordIngressLifecycle) => {
+          dispatched.push(event.id!);
+          lifecycles.set(event.id!, lifecycle);
+          return { kind: "deferred" as const };
+        },
+      );
       const monitor = createDiscordIngressMonitor({
         accountId: "default",
         client: {} as never,
