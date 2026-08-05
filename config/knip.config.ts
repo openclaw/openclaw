@@ -375,9 +375,6 @@ const config = {
     // Focused CLI tests exercise plan construction through this explicit test seam.
     "extensions/onepassword/src/secret-ref-cli.ts": ["exports"],
     "src/infra/heartbeat-wake.ts": ["exports"],
-    // Private RFC 0013 recovery helpers are direct unit-test contracts until
-    // their hidden host-facing caller lands in the next stacked slice.
-    "src/snapshot/recovery-point.ts": ["exports"],
   },
   workspaces: {
     ".": {
