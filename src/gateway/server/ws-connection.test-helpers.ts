@@ -48,6 +48,7 @@ export function createGatewayWsTestRequestContext(
     unsubscribeAllSessionEvents: vi.fn(),
     nodeRegistry: overrides.nodeRegistry ?? { unregister: vi.fn() },
     nodeUnsubscribeAll: vi.fn(),
+    systemAgentSessions: new Map(),
   };
 }
 

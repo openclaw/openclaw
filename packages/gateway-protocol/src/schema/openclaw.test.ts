@@ -38,6 +38,16 @@ describe("OpenClaw chat params protocol", () => {
     ).toBe(false);
   });
 
+  it("accepts a step poll id without adding a synthetic chat message", () => {
+    expect(
+      validateSystemAgentChatParams({
+        sessionId: "session-1",
+        pollStepId: "setup-qr",
+      }),
+    ).toBe(true);
+    expect(validateSystemAgentChatParams({ sessionId: "session-1", pollStepId: "" })).toBe(false);
+  });
+
   it("rejects unsafe page ids and unknown context fields", () => {
     expect(validateSystemAgentChatParams({ ...base, context: { page: "channels?tab=all" } })).toBe(
       false,

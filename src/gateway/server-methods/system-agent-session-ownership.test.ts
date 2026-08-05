@@ -2,8 +2,10 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { SystemAgentWizardAnswerError } from "../../system-agent/chat-engine.js";
+import { evictOldestSystemAgentSession } from "./system-agent-session-ownership.js";
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -42,9 +44,12 @@ vi.mock("../../system-agent/greeting.js", () => ({
 type FakeEngine = {
   answerWizard: ReturnType<typeof vi.fn>;
   handle: ReturnType<typeof vi.fn>;
+  pollStep: ReturnType<typeof vi.fn>;
   seedHistory: ReturnType<typeof vi.fn>;
   historyLength: ReturnType<typeof vi.fn>;
   historySince: ReturnType<typeof vi.fn>;
+  hasPendingQrCode: ReturnType<typeof vi.fn>;
+  getPersistentApplySettlement: ReturnType<typeof vi.fn>;
   getPendingOperatorProposal: ReturnType<typeof vi.fn>;
   resolveOperatorApproval: ReturnType<typeof vi.fn>;
   dispose: ReturnType<typeof vi.fn>;
@@ -58,9 +63,12 @@ function makeEngine(): FakeEngine {
       throw new SystemAgentWizardAnswerError("No hosted wizard is awaiting an answer.");
     }),
     handle: vi.fn(async () => ({ text: "did the thing", action: "none" })),
+    pollStep: vi.fn(async () => ({ text: "still waiting", action: "none" })),
     seedHistory: vi.fn(),
     historyLength: vi.fn(() => 0),
     historySince: vi.fn(() => []),
+    hasPendingQrCode: vi.fn(() => false),
+    getPersistentApplySettlement: vi.fn(() => null),
     getPendingOperatorProposal: vi.fn(() => null),
     resolveOperatorApproval: vi.fn(async () => null),
     dispose: vi.fn(async () => undefined),
@@ -70,14 +78,19 @@ function makeEngine(): FakeEngine {
 }
 
 const createdEngines = vi.hoisted(() => [] as FakeEngine[]);
+const createdEngineOptions = vi.hoisted(() => [] as Array<{ supportsQrCode?: boolean }>);
 
 vi.mock("../../system-agent/chat-engine.js", () => {
   class FakeSystemAgentWizardAnswerError extends Error {}
   return {
     SystemAgentWizardAnswerError: FakeSystemAgentWizardAnswerError,
-    SystemAgentChatEngine: function FakeSystemAgentChatEngine(this: FakeEngine) {
+    SystemAgentChatEngine: function FakeSystemAgentChatEngine(
+      this: FakeEngine,
+      options: { supportsQrCode?: boolean },
+    ) {
       const engine = makeEngine();
       createdEngines.push(engine);
+      createdEngineOptions.push(options);
       Object.assign(this, engine);
     },
   };
@@ -92,11 +105,13 @@ function makeClient(params: {
   connId: string;
   deviceId?: string;
   authenticatedUserId?: string;
+  supportsQrCode?: boolean;
 }): GatewayClient {
   return {
     connId: params.connId,
     connect: {
       client: { id: "openclaw-control-ui", mode: "webchat" },
+      ...(params.supportsQrCode ? { caps: [GATEWAY_CLIENT_CAPS.SYSTEM_AGENT_QR_CODE] } : {}),
       ...(params.deviceId ? { device: { id: params.deviceId } } : {}),
     },
     ...(params.authenticatedUserId ? { authenticatedUserId: params.authenticatedUserId } : {}),
@@ -112,12 +127,14 @@ function makeContext(sessions: Map<string, SystemAgentChatSession>): GatewayRequ
 function seededSession(params?: {
   engine?: FakeEngine;
   ownerKey?: string;
+  lastUsedAt?: number;
 }): SystemAgentChatSession {
   return {
     engine: params?.engine ?? makeEngine(),
     welcome: "welcome text",
-    lastUsedAt: 1,
+    lastUsedAt: params?.lastUsedAt ?? 1,
     ownerKey: params?.ownerKey ?? "device:device-test",
+    supportsQrCode: false,
   } as unknown as SystemAgentChatSession;
 }
 
@@ -142,10 +159,71 @@ async function callChat(
 
 beforeEach(() => {
   createdEngines.length = 0;
+  createdEngineOptions.length = 0;
   setupInferenceMocks.verifySetupInference.mockResolvedValue({ ok: true, binding: {} });
   delegatedInferenceMocks.verifySystemAgentInferenceWithFallback.mockResolvedValue({
     ok: true,
     binding: {},
+  });
+});
+
+describe("system-agent session eviction", () => {
+  it("preserves the caller's live QR when another session can be evicted", async () => {
+    const qrEngine = makeEngine();
+    qrEngine.hasPendingQrCode.mockReturnValue(true);
+    const normalEngine = makeEngine();
+    const sessions = new Map<string, SystemAgentChatSession>([
+      ["caller-qr", seededSession({ engine: qrEngine, ownerKey: "device:device-test" })],
+      ["normal", seededSession({ engine: normalEngine, ownerKey: "device:other" })],
+    ]);
+    for (let index = 2; index < 8; index += 1) {
+      sessions.set(`other-${index}`, seededSession({ ownerKey: `device:other-${index}` }));
+    }
+
+    await expect(evictOldestSystemAgentSession(sessions, makeContext(sessions))).resolves.toBe(
+      true,
+    );
+
+    expect(sessions.has("caller-qr")).toBe(true);
+    expect(sessions.has("normal")).toBe(false);
+    expect(qrEngine.dispose).not.toHaveBeenCalled();
+    expect(normalEngine.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("protects only the newest live QR per owner and refuses when all sessions are protected", async () => {
+    const sessions = new Map<string, SystemAgentChatSession>();
+    for (let index = 0; index < 8; index += 1) {
+      const engine = makeEngine();
+      engine.hasPendingQrCode.mockReturnValue(true);
+      sessions.set(
+        `qr-${index}`,
+        seededSession({
+          engine,
+          ownerKey: index < 2 ? "device:shared" : `device:${index}`,
+          lastUsedAt: index === 0 ? 1 : index,
+        }),
+      );
+    }
+
+    await expect(evictOldestSystemAgentSession(sessions, makeContext(sessions))).resolves.toBe(
+      true,
+    );
+    expect(sessions.has("qr-0")).toBe(false);
+    expect(sessions.has("qr-1")).toBe(true);
+
+    const allProtected = new Map(
+      Array.from({ length: 8 }, (_, index) => {
+        const engine = makeEngine();
+        engine.hasPendingQrCode.mockReturnValue(true);
+        return [
+          `protected-${index}`,
+          seededSession({ engine, ownerKey: `device:protected-${index}` }),
+        ] as const;
+      }),
+    );
+    await expect(
+      evictOldestSystemAgentSession(allProtected, makeContext(allProtected)),
+    ).resolves.toBe(false);
   });
 });
 
@@ -155,6 +233,37 @@ afterEach(() => {
 });
 
 describe("openclaw.chat session ownership", () => {
+  it("requires reset when a reconnect changes QR capabilities", async () => {
+    const sessions = new Map<string, SystemAgentChatSession>();
+    const context = makeContext(sessions);
+    const withoutQr = makeClient({ connId: "conn-old", deviceId: "device-owner" });
+    const withQr = makeClient({
+      connId: "conn-new",
+      deviceId: "device-owner",
+      supportsQrCode: true,
+    });
+
+    expect(await callChat(context, { sessionId: "capabilities" }, withoutQr)).toMatchObject({
+      ok: true,
+    });
+    expect(createdEngineOptions[0]).toMatchObject({ supportsQrCode: false });
+    const originalEngine = expectDefined(createdEngines[0], "original system-agent engine");
+    expect(
+      await callChat(context, { sessionId: "capabilities", message: "continue" }, withQr),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST", message: expect.stringContaining("capabilities changed") },
+    });
+    expect(originalEngine.handle).not.toHaveBeenCalled();
+
+    expect(
+      await callChat(context, { sessionId: "capabilities", reset: true }, withQr),
+    ).toMatchObject({ ok: true });
+    expect(originalEngine.dispose).toHaveBeenCalledOnce();
+    expect(sessions.get("capabilities")?.supportsQrCode).toBe(true);
+    expect(createdEngineOptions[1]).toMatchObject({ supportsQrCode: true });
+  });
+
   it("binds a new non-delegated session and rejects another principal", async () => {
     const sessions = new Map<string, SystemAgentChatSession>();
     const context = makeContext(sessions);
@@ -190,7 +299,10 @@ describe("openclaw.chat session ownership", () => {
     expect(turn).toMatchObject({
       ok: false,
       payload: undefined,
-      error: { code: "INVALID_REQUEST" },
+      error: {
+        code: "INVALID_REQUEST",
+        details: { code: "system_agent_session_invalidated" },
+      },
     });
     expect(approval).toMatchObject({
       ok: false,
@@ -339,6 +451,16 @@ describe("openclaw.chat session responses", () => {
       },
     });
     expect(setupInferenceMocks.verifySetupInference).not.toHaveBeenCalled();
+  });
+
+  it("polls only an existing step owned by the caller", async () => {
+    const engine = makeEngine();
+    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
+
+    const call = await callChat(makeContext(sessions), { sessionId: "s1", pollStepId: "qr-1" });
+
+    expect(engine.pollStep).toHaveBeenCalledWith("qr-1");
+    expect(call.payload).toMatchObject({ reply: "still waiting", action: "none" });
   });
 
   it("rejects a structured answer when the active session has no hosted wizard", async () => {

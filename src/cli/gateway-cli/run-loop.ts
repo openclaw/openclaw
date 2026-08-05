@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import net from "node:net";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { rotateGatewayProcessInstanceId } from "../../gateway/process-instance.js";
 import {
   captureGatewayRestartTraceHandoff,
   createGatewayRestartTraceHandoffEnv,
@@ -234,6 +235,10 @@ export async function runGatewayLoop(params: {
     return spawned;
   };
   const handleRestartAfterServerClose = async () => {
+    // Keep the process lock until every non-cancellable setup write from the
+    // retired Gateway settles. The existing restart watchdog exits to the
+    // supervisor if this fence outlives the restart budget.
+    await eagerLifecycleRuntime.waitForRetiredSystemAgentMutationSettlement();
     await releaseLockIfHeld();
     const {
       detectGatewayRespawnSupervisor,
@@ -1025,6 +1030,8 @@ export async function runGatewayLoop(params: {
         waitForActiveCronJobs,
         waitForActiveCronTaskRuns,
       } = await loadGatewayLifecycleRuntimeModule();
+      // The next server owns fresh process-local sessions even though the OS process survives.
+      rotateGatewayProcessInstanceId();
       // Rotate ownership before reset pumps preserved queue entries.
       rotateAgentEventLifecycleGeneration();
       advanceCronActiveJobGeneration();

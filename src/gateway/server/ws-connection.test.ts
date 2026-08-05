@@ -275,12 +275,25 @@ describe("attachGatewayWsConnectionHandler", () => {
     expect(socket.ping).toHaveBeenCalledOnce();
   });
 
-  it("releases connection-owned Talk relays when a gateway connection closes", async () => {
-    const { passed, socket } = await connectTestWs();
+  it("releases connection-owned sessions and Talk relays when a gateway connection closes", async () => {
+    const requestContext = createGatewayWsTestRequestContext();
+    const { passed, socket } = await connectTestWs({
+      options: { buildRequestContext: () => requestContext as never },
+    });
     const handlerParams = passed as {
       connId: string;
       setClient: (client: unknown) => boolean;
     };
+    const dispose = vi.fn(async () => undefined);
+    requestContext.systemAgentSessions.set("owned-session", {
+      engine: {
+        getPersistentApplySettlement: () => null,
+        dispose,
+      },
+      lastUsedAt: 1,
+      ownerKey: `connection:${handlerParams.connId}`,
+      supportsQrCode: true,
+    } as never);
     expect(
       handlerParams.setClient({
         socket,
@@ -292,6 +305,10 @@ describe("attachGatewayWsConnectionHandler", () => {
 
     socket.emit("close", 1000, Buffer.from("done"));
 
+    await vi.waitFor(() => {
+      expect(requestContext.systemAgentSessions.has("owned-session")).toBe(false);
+      expect(dispose).toHaveBeenCalledOnce();
+    });
     expect(closeTalkRealtimeRelaySessionsForConnectionMock).toHaveBeenCalledOnce();
     expect(closeTalkRealtimeRelaySessionsForConnectionMock).toHaveBeenCalledWith(
       handlerParams.connId,
