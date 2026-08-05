@@ -31,6 +31,8 @@ interface LineAccountBaseConfig {
   groupPolicy?: "open" | "allowlist" | "disabled";
   responsePrefix?: string;
   mediaMaxMb?: number;
+  /** Pending group-context window; account then channel then messages.groupChat. */
+  historyLimit?: number;
   webhookPath?: string;
   threadBindings?: LineThreadBindingsConfig;
   groups?: Record<string, LineGroupConfig>;

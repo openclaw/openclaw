@@ -54,6 +54,8 @@ export type MattermostAccountConfig = {
   groupPolicy?: GroupPolicy;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
+  /** Pending group-context window; account then channel then messages.groupChat. */
+  historyLimit?: number;
   /** Preview streaming config (nested-only; scalar modes migrate via doctor). */
   streaming?: ChannelPreviewStreamingConfig;
   /** Outbound response prefix override for this channel/account. */
