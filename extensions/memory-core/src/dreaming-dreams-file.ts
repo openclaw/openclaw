@@ -169,8 +169,10 @@ async function replaceManagedMarkdownBlockStreaming(
     let withheldHeadingSuffix = "";
     let wroteAnyContent = false;
     let outputBytes = 0;
+    let outputEndsWithLf = false;
     let lastNonWhitespaceEndBytes = 0;
     let duplicateGapStartBytes: number | undefined;
+    let duplicateGapStartEndsWithLf = false;
     let duplicateGapIsWhitespace = true;
     let shouldDropDuplicateGap = false;
 
@@ -189,6 +191,7 @@ async function replaceManagedMarkdownBlockStreaming(
           lastNonWhitespaceEndBytes = outputBytes + Buffer.byteLength(trimmed);
         }
         outputBytes += Buffer.byteLength(chunk);
+        outputEndsWithLf = chunk.endsWith("\n");
         wroteAnyContent = true;
       }
     };
@@ -218,26 +221,26 @@ async function replaceManagedMarkdownBlockStreaming(
       }
       await fs.rm(withheldPath, { force: true }).catch(() => undefined);
     };
-    const writeManagedBlock = async (trailingText: string): Promise<void> => {
+    const writeManagedBlock = async (): Promise<void> => {
       await writeChunk(managedBlock);
       duplicateGapStartBytes = outputBytes;
+      duplicateGapStartEndsWithLf = outputEndsWithLf;
       duplicateGapIsWhitespace = true;
-      if (!trailingText.startsWith("\n") && !trailingText.startsWith("\r")) {
-        await writeChunk("\n");
-      }
       wroteManagedBlock = true;
     };
-    const completeManagedBlock = async (trailingText: string): Promise<void> => {
+    const completeManagedBlock = async (): Promise<void> => {
       if (!wroteManagedBlock) {
-        await writeManagedBlock(trailingText);
+        await writeManagedBlock();
         return;
       }
       if (shouldDropDuplicateGap && duplicateGapStartBytes !== undefined) {
         await output?.truncate(duplicateGapStartBytes);
         outputBytes = duplicateGapStartBytes;
+        outputEndsWithLf = duplicateGapStartEndsWithLf;
         lastNonWhitespaceEndBytes = Math.min(lastNonWhitespaceEndBytes, outputBytes);
       }
       duplicateGapStartBytes = outputBytes;
+      duplicateGapStartEndsWithLf = outputEndsWithLf;
       duplicateGapIsWhitespace = true;
       shouldDropDuplicateGap = false;
     };
@@ -265,7 +268,7 @@ async function replaceManagedMarkdownBlockStreaming(
             continue;
           }
           const afterEndIndex = endIndex + params.endMarker.length;
-          await completeManagedBlock(current.slice(afterEndIndex));
+          await completeManagedBlock();
           withheldHeadingSuffix = "";
           await clearWithheld();
           skipping = false;
@@ -308,7 +311,7 @@ async function replaceManagedMarkdownBlockStreaming(
           continue;
         }
         const afterEndIndex = endIndex + params.endMarker.length;
-        await completeManagedBlock(current.slice(afterEndIndex));
+        await completeManagedBlock();
         withheldHeadingSuffix = "";
         await clearWithheld();
         skipping = false;
@@ -328,6 +331,8 @@ async function replaceManagedMarkdownBlockStreaming(
       await output.truncate(lastNonWhitespaceEndBytes);
       const separator = wroteAnyContent && lastNonWhitespaceEndBytes > 0 ? "\n\n" : "";
       await output.write(`${separator}${managedBlock}\n`, lastNonWhitespaceEndBytes, "utf-8");
+    } else if (!outputEndsWithLf) {
+      await writeChunk("\n");
     }
     await output.close();
     output = undefined;

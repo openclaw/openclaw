@@ -147,29 +147,26 @@ describe("dreaming markdown storage", () => {
   it("updates oversized daily memory files without reading the whole file", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
     const inlinePath = path.join(workspaceDir, "memory", "2026-04-05.md");
+    const startMarker = "<!-- openclaw:dreaming:light:start -->";
+    const endMarker = "<!-- openclaw:dreaming:light:end -->";
+    const body = "- Candidate: large file update";
     await fs.mkdir(path.dirname(inlinePath), { recursive: true });
-    await fs.writeFile(
-      inlinePath,
-      [
-        "# Daily Memory",
-        "",
-        "A".repeat(MEMORY_DREAMING_MARKDOWN_MAX_BYTES),
-        "",
-        "## Light Sleep",
-        "<!-- openclaw:dreaming:light:start -->",
-        "- Old candidate",
-        "<!-- openclaw:dreaming:light:end -->",
-        "",
-        "Unmanaged note stays.",
-        "",
-      ].join("\n"),
-      "utf-8",
-    );
+    const original = `${[
+      "# Daily Memory",
+      "",
+      "A".repeat(MEMORY_DREAMING_MARKDOWN_MAX_BYTES),
+      "",
+      "## Light Sleep",
+      startMarker,
+      "- Old candidate",
+      endMarker,
+    ].join("\n")}Unmanaged note stays.`;
+    await fs.writeFile(inlinePath, original, "utf-8");
 
     await writeDailyDreamingPhaseBlock({
       workspaceDir,
       phase: "light",
-      bodyLines: ["- Candidate: large file update"],
+      bodyLines: [body],
       nowMs,
       timezone,
       storage: {
@@ -179,9 +176,20 @@ describe("dreaming markdown storage", () => {
     });
 
     const content = await fs.readFile(inlinePath, "utf-8");
+    expect(content).toBe(
+      withTrailingNewline(
+        replaceManagedMarkdownBlock({
+          original,
+          heading: "## Light Sleep",
+          startMarker,
+          endMarker,
+          body,
+        }),
+      ),
+    );
     expect(content).toContain("A".repeat(1024));
     expect(content).toContain("Unmanaged note stays.");
-    expect(content).toContain("- Candidate: large file update");
+    expect(content).toContain(body);
     expect(content).not.toContain("- Old candidate");
   });
 
@@ -514,27 +522,24 @@ describe("dreaming markdown storage", () => {
   it("updates oversized DREAMS.md deep summaries without reading the whole file", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
     const dreamsPath = path.join(workspaceDir, "DREAMS.md");
-    await fs.writeFile(
-      dreamsPath,
-      [
-        "# Dream Diary",
-        "",
-        "B".repeat(MEMORY_DREAMING_MARKDOWN_MAX_BYTES),
-        "",
-        "## Deep Sleep",
-        "<!-- openclaw:dreaming:deep:start -->",
-        "- Old durable summary",
-        "<!-- openclaw:dreaming:deep:end -->",
-        "",
-        "Diary entry stays.",
-        "",
-      ].join("\n"),
-      "utf-8",
-    );
+    const startMarker = "<!-- openclaw:dreaming:deep:start -->";
+    const endMarker = "<!-- openclaw:dreaming:deep:end -->";
+    const body = "- Durable summary updated.";
+    const original = `${[
+      "# Dream Diary",
+      "",
+      "B".repeat(MEMORY_DREAMING_MARKDOWN_MAX_BYTES),
+      "",
+      "## Deep Sleep",
+      startMarker,
+      "- Old durable summary",
+      endMarker,
+    ].join("\n")}Diary entry stays.\r`;
+    await fs.writeFile(dreamsPath, original, "utf-8");
 
     await writeDeepDreamingReport({
       workspaceDir,
-      bodyLines: ["- Durable summary updated."],
+      bodyLines: [body],
       storage: {
         mode: "inline",
         separateReports: false,
@@ -544,9 +549,21 @@ describe("dreaming markdown storage", () => {
     });
 
     const content = await fs.readFile(dreamsPath, "utf-8");
+    expect(content).toBe(
+      withTrailingNewline(
+        replaceManagedMarkdownBlock({
+          original,
+          heading: "## Deep Sleep",
+          startMarker,
+          endMarker,
+          body,
+        }),
+      ),
+    );
+    expect(content.endsWith("Diary entry stays.\r\n")).toBe(true);
     expect(content).toContain("B".repeat(1024));
     expect(content).toContain("Diary entry stays.");
-    expect(content).toContain("- Durable summary updated.");
+    expect(content).toContain(body);
     expect(content).not.toContain("- Old durable summary");
   });
 
