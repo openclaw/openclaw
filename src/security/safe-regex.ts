@@ -19,8 +19,8 @@ type ParseFrame = {
   containsRepetition: boolean;
   containsAmbiguousAlternation: boolean;
   hasAlternation: boolean;
-  hasDuplicateAlternative: boolean;
-  alternativeSources: Set<string>;
+  hasOverlappingAlternative: boolean;
+  alternativeSources: string[];
   branchStart: number;
   branchMinLength: number;
   branchMaxLength: number;
@@ -61,8 +61,8 @@ function createParseFrame(branchStart = 0): ParseFrame {
     containsRepetition: false,
     containsAmbiguousAlternation: false,
     hasAlternation: false,
-    hasDuplicateAlternative: false,
-    alternativeSources: new Set(),
+    hasOverlappingAlternative: false,
+    alternativeSources: [],
     branchStart,
     branchMinLength: 0,
     branchMaxLength: 0,
@@ -85,13 +85,58 @@ function multiplyLength(length: number, factor: number): number {
   return length * factor;
 }
 
-function recordAlternative(frame: ParseFrame, source: string, branchEnd: number): void {
-  const branchSource = source.slice(frame.branchStart, branchEnd);
-  if (frame.alternativeSources.has(branchSource)) {
-    frame.hasDuplicateAlternative = true;
-  } else {
-    frame.alternativeSources.add(branchSource);
+function readAlternativeLead(source: string): { broad: boolean; literal?: string } {
+  for (let index = 0; index < source.length; index += 1) {
+    const ch = source[index];
+    if (ch === "^" || ch === "$") {
+      continue;
+    }
+    if (ch === "\\") {
+      const escaped = source[index + 1];
+      if (escaped === "b" || escaped === "B") {
+        index += 1;
+        continue;
+      }
+      if (escaped !== undefined && !/[0-9A-Za-z]/.test(escaped)) {
+        return { broad: false, literal: escaped };
+      }
+      return { broad: true };
+    }
+    if (ch === "." || ch === "[" || ch === "(") {
+      return { broad: true };
+    }
+    return { broad: false, literal: ch };
   }
+  return { broad: true };
+}
+
+function alternativesMayOverlap(left: string, right: string, ignoreCase: boolean): boolean {
+  const leftLead = readAlternativeLead(left);
+  const rightLead = readAlternativeLead(right);
+  if (leftLead.broad || rightLead.broad) {
+    return true;
+  }
+  if (ignoreCase) {
+    return leftLead.literal?.toLocaleLowerCase() === rightLead.literal?.toLocaleLowerCase();
+  }
+  return leftLead.literal === rightLead.literal;
+}
+
+function recordAlternative(
+  frame: ParseFrame,
+  source: string,
+  branchEnd: number,
+  ignoreCase: boolean,
+): void {
+  const branchSource = source.slice(frame.branchStart, branchEnd);
+  if (
+    frame.alternativeSources.some((alternative) =>
+      alternativesMayOverlap(alternative, branchSource, ignoreCase),
+    )
+  ) {
+    frame.hasOverlappingAlternative = true;
+  }
+  frame.alternativeSources.push(branchSource);
   if (frame.altMinLength === null || frame.altMaxLength === null) {
     frame.altMinLength = frame.branchMinLength;
     frame.altMaxLength = frame.branchMaxLength;
@@ -199,7 +244,9 @@ function tokenizePattern(source: string): PatternToken[] {
     }
 
     if (ch === "(") {
-      tokens.push({ kind: "group-open", contentStart: readGroupContentStart(source, i) });
+      const contentStart = readGroupContentStart(source, i);
+      tokens.push({ kind: "group-open", contentStart });
+      i = contentStart - 1;
       continue;
     }
 
@@ -226,7 +273,11 @@ function tokenizePattern(source: string): PatternToken[] {
   return tokens;
 }
 
-function analyzeTokensForNestedRepetition(source: string, tokens: PatternToken[]): boolean {
+function analyzeTokensForNestedRepetition(
+  source: string,
+  tokens: PatternToken[],
+  ignoreCase: boolean,
+): boolean {
   const frames: ParseFrame[] = [createParseFrame()];
 
   const emitToken = (token: TokenState) => {
@@ -266,7 +317,7 @@ function analyzeTokensForNestedRepetition(source: string, tokens: PatternToken[]
       if (frames.length > 1) {
         const frame = frames.pop() as ParseFrame;
         if (frame.hasAlternation) {
-          recordAlternative(frame, source, token.start);
+          recordAlternative(frame, source, token.start, ignoreCase);
         }
         const groupMinLength = frame.hasAlternation
           ? (frame.altMinLength ?? 0)
@@ -279,7 +330,7 @@ function analyzeTokensForNestedRepetition(source: string, tokens: PatternToken[]
           hasAmbiguousAlternation:
             frame.containsAmbiguousAlternation ||
             (frame.hasAlternation &&
-              (frame.hasDuplicateAlternative ||
+              (frame.hasOverlappingAlternative ||
                 (frame.altMinLength !== null &&
                   frame.altMaxLength !== null &&
                   frame.altMinLength !== frame.altMaxLength))),
@@ -293,7 +344,7 @@ function analyzeTokensForNestedRepetition(source: string, tokens: PatternToken[]
     if (token.kind === "alternation") {
       const frame = expectDefined(frames[frames.length - 1], "frames entry at frames.length 1");
       frame.hasAlternation = true;
-      recordAlternative(frame, source, token.start);
+      recordAlternative(frame, source, token.start, ignoreCase);
       frame.branchStart = token.end;
       frame.branchMinLength = 0;
       frame.branchMaxLength = 0;
@@ -357,10 +408,10 @@ export function testRegexWithBoundedInput(
   return testRegexFromStart(regex, input.slice(-maxWindow));
 }
 
-function hasNestedRepetition(source: string): boolean {
+function hasUnsafeRepetition(source: string, flags: string): boolean {
   // Conservative parser: tokenize first, then check if repeated tokens/groups are repeated again.
   // Non-goal: complete regex AST support; keep strict enough for config safety checks.
-  return analyzeTokensForNestedRepetition(source, tokenizePattern(source));
+  return analyzeTokensForNestedRepetition(source, tokenizePattern(source), flags.includes("i"));
 }
 
 export function compileSafeRegexDetailed(source: string, flags = ""): SafeRegexCompileResult {
@@ -380,7 +431,7 @@ export function compileSafeRegexDetailed(source: string, flags = ""): SafeRegexC
   }
 
   let result: SafeRegexCompileResult;
-  if (hasNestedRepetition(source)) {
+  if (hasUnsafeRepetition(source, flags)) {
     result = { regex: null, source, flags, reason: "unsafe-nested-repetition" };
   } else {
     try {

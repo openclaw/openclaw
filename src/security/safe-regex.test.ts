@@ -20,10 +20,17 @@ describe("safe regex", () => {
     ["(a+)+$", null],
     ["(a|aa)+$", null],
     ["(a|a)+$", null],
+    ["(?:a|aa)+$", null],
+    ["(?:a|a)+$", null],
     ["(?:(a|a))+$", null],
+    ["(aa|a.)+$", null],
+    ["([ab]|a.)+$", null],
     ["(a|b)+$", RegExp],
+    ["(?:a|b)+$", RegExp],
+    ["(aa|bb)+$", RegExp],
     ["(a|aa){2}$", RegExp],
     ["(a|a){2}$", RegExp],
+    ["(aa|a.){2}$", RegExp],
   ] as const)("compiles %s safely", (pattern, expected) => {
     if (expected === null) {
       expect(compileSafeRegex(pattern)).toBeNull();
@@ -58,6 +65,7 @@ describe("safe regex", () => {
     ["   ", "empty"],
     ["(a+)+$", "unsafe-nested-repetition"],
     ["(a|a)+$", "unsafe-nested-repetition"],
+    ["(aa|a.)+$", "unsafe-nested-repetition"],
     ["(invalid", "invalid-regex"],
     ["^agent:main$", null],
   ] as const)("returns structured reject reason for %s", (pattern, expected) => {

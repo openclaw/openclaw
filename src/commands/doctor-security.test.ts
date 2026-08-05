@@ -762,6 +762,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
           allowlist: [
             { pattern: "/usr/bin/python3", argPattern: "(a+)+$" },
             { pattern: "/usr/bin/ruby", argPattern: "^(a|a)+$" },
+            { pattern: "/usr/bin/perl", argPattern: "^(aa|a.)+$" },
             { pattern: "/usr/bin/node", argPattern: "[invalid" },
             { pattern: "/bin/echo", argPattern: "^safe$" },
             { pattern: "/bin/escaped-space", argPattern: String.raw`\ ` },
@@ -853,6 +854,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
             { pattern: "/bin/tool", argPattern: "(a+)+$\0safe" },
             { pattern: "/bin/invalid", argPattern: "[invalid" },
             { pattern: "/bin/overlap", argPattern: "^(a|a)+$" },
+            { pattern: "/bin/equal-overlap", argPattern: "^(aa|a.)+$" },
             { pattern: "/bin/duplicate", argPattern: "(a+)+$" },
             { pattern: "/bin/duplicate", argPattern: "(a+)+$" },
             collisionSafe,
@@ -878,29 +880,29 @@ describe("noteSecurityWarnings gateway exposure", () => {
         cfg: {} as OpenClawConfig,
       };
       const findings = await check!.detect(context);
-      expect(findings).toHaveLength(5);
+      expect(findings).toHaveLength(6);
       const beforeHash = readExecApprovalsSnapshot().hash;
 
       const preview = await check!.repair?.({ ...context, dryRun: true }, findings);
       expect(preview?.changes).toEqual([
-        expect.stringContaining("Would remove 5 rejected exec approval entries"),
+        expect.stringContaining("Would remove 6 rejected exec approval entries"),
       ]);
       expect(preview?.effects).toEqual([
         expect.objectContaining({
           kind: "state",
-          action: "remove 5 rejected exec approval entries",
+          action: "remove 6 rejected exec approval entries",
         }),
       ]);
       expect(readExecApprovalsSnapshot().hash).toBe(beforeHash);
 
       const repaired = await check!.repair?.(context, findings);
       expect(repaired?.changes).toEqual([
-        expect.stringContaining("Removed 5 rejected exec approval entries"),
+        expect.stringContaining("Removed 6 rejected exec approval entries"),
       ]);
       expect(repaired?.effects).toEqual([
         expect.objectContaining({
           kind: "state",
-          action: "remove 5 rejected exec approval entries",
+          action: "remove 6 rejected exec approval entries",
         }),
       ]);
       expect(await check!.detect(context)).toEqual([]);
