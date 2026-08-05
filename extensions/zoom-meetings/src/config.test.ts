@@ -23,7 +23,7 @@ describe("Zoom meetings config", () => {
     ).toBe(310_000);
   });
 
-  it("builds matching SoX commands from the selected audio format", () => {
+  it("builds native command pairs for the selected audio backend and format", () => {
     const config = resolveZoomMeetingsConfig({ chrome: { audioBufferBytes: 2048 } });
     expect(config.chrome.audioInputCommand).toContain("sox");
     expect(config.chrome.audioInputCommand).toContain("2048");
@@ -33,12 +33,24 @@ describe("Zoom meetings config", () => {
     expect(g711.chrome.audioInputCommand).toContain("BlackHole 2ch");
     expect(g711.chrome.audioOutputCommand).toContain("BlackHole 2ch");
     expect(g711.chrome.audioInputCommand).toContain("mu-law");
+
+    const linux = resolveZoomMeetingsConfig({
+      chrome: { audioBackend: "pipewire-pulse", audioFormat: "g711-ulaw-8khz" },
+    });
+    expect(linux.chrome.audioInputCommand).toContain("parec");
+    expect(linux.chrome.audioInputCommand).toContain("--format=ulaw");
+    expect(linux.chrome.audioOutputCommand).toContain("pacat");
   });
 
   it("preserves explicit command overrides and realtime passthrough", () => {
     const config = resolveZoomMeetingsConfig({
       defaultMode: "bidi",
-      chrome: { audioInputCommand: ["capture"], audioOutputCommand: ["play"] },
+      chrome: {
+        audioInputCommand: ["capture"],
+        audioOutputCommand: ["play"],
+        audioInputCommandOverride: ["capture"],
+        audioOutputCommandOverride: ["play"],
+      },
       chromeNode: { node: "mac-node" },
       realtime: {
         voiceProvider: "google",

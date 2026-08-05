@@ -350,7 +350,7 @@ export class GoogleMeetRuntime {
         tab,
       });
       session.chrome = {
-        audioBackend: this.params.config.chrome.audioBackend,
+        audioBackend: result.audioBackend,
         launched: result.launched,
         nodeId,
         browserProfile: this.params.config.chrome.browserProfile,
@@ -367,7 +367,7 @@ export class GoogleMeetRuntime {
             ? "Chrome node transport joins as the signed-in Google profile on the selected node and routes realtime audio through the node bridge."
             : "Chrome transport joins as the signed-in Google profile and routes realtime audio through the configured bridge."
           : MeetingPlatformAdapter.isTalkBackMode(session.mode)
-            ? "Chrome transport joins as the signed-in Google profile and expects BlackHole 2ch audio routing."
+            ? "Chrome transport is waiting for verified virtual input/output audio routing."
             : "Chrome transport joins as the signed-in Google profile without starting the realtime audio bridge.",
       );
       this.#sessions.refreshSpeechReadiness(session);
@@ -472,9 +472,7 @@ export class GoogleMeetRuntime {
       session.state !== "active" ||
       !session.chrome ||
       session.chrome.audioBridge ||
-      session.chrome.health?.inCall !== true ||
-      session.chrome.health.micMuted !== false ||
-      session.chrome.health.manualAction
+      !MeetingPlatformAdapter.isRealtimeRouteReady(session.mode, session.chrome.health)
     ) {
       return undefined;
     }

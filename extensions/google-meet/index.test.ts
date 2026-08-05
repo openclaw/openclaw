@@ -1018,7 +1018,9 @@ describe("google-meet plugin", () => {
     expect(config.defaultTransport).toBe("chrome");
     expect(config.defaultMode).toBe("agent");
     expect(config.chrome).toEqual({
-      audioBackend: "blackhole-2ch",
+      audioBackend: "auto",
+      audioBridgeCommand: undefined,
+      audioBridgeHealthCommand: undefined,
       launch: true,
       guestName: "OpenClaw Agent",
       reuseExistingTab: true,
@@ -1048,6 +1050,7 @@ describe("google-meet plugin", () => {
         "-L",
         "-",
       ],
+      audioInputCommandOverride: undefined,
       audioOutputCommand: [
         "sox",
         "-q",
@@ -1069,9 +1072,12 @@ describe("google-meet plugin", () => {
         "coreaudio",
         "BlackHole 2ch",
       ],
+      audioOutputCommandOverride: undefined,
       bargeInRmsThreshold: 650,
       bargeInPeakThreshold: 2500,
       bargeInCooldownMs: 900,
+      bargeInInputCommand: undefined,
+      browserProfile: undefined,
     });
     expect(config.chromeNode).toEqual({});
     expect(config.twilio).toEqual({});
@@ -1463,9 +1469,8 @@ describe("google-meet plugin", () => {
     });
   });
 
-  it("keeps the agent tool visible on non-macOS hosts but blocks local Chrome talk-back joins", async () => {
+  it("keeps local Chrome talk-back available on Linux and blocks unsupported hosts", () => {
     const { cliRegistrations, methods, tools } = setup(undefined, { registerPlatform: "linux" });
-    const tool = getMeetTool({ tools });
 
     expect(tools).toHaveLength(1);
     expect(cliRegistrations).toHaveLength(1);
@@ -1476,10 +1481,7 @@ describe("google-meet plugin", () => {
         raw: { action: "join" },
         platform: "linux",
       }),
-    ).toBe(true);
-
-    const blocked = await tool.execute("id", { action: "join" });
-    expect(JSON.stringify(blocked)).toContain("local Chrome talk-back audio is macOS-only");
+    ).toBe(false);
 
     expect(
       googleMeetPluginTesting.isGoogleMeetAgentToolActionUnsupportedOnHost({
@@ -1488,6 +1490,13 @@ describe("google-meet plugin", () => {
         platform: "linux",
       }),
     ).toBe(false);
+    expect(
+      googleMeetPluginTesting.isGoogleMeetAgentToolActionUnsupportedOnHost({
+        config: resolveGoogleMeetConfig({}),
+        raw: { action: "join" },
+        platform: "win32",
+      }),
+    ).toBe(true);
     expect(
       googleMeetPluginTesting.isGoogleMeetAgentToolActionUnsupportedOnHost({
         config: resolveGoogleMeetConfig({}),
@@ -2409,7 +2418,7 @@ describe("google-meet plugin", () => {
         },
         {
           runCommandWithTimeoutHandler: async (argv) => {
-            if (argv[0] === "/usr/sbin/system_profiler") {
+            if (argv[0]?.endsWith("system_profiler")) {
               return { code: 0, stdout: "BlackHole 2ch", stderr: "" };
             }
             return { code: 0, stdout: "", stderr: "" };
@@ -2635,7 +2644,7 @@ describe("google-meet plugin", () => {
   it.each([
     {
       config: { defaultTransport: "chrome" },
-      failingCommand: "/usr/sbin/system_profiler",
+      failingCommand: "system_profiler",
       expectedCheckId: "chrome-local-audio-device",
       expectedMessage: "BlackHole 2ch audio device not found",
     },
@@ -2665,11 +2674,9 @@ describe("google-meet plugin", () => {
       await withPlatform("darwin", async () => {
         const { tools } = setup(config, {
           runCommandWithTimeoutHandler: async (argv) => {
-            if (argv[0] === "/usr/sbin/system_profiler") {
+            if (argv[0]?.endsWith("system_profiler")) {
               const stdout =
-                failingCommand === "/usr/sbin/system_profiler"
-                  ? "Built-in Output"
-                  : "BlackHole 2ch";
+                failingCommand === "system_profiler" ? "Built-in Output" : "BlackHole 2ch";
               return { code: 0, stdout, stderr: "" };
             }
             if (argv[0] === "/bin/sh" && argv.at(-1) === failingCommand) {
@@ -3645,7 +3652,7 @@ describe("google-meet plugin", () => {
         {
           runCommandWithTimeoutHandler: async (argv) => {
             events.push(`command:${argv.join(" ")}`);
-            return argv[0] === "/usr/sbin/system_profiler"
+            return argv[0]?.endsWith("system_profiler")
               ? { code: 0, stdout: "BlackHole 2ch", stderr: "" }
               : { code: 0, stdout: "", stderr: "" };
           },
@@ -3729,7 +3736,7 @@ describe("google-meet plugin", () => {
         {
           runCommandWithTimeoutHandler: async (argv) => {
             events.push(`command:${argv.join(" ")}`);
-            return argv[0] === "/usr/sbin/system_profiler"
+            return argv[0]?.endsWith("system_profiler")
               ? { code: 0, stdout: "BlackHole 2ch", stderr: "" }
               : { code: 0, stdout: "", stderr: "" };
           },
@@ -4282,7 +4289,7 @@ describe("google-meet plugin", () => {
     expect(joinElsewhere.click).not.toHaveBeenCalled();
   });
 
-  it("uses the local Meet microphone control instead of remote participant mute buttons", async () => {
+  it("does not unmute local or remote microphones without a verified virtual input", async () => {
     const makeButton = (label: string, disabled = false) => ({
       disabled,
       innerText: "",
@@ -4329,9 +4336,11 @@ describe("google-meet plugin", () => {
     const result = JSON.parse(await inspect()) as { micMuted?: boolean; notes?: string[] };
 
     expect(result.micMuted).toBe(true);
-    expect(localMic.click).toHaveBeenCalledTimes(1);
+    expect(localMic.click).not.toHaveBeenCalled();
     expect(remoteMute.click).not.toHaveBeenCalled();
-    expect(result.notes).toContain("Attempted to turn on the Meet microphone for talk-back mode.");
+    expect(result.notes).not.toContain(
+      "Turned on the Meet microphone after verifying the virtual audio input.",
+    );
   });
 
   it.each(
@@ -4436,7 +4445,7 @@ describe("google-meet plugin", () => {
     expect(health.speechReady).toBe(true);
   });
 
-  it("preserves the paired-node bridge for an externally managed Meet session", async () => {
+  it("does not start an externally managed paired-node bridge without a recoverable tab", async () => {
     const { chrome, nodesInvoke } = await runGoogleMeetJoinScenario(
       {
         defaultTransport: "chrome-node",
@@ -4452,14 +4461,14 @@ describe("google-meet plugin", () => {
     );
     expect(
       matchingNodeInvocations(nodesInvoke, { command: "googlemeet.chrome", action: "start" }),
-    ).toHaveLength(1);
+    ).toHaveLength(0);
     expect(
       nodesInvoke.mock.calls.some(([rawCall]) => {
         const call = requireRecord(rawCall, "node invoke");
         return call.command === "browser.proxy";
       }),
-    ).toBe(false);
-    expect(requireRecord(chrome.audioBridge, "join audio bridge").type).toBe("external-command");
+    ).toBe(true);
+    expect(chrome.audioBridge).toBeUndefined();
   });
 
   it("joins Chrome on a paired node without local Chrome or BlackHole", async () => {
@@ -6018,7 +6027,12 @@ describe("google-meet plugin", () => {
         transport: "chrome",
         found: true,
         message: "Existing Meet tab is in-call.",
-        browser: { inCall: true, micMuted: false },
+        browser: {
+          inCall: true,
+          micMuted: false,
+          audioInputRouted: true,
+          audioOutputRouted: true,
+        },
       });
     try {
       const runtime = createChromeLifecycleRuntime();
@@ -6129,6 +6143,8 @@ describe("google-meet plugin", () => {
               ? {
                   inCall: true,
                   micMuted: false,
+                  audioInputRouted: true,
+                  audioOutputRouted: true,
                   title: "Meet call",
                   url: MEET_URL,
                 }
@@ -6282,10 +6298,10 @@ describe("google-meet plugin", () => {
       });
 
       expectRespondedOk(respond);
-      expect(runCommandWithTimeout).toHaveBeenNthCalledWith(2, ["bridge", "status"], {
+      expect(runCommandWithTimeout).toHaveBeenCalledWith(["bridge", "status"], {
         timeoutMs: 30000,
       });
-      expect(runCommandWithTimeout).toHaveBeenNthCalledWith(3, ["bridge", "start"], {
+      expect(runCommandWithTimeout).toHaveBeenCalledWith(["bridge", "start"], {
         timeoutMs: 30000,
       });
       const openRequests = callGatewayFromCli.mock.calls.filter((call) => {

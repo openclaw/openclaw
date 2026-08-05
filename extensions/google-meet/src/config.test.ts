@@ -4,6 +4,24 @@ import { describe, expect, it } from "vitest";
 import { resolveGoogleMeetConfig, resolveGoogleMeetGatewayOperationTimeoutMs } from "./config.js";
 
 describe("google meet gateway operation timeout", () => {
+  it("builds PipeWire-Pulse commands and retains explicit overrides", () => {
+    const linux = resolveGoogleMeetConfig({
+      chrome: { audioBackend: "pipewire-pulse" },
+    });
+    expect(linux.chrome.audioInputCommand).toContain("parec");
+    expect(linux.chrome.audioOutputCommand).toContain("pacat");
+
+    const custom = resolveGoogleMeetConfig({
+      chrome: { audioInputCommand: ["capture"], audioOutputCommand: ["play"] },
+    });
+    expect(custom.chrome).toMatchObject({
+      audioInputCommand: ["capture"],
+      audioOutputCommand: ["play"],
+      audioInputCommandOverride: ["capture"],
+      audioOutputCommandOverride: ["play"],
+    });
+  });
+
   it("caps timer config fields before runtime polling uses them", () => {
     const config = resolveGoogleMeetConfig({
       chrome: {

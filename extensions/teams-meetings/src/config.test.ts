@@ -11,11 +11,18 @@ describe("Microsoft Teams meetings config", () => {
     expect(resolveTeamsMeetingsConfig({}).chrome.waitForInCallMs).toBe(60_000);
   });
 
-  it("builds matching SoX commands from the selected audio format", () => {
+  it("builds native command pairs for the selected audio backend", () => {
     const config = resolveTeamsMeetingsConfig({ chrome: { audioBufferBytes: 2048 } });
     expect(config.chrome.audioInputCommand).toContain("sox");
     expect(config.chrome.audioInputCommand).toContain("2048");
     expect(config.chrome.audioOutputCommand).toContain("BlackHole 2ch");
+
+    const linux = resolveTeamsMeetingsConfig({
+      chrome: { audioBackend: "pipewire-pulse", audioBufferBytes: 2_048 },
+    });
+    expect(linux.chrome.audioInputCommand).toContain("parec");
+    expect(linux.chrome.audioOutputCommand).toContain("pacat");
+    expect(linux.chrome.audioInputCommand).toContain("--latency-msec=43");
   });
 
   it("preserves explicit command overrides and realtime passthrough", () => {
@@ -31,7 +38,12 @@ describe("Microsoft Teams meetings config", () => {
     });
     expect(config).toMatchObject({
       defaultMode: "bidi",
-      chrome: { audioInputCommand: ["capture"], audioOutputCommand: ["play"] },
+      chrome: {
+        audioInputCommand: ["capture"],
+        audioOutputCommand: ["play"],
+        audioInputCommandOverride: ["capture"],
+        audioOutputCommandOverride: ["play"],
+      },
       chromeNode: { node: "mac-node" },
       realtime: {
         voiceProvider: "google",

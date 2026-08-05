@@ -47,6 +47,9 @@ describe("Microsoft Teams meetings runtime setup", () => {
       nodeId: "node-1",
       params: {
         action: "setup",
+        audioBackend: "auto",
+        audioBufferBytes: 4_096,
+        audioFormat: "pcm16-24khz",
         audioInputCommand: ["custom-input", "--read"],
         audioOutputCommand: ["custom-output", "--write"],
         bargeInInputCommand: ["custom-barge-in"],
@@ -55,7 +58,7 @@ describe("Microsoft Teams meetings runtime setup", () => {
     });
     expect(status.checks).toContainEqual({
       id: "chrome-node-audio-prerequisites",
-      message: "Remote macOS, BlackHole 2ch, and SoX prerequisites are ready",
+      message: "Remote virtual audio backend and command-pair prerequisites are ready",
       ok: true,
     });
     expect(status.ok).toBe(true);
