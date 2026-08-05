@@ -1,4 +1,5 @@
 import { t } from "../../i18n/index.ts";
+import { showToast } from "../../lib/toast.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { ChatPaneBoard } from "./chat-pane-board.ts";
 import { cancelChatScroll } from "./scroll.ts";
@@ -55,6 +56,7 @@ export abstract class ChatPaneHistoryAnchor extends ChatPaneBoard {
         const message = t("chat.historyAnchorUnavailable");
         state.lastError = message;
         state.chatError = message;
+        showToast({ message });
         state.requestUpdate?.();
       },
     );
