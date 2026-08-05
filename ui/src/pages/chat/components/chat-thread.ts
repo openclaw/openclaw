@@ -323,6 +323,8 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
   }
   private rowKeys: readonly string[] = [];
   private rowIndexesByKey = new Map<string, number>();
+  private messageRowKeys = new Map<string, string>();
+  private messageRowExpanders = new Map<string, () => void>();
   private focusedRowKey: string | null = null;
   private announcementInitialized = false;
   private announcementKey: string | null = null;
@@ -527,6 +529,25 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
       this.scrollElement.scrollTop = offset;
     }
     this.virtualizerController.getVirtualizer().scrollToOffset(offset);
+  }
+
+  syncMessageRows(
+    messageRowKeys: Map<string, string>,
+    messageRowExpanders: Map<string, () => void>,
+  ): void {
+    this.messageRowKeys = messageRowKeys;
+    this.messageRowExpanders = messageRowExpanders;
+  }
+
+  scrollToMessage(messageId: string): boolean {
+    const rowKey = this.messageRowKeys.get(messageId);
+    const rowIndex = rowKey === undefined ? undefined : this.rowIndexesByKey.get(rowKey);
+    if (rowIndex === undefined) {
+      return false;
+    }
+    this.messageRowExpanders.get(messageId)?.();
+    this.virtualizerController.getVirtualizer().scrollToIndex(rowIndex, { align: "center" });
+    return true;
   }
 
   getScrollOffset(): number | null {
@@ -765,6 +786,10 @@ export class ChatTranscriptController implements ReactiveController {
 
   scrollToOffset(offset: number, onSettled?: (position: ChatSessionScrollPosition) => void): void {
     this.sessionVirtualizer?.restoreScrollOffset(offset, onSettled);
+  }
+
+  scrollToMessage(messageId: string): boolean {
+    return this.sessionVirtualizer?.scrollToMessage(messageId) ?? false;
   }
 
   pendingScrollOffsetFor(sessionKey: string): number | null {
@@ -1835,6 +1860,38 @@ function renderChatThreadContents(
     key: item.key,
     item,
   }));
+  const messageRowKeys = new Map<string, string>();
+  const messageRowExpanders = new Map<string, () => void>();
+  // Search anchors target persisted message IDs, while virtualization scrolls transcript rows.
+  // Keep collapsed work rows addressable so they can expand before revealing the message.
+  for (const row of transcriptRows) {
+    if (row.kind !== "item") {
+      continue;
+    }
+    const groups =
+      row.item.kind === "group"
+        ? [row.item]
+        : row.item.kind === "work-group"
+          ? row.item.groups
+          : [];
+    for (const group of groups) {
+      for (const entry of group.messages) {
+        const messageId = persistedMessageEntryId(entry.message);
+        if (messageId) {
+          messageRowKeys.set(messageId, row.key);
+          if (row.item.kind === "work-group") {
+            messageRowExpanders.set(messageId, () => {
+              if (!expandedToolCards.get(row.item.key)) {
+                setExpansionState(expandedToolCards, row.item.key, true);
+                requestUpdate();
+              }
+            });
+          }
+        }
+      }
+    }
+  }
+  transcript.syncMessageRows(messageRowKeys, messageRowExpanders);
   const realtimeConversation = renderRealtimeTalkConversation(props);
   if (realtimeConversation !== nothing) {
     transcriptRows.push({

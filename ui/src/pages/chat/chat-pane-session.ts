@@ -491,7 +491,11 @@ export abstract class ChatPaneSession extends ChatPaneSharing {
     }).finally(() => state.requestUpdate?.());
     const subscriptionSync = syncSelectedSessionMessageSubscription(state);
     const composerStorageError = state.chatError === CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
-    const historyLoad = loadChatHistory(state, { deferBranches: true });
+    const historyAnchor = this.active ? this.historyAnchor : undefined;
+    const historyLoad = loadChatHistory(state, {
+      deferBranches: true,
+      historyAnchor,
+    });
     if (composerStorageError) {
       // History loading clears the shared error slot synchronously. Restore the
       // pane-local storage warning unless the retry above made the draft durable.
@@ -503,7 +507,7 @@ export abstract class ChatPaneSession extends ChatPaneSharing {
     void this.refreshSessionSuggestions();
     this.deferSessionHydrationUntilTranscript(nextSessionKey, historyLoad);
     const scheduleHistoryScroll = () => {
-      if (state.sessionKey !== nextSessionKey) {
+      if (state.sessionKey !== nextSessionKey || historyAnchor) {
         return;
       }
       state.requestUpdate();

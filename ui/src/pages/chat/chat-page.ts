@@ -14,18 +14,18 @@ import type { BoardFace } from "../../lib/board/settings.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { readSessionDragData, sessionDragActive } from "../../lib/sessions/drag.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
-import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { persistSessionBoardFace } from "./chat-board-face-persistence.ts";
 import { stillOwnsCanonicalLocation } from "./chat-canonical-location.ts";
-import { ChatViewerPresenceController } from "./chat-viewer-presence.ts";
+import { ChatPageRouteController } from "./chat-page-route-controller.ts";
 import "../../styles/chat.css";
 import "./chat-pane.ts";
+import { ChatViewerPresenceController } from "./chat-viewer-presence.ts";
 import { RouteDraftComposerFocus, type ChatPaneElement } from "./route-draft-focus-handoff.ts";
-import { routeDraft } from "./route-draft.ts";
-import { locationWithoutDraft, type SessionChatRouteData } from "./route-loader.ts";
+import { locationWithoutDraft, routeDraft } from "./route-draft.ts";
+import type { SessionChatRouteData } from "./route-loader.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import {
   resolveSplitDropZone,
@@ -78,6 +78,11 @@ export class ChatPage extends OpenClawLightDomElement {
   private pendingDragOver: { pane: ChatPaneElement; x: number; y: number } | null = null;
   private consumedDraftData: SessionChatRouteData | null = null;
   private readonly draftFocus = new RouteDraftComposerFocus(this);
+  private readonly route = new ChatPageRouteController({
+    context: () => this.context,
+    data: () => this.data,
+    requestUpdate: () => this.requestUpdate(),
+  });
   private readonly chatMessagesBySession: ChatMessageCache = new Map();
   private classicColumnId = "c1";
   private classicPaneId = "p1";
@@ -166,7 +171,7 @@ export class ChatPage extends OpenClawLightDomElement {
           this.draftFocus.beforeDraftCleanup(data);
           this.consumedDraftData = data;
           // Remove the one-shot draft from history once the matching pane owns it.
-          this.updateRoute(data.sessionKey, true, data.face ?? "chat");
+          this.route.update(data.sessionKey, true, data.face ?? "chat");
           this.requestUpdate();
         }
       });
@@ -195,7 +200,7 @@ export class ChatPage extends OpenClawLightDomElement {
     const { command, sessionKey: sourceSessionKey } = event.detail as UiCommandDetail;
     if (command.kind === "navigate") {
       event.preventDefault();
-      this.updateRoute(command.sessionKey);
+      this.route.update(command.sessionKey);
       return;
     }
     if (command.kind !== "split" && command.kind !== "close-pane" && command.kind !== "focus") {
@@ -238,7 +243,7 @@ export class ChatPage extends OpenClawLightDomElement {
     this.persistLayout(next);
     const activePane = next ? findPane(next, next.activePaneId)?.pane : survivingPane;
     if (activePane) {
-      this.updateRoute(activePane.sessionKey, true);
+      this.route.update(activePane.sessionKey, true);
     }
   };
 
@@ -385,32 +390,13 @@ export class ChatPage extends OpenClawLightDomElement {
     patchSettings({ chatSplitLayout: layout });
   }
 
-  private updateRoute(sessionKey: string, replace = false, face = this.data.face ?? "chat") {
-    const data = this.data;
-    if (data?.sessionKey === sessionKey && (data.face ?? "chat") === face && !data.draft) {
-      return;
-    }
-    const options = sessionNavigationTarget({
-      context: this.context,
-      face,
-      sessionKey,
-      agentId: data?.agentId,
-      shortIdLength: data?.sessionKey === sessionKey ? data.shortId?.length : undefined,
-    }).options;
-    if (replace) {
-      this.context.replace(face, options);
-    } else {
-      this.context.navigate(face, options);
-    }
-  }
-
   private readonly handlePaneFaceChange = (paneId: string, sessionKey: string, face: BoardFace) => {
     const layout = this.layout;
     if (layout && layout.activePaneId !== paneId) {
       this.persistLayout(setActivePane(layout, paneId));
     }
     persistSessionBoardFace(this.context, sessionKey, face);
-    this.updateRoute(sessionKey, false, face);
+    this.route.update(sessionKey, false, face);
   };
 
   private applySessionDrop(sessionKey: string, paneId: string, zone: SplitDropZone): void {
@@ -421,7 +407,7 @@ export class ChatPage extends OpenClawLightDomElement {
     const layout = this.layout;
     if (!layout) {
       if (zone.kind === "center") {
-        this.updateRoute(trimmed);
+        this.route.update(trimmed);
         return;
       }
       const currentSessionKey = this.data?.sessionKey?.trim();
@@ -435,7 +421,7 @@ export class ChatPage extends OpenClawLightDomElement {
         zone.edge,
       );
       this.persistLayout(next);
-      this.updateRoute(trimmed, true);
+      this.route.update(trimmed, true);
       return;
     }
     const pane = findPane(layout, paneId)?.pane;
@@ -448,11 +434,11 @@ export class ChatPage extends OpenClawLightDomElement {
       }
       const active = setActivePane(layout, paneId);
       this.persistLayout(setPaneSession(active, paneId, trimmed));
-      this.updateRoute(trimmed, true);
+      this.route.update(trimmed, true);
       return;
     }
     this.persistLayout(insertPane(layout, paneId, trimmed, zone.edge));
-    this.updateRoute(trimmed, true);
+    this.route.update(trimmed, true);
   }
 
   private readonly handleFocusPane = (paneId: string) => {
@@ -465,7 +451,7 @@ export class ChatPage extends OpenClawLightDomElement {
       return;
     }
     this.persistLayout(setActivePane(layout, paneId));
-    this.updateRoute(pane.sessionKey, true);
+    this.route.update(pane.sessionKey, true);
   };
 
   private readonly handlePaneSessionChange = (
@@ -479,7 +465,7 @@ export class ChatPage extends OpenClawLightDomElement {
     }
     const layout = this.layout;
     if (!layout) {
-      this.updateRoute(trimmed, options?.replace);
+      this.route.update(trimmed, options?.replace);
       return;
     }
     const pane = findPane(layout, paneId)?.pane;
@@ -488,7 +474,7 @@ export class ChatPage extends OpenClawLightDomElement {
     }
     this.persistLayout(setPaneSession(layout, paneId, trimmed));
     if (layout.activePaneId === paneId) {
-      this.updateRoute(trimmed, options?.replace);
+      this.route.update(trimmed, options?.replace);
     }
   };
 
@@ -529,13 +515,13 @@ export class ChatPage extends OpenClawLightDomElement {
     }
     this.persistLayout(next);
     if (!next && survivingPane) {
-      this.updateRoute(survivingPane.sessionKey, true);
+      this.route.update(survivingPane.sessionKey, true);
       return;
     }
     if (next) {
       const activePane = findPane(next, next.activePaneId)?.pane;
       if (activePane) {
-        this.updateRoute(activePane.sessionKey, true);
+        this.route.update(activePane.sessionKey, true);
       }
     }
   };
@@ -554,6 +540,7 @@ export class ChatPage extends OpenClawLightDomElement {
       ? routeDraft(this.data, this.consumedDraftData, pane.sessionKey)
       : undefined;
     const focus = this.draftFocus.shouldFocusPane(active, draft, pane.sessionKey, this.data);
+    const historyAnchor = this.route.historyAnchor(active, pane.sessionKey);
     // Resolve aliases like the pane does so renamed sessions keep their display title.
     const resolvedKey =
       resolveSessionKey(pane.sessionKey, this.context?.gateway?.snapshot?.hello) || pane.sessionKey;
@@ -577,6 +564,10 @@ export class ChatPage extends OpenClawLightDomElement {
           .active=${active}
           .draft=${draft}
           .focusComposer=${focus}
+          .historyAnchor=${historyAnchor?.anchor}
+          .onHistoryAnchorConsumed=${historyAnchor
+            ? () => this.route.consumeHistoryAnchor(historyAnchor.data)
+            : undefined}
           .routeFace=${this.data?.face ?? "chat"}
           .paneTitle=${title}
           .narrow=${this.narrow}

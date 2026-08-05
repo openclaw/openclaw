@@ -50,6 +50,7 @@ import type { SessionArchivedFilter } from "../../lib/sessions/index.ts";
 import {
   resolveSessionPreferredFace,
   sessionNavigationTarget,
+  type SessionHistoryAnchor,
 } from "../../lib/sessions/route-navigation.ts";
 import { parseSessionKeyParts } from "../../lib/sessions/session-key.ts";
 import {
@@ -146,7 +147,7 @@ export type SessionsProps = {
   onDeselectPage: (keys: string[]) => void;
   onDeselectAll: () => void;
   onDeleteSelected: () => void;
-  onNavigateToChat?: (sessionKey: string) => void;
+  onNavigateToChat?: (sessionKey: string, historyAnchor?: SessionHistoryAnchor) => void;
   onOpenSessionMenu: (
     row: GatewaySessionRow,
     position: { x: number; y: number },
@@ -526,7 +527,11 @@ function renderTranscriptSearch(props: SessionsProps, rows: GatewaySessionRow[])
                       <button
                         class="sessions-transcript-search__result"
                         type="button"
-                        @click=${() => props.onNavigateToChat?.(hit.sessionKey)}
+                        @click=${() =>
+                          props.onNavigateToChat?.(hit.sessionKey, {
+                            sessionId: hit.sessionId,
+                            messageId: hit.messageId,
+                          })}
                       >
                         <span class="sessions-transcript-search__result-header">
                           <strong>${transcriptSearchSessionLabel(hit, rows)}</strong>

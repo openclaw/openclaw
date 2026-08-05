@@ -34,6 +34,7 @@ import type { BoardSnapshot, BoardTab } from "../../lib/board/types.ts";
 import type { BoardViewSnapshot } from "../../lib/board/view-types.ts";
 import { ObserverDigestHistory } from "../../lib/observer-digest.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import type { SessionHistoryAnchor } from "../../lib/sessions/route-navigation.ts";
 import type { SwarmRosterHydrator } from "../../lib/sessions/swarm-roster.ts";
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -82,6 +83,8 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @property({ attribute: false }) active = false;
   @property({ attribute: false }) draft?: string;
   @property({ attribute: false }) focusComposer = false;
+  @property({ attribute: false }) historyAnchor?: SessionHistoryAnchor;
+  @property({ attribute: false }) onHistoryAnchorConsumed?: () => void;
   @property({ attribute: false }) routeFace: BoardFace = "chat";
   @property({ attribute: false }) onFaceChange?: (face: BoardFace) => void;
   @property({ attribute: false }) onFocusPane?: (paneId: string) => void;
