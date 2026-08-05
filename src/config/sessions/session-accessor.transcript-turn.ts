@@ -87,13 +87,17 @@ export async function persistSessionTranscriptTurn(
   // Route through the guarded path when a real session entry is available to
   // validate against, so a session-id rotation between resolve and append
   // surfaces a visible session-rebound rejection instead of silently writing
-  // the stale transcript. transcript-only scopes (no session entry) keep the
-  // legacy append below.
-  if (scope.storePath && target.sessionKey && target.sessionEntry?.sessionId) {
-    return await persistExpectedSessionTranscriptTurn(scope, {
-      ...options,
-      expectedSessionId: target.sessionEntry.sessionId,
-    });
+  // the stale transcript. Use the resolved target store (covers default-store
+  // callers that omit scope.storePath). transcript-only scopes (no session
+  // entry) keep the legacy append below.
+  if (target.storePath && target.sessionKey && target.sessionEntry?.sessionId) {
+    return await persistExpectedSessionTranscriptTurn(
+      { ...scope, storePath: target.storePath },
+      {
+        ...options,
+        expectedSessionId: target.sessionEntry.sessionId,
+      },
+    );
   }
   const appendedMessages = await runWithOwnedSessionTranscriptWriteLock(
     {
