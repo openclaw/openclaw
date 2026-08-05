@@ -749,6 +749,39 @@ describe("system-scope gateway unit detection (openclaw#87577)", () => {
     expect(result).toBeNull();
   });
 
+  it("findInstalledSystemdGatewayScope refuses marker-owned units from another profile", async () => {
+    // Profile lisa has no unit; only openclaw-darlene.service exists system-wide.
+    // Must not report darlene as lisa's gateway (issue #119648).
+    mockUnitFileLayout({ system: false });
+    findSystemGatewayServicesMock.mockResolvedValueOnce([
+      {
+        platform: "linux",
+        label: "openclaw-darlene.service",
+        detail: "unit: /etc/systemd/system/openclaw-darlene.service",
+        scope: "system",
+        marker: "openclaw",
+      },
+    ]);
+    const result = await findInstalledSystemdGatewayScope({
+      HOME: TEST_MANAGED_HOME,
+      OPENCLAW_PROFILE: "lisa",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("findInstalledSystemdGatewayScope accepts legacy openclaw-<profile> system unit", async () => {
+    mockUnitFileLayout({ system: "/etc/systemd/system/openclaw-lisa.service" });
+    const result = await findInstalledSystemdGatewayScope({
+      HOME: TEST_MANAGED_HOME,
+      OPENCLAW_PROFILE: "lisa",
+    });
+    expect(result).toEqual({
+      scope: "system",
+      unitName: "openclaw-lisa.service",
+      unitPath: "/etc/systemd/system/openclaw-lisa.service",
+    });
+  });
+
   it("isSystemdServiceEnabled queries the marker-owned custom system unit name", async () => {
     mockUnitFileLayout({ system: false });
     findSystemGatewayServicesMock.mockResolvedValueOnce([
