@@ -19,6 +19,7 @@ const DAILY_PHASE_LABELS: Record<Exclude<MemoryDreamingPhaseName, "deep">, strin
   light: "light",
   rem: "rem",
 };
+const DEFAULT_DAILY_MEMORY_FILE_MODE = 0o666 & ~process.umask();
 
 function resolvePhaseMarkers(phase: Exclude<MemoryDreamingPhaseName, "deep">): {
   start: string;
@@ -78,6 +79,7 @@ export async function writeDailyDreamingPhaseBlock(params: {
       body,
       tempPrefix: `${path.basename(inlinePath)}.dreaming`,
       allowSymlink: true,
+      creationMode: DEFAULT_DAILY_MEMORY_FILE_MODE,
     });
   }
 

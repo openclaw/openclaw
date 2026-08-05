@@ -35,6 +35,7 @@ type ManagedMarkdownUpdateParams = {
   body: string;
   tempPrefix: string;
   allowSymlink?: boolean;
+  creationMode?: number;
 };
 
 const dreamsFileLocks = resolveGlobalMap<string, DreamsFileLockEntry>(DREAMS_FILE_LOCKS_KEY);
@@ -408,7 +409,7 @@ export async function updateManagedDreamingMarkdownFile(
     await replaceFileAtomic({
       filePath: resolvedParams.filePath,
       content: withTrailingNewline(updated),
-      mode: 0o600,
+      mode: resolvedParams.creationMode ?? 0o600,
       preserveExistingMode: true,
       tempPrefix: resolvedParams.tempPrefix,
       throwOnCleanupError: true,

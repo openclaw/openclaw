@@ -11,6 +11,7 @@ import { writeDailyDreamingPhaseBlock, writeDeepDreamingReport } from "./dreamin
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
 const MEMORY_DREAMING_MARKDOWN_MAX_BYTES = 16 * 1024 * 1024;
+const EXPECTS_POSIX_FILE_MODE = process.platform !== "win32";
 const { createTempWorkspace } = createMemoryCoreTestHarness();
 
 afterEach(() => {
@@ -64,6 +65,29 @@ describe("dreaming markdown storage", () => {
     const content = await fs.readFile(inlinePath, "utf-8");
     expect(content).toContain("## Light Sleep");
     expect(content).toContain("- Candidate: remember the API key is fake");
+  });
+
+  it("preserves default daily-file creation permissions", async () => {
+    if (!EXPECTS_POSIX_FILE_MODE) {
+      return;
+    }
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-mode-");
+
+    await writeDailyDreamingPhaseBlock({
+      workspaceDir,
+      phase: "light",
+      bodyLines: ["- Candidate: default file mode"],
+      nowMs,
+      timezone,
+      storage: {
+        mode: "inline",
+        separateReports: false,
+      },
+    });
+
+    const inlinePath = path.join(workspaceDir, "memory", "2026-04-05.md");
+    const expectedMode = 0o666 & ~process.umask();
+    expect((await fs.stat(inlinePath)).mode & 0o777).toBe(expectedMode);
   });
 
   it("falls back when the injected timestamp is outside Date range", async () => {
