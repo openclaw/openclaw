@@ -6024,12 +6024,22 @@ describe("google-meet plugin", () => {
         found: false,
         message: "Meet tab is missing.",
       },
-      preserveManualAction: true,
+      preserveManualAction: false,
+    },
+    {
+      label: "a found tab without browser health",
+      recovery: {
+        transport: "chrome" as const,
+        found: true,
+        targetId: "meet-tab",
+        message: "Meet tab health was unavailable.",
+      },
+      preserveManualAction: false,
     },
     {
       label: "a thrown recovery error",
       recovery: new Error("browser recovery failed"),
-      preserveManualAction: true,
+      preserveManualAction: false,
     },
   ])("handles stale manual actions after $label", async ({ recovery, preserveManualAction }) => {
     const staleManualAction = {

@@ -334,6 +334,50 @@ describe("Microsoft Teams meeting session flow", () => {
     );
   });
 
+  it("clears stale manual actions from ordinary status after a missing recovery", async () => {
+    const harness = runtimeHarness();
+    const runtime = new TeamsMeetingsRuntime({
+      config: resolveTeamsMeetingsConfig({ defaultMode: "transcribe" }),
+      fullConfig: {},
+      runtime: harness.runtime,
+      logger,
+    });
+    const joined = await runtime.join({ url: URL, mode: "transcribe" });
+    joined.session.chrome!.health = {
+      manualAction: {
+        reason: "teams-admission-required",
+        message: "This cached action must be rechecked after a missing recovery.",
+      },
+    };
+    harness.closeTab();
+
+    const status = await runtime.status(joined.session.id);
+
+    expect(status.session?.chrome?.health?.manualAction).toBeUndefined();
+  });
+
+  it("clears stale manual actions from ordinary status after a thrown recovery", async () => {
+    const harness = runtimeHarness();
+    const runtime = new TeamsMeetingsRuntime({
+      config: resolveTeamsMeetingsConfig({ defaultMode: "transcribe" }),
+      fullConfig: {},
+      runtime: harness.runtime,
+      logger,
+    });
+    const joined = await runtime.join({ url: URL, mode: "transcribe" });
+    joined.session.chrome!.health = {
+      manualAction: {
+        reason: "teams-admission-required",
+        message: "This cached action must be rechecked after a thrown recovery.",
+      },
+    };
+    harness.failNextTabLists();
+
+    const status = await runtime.status(joined.session.id);
+
+    expect(status.session?.chrome?.health?.manualAction).toBeUndefined();
+  });
+
   it("keeps retrying stale listening health until a missing tab recovers", async () => {
     const harness = runtimeHarness();
     const runtime = new TeamsMeetingsRuntime({

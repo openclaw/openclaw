@@ -576,6 +576,7 @@ export class GoogleMeetRuntime {
           };
         }
         if (!result.browser) {
+          session.chrome.health = clearNonAuthoritativeManualAction(session.chrome.health);
           return false;
         }
         const refreshedHealth = { ...session.chrome.health, ...result.browser };
@@ -585,11 +586,17 @@ export class GoogleMeetRuntime {
         session.updatedAt = nowIso();
         return true;
       }
+      if (session.chrome) {
+        session.chrome.health = clearNonAuthoritativeManualAction(session.chrome.health);
+      }
       return false;
     } catch (error) {
       this.params.logger.debug?.(
         `[google-meet] browser readiness refresh ignored: ${formatErrorMessage(error)}`,
       );
+      if (session.chrome) {
+        session.chrome.health = clearNonAuthoritativeManualAction(session.chrome.health);
+      }
       return false;
     }
   }
