@@ -247,6 +247,7 @@ export async function resolveBootstrapFilesForRunWithTiming(params: {
   warn?: (message: string) => void;
   contextMode?: BootstrapContextMode;
   runKind?: BootstrapContextRunKind;
+  chatType?: ChatType;
   onBootstrapSubstageTiming?: (
     name: "workspace-file-load" | "hook-overrides",
     durationMs: number,
