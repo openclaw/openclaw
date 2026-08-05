@@ -47,6 +47,7 @@ const WhatsAppCommonShape = {
     reactionLevels: ["off", "ack", "minimal", "extensive"],
   }),
   pluginHooks: WhatsAppPluginHooksSchema,
+  pollVoteRetentionMs: z.number().int().positive().optional(),
 };
 
 const WhatsAppAccountSchema = z.strictObject({
