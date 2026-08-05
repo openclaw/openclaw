@@ -5,11 +5,7 @@ import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-f
 import { attachConfigIssueDiagnostics } from "../config/issue-location.js";
 import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  coerceSecretRef,
-  resolveSecretInputRef,
-  type SecretRef,
-} from "../config/types.secrets.js";
+import { coerceSecretRef, resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
 import { validateConfigObjectRawWithPlugins } from "../config/validation.js";
 import { type RuntimeEnv, defaultRuntime, writeRuntimeJson } from "../runtime.js";
 import {
