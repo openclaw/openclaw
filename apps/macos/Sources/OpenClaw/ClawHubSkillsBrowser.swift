@@ -71,9 +71,10 @@ struct ClawHubSkillsBrowser: View {
                                 } ?? SkillManagementContract.installed(
                                     self.installedSkills,
                                     slug: skill.installReference),
-                                isBusy: self.model.reviewingSlug == skill.installReference || self.model.installingSlug.map {
-                                    SkillManagementContract.sameClawHubSkill($0, skill.installReference)
-                                } == true,
+                                isBusy: self.model.reviewingSlug == skill.installReference ||
+                                    self.model.installingSlug.map {
+                                        SkillManagementContract.sameClawHubSkill($0, skill.installReference)
+                                    } == true,
                                 showsDivider: index != self.model.results.count - 1)
                             {
                                 Task { await self.model.review(skill) }
