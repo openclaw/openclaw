@@ -1,10 +1,25 @@
+import {
+  fetchOwnerQualifiedSkillSecurityVerdict,
+  isOwnerQualifiedSkillNotFoundVerdict,
+} from "../../infra/clawhub-skill-verdict.js";
 // ClawHub verdict helpers normalize skill security verdicts from registry metadata.
 import {
   fetchClawHubSkillSecurityVerdicts,
   resolveClawHubBaseUrl,
   type ClawHubSkillSecurityVerdictItem,
 } from "../../infra/clawhub.js";
+import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import type { buildWorkspaceSkillStatus } from "../discovery/status.js";
+
+const OWNER_QUALIFIED_VERDICT_CONCURRENCY = 4;
+const OWNER_QUALIFIED_VERDICT_BUDGET_MS = 5_000;
+
+type ClawHubVerdictTarget = {
+  registry: string;
+  slug: string;
+  ownerHandle?: string;
+  version: string;
+};
 
 /** ClawHub verdict item shape projected into local security scan verdicts. */
 type OpenClawSkillSecurityVerdictItem = Omit<
@@ -115,10 +130,95 @@ function canAutoFetchVerdictRegistry(registry: string): boolean {
   return configured !== null && target === configured;
 }
 
+function needsOwnerQualifiedVerdict(
+  item: ClawHubSkillSecurityVerdictItem,
+  target: { slug: string; ownerHandle?: string; version: string } | undefined,
+): target is { slug: string; ownerHandle: string; version: string } {
+  return Boolean(
+    target?.ownerHandle &&
+    target.slug === item.requestedSlug &&
+    target.version === item.requestedVersion &&
+    isOwnerQualifiedSkillNotFoundVerdict(item),
+  );
+}
+
+async function resolveOwnerQualifiedVerdict(params: {
+  item: ClawHubSkillSecurityVerdictItem;
+  target: { slug: string; ownerHandle?: string; version: string } | undefined;
+  registry: string;
+  deadlineAtMs: number;
+}): Promise<ClawHubSkillSecurityVerdictItem> {
+  const { item, target, registry, deadlineAtMs } = params;
+  if (!needsOwnerQualifiedVerdict(item, target)) {
+    return item;
+  }
+  const timeoutMs = deadlineAtMs - Date.now();
+  if (timeoutMs <= 0) {
+    return item;
+  }
+  try {
+    return await fetchOwnerQualifiedSkillSecurityVerdict({
+      slug: target.slug,
+      ownerHandle: target.ownerHandle,
+      version: target.version,
+      baseUrl: registry,
+      skipAuth: true,
+      timeoutMs,
+    });
+  } catch {
+    // Keep the explicit bulk verdict if the compatibility fallback is unavailable.
+    return item;
+  }
+}
+
+async function resolveOwnerQualifiedVerdicts(params: {
+  items: ClawHubSkillSecurityVerdictItem[];
+  targets: Array<{ slug: string; ownerHandle?: string; version: string }>;
+  registry: string;
+  deadlineAtMs: number;
+}): Promise<ClawHubSkillSecurityVerdictItem[]> {
+  const remainingMs = params.deadlineAtMs - Date.now();
+  if (remainingMs <= 0) {
+    return params.items;
+  }
+
+  const timedOut = Symbol("owner-qualified-verdict-timeout");
+  let timer: NodeJS.Timeout | undefined;
+  const timeoutPromise = new Promise<typeof timedOut>((resolve) => {
+    timer = setTimeout(() => resolve(timedOut), remainingMs);
+    timer.unref?.();
+  });
+  const resolvedItems = [...params.items];
+  const resolvedPromise = runTasksWithConcurrency({
+    limit: OWNER_QUALIFIED_VERDICT_CONCURRENCY,
+    tasks: params.items.map((item, index) => async () => {
+      resolvedItems[index] = await resolveOwnerQualifiedVerdict({
+        item,
+        target: params.targets[index],
+        registry: params.registry,
+        deadlineAtMs: params.deadlineAtMs,
+      });
+    }),
+  });
+  try {
+    const resolved = await Promise.race([resolvedPromise, timeoutPromise]);
+    if (resolved === timedOut) {
+      // Passive badge lookup must not wait across multiple fallback waves.
+      // Preserve every bulk verdict whose owner-qualified lookup is late.
+      return resolvedItems.slice();
+    }
+    return resolvedItems;
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 export function collectClawHubVerdictTargets(
   report: ReturnType<typeof buildWorkspaceSkillStatus>,
-): Array<{ registry: string; slug: string; version: string }> {
-  const targets = new Map<string, { registry: string; slug: string; version: string }>();
+): ClawHubVerdictTarget[] {
+  const targets = new Map<string, ClawHubVerdictTarget>();
   for (const skill of report.skills) {
     const link = skill.clawhub;
     if (!link || link.status !== "linked" || !link.valid) {
@@ -127,10 +227,11 @@ export function collectClawHubVerdictTargets(
     if (!canAutoFetchVerdictRegistry(link.registry)) {
       continue;
     }
-    const key = `${link.registry}\0${link.slug}\0${link.installedVersion}`;
+    const key = `${link.registry}\0${link.ownerHandle ?? ""}\0${link.slug}\0${link.installedVersion}`;
     targets.set(key, {
       registry: link.registry,
       slug: link.slug,
+      ...(link.ownerHandle ? { ownerHandle: link.ownerHandle } : {}),
       version: link.installedVersion,
     });
   }
@@ -138,24 +239,46 @@ export function collectClawHubVerdictTargets(
 }
 
 export async function fetchOpenClawSkillSecurityVerdicts(
-  targets: Array<{ registry: string; slug: string; version: string }>,
+  targets: ClawHubVerdictTarget[],
 ): Promise<OpenClawSkillSecurityVerdictItem[]> {
-  const byRegistry = new Map<string, Array<{ slug: string; version: string }>>();
+  const byRegistry = new Map<
+    string,
+    Array<{ slug: string; ownerHandle?: string; version: string }>
+  >();
   for (const target of targets) {
     const registryTargets = byRegistry.get(target.registry) ?? [];
-    registryTargets.push({ slug: target.slug, version: target.version });
+    registryTargets.push({
+      slug: target.slug,
+      ...(target.ownerHandle ? { ownerHandle: target.ownerHandle } : {}),
+      version: target.version,
+    });
     byRegistry.set(target.registry, registryTargets);
   }
 
   const items: OpenClawSkillSecurityVerdictItem[] = [];
+  let ownerFallbackDeadlineAtMs: number | undefined;
   for (const [registry, registryTargets] of byRegistry) {
     const response = await fetchClawHubSkillSecurityVerdicts({
       baseUrl: registry,
       items: registryTargets,
       skipAuth: true,
     });
-    for (const item of response.items) {
-      items.push(projectClawHubVerdictItem(item, registry));
+    const needsOwnerFallback = response.items.some((item, index) =>
+      needsOwnerQualifiedVerdict(item, registryTargets[index]),
+    );
+    if (needsOwnerFallback && ownerFallbackDeadlineAtMs === undefined) {
+      ownerFallbackDeadlineAtMs = Date.now() + OWNER_QUALIFIED_VERDICT_BUDGET_MS;
+    }
+    const resolvedItems = needsOwnerFallback
+      ? await resolveOwnerQualifiedVerdicts({
+          items: response.items,
+          targets: registryTargets,
+          registry,
+          deadlineAtMs: ownerFallbackDeadlineAtMs!,
+        })
+      : response.items;
+    for (const resolvedItem of resolvedItems) {
+      items.push(projectClawHubVerdictItem(resolvedItem, registry));
     }
   }
   return items;

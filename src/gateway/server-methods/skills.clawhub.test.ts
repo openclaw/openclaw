@@ -11,6 +11,7 @@ const resolveAgentWorkspaceDirMock = vi.fn<(_cfg: unknown, _agentId: string) => 
 );
 const buildWorkspaceSkillStatusMock = vi.fn();
 const readLocalSkillCardContentSyncMock = vi.fn();
+const fetchClawHubSkillVerificationMock = vi.fn();
 const fetchClawHubSkillSecurityVerdictsMock = vi.fn();
 const installSkillFromClawHubMock = vi.fn();
 const installSkillMock = vi.fn();
@@ -46,6 +47,7 @@ vi.mock("../../skills/lifecycle/install.js", () => ({
 
 vi.mock("../../infra/clawhub.js", () => ({
   fetchClawHubSkillDetail: vi.fn(),
+  fetchClawHubSkillVerification: (...args: unknown[]) => fetchClawHubSkillVerificationMock(...args),
   fetchClawHubSkillSecurityVerdicts: (...args: unknown[]) =>
     fetchClawHubSkillSecurityVerdictsMock(...args),
   resolveClawHubBaseUrl: () => "https://clawhub.ai",
@@ -91,6 +93,7 @@ describe("skills gateway handlers (clawhub)", () => {
     resolveAgentWorkspaceDirMock.mockReset();
     buildWorkspaceSkillStatusMock.mockReset();
     readLocalSkillCardContentSyncMock.mockReset();
+    fetchClawHubSkillVerificationMock.mockReset();
     fetchClawHubSkillSecurityVerdictsMock.mockReset();
     installSkillFromClawHubMock.mockReset();
     installSkillMock.mockReset();
@@ -197,6 +200,314 @@ describe("skills gateway handlers (clawhub)", () => {
     });
     expect(JSON.stringify(response)).not.toContain("scannerPayload");
     expect(JSON.stringify(response)).not.toContain('"security":');
+  });
+
+  it("falls back to owner-qualified verification when the bulk verdict misses a linked skill", async () => {
+    buildWorkspaceSkillStatusMock.mockReturnValue({
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/openclaw/skills",
+      skills: [
+        {
+          name: "self-improvement",
+          skillKey: "self-improvement",
+          clawhub: {
+            status: "linked",
+            valid: true,
+            registry: "https://clawhub.ai",
+            slug: "self-improving-agent",
+            ownerHandle: "pskoett",
+            installedVersion: "3.0.24",
+            installedAt: 123,
+          },
+        },
+      ],
+    });
+    fetchClawHubSkillSecurityVerdictsMock.mockResolvedValue({
+      schema: "clawhub.skill.security-verdicts.v1",
+      items: [
+        {
+          ok: false,
+          decision: "fail",
+          reasons: ["skill.not_found"],
+          requestedSlug: "self-improving-agent",
+          requestedVersion: "3.0.24",
+          error: { code: "skill_not_found", message: "Skill not found" },
+        },
+      ],
+    });
+    fetchClawHubSkillVerificationMock.mockResolvedValue({
+      schema: "clawhub.skill.verify.v1",
+      ok: true,
+      decision: "pass",
+      reasons: [],
+      slug: "self-improving-agent",
+      publisherHandle: "pskoett",
+      version: { version: "3.0.24", createdAt: 123 },
+      skill: { slug: "self-improving-agent", displayName: "Self Improving Agent" },
+      publisher: { handle: "pskoett" },
+      card: {},
+      artifact: {},
+      provenance: {},
+      security: { status: "clean", passed: true },
+      signature: {},
+      pageUrl: "https://clawhub.ai/pskoett/self-improving-agent",
+    });
+
+    const { ok, response, error } = await callSkillsHandler("skills.securityVerdicts", {});
+
+    expect(error).toBeUndefined();
+    expect(ok).toBe(true);
+    expect(fetchClawHubSkillSecurityVerdictsMock).toHaveBeenCalledWith({
+      baseUrl: "https://clawhub.ai",
+      items: [
+        {
+          slug: "self-improving-agent",
+          ownerHandle: "pskoett",
+          version: "3.0.24",
+        },
+      ],
+      skipAuth: true,
+    });
+    expect(fetchClawHubSkillVerificationMock).toHaveBeenCalledWith({
+      slug: "self-improving-agent",
+      ownerHandle: "pskoett",
+      version: "3.0.24",
+      baseUrl: "https://clawhub.ai",
+      token: undefined,
+      skipAuth: true,
+      timeoutMs: expect.any(Number),
+    });
+    expect(response).toEqual({
+      schema: "openclaw.skills.security-verdicts.v1",
+      items: [
+        expect.objectContaining({
+          registry: "https://clawhub.ai",
+          ok: true,
+          decision: "pass",
+          requestedSlug: "self-improving-agent",
+          requestedVersion: "3.0.24",
+          publisherHandle: "pskoett",
+          securityStatus: "clean",
+          securityPassed: true,
+        }),
+      ],
+    });
+  });
+
+  it("keeps the bulk miss when owner-qualified verification is unavailable", async () => {
+    buildWorkspaceSkillStatusMock.mockReturnValue({
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/openclaw/skills",
+      skills: [
+        {
+          name: "self-improvement",
+          skillKey: "self-improvement",
+          clawhub: {
+            status: "linked",
+            valid: true,
+            registry: "https://clawhub.ai",
+            slug: "self-improving-agent",
+            ownerHandle: "pskoett",
+            installedVersion: "3.0.24",
+            installedAt: 123,
+          },
+        },
+      ],
+    });
+    fetchClawHubSkillSecurityVerdictsMock.mockResolvedValue({
+      schema: "clawhub.skill.security-verdicts.v1",
+      items: [
+        {
+          ok: false,
+          decision: "fail",
+          reasons: ["skill.not_found"],
+          requestedSlug: "self-improving-agent",
+          requestedVersion: "3.0.24",
+          error: { code: "skill_not_found", message: "Skill not found" },
+        },
+      ],
+    });
+    fetchClawHubSkillVerificationMock.mockRejectedValue(new Error("registry unavailable"));
+
+    const { ok, response, error } = await callSkillsHandler("skills.securityVerdicts", {});
+
+    expect(error).toBeUndefined();
+    expect(ok).toBe(true);
+    expect(response).toEqual({
+      schema: "openclaw.skills.security-verdicts.v1",
+      items: [
+        expect.objectContaining({
+          ok: false,
+          decision: "fail",
+          error: { code: "skill_not_found", message: "Skill not found" },
+        }),
+      ],
+    });
+  });
+
+  it("bounds concurrent owner-qualified verification fallbacks", async () => {
+    const skillCount = 5;
+    buildWorkspaceSkillStatusMock.mockReturnValue({
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/openclaw/skills",
+      skills: Array.from({ length: skillCount }, (_, index) => ({
+        name: `skill-${index}`,
+        skillKey: `skill-${index}`,
+        clawhub: {
+          status: "linked",
+          valid: true,
+          registry: "https://clawhub.ai",
+          slug: `skill-${index}`,
+          ownerHandle: `owner-${index}`,
+          installedVersion: "1.0.0",
+          installedAt: 123,
+        },
+      })),
+    });
+    fetchClawHubSkillSecurityVerdictsMock.mockResolvedValue({
+      schema: "clawhub.skill.security-verdicts.v1",
+      items: Array.from({ length: skillCount }, (_, index) => ({
+        ok: false,
+        decision: "fail",
+        reasons: ["skill.not_found"],
+        requestedSlug: `skill-${index}`,
+        requestedVersion: "1.0.0",
+        error: { code: "skill_not_found", message: "Skill not found" },
+      })),
+    });
+
+    let activeFallbacks = 0;
+    let maxActiveFallbacks = 0;
+    const releaseFallbacks: Array<() => void> = [];
+    fetchClawHubSkillVerificationMock.mockImplementation(
+      async (params: { slug: string; ownerHandle: string }) => {
+        activeFallbacks += 1;
+        maxActiveFallbacks = Math.max(maxActiveFallbacks, activeFallbacks);
+        await new Promise<void>((resolve) => {
+          releaseFallbacks.push(resolve);
+        });
+        activeFallbacks -= 1;
+        return {
+          schema: "clawhub.skill.verify.v1",
+          ok: true,
+          decision: "pass",
+          reasons: [],
+          slug: params.slug,
+          publisherHandle: params.ownerHandle,
+          version: { version: "1.0.0", createdAt: 123 },
+          skill: { slug: params.slug, displayName: params.slug },
+          publisher: { handle: params.ownerHandle },
+          card: {},
+          artifact: {},
+          provenance: {},
+          security: { status: "clean", passed: true },
+          signature: {},
+        };
+      },
+    );
+
+    const responsePromise = callSkillsHandler("skills.securityVerdicts", {});
+    await vi.waitFor(() => expect(releaseFallbacks).toHaveLength(4));
+    expect(fetchClawHubSkillVerificationMock).toHaveBeenCalledTimes(4);
+
+    for (const release of releaseFallbacks.slice(0, 4)) {
+      release();
+    }
+    await vi.waitFor(() => expect(releaseFallbacks).toHaveLength(skillCount));
+    releaseFallbacks[4]?.();
+
+    const { ok, response, error } = await responsePromise;
+    expect(error).toBeUndefined();
+    expect(ok).toBe(true);
+    expect(maxActiveFallbacks).toBe(4);
+    expect(fetchClawHubSkillVerificationMock).toHaveBeenCalledTimes(skillCount);
+    expect(response).toEqual({
+      schema: "openclaw.skills.security-verdicts.v1",
+      items: expect.arrayContaining(
+        Array.from({ length: skillCount }, (_, index) =>
+          expect.objectContaining({
+            ok: true,
+            requestedSlug: `skill-${index}`,
+            publisherHandle: `owner-${index}`,
+            securityStatus: "clean",
+          }),
+        ),
+      ),
+    });
+  });
+
+  it("returns bulk misses when the owner-qualified fallback budget expires", async () => {
+    vi.useFakeTimers();
+    try {
+      const skillCount = 5;
+      buildWorkspaceSkillStatusMock.mockReturnValue({
+        workspaceDir: "/tmp/workspace",
+        managedSkillsDir: "/tmp/openclaw/skills",
+        skills: Array.from({ length: skillCount }, (_, index) => ({
+          name: `skill-${index}`,
+          skillKey: `skill-${index}`,
+          clawhub: {
+            status: "linked",
+            valid: true,
+            registry: "https://clawhub.ai",
+            slug: `skill-${index}`,
+            ownerHandle: `owner-${index}`,
+            installedVersion: "1.0.0",
+            installedAt: 123,
+          },
+        })),
+      });
+      fetchClawHubSkillSecurityVerdictsMock.mockResolvedValue({
+        schema: "clawhub.skill.security-verdicts.v1",
+        items: Array.from({ length: skillCount }, (_, index) => ({
+          ok: false,
+          decision: "fail",
+          reasons: ["skill.not_found"],
+          requestedSlug: `skill-${index}`,
+          requestedVersion: "1.0.0",
+          error: { code: "skill_not_found", message: "Skill not found" },
+        })),
+      });
+      fetchClawHubSkillVerificationMock.mockImplementation(
+        () =>
+          new Promise(() => {
+            // Intentionally never settles; the request-wide budget must win.
+          }),
+      );
+
+      let settled = false;
+      const responsePromise = callSkillsHandler("skills.securityVerdicts", {}).then((result) => {
+        settled = true;
+        return result;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchClawHubSkillVerificationMock).toHaveBeenCalledTimes(4);
+
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toBe(true);
+
+      const { ok, response, error } = await responsePromise;
+      expect(error).toBeUndefined();
+      expect(ok).toBe(true);
+      expect(fetchClawHubSkillVerificationMock).toHaveBeenCalledTimes(4);
+      expect(fetchClawHubSkillVerificationMock).toHaveBeenCalledWith(
+        expect.objectContaining({ timeoutMs: 5_000 }),
+      );
+      expect(response).toEqual({
+        schema: "openclaw.skills.security-verdicts.v1",
+        items: Array.from({ length: skillCount }, (_, index) =>
+          expect.objectContaining({
+            ok: false,
+            requestedSlug: `skill-${index}`,
+            error: { code: "skill_not_found", message: "Skill not found" },
+          }),
+        ),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not passively fetch verdicts from a non-default registry", async () => {
