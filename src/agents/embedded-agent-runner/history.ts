@@ -4,6 +4,8 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeAccountId } from "../../routing/account-id.js";
+import { resolveNormalizedAccountEntry } from "../../routing/account-lookup.js";
 import type { AgentMessage } from "../runtime/index.js";
 
 const THREAD_SUFFIX_REGEX = /^(.*)(?::(?:thread|topic):\d+)$/i;
@@ -153,9 +155,17 @@ export function getHistoryLimitFromSessionKey(
 
   // Channel schemas accept these keys at the channel root and under `accounts.<id>`,
   // so an account value must win for that account or it validates and is silently
-  // ignored. Exact-key lookup matches resolveChannelAccountMediaMaxMb.
+  // ignored. The routed account id is canonical, while config keys are operator
+  // text, so both sides normalize before matching (`accounts["Work Team"]` must
+  // match the routed `work-team`).
   const trimmedAccountId = accountId?.trim();
-  const accountConfig = trimmedAccountId ? providerConfig.accounts?.[trimmedAccountId] : undefined;
+  const accountConfig = trimmedAccountId
+    ? resolveNormalizedAccountEntry(
+        providerConfig.accounts,
+        normalizeAccountId(trimmedAccountId),
+        normalizeAccountId,
+      )
+    : undefined;
 
   // For DM sessions: per-DM override -> dmHistoryLimit.
   // Accept both "direct" (new) and "dm" (legacy) for backward compat.

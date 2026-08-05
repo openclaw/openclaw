@@ -199,6 +199,35 @@ describe("getHistoryLimitFromSessionKey", () => {
     }
   });
 
+  it("matches an operator-written account key against the canonical routed id", () => {
+    // Routing canonicalizes account ids, so "Work Team" arrives as "work-team".
+    // Exact-key config lookup would miss it and silently fall back to the root.
+    const config = {
+      channels: {
+        telegram: {
+          historyLimit: 10,
+          dmHistoryLimit: 15,
+          dms: { "123": { historyLimit: 7 } },
+          accounts: {
+            "Work Team": {
+              historyLimit: 40,
+              dmHistoryLimit: 41,
+              dms: { "123": { historyLimit: 42 } },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    for (const accountId of ["work-team", "Work Team", "WORK TEAM"]) {
+      expect(getHistoryLimitFromSessionKey("telegram:channel:c1", config, accountId)).toBe(40);
+      expect(getHistoryLimitFromSessionKey("telegram:dm:999", config, accountId)).toBe(41);
+      expect(getHistoryLimitFromSessionKey("telegram:dm:123", config, accountId)).toBe(42);
+    }
+    // An unrelated account still falls back to the root.
+    expect(getHistoryLimitFromSessionKey("telegram:channel:c1", config, "other")).toBe(10);
+  });
+
   it("treats an explicit account limit of 0 as a real override", () => {
     const config = {
       channels: {
