@@ -16,6 +16,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { resolveClientVoiceRunBinding } from "../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../talk/client-voice-session.test-support.js";
 import type {
   RealtimeVoiceBridge,
@@ -1287,12 +1288,12 @@ describe("talk realtime gateway relay", () => {
       type: "session.continuity.reset",
     });
 
-    expect(fixture.abortController.signal.aborted).toBe(true);
+    expect(fixture.abortController.signal.aborted).toBe(false);
     expect(handleBargeIn).not.toHaveBeenCalled();
     expect(bridge.close).not.toHaveBeenCalled();
     expect(submitToolResult).toHaveBeenCalledTimes(1);
     expect(relay.pendingWorkingToolResults.size).toBe(0);
-    expect(relay.activeAgentRuns.size).toBe(0);
+    expect(relay.activeAgentRuns.size).toBe(1);
     expect(relay.activeAgentToolCalls.size).toBe(0);
     const payloads = fixture.broadcastToConnIds.mock.calls.map(([, payload]) => payload);
     const clears = payloads.filter(
@@ -4242,18 +4243,25 @@ describe("talk realtime gateway relay", () => {
     expect(bridge.submitToolResult).not.toHaveBeenCalled();
   });
 
-  it("aborts linked agent consult runs when the relay session closes", () => {
+  it("keeps durable agent consult runs alive when the relay session closes", () => {
     const { abortController, broadcast, nodeSendToSession, chatRunState, session } =
       createAbortableRelayRunFixture();
     stopTalkRealtimeRelaySession({ relaySessionId: session.relaySessionId, connId: "conn-1" });
 
-    expect(abortController.signal.aborted).toBe(true);
-    expect(chatRunState.runs.get("run-1")?.agentText).toBeUndefined();
-    expectChatAbortPayload(broadcast, "relay-closed");
-    expectNodeAbortPayload(nodeSendToSession);
+    expect(abortController.signal.aborted).toBe(false);
+    expect(chatRunState.runs.get("run-1")?.agentText).toBeDefined();
+    expect(broadcast).not.toHaveBeenCalledWith(
+      "chat",
+      expect.objectContaining({ runId: "run-1", state: "aborted" }),
+      expect.anything(),
+    );
+    expect(nodeSendToSession).not.toHaveBeenCalled();
+    expect(resolveClientVoiceRunBinding("run-1")).toMatchObject({
+      voiceSessionId: session.relaySessionId,
+    });
   });
 
-  it("aborts linked agent consult runs when the provider closes the relay", () => {
+  it("keeps durable agent consult runs alive when the provider closes the relay", () => {
     const abortController = new AbortController();
     let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
     const broadcast = vi.fn();
@@ -4332,10 +4340,17 @@ describe("talk realtime gateway relay", () => {
     });
     bridgeRequest?.onClose?.("error");
 
-    expect(abortController.signal.aborted).toBe(true);
-    expect(chatRunState.runs.get("run-1")?.agentText).toBeUndefined();
-    expectChatAbortPayload(broadcast, "relay-closed");
-    expectNodeAbortPayload(nodeSendToSession);
+    expect(abortController.signal.aborted).toBe(false);
+    expect(chatRunState.runs.get("run-1")?.agentText).toBeDefined();
+    expect(broadcast).not.toHaveBeenCalledWith(
+      "chat",
+      expect.objectContaining({ runId: "run-1", state: "aborted" }),
+      expect.anything(),
+    );
+    expect(nodeSendToSession).not.toHaveBeenCalled();
+    expect(resolveClientVoiceRunBinding("run-1")).toMatchObject({
+      voiceSessionId: session.relaySessionId,
+    });
   });
 
   it("fails closed when retained relay tool-call identities reach their hard cap", () => {

@@ -266,6 +266,70 @@ describe("GPT-Live sideband protocol", () => {
     expect(runAgentConsult.mock.calls[1]?.[0].prompt).toContain("latest task");
     expect(runAgentConsult.mock.calls[1]?.[0].prompt).not.toContain("second task");
     controller.stop(new Error("test complete"));
+    expect(signals[1]?.aborted).toBe(true);
+  });
+
+  it("detaches sideband ownership without aborting accepted work", async () => {
+    let consultSignal: AbortSignal | undefined;
+    let resolveConsult!: (result: { text: string }) => void;
+    let resolveCompleted!: () => void;
+    const consultResult = new Promise<{ text: string }>((resolve) => {
+      resolveConsult = resolve;
+    });
+    const completed = new Promise<void>((resolve) => {
+      resolveCompleted = resolve;
+    });
+    const runAgentConsult = vi.fn<ConsultRunner>(async ({ signal }) => {
+      consultSignal = signal;
+      try {
+        return await consultResult;
+      } finally {
+        resolveCompleted();
+      }
+    });
+    const { controller, sessionController, socket } = createDelegationHarness({
+      runAgentConsult,
+    });
+
+    delegate(controller, "delegation-1", "long task");
+    await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledOnce());
+
+    controller.detach();
+    sessionController.abort(new Error("transport closed"));
+    expect(consultSignal?.aborted).toBe(false);
+
+    delegate(controller, "delegation-late", "late task");
+    expect(runAgentConsult).toHaveBeenCalledOnce();
+
+    resolveConsult({ text: "finished after close" });
+    await completed;
+    await Promise.resolve();
+    expect(socket.sent).toEqual([]);
+  });
+
+  it("keeps session lifecycle abort destructive", async () => {
+    let consultSignal: AbortSignal | undefined;
+    const runAgentConsult = vi.fn<ConsultRunner>(
+      async ({ signal }) =>
+        await new Promise<{ text: string }>((_resolve, reject) => {
+          consultSignal = signal;
+          signal?.addEventListener(
+            "abort",
+            () => reject(signal.reason instanceof Error ? signal.reason : new Error("aborted")),
+            { once: true },
+          );
+        }),
+    );
+    const { controller, sessionController } = createDelegationHarness({ runAgentConsult });
+
+    delegate(controller, "delegation-1", "long task");
+    await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledOnce());
+
+    sessionController.abort(new Error("session closed"));
+    expect(consultSignal?.aborted).toBe(true);
+
+    delegate(controller, "delegation-late", "late task");
+    expect(runAgentConsult).toHaveBeenCalledOnce();
   });
 
   it("keeps transcript context when it skips an empty delegation", async () => {

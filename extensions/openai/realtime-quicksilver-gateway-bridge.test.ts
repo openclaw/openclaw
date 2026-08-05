@@ -835,6 +835,84 @@ describe("GPT-Live gateway relay bridge", () => {
     expect(onClose).toHaveBeenCalledWith("completed");
   });
 
+  it("closes transport without aborting an accepted delegation", async () => {
+    let socket: FakeSocket | undefined;
+    let consultSignal: AbortSignal | undefined;
+    let resolveConsult!: (result: { text: string }) => void;
+    let resolveCompleted!: () => void;
+    const consultResult = new Promise<{ text: string }>((resolve) => {
+      resolveConsult = resolve;
+    });
+    const completed = new Promise<void>((resolve) => {
+      resolveCompleted = resolve;
+    });
+    const runAgentConsult = vi.fn(async ({ signal }: { prompt: string; signal?: AbortSignal }) => {
+      consultSignal = signal;
+      try {
+        return await consultResult;
+      } finally {
+        resolveCompleted();
+      }
+    });
+    const closePeer = vi.fn();
+    const onClose = vi.fn();
+    const bridge = new OpenAIQuicksilverGatewayBridge({
+      providerConfig: {},
+      model: "gpt-live-1-boulder-alpha",
+      voice: "marin",
+      audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onClose,
+      runAgentConsult,
+      logger: { debug: vi.fn(), warn: vi.fn() },
+      resolveAuth: vi.fn(async () => ({
+        type: "api-key" as const,
+        token: "platform-key",
+      })),
+      createPeer: vi.fn(async () => ({
+        createOffer: vi.fn(async () => "v=offer\r\n"),
+        applyAnswer: vi.fn(async () => undefined),
+        sendAudio: vi.fn(),
+        close: closePeer,
+      })),
+      fetchImpl: vi.fn(async () => createCallResponse("v=answer\r\n", "rtc_detach")),
+      webSocketFactory: () => {
+        socket = new FakeSocket();
+        return socket;
+      },
+    });
+
+    await bridge.connect();
+    if (!socket) {
+      throw new Error("expected sideband socket");
+    }
+    const connectedSocket = socket;
+    emitSideband(connectedSocket, {
+      type: "delegation.created",
+      item: {
+        type: "delegation",
+        target: "client",
+        id: "delegation-1",
+        content: [{ type: "input_text", text: "Finish this task" }],
+      },
+    });
+    await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledOnce());
+
+    bridge.close();
+    expect(consultSignal?.aborted).toBe(false);
+    expect(closePeer).toHaveBeenCalledOnce();
+    expect(connectedSocket.closed).toBe(true);
+    expect(onClose).toHaveBeenCalledWith("completed");
+
+    resolveConsult({ text: "finished after close" });
+    await completed;
+    await Promise.resolve();
+    expect(
+      parseSent(connectedSocket).filter((event) => event.type === "delegation.context.append"),
+    ).toEqual([]);
+  });
+
   it("treats a normal upstream sideband close as completion", async () => {
     let socket: FakeSocket | undefined;
     const onClose = vi.fn();

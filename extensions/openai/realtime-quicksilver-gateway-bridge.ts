@@ -357,8 +357,10 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
     releaseOpenAIQuicksilverSession(this);
     this.connected = false;
     this.pendingAudio = Buffer.alloc(0);
+    // Transport teardown releases sideband ownership, but accepted Gateway work
+    // remains owned by the durable consult runtime until explicit cancellation.
+    this.delegations?.detach();
     this.abortController.abort(new Error("GPT-Live gateway relay bridge closed"));
-    this.delegations?.stop(new Error("GPT-Live delegation stopped"));
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = undefined;
