@@ -625,4 +625,30 @@ describe("telegram webhook schema", () => {
       webhookPath: "/mybot",
     });
   });
+
+  it("rejects webhookPath containing a fragment", () => {
+    expectTelegramConfigIssue(
+      {
+        webhookUrl: "https://example.com/telegram-webhook",
+        webhookSecret: "secret",
+        webhookPath: "/hook#fragment",
+      },
+      "webhookPath",
+    );
+  });
+
+  it("rejects account webhookPath containing a fragment", () => {
+    expectTelegramConfigIssue(
+      {
+        accounts: {
+          ops: {
+            webhookUrl: "https://example.com/telegram-webhook",
+            webhookSecret: "secret",
+            webhookPath: "/ops#anchor",
+          },
+        },
+      },
+      "accounts.ops.webhookPath",
+    );
+  });
 });

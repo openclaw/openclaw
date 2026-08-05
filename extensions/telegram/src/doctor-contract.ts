@@ -166,6 +166,49 @@ function removeRetiredTelegramGroupHistoryContextConfig(params: {
   return { entry: updated, changed: true };
 }
 
+function normalizeTelegramWebhookPath(params: {
+  entry: Record<string, unknown>;
+  pathPrefix: string;
+  changes: string[];
+}): { entry: Record<string, unknown>; changed: boolean } {
+  const rawPath = params.entry.webhookPath;
+  if (typeof rawPath !== "string" || rawPath.length === 0) {
+    return { entry: params.entry, changed: false };
+  }
+
+  let normalized = rawPath;
+  const fixes: string[] = [];
+
+  // Strip fragment — fragments are not part of an HTTP request target.
+  const hashIdx = normalized.indexOf("#");
+  if (hashIdx !== -1) {
+    normalized = normalized.slice(0, hashIdx);
+    fixes.push("removed fragment");
+  }
+
+  // Rename /healthz — it collides with the reserved health-check endpoint.
+  if (normalized === "/healthz") {
+    normalized = "/telegram-webhook";
+    fixes.push("renamed from /healthz to /telegram-webhook (reserved health-check path)");
+  }
+
+  // Prefix missing leading slash.
+  if (!normalized.startsWith("/")) {
+    normalized = `/${normalized}`;
+    fixes.push("prefixed missing leading slash");
+  }
+
+  if (normalized === rawPath) {
+    return { entry: params.entry, changed: false };
+  }
+
+  const updated = { ...params.entry, webhookPath: normalized };
+  params.changes.push(
+    `Repaired ${params.pathPrefix}.webhookPath "${rawPath}" → "${normalized}" (${fixes.join("; ")}).`,
+  );
+  return { entry: updated, changed: true };
+}
+
 function resolveCompatibleDefaultGroupEntry(section: Record<string, unknown>): {
   groups: Record<string, unknown>;
   entry: Record<string, unknown>;
@@ -285,6 +328,14 @@ export function normalizeCompatibilityConfig({
   updated = removedGroupHistoryContext.entry;
   changed = changed || removedGroupHistoryContext.changed;
 
+  const normalizedWebhookPath = normalizeTelegramWebhookPath({
+    entry: updated,
+    pathPrefix: "channels.telegram",
+    changes,
+  });
+  updated = normalizedWebhookPath.entry;
+  changed = changed || normalizedWebhookPath.changed;
+
   if (updated.groupMentionsOnly !== undefined) {
     const defaultGroupEntry = resolveCompatibleDefaultGroupEntry(updated);
     if (!defaultGroupEntry) {
@@ -334,9 +385,14 @@ export function normalizeCompatibilityConfig({
           ? { preserveRecentHistoryLimit: rootGroupHistoryLimitBeforeMigration }
           : {}),
       });
-      return {
+      const webhookPath = normalizeTelegramWebhookPath({
         entry: history.entry,
-        changed: dm.changed || nativeDraft.changed || history.changed,
+        pathPrefix,
+        changes: accountChanges,
+      });
+      return {
+        entry: webhookPath.entry,
+        changed: dm.changed || nativeDraft.changed || history.changed || webhookPath.changed,
       };
     },
   });

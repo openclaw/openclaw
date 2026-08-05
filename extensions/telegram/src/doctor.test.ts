@@ -761,4 +761,148 @@ describe("telegram doctor", () => {
       "TELEGRAM_BOT_TOKEN is absent",
     );
   });
+
+  it("repairs webhookPath missing a leading slash", () => {
+    const normalize = telegramDoctor.normalizeCompatibilityConfig;
+    if (!normalize) {
+      throw new Error("expected telegram compatibility normalizer");
+    }
+
+    const result = normalize({
+      cfg: {
+        channels: {
+          telegram: {
+            webhookPath: "mybot",
+          },
+        },
+      } as never,
+    });
+
+    expect(result.config.channels?.telegram?.webhookPath).toBe("/mybot");
+    expect(result.changes).toContain(
+      'Repaired channels.telegram.webhookPath "mybot" → "/mybot" (prefixed missing leading slash).',
+    );
+  });
+
+  it("repairs webhookPath colliding with /healthz", () => {
+    const normalize = telegramDoctor.normalizeCompatibilityConfig;
+    if (!normalize) {
+      throw new Error("expected telegram compatibility normalizer");
+    }
+
+    const result = normalize({
+      cfg: {
+        channels: {
+          telegram: {
+            webhookPath: "/healthz",
+          },
+        },
+      } as never,
+    });
+
+    expect(result.config.channels?.telegram?.webhookPath).toBe("/telegram-webhook");
+    expect(result.changes).toContain(
+      'Repaired channels.telegram.webhookPath "/healthz" → "/telegram-webhook" (renamed from /healthz to /telegram-webhook (reserved health-check path)).',
+    );
+  });
+
+  it("repairs webhookPath containing a fragment", () => {
+    const normalize = telegramDoctor.normalizeCompatibilityConfig;
+    if (!normalize) {
+      throw new Error("expected telegram compatibility normalizer");
+    }
+
+    const result = normalize({
+      cfg: {
+        channels: {
+          telegram: {
+            webhookPath: "/hook#fragment",
+          },
+        },
+      } as never,
+    });
+
+    expect(result.config.channels?.telegram?.webhookPath).toBe("/hook");
+    expect(result.changes).toContain(
+      'Repaired channels.telegram.webhookPath "/hook#fragment" → "/hook" (removed fragment).',
+    );
+  });
+
+  it("repairs account webhookPath missing a leading slash", () => {
+    const normalize = telegramDoctor.normalizeCompatibilityConfig;
+    if (!normalize) {
+      throw new Error("expected telegram compatibility normalizer");
+    }
+
+    const result = normalize({
+      cfg: {
+        channels: {
+          telegram: {
+            accounts: {
+              work: {
+                webhookPath: "workbot",
+              },
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.config.channels?.telegram?.accounts?.work?.webhookPath).toBe("/workbot");
+    expect(result.changes).toContain(
+      'Repaired channels.telegram.accounts.work.webhookPath "workbot" → "/workbot" (prefixed missing leading slash).',
+    );
+  });
+
+  it("repairs account webhookPath colliding with /healthz", () => {
+    const normalize = telegramDoctor.normalizeCompatibilityConfig;
+    if (!normalize) {
+      throw new Error("expected telegram compatibility normalizer");
+    }
+
+    const result = normalize({
+      cfg: {
+        channels: {
+          telegram: {
+            accounts: {
+              work: {
+                webhookPath: "/healthz",
+              },
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.config.channels?.telegram?.accounts?.work?.webhookPath).toBe("/telegram-webhook");
+    expect(result.changes).toContain(
+      'Repaired channels.telegram.accounts.work.webhookPath "/healthz" → "/telegram-webhook" (renamed from /healthz to /telegram-webhook (reserved health-check path)).',
+    );
+  });
+
+  it("leaves valid webhookPath unchanged", () => {
+    const normalize = telegramDoctor.normalizeCompatibilityConfig;
+    if (!normalize) {
+      throw new Error("expected telegram compatibility normalizer");
+    }
+
+    const result = normalize({
+      cfg: {
+        channels: {
+          telegram: {
+            webhookPath: "/my-custom-webhook",
+            accounts: {
+              work: {
+                webhookPath: "/work-webhook",
+              },
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.config.channels?.telegram?.webhookPath).toBe("/my-custom-webhook");
+    expect(result.config.channels?.telegram?.accounts?.work?.webhookPath).toBe("/work-webhook");
+    expect(result.changes).toEqual([]);
+  });
 });
