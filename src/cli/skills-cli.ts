@@ -167,9 +167,10 @@ async function resolveSkillsWorkspaceBestEffort(
   options?: ResolveSkillsWorkspaceOptions,
 ): Promise<ResolvedSkillsWorkspace> {
   // Browse commands must render local skill metadata even when config validation fails,
-  // so read best-effort and keep the no-plugin-validation status contract.
+  // so read best-effort and keep the no-plugin-validation status contract. They are
+  // read-only: observe:false keeps them from persisting config-health/audit state.
   return resolveSkillsWorkspaceFromConfig(
-    await readBestEffortConfig({ skipPluginValidation: true }),
+    await readBestEffortConfig({ observe: false, skipPluginValidation: true }),
     options,
   );
 }

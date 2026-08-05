@@ -1453,7 +1453,7 @@ describe("skills cli commands", () => {
   it("keeps non-JSON skills list output on stdout with human-readable formatting", async () => {
     await runCommand(["skills", "list"]);
 
-    expect(loadConfigMock).toHaveBeenCalledWith({ skipPluginValidation: true });
+    expect(loadConfigMock).toHaveBeenCalledWith({ observe: false, skipPluginValidation: true });
     expect(defaultRuntime.writeStdout).toHaveBeenCalledTimes(1);
     expect(defaultRuntime.log).not.toHaveBeenCalled();
     expect(runtimeErrors).toStrictEqual([]);
