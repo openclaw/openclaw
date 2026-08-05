@@ -18,6 +18,7 @@ vi.mock("../config/config.js", async () => {
   return {
     ...actual,
     getRuntimeConfig: loadConfigMock,
+    getRuntimeConfigForInspection: loadConfigMock,
     loadConfig: loadConfigMock,
   };
 });
