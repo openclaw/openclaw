@@ -325,7 +325,7 @@ function hasNestedRepetition(source: string): boolean {
   return analyzeTokensForNestedRepetition(tokenizePattern(source));
 }
 
-export type CompileSafeRegexOptions = {
+type CompileSafeRegexOptions = {
   /**
    * Keep the exact schema/source string for analysis and RegExp construction.
    * Default false trims (config/model patterns treat blank as empty). JSON Schema
