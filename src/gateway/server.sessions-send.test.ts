@@ -189,6 +189,87 @@ describe("sessions_send gateway loopback", () => {
     expect(firstCall?.inputProvenance?.sourceTool).toBe("sessions_send");
   });
 
+  it("includes configured requester identity in the real gateway-dispatched A2A prompt", async () => {
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    if (!configPath) {
+      throw new Error("OPENCLAW_CONFIG_PATH missing in gateway test environment");
+    }
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-send-identity-"));
+    const requesterSessionKey = "agent:main:main";
+    const targetSessionKey = "agent:orion:main";
+    const config: OpenClawConfig = {
+      tools: {
+        sessions: { visibility: "all" },
+        agentToAgent: { enabled: true },
+      },
+      agents: {
+        list: [
+          { id: "main", default: true, identity: { name: "Stevo" } },
+          { id: "orion" },
+        ],
+      },
+    };
+
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    testState.agentsConfig = config.agents;
+    try {
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
+      await writeSessionStore({
+        entries: {
+          [requesterSessionKey]: { sessionId: "identity-main", updatedAt: Date.now() },
+          [targetSessionKey]: { sessionId: "identity-orion", updatedAt: Date.now() },
+        },
+      });
+
+      const spy = agentCommand as unknown as Mock<(opts: unknown) => Promise<void>>;
+      spy.mockReset();
+      spy.mockImplementation(async (opts: unknown) =>
+        emitLifecycleAssistantReply({
+          opts,
+          defaultSessionId: "identity-orion",
+          resolveText: (extraSystemPrompt) => {
+            if (extraSystemPrompt?.includes("Agent-to-agent reply step")) {
+              return "REPLY_SKIP";
+            }
+            if (extraSystemPrompt?.includes("Agent-to-agent announce step")) {
+              return "ANNOUNCE_SKIP";
+            }
+            return "orion saw requester identity";
+          },
+        }),
+      );
+
+      const tool = createOpenClawTools({
+        agentSessionKey: requesterSessionKey,
+        agentChannel: "discord",
+        config,
+      }).find((candidate) => candidate.name === "sessions_send");
+      if (!tool) {
+        throw new Error("missing sessions_send tool");
+      }
+
+      const result = await tool.execute("call-gateway-identity-proof", {
+        sessionKey: targetSessionKey,
+        message: "prove requester identity",
+        timeoutSeconds: 5,
+      });
+      expectSessionsSendDetails(result, {
+        reply: "orion saw requester identity",
+        sessionKey: targetSessionKey,
+      });
+
+      const targetRun = spy.mock.calls
+        .map(([opts]) => opts as { sessionKey?: string; extraSystemPrompt?: string })
+        .find((call) => call.sessionKey === targetSessionKey);
+      expect(targetRun?.extraSystemPrompt).toContain("Agent 1 (requester) name: Stevo.");
+    } finally {
+      testState.agentsConfig = undefined;
+      testState.sessionStorePath = undefined;
+      await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
+  });
+
   it.each([
     {
       label: "direct",
