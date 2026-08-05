@@ -557,6 +557,41 @@ describe("resolveChannelSetupSelectionContributions", () => {
     expect(lines).toEqual(["Telegram — Chat over Telegram."]);
   });
 
+  it.each([
+    ["whitespace-only", " \t "],
+    ["control-only", "\u001B[2K\u0007"],
+  ])("restores the default for %s channel selection docs prefixes", (_label, prefix) => {
+    resolveChannelSetupEntries.mockReturnValue(
+      makeChannelSetupEntries({
+        entries: [
+          {
+            id: "custom-chat",
+            meta: {
+              id: "custom-chat",
+              label: "Custom Chat",
+              selectionLabel: "Custom Chat",
+              docsPath: "/channels/custom-chat",
+              blurb: "External channel.",
+              selectionDocsPrefix: prefix,
+            },
+          },
+        ],
+      }),
+    );
+
+    resolveChannelSelectionNoteLines({
+      cfg: {} as never,
+      installedPlugins: [],
+      selection: ["custom-chat"],
+    });
+
+    const [selectionMeta] = requireFirstMockCall(
+      formatChannelSelectionLine.mock.calls,
+      "selection line",
+    );
+    expect(selectionMeta?.selectionDocsPrefix).toBe("Docs:");
+  });
+
   it("localizes built-in channel blurbs before selection notes", () => {
     resolveChannelSetupEntries.mockReturnValue(
       makeChannelSetupEntries({
