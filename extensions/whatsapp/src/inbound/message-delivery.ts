@@ -521,6 +521,7 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
             key: msg.key,
             getCachedMessage: getCachedBaileysMessage,
             selfJid: self.jid,
+            selfLid: self.lid,
           });
         }
         continue;
