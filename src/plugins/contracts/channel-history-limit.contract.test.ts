@@ -50,12 +50,21 @@ function schemaFor(channelId: string): JsonSchemaLike | undefined {
  * sessions on any provider. Channels with no group surface never reach that
  * branch, so only group-capable channels owe the key.
  */
+/**
+ * Channels that route group sessions without publishing an allowlist surface.
+ * Twitch and Tlon both build `kind: "group"` routes (twitch `monitor.ts:79`,
+ * tlon `session-route.ts:21`), so the session-key resolver applies the key for
+ * them even though they expose no groupPolicy/groups/groupAllowFrom to key on.
+ */
+const GROUP_ROUTING_CHANNELS_WITHOUT_ALLOWLIST = ["tlon", "twitch"] as const;
+
 const groupCapableChannels = GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.filter((entry) => {
   const properties = asSchema(entry.schema)?.properties ?? {};
   return (
     Object.hasOwn(properties, "groupPolicy") ||
     Object.hasOwn(properties, "groups") ||
-    Object.hasOwn(properties, "groupAllowFrom")
+    Object.hasOwn(properties, "groupAllowFrom") ||
+    (GROUP_ROUTING_CHANNELS_WITHOUT_ALLOWLIST as readonly string[]).includes(entry.channelId)
   );
 }).map((entry) => entry.channelId);
 

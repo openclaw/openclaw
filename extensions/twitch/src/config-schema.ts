@@ -20,6 +20,8 @@ const TwitchAccountShape = {
   enabled: z.boolean().optional(),
   /** Allow channel-initiated configuration writes */
   configWrites: z.boolean().optional(),
+  /** Group/channel transcript window; see docs/gateway/config-channels.md. */
+  historyLimit: z.number().int().min(0).optional(),
   /** Allowlist of Twitch user IDs who can interact with the bot (use IDs for safety, not usernames) */
   allowFrom: z.array(z.string()).optional(),
   /** Roles allowed to interact with the bot (e.g., ["moderator", "vip", "subscriber"]) */

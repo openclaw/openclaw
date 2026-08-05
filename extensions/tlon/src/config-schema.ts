@@ -29,6 +29,7 @@ const tlonCommonConfigFields = {
   name: z.string().optional(),
   enabled: z.boolean().optional(),
   configWrites: z.boolean().optional(),
+  historyLimit: z.number().int().min(0).optional(),
   ship: ShipSchema.optional(),
   url: z.string().optional(),
   code: z.string().optional(),
