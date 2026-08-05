@@ -143,7 +143,15 @@ export function classifyOAuthRefreshFailureReason(
   message: string,
 ): OAuthRefreshFailureReason | null {
   const lower = message.toLowerCase();
-  if (lower.includes("refresh_token_reused")) {
+  // The rotation race also surfaces as prose when the raw code does not leak
+  // into the message, and OpenAI's real wording ends with "Please try signing
+  // in again" (#111827) — match reuse first so the race can never be
+  // tombstoned as a permanent sign_in_again failure.
+  if (
+    lower.includes("refresh_token_reused") ||
+    lower.includes("refresh token has already been used") ||
+    lower.includes("already been used to generate a new access token")
+  ) {
     return "refresh_token_reused";
   }
   if (lower.includes("invalid_grant")) {
@@ -155,7 +163,10 @@ export function classifyOAuthRefreshFailureReason(
   if (lower.includes("signing in again") || lower.includes("sign in again")) {
     return "sign_in_again";
   }
-  if (lower.includes("invalid refresh token")) {
+  // Providers surface both the prose ("invalid refresh token") and the raw
+  // error code ("invalid_refresh_token") depending on which body field leaks
+  // into the message; match both so classification does not depend on it.
+  if (lower.includes("invalid refresh token") || lower.includes("invalid_refresh_token")) {
     return "invalid_refresh_token";
   }
   if (lower.includes("expired or revoked") || lower.includes("revoked")) {
@@ -169,6 +180,36 @@ export function classifyOAuthRefreshFailureReason(
     return "revoked";
   }
   return null;
+}
+
+// refresh_token_reused is excluded: it signals a rotation race with its own
+// in-store recovery path, not a grant that can never work again.
+const PERMANENT_OAUTH_REFRESH_FAILURE_REASONS: ReadonlySet<OAuthRefreshFailureReason> = new Set([
+  "invalid_grant",
+  "invalid_refresh_token",
+  "token_invalidated",
+  "revoked",
+  "sign_in_again",
+]);
+
+/** True when a refresh failure means the stored refresh grant can never succeed again. */
+export function isPermanentOAuthRefreshFailure(error: unknown): boolean {
+  const seen = new Set<object>();
+  let candidate: unknown = error;
+  while (candidate && typeof candidate === "object") {
+    if (seen.has(candidate)) {
+      return false;
+    }
+    seen.add(candidate);
+    if (candidate instanceof Error) {
+      const reason = classifyOAuthRefreshFailureReason(candidate.message);
+      if (reason) {
+        return PERMANENT_OAUTH_REFRESH_FAILURE_REASONS.has(reason);
+      }
+    }
+    candidate = (candidate as { cause?: unknown }).cause;
+  }
+  return false;
 }
 
 /** Classify provider/reason from a user-facing OAuth refresh failure message. */
