@@ -115,6 +115,18 @@ async function expectProcessState(pid: number, suspended: boolean, timeout = 5_0
   );
 }
 
+async function expectProcessExited(pid: number, timeout = 5_000) {
+  await vi.waitFor(
+    async () => {
+      const result = await runCommandWithTimeout(["ps", "-o", "stat=", "-p", String(pid)], {
+        timeoutMs: 2_000,
+      });
+      expect(result.code !== 0 || /^[ZX]/u.test(result.stdout.trim())).toBe(true);
+    },
+    { interval: 50, timeout },
+  );
+}
+
 async function terminate(child: ReturnType<typeof spawn>) {
   if (child.pid) {
     try {
@@ -157,12 +169,7 @@ describe("remote workspace quiescence scripts", () => {
     await resume(input, nonce);
 
     await expect(fs.access(leasePath(input.home, input.workspace, nonce))).rejects.toThrow();
-    await vi.waitFor(
-      () => {
-        expect(() => process.kill(lease.watchdog.pid, 0)).toThrow();
-      },
-      { interval: 50, timeout: 5_000 },
-    );
+    await expectProcessExited(lease.watchdog.pid);
   });
 
   it("recovers a prior nonce without letting its watchdog own the next lease", async () => {
@@ -179,12 +186,7 @@ describe("remote workspace quiescence scripts", () => {
     await expect(
       fs.access(leasePath(input.home, input.workspace, secondNonce)),
     ).resolves.toBeUndefined();
-    await vi.waitFor(
-      () => {
-        expect(() => process.kill(firstLease.watchdog.pid, 0)).toThrow();
-      },
-      { interval: 50, timeout: 5_000 },
-    );
+    await expectProcessExited(firstLease.watchdog.pid);
     await resume(input, secondNonce);
   });
 
