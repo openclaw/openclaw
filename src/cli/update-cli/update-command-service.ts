@@ -20,6 +20,7 @@ import {
   GATEWAY_SERVICE_MARKER,
   GATEWAY_SERVICE_RUNTIME_PID_ENV,
 } from "../../daemon/constants.js";
+import { readFutureConfigActionBlock } from "../../daemon/future-config-guard.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
 import {
@@ -590,8 +591,32 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
   } catch (err) {
     // A completed package swap leaves this process older than the config it now
     // reads, so the version guard refuses the restart and the service stays
-    // stopped with only a warning. Recover the way the detached update handoff
-    // does: start the unit that is already installed.
+    // stopped with only a warning. Only recover when the config is genuinely
+    // newer than this binary AND the managed service is still installed.
+    const block = await readFutureConfigActionBlock("restart");
+    if (!block) {
+      const message = `Failed to restart managed gateway service after failed update: ${String(err)}`;
+      if (params.jsonMode) {
+        defaultRuntime.error(message);
+      } else {
+        defaultRuntime.log(theme.warn(message));
+      }
+      return;
+    }
+    const state = await readGatewayServiceState(resolveGatewayService(), {
+      env: params.preManagedServiceStop.serviceEnv,
+    });
+    if (!state.installed) {
+      const message =
+        `Failed to restart managed gateway service after failed update: ${String(err)}; ` +
+        "recovery start skipped because no managed service is installed.";
+      if (params.jsonMode) {
+        defaultRuntime.error(message);
+      } else {
+        defaultRuntime.log(theme.warn(message));
+      }
+      return;
+    }
     try {
       await startGatewayServiceAfterFailedUpdate({
         env: params.preManagedServiceStop.serviceEnv,
