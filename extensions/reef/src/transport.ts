@@ -1,5 +1,6 @@
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import WebSocket from "ws";
 import { sha256Hex, signDeviceRequest, utf8 } from "../protocol/index.js";
 import type { Envelope, SignedReceipt } from "../protocol/index.js";
@@ -25,6 +26,16 @@ const REEF_WS_HANDSHAKE_MS = 30_000;
 // Cover headers and body consumption. A relay that accepts the request but
 // stops producing bytes must not pin inbox recovery forever.
 const REEF_RELAY_REQUEST_TIMEOUT_MS = 15_000;
+
+function redactReefRelayErrorMessage(message: string, secrets: readonly string[]): string {
+  let redacted = redactSensitiveText(message, { mode: "tools" });
+  for (const secret of secrets) {
+    if (secret.length > 0) {
+      redacted = redacted.replaceAll(secret, "<redacted>");
+    }
+  }
+  return redacted;
+}
 
 export class ReefRelayError extends Error {
   constructor(
@@ -105,7 +116,7 @@ export class ReefTransportClient {
   }
 
   async authComplete(token: string): Promise<{ session: string; expires: number }> {
-    return await this.unsigned("POST", "/v1/auth/complete", { token });
+    return await this.unsigned("POST", "/v1/auth/complete", { token }, {}, [token]);
   }
 
   async createHandle(
@@ -122,20 +133,29 @@ export class ReefTransportClient {
         request_policy: requestPolicy,
       },
       { authorization: `Bearer ${session}` },
+      [session],
     );
   }
 
   listOwnHandles(
     session: string,
   ): Promise<{ handles: Array<{ handle: string; key_epoch: number; request_policy: string }> }> {
-    return this.unsigned("GET", "/v1/handles", undefined, { authorization: `Bearer ${session}` });
+    return this.unsigned("GET", "/v1/handles", undefined, { authorization: `Bearer ${session}` }, [
+      session,
+    ]);
   }
 
   mintFriendCode(): Promise<{ code: string; expires: number }> {
     return this.signed("POST", "/v1/friend-codes");
   }
   requestFriend(to: string, code?: string): Promise<{ status: string }> {
-    return this.signed("POST", "/v1/friends/request", code ? { to, code } : { to });
+    return this.signed(
+      "POST",
+      "/v1/friends/request",
+      code ? { to, code } : { to },
+      undefined,
+      code ? [code] : [],
+    );
   }
   respondFriend(friend: RelayFriend, accept: boolean): Promise<{ peer: string; status: string }> {
     return this.signed("POST", "/v1/friends/respond", {
@@ -173,7 +193,13 @@ export class ReefTransportClient {
     return url.toString();
   }
 
-  async signed<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+  async signed<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    signal?: AbortSignal,
+    secrets: readonly string[] = [],
+  ): Promise<T> {
     const bytes = body === undefined ? new Uint8Array() : utf8(JSON.stringify(body));
     const auth = this.auth(path, bytes, method);
     return await this.request(
@@ -186,6 +212,7 @@ export class ReefTransportClient {
         "x-reef-sig": auth.signature,
       },
       signal,
+      [auth.signature, ...secrets],
     );
   }
 
@@ -209,9 +236,10 @@ export class ReefTransportClient {
     path: string,
     body?: unknown,
     headers: Record<string, string> = {},
+    secrets: readonly string[] = [],
   ): Promise<T> {
     const bytes = body === undefined ? new Uint8Array() : utf8(JSON.stringify(body));
-    return await this.request(method, path, bytes, headers);
+    return await this.request(method, path, bytes, headers, undefined, secrets);
   }
 
   private async request<T>(
@@ -220,6 +248,7 @@ export class ReefTransportClient {
     bytes: Uint8Array,
     headers: Record<string, string>,
     signal?: AbortSignal,
+    secrets: readonly string[] = [],
   ): Promise<T> {
     const url = new URL(path, this.relayUrl).toString();
     const timeout = buildTimeoutAbortSignal({
@@ -252,7 +281,7 @@ export class ReefTransportClient {
             { maxBytes: REEF_RELAY_ERROR_JSON_MAX_BYTES },
           );
           if (typeof parsed.error === "string" && parsed.error) {
-            message = parsed.error;
+            message = redactReefRelayErrorMessage(parsed.error, secrets);
           }
         } catch {
           if (timeout.signal?.aborted) {

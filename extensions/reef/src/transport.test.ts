@@ -339,6 +339,120 @@ describe("ReefTransportClient response body bounds", () => {
   });
 });
 
+describe("ReefTransportClient credential redaction", () => {
+  it("redacts setup tokens and bearer sessions from loopback relay errors", async () => {
+    const setupToken = "reef.token[abc]+?/";
+    const session = "xy";
+    const receivedAuthorization: string[] = [];
+    const receivedSignatures: string[] = [];
+    const receivedTokens: string[] = [];
+    const server = http.createServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => chunks.push(chunk));
+      request.on("end", () => {
+        const authorization = request.headers.authorization ?? "";
+        receivedAuthorization.push(authorization);
+        const signatureHeader = request.headers["x-reef-sig"];
+        const signature = typeof signatureHeader === "string" ? signatureHeader : "";
+        if (signature) {
+          receivedSignatures.push(signature);
+        }
+        const body = Buffer.concat(chunks).toString("utf8");
+        const token = body ? (JSON.parse(body) as { token?: unknown }).token : undefined;
+        if (typeof token === "string") {
+          receivedTokens.push(token);
+        }
+        const reflectedCredential =
+          authorization || (typeof token === "string" ? token : "") || signature;
+        response.writeHead(401, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({ error: `${reflectedCredential} relay rejected`, marker: "safe" }),
+        );
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("Reef credential redaction test server did not bind a TCP port");
+    }
+
+    const client = createClient(fetch, () => ts, `http://127.0.0.1:${address.port}`);
+    try {
+      const tokenError = await client.authComplete(setupToken).catch((error: unknown) => error);
+      const createHandleError = await client
+        .createHandle(session, "approve")
+        .catch((error: unknown) => error);
+      const sessionError = await client.listOwnHandles(session).catch((error: unknown) => error);
+      const signedError = await client.listFriends().catch((error: unknown) => error);
+
+      expect(tokenError).toMatchObject({ name: "ReefRelayError", status: 401 });
+      expect(createHandleError).toMatchObject({ name: "ReefRelayError", status: 401 });
+      expect(sessionError).toMatchObject({ name: "ReefRelayError", status: 401 });
+      expect(tokenError).toMatchObject({ message: expect.stringContaining("relay rejected") });
+      expect(createHandleError).toMatchObject({
+        message: expect.stringContaining("relay rejected"),
+      });
+      expect(sessionError).toMatchObject({ message: expect.stringContaining("relay rejected") });
+      expect(signedError).toMatchObject({
+        name: "ReefRelayError",
+        status: 401,
+        message: expect.stringContaining("relay rejected"),
+      });
+      expect((tokenError as Error).message).not.toContain(setupToken);
+      expect((createHandleError as Error).message).not.toContain(session);
+      expect((sessionError as Error).message).not.toContain(session);
+      expect(receivedAuthorization).toContain(`Bearer ${session}`);
+      expect(receivedSignatures).toHaveLength(1);
+      expect(receivedSignatures[0]).toBeTruthy();
+      expect((signedError as Error).message).not.toContain(receivedSignatures[0]);
+      expect(receivedTokens).toContain(setupToken);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it("redacts signed body credentials across bounded error text", async () => {
+    const code = "friend.code[123]+?/";
+    const prefix = "x".repeat(32_760);
+    const suffix = "y".repeat(32);
+    const receivedBodies: string[] = [];
+    const client = createClient(async (_url, init) => {
+      const body = init?.body;
+      receivedBodies.push(
+        body instanceof Uint8Array
+          ? new TextDecoder().decode(body)
+          : typeof body === "string"
+            ? body
+            : "",
+      );
+      const responseBody = JSON.stringify({ error: `${prefix}${code}${suffix}` });
+      const splitAt = responseBody.indexOf(code) + Math.floor(code.length / 2);
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(responseBody.slice(0, splitAt)));
+            controller.enqueue(new TextEncoder().encode(responseBody.slice(splitAt)));
+            controller.close();
+          },
+        }),
+        { status: 401, headers: { "content-type": "application/json" } },
+      );
+    });
+
+    const error = await client.requestFriend("bob", code).catch((failure: unknown) => failure);
+
+    expect(error).toMatchObject({ name: "ReefRelayError", status: 401 });
+    expect(receivedBodies).toHaveLength(1);
+    expect(receivedBodies[0]).toContain(`"code":"${code}"`);
+    expect((error as Error).message).not.toContain(code);
+  });
+});
+
 const INBOX_WEBSOCKET_MAX_PAYLOAD_BYTES = 64 * 1024;
 
 class ControlledSocket {
