@@ -102,6 +102,11 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "forwardSessionId": {
+        "type": "boolean",
+        "description": "Forward a stable, OpenRouter-scoped session identifier (derived from the active OpenClaw session id, not the raw id) to OpenRouter as the chat-completion session_id (sticky routing for better prompt-cache hits and observability). Default: false."
+      }
+    }
   }
 }
