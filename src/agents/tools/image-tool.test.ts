@@ -2774,6 +2774,95 @@ describe("image tool MiniMax VLM routing", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
+  it("clamps pathological maxImages across the 20-image threshold", async () => {
+    const { fetch, tool } = await createMinimaxVlmFixture({ status_code: 0, status_msg: "" });
+
+    // 21 unique tiny PNGs cross the clamped threshold (20) so the
+    // gate must fire. Without the clamp, maxImages=1_000_000_000 would
+    // pass through and silently accept millions of image references.
+    // Each image has a distinct red channel to bypass the URI dedup.
+    const tooMany = Array.from({ length: 21 }, (_, i) => {
+      const buf = Buffer.alloc(4, 255);
+      buf[0] = i;
+      return `data:image/png;base64,${encodePngRgba(buf, 1, 1).toString("base64")}`;
+    });
+    const result = await tool.execute("t1", {
+      prompt: "Describe.",
+      images: tooMany,
+      maxImages: 1_000_000_000,
+    });
+
+    // The gate fires because 21 > 20 (clamped), not 21 > 1_000_000_000.
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: "Too many images: 21 provided, maximum is 20. Please reduce the number of images.",
+      },
+    ]);
+    expect(result.details).toMatchObject({
+      error: "too_many_images",
+      count: 21,
+      max: 20,
+    });
+    // No fetch — the gate exits before any image processing.
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("accepts below-cap images when maxImages is pathological but count is safe", async () => {
+    const { fetch, tool } = await createMinimaxVlmFixture({ status_code: 0, status_msg: "" });
+
+    // 3 images with pathological maxImages=1_000_000_000: clamp gives
+    // 20, and 3 < 20 so the gate passes normally.
+    const many = await tool.execute("t1", {
+      prompt: "Describe.",
+      images: [
+        `data:image/png;base64,${createLargeColorBlockPng(1).toString("base64")}`,
+        `data:image/png;base64,${createLargeColorBlockPng(2).toString("base64")}`,
+        `data:image/png;base64,${createLargeColorBlockPng(3).toString("base64")}`,
+      ],
+      maxImages: 1_000_000_000,
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect((many.details as { images?: unknown[] } | undefined)?.images).toHaveLength(3);
+  });
+
+  it("clamps pathological maxBytesMb to the cap", async () => {
+    // pickMaxBytes receives the megabytes value and converts to bytes.
+    // A pathological model input (1e9 MB ≈ 1 PB) must not allocate.
+    const api = (globalThis as Record<PropertyKey, unknown>)[
+      Symbol.for("openclaw.imageToolTestApi")
+    ] as { pickMaxBytes: (cfg: unknown, maxBytesMb: number) => number | undefined } | undefined;
+    expect(api?.pickMaxBytes).toBeDefined();
+
+    const clamped = api!.pickMaxBytes(undefined, 1_000_000_000);
+    // 1e9 MB clamped to MAX_IMAGE_MB_CAP=100 → 100 * 1024 * 1024 bytes
+    expect(clamped).toBe(100 * 1024 * 1024);
+  });
+
+  it("passes below-cap maxBytesMb through pickMaxBytes unchanged", async () => {
+    const api = (globalThis as Record<PropertyKey, unknown>)[
+      Symbol.for("openclaw.imageToolTestApi")
+    ] as { pickMaxBytes: (cfg: unknown, maxBytesMb: number) => number | undefined } | undefined;
+    expect(api?.pickMaxBytes).toBeDefined();
+
+    const result = api!.pickMaxBytes(undefined, 50);
+    // 50 < 100 cap → pass through unchanged
+    expect(result).toBe(50 * 1024 * 1024);
+  });
+
+  it("falls through to configured mediaMaxMb when maxBytesMb is omitted", async () => {
+    const api = (globalThis as Record<PropertyKey, unknown>)[
+      Symbol.for("openclaw.imageToolTestApi")
+    ] as { pickMaxBytes: (cfg: unknown, maxBytesMb?: number) => number | undefined } | undefined;
+    expect(api?.pickMaxBytes).toBeDefined();
+
+    // No model-supplied value → falls through to operator config
+    const cfg = { agents: { defaults: { mediaMaxMb: 75 } } } as OpenClawConfig;
+    const result = api!.pickMaxBytes(cfg, undefined);
+    expect(result).toBe(75 * 1024 * 1024);
+  });
+
   it("surfaces MiniMax API errors from /v1/coding_plan/vlm", async () => {
     const { tool } = await createMinimaxVlmFixture({ status_code: 1004, status_msg: "bad key" });
 
