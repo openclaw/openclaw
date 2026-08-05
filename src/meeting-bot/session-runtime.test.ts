@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { TranscriptsStore } from "../transcripts/store.js";
 import { createMeetingSession } from "./session-factory.js";
 import {
@@ -9,7 +9,11 @@ import {
   registerMeetingSessionRuntimeHealthRefresh,
   type MeetingBrowserHealthRefreshOutcome,
 } from "./session-runtime-probes.js";
-import { MeetingSessionRuntime, type MeetingSessionRuntimeJoinContext } from "./session-runtime.js";
+import {
+  MeetingSessionRuntime,
+  type MeetingSessionRuntimeJoinContext,
+  type MeetingSessionRuntimeOptions,
+} from "./session-runtime.js";
 import type {
   MeetingBrowserHealth,
   MeetingBrowserTab,
@@ -327,6 +331,23 @@ describe("MeetingSessionRuntime probe join health", () => {
 });
 
 describe("MeetingSessionRuntime caption health compatibility", () => {
+  it("keeps the owner refresh callback on the public void contract", () => {
+    type TestRuntimeOptions = MeetingSessionRuntimeOptions<
+      TestSession,
+      TestRequest,
+      TestTransport,
+      TestMode,
+      MeetingBrowserHealth,
+      MeetingBrowserTab,
+      string,
+      string
+    >;
+
+    expectTypeOf<ReturnType<TestRuntimeOptions["refreshBrowserHealth"]>>().toEqualTypeOf<
+      Promise<void>
+    >();
+  });
+
   it("keeps the legacy void method while exposing the probe refresh outcome", async () => {
     const refreshOutcome = {
       browserHealthChecked: false,

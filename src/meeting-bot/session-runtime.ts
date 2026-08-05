@@ -98,7 +98,7 @@ export type MeetingSessionRuntimeOptions<
   refreshBrowserHealth(
     session: TSession,
     options?: { force?: boolean; readOnly?: boolean },
-  ): Promise<MeetingBrowserHealthRefreshResult>;
+  ): Promise<void>;
   refreshStatus(session: TSession): Promise<void>;
   refreshReusableSession(
     session: TSession,

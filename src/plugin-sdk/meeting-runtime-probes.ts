@@ -2,6 +2,7 @@
 
 import {
   getMeetingSessionRuntimeProbeAccess,
+  registerMeetingSessionRuntimeHealthRefresh,
   type MeetingBrowserHealthRefreshOutcome,
   type MeetingSessionProbeJoinResult,
 } from "../meeting-bot/session-runtime-probes.js";
@@ -22,4 +23,14 @@ export function refreshMeetingCaptionHealthForProbe<TSession>(
   return getMeetingSessionRuntimeProbeAccess<TSession, unknown>(
     runtime,
   ).refreshCaptionHealthForProbe(session);
+}
+
+export function registerMeetingSessionRuntimeHealthRefreshForProbe<TSession>(
+  runtime: object,
+  refresh: (
+    session: TSession,
+    options?: { force?: boolean; readOnly?: boolean },
+  ) => Promise<MeetingBrowserHealthRefreshOutcome>,
+): void {
+  registerMeetingSessionRuntimeHealthRefresh(runtime, refresh);
 }

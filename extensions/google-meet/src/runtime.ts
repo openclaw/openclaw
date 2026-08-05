@@ -13,6 +13,7 @@ import {
 import {
   joinMeetingSessionForProbe,
   refreshMeetingCaptionHealthForProbe,
+  registerMeetingSessionRuntimeHealthRefreshForProbe,
 } from "openclaw/plugin-sdk/meeting-runtime-probes";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
@@ -193,8 +194,9 @@ export class GoogleMeetRuntime {
       joinTransport: async ({ request, session, context }) =>
         await this.#joinTransport(request, session, context),
       releaseBrowserTab: async (session) => await this.#releaseBrowserTab(session),
-      refreshBrowserHealth: async (session, options) =>
-        await this.#refreshBrowserHealth(session, options),
+      refreshBrowserHealth: async (session, options) => {
+        await this.#refreshBrowserHealth(session, options);
+      },
       refreshStatus: async (session) => await this.#refreshStatus(session),
       refreshReusableSession: async (session, _request, _resolved) => {
         if (session.transport === "twilio") {
@@ -212,6 +214,16 @@ export class GoogleMeetRuntime {
         providerName: "Google Meet",
       },
     });
+    registerMeetingSessionRuntimeHealthRefreshForProbe(
+      this.#sessions,
+      async (session: GoogleMeetSession, options) => {
+        const browserHealthChecked = await this.#refreshBrowserHealth(session, options);
+        return {
+          browserHealthChecked,
+          manualActionIsAuthoritative: browserHealthChecked,
+        };
+      },
+    );
   }
 
   list(): GoogleMeetSession[] {
