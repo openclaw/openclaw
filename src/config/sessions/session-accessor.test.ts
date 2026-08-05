@@ -1156,6 +1156,50 @@ describe("session accessor seam", () => {
     );
   });
 
+  it("rejects a sessionStore-mirrored transcript turn when the session id rotates mid-append", async () => {
+    // Caller passes both sessionStore (in-memory mirror) and storePath (durable
+    // SQLite). The guarded path must still apply — a sessionStore mirror does
+    // not exempt the caller from identity validation.
+    const scope = {
+      agentId: "main",
+      sessionId: "old-mirror-session",
+      sessionKey: "agent:main:mirror-rotate",
+      storePath,
+      sessionStore: {} as Record<string, import("./types.js").SessionEntry>,
+    };
+    await replaceSessionEntry(
+      { sessionKey: scope.sessionKey, storePath },
+      { sessionId: scope.sessionId, updatedAt: Date.now() },
+    );
+
+    const result = await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          message: { role: "user", content: "mirror-rotate-hello", timestamp: Date.now() },
+          shouldAppend: async () => {
+            await replaceSessionEntry(
+              { sessionKey: scope.sessionKey, storePath },
+              { sessionId: "new-mirror-session", updatedAt: Date.now() },
+            );
+            return true;
+          },
+        },
+      ],
+      touchSessionEntry: true,
+      updateMode: "none",
+    });
+
+    expect(result.rejectedReason).toBe("session-rebound");
+    await expect(
+      loadTranscriptEvents({ ...scope, sessionId: "old-mirror-session" }),
+    ).resolves.not.toContainEqual(
+      expect.objectContaining({
+        type: "message",
+        message: expect.objectContaining({ content: "mirror-rotate-hello" }),
+      }),
+    );
+  });
+
   it("rejects a transcript turn when the session id rotates before target resolution", async () => {
     // A reset wins before resolveTranscriptTurnTarget reads the entry, so the
     // resolved entry already holds the replacement id. The caller still passes

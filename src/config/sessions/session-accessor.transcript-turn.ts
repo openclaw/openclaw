@@ -90,15 +90,10 @@ export async function persistSessionTranscriptTurn(
   // stale transcript. Use the caller's session id (target.sessionId), not the
   // resolved entry's — if a reset won before resolution, the entry already holds
   // the replacement id and the guarded transaction must see the caller's old id
-  // to detect the mismatch. In-memory sessionStore scopes and transcript-only
-  // scopes (no session entry) keep the legacy append below — guarded is SQLite-only.
-  if (
-    !scope.sessionStore &&
-    target.storePath &&
-    target.sessionKey &&
-    target.sessionEntry &&
-    target.sessionId
-  ) {
+  // to detect the mismatch. A sessionStore mirror does not exempt the caller —
+  // if it has a durable SQLite session entry + store path, the guard applies.
+  // Transcript-only scopes (no session entry) keep the legacy append below.
+  if (target.storePath && target.sessionKey && target.sessionEntry && target.sessionId) {
     return await persistExpectedSessionTranscriptTurn(
       { ...scope, storePath: target.storePath },
       {
