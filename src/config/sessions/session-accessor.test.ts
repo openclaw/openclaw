@@ -1156,6 +1156,40 @@ describe("session accessor seam", () => {
     );
   });
 
+  it("rejects a transcript turn when the session id rotates before target resolution", async () => {
+    // A reset wins before resolveTranscriptTurnTarget reads the entry, so the
+    // resolved entry already holds the replacement id. The caller still passes
+    // its old id. The guarded transaction must use the caller's id (not the
+    // resolved entry's) to detect the mismatch and reject.
+    const scope = {
+      agentId: "main",
+      sessionId: "old-preresolve-session",
+      sessionKey: "agent:main:preresolve-rotate",
+      storePath,
+    };
+    // Rotate the entry before the turn is attempted — resolve will read the new id.
+    await replaceSessionEntry(
+      { sessionKey: scope.sessionKey, storePath },
+      { sessionId: "new-preresolve-session", updatedAt: Date.now() },
+    );
+
+    const result = await persistSessionTranscriptTurn(scope, {
+      messages: [{ message: { role: "user", content: "preresolve-hello", timestamp: Date.now() } }],
+      touchSessionEntry: true,
+      updateMode: "none",
+    });
+
+    expect(result.rejectedReason).toBe("session-rebound");
+    await expect(
+      loadTranscriptEvents({ ...scope, sessionId: "new-preresolve-session" }),
+    ).resolves.not.toContainEqual(
+      expect.objectContaining({
+        type: "message",
+        message: expect.objectContaining({ content: "preresolve-hello" }),
+      }),
+    );
+  });
+
   it("appends SQLite turns to the active transcript leaf", async () => {
     const scope = {
       agentId: "main",

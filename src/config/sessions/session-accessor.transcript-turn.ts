@@ -87,21 +87,23 @@ export async function persistSessionTranscriptTurn(
   // Route through the guarded SQLite path when a real session entry is available
   // to validate against, so a session-id rotation between resolve and append
   // surfaces a visible session-rebound rejection instead of silently writing the
-  // stale transcript. Use the resolved target store (covers default-store callers
-  // that omit scope.storePath). In-memory sessionStore scopes and transcript-only
-  // scopes (no session entry) keep the legacy append below — the guarded path is
-  // SQLite-only.
+  // stale transcript. Use the caller's session id (target.sessionId), not the
+  // resolved entry's — if a reset won before resolution, the entry already holds
+  // the replacement id and the guarded transaction must see the caller's old id
+  // to detect the mismatch. In-memory sessionStore scopes and transcript-only
+  // scopes (no session entry) keep the legacy append below — guarded is SQLite-only.
   if (
     !scope.sessionStore &&
     target.storePath &&
     target.sessionKey &&
-    target.sessionEntry?.sessionId
+    target.sessionEntry &&
+    target.sessionId
   ) {
     return await persistExpectedSessionTranscriptTurn(
       { ...scope, storePath: target.storePath },
       {
         ...options,
-        expectedSessionId: target.sessionEntry.sessionId,
+        expectedSessionId: target.sessionId,
       },
     );
   }
