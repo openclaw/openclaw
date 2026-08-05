@@ -328,6 +328,39 @@ describe("MeetingSessionRuntime probe join health", () => {
       expect(refreshBrowserHealth).toHaveBeenCalledTimes(refreshCalls);
     },
   );
+
+  it.each([
+    { tracked: true, refreshCalls: 1 },
+    { tracked: false, refreshCalls: 0 },
+  ])(
+    "force-refreshes a launch-disabled browser session when tracked=$tracked",
+    async ({ tracked, refreshCalls }) => {
+      const refreshBrowserHealth = vi.fn(async () => true);
+      const { runtime } = createTestRuntime({
+        refreshBrowserHealth,
+        releaseBrowserTab: async () => true,
+        joinTransport: async ({ session }) => {
+          session.browser = {
+            launched: false,
+            tab: tracked ? { targetId: "manual-tab", openedByPlugin: false } : undefined,
+          };
+          return {};
+        },
+      });
+      const { session } = await runtime.join({
+        url: "https://meeting.example/manual",
+        agentId: "main",
+      });
+      refreshBrowserHealth.mockClear();
+
+      await runtime.refreshBrowserHealth(session, { force: true });
+
+      expect(refreshBrowserHealth).toHaveBeenCalledTimes(refreshCalls);
+      if (tracked) {
+        expect(refreshBrowserHealth).toHaveBeenCalledWith(session, { force: true });
+      }
+    },
+  );
 });
 
 describe("MeetingSessionRuntime caption health compatibility", () => {

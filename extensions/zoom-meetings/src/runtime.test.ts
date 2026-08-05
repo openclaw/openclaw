@@ -308,7 +308,7 @@ describe("Zoom meeting session flow", () => {
       logger,
     });
     await runtime.join({ url: URL, mode: "transcribe" });
-    harness.state.tabListFailures = 10;
+    harness.state.tabListOutcomes.push("success", "failure", "pending");
 
     const result = await runtime.testListen({ url: URL, mode: "transcribe", timeoutMs: 20 });
 
@@ -320,6 +320,7 @@ describe("Zoom meeting session flow", () => {
         message: "Zoom browser readiness refresh failed: browser node unavailable",
       },
     });
+    expect(harness.state.tabListOutcomes).toEqual(["pending"]);
   });
 
   it("returns a launched-tab lifecycle failure without starting a probe refresh", async () => {
@@ -389,7 +390,13 @@ describe("Zoom meeting session flow", () => {
   });
 
   it("ends the session when the tracked Zoom tab disappears", async () => {
-    const { harness, runtime } = runtimeFixture();
+    const { harness, runtime } = runtimeFixture({
+      harness: { tabOpen: true },
+      config: {
+        defaultMode: "transcribe",
+        chrome: { launch: false, waitForInCallMs: 1 },
+      },
+    });
     const joined = await joinMeeting(runtime);
     harness.state.tabOpen = false;
 
@@ -441,6 +448,24 @@ describe("Zoom meeting session flow", () => {
     if (scenario !== "verification-failure") {
       expect(browserRequests(harness, "/tabs/open")).toHaveLength(2);
     }
+  });
+
+  it("replaces a launch-disabled reusable session when tab verification fails", async () => {
+    const { harness, runtime } = runtimeFixture({
+      harness: { tabOpen: true },
+      config: {
+        defaultMode: "transcribe",
+        chrome: { launch: false, waitForInCallMs: 1 },
+      },
+    });
+    const first = await joinMeeting(runtime);
+    harness.state.tabListFailures = 1;
+
+    const replacement = await joinMeeting(runtime);
+
+    expect(first.session.state).toBe("ended");
+    expect(replacement.session.id).not.toBe(first.session.id);
+    expect(browserRequests(harness, "/tabs/open")).toHaveLength(0);
   });
 
   it("rejects and closes the tab when the initial browser status is host-ended", async () => {

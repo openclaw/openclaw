@@ -389,7 +389,9 @@ export class MeetingSessionRuntime<
     session: TSession,
     options: { force?: boolean; readOnly?: boolean } = {},
   ): Promise<MeetingBrowserHealthRefreshOutcome> {
-    if (!this.#isManagedBrowserSession(session)) {
+    const browserTransport = this.options.isBrowserTransport(session.transport);
+    const browser = browserTransport ? this.options.getBrowser(session) : undefined;
+    if (!browser?.launched && !(options.force && browser?.tab?.targetId)) {
       this.refreshSpeechReadiness(session);
       return { browserHealthChecked: false, manualActionIsAuthoritative: false };
     }
@@ -731,19 +733,16 @@ export class MeetingSessionRuntime<
     this.#sessionHealth.delete(sessionId);
   }
 
-  #isManagedBrowserSession(session: TSession): boolean {
-    const browser = this.options.getBrowser(session);
-    return Boolean(this.options.isBrowserTransport(session.transport) && browser?.launched);
-  }
-
   #evaluateSpeechReadiness(session: TSession): {
     ready: boolean;
     reason?: TSpeechBlockedReason;
     message?: string;
   } {
+    const browser = this.options.getBrowser(session);
+    const isBrowser = this.options.isBrowserTransport(session.transport);
     return evaluateMeetingSpeechReadiness({
-      browser: this.options.getBrowser(session),
-      managedBrowser: this.#isManagedBrowserSession(session),
+      browser,
+      managedBrowser: Boolean(isBrowser && browser?.launched),
       speech: this.options.messages.speech,
       talkBack: this.options.isTalkBackMode(session.mode),
     });

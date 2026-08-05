@@ -6049,8 +6049,8 @@ describe("google-meet plugin", () => {
     const { launch: launchChromeMeet } = mockChromeMeetLifecycle({
       launches: [
         {
-          launched: true,
-          tab: { targetId: "meet-tab", openedByPlugin: true },
+          launched: false,
+          tab: { targetId: "meet-tab", openedByPlugin: false },
           browser: { inCall: false, manualAction: staleManualAction },
         },
       ],
@@ -6064,7 +6064,10 @@ describe("google-meet plugin", () => {
         return recovery;
       });
     try {
-      const runtime = createChromeLifecycleRuntime({ defaultMode: "transcribe" });
+      const runtime = createChromeLifecycleRuntime({
+        defaultMode: "transcribe",
+        chrome: { launch: false },
+      });
       const joined = await runtime.join({ url: MEET_URL, mode: "transcribe" });
       expect(joined.session.chrome?.health?.manualAction).toEqual(staleManualAction);
 

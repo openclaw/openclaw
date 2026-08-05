@@ -335,9 +335,12 @@ describe("Microsoft Teams meeting session flow", () => {
   });
 
   it("clears stale manual actions from ordinary status after a missing recovery", async () => {
-    const harness = runtimeHarness();
+    const harness = runtimeHarness({ tabOpen: true });
     const runtime = new TeamsMeetingsRuntime({
-      config: resolveTeamsMeetingsConfig({ defaultMode: "transcribe" }),
+      config: resolveTeamsMeetingsConfig({
+        defaultMode: "transcribe",
+        chrome: { launch: false },
+      }),
       fullConfig: {},
       runtime: harness.runtime,
       logger,
