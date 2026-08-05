@@ -28,13 +28,13 @@ const REEF_WS_HANDSHAKE_MS = 30_000;
 const REEF_RELAY_REQUEST_TIMEOUT_MS = 15_000;
 
 function redactReefRelayErrorMessage(message: string, secrets: readonly string[]): string {
-  let redacted = redactSensitiveText(message, { mode: "tools" });
+  let redacted = message;
   for (const secret of secrets) {
     if (secret.length > 0) {
       redacted = redacted.replaceAll(secret, "<redacted>");
     }
   }
-  return redacted;
+  return redactSensitiveText(redacted, { mode: "tools" });
 }
 
 export class ReefRelayError extends Error {
@@ -468,7 +468,9 @@ export class ReefInboxConnection {
 
   private live(signal?: AbortSignal, onReady?: () => void): Promise<void> {
     return new Promise((resolve, reject) => {
-      const socket = this.webSocketFactory(this.client.websocketUrl());
+      const url = this.client.websocketUrl();
+      const signature = new URL(url).searchParams.get("sig") ?? "";
+      const socket = this.webSocketFactory(url);
       const workAbort = new AbortController();
       // Emit each state transition at most once per socket and never after this
       // invocation settles, so late events from an abandoned socket cannot
@@ -607,7 +609,7 @@ export class ReefInboxConnection {
         if (aborting || finished) {
           return;
         }
-        disconnect(reefInboxCloseError(event));
+        disconnect(reefInboxCloseError(event, [signature]));
       });
       socket.addEventListener("error", (event) =>
         disconnect(new Error(event.message?.trim() || "reef inbox socket error")),
@@ -623,8 +625,13 @@ function asError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
 
-function reefInboxCloseError(event: { code?: number; reason?: string }): Error {
+function reefInboxCloseError(
+  event: { code?: number; reason?: string },
+  secrets: readonly string[] = [],
+): Error {
   const code = Number.isInteger(event.code) ? ` code=${event.code}` : "";
-  const reason = event.reason?.trim() ? ` reason=${event.reason.trim()}` : "";
+  const reason = event.reason?.trim()
+    ? ` reason=${redactReefRelayErrorMessage(event.reason.trim(), secrets)}`
+    : "";
   return new Error(`reef inbox socket closed unexpectedly${code}${reason}`);
 }

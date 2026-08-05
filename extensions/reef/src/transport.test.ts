@@ -342,7 +342,9 @@ describe("ReefTransportClient response body bounds", () => {
 describe("ReefTransportClient credential redaction", () => {
   it("redacts setup tokens and bearer sessions from loopback relay errors", async () => {
     const setupToken = "reef.token[abc]+?/";
-    const session = "xy";
+    const session = `reef-session-${"a".repeat(96)}-tail`;
+    const sessionPrefix = session.slice(0, 6);
+    const sessionSuffix = session.slice(-4);
     const receivedAuthorization: string[] = [];
     const receivedSignatures: string[] = [];
     const receivedTokens: string[] = [];
@@ -404,6 +406,10 @@ describe("ReefTransportClient credential redaction", () => {
       expect((tokenError as Error).message).not.toContain(setupToken);
       expect((createHandleError as Error).message).not.toContain(session);
       expect((sessionError as Error).message).not.toContain(session);
+      expect((createHandleError as Error).message).not.toContain(sessionPrefix);
+      expect((createHandleError as Error).message).not.toContain(sessionSuffix);
+      expect((sessionError as Error).message).not.toContain(sessionPrefix);
+      expect((sessionError as Error).message).not.toContain(sessionSuffix);
       expect(receivedAuthorization).toContain(`Bearer ${session}`);
       expect(receivedSignatures).toHaveLength(1);
       expect(receivedSignatures[0]).toBeTruthy();
@@ -701,12 +707,16 @@ describe("ReefInboxConnection recovery", () => {
     const socket = new ControlledSocket();
     const states: string[] = [];
     const errors: string[] = [];
+    let socketUrl = "";
     const client = createClient(async () => Response.json({ entries: [], cursor: 0 }));
     const abort = new AbortController();
     const inbox = new ReefInboxConnection(
       client,
       async () => {},
-      () => socket as unknown as WebSocketLike,
+      (url) => {
+        socketUrl = url;
+        return socket as unknown as WebSocketLike;
+      },
       {
         onState: (state) => states.push(state),
         onError: (error) => {
@@ -718,11 +728,17 @@ describe("ReefInboxConnection recovery", () => {
 
     const running = inbox.start(abort.signal);
     socket.emit("open");
-    socket.emit("close", { code: 1008, reason: "policy" });
+    const signature = new URL(socketUrl).searchParams.get("sig");
+    if (!signature) {
+      throw new Error("Reef WebSocket test URL did not contain a signature");
+    }
+    socket.emit("close", { code: 1008, reason: `policy ${signature}` });
     await running;
 
     expect(states).toEqual(["connected", "disconnected"]);
-    expect(errors).toEqual(["reef inbox socket closed unexpectedly code=1008 reason=policy"]);
+    expect(errors).toEqual([
+      "reef inbox socket closed unexpectedly code=1008 reason=policy <redacted>",
+    ]);
   });
 
   it("resets reconnect backoff after a socket completes catch-up", async () => {
