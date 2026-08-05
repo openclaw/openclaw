@@ -56,7 +56,6 @@ function processSignalDeadlineMs(referenceCount) {
   // This is one strict wall-clock ceiling for the whole recovery pass. Probe
   // batches run concurrently within it; the deadline must not scale with the
   // number of retained process references.
-  void referenceCount;
   return Date.now() + ${REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS};
 }
 async function signalProcessReferences(references, concurrency = ${REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY}, deadlineMs = Date.now() + ${REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS}) {
