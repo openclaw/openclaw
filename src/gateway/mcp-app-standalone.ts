@@ -318,39 +318,53 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
     return resolved;
   };
   // Bound standalone host fetches so a hung gateway response cannot pin the
-  // MCP App UI indefinitely. Responses are same-origin and gateway-constructed
-  // (operation results, view payloads), so no streaming byte cap is added here;
-  // the gateway already bounds request bodies via MCP_APP_OPERATION_MAX_BODY_BYTES
-  // and constructs every response payload.
+  // MCP App UI indefinitely. The deadline spans both header arrival and JSON
+  // body consumption: fetch() resolves on headers, but a stalled body would
+  // still hang the UI if the timer were cleared earlier. Responses are
+  // same-origin and gateway-constructed, so no streaming byte cap is added;
+  // the gateway bounds request bodies via MCP_APP_OPERATION_MAX_BODY_BYTES.
   const MCP_APP_FETCH_TIMEOUT_MS = 30_000;
-  const fetchWithDeadline = (input: string, init?: RequestInit): Promise<Response> => {
+  const withFetchDeadline = async <T>(
+    input: string,
+    init: RequestInit,
+    consume: (response: Response) => Promise<T>,
+  ): Promise<T> => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), MCP_APP_FETCH_TIMEOUT_MS);
-    return fetch(input, { ...init, signal: controller.signal }).finally(() => clearTimeout(timer));
+    try {
+      const response = await fetch(input, { ...init, signal: controller.signal });
+      return await consume(response);
+    } finally {
+      clearTimeout(timer);
+    }
   };
-  const request = async (method: string, params: unknown): Promise<unknown> => {
-    const response = await fetchWithDeadline(config.viewPath, {
-      method: "POST",
-      headers: {
-        Authorization: `MCP-App ${ticket}`,
-        "Content-Type": "application/json",
+  const request = (method: string, params: unknown): Promise<unknown> =>
+    withFetchDeadline(
+      config.viewPath,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `MCP-App ${ticket}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ method, params }),
+        cache: "no-store",
+        credentials: "omit",
       },
-      body: JSON.stringify({ method, params }),
-      cache: "no-store",
-      credentials: "omit",
-    });
-    const body = (await response.json().catch(() => undefined)) as
-      | { ok?: boolean; result?: unknown; error?: string }
-      | undefined;
-    if (response.status === 401) {
-      fail("MCP App ticket was rejected");
-      throw new Error("MCP App ticket was rejected");
-    }
-    if (!response.ok || body?.ok !== true) {
-      throw new Error(body?.error || "MCP App operation was rejected");
-    }
-    return body.result;
-  };
+      async (response) => {
+        if (response.status === 401) {
+          fail("MCP App ticket was rejected");
+          throw new Error("MCP App ticket was rejected");
+        }
+        const body = (await response.json().catch(() => undefined)) as
+          | { ok?: boolean; result?: unknown; error?: string }
+          | undefined;
+        if (!response.ok || body?.ok !== true) {
+          throw new Error(body?.error || "MCP App operation was rejected");
+        }
+        return body.result;
+      },
+    );
   const operationHandlers = new Map<string, (params: unknown) => Promise<unknown>>();
   const installOperationHandlers = (view: ViewPayload) => {
     if (view.serverTools === true) {
@@ -496,12 +510,14 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
     fail("MCP App ticket is missing");
     return;
   }
-  void fetchWithDeadline(config.viewPath, {
-    headers: { Authorization: `MCP-App ${ticket}` },
-    cache: "no-store",
-    credentials: "omit",
-  })
-    .then(async (response) => {
+  void withFetchDeadline(
+    config.viewPath,
+    {
+      headers: { Authorization: `MCP-App ${ticket}` },
+      cache: "no-store",
+      credentials: "omit",
+    },
+    async (response) => {
       if (!response.ok) {
         throw new Error("MCP App ticket was rejected");
       }
@@ -515,8 +531,8 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
       frame.setAttribute("sandbox", "allow-scripts allow-same-origin allow-forms");
       frame.src = sandboxUrl.href;
       host?.replaceChildren(frame);
-    })
-    .catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)));
+    },
+  ).catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)));
 }
 
 function standaloneHostHtml(): { html: string; scriptHash: string } {

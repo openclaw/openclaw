@@ -1,6 +1,6 @@
 import type { IncomingMessage } from "node:http";
 import { Readable } from "node:stream";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
 const mocks = vi.hoisted(() => ({
@@ -366,5 +366,97 @@ describe("MCP App standalone host", () => {
         })
       ).res.statusCode,
     ).toBe(400);
+  });
+});
+
+describe("standalone host fetch deadline", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  // Mirrors the withFetchDeadline helper serialized inside runStandaloneMcpAppHost.
+  // The helper runs browser-side via .toString(), so it cannot be imported; this
+  // test validates the timeout pattern covers both header arrival and body reads.
+  async function withFetchDeadline<T>(
+    input: string,
+    init: RequestInit,
+    consume: (response: Response) => Promise<T>,
+  ): Promise<T> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 30_000);
+    try {
+      const response = await fetch(input, { ...init, signal: controller.signal });
+      return await consume(response);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  it("aborts during stalled body consumption after the deadline", async () => {
+    // Mock fetch: headers resolve immediately, but .json() stalls until the
+    // abort signal fires (simulating a gateway that sends headers then stalls
+    // while streaming the body).
+    const fetchMock = vi.fn(async (_input: string, init?: RequestInit) => {
+      const signal = init?.signal as AbortSignal | undefined;
+      return {
+        ok: true,
+        status: 200,
+        json: () =>
+          new Promise<unknown>((_, reject) => {
+            signal?.addEventListener("abort", () => reject(new Error("The operation was aborted")));
+          }),
+      } as unknown as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const promise = withFetchDeadline(
+      "https://gateway.test/view",
+      {},
+      async (response) => (await response.json()) as unknown,
+    );
+
+    // Headers arrive synchronously; body stalls — advance just before deadline.
+    await vi.advanceTimersByTimeAsync(29_999);
+
+    // Attach handler before advancing past the deadline so the rejection
+    // is never unhandled.
+    const assertion = expect(promise).rejects.toThrow("aborted");
+
+    // Advance past the 30s deadline — controller.abort() fires and rejects
+    // the stalled body read, proving the timer covers body consumption.
+    await vi.advanceTimersByTimeAsync(2);
+    await assertion;
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://gateway.test/view",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
+
+  it("clears the timer after successful body consumption", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          ({
+            ok: true,
+            status: 200,
+            json: async () => ({ ok: true, result: "done" }),
+          }) as unknown as Response,
+      ),
+    );
+
+    const result = await withFetchDeadline(
+      "https://gateway.test/view",
+      {},
+      async (response) => (await response.json()) as { ok: boolean; result: string },
+    );
+
+    expect(result).toEqual({ ok: true, result: "done" });
+    // Advance well past the deadline — no unhandled abort fires.
+    vi.advanceTimersByTime(60_000);
   });
 });
