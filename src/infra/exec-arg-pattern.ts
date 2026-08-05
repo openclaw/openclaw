@@ -9,11 +9,14 @@ type ExecArgPatternCompileResult =
 
 export function compileExecArgPattern(source: string): ExecArgPatternCompileResult {
   const safety = compileSafeRegexDetailed(source);
-  if (!safety.regex && safety.reason !== "empty") {
+  if (safety.regex) {
+    return { regex: safety.regex, reason: null };
+  }
+  if (safety.reason !== "empty") {
     return { regex: null, reason: safety.reason };
   }
-  // The shared guard trims before classifying. Compile the original source so
-  // whitespace-only and whitespace-sensitive persisted patterns keep matching exactly.
+  // Blank persisted patterns historically compile as JavaScript regexes instead of
+  // acting like absent argPattern values.
   try {
     return { regex: new RegExp(source), reason: null };
   } catch {

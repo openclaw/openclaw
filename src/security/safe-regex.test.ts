@@ -19,7 +19,11 @@ describe("safe regex", () => {
   it.each([
     ["(a+)+$", null],
     ["(a|aa)+$", null],
+    ["(a|a)+$", null],
+    ["(?:(a|a))+$", null],
+    ["(a|b)+$", RegExp],
     ["(a|aa){2}$", RegExp],
+    ["(a|a){2}$", RegExp],
   ] as const)("compiles %s safely", (pattern, expected) => {
     if (expected === null) {
       expect(compileSafeRegex(pattern)).toBeNull();
@@ -39,9 +43,21 @@ describe("safe regex", () => {
     expect("TOKEN=abcd1234".replace(re, "***")).toBe("***");
   });
 
+  it("preserves nonblank source bytes during analysis and compilation", () => {
+    const escapedSpace = String.raw`\ `;
+    const escapedResult = compileSafeRegexDetailed(escapedSpace);
+    expect(escapedResult.source).toBe(escapedSpace);
+    expect(escapedResult.regex?.test(" ")).toBe(true);
+
+    const padded = expectCompiledRegex(" a ");
+    expect(padded.test(" a ")).toBe(true);
+    expect(padded.test("a")).toBe(false);
+  });
+
   it.each([
     ["   ", "empty"],
     ["(a+)+$", "unsafe-nested-repetition"],
+    ["(a|a)+$", "unsafe-nested-repetition"],
     ["(invalid", "invalid-regex"],
     ["^agent:main$", null],
   ] as const)("returns structured reject reason for %s", (pattern, expected) => {

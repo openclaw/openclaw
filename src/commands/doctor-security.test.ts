@@ -761,8 +761,10 @@ describe("noteSecurityWarnings gateway exposure", () => {
         main: {
           allowlist: [
             { pattern: "/usr/bin/python3", argPattern: "(a+)+$" },
+            { pattern: "/usr/bin/ruby", argPattern: "^(a|a)+$" },
             { pattern: "/usr/bin/node", argPattern: "[invalid" },
             { pattern: "/bin/echo", argPattern: "^safe$" },
+            { pattern: "/bin/escaped-space", argPattern: String.raw`\ ` },
             { pattern: "/bin/blank", argPattern: "" },
             { pattern: "/bin/space", argPattern: " " },
             { pattern: "/bin/path-only" },
@@ -839,6 +841,10 @@ describe("noteSecurityWarnings gateway exposure", () => {
 
   it("repairs rejected exec argPatterns through the structured security health check", async () => {
     const collisionSafe = { pattern: "/bin/tool\0(a+)+$", argPattern: "safe" };
+    const escapedWhitespace = {
+      pattern: "/bin/escaped-space",
+      argPattern: String.raw`\ `,
+    };
     const approvals = {
       version: 1,
       agents: {
@@ -846,9 +852,11 @@ describe("noteSecurityWarnings gateway exposure", () => {
           allowlist: [
             { pattern: "/bin/tool", argPattern: "(a+)+$\0safe" },
             { pattern: "/bin/invalid", argPattern: "[invalid" },
+            { pattern: "/bin/overlap", argPattern: "^(a|a)+$" },
             { pattern: "/bin/duplicate", argPattern: "(a+)+$" },
             { pattern: "/bin/duplicate", argPattern: "(a+)+$" },
             collisionSafe,
+            escapedWhitespace,
             { pattern: "/bin/echo", argPattern: "^safe$" },
             { pattern: "/bin/blank", argPattern: "" },
             { pattern: "/bin/space", argPattern: " " },
@@ -870,29 +878,29 @@ describe("noteSecurityWarnings gateway exposure", () => {
         cfg: {} as OpenClawConfig,
       };
       const findings = await check!.detect(context);
-      expect(findings).toHaveLength(4);
+      expect(findings).toHaveLength(5);
       const beforeHash = readExecApprovalsSnapshot().hash;
 
       const preview = await check!.repair?.({ ...context, dryRun: true }, findings);
       expect(preview?.changes).toEqual([
-        expect.stringContaining("Would remove 4 rejected exec approval entries"),
+        expect.stringContaining("Would remove 5 rejected exec approval entries"),
       ]);
       expect(preview?.effects).toEqual([
         expect.objectContaining({
           kind: "state",
-          action: "remove 4 rejected exec approval entries",
+          action: "remove 5 rejected exec approval entries",
         }),
       ]);
       expect(readExecApprovalsSnapshot().hash).toBe(beforeHash);
 
       const repaired = await check!.repair?.(context, findings);
       expect(repaired?.changes).toEqual([
-        expect.stringContaining("Removed 4 rejected exec approval entries"),
+        expect.stringContaining("Removed 5 rejected exec approval entries"),
       ]);
       expect(repaired?.effects).toEqual([
         expect.objectContaining({
           kind: "state",
-          action: "remove 4 rejected exec approval entries",
+          action: "remove 5 rejected exec approval entries",
         }),
       ]);
       expect(await check!.detect(context)).toEqual([]);
@@ -900,6 +908,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
       const remaining = loadExecApprovals().agents?.main?.allowlist ?? [];
       expect(remaining.map(({ pattern, argPattern }) => ({ pattern, argPattern }))).toEqual([
         collisionSafe,
+        escapedWhitespace,
         { pattern: "/bin/echo", argPattern: "^safe$" },
         { pattern: "/bin/blank", argPattern: "" },
         { pattern: "/bin/space", argPattern: " " },

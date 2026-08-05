@@ -160,6 +160,14 @@ describe("exec allowlist matching", () => {
       expect(matchAllowlist([unsafe], resolution, ["python3", "aaaa"])).toBeNull();
     });
 
+    it("rejects repeated equal alternatives while preserving disjoint siblings", () => {
+      const unsafe = { pattern: "/usr/bin/python3", argPattern: "^(a|a)+$" };
+      const safe = { pattern: "/usr/bin/python3", argPattern: "^(a|b)+$" };
+
+      expect(matchAllowlist([unsafe], resolution, ["python3", "aaaa"])).toBeNull();
+      expect(matchAllowlist([safe], resolution, ["python3", "abba"])).toBe(safe);
+    });
+
     it("falls back to an explicit path-only sibling when an argPattern is rejected", () => {
       const unsafe = { pattern: "/usr/bin/python3", argPattern: "(a+)+$" };
       const pathOnly = { pattern: "/usr/bin/python3" };
@@ -170,10 +178,13 @@ describe("exec allowlist matching", () => {
     it("preserves blank and whitespace-sensitive legacy argPattern semantics", () => {
       const blank = { pattern: "/usr/bin/python3", argPattern: "" };
       const whitespace = { pattern: "/usr/bin/python3", argPattern: "^ a $" };
+      const escapedSpace = { pattern: "/usr/bin/python3", argPattern: String.raw`\ ` };
 
       expect(matchAllowlist([blank], resolution, ["python3", "anything"])).toBe(blank);
       expect(matchAllowlist([whitespace], resolution, ["python3", " a "])).toBe(whitespace);
       expect(matchAllowlist([whitespace], resolution, ["python3", "a"])).toBeNull();
+      expect(matchAllowlist([escapedSpace], resolution, ["python3", " "])).toBe(escapedSpace);
+      expect(matchAllowlist([escapedSpace], resolution, ["python3", "x"])).toBeNull();
     });
 
     it("rejects split-arg bypasses against single-arg auto-generated argPattern", () => {

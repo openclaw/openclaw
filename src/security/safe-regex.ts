@@ -17,7 +17,11 @@ type TokenState = {
 type ParseFrame = {
   lastToken: TokenState | null;
   containsRepetition: boolean;
+  containsAmbiguousAlternation: boolean;
   hasAlternation: boolean;
+  hasDuplicateAlternative: boolean;
+  alternativeSources: Set<string>;
+  branchStart: number;
   branchMinLength: number;
   branchMaxLength: number;
   altMinLength: number | null;
@@ -26,9 +30,9 @@ type ParseFrame = {
 
 type PatternToken =
   | { kind: "simple-token" }
-  | { kind: "group-open" }
-  | { kind: "group-close" }
-  | { kind: "alternation" }
+  | { kind: "group-open"; contentStart: number }
+  | { kind: "group-close"; start: number }
+  | { kind: "alternation"; start: number; end: number }
   | { kind: "quantifier"; quantifier: QuantifierRead };
 
 const SAFE_REGEX_CACHE_MAX = 256;
@@ -51,11 +55,15 @@ export type SafeRegexCompileResult =
 
 const safeRegexCache = new Map<string, SafeRegexCompileResult>();
 
-function createParseFrame(): ParseFrame {
+function createParseFrame(branchStart = 0): ParseFrame {
   return {
     lastToken: null,
     containsRepetition: false,
+    containsAmbiguousAlternation: false,
     hasAlternation: false,
+    hasDuplicateAlternative: false,
+    alternativeSources: new Set(),
+    branchStart,
     branchMinLength: 0,
     branchMaxLength: 0,
     altMinLength: null,
@@ -77,7 +85,13 @@ function multiplyLength(length: number, factor: number): number {
   return length * factor;
 }
 
-function recordAlternative(frame: ParseFrame): void {
+function recordAlternative(frame: ParseFrame, source: string, branchEnd: number): void {
+  const branchSource = source.slice(frame.branchStart, branchEnd);
+  if (frame.alternativeSources.has(branchSource)) {
+    frame.hasDuplicateAlternative = true;
+  } else {
+    frame.alternativeSources.add(branchSource);
+  }
   if (frame.altMinLength === null || frame.altMaxLength === null) {
     frame.altMinLength = frame.branchMinLength;
     frame.altMaxLength = frame.branchMaxLength;
@@ -85,6 +99,24 @@ function recordAlternative(frame: ParseFrame): void {
   }
   frame.altMinLength = Math.min(frame.altMinLength, frame.branchMinLength);
   frame.altMaxLength = Math.max(frame.altMaxLength, frame.branchMaxLength);
+}
+
+function readGroupContentStart(source: string, index: number): number {
+  if (source[index + 1] !== "?") {
+    return index + 1;
+  }
+  const marker = source[index + 2];
+  if (marker === ":" || marker === "=" || marker === "!") {
+    return index + 3;
+  }
+  if (marker !== "<") {
+    return index + 1;
+  }
+  if (source[index + 3] === "=" || source[index + 3] === "!") {
+    return index + 4;
+  }
+  const nameEnd = source.indexOf(">", index + 3);
+  return nameEnd === -1 ? index + 1 : nameEnd + 1;
 }
 
 function readQuantifier(source: string, index: number): QuantifierRead | null {
@@ -167,17 +199,17 @@ function tokenizePattern(source: string): PatternToken[] {
     }
 
     if (ch === "(") {
-      tokens.push({ kind: "group-open" });
+      tokens.push({ kind: "group-open", contentStart: readGroupContentStart(source, i) });
       continue;
     }
 
     if (ch === ")") {
-      tokens.push({ kind: "group-close" });
+      tokens.push({ kind: "group-close", start: i });
       continue;
     }
 
     if (ch === "|") {
-      tokens.push({ kind: "alternation" });
+      tokens.push({ kind: "alternation", start: i, end: i + 1 });
       continue;
     }
 
@@ -194,7 +226,7 @@ function tokenizePattern(source: string): PatternToken[] {
   return tokens;
 }
 
-function analyzeTokensForNestedRepetition(tokens: PatternToken[]): boolean {
+function analyzeTokensForNestedRepetition(source: string, tokens: PatternToken[]): boolean {
   const frames: ParseFrame[] = [createParseFrame()];
 
   const emitToken = (token: TokenState) => {
@@ -202,6 +234,9 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[]): boolean {
     frame.lastToken = token;
     if (token.containsRepetition) {
       frame.containsRepetition = true;
+    }
+    if (token.hasAmbiguousAlternation) {
+      frame.containsAmbiguousAlternation = true;
     }
     frame.branchMinLength = addLength(frame.branchMinLength, token.minLength);
     frame.branchMaxLength = addLength(frame.branchMaxLength, token.maxLength);
@@ -223,7 +258,7 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[]): boolean {
     }
 
     if (token.kind === "group-open") {
-      frames.push(createParseFrame());
+      frames.push(createParseFrame(token.contentStart));
       continue;
     }
 
@@ -231,7 +266,7 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[]): boolean {
       if (frames.length > 1) {
         const frame = frames.pop() as ParseFrame;
         if (frame.hasAlternation) {
-          recordAlternative(frame);
+          recordAlternative(frame, source, token.start);
         }
         const groupMinLength = frame.hasAlternation
           ? (frame.altMinLength ?? 0)
@@ -242,10 +277,12 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[]): boolean {
         emitToken({
           containsRepetition: frame.containsRepetition,
           hasAmbiguousAlternation:
-            frame.hasAlternation &&
-            frame.altMinLength !== null &&
-            frame.altMaxLength !== null &&
-            frame.altMinLength !== frame.altMaxLength,
+            frame.containsAmbiguousAlternation ||
+            (frame.hasAlternation &&
+              (frame.hasDuplicateAlternative ||
+                (frame.altMinLength !== null &&
+                  frame.altMaxLength !== null &&
+                  frame.altMinLength !== frame.altMaxLength))),
           minLength: groupMinLength,
           maxLength: groupMaxLength,
         });
@@ -256,7 +293,8 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[]): boolean {
     if (token.kind === "alternation") {
       const frame = expectDefined(frames[frames.length - 1], "frames entry at frames.length 1");
       frame.hasAlternation = true;
-      recordAlternative(frame);
+      recordAlternative(frame, source, token.start);
+      frame.branchStart = token.end;
       frame.branchMinLength = 0;
       frame.branchMaxLength = 0;
       frame.lastToken = null;
@@ -322,20 +360,19 @@ export function testRegexWithBoundedInput(
 function hasNestedRepetition(source: string): boolean {
   // Conservative parser: tokenize first, then check if repeated tokens/groups are repeated again.
   // Non-goal: complete regex AST support; keep strict enough for config safety checks.
-  return analyzeTokensForNestedRepetition(tokenizePattern(source));
+  return analyzeTokensForNestedRepetition(source, tokenizePattern(source));
 }
 
 export function compileSafeRegexDetailed(source: string, flags = ""): SafeRegexCompileResult {
-  const trimmed = source.trim();
-  if (!trimmed) {
-    return { regex: null, source: trimmed, flags, reason: "empty" };
+  if (!source.trim()) {
+    return { regex: null, source, flags, reason: "empty" };
   }
-  const cacheKey = `${flags}::${trimmed}`;
+  const cacheKey = `${flags}::${source}`;
   if (safeRegexCache.has(cacheKey)) {
     return (
       safeRegexCache.get(cacheKey) ?? {
         regex: null,
-        source: trimmed,
+        source,
         flags,
         reason: "invalid-regex",
       }
@@ -343,13 +380,13 @@ export function compileSafeRegexDetailed(source: string, flags = ""): SafeRegexC
   }
 
   let result: SafeRegexCompileResult;
-  if (hasNestedRepetition(trimmed)) {
-    result = { regex: null, source: trimmed, flags, reason: "unsafe-nested-repetition" };
+  if (hasNestedRepetition(source)) {
+    result = { regex: null, source, flags, reason: "unsafe-nested-repetition" };
   } else {
     try {
-      result = { regex: new RegExp(trimmed, flags), source: trimmed, flags, reason: null };
+      result = { regex: new RegExp(source, flags), source, flags, reason: null };
     } catch {
-      result = { regex: null, source: trimmed, flags, reason: "invalid-regex" };
+      result = { regex: null, source, flags, reason: "invalid-regex" };
     }
   }
 
