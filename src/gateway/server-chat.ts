@@ -963,6 +963,18 @@ export function createAgentEventHandler({
     });
   };
 
+  // Direct aborts and restart shutdown mark, then clear, the run id they were
+  // handed — for a mapped run that is the source id, not the client id this
+  // flush is keyed by, so the client-keyed buffer outlives the aborted frame.
+  // Read both ids, exactly as the live event path derives its abort state.
+  const hasCurrentChatAbortMarker = (clientRunId: string, sourceRunId: string) => {
+    const chatLink = chatRunState.registry.peek(sourceRunId);
+    return (
+      isChatAbortMarkerCurrent(chatRunState.runs.get(clientRunId)?.abortMarker, chatLink) ||
+      isChatAbortMarkerCurrent(chatRunState.runs.get(sourceRunId)?.abortMarker, chatLink)
+    );
+  };
+
   const scheduleChatDeltaFlush = (
     sessionKey: string,
     agentId: string | undefined,
@@ -992,6 +1004,9 @@ export function createAgentEventHandler({
         return;
       }
       pendingChatDeltaFlushes.delete(clientRunId);
+      if (hasCurrentChatAbortMarker(clientRunId, pending.sourceRunId)) {
+        return;
+      }
       broadcastChatDelta(
         pending.sessionKey,
         pending.agentId,

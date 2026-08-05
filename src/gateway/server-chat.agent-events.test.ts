@@ -79,6 +79,7 @@ vi.mock("./session-utils.js", () => {
 
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
+import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import {
   emitAgentEvent,
@@ -1613,6 +1614,57 @@ describe("agent event handler", () => {
     expect(vi.getTimerCount()).toBe(0);
 
     const framesAtAbort = chatBroadcastStates(broadcast);
+    now = 10_500;
+    vi.advanceTimersByTime(1_000);
+
+    expect(chatBroadcastStates(broadcast)).toEqual(framesAtAbort);
+    nowSpy.mockRestore();
+  });
+
+  it("does not flush after a direct abort of a run whose client id is mapped", () => {
+    vi.useFakeTimers();
+    let now = 10_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, nodeSendToSession, chatRunState, agentRunSeq, handler } = createHarness();
+    // Voice maps a per-turn source run onto its own client run id, so the delta
+    // buffer and the trailing flush are keyed by an id the abort never names.
+    registerChatRun(chatRunState, "voice-source", "session-voice", "voice-client");
+
+    emitAgentEvent(handler, "voice-source", "assistant", { text: "Hello" });
+
+    now = 10_020;
+    emitAgentEvent(handler, "voice-source", "assistant", { text: "Hello world" });
+    expect(vi.getTimerCount()).toBe(1);
+    expect(chatRunState.runs.get("voice-client")?.rawBuffer).toBe("Hello world");
+
+    const chatAbortControllers = new Map<string, ChatAbortControllerEntry>([
+      [
+        "voice-source",
+        {
+          controller: new AbortController(),
+          sessionId: "session-voice",
+          sessionKey: "session-voice",
+          startedAtMs: now,
+          expiresAtMs: now + 60_000,
+        },
+      ],
+    ]);
+    abortChatRunById(
+      {
+        chatAbortControllers,
+        chatRunState,
+        removeChatRun: (sessionId, clientRunId, sessionKey) =>
+          chatRunState.registry.remove(sessionId, clientRunId, sessionKey),
+        agentRunSeq,
+        broadcast,
+        nodeSendToSession,
+      },
+      { runId: "voice-source", sessionKey: "session-voice", stopReason: "user" },
+    );
+
+    const framesAtAbort = chatBroadcastStates(broadcast);
+    expect(framesAtAbort.at(-1)).toBe("aborted");
+
     now = 10_500;
     vi.advanceTimersByTime(1_000);
 
