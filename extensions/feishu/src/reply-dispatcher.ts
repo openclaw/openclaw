@@ -205,7 +205,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     sendReplyToMessageId !== undefined &&
     sendReplyToMessageId !== rootId;
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
-  const prefixContext = createReplyPrefixContext({ cfg, agentId });
+  // Channel and account must reach the resolver or channels.feishu.responsePrefix
+  // and its account override fall through to the global value. The comment
+  // dispatcher already passes them; ordinary replies did not.
+  const prefixContext = createReplyPrefixContext({ cfg, agentId, channel: "feishu", accountId });
 
   let typingState: TypingIndicatorState | null = null;
   const { typingCallbacks } = createChannelMessageReplyPipeline({
