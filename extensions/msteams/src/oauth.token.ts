@@ -1,7 +1,7 @@
 // Msteams plugin module implements oauth.token behavior.
 import { resolveExpiresAtMsFromDurationSeconds } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithSsrFGuard, type LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { createMSTeamsHttpError } from "./http-error.js";
 import {
   MSTEAMS_DEFAULT_DELEGATED_SCOPES,
@@ -19,6 +19,15 @@ type MSTeamsTokenResponse = {
   refresh_token?: string;
   expiresAt: number;
   scope?: string;
+};
+
+type MSTeamsTokenFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+
+/** Optional test hooks so token fetch can exercise the real guarded-fetch owner. */
+type MSTeamsTokenFetchDeps = {
+  fetchImpl?: MSTeamsTokenFetch;
+  lookupFn?: LookupFn;
+  timeoutMs?: number;
 };
 
 function createMSTeamsTokenBody(params: {
@@ -74,7 +83,13 @@ async function fetchMSTeamsTokens(params: {
   body: URLSearchParams;
   auditContext: string;
   failureLabel: string;
+  fetchImpl?: MSTeamsTokenFetch;
+  lookupFn?: LookupFn;
+  timeoutMs?: number;
 }): Promise<MSTeamsTokenResponse> {
+  // Guard-owned timeoutMs covers DNS/proxy preflight; init.signal alone does not.
+  // Sibling graph.ts already passes top-level timeoutMs into fetchWithSsrFGuard.
+  const timeoutMs = params.timeoutMs ?? MSTEAMS_DEFAULT_TOKEN_FETCH_TIMEOUT_MS;
   const { response, release } = await fetchWithSsrFGuard({
     url: params.tokenUrl,
     init: {
@@ -84,9 +99,11 @@ async function fetchMSTeamsTokens(params: {
         Accept: "application/json",
       },
       body: params.body,
-      signal: AbortSignal.timeout(MSTEAMS_DEFAULT_TOKEN_FETCH_TIMEOUT_MS),
     },
     auditContext: params.auditContext,
+    timeoutMs,
+    ...(params.fetchImpl ? { fetchImpl: params.fetchImpl } : {}),
+    ...(params.lookupFn ? { lookupFn: params.lookupFn } : {}),
   });
 
   try {
@@ -113,6 +130,9 @@ async function requestMSTeamsDelegatedTokens(params: {
   auditContext: string;
   failureLabel: string;
   resolveRefreshToken: (data: MSTeamsTokenResponse) => string;
+  fetchImpl?: MSTeamsTokenFetch;
+  lookupFn?: LookupFn;
+  timeoutMs?: number;
 }): Promise<MSTeamsDelegatedTokens> {
   const scopes = params.scopes ?? MSTEAMS_DEFAULT_DELEGATED_SCOPES;
   const body = createMSTeamsTokenBody({
@@ -127,6 +147,9 @@ async function requestMSTeamsDelegatedTokens(params: {
     body,
     auditContext: params.auditContext,
     failureLabel: params.failureLabel,
+    fetchImpl: params.fetchImpl,
+    lookupFn: params.lookupFn,
+    timeoutMs: params.timeoutMs,
   });
 
   return {
@@ -137,14 +160,16 @@ async function requestMSTeamsDelegatedTokens(params: {
   };
 }
 
-export async function exchangeMSTeamsCodeForTokens(params: {
-  tenantId: string;
-  clientId: string;
-  clientSecret: string;
-  code: string;
-  verifier: string;
-  scopes?: readonly string[];
-}): Promise<MSTeamsDelegatedTokens> {
+export async function exchangeMSTeamsCodeForTokens(
+  params: {
+    tenantId: string;
+    clientId: string;
+    clientSecret: string;
+    code: string;
+    verifier: string;
+    scopes?: readonly string[];
+  } & MSTeamsTokenFetchDeps,
+): Promise<MSTeamsDelegatedTokens> {
   return await requestMSTeamsDelegatedTokens({
     tenantId: params.tenantId,
     clientId: params.clientId,
@@ -164,16 +189,21 @@ export async function exchangeMSTeamsCodeForTokens(params: {
       }
       return data.refresh_token;
     },
+    fetchImpl: params.fetchImpl,
+    lookupFn: params.lookupFn,
+    timeoutMs: params.timeoutMs,
   });
 }
 
-export async function refreshMSTeamsDelegatedTokens(params: {
-  tenantId: string;
-  clientId: string;
-  clientSecret: string;
-  refreshToken: string;
-  scopes?: readonly string[];
-}): Promise<MSTeamsDelegatedTokens> {
+export async function refreshMSTeamsDelegatedTokens(
+  params: {
+    tenantId: string;
+    clientId: string;
+    clientSecret: string;
+    refreshToken: string;
+    scopes?: readonly string[];
+  } & MSTeamsTokenFetchDeps,
+): Promise<MSTeamsDelegatedTokens> {
   return await requestMSTeamsDelegatedTokens({
     tenantId: params.tenantId,
     clientId: params.clientId,
@@ -186,5 +216,8 @@ export async function refreshMSTeamsDelegatedTokens(params: {
     auditContext: "msteams-oauth-token-refresh",
     failureLabel: "token refresh",
     resolveRefreshToken: (data) => data.refresh_token ?? params.refreshToken,
+    fetchImpl: params.fetchImpl,
+    lookupFn: params.lookupFn,
+    timeoutMs: params.timeoutMs,
   });
 }
