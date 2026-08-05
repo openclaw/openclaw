@@ -239,7 +239,7 @@ describe("ClickClack inbound mention gating", () => {
     expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
   });
 
-  it("fails closed when the authoritative message omits author kind", async () => {
+  it("preserves legacy inbound delivery when the message omits author kind", async () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
 
@@ -251,7 +251,7 @@ describe("ClickClack inbound mention gating", () => {
       }),
     });
 
-    expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
+    expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(1);
   });
 
   it("dispatches an allowed bot-authored message through the shared loop guard", async () => {

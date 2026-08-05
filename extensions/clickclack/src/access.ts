@@ -204,17 +204,10 @@ export async function resolveClickClackInboundAccess(params: {
     account: params.account,
     channelId: params.message.channel_id,
   });
-  const authorKind = params.message.author?.kind;
-  if (authorKind !== "human" && authorKind !== "bot") {
-    return {
-      shouldDispatch: false,
-      commandAuthorized: false,
-      requireMention: effectiveGroupPolicy.requireMention,
-      mentionFacts,
-      preparedRoute,
-    };
-  }
-  const isBotAuthor = authorKind === "bot";
+  // Older ClickClack servers may omit author classification. Preserve the
+  // legacy ingress path for those responses and apply bot-only policy only to
+  // messages positively classified as bot-authored.
+  const isBotAuthor = params.message.author?.kind === "bot";
   // The account's default allowFrom is wildcarded for human traffic. Bot
   // admission is a separate opt-in boundary, so wildcard authorization must
   // not implicitly trust every bot in the workspace.
