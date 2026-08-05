@@ -336,7 +336,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     ? null
     : await traceRunPhase("reply.load_embedded_agent_runtime", () => loadEmbeddedAgentRuntime());
   const resolveActiveEmbeddedSessionId = (sessionFile = preparedSessionState.sessionFile) =>
-    embeddedAgentRuntime?.resolveActiveEmbeddedRunSessionId(sessionKey) ??
+    embeddedAgentRuntime?.resolveActiveEmbeddedRunSessionId(sessionKey, agentId) ??
     embeddedAgentRuntime?.resolveActiveEmbeddedRunSessionIdBySessionFile?.(sessionFile);
   const sessionLaneKey = embeddedAgentRuntime
     ? embeddedAgentRuntime.resolveEmbeddedSessionLane(sessionKey ?? sessionIdFinal)
@@ -471,6 +471,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     const adoption = await admitReplyTurn({
       sessionKey: commandTurnContinuationTargetKey,
       sessionId: providedReplyOperation.sessionId,
+      agentId,
       expectedSessionId: preparedSessionState.sessionEntry?.sessionId,
       storePath,
       kind: "visible",

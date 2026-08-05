@@ -161,6 +161,7 @@ export function createDispatchReplyOperationCoordinator(params: {
     const activeReplyOperation = replyRunRegistry.get(params.dispatchOperationSessionKey);
     const activeEmbeddedSessionId = resolveActiveEmbeddedRunSessionId(
       params.dispatchOperationSessionKey,
+      params.ctx.AgentId,
     );
     const allowGatewayEmbeddedQueueResolution =
       replyTurnKind === "visible" &&
@@ -200,6 +201,7 @@ export function createDispatchReplyOperationCoordinator(params: {
     let admission = await admitReplyTurn({
       sessionKey: params.dispatchOperationSessionKey,
       sessionId: operationSessionId,
+      agentId: params.ctx.AgentId,
       expectedSessionId: params.resolveOperationExpectedSessionId(),
       expectedActiveOperation: params.initialDispatchReplyOperation,
       storePath: params.operationSessionStoreEntry.storePath,
@@ -247,6 +249,7 @@ export function createDispatchReplyOperationCoordinator(params: {
         admission = await admitReplyTurn({
           sessionKey: params.dispatchOperationSessionKey,
           sessionId: operationSessionId,
+          agentId: params.ctx.AgentId,
           expectedSessionId: params.resolveOperationExpectedSessionId(),
           expectedActiveOperation: params.initialDispatchReplyOperation,
           storePath: params.operationSessionStoreEntry.storePath,

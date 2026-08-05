@@ -38,21 +38,30 @@ import {
 } from "../../logging/diagnostic-run-activity.js";
 import { logMessageQueuedWithBacklogPolicy } from "../../logging/diagnostic-runtime.js";
 import { diagnosticLogger as diag, logSessionStateChange } from "../../logging/diagnostic.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  isUnscopedSessionKeySentinel,
+  normalizeAgentId,
+  resolveAgentIdFromSessionKey,
+} from "../../routing/session-key.js";
 import { resolveTimerTimeoutMs } from "../../shared/number-coercion.js";
 import {
   ACTIVE_EMBEDDED_RUNS,
   ACTIVE_EMBEDDED_RUNS_BY_RUN_ID,
+  ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY,
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE,
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY,
   ACTIVE_EMBEDDED_RUN_SNAPSHOTS,
+  ABANDONED_EMBEDDED_RUNS_BY_AGENT_SCOPED_FALLBACK_KEY,
   ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID,
+  ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY,
   ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE,
   ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY,
   EMBEDDED_RUN_WAITERS,
   getActiveEmbeddedRunCount,
   RETAINED_EMBEDDED_RUN_ABORTABILITY_RUN_IDS,
+  resolveActiveEmbeddedRunSessionIdByKey,
   setActiveEmbeddedRunLifecycleGeneration,
+  resolveEmbeddedRunAgentScopedFallbackIndexKey,
   type ActiveEmbeddedRunSnapshot,
   type AbandonedEmbeddedRun,
   type EmbeddedAgentQueueHandle,
@@ -130,9 +139,24 @@ export function formatEmbeddedAgentQueueFailureSummary(
   const errorPart = outcome.errorMessage ? ` error=${outcome.errorMessage}` : "";
   return `queue_message_failed reason=${outcome.reason} sessionId=${outcome.sessionId} gatewayHealth=${outcome.gatewayHealth}${errorPart}`;
 }
-function setActiveRunSessionKey(sessionKey: string | undefined, sessionId: string): void {
+function setActiveRunSessionKey(
+  sessionKey: string | undefined,
+  sessionId: string,
+  agentId?: string,
+): void {
   const normalizedSessionKey = sessionKey?.trim();
   if (!normalizedSessionKey) {
+    return;
+  }
+  const scopedFallbackKey = resolveEmbeddedRunAgentScopedFallbackIndexKey({
+    sessionKey: normalizedSessionKey,
+    agentId,
+  });
+  if (scopedFallbackKey) {
+    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY.set(scopedFallbackKey, sessionId);
+    if (ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(normalizedSessionKey) === sessionId) {
+      ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.delete(normalizedSessionKey);
+    }
     return;
   }
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.set(normalizedSessionKey, sessionId);
@@ -144,11 +168,18 @@ function clearActiveRunSessionKeys(sessionId: string, sessionKey?: string): void
     if (ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(normalizedSessionKey) === sessionId) {
       ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.delete(normalizedSessionKey);
     }
-    return;
   }
   for (const [key, activeSessionId] of ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY) {
-    if (activeSessionId === sessionId) {
+    if (!normalizedSessionKey && activeSessionId === sessionId) {
       ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.delete(key);
+    }
+  }
+  for (const [
+    key,
+    activeSessionId,
+  ] of ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY) {
+    if (activeSessionId === sessionId) {
+      ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY.delete(key);
     }
   }
 }
@@ -198,18 +229,127 @@ function clearEmbeddedRunAbandonmentBySessionId(sessionId: string): void {
   ) {
     ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.delete(normalizedSessionKey);
   }
-  const normalizedSessionFile = normalizeSessionFileRegistryKey(abandonedRun.sessionFile);
-  if (normalizedSessionFile) {
-    const sessionFileKey = normalizedSessionFile;
-    if (ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(sessionFileKey) === sessionId) {
-      ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.delete(sessionFileKey);
+  const scopedFallbackKey = resolveEmbeddedRunAgentScopedFallbackIndexKey({
+    sessionKey: abandonedRun.sessionKey,
+    agentId: abandonedRun.agentId,
+  });
+  if (scopedFallbackKey) {
+    if (
+      ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY.get(scopedFallbackKey) ===
+      sessionId
+    ) {
+      ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY.delete(scopedFallbackKey);
     }
+    if (
+      ABANDONED_EMBEDDED_RUNS_BY_AGENT_SCOPED_FALLBACK_KEY.get(scopedFallbackKey)?.sessionId ===
+      sessionId
+    ) {
+      ABANDONED_EMBEDDED_RUNS_BY_AGENT_SCOPED_FALLBACK_KEY.delete(scopedFallbackKey);
+    }
+  } else {
+    for (const [
+      key,
+      abandonedSessionId,
+    ] of ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY) {
+      if (abandonedSessionId === sessionId) {
+        ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY.delete(key);
+        ABANDONED_EMBEDDED_RUNS_BY_AGENT_SCOPED_FALLBACK_KEY.delete(key);
+      }
+    }
+  }
+  clearEmbeddedRunAbandonmentFileIndex(abandonedRun);
+}
+
+function clearEmbeddedRunAbandonmentFileIndex(abandonedRun: AbandonedEmbeddedRun): void {
+  const normalizedSessionFile = normalizeSessionFileRegistryKey(abandonedRun.sessionFile);
+  if (!normalizedSessionFile) {
+    return;
+  }
+  if (
+    ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(normalizedSessionFile) === abandonedRun.sessionId
+  ) {
+    ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.delete(normalizedSessionFile);
   }
 }
 
-function clearEmbeddedRunAbandonmentBySessionKey(sessionKey: string | undefined): void {
+function clearLegacyEmbeddedRunAbandonmentByIdentity(params: {
+  sessionId: string;
+  sessionKey?: string;
+  sessionFile?: string;
+}): void {
+  const abandonedRun = ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.get(params.sessionId);
+  if (!abandonedRun || abandonedRun.agentId?.trim()) {
+    return;
+  }
+  const normalizedSessionKey = params.sessionKey?.trim();
+  const abandonedSessionKey = abandonedRun.sessionKey?.trim();
+  if (normalizedSessionKey && abandonedSessionKey && normalizedSessionKey !== abandonedSessionKey) {
+    return;
+  }
+  const sessionFileKey = normalizeSessionFileRegistryKey(params.sessionFile);
+  const abandonedFileKey = normalizeSessionFileRegistryKey(abandonedRun.sessionFile);
+  if (sessionFileKey) {
+    if (abandonedFileKey !== sessionFileKey) {
+      return;
+    }
+  } else if (
+    !normalizedSessionKey ||
+    !abandonedSessionKey ||
+    normalizedSessionKey !== abandonedSessionKey
+  ) {
+    return;
+  }
+  // A legacy fallback marker cannot outrank the current scoped owner. Without
+  // this retirement, another agent's healthy completion is treated as abandoned.
+  ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.delete(params.sessionId);
+  if (
+    abandonedSessionKey &&
+    ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(abandonedSessionKey) === params.sessionId
+  ) {
+    ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.delete(abandonedSessionKey);
+  }
+  clearEmbeddedRunAbandonmentFileIndex(abandonedRun);
+}
+
+function clearEmbeddedRunAbandonmentByScopedFallbackKey(
+  scopedFallbackKey: string,
+  expectedSessionId?: string,
+): void {
+  const indexedSessionId =
+    ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY.get(scopedFallbackKey);
+  const scopedRun = ABANDONED_EMBEDDED_RUNS_BY_AGENT_SCOPED_FALLBACK_KEY.get(scopedFallbackKey);
+  const sessionId = expectedSessionId ?? indexedSessionId ?? scopedRun?.sessionId;
+  if (indexedSessionId && (!expectedSessionId || indexedSessionId === expectedSessionId)) {
+    ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY.delete(scopedFallbackKey);
+  }
+  if (scopedRun && (!expectedSessionId || scopedRun.sessionId === expectedSessionId)) {
+    ABANDONED_EMBEDDED_RUNS_BY_AGENT_SCOPED_FALLBACK_KEY.delete(scopedFallbackKey);
+    clearEmbeddedRunAbandonmentFileIndex(scopedRun);
+  }
+  const sessionRun = sessionId ? ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.get(sessionId) : undefined;
+  const sessionRunScopedKey = resolveEmbeddedRunAgentScopedFallbackIndexKey({
+    sessionKey: sessionRun?.sessionKey,
+    agentId: sessionRun?.agentId,
+  });
+  if (sessionId && sessionRunScopedKey === scopedFallbackKey) {
+    clearEmbeddedRunAbandonmentBySessionId(sessionId);
+  }
+}
+
+function clearEmbeddedRunAbandonmentBySessionKey(
+  sessionKey: string | undefined,
+  agentId?: string,
+): void {
   const normalizedSessionKey = sessionKey?.trim();
   if (!normalizedSessionKey) {
+    return;
+  }
+  const scopedFallbackKey = resolveEmbeddedRunAgentScopedFallbackIndexKey({
+    sessionKey: normalizedSessionKey,
+    agentId,
+  });
+  if (scopedFallbackKey) {
+    clearEmbeddedRunAbandonmentByScopedFallbackKey(scopedFallbackKey);
     return;
   }
   const sessionId = ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(normalizedSessionKey);
@@ -234,19 +374,34 @@ function clearEmbeddedRunAbandonment(params: {
   sessionId?: string;
   sessionKey?: string;
   sessionFile?: string;
+  agentId?: string;
 }): void {
   const normalizedSessionId = params.sessionId?.trim();
-  if (normalizedSessionId) {
+  const scopedFallbackKey = resolveEmbeddedRunAgentScopedFallbackIndexKey({
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+  });
+  if (normalizedSessionId && scopedFallbackKey) {
+    clearEmbeddedRunAbandonmentByScopedFallbackKey(scopedFallbackKey);
+    clearLegacyEmbeddedRunAbandonmentByIdentity({
+      sessionId: normalizedSessionId,
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      ...(params.sessionFile ? { sessionFile: params.sessionFile } : {}),
+    });
+  } else if (normalizedSessionId) {
     clearEmbeddedRunAbandonmentBySessionId(normalizedSessionId);
   }
-  clearEmbeddedRunAbandonmentBySessionKey(params.sessionKey);
-  clearEmbeddedRunAbandonmentBySessionFile(params.sessionFile);
+  if (!scopedFallbackKey) {
+    clearEmbeddedRunAbandonmentBySessionKey(params.sessionKey, params.agentId);
+    clearEmbeddedRunAbandonmentBySessionFile(params.sessionFile);
+  }
 }
 
 function markEmbeddedRunAbandoned(params: {
   sessionId: string;
   sessionKey?: string;
   sessionFile?: string;
+  agentId?: string;
   reason: AbandonedEmbeddedRun["reason"];
 }): void {
   const sessionId = params.sessionId.trim();
@@ -257,6 +412,7 @@ function markEmbeddedRunAbandoned(params: {
     sessionId,
     sessionKey: params.sessionKey,
     sessionFile: params.sessionFile,
+    agentId: params.agentId,
   });
   const normalizedSessionFile = normalizeSessionFileRegistryKey(params.sessionFile);
   const abandonedRun: AbandonedEmbeddedRun = {
@@ -265,7 +421,22 @@ function markEmbeddedRunAbandoned(params: {
     reason: params.reason,
     ...(params.sessionKey?.trim() ? { sessionKey: params.sessionKey.trim() } : {}),
     ...(normalizedSessionFile ? { sessionFile: normalizedSessionFile } : {}),
+    ...(params.agentId?.trim() ? { agentId: params.agentId.trim() } : {}),
   };
+  const scopedFallbackKey = resolveEmbeddedRunAgentScopedFallbackIndexKey({
+    sessionKey: abandonedRun.sessionKey,
+    agentId: abandonedRun.agentId,
+  });
+  if (scopedFallbackKey) {
+    // Fallback keys are reused by several agents. Keep abandonment evidence
+    // scoped so one timeout cannot suppress another owner.
+    ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY.set(
+      scopedFallbackKey,
+      sessionId,
+    );
+    ABANDONED_EMBEDDED_RUNS_BY_AGENT_SCOPED_FALLBACK_KEY.set(scopedFallbackKey, abandonedRun);
+    return;
+  }
   ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.set(sessionId, abandonedRun);
   if (abandonedRun.sessionKey) {
     ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.set(abandonedRun.sessionKey, sessionId);
@@ -280,6 +451,7 @@ export function markActiveEmbeddedRunAbandoned(params: {
   handle: EmbeddedAgentQueueHandle;
   sessionKey?: string;
   sessionFile?: string;
+  agentId?: string;
   reason: AbandonedEmbeddedRun["reason"];
 }): boolean {
   const sessionId = params.sessionId.trim();
@@ -294,18 +466,70 @@ export function isEmbeddedRunAbandoned(params: {
   sessionId?: string;
   sessionKey?: string;
   sessionFile?: string;
+  agentId?: string;
 }): boolean {
   const normalizedSessionId = params.sessionId?.trim();
-  if (normalizedSessionId && ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.has(normalizedSessionId)) {
+  const normalizedAgentId = params.agentId?.trim() ? normalizeAgentId(params.agentId) : undefined;
+  const scopedFallbackKey = resolveEmbeddedRunAgentScopedFallbackIndexKey({
+    sessionKey: params.sessionKey,
+    agentId: normalizedAgentId,
+  });
+  if (
+    scopedFallbackKey &&
+    ABANDONED_EMBEDDED_RUNS_BY_AGENT_SCOPED_FALLBACK_KEY.has(scopedFallbackKey)
+  ) {
+    return true;
+  }
+  if (normalizedSessionId && normalizedAgentId) {
+    for (const abandonedRun of ABANDONED_EMBEDDED_RUNS_BY_AGENT_SCOPED_FALLBACK_KEY.values()) {
+      if (
+        abandonedRun.sessionId === normalizedSessionId &&
+        abandonedRun.agentId &&
+        normalizeAgentId(abandonedRun.agentId) === normalizedAgentId
+      ) {
+        return true;
+      }
+    }
+  }
+  const matchesAgentOwnership = (abandonedRun: AbandonedEmbeddedRun | undefined): boolean => {
+    if (!abandonedRun) {
+      return false;
+    }
+    if (!normalizedAgentId) {
+      return true;
+    }
+    const abandonedAgentId = abandonedRun.agentId?.trim();
+    if (abandonedAgentId) {
+      return normalizeAgentId(abandonedAgentId) === normalizedAgentId;
+    }
+    // Ownerless legacy fallback markers are ambiguous across agents and cannot
+    // safely suppress completion delivery for a known current owner.
+    return !isUnscopedSessionKeySentinel(abandonedRun.sessionKey);
+  };
+  if (
+    normalizedSessionId &&
+    matchesAgentOwnership(ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.get(normalizedSessionId))
+  ) {
     return true;
   }
   const normalizedSessionKey = params.sessionKey?.trim();
-  if (normalizedSessionKey && ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.has(normalizedSessionKey)) {
-    return true;
+  if (normalizedSessionKey) {
+    const indexedSessionId = ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(normalizedSessionKey);
+    if (
+      indexedSessionId &&
+      matchesAgentOwnership(ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.get(indexedSessionId))
+    ) {
+      return true;
+    }
   }
   const normalizedSessionFile = normalizeSessionFileRegistryKey(params.sessionFile);
+  if (!normalizedSessionFile) {
+    return false;
+  }
+  const indexedSessionId = ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(normalizedSessionFile);
   return Boolean(
-    normalizedSessionFile && ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.has(normalizedSessionFile),
+    indexedSessionId &&
+    matchesAgentOwnership(ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.get(indexedSessionId)),
   );
 }
 
@@ -709,12 +933,15 @@ export function isEmbeddedAgentRunStreaming(sessionId: string): boolean {
   return handle.isStreaming();
 }
 
-export function resolveActiveEmbeddedRunHandleSessionId(sessionKey: string): string | undefined {
+export function resolveActiveEmbeddedRunHandleSessionId(
+  sessionKey: string,
+  agentId?: string,
+): string | undefined {
   const normalizedSessionKey = sessionKey.trim();
   if (!normalizedSessionKey) {
     return undefined;
   }
-  return ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(normalizedSessionKey);
+  return resolveActiveEmbeddedRunSessionIdByKey(normalizedSessionKey, agentId);
 }
 
 export function resolveActiveEmbeddedRunHandleSessionIdBySessionFile(
@@ -993,6 +1220,7 @@ export function setActiveEmbeddedRun(
   handle: EmbeddedAgentQueueHandle,
   sessionKey?: string,
   sessionFile?: string,
+  agentId?: string,
 ) {
   const currentLifecycleGeneration = getAgentEventLifecycleGeneration();
   const incomingLifecycleGeneration = setActiveEmbeddedRunLifecycleGeneration(
@@ -1015,13 +1243,15 @@ export function setActiveEmbeddedRun(
   if (previousHandle) {
     clearEmbeddedRunAbortability(previousHandle, { retainFinalizing: true });
   }
-  clearEmbeddedRunAbandonment({ sessionId, sessionKey, sessionFile });
+  clearEmbeddedRunAbandonment({ sessionId, sessionKey, sessionFile, agentId });
   ACTIVE_EMBEDDED_RUNS.set(sessionId, handle);
   if (handle.runId) {
     ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.set(handle.runId, handle);
   }
+  // A session id identifies one active run generation. Retire every alias for
+  // the replaced handle before publishing the current owner's scoped alias.
   clearActiveRunSessionKeys(sessionId);
-  setActiveRunSessionKey(sessionKey, sessionId);
+  setActiveRunSessionKey(sessionKey, sessionId, agentId);
   clearActiveRunSessionFiles(sessionId);
   setActiveRunSessionFile(sessionFile, sessionId);
   logSessionStateChange({
@@ -1124,9 +1354,12 @@ const testing = {
     RETAINED_EMBEDDED_RUN_ABORTABILITY_RUN_IDS.clear();
     ACTIVE_EMBEDDED_RUN_SNAPSHOTS.clear();
     ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.clear();
+    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY.clear();
     ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.clear();
     ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.clear();
+    ABANDONED_EMBEDDED_RUNS_BY_AGENT_SCOPED_FALLBACK_KEY.clear();
     ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.clear();
+    ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY.clear();
     ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.clear();
   },
 };
