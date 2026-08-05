@@ -28,7 +28,10 @@ import { isFallbackSummaryError } from "../../agents/model-fallback-attempt.js";
 import { resolveSilentReplyPolicy } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
+import {
+  markReplyPayloadForSourceSuppressionDelivery,
+  setReplyPayloadMetadata,
+} from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -466,7 +469,7 @@ export function markAgentRunFailureReplyPayload<T extends ReplyPayload>(payload:
   if (!isSilentReplyText(marked.text, SILENT_REPLY_TOKEN)) {
     marked.isError = true;
   }
-  return marked;
+  return setReplyPayloadMetadata(marked, { agentRunFailure: true });
 }
 
 export function buildTerminalAgentRunFailureReplyPayload(params: {
