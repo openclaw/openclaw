@@ -88,6 +88,8 @@ The lists below are generated from the source target registry and checked agains
 - `channels.buzz.privateKey`
 - `channels.clickclack.token`
 - `channels.clickclack.accounts.*.token`
+- `channels.rcs.authToken`
+- `channels.rcs.accounts.*.authToken`
 - `channels.discord.token`
 - `channels.discord.pluralkit.token`
 - `channels.discord.voice.tts.providers.*.apiKey`
