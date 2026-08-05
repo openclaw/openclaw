@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { bindModelLlmRuntime } from "../../llm/model-runtime-binding.js";
 import { complete } from "../../llm/stream.js";
 import type { Context } from "../../llm/types.js";
+import { logWarn } from "../../logger.js";
 import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
@@ -68,6 +69,7 @@ const DEFAULT_PROMPT = "Analyze this PDF document.";
 const DEFAULT_MAX_PDFS = 10;
 const DEFAULT_MAX_BYTES_MB = 10;
 const DEFAULT_MAX_PAGES = 20;
+const MAX_PDF_MB_CAP = 100;
 
 const PDF_MIN_TEXT_CHARS = 200;
 const PDF_MAX_PIXELS = 4_000_000;
@@ -453,12 +455,20 @@ export function createPdfTool(options?: {
         record,
         DEFAULT_PROMPT,
       );
+      const maxBytesMbRaw = readFiniteNumberParam(record, "maxBytesMb", {
+        min: 0,
+        minExclusive: true,
+        message: "maxBytesMb must be greater than 0",
+      });
+      // Model-supplied maxBytesMb is clamped to prevent pathological allocations
+      // in PDF processing pipelines. Operator config (agents.defaults.pdfMaxMb) is not clamped.
       const maxBytesMb =
-        readFiniteNumberParam(record, "maxBytesMb", {
-          min: 0,
-          minExclusive: true,
-          message: "maxBytesMb must be greater than 0",
-        }) ?? configuredMaxBytesMb;
+        maxBytesMbRaw === undefined
+          ? configuredMaxBytesMb
+          : Math.min(maxBytesMbRaw, MAX_PDF_MB_CAP);
+      if (maxBytesMbRaw !== undefined && maxBytesMbRaw > MAX_PDF_MB_CAP) {
+        logWarn(`pdf-tool: maxBytesMb clamped from ${maxBytesMbRaw} to ${MAX_PDF_MB_CAP}`);
+      }
       const maxBytes = Math.floor(maxBytesMb * 1024 * 1024);
 
       // Parse page range
