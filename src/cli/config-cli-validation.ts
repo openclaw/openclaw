@@ -17,7 +17,7 @@ import {
   preflightExecSecretProviderCommandPaths,
   resolveSecretRefValue,
 } from "../secrets/resolve.js";
-import { collectActiveSecretsRuntimeRefs } from "../secrets/runtime.js";
+import { buildActiveSecretsRuntimePreflightPlan } from "../secrets/runtime.js";
 import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
@@ -229,11 +229,12 @@ export function collectDryRunSchemaErrors(config: OpenClawConfig): ConfigSetDryR
 export async function collectExecProviderCommandPathErrors(params: {
   config: OpenClawConfig;
 }): Promise<{ errors: ConfigSetDryRunError[]; preflightRan: boolean }> {
-  const refs = await collectActiveSecretsRuntimeRefs({ config: params.config });
-  const preflightRan = refs.some((ref) => ref.source === "exec");
+  const plan = await buildActiveSecretsRuntimePreflightPlan({ config: params.config });
+  const preflightRan = plan.refs.some((ref) => ref.source === "exec");
   const errors = await preflightExecSecretProviderCommandPaths({
-    refs,
+    refs: plan.refs,
     config: params.config,
+    ...(plan.manifestRegistry ? { manifestRegistry: plan.manifestRegistry } : {}),
   });
   return {
     errors: errors.map((message) => ({ kind: "schema", message })),

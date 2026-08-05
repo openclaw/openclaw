@@ -80,11 +80,14 @@ const loadRuntimeOwnerAssignmentHelpers = createLazyRuntimeModule(
   () => import("./runtime-owner-assignments.js"),
 );
 
-async function resolveLoadablePluginOrigins(params: {
+async function resolveSecretsPluginMetadata(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
-}): Promise<ReadonlyMap<string, PluginOrigin>> {
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins" | "manifestRegistry">;
+}): Promise<{
+  loadablePluginOrigins: ReadonlyMap<string, PluginOrigin>;
+  manifestRegistry: Pick<PluginManifestRegistry, "plugins">;
+}> {
   const workspaceDir = resolveAgentWorkspaceDir(
     params.config,
     resolveDefaultAgentId(params.config),
@@ -99,7 +102,10 @@ async function resolveLoadablePluginOrigins(params: {
       workspaceDir,
       env: params.env,
     });
-  return listPluginOriginsFromMetadataSnapshot(snapshot);
+  return {
+    loadablePluginOrigins: listPluginOriginsFromMetadataSnapshot(snapshot),
+    manifestRegistry: snapshot.manifestRegistry,
+  };
 }
 
 function hasConfiguredPluginEntries(config: OpenClawConfig): boolean {
@@ -193,19 +199,24 @@ async function buildSecretsRuntimeAssignmentPlan(params: {
 }) {
   const { collectAuthStoreAssignments, collectConfigAssignments, createResolverContext } =
     await loadRuntimePrepareHelpers();
-  const manifestRegistry =
-    params.manifestRegistry ?? params.pluginMetadataSnapshot?.manifestRegistry;
-  const loadablePluginOrigins =
-    params.loadablePluginOrigins ??
-    (shouldLoadPluginMetadataForSecrets(params.sourceConfig)
-      ? await resolveLoadablePluginOrigins({
-          config: params.sourceConfig,
-          env: params.runtimeEnv,
-          pluginMetadataSnapshot:
-            params.pluginMetadataSnapshot ??
-            (manifestRegistry ? { plugins: manifestRegistry.plugins } : undefined),
-        })
-      : new Map<string, PluginOrigin>());
+  let manifestRegistry = params.manifestRegistry ?? params.pluginMetadataSnapshot?.manifestRegistry;
+  let loadablePluginOrigins = params.loadablePluginOrigins;
+  if (
+    shouldLoadPluginMetadataForSecrets(params.sourceConfig) &&
+    (!loadablePluginOrigins ||
+      (!manifestRegistry && hasConfiguredPluginIntegrationSecretProviders(params.sourceConfig)))
+  ) {
+    const pluginMetadata = await resolveSecretsPluginMetadata({
+      config: params.sourceConfig,
+      env: params.runtimeEnv,
+      pluginMetadataSnapshot:
+        params.pluginMetadataSnapshot ??
+        (manifestRegistry ? { plugins: manifestRegistry.plugins, manifestRegistry } : undefined),
+    });
+    loadablePluginOrigins ??= pluginMetadata.loadablePluginOrigins;
+    manifestRegistry ??= pluginMetadata.manifestRegistry;
+  }
+  loadablePluginOrigins ??= new Map<string, PluginOrigin>();
   const context = createResolverContext({
     sourceConfig: params.sourceConfig,
     env: params.runtimeEnv,
@@ -253,13 +264,16 @@ async function buildSecretsRuntimeAssignmentPlan(params: {
   };
 }
 
-/** Collects the exact SecretRefs a cold start would select, without resolving providers. */
-export async function collectActiveSecretsRuntimeRefs(params: {
+/** Builds the exact non-resolving SecretRef plan a cold start would select. */
+export async function buildActiveSecretsRuntimePreflightPlan(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   agentDirs?: string[];
   loadAuthStore?: (agentDir?: string) => AuthProfileStore;
-}): Promise<SecretRef[]> {
+}): Promise<{
+  refs: SecretRef[];
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+}> {
   const runtimeEnv = mergeSecretsRuntimeEnv(params.env);
   const sourceConfig = structuredClone(params.config);
   const resolvedConfig = structuredClone(params.config);
@@ -289,7 +303,10 @@ export async function collectActiveSecretsRuntimeRefs(params: {
       return "openclaw-secret-preflight";
     },
   });
-  return [...refsByKey.values()];
+  return {
+    refs: [...refsByKey.values()],
+    ...(plan.manifestRegistry ? { manifestRegistry: plan.manifestRegistry } : {}),
+  };
 }
 
 /** Prepares a secrets runtime snapshot and records refresh context for later activation. */

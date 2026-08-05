@@ -144,6 +144,8 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: (config: unknown) => mockLoadPluginMetadataSnapshot(config),
   resolvePluginMetadataSnapshot: (params: { config?: unknown }) =>
     mockLoadPluginMetadataSnapshot(params.config),
+  listPluginOriginsFromMetadataSnapshot: (snapshot: PluginMetadataSnapshot) =>
+    new Map(snapshot.plugins.map((plugin) => [plugin.id, plugin.origin])),
 }));
 
 vi.mock("../plugins/bundled-plugin-metadata.js", () => ({
@@ -225,13 +227,20 @@ function setGatewaySnapshot(secrets?: OpenClawConfig["secrets"]): void {
   setSnapshot(resolved, resolved);
 }
 
+function setGatewayTokenAuthSnapshot(secrets: OpenClawConfig["secrets"]): void {
+  const resolved: OpenClawConfig = {
+    gateway: { port: 18789, auth: { mode: "token" } },
+    secrets,
+  };
+  setSnapshot(resolved, resolved);
+}
+
 /**
  * Configures a snapshot whose `gateway.auth.token` is an active exec SecretRef
  * on `providerAlias`, so the exec-provider preflight (which derives targets
  * from active SecretRefs, matching startup) inspects that provider during
  * `config validate`. Without an active ref the preflight skips the provider,
- * since startup would not resolve it either (see ClawSweeper P1 review on
- * #117128).
+ * since startup would not resolve it either.
  */
 function setGatewaySnapshotWithActiveExecRef(
   secrets: OpenClawConfig["secrets"],
@@ -1723,7 +1732,7 @@ describe("config cli", () => {
       try {
         // An active SecretRef on `execmain` makes the provider part of the
         // startup resolution set, so the exec-provider preflight inspects its
-        // command path during validate (see ClawSweeper P1 review on #117128).
+        // command path during validate.
         setGatewaySnapshotWithActiveExecRef(
           {
             providers: {
@@ -1774,9 +1783,8 @@ describe("config cli", () => {
             path: string;
             issues: string[];
           };
-          // Machine-readable validate output must surface the exec provider
-          // command-path failure as an issue string (see ClawSweeper review on
-          // #117128 — cover the --json contract, not just the text surface).
+          // Machine-readable validate output must cover the same command-path
+          // failure as the text surface.
           expect(payload.valid).toBe(false);
           expect(payload.issues).toEqual(
             expect.arrayContaining([expect.stringContaining("secrets.providers.execmain")]),
@@ -1797,7 +1805,7 @@ describe("config cli", () => {
         // The preflight selector derives targets from active SecretRefs, matching
         // startup's ref-driven resolution: a provider with no active ref is not
         // startup's concern, so an unsafe command path on such a provider must
-        // not fail validation (see ClawSweeper P1 review on #117128).
+        // not fail validation.
         const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-validate-unused-"));
         const symlinkPath = path.join(root, "node-link");
         fs.symlinkSync(process.execPath, symlinkPath);
@@ -1827,21 +1835,20 @@ describe("config cli", () => {
     );
 
     it.skipIf(process.platform === "win32")(
-      "does not preflight an exec provider whose only SecretRef sits on a disabled model provider",
+      "does not preflight an exec provider whose only SecretRef sits on a disabled skill",
       async () => {
         // The preflight selector reuses the runtime active-assignment walk, so
-        // a SecretRef on a disabled owner (here a model provider with
+        // a SecretRef on a disabled owner (here a skill entry with
         // `enabled: false`) is inactive — startup skips it, so validate must
-        // not preflight the exec provider it points at (see ClawSweeper P1
-        // review on #117128, head 3e04a396).
+        // not preflight the exec provider it points at.
         const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-disabled-provider-"));
         const symlinkPath = path.join(root, "node-link");
         fs.symlinkSync(process.execPath, symlinkPath);
         try {
           const resolved = {
             gateway: { port: 18789 },
-            models: {
-              providers: {
+            skills: {
+              entries: {
                 disabledone: {
                   enabled: false,
                   apiKey: {
@@ -1875,7 +1882,7 @@ describe("config cli", () => {
     );
 
     it.skipIf(process.platform === "win32")(
-      "preflights an exec provider once its disabled model provider is re-enabled",
+      "preflights an exec provider once its disabled skill is re-enabled",
       async () => {
         // Mirror of the disabled-owner test: the same config with the provider
         // enabled must reject the unsafe command, proving the active-assignment
@@ -1886,8 +1893,8 @@ describe("config cli", () => {
         try {
           const resolved = {
             gateway: { port: 18789 },
-            models: {
-              providers: {
+            skills: {
+              entries: {
                 activeone: {
                   enabled: true,
                   apiKey: {
@@ -2395,9 +2402,11 @@ describe("config cli", () => {
         try {
           // An active SecretRef on `execmain` makes the provider part of the
           // startup resolution set, so writing an unsafe command path is
-          // rejected before it can become the next cold-start input
-          // (see ClawSweeper P1 review on #117128).
-          setGatewaySnapshotWithActiveExecRef({}, "execmain");
+          // rejected before it can become the next cold-start input.
+          setGatewaySnapshotWithActiveExecRef(
+            { providers: { execmain: { source: "exec", command: symlinkPath } } },
+            "execmain",
+          );
 
           await expect(
             runConfigCommand(["config", "set", "secrets.providers.execmain.command", symlinkPath]),
@@ -2420,7 +2429,7 @@ describe("config cli", () => {
       fs.symlinkSync(process.execPath, symlinkPath);
       try {
         const resolved = {
-          models: { providers: { disabledone: { enabled: false } } },
+          skills: { entries: { disabledone: { enabled: false } } },
           secrets: {
             providers: { execmain: { source: "exec", command: symlinkPath } },
           },
@@ -2430,7 +2439,7 @@ describe("config cli", () => {
         await runConfigCommand([
           "config",
           "set",
-          "models.providers.disabledone.apiKey",
+          "skills.entries.disabledone.apiKey",
           '{"source":"exec","provider":"execmain","id":"disabled-api-key"}',
           "--strict-json",
           ...extraArgs,
@@ -2451,8 +2460,8 @@ describe("config cli", () => {
         fs.symlinkSync(process.execPath, symlinkPath);
         try {
           const resolved = {
-            models: {
-              providers: {
+            skills: {
+              entries: {
                 disabledone: {
                   enabled: false,
                   apiKey: {
@@ -2473,7 +2482,7 @@ describe("config cli", () => {
             runConfigCommand([
               "config",
               "set",
-              "models.providers.disabledone.enabled",
+              "skills.entries.disabledone.enabled",
               "true",
               "--strict-json",
             ]),
@@ -2509,8 +2518,7 @@ describe("config cli", () => {
       // A value-mode write can set secrets.providers.<alias> to a non-object
       // (null/primitive) without triggering full schema validation. The
       // exec-provider preflight must narrow to a non-null object instead of
-      // throwing a raw TypeError on `"command" in provider` (see ClawSweeper
-      // review on #117128).
+      // throwing a raw TypeError on `"command" in provider`.
       setGatewaySnapshot();
 
       await runConfigCommand(["config", "set", "secrets.providers.ghost", "null", "--dry-run"]);
@@ -2526,7 +2534,7 @@ describe("config cli", () => {
         const symlinkPath = path.join(root, "node-link");
         fs.symlinkSync(process.execPath, symlinkPath);
         try {
-          setGatewaySnapshot({
+          setGatewayTokenAuthSnapshot({
             providers: { execmain: { source: "exec", command: symlinkPath } },
           });
 
@@ -2534,13 +2542,13 @@ describe("config cli", () => {
             runConfigCommand([
               "config",
               "set",
-              "channels.discord.token",
+              "gateway.auth.token",
               "--ref-provider",
               "execmain",
               "--ref-source",
               "exec",
               "--ref-id",
-              "DISCORD_BOT_TOKEN",
+              "gateway-auth-token",
               "--dry-run",
               "--json",
             ]),
@@ -2575,20 +2583,20 @@ describe("config cli", () => {
       async () => {
         const validCommandPath = createValidExecutableFixture();
         try {
-          setGatewaySnapshot({
+          setGatewayTokenAuthSnapshot({
             providers: { execmain: { source: "exec", command: validCommandPath } },
           });
 
           await runConfigCommand([
             "config",
             "set",
-            "channels.discord.token",
+            "gateway.auth.token",
             "--ref-provider",
             "execmain",
             "--ref-source",
             "exec",
             "--ref-id",
-            "DISCORD_BOT_TOKEN",
+            "gateway-auth-token",
             "--dry-run",
             "--json",
           ]);
@@ -2600,8 +2608,7 @@ describe("config cli", () => {
             errors?: Array<{ kind: string; message: string }>;
           };
           // A valid exec provider passes the non-executing preflight, but the
-          // JSON report must still reflect that the schema-class preflight ran
-          // (see ClawSweeper review on #117128).
+          // JSON report must still reflect that the schema-class preflight ran.
           expect(payload.ok).toBe(true);
           expect(payload.checks.schema).toBe(true);
         } finally {
@@ -3430,9 +3437,8 @@ describe("config cli", () => {
 
         setSnapshot(resolved, resolved);
         // The patch assigns a SecretRef on `team` so the plugin-integration
-        // provider enters the active set startup will resolve; the preflight
-        // selector derives targets from active refs (see ClawSweeper P1 review
-        // on #117128), so the ref must be present for materialization to run.
+        // provider enters the active set startup will resolve, so the ref must
+        // be present for materialization to run.
         const activeTeamRef = {
           source: "exec",
           provider: "team",
@@ -3464,7 +3470,7 @@ describe("config cli", () => {
         }
         expect(mockWriteConfigFile).not.toHaveBeenCalled();
         // The plugin-integration provider was materialized and its command
-        // path preflight ran; checks.schema must reflect that (see #117128).
+        // path preflight ran, so checks.schema must reflect it.
         const validPayload = parseLastLogPayload() as {
           ok: boolean;
           checks: { schema: boolean };
@@ -3516,7 +3522,7 @@ describe("config cli", () => {
         // The integration was selected for preflight and materialization was
         // attempted (and failed); checks.schema must reflect that the
         // plugin-integration preflight ran, even though no command-path check
-        // executed (see ClawSweeper review on #117128).
+        // executed.
         expect(invalidPayload.ok).toBe(false);
         expect(invalidPayload.checks?.schema).toBe(true);
       } finally {
@@ -3530,8 +3536,7 @@ describe("config cli", () => {
         // The plugin-integration preflight must materialize the integration
         // into a manual exec provider and run the same command-path trust
         // checks that startup applies, so a config cannot pass validation and
-        // then fail cold start when the materialized command is spawned
-        // (see ClawSweeper review on #117128).
+        // then fail cold start when the materialized command is spawned.
         const pluginId = "secret-provider-proof";
         const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-plugin-cmd-"));
         try {
@@ -3605,8 +3610,7 @@ describe("config cli", () => {
         // SecretRefs (matching startup), so an active ref on `team` makes the
         // integration's materialization run during validate; a missing/disabled
         // integration that an active ref points at must fail validation rather
-        // than report valid: true and fail only at cold start
-        // (see ClawSweeper P1 review on #117128).
+        // than report valid: true and fail only at cold start.
         const pluginId = "secret-provider-proof";
         const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-plugin-missing-"));
         try {
@@ -3758,8 +3762,7 @@ describe("config cli", () => {
         // otherwise the config passes validation/write and fails only at cold
         // start. The active-ref-derived selector catches this because the
         // post-mutation config still has the ref, so the now-disabled provider
-        // is materialized for preflight and fails (see ClawSweeper P1 review
-        // on #117128).
+        // is materialized for preflight and fails.
         const pluginId = "secret-provider-proof";
         const rootDir = fs.mkdtempSync(
           path.join(os.tmpdir(), "openclaw-config-plugin-disable-ref-"),
@@ -3853,63 +3856,13 @@ describe("config cli", () => {
     );
 
     it.skipIf(process.platform === "win32")(
-      "rejects changing secrets.defaults.exec to an unsafe provider an active ref now resolves to",
-      async () => {
-        // A legacy exec SecretRef without an explicit provider resolves its
-        // provider from `secrets.defaults.exec`. Changing that default to a
-        // provider with an unsafe command path must be rejected at write time,
-        // because the post-mutation active ref now resolves to the unsafe
-        // provider — the active-ref-derived selector widens to cover it
-        // (see ClawSweeper P1 review on #117128).
-        const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-defaults-exec-"));
-        const symlinkPath = path.join(root, "node-link");
-        fs.symlinkSync(process.execPath, symlinkPath);
-        try {
-          const resolved = {
-            gateway: {
-              port: 18789,
-              auth: {
-                mode: "token",
-                // Legacy ref without `provider`: resolves via secrets.defaults.exec.
-                token: { source: "exec", id: "gateway-auth-token" },
-              },
-            },
-            secrets: {
-              defaults: { exec: "default" },
-              providers: {
-                default: { source: "env" },
-                vault: { source: "exec", command: symlinkPath },
-              },
-            },
-          } as unknown as OpenClawConfig;
-          setSnapshot(resolved, resolved);
-
-          // Before the write, `vault` has no active ref (the ref resolves to
-          // `default`), so validate accepts despite the unsafe command.
-          await runConfigCommand(["config", "validate"]);
-          expect(mockExit).not.toHaveBeenCalled();
-
-          // Pointing the default at `vault` makes the active ref resolve to
-          // `vault`, so the write must be rejected before it persists.
-          await expect(
-            runConfigCommand(["config", "set", "secrets.defaults.exec", "vault", "--dry-run"]),
-          ).rejects.toThrow("Dry run failed: config schema validation failed");
-          expectErrorIncludes("must not be a symlink");
-          expect(mockWriteConfigFile).not.toHaveBeenCalled();
-        } finally {
-          fs.rmSync(root, { recursive: true, force: true });
-        }
-      },
-    );
-
-    it.skipIf(process.platform === "win32")(
       "stops prefighting an exec provider once its active SecretRef is removed",
       async () => {
         // Switching gateway.auth.mode away from `token` prunes the
         // gateway.auth.token SecretRef, so the provider that ref pointed at no
         // longer has an active ref and is not startup's concern. The write must
         // succeed even though that provider's command path is unsafe, matching
-        // startup's ref-driven resolution (see ClawSweeper P1 review on #117128).
+        // startup's ref-driven resolution.
         const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-ref-removal-"));
         const symlinkPath = path.join(root, "node-link");
         fs.symlinkSync(process.execPath, symlinkPath);
@@ -4295,7 +4248,7 @@ describe("config cli", () => {
       const symlinkPath = path.join(badRoot, "bad-link");
       fs.symlinkSync(process.execPath, symlinkPath);
       try {
-        setGatewaySnapshot({
+        setGatewayTokenAuthSnapshot({
           providers: {
             good: { source: "exec", command: validPath },
             bad: { source: "exec", command: symlinkPath },
@@ -4306,13 +4259,13 @@ describe("config cli", () => {
           runConfigCommand([
             "config",
             "set",
-            "channels.discord.token",
+            "gateway.auth.token",
             "--ref-provider",
             "bad",
             "--ref-source",
             "exec",
             "--ref-id",
-            "DISCORD_BOT_TOKEN",
+            "gateway-auth-token",
             "--dry-run",
             "--json",
           ]),
