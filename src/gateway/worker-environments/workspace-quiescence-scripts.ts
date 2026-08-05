@@ -53,7 +53,6 @@ function probeProcessIdentity(pid, timeoutMs = ${REMOTE_WATCHDOG_PROCESS_PROBE_T
   });
 }
 function processEnrollmentDeadlineMs(referenceCount) {
-  // Enrollment budgets each concurrency batch plus scheduling headroom; recovery remains five seconds.
   const probeBatches = Math.ceil(referenceCount / ${REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY});
   return Date.now() + Math.max(
     ${REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS},
@@ -494,8 +493,9 @@ if (input.recovery !== undefined) {
   throw new Error("workspace quiescence recovery " + failure + "; lease retained for operator recovery");
 }
 const existingReferences = input.processes.map((entry) => ({ ...entry, signal: 0 }));
-const existingValidationDeadlineMs = processEnrollmentDeadlineMs(existingReferences.length);
-if (input.watchdog === null || input.expiresAtMs < existingValidationDeadlineMs + ${REMOTE_WATCHDOG_PROCESS_PROBE_TIMEOUT_MS}) {
+const existingValidationDeadlineMs = existingReferences.length === 0 ? Date.now() : processEnrollmentDeadlineMs(existingReferences.length);
+const renewalDeadlineMs = existingValidationDeadlineMs + ${REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS};
+if (input.watchdog === null || input.expiresAtMs <= renewalDeadlineMs) {
   throw new Error("workspace quiescence lease is no longer active");
 }
 function writeLease(processes, expiresAtMs) {
@@ -514,9 +514,9 @@ function writeLease(processes, expiresAtMs) {
   input.processes = processes;
   input.expiresAtMs = expiresAtMs;
 }
-async function assertWatchdogActive() {
+async function assertWatchdogActive(deadlineMs = Date.now() + ${REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS}) {
   const reference = { ...input.watchdog, signal: 0 };
-  const checked = await recoverProcessReferences([reference]);
+  const checked = await recoverProcessReferences([reference], ${REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY}, deadlineMs);
   if (checked.remaining.length > 0 && !checked.failed) throw new Error("workspace quiescence watchdog identity probe timed out");
   if (checked.failed) throw new Error("workspace quiescence watchdog identity probe failed");
   const outcome = checked.settled.get(reference);
@@ -525,8 +525,8 @@ async function assertWatchdogActive() {
     throw new Error("workspace quiescence watchdog is not active");
   }
 }
-async function refreshLease(processes) {
-  await assertWatchdogActive();
+async function refreshLease(processes, watchdogDeadlineMs) {
+  await assertWatchdogActive(watchdogDeadlineMs);
   writeLease(processes, Date.now() + timeoutMs);
 }
 async function rollbackLateProcesses(references, priorProcesses, error) {
@@ -554,7 +554,7 @@ for (const reference of existingReferences) {
     throw new Error("workspace quiescence process resumed unexpectedly");
   }
 }
-await refreshLease(input.processes);
+await refreshLease(input.processes, renewalDeadlineMs);
 if (validationMode === "final") {
   const frozen = new Map(input.processes.map((entry) => [entry.pid, entry.start]));
   let quietScans = 0;

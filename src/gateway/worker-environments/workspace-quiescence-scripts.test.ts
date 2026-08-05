@@ -78,7 +78,7 @@ async function fixture() {
 async function useBatchedDelayedProcessFixture(input: Awaited<ReturnType<typeof fixture>>) {
   await fs.writeFile(
     path.join(input.bin, "ps"),
-    '#!/bin/sh\ncase "$*" in\n  *"pid=,ppid=,uid=,stat=,lstart="*) printf "%s %s %s S Tue Jul 15 08:00:00 2026\\n" "$$" "$PPID" "$(id -u)"; if [ -s "$OPENCLAW_TEST_PS_EXTRA" ]; then pids=$(paste -sd, "$OPENCLAW_TEST_PS_EXTRA"); /bin/ps -o pid=,ppid=,uid=,stat=,lstart= -p "$pids"; fi ;;\n  *"stat=,lstart= -p"*|*"lstart= -p"*) target=""; for argument in "$@"; do target=$argument; done; if [ -f "$OPENCLAW_TEST_PS_DELAY_TARGET" ] && grep -qx "$target" "$OPENCLAW_TEST_PS_DELAY_TARGET"; then /bin/sleep 0.7; fi; exec /bin/ps "$@" ;;\nesac\n',
+    '#!/bin/sh\nstall() { trap "" TERM; exec sleep 30; }\nif [ -f "$OPENCLAW_TEST_PS_STALL_TARGET" ]; then target=""; for argument in "$@"; do target=$argument; done; case "$*" in *"stat=,lstart= -p"*|*"lstart= -p"*) if grep -qx "$target" "$OPENCLAW_TEST_PS_STALL_TARGET"; then stall; fi ;; esac; fi\ncase "$*" in\n  *"pid=,ppid=,uid=,stat=,lstart="*) printf "%s %s %s S Tue Jul 15 08:00:00 2026\\n" "$$" "$PPID" "$(id -u)"; if [ -s "$OPENCLAW_TEST_PS_EXTRA" ]; then pids=$(paste -sd, "$OPENCLAW_TEST_PS_EXTRA"); /bin/ps -o pid=,ppid=,uid=,stat=,lstart= -p "$pids"; fi ;;\n  *"stat=,lstart= -p"*|*"lstart= -p"*) target=""; for argument in "$@"; do target=$argument; done; if [ -f "$OPENCLAW_TEST_PS_DELAY_TARGET" ] && grep -qx "$target" "$OPENCLAW_TEST_PS_DELAY_TARGET"; then /bin/sleep 0.7; fi; exec /bin/ps "$@" ;;\nesac\n',
   );
 }
 
@@ -467,19 +467,21 @@ describe("remote workspace quiescence scripts", () => {
 
     try {
       await fs.writeFile(input.extraProcessPath, `${childPids.join("\n")}\n`);
-      nonce = await quiesce(input, 15_000, 30_000);
+      nonce = await quiesce(input, 20_000, 30_000);
       await Promise.all(childPids.map(async (pid) => await expectProcessState(pid, true)));
       const leaseFile = leasePath(input.home, input.workspace, nonce);
       const before = JSON.parse(await fs.readFile(leaseFile, "utf8")) as {
         expiresAtMs: number;
+        watchdog: { pid: number };
       };
-      const waitMs = before.expiresAtMs - Date.now() - 6_000;
+      const waitMs = before.expiresAtMs - Date.now() - 11_000;
       if (waitMs > 0) {
         await new Promise<void>((resolve) => {
           setTimeout(resolve, waitMs);
         });
       }
       await fs.writeFile(input.delayedProcessProbeTargetPath, `${childPids.join("\n")}\n`);
+      await fs.writeFile(input.stalledProcessProbeTargetPath, `${before.watchdog.pid}\n`);
 
       const startedAt = Date.now();
       const result = await runCommandWithTimeout(
@@ -491,7 +493,7 @@ describe("remote workspace quiescence scripts", () => {
           nonce,
           "20000",
         ],
-        { timeoutMs: 10_000, baseEnv: input.env },
+        { timeoutMs: 20_000, baseEnv: input.env },
       );
 
       expect(result.code).not.toBe(0);
@@ -504,6 +506,7 @@ describe("remote workspace quiescence scripts", () => {
       await Promise.all(childPids.map(async (pid) => await expectProcessState(pid, true)));
     } finally {
       await fs.rm(input.delayedProcessProbeTargetPath, { force: true });
+      await fs.rm(input.stalledProcessProbeTargetPath, { force: true });
       await fs.rm(input.extraProcessPath, { force: true });
       if (nonce) {
         try {
