@@ -18,7 +18,7 @@ import { collectProviderApiKeys, isApiKeyRateLimitError } from "./live-auth-keys
 type ApiKeyRetryParams = {
   apiKey: string;
   error: unknown;
-  /** @deprecated Use apiKeyIndex for key-rotation position or attemptNumber for per-key retry count. */
+  /** One-based retry count for the current key (same as attemptNumber; canonical name). */
   attempt: number;
   /** Zero-based index of the current key in the rotation array. */
   apiKeyIndex: number;
@@ -73,7 +73,7 @@ export async function executeWithApiKeyRotation<T>(
           ? params.shouldRetry({
               apiKey,
               error,
-              attempt: apiKeyIndex,
+              attempt: attemptNumber,
               apiKeyIndex,
               attemptNumber,
               message,
@@ -89,7 +89,7 @@ export async function executeWithApiKeyRotation<T>(
           params.onRetry?.({
             apiKey,
             error,
-            attempt: apiKeyIndex,
+            attempt: attemptNumber,
             apiKeyIndex,
             attemptNumber,
             message,
