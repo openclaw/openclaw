@@ -208,10 +208,10 @@ const TelegramAccountSchemaBase = z
     ),
     webhookPath: z
       .string()
-      .optional()
-      .refine((value) => value === undefined || (value.startsWith("/") && value !== "/healthz"), {
+      .regex(/^(?!\/healthz$)\/.*/, {
         message: 'channels.telegram.webhookPath must start with "/" and must not be "/healthz"',
       })
+      .optional()
       .describe(
         'Local webhook route path served by the gateway listener. Must start with "/" and cannot be "/healthz". Defaults to /telegram-webhook.',
       ),
