@@ -101,6 +101,24 @@ describe("security audit trust model findings", () => {
         cfg: {
           channels: {
             discord: {
+              groupPolicy: "open",
+            },
+          },
+          tools: { elevated: { enabled: false } },
+        } satisfies OpenClawConfig,
+        assert: (findings: ReturnType<typeof audit>) => {
+          const finding = requireMultiUserHeuristicFinding(findings);
+          expect(finding.severity).toBe("warn");
+          expect(finding.detail).toContain('channels.discord.groupPolicy="open"');
+          expect(finding.detail).toContain("personal-assistant");
+          expect(finding.remediation).toContain('agents.defaults.sandbox.mode="all"');
+        },
+      },
+      {
+        name: "does not treat scoped allowlist with configured group targets as a multi-user setup",
+        cfg: {
+          channels: {
+            discord: {
               groupPolicy: "allowlist",
               guilds: {
                 "1234567890": {
@@ -114,14 +132,11 @@ describe("security audit trust model findings", () => {
           tools: { elevated: { enabled: false } },
         } satisfies OpenClawConfig,
         assert: (findings: ReturnType<typeof audit>) => {
-          const finding = requireMultiUserHeuristicFinding(findings);
-          expect(finding.severity).toBe("warn");
-          expect(finding.detail).toContain(
-            'channels.discord.groupPolicy="allowlist" with configured group targets',
-          );
-          expect(finding.detail).toContain("personal-assistant");
-          expect(finding.detail).toContain("https://docs.openclaw.ai/gateway/multi-tenant-hosting");
-          expect(finding.remediation).toContain('agents.defaults.sandbox.mode="all"');
+          expect(
+            findings.some(
+              (finding) => finding.checkId === "security.trust_model.multi_user_heuristic",
+            ),
+          ).toBe(false);
         },
       },
       {
