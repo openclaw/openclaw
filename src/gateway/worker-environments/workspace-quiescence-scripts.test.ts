@@ -157,9 +157,12 @@ describe("remote workspace quiescence scripts", () => {
     await resume(input, nonce);
 
     await expect(fs.access(leasePath(input.home, input.workspace, nonce))).rejects.toThrow();
-    await vi.waitFor(() => {
-      expect(() => process.kill(lease.watchdog.pid, 0)).toThrow();
-    });
+    await vi.waitFor(
+      () => {
+        expect(() => process.kill(lease.watchdog.pid, 0)).toThrow();
+      },
+      { interval: 50, timeout: 5_000 },
+    );
   });
 
   it("recovers a prior nonce without letting its watchdog own the next lease", async () => {
@@ -176,9 +179,12 @@ describe("remote workspace quiescence scripts", () => {
     await expect(
       fs.access(leasePath(input.home, input.workspace, secondNonce)),
     ).resolves.toBeUndefined();
-    await vi.waitFor(() => {
-      expect(() => process.kill(firstLease.watchdog.pid, 0)).toThrow();
-    });
+    await vi.waitFor(
+      () => {
+        expect(() => process.kill(firstLease.watchdog.pid, 0)).toThrow();
+      },
+      { interval: 50, timeout: 5_000 },
+    );
     await resume(input, secondNonce);
   });
 
