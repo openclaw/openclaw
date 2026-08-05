@@ -4501,6 +4501,70 @@ describe("message tool internal-runtime-context sanitization", () => {
     expect(call?.params?.text).toBe("");
     expect(call?.params?.message).toBe("Visible");
   });
+
+  it("suppresses a send whose text is only the heartbeat token", async () => {
+    const { call, result } = await executeSendWithResult({
+      action: {
+        channel: "telegram",
+        target: "telegram:123",
+        text: "HEARTBEAT_OK",
+      },
+    });
+
+    expect(call).toBeUndefined();
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      status: "suppressed",
+      reason: "heartbeat_token",
+    });
+  });
+
+  it("suppresses heartbeat-only sends through text aliases", async () => {
+    const { call, result } = await executeSendWithResult({
+      action: {
+        channel: "telegram",
+        target: "telegram:123",
+        content: "HEARTBEAT_OK",
+      },
+    });
+
+    expect(call).toBeUndefined();
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      status: "suppressed",
+      reason: "heartbeat_token",
+    });
+  });
+
+  it("strips the heartbeat token but still sends real content", async () => {
+    mockSendResult({ channel: "telegram", to: "telegram:123" });
+
+    const call = await executeSend({
+      action: {
+        channel: "telegram",
+        target: "telegram:123",
+        text: "All checks passed. HEARTBEAT_OK",
+      },
+    });
+
+    expect(call?.params?.text).toBe("All checks passed.");
+  });
+
+  it("keeps sending media when the heartbeat token is the only text", async () => {
+    mockSendResult({ channel: "telegram", to: "telegram:123" });
+
+    const call = await executeSend({
+      action: {
+        channel: "telegram",
+        target: "telegram:123",
+        text: "HEARTBEAT_OK",
+        mediaUrl: "file:///tmp/status.png",
+      },
+    });
+
+    expect(call?.params?.text).toBe("");
+    expect(call?.params?.mediaUrl).toBe("file:///tmp/status.png");
+  });
 });
 
 describe("message tool sandbox passthrough", () => {

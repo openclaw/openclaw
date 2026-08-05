@@ -16,6 +16,7 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
+import { stripHeartbeatToken } from "../../auto-reply/heartbeat.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import {
   hasInboundMetadataSentinel,
@@ -200,7 +201,8 @@ function normalizeEscapedLineBreaksForVisibleText(text: string): string {
 type VisibleTextSuppressionReason =
   | "internal_runtime_context_echo"
   | "inbound_metadata_echo"
-  | "poll_vote_echo";
+  | "poll_vote_echo"
+  | "heartbeat_token";
 
 const POLL_VOTE_ECHO_TTL_MS = 30_000;
 
@@ -1671,6 +1673,21 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         const suppressionReason = sanitizeStringParam(params, field, bootPromptForSession);
         suppressedVisiblePayloadReason ??= suppressionReason;
       }
+      // Heartbeat acknowledgements are an internal turn-protocol token. The
+      // final-reply path strips them; the message tool must too, or a cron run
+      // that is told to reply exactly HEARTBEAT_OK and offered the message tool
+      // in the same prompt delivers the literal token into the user's chat.
+      let heartbeatStripped = false;
+      for (const field of ["text", "content", "message", "caption", "SendMessage"]) {
+        if (typeof params[field] !== "string") {
+          continue;
+        }
+        const stripped = stripHeartbeatToken(params[field], { mode: "message" });
+        if (stripped.didStrip) {
+          params[field] = stripped.text;
+          heartbeatStripped = true;
+        }
+      }
       for (const field of ["pollOption", "poll_option"]) {
         const suppressionReason = sanitizeStringArrayParam(params, field, bootPromptForSession);
         suppressedVisiblePayloadReason ??= suppressionReason;
@@ -1692,17 +1709,22 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       }
 
       if (
-        suppressedVisiblePayloadReason &&
+        (suppressedVisiblePayloadReason || heartbeatStripped) &&
         action === "send" &&
         !hasSanitizedSendPayloadContent(params)
       ) {
+        const suppressedReason = heartbeatStripped
+          ? "heartbeat_token"
+          : suppressedVisiblePayloadReason;
         return jsonResult({
           status: "suppressed",
-          reason: suppressedVisiblePayloadReason,
+          reason: suppressedReason,
           message:
-            suppressedVisiblePayloadReason === "inbound_metadata_echo"
-              ? "Suppressed outbound message text because it matched inbound runtime metadata."
-              : "Suppressed outbound message text because it matched internal runtime context.",
+            suppressedReason === "heartbeat_token"
+              ? "Suppressed outbound message text because it was a heartbeat acknowledgement (HEARTBEAT_OK)."
+              : suppressedReason === "inbound_metadata_echo"
+                ? "Suppressed outbound message text because it matched inbound runtime metadata."
+                : "Suppressed outbound message text because it matched internal runtime context.",
         });
       }
       const requireExplicitTarget = options?.requireExplicitTarget === true;
