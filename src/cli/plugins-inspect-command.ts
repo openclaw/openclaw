@@ -118,16 +118,21 @@ export async function runPluginsInspectCommand(
   } = await import("../plugins/status.js");
   const { loadInstalledPluginIndexInstallRecords } =
     await import("../plugins/installed-plugin-index-records.js");
-  const cfg = tracePluginLifecyclePhase("config read", () => getRuntimeConfig(), {
-    command: "inspect",
-  });
+  const runtimeInspect = opts.runtime === true;
+  const cfg = tracePluginLifecyclePhase(
+    "config read",
+    () =>
+      runtimeInspect
+        ? getRuntimeConfig()
+        : getRuntimeConfig({ observe: false, skipPluginValidation: true }),
+    { command: "inspect" },
+  );
   const installRecords = await tracePluginLifecyclePhaseAsync(
     "install records load",
     () => loadInstalledPluginIndexInstallRecords(),
     { command: "inspect" },
   );
   const loggerParams = opts.json ? { logger: quietPluginJsonLogger } : {};
-  const runtimeInspect = opts.runtime === true;
   if (opts.all) {
     if (id) {
       defaultRuntime.error("Pass either a plugin id or --all, not both.");

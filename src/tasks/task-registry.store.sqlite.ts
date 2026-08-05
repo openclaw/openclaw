@@ -344,6 +344,22 @@ function withWriteTransaction(write: (database: OpenClawStateDatabase) => void) 
 }
 
 export function loadTaskRegistryStateFromSqlite(): TaskRegistryStoreSnapshot {
+  const { db, path } = openTaskRegistryWriteDatabase();
+  return runSqliteDeferredTransactionSync(db, () => {
+    assertSqliteTableIntegrity(db, path, "task_runs");
+    assertSqliteTableIntegrity(db, path, "task_delivery_state");
+    const taskRows = selectTaskRows(db);
+    const deliveryRows = selectTaskDeliveryStateRows(db);
+    return {
+      tasks: new Map(taskRows.map((row) => [row.task_id, rowToTaskRecord(row)])),
+      deliveryStates: new Map(
+        deliveryRows.map((row) => [row.task_id, rowToTaskDeliveryState(row)]),
+      ),
+    };
+  });
+}
+
+export function loadTaskRegistryStateFromSqliteReadOnly(): TaskRegistryStoreSnapshot {
   return (
     withExistingCurrentOpenClawStateDatabaseReadOnly(({ db, path }) =>
       runSqliteDeferredTransactionSync(db, () => {

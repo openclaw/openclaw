@@ -219,6 +219,14 @@ function withWriteTransaction(write: (database: FlowRegistryDatabase) => void) {
 }
 
 export function loadTaskFlowRegistryStateFromSqlite(): TaskFlowRegistryStoreSnapshot {
+  const { db } = openFlowRegistryWriteDatabase();
+  const rows = selectFlowRows(db);
+  return {
+    flows: new Map(rows.map((row) => [row.flow_id, rowToFlowRecord(row)])),
+  };
+}
+
+export function loadTaskFlowRegistryStateFromSqliteReadOnly(): TaskFlowRegistryStoreSnapshot {
   return (
     withExistingCurrentOpenClawStateDatabaseReadOnly(({ db }) => {
       const rows = selectFlowRows(db);

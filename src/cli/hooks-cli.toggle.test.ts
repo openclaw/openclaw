@@ -271,7 +271,10 @@ describe("hooks CLI metadata config keys", () => {
 
     await createHooksProgram().parseAsync(argv, { from: "user" });
 
-    expect(mocks.getRuntimeConfig).toHaveBeenCalledWith({ skipPluginValidation: true });
+    expect(mocks.getRuntimeConfig).toHaveBeenCalledWith({
+      observe: false,
+      skipPluginValidation: true,
+    });
     expect(mocks.callGateway).toHaveBeenCalledWith({
       config: sourceConfig,
       method: "hooks.status",

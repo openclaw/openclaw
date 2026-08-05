@@ -326,7 +326,9 @@ export async function runPluginsRegistryCommand(opts: PluginRegistryOptions): Pr
     });
   }
 
-  const inspection = await inspectPluginRegistry({ config: getRuntimeConfig() });
+  const inspection = await inspectPluginRegistry({
+    config: getRuntimeConfig({ observe: false, skipPluginValidation: true }),
+  });
   if (opts.json) {
     defaultRuntime.writeJson({
       state: inspection.state,

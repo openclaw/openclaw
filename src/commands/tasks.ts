@@ -16,7 +16,11 @@ import {
 import { normalizeCronLaneSegment } from "../cron/service/task-runs.js";
 import { loadCronJobsStoreSync, resolveCronJobsStorePath } from "../cron/store.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { getTaskById, updateTaskNotifyPolicyById } from "../tasks/runtime-internal.js";
+import {
+  ensureTaskRuntimeStateReady,
+  getTaskById,
+  updateTaskNotifyPolicyById,
+} from "../tasks/runtime-internal.js";
 import { cancelDetachedTaskRunById } from "../tasks/task-executor.js";
 import { listTaskFlowAuditFindings } from "../tasks/task-flow-registry.audit.js";
 import {
@@ -442,6 +446,7 @@ export async function tasksNotifyCommand(
   opts: { lookup: string; notify: TaskNotifyPolicy },
   runtime: RuntimeEnv,
 ) {
+  ensureTaskRuntimeStateReady();
   const task = reconcileTaskLookupToken(opts.lookup);
   if (!task) {
     runtime.error(formatTaskLookupMiss(opts.lookup));
@@ -464,6 +469,7 @@ export async function tasksNotifyCommand(
 
 /** Cancels a detached task run by lookup token. */
 export async function tasksCancelCommand(opts: { lookup: string }, runtime: RuntimeEnv) {
+  ensureTaskRuntimeStateReady();
   const task = reconcileTaskLookupToken(opts.lookup);
   if (!task) {
     runtime.error(formatTaskLookupMiss(opts.lookup));
@@ -530,6 +536,7 @@ async function runTaskRecoveryCommand(
     runtime.exit(1);
     return;
   }
+  ensureTaskRuntimeStateReady();
   const tasks: TaskRecord[] = [];
   for (const lookup of lookups) {
     const task = reconcileTaskLookupToken(lookup);
@@ -655,6 +662,15 @@ export async function tasksMaintenanceCommand(
   runtime: RuntimeEnv,
 ) {
   configureTaskMaintenanceFromConfig();
+  if (opts.apply) {
+    try {
+      ensureTaskRuntimeStateReady();
+    } catch (error) {
+      // Preserve the maintenance-specific refusal for a flow restore failure.
+      assertTaskFlowRegistryMaintenanceReady();
+      throw error;
+    }
+  }
   assertTaskFlowRegistryMaintenanceReady();
   const auditBefore = getInspectableTaskAuditSummary();
   const flowAuditBefore = getInspectableTaskFlowAuditSummary();

@@ -520,6 +520,20 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     route: { id: "plugins-list" },
   },
   {
+    commandPath: ["plugins", "inspect"],
+    exact: true,
+    policy: {
+      configGuard: ({ argv }) => (hasFlag(argv, "--runtime") ? "run" : "skip"),
+    },
+  },
+  {
+    commandPath: ["plugins", "registry"],
+    exact: true,
+    policy: {
+      configGuard: ({ argv }) => (hasFlag(argv, "--refresh") ? "run" : "skip"),
+    },
+  },
+  {
     commandPath: ["onboard"],
     exact: true,
     policy: { loadPlugins: "never" },

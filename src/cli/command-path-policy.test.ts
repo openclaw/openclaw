@@ -351,13 +351,32 @@ describe("command-path-policy", () => {
     }
     for (const commandPath of [
       ["plugins", "install"],
-      ["plugins", "inspect"],
-      ["plugins", "registry"],
       ["plugins", "doctor"],
     ]) {
       expectResolvedPolicy(commandPath, {
         loadPlugins: "never",
       });
+    }
+    for (const [command, writeFlag] of [
+      ["inspect", "--runtime"],
+      ["registry", "--refresh"],
+    ]) {
+      const commandPath = ["plugins", command];
+      const policy = resolveCliCommandPathPolicy(commandPath);
+      expectConfigGuardResolver(policy);
+      expect(policy.loadPlugins).toBe("never");
+      expect(
+        policy.configGuard({
+          argv: ["node", "openclaw", ...commandPath],
+          commandPath,
+        }),
+      ).toBe("skip");
+      expect(
+        policy.configGuard({
+          argv: ["node", "openclaw", ...commandPath, writeFlag],
+          commandPath,
+        }),
+      ).toBe("run");
     }
     expectResolvedPolicy(["cron", "list"], {
       configGuard: "skip",
