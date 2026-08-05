@@ -478,6 +478,7 @@ describe("gateway run option collisions", () => {
       ambientEnvTriggers?: "allow" | "suppress";
       startupConfigSnapshotRead?: { snapshot?: Record<string, unknown> };
       startupStartedAt?: number;
+      restoredAdmissionDescriptorPath?: string;
     };
   }
 
@@ -1570,6 +1571,20 @@ describe("gateway run option collisions", () => {
     const secondOptions = gatewayStartOptions(1);
     expect(secondOptions.startupConfigSnapshotRead).toBeUndefined();
     expect(secondOptions.startupStartedAt).toBe(2000);
+  });
+
+  it("passes restored admission through the explicit lifecycle handoff option", async () => {
+    await runGatewayCli([
+      "gateway",
+      "run",
+      "--allow-unconfigured",
+      "--restore-admission-descriptor",
+      "/tmp/openclaw-restore-journal.sqlite",
+    ]);
+
+    expect(gatewayStartOptions().restoredAdmissionDescriptorPath).toBe(
+      "/tmp/openclaw-restore-journal.sqlite",
+    );
   });
 
   it("re-inspects crash-loop breaker state for each boot iteration", async () => {
