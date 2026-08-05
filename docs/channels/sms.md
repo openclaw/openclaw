@@ -34,6 +34,25 @@ You need:
 
 One Twilio number can serve both SMS and [Voice Call](/plugins/voice-call) if it has both capabilities. The SMS webhook and Voice webhook are configured separately in Twilio and use separate Gateway paths; this page only covers the SMS webhook.
 
+## US A2P / 10DLC delivery
+
+SMS and MMS sent by an application from a US local 10DLC number to US recipients require US A2P 10DLC registration. Toll-free numbers and short codes use separate verification processes. This is separate from OpenClaw channel setup: webhook signature validation, pairing, and outbound credentials can all be correct while carriers still block or filter delivery.
+
+Before relying on a US 10DLC sender, confirm in Twilio that:
+
+- The account is paid; Twilio trial accounts cannot register for A2P 10DLC.
+- A Primary or Secondary Compliance Profile is approved in Twilio Trust Hub.
+- The Brand and Campaign are registered and approved.
+- The Twilio phone number has A2P status `REGISTERED` and is in the Sender Pool of the Messaging Service associated with the approved Campaign, or the `messagingServiceSid` you configure here is that approved service.
+- The Campaign describes the real OpenClaw message use case and includes matching sample messages.
+- Every website, keyword, offline, paper, or QR-code opt-in path is described completely. If the flow is not publicly visible, provide publicly accessible screenshots or other evidence.
+- Messaging consent is voluntary and separate from required service terms, account creation, or purchase, with the privacy policy, terms, frequency, rates, and opt-out disclosures Twilio requires.
+- You retain proof of consent, identify the sender, honor standard one-step opt-out keywords, and do not buy, rent, sell, or transfer consent. After an opt-out, send only one confirmation unless the recipient opts in again.
+
+Use Twilio as the source of truth for current requirements: [A2P 10DLC overview](https://www.twilio.com/docs/messaging/compliance/a2p-10dlc), [registration quickstart](https://www.twilio.com/docs/messaging/compliance/a2p-10dlc/quickstart), and [required business and campaign information](https://www.twilio.com/docs/messaging/compliance/a2p-10dlc/collect-business-info). This section is setup guidance, not legal advice.
+
+If Twilio rejects the Brand or Campaign during registration review, fix that in Twilio before using the sender with OpenClaw. [`30909`](https://www.twilio.com/docs/api/errors/30909) means the message flow or call to action is incomplete or unverifiable. [`30923`](https://www.twilio.com/docs/api/errors/30923) means messaging consent is required as a condition of service, account creation, or purchase, or is bundled with service terms. [`30893`](https://www.twilio.com/docs/api/errors/30893) means the sample messages do not match the declared use case.
+
 ## Quick Setup
 
 <Steps>
@@ -453,7 +472,17 @@ If the Twilio message log shows error `11200`, Twilio accepted the inbound SMS b
 
 ### Outbound sends fail
 
-Confirm `accountSid`, `authToken`, and either `fromNumber` or `messagingServiceSid` are resolved. If you use a trial Twilio account, the destination number may need to be verified in Twilio before outbound SMS will send.
+Confirm `accountSid`, `authToken`, and either `fromNumber` or `messagingServiceSid` are resolved. Twilio trial accounts can send only to verified recipients in the account's sign-up country and must use Twilio's predefined content; custom SMS bodies are not supported. Trial accounts also cannot register for A2P 10DLC, so upgrade before registering a US 10DLC sender.
+
+### Twilio accepts the send but delivery later fails
+
+Start with OpenClaw's stored delivery observation:
+
+```bash
+openclaw channels status --channel sms --probe --json
+```
+
+If the recent outbound status is `failed` or `undelivered`, use its `messageSid` to inspect the final Message status and error code in Twilio. [`30034`](https://www.twilio.com/docs/api/errors/30034) means the sender is unregistered or is not in the Sender Pool of the Messaging Service associated with the approved Campaign. [`30035`](https://www.twilio.com/docs/api/errors/30035) means Twilio is still registering, deregistering, or reassigning the number; wait until its status is `REGISTERED` before sending.
 
 ### Messages arrive but the agent does not answer
 
