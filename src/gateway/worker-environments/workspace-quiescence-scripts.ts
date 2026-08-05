@@ -89,7 +89,8 @@ async function signalProcessReferences(references, concurrency = ${REMOTE_QUIESC
         continue;
       }
       try {
-        process.kill(reference.pid, reference.signal);
+        const signal = reference.signal === "SIGTERM" && /^[Tt]/u.test(observed.state) ? "SIGKILL" : reference.signal;
+        process.kill(reference.pid, signal);
         results[index] = { kind: "signaled", state: observed.state };
       } catch (error) {
         if (error && error.code === "ESRCH") results[index] = { kind: "missing" };
@@ -701,7 +702,6 @@ async function resume() {
   fs.unlinkSync(leasePath);
 }
 void resume().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
+  console.error(error); process.exitCode = 1;
 });
 `;

@@ -426,11 +426,64 @@ describe("remote workspace quiescence scripts", () => {
       expect(after.expiresAtMs).toBe(before.expiresAtMs);
     } finally {
       try {
-        process.kill(before.watchdog.pid, "SIGCONT");
-      } catch {}
-      await resume(input, nonce);
+        await resume(input, nonce);
+        await expectProcessExited(before.watchdog.pid);
+      } finally {
+        try {
+          process.kill(before.watchdog.pid, "SIGKILL");
+        } catch {}
+      }
     }
   });
+
+  it("renews the maximum process set with the first-heartbeat lifetime", async () => {
+    const input = await fixture();
+    const child = spawn("sleep", ["120"], { stdio: "ignore" });
+    const childPid = child.pid!;
+    let nonce = "";
+
+    try {
+      nonce = await quiesce(input, 12 * 60_000);
+      process.kill(childPid, "SIGSTOP");
+      await expectProcessState(childPid, true);
+      const leaseFile = leasePath(input.home, input.workspace, nonce);
+      const lease = JSON.parse(await fs.readFile(leaseFile, "utf8")) as {
+        expiresAtMs: number;
+        processes: Array<{ pid: number; start: string }>;
+      };
+      const reference = { pid: childPid, start: await processStart(childPid) };
+      lease.expiresAtMs = Date.now() + 9 * 60_000;
+      lease.processes = Array.from({ length: 4096 }, () => reference);
+      await fs.writeFile(leaseFile, `${JSON.stringify(lease)}\n`);
+
+      const result = await runCommandWithTimeout(
+        [
+          process.execPath,
+          "-e",
+          REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
+          input.workspace,
+          nonce,
+          String(12 * 60_000),
+          "heartbeat",
+        ],
+        { timeoutMs: 30_000, baseEnv: input.env },
+      );
+
+      expect(result.code, result.stderr).toBe(0);
+      const renewed = JSON.parse(await fs.readFile(leaseFile, "utf8")) as {
+        expiresAtMs: number;
+      };
+      expect(renewed.expiresAtMs).toBeGreaterThan(lease.expiresAtMs);
+      await expectProcessState(childPid, true);
+    } finally {
+      if (nonce) {
+        try {
+          await resume(input, nonce);
+        } catch {}
+      }
+      await terminate(child);
+    }
+  }, 45_000);
 
   it("allows healthy high-cardinality enrollment to use a bounded count-aware deadline", async () => {
     const input = await fixture();

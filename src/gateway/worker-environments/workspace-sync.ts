@@ -65,7 +65,7 @@ import {
 const REMOTE_SETUP_TIMEOUT_MS = 20_000;
 const WORKSPACE_TIMEOUT_MS = 10 * 60_000;
 const WORKSPACE_QUIESCENCE_TIMEOUT_MS = 12 * 60_000;
-const WORKSPACE_QUIESCENCE_RENEW_INTERVAL_MS = 4 * 60_000;
+const WORKSPACE_QUIESCENCE_RENEW_INTERVAL_MS = 3 * 60_000;
 // Relative to the $HOME/.openclaw-worker root owned by REMOTE_WORKSPACE_SETUP_SCRIPT;
 // rsync targets must use the returned absolute directory, never this relative path.
 const REMOTE_WORKSPACE_ROOT = "workspaces";

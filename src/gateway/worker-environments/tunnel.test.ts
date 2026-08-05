@@ -272,7 +272,7 @@ describe("worker tunnel manager", () => {
     vi.useFakeTimers();
     try {
       const quiescence = await handle.quiesceWorkspace("/home/worker/workspace");
-      await vi.advanceTimersByTimeAsync(4 * 60_000);
+      await vi.advanceTimersByTimeAsync(3 * 60_000);
       expect(
         fake.runs.filter((entry) => entry.argv.at(-1)?.includes('process.stdout.write("renewed "')),
       ).toHaveLength(1);
