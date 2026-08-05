@@ -230,6 +230,19 @@ describe("agent event handler", () => {
     return broadcast.mock.calls.filter(([event]) => event === "chat");
   }
 
+  function chatBroadcastStates(broadcast: ReturnType<typeof vi.fn>) {
+    return chatBroadcastCalls(broadcast).map(
+      ([, payload]) => (payload as { state?: string }).state,
+    );
+  }
+
+  function chatDeltaTexts(broadcast: ReturnType<typeof vi.fn>) {
+    return chatBroadcastCalls(broadcast)
+      .map(([, payload]) => payload as { state?: string; deltaText?: string })
+      .filter((payload) => payload.state === "delta")
+      .map((payload) => payload.deltaText);
+  }
+
   function agentBroadcastCalls(broadcast: ReturnType<typeof vi.fn>) {
     return broadcast.mock.calls.filter(([event]) => event === "agent");
   }
@@ -1422,6 +1435,211 @@ describe("agent event handler", () => {
       (expectDefined(chatCalls[2], "chatCalls[2] test invariant")[1] as { state?: string }).state,
     ).toBe("final");
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(3);
+    nowSpy.mockRestore();
+  });
+
+  it("delivers a throttled delta when the window expires without another event", () => {
+    vi.useFakeTimers();
+    let now = 10_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, chatRunState, handler } = createHarness();
+    registerNamedChatRun(chatRunState, "trailing");
+
+    emitAgentEvent(handler, "run-trailing", "assistant", { text: "Hello" });
+
+    now = 10_020;
+    emitAgentEvent(handler, "run-trailing", "assistant", { text: "Hello world" });
+
+    // The chunk landed inside the window, so it is withheld for now.
+    expect(chatDeltaTexts(broadcast)).toEqual(["Hello"]);
+
+    // No further agent event ever arrives; only the window expiring may deliver it.
+    now = 10_150;
+    vi.advanceTimersByTime(130);
+
+    expect(chatDeltaTexts(broadcast)).toEqual(["Hello", " world"]);
+    const trailing = chatBroadcastCalls(broadcast).at(-1)?.[1] as {
+      message?: { content?: Array<{ text?: string }> };
+    };
+    expect(trailing?.message?.content?.[0]?.text).toBe("Hello world");
+    expect(vi.getTimerCount()).toBe(0);
+    nowSpy.mockRestore();
+  });
+
+  it("merges withheld chunks into one frame without duplicating delivered text", () => {
+    vi.useFakeTimers();
+    let now = 10_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, chatRunState, handler } = createHarness();
+    registerNamedChatRun(chatRunState, "merged");
+
+    emitAgentEvent(handler, "run-merged", "assistant", { text: "a" });
+
+    now = 10_050;
+    emitAgentEvent(handler, "run-merged", "assistant", { text: "ab" });
+    now = 10_100;
+    emitAgentEvent(handler, "run-merged", "assistant", { text: "abc" });
+
+    // An event past the window carries the union of both withheld chunks and
+    // retires the armed flush, so the merged text is never sent twice.
+    now = 10_160;
+    emitAgentEvent(handler, "run-merged", "assistant", { text: "abcd" });
+    expect(chatDeltaTexts(broadcast)).toEqual(["a", "bcd"]);
+    expect(vi.getTimerCount()).toBe(0);
+
+    now = 10_200;
+    emitAgentEvent(handler, "run-merged", "assistant", { text: "abcde" });
+    now = 10_310;
+    vi.advanceTimersByTime(110);
+
+    expect(chatDeltaTexts(broadcast)).toEqual(["a", "bcd", "e"]);
+    vi.advanceTimersByTime(1_000);
+    expect(chatDeltaTexts(broadcast)).toEqual(["a", "bcd", "e"]);
+    nowSpy.mockRestore();
+  });
+
+  it("retires the trailing flush when a tool boundary drains the buffer", () => {
+    vi.useFakeTimers();
+    let now = 10_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, chatRunState, handler } = createHarness();
+    registerNamedChatRun(chatRunState, "tool-drain");
+
+    emitAgentEvent(handler, "run-tool-drain", "assistant", { text: "Hello" });
+
+    now = 10_020;
+    emitAgentEvent(handler, "run-tool-drain", "assistant", { text: "Hello world" });
+    expect(vi.getTimerCount()).toBe(1);
+
+    // The ungated tool-start drain already delivers the withheld tail, so the
+    // armed flush has nothing left to send and must not stay armed against a
+    // watermark that moved without it.
+    emitAgentEvent(handler, "run-tool-drain", "tool", { phase: "start", name: "edit" }, { seq: 2 });
+    expect(chatDeltaTexts(broadcast)).toEqual(["Hello", " world"]);
+    expect(vi.getTimerCount()).toBe(0);
+
+    now = 10_500;
+    vi.advanceTimersByTime(1_000);
+
+    expect(chatDeltaTexts(broadcast)).toEqual(["Hello", " world"]);
+    nowSpy.mockRestore();
+  });
+
+  it("disarms the trailing flush at the terminal so no delta follows it", () => {
+    vi.useFakeTimers();
+    let now = 10_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, chatRunState, handler } = createHarness();
+    registerNamedChatRun(chatRunState, "terminal-order");
+
+    emitAgentEvent(handler, "run-terminal-order", "assistant", { text: "Hello" });
+
+    now = 10_020;
+    emitAgentEvent(handler, "run-terminal-order", "assistant", { text: "Hello world" });
+    expect(vi.getTimerCount()).toBe(1);
+
+    // The terminal lands while the trailing flush is still armed.
+    emitLifecycleEnd(handler, "run-terminal-order");
+    expect(vi.getTimerCount()).toBe(0);
+    expect(chatBroadcastStates(broadcast)).toEqual(["delta", "delta", "final"]);
+
+    now = 10_500;
+    vi.advanceTimersByTime(1_000);
+
+    expect(chatBroadcastStates(broadcast)).toEqual(["delta", "delta", "final"]);
+    expect(chatDeltaTexts(broadcast)).toEqual(["Hello", " world"]);
+    nowSpy.mockRestore();
+  });
+
+  it("disarms the trailing flush when the run's chat state is cleared", () => {
+    vi.useFakeTimers();
+    let now = 10_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, chatRunState, handler } = createHarness({ lifecycleErrorRetryGraceMs: 0 });
+    registerNamedChatRun(chatRunState, "cleared");
+
+    emitAgentEvent(handler, "run-cleared", "assistant", { text: "Hello" });
+
+    now = 10_020;
+    emitAgentEvent(handler, "run-cleared", "assistant", { text: "Hello world" });
+    expect(vi.getTimerCount()).toBe(1);
+
+    emitAgentEvent(
+      handler,
+      "run-cleared",
+      "lifecycle",
+      { phase: "error", error: "provider failed" },
+      { seq: 2 },
+    );
+    expect(vi.getTimerCount()).toBe(0);
+
+    // Whatever the error path delivers ahead of its terminal is that path's own
+    // contract; what this pins is that the armed flush contributes nothing once
+    // the terminal has gone out.
+    const framesAtTerminal = chatBroadcastStates(broadcast);
+    expect(framesAtTerminal.at(-1)).not.toBe("delta");
+
+    now = 10_500;
+    vi.advanceTimersByTime(1_000);
+
+    expect(chatBroadcastStates(broadcast)).toEqual(framesAtTerminal);
+    nowSpy.mockRestore();
+  });
+
+  it("cancels the pending trailing flush when an aborted run is finalized", () => {
+    vi.useFakeTimers();
+    let now = 10_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, chatRunState, handler } = createHarness();
+    registerNamedChatRun(chatRunState, "abort-flush");
+
+    emitAgentEvent(handler, "run-abort-flush", "assistant", { text: "Hello" });
+
+    now = 10_020;
+    emitAgentEvent(handler, "run-abort-flush", "assistant", { text: "Hello world" });
+    expect(vi.getTimerCount()).toBe(1);
+
+    // An abort arriving mid-stream finalizes without emitting any chat terminal,
+    // so clearing the run's buffered state is the only thing that can disarm the
+    // flush on this path.
+    chatRunState.getOrCreate("client-abort-flush").abortMarker = createChatAbortMarker();
+    emitAgentEvent(
+      handler,
+      "run-abort-flush",
+      "lifecycle",
+      { phase: "end", aborted: true, stopReason: "rpc" },
+      { seq: 2 },
+    );
+    expect(vi.getTimerCount()).toBe(0);
+
+    const framesAtAbort = chatBroadcastStates(broadcast);
+    now = 10_500;
+    vi.advanceTimersByTime(1_000);
+
+    expect(chatBroadcastStates(broadcast)).toEqual(framesAtAbort);
+    nowSpy.mockRestore();
+  });
+
+  it("cancels a pending trailing flush when the handler is disposed", () => {
+    vi.useFakeTimers();
+    let now = 10_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, chatRunState, handler } = createHarness();
+    registerNamedChatRun(chatRunState, "flush-dispose");
+
+    emitAgentEvent(handler, "run-flush-dispose", "assistant", { text: "Hello" });
+
+    now = 10_020;
+    emitAgentEvent(handler, "run-flush-dispose", "assistant", { text: "Hello world" });
+    expect(vi.getTimerCount()).toBe(1);
+
+    handler.dispose();
+    expect(vi.getTimerCount()).toBe(0);
+
+    now = 10_500;
+    vi.advanceTimersByTime(1_000);
+
+    expect(chatDeltaTexts(broadcast)).toEqual(["Hello"]);
     nowSpy.mockRestore();
   });
 
