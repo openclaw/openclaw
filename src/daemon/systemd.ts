@@ -143,14 +143,10 @@ async function findMarkerOwnedSystemSystemdUnit(env: GatewayServiceEnv): Promise
   unitName: string;
   unitPath: string;
 } | null> {
-  // System-scope installs may use non-canonical names for the *default*
-  // profile (e.g. openclaw.service). Profile-scoped installs must never adopt
-  // an unrelated agent's unit via this scan (issue #119648). Explicit
-  // OPENCLAW_SYSTEMD_UNIT (Node / custom) is always an allowed match.
-  const hasExplicitUnit = Boolean(env.OPENCLAW_SYSTEMD_UNIT?.trim());
-  const profile = env.OPENCLAW_PROFILE?.trim();
-  const profileScoped = Boolean(profile && profile.toLowerCase() !== "default");
-  const restrictToCandidates = hasExplicitUnit || profileScoped;
+  // Marker scan is always candidate-only (every profile, including default).
+  // Proven identities: OPENCLAW_SYSTEMD_UNIT when set, else gateway candidates
+  // (canonical + known legacy). Never adopt the first unrelated marker unit
+  // (issue #119648 / Claw default-profile hole).
   const allowedNames = new Set(
     resolveInstalledSystemdServiceNameCandidates(env).map((name) =>
       normalizeLowercaseStringOrEmpty(name),
@@ -174,9 +170,8 @@ async function findMarkerOwnedSystemSystemdUnit(env: GatewayServiceEnv): Promise
       continue;
     }
     const base = normalizeLowercaseStringOrEmpty(unitBaseName(svc.label));
-    if (restrictToCandidates && !allowedNames.has(base)) {
-      // Refuse to treat another profile's (or arbitrary custom) unit as this
-      // identity. Fall through until a matching candidate is found.
+    if (!allowedNames.has(base)) {
+      // Refuse another profile's (or arbitrary custom) unit as this identity.
       continue;
     }
     const match = /^unit:\s*(.+)$/.exec(svc.detail.trim());

@@ -62,7 +62,10 @@ export function resolveGatewaySystemdServiceNameCandidates(profile?: string): st
   const canonical = resolveGatewaySystemdServiceName(profile);
   const suffix = resolveGatewayProfileSuffix(profile);
   if (!suffix) {
-    return [canonical];
+    // Default profile: openclaw-gateway is current; bare openclaw is a known
+    // legacy system-unit name (parallel to openclaw-<profile> for named agents).
+    // Arbitrary custom units are not candidates; use OPENCLAW_SYSTEMD_UNIT.
+    return canonical === "openclaw" ? [canonical] : [canonical, "openclaw"];
   }
   const legacy = `openclaw${suffix}`;
   return legacy === canonical ? [canonical] : [canonical, legacy];
