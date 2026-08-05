@@ -374,6 +374,14 @@ describe("command-startup-policy", () => {
     expect(resolvePolicy({ commandPath: ["mcp", "serve"] }).suppressDoctorStdout).toBe(true);
   });
 
+  it("reserves stdout for the final recovery capture protocol", () => {
+    const policy = resolvePolicy({ commandPath: ["backup", "capture-final"] });
+
+    expect(policy.hideBanner).toBe(true);
+    expect(policy.loadPlugins).toBe(false);
+    expect(policy.suppressDoctorStdout).toBe(true);
+  });
+
   it("reserves stdout for the node worker protocol", () => {
     const policy = resolvePolicy({ commandPath: ["node", "worker"] });
 
