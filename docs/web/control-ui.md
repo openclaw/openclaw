@@ -143,9 +143,9 @@ Imported themes are stored only in the current browser profile; they are not wri
 
 Appearance also has a Text size setting. It applies to chat text, composer text, tool cards, and chat sidebars, and keeps text inputs at least 16px so mobile Safari does not auto-zoom on focus.
 
-Under **Appearance → Chat**, **Assistant message surface** is browser-local. **Theme default** preserves the active theme's existing assistant surface. **White** uses pure white for assistant message bubbles in light mode; dark mode always keeps the theme surface. Selecting **Theme default** resets the override.
+Under **Appearance → Chat**, **Assistant message surface** is browser-local and never syncs through `ui.prefs`. **Theme default** preserves the active theme's existing assistant surface. **White** uses pure white for completed assistant message bubbles in light mode; dark mode, tool cards, and the working indicator always keep the theme surface. Selecting **Theme default** resets the override.
 
-Theme, theme mode, text size, language, and chat display preferences sync through the gateway config (`ui.prefs`), so they follow you across devices and agents can change them through the approval gate — connected clients apply changes live via the gateway's `config.changed` notice. Each browser keeps a local mirror for instant boot; clients that cannot write config (viewer scope, offline) keep changes device-local. See [Configuration reference](/gateway/configuration-reference#ui).
+Theme, theme mode, text size, language, and gateway-backed chat display preferences sync through the gateway config (`ui.prefs`), so they follow you across devices and agents can change them through the approval gate — connected clients apply changes live via the gateway's `config.changed` notice. Each browser keeps a local mirror for instant boot; clients that cannot write config (viewer scope, offline) keep changes device-local. See [Configuration reference](/gateway/configuration-reference#ui).
 
 ## OpenClaw system care
 

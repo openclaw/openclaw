@@ -148,11 +148,13 @@ describe("Control UI theme contrast", () => {
     }
   });
 
-  it("limits the white assistant message surface override to light-mode non-tool bubbles", () => {
+  it("limits the white assistant surface to light-mode completed message bubbles", () => {
     expect(groupedCss).toContain(
       ':root[data-theme-mode="light"][data-assistant-message-surface="white"]',
     );
-    expect(groupedCss).toContain(".chat-bubble:not(.chat-bubble--tool-shell)");
+    expect(groupedCss).toContain(
+      ".chat-bubble:not(.chat-bubble--tool-shell):not(.chat-reading-indicator)",
+    );
     expect(groupedCss).toMatch(
       /data-assistant-message-surface="white"[^{}]*\{[^{}]*background:\s*#fff;/u,
     );
