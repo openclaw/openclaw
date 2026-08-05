@@ -264,6 +264,56 @@ describe("runCommandWithTimeout", () => {
     ]);
   });
 
+  it("delivers preserved lines while the command is still running", async () => {
+    const abortController = new AbortController();
+    let resolveLinkUri!: () => void;
+    const linkUriSeen = new Promise<void>((resolve) => {
+      resolveLinkUri = resolve;
+    });
+    let commandSettled = false;
+    const commandPromise = runCommandWithTimeout(
+      [
+        process.execPath,
+        "-e",
+        [
+          "process.stdout.write('sgnl://linkdevice?uuid=test&pub_key=test\\n')",
+          "setInterval(() => {}, 1_000)",
+        ].join(";"),
+      ],
+      {
+        signal: abortController.signal,
+        killProcessTree: true,
+        outputCapture: { stdout: "discard", stderr: "tail" },
+        timeoutMs: 3_000,
+        preserveOutputLine: (line, stream) => {
+          if (stream === "stdout" && line.startsWith("sgnl://linkdevice?")) {
+            resolveLinkUri();
+          }
+          return false;
+        },
+      },
+    );
+    void commandPromise.then(
+      () => {
+        commandSettled = true;
+      },
+      () => {
+        commandSettled = true;
+      },
+    );
+
+    await expect(
+      Promise.race([linkUriSeen.then(() => "line"), commandPromise.then(() => "command")]),
+    ).resolves.toBe("line");
+    expect(commandSettled).toBe(false);
+
+    abortController.abort();
+    await expect(commandPromise).resolves.toMatchObject({
+      code: null,
+      termination: "signal",
+    });
+  });
+
   it("bounds preserved matching output for long lines without newlines", async () => {
     const result = await runCommandWithTimeout(
       [process.execPath, "-e", "process.stdout.write('x'.repeat(10_000))"],
