@@ -258,7 +258,7 @@ describe("attemptRecoveryMemoryFlush", () => {
     // Default: the nested maintenance turn writes memory (invokes the core
     // `write` tool). Tests that need a no-write or failed turn override this.
     mocks.runEmbeddedAgent.mockImplementation(async (params: RunEmbeddedAgentParams) => {
-      params.onAgentEvent?.({
+      void params.onAgentEvent?.({
         stream: "tool",
         data: { name: "write", phase: "result", isError: false },
       });
@@ -497,7 +497,7 @@ describe("attemptRecoveryMemoryFlush", () => {
       }
       // The turn still writes memory so it counts as a successful checkpoint;
       // the regression below is about the outer object, not the write path.
-      params.onAgentEvent?.({
+      void params.onAgentEvent?.({
         stream: "tool",
         data: { name: "write", phase: "result", isError: false },
       });
