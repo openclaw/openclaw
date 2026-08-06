@@ -221,22 +221,19 @@ Why the assertions differ: Anthropic exposes explicit cache breakpoints and movi
 diagnostics:
   cacheTrace:
     enabled: true
-    filePath: "~/.openclaw/logs/cache-trace.jsonl" # optional
-    includeMessages: false # default true
-    includePrompt: false # default true
-    includeSystem: false # default true
 ```
+
+These fields (`filePath`, `includeMessages`, `includePrompt`, `includeSystem`) are retired from the JSON config schema, which accepts only `enabled`; `openclaw doctor --fix` strips the rest.
 
 Defaults:
 
-| Key               | Default                                      |
-| ----------------- | -------------------------------------------- |
-| `filePath`        | `$OPENCLAW_STATE_DIR/logs/cache-trace.jsonl` |
-| `includeMessages` | `true`                                       |
-| `includePrompt`   | `true`                                       |
-| `includeSystem`   | `true`                                       |
+| Key       | Default |
+| --------- | ------- |
+| `enabled` | `false` |
 
-### Env toggles (one-off debugging)
+### Env toggles (environment-only one-off debugging)
+
+The environment controls remain active runtime overrides; they are not part of the JSON config schema.
 
 | Variable                             | Effect                               |
 | ------------------------------------ | ------------------------------------ |
@@ -248,7 +245,7 @@ Defaults:
 
 ### What to inspect
 
-- Cache trace events are JSONL with staged snapshots like `session:loaded`, `prompt:before`, `stream:context`, and `session:after`.
+- Cache trace events are JSONL with staged snapshots like `session:loaded`, `prompt:before`, `stream:context`, and `session:after`, written by default to `<state-dir>/logs/cache-trace.jsonl`.
 - Per-turn cache token impact is visible in normal usage surfaces: `cacheRead` and `cacheWrite` show up in `/usage tokens`, `/status`, session usage summaries, and custom `messages.usageTemplate` layouts.
 - For Anthropic, expect both `cacheRead` and `cacheWrite` when caching is active.
 - For OpenAI, expect `cacheRead` on cache hits; `cacheWrite` is populated only on Responses API payloads that include it (see [OpenAI](#openai-direct-api) above).
