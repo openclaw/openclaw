@@ -333,11 +333,11 @@ describe("sendHostedFileUrl", () => {
   });
 
   it("rejects hosted URLs with embedded credentials or fragments", async () => {
+    const credentialedUrl = new URL("https://gateway.example.com/webhook#fragment");
+    credentialedUrl.username = "fixture-user";
+    credentialedUrl.password = "fixture-password";
     const result = await settleTimers(
-      sendHostedFileUrl(
-        "https://nas.example.com/incoming",
-        hostedUrl("https://user:pass@gateway.example.com/webhook#fragment"),
-      ),
+      sendHostedFileUrl("https://nas.example.com/incoming", hostedUrl(credentialedUrl.toString())),
     );
     expect(result).toBe(false);
     expect(vi.mocked(https.request)).not.toHaveBeenCalled();
