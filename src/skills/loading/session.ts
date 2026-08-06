@@ -1,4 +1,12 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  fstatSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+} from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir } from "../../agents/config.js";
 import type { ResourceDiagnostic } from "../../agents/sessions/diagnostics.js";
@@ -19,7 +27,7 @@ const MAX_NAME_LENGTH = 64;
 const MAX_DESCRIPTION_LENGTH = 1024;
 
 /** Max file size for a single SKILL.md. Matches workspace skill loading limit. */
-export const MAX_SKILL_FILE_BYTES = 256_000;
+const MAX_SKILL_FILE_BYTES = 256_000;
 
 export interface Skill {
   name: string;
@@ -210,6 +218,28 @@ function loadSkillsFromDirInternal(
   return { skills, diagnostics };
 }
 
+/**
+ * Read SKILL.md content through a pinned descriptor to avoid TOCTOU races
+ * and bound memory on oversized files.
+ * Emits an operator-visible warning and throws on oversized input.
+ */
+export function readBoundedSkillFile(filePath: string): string {
+  const fd = openSync(filePath, "r");
+  try {
+    const stats = fstatSync(fd);
+    if (stats.size > MAX_SKILL_FILE_BYTES) {
+      console.warn(`Skill file rejected (exceeds ${MAX_SKILL_FILE_BYTES} bytes): ${filePath}`);
+      throw Object.assign(
+        new Error(`skill file exceeds ${MAX_SKILL_FILE_BYTES} bytes (${stats.size} bytes)`),
+        { code: "E2BIG" },
+      );
+    }
+    return readFileSync(fd, "utf-8");
+  } finally {
+    closeSync(fd);
+  }
+}
+
 function loadSkillFromFile(
   filePath: string,
   source: string,
@@ -218,16 +248,7 @@ function loadSkillFromFile(
 
   try {
     // Reject oversized skill files to bound memory usage during loading.
-    const fileSize = statSync(filePath).size;
-    if (fileSize > MAX_SKILL_FILE_BYTES) {
-      diagnostics.push({
-        type: "warning",
-        message: `skill file exceeds ${MAX_SKILL_FILE_BYTES} bytes (${fileSize} bytes)`,
-        path: filePath,
-      });
-      return { skill: null, diagnostics };
-    }
-    const rawContent = readFileSync(filePath, "utf-8");
+    const rawContent = readBoundedSkillFile(filePath);
     const frontmatter = parseFrontmatter(rawContent);
     const invocation = resolveSkillInvocationPolicy(frontmatter);
     const skillDir = dirname(filePath);

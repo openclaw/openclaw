@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { parseFrontmatter, resolveOpenClawMetadata } from "./frontmatter.js";
-import { loadSkills, MAX_SKILL_FILE_BYTES } from "./session.js";
+import { loadSkills } from "./session.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -93,8 +93,8 @@ disable-model-invocation: true
     const skillDir = path.join(tempDir, "oversized");
     await fs.mkdir(skillDir);
     const skillFile = path.join(skillDir, "SKILL.md");
-    // Write content exceeding the size limit.
-    const oversizeBody = "x".repeat(MAX_SKILL_FILE_BYTES + 1);
+    // Write content exceeding the size limit (256 KB).
+    const oversizeBody = "x".repeat(260_000);
     await fs.writeFile(
       skillFile,
       `---\nname: oversized\ndescription: This file is too big\n---\n${oversizeBody}`,
