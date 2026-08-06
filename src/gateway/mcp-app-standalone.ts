@@ -254,6 +254,7 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
     toolResult: unknown;
     serverTools?: boolean;
     serverResources?: boolean;
+    operationTimeoutMs?: number;
   };
 
   const host = browser.document.getElementById("host");
@@ -323,14 +324,21 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
   // still hang the UI if the timer were cleared earlier. Responses are
   // same-origin and gateway-constructed, so no streaming byte cap is added;
   // the gateway bounds request bodies via MCP_APP_OPERATION_MAX_BODY_BYTES.
-  const MCP_APP_FETCH_TIMEOUT_MS = 30_000;
+  // The initial view load uses a fixed 30s budget; operation fetches derive
+  // their deadline from the owning MCP server's requestTimeoutMs (carried in
+  // the view payload) plus a small grace for gateway overhead, so a valid
+  // long-running tool call is not aborted before the server-side budget.
+  const MCP_APP_VIEW_LOAD_TIMEOUT_MS = 30_000;
+  const DEFAULT_OPERATION_TIMEOUT_MS = 60_000;
+  const OPERATION_TIMEOUT_GRACE_MS = 5_000;
   const withFetchDeadline = async <T>(
     input: string,
     init: RequestInit,
     consume: (response: Response) => Promise<T>,
+    timeoutMs: number,
   ): Promise<T> => {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), MCP_APP_FETCH_TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const response = await fetch(input, { ...init, signal: controller.signal });
       return await consume(response);
@@ -338,8 +346,10 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
       clearTimeout(timer);
     }
   };
-  const request = (method: string, params: unknown): Promise<unknown> =>
-    withFetchDeadline(
+  const request = (method: string, params: unknown): Promise<unknown> => {
+    const operationDeadlineMs =
+      (payload?.operationTimeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS) + OPERATION_TIMEOUT_GRACE_MS;
+    return withFetchDeadline(
       config.viewPath,
       {
         method: "POST",
@@ -364,7 +374,9 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
         }
         return body.result;
       },
+      operationDeadlineMs,
     );
+  };
   const operationHandlers = new Map<string, (params: unknown) => Promise<unknown>>();
   const installOperationHandlers = (view: ViewPayload) => {
     if (view.serverTools === true) {
@@ -532,6 +544,7 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
       frame.src = sandboxUrl.href;
       host?.replaceChildren(frame);
     },
+    MCP_APP_VIEW_LOAD_TIMEOUT_MS,
   ).catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)));
 }
 
@@ -679,6 +692,8 @@ export async function handleMcpAppStandaloneHttpRequest(
   try {
     return await withMcpAppActiveView(active, "read", () => {
       const { runtime, view } = active;
+      const operationTimeoutMs =
+        runtime.peekCatalog()?.servers[view.serverName]?.requestTimeoutMs ?? 60_000;
       res.statusCode = 200;
       res.setHeader("Content-Type", "application/json; charset=utf-8");
       res.end(
@@ -696,6 +711,7 @@ export async function handleMcpAppStandaloneHttpRequest(
               toolResult: view.toolResult,
               serverTools: supportsStandaloneToolOperations(view),
               serverResources: runtime.readResource !== undefined,
+              operationTimeoutMs,
             }),
       );
       return true;

@@ -41,6 +41,15 @@ const runtime = {
   mcpAppsEnabled: true,
   markUsed: vi.fn(),
   acquireLease: vi.fn(() => releaseRuntimeLease),
+  peekCatalog: vi.fn(() => ({
+    servers: { demo: { requestTimeoutMs: 90_000 } },
+    tools: [
+      { serverName: "demo", toolName: "shared" },
+      { serverName: "demo", toolName: "app-only", uiVisibility: ["app"] },
+      { serverName: "demo", toolName: "model-only", uiVisibility: ["model"] },
+      { serverName: "other", toolName: "cross-only", uiVisibility: ["app"] },
+    ],
+  })),
   getCatalog: vi.fn(async () => ({
     tools: [
       { serverName: "demo", toolName: "shared" },
@@ -225,6 +234,7 @@ describe("MCP App standalone host", () => {
       sandboxPort: 18_790,
       serverTools: true,
       serverResources: true,
+      operationTimeoutMs: 90_000,
     });
     expect(
       (await request({ url: route, authorization: `MCP-App ${issued.ticket}` })).res.statusCode,
@@ -372,34 +382,54 @@ describe("MCP App standalone host", () => {
 describe("standalone host fetch deadline", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    mocks.peekSessionMcpRuntime.mockReturnValue(runtime);
+    mocks.getMcpAppViewLease.mockReturnValue(view);
+    mocks.completeRetirement.mockResolvedValue(undefined);
   });
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
-  // Mirrors the withFetchDeadline helper serialized inside runStandaloneMcpAppHost.
-  // The helper runs browser-side via .toString(), so it cannot be imported; this
-  // test validates the timeout pattern covers both header arrival and body reads.
-  async function withFetchDeadline<T>(
-    input: string,
-    init: RequestInit,
-    consume: (response: Response) => Promise<T>,
-  ): Promise<T> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 30_000);
-    try {
-      const response = await fetch(input, { ...init, signal: controller.signal });
-      return await consume(response);
-    } finally {
-      clearTimeout(timer);
+  // Extract the actual serialized bootstrap from the handler's HTML response
+  // so the deadline tests exercise the real runStandaloneMcpAppHost payload
+  // served to browsers, not a reimplementation that can drift.
+  async function extractBootstrap(): Promise<string> {
+    const result = await request({ url: "/__openclaw__/mcp-app" });
+    const html = String(result.end.mock.calls[0]?.[0]);
+    const match = /<script>([\s\S]*?)<\/script>/.exec(html);
+    if (!match?.[1]) {
+      throw new Error("bootstrap script not found in standalone shell HTML");
     }
+    return match[1];
   }
 
-  it("aborts during stalled body consumption after the deadline", async () => {
-    // Mock fetch: headers resolve immediately, but .json() stalls until the
-    // abort signal fires (simulating a gateway that sends headers then stalls
-    // while streaming the body).
+  function stubBrowserEnv(hostReplaceChildren: ReturnType<typeof vi.fn>): void {
+    vi.stubGlobal("document", {
+      getElementById: () => ({ replaceChildren: hostReplaceChildren }),
+      createElement: (name: string) =>
+        name === "iframe"
+          ? {
+              src: "",
+              title: "",
+              referrerPolicy: "",
+              style: { height: "600px" },
+              setAttribute: vi.fn(),
+              contentWindow: { postMessage: vi.fn() },
+              remove: vi.fn(),
+            }
+          : {},
+    });
+    vi.stubGlobal("location", { hash: "#test-ticket", origin: "http://localhost:18900" });
+    vi.stubGlobal("addEventListener", vi.fn());
+    vi.stubGlobal("navigator", { language: "en" });
+    vi.stubGlobal("matchMedia", () => ({ matches: false }));
+    vi.stubGlobal("innerWidth", 1024);
+  }
+
+  it("aborts stalled view-load body after the deadline via the serialized shell", async () => {
+    const hostReplaceChildren = vi.fn();
+    stubBrowserEnv(hostReplaceChildren);
     const fetchMock = vi.fn(async (_input: string, init?: RequestInit) => {
       const signal = init?.signal as AbortSignal | undefined;
       return {
@@ -413,30 +443,33 @@ describe("standalone host fetch deadline", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const promise = withFetchDeadline(
-      "https://gateway.test/view",
-      {},
-      async (response) => (await response.json()) as unknown,
-    );
+    const bootstrap = await extractBootstrap();
+    // oxlint-disable-next-line typescript/no-implied-eval -- Execute the generated bootstrap itself so the test cannot drift into a reimplementation.
+    new Function(bootstrap)();
 
     // Headers arrive synchronously; body stalls — advance just before deadline.
     await vi.advanceTimersByTimeAsync(29_999);
+    expect(hostReplaceChildren).not.toHaveBeenCalled();
 
-    // Attach handler before advancing past the deadline so the rejection
-    // is never unhandled.
-    const assertion = expect(promise).rejects.toThrow("aborted");
-
-    // Advance past the 30s deadline — controller.abort() fires and rejects
-    // the stalled body read, proving the timer covers body consumption.
+    // Advance past the 30s view-load deadline — controller.abort() fires,
+    // the stalled body rejects, and fail() renders the error into the host.
     await vi.advanceTimersByTimeAsync(2);
-    await assertion;
+    expect(hostReplaceChildren).toHaveBeenCalledTimes(1);
+    expect(hostReplaceChildren).toHaveBeenCalledWith(
+      expect.objectContaining({
+        className: "error",
+        textContent: "The operation was aborted",
+      }),
+    );
     expect(fetchMock).toHaveBeenCalledWith(
-      "https://gateway.test/view",
+      expect.any(String),
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
   });
 
-  it("clears the timer after successful body consumption", async () => {
+  it("clears the timer after successful body consumption via the serialized shell", async () => {
+    const hostReplaceChildren = vi.fn();
+    stubBrowserEnv(hostReplaceChildren);
     vi.stubGlobal(
       "fetch",
       vi.fn(
@@ -444,19 +477,29 @@ describe("standalone host fetch deadline", () => {
           ({
             ok: true,
             status: 200,
-            json: async () => ({ ok: true, result: "done" }),
+            json: async () => ({
+              sandboxUrl: "/mcp-app-sandbox",
+              sandboxPort: 18_901,
+              html: "<p>app</p>",
+              toolInput: {},
+              toolResult: {},
+            }),
           }) as unknown as Response,
       ),
     );
 
-    const result = await withFetchDeadline(
-      "https://gateway.test/view",
-      {},
-      async (response) => (await response.json()) as { ok: boolean; result: string },
-    );
+    const bootstrap = await extractBootstrap();
+    // oxlint-disable-next-line typescript/no-implied-eval -- Execute the generated bootstrap itself so the test cannot drift into a reimplementation.
+    new Function(bootstrap)();
 
-    expect(result).toEqual({ ok: true, result: "done" });
-    // Advance well past the deadline — no unhandled abort fires.
+    // Let the fetch and body consumption settle — the view loads successfully
+    // and the iframe is placed in the host element.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(hostReplaceChildren).toHaveBeenCalledWith(expect.objectContaining({ title: "MCP App" }));
+
+    // Advance well past the 30s deadline — the timer was cleared in the
+    // finally block, so no abort fires and no error is rendered.
     vi.advanceTimersByTime(60_000);
+    expect(hostReplaceChildren).toHaveBeenCalledTimes(1);
   });
 });
