@@ -324,16 +324,25 @@ async function resolveTranscriptTurnTarget(
         sessionKey,
         storePath,
       });
-  // Track whether the session entry was loaded from a persisted SQLite row
-  // (vs an in-memory mirror from scope.sessionStore or scope.sessionEntry).
-  // The guarded transaction requires a persisted row to validate; a mirror-only
-  // entry must stay on the legacy append. (#119221)
+  // Track whether the session entry is backed by a persisted SQLite row.
+  // scope.sessionStore may be a Gateway-materialized SQLite snapshot (not a
+  // pure memory mirror), so we cannot infer provenance from sessionStore
+  // presence alone. When sessionStore is set, also check SQLite directly:
+  // if a row exists there, the entry is persisted and the guarded transaction
+  // can validate it; otherwise it is mirror-only and must use the legacy append.
+  // (#119221)
   let sessionEntry = resolved?.existing ?? scope.sessionEntry;
-  // entryFromPersistedStore is true only when the entry came from a SQLite
-  // source: resolveSessionEntrySelection (non-sessionStore path) or
-  // loadSessionEntry (fallback). When scope.sessionStore is set,
-  // resolved.existing comes from the in-memory mirror — not persisted.
-  let entryFromPersistedStore = !scope.sessionStore && resolved?.existing != null;
+  let entryFromPersistedStore = false;
+  if (sessionEntry && !scope.sessionStore) {
+    // Non-sessionStore path: resolved came from resolveSessionEntrySelection (SQLite).
+    entryFromPersistedStore = true;
+  } else if (sessionEntry && scope.sessionStore) {
+    // sessionStore path: check whether a SQLite row also exists for this key.
+    // If it does, the entry is persisted (Gateway snapshot from SQLite).
+    // If not, it is a pure memory mirror and must stay on legacy append.
+    const sqliteEntry = loadSessionEntry({ ...scope, agentId, sessionKey, storePath });
+    entryFromPersistedStore = sqliteEntry != null;
+  }
   if (!sessionEntry) {
     sessionEntry = loadSessionEntry({ ...scope, agentId, sessionKey, storePath });
     entryFromPersistedStore = true;
