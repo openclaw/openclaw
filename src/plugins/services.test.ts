@@ -22,6 +22,7 @@ import {
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
+import { markHostPluginUsageDiagnosticEvent } from "../infra/diagnostic-plugin-usage-provenance.js";
 import { queuePluginSessionsChanged, subscribePluginSessionsChanged } from "./gateway-events.js";
 import { registerPluginHttpRoute } from "./http-registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
@@ -787,6 +788,7 @@ describe("startPluginServices", () => {
 
     expect(contexts[0]?.internalDiagnostics?.onEvent).toBeTypeOf("function");
     expect(contexts[0]?.internalDiagnostics?.emit).toBeTypeOf("function");
+    expect(contexts[0]?.internalDiagnostics?.registerTracePropagationBridge).toBeTypeOf("function");
 
     const prometheusContexts: OpenClawPluginServiceContext[] = [];
     const prometheusService = createTrackingService("diagnostics-prometheus", {
@@ -799,6 +801,9 @@ describe("startPluginServices", () => {
 
     expect(prometheusContexts[0]?.internalDiagnostics?.onEvent).toBeTypeOf("function");
     expect(prometheusContexts[0]?.internalDiagnostics?.emit).toBeTypeOf("function");
+    expect(prometheusContexts[0]?.internalDiagnostics?.registerTracePropagationBridge).toBeTypeOf(
+      "function",
+    );
 
     const officialDiagnosticsOtelContexts: OpenClawPluginServiceContext[] = [];
     const officialDiagnosticsOtelService = createTrackingService("diagnostics-otel", {
@@ -816,6 +821,9 @@ describe("startPluginServices", () => {
 
     expect(officialDiagnosticsOtelContexts[0]?.internalDiagnostics?.onEvent).toBeTypeOf("function");
     expect(officialDiagnosticsOtelContexts[0]?.internalDiagnostics?.emit).toBeTypeOf("function");
+    expect(
+      officialDiagnosticsOtelContexts[0]?.internalDiagnostics?.registerTracePropagationBridge,
+    ).toBeTypeOf("function");
 
     const officialInstallContexts: OpenClawPluginServiceContext[] = [];
     const officialInstallService = createTrackingService("diagnostics-prometheus", {
@@ -828,6 +836,9 @@ describe("startPluginServices", () => {
 
     expect(officialInstallContexts[0]?.internalDiagnostics?.onEvent).toBeTypeOf("function");
     expect(officialInstallContexts[0]?.internalDiagnostics?.emit).toBeTypeOf("function");
+    expect(
+      officialInstallContexts[0]?.internalDiagnostics?.registerTracePropagationBridge,
+    ).toBeTypeOf("function");
 
     const untrustedContexts: OpenClawPluginServiceContext[] = [];
     const untrustedService = createTrackingService("diagnostics-otel", {
@@ -850,5 +861,57 @@ describe("startPluginServices", () => {
     });
 
     expect(spoofedContexts[0]?.internalDiagnostics).toBeUndefined();
+  });
+
+  it("delivers host plugin attribution only to the trusted OTel listener lane", async () => {
+    const observed: Array<{
+      exporter: string;
+      hostPluginId?: string;
+      privateHostPluginId?: unknown;
+    }> = [];
+    const createDiagnosticsService = (id: "diagnostics-otel" | "diagnostics-prometheus") => ({
+      id,
+      start(ctx: OpenClawPluginServiceContext) {
+        ctx.internalDiagnostics?.onEvent((event, _metadata, privateData) => {
+          if (event.type === "model.usage") {
+            observed.push({
+              exporter: id,
+              hostPluginId: (privateData as { hostPluginId?: string }).hostPluginId,
+              privateHostPluginId: (privateData as { hostPluginId?: unknown }).hostPluginId,
+            });
+          }
+        });
+      },
+    });
+    const registry = createRegistry(
+      [createDiagnosticsService("diagnostics-otel")],
+      "diagnostics-otel",
+      "bundled",
+    );
+    registry.services.push(
+      ...createRegistry(
+        [createDiagnosticsService("diagnostics-prometheus")],
+        "diagnostics-prometheus",
+        "bundled",
+      ).services,
+    );
+    await startPluginServices({ registry, config: createServiceConfig() });
+
+    emitTrustedDiagnosticEvent(
+      markHostPluginUsageDiagnosticEvent({ type: "model.usage", usage: { input: 1 } }, "llm-task"),
+    );
+
+    expect(observed).toEqual([
+      {
+        exporter: "diagnostics-otel",
+        hostPluginId: "llm-task",
+        privateHostPluginId: "llm-task",
+      },
+      {
+        exporter: "diagnostics-prometheus",
+        hostPluginId: undefined,
+        privateHostPluginId: undefined,
+      },
+    ]);
   });
 });
