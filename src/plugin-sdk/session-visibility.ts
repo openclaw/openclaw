@@ -374,7 +374,13 @@ function isCrossAgentTarget(
     // not depend on spawned ownership; do not relabel it.
     return false;
   }
-  return !!targetAgentId && !!requesterAgentId && targetAgentId !== requesterAgentId;
+  // Both ids are resolved strings here; an empty requester id means the
+  // requester itself is unscoped, in which case the row checker's own denial
+  // already applies and we must not relabel it.
+  if (!requesterAgentId || !targetAgentId) {
+    return false;
+  }
+  return targetAgentId !== requesterAgentId;
 }
 
 /** Create a direct session-key visibility checker for one requester/action pair. */
