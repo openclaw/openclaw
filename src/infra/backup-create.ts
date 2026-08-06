@@ -31,6 +31,10 @@ import {
 } from "./backup-archive-publication.js";
 import { removePreparedBackupArchive, writeArchiveStreamToFile } from "./backup-create-stream.js";
 import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
+import {
+  keepBackupTempDirectoryAlive,
+  sweepStaleBackupTempDirectories,
+} from "./backup-temp-sweep.js";
 import { isVolatileBackupPath } from "./backup-volatile-filter.js";
 import {
   createBackupLinkCache,
@@ -50,6 +54,11 @@ import {
 import { withLegacyAuditMigrationLease } from "./state-migrations.audit-coordination.js";
 
 const loadTarRuntime = createLazyRuntimeModule(() => import("tar"));
+
+// `fs.mkdtemp` appends exactly six alphanumeric characters. Matching that
+// shape rather than the bare prefix keeps the sweep from also claiming a
+// live `openclaw-backup-verify-sqlite-*` run, which shares the prefix.
+const STALE_BACKUP_STAGING_DIRECTORY_PATTERN = /^openclaw-backup-[A-Za-z0-9]{6}$/u;
 
 export type BackupCreateOptions = {
   output?: string;
@@ -791,15 +800,27 @@ export async function createBackupArchive(
   await fs.mkdir(path.dirname(outputPath), { recursive: true });
   const tempRoot = await chooseBackupTempRoot({ assets: result.assets, outputPath });
   await fs.mkdir(tempRoot, { recursive: true });
+  // Staleness is wall-clock, not `opts.nowMs`: that timestamp names the
+  // archive and callers inject arbitrary values for it.
+  await sweepStaleBackupTempDirectories({
+    directoryPath: tempRoot,
+    entryPattern: STALE_BACKUP_STAGING_DIRECTORY_PATTERN,
+    log: opts.log,
+  });
   const tempDir = await fs.mkdtemp(path.join(tempRoot, "openclaw-backup-"));
+  // Claim both temp dirs for this run: `tar` only reads the staging directory,
+  // so a multi-hour archive would otherwise age it into another run's sweep.
+  const stopTempDirKeepAlive = keepBackupTempDirectoryAlive(tempDir);
   const manifestPath = path.join(tempDir, "manifest.json");
   let publication: BackupArchivePublication;
   try {
-    publication = await createBackupArchivePublication(outputPath);
+    publication = await createBackupArchivePublication(outputPath, opts.log);
   } catch (error) {
+    stopTempDirKeepAlive();
     await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
     throw error;
   }
+  const stopPublishDirKeepAlive = keepBackupTempDirectoryAlive(publication.stagingDir);
   const tempArchivePath = publication.tempArchivePath;
   const stateAsset = result.assets.find((asset) => asset.kind === "state");
   const preservedStatePaths = [
@@ -985,6 +1006,8 @@ export async function createBackupArchive(
       log: opts.log,
     });
   } finally {
+    stopPublishDirKeepAlive();
+    stopTempDirKeepAlive();
     await cleanupBackupArchivePublication(publication, opts.log);
     await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
   }
