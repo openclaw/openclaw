@@ -116,10 +116,12 @@ openclaw config validate --json
 ```
 
 <Note>
-The exec-provider checks inspect the filesystem of the host where the CLI
-runs. Run `config validate` on the gateway host itself (or on a host with
-matching command paths, ownership, and ACLs) before relying on the result for
-restart safety.
+Exec-provider command-path checks are host-local. These commands inspect the
+filesystem of the host where the CLI runs: `config validate`, `config set`,
+`config patch`, and the write commands' `--dry-run` modes. Run them on the
+gateway host itself, or on a host with matching command paths, ownership,
+permissions, and ACLs. This structural preflight does not execute the provider
+command and still runs when a dry-run skips exec-backed SecretRef resolvability.
 </Note>
 
 <Note>
