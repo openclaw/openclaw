@@ -18,6 +18,9 @@ const MAX_NAME_LENGTH = 64;
 /** Max description length per spec */
 const MAX_DESCRIPTION_LENGTH = 1024;
 
+/** Max file size for a single SKILL.md. Matches workspace skill loading limit. */
+export const MAX_SKILL_FILE_BYTES = 256_000;
+
 export interface Skill {
   name: string;
   description: string;
@@ -214,6 +217,16 @@ function loadSkillFromFile(
   const diagnostics: ResourceDiagnostic[] = [];
 
   try {
+    // Reject oversized skill files to bound memory usage during loading.
+    const fileSize = statSync(filePath).size;
+    if (fileSize > MAX_SKILL_FILE_BYTES) {
+      diagnostics.push({
+        type: "warning",
+        message: `skill file exceeds ${MAX_SKILL_FILE_BYTES} bytes (${fileSize} bytes)`,
+        path: filePath,
+      });
+      return { skill: null, diagnostics };
+    }
     const rawContent = readFileSync(filePath, "utf-8");
     const frontmatter = parseFrontmatter(rawContent);
     const invocation = resolveSkillInvocationPolicy(frontmatter);

@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { parseFrontmatter, resolveOpenClawMetadata } from "./frontmatter.js";
-import { loadSkills } from "./session.js";
+import { loadSkills, MAX_SKILL_FILE_BYTES } from "./session.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -86,6 +86,31 @@ disable-model-invocation: true
       }),
     ]);
     expect(resolveOpenClawMetadata(frontmatter)?.requires?.env).toEqual(["EXAMPLE_VAR"]);
+  });
+
+  it("rejects oversized SKILL.md files and emits a diagnostic", async () => {
+    const tempDir = tempDirs.make("openclaw-skill-scan-");
+    const skillDir = path.join(tempDir, "oversized");
+    await fs.mkdir(skillDir);
+    const skillFile = path.join(skillDir, "SKILL.md");
+    // Write content exceeding the size limit.
+    const oversizeBody = "x".repeat(MAX_SKILL_FILE_BYTES + 1);
+    await fs.writeFile(
+      skillFile,
+      `---\nname: oversized\ndescription: This file is too big\n---\n${oversizeBody}`,
+      "utf-8",
+    );
+
+    const result = loadSkillsFromPath(tempDir);
+
+    expect(result.skills).toEqual([]);
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        type: "warning",
+        path: skillFile,
+        message: expect.stringContaining("exceeds"),
+      }),
+    ]);
   });
 
   it("reports malformed frontmatter by file and keeps loading sibling skills", async () => {
