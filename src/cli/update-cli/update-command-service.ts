@@ -576,6 +576,13 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
 export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
   preManagedServiceStop: PreManagedServiceStop | undefined;
   jsonMode: boolean;
+  /**
+   * Producer-owned fact from the package-update path: a replacement package
+   * tree was actually installed. Required before the future-config start
+   * exception may run. Git rollbacks and pre-swap failures must leave this
+   * false/undefined so recovery stays on the guarded restart only.
+   */
+  packageReplacementVerified?: boolean;
 }): Promise<void> {
   if (!params.preManagedServiceStop?.stopped || !params.preManagedServiceStop.serviceEnv) {
     return;
@@ -591,8 +598,20 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
   } catch (err) {
     // A completed package swap leaves this process older than the config it now
     // reads, so the version guard refuses the restart and the service stays
-    // stopped with only a warning. Only recover when the config is genuinely
-    // newer than this binary AND the managed service is still installed.
+    // stopped with only a warning. Only recover when the package-update
+    // producer verified a replacement, the config is genuinely newer than this
+    // binary, AND the managed service is still installed. Future-config
+    // metadata alone is not enough — Git and pre-swap failures can stamp or
+    // observe newer config without installing a replacement binary.
+    if (!params.packageReplacementVerified) {
+      const message = `Failed to restart managed gateway service after failed update: ${String(err)}`;
+      if (params.jsonMode) {
+        defaultRuntime.error(message);
+      } else {
+        defaultRuntime.log(theme.warn(message));
+      }
+      return;
+    }
     const block = await readFutureConfigActionBlock("restart");
     if (!block) {
       const message = `Failed to restart managed gateway service after failed update: ${String(err)}`;

@@ -36,6 +36,30 @@ import {
 const PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS = "allow" as const;
 
 /**
+ * True when the package-update producer has already installed a replacement
+ * tree. Used by failed-update recovery to decide whether the future-config
+ * start exception is allowed — Git rollbacks and pre-swap failures must not
+ * infer that fact from config metadata alone.
+ */
+export function didCompletePackageReplacement(
+  steps: ReadonlyArray<{ name: string; exitCode: number | null }>,
+): boolean {
+  if (steps.some((step) => step.name === "global install swap" && step.exitCode === 0)) {
+    return true;
+  }
+  const installLanded = steps.some(
+    (step) =>
+      (step.name === "global update" || step.name === "global update (omit optional)") &&
+      step.exitCode === 0,
+  );
+  if (!installLanded) {
+    return false;
+  }
+  // Doctor only runs against the replacement tree after install verification.
+  return steps.some((step) => step.name.startsWith("openclaw doctor"));
+}
+
+/**
  * Captures one package-manager or filesystem step from the global update flow.
  * Callers surface these records directly in update diagnostics.
  */
@@ -837,6 +861,7 @@ export async function runGlobalPackageUpdateSteps(params: {
   verifiedPackageRoot: string | null;
   afterVersion: string | null;
   failedStep: PackageUpdateStepResult | null;
+  packageReplacementVerified: boolean;
 }> {
   let stagedInstall: StagedNpmInstall | null | undefined;
   let packedInstallDir: string | null = null;
@@ -855,6 +880,7 @@ export async function runGlobalPackageUpdateSteps(params: {
         verifiedPackageRoot: params.packageRoot ?? params.installTarget.packageRoot,
         afterVersion: null,
         failedStep: pnpmPreflight.failedStep,
+        packageReplacementVerified: false,
       };
     }
     // Keep the preflight and mutation on the same pnpm executable. `pnpm bin -g`
@@ -883,6 +909,7 @@ export async function runGlobalPackageUpdateSteps(params: {
         verifiedPackageRoot: params.packageRoot ?? null,
         afterVersion: null,
         failedStep: preparedInstall.failedStep,
+        packageReplacementVerified: false,
       };
     }
 
@@ -905,6 +932,7 @@ export async function runGlobalPackageUpdateSteps(params: {
         verifiedPackageRoot: params.packageRoot ?? null,
         afterVersion: null,
         failedStep: preparedSpec.failedStep,
+        packageReplacementVerified: didCompletePackageReplacement(steps),
       };
     }
 
@@ -956,6 +984,7 @@ export async function runGlobalPackageUpdateSteps(params: {
           verifiedPackageRoot: params.packageRoot ?? null,
           afterVersion: null,
           failedStep: preparedFallbackInstall.failedStep,
+          packageReplacementVerified: didCompletePackageReplacement(steps),
         };
       }
 
@@ -1032,6 +1061,7 @@ export async function runGlobalPackageUpdateSteps(params: {
         verifiedPackageRoot: params.packageRoot ?? null,
         afterVersion: null,
         failedStep: replacementStep,
+        packageReplacementVerified: didCompletePackageReplacement(steps),
       };
     }
     const livePackageRoot =
@@ -1085,6 +1115,7 @@ export async function runGlobalPackageUpdateSteps(params: {
               verifiedPackageRoot,
               afterVersion: null,
               failedStep: markerStep,
+              packageReplacementVerified: didCompletePackageReplacement(steps),
             };
           }
         }
@@ -1110,6 +1141,7 @@ export async function runGlobalPackageUpdateSteps(params: {
               verifiedPackageRoot,
               afterVersion: null,
               failedStep: lifecycleStep,
+              packageReplacementVerified: didCompletePackageReplacement(steps),
             };
           }
         }
@@ -1131,6 +1163,7 @@ export async function runGlobalPackageUpdateSteps(params: {
             verifiedPackageRoot,
             afterVersion: null,
             failedStep: finalizeStep,
+            packageReplacementVerified: didCompletePackageReplacement(steps),
           };
         }
       }
@@ -1202,6 +1235,7 @@ export async function runGlobalPackageUpdateSteps(params: {
       verifiedPackageRoot,
       afterVersion,
       failedStep,
+      packageReplacementVerified: didCompletePackageReplacement(steps),
     };
   } finally {
     await cleanupStagedNpmInstall(stagedInstall ?? null);

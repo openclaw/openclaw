@@ -93,6 +93,9 @@ describe("failed Git update recovery restart", () => {
     await finishFailedUpdate(failedResult({ serviceRestartSafe: true }));
 
     expect(mocks.restart).toHaveBeenCalledOnce();
+    expect(mocks.restart).toHaveBeenCalledWith(
+      expect.objectContaining({ packageReplacementVerified: false }),
+    );
   });
 
   it("leaves a managed Gateway stopped after unverified rollback recovery", async () => {
@@ -104,5 +107,65 @@ describe("failed Git update recovery restart", () => {
 
     expect(mocks.restart).not.toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith(expect.stringContaining("Managed gateway remains stopped"));
+  });
+
+  it("does not claim a verified package replacement on Git failures", async () => {
+    await finishFailedUpdate(failedResult({ serviceRestartSafe: true }));
+
+    expect(mocks.restart.mock.calls[0]?.[0]).toMatchObject({
+      packageReplacementVerified: false,
+    });
+  });
+});
+
+describe("failed package update recovery provenance", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
+  });
+
+  it("threads a verified package replacement into failed-update recovery", async () => {
+    await finishUpdate({
+      result: {
+        status: "error",
+        mode: "npm",
+        reason: "doctor-failed",
+        steps: [
+          { name: "global update", command: "npm", cwd: "/", durationMs: 1, exitCode: 0 },
+          { name: "openclaw doctor", command: "doctor", cwd: "/", durationMs: 1, exitCode: 1 },
+        ],
+        packageReplacementVerified: true,
+        durationMs: 1,
+      },
+      opts: {},
+      showProgress: false,
+      preManagedServiceStop: { stopped: true, serviceEnv: {} },
+      controlPlaneUpdateSentinelMeta: undefined,
+    } as unknown as FinishUpdateParams);
+
+    expect(mocks.restart).toHaveBeenCalledWith(
+      expect.objectContaining({ packageReplacementVerified: true }),
+    );
+  });
+
+  it("keeps pre-swap package failures on the guarded restart only", async () => {
+    await finishUpdate({
+      result: {
+        status: "error",
+        mode: "npm",
+        reason: "global-install-failed",
+        steps: [{ name: "global update", command: "npm", cwd: "/", durationMs: 1, exitCode: 1 }],
+        packageReplacementVerified: false,
+        durationMs: 1,
+      },
+      opts: {},
+      showProgress: false,
+      preManagedServiceStop: { stopped: true, serviceEnv: {} },
+      controlPlaneUpdateSentinelMeta: undefined,
+    } as unknown as FinishUpdateParams);
+
+    expect(mocks.restart).toHaveBeenCalledWith(
+      expect.objectContaining({ packageReplacementVerified: false }),
+    );
   });
 });

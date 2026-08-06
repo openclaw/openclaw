@@ -127,6 +127,7 @@ export async function finishUpdate(params: {
       await maybeRestartServiceAfterFailedMutableUpdate({
         preManagedServiceStop: params.preManagedServiceStop,
         jsonMode: Boolean(params.opts.json),
+        packageReplacementVerified: params.result.packageReplacementVerified === true,
       });
     }
     defaultRuntime.exit(1);
@@ -145,6 +146,7 @@ export async function finishUpdate(params: {
     await maybeRestartServiceAfterFailedMutableUpdate({
       preManagedServiceStop: params.preManagedServiceStop,
       jsonMode: Boolean(params.opts.json),
+      packageReplacementVerified: params.result.packageReplacementVerified === true,
     });
     if (params.result.reason === "dirty") {
       defaultRuntime.error(theme.error("Update blocked: local files are edited in this checkout."));
@@ -333,6 +335,8 @@ export async function finishUpdate(params: {
       await maybeRestartServiceAfterFailedMutableUpdate({
         preManagedServiceStop: params.preManagedServiceStop,
         jsonMode: Boolean(params.opts.json),
+        // Core package update already finished; plugin/doctor failure is post-swap.
+        packageReplacementVerified: params.result.packageReplacementVerified === true,
       });
     }
     if (params.opts.json) {
