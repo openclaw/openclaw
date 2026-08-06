@@ -294,6 +294,12 @@ export type SessionGoal = {
 export type PendingSkillSuggestion = {
   skillName: string;
   detectedAt: number;
+  observedWorkflow?: string;
+  expectedBenefit?: string;
+  evidence?: string;
+  source?: "openclaw" | "skill_workshop";
+  proposalId?: string;
+  opportunityKey?: string;
 };
 
 export type RestartRecoveryRun = {
