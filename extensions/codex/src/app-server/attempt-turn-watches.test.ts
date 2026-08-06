@@ -267,6 +267,49 @@ describe("Codex app-server attempt turn watches", () => {
     ]);
   });
 
+  it("does not treat a quiet active native item as stalled attempt progress", () => {
+    const harness = createController();
+    harness.activeCompletionBlockers = 1;
+
+    harness.controller.armAttemptIdleWatch();
+    harness.controller.touchActivity("notification:item/started", { attemptProgress: true });
+    vi.advanceTimersByTime(20);
+
+    expect(harness.timeouts).toEqual([]);
+    expect(harness.abortController.signal.aborted).toBe(false);
+
+    harness.activeCompletionBlockers = 0;
+    harness.controller.touchActivity("notification:item/completed", { attemptProgress: true });
+    vi.advanceTimersByTime(10);
+
+    expect(harness.timeouts).toMatchObject([
+      {
+        kind: "progress",
+        idleMs: 10,
+        timeoutMs: 10,
+        lastActivityReason: "notification:item/completed",
+      },
+    ]);
+  });
+
+  it("does not treat an in-flight app-server request as stalled attempt progress", () => {
+    const harness = createController();
+    harness.activeRequests = 1;
+
+    harness.controller.armAttemptIdleWatch();
+    harness.controller.touchActivity("request:item/tool/call:start", { attemptProgress: true });
+    vi.advanceTimersByTime(20);
+
+    expect(harness.timeouts).toEqual([]);
+    expect(harness.abortController.signal.aborted).toBe(false);
+
+    harness.activeRequests = 0;
+    harness.controller.touchActivity("request:item/tool/call:response", { attemptProgress: true });
+    vi.advanceTimersByTime(10);
+
+    expect(harness.timeouts).toMatchObject([{ kind: "progress" }]);
+  });
+
   it("releases a completed assistant item after its interrupted turn completes", async () => {
     const harness = createController();
 

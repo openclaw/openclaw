@@ -137,12 +137,16 @@ export function createCodexAttemptTurnWatchController(params: {
   }
 
   function scheduleAttemptIdleWatch() {
+    // Native tool items and server requests own legitimate quiet windows.
+    // Their completion/response records fresh progress before this watch resumes.
     scheduleWatch(
       "attempt",
       fireAttemptIdleTimeout,
       attemptLastProgressAt,
       attemptIdleTimeoutOverrideMs ?? turnAttemptIdleTimeoutMs,
-      attemptIdleWatchArmed,
+      attemptIdleWatchArmed &&
+        params.getActiveAppServerTurnRequests() === 0 &&
+        params.getActiveCompletionBlockerItemCount() === 0,
     );
   }
 
@@ -266,7 +270,13 @@ export function createCodexAttemptTurnWatchController(params: {
   }
 
   function fireAttemptIdleTimeout() {
-    if (params.isCompleted() || params.signal.aborted || !attemptIdleWatchArmed) {
+    if (
+      params.isCompleted() ||
+      params.signal.aborted ||
+      !attemptIdleWatchArmed ||
+      params.getActiveAppServerTurnRequests() > 0 ||
+      params.getActiveCompletionBlockerItemCount() > 0
+    ) {
       return;
     }
     const idleMs = Math.max(0, Date.now() - attemptLastProgressAt);
