@@ -24,12 +24,15 @@ export function validateTelegramMiniAppInitData(params: {
 
   const parsed = new URLSearchParams(initData);
   const receivedHash = parsed.get("hash")?.trim() ?? "";
-  const authDateRaw = parsed.get("auth_date")?.trim() ?? "";
+  const authDateRaw = parsed.get("auth_date") ?? "";
   const userRaw = parsed.get("user")?.trim() ?? "";
   if (!receivedHash || !authDateRaw || !userRaw) {
     return null;
   }
 
+  if (!/^[1-9]\d*$/.test(authDateRaw)) {
+    return null;
+  }
   const authDateSeconds = parseStrictPositiveInteger(authDateRaw);
   if (authDateSeconds === undefined) {
     return null;

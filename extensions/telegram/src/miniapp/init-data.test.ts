@@ -52,8 +52,15 @@ describe("validateTelegramMiniAppInitData", () => {
     ).toBeNull();
   });
 
-  it("rejects non-decimal auth dates even when they are signed", () => {
-    for (const authDate of ["1.8e9", "0x6b49d200", "1800000000.0"]) {
+  it("rejects non-canonical auth dates even when they are signed", () => {
+    for (const authDate of [
+      "1.8e9",
+      "0x6b49d200",
+      "1800000000.0",
+      "+1800000000",
+      " 1800000000 ",
+      "01800000000",
+    ]) {
       expect(
         validateTelegramMiniAppInitData({
           initData: signedInitData({ auth_date: authDate }),
