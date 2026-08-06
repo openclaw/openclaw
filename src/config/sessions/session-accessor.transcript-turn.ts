@@ -333,16 +333,18 @@ async function resolveTranscriptTurnTarget(
   // (#119221)
   let sessionEntry = resolved?.existing ?? scope.sessionEntry;
   let entryFromPersistedStore = false;
-  if (sessionEntry && !scope.sessionStore) {
-    // Non-sessionStore path: resolved came from resolveSessionEntrySelection (SQLite).
+  if (sessionEntry && !scope.sessionStore && resolved?.existing != null) {
+    // Non-sessionStore path with resolved.existing: came from
+    // resolveSessionEntrySelection (SQLite). Persisted.
     entryFromPersistedStore = true;
   } else if (sessionEntry && scope.sessionStore) {
     // sessionStore path: check whether a SQLite row also exists for this key.
-    // If it does, the entry is persisted (Gateway snapshot from SQLite).
-    // If not, it is a pure memory mirror and must stay on legacy append.
     const sqliteEntry = loadSessionEntry({ ...scope, agentId, sessionKey, storePath });
     entryFromPersistedStore = sqliteEntry != null;
   }
+  // If sessionEntry came from scope.sessionEntry (caller-supplied, no
+  // sessionStore, no resolved.existing), it is an in-memory value — not
+  // persisted. ACP/CLI internal transcript routes use this path.
   if (!sessionEntry) {
     sessionEntry = loadSessionEntry({ ...scope, agentId, sessionKey, storePath });
     entryFromPersistedStore = true;
