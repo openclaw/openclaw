@@ -121,6 +121,10 @@ cost that failures from one client can temporarily lock shared-secret attempts
 for other clients on the route. Verified tokenless Serve identity remains
 independent of that shared-secret lockout.
 
+Tagged Serve clients omit the user identity header. They remain eligible for
+shared-secret authentication through the managed-route bucket, but cannot use
+tokenless identity authentication.
+
 Managed Funnel uses the same stable, non-resetting proxy-peer bucket rather
 than selecting a password limiter key from forwarded headers. Repeated failures
 from one Funnel client can therefore temporarily lock password attempts for

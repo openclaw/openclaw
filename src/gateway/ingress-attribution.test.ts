@@ -164,7 +164,27 @@ describe("gateway ingress attribution", () => {
     });
   });
 
-  it("preserves generic trusted-proxy attribution without Serve identity evidence", async () => {
+  it("keeps tagged managed Serve clients eligible for shared-secret auth", async () => {
+    const tailscaleWhois = vi.fn(async () => ({ login: "owner@example.test", name: "Owner" }));
+    const attribution = await resolveGatewayIngressAttribution({
+      req: request({ headers: { ...proxyHeaders, "x-forwarded-for": "100.64.0.9" } }),
+      tailscaleMode: "serve",
+      tailscaleWhois,
+    });
+
+    expect(attribution).toMatchObject({
+      kind: "tailscale-serve",
+      provenance: "managed-route",
+      rateLimit: {
+        subject: { key: "127.0.0.1", exemption: "none" },
+        resetOnSuccess: false,
+      },
+    });
+    await expect(serveIdentity(attribution)).resolves.toBeUndefined();
+    expect(tailscaleWhois).not.toHaveBeenCalled();
+  });
+
+  it("uses managed Serve attribution without identity evidence", async () => {
     const tailscaleWhois = vi.fn(async () => ({ login: "owner@example.test", name: "Owner" }));
     const attribution = await resolveGatewayIngressAttribution({
       req: request({ headers: proxyHeaders }),
@@ -174,8 +194,13 @@ describe("gateway ingress attribution", () => {
     });
 
     expect(attribution).toMatchObject({
-      kind: "trusted-proxy",
+      kind: "tailscale-serve",
       clientIp: "198.51.100.10",
+      provenance: "managed-route",
+      rateLimit: {
+        subject: { key: "127.0.0.1", exemption: "none" },
+        resetOnSuccess: false,
+      },
     });
     expect(tailscaleWhois).not.toHaveBeenCalled();
   });

@@ -125,7 +125,9 @@ function hasTailscaleModeEvidence(
   mode: GatewayTailscaleIngressMode,
 ): boolean {
   if (mode === "serve") {
-    return Boolean(normalizeOptionalString(req.headers["tailscale-user-login"]));
+    // The registered managed route is the provenance. Tagged Serve clients
+    // omit user identity headers but must still reach shared-secret auth.
+    return true;
   }
   return mode === "funnel" && headerValue(req.headers["tailscale-funnel-request"]) === "?1";
 }
@@ -201,19 +203,23 @@ async function resolveTailscaleIngress(params: {
   }
 
   const headerLogin = normalizeOptionalString(req.headers["tailscale-user-login"]);
-  if (!headerLogin) {
-    return unattributableProxy(req.socket.remoteAddress ?? "unknown");
-  }
   const headerName = normalizeOptionalString(req.headers["tailscale-user-name"]);
   const profilePic = normalizeOptionalString(req.headers["tailscale-user-profile-pic"]);
   let identityPromise: Promise<VerifiedTailscaleIngressIdentity | undefined> | undefined;
   const verifyIdentity = () => {
+    if (!headerLogin) {
+      return Promise.resolve(undefined);
+    }
     identityPromise ??= (async () => {
       try {
         const whois = await (params.externalServe
           ? runExternalServeWhois(params.tailscaleWhois, clientIp)
           : params.tailscaleWhois(clientIp));
-        if (!whois?.login || headerLogin.toLowerCase() !== whois.login.toLowerCase()) {
+        if (
+          !headerLogin ||
+          !whois?.login ||
+          headerLogin.toLowerCase() !== whois.login.toLowerCase()
+        ) {
           return undefined;
         }
         return {
@@ -306,7 +312,7 @@ export async function resolveGatewayIngressAttribution(params: {
       remoteIsLoopback &&
       managedTailscaleMode === "off" &&
       params.allowVerifiedExternalServe &&
-      hasTailscaleModeEvidence(req, "serve")
+      Boolean(normalizeOptionalString(req.headers["tailscale-user-login"]))
     ) {
       const tailscale = await resolveTailscaleIngress({
         req,
