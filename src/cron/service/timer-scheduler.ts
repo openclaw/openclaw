@@ -255,12 +255,21 @@ async function onAdmittedTimer(state: CronServiceState) {
         return [];
       }
 
-      const admissionReleases = tryAcquireCronRunSlots(state, due.length);
+      const batchAdmissionOwner = {};
+      const admissionReleases = tryAcquireCronRunSlots(state, due.length, {
+        releaseOwner: batchAdmissionOwner,
+      });
       const admittedDue = due.slice(0, admissionReleases.length);
-      if (admittedDue.length === 0) {
-        // A single replaceable listener keeps saturated timer ticks bounded:
+      if (admittedDue.length < due.length) {
+        // A single replaceable listener keeps unreserved due work responsive:
         // no Gateway root, Promise waiter, or durable reservation is retained.
-        setCronRunCapacityListener(state, () => requestImmediateCronRecheck(state));
+        setCronRunCapacityListener(state, () => requestImmediateCronRecheck(state), {
+          // This batch already owns a bounded recursive drain. Only a slot
+          // released by other work needs to fork an immediate scheduler tick.
+          ignoredReleaseOwner: admittedDue.length > 0 ? batchAdmissionOwner : undefined,
+        });
+      }
+      if (admittedDue.length === 0) {
         return [];
       }
 

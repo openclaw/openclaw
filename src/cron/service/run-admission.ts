@@ -8,7 +8,7 @@ export function resolveRunConcurrency(): number {
   return DEFAULT_CRON_MAX_CONCURRENT_RUNS;
 }
 
-function acquireCronRunSlot(state: CronServiceState): () => void {
+function acquireCronRunSlot(state: CronServiceState, releaseOwner?: object): () => void {
   state.runAdmission.active += 1;
   let released = false;
   return () => {
@@ -17,11 +17,11 @@ function acquireCronRunSlot(state: CronServiceState): () => void {
     }
     released = true;
     state.runAdmission.active -= 1;
-    dispatchWaiters(state);
+    dispatchWaiters(state, releaseOwner);
   };
 }
 
-function dispatchWaiters(state: CronServiceState): void {
+function dispatchWaiters(state: CronServiceState, releaseOwner?: object): void {
   const admission = state.runAdmission;
   if (state.stopped) {
     cancelCronRunAdmissionWaiters(state);
@@ -36,10 +36,13 @@ function dispatchWaiters(state: CronServiceState): void {
     waiter(acquireCronRunSlot(state));
   }
   if (admission.active < maxConcurrentRuns && admission.waiters.length === 0) {
-    const listener = admission.capacityListener;
-    admission.capacityListener = null;
-    if (listener) {
-      queueMicrotask(listener);
+    const capacityListener = admission.capacityListener;
+    const ignoresRelease =
+      capacityListener?.ignoredReleaseOwner !== undefined &&
+      capacityListener.ignoredReleaseOwner === releaseOwner;
+    if (capacityListener && !ignoresRelease) {
+      admission.capacityListener = null;
+      queueMicrotask(capacityListener.listener);
     }
   }
 }
@@ -52,20 +55,26 @@ function dispatchWaiters(state: CronServiceState): void {
 export function tryAcquireCronRunSlots(
   state: CronServiceState,
   requested: number,
+  opts?: { releaseOwner?: object },
 ): Array<() => void> {
   if (state.stopped || requested <= 0 || state.runAdmission.waiters.length > 0) {
     return [];
   }
   const available = Math.max(0, resolveRunConcurrency() - state.runAdmission.active);
-  return Array.from({ length: Math.min(requested, available) }, () => acquireCronRunSlot(state));
+  return Array.from({ length: Math.min(requested, available) }, () =>
+    acquireCronRunSlot(state, opts?.releaseOwner),
+  );
 }
 
-/** Keep at most one wake-up for due scheduled work that found no free slot. */
+/** Keep at most one wake-up for due scheduled work left without a free slot. */
 export function setCronRunCapacityListener(
   state: CronServiceState,
   listener: (() => void) | null,
+  opts?: { ignoredReleaseOwner?: object },
 ): void {
-  state.runAdmission.capacityListener = listener;
+  state.runAdmission.capacityListener = listener
+    ? { listener, ignoredReleaseOwner: opts?.ignoredReleaseOwner }
+    : null;
 }
 
 async function acquireCronRunAdmission(state: CronServiceState): Promise<(() => void) | null> {
