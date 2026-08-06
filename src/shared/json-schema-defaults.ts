@@ -6,7 +6,7 @@ import {
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Compile } from "typebox/compile";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import { compileSafeRegex } from "../security/safe-regex.js";
+import { compileJsonSchemaPatternRegex } from "../security/safe-regex.js";
 
 type LocalRefResolution =
   | {
@@ -817,11 +817,9 @@ function applyObjectPropertyDefaults(
   const patternMatchedKeys = new Set<string>();
   if (isRecord(schema.patternProperties)) {
     for (const [pattern, propertySchema] of Object.entries(schema.patternProperties)) {
-      // Safe compile with exact schema sources: preserveExactSource keeps
-      // leading/trailing whitespace (JSON Schema contract). Nested-repetition
-      // and invalid patterns return null so plugin configSchema cannot hang
-      // defaults during load/validation.
-      const regex = compileSafeRegex(pattern, "", { preserveExactSource: true });
+      // Safe exact-source compile (JSON Schema whitespace contract). Nested
+      // repetition and invalid patterns return null so configSchema cannot hang.
+      const regex = compileJsonSchemaPatternRegex(pattern);
       if (!regex) {
         continue;
       }

@@ -325,29 +325,20 @@ function hasNestedRepetition(source: string): boolean {
   return analyzeTokensForNestedRepetition(tokenizePattern(source));
 }
 
-type CompileSafeRegexOptions = {
-  /**
-   * Keep the exact schema/source string for analysis and RegExp construction.
-   * Default false trims (config/model patterns treat blank as empty). JSON Schema
-   * patternProperties must use true so sources like " " or "^x " keep semantics.
-   */
-  preserveExactSource?: boolean;
-};
+type CompileSafeRegexMode = "trim" | "exact";
 
-export function compileSafeRegexDetailed(
+function compileSafeRegexCore(
   source: string,
-  flags = "",
-  options?: CompileSafeRegexOptions,
+  flags: string,
+  mode: CompileSafeRegexMode,
 ): SafeRegexCompileResult {
-  const preserveExactSource = options?.preserveExactSource === true;
-  // Trim only for the default contract used by config/model pattern callers.
-  // JSON Schema patternProperties pass preserveExactSource so whitespace is
-  // significant in both safety analysis and RegExp construction.
-  const compileSource = preserveExactSource ? source : source.trim();
+  // Default "trim" matches config/model pattern callers (blank => empty).
+  // "exact" keeps JSON Schema patternProperties sources (whitespace significant).
+  const compileSource = mode === "exact" ? source : source.trim();
   if (!compileSource) {
     return { regex: null, source: compileSource, flags, reason: "empty" };
   }
-  const cacheKey = `${preserveExactSource ? "exact" : "trim"}::${flags}::${compileSource}`;
+  const cacheKey = `${mode}::${flags}::${compileSource}`;
   if (safeRegexCache.has(cacheKey)) {
     return (
       safeRegexCache.get(cacheKey) ?? {
@@ -380,10 +371,27 @@ export function compileSafeRegexDetailed(
   return result;
 }
 
-export function compileSafeRegex(
+/** Public safe-regex entry: trims source (config/model pattern contract). */
+export function compileSafeRegexDetailed(source: string, flags = ""): SafeRegexCompileResult {
+  return compileSafeRegexCore(source, flags, "trim");
+}
+
+export function compileSafeRegex(source: string, flags = ""): RegExp | null {
+  return compileSafeRegexDetailed(source, flags).regex;
+}
+
+/**
+ * Internal JSON Schema patternProperties compile path.
+ * Preserves exact source semantics; not re-exported through the public plugin SDK.
+ */
+export function compileJsonSchemaPatternRegex(source: string, flags = ""): RegExp | null {
+  return compileSafeRegexCore(source, flags, "exact").regex;
+}
+
+/** Detailed variant for pre-validation guards (internal JSON Schema path only). */
+export function compileJsonSchemaPatternRegexDetailed(
   source: string,
   flags = "",
-  options?: CompileSafeRegexOptions,
-): RegExp | null {
-  return compileSafeRegexDetailed(source, flags, options).regex;
+): SafeRegexCompileResult {
+  return compileSafeRegexCore(source, flags, "exact");
 }

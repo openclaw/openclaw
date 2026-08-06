@@ -1818,7 +1818,7 @@ describe("schema validator", () => {
     });
   });
 
-  it("skips nested-repetition patternProperties during plugin default application", () => {
+  it("rejects nested-repetition patternProperties before TypeBox validation", () => {
     const value = { aaaaaaaaaaaaaaaaaaaaX: {} };
     const started = Date.now();
     const result = validateJsonSchemaValue({
@@ -1840,15 +1840,15 @@ describe("schema validator", () => {
       applyDefaults: true,
     });
     const elapsedMs = Date.now() - started;
-    // Allow CI host load; raw nested-repetition RegExp hangs multi-second.
+    // Must fail closed without hanging on nested-repetition pattern compile.
     expect(elapsedMs).toBeLessThan(2_000);
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      throw new Error("expected validation success");
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected validation failure for unsafe patternProperties");
     }
-    expect(
-      (result.value as { aaaaaaaaaaaaaaaaaaaaX?: { mode?: string } }).aaaaaaaaaaaaaaaaaaaaX?.mode,
-    ).toBeUndefined();
+    expect(result.errors.some((error) => /unsafe patternProperties/i.test(error.message))).toBe(
+      true,
+    );
   });
 
   it("does not clone values when default application has no defaults to inject", () => {
