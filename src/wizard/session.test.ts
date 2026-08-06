@@ -1,7 +1,19 @@
 // Wizard session tests cover session creation and state transitions.
 
 import { describe, expect, test, vi } from "vitest";
+import { QR_PNG_DATA_URL_MAX_LENGTH } from "../../packages/gateway-protocol/src/schema/qr.js";
+import type { WizardPrompter } from "./prompts.js";
 import { WizardSession, wizardStepAwaitsInput, type WizardStep } from "./session.js";
+
+const QR_TEXT = "https://example.test/pair";
+const QR_DATA_URL = "data:image/png;base64,qr";
+const qrImageMocks = vi.hoisted(() => ({
+  renderQrPngDataUrlWithinLimit: vi.fn(async () => QR_DATA_URL),
+}));
+
+vi.mock("../media/qr-image.js", () => ({
+  renderQrPngDataUrlWithinLimit: qrImageMocks.renderQrPngDataUrlWithinLimit,
+}));
 
 function noteRunner() {
   return new WizardSession(async (prompter) => {
@@ -9,6 +21,23 @@ function noteRunner() {
     const name = await prompter.text({ message: "Name" });
     await prompter.note(`Hello ${name}`);
   });
+}
+
+function presentQr(prompter: WizardPrompter, dismissed?: Promise<unknown>) {
+  return prompter.qrCode?.({
+    title: "Link a device",
+    message: "Scan this QR code, then continue.",
+    text: QR_TEXT,
+    expiresAtMs: Date.now() + 60_000,
+    dismissed,
+  });
+}
+
+function createQrSession(
+  run: ConstructorParameters<typeof WizardSession>[0],
+  options: ConstructorParameters<typeof WizardSession>[1] = {},
+) {
+  return new WizardSession(run, { supportsQrCode: true, ...options });
 }
 
 describe("WizardSession", () => {
@@ -19,12 +48,13 @@ describe("WizardSession", () => {
     ["confirm", undefined, true],
     ["action", "client", true],
     ["action", "gateway", false],
+    ["qr", "client", true],
     ["note", undefined, false],
     ["progress", undefined, false],
   ] as const satisfies ReadonlyArray<
     readonly [WizardStep["type"], WizardStep["executor"], boolean]
   >)("classifies whether %s/%s awaits user input", (type, executor, expected) => {
-    expect(wizardStepAwaitsInput({ id: "step", type, executor })).toBe(expected);
+    expect(wizardStepAwaitsInput({ type, executor })).toBe(expected);
   });
 
   test("steps progress in order", async () => {
@@ -147,6 +177,100 @@ describe("WizardSession", () => {
         message: "Enter this one-time code in your browser.",
       },
     });
+  });
+
+  test("presents QR data only to capable hosts and scrubs it on acknowledgement", async () => {
+    let acknowledged: boolean | undefined;
+    const supported = createQrSession(async (prompter) => {
+      acknowledged = await presentQr(prompter);
+    });
+
+    const prompt = await supported.next();
+    expect(prompt.step).toMatchObject({
+      type: "qr",
+      title: "Link a device",
+      qrDataUrl: QR_DATA_URL,
+      executor: "client",
+    });
+    expect(qrImageMocks.renderQrPngDataUrlWithinLimit).toHaveBeenCalledWith(
+      QR_TEXT,
+      QR_PNG_DATA_URL_MAX_LENGTH,
+    );
+    if (!prompt.step) {
+      throw new Error("expected QR step");
+    }
+    await supported.answer(prompt.step.id, true);
+    expect(prompt.step.qrDataUrl).toBeUndefined();
+    expect((await supported.next()).status).toBe("done");
+    expect(acknowledged).toBe(true);
+
+    let unsupportedHasQr = true;
+    const unsupported = new WizardSession(async (prompter) => {
+      unsupportedHasQr = typeof prompter.qrCode === "function";
+    });
+    expect((await unsupported.next()).status).toBe("done");
+    expect(unsupportedHasQr).toBe(false);
+  });
+
+  test("advances when the QR owner settles and accepts one stale acknowledgement", async () => {
+    let settleOwner!: () => void;
+    const owner = new Promise<void>((resolve) => {
+      settleOwner = resolve;
+    });
+    const settled = vi.fn();
+    const session = createQrSession(
+      async (prompter) => {
+        await presentQr(prompter, owner);
+        await prompter.text({ message: "Next step" });
+      },
+      { onQrPresentationOwnerSettled: settled },
+    );
+
+    const prompt = await session.next();
+    if (!prompt.step) {
+      throw new Error("expected QR step");
+    }
+    settleOwner();
+    const next = await session.next();
+
+    expect(prompt.step.qrDataUrl).toBeUndefined();
+    expect(settled).toHaveBeenCalledWith(prompt.step.id);
+    expect(next.step).toMatchObject({ type: "text", message: "Next step" });
+    await expect(session.answer(prompt.step.id, undefined)).resolves.toBeUndefined();
+    await expect(session.answer(prompt.step.id, undefined)).rejects.toThrow(
+      "wizard: no pending step",
+    );
+  });
+
+  test("skips a QR step whose owner settled before its first presentation", async () => {
+    const session = createQrSession(async (prompter) => {
+      await presentQr(prompter, Promise.resolve());
+    });
+
+    await expect(session.next()).resolves.toMatchObject({ done: true, status: "done" });
+  });
+
+  test("expires QR display bytes without cancelling its external owner", async () => {
+    let settleOwner!: () => void;
+    const owner = new Promise<void>((resolve) => {
+      settleOwner = resolve;
+    });
+    const session = createQrSession(async (prompter) => {
+      await presentQr(prompter, owner);
+      await owner;
+    });
+
+    const prompt = await session.next();
+    if (!prompt.step) {
+      throw new Error("expected QR step");
+    }
+    expect(session.expireOwnedQrPresentation(prompt.step.id)).toBe(true);
+    expect(prompt.step.qrDataUrl).toBeUndefined();
+    expect(session.hasExternalQrPresentationOwner()).toBe(true);
+
+    settleOwner();
+    await session.whenSettled();
+    expect(session.getStatus()).toBe("done");
   });
 
   test("invalid answers throw", async () => {

@@ -123,6 +123,15 @@ class WizardPromptNavigator {
           },
         }
       : {}),
+    ...(this.base.qrCode
+      ? {
+          qrCode: async (params) => {
+            // Replay may mint fresh credentials, so output suppression can never stand in for
+            // the user's acknowledgement of the exact QR code now being presented.
+            return (await this.base.qrCode?.(params)) === true;
+          },
+        }
+      : {}),
     plain: async (message) => {
       if (!this.shouldSuppressOutput()) {
         await this.base.plain?.(message);

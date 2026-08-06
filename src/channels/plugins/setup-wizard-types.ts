@@ -305,6 +305,8 @@ export type SetupChannelsOptions = {
   allowDisable?: boolean;
   allowIMessageInstall?: boolean;
   allowSignalInstall?: boolean;
+  /** Abort in-flight setup work when the owning hosted wizard is cancelled. */
+  abortSignal?: AbortSignal;
   /** Revalidate host authority immediately before an installer or other durable effect. */
   beforePersistentEffect?: () => Promise<void>;
   onSelection?: (selection: ChannelId[]) => void;
