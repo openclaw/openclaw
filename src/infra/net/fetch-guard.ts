@@ -54,6 +54,8 @@ function resolveDispatcherTimeoutMs(fromParams: number | undefined): number | un
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
+export type GuardedFetchRequestSendState = "not-sent" | "sent" | "unknown";
+
 export const GUARDED_FETCH_MODE = {
   STRICT: "strict",
   TRUSTED_ENV_PROXY: "trusted_env_proxy",
@@ -107,6 +109,7 @@ export type GuardedFetchResult = {
 
 type GuardedFetchInternalOptions = GuardedFetchOptions & {
   managedProxyBypass?: ConfiguredLocalOriginManagedProxyBypass;
+  onRequestSendState?: (state: GuardedFetchRequestSendState) => void;
   resolveDispatcherPolicy?: (url: URL) => PinnedDispatcherPolicy | undefined;
   /** Preserve ambient Undici env-proxy routing for each eligible URL while keeping strict checks otherwise. */
   useEnvProxyForEligibleUrls?: boolean;
@@ -469,6 +472,20 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
   return await fetchWithSsrFGuardInternal(publicParams);
 }
 
+export async function fetchWithSsrFGuardAndRequestSendState(
+  params: GuardedFetchOptions,
+  onRequestSendState: (state: GuardedFetchRequestSendState) => void,
+): Promise<GuardedFetchResult> {
+  const { managedProxyBypass: _ignoredManagedProxyBypass, ...publicParams } =
+    params as GuardedFetchOptions & {
+      managedProxyBypass?: unknown;
+    };
+  return await fetchWithSsrFGuardInternal({
+    ...publicParams,
+    onRequestSendState,
+  });
+}
+
 export async function fetchConfiguredLocalOriginWithSsrFGuard({
   configuredLocalOriginBaseUrl,
   ...params
@@ -485,6 +502,7 @@ export async function fetchConfiguredLocalOriginWithSsrFGuard({
 async function fetchWithSsrFGuardInternal(
   params: GuardedFetchInternalOptions,
 ): Promise<GuardedFetchResult> {
+  params.onRequestSendState?.("not-sent");
   const defaultFetch: FetchLike | undefined = params.fetchImpl ?? globalThis.fetch;
   if (!defaultFetch) {
     throw new Error("fetch is not available");
@@ -635,13 +653,6 @@ async function fetchWithSsrFGuardInternal(
         dispatcher = createPinnedDispatcher(pinned, dispatcherPolicy, policyForUrl, timeoutMs);
       }
 
-      const init: DispatcherAwareRequestInit = {
-        ...(currentInit ? { ...currentInit } : {}),
-        redirect: "manual",
-        ...(dispatcher ? { dispatcher } : {}),
-        ...(signal ? { signal } : {}),
-      };
-
       const supportsDispatcherInit =
         (params.fetchImpl !== undefined &&
           !isAmbientGlobalFetch({
@@ -654,6 +665,40 @@ async function fetchWithSsrFGuardInternal(
       // because the default global fetch path will not honor per-request
       // dispatchers.
       const shouldUseRuntimeFetch = Boolean(dispatcher) && !supportsDispatcherInit;
+      const requestDispatcher =
+        dispatcher && params.onRequestSendState && shouldUseRuntimeFetch
+          ? dispatcher.compose((dispatch) => {
+              const trackedDispatch: Dispatcher.Dispatch = (options, handler) =>
+                dispatch(
+                  options,
+                  new Proxy(handler, {
+                    get(target, property) {
+                      if (property === "onRequestSent") {
+                        return () => {
+                          params.onRequestSendState?.("sent");
+                          return target.onRequestSent?.();
+                        };
+                      }
+                      const value = Reflect.get(target, property, target) as unknown;
+                      return typeof value === "function" ? value.bind(target) : value;
+                    },
+                  }),
+                );
+              return trackedDispatch;
+            })
+          : dispatcher;
+      if (!shouldUseRuntimeFetch && params.onRequestSendState) {
+        // Custom/mock fetch implementations can send bytes without invoking the
+        // supplied dispatcher, so absence of onRequestSent is not replay proof.
+        params.onRequestSendState("unknown");
+      }
+      const init: DispatcherAwareRequestInit = {
+        ...(currentInit ? { ...currentInit } : {}),
+        redirect: "manual",
+        ...(requestDispatcher ? { dispatcher: requestDispatcher } : {}),
+        ...(signal ? { signal } : {}),
+      };
+
       const response = shouldUseRuntimeFetch
         ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
         : await defaultFetch(parsedUrl.toString(), init);

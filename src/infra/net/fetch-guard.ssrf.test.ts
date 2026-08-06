@@ -1,10 +1,14 @@
 // Guarded fetch SSRF tests cover redirect hardening, pinned dispatcher setup,
 // trusted proxy modes, and safe header retention.
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   fetchConfiguredLocalOriginWithSsrFGuard,
   fetchWithSsrFGuard,
+  fetchWithSsrFGuardAndRequestSendState,
   GUARDED_FETCH_MODE,
+  type GuardedFetchRequestSendState,
   retainSafeHeadersForCrossOriginRedirectHeaders,
 } from "./fetch-guard.js";
 import {
@@ -387,6 +391,45 @@ describe("fetchWithSsrFGuard hardening", () => {
     logWarnMock.mockClear();
     resetGlobalUndiciStreamTimeoutsForTests();
     Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
+  });
+
+  it("keeps preflight failures in the not-sent state", async () => {
+    const states: GuardedFetchRequestSendState[] = [];
+    const lookupFn = vi.fn(async () => {
+      throw Object.assign(new Error("lookup failed"), { code: "ENOTFOUND" });
+    });
+
+    await expect(
+      fetchWithSsrFGuardAndRequestSendState(
+        {
+          url: "https://api.example.test/v1/messages",
+          lookupFn,
+        },
+        (state) => states.push(state),
+      ),
+    ).rejects.toThrow("lookup failed");
+
+    expect(states).toEqual(["not-sent"]);
+  });
+
+  it("reports unknown when a custom fetch has no observable dispatcher", async () => {
+    const states: GuardedFetchRequestSendState[] = [];
+    const fetchImpl = vi.fn(async () => {
+      throw new TypeError("fetch failed");
+    });
+
+    await expect(
+      fetchWithSsrFGuardAndRequestSendState(
+        {
+          url: "https://api.example.test/v1/messages",
+          fetchImpl,
+        },
+        (state) => states.push(state),
+      ),
+    ).rejects.toThrow("fetch failed");
+
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(states).toEqual(["not-sent", "unknown"]);
   });
 
   it("blocks private and legacy loopback literals before fetch", async () => {
@@ -2447,6 +2490,50 @@ describe("fetchWithSsrFGuard hardening", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(lookupFn).toHaveBeenCalledOnce();
     await result.release();
+  });
+
+  it("reports sent after the server receives the complete request body", async () => {
+    const bodies: string[] = [];
+    const server = createServer((request) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => chunks.push(chunk));
+      request.on("end", () => {
+        bodies.push(Buffer.concat(chunks).toString("utf8"));
+        request.socket.destroy();
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+
+    try {
+      const port = (server.address() as AddressInfo).port;
+      const body = JSON.stringify({ model: "test-model", stream: true });
+      const states: GuardedFetchRequestSendState[] = [];
+
+      await expect(
+        fetchWithSsrFGuardAndRequestSendState(
+          {
+            url: `http://127.0.0.1:${port}/v1/messages`,
+            init: {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body,
+            },
+            policy: { allowPrivateNetwork: true },
+          },
+          (state) => states.push(state),
+        ),
+      ).rejects.toThrow();
+
+      expect(bodies).toEqual([body]);
+      expect(states).toEqual(["not-sent", "sent"]);
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
   });
 });
 

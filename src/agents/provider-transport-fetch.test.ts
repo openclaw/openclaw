@@ -3,6 +3,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { Stream } from "openai/streaming";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GuardedFetchRequestSendState } from "../infra/net/fetch-guard.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 
@@ -17,6 +18,7 @@ type ProviderRequestPolicyConfigMockResult = {
 const {
   buildProviderRequestDispatcherPolicyMock,
   fetchWithSsrFGuardMock,
+  fetchWithSsrFGuardAndRequestSendStateMock,
   ensureModelProviderLocalServiceMock,
   mergeModelProviderRequestOverridesMock,
   resolveProviderRequestPolicyConfigMock,
@@ -59,6 +61,7 @@ const {
       (_request?: unknown) => { mode: "direct" } | undefined
     >(() => undefined),
     fetchWithSsrFGuardMock: vi.fn(),
+    fetchWithSsrFGuardAndRequestSendStateMock: vi.fn(),
     ensureModelProviderLocalServiceMock: vi.fn(),
     mergeModelProviderRequestOverridesMock: vi.fn((current, overrides) => ({
       ...current,
@@ -80,6 +83,7 @@ const {
 
 vi.mock("../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+  fetchWithSsrFGuardAndRequestSendState: fetchWithSsrFGuardAndRequestSendStateMock,
   withTrustedEnvProxyGuardedFetchMode: withTrustedEnvProxyGuardedFetchModeMock,
 }));
 
@@ -162,6 +166,17 @@ describe("buildGuardedModelFetch", () => {
       finalUrl: "https://api.openai.com/v1/responses",
       release: vi.fn(async () => undefined),
     });
+    fetchWithSsrFGuardAndRequestSendStateMock
+      .mockReset()
+      .mockImplementation(
+        async (
+          params: unknown,
+          onRequestSendState: (state: GuardedFetchRequestSendState) => void,
+        ) => {
+          onRequestSendState("not-sent");
+          return await fetchWithSsrFGuardMock(params);
+        },
+      );
     ensureModelProviderLocalServiceMock.mockReset().mockResolvedValue(undefined);
     buildProviderRequestDispatcherPolicyMock.mockClear().mockReturnValue(undefined);
     mergeModelProviderRequestOverridesMock.mockClear();
@@ -186,6 +201,37 @@ describe("buildGuardedModelFetch", () => {
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
     } as unknown as Model<"openai-responses">;
+  }
+
+  function makeAnthropicModel(): Model<"anthropic-messages"> {
+    return {
+      id: "claude-opus-4-7",
+      provider: "anthropic",
+      api: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com/v1",
+    } as unknown as Model<"anthropic-messages">;
+  }
+
+  function fetchFailure(code?: string): TypeError {
+    return new TypeError(
+      "fetch failed",
+      code ? { cause: Object.assign(new Error("socket failed"), { code }) } : undefined,
+    );
+  }
+
+  function mockTrackedFetchFailure(
+    error: Error,
+    requestSendState: GuardedFetchRequestSendState,
+  ): void {
+    fetchWithSsrFGuardAndRequestSendStateMock.mockImplementationOnce(
+      async (
+        _params: unknown,
+        onRequestSendState: (state: GuardedFetchRequestSendState) => void,
+      ) => {
+        onRequestSendState(requestSendState);
+        throw error;
+      },
+    );
   }
 
   it("swaps sentinels in Request-form headers", async () => {
@@ -753,6 +799,191 @@ describe("buildGuardedModelFetch", () => {
       fetcher("http://127.0.0.1:18000/v1/chat/completions", { method: "POST" }),
     ).rejects.toThrow("network down");
     expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries one replay-safe Anthropic transport failure before fallback", async () => {
+    const releaseLocalService = vi.fn();
+    const releaseGuardedFetch = vi.fn(async () => undefined);
+    ensureModelProviderLocalServiceMock.mockResolvedValue({ release: releaseLocalService });
+    mockTrackedFetchFailure(fetchFailure("UND_ERR_SOCKET"), "not-sent");
+    fetchWithSsrFGuardAndRequestSendStateMock.mockResolvedValueOnce({
+      response: new Response("data: ok\n\n", {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      }),
+      finalUrl: "https://api.anthropic.com/v1/messages",
+      release: releaseGuardedFetch,
+    });
+    const body = JSON.stringify({ model: "claude-opus-4-7", stream: true });
+
+    const response = await buildGuardedModelFetch(makeAnthropicModel())(
+      "https://api.anthropic.com/v1/messages",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+      },
+    );
+
+    expect(fetchWithSsrFGuardAndRequestSendStateMock).toHaveBeenCalledTimes(2);
+    expect(fetchWithSsrFGuardAndRequestSendStateMock.mock.calls[1]?.[0]).toEqual(
+      fetchWithSsrFGuardAndRequestSendStateMock.mock.calls[0]?.[0],
+    );
+    expect(
+      (
+        fetchWithSsrFGuardAndRequestSendStateMock.mock.calls[1]?.[0]?.init as
+          | RequestInit
+          | undefined
+      )?.body,
+    ).toBe(body);
+    expect(ensureModelProviderLocalServiceMock).toHaveBeenCalledTimes(1);
+    expect(releaseLocalService).not.toHaveBeenCalled();
+    expect(releaseGuardedFetch).not.toHaveBeenCalled();
+
+    await expect(response.text()).resolves.toBe("data: ok\n\n");
+    expect(releaseLocalService).toHaveBeenCalledTimes(1);
+    expect(releaseGuardedFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases the lease and throws the final Anthropic retry failure", async () => {
+    const release = vi.fn();
+    const firstError = fetchFailure("UND_ERR_SOCKET");
+    const finalError = fetchFailure("ECONNRESET");
+    ensureModelProviderLocalServiceMock.mockResolvedValue({ release });
+    mockTrackedFetchFailure(firstError, "not-sent");
+    mockTrackedFetchFailure(finalError, "not-sent");
+
+    await expect(
+      buildGuardedModelFetch(makeAnthropicModel())("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        body: "{}",
+      }),
+    ).rejects.toBe(finalError);
+
+    expect(fetchWithSsrFGuardAndRequestSendStateMock).toHaveBeenCalledTimes(2);
+    expect(ensureModelProviderLocalServiceMock).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries a bare Anthropic fetch-origin failure only with pre-send proof", async () => {
+    mockTrackedFetchFailure(fetchFailure(), "not-sent");
+
+    const response = await buildGuardedModelFetch(makeAnthropicModel())(
+      "https://api.anthropic.com/v1/messages",
+      { method: "POST", body: "{}" },
+    );
+    await response.text();
+
+    expect(fetchWithSsrFGuardAndRequestSendStateMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry an Anthropic transport failure after the request was sent", async () => {
+    mockTrackedFetchFailure(fetchFailure("UND_ERR_SOCKET"), "sent");
+
+    await expect(
+      buildGuardedModelFetch(makeAnthropicModel())("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        body: "{}",
+      }),
+    ).rejects.toThrow("fetch failed");
+
+    expect(fetchWithSsrFGuardAndRequestSendStateMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry a bare Anthropic fetch failure without send-state proof", async () => {
+    mockTrackedFetchFailure(fetchFailure(), "unknown");
+
+    await expect(
+      buildGuardedModelFetch(makeAnthropicModel())("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        body: "{}",
+      }),
+    ).rejects.toThrow("fetch failed");
+
+    expect(fetchWithSsrFGuardAndRequestSendStateMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry non-transport Anthropic failures", async () => {
+    mockTrackedFetchFailure(fetchFailure("CERT_HAS_EXPIRED"), "not-sent");
+
+    await expect(
+      buildGuardedModelFetch(makeAnthropicModel())("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        body: "{}",
+      }),
+    ).rejects.toThrow("fetch failed");
+
+    expect(fetchWithSsrFGuardAndRequestSendStateMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry Anthropic transport failures after caller cancellation", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    mockTrackedFetchFailure(fetchFailure("UND_ERR_SOCKET"), "not-sent");
+
+    await expect(
+      buildGuardedModelFetch(makeAnthropicModel())("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        body: "{}",
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("fetch failed");
+
+    expect(fetchWithSsrFGuardAndRequestSendStateMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not replay Request body streams after Anthropic transport failures", async () => {
+    fetchWithSsrFGuardMock.mockRejectedValue(fetchFailure("UND_ERR_SOCKET"));
+    const request = new Request("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+
+    await expect(buildGuardedModelFetch(makeAnthropicModel())(request)).rejects.toThrow(
+      "fetch failed",
+    );
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not replay streaming init bodies after Anthropic transport failures", async () => {
+    fetchWithSsrFGuardMock.mockRejectedValue(fetchFailure("UND_ERR_SOCKET"));
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("{}"));
+        controller.close();
+      },
+    });
+
+    await expect(
+      buildGuardedModelFetch(makeAnthropicModel())("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        body,
+        duplex: "half",
+      } as RequestInit & { duplex: "half" }),
+    ).rejects.toThrow("fetch failed");
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not apply the Anthropic retry policy to other providers", async () => {
+    fetchWithSsrFGuardMock.mockRejectedValue(fetchFailure("UND_ERR_SOCKET"));
+    const model = {
+      id: "gpt-5.4",
+      provider: "openai",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    } as unknown as Model<"openai-responses">;
+
+    await expect(
+      buildGuardedModelFetch(model)("https://api.openai.com/v1/responses", {
+        method: "POST",
+        body: "{}",
+      }),
+    ).rejects.toThrow("fetch failed");
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
   });
 
   it("scopes fake-IP DNS exemptions to the configured provider host", async () => {
