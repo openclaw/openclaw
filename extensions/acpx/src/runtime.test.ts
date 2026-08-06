@@ -863,13 +863,14 @@ describe("AcpxRuntime fresh reset wrapper", () => {
         runtimeSessionName: "opencode",
       });
 
-    await runtime.ensureSession({
+    const handle = await runtime.ensureSession({
       sessionKey: "agent:opencode:acp:test",
       agent: "opencode",
       mode: "persistent",
       model: "openrouter/owl-alpha",
     });
 
+    expect(handle.appliedModel).toEqual({ kind: "dropped" });
     expect(ensure).toHaveBeenCalledTimes(2);
     expect(readFirstEnsureSessionInput(ensure)).toMatchObject({
       model: "openrouter/owl-alpha",
@@ -878,6 +879,38 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     const [, secondCall] = ensure.mock.calls;
     expect(secondCall?.[0]).not.toHaveProperty("sessionOptions");
     expect((secondCall?.[0] as { model?: string } | undefined)?.model).toBeUndefined();
+  });
+
+  it("does not drop an explicit model when ACPX reports missing model capability", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore, {
+      agentRegistry: {
+        resolve: (agentName: string) => (agentName === "opencode" ? "opencode acp" : agentName),
+        list: () => ["opencode"],
+      },
+    });
+    const ensure = vi
+      .spyOn(delegate, "ensureSession")
+      .mockRejectedValueOnce(
+        new RequestedModelUnsupportedError(
+          "Cannot apply --model: the ACP agent did not advertise model support",
+          "missing-capability",
+        ),
+      );
+
+    await expect(
+      runtime.ensureSession({
+        sessionKey: "agent:opencode:acp:test",
+        agent: "opencode",
+        mode: "persistent",
+        model: "openrouter/owl-alpha",
+        modelExplicit: true,
+      }),
+    ).rejects.toThrow("did not advertise model support");
+    expect(ensure).toHaveBeenCalledTimes(1);
   });
 
   it("does not retry when ACPX rejects an explicitly unsupported model id", async () => {

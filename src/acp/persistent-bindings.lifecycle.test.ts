@@ -25,7 +25,18 @@ vi.mock("./control-plane/manager.js", () => ({
 const baseCfg = {
   session: { mainKey: "main", scope: "per-sender" },
   agents: {
+    defaults: { model: "openai/gpt-5.2" },
     list: [{ id: "codex" }, { id: "claude" }],
+  },
+} satisfies OpenClawConfig;
+
+const explicitModelCfg = {
+  ...baseCfg,
+  agents: {
+    list: [
+      { id: "codex", model: "openai/gpt-5.4" },
+      { id: "claude", model: "anthropic/claude-opus-4-6" },
+    ],
   },
 } satisfies OpenClawConfig;
 
@@ -59,6 +70,7 @@ function createPersistentSpec(
 function mockReadySession(params: {
   spec: ConfiguredAcpBindingSpec;
   cwd: string;
+  model?: string;
   state?: "idle" | "running" | "error";
 }) {
   const sessionKey = buildConfiguredAcpSessionKey(params.spec);
@@ -70,7 +82,10 @@ function mockReadySession(params: {
       agent: params.spec.acpAgentId ?? params.spec.agentId,
       runtimeSessionName: "existing",
       mode: params.spec.mode,
-      runtimeOptions: { cwd: params.cwd },
+      runtimeOptions: {
+        cwd: params.cwd,
+        ...(params.model === undefined ? {} : { model: params.model }),
+      },
       state: params.state ?? "idle",
       lastActivityAt: Date.now(),
     },
@@ -170,5 +185,81 @@ describe("ensureConfiguredAcpBindingSession", () => {
     expect(ensured.ok).toBe(true);
     const initializeArgs = expectInitializeArgs();
     expect(initializeArgs.agent).toBe("codex");
+    expect(initializeArgs).not.toHaveProperty("runtimeOptions");
+    expect(initializeArgs).not.toHaveProperty("modelExplicit");
+  });
+
+  it("passes the binding owner's explicit model while retaining the ACP harness", async () => {
+    const spec = createPersistentSpec({ acpAgentId: "claude" });
+
+    const ensured = await ensureConfiguredAcpBindingSession({
+      cfg: explicitModelCfg,
+      spec,
+    });
+
+    expect(ensured.ok).toBe(true);
+    expect(expectInitializeArgs()).toMatchObject({
+      agent: "claude",
+      runtimeOptions: { model: "openai/gpt-5.4" },
+      modelExplicit: true,
+    });
+  });
+
+  it("preserves a manual ACP model when the binding owner has no explicit model", async () => {
+    const spec = createPersistentSpec();
+    const sessionKey = mockReadySession({
+      spec,
+      cwd: "/workspace/openclaw",
+      model: "openai/gpt-5.3-codex",
+    });
+
+    const ensured = await ensureConfiguredAcpBindingSession({ cfg: baseCfg, spec });
+
+    expect(ensured).toEqual({ ok: true, sessionKey });
+    expect(managerMocks.closeSession).not.toHaveBeenCalled();
+    expect(managerMocks.initializeSession).not.toHaveBeenCalled();
+  });
+
+  it("reuses a session with the binding owner's explicit model", async () => {
+    const spec = createPersistentSpec({ acpAgentId: "claude" });
+    const sessionKey = mockReadySession({
+      spec,
+      cwd: "/workspace/openclaw",
+      model: "openai/gpt-5.4",
+    });
+
+    const ensured = await ensureConfiguredAcpBindingSession({
+      cfg: explicitModelCfg,
+      spec,
+    });
+
+    expect(ensured).toEqual({ ok: true, sessionKey });
+    expect(managerMocks.closeSession).not.toHaveBeenCalled();
+    expect(managerMocks.initializeSession).not.toHaveBeenCalled();
+  });
+
+  it("reinitializes a session when the binding owner's explicit model changes", async () => {
+    const spec = createPersistentSpec({ acpAgentId: "claude" });
+    const sessionKey = mockReadySession({
+      spec,
+      cwd: "/workspace/openclaw",
+      model: "openai/gpt-5.3-codex",
+    });
+
+    const ensured = await ensureConfiguredAcpBindingSession({
+      cfg: explicitModelCfg,
+      spec,
+    });
+
+    expect(ensured).toEqual({ ok: true, sessionKey });
+    expect(expectCloseArgs()).toMatchObject({
+      sessionKey,
+      discardPersistentState: true,
+    });
+    expect(expectInitializeArgs()).toMatchObject({
+      agent: "claude",
+      runtimeOptions: { model: "openai/gpt-5.4" },
+      modelExplicit: true,
+    });
   });
 });

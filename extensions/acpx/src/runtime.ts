@@ -663,19 +663,22 @@ function isAcpModelCapabilityMissingError(error: unknown): boolean {
   return isRequestedModelUnsupportedError(error) && error.reason === "missing-capability";
 }
 
-// ACPX owns the distinction between missing model capability and an invalid model id.
-// Retry only the former so explicit model mistakes remain visible to the caller.
+// An inherited model may fall back when the agent has no model capability, but an explicit
+// selection must fail closed so the caller never mistakes the harness default for its choice.
 async function ensureDelegateSessionWithModelFallback(
   delegate: BaseAcpxRuntime,
   input: OpenClawRuntimeEnsureInput,
-): Promise<AcpRuntimeHandle> {
+): Promise<OpenClawRuntimeHandle> {
   try {
     return await delegate.ensureSession(withAcpxSessionOptions(input));
   } catch (error) {
-    if (!input.model || !isAcpModelCapabilityMissingError(error)) {
+    if (!input.model || input.modelExplicit || !isAcpModelCapabilityMissingError(error)) {
       throw error;
     }
-    return await delegate.ensureSession(withAcpxSessionOptions({ ...input, model: undefined }));
+    const handle = await delegate.ensureSession(
+      withAcpxSessionOptions({ ...input, model: undefined }),
+    );
+    return { ...handle, appliedModel: { kind: "dropped" } };
   }
 }
 
