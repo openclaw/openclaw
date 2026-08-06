@@ -329,12 +329,11 @@ async function resolveTranscriptTurnTarget(
   // The guarded transaction requires a persisted row to validate; a mirror-only
   // entry must stay on the legacy append. (#119221)
   let sessionEntry = resolved?.existing ?? scope.sessionEntry;
-  // entryFromPersistedStore is true only when the entry came from a SQLite row
-  // (resolved.existing or loadSessionEntry), not from an in-memory mirror
-  // (scope.sessionEntry). The guard's sessionKey↔sessionId identity check is
-  // invalid for internal transcripts where the key and target id are
-  // intentionally different. (#119221)
-  let entryFromPersistedStore = resolved?.existing != null;
+  // entryFromPersistedStore is true only when the entry came from a SQLite
+  // source: resolveSessionEntrySelection (non-sessionStore path) or
+  // loadSessionEntry (fallback). When scope.sessionStore is set,
+  // resolved.existing comes from the in-memory mirror — not persisted.
+  let entryFromPersistedStore = !scope.sessionStore && resolved?.existing != null;
   if (!sessionEntry) {
     sessionEntry = loadSessionEntry({ ...scope, agentId, sessionKey, storePath });
     entryFromPersistedStore = true;
