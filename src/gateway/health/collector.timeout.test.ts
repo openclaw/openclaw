@@ -67,6 +67,10 @@ describe("collectGatewayHealthSnapshot hook deadlines", () => {
     vi.useFakeTimers();
     const pluginId = "delayed-summary";
     const account = { accountId: "default", enabled: true, configured: true };
+    let markSummaryStarted: (() => void) | undefined;
+    const summaryStarted = new Promise<void>((resolve) => {
+      markSummaryStarted = resolve;
+    });
     healthPluginsForTest = [
       {
         ...createChannelTestPluginBase({ id: pluginId, label: pluginId }),
@@ -78,6 +82,7 @@ describe("collectGatewayHealthSnapshot hook deadlines", () => {
         },
         status: {
           buildChannelSummary: async () => {
+            markSummaryStarted?.();
             await new Promise<void>((resolve) => {
               setTimeout(resolve, 75);
             });
@@ -88,6 +93,7 @@ describe("collectGatewayHealthSnapshot hook deadlines", () => {
     ];
 
     const run = collectHealth();
+    await summaryStarted;
     await vi.advanceTimersByTimeAsync(75);
     const result = (await run).channels[pluginId]?.accounts?.default;
 
