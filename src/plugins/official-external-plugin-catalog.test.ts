@@ -1913,6 +1913,19 @@ describe("official external plugin catalog", () => {
     });
   });
 
+  it("advertises the experimental FaceTime plugin with its authorization floor", () => {
+    const facetime = expectCatalogEntry("facetime");
+
+    expect(resolveOfficialExternalPluginInstall(facetime)).toEqual({
+      npmSpec: "@openclaw/facetime",
+      defaultChoice: "npm",
+      minHostVersion: ">=2026.7.2-beta.8",
+    });
+    expect(getOfficialExternalPluginCatalogManifest(facetime)?.contracts?.tools).toEqual([
+      "facetime_call",
+    ]);
+  });
+
   it("resolves third-party channel lookup aliases to published plugin ids", () => {
     const wecomByChannel = expectCatalogEntry("wecom");
     const wecomByPlugin = expectCatalogEntry("wecom-openclaw-plugin");

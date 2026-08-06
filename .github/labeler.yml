@@ -62,6 +62,11 @@
       - any-glob-to-any-file:
           - "extensions/google-meet/**"
           - "docs/plugins/google-meet.md"
+"plugin: facetime":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/facetime/**"
+          - "docs/plugins/facetime.md"
 "plugin: teams-meetings":
   - changed-files:
       - any-glob-to-any-file:

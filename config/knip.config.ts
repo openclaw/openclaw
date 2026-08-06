@@ -388,6 +388,19 @@ const config = {
     // Focused media tests consume these explicit seams; production uses the helpers in-module.
     "src/agents/embedded-agent-subscribe.handlers.lifecycle.ts": ["exports"],
     "src/gateway/server-methods/chat-webchat-media.ts": ["exports"],
+    // FaceTime's native/audio safety tests exercise these deterministic seams directly;
+    // the full-tree scan still requires every ignored production export to have a test consumer.
+    "extensions/facetime/src/audio-pump.ts": ["exports"],
+    "extensions/facetime/src/call-events.ts": ["exports", "types"],
+    "extensions/facetime/src/config.ts": ["exports", "types"],
+    "extensions/facetime/src/helper-supervisor.ts": ["types"],
+    "extensions/facetime/src/outbound-call.ts": ["exports", "types"],
+    "extensions/facetime/src/paired-audio-transport.ts": ["exports"],
+    "extensions/facetime/src/playback-clock.ts": ["exports"],
+    "extensions/facetime/src/plugin-paths.ts": ["exports"],
+    "extensions/facetime/src/preflight.ts": ["exports", "types"],
+    "extensions/facetime/src/setup.ts": ["types"],
+    "extensions/facetime/src/tool.ts": ["exports"],
     // Greeting cache/fact contracts (hash, alert text, store shapes) are
     // asserted by the focused greeting unit tests, not by another prod module.
     "src/system-agent/greeting.ts": ["exports", "types"],

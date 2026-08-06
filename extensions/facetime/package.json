@@ -1,0 +1,88 @@
+{
+  "name": "@openclaw/facetime",
+  "version": "2026.7.2",
+  "description": "Experimental private FaceTime realtime voice carrier for OpenClaw agents",
+  "license": "MIT",
+  "author": "OpenClaw contributors",
+  "homepage": "https://docs.openclaw.ai/plugins/facetime",
+  "bugs": {
+    "url": "https://github.com/openclaw/openclaw/issues"
+  },
+  "keywords": [
+    "facetime",
+    "openclaw",
+    "openclaw-plugin",
+    "realtime-voice"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw",
+    "directory": "extensions/facetime"
+  },
+  "files": [
+    "dist/",
+    "docs/",
+    "helper/",
+    "native/Package.swift",
+    "native/Checks/",
+    "native/Sources/",
+    "scripts/",
+    "skills/",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+    "README.md",
+    "openclaw.plugin.json"
+  ],
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "type": "module",
+  "scripts": {
+    "build:capture": "bash scripts/build-capture.sh",
+    "build:driver": "bash scripts/build-driver.sh",
+    "build:helper:macabi": "bash scripts/build-helper-macabi.sh",
+    "install:driver": "bash scripts/install-driver.sh",
+    "inject:helper": "bash scripts/inject-helper.sh",
+    "inject:helper:phone": "bash scripts/inject-helper.sh --app Phone",
+    "inject:helper:terminal": "bash scripts/inject-helper-terminal.sh"
+  },
+  "dependencies": {
+    "typebox": "1.3.6"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.7.2-beta.8"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "npmSpec": "@openclaw/facetime",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.7.2-beta.8"
+    },
+    "compat": {
+      "pluginApi": ">=2026.7.2-beta.8"
+    },
+    "build": {
+      "bundledDist": false,
+      "openclawVersion": "2026.7.2"
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
+    }
+  }
+}

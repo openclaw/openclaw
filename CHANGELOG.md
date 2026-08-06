@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- **Experimental FaceTime plugin:** add a disabled-by-default Apple Silicon plugin for allowlisted private FaceTime voice calls, including authenticated inbound and outbound call control, OpenAI Realtime audio, owner-authorized agent consultation, guided setup, and explicit partial-SIP security guidance.
 - **Plugin uninstall cleanup:** remove exact recorded install paths from `plugins.load.paths` for marketplace, npm, and other managed installs while preserving parent, child, prefix, and unrelated paths.
 - Fixed Crabbox hydration on unprivileged cloud sandboxes by falling back to a user-writable pnpm store when the shared `/var/cache/crabbox` cache is unavailable, preserving the hardlink import mode after hydration, and making Docker an explicit routed capability instead of an implicit install requirement.
 

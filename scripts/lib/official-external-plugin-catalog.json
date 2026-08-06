@@ -252,6 +252,28 @@
       }
     },
     {
+      "name": "@openclaw/facetime",
+      "description": "Experimental private FaceTime realtime voice carrier for OpenClaw agents",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "facetime",
+          "label": "FaceTime (experimental)"
+        },
+        "contracts": {
+          "tools": [
+            "facetime_call"
+          ]
+        },
+        "install": {
+          "npmSpec": "@openclaw/facetime",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2-beta.8"
+        }
+      }
+    },
+    {
       "name": "@openclaw/firecrawl-plugin",
       "description": "OpenClaw Firecrawl plugin.",
       "source": "official",

@@ -1,0 +1,4 @@
+interface:
+  display_name: "FaceTime Calls"
+  short_description: "Make and manage allowlisted FaceTime calls"
+  default_prompt: "Use $facetime to check readiness or place an allowlisted FaceTime call."

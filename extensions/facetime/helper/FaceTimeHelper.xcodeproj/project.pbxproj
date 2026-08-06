@@ -1,0 +1,493 @@
+// !$*UTF8*$!
+// Modified by OpenClaw contributors in 2026 from the Apache-2.0 BlueBubbles helper.
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 48;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A62991D12972106200B7E663 /* FaceTimeHelper.m in Sources */ = {isa = PBXBuildFile; fileRef = 93AC09CB2565E45F0000C60C /* FaceTimeHelper.m */; };
+		A62991D22972106500B7E663 /* NetworkController.m in Sources */ = {isa = PBXBuildFile; fileRef = 93FD99392568E7360060D430 /* NetworkController.m */; };
+		A62991D52972107400B7E663 /* ZKSwizzle.m in Sources */ = {isa = PBXBuildFile; fileRef = FBCE4ECB201C0F4D002F8A61 /* ZKSwizzle.m */; };
+		A62991D8297210D900B7E663 /* IMCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 93AC09C52565E4150000C60C /* IMCore.framework */; };
+		A6490A0E2984697C002B0E1D /* PrefixHeader.pch in Resources */ = {isa = PBXBuildFile; fileRef = FBCE4ECD201C0F4D002F8A61 /* PrefixHeader.pch */; };
+		A65C21A72A9AAB1500D6FB7F /* FaceTimeHelper.dylib in CopyFiles */ = {isa = PBXBuildFile; fileRef = A62991CB29720FAC00B7E663 /* FaceTimeHelper.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		A65C21BC2AAD602600D6FB7F /* TelephonyUtilities.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A65C21BB2AAD602500D6FB7F /* TelephonyUtilities.framework */; };
+		A65C21C22AAD725300D6FB7F /* CTBlockDescription.m in Sources */ = {isa = PBXBuildFile; fileRef = A65C21C12AAD725300D6FB7F /* CTBlockDescription.m */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		A65C21A62A9AAAE600D6FB7F /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 12;
+			dstPath = "$(BUILT_PRODUCTS_DIR)";
+			dstSubfolderSpec = 0;
+			files = (
+				A65C21A72A9AAB1500D6FB7F /* FaceTimeHelper.dylib in CopyFiles */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		93AC09C52565E4150000C60C /* IMCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = IMCore.framework; path = /System/Library/PrivateFrameworks/IMCore.framework; sourceTree = "<group>"; };
+		93AC09CB2565E45F0000C60C /* FaceTimeHelper.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = FaceTimeHelper.m; sourceTree = "<group>"; };
+		93B28EA5257399450056DAD4 /* Logging.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Logging.h; sourceTree = "<group>"; };
+		93FD99392568E7360060D430 /* NetworkController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = NetworkController.m; sourceTree = "<group>"; };
+		93FD993D2568E7500060D430 /* NetworkController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = NetworkController.h; sourceTree = "<group>"; };
+		A62991CB29720FAC00B7E663 /* FaceTimeHelper.dylib */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.dylib"; includeInIndex = 0; path = FaceTimeHelper.dylib; sourceTree = BUILT_PRODUCTS_DIR; };
+		A649F2632AB74D8700D2F1F0 /* TUConversationLink.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TUConversationLink.h; sourceTree = "<group>"; };
+		A649F2642AB7588200D2F1F0 /* TUConversationManagerXPCClient.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TUConversationManagerXPCClient.h; sourceTree = "<group>"; };
+		A649F2652AB76E4F00D2F1F0 /* TUProxyCall.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TUProxyCall.h; sourceTree = "<group>"; };
+		A649F2662AB795DC00D2F1F0 /* TUHandle.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TUHandle.h; sourceTree = "<group>"; };
+		A649F2672AB7C39F00D2F1F0 /* TUAnswerRequest.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TUAnswerRequest.h; sourceTree = "<group>"; };
+		A649F2682AB7C6C400D2F1F0 /* TUCallCenter.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TUCallCenter.h; sourceTree = "<group>"; };
+		A649F2692AB7C86B00D2F1F0 /* TUConversation.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TUConversation.h; sourceTree = "<group>"; };
+		A649F26A2AB7CBED00D2F1F0 /* TUConversationJoinRequest.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TUConversationJoinRequest.h; sourceTree = "<group>"; };
+		A649F26B2AB93EA700D2F1F0 /* TUConversationMember.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TUConversationMember.h; sourceTree = "<group>"; };
+		A649F26C2AB9427200D2F1F0 /* TUConversationMemberAssociation.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TUConversationMemberAssociation.h; sourceTree = "<group>"; };
+		A649F26D2AB9593100D2F1F0 /* CSDConversation.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = CSDConversation.h; sourceTree = "<group>"; };
+		A649F26E2ABA002A00D2F1F0 /* callservicesd */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.executable"; name = callservicesd; path = /System/Library/PrivateFrameworks/TelephonyUtilities.framework/callservicesd; sourceTree = "<group>"; };
+		A65C21BA2AAD5E3400D6FB7F /* TUConversationManager.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TUConversationManager.h; sourceTree = "<group>"; };
+		A65C21BB2AAD602500D6FB7F /* TelephonyUtilities.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = TelephonyUtilities.framework; path = /System/Library/PrivateFrameworks/TelephonyUtilities.framework; sourceTree = "<group>"; };
+		A65C21C02AAD722500D6FB7F /* CTBlockDescription.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = CTBlockDescription.h; sourceTree = "<group>"; };
+		A65C21C12AAD725300D6FB7F /* CTBlockDescription.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = CTBlockDescription.m; sourceTree = "<group>"; };
+		A6CA47952AC0B23C004E21C8 /* avconferenced */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.executable"; name = avconferenced; path = /usr/libexec/avconferenced; sourceTree = "<group>"; };
+		A6CA47962AC121B6004E21C8 /* CSDConversationManager.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = CSDConversationManager.h; sourceTree = "<group>"; };
+		A6CA47972AC1E8BE004E21C8 /* TUCall.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TUCall.h; sourceTree = "<group>"; };
+		FBCE4EBE201C0F4D002F8A61 /* AppKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppKit.framework; path = /System/Library/Frameworks/AppKit.framework; sourceTree = "<absolute>"; };
+		FBCE4EC0201C0F4D002F8A61 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = /System/Library/Frameworks/Foundation.framework; sourceTree = "<absolute>"; };
+		FBCE4EC4201C0F4D002F8A61 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		FBCE4ECA201C0F4D002F8A61 /* ZKSwizzle.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = ZKSwizzle.h; path = ZKSwizzle/ZKSwizzle.h; sourceTree = "<group>"; };
+		FBCE4ECB201C0F4D002F8A61 /* ZKSwizzle.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = ZKSwizzle.m; path = ZKSwizzle/ZKSwizzle.m; sourceTree = "<group>"; };
+		FBCE4ECD201C0F4D002F8A61 /* PrefixHeader.pch */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = PrefixHeader.pch; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A62991C929720FAC00B7E663 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A65C21BC2AAD602600D6FB7F /* TelephonyUtilities.framework in Frameworks */,
+				A62991D8297210D900B7E663 /* IMCore.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		93FD99382568E7230060D430 /* Networking */ = {
+			isa = PBXGroup;
+			children = (
+				93FD99392568E7360060D430 /* NetworkController.m */,
+				93FD993D2568E7500060D430 /* NetworkController.h */,
+			);
+			name = Networking;
+			sourceTree = "<group>";
+		};
+		A65C21B92AAD5DEC00D6FB7F /* FaceTime */ = {
+			isa = PBXGroup;
+			children = (
+				A65C21BA2AAD5E3400D6FB7F /* TUConversationManager.h */,
+				A649F2632AB74D8700D2F1F0 /* TUConversationLink.h */,
+				A649F2642AB7588200D2F1F0 /* TUConversationManagerXPCClient.h */,
+				A649F2652AB76E4F00D2F1F0 /* TUProxyCall.h */,
+				A649F2662AB795DC00D2F1F0 /* TUHandle.h */,
+				A649F2672AB7C39F00D2F1F0 /* TUAnswerRequest.h */,
+				A649F2682AB7C6C400D2F1F0 /* TUCallCenter.h */,
+				A649F2692AB7C86B00D2F1F0 /* TUConversation.h */,
+				A649F26A2AB7CBED00D2F1F0 /* TUConversationJoinRequest.h */,
+				A649F26B2AB93EA700D2F1F0 /* TUConversationMember.h */,
+				A649F26C2AB9427200D2F1F0 /* TUConversationMemberAssociation.h */,
+				A649F26D2AB9593100D2F1F0 /* CSDConversation.h */,
+				A6CA47962AC121B6004E21C8 /* CSDConversationManager.h */,
+				A6CA47972AC1E8BE004E21C8 /* TUCall.h */,
+			);
+			path = FaceTime;
+			sourceTree = "<group>";
+		};
+		FBCE4EB2201C0F4D002F8A61 = {
+			isa = PBXGroup;
+			children = (
+				FBCE4EC2201C0F4D002F8A61 /* FaceTimeHelper */,
+				FBCE4EBD201C0F4D002F8A61 /* Frameworks */,
+				FBCE4EBC201C0F4D002F8A61 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		FBCE4EBC201C0F4D002F8A61 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A62991CB29720FAC00B7E663 /* FaceTimeHelper.dylib */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		FBCE4EBD201C0F4D002F8A61 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				A6CA47952AC0B23C004E21C8 /* avconferenced */,
+				A649F26E2ABA002A00D2F1F0 /* callservicesd */,
+				A65C21BB2AAD602500D6FB7F /* TelephonyUtilities.framework */,
+				93AC09C52565E4150000C60C /* IMCore.framework */,
+				FBCE4EBE201C0F4D002F8A61 /* AppKit.framework */,
+				FBCE4EC0201C0F4D002F8A61 /* Foundation.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		FBCE4EC2201C0F4D002F8A61 /* FaceTimeHelper */ = {
+			isa = PBXGroup;
+			children = (
+				A65C21B92AAD5DEC00D6FB7F /* FaceTime */,
+				93FD99382568E7230060D430 /* Networking */,
+				FBCE4EC9201C0F4D002F8A61 /* ZKSwizzle */,
+				FBCE4EC3201C0F4D002F8A61 /* Supporting Files */,
+				93AC09CB2565E45F0000C60C /* FaceTimeHelper.m */,
+			);
+			path = FaceTimeHelper;
+			sourceTree = "<group>";
+		};
+		FBCE4EC3201C0F4D002F8A61 /* Supporting Files */ = {
+			isa = PBXGroup;
+			children = (
+				FBCE4EC4201C0F4D002F8A61 /* Info.plist */,
+				FBCE4ECD201C0F4D002F8A61 /* PrefixHeader.pch */,
+				93B28EA5257399450056DAD4 /* Logging.h */,
+			);
+			name = "Supporting Files";
+			sourceTree = "<group>";
+		};
+		FBCE4EC9201C0F4D002F8A61 /* ZKSwizzle */ = {
+			isa = PBXGroup;
+			children = (
+				FBCE4ECA201C0F4D002F8A61 /* ZKSwizzle.h */,
+				FBCE4ECB201C0F4D002F8A61 /* ZKSwizzle.m */,
+				A65C21C02AAD722500D6FB7F /* CTBlockDescription.h */,
+				A65C21C12AAD725300D6FB7F /* CTBlockDescription.m */,
+			);
+			name = ZKSwizzle;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXHeadersBuildPhase section */
+		A62991C729720FAC00B7E663 /* Headers */ = {
+			isa = PBXHeadersBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXHeadersBuildPhase section */
+
+/* Begin PBXNativeTarget section */
+		A62991CA29720FAC00B7E663 /* FaceTimeHelper */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A62991CE29720FAC00B7E663 /* Build configuration list for PBXNativeTarget "FaceTimeHelper" */;
+			buildPhases = (
+				A62991C729720FAC00B7E663 /* Headers */,
+				A62991C829720FAC00B7E663 /* Sources */,
+				A62991C929720FAC00B7E663 /* Frameworks */,
+				A6490A0D29846973002B0E1D /* Resources */,
+				A65C21A62A9AAAE600D6FB7F /* CopyFiles */,
+				A6490A0F29846A3A002B0E1D /* Run Script */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = FaceTimeHelper;
+			productName = "FaceTimeHelper";
+			productReference = A62991CB29720FAC00B7E663 /* FaceTimeHelper.dylib */;
+			productType = "com.apple.product-type.library.dynamic";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		FBCE4EB3201C0F4D002F8A61 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				LastUpgradeCheck = 0900;
+				ORGANIZATIONNAME = FaceTime;
+				TargetAttributes = {
+					A62991CA29720FAC00B7E663 = {
+						CreatedOnToolsVersion = 14.1;
+						LastSwiftMigration = 1410;
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = FBCE4EB6201C0F4D002F8A61 /* Build configuration list for PBXProject "FaceTimeHelper" */;
+			compatibilityVersion = "Xcode 8.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+			);
+			mainGroup = FBCE4EB2201C0F4D002F8A61;
+			productRefGroup = FBCE4EBC201C0F4D002F8A61 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A62991CA29720FAC00B7E663 /* FaceTimeHelper */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A6490A0D29846973002B0E1D /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A6490A0E2984697C002B0E1D /* PrefixHeader.pch in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		A6490A0F29846A3A002B0E1D /* Run Script */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Run Script";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "
+";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A62991C829720FAC00B7E663 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A62991D52972107400B7E663 /* ZKSwizzle.m in Sources */,
+				A65C21C22AAD725300D6FB7F /* CTBlockDescription.m in Sources */,
+				A62991D22972106500B7E663 /* NetworkController.m in Sources */,
+				A62991D12972106200B7E663 /* FaceTimeHelper.m in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		A62991CC29720FAC00B7E663 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = "$(inherited)";
+				CODE_SIGN_ENTITLEMENTS = "";
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEFINES_MODULE = YES;
+				DEVELOPMENT_TEAM = "";
+				DSTROOT = /;
+				DYLIB_COMPATIBILITY_VERSION = 1;
+				DYLIB_CURRENT_VERSION = 1;
+				EXECUTABLE_PREFIX = "";
+				INFOPLIST_FILE = "$(SRCROOT)/FaceTimeHelper/Info.plist";
+				INSTALL_PATH = "$(BUILT_PRODUCTS_DIR)";
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks @loader_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 11.0;
+				MARKETING_VERSION = 0.0.1;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.openclaw.facetime.helper;
+				PRODUCT_NAME = FaceTimeHelper;
+				SDKROOT = macosx;
+				SKIP_INSTALL = NO;
+				SWIFT_OBJC_BRIDGING_HEADER = "FaceTimeHelper-Bridging-Header.h";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				SYSTEM_FRAMEWORK_SEARCH_PATHS = "$(inherited) $(SYSTEM_LIBRARY_DIR)/PrivateFrameworks";
+			};
+			name = Debug;
+		};
+		A62991CD29720FAC00B7E663 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = "$(inherited)";
+				CODE_SIGN_ENTITLEMENTS = "";
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEFINES_MODULE = YES;
+				DEVELOPMENT_TEAM = "";
+				DSTROOT = /;
+				DYLIB_COMPATIBILITY_VERSION = 1;
+				DYLIB_CURRENT_VERSION = 1;
+				EXECUTABLE_PREFIX = "";
+				INFOPLIST_FILE = "$(SRCROOT)/FaceTimeHelper/Info.plist";
+				INSTALL_PATH = "$(BUILT_PRODUCTS_DIR)";
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks @loader_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 11.0;
+				MARKETING_VERSION = 0.0.1;
+				MTL_FAST_MATH = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.openclaw.facetime.helper;
+				PRODUCT_NAME = FaceTimeHelper;
+				SDKROOT = macosx;
+				SKIP_INSTALL = NO;
+				SWIFT_OBJC_BRIDGING_HEADER = "FaceTimeHelper-Bridging-Header.h";
+				SWIFT_VERSION = 5.0;
+				SYSTEM_FRAMEWORK_SEARCH_PATHS = "$(inherited) $(SYSTEM_LIBRARY_DIR)/PrivateFrameworks";
+			};
+			name = Release;
+		};
+		FBCE4ECF201C0F4D002F8A61 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = (
+					"$(ARCHS_STANDARD)",
+					arm64e,
+				);
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = YES;
+				ONLY_ACTIVE_ARCH = NO;
+				VALID_ARCHS = "x86_64 arm64 arm64e";
+			};
+			name = Debug;
+		};
+		FBCE4ED0201C0F4D002F8A61 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = (
+					"$(ARCHS_STANDARD)",
+					arm64e,
+				);
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				ONLY_ACTIVE_ARCH = NO;
+				VALID_ARCHS = "x86_64 arm64 arm64e";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A62991CE29720FAC00B7E663 /* Build configuration list for PBXNativeTarget "FaceTimeHelper" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A62991CC29720FAC00B7E663 /* Debug */,
+				A62991CD29720FAC00B7E663 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		FBCE4EB6201C0F4D002F8A61 /* Build configuration list for PBXProject "FaceTimeHelper" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				FBCE4ECF201C0F4D002F8A61 /* Debug */,
+				FBCE4ED0201C0F4D002F8A61 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = FBCE4EB3201C0F4D002F8A61 /* Project object */;
+}

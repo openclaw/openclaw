@@ -1,0 +1,65 @@
+{
+  "id": "facetime",
+  "name": "FaceTime",
+  "description": "Experimental private FaceTime realtime voice carrier for OpenClaw agents",
+  "enabledByDefault": false,
+  "activation": {
+    "onStartup": true
+  },
+  "skills": ["./skills"],
+  "contracts": {
+    "tools": ["facetime_call"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": { "type": "boolean", "default": true },
+      "helperHost": { "type": "string", "default": "127.0.0.1" },
+      "helperPort": { "type": "number" },
+      "whitelistHandles": {
+        "type": "array",
+        "items": { "type": "string" },
+        "default": []
+      },
+      "realtime": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "provider": { "type": "string", "default": "openai" },
+          "model": { "type": "string", "default": "gpt-realtime-2.1" },
+          "voice": { "type": "string", "default": "marin" },
+          "sessionKey": { "type": "string", "default": "main" },
+          "brain": { "type": "string", "enum": ["agent-consult"], "default": "agent-consult" },
+          "toolPolicy": { "type": "string", "default": "owner" },
+          "instructions": { "type": "string" },
+          "providers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        }
+      }
+    }
+  },
+  "channelEnvVars": {
+    "facetime": ["OPENAI_API_KEY"]
+  },
+  "uiHints": {
+    "enabled": { "label": "Enable FaceTime Voice" },
+    "helperHost": { "label": "Helper Host", "advanced": true },
+    "helperPort": { "label": "Helper Port", "advanced": true },
+    "whitelistHandles": {
+      "label": "Owner FaceTime Handles",
+      "help": "Only these handles may place or receive bridged calls. Every listed handle receives authenticated owner privileges."
+    },
+    "realtime.provider": { "label": "Realtime Provider", "advanced": true },
+    "realtime.model": { "label": "Realtime Model", "advanced": true },
+    "realtime.voice": { "label": "Realtime Voice", "advanced": true },
+    "realtime.sessionKey": { "label": "Agent Session Key", "advanced": true },
+    "realtime.brain": { "label": "Brain Mode", "advanced": true },
+    "realtime.toolPolicy": { "label": "Tool Policy", "advanced": true }
+  }
+}

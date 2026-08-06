@@ -1322,6 +1322,7 @@
                   "plugins/codex-computer-use",
                   "plugins/logbook",
                   "plugins/meeting-plugins",
+                  "plugins/facetime",
                   "plugins/google-meet",
                   "plugins/teams-meetings",
                   "plugins/zoom-meetings",
